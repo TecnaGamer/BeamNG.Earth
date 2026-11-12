@@ -1402,12 +1402,12 @@ class AnchorQTest(unittest.TestCase):
                 return 1000 + self.relief * (np.asarray(lat) - LAT) / 0.27     # +-15 km = +-0.135 deg
         f = geodesy.EnuFrame(LAT, LON)
         d = Dem(10)
-        self.assertEqual(earthd.survey_q(f, d), 1 / 256)
+        self.assertEqual(earthd.survey_q(f, d), 1 / 1024)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
         # 3000 m over 30 km is 100 m per window (9 samples, 1 km, for a block of 1024 m)
-        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 128)     # 300 m per window (+ zBase's 72 m: 512)
+        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 512)      # (+ zBase's 16 m: 128 m)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 128)     # 300 m per window
         self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (600 m)
         self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1200 m
 
@@ -1415,10 +1415,11 @@ class AnchorQTest(unittest.TestCase):
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 256)     # (the plain round it, not its top: 1/32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 1024)     # (the plain round it, not its top: 1/32)
         self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
         for relief in (10.0, 180.0, 440.0, 950.0, 1900.0, 5000.0):    # block_q: block_params' rule, its worst zBase
-            self.assertEqual(heightmap.block_q(relief), heightmap.block_params(1031.99, 1031.99 + relief, 1 / 256)[0])
+            self.assertEqual(heightmap.block_q(relief), heightmap.block_params(
+                1015.99, 1015.99 + relief, heightmap.Q_LADDER[0])[0])
 
         class Range(Dem):           # a mountain range over half the survey: it decides
             def sample(self, lat, lon, zoom, progress=None):
