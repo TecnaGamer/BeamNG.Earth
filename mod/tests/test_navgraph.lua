@@ -5,6 +5,48 @@ local N = require('beamngEarth/navgraph')
 
 T.check(N.lanes(2, 1, false) == '-++' and N.lanes(2, 1, true) == '++-' and N.lanes(1, 0, false) == '+',
   'lanes: against first for right-hand traffic')
+-- A sub-metre seam on the same carriageway must not force a separate lane adjustment.
+do
+  local function seam()
+    return { nodes = { a = { 0, 0, 0, 10 }, b = { 50, 0, 0, 10 }, c = { 50.34, 0, 0, 10 },
+      d = { 100, 0, 0, 10 } }, edges = { { 'a', 'b', 1, 5, 0, 20.62, 1, 10, 10, 30.6 },
+      { 'b', 'c', 1, 5, 0, 19.44, 1, 10, 10 }, { 'c', 'd', 1, 5, 0, 19.44, 1, 10, 10 } } }
+  end
+  local g = seam()
+  local ns, count, edges = N.toNodes(g, nil, 0, false)
+  T.check(count == 3 and edges == 2 and not ns.b and ns.a.links.c == ns.c.links.a,
+    'an isolated short same-lane seam is contracted without disconnecting the road')
+  local e = ns.a.links.c
+  T.check(e and e.inNode == 'a' and e.outNode == 'c' and e.outPos == ns.c.pos
+    and e.outRadius == 10 and e.posted == 30.6 and e.speedLimit == 20.62,
+    'the joined incoming edge retains its direction, widths and speed metadata')
+  T.check(g.nodes.b ~= nil and g.edges[1][2] == 'b', 'compaction leaves the cached raw graph unchanged')
+  local variants = {
+    { 'a real junction', function(g) g.nodes.x = { 50, 50, 0, 4 }; g.edges[4] = { 'b', 'x', 1, 1, 0, 10, 1, 4 } end },
+    { 'a clipped junction arm', function(g) g.nodes.x = { 500, 50, 0, 4 }; g.edges[4] = { 'b', 'x', 1, 1, 0, 10, 1, 4 } end },
+    { 'a signalled junction', function(g) g.signals = { { j = 'b', app = {} } } end },
+    { 'a signal approach', function(g) g.signals = { { j = 'd', app = { { 'c' } } } } end },
+    { 'a lane-count change', function(g) g.edges[3][4] = 4 end },
+    { 'a tapered seam', function(g) g.edges[2][9] = 8 end },
+    { 'an isolated speed restriction', function(g) g.edges[2][6] = 5 end },
+    { 'an isolated posted limit', function(g) g.edges[2][10] = 5 end },
+    { 'a rough segment', function(g) g.edges[2][11] = true end },
+    { 'a blocked segment', function(g) g.edges[2][7] = 0 end },
+    { 'opposed one-way edges', function(g) g.edges[3][1], g.edges[3][2] = 'd', 'c' end },
+    { 'a two-way road', function(g) for _, e in ipairs(g.edges) do e[3], e[4], e[5] = 0, 3, 2 end end },
+    { 'a genuine corner', function(g) g.nodes.d[2] = 50 end },
+    { 'a longer segment', function(g) g.nodes.c[1] = 51.1 end },
+  }
+  for _, case in ipairs(variants) do
+    local g = seam(); case[2](g)
+    local ns = N.toNodes(g, { -100, -100, 200, 200 }, 0, false)
+    T.check(ns.b and ns.c and ns.b.links.c, 'preserve ' .. case[1])
+  end
+  local reversed = seam()
+  reversed.edges[1], reversed.edges[3] = reversed.edges[3], reversed.edges[1]
+  local ns = N.toNodes(reversed, nil, 0, false)
+  T.check(not ns.b and ns.a.links.c and ns.c.links.d, 'edge input order does not change the retained node')
+end
 do
   local rg = { nodes = { a = { 0, 0, 0, 4 }, b = { 40, 0, 0, 4 } },
     edges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, nil, nil, false, true } } }

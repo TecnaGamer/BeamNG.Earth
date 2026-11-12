@@ -170,6 +170,60 @@ function M.tooSteep(p, q)
   return math.abs(p[3] - q[3]) > M.MAX_GRADE * math.max(run, 1.0)
 end
 
+-- Contract isolated sub-metre seams on an otherwise continuous one-way carriageway. The stock marker planner
+-- merges points this close, but the vehicle AI given both nodes can make a sharp lane adjustment and nearly stop.
+-- Keep junctions, clip boundaries, controls and changes in lanes/width/rules; the downstream node stays stable.
+function M.compactShortEdges(nodes, protected)
+  local function other(id, except)
+    local found
+    for nextId in pairs(nodes[id].links) do
+      if nextId ~= except then if found then return nil end; found = nextId end
+    end
+    return found
+  end
+  local function lengthSq(a, b)
+    return (a.x - b.x)^2 + (a.y - b.y)^2 + (a.z - b.z)^2
+  end
+  local function aligned(a, b, c)
+    local dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y) + (b.z - a.z) * (c.z - b.z)
+    return dot > 0.98 * math.sqrt(lengthSq(a, b) * lengthSq(b, c))
+  end
+  local function sameLanes(a, b)
+    return a.oneWay and b.oneWay and a.lanes == b.lanes and a.drivability == b.drivability
+      and a.rough == b.rough and a.rumble == b.rumble
+  end
+  local ids, removed = {}, 0
+  for id in pairs(nodes) do ids[#ids + 1] = id end
+  table.sort(ids)
+  for _, a in ipairs(ids) do
+    local A = nodes[a]
+    if A and not protected[a] then
+      for b, e in pairs(A.links) do
+        local B = nodes[b]
+        if e.oneWay and e.inNode == a and not protected[b] and lengthSq(A.pos, B.pos) <= 1 then
+          local p, q = other(a, b), other(b, a)
+          if p and q and p ~= q then
+            local P, Q = nodes[p], nodes[q]
+            local before, after = A.links[p], B.links[q]
+            if before.inNode == p and after.inNode == b and sameLanes(before, e) and sameLanes(e, after)
+              and before.outRadius == e.inRadius and e.inRadius == e.outRadius and e.outRadius == after.inRadius
+              and e.speedLimit == after.speedLimit and e.posted == after.posted
+              and lengthSq(P.pos, A.pos) > 1 and lengthSq(B.pos, Q.pos) > 1
+              and aligned(P.pos, A.pos, B.pos) and aligned(A.pos, B.pos, Q.pos) then
+              P.links[a], B.links[a] = nil, nil
+              P.links[b], B.links[p] = before, before
+              before.outNode, before.outPos = b, B.pos
+              nodes[a], removed = nil, removed + 1
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  return removed
+end
+
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
 -- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
@@ -232,7 +286,13 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
       end
     end
   end
-  return nodes, nn, ne, cutList
+  -- A clipped-away arm must not turn a junction into an apparent degree-two seam.
+  for _, sg in ipairs(g.signals or {}) do
+    if sg.j then cut[sg.j] = true end
+    for _, app in ipairs(sg.app or {}) do if app[1] then cut[app[1]] = true end end
+  end
+  local removed = M.compactShortEdges(nodes, cut)
+  return nodes, nn - removed, ne - removed, cutList
 end
 
 M.FOLLOW_MS = 8         -- m/s the player moves at least for a car ahead going its way to keep going (followsPlayer)
