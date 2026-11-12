@@ -6296,6 +6296,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
         // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
         // _buried, tunnel_cover_roads_over)
-    m.add("VERSION", 248)?;
+        // 253: a road joined at a bridge's end is no crossing under it whatever the C library's hypot rounds to
+        // (levelrules END_EPS_M)
+    m.add("VERSION", 253)?;
     Ok(())
 }
