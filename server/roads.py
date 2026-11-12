@@ -5520,6 +5520,8 @@ BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under t
 TUNNEL_FULL_H = 6.8     # m: roadmesh.TUNNEL_H (a full tube's height: the shorter ones are kept in heights)
 CHAIN_PORTAL_M = 3.0    # m: a tunnel part's end this near its own road's ground part is a portal (_chain_pins) ...
 CHAIN_END_M = 1.0       # ... or this near another ground road's end, or on one running on in line with it
+CHAIN_JOIN_M = 1.5      # m: tunnel parts' ends this near one another are one joint of the network
+PORTAL_TAIL_N = 9       # a part's last points (DECK_STEP apart: ~32 m) where a road it was carried past ends
 CHAIN_INLINE_COS = 0.87 # (within 30 degrees)
 TUNNEL_LOW_H = 3.6      # m: the lowest tube (floor to vault)
 MAJOR_LOW_H = 5.0       # m: ... on a major road (CONCRETE_WALL_CLASSES: road tunnels clear ~4.5 m, a truck ~4 m)
@@ -8084,7 +8086,7 @@ class TunnelProfiles(BridgeProfiles):
         import fast
         fast.require(245, "tunnel_chain_nodes")
         gfn = self._raw_ground if self.raw is not None else self._ground
-        nk = _EndJoin()
+        nk = _EndJoin(CHAIN_JOIN_M)     # (wider than the chain's own 0.5 m: Tromsø's roundabout pieces end ~1 m apart)
         ea, eb, starts, ss, gs, ends_xy = [], [], [0], [], [], {}
         sls, srs = [], []
         for k in keys:
@@ -8125,12 +8127,14 @@ class TunnelProfiles(BridgeProfiles):
                     self._load(ck, {}, ground)
                 except Exception as e:      # (a cell not at hand: the roads already read)
                     log.debug("tunnel chain approach cell %s: %s: %s", ck, type(e).__name__, e)
-        tang = {}
+        tang, last = {}, {}
         for k, a_, b_ in zip(keys, ea, eb):
             xy = np.asarray(pool[k][1], np.float64)[:, :2]
-            for nd, p0, p1 in ((a_, xy[0], xy[min(1, len(xy) - 1)]), (b_, xy[-1], xy[max(len(xy) - 2, 0)])):
+            for nd, p0, p1, tail in ((a_, xy[0], xy[min(1, len(xy) - 1)], xy[:PORTAL_TAIL_N]),
+                                     (b_, xy[-1], xy[max(len(xy) - 2, 0)], xy[-PORTAL_TAIL_N:])):
                 d = p0 - p1
                 tang.setdefault(nd, d / max(float(np.hypot(*d)), 1e-9))
+                last.setdefault(nd, tail)
         nodes_xy = np.asarray([ends_xy[q] for q in range(n)], np.float64)
         approach = np.zeros(n, bool)
         for gk, lns in (ground or {}).items():
@@ -8146,8 +8150,16 @@ class TunnelProfiles(BridgeProfiles):
                 for q in np.flatnonzero(hit & ~approach):
                     v = ln[seg[q] + 1] - ln[seg[q]]
                     v = v / max(float(np.hypot(*v)), 1e-9)
-                    if q in tang and abs(float(np.dot(v, tang[q]))) > CHAIN_INLINE_COS:
+                    tail = last.get(q)
+                    if q not in tang or abs(float(np.dot(v, tang[q]))) <= CHAIN_INLINE_COS or tail is None or \
+                            len(tail) < 2:
+                        continue
+                    # (and the road's own end on the tunnel's last metres: the map's portal it was carried past)
+                    if _seg_dist(np.asarray([ln[0], ln[-1]]), tail[:-1], tail[1:]).min() < CHAIN_END_M:
                         approach[q] = True
+        # every single end a portal too, as before: a portal onto a bridge has no ground road at it (Stuttgart's B14 at
+        # the Heslacher tunnel was closed 43 m down in the hill as a dead end); a junction at a portal needs the road
+        approach |= deg == 1
         # (a connected network with no road mapped on from any of its ends: every single end of it a portal, as before;
         # a chain also holds parts crossing it, not joined)
         root = list(range(n))
