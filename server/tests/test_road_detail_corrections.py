@@ -219,17 +219,17 @@ class ModelTest(unittest.TestCase):
                 face["sha256"],
             )
             self.assertTrue((stops.OUT / (n + ".dae")).exists())
-            self.assertTrue((stops.OUT / (n + ".png")).exists())
+            self.assertTrue((stops.OUT / (n + ".dds")).exists())     # (shipped as DDS: tools/mod_textures_dds.py)
             self.assertTrue(
-                materials[n + "_face"]["Stages"][0]["baseColorMap"].endswith("/" + n + ".png")
+                materials[n + "_face"]["Stages"][0]["baseColorMap"].endswith("/" + n + ".dds")
             )
         self.assertNotEqual(
-            (stops.OUT / "bne_eu_stop_fr.png").read_bytes(),
-            (stops.OUT / "bne_eu_stop_de.png").read_bytes(),
+            (stops.OUT / "bne_eu_stop_fr.dds").read_bytes(),
+            (stops.OUT / "bne_eu_stop_de.dds").read_bytes(),
         )
         self.assertNotEqual(
-            (stops.OUT / "bne_eu_stop_fr.png").read_bytes(),
-            (stops.OUT / "bne_eu_stop_gb.png").read_bytes(),
+            (stops.OUT / "bne_eu_stop_fr.dds").read_bytes(),
+            (stops.OUT / "bne_eu_stop_gb.dds").read_bytes(),
         )
 
     def test_stop_localization_preserves_pose_and_legacy_quebec(self):

@@ -18,6 +18,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "server"), str(ROOT / "tools"), str(Path(__file__).parent)]
 import franceroads as fr
+import mod_textures_dds
 import furniture
 import geodesy
 import mapgeom
@@ -326,7 +327,7 @@ class AssetTest(unittest.TestCase):
         from PIL import Image, ImageOps
         for a, b in (("fr_a1a", "fr_a1b"), ("fr_a1c", "fr_a1d")):
             np.testing.assert_array_equal(np.asarray(assets.texture(a)), np.asarray(ImageOps.mirror(assets.texture(b))))
-        panel = Image.open(assets.OUT / "m9c.color.png")
+        panel = Image.open(assets.OUT / "m9c.color.dds")      # (the mod ships its textures as DDS)
         self.assertEqual(panel.size, (512, 512))
         self.assertGreater(np.count_nonzero(np.asarray(panel)[60:200, :, 0] < 100), 1000)
 
@@ -341,24 +342,22 @@ class AssetTest(unittest.TestCase):
         np.testing.assert_array_equal(expected, actual)
 
     def test_generator_reproduces_shipped_assets_ignoring_newlines(self):
-        from PIL import Image
         with tempfile.TemporaryDirectory() as tmp:
             assets.build(Path(tmp))
             generated = sorted(Path(tmp).iterdir())
             self.assertEqual(len(generated), 16)  # 7 models, 8 faces and their material file
             for got in generated:
-                src = assets.OUT / got.name
+                # (the tool draws PNGs; the mod ships them as DDS, tools/mod_textures_dds.py)
+                src = assets.OUT / mod_textures_dds.shipped(got.name)
                 with self.subTest(asset=got.name):
                     self.assertTrue(src.is_file())
                     if src.suffix == ".dae":
                         self.assert_collada_equal(src.read_text(encoding="utf-8"), got.read_text(encoding="utf-8"))
                     elif src.suffix == ".json":
                         self.assertEqual(json.loads(src.read_text(encoding="utf-8")),
-                                         json.loads(got.read_text(encoding="utf-8")))
-                    elif src.suffix == ".png":
-                        # PNG compression/metadata can vary without changing a pixel.
-                        with Image.open(src) as a, Image.open(got) as b:
-                            np.testing.assert_array_equal(np.asarray(a.convert("RGBA")), np.asarray(b.convert("RGBA")))
+                                         mod_textures_dds.shipped(json.loads(got.read_text(encoding="utf-8"))))
+                    elif src.suffix == ".dds":
+                        self.assertGreater(mod_textures_dds.texture_psnr(got, src), 45.0, got.name)
                     else:
                         self.fail("Unexpected generated asset: " + got.name)
 

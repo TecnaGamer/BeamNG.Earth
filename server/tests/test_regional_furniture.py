@@ -123,9 +123,11 @@ class ModelTest(unittest.TestCase):
         mats=json.loads((folder/'main.materials.json').read_text())
         glyph=mats['bne_sign_glyph'];self.assertTrue(glyph['alphaTest'])
         opacity=folder/Path(glyph['Stages'][0]['opacityMap']).name
-        with Image.open(folder/'sign_font.png') as colour,Image.open(opacity) as mask:
+        self.assertEqual(opacity.suffix,'.dds')   # (the mod ships its textures as DDS: BC7 colour, BC4 opacity)
+        with Image.open(folder/'sign_font.dds') as colour,Image.open(opacity) as mask:
             self.assertTrue(all(v<=4096 and v&(v-1)==0 for v in colour.size))
-            np.testing.assert_array_equal(np.array(colour.getchannel('A')),np.array(mask))
+            diff=np.abs(np.array(colour.getchannel('A'),dtype=np.int16)-np.array(mask,dtype=np.int16))
+            self.assertLess(diff.mean(),1.0)     # (the same alpha, within the two encoders' errors)
         self.assertGreater(mats['bne_sign_white']['Stages'][0]['retroreflectivity'],0)
 
 

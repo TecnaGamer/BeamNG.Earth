@@ -96,7 +96,7 @@ class PackagedMileMarkersTest(unittest.TestCase):
                     signstates._polygons.cache_clear()
         client = set(package.tree_files('mod/beamng_earth'))
         scenery = 'levels/beamng_earth/art/shapes/beamngEarth/roadside/'
-        for name in ('exit.materials.json', 'merge.materials.json', 'median.materials.json', 'sign_letters_o.data.png',
+        for name in ('exit.materials.json', 'merge.materials.json', 'median.materials.json', 'sign_letters_o.data.dds',
                      'Roadgeek-LICENSE.txt'):
             self.assertIn(scenery + name, client)
         for name in ('exit.materials.json', 'merge.materials.json'):
@@ -104,7 +104,7 @@ class PackagedMileMarkersTest(unittest.TestCase):
             for mat in mats.values():
                 for stage in mat.get('Stages', []):
                     for key, value in stage.items():
-                        if isinstance(value, str) and value.endswith('.png'):
+                        if isinstance(value, str) and value.endswith(('.png', '.dds')):
                             self.assertIn(value.lstrip('/'), client, (name, key))
 
 
@@ -117,10 +117,10 @@ class PackagedRadarSignsTest(unittest.TestCase):
         for sign in ('sr3a', 'sr3b'):
             with self.subTest(sign=sign):
                 texture = materials[f'bne_fr_radar_{sign}']['Stages'][0]['baseColorMap'].lstrip('/')
-                self.assertTrue(texture.endswith('.color.png'))
+                self.assertTrue(texture.endswith('.color.dds'))   # (a DDS the game takes as it is: no cooking)
                 self.assertIn(texture, client)
                 with Image.open(mod / texture) as image:
-                    self.assertEqual(image.mode, 'RGB')
+                    self.assertIn(image.mode, ('RGB', 'RGBA'))
                     for side in image.size:
                         self.assertEqual(side & (side - 1), 0)
 

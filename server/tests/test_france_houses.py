@@ -29,6 +29,7 @@ import house_regions
 import mapgeom
 import roads
 import build_french_houses as assets
+import mod_textures_dds
 import test_regional_geotiles as regional_geo
 import blockworker as bw
 
@@ -268,15 +269,17 @@ class HouseTest(unittest.TestCase):
     def test_original_textures_and_material_registration_are_reproducible(self):
         with tempfile.TemporaryDirectory() as td:
             assets.build(td)
-            names = {p.name for p in assets.OUT.iterdir()}
-            self.assertEqual(names, {p.name for p in Path(td).iterdir()})
+            # (the tool draws PNGs and names them; the mod ships them as DDS, tools/mod_textures_dds.py)
+            names = {p.name for p in Path(td).iterdir()}
+            self.assertEqual({p.name for p in assets.OUT.iterdir()}, {mod_textures_dds.shipped(n) for n in names})
             for name in names:
                 with self.subTest(asset=name):
                     if name.endswith(".png"):
-                        with Image.open(assets.OUT / name) as a, Image.open(Path(td) / name) as c:
-                            np.testing.assert_array_equal(np.asarray(a), np.asarray(c))
+                        self.assertGreater(mod_textures_dds.texture_psnr(Path(td) / name,
+                                                                         assets.OUT / mod_textures_dds.shipped(name)), 40.0)
                     else:
-                        self.assertEqual(json.loads((assets.OUT / name).read_text()), json.loads((Path(td) / name).read_text()))
+                        self.assertEqual(json.loads((assets.OUT / name).read_text()),
+                                         mod_textures_dds.shipped(json.loads((Path(td) / name).read_text())))
         material = json.loads((assets.OUT / "main.materials.json").read_text())
         self.assertEqual(set(material), set(fr.MATERIALS))
         self.assertTrue(all(not v["translucent"] for v in material.values()))

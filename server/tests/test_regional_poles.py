@@ -24,6 +24,7 @@ import furniture
 import poleprofiles as pp
 import roads
 import build_regional_poles as mesh
+import mod_textures_dds
 
 
 def road(fid="example", urban=False):
@@ -325,22 +326,16 @@ class GeometryTest(unittest.TestCase):
     def test_export_materials_lods_and_reproducibility(self):
         with tempfile.TemporaryDirectory() as d:
             mesh.build(d)
-            for name in (mesh.NAME + ".dae", "main.materials.json"):
-                # Git's Windows checkout can use CRLF. Compare all UTF-8 text
-                # after universal-newline decoding; geometry and materials stay exact.
-                self.assertEqual(Path(d, name).read_text(encoding="utf-8"),
-                                 (mesh.OUT / name).read_text(encoding="utf-8"), name)
-            # PNG compression can differ between Pillow/zlib builds. Require
-            # exactly the same decoded image, not the same compressed stream.
-            with Image.open(Path(d, "concrete_grain.png")) as generated, \
-                    Image.open(mesh.OUT / "concrete_grain.png") as shipped:
-                for img in (generated, shipped):
-                    self.assertEqual(img.format, "PNG")
-                    self.assertEqual(img.mode, "RGB")
-                    self.assertEqual(img.size, (128, 128))
-                self.assertEqual(generated.info, shipped.info, "PNG metadata")
-                np.testing.assert_array_equal(np.asarray(generated), np.asarray(shipped),
-                                              err_msg="concrete_grain.png pixels")
+            # Git's Windows checkout can use CRLF. Compare all UTF-8 text
+            # after universal-newline decoding; geometry and materials stay exact.
+            self.assertEqual(Path(d, mesh.NAME + ".dae").read_text(encoding="utf-8"),
+                             (mesh.OUT / (mesh.NAME + ".dae")).read_text(encoding="utf-8"))
+            # (the tool draws a PNG and names it; the mod ships it as DDS: tools/mod_textures_dds.py)
+            self.assertEqual(mod_textures_dds.shipped(json.loads(Path(d, "main.materials.json").read_text("utf-8"))),
+                             json.loads((mesh.OUT / "main.materials.json").read_text(encoding="utf-8")))
+            with Image.open(Path(d, "concrete_grain.png")) as generated:
+                self.assertEqual((generated.format, generated.mode, generated.size), ("PNG", "RGB", (128, 128)))
+                self.assertGreater(mod_textures_dds.texture_psnr(generated, mesh.OUT / "concrete_grain.dds"), 45.0)
             xml = ET.parse(Path(d, mesh.NAME + ".dae"))
             ns = {"c": "http://www.collada.org/2005/11/COLLADASchema"}
             names = {n.attrib.get("name") for n in xml.findall(".//c:node", ns)}

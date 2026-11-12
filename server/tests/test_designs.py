@@ -1959,7 +1959,7 @@ class ZoneSignsTest(unittest.TestCase):
             mats = json.load(f)
         self.assertLessEqual(set(dezones.MATERIALS_ZONE), set(mats))
         sheet = mats["bne_de_zones"]["Stages"][0]["baseColorMap"]
-        self.assertTrue(sheet.endswith("/bne_de_zones.png"))
+        self.assertTrue(sheet.endswith("/bne_de_zones.dds"))
         self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
 
 

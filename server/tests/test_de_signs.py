@@ -20,10 +20,39 @@ import designs  # noqa: E402
 import designsigns  # noqa: E402
 import furniture  # noqa: E402
 import build_de_signs  # noqa: E402
+import mod_textures_dds  # noqa: E402
 
 TREES = os.path.join(ROOT, "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth", "trees.lua")
 SHAPES = os.path.join(ROOT, "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
-SHEET = os.path.join(SHAPES, "bne_de_signs.png")
+# The mod ships the sheets as DDS (tools/mod_textures_dds.py: lossy BC7, no palette); the sheets' own checks run on
+# the tool's fresh output (made once here, as the tool makes them now), and the shipped DDS must match it.
+SHEET_DDS = os.path.join(SHAPES, "bne_de_signs.dds")
+ZONE_SHEET_DDS = os.path.join(SHAPES, "bne_de_zones.dds")
+_FRESH = []
+
+
+def fresh_sheets():
+    """(the junction signs' sheet, the zone sheet) as tools/build_de_signs.py makes them, built once a run."""
+    if not _FRESH:
+        import atexit
+        import shutil
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        atexit.register(shutil.rmtree, tmp, True)
+        _FRESH.extend(build_sheets(tmp, "fresh"))
+    return tuple(_FRESH)
+
+
+class _Fresh(os.PathLike):
+    """A path that is the fresh build's (os.fspath: resolved at use, built on first use)."""
+    def __init__(self, k):
+        self.k = k
+
+    def __fspath__(self):
+        return fresh_sheets()[self.k]
+
+
+SHEET = _Fresh(0)
 
 # DIN 6171's sign colours (VwV-StVO zu den §§ 39 bis 43 Rn. 20) as the VzKat's pictures show them (vzkat.de's 205,
 # 206, 301, 306, 307 and 1002-10, flat patches' medians, 2026-11-06), by their RAL names: 3020 Verkehrsrot, 9016
@@ -234,7 +263,7 @@ class CollisionTest(unittest.TestCase):
         self.assertEqual(out.stdout.split(), ["0", "108"])
 
 
-ZONE_SHEET = os.path.join(SHAPES, "bne_de_zones.png")
+ZONE_SHEET = _Fresh(1)
 SRGB_GREY = (0x7B, 0x7B, 0x7B)      # 274.2's struck-through ring, digits and ZONE (vzkat.de 274-2-50.gif, flat patches)
 
 
@@ -250,6 +279,7 @@ def sheet_cases():
     zones'."""
     r_in = 0.9 / (2 * 3 ** 0.5)
     ring = build_de_signs.ZONE_RING[0]
+    fresh_sheets()          # (built now, before any test patches the tool)
     return [(SHEET, (SRGB_9016, SRGB_3020, SRGB_1023, SRGB_9017),
              lambda im: [(at(im, "z205", 0.0, 0.0), SRGB_9016), (at(im, "z205", 0.0, r_in - 0.05), SRGB_3020),
                          (at(im, "z306", 0.0, 0.0), SRGB_1023), (at(im, "z307", 0.0, 0.0), SRGB_9017)]),
@@ -316,6 +346,9 @@ class ZoneSheetTest(unittest.TestCase):
                 with open(made[0][k], "rb") as f, open(made[1][k], "rb") as g:
                     self.assertEqual(f.read(), g.read(), "a rebuild is byte for byte the same")
                 self.assertEqual(sheet_differences(made[0][k], kept, base, spots), [], kept)
+            # the shipped DDS are these sheets (BC7: within its error)
+            for k, dds in enumerate((SHEET_DDS, ZONE_SHEET_DDS)):
+                self.assertGreater(mod_textures_dds.texture_psnr(Image.open(made[0][k]).convert("RGB"), dds), 40.0, dds)
 
     def test_the_comparison_sees_a_wrong_sheet(self):
         """sheet_differences flags a sheet one glyph off on one face (the 30's 3 drawn as an 8 on both zone faces;
