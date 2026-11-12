@@ -426,6 +426,7 @@ local function routeTarget(e, nodes, i, t)
   -- The first join starts at the car, which can be behind the router's snapped start.
   -- Accepted samples below reset previousS, so this allowance is only used for the initial join.
   local previousS = s0 - (auto and previous and math.sqrt((previous.x - rx)^2 + (previous.y - ry)^2) or 0)
+  local start, startS, previousDistanceSq = previous, previousS, d0 * d0
   local best = nil
   local via, lastVia, misses = {}, s0, 0
   -- sample along the route every SAMPLE_M from the player's spot (the simplified route's vertices can be far apart)
@@ -442,17 +443,26 @@ local function routeTarget(e, nodes, i, t)
     -- where the local graph ended a little sooner on the car's side, the target fell on the other one and the AI
     -- turned round across the highway to reach it, then circled at 4 mph (GitHub #180, reproduced on US-1, 2026-10-23)
     local function connected(bp, distanceSq)
-      return distanceSq <= M.ON_GRAPH_M^2 and
-        (not previous or M.routeConnected(segCache.links, previous, bp, s - previousS + 2 * M.ON_GRAPH_M))
+      if distanceSq > M.ON_GRAPH_M^2 then return false end
+      return not previous or M.routeConnected(segCache.links, previous, bp, s - previousS + 2 * M.ON_GRAPH_M)
+        -- A simplified route can lie nearer an exit for one sample. Do not let that tentative
+        -- projection prevent a closer continuation still reachable from the car before the fork.
+        or (distanceSq < previousDistanceSq and start
+          and M.routeConnected(segCache.links, start, bp, s - startS + 2 * M.ON_GRAPH_M))
     end
     local d, z, bp = M.nearestEdge(segs, x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k], connected)
     local final = s >= e.cum[n] - 1e-6
     if d <= M.ON_GRAPH_M then
+      -- Drop only waypoints on the abandoned branch; earlier pins must still guide the planner.
+      while #via > 0 and not M.routeConnected(segCache.links, via[#via].projection, bp,
+        s - via[#via].s + 2 * M.ON_GRAPH_M) do table.remove(via) end
+      lastVia = via[#via] and via[#via].s or s0
       previous, previousS = bp, s
+      previousDistanceSq = d * d
       -- the target / waypoint itself on that edge (not the route's point, which can lie nearer the other carriageway:
       -- the game's planner went for that one, the wrong way up a one-way road, and asked for a U-turn; GitHub #180)
       if bp and not final then x, y = bp.x, bp.y end
-      best = { s = s, x = x, y = y, z = z, final = final }
+      best = { s = s, x = x, y = y, z = z, final = final, projection = bp }
       misses = 0
       if s - lastVia >= M.VIA_M then via[#via + 1] = best; lastVia = s end
     elseif previous then

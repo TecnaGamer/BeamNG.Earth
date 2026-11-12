@@ -95,6 +95,27 @@ local function diversionRoads(f)
   f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
 end
 
+-- One projection near a fork can be closer to an exit than to the continuing main road.
+do
+  local f = fixture({ 'j', 'main', 'end' }, -2, 6, function(f)
+    local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
+    f.nodes = { w = n(0, -4, { j = { oneWay = true, inNode = 'w' } }),
+      j = n(300, -4, { main = { oneWay = true, inNode = 'j' }, ramp = { oneWay = true, inNode = 'j' } }),
+      main = n(420, 0, { ['end'] = { oneWay = true, inNode = 'main' } }), ['end'] = n(1000, 0, {}),
+      ramp = n(360, 2, { exit = { oneWay = true, inNode = 'ramp' } }), exit = n(500, 30, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+  end)
+  T.check(f.target[#f.target].x > 900, 'a tentative exit projection does not hide the reachable main-road continuation')
+  for _, wp in ipairs(f.target) do
+    if type(wp) == 'table' then
+      T.check(wp.y <= 0, 'the planner receives no mandatory waypoint on the abandoned exit')
+    end
+  end
+  f:mapArrives(); f:step()
+  T.check(f.target[#f.target].x > 900, 'graph replacement preserves the main-road choice at the fork')
+end
+
 for _, offset in ipairs({ 0, -18 }) do
   local f = fixture({ 'j', 'k' }, 2, 6, function(f)
     diversionRoads(f)
