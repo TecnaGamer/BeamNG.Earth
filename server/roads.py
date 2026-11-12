@@ -2155,8 +2155,17 @@ def _passage_widths(feats, specs):
     import busstations
     if not busstations.PASSAGE_IDS:
         return specs
-    for j, sp in enumerate(specs):
-        if sp is not None and sp.cls == "service" and str(feats.ids[j]) in busstations.PASSAGE_IDS:
+    # (the lanes found by id, the layer's ids indexed once: every spec of the layer tested at each call, a call per
+    # road_specs ask, was ~1 % of a city's road tiles, 2026-11-12)
+    at = feats.__dict__.get("_ids_at")
+    if at is None or at[0] != len(feats.ids):
+        index = {}
+        for j, f in enumerate(feats.ids):
+            index.setdefault(str(f), []).append(j)
+        at = feats.__dict__["_ids_at"] = (len(feats.ids), index)
+    for j in sorted(j for fid in list(busstations.PASSAGE_IDS) for j in at[1].get(fid, ()) if j < len(specs)):
+        sp = specs[j]
+        if sp is not None and sp.cls == "service":
             kw = {}
             if sp.kind == "cobble":             # (the map's paving_stones for the whole yard: asphalt, _map_surface_value)
                 kw = {"kind": "paved", "surf": "asphalt"}

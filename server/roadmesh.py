@@ -611,52 +611,51 @@ def trim_overlaps(rb, context=(), shared=None):
     centre, and an AI car drove into it at 29 mph (Los Angeles, 2026-10-27). Pure."""
     if not rb:
         return rb
-    others = []                         # (owner, centre (k, 2), half width (k,), z (k,))
+    import fast
+    fast.require(235, "deck_trim_overlaps")
+    # (the cuts are native: earthfast deck_trim_overlaps, meshtrim.rs; each deck against every other deck near it was
+    # a numpy round of a few rows, hundreds a tile)
+    owners, groups, lefts, rights, zs, lens, own_in, targets = {}, {}, [], [], [], [], [], []
+    oid, gid, sh = [], [], []
     for n, ((left, right, v, m, layer, z), c) in enumerate(list(rb) + list(context)):
         if z is None:
             continue
-        others.append((c.get("fid", ("n", n)), (left + right) / 2, np.hypot(*(left - right).T) / 2,
-                       np.asarray(z, np.float64)))
+        if n < len(rb):
+            targets.append(len(oid))
+        owner = c.get("fid", ("n", n))
+        oid.append(owners.setdefault(owner, len(owners)))
+        if shared:
+            g = shared.get(owner)
+            gid.append(groups.setdefault(id(g), len(groups)))
+            sh.append(owner in shared)
+        else:
+            gid.append(-1)
+            sh.append(False)
+        lefts.append(np.asarray(left, np.float64)[:, :2])
+        rights.append(np.asarray(right, np.float64)[:, :2])
+        zs.append(np.asarray(z, np.float64).reshape(-1))
+        lens.append(len(lefts[-1]))
+    if not targets:
+        return list(rb)
+    tl_all, tr_all = fast._ef.deck_trim_overlaps(
+        np.ascontiguousarray(np.concatenate(lefts)), np.ascontiguousarray(np.concatenate(rights)),
+        np.ascontiguousarray(np.concatenate(zs)), np.r_[0, np.cumsum(lens)].astype(np.int64),
+        np.array(oid, np.int64), np.array(gid, np.int64), np.array(sh, bool), np.array(targets, np.int64),
+        np.array([TRIM_DZ[0], TRIM_DZ[1], TRIM_GAP_M, 1.0 if shared else 0.0], np.float64))
     out = []
+    at = 0
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         if z is None:
             out.append(((left, right, v, m, layer, z), c))
             continue
-        own = c.get("fid", ("n", n))
-        mid = (left + right) / 2
-        hw = np.hypot(*(left - right).T) / 2
-        u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
-        tl, tr = np.zeros(len(mid)), np.zeros(len(mid))
-        lo, hi = mid.min(0) - hw.max() - 30.0, mid.max(0) + hw.max() + 30.0
-        for owner, om, ohw, oz in others:
-            if owner == own or len(om) < 2:
-                continue
-            if shared and own in shared and shared.get(owner) is shared[own]:
-                continue  # the joined roads now share one surface; preserve their full carriageway widths
-            if (om.max(0) < lo).any() or (om.min(0) > hi).any():
-                continue
-            a, b = om[:-1], om[1:]
-            d = b - a
-            L2 = np.maximum((d * d).sum(1), 1e-12)
-            t = np.clip(((mid[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
-            q = a[None] + t[..., None] * d[None]
-            dist = np.hypot(*(q - mid[:, None, :]).transpose(2, 0, 1))
-            j = np.argmin(dist, 1)
-            k = np.arange(len(mid))
-            dc, tj, qj = dist[k, j], t[k, j], q[k, j]
-            zo = oz[j] + tj * (oz[np.minimum(j + 1, len(oz) - 1)] - oz[j])
-            wo = ohw[j] + tj * (ohw[np.minimum(j + 1, len(ohw) - 1)] - ohw[j])
-            dz = np.abs(zo - z)
-            hit = (dc < hw + wo) & (dz >= TRIM_DZ[0]) & (dz < TRIM_DZ[1]) & (dc > 1e-3)
-            if not hit.any():
-                continue
-            cut = np.maximum(hw - (dc / 2 - TRIM_GAP_M), 0.0)
-            on_left = ((qj - mid) * u).sum(1) > 0
-            tl = np.where(hit & on_left, np.maximum(tl, cut), tl)
-            tr = np.where(hit & ~on_left, np.maximum(tr, cut), tr)
+        k = len(left)
+        tl, tr = tl_all[at:at + k], tr_all[at:at + k]
+        at += k
         if not (tl.any() or tr.any()):
             out.append(((left, right, v, m, layer, z), c))
             continue
+        hw = np.hypot(*(left - right).T) / 2
+        u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
         tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
         tr = np.minimum(tr, 0.9 * hw)
         out.append(((left - u * tl[:, None], right + u * tr[:, None], v, m, layer, z), c))
@@ -869,9 +868,11 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None):
 
 def _shared(P, UV, T):
     """The mesh with its equal points (position and uv to 0.1 mm) made one."""
+    import fast
+    fast.require(235, "shared_points")
     key = np.round(np.c_[P, UV] * 1e4).astype(np.int64)
-    _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    return P[first], UV[first], inv.reshape(-1)[T]
+    first, inv = fast._ef.shared_points(np.ascontiguousarray(key))       # (np.unique(axis=0)'s, natively)
+    return P[first], UV[first], inv[T]
 
 
 def _frontage_mask(polys, box):
@@ -1412,10 +1413,10 @@ def _quads(base, k, row_a, row_b):
 
 def _keep_up(tri, xy, base):
     """tri with the triangles facing the ribbon's way kept (a mitre folding over itself turns some over)."""
-    loc = tri - base
-    e1, e2 = xy[loc[:, 1]] - xy[loc[:, 0]], xy[loc[:, 2]] - xy[loc[:, 0]]
-    cz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
-    return tri[cz * np.sign(np.median(cz) or 1.0) > 1e-6]
+    import fast
+    fast.require(235, "keep_up_mask")
+    return tri[fast._ef.keep_up_mask(np.ascontiguousarray(tri, np.int64).reshape(-1, 3),
+                                     np.ascontiguousarray(xy, np.float64), int(base))]
 
 
 def _fade_uv(UV, vr, par):

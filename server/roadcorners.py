@@ -383,6 +383,7 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
     x0, y0, x1, y1 = box
     ex0, ey0, ex1, ey1 = exact if exact is not None else box
     st = markings.style(country, float(np.mean([r[3] for r in rows])))
+    packed = None
     for c in find(rows, box, rings):
         sides = c["road_sides"]
         for side, cut in zip(sides, c["edge_cuts"]):
@@ -403,9 +404,16 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
             # (as the straight decals: none where another carriageway is near; the roads at this junction not counted,
             # the arc keeps off them, and a through road split at the node had its other half wipe the arc)
             X = c["edge_cuts"][0][0]
+            if packed is None:          # (the roads' points once a tile: each corner's distances in one native call)
+                import fast
+                fast.require(235, "lines_point_min_dist")
+                lens = [len(r[2]) for r in rows]
+                packed = (np.ascontiguousarray(np.concatenate([np.asarray(r[2], np.float64)[:, :2] for r in rows])),
+                          np.r_[0, np.cumsum(lens)].astype(np.int64))
+            near = fast._ef.lines_point_min_dist(*packed, float(X[0]), float(X[1]))
             others = [(p2[:, :2], s2.width / 2 + roads.EDGE_DECAL["w"] + roads.EDGE_DECAL_GAP_M)
-                      for f2, s2, p2, _ in rows if s2.kind in roads.BUILT and f2 not in (sides[0][0], sides[1][0])
-                      and float(np.min(np.hypot(*(p2[:, :2] - X).T))) > JUNCTION_NEAR_M]
+                      for (f2, s2, p2, _), dk in zip(rows, near.tolist())
+                      if s2.kind in roads.BUILT and f2 not in (sides[0][0], sides[1][0]) and dk > JUNCTION_NEAR_M]
             for piece in roads.clip_polyline(_decal_line(c), x0, y0, x1, y1):
                 for run in (_cut_decal(piece, others) if others else [piece]):
                     for ch in roads.split(roads.densify(run)):

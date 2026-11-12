@@ -97,6 +97,9 @@ mod l0roads;
 mod groundphoto;
 mod layerfold;
 mod roadsurf;
+mod levelways;
+mod meshtrim;
+mod shelterfit;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5963,6 +5966,26 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
     // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
     m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
-    m.add("VERSION", 234)?;
+    // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
+    // Python round the line kernels was most of the smoothing's CPU)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_rebuild, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_fractions, m)?)?;
+    // (and lanesections.split's new layer: lane_split_coords / lane_split_rules)
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_coords, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_rules, m)?)?;
+    // (and levelways.promote: level_ways_promote)
+    m.add_function(wrap_pyfunction!(levelways::level_ways_promote, m)?)?;
+    // (and roadmesh's per-ribbon rounds: deck_trim_overlaps, keep_up_mask, shared_points)
+    m.add_function(wrap_pyfunction!(meshtrim::deck_trim_overlaps, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::keep_up_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::shared_points, m)?)?;
+    // (and shelters' carriageway tests: shelter_intrusion, shelter_worst_post)
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_intrusion, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_worst_post, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::lines_point_min_dist, m)?)?;
+    // (and busstations.centroid's shoelace centroid: ring_centroid)
+    m.add_function(wrap_pyfunction!(stationgeom::ring_centroid, m)?)?;
+    m.add("VERSION", 235)?;
     Ok(())
 }

@@ -150,6 +150,157 @@ pub fn lane_runs<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, room: P
     Ok((arr.into_pyarray(py), starts.into_pyarray(py), before.into_pyarray(py)))
 }
 
+// ---- split's new layer (kernel 235) --------------------------------------------------------------------------------
+// lanesections.split rebuilt the whole roads layer of a cell holding a lane section in Python (every feature's rings,
+// every rule row of every table, one by one: ~0.9 CPU-s of a 16-tile I-83 probe, 2026-11-12). The jobs (the new
+// features, sorted) are decided in Python; their geometry and the rows they keep are gathered here.
+
+type Coords<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>,
+                    Bound<'py, PyArray2<f64>>);
+
+/// split's geometry: job j a copy of old feature old[j] (all its parts and rings, as part_off / ring_off / coord_off /
+/// coords (N, 2) hold them), or, where moved[j], one part of one ring: pts[pts_off[j] .. pts_off[j + 1]]. Returns the
+/// new (part_off, ring_off, coord_off, coords).
+#[pyfunction]
+pub fn lane_split_coords<'py>(
+    py: Python<'py>,
+    part_off: PyReadonlyArray1<'py, i64>,
+    ring_off: PyReadonlyArray1<'py, i64>,
+    coord_off: PyReadonlyArray1<'py, i64>,
+    coords: PyReadonlyArray2<'py, f64>,
+    old: PyReadonlyArray1<'py, i64>,
+    moved: PyReadonlyArray1<'py, bool>,
+    pts: PyReadonlyArray2<'py, f64>,
+    pts_off: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Coords<'py>> {
+    let (po, ro, co, xy) = (part_off.as_array(), ring_off.as_array(), coord_off.as_array(), coords.as_array());
+    let (old, moved, pts, poff) = (old.as_array(), moved.as_array(), pts.as_array(), pts_off.as_array());
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(format!("lane_split_coords: {m}"));
+    let k = old.len();
+    if moved.len() != k || poff.len() != k + 1 || xy.ncols() < 2 || pts.ncols() < 2 || po.is_empty() {
+        return Err(bad("old / moved / pts_off must match; coords and pts (N, 2)"));
+    }
+    let nf = po.len() - 1;
+    let ok_range = |a: i64, b: i64, n: usize| a >= 0 && b >= a && (b as usize) <= n;
+    let (mut npo, mut nro, mut nco) = (vec![0i64], vec![0i64], vec![0i64]);
+    let mut out: Vec<f64> = Vec::new();
+    for j in 0..k {
+        if moved[j] {
+            let (a, b) = (poff[j], poff[j + 1]);
+            if !ok_range(a, b, pts.nrows()) {
+                return Err(bad("bad pts_off"));
+            }
+            for q in a as usize..b as usize {
+                out.push(pts[[q, 0]]);
+                out.push(pts[[q, 1]]);
+            }
+            nco.push((out.len() / 2) as i64);
+            nro.push(nco.len() as i64 - 1);
+        } else {
+            let i = old[j];
+            if i < 0 || i as usize >= nf {
+                return Err(bad("bad old"));
+            }
+            let i = i as usize;
+            if !ok_range(po[i], po[i + 1], ro.len().saturating_sub(1)) {
+                return Err(bad("bad part_off"));
+            }
+            for p in po[i] as usize..po[i + 1] as usize {
+                if !ok_range(ro[p], ro[p + 1], co.len().saturating_sub(1)) {
+                    return Err(bad("bad ring_off"));
+                }
+                for r in ro[p] as usize..ro[p + 1] as usize {
+                    if !ok_range(co[r], co[r + 1], xy.nrows()) {
+                        return Err(bad("bad coord_off"));
+                    }
+                    for q in co[r] as usize..co[r + 1] as usize {
+                        out.push(xy[[q, 0]]);
+                        out.push(xy[[q, 1]]);
+                    }
+                    nco.push((out.len() / 2) as i64);
+                }
+                nro.push(nco.len() as i64 - 1);
+            }
+        }
+        npo.push(nro.len() as i64 - 1);
+    }
+    let m = out.len() / 2;
+    Ok((
+        npo.into_pyarray(py),
+        nro.into_pyarray(py),
+        nco.into_pyarray(py),
+        numpy::ndarray::Array2::from_shape_vec((m, 2), out).expect("coords").into_pyarray(py),
+    ))
+}
+
+/// Python's max(x, 0.) and min(x, 1.) (a NaN stays: the first argument wins a tie or an unordered pair).
+fn clamp01(x: f64) -> f64 {
+    let y = if 0.0 > x { 0.0 } else { x };
+    if 1.0 < y { 1.0 } else { y }
+}
+
+type Rows<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<f64>>,
+                  Bound<'py, PyArray1<f64>>);
+
+/// split's rows of one rule table (feature, start, end per row): job j (old feature old[j], its section a[j] .. b[j]
+/// of it) keeps all of the feature's rows (in row order) when it is the whole feature (0 .. 1), else those over its
+/// section (a point row within 1e-7 of it, a span overlapping it), their fractions the section's. Returns (rows into
+/// the table, job of each, start, end), the jobs in order.
+#[pyfunction]
+pub fn lane_split_rules<'py>(
+    py: Python<'py>,
+    feature: PyReadonlyArray1<'py, i64>,
+    start: PyReadonlyArray1<'py, f64>,
+    end: PyReadonlyArray1<'py, f64>,
+    old: PyReadonlyArray1<'py, i64>,
+    a: PyReadonlyArray1<'py, f64>,
+    b: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Rows<'py>> {
+    let (feat, st, en, old, a, b) =
+        (feature.as_array(), start.as_array(), end.as_array(), old.as_array(), a.as_array(), b.as_array());
+    if st.len() != feat.len() || en.len() != feat.len() || a.len() != old.len() || b.len() != old.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("lane_split_rules: feature / start / end, old / a / b"));
+    }
+    // each feature's rows, ascending (RuleTable.rows)
+    let mut order: Vec<usize> = (0..feat.len()).collect();
+    order.sort_by_key(|&r| feat[r]);           // (stable: rows of one feature stay ascending)
+    let mut first: std::collections::HashMap<i64, (usize, usize)> = std::collections::HashMap::new();
+    let mut s = 0usize;
+    while s < order.len() {
+        let f = feat[order[s]];
+        let mut e = s + 1;
+        while e < order.len() && feat[order[e]] == f {
+            e += 1;
+        }
+        first.insert(f, (s, e));
+        s = e;
+    }
+    let (mut rows, mut jobs, mut us, mut vs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for j in 0..old.len() {
+        let Some(&(s, e)) = first.get(&old[j]) else { continue };
+        let (aj, bj) = (a[j], b[j]);
+        let whole = aj == 0.0 && bj == 1.0;
+        for &r in &order[s..e] {
+            let (u, v) = (st[r], en[r]);
+            if whole {
+                rows.push(r as i64);
+                jobs.push(j as i64);
+                us.push(clamp01(u));
+                vs.push(clamp01(v));
+                continue;
+            }
+            let point = (u - v).abs() < 1e-8;
+            if (point && aj - 1e-7 <= u && u <= bj + 1e-7) || (!point && v > aj && u < bj) {
+                rows.push(r as i64);
+                jobs.push(j as i64);
+                us.push(clamp01((u - aj) / (bj - aj)));
+                vs.push(clamp01((v - aj) / (bj - aj)));
+            }
+        }
+    }
+    Ok((rows.into_pyarray(py), jobs.into_pyarray(py), us.into_pyarray(py), vs.into_pyarray(py)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

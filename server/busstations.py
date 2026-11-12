@@ -183,15 +183,14 @@ def area(ring):
 
 def centroid(xy):
     """Centre of a point set or ring (the area's centroid for a ring with an area, else the mean)."""
-    xy = _open(xy)
-    if len(xy) >= 3:
-        x, y = xy[:, 0], xy[:, 1]
-        cr = x * np.roll(y, -1) - np.roll(x, -1) * y
-        a = float(cr.sum()) * 0.5
-        if abs(a) > 1e-6:
-            return np.array([float(((x + np.roll(x, -1)) * cr).sum()) / (6 * a),
-                             float(((y + np.roll(y, -1)) * cr).sum()) / (6 * a)])
-    return xy.mean(0)
+    xy = np.asarray(xy, np.float64)
+    if xy.ndim == 2:            # (the shoelace sums natively: earthfast ring_centroid, numpy's numbers)
+        import fast
+        fast.require(235, "ring_centroid")
+        got = fast._ef.ring_centroid(np.ascontiguousarray(xy))
+        if got is not None:
+            return np.array(got, np.float64)
+    return _open(xy).mean(0)
 
 
 GEOM_NATIVE = 221          # earthfast.VERSION of station_contains / station_path_dist (stationgeom.rs)
