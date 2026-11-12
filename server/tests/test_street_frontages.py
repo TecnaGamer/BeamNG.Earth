@@ -130,10 +130,12 @@ class PavementTest(unittest.TestCase):
         cached = SimpleNamespace(roads=lambda la, lo: ([], False))
         rgb = np.zeros((16, 16, 3), np.uint8)
         surface.paint_square(rgb, FRAME, 0., 0., 20., cached, simple=True, pending=pending)
-        self.assertEqual(pending, set())        # (the European road details off: as before)
-        with patch.dict(os.environ, {"BNE_EU_ROAD_DETAILS": "on"}):
-            surface.paint_square(rgb, FRAME, 0., 0., 20., cached, simple=True, pending=pending)
+        # (every photo, not only with the European road details on: Discord's gravel mountain roads)
         self.assertEqual(pending, {surface.PHOTO_ROADS_PENDING})
+        done = SimpleNamespace(roads=lambda la, lo: ([], True))
+        later = set()
+        surface.paint_square(rgb, FRAME, 0., 0., 20., done, simple=True, pending=later)
+        self.assertEqual(later, set())          # (its cells here: nothing to wait for)
         key = (1, 0, 0)
         server = SimpleNamespace(
             base_pending={}, base_stale=set(), layout=SimpleNamespace(block=16),
