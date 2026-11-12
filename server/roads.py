@@ -37,6 +37,7 @@ import mapcells
 import mapgeom
 import photosurface
 import roadmesh
+import roadsurf
 import roadsmooth
 import staging
 
@@ -792,8 +793,11 @@ SKEW_MIN_SIN = math.sin(math.radians(20.0))    # flatter crossings are taken as 
 
 
 def _feature_boxes(feats):
-    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats."""
-    got = feats.__dict__.get("_lonlat_boxes")
+    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats (as "_feature_boxes":
+    surface._lonlat_boxes keeps its own (lon0, lon1, lat0, lat1) as "_lonlat_boxes"; under one key, whichever ran first
+    on a layer gave the other its columns crossed, and paint_roads then took every road for off the block: no road paint
+    in the ground and no carriageway in its photo, the Discord "mountain roads 100% gravel/grass since 1.6.3")."""
+    got = feats.__dict__.get("_feature_boxes")
     if got is None:
         n = len(feats)
         got = np.full((n, 4), np.nan)
@@ -810,7 +814,7 @@ def _feature_boxes(feats):
             for i in np.flatnonzero(ok):
                 seg = ll[a[i]:b[i]]
                 got[i] = (seg[:, 0].min(), seg[:, 1].min(), seg[:, 0].max(), seg[:, 1].max())
-        feats.__dict__["_lonlat_boxes"] = got
+        feats.__dict__["_feature_boxes"] = got
     return got
 
 
@@ -2079,7 +2083,7 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
             (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
-            (germanroads.VERSION,) if germanroads.ON else ())
+            (germanroads.VERSION,) if germanroads.ON else ()) + roadsurf.layer_tags(feats)
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
         # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
@@ -3339,6 +3343,19 @@ def _spec_inputs(feats):
     if photosurface.ON and any(vals[i] is None for i in np.flatnonzero(elig).tolist()):
         ph = _photo_surface(feats)
         vals = [ph.get(i) if v is None else v for i, v in enumerate(vals)]
+    # the aerial's verdict on an untagged minor road (roadsurf.py; this run's, made by an earlier one): unpaved -> gravel
+    # (a track stays dirt), paved -> its class's paved (a track asphalt), the regional rule not asked for either
+    photo_paved = np.zeros(n, bool)
+    for i, v in roadsurf.layer_verdicts(feats).items():
+        if vals[i] is not None:
+            continue
+        if v == roadsurf.UNPAVED:
+            if cls_s[i] != "track":
+                vals[i] = "gravel"
+        else:
+            photo_paved[i] = True
+            if cls_s[i] == "track":
+                vals[i] = "asphalt"
     tokens, tok_of, kind_of = [], {}, {}
 
     def token(v):
@@ -3362,7 +3379,7 @@ def _spec_inputs(feats):
     good = np.zeros(n, bool) if sm is None else np.fromiter(
         (str(v).strip().lower() in GOOD_SMOOTHNESS for v in sm.tolist()), bool, n)
     reg_pre = (np.fromiter((REGIONAL_ON and v is None and c in REGIONAL_CLASSES for c, v in zip(cls_s, vals)), bool, n)
-               & np.isnan(osm_lanes) & ~good)
+               & np.isnan(osm_lanes) & ~good & ~photo_paved)
     nm_col = a.get("name")
     name = None
     if nm_col is not None:

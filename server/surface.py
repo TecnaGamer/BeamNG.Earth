@@ -475,8 +475,11 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # (cobble: the setts' own mean colour, bne_cobble_b 135 132 127, a touch darker for the joints at a distance: the
 # drawn block's detail texture lies over this paint, and a darker brown showed the texture's 1 m-stepped edge as a tone
 # change, the user 2026-11-11: "the textures dont seem to match the border of the paint collor")
+# concrete (a paved road the map says is concrete: surface=concrete / concrete:plates / concrete:lanes): the pale grey
+# of a concrete motorway in the aerials (NAIP, 2026-11-12: I-405 at Sepulveda Pass luma 170-179, I-35E Dallas 162-184,
+# Houston's Katy Freeway 183-200, against Santa Monica Boulevard's asphalt 130-146)
 PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (128, 125, 120, 0.9),
-                   "paved": (95, 95, 94, 1.0)}
+                   "concrete": (172, 170, 164, 1.0), "paved": (95, 95, 94, 1.0)}
 # The painted roads in the photo's own tone (earthfast.paint_lines_toned; the user, 2026-11-11: "look into other ways to
 # get the ground collor, and material to be right" -> "start with 1"): a kind's colour at a pixel is the mean of the
 # photo's pavement under it within PHOTO_TONE_RADIUS_M (markings over the sample luma, shadow under it, greenery and
@@ -487,8 +490,21 @@ PHOTO_TONE_RADIUS_M = 6.0
 PHOTO_TONE_SAMPLE_LUMA = (40.0, 185.0)
 PHOTO_TONE_SAMPLE_SAT = 0.30
 PHOTO_TONE_GREEN = 10.0
-PHOTO_ROAD_TONE = {"dirt": (70.0, 150.0, 0.45, 0.6, 12.0), "gravel": (110.0, 190.0, 0.30, 0.6, 12.0),
-                   "cobble": (80.0, 150.0, 0.22, 0.75, 12.0), "paved": (55.0, 135.0, 0.14, 0.75, 12.0)}
+# Concrete keeps its light tone (the user, 2026-11-12: "Concrete highways look too dark"): the paved cap (135) pulled a
+# concrete motorway's pale grey (luma 165-200 in NAIP, saturation 0.07-0.11) to asphalt's, and the sample cap (185)
+# left half its pixels out. A kind's tone row may carry (earthfast 231, roadtone.rs) its own sample cap and a light
+# pavement band: a tone from `light from` up, no more saturated than its saturation cap, keeps its luma up to the band's
+# cap (faded in over 20 luma below `light from` and out over half the saturation cap above it: no step along a road).
+# Paved: photo-detected concrete (and pale old asphalt) keeps its shade; a beige tone (sand, dry dirt under a road
+# drawn off its line: saturated) is held at the paved cap as before. Concrete (the map's tag): the photo's own tone
+# whatever it is (Phoenix's Papago Freeway, tagged concrete, wears a dark rubberised asphalt overlay: luma 86-134),
+# its light flat colour where the photo has none. The markings stay out at the higher sample cap: the second pass
+# keeps samples within 22 luma of the first pass's tone.
+PHOTO_ROAD_TONE = {"dirt": (70.0, 150.0, 0.45, 0.6, 12.0, 0.0, 0.0, 0.0, 0.0),
+                   "gravel": (110.0, 190.0, 0.30, 0.6, 12.0, 0.0, 0.0, 0.0, 0.0),
+                   "cobble": (80.0, 150.0, 0.22, 0.75, 12.0, 0.0, 0.0, 0.0, 0.0),
+                   "concrete": (70.0, 205.0, 0.12, 0.8, 12.0, 215.0, 0.0, 0.0, 0.0),
+                   "paved": (55.0, 135.0, 0.14, 0.75, 12.0, 215.0, 150.0, 205.0, 0.11)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
                                 # antialiased rim left a pale hair between the edge line and the decal)
@@ -519,6 +535,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
             sp = specs[i]
             if sp is None or fid in seen or sp.kind not in PHOTO_ROAD_RGBA:
                 continue
+            kname = "concrete" if sp.kind == "paved" and sp.surf == "concrete" else sp.kind
             seen.add(fid)
             m = sp.width / 2        # (all of the feature off the photo: none of its rings is in it)
             if box[i, 1] < x0 - m or box[i, 0] > x0 + size + m or box[i, 3] < y0 - m or box[i, 2] > y0 + size + m:
@@ -539,7 +556,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
                 else:
                     hp = (ws / 2 + PHOTO_ROAD_EDGE_M) * px_m
                     hws.append((hp[:-1] + hp[1:]) / 2)
-                kind.append(np.full(len(c) - 1, kinds.index(sp.kind), np.uint8))
+                kind.append(np.full(len(c) - 1, kinds.index(kname), np.uint8))
                 if roads_of is not None:
                     roads_of.append((np.full(len(c) - 1, nroad, np.int64),
                                      np.full(len(c) - 1, not roadsmod.has_sidewalks(sp) and sp.kind == "paved")))
@@ -827,7 +844,7 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
         out = filled
     else:
         colors = np.array([PHOTO_ROAD_RGBA[k] for k in PHOTO_ROAD_RGBA], np.float32)
-        fast.require(203, "roads in the photo's own tone")
+        fast.require(231, "roads in the photo's own tone, concrete's light")
         tone = np.array([PHOTO_ROAD_TONE[k] for k in PHOTO_ROAD_RGBA], np.float32)
         radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
         out = fast._ef.paint_lines_toned(np.ascontiguousarray(filled, np.uint8), *got, colors, tone, radius,
@@ -1065,7 +1082,7 @@ def _square_pads(frame, x0, y0, size, surface):
 # (farfield.NEAR_MASK_PX; the GPU has room, the CPU less, the user 2026-10-22); the mod's material gives the masked
 # part a second layer of the stock asphalt (its colour, grain and bumps, world-locked; satmat.lua), the rest the photo.
 ROAD_MASK_MAX_TEXEL = 1.0       # m per texel of the mask
-ROAD_MASK_KINDS = ("paved", "cobble")
+ROAD_MASK_KINDS = ("paved", "cobble", "concrete")
 
 
 def road_mask_name(texture):
@@ -1372,7 +1389,7 @@ def photo_pads(rgb, frame, x0, y0, size, pads):
     cov = _pads_px(frame, x0, y0, size, w, h, pads) if pads else None
     if cov is None:
         return rgb
-    fast.require(204, "pads in the photo's own tone")
+    fast.require(231, "pads in the photo's own tone (its 9-value tone row)")
     radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
     return fast._ef.paint_cover_toned(np.ascontiguousarray(rgb, np.uint8), np.ascontiguousarray(cov, np.float32),
                                       np.array(PHOTO_ROAD_RGBA["paved"], np.float32),
