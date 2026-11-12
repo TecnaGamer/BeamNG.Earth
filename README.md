@@ -190,10 +190,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
-- Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
-  corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
-  gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
-  ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
+- Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
+  straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
+  bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's
+  tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m), joined by transition
+  spirals so the curvature has no steps (`BNE_ROAD_G2=off`: the arcs alone). The road's ends and the points where
+  another road joins it stay where the map has them. The road mesh, the ground's grading, the markings and the AI's
+  routes all follow the same line. Driveways and parking aisles keep their mapped corners; railways are rounded only
+  with `BNE_RAIL_CURVES=on`.
 - Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
   downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
@@ -292,6 +296,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Easy setup: one download per system (Windows .exe, Linux AppImage) that installs the mod and starts the server
   and the game; from the source, `install.py` installs everything and `start.py` keeps the mod in sync.
 - Runs on a Steam Deck (aim: 30 fps on the Handheld graphics preset).
+- Computers with little memory: BeamNG.drive itself asks for 16 GB. On an 8 GB computer the app says so at start,
+  the world server runs in fewer processes with smaller caches and a coarser distant land, and the first start picks
+  the Low preset; expect some stutter while the world loads. With about 4 GB the game alone does not fit: the app
+  warns clearly (in its window and in the game) and runs its smallest server. (`BNGE_LEAN=off` turns the low-memory
+  server off.)
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,

@@ -214,11 +214,28 @@ class SmoothLineTest(unittest.TestCase):
             np.testing.assert_array_equal(x, y)
 
 
+class DefaultsTest(unittest.TestCase):
+    def test_on_by_default(self):
+        import importlib
+        keep = {k: os.environ.pop(k) for k in ("BNE_ROAD_SMOOTH", "BNE_ROAD_G2") if k in os.environ}
+        try:
+            m = importlib.reload(roadsmooth)
+            self.assertTrue(m.ON and m.G2_ON)
+            os.environ["BNE_ROAD_SMOOTH"] = "off"
+            self.assertFalse(importlib.reload(roadsmooth).ON)
+        finally:
+            os.environ.pop("BNE_ROAD_SMOOTH", None)
+            os.environ.update(keep)
+            importlib.reload(roadsmooth)
+
+
 class SmoothFeaturesTest(unittest.TestCase):
     def setUp(self):
         self.frame = geodesy.EnuFrame(49.04, 28.04, 0.0)
         was, roadsmooth.ON = roadsmooth.ON, True
         self.addCleanup(setattr, roadsmooth, "ON", was)
+        rail, roadsmooth.RAIL_ON = roadsmooth.RAIL_ON, True       # (the rails' arcs: BNE_RAIL_CURVES=on)
+        self.addCleanup(setattr, roadsmooth, "RAIL_ON", rail)
 
     def test_off_changes_nothing(self):
         roadsmooth.ON = False
@@ -293,6 +310,8 @@ class SmoothFeaturesTest(unittest.TestCase):
             self.assertGreater(float(np.min(np.hypot(*(h.en[:h.coord_off[1]] - mapped).T))), 0.05, "BNE_RAIL_SWITCH_FIX=off")
 
     def test_rule_fractions_follow_the_line(self):
+        self.addCleanup(setattr, roadsmooth, "G2_ON", roadsmooth.G2_ON)
+        roadsmooth.G2_ON = False                # (the arcs' exact tangent point: G2 below)
         bend = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0)]
         # a bridge from 0.9 of the line (160 m up the second piece, past the arc's end at 150 m) to its end
         f = _features(self.frame, [bend], ["primary"], {"flags": ([0], ["is_bridge"], [0.9], [1.0])})
@@ -305,6 +324,66 @@ class SmoothFeaturesTest(unittest.TestCase):
         self.assertLess(np.hypot(pts[i, 0] - 200.0, pts[i, 1] - 150.0), 1e-6)
         self.assertAlmostEqual(float(rt.start[0]) * s[-1], s[i] + 10.0, places=3)
         self.assertLess(float(rt.start[0]), 0.9)                          # the line got shorter, the bridge's share grew
+
+    def test_g2_rule_fractions_follow_the_line(self):
+        bend = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0)]
+        # a bridge from 0.9 of the line (160 m up the second piece) to its end: it starts there on the new line too
+        f = _features(self.frame, [bend], ["primary"], {"flags": ([0], ["is_bridge"], [0.9], [1.0])})
+        roadsmooth.smooth(f, self.frame)
+        rt = f.rules["flags"]
+        pts = f.en
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+        at = float(rt.start[0]) * s[-1]
+        q = np.array([np.interp(at, s, pts[:, 0]), np.interp(at, s, pts[:, 1])])
+        self.assertLess(float(np.hypot(*(q - (200.0, 160.0)))), 0.3)
+        self.assertAlmostEqual(float(rt.end[0]), 1.0)
+
+    def test_g2_is_curvature_continuous_and_keeps_connectors(self):
+        # a primary's mapped curve, chords turning unevenly, a side road joining at vertex 3 (an interior connector)
+        a = np.radians(np.cumsum([0, 4, 7, 3, 6, 2, 5, 4]))
+        xy = np.cumsum(np.c_[np.r_[0.0, 30 * np.cos(a)], np.r_[0.0, 30 * np.sin(a)]], axis=0)
+        line = [tuple(p) for p in xy]
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        f = _features(self.frame, [line], ["primary"])
+        con = mapgeom.rule_table([(0, "c0", [0.0, 0.0]), (0, "c1", [s[3] / s[-1]] * 2), (0, "c2", [1.0, 1.0])], "text")
+        f.rules["connectors"] = con
+        before = f.lonlat.copy()
+        roadsmooth.smooth(f, self.frame)
+        out = f.en
+        self.assertTrue(any((f.lonlat == before[3]).all(1)), "the connector's vertex stays bit for bit")
+        np.testing.assert_array_equal(f.lonlat[0], before[0])
+        np.testing.assert_array_equal(f.lonlat[-1], before[-1])
+
+        def jumps(p):
+            d = np.diff(p, axis=0)
+            L = np.hypot(*d.T)
+            h = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+            k = np.diff(h) / (0.5 * (L[:-1] + L[1:]))
+            return float(np.abs(np.diff(k)).max())
+        with unittest.mock.patch.object(roadsmooth, "G2_ON", False):
+            g = _features(self.frame, [line], ["primary"])
+            g.rules["connectors"] = mapgeom.rule_table([(0, "c0", [0.0, 0.0]), (0, "c1", [s[3] / s[-1]] * 2),
+                                                        (0, "c2", [1.0, 1.0])], "text")
+            roadsmooth.smooth(g, self.frame)
+        self.assertLess(jumps(out), 0.5 * jumps(g.en))
+        # the connector's fraction still points at its vertex
+        c = f.rules["connectors"]
+        s2 = np.r_[0.0, np.cumsum(np.hypot(*np.diff(out, axis=0).T))]
+        at = float(c.start[1]) * s2[-1]
+        q = np.array([np.interp(at, s2, out[:, 0]), np.interp(at, s2, out[:, 1])])
+        e, n, _ = self.frame.geodetic_to_enu(before[3:4, 1], before[3:4, 0], 0.0)
+        self.assertLess(float(np.hypot(q[0] - e[0], q[1] - n[0])), 0.05)
+
+    def test_raceways_are_smoothed_and_rings_too(self):
+        ring = [(60 * math.cos(t), 60 * math.sin(t)) for t in np.linspace(0, 2 * math.pi, 25)]
+        ring[-1] = ring[0]
+        f = _features(self.frame, [ring, [(0.0, 0.0), (100.0, 0.0), (190.0, 40.0)]], ["residential", "raceway"])
+        before = f.lonlat.copy()
+        roadsmooth.smooth(f, self.frame)
+        n = np.diff(f.coord_off)
+        self.assertGreater(n[0], 25, "a ring is rounded")
+        self.assertGreater(n[1], 3, "a raceway is rounded")
+        np.testing.assert_array_equal(f.lonlat[f.coord_off[1] - 1], before[24])
 
     def test_two_cells_agree_on_a_shared_road(self):
         line = [(0.0, 0.0), (80.0, 10.0), (120.0, 60.0), (200.0, 70.0)]

@@ -281,5 +281,36 @@ class KeepPreviousLogTest(unittest.TestCase):
             launcher.clear_level_flag(d)      # (none there: quiet)
             launcher.clear_level_flag(None)
 
+
+class MemoryNoticeTest(unittest.TestCase):
+    """The start's low-memory notice (8 GB / 4 GB machines: server/budget.py memory_notice): set apart, wrapped,
+    never stopping the start; nothing on a machine with enough."""
+
+    def lines(self, notice=None, gb=None):
+        out = []
+        env = {"BNGE_TOTAL_GB": str(gb)} if gb is not None else {}
+        with mock.patch.object(launcher, "_out", side_effect=out.append), mock.patch.dict(os.environ, env):
+            shown = launcher.memory_notice(notice)
+        return shown, out
+
+    def test_emergency(self):
+        shown, out = self.lines(gb=4.1)
+        self.assertTrue(shown)
+        self.assertIn("Not enough memory:", "\n".join(out))
+        self.assertTrue(all(len(line) <= 80 for line in out), out)
+
+    def test_lean(self):
+        shown, out = self.lines(gb=8.3)
+        self.assertTrue(shown)
+        self.assertIn("Low memory:", "\n".join(out))
+
+    def test_enough(self):
+        self.assertEqual(self.lines(gb=32.0), (False, []))
+
+    def test_given(self):
+        shown, out = self.lines(("Head", "text " * 40))
+        self.assertTrue(shown and out[2] == "  Head:")
+
+
 if __name__ == "__main__":
     unittest.main()
