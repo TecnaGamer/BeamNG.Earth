@@ -49,6 +49,7 @@ import struct
 import threading
 from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
@@ -584,6 +585,7 @@ class Imagery:
         self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
         self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
+        self._taken = {}                    # key -> tile_now's fetch that took over a fetch still queued on the pool
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
         self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
@@ -1026,10 +1028,19 @@ class Imagery:
             if isinstance(pool, HostPools):
                 pool = pool.of(netfetch.host_of(key[0].url))
             why = (f"{kind}:" + netfetch._caller(2)) if netfetch.NETLOG_STACK else None
-            fut = self._inflight[key] = pool.submit(self._load_kind, key, kind, why)
+            fut = self._inflight[key] = pool.submit(self._pool_load, key, kind, why)
             fut.urgent = kind == "urgent"
             fut.add_done_callback(lambda f: self._finish(key, f))
         return fut
+
+    def _pool_load(self, key, kind, why=None):
+        """A pool fetch, started: when a map tile took it over while it was queued (tile_now: `_taken`), that fetch's
+        result, not a second download of the same tile."""
+        with self._lock:
+            taken = self._taken.pop(key, None)
+        if taken is not None:
+            return taken.result()
+        return self._load_kind(key, kind, why)
 
     @contextlib.contextmanager
     def urgent(self):
@@ -1102,6 +1113,56 @@ class Imagery:
                 a = got[pk] if pk in got else self._lru.get(pk)
             out[k] = None if a is None else _overzoom(a, k, d)
         return out
+
+    def tile_now(self, key, kind="demand"):
+        """tiles([key])[key] for a caller with threads of its own (the world map's tile files, maptiles.TileFiles):
+        a tile not in memory loads in the calling thread instead of queueing on the fetch pool behind the world's own
+        fetches (the in-car map and the M map waited there for the far field's hundreds of prefetches: "it loads some
+        of the map but it's slow", the user 2026-10-29). A fetch of it already running is shared, and this one is
+        shared with later callers (four z17 map tiles overzoom one z16 photo). The network limits are netfetch's, as
+        before; the pool's threads are left to the world."""
+        if kind == "demand" and getattr(self._caller, "urgent", False):
+            kind = "urgent"
+        probe = self._probe_key(key)
+        if probe is not None and not self._covered(self.tile_now(probe, kind)):
+            return None                             # the source has nothing in this area
+        stale = None
+        while True:
+            with self._lock:
+                if key in self._lru:
+                    self._lru.move_to_end(key)
+                    return self._lru[key]
+                if not in_bounds(*key):
+                    return None
+                if key[0].lazy and not self._on_disk(key):
+                    return None
+                fut = self._inflight.get(key)
+                # none, a dropped prefetch met last time, or one still queued on the pool: fetched here
+                mine = fut is None or fut is stale or not (fut.running() or fut.done())
+                load = kind
+                if mine:
+                    queued = fut if fut is not None and fut is not stale else None
+                    fut = Future()
+                    # (taking over a queued urgent fetch keeps it urgent: later urgent callers do not fetch it again)
+                    fut.urgent = bool(queued is not None and getattr(queued, "urgent", False))
+                    if fut.urgent:
+                        load = "urgent"
+                    fut.set_running_or_notify_cancel()
+                    fut.add_done_callback(lambda f: self._finish(key, f))
+                    self._inflight[key] = fut
+                    if queued is not None:
+                        self._taken[key] = fut      # the queued pool fetch, when it starts, waits for this one
+            if mine:
+                try:
+                    fut.set_result(self._load_kind(key, load))
+                except BaseException as e:          # (every waiter gets it)
+                    fut.set_exception(e)
+            try:
+                return fut.result()
+            except ImageryError as e:
+                if mine or not e.deferred or kind not in ("demand", "urgent"):
+                    raise
+                stale = fut                         # the world's prefetch was dropped: fetched here, as demand
 
     def _quick_ancestor(self, key):
         """(ancestor key, levels up) of a tile not on disk whose ancestor is (in memory or on disk), for the 3D map's
