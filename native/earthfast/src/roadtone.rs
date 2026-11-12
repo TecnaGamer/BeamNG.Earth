@@ -10,6 +10,14 @@ use pyo3::prelude::*;
 
 /// A sample further than this (8-bit luma) from the first pass's tone at its cell is left out of the second.
 const ROBUST_LUMA: f32 = 22.0;
+/// A tone row's long form (231): the five of before, then the kind's own sample luma cap (0: sample_luma's), and a
+/// light-pavement band (light from, its luma cap, its saturation cap; 0 0 0: none): a tone at least `light from` and
+/// no more saturated than the band's saturation cap keeps its luma up to the band's luma cap instead of the kind's
+/// (concrete: a concrete motorway's pale grey was pulled down to the paved cap, the user 2026-11-12), faded in over
+/// LIGHT_RAMP luma below `light from` and out over half the saturation cap above it (no step along a road whose tone
+/// crosses either).
+const TONE_COLS: usize = 9;
+const LIGHT_RAMP: f32 = 20.0;
 
 /// Box sums (radius r, clipped at the edges) of the planes v (n planes of h x w), by summed-area tables.
 fn box_sum(v: &[f32], h: usize, w: usize, r: usize) -> Vec<f32> {
@@ -57,9 +65,9 @@ pub fn paint_lines_toned<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, s
     let tn = tone.as_array();
     let m = sg.nrows();
     if sg.ncols() != 4 || hw.len() != m || kd.len() != m || col.ncols() != 4 || img.shape()[2] != 3
-        || tn.nrows() != col.nrows() || tn.ncols() != 5 {
+        || tn.nrows() != col.nrows() || (tn.ncols() != 5 && tn.ncols() != TONE_COLS) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "paint_lines_toned: rgb (h, w, 3), segs (m, 4), hw (m,), kind (m,), colors (k, 4), tone (k, 5)"));
+            "paint_lines_toned: rgb (h, w, 3), segs (m, 4), hw (m,), kind (m,), colors (k, 4), tone (k, 5 or 9)"));
     }
     let k = col.nrows();
     if kd.iter().any(|&v| v as usize >= k) {
@@ -115,12 +123,12 @@ pub fn paint_cover_toned<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, c
     let cv = cover.as_array();
     let c = color.as_array();
     let t = tone.as_array();
-    if img.shape()[2] != 3 || cv.shape() != &img.shape()[..2] || c.len() != 4 || t.len() != 5 {
+    if img.shape()[2] != 3 || cv.shape() != &img.shape()[..2] || c.len() != 4 || (t.len() != 5 && t.len() != TONE_COLS) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "paint_cover_toned: rgb (h, w, 3), cover (h, w), color (4,), tone (5,)"));
+            "paint_cover_toned: rgb (h, w, 3), cover (h, w), color (4,), tone (5 or 9,)"));
     }
     let col = numpy::ndarray::Array2::from_shape_vec((1, 4), c.to_vec()).unwrap();
-    let tn = numpy::ndarray::Array2::from_shape_vec((1, 5), t.to_vec()).unwrap();
+    let tn = numpy::ndarray::Array2::from_shape_vec((1, t.len()), t.to_vec()).unwrap();
     let cov: Vec<f32> = cv.iter().map(|v| v.clamp(0.0, 1.0)).collect();
     let out = py.detach(|| tone_paint(img, &cov, 1, col.view(), tn.view(), radius, sample_luma, sample_sat, green_margin));
     Ok(out.into_pyarray(py))
@@ -163,7 +171,8 @@ fn tone_paint(img: numpy::ndarray::ArrayView3<u8>, cov: &[f32], k: usize, col: n
             let luma = 0.299 * r + 0.587 * g + 0.114 * b;
             let mx = r.max(g).max(b);
             let sat = if mx > 0.0 { (mx - r.min(g).min(b)) / mx } else { 0.0 };
-            if luma < sample_luma.0 || luma > sample_luma.1 || sat > sample_sat
+            let cap = if tn.ncols() >= TONE_COLS && tn[[top, 5]] > 0.0 { tn[[top, 5]] } else { sample_luma.1 };
+            if luma < sample_luma.0 || luma > cap || sat > sample_sat
                 || (g > r + green_margin && g > b + green_margin) {
                 continue;
             }
@@ -248,6 +257,19 @@ fn tone_paint(img: numpy::ndarray::ArrayView3<u8>, cov: &[f32], k: usize, col: n
                 if let Some((mut t, cover)) = tone_at(tq, p / w, p % w) {
                     // (pulled to the kind's range: luma first, then the saturation toward its grey)
                     let luma = 0.299 * t[0] + 0.587 * t[1] + 0.114 * t[2];
+                    let (mut lmax, mut smax) = (lmax, smax);
+                    if tn.ncols() >= TONE_COLS && tn[[q, 7]] > lmax {
+                        // (light pavement: the band's caps, faded in over LIGHT_RAMP luma below its start and out
+                        // over half its saturation cap above that cap)
+                        let mx0 = t[0].max(t[1]).max(t[2]);
+                        let sat0 = if mx0 > 0.0 { (mx0 - t[0].min(t[1]).min(t[2])) / mx0 } else { 0.0 };
+                        let (from, lcap, scap) = (tn[[q, 6]], tn[[q, 7]], tn[[q, 8]]);
+                        let wl = ((luma - (from - LIGHT_RAMP)) / LIGHT_RAMP).clamp(0.0, 1.0);
+                        let ws = if scap > 0.0 { ((1.5 * scap - sat0) / (0.5 * scap)).clamp(0.0, 1.0) } else { 1.0 };
+                        let wgt = wl * ws;
+                        lmax += (lcap - lmax) * wgt;
+                        if scap > 0.0 && scap < smax { smax += (scap - smax) * wgt; }
+                    }
                     let want = luma.clamp(lmin, lmax);
                     if luma > 0.0 {
                         for v in t.iter_mut() { *v *= want / luma; }

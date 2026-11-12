@@ -94,6 +94,7 @@ mod gradebins;
 mod l0roads;
 mod groundphoto;
 mod layerfold;
+mod roadsurf;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5940,6 +5941,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 228)?;
+    // 231: roadsurf (road_photo_surface: an untagged minor road's surface from the aerial's z17 tiles on the disk,
+    // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
+    // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
+    m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
+    m.add("VERSION", 231)?;
     Ok(())
 }
