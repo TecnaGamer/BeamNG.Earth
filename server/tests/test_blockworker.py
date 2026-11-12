@@ -337,6 +337,7 @@ class GermanCacheKeyTest(unittest.TestCase):
     def test_off_and_away_as_before(self):
         import countrybounds
         import regionaldata
+        import roadsurf
         from unittest import mock
 
         def refused(*a, **k):
@@ -344,7 +345,8 @@ class GermanCacheKeyTest(unittest.TestCase):
         for kind in ("tile", "geo"):
             with mock.patch.object(countrybounds, "bundled", refused), \
                     mock.patch.object(countrybounds, "signature", refused), \
-                    mock.patch.object(regionaldata, "manifest", refused):
+                    mock.patch.object(regionaldata, "manifest", refused), \
+                    mock.patch.object(roadsurf, "ON", False):    # (photo verdicts: the machine's own cache)
                 off = self.parts(kind, self.MUNICH, False)
                 away = self.parts(kind, self.BALTIMORE, True)
                 away_off = self.parts(kind, self.BALTIMORE, False)
