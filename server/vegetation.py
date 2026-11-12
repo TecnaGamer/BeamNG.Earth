@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import beaches
 import fast
 
 import mapcells
@@ -36,12 +37,12 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 23          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 24          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
-                      # orchard rows and the deck mask)
+                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -237,8 +238,14 @@ class Vegetation:
                 x, y = self._warm.pop(0)
             try:
                 self.cell((mapcells.ZOOM, x, y))
-            except Exception:
-                log.exception("vegetation: building cell %s", (x, y))
+            except Exception as e:
+                import netfetch
+                if isinstance(e, netfetch.HostUnavailable):
+                    # (a host's circuit breaker open, or offline: expected, and the cell is built when it is asked
+                    # for; a traceback a cell was the first week's third most frequent error, ~5.5k)
+                    log.debug("vegetation: warming cell %s skipped: %s", (x, y), e)
+                else:
+                    log.exception("vegetation: building cell %s", (x, y))
 
     def ready(self, key):
         k = (int(key[1]), int(key[2]))
@@ -256,8 +263,10 @@ class Vegetation:
         p = self._path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
         if p and os.path.exists(p):
-            with np.load(p, allow_pickle=False) as f:
-                return Items(*(f[n] for n in fields))
+            # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
+            got = staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+            if got is not None:
+                return got
         self._tl.dem_failed = False
         items = self._build(x, y)
         # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
@@ -512,6 +521,16 @@ class Vegetation:
                 lo2, la2 = _to4326(px[bare] + dx, py[bare] + dy)
                 near += lc.sample(lo2, la2) == WC["built"]
             free[bare[near >= 2]] = False
+        # a beach's sand (beaches.py, GitHub #578): neither rocks nor bushes
+        # (only the points that would get one: a few % of them, the test samples ~70 points round each)
+        sandy = np.flatnonzero(free & (u < pr + pb) & ((cls == WC["bare"]) | (cls == WC["grass"])))
+        if len(sandy):
+            sec = 1.0 / np.cos(np.radians(lat[sandy]))      # (Web Mercator metres per ground metre)
+            pxs, pys = px[sandy], py[sandy]
+
+            def at(idx, dx, dy):
+                return lc.sample(*_to4326(pxs[idx] + dx * sec[idx], pys[idx] + dy * sec[idx]))
+            free[sandy[beaches.sand_points(cls[sandy], at)]] = False
         rock = free & (u < pr)
         bare_rock = np.flatnonzero(rock & (cls == WC["bare"]))
         if len(bare_rock) and self.dem is not None:
@@ -1331,7 +1350,10 @@ class Tracker:
                 return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
             keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
                     for c in geotiles.children(a, b, self.group_z, z)]
-            return sorted(keys, key=lambda k: (self._geo_dist(k, px, py, own=True), k))
+            if not keys:
+                return keys
+            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (_geo_dist(own=True) of each)
+            return [k for _d, k in sorted(zip(d, keys))]
         skip = set()
         if self.inner is not None:
             for p in spots:
@@ -1352,13 +1374,35 @@ class Tracker:
             self.building.add((gx, gy))
             fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
-        for k in [k for k in list(self.sent) if all(self._geo_dist(k, *p) > self.drop_m for p in spots)
-                  and all(self._geo_dist(k, f[0], f[1]) > f[2] + 256.0 for f in foci)]:
+        for k in self._far_sent(spots, foci):
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone(self.kind, k, geotiles.key(*k, z))
+
+    def _far_sent(self, spots, foci):
+        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
+        of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
+        were whole seconds of a busy event loop, 2026-11-07)."""
+        import geotiles
+        sent = list(self.sent)
+        if not sent:
+            return []
+        z = self.z or geotiles.Z
+        keys, kz = sent, z
+        if self.group_z is not None:
+            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
+        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
+        if not pts:
+            return sent
+        d = geotiles.dists(self.frame, keys, kz, pts)
+        far = np.ones(len(sent), bool)
+        if spots:
+            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
+        if foci:
+            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
+        return [k for k, f in zip(sent, far.tolist()) if f]
 
     def _geo_dist(self, k, x, y, own=False):
         """m from (x, y) to geotile k's quad in the anchor's world (to its group's, group_z, unless own)."""

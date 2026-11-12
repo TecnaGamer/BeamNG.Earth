@@ -36,7 +36,7 @@ CROSS_SLOPE = 0.015     # sidewalk cross slope, rising away from the road
 CURB_REPEAT_M = 9.0     # m of curb per texture width (3 joints of 3 m)
 SLAB_REPEAT_M = 45.0    # m of sidewalk per texture width (4096 px, a 205 px strip ~ 2.25 m)
 MATERIALS = ("curbs", "sidewalk1", "tactile_indicator",  # West Coast USA (art/shapes/roads), loaded by the mod
-             "bne_sidewalk_brick")                       # red brick pavers (buildings.materials.json)
+             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile")
 BRICK = 3
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
 
@@ -156,10 +156,10 @@ class Builder:
     def __init__(self, origin, collision=False):
         self.origin = np.asarray(origin, np.float64)
         self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
-        self._built = None          # slab); the Rust meshes once built (full, lean)
+        self._built = None          # slab, europe); the Rust meshes once built (full, lean)
         self.col = _Lean(self) if collision else None
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1):
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
@@ -168,10 +168,10 @@ class Builder:
         if len(curb) < 2:
             return
         self.pieces.append((0, curb[:, :3], np.asarray(toward_out, np.float64)[:, :2], None, list(ramps), float(w),
-                            float(h), (bool(caps[0]), bool(caps[1])), int(slab)))
+                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe)))
         self._built = None
 
-    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=()):
+    def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False):
         """A corner piece: the curb along the polyline arc (k, 3) (a curb return, with the straight
         runs and tapers of curb extensions; inward: unit vectors toward the sidewalk), the slab from
         the curb top to the outer corner points [(x, y, z) ...] (from the second sidewalk's end round
@@ -179,31 +179,64 @@ class Builder:
         where the curb is lowered (the slab then slopes up from it toward the outer corner)."""
         self.pieces.append((1, np.asarray(arc, np.float64)[:, :3], np.asarray(inward, np.float64)[:, :2],
                             np.asarray(outer, np.float64).reshape(-1, 3), list(ramps), 2.5, float(h), (False, False),
-                            1))
+                            1, bool(europe)))
         self._built = None
 
     def empty(self):
         return not self.pieces
 
+    def _native(self, ps):
+        """Unmodified 1.7.2 native geometry, for a batch of pieces with one palette."""
+        import fast
+        fast.require(104, "sidewalk_mesh")
+        kind = np.array([p[0] for p in ps], np.int64)
+        pts = np.ascontiguousarray(np.concatenate([p[1] for p in ps]) if ps else np.zeros((0, 3)))
+        dirs = np.ascontiguousarray(np.concatenate([p[2] for p in ps]) if ps else np.zeros((0, 2)))
+        off = np.r_[0, np.cumsum([len(p[1]) for p in ps])].astype(np.int64)
+        outs = [p[3] if p[3] is not None else np.zeros((0, 3)) for p in ps]
+        outer = np.ascontiguousarray(np.concatenate(outs) if ps else np.zeros((0, 3)))
+        ooff = np.r_[0, np.cumsum([len(o) for o in outs])].astype(np.int64)
+        rs = [np.asarray(p[4], np.float64).reshape(-1, 2) for p in ps]
+        ramps = np.ascontiguousarray(np.concatenate(rs) if ps else np.zeros((0, 2)))
+        roff = np.r_[0, np.cumsum([len(r) for r in rs])].astype(np.int64)
+        return fast._ef.sidewalk_mesh(
+            kind, pts, dirs, off, outer, ooff, ramps, roff, np.array([p[5] for p in ps], np.float64),
+            np.array([p[6] for p in ps], np.float64), np.array([p[7] for p in ps], bool).reshape(-1, 2),
+            np.array([p[8] for p in ps], np.int64), tuple(float(v) for v in self.origin), self.col is not None)
+
+    @staticmethod
+    def _join(meshes):
+        if len(meshes) == 1:
+            return meshes[0]
+        offsets = np.r_[0, np.cumsum([len(m[0]) for m in meshes])]
+        return (np.concatenate([m[0] for m in meshes]),
+                np.concatenate([m[1] + offsets[i] for i, m in enumerate(meshes)]),
+                np.concatenate([m[2] for m in meshes]), np.concatenate([m[3] for m in meshes]))
+
     def _build(self):
         if self._built is None:
-            import fast
-            fast.require(104, "sidewalk_mesh")
-            ps = self.pieces
-            kind = np.array([p[0] for p in ps], np.int64)
-            pts = np.ascontiguousarray(np.concatenate([p[1] for p in ps]) if ps else np.zeros((0, 3)))
-            dirs = np.ascontiguousarray(np.concatenate([p[2] for p in ps]) if ps else np.zeros((0, 2)))
-            off = np.r_[0, np.cumsum([len(p[1]) for p in ps])].astype(np.int64)
-            outs = [p[3] if p[3] is not None else np.zeros((0, 3)) for p in ps]
-            outer = np.ascontiguousarray(np.concatenate(outs) if ps else np.zeros((0, 3)))
-            ooff = np.r_[0, np.cumsum([len(o) for o in outs])].astype(np.int64)
-            rs = [np.asarray(p[4], np.float64).reshape(-1, 2) for p in ps]
-            ramps = np.ascontiguousarray(np.concatenate(rs) if ps else np.zeros((0, 2)))
-            roff = np.r_[0, np.cumsum([len(r) for r in rs])].astype(np.int64)
-            self._built = fast._ef.sidewalk_mesh(
-                kind, pts, dirs, off, outer, ooff, ramps, roff, np.array([p[5] for p in ps], np.float64),
-                np.array([p[6] for p in ps], np.float64), np.array([p[7] for p in ps], bool).reshape(-1, 2),
-                np.array([p[8] for p in ps], np.int64), tuple(float(v) for v in self.origin), self.col is not None)
+            # Keep contiguous batches: one native call in the usual single-country case,
+            # identical vertex/triangle order even where a tile straddles a border.
+            from itertools import groupby
+            batches = [(flag, list(ps)) for flag, ps in groupby(self.pieces, key=lambda p: p[9])]
+            if not batches:
+                batches = [(False, [])]
+            full, lean = [], []
+            for european, ps in batches:
+                drawn, collision = self._native(ps)
+                if european:
+                    P, T, UV, M = drawn
+                    UV = UV.copy()
+                    # Original tactile/brick UVs stay intact. Asphalt uses metre-scale
+                    # planar coordinates, the neutral curb repeats every metre.
+                    curb = np.unique(T[M == 0])
+                    slab = np.setdiff1d(np.unique(T[M == 1]), np.unique(T[M == 2]))
+                    UV[curb, 0] *= CURB_REPEAT_M
+                    UV[slab] = P[slab, :2] / 2.0
+                    drawn = P, T, UV, np.take((4, 5, 6, 3), M)
+                full.append(drawn)
+                lean.append(collision)       # palette never changes collision geometry/materials
+            self._built = self._join(full), self._join(lean)
         return self._built
 
     def arrays(self):

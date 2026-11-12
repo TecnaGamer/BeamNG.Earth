@@ -5,6 +5,70 @@
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+type Row = (usize, [f64; 2], [f64; 2]);
+
+/// Replace isolated clamped miters by a bevel on the outside and the true offset intersection on the inside.
+/// Inner samples covered by the join collapse onto that intersection instead of folding backwards. A join must
+/// fit on its straight arms, and joins may not overlap; short or ambiguous mapped turns keep the existing layout.
+fn bevel_rows(xs: &[f64], ys: &[f64], nx: &[f64], ny: &[f64], s: &[f64], half: f64) -> Option<Vec<Row>> {
+    let n = xs.len();
+    if n < 3 || half <= 0.0 { return None; }
+    let mut normals = Vec::with_capacity(n - 1);
+    for i in 0..n - 1 {
+        let (dx, dy) = (xs[i + 1] - xs[i], ys[i + 1] - ys[i]);
+        let len = dx.hypot(dy);
+        if len < 1e-9 { return None; }
+        normals.push([-dy / len, dx / len]);
+    }
+    let dot = |a: [f64; 2], b: [f64; 2]| a[0] * b[0] + a[1] * b[1];
+    let mut joins = Vec::new();
+    for i in 1..n - 1 {
+        let (a, b) = (normals[i - 1], normals[i]);
+        let cos = dot(a, b).clamp(-1.0, 1.0);
+        if cos >= -0.5 || cos <= -1.0 + 1e-8 { continue; }
+        let trim = half * ((1.0 - cos) / (1.0 + cos)).sqrt();
+        let (mut start, mut end) = (i - 1, i + 1);
+        while start > 0 && dot(normals[start - 1], a) > 1.0 - 1e-10 { start -= 1; }
+        while end < n - 1 && dot(normals[end], b) > 1.0 - 1e-10 { end += 1; }
+        if trim > s[i] - s[start] || trim > s[end] - s[i] { continue; }
+        let turn = a[0] * b[1] - a[1] * b[0];
+        // (a + b) / (1 + cos) is the intersection of the two constant-width offset lines.
+        let side = turn.signum();
+        let inner = [xs[i] + side * half * (a[0] + b[0]) / (1.0 + cos),
+                     ys[i] + side * half * (a[1] + b[1]) / (1.0 + cos)];
+        joins.push((i, start, end, trim, side, inner));
+    }
+    if joins.is_empty() { return None; }
+    let mut left: Vec<_> = (0..n).map(|i| [xs[i] + nx[i] * half, ys[i] + ny[i] * half]).collect();
+    let mut right: Vec<_> = (0..n).map(|i| [xs[i] - nx[i] * half, ys[i] - ny[i] * half]).collect();
+    let mut extra = vec![None; n];
+    let mut changed = false;
+    for &(i, start, end, trim, side, inner) in &joins {
+        if joins.iter().any(|&(j, _, _, other, _, _)| j != i && (s[j] - s[i]).abs() <= trim + other) { continue; }
+        let (a, b) = (normals[i - 1], normals[i]);
+        for j in start..=end {
+            if (s[j] - s[i]).abs() <= trim + 1e-8 {
+                if side > 0.0 { left[j] = inner; } else { right[j] = inner; }
+            }
+        }
+        if side > 0.0 {
+            right[i] = [xs[i] - half * a[0], ys[i] - half * a[1]];
+            extra[i] = Some((inner, [xs[i] - half * b[0], ys[i] - half * b[1]]));
+        } else {
+            left[i] = [xs[i] + half * a[0], ys[i] + half * a[1]];
+            extra[i] = Some(([xs[i] + half * b[0], ys[i] + half * b[1]], inner));
+        }
+        changed = true;
+    }
+    if !changed { return None; }
+    let mut rows = Vec::with_capacity(n + joins.len());
+    for i in 0..n {
+        rows.push((i, left[i], right[i]));
+        if let Some((l, r)) = extra[i] { rows.push((i, l, r)); }
+    }
+    Some(rows)
+}
+
 /// numpy.interp for increasing xp (x at or past the last xp: fp's last value).
 fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
@@ -34,7 +98,8 @@ fn interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
 
 /// Per chunk c (points pts[off[c]..off[c + 1]] (k, 3)): resampled every `step` m with its ends kept (numpy's
 /// linspace), and the left / right edges at half[c] m along the mitred normals (cos clipped at 0.5). Returns (left
-/// (m, 2), right (m, 2), arc s (m,), z (m,), out offsets (chunks + 1)); a chunk of zero length gives its first point.
+/// (m, 2), right (m, 2), arc s (m,), z (m,), out offsets (chunks + 1)); eligible sharp joins add a bevel row. A chunk
+/// of zero length gives its first point.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
@@ -69,7 +134,21 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                 let n = 1usize.max((s[k - 1] / step).ceil() as usize);
                 // numpy.linspace(0, stop, n + 1): step = stop / n, t[i] = i * step, the last exactly stop
                 let st = s[k - 1] / n as f64;
-                let t: Vec<f64> = (0..=n).map(|i| if i == n { s[k - 1] } else { i as f64 * st }).collect();
+                let mut t: Vec<f64> = (0..=n).map(|i| if i == n { s[k - 1] } else { i as f64 * st }).collect();
+                // A lattice sample just either side of a hairpin cuts across its apex. Retain the sharp mapped
+                // knot so its bevel is independent of whether the road's length happens to divide by `step`.
+                let mut added_knot = false;
+                for i in 1..k - 1 {
+                    let (ax, ay) = (px[i] - px[i - 1], py_[i] - py_[i - 1]);
+                    let (bx, by) = (px[i + 1] - px[i], py_[i + 1] - py_[i]);
+                    let lengths = ax.hypot(ay) * bx.hypot(by);
+                    if lengths > 1e-12 && (ax * bx + ay * by) / lengths < -0.5 - 1e-12 {
+                        t.retain(|v| (*v - s[i]).abs() > 1e-8);
+                        t.push(s[i]);
+                        added_knot = true;
+                    }
+                }
+                if added_knot { t.sort_by(f64::total_cmp); }
                 xs = t.iter().map(|&x| interp(x, &s, &px)).collect();
                 ys = t.iter().map(|&x| interp(x, &s, &py_)).collect();
                 zs = t.iter().map(|&x| interp(x, &s, &pz)).collect();
@@ -79,6 +158,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
             // _normals (times half)
             let mut nx = vec![0.0f64; m];
             let mut ny = vec![0.0f64; m];
+            let mut clamped = false;
             if m >= 2 {
                 let mut snx = vec![0.0f64; m - 1];
                 let mut sny = vec![0.0f64; m - 1];
@@ -97,17 +177,27 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                     let mut ml = mx.hypot(my);
                     if ml < 1e-9 { ml = 1.0; }
                     let (mx, my) = (mx / ml, my / ml);
-                    let cos = (mx * snx[i] + my * sny[i]).clamp(0.5, 1.0);
+                    let raw_cos = mx * snx[i] + my * sny[i];
+                    clamped |= raw_cos < 0.5;
+                    let cos = raw_cos.clamp(0.5, 1.0);
                     nx[i] = mx / cos;
                     ny[i] = my / cos;
                 }
             }
-            for i in 0..m {
-                let (hx, hy) = (nx[i] * half[c], ny[i] * half[c]);
-                l.push(xs[i] + hx); l.push(ys[i] + hy);
-                r.push(xs[i] - hx); r.push(ys[i] - hy);
-                s_out.push(ts[i]);
-                z_out.push(zs[i]);
+            let bevel = if clamped { bevel_rows(&xs, &ys, &nx, &ny, &ts, half[c]) } else { None };
+            if let Some(rows) = bevel {
+                for (i, lp, rp) in rows {
+                    l.extend_from_slice(&lp); r.extend_from_slice(&rp);
+                    s_out.push(ts[i]); z_out.push(zs[i]);
+                }
+            } else {
+                for i in 0..m {
+                    let (hx, hy) = (nx[i] * half[c], ny[i] * half[c]);
+                    l.push(xs[i] + hx); l.push(ys[i] + hy);
+                    r.push(xs[i] - hx); r.push(ys[i] - hy);
+                    s_out.push(ts[i]);
+                    z_out.push(zs[i]);
+                }
             }
             o.push(s_out.len() as i64);
         }

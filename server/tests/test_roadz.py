@@ -196,6 +196,54 @@ class KernelTest(unittest.TestCase):
             ef.las_decode(b"nope" * 100, [0, 0, 1, 1])
 
 
+
+def las_bytes(points):
+    """A LAS 1.2 point format 0 file (no compression) of points [(x, y, z, class)] in 0.01 units at (1000, 2000, 0)."""
+    hdr = bytearray(227)
+    hdr[0:4] = b"LASF"
+    hdr[24], hdr[25] = 1, 2
+    struct.pack_into("<H", hdr, 94, 227)
+    struct.pack_into("<I", hdr, 96, 227)
+    struct.pack_into("<I", hdr, 100, 0)
+    hdr[104] = 0
+    struct.pack_into("<H", hdr, 105, 20)
+    struct.pack_into("<I", hdr, 107, len(points))
+    struct.pack_into("<3d", hdr, 131, 0.01, 0.01, 0.01)
+    struct.pack_into("<3d", hdr, 155, 1000.0, 2000.0, 0.0)
+    out = bytes(hdr)
+    for (x, y, z, c) in points:
+        rec = bytearray(20)
+        struct.pack_into("<3i", rec, 0, x, y, z)
+        rec[15] = c
+        out += bytes(rec)
+    return out
+
+
+class PartsTest(unittest.TestCase):
+    """A cell's lidar read keeps each node's points on disk as they come (2026-11-06): a read dropped this run goes on
+    from there next time instead of downloading every node again (a busy cell was dropped at every visit)."""
+
+    def test_a_second_read_takes_the_nodes_from_disk(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+
+            def provider():
+                rz = roadz.RoadZ(d, None)
+                rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                    [(100, 200, 550, 2), (5000, 200, 900, 17)])
+                return rz
+            key = mapcells.CellKey(14, 4683, 6266)
+            boxes = [(1000.0, 2000.0, 1060.0, 2010.0)]
+            a = provider()._read("USGS_X", ["0-0-0-0", "1-0-0-0"], boxes, key)
+            self.assertEqual(len(asked), 2)
+            b = provider()._read("USGS_X", ["0-0-0-0", "1-0-0-0"], boxes, key)
+            self.assertEqual(len(asked), 2, "the second read from disk")
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[1], b[1])
+            provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
+            self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
+
 class FakeDem:
     def __init__(self, z):
         self.z = z

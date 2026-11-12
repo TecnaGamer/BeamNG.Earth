@@ -36,6 +36,8 @@ END_SKIP = 10.0         # m kept clear of each end of a road (junctions)
 REACH = 25.0            # m searched each side
 NEAR_M = REACH + 10.0   # m round a road the cells whose buildings it is measured against
 COMBOS = 32             # sets of cells' walls kept (roads near a cell's edge)
+REFRAMED = 64           # a cell's wall segments in another cell's frame, kept for the sets (each set of 2-4 cells
+                        # converted every wall of its other cells through lon / lat again, 2026-11-07)
 NEAR_STEP_M = 200.0     # m between a road's points its cells are found round
 MIN_SAMPLES = 4
 WALLED = 0.6            # share of cross-sections with a building on both sides
@@ -279,6 +281,7 @@ class RoadWidths:
         self.memo = {}                          # fid -> (carriageway, walk) or None (MEMO_MAX at most)
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
+        self.reframed = OrderedDict()           # (cell key, frame's cell key) -> (its Walls, segs in that frame)
         self.lock = threading.Lock()
         self.key_locks = {}                     # cell key -> Lock: one thread builds a cell's walls
 
@@ -386,10 +389,22 @@ class RoadWidths:
             if frame is None:
                 frame = f
             elif len(sg):
-                pts = sg.reshape(-1, 2)
-                la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-                sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                rk = (str(k), ck[0])
+                with self.lock:
+                    hit = self.reframed.get(rk)
+                    if hit is not None:
+                        self.reframed.move_to_end(rk)
+                if hit is not None and hit[0] is w:
+                    sg = hit[1]
+                else:
+                    pts = sg.reshape(-1, 2)
+                    la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+                    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+                    sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                    with self.lock:
+                        self.reframed[rk] = (w, sg)
+                        while len(self.reframed) > REFRAMED:
+                            self.reframed.popitem(last=False)
             segs.append(sg)
         got = (frame, Walls(np.concatenate(segs) if segs else np.zeros((0, 4))))
         with self.lock:

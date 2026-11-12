@@ -1,0 +1,78 @@
+{
+  "town_responses": [
+    {
+      "file": "0.json.gz",
+      "sha256": "424d9ebce88caf34c69d5680f36418348dde00f9d839591ea6bf08600242ce27",
+      "timestamp_osm_base": "2026-10-29T04:13:25Z",
+      "elements": 72081
+    },
+    {
+      "file": "1.json.gz",
+      "sha256": "25df037426d0e34435b082c6180ff73373604616b53b8236b620451812bfb57e",
+      "timestamp_osm_base": "2026-10-29T04:13:25Z",
+      "elements": 82413
+    },
+    {
+      "file": "20.json.gz",
+      "sha256": "1f7582928516d99c4623271cbc16baee7836dca592911ee7c2f2733f83866e43",
+      "timestamp_osm_base": "2026-10-29T04:19:36Z",
+      "elements": 70349
+    },
+    {
+      "file": "21.json.gz",
+      "sha256": "40d0dfb743ed1c65d1d87d17f3ee891811f29fca35b718b6a3df851a342d78c8",
+      "timestamp_osm_base": "2026-10-29T04:21:35Z",
+      "elements": 97354
+    },
+    {
+      "file": "30.json.gz",
+      "sha256": "806ef59b33615adb8d77e52d88f3928e9cedaed7b6290548fd35f8841f60914e",
+      "timestamp_osm_base": "2026-10-29T04:23:36Z",
+      "elements": 42206
+    },
+    {
+      "file": "31.json.gz",
+      "sha256": "51dd5df8727fd1c1d9f4345a92cfc2f3f754cc1763f7b3acb796e70a47e96b83",
+      "timestamp_osm_base": "2026-10-29T04:25:41Z",
+      "elements": 29075
+    },
+    {
+      "file": "4.json.gz",
+      "sha256": "452f020fc26ed343d472f8391e053de517f05ecd758ae9b47fcdc708e8f7d6da",
+      "timestamp_osm_base": "2026-10-29T04:16:34Z",
+      "elements": 46432
+    },
+    {
+      "file": "500.json.gz",
+      "sha256": "75840e220005bdd9e2c7ef8d2773f0478f573d47a58ab8975553734d25da95c8",
+      "timestamp_osm_base": "2026-10-29T04:31:51Z",
+      "elements": 7592
+    },
+    {
+      "file": "501.json.gz",
+      "sha256": "5651f92bdf7d2a256dbb2a0e8b82e823335375edd64ec946ea9439bd1a9f51f6",
+      "timestamp_osm_base": "2026-10-29T04:33:55Z",
+      "elements": 9925
+    },
+    {
+      "file": "502.json.gz",
+      "sha256": "798e48af1642d7a5e7555d1cb37099cf3802c81ba7609386f9bbe2cff6b1e32c",
+      "timestamp_osm_base": "2026-10-29T04:35:01Z",
+      "elements": 18348
+    },
+    {
+      "file": "51.json.gz",
+      "sha256": "77ad84383d108e8a30d1f781fcc994690fc9730e1761db2f75f455e7bd488ae0",
+      "timestamp_osm_base": "2026-10-29T04:27:51Z",
+      "elements": 14887
+    }
+  ],
+  "directions_response": {
+    "file": "directions.json.gz",
+    "sha256": "837ef36863232faa5b1bb3791be63e151931b0359d77133604d2fd9361795ef5",
+    "timestamp_osm_base": "2026-10-29T04:41:48Z",
+    "elements": 75762
+  },
+  "query_tool": "tools/fetch_fr_sign_data.py",
+  "note": "Immutable response hashes from the build. A fresh live fetch changes content; use source timestamps for attic queries."
+}

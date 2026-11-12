@@ -1,0 +1,96 @@
+{
+  "project": {
+    "name": "BeamNG.Earth",
+    "description": "A streamed Earth for BeamNG.drive, built from real elevation, imagery and map data.",
+    "project_url": "https://github.com/TecnaGamer/BeamNG.Earth",
+    "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md",
+    "contact_name": "TecnaGamer",
+    "contact_email": "doeringduo.d@gmail.com"
+  },
+  "sources": [
+    {
+      "path": "server/osmtags.py",
+      "keys": [
+        "highway",
+        "lanes",
+        "width",
+        "maxspeed",
+        "sidewalk",
+        "lit",
+        "smoothness",
+        "surface",
+        "oneway",
+        "layer",
+        "name",
+        "bridge",
+        "tunnel"
+      ],
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake."
+    },
+    {
+      "path": "tools/build_lane_tags.py",
+      "constants": [
+        "TAGS"
+      ],
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support."
+    },
+    {
+      "path": "tools/build_rail_tags.py",
+      "constants": [
+        "TAGS"
+      ],
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model."
+    },
+    {
+      "path": "server/osmfuel.py",
+      "keys": [
+        "amenity",
+        "brand",
+        "name",
+        "building"
+      ],
+      "description": "Identify and name mapped fuel stations and EV charging stations."
+    },
+    {
+      "path": "server/picnicsource.py",
+      "keys": [
+        "leisure",
+        "amenity",
+        "tourism"
+      ],
+      "description": "Identify mapped picnic tables and picnic sites."
+    },
+    {
+      "path": "server/windturbines.py",
+      "keys": [
+        "power",
+        "generator:source",
+        "generator:method",
+        "generator:type",
+        "generator:status",
+        "height",
+        "height:hub",
+        "rotor:diameter",
+        "end_date",
+        "type",
+        "site"
+      ],
+      "description": "Select active individual wind turbines and determine their placement and dimensions."
+    },
+    {
+      "path": "server/exitsigns.py",
+      "constants": [
+        "WAY_KEYS"
+      ],
+      "description": "Exit destinations, road references and lane context used to lay out highway signs."
+    },
+    {
+      "path": "server/milemarkers.py",
+      "constants": [
+        "TAG_KEYS",
+        "WAY_KEYS"
+      ],
+      "description": "Mapped highway milestones and route/direction references."
+    }
+  ]
+}

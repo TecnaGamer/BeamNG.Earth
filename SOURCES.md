@@ -22,6 +22,14 @@ A few things hold for all of them:
 
 ## Map data: roads, buildings, water, land use
 
+On a network with no IPv4 route (IPv6-only, no NAT64), the public AWS S3 sources below switch to their regional
+dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`, IPv4 and IPv6) after the first IPv4 connection finds no
+route; everywhere else they are used as listed. The source names remain the identities for download budgets, status,
+cached files and `NO_PROXY`. Signed URLs, requests with an Authorization header and proxied requests keep their
+original endpoint. Other providers still need their own IPv6 support.
+For the OpenStreetMap keys read by the server and weekly data builders, see the
+[OSM tag inventory](docs/OSM_TAGS.md) and [Taginfo project file](docs/taginfo.json).
+
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings, and the town, state and country names in the status bar. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water (and the status bar without the town name) until it answers. Places you have visited load from disk. | named |
@@ -55,6 +63,7 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 | USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
 | USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
+| BeamNG.Earth's own tile host (Sentinel-2, ESA WorldCover 2021 composite, CC BY 4.0) | `tiles.tgforever.net` | the whole land to ~40 m per pixel, the distant land; packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. | The sources below, as before. | named |
 | Sentinel-2 cloudless (EOX) | `tiles.maps.eox.at` | the whole world, 10 m per pixel; the distant land everywhere and the near ground outside the regions above. Also the world map's base layers. | New ground outside the regions above may stay plain (the land cover's colours). | named |
 
 Regional services, each used only inside its own area:
@@ -62,7 +71,7 @@ Connecticut (`cteco.uconn.edu`), Massachusetts (`tiles.arcgis.com`), Washington 
 Indiana (`di-ingov.img.arcgis.com`), Ohio (`maps.ohio.gov`), North Carolina (`services.nconemap.gov`),
 Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`), New York State
 (`orthos.its.ny.gov`), New Jersey (`maps.nj.gov`), Delaware (`imagery.firstmap.delaware.gov`), Vermont
-(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Spain
+(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Portugal (`cartografia.dgterritorio.gov.pt`), Spain
 (`tms-pnoa-ma.idee.es`), the Netherlands (`service.pdok.nl`), Luxembourg (`wmts1.geoportail.lu`), Austria
 (`maps.wien.gv.at`), South Tyrol (`geoservices.buergernetz.bz.it`), Italy (`wms.pcn.minambiente.it`), Poland
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders
@@ -93,6 +102,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it does | What is sent | If it does not answer | Status line |
 |---|---|---|---|---|---|
+| NASA GIBS (VIIRS true colour) | `gibs.earthdata.nasa.gov` | The clouds you see from space: the latest satellite day round the point under you, only while the camera is far above the clouds. | Which map tiles round your position (no other data). | No clouds from orbit until it answers. | optional |
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
 | Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
@@ -111,6 +121,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 ## Data that comes with the app (no download)
 
 - **Country and state borders, big town names** (Natural Earth): the world map.
+- **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed

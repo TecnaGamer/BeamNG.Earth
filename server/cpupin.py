@@ -90,6 +90,18 @@ def player_settings(user_dir):
         out["priority"] = "normal"
     if d.get("teleportPriority") is True:
         out["teleport_full"] = True
+    if d.get("telemetry") is False:                 # (the settings page's Anonymous usage statistics: telemetry.py)
+        out["telemetry"] = False
+    # (its sub-switches and the welcome page's choice: telemetry.py sends nothing before the choice was made)
+    for key in ("telemetryPerf", "telemetryNet"):
+        if d.get(key) is False:
+            out[key] = False
+    try:
+        n = int(d.get("telemetryChoice") or 0)
+    except (TypeError, ValueError, OverflowError):
+        n = 0
+    if n > 0:
+        out["telemetryChoice"] = n          # (missing: no choice made, telemetry.choices sends nothing)
     env = os.environ.get("BNGE_TELEPORT_FULL")      # (tests: the setting either way for this run)
     if env in ("0", "1"):
         out["teleport_full"] = env == "1"
@@ -240,7 +252,14 @@ def pin_tree(cpus, root=None):
         return n
     if not cpus or not hasattr(os, "sched_setaffinity"):
         return 0
-    kids = _children()
+    if root is None or root == os.getpid():
+        # (this process's tree: its worker processes as multiprocessing knows them, no read of every process's
+        # /proc/<pid>/stat: ~470 file reads, each giving the interpreter lock away, were 2 s event loop stalls while a
+        # teleport's boost came on, 2026-11-07)
+        import multiprocessing
+        kids = {os.getpid(): [p.pid for p in multiprocessing.active_children() if p.pid]}
+    else:
+        kids = _children()
     todo, n = [root or os.getpid()], 0
     while todo:
         pid = todo.pop()

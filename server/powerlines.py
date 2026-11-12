@@ -7,11 +7,48 @@ reach a substation (Overture infrastructure class substation areas; no towers in
 West Coast USA's switchgear (its yard's parts as a kit, a smaller one where it does not fit) and fenced with chain link.
 The layouts in Rust (earthfast.power_line_layout, earthfast.substation_yard).
 """
+import logging
+
 import numpy as np
 
 import fast
 
+log = logging.getLogger("earthd.powerlines")
+
 G_PYLON = "pylon"
+# Lines under HV_MIN_V stand on poles, not the 36 m lattice tower: a 66 kV line runs on poles along the street in town
+# (Shepparton, Victoria: MNA-STN on concrete poles down the main road, drawn as pylons over the houses; GitHub #787),
+# 69 kV in North America likewise; left out, they left empty cuttings hundreds of miles long through northern Michigan's
+# woods (GitHub #797). A line without a mapped voltage keeps its towers.
+HV_MIN_V = 100000.0
+G_POLE = "hvpole"           # the game's own wooden power pole (art/shapes/common/power_lines_procedural, trees.lua)
+POLE_SHAPE_H = 9.96         # m: its height as modelled ...
+POLE_H = 16.0               # ... drawn this tall (a sub-transmission pole is 15-25 m; the stock one is a 10 m one)
+_PS = POLE_H / POLE_SHAPE_H
+# its three conductors: the top insulator and the two at the ends of the cross-arm (the shape's anchorPoint_11 / _6 /
+# _10), to one side's three strain insulators at a substation's gantry
+POLE_ARMS = np.array([[-0.523 * _PS, 9.21 * _PS, -5.8, 7.5], [0.669 * _PS, 7.245 * _PS, -4.05, 7.5],
+                      [-0.63 * _PS, 7.245 * _PS, -7.55, 7.5]], np.float64)
+POLE_ROAD_CLEAR_M = 1.0     # m off a carriageway edge a pole stands (a pylon: TOWER_ROAD_CLEAR_M)
+POLE_WIRE_R = 0.012
+
+
+def low_voltage(tags):
+    """Is a power line's mapped voltage (OSM "voltage", ';'-separated circuits) all under HV_MIN_V? False when unknown."""
+    import json
+    try:
+        v = json.loads(tags).get("voltage") if isinstance(tags, str) and tags.startswith("{") else None
+    except ValueError:
+        v = None
+    if not v:
+        return False
+    kv = []
+    for part in str(v).replace(",", ";").split(";"):
+        try:
+            kv.append(float(part.strip()))
+        except ValueError:
+            return False
+    return bool(kv) and max(kv) < HV_MIN_V
 PYLON_H = 35.8              # m (the shape's height: trees.lua scales to it)
 # the conductors' attachment: the bottoms of the shape's insulator strings (lateral m, height m over its origin, which
 # sits on the ground with the legs 5.9 m below it; read from pylon.dae 2026-10-26: 3.27 m out at 12.43 / 16.20 / 20.01,
@@ -119,20 +156,7 @@ def _near(frame, ring, box):
     return out
 
 
-def _margin(pts, lines):
-    """Per point (k, 2) its distance to the nearest road's carriageway edge (drive_lines' (centreline, half width))
-    less TOWER_ROAD_CLEAR_M: negative too close to some road."""
-    out = np.full(len(pts), np.inf)
-    for line, hw in lines:
-        a, ab = line[:-1], line[1:] - line[:-1]
-        ap = pts[:, None, :] - a[None]
-        t = np.clip((ap * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12), 0.0, 1.0)
-        d = np.hypot(*(ap - t[..., None] * ab).transpose(2, 0, 1)).min(1)
-        out = np.minimum(out, d - hw - TOWER_ROAD_CLEAR_M)
-    return out
-
-
-def _off_roads(frame, md, e, n, ll):
+def _off_roads(frame, md, e, n, ll, clear_m=None):
     """The line vertices (e, n: frame m; ll: their lon/lat) moved off the public roads' carriageways: one closer than
     half the carriageway + TOWER_ROAD_CLEAR_M to a road's centreline goes straight away from the nearest to that
     distance; where that is too close to another road (between a dual carriageway's two, in a junction's corner), to
@@ -141,6 +165,8 @@ def _off_roads(frame, md, e, n, ll):
     tile (and every process) moves it alike: the same towers and wires on both sides of a tile edge."""
     import gasstations
     import mapcells
+    fast.require(168, "power-line road avoidance")
+    clear_m = TOWER_ROAD_CLEAR_M if clear_m is None else clear_m
     e, n = e.copy(), n.copy()
     layers = {}
 
@@ -161,26 +187,20 @@ def _off_roads(frame, md, e, n, ll):
     for i in range(len(e)):
         lines = gasstations.drive_lines(frame, roads_of(mapcells.cell_of(float(ll[i, 1]), float(ll[i, 0]))),
                                         float(e[i]), float(n[i]), 30.0 + CLEAR_SEARCH_M)
-        p = np.array([e[i], n[i]])
-        if not lines or _margin(p[None], lines)[0] >= 0.0:
+        if not lines:
             continue
-        # straight away from the nearest road
-        best = None
+        # One native call per tower: pack its nearby segments once, then test the ordered search without
+        # allocating a candidate-by-segment matrix for every road (a warm city tile's measured Python hot path).
+        ends = np.cumsum([len(line) - 1 for line, _ in lines], dtype=np.int64)
+        segments = np.empty((int(ends[-1]), 5), np.float64)
+        at = 0
         for line, hw in lines:
-            a, b = line[:-1], line[1:]
-            ab = b - a
-            t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-            foot = a + t[:, None] * ab
-            d = np.hypot(*(p - foot).T)
-            k = int(np.argmin(d))
-            if best is None or d[k] - hw < best[0]:
-                away = (p - foot[k]) / d[k] if d[k] > 1e-6 else np.array([-ab[k, 1], ab[k, 0]]) / max(
-                    float(np.hypot(*ab[k])), 1e-9)
-                best = (d[k] - hw, foot[k] + away * (hw + TOWER_ROAD_CLEAR_M))
-        cand = np.vstack([best[1][None], p + around])
-        m = _margin(cand, lines)
-        ok = np.flatnonzero(m >= -1e-6)
-        e[i], n[i] = cand[ok[0] if len(ok) else int(np.argmax(m))]
+            count = len(line) - 1
+            segments[at:at + count, :2] = line[:-1]
+            segments[at:at + count, 2:4] = line[1:] - line[:-1]
+            segments[at:at + count, 4] = hw
+            at += count
+        e[i], n[i] = fast._ef.power_off_roads(segments, ends, float(e[i]), float(n[i]), around, float(clear_m))
     return e, n
 
 
@@ -190,14 +210,30 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     RoadClearance: sampled tapers and actual shifted / sidewalk-expanded decks, never tunnel vaults. Full stock
     colliders are checked AFTER native layout (which decides tower yaw). Unlike moving a point away from one road,
     this also covers crossroads, a rotated tower's corners and services. A tower with no safe footprint is omitted;
-    its overhead conductors remain, not cut at a tile boundary."""
-    import roads
-    from polygon import Path
+    its overhead conductors remain, not cut at a tile boundary.
+
+    A cache read that fails (an OSError: PermissionError opening an Overture infrastructure file on Windows, PR #861's
+    review at 50.8468, 7.0975) leaves this tile without power lines instead of dropping it: the caller has already
+    built its decks, and an exception here lost the whole road tile (a viaduct never arrived). The rows are added
+    only once the whole layout succeeded, never half a line's towers."""
     if md is None:
         return
+    got_props, got_wires = [], []
+    try:
+        _tile_lines(frame, tx, ty, md, elev, got_props, got_wires, clearance)
+    except OSError as e:
+        log.warning("power lines: tile %s_%s left out: %s: %s", tx, ty, type(e).__name__, e)
+        return
+    props.extend(got_props)
+    wires.extend(got_wires)
+
+
+def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
+    """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
+    import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
-    lines, seen = [], set()
+    lines, poles, seen = [], [], set()
     for key in cells:
         f = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
         if f is None or not len(f.kind) or f.attrs.get("class") is None:
@@ -209,18 +245,34 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
             if fid in seen or any(u in t for u in UNDERGROUND):
                 continue
             seen.add(fid)
+            into = poles if low_voltage(t) else lines
             for part in f.parts(i):
                 for ring in part:
                     if len(ring) >= 2:
-                        lines += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
+                        into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
     subs = _substations(frame, cells, md)
-    ends = np.zeros((0, 4))
     fast.require(82, "power_line_layout")
+    ends = np.zeros((0, 4))
+    for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
+                                                  (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
+        got = _lay(frame, md, elev, subs, these, group, h, arms, clear_m, wire_r, (x0, y0, x1, y1), props, wires,
+                   clearance)
+        if len(got):
+            ends = np.vstack([ends, got])
+    _yards(frame, elev, subs, ends, (x0, y0, x1, y1), props)
+
+
+def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
+    """The towers (group, h m tall; conductors at arms) and conductors of lines [(fid, lon/lat ring)] (tile_lines);
+    returns their ends (n, 4) at the substations."""
+    from polygon import Path
+    ends = np.zeros((0, 4))
+    x0, y0, x1, y1 = box
     if lines:
         lines.sort(key=lambda q: q[0])          # (the same order in every tile: shared towers decided alike)
         ll = np.concatenate([r for _, r in lines])
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
-        e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll)
+        e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
         la2, lo2, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
         la2, lo2 = np.asarray(la2, np.float64), np.asarray(lo2, np.float64)
         _, _, z = frame.geodetic_to_enu(la2, lo2, np.asarray(elev(la2, lo2), np.float64))
@@ -232,15 +284,22 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
             for ring in rings:
                 here ^= Path(ring).contains_points(pts[:, :2])
             stop |= here
-        towers, ends, wp, wo = fast._ef.power_line_layout(pts, off, stop, ARMS, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M,
+        towers, ends, wp, wo = fast._ef.power_line_layout(pts, off, stop, arms, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M,
                                                           DEDUPE_M, END_MERGE_M, GANTRY_FRONT, [x0, y0, x1, y1])
         for x, y, zz, yaw in towers:
-            row = [G_PYLON, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
-                   1.0, PYLON_H, 0.0]
+            row = [group, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
+                   1.0, h, 0.0]
             if clearance is None or clearance.clear(row):
                 props.append(row)
         for a, b in zip(wo[:-1], wo[1:]):
-            wires.append((np.asarray(wp[a:b]), WIRE_R))
+            wires.append((np.asarray(wp[a:b]), wire_r))
+    return np.asarray(ends, np.float64).reshape(-1, 4)
+
+
+def _yards(frame, elev, subs, ends, box, props):
+    """The substations' yards (props rows) with the lines' ends (n, 4) at their gantries (tile_lines)."""
+    from polygon import Path
+    x0, y0, x1, y1 = box
     if not subs:
         return
     groups = sorted(PARTS)

@@ -25,6 +25,61 @@ def slope(la, lo):
 
 
 class RoadMeshTest(unittest.TestCase):
+    def test_sharp_ground_ribbon_covers_both_arms_without_miter_pinching(self):
+        """#740: every interior point of both mapped road rectangles remains covered at an isolated hairpin."""
+        for degrees in (121, 130, 150, -130, -150):
+            for half in (0.075, 1.75, 4.0):
+                angle = math.radians(degrees)
+                # Unequal non-lattice lengths also exercise an apex between resampling stations.
+                pts = np.array([[0., 0., 0.], [80.3, 0., 0.],
+                                [80.3 + 83.7 * math.cos(angle), 83.7 * math.sin(angle), 0.]])
+                with self.subTest(degrees=degrees, half=half):
+                    left, right, v, *_ = roadmesh.ribbons([chunk("road_asphalt_2lane", half * 2, pts)])[0]
+                    xy = np.r_[left, right]
+                    triangles = roadmesh._keep_up(roadmesh._quads(0, len(left), 0, 1), xy, 0)
+                    samples = []
+                    for a, b in zip(pts[:-1, :2], pts[1:, :2]):
+                        tangent = (b - a) / np.linalg.norm(b - a)
+                        normal = np.array([-tangent[1], tangent[0]])
+                        stations = np.r_[np.linspace(.001, .999, 65), .99999, .00001]
+                        for across in (-.999, -.5, 0., .5, .999):
+                            samples.extend(a + stations[:, None] * (b - a) + across * half * normal)
+                    samples = np.asarray(samples)
+                    tri = xy[triangles]
+                    edge = np.roll(tri, -1, axis=1) - tri
+                    delta = samples[:, None, None, :] - tri[None]
+                    cross = edge[None, :, :, 0] * delta[:, :, :, 1] - edge[None, :, :, 1] * delta[:, :, :, 0]
+                    covered = ((cross >= -1e-8).all(2) | (cross <= 1e-8).all(2)).any(1)
+                    self.assertTrue(covered.all(), f"{np.count_nonzero(~covered)} road samples missing")
+                    # The area of a butt-capped, bevel-joined constant-width polyline (no folded/overlapping fan).
+                    expected = 2 * half * 164 - half ** 2 * (math.tan(abs(angle) / 2) - math.sin(abs(angle)) / 2)
+                    e1, e2 = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+                    area = np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum() / 2
+                    self.assertAlmostEqual(area, expected, places=6)
+                    self.assertTrue(np.isfinite(xy).all())
+                    self.assertTrue((np.diff(v) >= 0).all(), "texture distance stays monotone through the bevel")
+                    np.testing.assert_allclose((left[[0, -1]] + right[[0, -1]]) / 2, pts[[0, -1], :2])
+
+    def test_sharp_ribbon_never_extrudes_a_miter_past_short_arms(self):
+        angle = math.radians(175)
+        pts = [[0, 0, 0], [4, 0, 0], [4 + 4 * math.cos(angle), 4 * math.sin(angle), 0]]
+        left, right, *_ = roadmesh.ribbons([chunk("road_asphalt_2lane", 8, pts)])[0]
+        self.assertLess(np.abs(np.r_[left, right]).max(), 12, "no unbounded intersection at a near reversal")
+
+    def test_beveled_hairpin_mesh_keeps_its_area_across_a_tile_seam(self):
+        angle = math.radians(150)
+        pts = [[176, 0, 0], [256, 0, 0], [256 + 80 * math.cos(angle), 80 * math.sin(angle), 0]]
+        chunks = [chunk("road_asphalt_2lane", 8, pts)]
+        flat = lambda la, lo: np.zeros(np.shape(la))
+        area = 0.
+        for box in ((0., -100., 256., 100.), (256., -100., 512., 100.)):
+            p, t, *_ = roadmesh.build(FRAME, chunks, flat, (0., 0., 0.), clip=box)
+            tri = p[t, :2]
+            a, b = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+            area += np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum() / 2
+        expected = 8 * 160 - 16 * (math.tan(angle / 2) - math.sin(angle) / 2)
+        self.assertAlmostEqual(area, expected, delta=.01)
+
     def test_ribbons_drape_face_up_and_lift(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (40, 0, 0), (80, 20, 0)]),
                   chunk("line_yellow", 0.12, [(0, 0.12, 0), (40, 0.12, 0)])]

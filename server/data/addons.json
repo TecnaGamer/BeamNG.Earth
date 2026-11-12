@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "note": "The curated add-ons the in-game Add-ons page offers (server/addons.py; docs/ADDONS.md). Listed with their authors' agreement. Only these repos can be installed from it; each add-on is downloaded from its author's own GitHub releases on the player's machine; nothing of theirs is copied here.",
+  "addons": [
+    {
+      "id": "trucking-dc",
+      "name": "Worldwide Trucking Career: Dangerous Contracts",
+      "author": "MadMerick01",
+      "repo": "MadMerick01/BeamNG-Worldwide-Trucking-Career-Dangerous-Contracts",
+      "kind": "beamng-mod",
+      "summary": "A freight career on the real map: job boards in 178,000 real towns, a garage, trailers, fuel, punctures and dangerous high-paid roads.",
+      "licence": "Source available, not open source: free to download and play; re-uploading or sharing changed copies is not allowed.",
+      "asset": "^worldwide-trucking-dangerous-contracts\\.zip$",
+      "modFile": "worldwide-trucking-dangerous-contracts.zip",
+      "oldFiles": [
+        "earth-freight-sim.zip",
+        "earth_freight.zip"
+      ],
+      "uiApps": [
+        "TruckingCareerDC"
+      ],
+      "trust": "latest",
+      "reviewed": [],
+      "minEarth": "1.8.0"
+    }
+  ]
+}
