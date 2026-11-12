@@ -1283,17 +1283,19 @@ def _flush(s, zb, blk, zroad):
 SEAM_FLUSH_ON = os.environ.get("BNE_RAIL_SEAM_FLUSH", "on") != "off"
 
 
-def seam_roads(xy, zb, roads_):
-    """railroadseam.couple's roads ([(xy (k, 2), z (k,), half width)]) for the track xy with bed zb, each road it crosses
-    at grade (its line crossing the track's, CROSSING_DZ of the bed's rail top) taken at the bed a flush crossing gives
-    there (_flush: the road less RAIL_TOP_M): couple took the bed to the road's own height, 0.55 m over the flush bed, for
-    25 m either side of the crossing, and the ground graded to it buried the ballast and sleepers there (Nachod's Kladska,
-    2026-11-09). Pure."""
+def seam_lowered(xy, zb, roads_):
+    """The indices of roads_ ([(xy (k, 2), z (k,), half width)]) railroadseam.couple takes SEAM_LOWER_M lower for the
+    track xy with bed zb: each road it crosses at grade (its line crossing the track's, CROSSING_DZ of the bed's rail
+    top), at the bed a flush crossing gives there (_flush: the road less RAIL_TOP_M): couple took the bed to the road's
+    own height, 0.55 m over the flush bed, for 25 m either side of the crossing, and the ground graded to it buried the
+    ballast and sleepers there (Nachod's Kladska, 2026-11-09). Pure."""
     if not SEAM_FLUSH_ON or not roads_ or len(xy) < 2:
-        return roads_
+        return ()
     at = {id(r[0]) for r in seam_crossers(xy, zb, roads_)}
-    return [(rxy, np.asarray(rz, np.float64) - (RAIL_TOP_M - FLUSH_LIFT_M), rh) if id(rxy) in at else (rxy, rz, rh)
-            for rxy, rz, rh in roads_]
+    return tuple(k for k, r in enumerate(roads_) if id(r[0]) in at)
+
+
+SEAM_LOWER_M = RAIL_TOP_M - FLUSH_LIFT_M
 
 
 def flush_to_plans(xy, zb, roads_):

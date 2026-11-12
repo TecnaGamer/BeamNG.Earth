@@ -102,6 +102,24 @@ impl Frame {
     /// point (x, y, 0) lies d^2 / 2R over the ellipsoid: three corrections), h whose up is z (Newton on the up, whose
     /// rate is the cosine between the frame's up and the place's normal).
     pub fn world_to_geodetic(&self, x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+        let (lat, lon) = self.world_to_latlon(x, y);
+        let (phi, lam) = (lat.to_radians(), lon.to_radians());
+        let nrm = [phi.cos() * lam.cos(), phi.cos() * lam.sin(), phi.sin()];
+        let rate = self.r[2][0] * nrm[0] + self.r[2][1] * nrm[1] + self.r[2][2] * nrm[2];
+        let mut h = {
+            let p = self.from_enu([x, y, z]);
+            ecef_to_geo(p[0], p[1], p[2]).2
+        };
+        for _ in 0..2 {
+            let u = self.to_enu(geo_to_ecef(lat, lon, h))[2];
+            h += (z - u) / rate;
+        }
+        (lat, lon, h)
+    }
+
+    /// world_to_geodetic's lat / lon alone (the same numbers: its height, two more conversions each way, left out):
+    /// a WorldFrame's enu_to_geodetic at h = 0 asked for every point and threw the heights away, ~1/3 of its work.
+    pub fn world_to_latlon(&self, x: f64, y: f64) -> (f64, f64) {
         let (mut qx, mut qy) = (x, y);
         let (mut lat, mut lon, _) = {
             let p = self.from_enu([qx, qy, 0.0]);
@@ -116,18 +134,7 @@ impl Frame {
             lat = got.0;
             lon = got.1;
         }
-        let (phi, lam) = (lat.to_radians(), lon.to_radians());
-        let nrm = [phi.cos() * lam.cos(), phi.cos() * lam.sin(), phi.sin()];
-        let rate = self.r[2][0] * nrm[0] + self.r[2][1] * nrm[1] + self.r[2][2] * nrm[2];
-        let mut h = {
-            let p = self.from_enu([x, y, z]);
-            ecef_to_geo(p[0], p[1], p[2]).2
-        };
-        for _ in 0..2 {
-            let u = self.to_enu(geo_to_ecef(lat, lon, h))[2];
-            h += (z - u) / rate;
-        }
-        (lat, lon, h)
+        (lat, lon)
     }
 
     /// The rigid ENU move into other: p_other = R p + t (R = E_o E_s^T, t = E_o (O_s - O_o)).
@@ -386,6 +393,29 @@ pub fn geo_world_to_geodetic<'py>(py: Python<'py>, lat0: f64, lon0: f64, pts: Py
         (la, lo, h)
     });
     (la.into_pyarray(py), lo.into_pyarray(py), h.into_pyarray(py))
+}
+
+/// geo_world_to_geodetic's lat / lon of points (m, 2+) of the frame's world at h = 0 (Frame::world_to_latlon: the
+/// heights not made), as WorldFrame.enu_to_geodetic(e, n, 0) gives them (version 242).
+#[pyfunction]
+pub fn geo_world_to_latlon<'py>(py: Python<'py>, lat0: f64, lon0: f64, e: PyReadonlyArray1<'py, f64>,
+                                n: PyReadonlyArray1<'py, f64>) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let f = Frame::new(lat0, lon0);
+    let (e, n) = (e.as_array(), n.as_array());
+    if e.len() != n.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geo_world_to_latlon: as many e as n"));
+    }
+    let m = e.len();
+    let (la, lo) = crate::release(py, m * 200, || {
+        let (mut la, mut lo) = (Vec::with_capacity(m), Vec::with_capacity(m));
+        for i in 0..m {
+            let g = f.world_to_latlon(e[i], n[i]);
+            la.push(g.0);
+            lo.push(g.1);
+        }
+        (la, lo)
+    });
+    Ok((la.into_pyarray(py), lo.into_pyarray(py)))
 }
 
 /// geotiles.placement: (R as 9 numbers row-major, t (3), c (3)) placing the world of the frame (slat, slon) in that of

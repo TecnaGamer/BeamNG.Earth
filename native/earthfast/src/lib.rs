@@ -53,6 +53,7 @@ mod dirsigns_face;
 mod cachemap;
 mod areacover;
 mod geotiles;
+mod chaingraph;
 mod geocontent;
 mod farcontent;
 mod sidewalks;
@@ -3231,6 +3232,72 @@ pub fn py_hash01_fints(seed: f64, ints: &[i64]) -> f64 {
     blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0
 }
 
+/// Python's repr() of a str whose characters are all ASCII (CPython's unicode_repr: single quotes unless it holds a '
+/// and no ", the backslash, \t \n \r and the other controls escaped); None for any other character (repr() asked).
+fn py_ascii_str_repr(v: &str, out: &mut String) -> bool {
+    if !v.is_ascii() {
+        return false;
+    }
+    let quote = if v.contains('\'') && !v.contains('"') { '"' } else { '\'' };
+    out.push(quote);
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    true
+}
+
+/// buildings._hash01(*vals): BLAKE2b-64 of repr(vals) (the tuple's repr: ASCII str, int, bool and None items made
+/// here as CPython writes them, any other item by its own repr(): a float's too, py_float_repr's shortest digits
+/// are not always CPython's, 2208031614071659.3 for 2208031614071659.2), / 2^64.
+/// The Python's repr + encode + hashlib per call was ~3 % of a first visit's far building tiles (version 242).
+#[pyfunction(signature = (*vals))]
+fn hash01(vals: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<f64> {
+    use pyo3::types::{PyBool, PyInt, PyString};
+    let mut s = String::with_capacity(64);
+    s.push('(');
+    let n = vals.len();
+    for (k, v) in vals.iter().enumerate() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        let mut done = false;
+        if let Ok(t) = v.cast_exact::<PyString>() {
+            done = py_ascii_str_repr(t.to_str()?, &mut s);
+        } else if v.is_none() {
+            s.push_str("None");
+            done = true;
+        } else if let Ok(b) = v.cast_exact::<PyBool>() {
+            s.push_str(if b.is_true() { "True" } else { "False" });
+            done = true;
+        } else if v.is_exact_instance_of::<PyInt>() {
+            if let Ok(i) = v.extract::<i64>() {
+                s.push_str(&i.to_string());
+                done = true;
+            }
+        }
+        if !done {
+            s.push_str(&v.repr()?.to_str()?.to_owned());
+        }
+    }
+    if n == 1 {
+        s.push(',');
+    }
+    s.push(')');
+    Ok(blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0)
+}
+
 #[pyfunction]
 fn hash01_test(seeds: Vec<f64>, ints: Vec<Vec<i64>>) -> (Vec<f64>, Vec<String>) {
     (seeds.iter().zip(&ints).map(|(&s, iv)| py_hash01_fints(s, iv)).collect(),
@@ -5826,6 +5893,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_hypot_test, m)?)?;
     m.add_function(wrap_pyfunction!(oriented_box_core, m)?)?;
     m.add_function(wrap_pyfunction!(hash01_test, m)?)?;
+    m.add_function(wrap_pyfunction!(hash01, m)?)?;
+    m.add_function(wrap_pyfunction!(chaingraph::chain_graph, m)?)?;
     m.add_function(wrap_pyfunction!(building_walls, m)?)?;
     m.add_function(wrap_pyfunction!(float_predictor_f32, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings, m)?)?;
@@ -5900,6 +5969,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geotiles::geo_tiles_dist, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_map, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_world_to_latlon, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_placement, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
@@ -5963,6 +6033,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roofs::slope_wall_floors, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::skeleton_roof_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::sky_walls, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
     // (roads.level_ranges' rules a layer at a time: _skew_decks, _deck_gaps, _lidar_gaps, the grade separations' merge,
     // lidar_gap_candidates)
@@ -6162,13 +6234,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
     m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
-    // 246: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
+        // 242: geo_world_to_latlon, chain_graph, hash01, skeleton_roof_uv, sky_walls (world gen speed)
+        // 247: 242 (world gen speed) and 243 (bldclear) in one module
+    // 249: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
     m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_tier, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
-    m.add("VERSION", 246)?;
+    m.add("VERSION", 249)?;
     Ok(())
 }
