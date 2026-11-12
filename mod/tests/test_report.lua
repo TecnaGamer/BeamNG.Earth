@@ -85,4 +85,26 @@ T.check(hs.held and hs.held.frames == 2 and math.abs(hs.held.s - 0.316) < 1e-9 a
 T.check(hs.playing.frames == 3 and hs.playing.over50 == 1 and hs.over50 == 2, 'frames while playing apart; all as before')
 T.check(report.stats({ 16, 16 }, { false, false }).held == nil, 'never held: no held part')
 
+-- The saved-report button uses the same companion/browser route as the settings links (GitHub #1109).
+local pages, browserPages = {}, {}
+beamngEarth_core.openPage = function(url) pages[#pages + 1] = url end
+openWebBrowser = function(url) browserPages[#browserPages + 1] = url end
+ui_imgui = {
+  ImVec2 = function() return {} end,
+  SetNextWindowPos = function() end, SetNextWindowSize = function() end,
+  Begin = function(name) return name:find('report saved', 1, true) ~= nil end,
+  End = function() end, TextUnformatted = function() end,
+  PushTextWrapPos = function() end, PopTextWrapPos = function() end, SameLine = function() end,
+  Button = function(name) return name == 'Open GitHub issue page' end,
+  Cond_Always = 0, Cond_FirstUseEver = 0, WindowFlags_NoDecoration = 0,
+  WindowFlags_AlwaysAutoResize = 0, WindowFlags_NoInputs = 0,
+}
+report.onUpdate()
+T.check(#pages == 1 and pages[1]:find('https://github.com/TecnaGamer/BeamNG.Earth/issues/new?', 1, true) == 1,
+  'the saved issue URL goes through core.openPage')
+T.check(#browserPages == 0, 'the report does not bypass the companion with the game browser')
+beamngEarth_core = nil
+report.onUpdate()
+T.check(#browserPages == 1 and browserPages[1] == pages[1], 'without core, the game browser is the fallback')
+
 T.done('test_report')
