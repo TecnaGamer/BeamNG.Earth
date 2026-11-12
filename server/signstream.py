@@ -81,10 +81,14 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     # German Autobahn signs: a tile in Germany (real borders, behind a box) whose shards carry the German block
     german = _german(source, frame, tx, ty)
     autobahn = _autobahn(md, frame, tx, ty, elev, context, left_hand) if german else None
-    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns)
+    ndw_mesh, ndw_claims = _ndw(md, frame, tx, ty, elev, context, decks) if rsigns and roadsigns.NL_ON else (None, [])
+    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej, towns,
+                     ndw_claims)
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
                                  autobahn=german) if dirs else (None, {}))
-    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
+    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, ndw_claims) if rsigns else None
+    import plazas
+    rsign_mesh = plazas.merge(rsign_mesh, ndw_mesh)
     import busstationsign               # the bus stations' name signs (on whether or not the direction boards are)
     bus_mesh, bus_faces = _optional('Bus station signs', busstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
                                     vfs_dir, country)
@@ -116,13 +120,13 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
 _warned = -float('inf')
 
 
-def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False, towns=None):
+def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False, towns=None, ndw_claims=()):
     """speedsigns.build_tile, or None: optional scenery never stops the other signs (towns: the town signs' towns,
     townentry.Towns.town_state, when they are on)."""
     global _warned
     try:
         return speedsigns.build_tile(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=de_on,
-                                     towns=towns)
+                                     towns=towns, ndw_claims=ndw_claims)
     except Exception as error:
         now = time.monotonic()
         if now - _warned >= 60.:
@@ -131,11 +135,24 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=Fal
         return None
 
 
-def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country):
+def _ndw(md, frame, tx, ty, elev, context, decks):
+    global _warned_rsigns
+    try:
+        import nlrvv
+        return nlrvv.build_tile(md, frame, tx, ty, elev, context, decks)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_rsigns >= 60.:
+            _warned_rsigns = now
+            log.warning('Dutch NDW signs unavailable; existing signs retained: %s', error, exc_info=True)
+        return None, []
+
+
+def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, ndw_claims=()):
     """roadsigns.build_tile, or None: optional scenery never stops the other signs."""
     global _warned_rsigns
     try:
-        return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country)
+        return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, ndw_claims)
     except Exception as error:
         now = time.monotonic()
         if now - _warned_rsigns >= 60.:

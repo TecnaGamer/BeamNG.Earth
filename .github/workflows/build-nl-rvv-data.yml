@@ -1,0 +1,29 @@
+name: Build public Dutch sign tiles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch official NDW attribute export
+        run: curl --fail --location --retry 3 --max-time 1200 --output source.csv.gz https://opendata.ndw.nu/verkeersborden_actueel_beeld.csv.gz
+      - name: Build attribute-only tiles
+        run: python tools/build_nl_rvv.py source.csv.gz public/nl-rvv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nl-rvv-public-tiles
+          path: public/nl-rvv
+          retention-days: 7
+# Publication is intentionally separate: the BeamNG.Earth-data maintainer can
+# add public/nl-rvv to that site's existing deployment. This workflow grants no
+# Pages/R2 write permissions and never publishes photographs or the source CSV.

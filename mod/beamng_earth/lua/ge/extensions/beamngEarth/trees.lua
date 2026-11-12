@@ -931,11 +931,17 @@ local function spelled(shape, v)
 end
 
 -- The shape (the tile's variant) and scale of a tile's row i (cached: M.pick makes tables).
+local signalFrame=nil
+local nlSignals=require('beamngEarth/nl_signals')
 local function shapeOf(t, i)
   local s = t.shapes[i]
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
   local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
+  if g=='signal' and M.dutchSignals then
+    s,sc=nlSignals.staticShape(t.geo and t.frame or t.anchorObj or signalFrame,f[b+F_X],f[b+F_Y],f[b+F_Z])
+    if s then t.shapes[i],t.scales[i]=s,sc;return s,sc end
+  end
   s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
   s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or t.variant)
   t.shapes[i], t.scales[i] = s, sc
@@ -951,7 +957,23 @@ end
 -- thousands a second while a forest loads. Every item sets the whole rotation and the position: nothing of the item
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
+local staticSignalRow={}
+local signalScene=require('beamngEarth/nl_signal_scene')
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
+  if group=='signal' and M.dutchSignals then
+    local b=(i-1)*t.s;local f=t.f
+    local x,y,z=f[b+F_X],f[b+F_Y],f[b+F_Z];local yaw=f[b+F_YAW]
+    local frame=t.geo and t.anchorObj or signalFrame
+    if t.geo and t.madePl then x,y,z=geotile.apply(t.madePl,x,y,z);yaw=yaw+geotile.yawOf(t.madePl) end
+    local p=nlSignals.staticPlan(frame,x,y,z,yaw)
+    if p then
+      local h=signalScene.create(p,{createSignalObject=signalScene.visualObject})
+      if h then
+        M.made=M.made+1;pop[shape]=(pop[shape] or 0)+1
+        return setmetatable(h,staticSignalRow)
+      end
+    end
+  end
   local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
   if not d then M.errors = M.errors + 1; return nil end
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
@@ -1000,7 +1022,8 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
 end
 
 local function removeItem(fd, it, shape)
-  if not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
+  if getmetatable(it)==staticSignalRow then signalScene.delete(it)
+  elseif not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
   M.removed = M.removed + 1
   if shape then pop[shape] = math.max((pop[shape] or 1) - 1, 0) end
 end
@@ -1204,6 +1227,20 @@ M.tileThreshold = tileThreshold
 -- its graph changes, a few times a minute while driving: all 5,300 tiles of a drive through LA rescanned each time
 -- kept the tree passes at their time limit, the new tiles' trees waiting behind (2026-11-02).
 M.suppress = nil
+-- Legacy non-geotile rows have world coordinates; geotiles use their own immutable frame.
+function M.setSignalFrame(frame)
+  if signalFrame==frame then return false end
+  signalFrame=frame
+  for _,t in pairs(tiles)do
+    if M.tileHasGroup(t,'signal') then
+      for i=1,t.n do
+        if (t.groups or GROUPS)[t.f[(i-1)*t.s+F_GROUP]+1]=='signal' then t.shapes[i],t.scales[i]=nil,nil end
+      end
+      t.signalRefresh=true;t.pending=true;t.scan=nil;dirty=true
+    end
+  end
+  return true
+end
 -- M.hiders[name](group, x, y, anchor) -> true hides one too, for the other modules that need it (townsigns.lua: the
 -- trees in front of a town sign), each under its own name; M.refreshNear re-runs the rows of the tiles near a spot
 -- that changed.
@@ -1456,7 +1493,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         if budget <= 0 or elapsed() > limit then dirty = true; return end
         local sh = t.madeShape[i]
         if not sh or allow(sh) then
-          if fd then removeItem(fd, it, sh) end
+          if fd or getmetatable(it)==staticSignalRow then removeItem(fd, it, sh) end
           t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
           liveItems = liveItems - 1
           budget = budget - 1
@@ -1606,9 +1643,13 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
-        if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor) then r = 2 end
+        if g and (M.suppress or next(M.hiders)) then
+          local px,py=f[b+F_X],f[b+F_Y]
+          if t.geo and t.madePl then px,py=geotile.apply(t.madePl,px,py,f[b+F_Z])end
+          if hidden(g,px,py,t.anchor)then r=2 end
+        end
         local solid = near and not M.NO_COLLIDE[g or '']
-        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
+        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid or g=='signal' and t.signalRefresh) then
           local sh, sc = shapeOf(t, i)
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
           if allow(sh) then
@@ -1637,6 +1678,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
       end
       t.shown = want
+      t.signalRefresh=nil
       t.band = band
       t.near = near
       if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end
@@ -1658,7 +1700,7 @@ function M.clear()
   for _, t in pairs(tiles) do
     local f = t.forestId and scenetree.findObjectById(t.forestId)
     local fd = f and f:getData()
-    for i, it in pairs(t.made) do if fd then removeItem(fd, it, t.madeShape[i]) end end
+    for i, it in pairs(t.made) do if fd or getmetatable(it)==staticSignalRow then removeItem(fd, it, t.madeShape[i]) end end
     releaseForest(t)
   end
   tiles, tileList, tileAt, frameN, dirty, lastPass = {}, {}, {}, 0, true, nil
@@ -1667,6 +1709,10 @@ end
 
 -- Level end: the level deletes its objects itself.
 function M.reset()
+  for _,t in pairs(tiles)do for _,it in pairs(t.made)do
+    if getmetatable(it)==staticSignalRow then signalScene.delete(it) end
+  end end
+  signalFrame=nil
   tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
   everMade = {}
   dirty, lastPass = true, nil

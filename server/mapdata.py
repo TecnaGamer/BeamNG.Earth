@@ -385,6 +385,8 @@ class MapData:
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
         import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
         self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
+        import nlrvv
+        self.nl_rvv = nlrvv.Source(cache_dir, self.fetcher) if nlrvv.roadsigns.NL_ON else None
         self.dem = None                 # (gradesep's ground: the server's dem.Dem, set by its owner, else its own)
         self._locks = {}
         self._lock = threading.Lock()
@@ -1354,7 +1356,7 @@ class MapData:
             self._slim_bytes = 0
         # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
         for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
-                     getattr(self, "osm_shards", None)):
+                     getattr(self, "osm_shards", None), getattr(self, 'nl_rvv', None)):
             if tags is not None:
                 tags.clear_memory()
 

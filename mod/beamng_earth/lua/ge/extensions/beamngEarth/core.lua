@@ -2856,7 +2856,7 @@ local function onUpdate(dtReal, dtSim)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
     t = mark('parking', t)
-    navgraph.update(st.anchorId, pb, gov)
+    navgraph.update(st.anchorId, pb, gov, st.anchor)
     t = mark('navgraph', t)
     do
       local ok, err = pcall(require('beamngEarth/rumble').update, dtReal, navgraph.currentGraph(), not st.paused)

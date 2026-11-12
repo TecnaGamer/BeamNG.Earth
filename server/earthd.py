@@ -8862,7 +8862,8 @@ class Connection:
             source = getattr(self.s.mapdata, "highway_signs", None)
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
-                                   ready, version=source.tags.known())
+                                   ready, version=(source.tags.known(),
+                                       self.s.mapdata.nl_rvv.known() if getattr(self.s.mapdata, 'nl_rvv', None) else None))
         if self.turbine_geo and aid == self.active and detail:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:

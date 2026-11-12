@@ -1124,7 +1124,7 @@ TURN_ON_RED = {"US", "CA"}
 # Islands, Micronesia, Palau: their limits were drawn in km/h)
 MPH_COUNTRIES = {"US", "PR", "VI", "GU", "AS", "MP", "UM", "GB", "IM", "JE", "GG", "LR", "MM",
                  "AG", "BS", "BZ", "DM", "GD", "KN", "LC", "VC", "MH", "FM", "PW"}
-RED_YELLOW = {"GB", "IE", "DE", "AT", "CH", "LI", "NL", "BE", "LU", "DK", "NO", "SE", "FI", "IS", "PL", "CZ", "SK",
+RED_YELLOW = {"GB", "IE", "DE", "AT", "CH", "LI", "BE", "LU", "DK", "NO", "SE", "FI", "IS", "PL", "CZ", "SK",
               "HU", "SI", "HR", "BA", "RS", "ME", "MK", "AL", "RO", "BG", "LT", "LV", "EE", "UA", "BY", "RU", "IL"}
 
 

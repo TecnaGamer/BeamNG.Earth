@@ -228,6 +228,16 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
   visibility to structural similarity", IEEE Trans. Image Processing 13(4), 2004: the SSIM measure
   `tools/benchmark.py compare` uses (own NumPy implementation).
 
+## Dutch roadside data and models
+
+Dutch Groenpol vehicle signals: Sven's supplied and confirmed `Groenpol.fbx`
+and textures; derived components retain their source hash and object provenance.
+Offline signal context: Rijkswaterstaat/NDW WKD built-up road sections and
+OpenStreetMap contributors (ODbL). See `docs/NL_VRI.md` and the asset folder's
+`context_attribution.md` and `context_provenance.json`.
+The public Dutch road-sign tile producer uses NDW attribute data (CC0-1.0;
+source and terms in each manifest), excluding photographs and vendor images.
+
 ## User mods mentioned in the docs (not part of BeamNG.Earth)
 
 BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic Driver Camera,
