@@ -347,9 +347,7 @@ class Sampler:
             t = tile_of_name(n.rsplit("/", 1)[-1])
             if t and t[0] <= e_km < t[0] + t[2] and t[1] <= n_km < t[1] + t[2]:
                 return n
-        if not tiles:
-            raise ValueError("no tile in the zip")
-        return tiles[0]
+        return tiles[0] if tiles else None     # (a few of Baden-Wuerttemberg's border zips hold only csv files)
 
     def _zip(self, url, ranged):
         z = self.zips.get(url)
@@ -376,6 +374,8 @@ class Sampler:
             if url.endswith(".zip"):
                 z = self._zip(url, ranged=self.state in ("hh", "hb"))
                 name = self._member(z.namelist(), member, e_km, n_km)
+                if name is None:
+                    raise netfetch.NotFound(url)
             key = (which, url, name)
             got = self.grids.get(key)
             if got is not None:
