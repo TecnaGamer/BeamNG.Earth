@@ -199,8 +199,12 @@ def memory_mb():
             c.cb = ctypes.sizeof(c)
             k32 = ctypes.WinDLL("kernel32")
             k32.GetCurrentProcess.restype = wintypes.HANDLE
-            psapi = ctypes.WinDLL("psapi")
-            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            # (argtypes: without them ctypes passed the pseudo handle (2**64 - 1 as HANDLE) as a C int, OverflowError,
+            # and this returned None on every Windows machine: the worker memory ceiling never ran there, 2026-11-11 -
+            # 16 GB test PC: eight workers at 0.9-3.6 GB private each, 33 of 36.8 GB committed after 30 minutes)
+            k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
+            k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+            if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
                 return c.PrivateUsage / 2 ** 20
         except Exception:
             pass
@@ -330,10 +334,27 @@ def _malloc_small():
 
 
 def trim():
-    """Give the freed memory back now (glibc; nothing elsewhere)."""
+    """Give the freed memory back now (glibc: malloc_trim; Windows: HeapCompact of the process's heaps, which
+    decommits their large free blocks: the C runtime's malloc is the process heap there; BNGE_WIN_TRIM=0 off)."""
     libc = _libc() if sys.platform.startswith("linux") else None
     if libc is not None and hasattr(libc, "malloc_trim"):
         libc.malloc_trim(0)
+    elif sys.platform == "win32" and os.environ.get("BNGE_WIN_TRIM", "1") != "0":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetProcessHeaps.argtypes = (wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+            k32.GetProcessHeaps.restype = wintypes.DWORD
+            k32.HeapCompact.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            k32.HeapCompact.restype = ctypes.c_size_t
+            n = k32.GetProcessHeaps(0, None)
+            heaps = (wintypes.HANDLE * max(1, n))()
+            n = min(k32.GetProcessHeaps(len(heaps), heaps), len(heaps))
+            for i in range(n):
+                k32.HeapCompact(heaps[i], 0)
+        except Exception:
+            pass
 
 
 # Windows has no niceness: priority classes. The server's own (earthd --nice, default 10) is "below normal"; its workers

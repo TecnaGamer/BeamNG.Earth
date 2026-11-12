@@ -55,7 +55,9 @@ class ShedTest(unittest.TestCase):
 
     def test_memory_mb(self):
         mb = budget.memory_mb()
-        if sys.platform.startswith("linux"):
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            # (Windows: private bytes; it returned None there until 2026-11-11, a ctypes argument overflow, and the
+            # ceiling never ran on Windows)
             self.assertGreater(mb, 1.0)
 
     def test_call_runs_job_then_sheds(self):
