@@ -522,5 +522,32 @@ class BaseRoutingTest(unittest.TestCase):
         self.assertEqual(tries, [{"eox": "sig1"}, None])
 
 
+class AnchorCacheTest(unittest.TestCase):
+    """_State.anchor keeps the last ANCHORS_KEPT anchors, never evicting the one just asked for (a late job of an
+    older anchor after two newer ones raised KeyError: a BeamMP player's log, 2026-11-10)."""
+
+    def state(self):
+        st = blockworker._State.__new__(blockworker._State)
+        st.lock = threading.Lock()
+        st.chunks, st.graders, st.grading = {}, {}, False
+        return st
+
+    def test_newest_kept(self):
+        st = self.state()
+        for aid in (1, 2, 3):
+            st.anchor(aid, 0.0, 0.0)
+        self.assertEqual(sorted(st.chunks), [2, 3])
+
+    def test_late_older_anchor(self):
+        st = self.state()
+        st.anchor(2, 0.0, 0.0)
+        st.anchor(3, 0.0, 0.0)
+        grader, chunks = st.anchor(1, 0.0, 0.0)      # (raised KeyError: 1)
+        self.assertIsNone(grader)
+        self.assertIs(chunks, st.chunks[1])
+        st.anchor(4, 0.0, 0.0)
+        self.assertEqual(sorted(st.chunks), [3, 4])
+
+
 if __name__ == "__main__":
     unittest.main()

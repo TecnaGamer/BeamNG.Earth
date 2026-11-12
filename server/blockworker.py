@@ -151,7 +151,9 @@ class _State:
                     grader.shared = plancache.for_grader(self.cache_dir, grader, self.widths, grader.wet)
                 self.graders[aid] = grader
                 self.chunks[aid] = heightmap.ChunkCache()    # no cached unpinned state after a failed setup
-                for old in sorted(self.chunks)[:-ANCHORS_KEPT]:
+                # (never the anchor just set up: a late job of an older anchor, after two newer ones, evicted its own
+                # and failed with KeyError, "Future exception was never retrieved" in a BeamMP player's log 2026-11-10)
+                for old in [a for a in sorted(self.chunks)[:-ANCHORS_KEPT] if a != aid]:
                     del self.chunks[old], self.graders[old]
             return self.graders[aid], self.chunks[aid]
 
