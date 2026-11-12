@@ -7,6 +7,7 @@ mod roofs;
 mod roofphoto;
 mod gravity;
 mod polyproject;
+mod lanesections;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
@@ -5756,6 +5757,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
     m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::geodesic_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_runs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
@@ -5951,6 +5954,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
     // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
-    m.add("VERSION", 230)?;
+    m.add("VERSION", 233)?;
     Ok(())
 }

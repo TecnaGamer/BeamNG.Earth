@@ -2270,6 +2270,14 @@ class _Planner:
                                                                          decks=self._decks_near(key), rings=rings)):
                 if p is not None:
                     p.rid = road_id(fid)
+                    import lanesections
+                    fi = feats.index(fid)
+                    if fi >= 0 and lanesections.profile(feats, fi):
+                        la, lo, _ = self.frame.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.)
+                        tp = roadsmod.road_tapers(feats, None, self.widths)[fi]
+                        ws = roadsmod.taper_widths(part[1].width, tp, lo, la)
+                        if ws is not None:
+                            set_widen(p, (ws - part[1].width) / 2.)
                     plans.append((fid, p))
                     pspecs.append(part[1])
                     pclip.append(cl)

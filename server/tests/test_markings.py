@@ -306,7 +306,7 @@ class GoreTest(unittest.TestCase):
         a, apex = stripes[0]
         self.assertLess(apex[0], a[0], "the point toward the traffic coming from the split")
         for l in stripes:
-            self.assertTrue(np.all(l[:, 1] <= -main.width / 2 + 1e-6), "in the wedge, off the carriageway")
+            self.assertTrue(np.all(l[:, 1] <= -roads.lane_layout(main)[0] / 2 + 1e-6), "in the wedge, off the driving lanes")
 
 
 class ArrowTest(unittest.TestCase):

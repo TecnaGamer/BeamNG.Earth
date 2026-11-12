@@ -198,6 +198,16 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   another road joins it stay where the map has them. The road mesh, the ground's grading, the markings and the AI's
   routes all follow the same line. Driveways and parking aisles keep their mapped corners; railways are rounded only
   with `BNE_RAIL_CURVES=on`.
+- Lane changes inside a highway stretch (from PR #880 by DerEifrige-f; `BNE_LANE_SECTIONS=off` turns it off): where
+  the map's ways between two junctions hold different lane counts (an auxiliary lane opening before an exit, a lane
+  dropping after an entrance), the road gets each part's own lane count and width. Where OpenStreetMap places the
+  added lane beside the through lanes, the through lanes run straight and only the added lane's edge tapers; its lane
+  line is a wide, short-dashed line, and the slip road leaves from that lane.
+- Street widths measured against aerial photos: where the map gives a road no width, its default width comes from
+  measurements of each road's visible paved width on high-resolution aerials in US towns and suburbs, European cities
+  and Japan (narrower small-town streets in the US, one-way town streets as wide as their parking), no parking lanes
+  are added on top of a mapped lane count, and winding rural roads (touge, alpine roads) are narrow
+  (`BNE_WIDTH_MODEL=off` / `BNE_WINDING_ROADS=off`: the old widths).
 - Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
   downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds

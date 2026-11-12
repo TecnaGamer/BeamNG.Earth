@@ -290,6 +290,7 @@ def load_roads(lat, lon, half, cache_dir):
             continue
         specs = roads.road_specs(f, surf.urban, None)
         vals = roads._map_surface_values(f)
+        inp = roads._spec_inputs(f)
         cls = f.attrs.get("class")
         for i, sp in enumerate(specs):
             fid = str(f.ids[i])
@@ -306,8 +307,17 @@ def load_roads(lat, lon, half, cache_dir):
                 if (np.abs(xy) <= half).all(1).any():
                     lines.append(xy)
             if lines:
+                # what the width came from (a mapped width / lane count, else the class default: the width model's
+                # calibration reads the untagged roads)
+                c = inp["cols"]
+                meta = {"w_tag": bool(c["has_w"][i]) or bool(np.isfinite(c["osm_w"][i])),
+                        "lanes_tag": bool(np.isfinite(c["osm_lanes"][i])) or int(c["over"][i]) >= 0
+                        or int(c["gen"][i]) >= 0,
+                        "urban": bool(sp.urban), "mountain": bool(getattr(sp, "mountain", False)),
+                        "link": bool(sp.link), "parking": float(roads.parking_width(sp)),
+                        "median": None if sp.median is None else float(sp.median)}
                 out.append((fid, str(cls[i]) if cls is not None else sp.cls, sp, lines,
-                            None if vals[i] is None else str(vals[i])))
+                            None if vals[i] is None else str(vals[i]), meta))
     return out, frame
 
 
@@ -435,7 +445,7 @@ def score(lat, lon, half=300.0, px=2048, source="auto", out=None, cache_dir=None
     roads_, frame = load_roads(lat, lon, half, cache_dir)
     rows = []
     det_marks = []
-    for fid, cls, sp, lines, tag in roads_:
+    for fid, cls, sp, lines, tag, meta in roads_:
         w = float(sp.width)
         wins, mats = [], []
         for xy in lines:
@@ -465,7 +475,7 @@ def score(lat, lon, half=300.0, px=2048, source="auto", out=None, cache_dir=None
         ok = [x for x in wins if x["ok"]]
         lanes_ours = sp.lanes if sp.lanes else (1 if sp.oneway else 2)
         rows.append({"fid": fid, "cls": cls, "kind": kind, "tag": tag, "ref": ref, "width": w, "lanes": sp.lanes,
-                     "lanes_ours": lanes_ours, "oneway": bool(sp.oneway), "n_win": len(wins), "n_ok": len(ok),
+                     "lanes_ours": lanes_ours, "oneway": bool(sp.oneway), **meta, "n_win": len(wins), "n_ok": len(ok),
                      "off": float(np.median([x["off"] for x in ok])) if ok else None,
                      "abs_off": float(np.median([abs(x["off"]) for x in ok])) if ok else None,
                      "wid": float(np.median([x["wid"] for x in ok])) if ok else None,

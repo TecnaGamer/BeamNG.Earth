@@ -197,7 +197,8 @@ class RulesTest(unittest.TestCase):
         f = features([[(0, 0), (10, 0)]] * 6, ["residential", "footway", "primary", "tertiary", "track", "secondary"],
                      surfaces=[(4, "gravel")], widths=[(2, 14.0)], levels=[(3, 1.0)], flags=[(5, "is_bridge")])
         s = roads.road_specs(f)
-        self.assertEqual(s[0][:2], (roads.STYLE["residential"][0] + 2 * roads.EDGE_STRIP_M, "paved"), "rural: edge strips")
+        # (rural: edge strips; the frame is Baltimore: the US's measured width, roads.WIDTH_TABLE)
+        self.assertEqual(s[0][:2], (roads.WIDTH_TABLE["US"]["residential"][2], "paved"), "rural: measured")
         self.assertIsNone(s[1], "footways left out")
         self.assertEqual(s[2][:2], (14.0, "paved"), "width rule")
         self.assertIsNone(s[3], "off ground level (bridge / tunnel) left out")
@@ -217,7 +218,7 @@ class RulesTest(unittest.TestCase):
     def test_urban_from_land_cover(self):
         f = features([[(0, 0), (10, 0)], [(0, 100), (10, 100)]], ["residential", "residential"], widths=[(1, 9.0)])
         s = roads.road_specs(f, lambda lat, lon: np.ones(np.shape(lat), bool))
-        self.assertEqual(s[0][0], roads.STYLE["residential"][0] + 2 * roads.PARKING_M)
+        self.assertEqual(s[0][0], roads.WIDTH_TABLE["US"]["residential"][0], "a US town street, parking included")
         self.assertEqual(s[1][0], 9.0, "width rule wins over the parking guess")
 
 
@@ -708,7 +709,7 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(sum(len(w["ramps"]) for w in runs) + sum(len(c["ramps"]) for c in corners) >= 8,
                         "two curb ramps per crosswalk")
         # residential streets with parking: no curb extensions (GitHub #208), the corners at the parking curb
-        wd = roads.carriageway("residential", "paved", True) / 2
+        wd = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2   # (WIDTH_TABLE)
         cls_ = [np.array(c["n"])[:, :2] for c in chunks if c["m"] == roads.LOOK["paved"]["m"] and c["n"]]
         for c in corners:
             d = np.min([_seg_dist(c["arc"][:, :2], ln) for ln in cls_], axis=0)
@@ -717,7 +718,7 @@ class BuildTileTest(unittest.TestCase):
         for c in chunks:
             if c["m"] == junctions.CROSSWALK["m"]:
                 self.assertAlmostEqual(np.hypot(*np.subtract(c["n"][0][:2], c["n"][-1][:2])), 2 * wd, delta=0.3)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = wd
         for c in chunks:                        # no markings through the junction or its crosswalks
             if c["m"].startswith("line_") and c["w"] != junctions.STOP_LINE["w"]:
                 for x, y, _ in c["n"]:
@@ -774,7 +775,7 @@ class BuildTileTest(unittest.TestCase):
         f = features(arms, ["residential"] * 5)
         walks = []
         chunks = roads.build_tile(FRAME, -1, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2
         lines = [np.array([(-200, 100), (200, 100)]), np.array([(-200, 108), (200, 108)]), np.array([(0, 100), (0, 108)])]
         for c in [wk["corner"] for wk in walks if "corner" in wk]:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
@@ -792,14 +793,14 @@ class BuildTileTest(unittest.TestCase):
         # two junctions ~10 m apart on a diagonal connector no longer than the streets are wide (the user's
         # Fells Point junction, 2026-10-17): every quadrant gets a curb return, turning onto the connector's edge
         # at one node and off at the other, none on a carriageway, and the connector keeps no sidewalk
-        A, B = (120.0, 120.0), (127.0, 113.0)
+        A, B = (120.0, 120.0), (126.0, 114.0)     # (8.5 m: under the streets' 9.5 m, roads.WIDTH_TABLE)
         arms = [[A, (120, 300)], [A, (-60, 120)], [A, B], [B, (127, -60)], [B, (300, 113)]]
         f = features(arms, ["residential"] * 5)
         walks = []
         roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
         corners = [wk["corner"] for wk in walks if "corner" in wk]
         self.assertEqual(len(corners), 4)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2
         lines = [np.array(a, np.float64) for a in arms]
         for c in corners:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
@@ -814,7 +815,7 @@ class BuildTileTest(unittest.TestCase):
         f = features([[(-300, 50), (300, 50)]], ["tertiary"], surfaces=[(0, "paving_stones")])
         chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool))
         cob = [c for c in chunks if c["m"] == roads.LOOK["cobble"]["m"]]
-        w = roads.carriageway("tertiary", "cobble", True)
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width     # (the town width: WIDTH_TABLE)
         n = max(1, int(round(w / roads.LOOK["cobble"]["strip"])))
         self.assertEqual(len(cob), n, "parallel strips across the width")
         self.assertTrue(all(abs(c["w"] - w / n) < 0.01 for c in cob))
