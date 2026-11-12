@@ -282,6 +282,7 @@ struct Layer<'a> {
     se_kind: Vec<i8>,
     se_tok: Vec<i32>,
     aisle: Vec<bool>,
+    region: Option<Vec<i64>>, // roads.WIDTH_REGIONS' index of the feature's region (None: all 0)
     built: [bool; 4],
 }
 
@@ -322,7 +323,7 @@ impl<'a> Layer<'a> {
             skind: col(d, "skind", n)?, stok: col(d, "stok", n)?, reg_pre: col(d, "reg_pre", n)?,
             name: opt_col(d, "name", n)?, eu_country: col(d, "eu_country", n)?, sides: col(d, "sides", n)?,
             sweden: col(d, "sweden", n)?, se_tag: col(d, "se_tag", n)?, se_kind: col(d, "se_kind", n)?,
-            se_tok: col(d, "se_tok", n)?, aisle: col(d, "aisle", n)?, built,
+            se_tok: col(d, "se_tok", n)?, aisle: col(d, "aisle", n)?, region: opt_col(d, "region", n)?, built,
         })
     }
 
@@ -581,6 +582,10 @@ struct Prm {
     se_town_kmh: f64,
     edge_m: f64,
     reg_beside: f64,
+    winding_on: bool,
+    winding_deg_km: f64,
+    winding_min_m: f64,
+    winding_step: f64,
 }
 
 impl Prm {
@@ -595,6 +600,10 @@ impl Prm {
             mountain_turn: g("MOUNTAIN_TURN_DEG")?, mountain_road: g("MOUNTAIN_ROAD_M")?,
             mountain_max_lanes: g("MOUNTAIN_MAX_LANES")?, se_town_kmh: g("SE_TOWN_MAX_KMH")?, edge_m: g("EDGE_M")?,
             reg_beside: g("REGIONAL_BESIDE_SHARE")?,
+            winding_on: p.get("WINDING_ON").copied().unwrap_or(0.0) != 0.0,
+            winding_deg_km: p.get("WINDING_DEG_PER_KM").copied().unwrap_or(f64::INFINITY),
+            winding_min_m: p.get("WINDING_MIN_M").copied().unwrap_or(f64::INFINITY),
+            winding_step: p.get("WINDING_STEP_M").copied().unwrap_or(20.0),
         })
     }
 }
@@ -620,6 +629,98 @@ fn switchbacks(ll: &[P], span: f64, turn: f64) -> usize {
         }
     }
     c
+}
+
+/// (degrees of heading change per km, length m) of a lon/lat line, its heading read along chords of `step` m (a line
+/// resampled every step m: a densely drawn or jittery line counts no more turning than its shape has). A winding
+/// mountain road turns 300-1000 deg a km; a rural road through hills 50-200.
+pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
+    if ll.len() < 2 {
+        return (0.0, 0.0);
+    }
+    let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let xy: Vec<[f64; 2]> = ll.iter().map(|p| [(p[0] - ll[0][0]) * kx, (p[1] - ll[0][1]) * 110540.0]).collect();
+    let mut s = vec![0.0f64; xy.len()];
+    for k in 1..xy.len() {
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+    }
+    let total = s[s.len() - 1];
+    if total < 2.0 * step {
+        return (0.0, total);
+    }
+    let m = (total / step).floor() as usize;
+    let mut pts = Vec::with_capacity(m + 1);
+    let mut j = 0usize;
+    for q in 0..=m {
+        let at = q as f64 * step;
+        while j + 2 < s.len() && s[j + 1] < at {
+            j += 1;
+        }
+        let d = (s[j + 1] - s[j]).max(1e-9);
+        let t = ((at - s[j]) / d).clamp(0.0, 1.0);
+        pts.push([xy[j][0] + t * (xy[j + 1][0] - xy[j][0]), xy[j][1] + t * (xy[j + 1][1] - xy[j][1])]);
+    }
+    let mut turn = 0.0f64;
+    let mut prev: Option<f64> = None;
+    for w in pts.windows(2) {
+        let h = (w[1][1] - w[0][1]).atan2(w[1][0] - w[0][0]);
+        if let Some(p) = prev {
+            let mut d = h - p;
+            if d > std::f64::consts::PI {
+                d -= 2.0 * std::f64::consts::PI;
+            }
+            if d < -std::f64::consts::PI {
+                d += 2.0 * std::f64::consts::PI;
+            }
+            turn += d.abs();
+        }
+        prev = Some(h);
+    }
+    (turn.to_degrees() / (m as f64 * step) * 1000.0, total)
+}
+
+/// roads.WIDTH_REGIONS' default widths: (regions, classes, 5) of [town two-way, town one-way, rural two-way, rural
+/// one-way, a winding rural road's at most], NaN where the class formula stands.
+struct RegionTab {
+    r: usize,
+    c: usize,
+    v: Vec<f64>,
+}
+
+impl RegionTab {
+    fn get(&self, region: i64, c: usize, k: usize) -> f64 {
+        let r = region.max(0) as usize;
+        if r >= self.r || c >= self.c {
+            return f64::NAN;
+        }
+        self.v[(r * self.c + c) * 5 + k]
+    }
+}
+
+/// A road's width with the region's measured defaults (roads.WIDTH_TABLE) where the map gives no width: the class
+/// formula's w (RoadRules::cw) replaced by the region's default without a lane count; with a mapped lane count in town
+/// no parking lanes on top (lanes x LANE_W, the street's default the least). Highways and ramps keep cw's.
+#[allow(clippy::too_many_arguments)]
+fn region_width(rules: &RoadRules, rt: Option<&RegionTab>, region: i64, c: usize, built: bool, urban: bool,
+                rule_w: Option<f64>, oneway: bool, lanes: Option<i64>, link: bool, w: f64) -> f64 {
+    let Some(rt) = rt else { return w };
+    if rule_w.is_some() || !built || link || rules.has(c, F_MOTORWAY | F_TRUNK) {
+        return w;
+    }
+    let k = if urban { if oneway { 1 } else { 0 } } else if oneway { 3 } else { 2 };
+    let d = rt.get(region, c, k);
+    match lanes.filter(|&v| v != 0) {
+        None => if d.is_finite() { d } else { w },
+        Some(ln) if urban && rules.has(c, F_PARK) => {
+            // (the lanes, and the street's default width up to the lanes with a parking lane each side: a 4-lane
+            // street its lanes alone, a 2-lane one its street's width)
+            let drive = ln as f64 * rules.row(c).lw_or(rules.lane_w_default);
+            let street = if d.is_finite() { d } else { rules.cw(c, built, urban, None, oneway, None, false).0 };
+            pmax(drive, street.min(drive + 2.0 * rules.parking))
+        }
+        _ => w,
+    }
 }
 
 /// The Swedish reading (roads._swedish_specs) of the specs in place.
@@ -935,12 +1036,24 @@ impl RoadRules {
     /// lon) -> bool (None: rural everywhere); prm: roads._spec_prm. Returns a dict of columns (spec_cols, "towns",
     /// "frontage" (n, 2), NaN where not asked).
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (geo, cols, built, raw_off, raw_rng, flow_fn, regional_fn, urban_fn, prm, european, left_hand))]
+    #[pyo3(signature = (geo, cols, built, raw_off, raw_rng, flow_fn, regional_fn, urban_fn, prm, european, left_hand,
+                        region_tab=None))]
     fn road_specs<'py>(&self, py: Python<'py>, geo: Geom<'py>, cols: Bound<'py, PyDict>, built: Vec<bool>,
                        raw_off: PyReadonlyArray1<'py, i64>, raw_rng: PyReadonlyArray2<'py, f64>,
                        flow_fn: Bound<'py, PyAny>, regional_fn: Bound<'py, PyAny>, urban_fn: Option<Bound<'py, PyAny>>,
-                       prm: HashMap<String, f64>, european: bool, left_hand: bool) -> PyResult<Bound<'py, PyDict>> {
+                       prm: HashMap<String, f64>, european: bool, left_hand: bool,
+                       region_tab: Option<numpy::PyReadonlyArray3<'py, f64>>) -> PyResult<Bound<'py, PyDict>> {
         let prm = Prm::new(&prm)?;
+        let rtab = match region_tab {
+            Some(t) => {
+                let a = t.as_array();
+                if a.shape()[2] != 5 {
+                    return Err(PyValueError::new_err("road_specs: region_tab (regions, classes, 5)"));
+                }
+                Some(RegionTab { r: a.shape()[0], c: a.shape()[1], v: a.iter().copied().collect() })
+            }
+            None => None,
+        };
         let l = Layer::new(geo.0.as_array(), &geo.1, &geo.2, &geo.3, &cols, built_of(&built)?)?;
         let n = l.n;
         let (ro, rr) = (raw_off.as_array(), raw_rng.as_array());
@@ -1009,6 +1122,8 @@ impl RoadRules {
                 kind = GRAVEL;
             }
             let (w, _) = self.cw(c, l.built(kind), false, rule_w, ow, ln.map(|v| v as f64), link);
+            let w = region_width(self, rtab.as_ref(), l.region.as_ref().map(|v| v[i]).unwrap_or(0), c, l.built(kind),
+                                 false, rule_w, ow, ln, link, w);
             out[i] = Some(Sp { width: w, w32: false, kind, urban: false, cls: c, oneway: ow, dir, kmh, gap,
                                median: None, lanes: ln, surf: l.stok[i], link, sides: -1, parking: true,
                                mountain: false });
@@ -1073,6 +1188,9 @@ impl RoadRules {
                 }
                 let ow = l.has_ow[i];
                 let (w, _) = self.cw(c, l.built(kind), urban, q.rule_w, ow, q.lanes.map(|v| v as f64), l.link[i]);
+                // (the region's measured default widths: roads.WIDTH_TABLE)
+                let w = region_width(self, rtab.as_ref(), l.region.as_ref().map(|v| v[i]).unwrap_or(0), c, l.built(kind),
+                                     urban, q.rule_w, ow, q.lanes, l.link[i], w);
                 out[i] = Some(Sp { width: w, w32: false, kind, urban, cls: c, oneway: ow, dir: q.dir, kmh: q.kmh,
                                    gap: q.gap, median: None, lanes: q.lanes, surf: l.stok[i], link: l.link[i],
                                    sides: -1, parking: true, mountain: false });
@@ -1148,6 +1266,36 @@ impl RoadRules {
                         sp.w32 = false;
                     }
                     sp.mountain = true;
+                }
+            }
+            // winding rural roads (touge, alpine roads without hairpins enough for a pass road; a one-way mountain road
+            // of two lanes, Irohazaka's, too): at most the region's winding width (roads.WINDING_*)
+            if prm.winding_on {
+                if let Some(rt) = rtab.as_ref() {
+                    for i in 0..n {
+                        let Some(sp) = out[i].as_mut() else { continue };
+                        if sp.urban || sp.mountain || sp.kind != PAVED || sp.link || med_truthy(sp.median)
+                            || self.has(sp.cls, F_MOTORWAY) || l.mapped_w(i)
+                            || (sp.lanes.unwrap_or(0) as f64) > prm.mountain_max_lanes {
+                            continue;
+                        }
+                        let reg = l.region.as_ref().map(|v| v[i]).unwrap_or(0);
+                        let cap = rt.get(reg, sp.cls, 4);
+                        if !cap.is_finite() || cap >= sp.width {
+                            continue;
+                        }
+                        let a = l.co[l.ro[l.po[i]]];
+                        let b = l.co[l.ro[l.po[i] + 1]];
+                        if b < a + 3 {
+                            continue;
+                        }
+                        let ll: Vec<P> = (a..b).map(|k| l.pt(k)).collect();
+                        let (deg_km, len) = winding(&ll, prm.winding_step);
+                        if len >= prm.winding_min_m && deg_km >= prm.winding_deg_km {
+                            sp.width = cap;
+                            sp.w32 = false;
+                        }
+                    }
                 }
             }
             out

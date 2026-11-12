@@ -7,6 +7,7 @@ mod roofs;
 mod roofphoto;
 mod gravity;
 mod polyproject;
+mod lanesections;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
@@ -5758,6 +5759,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
     m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::geodesic_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_runs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
@@ -5957,9 +5960,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
     // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
     m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
-    // 232: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
+    // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
     // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
     m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
-    m.add("VERSION", 232)?;
+    m.add("VERSION", 234)?;
     Ok(())
 }

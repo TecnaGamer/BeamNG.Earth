@@ -47,6 +47,18 @@ def ecef_to_geodetic(x, y, z):
     return _rust3("enu_to_geodetic", x, y, z, _ZERO, _EYE)
 
 
+def segment_lengths(lonlat):
+    """WGS84 geodesic metres between consecutive lon/lat vertices (Vincenty's inverse; the mean sphere where it does not
+    converge, near antipodal: no road edge), the metric lanesections.py locates a merged highway's per-source lane
+    stretches in (from PR #880 by DerEifrige-f; earthfast.geodesic_lengths)."""
+    import fast
+    ll = np.ascontiguousarray(np.asarray(lonlat, np.float64)[:, :2])
+    if len(ll) < 2:
+        return np.empty(0, np.float64)
+    fast.require(233, "geodesic_lengths")
+    return fast._ef.geodesic_lengths(ll)
+
+
 class EnuFrame:
     """Local East-North-Up frame tangent to the ellipsoid at (lat0, lon0, h0)."""
 

@@ -1708,7 +1708,8 @@ class ZoneSignsTest(unittest.TestCase):
                 off, off_mesh = self.table(lines, False)
                 self.assertEqual(off, TODAY_274[name], name)
                 self.assertEqual(off_mesh[3], speedsigns.MATERIALS)
-                away, away_mesh = self.table(lines, True, baltimore)
+                with mock.patch.object(roads, "WIDTH_MODEL_ON", False):     # (today's widths: the record's)
+                    away, away_mesh = self.table(lines, True, baltimore)
                 self.assertEqual(away, TODAY_274[name], name)
                 self.assertEqual(len(away_mesh[1]), len(off_mesh[1]))
 

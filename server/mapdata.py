@@ -121,6 +121,7 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # (osmtags.is_outline, a raceway that is a circuit site's outline left out, GitHub #1010: as #184, only cells fetched
 # after it; the cached ones with the next Overture release bump)
 LAYER_VERSIONS = {"roads": 9}
+LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-road mouths (lanesections.split's context)
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -437,6 +438,46 @@ class MapData:
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
+    def _lane_sections(self, key, layer, kind, frame, f):
+        """The roads layer with its merged highways' lane sections split out (lanesections.split, from PR #880 by
+        DerEifrige-f; BNE_LANE_SECTIONS=off: as before). A slip road whose mouth lies in another cell reads that
+        cell's own arrays (not cell(): two workers resolving the two ends of one link would wait on each other), so
+        every copy of the link has one geometry."""
+        import lanesections
+        import railtags
+        if not lanesections.ON or railtags.LANE_PARTS not in f.attrs:
+            return f
+        context = {}
+        lt = getattr(self, "lane_tags", None)
+        built = lt.version() if lt is not None else None
+        with self._lock:                # (the neighbour cells' raw layers, kept for the next cells' decodes)
+            kept = self.__dict__.setdefault("_lane_context", OrderedDict())
+
+        def lane_context(lat, lon):
+            owner = mapcells.cell_of(lat, lon)
+            if owner == key:
+                return f
+            if owner not in context:
+                ck = (str(owner), layer, built)
+                with self._lock:
+                    other = kept.get(ck)
+                    if other is not None:
+                        kept.move_to_end(ck)
+                if other is None:
+                    try:
+                        ar, _hit = self.layer_arrays(owner, layer, kind)
+                        other = mapgeom.Features.from_arrays(layer, ar, "")
+                        self._lanes(owner, layer, other)
+                        with self._lock:
+                            kept[ck] = other
+                            while len(kept) > LANE_CONTEXT_CELLS:
+                                kept.popitem(last=False)
+                    except Exception as e:
+                        log.debug("lane mouth context %s: %s", owner, e)
+                context[owner] = other
+            return context[owner]
+        return lanesections.split(f, frame, lane_context)
+
     def _bdtopo(self, key, layer, feats):
         """A French buildings layer with IGN BD TOPO's measured heights, storeys, materials and use (bdtopo.py), joined
         once its cell's records are here; never waits for them nor asks for them: the building tiles do, for their own
@@ -494,6 +535,12 @@ class MapData:
             v["mapsrc"] = pmtiles.source_key()
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
+        import lanesections
+        if lanesections.ON:                     # (likewise the merged highways' lane sections, PR #880)
+            v["lanesections"] = lanesections.VERSION
+        import roads
+        if not roads.WIDTH_MODEL_ON or not roads.WINDING_ON:    # (the measured default widths' switches: off keyed)
+            v["widths"] = (roads.WIDTH_MODEL_ON, roads.WINDING_ON)
         if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
@@ -1031,6 +1078,9 @@ class MapData:
                 self._lanes(key, layer, f)
                 if layer == "roads":
                     f = levelways.promote(f, frame)         # (a street mapped as a footway over a level crossing: a road)
+                    # (a merged highway's own lane sections as their own pieces, before the bends are rounded:
+                    # lanesections.py, from PR #880)
+                    f = self._lane_sections(key, layer, kind, frame, f)
                     f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)

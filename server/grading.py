@@ -2292,6 +2292,14 @@ class _Planner:
                                                                          decks=self._decks_near(key), rings=rings)):
                 if p is not None:
                     p.rid = road_id(fid)
+                    import lanesections
+                    fi = feats.index(fid)
+                    if fi >= 0 and lanesections.profile(feats, fi):
+                        la, lo, _ = self.frame.enu_to_geodetic(p.xy[:, 0], p.xy[:, 1], 0.)
+                        tp = roadsmod.road_tapers(feats, None, self.widths)[fi]
+                        ws = roadsmod.taper_widths(part[1].width, tp, lo, la)
+                        if ws is not None:
+                            set_widen(p, (ws - part[1].width) / 2.)
                     plans.append((fid, p))
                     pspecs.append(part[1])
                     pclip.append(cl)
@@ -6936,7 +6944,7 @@ def share_corridors(plans, specs):
     if not plans:
         return 0
     import fast
-    fast.require(232, "plan_share_corridors")
+    fast.require(234, "plan_share_corridors")
     ps = [p for _f, p in plans]
     xy, off, z = _plan_lines(ps)
     rh = np.array([float(p.road_half) for p in ps], np.float64)

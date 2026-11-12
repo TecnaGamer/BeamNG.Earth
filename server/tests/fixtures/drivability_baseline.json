@@ -1164,7 +1164,7 @@
   }
  },
  "riva_pontera_tunnel": {
-  "steps": 52,
+  "steps": 48,
   "parts": {
    "bridge:37df2d39-f647-49a8-ada8-0344c81bb17f": {
     "step_m": 0.118,
@@ -1202,7 +1202,7 @@
     "lift_g": 0.0
    },
    "ground:a795559e-7955-4444-bab4-124cbd99cb21": {
-    "step_m": 0.3939,
+    "step_m": 0.3274,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1212,12 +1212,12 @@
     "lift_g": 0.0
    },
    "ground:c68357f9-d151-457f-abc4-d47f6193a446": {
-    "step_m": 0.1895,
+    "step_m": 0.1379,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:c8ca3b2b-c714-4e00-9003-f0200f280cb4": {
-    "step_m": 0.1894,
+    "step_m": 0.1725,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1227,7 +1227,7 @@
     "lift_g": 0.5141
    },
    "ground:dac86049-af7b-4479-805d-b44b62be9f00": {
-    "step_m": 0.5327,
+    "step_m": 0.3817,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1307,7 +1307,7 @@
     "lift_g": 0.0
    },
    "ground:9bb7f216-47c4-4ae0-a3f5-5a23ce0d1b1c": {
-    "step_m": 0.283,
+    "step_m": 0.2343,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1337,7 +1337,7 @@
     "lift_g": 0.0
    },
    "ground:fc3a4b4b-d699-4135-ad9c-6aef472df664": {
-    "step_m": 0.3034,
+    "step_m": 0.2233,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1474,7 +1474,7 @@
   }
  },
  "vienna_mooslacken_1083": {
-  "steps": 57,
+  "steps": 56,
   "parts": {
    "ground:44dbb086-8c34-429a-b9e1-f788916ec9f4": {
     "step_m": 3.5543,
@@ -1482,7 +1482,7 @@
     "lift_g": 0.0
    },
    "ground:fc8772f1-5d78-4240-b9f6-28cfcc894555": {
-    "step_m": 1.1716,
+    "step_m": 0.9671,
     "grade": 0.0,
     "lift_g": 0.0
    }
