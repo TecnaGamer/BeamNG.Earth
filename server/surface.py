@@ -861,10 +861,12 @@ def _square_roads(frame, x0, y0, size, surface, pending=None):
     feats, complete = surface.roads(la, lo)
     if not complete and pending is not None:
         # (PR #505: a photo painted before its roads' cells were cached is rendered again once they are,
-        # earthd.Server.base_ready; with the European road details on only, as the author tested it)
-        import europewalks
-        if europewalks.enabled():
-            pending.add(PHOTO_ROADS_PENDING)
+        # earthd.Server.base_ready. Everywhere, not only with the European road details on: without it a block's
+        # photo made on a fast first visit kept the raw aerial over its roads for good, the forest canopy over a
+        # mountain road read as grass and gravel once the stand-in's painted asphalt was swapped out (Discord
+        # 2026-10-26 .. 11-12: "90% of mountain roads in japan are just 100% gravel/grass", Myanmar, China, the
+        # Pacific Northwest; "it changes the entire road, even the parts that were asphalt"))
+        pending.add(PHOTO_ROADS_PENDING)
     return feats
 
 
