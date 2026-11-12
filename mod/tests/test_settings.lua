@@ -46,6 +46,20 @@ T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', me
   'a Steam Deck gets Medium')
 T.check(settings.detectQuality({ name = 'Intel UHD 620', memoryMB = 1024 }) == 'low', 'a small GPU gets Low')
 T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }) == 'high', 'a big GPU gets High')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 8 * 1073741824 - 300e6) == 'low',
+  'an 8 GB PC gets Low whatever its GPU (the server lean tier)')
+T.check(settings.detectQuality({ name = 'AMD Radeon RX 7900 XTX', memoryMB = 24560 }, 16 * 1073741824) == 'high',
+  'a 16 GB PC: by its GPU')
+T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', memoryMB = 6144 }, 15.5e9) == 'medium',
+  'a Steam Deck (16 GB) keeps Medium')
+do
+  local pick, why = settings.detectQuality(nil, 4 * 1073741824)
+  T.check(pick == 'low' and why:find('4 GB', 1, true) ~= nil, 'a 4 GB PC: Low, and why ' .. tostring(why))
+  local old = settings.LOW_RAM_GB
+  settings.LOW_RAM_GB = 0
+  T.check(settings.detectQuality(nil, 4 * 1073741824) == 'high', 'LOW_RAM_GB = 0: the memory not counted')
+  settings.LOW_RAM_GB = old
+end
 for _, p in ipairs(settings.PRESET_ORDER) do
   for _, k in ipairs(settings.PRESET_KEYS) do
     T.check(settings.validate(k, settings.PRESETS[p][k]) == settings.PRESETS[p][k], p .. ' preset: valid ' .. k)

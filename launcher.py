@@ -135,6 +135,29 @@ def support_notice(multiplayer=False):
     _out("  " + "=" * 78)
 
 
+def memory_notice(notice=None):
+    """A computer with too little memory for the game (8 GB, 4 GB: server/budget.py's lean tiers, memory_notice): said
+    at every start, set apart, before anything else happens. It never stops the start. True when shown."""
+    import textwrap
+    if notice is None:
+        try:
+            sys.path.insert(0, os.path.join(ROOT, "server"))
+            import budget
+            notice = budget.memory_notice()
+        except Exception:           # (never in the way of a start)
+            return False
+    if not notice:
+        return False
+    head, text = notice
+    _out("")
+    _out("  " + "=" * 78)
+    _out(f"  {head}:")
+    for line in textwrap.wrap(text, 76):
+        _out(f"  {line}")
+    _out("  " + "=" * 78)
+    return True
+
+
 def problem(msg, hint=None):
     """Something that stops the start: set apart, with what to do about it."""
     import textwrap
@@ -1897,6 +1920,7 @@ def run(args):
     support_notice()
     if update_at_start(args):           # the new copy runs now (in its own window)
         return
+    memory_notice()                     # (8 GB or less: what to expect; never stops the start)
     wine = under_wine()
     build = "native"
     if args.user_dir:

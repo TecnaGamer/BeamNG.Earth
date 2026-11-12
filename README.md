@@ -292,6 +292,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Easy setup: one download per system (Windows .exe, Linux AppImage) that installs the mod and starts the server
   and the game; from the source, `install.py` installs everything and `start.py` keeps the mod in sync.
 - Runs on a Steam Deck (aim: 30 fps on the Handheld graphics preset).
+- Computers with little memory: BeamNG.drive itself asks for 16 GB. On an 8 GB computer the app says so at start,
+  the world server runs in fewer processes with smaller caches and a coarser distant land, and the first start picks
+  the Low preset; expect some stutter while the world loads. With about 4 GB the game alone does not fit: the app
+  warns clearly (in its window and in the game) and runs its smallest server. (`BNGE_LEAN=off` turns the low-memory
+  server off.)
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,

@@ -23,6 +23,15 @@ RESPAWN_S = 10.0
 QUEUED_POLL_S = 1.0
 
 
+def tasks_per_child_kw(n):
+    """ProcessPoolExecutor's max_tasks_per_child=n (Python 3.11+, spawn pools: each process replaced by a fresh one
+    after n jobs, its queue kept; the lean memory tiers' road process, budget.tasks_per_child) as keyword arguments;
+    {} for 0 or an older Python."""
+    if not n or n <= 0 or sys.version_info < (3, 11):
+        return {}
+    return {"max_tasks_per_child": int(n)}
+
+
 class Abandoned(Exception):
     """A queued job its caller no longer wants (result_running's abandon: a teleport left its place), cancelled."""
 

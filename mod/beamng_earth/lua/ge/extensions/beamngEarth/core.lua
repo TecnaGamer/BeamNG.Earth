@@ -1144,6 +1144,17 @@ local function onMessage(msg)
     end
     roads.prewarm(msg.prewarm)  -- the materials of the server's shapes set up now, not at their first tile
     st.serverNote, st.serverNoteDetail = nil, nil
+    -- a computer with too little memory for the game (the server's emergency tier, budget.memory_notice): said once a
+    -- server session, as a warning toast and in the log (the lean tier's note stays in the app's window)
+    if msg.memoryTier == 'emergency' and type(msg.memoryNote) == 'string' and M._memoryNoted ~= msg.sessionId then
+      M._memoryNoted = msg.sessionId
+      log('W', 'beamngEarth', 'memory: ' .. msg.memoryNote)
+      local gh = rawget(_G, 'guihooks')
+      if gh and gh.trigger then
+        pcall(gh.trigger, 'toastrMsg', { type = 'warning', title = 'BeamNG.Earth: not enough memory', msg = msg.memoryNote,
+          config = { timeOut = 30000 } })
+      end
+    end
     -- a new server session: its own gravity message follows the first pose (none with --gravity off)
     local w = rawget(_G, 'beamngEarth_weather')
     if w and w.clearGravity then w.clearGravity() end

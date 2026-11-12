@@ -1497,8 +1497,8 @@ class MachineProfileTest(unittest.TestCase):
         old = earthd.FAST_BASE_V
         try:
             a = self._args()
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("BNGE_FAST_BASE_V", None)
+            with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(budget, "tier", return_value="small"):
+                os.environ.pop("BNGE_FAST_BASE_V", None)     # (the small tier: a 6 GB test runner is a lean one)
                 earthd.machine_profile(a, True)
             self.assertEqual(a.road_processes, budget.SMALL_ROAD_PROCESSES)
             self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS)
@@ -1507,6 +1507,66 @@ class MachineProfileTest(unittest.TestCase):
             self.assertEqual(earthd.FAST_BASE_V, earthd.SMALL_FAST_BASE_V)
         finally:
             earthd.FAST_BASE_V = old
+
+    def test_lean(self):
+        """An 8 GB machine (budget.tier 'lean'): one road-tile and one far-tile process, the tier kept for main_async's
+        pools; a player's own --workers / --road-processes stand."""
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier in ("lean", "emergency"):
+                a = self._args()
+                with mock.patch.object(budget, "tier", return_value=tier):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.road_processes, a.workers, a.far_max, a.tier),
+                                 (budget.LEAN_ROAD_PROCESSES, budget.LEAN_FAR_WORKERS, budget.LEAN_FAR_WORKERS, tier))
+            a = self._args()
+            a.workers, a.road_processes = 4, 3
+            with mock.patch.object(budget, "tier", return_value="lean"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers), (3, 4), "the player's choice")
+            a = self._args()
+            with mock.patch.object(budget, "tier", return_value="small"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers), (budget.SMALL_ROAD_PROCESSES, budget.SMALL_FAR_WORKERS))
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_emergency_trims_the_extras(self):
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier, trim, want in (("emergency", "on", "off"), ("lean", "on", "on"), ("emergency", "off", "on")):
+                a = self._args()
+                a.trees = a.gas_stations = a.airports = a.roads = a.buildings = "on"
+                with mock.patch.object(budget, "tier", return_value=tier), \
+                        mock.patch.object(earthd, "EMERGENCY_TRIM", trim == "on"):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.trees, a.gas_stations, a.airports), (want,) * 3, (tier, trim))
+                self.assertEqual((a.roads, a.buildings), ("on", "on"), "the essentials stay")
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_lean_processes(self):
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": ""}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"])
+            self.assertEqual(earthd.lean_processes("emergency"), earthd.LEAN_PROCS["emergency"])
+            self.assertEqual(earthd.lean_processes("small"), 4)
+        for v in ("1", "2", "4"):
+            with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": v}):
+                self.assertEqual(earthd.lean_processes("lean"), int(v))
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": "7"}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"], "not a level: the default")
+
+    def test_block_shared(self):
+        s = earthd.Server.__new__(earthd.Server)
+        p, q = object(), object()
+        s.block_pools = [(p, q), (p, q)]
+        self.assertTrue(s.block_shared())
+        s.block_pools = [(p, q), (object(), object())]
+        self.assertFalse(s.block_shared())
+        s.block_pools = []
+        self.assertFalse(s.block_shared())
 
     def test_photo_process_not_on_a_small_machine(self):
         with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": ""}):
