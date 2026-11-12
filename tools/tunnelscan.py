@@ -25,8 +25,8 @@ mouth, roadmesh.tunnel on roads._tunnel_chunks, and the terrain block's holes, r
                its level, no mesh over them or under them less than 1 m below their lowest corner): sky or the void
                under the terrain seen through the ground beside / over the mouth
   proud        the portal's structure more than 3 m over the ground beside the opening (2.5 m or more beyond the tube's
-               wall, at the mouth's plane; the highest of the ground there and 1.5 and 3 m behind it, the hill it holds back): a
-               slab standing on the hillside ("a concrete bunker", GitHub #403 / #1066)
+               wall up to 4 m further, at the mouth's plane; the highest of the ground there and 1.5, 3 and 5 m behind
+               it, the hill it holds back): a slab standing on the hillside ("a concrete bunker", GitHub #403 / #1066)
   bare         a full tube with more than 5 m within 40 m of its mouth where the ground is under its crown + 0.5 m and
                nothing covers the vault from outside (the tube is faced inwards: sky through it, "a floating shell")
 Prints a summary and the worst of each with lat/lon; --json writes everything. A scratch cache by default
@@ -592,6 +592,13 @@ def entrance_checks(res, mouth_pts, tun, cells, graded_xy, ll):
         for c in chunks:
             if c.get("tunnel") and c.get("deck"):
                 n = np.asarray(c["n"], np.float64)
+                n = n.copy()
+                # (at a mouth the approach's road surface goes on over the terrain's holes there: 2 m of it)
+                for e_, (a_, b_) in enumerate(((0, 1), (-1, -2))):
+                    if (c.get("portal") or (False, False))[e_]:
+                        t_ = n[a_, :2] - n[b_, :2]
+                        n = np.insert(n, len(n) if e_ else 0, np.r_[n[a_, :2] + t_ / max(float(np.hypot(*t_)), 1e-9) * 2.0,
+                                                                    n[a_, 2]], axis=0)
                 floors.append((n[:, :2], float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER, n[:, 2]))
 
         def floor_z(q):
@@ -629,6 +636,13 @@ def entrance_checks(res, mouth_pts, tun, cells, graded_xy, ll):
                 cov = np.isfinite(fz) & (lo <= fz + 1.0)
                 cov |= _covered(q, tri[:, :, :2], tri[:, :, 2], lo - 1.0)
                 rec["gap"] = int((~cov).sum())
+                # where (the mouth's frame: x to the left of the way out, s out of the mouth, the square's lowest
+                # corner over the floor there; the floor under it if any)
+                lv = np.array([-out[1], out[0]])
+                zf0 = float(np.nanmin(fz)) if np.isfinite(fz).any() else float("nan")
+                rec["gap_at"] = [[round(float((v - p) @ lv), 1), round(float((v - p) @ out), 1),
+                                  round(float(lz - zf0), 1), None if not np.isfinite(f_) else round(float(f_ - zf0), 1)]
+                                 for v, lz, f_ in zip(q[~cov][:40], lo[~cov][:40], fz[~cov][:40])]
         # proud: the structure's vertices at the mouth's plane beyond the tube's wall over the ground there
         hw0 = th = None
         for c in chunks:
@@ -642,10 +656,10 @@ def entrance_checks(res, mouth_pts, tun, cells, graded_xy, ll):
             lv = np.array([-out[1], out[0]])
             sv = (Pm[:, :2] - p) @ out
             xv = (Pm[:, :2] - p) @ lv
-            sel = (sv > -1.5) & (sv < 2.0) & (np.abs(xv) >= hw0 + PROUD_X) & (np.abs(xv) < hw0 + 12.0)
+            sel = (sv > -1.5) & (sv < 2.0) & (np.abs(xv) >= hw0 + PROUD_X) & (np.abs(xv) < hw0 + PROUD_X + 4.0)
             if sel.any():
                 # (over the ground in front and the ground it holds back behind it, the higher)
-                gz = np.maximum.reduce([graded_xy(Pm[sel, :2] - out[None] * b) for b in (0.0, 1.5, 3.0)])
+                gz = np.maximum.reduce([graded_xy(Pm[sel, :2] - out[None] * b) for b in (0.0, 1.5, 3.0, 5.0)])
                 k = int(np.argmax(Pm[sel, 2] - gz))
                 rec["proud"] = round(float(Pm[sel, 2][k] - gz[k]), 1)
                 rec["proud_at"] = [round(float(xv[sel][k]), 1), round(float(sv[sel][k]), 1), round(float(Pm[sel, 2][k]), 1),

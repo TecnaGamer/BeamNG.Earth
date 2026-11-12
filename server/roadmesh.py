@@ -2376,6 +2376,9 @@ TUNNEL_STONE = "bne_tunnel_stone"  # a low arch's portal faces and the retaining
                                     # Park's transverse walls and arches; the buildings' pale dressed stone read as
                                     # concrete, 2026-10-17)
 TUNNEL_STONE_IN = "bne_tunnel_stone_in"   # the same stone darker: a low arch's vault (in its shade)
+PORTAL_COLLAR = "bne_portal_collar"   # a portal's collar round the opening: fair-faced / painted concrete, lighter than
+                                      # its headwall (Loibl's white ring in a stone wall, Laerdal's pale hood in the
+                                      # slope; Mapillary 2026-11-12)
 TUNNEL_SOIL = "bne_tunnel_soil"     # grass on the ground over the masonry: a retaining wall's top behind its coping,
                                     # a low arch's top (stone slabs on the grass, the user 2026-10-17: "blend the
                                     # stone and terrain better")
@@ -2611,7 +2614,7 @@ def tunnel(chunks, origin, walls=()):
                 stone_p = stone if low else int(fitd["st"]) == 2
                 nv = _add_blocks(P, T, UV, M, nv, portals.structure(
                     fitd, np.r_[mid[at], z[at]] - origin, ul, outv, sec, th, hw, STONE_UV_M if stone_p else CONCRETE_UV_M,
-                    near, low), 2 if stone_p else 0)
+                    near, low), 2 if stone_p else 0, 2 if (low and stone_p) else 7)
                 if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
                     # a low arch's top over its mouth (the terrain is cut away there): at the ground behind the
                     # headwall, as wide as the headwall
@@ -2650,7 +2653,8 @@ def tunnel(chunks, origin, walls=()):
             if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
                 nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, float(np.max(o[:, 0])), float(o[:, 1].max()), th, origin,
                                LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)), 2 if stone else 0)
-    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, WALL_SCREE]
+    allm = [TUNNEL_SIDE, TUNNEL_LIGHT, TUNNEL_STONE, TUNNEL_STONE_IN, TUNNEL_SOIL, TUNNEL_INNER, WALL_SCREE,
+            PORTAL_COLLAR]
     Tall = np.concatenate(T)
     Mall = np.concatenate([np.full(len(t), m, np.int64) for t, m in zip(T, M)]) if M else np.zeros(len(Tall), np.int64)
     used = sorted(set(int(v) for v in np.unique(Mall)) | {0, 1})     # (concrete and lamps first, as before)
@@ -2659,16 +2663,17 @@ def tunnel(chunks, origin, walls=()):
     return (np.concatenate(P), Tall, np.concatenate(UV), [allm[i] for i in used], remap[Mall])
 
 
-def _add_blocks(P, T, UV, M, nv, mesh, face_mat):
-    """A portal kernel's mesh (positions, triangles, uvs, codes: 0 the structure, 1 soil) appended to tunnel()'s
-    lists, the structure in material index face_mat; returns the new vertex count."""
+def _add_blocks(P, T, UV, M, nv, mesh, face_mat, collar_mat=7):
+    """A portal kernel's mesh (positions, triangles, uvs, codes: 0 the structure, 1 soil, 2 the collar) appended to
+    tunnel()'s lists, the structure in material index face_mat, the collar in collar_mat; returns the new vertex
+    count."""
     Pm, Tm, UVm, Cm = mesh
     if not len(Tm):
         return nv
     P.append(np.asarray(Pm, np.float64))
     UV.append(np.asarray(UVm, np.float64))
     Tm, Cm = np.asarray(Tm, np.int64) + nv, np.asarray(Cm, np.int64)
-    for code, mat in ((0, face_mat), (1, 4)):
+    for code, mat in ((0, face_mat), (1, 4), (2, collar_mat)):
         sel = Cm == code
         if sel.any():
             T.append(Tm[sel])

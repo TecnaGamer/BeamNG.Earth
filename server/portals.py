@@ -19,7 +19,9 @@ import fast
 
 ON = os.environ.get("BNE_PORTALS", "1") != "0"
 VERSION = 252               # earthfast's portal kernels
-FACE_IN = (1.0, 3.0)        # m inside the mouth's plane the ground behind the headwall is read (the higher of them)
+FACE_IN = (1.0, 3.0, 5.0)   # m inside the mouth's plane the ground behind the headwall is read (the highest of them:
+                            # the grading flattens the approach a few metres into the mapped mouth, the hill's face
+                            # stands 3 - 5 m in; the headwall holds that face, 2026-11-12)
 FACE_SIDE = 3.0             # m of headwall beside the opening (over the terrain hole's ragged edge) ...
 FACE_SIDE_MIN = 0.7         # ... at least, where another road runs beside the mouth
 FACE_STEP = 0.5             # m between the tries of a shorter side
@@ -30,11 +32,14 @@ WING_BACK = 1.2             # m behind a wing wall's face its ground is read
 RISE_IN = 12.0              # m inside the mouth where the hill over the tube is read (portal_style's rise)
 SIDES_OUT = (5.0, 10.0)     # m out of the mouth where the approach's sides are read (portal_style's sides) ...
 SIDES_OFF = 3.0             # ... this far beside the tube's wall
-COVER_NEED = 0.5            # m of ground over the crown that covers a tube (less: its outside is built)
+COVER_NEED = 1.0            # m of ground over the crown that covers a tube (less: its outside is built; the terrain's
+                            # holes reach TUNNEL_HOLE_MARGIN over the vault, and a square's rise)
 COVER_OVER = 0.3            # m the cover's top lies over the crown
 COVER_SIDE = 1.5            # m the cover's sides stand outside the tube's wall (past the terrain hole's edge)
 COVER_FOOT = 1.0            # m its sides reach under the floor
-COVER_OFF = 0.7             # the ground over the tube: the lowest of its axis and this share of its half width either side
+COVER_REACH = 1.0           # the ground over the tube: the lowest of its axis and this far beyond its walls either side
+                            # (the terrain's holes reach TUNNEL_HOLE_MARGIN and a square past the wall)
+TWIN_GAP = 0.5              # m a headwall keeps from another tube's wall (a twin bore's collar)
 MAJOR = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}
 
 # per look: collar_out, rake, collar_t, wall_t, parapet, top_min, top_max, foot, end_min, wing_t, wing_flare, wing_low
@@ -66,10 +71,13 @@ def _others(roads, cells, frame, parts):
                 xy = np.c_[e, n]
                 if len(xy) >= 2:
                     lines.append((len(lines), sp.width / 2, xy))
+    import roadmesh
     for _fid, spec, xy, _z, _lon in parts:
         xy = np.asarray(xy, np.float64)[:, :2]
         if len(xy) >= 2:
-            lines.append((len(lines), spec.width / 2, xy))
+            # (a twin bore's tube and its collar, not only its carriageway: the two headwalls stopped on each other's
+            # roads and overlapped by the shoulders between)
+            lines.append((len(lines), spec.width / 2 + roadmesh.TUNNEL_SHOULDER + TWIN_GAP, xy))
     return lines
 
 
@@ -104,7 +112,7 @@ def fit(roads, tunnels, cells, chunks, parts):
         d = np.gradient(xy, axis=0)
         d /= np.maximum(np.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
-        pts = [xy, xy + left * hw * COVER_OFF, xy - left * hw * COVER_OFF]
+        pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
         ends = []
         for e, at in enumerate((0, len(xy) - 1)):
             if not (c.get("portal") or (False, False))[e]:
@@ -159,8 +167,8 @@ def fit(roads, tunnels, cells, chunks, parts):
                 continue
             i, nx, nw = en["i0"], len(en["fx"]), len(WING_S)
             zf = float(z[en["at"]])
-            face = np.maximum(g[i:i + nx], g[i + nx:i + 2 * nx]) - zf
-            i += 2 * nx
+            face = np.max([g[i + q * nx:i + (q + 1) * nx] for q in range(len(FACE_IN))], axis=0) - zf
+            i += len(FACE_IN) * nx
             wl, wr, rz = g[i:i + nw] - zf, g[i + nw:i + 2 * nw] - zf, g[i + 2 * nw:i + 3 * nw] - zf
             i += 3 * nw
             rise = float(g[i] - zf) - float(face[nx // 2])

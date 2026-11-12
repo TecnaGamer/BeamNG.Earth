@@ -22,6 +22,7 @@ use pyo3::prelude::*;
 /// Material codes of the triangles (the glue maps them: roadmesh.tunnel).
 pub const M_FACE: i64 = 0;      // the structure's concrete / stone
 pub const M_SOIL: i64 = 1;      // ground on a cover's top
+pub const M_COLLAR: i64 = 2;    // the collar round the opening (lighter: painted / fair-faced concrete, Loibl, Laerdal)
 
 #[derive(Default)]
 pub struct Mesh {
@@ -233,13 +234,13 @@ pub fn portal(f: &Frame, prm: &Prm, sec: &[[f64; 2]], face_x: &[f64], face_g: &[
             // inside (the tube's surface going on), the ring seen from the road, outside
             m.quad([(f.w(o[i][0], 0.0, o[i][1]), [arc[i], 0.0]), (f.w(o[i][0], st[i], o[i][1]), [arc[i], st[i]]),
                     (f.w(o[j][0], st[j], o[j][1]), [arc[j], st[j]]), (f.w(o[j][0], 0.0, o[j][1]), [arc[j], 0.0])],
-                   Look::Toward(axis), M_FACE, uv);
+                   Look::Toward(axis), M_COLLAR, uv);
             m.quad([(f.w(o[i][0], st[i], o[i][1]), [o[i][0], o[i][1]]), (f.w(r[i][0], st[i], r[i][1]), [r[i][0], r[i][1]]),
                     (f.w(r[j][0], st[j], r[j][1]), [r[j][0], r[j][1]]), (f.w(o[j][0], st[j], o[j][1]), [o[j][0], o[j][1]])],
-                   Look::Dir([f.o[0], f.o[1], 0.35]), M_FACE, uv);
+                   Look::Dir([f.o[0], f.o[1], 0.35]), M_COLLAR, uv);
             m.quad([(f.w(r[i][0], 0.0, r[i][1]), [arc[i], 0.0]), (f.w(r[i][0], st[i], r[i][1]), [arc[i], st[i]]),
                     (f.w(r[j][0], st[j], r[j][1]), [arc[j], st[j]]), (f.w(r[j][0], 0.0, r[j][1]), [arc[j], 0.0])],
-                   Look::Away(axis), M_FACE, uv);
+                   Look::Away(axis), M_COLLAR, uv);
         }
     }
     // the wing walls: from the headwall's ends out along the approach, each top with the ground behind it, never
