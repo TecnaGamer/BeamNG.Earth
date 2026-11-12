@@ -1396,6 +1396,29 @@ def sub_polyline(ring, a, b):
 MIN_PART = 1e-3     # parts shorter than this share of a segment are dropped
 
 
+def height_limit_lines(feats):
+    """[(ring (k, 2) lon/lat, limit m)]: where a height limit (the "max_height_m" rule: a maxheight sign, Overture's
+    access restriction for vehicles over a height) holds, each range of each road as its polyline. A road under a low
+    bridge has one over the bridge's short stretch. Kept on the layer."""
+    got = feats.__dict__.get("_height_limit_lines")
+    if got is not None:
+        return got
+    t = feats.rules.get("max_height_m") if feats is not None else None
+    out = []
+    if t is not None and len(t):
+        for i in sorted({int(x) for x in np.asarray(t.feature).tolist()}):
+            rows = t.for_feature(i)
+            for part in feats.parts(i):
+                for ring in part:
+                    if len(ring) < 2:
+                        continue
+                    for h, a, b in rows:
+                        if b - a > 1e-4 and np.isfinite(h):
+                            out.append((np.asarray(sub_polyline(ring, a, b), np.float64), float(h)))
+    feats.__dict__["_height_limit_lines"] = out
+    return out
+
+
 def _parts_by_level(feats, i, want):
     memo = feats.__dict__.setdefault("_parts_by_level", {})      # remembered: cells stay decoded (mapdata)
     got = memo.get((i, want))
