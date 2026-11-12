@@ -576,12 +576,13 @@ class LotTest(unittest.TestCase):
         self.assertEqual(float(a[2, 2]), 0.0)
         self.assertAlmostEqual(float(a.sum()), 40.5 * 30, places=3)       # the union's area in pixels
         self.assertIsNone(sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(100.0, 120.0, 0.0, 10.0)]))
-        rgb = np.full((64, 64, 3), 200, np.uint8)
+        # (a photo past the paved samples' luma cap: the flat colour; a pale grey one is a concrete lot's own tone now)
+        rgb = np.full((64, 64, 3), 240, np.uint8)
         out = sf.photo_pads(rgb, frame, -32.0, -32.0, 64.0, [pad(-20.5, 20.0, -15.0, 15.0)])
         paved = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
         self.assertTrue(np.array_equal(out[30, 30], paved))
-        self.assertTrue(np.array_equal(out[30, 11], np.round((200 + paved) / 2)))   # half covered
-        self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
+        self.assertTrue(np.array_equal(out[30, 11], np.round((240 + paved) / 2)))   # half covered
+        self.assertTrue(np.array_equal(out[2, 2], [240, 240, 240]) and np.array_equal(rgb[30, 30], [240, 240, 240]))
 
 
     def test_dirt_track_visible_on_pale_ground(self):
@@ -732,6 +733,33 @@ class RoadToneTest(unittest.TestCase):
                                               sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
         self.assertTrue(np.allclose(flat_out[100, 100], flat, atol=1))
 
+    def test_concrete_keeps_its_light_tone(self):
+        """The user, 2026-11-12: "Concrete highways look too dark". A pale neutral pavement (a concrete motorway in
+        NAIP: luma 165-200) keeps its shade on a paved road (it was held at the paved cap, 135, or left out of the
+        samples past 185: the flat dark grey); a beige one (dry ground under a road drawn off its line) is held at the
+        cap as before; a road the map says is concrete takes the photo's tone, its light flat colour without one."""
+        import fast
+        cols = np.array([sf.PHOTO_ROAD_RGBA[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        tone = np.array([sf.PHOTO_ROAD_TONE[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        segs = np.array([[0.0, 100.0, 200.0, 100.0]])
+        kinds = list(sf.PHOTO_ROAD_RGBA)
+
+        def painted(road_rgb, kind):
+            rgb = np.full((200, 200, 3), (60, 110, 50), np.uint8)
+            if road_rgb is not None:
+                rgb[80:120, :] = road_rgb
+            out = fast._ef.paint_lines_toned(rgb, segs, np.array([18.0]), np.array([kinds.index(kind)], np.uint8),
+                                             cols, tone, 12, sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT,
+                                             sf.PHOTO_TONE_GREEN)
+            return float(np.median(out[90:110, 20:180].reshape(-1, 3).astype(float) @ [0.299, 0.587, 0.114]))
+        self.assertGreater(painted((190, 188, 180), "paved"), 155.0, "pale concrete keeps its light grey")
+        self.assertLess(painted((180, 165, 135), "paved"), 140.0, "a beige tone stays at the paved cap")
+        self.assertLess(painted((100, 100, 104), "paved"), 105.0, "dark asphalt as before")
+        conc = sf.PHOTO_ROAD_RGBA["concrete"]
+        self.assertAlmostEqual(painted(None, "concrete"), 0.299 * conc[0] + 0.587 * conc[1] + 0.114 * conc[2],
+                               delta=1.5)
+        self.assertLess(painted((96, 96, 100), "concrete"), 125.0, "tagged concrete under a dark overlay: the photo's")
+
 
 def plazas_mod():
     import plazas
@@ -773,6 +801,19 @@ class PhotoRoadsTest(unittest.TestCase):
         self.assertLessEqual(abs(painted - width), 2, f"{painted} px painted across a {width:.1f} m road")
         self.assertEqual(int(out[10, 64, 0]), 30, "the photo kept off the road")
         self.assertTrue(np.array_equal(sf.photo_roads(rgb, frame, -64.0, -64.0, 128.0, []), rgb))
+
+    def test_tagged_concrete_painted_light(self):
+        """A road the map says is concrete (concrete:plates too) is painted in concrete's light grey where the photo
+        shows no pavement under it, not asphalt's."""
+        import geodesy
+        import test_roads
+        frame = geodesy.EnuFrame(test_roads.LAT, test_roads.LON)
+        rgb = np.full((128, 128, 3), (60, 110, 50), np.uint8)
+        con = test_roads.features([[(-60, 0), (60, 0)]], ["residential"], surfaces=[(0, "concrete:plates")])
+        asp = test_roads.features([[(-60, 0), (60, 0)]], ["residential"])
+        lum = [float(sf.photo_roads(rgb, frame, -64.0, -64.0, 128.0, [f])[64, 64].astype(float)
+                     @ [0.299, 0.587, 0.114]) for f in (con, asp)]
+        self.assertGreater(lum[0], lum[1] + 50, f"concrete {lum[0]:.0f} vs asphalt {lum[1]:.0f}")
 
 
 class FuelPadTest(unittest.TestCase):
