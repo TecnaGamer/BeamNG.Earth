@@ -6297,13 +6297,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
         // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
         // _buried, tunnel_cover_roads_over)
-    // 249: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
+        // 253: a road joined at a bridge's end is no crossing under it whatever the C library's hypot rounds to
+        // (levelrules END_EPS_M)
+    // 254: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
     m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_tier, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
-    m.add("VERSION", 249)?;
+    m.add("VERSION", 254)?;
     Ok(())
 }

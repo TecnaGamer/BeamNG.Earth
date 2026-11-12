@@ -2,7 +2,6 @@
 import os
 import sys
 import unittest
-import time
 import unittest.mock
 from concurrent.futures.process import BrokenProcessPool
 
@@ -363,38 +362,69 @@ class RotateTest(unittest.TestCase):
 
 class TasksPerChildTest(unittest.TestCase):
     """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
-    answered, by fresh processes, the queue kept."""
+    answered, by fresh processes, the queue kept. The pool's own queue on every Python, never the executor's
+    max_tasks_per_child (it hangs before CPython's gh-115634 fix: Python 3.12, the packaged app's)."""
 
     def test_kwargs(self):
         self.assertEqual(pools.tasks_per_child_kw(0), {})
         self.assertEqual(pools.tasks_per_child_kw(None), {})
-        self.assertEqual(pools.tasks_per_child_kw(40), {"rotate_jobs": 40})
+        self.assertEqual(pools.tasks_per_child_kw(40), {"tasks_per_child": 40})
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(40))
+        try:
+            self.assertNotIn("max_tasks_per_child", p._kwargs)
+            self.assertEqual(p.tasks_per_child, 40)
+        finally:
+            p.shutdown(wait=False)
 
     def test_fresh_processes(self):
-        """Jobs queued at once (more than the processes: the case Python 3.12's max_tasks_per_child deadlocked on) all
-        answered; once the backlog is gone the pool is rotated and later jobs run in fresh processes."""
         p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
-        p.JOBS_CHECK_S = 0.2
         try:
             futs = [p.submit(os.getpid) for _ in range(6)]
-            first = {f.result(timeout=120) for f in futs}
-            deadline = time.monotonic() + 60
-            while p.rotations == 0 and time.monotonic() < deadline:
-                time.sleep(0.1)
-            self.assertGreaterEqual(p.rotations, 1, "rotated once the backlog was done")
-            later = p.submit(os.getpid).result(timeout=120)
-            self.assertNotIn(later, first, "a fresh process")
+            self.assertEqual(p.inflight, 6)
+            pids = [f.result(timeout=120) for f in futs]
+            self.assertEqual(len(pids), 6)
+            self.assertEqual([pids[0], pids[2], pids[4]], [pids[1], pids[3], pids[5]], pids)
+            self.assertEqual(len(set(pids)), 3, pids)
+            self.assertGreaterEqual(p.rotations, 2)
         finally:
             p.shutdown(wait=True)
 
-    def test_jobs_step_waits_for_the_backlog(self):
-        p = pools.RespawningPool.__new__(pools.RespawningPool)
-        p.rotate_jobs, p._jobs_done, p.inflight, p.workers = 4, 5, 3, 1
-        p.rotate = unittest.mock.Mock(return_value=True)
-        self.assertFalse(p._jobs_step(0.0), "a backlog: not yet")
-        p.inflight = 1
-        self.assertTrue(p._jobs_step(0.0))
-        p.rotate.assert_called_once()
+    def test_two_processes_errors_and_cancels(self):
+        import time
+        p = pools.RespawningPool("test", 2, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            slow = [p.submit(time.sleep, 0.6) for _ in range(2)]
+            bad = p.submit(int, "x")                    # (a job's own error reaches its caller)
+            gone = p.submit(os.getpid)
+            self.assertFalse(gone.running(), "queued behind the two running ones")
+            self.assertTrue(gone.cancel(), "a queued job can be cancelled (result_running's abandon)")
+            rest = [p.submit(os.getpid) for _ in range(8)]
+            for f in slow:
+                self.assertIsNone(f.result(timeout=120))
+            with self.assertRaises(ValueError):
+                bad.result(timeout=120)
+            pids = [f.result(timeout=120) for f in rest]
+            self.assertGreaterEqual(len(set(pids)), 2, pids)    # (11 jobs run, 4 a generation: three generations)
+            self.assertGreaterEqual(p.rotations, 2)
+            for _ in range(100):
+                if p.inflight == 0:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(p.inflight, 0)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_shutdown_waits_for_the_queue(self):
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        p.shutdown(wait=True)
+        self.assertTrue(all(f.done() and f.exception() is None for f in futs))
+        q = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(1))
+        futs = [q.submit(time.sleep, 0.5) for _ in range(3)]
+        time.sleep(0.1)
+        q.shutdown(wait=False, cancel_futures=True)
+        self.assertTrue(futs[2].cancelled())
 
     def test_budget_setting(self):
         import budget
