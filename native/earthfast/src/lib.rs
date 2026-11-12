@@ -82,6 +82,7 @@ mod gsrows;
 mod places;
 mod planends;
 mod planset;
+mod corridor;
 mod junctions;
 mod wallsindex;
 mod mappedlamps;
@@ -5940,6 +5941,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 228)?;
+    // 232: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
+    // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
+    m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
+    m.add("VERSION", 232)?;
     Ok(())
 }
