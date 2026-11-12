@@ -52,7 +52,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 6, 'version 1.6 (routeGeometry, transform)')
+T.check(api.version() == 1 and select(2, api.version()) == 7, 'version 1.7 (rebase)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -163,6 +163,21 @@ api._event('routeArrived', { lat = 3, lon = 4, name = 'Depot' })
 T.check(hooks[#hooks][1] == 'onBeamNGEarthRouteArrived' and hooks[#hooks][2].name == 'Depot', 'route arrived hook')
 api._event('waypointReached', { lat = 3, lon = 4, name = 'Charger', left = 1 })
 T.check(hooks[#hooks][1] == 'onBeamNGEarthWaypointReached' and hooks[#hooks][2].left == 1, 'waypoint reached hook')
+
+-- 1.7: the world's origin moved (core.lua says so at a rebase's end and at a teleport's commit)
+T.check(api.has('rebase') and select(2, api.version()) >= 7, 'rebase: has() and minor version 7')
+local moved = {}
+local hr = api.on('rebased', function(info) moved[#moved + 1] = info end)
+T.check(hr ~= nil, 'rebased: a listener is taken')
+api._event('rebased', { lat = 45.1, lon = 7.2, oldLat = 45.0, oldLon = 7.0, anchorId = 9, purpose = 'rebase' })
+T.check(hooks[#hooks][1] == 'onBeamNGEarthRebased' and hooks[#hooks][2].anchorId == 9, 'rebased hook')
+T.check(#moved == 1 and moved[1].oldLat == 45.0 and moved[1].lat == 45.1 and moved[1].purpose == 'rebase',
+  'rebased: the listener got the old and the new origin')
+api.off(hr)
+T.check(api.rebasing() == false, 'rebasing: not between a rebase\'s frames')
+st.rebasing = { purpose = 'rebase' }
+T.check(api.rebasing() == true, 'rebasing: between a rebase\'s two frames')
+st.rebasing = nil
 
 T.check(api.has('options') and select(2, api.version()) >= 1, 'options: has() and minor version 1')
 package.loaded['beamngEarth/addons'] = { optionValues = function(id) return id == 'x' and { port = 1 } or nil end }

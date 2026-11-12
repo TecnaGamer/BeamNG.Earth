@@ -15,8 +15,10 @@
 --   onBeamNGEarthRouteArrived(info)   the GPS destination reached: info.lat / lon / name
 --   onBeamNGEarthWaypointReached(info) a GPS waypoint passed (1.2, has('gpsRoute')): info.lat / lon / name / left
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
--- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions'), which returns a handle for
--- api.off(handle).
+--   onBeamNGEarthRebased(info)        the world's origin moved (1.7, has('rebase')): info.lat / lon the new origin,
+--                                     oldLat / oldLon the one before (nil at the first), anchorId, purpose
+-- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions', 'rebased'), which returns a
+-- handle for api.off(handle).
 --
 -- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
 -- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
@@ -28,13 +30,13 @@
 -- (places only sends a request to the app, which answers from what it has).
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 6
+M.MAJOR, M.MINOR = 1, 7
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true }
+  routeGeometry = true, transform = true, rebase = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
-  waypointReached = 'onBeamNGEarthWaypointReached' }
+  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -285,6 +287,14 @@ function M.toGeo(x, y, z)
   local a = st and st.inOurLevel and st.anchor
   if not a or not a.worldToGeodetic then return nil end
   return a:worldToGeodetic(x, y, tonumber(z) or 0)
+end
+
+-- Is the world's origin being moved right now (1.7, has('rebase'))? True between a rebase's two frames: the vehicles
+-- are in the new frame already, toGame / toGeo and pose() still in the old one. Leave positions alone until
+-- onBeamNGEarthRebased, which comes in the frame that ends it.
+function M.rebasing()
+  local st = state()
+  return st ~= nil and st.rebasing ~= nil
 end
 
 -- A short message on the screen (the game's own messages), seconds (default 5).
