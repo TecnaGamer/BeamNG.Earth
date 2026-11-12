@@ -146,7 +146,7 @@
         ],
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds",
         "opacityFactor": 1.0
       },
       {},
@@ -239,7 +239,7 @@
         ],
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds",
         "opacityFactor": 1.0
       },
       {},
@@ -266,7 +266,7 @@
         ],
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds",
         "opacityFactor": 1.0
       },
       {},
@@ -285,7 +285,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_w.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_w.color.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -302,7 +302,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_y.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_y.color.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -319,7 +319,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -336,7 +336,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs2.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs2.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -353,7 +353,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_signs.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_signs.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -370,7 +370,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_zones.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_zones.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },

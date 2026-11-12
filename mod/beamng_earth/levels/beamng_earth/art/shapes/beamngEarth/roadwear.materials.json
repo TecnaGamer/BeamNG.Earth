@@ -21,7 +21,7 @@
           1,
           0.7
         ],
-        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
         "detailOpacityMapStrength": 1,
         "detailScale": [
@@ -56,7 +56,7 @@
           1,
           0.9
         ],
-        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
         "detailOpacityMapStrength": 1,
         "detailScale": [
@@ -91,7 +91,7 @@
           1,
           0.9
         ],
-        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityDetailMapUseUV": 1,
         "detailOpacityMapStrength": 1,
         "detailScale": [

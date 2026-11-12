@@ -19,7 +19,7 @@
         "detailScale": [2, 8],
         "baseColorFactor": [0.722614, 0.711599, 0.636709, 1],
         "opacityFactor": 0.85,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       },
       {},
@@ -47,7 +47,7 @@
         "detailScale": [2, 8],
         "baseColorFactor": [0.801963, 0.801955, 0.801955, 1],
         "opacityFactor": 0.85,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       },
       {},
@@ -75,7 +75,7 @@
         "detailScale": [2, 8],
         "baseColorFactor": [0.497733, 0.497728, 0.497728, 1],
         "opacityFactor": 0.85,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       },
       {},
@@ -103,7 +103,7 @@
         "detailScale": [2, 8],
         "baseColorFactor": [0.885891, 0.879011, 0.813686, 1],
         "opacityFactor": 0.85,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       },
       {},
@@ -128,7 +128,7 @@
         "roughnessMap": "/assets/materials/decalroad/dirt/m_dirt_road_01/t_dirt_road_r.data.png",
         "baseColorFactor": [0.95, 0.88, 0.75, 1],
         "opacityFactor": 0.85,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.dds",
         "opacityMapUseUV": 1
       },
       {},

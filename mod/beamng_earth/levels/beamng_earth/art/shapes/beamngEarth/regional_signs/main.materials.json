@@ -122,8 +122,8 @@
         ],
         "metallicFactor": 0.0,
         "roughnessFactor": 0.45,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font.png",
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font.dds",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.dds"
       }
     ],
     "persistentId": "23421441-700c-510d-ae1b-8f5c0b59ece6",
@@ -190,8 +190,8 @@
         ],
         "metallicFactor": 0.0,
         "roughnessFactor": 0.45,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_white.png",
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_white.dds",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.dds"
       }
     ],
     "persistentId": "5f30090f-9985-525d-8e52-9ed1b15f192e",

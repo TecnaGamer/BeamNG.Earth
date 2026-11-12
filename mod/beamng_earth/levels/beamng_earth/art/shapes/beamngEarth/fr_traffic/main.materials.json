@@ -7,7 +7,7 @@
     "persistentId": "390d5d60-609d-5ab3-b8d7-f3fe6edae0fb",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_noentry.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_noentry.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -29,7 +29,7 @@
     "persistentId": "24004c30-a286-5e1b-9ca1-703110e0512e",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/eu_noentry.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/eu_noentry.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -51,7 +51,7 @@
     "persistentId": "4155bd83-48b7-5ef7-8649-59e200a744c0",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_giveway_m9c.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_giveway_m9c.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -73,7 +73,7 @@
     "persistentId": "3e30e95e-4715-5767-9fad-765e6575f552",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1a.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1a.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -95,7 +95,7 @@
     "persistentId": "d601b3cd-9a58-5c38-b85c-b61ca3bb0816",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1b.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1b.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -117,7 +117,7 @@
     "persistentId": "a1745e0f-b647-56da-be21-0d208c4642cf",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1c.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1c.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -139,7 +139,7 @@
     "persistentId": "fdd1354a-6d76-5917-aa58-3de112a79d9a",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1d.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/fr_a1d.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -161,7 +161,7 @@
     "persistentId": "a2a9d177-6eba-5ca9-b9d6-1da2c8bca787",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/m9c.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/m9c.color.dds",
         "baseColorFactor": [
           1.0,
           1.0,
