@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import re
 
 import numpy as np
 
@@ -41,7 +42,7 @@ WALL_ON_ROAD_M = 0.3        # m past a carriageway's edge no wall panel stands, 
 WALL_LEVEL_M = 3.0          # m: a carriageway this far above or below the wall is not the one it runs along
 WALL_DECK_REACH_M = 4.0     # m past a deck's edge a bridge wall (its own layer/bridge tags) still stands on it
                             # (a road passing under a rail viaduct)
-CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain"}
+CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain", "wire_mesh", "welded_mesh"}
 NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
 ALONG_EDGE_M = 4.0      # m past a deck's edge an untagged barrier running along it is its parapet (ALONG_*)
@@ -78,6 +79,20 @@ FR_PALETTES = {
 FR_WALLS = {"north": "brick", "toulouse": "brick", "central": "dark_stone", "alpine": "dark_stone",
             "brittany": "dark_stone", "pyrenees": "dark_stone"}
 
+
+
+def metres(value, default, low=0.1, high=10.0):
+    """Physical dimensions only (not legal maxwidth); OSM metres and common explicit feet/inches."""
+    s = str(value).strip().lower()
+    feet = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:'|ft|feet)(?:\s*(\d+(?:\.\d+)?)\s*(?:\"|in))?", s)
+    number = re.fullmatch(r"(\d+(?:\.\d+)?|\.\d+)\s*(m|cm)?", s)
+    if feet:
+        n = float(feet[1]) * 0.3048 + float(feet[2] or 0) * 0.0254
+    elif number:
+        n = float(number[1]) * (0.01 if number[2] == "cm" else 1.0)
+    else:
+        return default
+    return n if np.isfinite(n) and low <= n <= high else default
 
 
 def _tags(feats, i):
@@ -137,14 +152,14 @@ def _centres(line, length):
         s += length
 
 
-def _place(group, centre, tangent):
+def _place(group, centre, tangent, scale=1.0):
     """(x, y, yaw) of one panel whose centre sits on the mapped line."""
     tx, ty = float(tangent[0]), float(tangent[1])
     cx, cy = float(centre[0]), float(centre[1])
     if group == G_CHAIN:
-        return cx + CHAIN_OX * tx, cy + CHAIN_OX * ty, _yaw(tx, ty)
+        return cx + CHAIN_OX * scale * tx, cy + CHAIN_OX * scale * ty, _yaw(tx, ty)
     # the noise wall's long axis is local +y, so local +x points to the right of the line
-    return (cx - WALL_ACROSS * ty - WALL_ALONG * tx, cy + WALL_ACROSS * tx - WALL_ALONG * ty,
+    return (cx - scale * (WALL_ACROSS * ty + WALL_ALONG * tx), cy + scale * (WALL_ACROSS * tx - WALL_ALONG * ty),
             _yaw(ty, -tx))
 
 
@@ -622,7 +637,8 @@ def french_rows(frame, infra_fn, box, elev, carriageways=()):
     return _forest_rows(pending, z), taken
 
 
-def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriageways=None):
+def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriageways=None,
+         gate_clearance=None, french_data=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the chain-link fences and noise walls whose
     centre is inside box (x0, y0, x1, y1). decks ([{"n": (k, 3) XYZ, "w": road width}], as guardrails.forest_rows
     takes them): a wall or fence on a bridge stands on its deck, not on the ground under it (GitHub #775: a noise
@@ -643,7 +659,8 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
         return []
     if carriageways is not None and not roads:      # (PR #505's name for the same roads_out rows)
         roads = carriageways
-    fr_rows, fr_taken = french_rows(frame, infra_fn, box, elev, roads) if french else ([], set())
+    fr_rows, fr_taken = (french_data if french_data is not None else
+                        french_rows(frame, infra_fn, box, elev, roads) if french else ([], set()))
     x0, y0, x1, y1 = map(float, box)
     la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
     try:
@@ -691,18 +708,25 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                     lv = float("nan")
                 if lv == lv:
                     hint = True if lv > 0 else (False if lv < 0 else None)
-            length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
+            tags = _tags(feats, i)
+            heights = feats.attrs.get("height")
+            height = metres(tags.get("height"), metres(heights[i] if heights is not None else None,
+                CHAIN_H if group == G_CHAIN else WALL_H))
+            scale = height / (CHAIN_H if group == G_CHAIN else WALL_H)
+            length = (CHAIN_LEN if group == G_CHAIN else WALL_LEN) * scale
             for pi, part in enumerate(feats.parts(i)):
                 if not part or len(part[0]) < 2:
                     continue
                 e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
                 for centre, tangent in _centres(np.column_stack((e, n)), length):
-                    px, py, yaw = _place(group, centre, tangent)
+                    px, py, yaw = _place(group, centre, tangent, scale)
                     # (a panel is kept when its centre is in the tile; the part's panels outside it are still
                     # made, for the bridge-continuity test below, and only not drawn)
                     keep = x0 <= centre[0] < x1 and y0 <= centre[1] < y1
+                    gate_ok = gate_clearance is None or gate_clearance(fid, centre, length, hint)
+                    keep = keep and gate_ok
                     pending.append((group, px, py, yaw, float(centre[0]), float(centre[1]), hint, fid, pi,
-                                    keep, float(tangent[0]), float(tangent[1])))
+                                    keep, float(tangent[0]), float(tangent[1]), height, scale, gate_ok))
     if not pending:
         return fr_rows
     near = np.zeros(len(pending), bool)     # (set below: walls laid along a carriageway)
@@ -859,13 +883,14 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                 T = pt[i]
                 left = np.array([-T[1], T[0]])
                 side = 1.0 if float((pv[i] * left).sum()) < 0.0 else -1.0
-                here = mid[i] + pv[i] + side * left * (ph[i] + WALL_EDGE_M + WALL_ACROSS)
+                scale = p[13]
+                here = mid[i] + pv[i] + side * left * (ph[i] + WALL_EDGE_M + WALL_ACROSS * scale)
                 t_new = side * T
                 px, py, yaw = _place(p[0], (float(here[0]), float(here[1])),
-                                     (float(t_new[0]), float(t_new[1])))
-                keep = x0 <= here[0] < x1 and y0 <= here[1] < y1
+                                     (float(t_new[0]), float(t_new[1])), scale)
+                keep = x0 <= here[0] < x1 and y0 <= here[1] < y1 and p[14]
                 pending[i] = ((p[0], px, py, yaw, float(here[0]), float(here[1])) + p[6:9]
-                              + (keep, float(t_new[0]), float(t_new[1])))
+                              + (keep, float(t_new[0]), float(t_new[1])) + p[12:])
             for i in np.flatnonzero(across).tolist():
                 p = pending[i]
                 pending[i] = p[:9] + (False,) + p[10:]      # (never a panel across the road)
@@ -876,7 +901,8 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
             if keep_ix:
                 kp = np.array([[pending[i][4], pending[i][5]] for i in keep_ix], np.float64)
                 kt = np.array([[pending[i][10], pending[i][11]] for i in keep_ix], np.float64)
-                probes = (kp, kp + kt * (WALL_LEN / 2.0), kp - kt * (WALL_LEN / 2.0))
+                halves = np.array([pending[i][13] * WALL_LEN / 2.0 for i in keep_ix])[:, None]
+                probes = (kp, kp + kt * halves, kp - kt * halves)
                 kref = ref[keep_ix]
                 on = np.zeros(len(keep_ix), bool)
                 for line, half, is_deck in fits:
@@ -981,10 +1007,10 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
         if not p[9]:
             continue
         group, px, py, yaw = p[0], p[1], p[2], p[3]
-        lift = CHAIN_LIFT if group == G_CHAIN else 0.0
-        height = CHAIN_H if group == G_CHAIN else WALL_H
+        height, scale = p[12:14]
+        lift = CHAIN_LIFT * scale if group == G_CHAIN else 0.0
         out.append([group, round(px, 2), round(py, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360.0,
-                    1.0, height, 0.0])
+                    scale, height, 0.0])
     return out
 
 

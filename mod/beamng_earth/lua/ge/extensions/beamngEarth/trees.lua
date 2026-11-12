@@ -60,7 +60,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { mapped_hedge = true, tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -111,6 +111,7 @@ local IT = '/levels/italy/art/shapes/'
 local ATT = '/levels/automation_test_track/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
+  mapped_hedge = { { IT .. 'trees/trees_italy/cypress_hedge_3m', 1.69180287 } },
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
   cliff = {
     { IT .. 'rocks/italy_rockface_short_wide', 2.9 }, { IT .. 'rocks/italy_rockface_tall_wide', 13.2 },
@@ -717,6 +718,21 @@ local function newForest()
 end
 
 -- The tile's Forest: its own, else one from the pool, else a new one; nil when this frame made its new ones already.
+local hedgeTiles, retiredHedges = {}, 0
+-- Stock hedges already have authored LODs. Keep them for the road tile's lifetime;
+-- switching the whole tile to a differently lit backstop at 150 m made a visible seam.
+-- The stock asset's authored wind parameters; mass is animation data, not contact physics.
+local HEDGE_PROFILE = { windScale = 0.2, branchAmp = 0.02, detailAmp = 0.07, detailFreq = 1.5,
+  trunkBendScale = 0.05, mass = 10, radius = 0.8, rigidity = 10.2, dampingCoefficient = 1, tightnessCoefficient = 1 }
+local function showHedge(t, on)
+  if t.visible == on then return end
+  if on and t.onVisible(true) == false then return end -- retry after the backstop mesh is ready
+  t.visible = on
+  local f = t.forestId and scenetree.findObjectById(t.forestId)
+  if f then f:setHidden(not on) end
+  if not on then t.onVisible(false) end
+end
+
 local function forest(t)
   local f = t.forestId and scenetree.findObjectById(t.forestId)
   while not f and #pool > 0 do
@@ -728,6 +744,7 @@ local function forest(t)
     f = newForest()
   end
   t.forestId = f:getID()
+  f:setHidden(t.onVisible and not t.visible or false)
   return f
 end
 
@@ -797,15 +814,15 @@ end
 function M.setFoci(f) foci = f or {} end
 
 -- Pure: the item type's name of a shape, solid (collides) or not.
-function M.typeName(shape, solid)
-  return 'bngEarthTree_' .. shape:gsub('[^%w]', '_') .. (solid and '' or '_n')
+function M.typeName(shape, solid, profile)
+  return 'bngEarthTree_' .. shape:gsub('[^%w]', '_') .. (solid and '' or '_n') .. (profile and '_hedge' or '')
 end
 
-local function itemType(shape, solid)
-  local key = solid and shape or (shape .. '#n')
+local function itemType(shape, solid, profile)
+  local key = (solid and shape or (shape .. '#n')) .. (profile and '#hedge' or '')
   local d = types[key]
   if d then return d end
-  local name = M.typeName(shape, solid)
+  local name = M.typeName(shape, solid, profile)
   d = scenetree.findObject(name)
   if not d then
     d = (worldEditorCppApi and worldEditorCppApi.createObject) and worldEditorCppApi.createObject('TSForestItemData')
@@ -813,7 +830,11 @@ local function itemType(shape, solid)
     if not d then return nil end
     d:setField('shapeFile', 0, shape .. '.dae')
     d:setField('collidable', 0, solid and '1' or '0')
-    d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    if profile then
+      for k, v in pairs(HEDGE_PROFILE) do d:setField(k, 0, tostring(v)) end
+    else
+      d:setField('windScale', 0, '0.4'); d:setField('branchAmp', 0, '0.1'); d:setField('detailAmp', 0, '0.2')
+    end
     d:registerObject(name)
     if Sim and Sim.getDataBlockSet then Sim.getDataBlockSet():addObject(d) end
   end
@@ -841,6 +862,9 @@ function M.pick(group, h, rank)
     cands = { best }
   end
   local v = cands[math.floor(rank * 7919) % #cands + 1]
+  -- Mapped panel dimensions have already been validated by the server. Clamping
+  -- their scale would disagree with its panel spacing, origins and ground lift.
+  if group == "chainlink" or group == "noisewall" then return v[1], h / v[2] end
   return v[1], math.max(0.3, math.min(2.5, h / v[2]))
 end
 
@@ -952,7 +976,7 @@ end
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
-  local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)))
+  local d = itemType(shape, vienna.faceSolid(group, townsigns.faceSolid(group, solid)), group == 'mapped_hedge')
   if not d then M.errors = M.errors + 1; return nil end
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
   local m = itemMat
@@ -1151,7 +1175,7 @@ end
 -- The tile "anchorId:key" goes (roads.lua's furniture).
 function M.dropKey(key)
   local t = tiles[key]
-  if t then t.drop = true; dirty = true end
+  if t then if t.onVisible then showHedge(t, false) end; t.drop = true; dirty = true end
 end
 
 -- A 'veg_drop' message: the tile's items go.
@@ -1173,6 +1197,9 @@ end
 -- beyond it every row but the trees they stand for (a negative scale).
 local function tileThreshold(d, t)
   local want = threshold(d)
+  -- Hedge payloads are already bounded to 256 items. Quality thinning must not
+  -- replace an entire continuous hedge with its differently lit backstop.
+  if t.onVisible then return want end
   local n = t.n or 0
   for _, r in ipairs(M.TILE_CAP) do
     if d <= r[1] then
@@ -1689,6 +1716,64 @@ function M.status()
   if M.COUNT_ITEMS then items = liveItems else items = M.countItems() end
   return { tiles = n, items = items, pending = pending, made = M.made, removed = M.removed, errors = M.errors,
     geoMoved = M.geoMoved, geoFlushed = M.geoFlushed }   -- (geotiles: placed again at a rebase, made again)
+end
+
+
+-- Mapped hedges use the existing row/geotile placement, with a bounded whole-tile visibility handoff.
+local function beginHedges(key, rows, onVisible)
+  local old = tiles[key]
+  if old then
+    showHedge(old, false)
+    old.drop = true
+    retiredHedges = retiredHedges + 1
+    local retired = key .. ':retiredHedge' .. retiredHedges
+    setTile(key, nil)
+    setTile(retired, old)
+    hedgeTiles[retired], hedgeTiles[key] = old, nil
+  end
+  local shape = M.CATALOG.mapped_hedge[1][1] .. '.dae'
+  if #rows == 0 or #rows > 256 or (FS and not FS:fileExists(shape)) then
+    onVisible(false)
+    return false
+  end
+  return true
+end
+local function bindHedges(key, onVisible)
+  local t = tiles[key]
+  if not t then onVisible(false); return end
+  t.onVisible, t.visible = onVisible, false
+  hedgeTiles[key] = t
+  onVisible(false)
+end
+function M.onHedges(anchorId, tileKey, rows, groups, onVisible)
+  local key = anchorId .. ':' .. tostring(tileKey)
+  if not beginHedges(key, rows, onVisible) then return end
+  M.onRows(anchorId, tileKey, rows, groups)
+  bindHedges(key, onVisible)
+end
+function M.onGeoHedges(tileKey, gkey, rows, groups, frame, pivot, a, onVisible)
+  if not frame or not a then onVisible(false); return end
+  local key = 'g:' .. tostring(tileKey)
+  if not beginHedges(key, rows, onVisible) then return end
+  M.onGeoRows(tileKey, gkey, rows, groups, nil, frame, pivot, a)
+  bindHedges(key, onVisible)
+end
+local updateRows = M.update
+function M.update(anchorId, player, view, frameMs)
+  updateRows(anchorId, player, view, frameMs)
+  for key, t in pairs(hedgeTiles) do
+    if tiles[key] ~= t then hedgeTiles[key] = nil else
+      local complete = t.n > 0 and not t.pending and not t.drop
+      if complete then for i = 1, t.n do if not t.made[i] then complete = false; break end end end
+      showHedge(t, complete)
+    end
+  end
+end
+local clearRows = M.clear
+function M.clear()
+  for _, t in pairs(hedgeTiles) do showHedge(t, false) end
+  clearRows()
+  hedgeTiles = {}
 end
 
 return M
