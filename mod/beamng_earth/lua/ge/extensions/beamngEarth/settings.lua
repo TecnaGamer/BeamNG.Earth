@@ -160,7 +160,7 @@ M.SCHEMA = {
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
   -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
   -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
-  -- third of the RAM, 1.5 to 16 GB
+  -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
   maxRamGb = { kind = 'enum', default = 'auto', values = { 'auto', '3', '4', '6', '8', '12', '16', '24', '32' },
     label = 'Max RAM for BeamNG.Earth' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles

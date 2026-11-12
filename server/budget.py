@@ -100,7 +100,8 @@ def tasks_per_child():
 
 # The player's Max RAM for BeamNG.Earth (the settings page's maxRamGb; cpupin.apply_player_settings or earthd
 # --max-ram-gb put it in SETTING_ENV, which the worker processes inherit): the whole server's limit (native
-# membudget.rs: Auto = a third of the RAM, 1.5 to 16 GB; an explicit one at most 90 % of it), its tier (by the limit:
+# membudget.rs: Auto = a third of the RAM below 22 GB, at least 1.5 GB; 60 % of it from 22 GB up, at most 24 GB;
+# an explicit one at most 90 % of it), its tier (by the limit:
 # Auto gives every machine the tier its RAM alone gave before the setting), the desktop tier's cache sizes and worker
 # ceilings by it (desktop_sizes), and the watchdog that holds the server to it (memwatch.py). LIMIT_MB: this process's
 # (apply()); 0 while the RAM is unknown and the setting Auto (no limit, the desktop sizes, as before).
@@ -468,7 +469,7 @@ SHED_MB = 0
 TIER = "desktop"         # (apply(): tier() of this process's machine)
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
 TINY_SHED_MB = 1000      # (an 8-12 GB machine: TINY_GB)
-# A desktop's ceiling follows the RAM limit (desktop_sizes: 2000 MB at a 32 GB PC's Auto, 3000 at the 16 GB cap).
+# A desktop's ceiling follows the RAM limit (desktop_sizes: 3000 MB from a 16 GB limit up, a 32 GB PC's Auto).
 # Before 2026-11-11 a desktop had none: a 32 GB PC's server grew to 20 GB after 15 miles of Los Angeles, the system
 # killed it after ~90 miles, other players' games swapped (Discord, GitHub #893 #1026); a road worker's working set in
 # a city is ~0.9-1.3 GB (drive_mem, 2026-11-11)

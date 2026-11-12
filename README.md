@@ -362,7 +362,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   and the game keeps two until it has loaded.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
-  memory, at least 1.5 GB and at most 16 GB (about 5 GB on a 16 GB PC, 10 GB on a 32 GB one); or pick 3 to 32 GB. The
+  memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
+  (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
   page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
   helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
   processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the

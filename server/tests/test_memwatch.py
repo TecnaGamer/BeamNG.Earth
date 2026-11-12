@@ -21,8 +21,10 @@ class LimitTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def test_auto_by_ram(self):
-        self.assertAlmostEqual(budget.limit_mb(32.0), 0.33 * 32e9 / 2 ** 20, places=3)
-        self.assertEqual(budget.limit_mb(64.0), 16384.0, "the cap: more RAM does not mean bigger caches")
+        self.assertAlmostEqual(budget.limit_mb(16.0), 0.33 * 16e9 / 2 ** 20, places=3)
+        self.assertAlmostEqual(budget.limit_mb(32.0), 0.6 * 32e9 / 2 ** 20, places=3, msg="a big machine: 60 %")
+        self.assertEqual(budget.limit_mb(64.0), 24576.0, "the cap: more RAM does not mean bigger caches")
+        self.assertEqual(budget.limit_mb(128.0), 24576.0)
         self.assertEqual(budget.limit_mb(4.0), 1536.0, "the floor")
         with mock.patch.object(budget, "total_gb", return_value=None):
             self.assertEqual(budget.limit_mb(), 0.0, "unknown RAM, Auto: no limit")
@@ -161,10 +163,10 @@ class WatchTest(unittest.TestCase):
             mb = memwatch.set_setting(6)
             self.assertEqual(mb, 6144.0)
             s = memwatch.status()
-            self.assertEqual((s["limitMB"], s["setting"], s["autoMB"]), (6144, 6.0, 16384))
+            self.assertEqual((s["limitMB"], s["setting"], s["autoMB"]), (6144, 6.0, 24576))
             self.assertEqual(os.environ[budget.SETTING_ENV], "6.0")
             memwatch.set_setting("bad")
-            self.assertEqual(memwatch.status()["limitMB"], 16384)
+            self.assertEqual(memwatch.status()["limitMB"], 24576)
 
 
 if __name__ == "__main__":

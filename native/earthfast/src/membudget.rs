@@ -3,11 +3,15 @@
 //! and the watchdog's step.
 //!
 //! Units: MB of 2^20 bytes throughout. The limit is the player's choice, or Auto:
-//!   AUTO_FRAC of the RAM (the game holds ~6.5-7.5 GB, the system and other programs the rest), at least AUTO_MIN_MB,
-//!   at most AUTO_MAX_MB: caches past the working set gain nothing (a 64 GB PC's server reached 29 GB in a 30-minute
-//!   game-less drive through three cities and was no faster for it). Auto puts every machine on the tier the RAM alone
-//!   gave it before the setting existed (TIER_GB: the old thresholds times AUTO_FRAC), so the setting is one model with
-//!   the old tiers at its low end.
+//!   below BIG_GB of RAM, AUTO_FRAC of it (the game holds ~6.5-7.5 GB, the system and other programs the rest), at
+//!   least AUTO_MIN_MB: a Steam Deck 4.8 GB, a 16 GB PC 5.3 GB, where the server's 8-12 GB swapped the game out.
+//!   From BIG_GB up, BIG_FRAC of it, at most AUTO_MAX_MB (32 GB: 17.9 GB, 64 GB and up: 24 GB): there memory is not
+//!   what makes the game hitch (the players' reports, 2026-11-12: 335 hitches over 100 ms an hour at 32 GB, 357 at 64,
+//!   the swap-tagged ones on 8-16 GB machines), and a third of the RAM cost world generation 11 % (32 GB) to 31-41 %
+//!   (64 GB, a 16 GB cap) in game-less cold city drives; the cap still bounds the growth (try598's server reached 20.3
+//!   GB on the 32 GB profile and 22.8-29 GB on 64 GB). Auto puts every machine on the tier the RAM alone gave it before
+//!   the setting existed (TIER_GB: the old thresholds times AUTO_FRAC), so the setting is one model with the old tiers
+//!   at its low end.
 //! The watchdog (ram_watch, every few seconds in the server's main process): the server's measured total (Linux PSS +
 //! swapped PSS, Windows private bytes) against the limit, lowered while the system itself is short of memory (less
 //! than the reserve available); a soft step asks every process to drop its caches, a hard one replaces the processes
@@ -18,7 +22,10 @@ use pyo3::prelude::*;
 
 pub const AUTO_FRAC: f64 = 0.33;
 pub const AUTO_MIN_MB: f64 = 1536.0;
-pub const AUTO_MAX_MB: f64 = 16384.0;
+/// A big machine (GB of 10^9 bytes: a "24 GB" PC shows ~23.5-25.7) and its share, up to AUTO_MAX_MB
+pub const BIG_GB: f64 = 22.0;
+pub const BIG_FRAC: f64 = 0.6;
+pub const AUTO_MAX_MB: f64 = 24576.0;
 /// An explicit limit is at least this, and at most EXPLICIT_MAX_FRAC of the RAM
 pub const EXPLICIT_MIN_MB: f64 = 1024.0;
 pub const EXPLICIT_MAX_FRAC: f64 = 0.9;
@@ -35,7 +42,10 @@ pub fn ram_auto_mb(total_mb: f64) -> f64 {
     if !(total_mb > 0.0) {
         return AUTO_MIN_MB;
     }
-    (AUTO_FRAC * total_mb).clamp(AUTO_MIN_MB, AUTO_MAX_MB)
+    if total_mb >= gb_to_mb(BIG_GB) {
+        return (BIG_FRAC * total_mb).min(AUTO_MAX_MB);
+    }
+    (AUTO_FRAC * total_mb).max(AUTO_MIN_MB)
 }
 
 /// The limit in MB: the setting in GB (of 2^30 bytes; 0 or less: Auto) on a machine with total_mb of RAM (0: unknown).
@@ -63,9 +73,10 @@ pub fn ram_tier(limit_mb: f64) -> &'static str {
 }
 
 /// The desktop tier's sizes for a limit: (decoded DEM tiles a process, map data MB a process, a worker's shed ceiling
-/// MB, its pool's rotation ceiling MB, road-tile processes at most, far-tile processes at most). From a 32 GB PC's
-/// Auto (~10 GB) to the cap (16 GB): DEM 315 -> 512 tiles, map data 160 -> 256 MB, ceilings 2000 / 2670 -> 3000 /
-/// 4000 MB (the RAM-keyed ceilings before: 2000 / 2800 below 40 GB, 3000 / 3800 below 56 GB, none above).
+/// MB, its pool's rotation ceiling MB, road-tile processes at most, far-tile processes at most). From a 6.5 GB limit
+/// (a 20 GB PC's Auto) to 16 GB and more (a 32 GB PC's Auto: 17.9 GB): DEM ~200 -> 512 tiles, map data 160 -> 256 MB,
+/// ceilings 1350 / 1800 -> 3000 / 4000 MB (the RAM-keyed ceilings before: 2000 / 2800 below 40 GB, 3000 / 3800 below
+/// 56 GB, none above).
 #[pyfunction]
 pub fn ram_desktop_sizes(limit_mb: f64) -> (i64, i64, i64, i64, i64, i64) {
     let l = limit_mb.max(0.0);
@@ -161,9 +172,12 @@ mod tests {
     fn auto_share_floor_and_cap() {
         assert_eq!(ram_auto_mb(0.0), AUTO_MIN_MB);
         assert_eq!(ram_auto_mb(4096.0), AUTO_MIN_MB);
-        assert!((ram_auto_mb(32768.0) - 10813.44).abs() < 0.01);
-        assert_eq!(ram_auto_mb(65536.0), AUTO_MAX_MB);
+        assert!((ram_auto_mb(16.0 * GB) - 0.33 * 16.0 * GB).abs() < 0.01, "a 16 GB PC: a third");
+        assert!((ram_auto_mb(14800.0) - 4884.0).abs() < 0.01, "a Steam Deck");
+        assert!((ram_auto_mb(32.0 * GB) - 0.6 * 32.0 * GB).abs() < 0.01, "a 32 GB PC: 60 %");
+        assert_eq!(ram_auto_mb(64.0 * GB), AUTO_MAX_MB);
         assert_eq!(ram_auto_mb(262144.0), AUTO_MAX_MB);
+        assert!(ram_auto_mb(24.0 * GB) > ram_auto_mb(21.9 * GB), "never less for more RAM");
     }
 
     #[test]
@@ -184,10 +198,12 @@ mod tests {
         assert_eq!((dem, md, shed, rot), (512, 256, 3000, 4000));
         assert!(road >= 4 && far >= 10);
         let (dem, md, shed, rot, road, far) = ram_desktop_sizes(ram_auto_mb(32.0 * GB));
-        assert!(dem > 192 && dem < 512 && md == 160 && (1900..=2100).contains(&shed) && rot < 2800);
-        assert!(road >= 4 && (5..=8).contains(&far));
+        assert!(dem >= 500 && md >= 250 && shed >= 2900 && rot >= 3900, "a 32 GB PC: about the desktop sizes");
+        assert!(road >= 4 && far >= 10, "no fewer processes than the CPU allows");
         let (_, _, _, _, road, far) = ram_desktop_sizes(ram_auto_mb(24.0 * GB));
-        assert!(road >= 3 && far >= 3);
+        assert!(road >= 4 && far >= 10);
+        let (_, _, _, _, road, far) = ram_desktop_sizes(ram_auto_mb(20.0 * GB));
+        assert!(road >= 2 && far >= 2);
     }
 
     #[test]
