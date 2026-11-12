@@ -47,6 +47,100 @@ SMALL_ANALYSES_OFF = True
 FIN_MB_PER_GB = 4.0
 SMALL_FIN_MB = 32
 SMALL_FIN_DECODED = 96
+# The lean tiers (tier()): an 8 GB PC (LEAN_GB) and one with 4-6 GB (EMERGENCY_GB). BeamNG.drive itself asks for 16 GB
+# (its minimum since 0.3x; it holds ~6.5-7.5 GB private on Windows), so an 8 GB machine leaves the server ~1-1.5 GB before
+# everything swaps: the small profile's eight processes held ~6 GB + 2 GB of swap after 2 minutes of a cold Baltimore
+# in a 6 GB scope (drive_mem, 2026-11-12), and the players' reports showed 8 GB machines at 1,493 hitches over 100 ms an
+# hour (16 GB 540). Fewest processes (earthd LEAN_PROCS: the server and one road-tile process that also builds the far
+# buildings and the trees, replaced every LEAN_TASKS_PER_CHILD jobs; the blocks and the far tiles in the server's own
+# threads), smaller caches, a coarser far field; the emergency tier's extras off too (earthd EMERGENCY_OFF).
+# BNGE_LEAN=off: the small profile's tiny sizes below LEAN_GB as before; BNGE_BUDGET=lean / emergency forces one.
+LEAN_ON = os.environ.get("BNGE_LEAN", "on").lower() not in ("off", "0", "false", "no")
+LEAN_GB = 10.0              # below this much RAM: the lean tier (an 8 GB PC shows ~7.7-8.4 GB)
+EMERGENCY_GB = 6.0          # ... below this the emergency tier (4 GB: below what the game needs to run at all)
+LEAN_DEM_TILES = 64
+LEAN_MAPDATA_MB = 128
+LEAN_WALL_CELLS = 8
+LEAN_FACTS_CELLS = 96
+LEAN_FIN_MB = 24
+LEAN_FIN_DECODED = 64
+LEAN_IMAGERY_TILES = 128    # imagery.MEM_TILES (512: ~100 MB of decoded source tiles a process)
+LEAN_PMTILES_MB = 32        # pmtiles.MEM_TILES_MB (96)
+LEAN_RANGEREAD_MB = 16      # rangeread.MEM_BYTES (64 MB)
+LEAN_SEA_CELLS = 6          # seacarve.MEM_CELLS (24 rasters of ~10 MB)
+LEAN_PHOTOSURFACE_TILES = 32    # photosurface.MEM_TILES (96)
+LEAN_FAR_K = 0.6            # (instead of SMALL_FAR_K)
+LEAN_FAR_TEX = 256
+EMERGENCY_DEM_TILES = 48
+EMERGENCY_MAPDATA_MB = 96
+EMERGENCY_FAR_K = 0.45
+EMERGENCY_FAR_TEX = 128
+LEAN_ROAD_PROCESSES = 1
+LEAN_FAR_WORKERS = 1
+LEAN_SHED_MB = 700          # a worker's ceiling (SHED_MB) ...
+LEAN_ROTATE_MB = 1000       # ... and its pool's rotation (ROTATE_MB)
+EMERGENCY_SHED_MB = 500
+EMERGENCY_ROTATE_MB = 800
+TIERS = ("desktop", "small", "lean", "emergency")
+# The lean tiers' road-tile process is replaced by a fresh one after this many jobs (pools.tasks_per_child_kw; its
+# queue kept): its caches' sheds gave back ~0.3 of 1-1.6 GB, a rotation never ran with its queue always full (the old
+# process would finish the whole queue beside the new one), and it grew to 1.58 GB in 8 minutes of Baltimore + I-95
+# (drive_mem, 2026-11-12). BNGE_TASKS_PER_CHILD=<n>, 0 off.
+LEAN_TASKS_PER_CHILD = 40
+
+
+def tasks_per_child():
+    """The lean tiers' jobs per road process (LEAN_TASKS_PER_CHILD; BNGE_TASKS_PER_CHILD overrides, 0 off)."""
+    v = os.environ.get("BNGE_TASKS_PER_CHILD", "")
+    try:
+        return max(0, int(v)) if v != "" else LEAN_TASKS_PER_CHILD
+    except ValueError:
+        return LEAN_TASKS_PER_CHILD
+
+
+def tier(gb=None):
+    """The machine's memory tier: 'desktop', 'small' (SMALL_GB), 'lean' (LEAN_GB) or 'emergency' (EMERGENCY_GB).
+    BNGE_BUDGET=<tier> forces one (lean / emergency need BNGE_LEAN on); the lean tiers are small machines too."""
+    force = os.environ.get("BNGE_BUDGET", "").lower()
+    if force in TIERS and (LEAN_ON or force in ("desktop", "small")):
+        return force
+    gb = total_gb() if gb is None else gb
+    if gb is None or gb >= SMALL_GB:
+        return "desktop"
+    if LEAN_ON and gb < EMERGENCY_GB:
+        return "emergency"
+    if LEAN_ON and gb < LEAN_GB:
+        return "lean"
+    return "small"
+
+
+def lean(gb=None):
+    """Is this machine on one of the lean tiers (lean, emergency)?"""
+    return tier(gb) in ("lean", "emergency")
+
+
+GAME_MIN_GB = 16            # BeamNG.drive's own minimum (its Steam page and docs.beamng.com, 2026)
+
+
+def memory_notice(gb=None, tier_=None):
+    """(title, text) for the player on a lean tier (the launcher at start; the emergency one in the game too: hello
+    memoryNote), or None. Plain words: the RAM, what the game needs, what BeamNG.Earth does about it, what helps."""
+    gb = total_gb() if gb is None else gb
+    tier_ = tier(gb) if tier_ is None else tier_
+    if gb is None or tier_ not in ("lean", "emergency"):
+        return None
+    have = f"{gb * 1e9 / 2 ** 30:.0f} GB" if gb > 0 else "very little"
+    if tier_ == "emergency":
+        return ("Not enough memory", (
+            f"This computer has {have} of memory. BeamNG.drive needs {GAME_MIN_GB} GB, and the game alone does not fit "
+            f"in {have}: expect long freezes, and the game or BeamNG.Earth may close by itself. BeamNG.Earth runs its "
+            "smallest world server, but it cannot make up for the missing memory. Use the Low quality preset, close "
+            "every other program before playing, or play on a computer with more memory."))
+    return ("Low memory", (
+        f"This computer has {have} of memory; BeamNG.drive asks for {GAME_MIN_GB} GB. BeamNG.Earth runs its "
+        "low-memory world server, but expect some stutter while the world loads. What helps most: the Low quality "
+        "preset (pause menu > BeamNG.Earth > Graphics; a first start picks it), and closing other programs (web "
+        "browsers especially)."))
 
 
 def total_gb():
@@ -58,7 +152,9 @@ def total_gb():
         except ValueError:
             pass
     try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+        phys = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+        lim = cgroup_limit_gb() if CGROUP_MEM else None
+        return min(phys, lim) if lim else phys      # (a container's or a scope's memory limit: CGROUP_MEM)
     except (ValueError, OSError, AttributeError):
         pass
     try:                                    # Windows
@@ -79,13 +175,92 @@ def total_gb():
     return None
 
 
+# Linux: a memory limit on the server's control group (a container, systemd's MemoryMax, the low-memory tests' capped
+# scope) counts as the machine's free memory when it is the smaller: /proc/meminfo tells the whole machine's, and a
+# server capped at 1.5 GB on a 64 GB PC never shed by the free memory while it swapped at its limit (2026-11-12).
+# BNGE_CGROUP_MEM=off: MemAvailable alone, as before.
+CGROUP_MEM = os.environ.get("BNGE_CGROUP_MEM", "on").lower() not in ("off", "0", "false", "no")
+_cg_dir = None
+
+
+def _cgroup_dir():
+    """This process's cgroup v2 folder (cached), or "" when there is none."""
+    global _cg_dir
+    if _cg_dir is None:
+        _cg_dir = ""
+        try:
+            with open("/proc/self/cgroup") as f:
+                for line in f:
+                    if line.startswith("0::"):
+                        _cg_dir = CG_ROOT + line[3:].strip()
+        except OSError:
+            pass
+    return _cg_dir
+
+
+CG_ROOT = "/sys/fs/cgroup"
+
+
+def cgroup_limit_gb(d=None, root=CG_ROOT):
+    """The tightest memory.max of this process's cgroup (folder d under root) and its parents in GB; None when none is
+    limited."""
+    d = _cgroup_dir() if d is None else d
+    best = None
+    while d and d.startswith(root) and len(d) > len(root):
+        try:
+            with open(os.path.join(d, "memory.max")) as f:
+                mx = f.read().strip()
+            if mx != "max":
+                best = int(mx) / 1e9 if best is None else min(best, int(mx) / 1e9)
+        except (OSError, ValueError):
+            pass
+        d = os.path.dirname(d)
+    return best
+
+
+def cgroup_free_gb(d=None, root=CG_ROOT):
+    """The memory left under the tightest limit of this process's cgroup (folder d under root) and its parents
+    (memory.max less what is charged, the inactive file cache counted free), in GB; None when none is limited (or not
+    Linux)."""
+    d = _cgroup_dir() if d is None else d
+    best = None
+    while d and d.startswith(root) and len(d) > len(root):
+        try:
+            with open(os.path.join(d, "memory.max")) as f:
+                mx = f.read().strip()
+            if mx != "max":
+                with open(os.path.join(d, "memory.current")) as f:
+                    cur = int(f.read())
+                inactive = 0
+                try:
+                    with open(os.path.join(d, "memory.stat")) as f:
+                        for line in f:
+                            if line.startswith("inactive_file "):
+                                inactive = int(line.split()[1])
+                                break
+                except (OSError, ValueError):
+                    pass
+                left = max(0, int(mx) - cur + inactive) / 1e9
+                best = left if best is None else min(best, left)
+        except (OSError, ValueError):
+            pass
+        d = os.path.dirname(d)
+    return best
+
+
 def free_gb():
-    """The RAM free for new work now, in GB (Linux MemAvailable, Windows ullAvailPhys; None if unknown)."""
+    """The RAM free for new work now, in GB (Linux MemAvailable, or the room under a cgroup memory limit when smaller:
+    CGROUP_MEM; Windows ullAvailPhys; None if unknown)."""
     try:
         with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024 / 1e9
+                    free = int(line.split()[1]) * 1024 / 1e9
+                    if CGROUP_MEM:
+                        cg = cgroup_free_gb()
+                        if cg is not None:
+                            free = min(free, cg)
+                    return free
     except (OSError, ValueError, IndexError):
         pass
     try:                                    # Windows
@@ -107,10 +282,11 @@ def free_gb():
 
 
 def small(gb=None):
-    """Is this a small machine (the small profile)? BNGE_BUDGET=small / desktop overrides."""
+    """Is this a small machine (the small profile, the lean tiers too)? BNGE_BUDGET=small / desktop / lean /
+    emergency overrides."""
     force = os.environ.get("BNGE_BUDGET", "").lower()
-    if force in ("small", "desktop"):
-        return force == "small"
+    if force in TIERS:
+        return force != "desktop"
     gb = total_gb() if gb is None else gb
     return gb is not None and gb < SMALL_GB
 
@@ -118,8 +294,13 @@ def small(gb=None):
 SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
 
 
-def shed_mb(is_small, gb):
-    """A worker's memory ceiling (SHED_MB) for the profile and the machine's RAM (GB, None unknown); 0: none."""
+def shed_mb(is_small, gb, tier_=None):
+    """A worker's memory ceiling (SHED_MB) for the profile and the machine's RAM (GB, None unknown); 0: none.
+    tier_: the lean tiers' own (tier())."""
+    if tier_ == "emergency":
+        return EMERGENCY_SHED_MB
+    if tier_ == "lean":
+        return LEAN_SHED_MB
     if is_small:
         return TINY_SHED_MB if gb is not None and gb < TINY_GB else SMALL_SHED_MB
     if gb is None:
@@ -140,9 +321,12 @@ def low_free_gb(gb):
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
-    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB
+    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB, TIER
     gb = total_gb()
-    SHED_MB = shed_mb(is_small, gb)
+    TIER = tier(gb) if is_small else "desktop"
+    if TIER == "desktop" and is_small:
+        TIER = "small"
+    SHED_MB = shed_mb(is_small, gb, TIER)
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
         SHED_MB = int(os.environ["BNGE_SHED_MB"])
     LOW_FREE_GB = low_free_gb(gb)
@@ -151,7 +335,7 @@ def apply(is_small=None):
     TREE_MB = tree_mb(gb) if TREE_ON else 0
     if os.environ.get("BNGE_TREE_MB"):              # (A/B: the whole server's budget in MB, 0 off)
         TREE_MB = int(os.environ["BNGE_TREE_MB"])
-    ROTATE_MB = rotate_mb(is_small, gb)
+    ROTATE_MB = rotate_mb(is_small, gb, TIER)
     if os.environ.get("BNGE_ROTATE_MB"):            # (A/B: the pools' rotation ceiling in MB, 0 off)
         ROTATE_MB = int(os.environ["BNGE_ROTATE_MB"])
     if is_small:
@@ -160,19 +344,38 @@ def apply(is_small=None):
         import mapdata
         import roadwidth
         tiny = gb is not None and gb < TINY_GB
-        dem.MEM_TILES = TINY_DEM_TILES if tiny else SMALL_DEM_TILES
-        mapdata.MEM_MB = TINY_MAPDATA_MB if tiny else SMALL_MAPDATA_MB
-        roadwidth.WALL_CELLS = SMALL_WALL_CELLS
+        emergency, leanest = TIER == "emergency", TIER in ("lean", "emergency")
+        dem.MEM_TILES = EMERGENCY_DEM_TILES if emergency else LEAN_DEM_TILES if leanest else \
+            TINY_DEM_TILES if tiny else SMALL_DEM_TILES
+        mapdata.MEM_MB = EMERGENCY_MAPDATA_MB if emergency else LEAN_MAPDATA_MB if leanest else \
+            TINY_MAPDATA_MB if tiny else SMALL_MAPDATA_MB
+        roadwidth.WALL_CELLS = LEAN_WALL_CELLS if leanest else SMALL_WALL_CELLS
         import roads
-        roads.FACTS_MEM_KEPT = SMALL_FACTS_CELLS   # (~0.5 MB a city cell's facts, in each process)
+        roads.FACTS_MEM_KEPT = LEAN_FACTS_CELLS if leanest else SMALL_FACTS_CELLS   # (~0.5 MB a city cell's facts)
         import imagery
         gb = total_gb() or 16.0
         imagery.MEM_FINISHED_MB = int(min(imagery.MEM_FINISHED_MB, max(SMALL_FIN_MB, round(FIN_MB_PER_GB * gb))))
         imagery.MEM_DECODED = min(imagery.MEM_DECODED, SMALL_FIN_DECODED)
+        if leanest:
+            imagery.MEM_FINISHED_MB = min(imagery.MEM_FINISHED_MB, LEAN_FIN_MB)
+            imagery.MEM_DECODED = min(imagery.MEM_DECODED, LEAN_FIN_DECODED)
+            # (the per-process caches the small profile keeps at a desktop's size: a lean block process held 291 MB
+            # of imagery arrays after two minutes of Baltimore, 2026-11-12)
+            import pmtiles
+            import photosurface
+            import rangeread
+            import seacarve
+            imagery.MEM_TILES = min(imagery.MEM_TILES, LEAN_IMAGERY_TILES)
+            pmtiles.MEM_TILES_MB = min(pmtiles.MEM_TILES_MB, LEAN_PMTILES_MB)
+            rangeread.MEM_BYTES = min(rangeread.MEM_BYTES, LEAN_RANGEREAD_MB * 2 ** 20)
+            seacarve.MEM_CELLS = min(seacarve.MEM_CELLS, LEAN_SEA_CELLS)
+            photosurface.MEM_TILES = min(photosurface.MEM_TILES, LEAN_PHOTOSURFACE_TILES)
+        far_k = EMERGENCY_FAR_K if emergency else LEAN_FAR_K if leanest else SMALL_FAR_K
+        far_tex = EMERGENCY_FAR_TEX if emergency else LEAN_FAR_TEX if leanest else SMALL_FAR_TEX
         for cells, table in farfield.K_TABLE.items():       # (read when the server makes its Layout)
-            farfield.K_TABLE[cells] = {lvl: k * SMALL_FAR_K for lvl, k in table.items()}
+            farfield.K_TABLE[cells] = {lvl: k * far_k for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
-            farfield.TEX_DEFAULT[cells] = tuple(min(t, SMALL_FAR_TEX) for t in tex)
+            farfield.TEX_DEFAULT[cells] = tuple(min(t, far_tex) for t in tex)
     if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
         import dem
         dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])
@@ -198,6 +401,7 @@ _trimming = False
 # server to ~5 GB PSS with 6.7 GB of swap until the system killed the game's UI (2026-11-04); the caches' own caps
 # count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
 SHED_MB = 0
+TIER = "desktop"         # (apply(): tier() of this process's machine)
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
 TINY_SHED_MB = 1000      # (an 8-12 GB machine: TINY_GB)
 # A desktop's ceiling by its RAM, (below GB, MB); none from the last up. Before 2026-11-11 a desktop had none: a 32 GB
@@ -309,8 +513,13 @@ ROTATE_CHECK_S = 30.0
 ROTATE_MIN_S = 300.0
 
 
-def rotate_mb(is_small, gb):
-    """The pools' rotation ceiling (ROTATE_MB) for the profile and the machine's RAM (GB, None unknown); 0: none."""
+def rotate_mb(is_small, gb, tier_=None):
+    """The pools' rotation ceiling (ROTATE_MB) for the profile and the machine's RAM (GB, None unknown); 0: none.
+    tier_: the lean tiers' own (tier())."""
+    if tier_ == "emergency":
+        return EMERGENCY_ROTATE_MB
+    if tier_ == "lean":
+        return LEAN_ROTATE_MB
     if is_small:
         return SMALL_ROTATE_MB
     if gb is None:

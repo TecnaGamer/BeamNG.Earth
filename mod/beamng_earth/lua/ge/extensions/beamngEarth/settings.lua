@@ -224,11 +224,21 @@ M.BUILDING_DISTANCE = { near = 0.6, normal = 1.0, far = 1.5, max = 2.0 }
 -- A file saved before the tree distance had its own setting: the distance its tree level had (trees.lua, before)
 M.TREE_DISTANCE_OF = { low = 'near', medium = 'medium', normal = 'normal', high = 'far', ultra = 'farther' }
 
--- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }) and why.
--- A Steam Deck (its APU: "AMD Custom GPU 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low.
-function M.detectQuality(gpu)
+-- A computer with less memory than this (GB of 10^9 bytes, the server's budget.LEAN_GB: an 8 GB PC) starts on Low,
+-- whatever its GPU: the game alone holds ~6.5-7.5 GB there and the world server runs its lean tier (2026-11-12: 8 GB
+-- machines had 1,493 hitches over 100 ms an hour in the players' reports, 16 GB ones 540). LOW_RAM_GB = 0: off.
+M.LOW_RAM_GB = 10
+
+-- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }; ramBytes: the
+-- machine's memory, Engine.Platform.getMemoryInfo().osPhysAvailable) and why. A Steam Deck (its APU: "AMD Custom GPU
+-- 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low; under LOW_RAM_GB of memory: low.
+function M.detectQuality(gpu, ramBytes)
   local name = type(gpu) == 'table' and tostring(gpu.name or '') or ''
   local mem = type(gpu) == 'table' and tonumber(gpu.memoryMB) or nil
+  local ram = tonumber(ramBytes)
+  if ram and ram > 0 and M.LOW_RAM_GB > 0 and ram / 1e9 < M.LOW_RAM_GB then
+    return 'low', string.format('%.0f GB of memory', ram / 1073741824)
+  end
   local up = name:upper()
   if up:find('VANGOGH', 1, true) or up:find('CUSTOM GPU 0405', 1, true) or up:find('CUSTOM GPU 0932', 1, true) then
     return 'medium', 'Steam Deck'
@@ -342,15 +352,19 @@ end
 
 -- The first run (quality 'auto'): the hardware's preset, unless the player changed one of its knobs before presets
 -- existed (then 'custom', theirs kept). Saved by the caller's next save (and here, when the file can be written).
-function M.resolveAuto(gpu)
+function M.resolveAuto(gpu, ramBytes)
+  local P = rawget(_G, 'Engine') and Engine.Platform
   if gpu == nil then
-    local P = rawget(_G, 'Engine') and Engine.Platform
     if P and P.getGPUInfo then
       local ok, g = pcall(P.getGPUInfo)
       if ok then gpu = g end
     end
   end
-  local pick, why = M.detectQuality(gpu)
+  if ramBytes == nil and P and P.getMemoryInfo then     -- (osPhysAvailable is the total: ge_utils.lua's RAM size)
+    local ok, m = pcall(P.getMemoryInfo)
+    if ok and type(m) == 'table' then ramBytes = tonumber(m.osPhysAvailable) end
+  end
+  local pick, why = M.detectQuality(gpu, ramBytes)
   values.qualityDetected = why .. ': ' .. pick
   local changed = false
   for _, k in ipairs(M.PRESET_KEYS) do

@@ -1025,4 +1025,28 @@ do
   T.check(v and v.x == 200 and v.y == 0, 'a free camera with no target')
   st.player, st.cam = was[1], was[2]
 end
+do -- a computer with too little memory (the server's emergency tier): one warning toast a server session
+  local toasts, oldGh = {}, rawget(_G, 'guihooks')
+  guihooks = { trigger = function(name, data)
+    if name == 'toastrMsg' and type(data) == 'table' and tostring(data.title):find('memory', 1, true) then
+      toasts[#toasts + 1] = data
+    end
+    if oldGh and oldGh.trigger then return oldGh.trigger(name, data) end
+  end }
+  local hello = { type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'emergency',
+    memoryNote = 'This computer has 4 GB of memory.' }
+  serverSend(hello)
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1 and toasts[1].msg == hello.memoryNote and toasts[1].type == 'warning',
+    'emergency memory tier: a warning toast with the server\'s note')
+  serverSend(hello)
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1, 'the same server session: not again')
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'lean', memoryNote = 'x' })
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
+  guihooks = oldGh
+end
 T.done('test_core_stubbed')
