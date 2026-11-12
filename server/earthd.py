@@ -689,6 +689,7 @@ PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked
 # (Lille, Caen, Brest, 2026-11-11: EOX ~5-15/s for the first 60 s, then 30-50/s). BNGE_PREFETCH_SPARE=0: off
 IMAGERY_PREFETCH_SPARE = int(os.environ.get("BNGE_PREFETCH_SPARE", "200"))
 PREFETCH_SPARE_AGAIN_S = 5.0
+PREFETCH_SPARE_PER_PASS = 40    # (at most this many of them a pass of the loop: its time on the event loop)
 PREFETCHED_MAX = 8192       # tiles remembered as prefetched (a connection's record starts again past this)
 # status.backlog (docs/V1_4_SPEC.md §3.0, §4): every status message carries the number of desired
 # tiles of the current anchor not shown yet. Status messages only go out on events (v1.3.1); with
@@ -9998,12 +9999,16 @@ class Connection:
                 now = time.monotonic()
                 if len(self.prefetched) > PREFETCHED_MAX:
                     self.prefetched.clear()
+                spare = PREFETCH_SPARE_PER_PASS
                 for i, t in enumerate(self.queue[self.qi:self.qi + IMAGERY_PREFETCH + IMAGERY_PREFETCH_SPARE]):
                     ck = self.ck(t.key)
                     soon = i < IMAGERY_PREFETCH
+                    if not soon and spare <= 0:
+                        break
                     if ck not in self.s.tiles and \
                             now - self.prefetched.get(ck, -1e9) >= (PREFETCH_AGAIN_S if soon else PREFETCH_SPARE_AGAIN_S):
                         self.prefetched[ck] = now
+                        spare -= not soon
                         self.s.prefetch_imagery(anchor, t, soon)
             if anchor is not None:
                 self.emit_groups()
