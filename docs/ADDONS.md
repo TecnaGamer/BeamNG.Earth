@@ -153,7 +153,7 @@ end
 | function | returns |
 |---|---|
 | `version()` | `major, minor` (1, 7) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'` (1.7) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -164,7 +164,8 @@ end
 | `teleport(lat, lon, name)` | true once taken (as the map's Go), else `false, why` |
 | `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning, waypoints, legs}` or nil |
 | `gpsRoute()` | 1.6: the planned route as the map draws it: `{version, points = {{lat, lon}, ...}, dist (m), dur (s), elev = {{distM, elevM}, ...}, legs, steps}`, or nil without one. `steps` from 1.7: see "Route maneuvers" below. `version` changes with every new plan (a replan after a wrong turn too); `gps()` also has `off` (m off the route) and `routeVersion` from 1.6. A copy: keep it as long as you like |
-| `toGame(lat, lon, h)`, `toGeo(x, y, z)` | 1.6: lat / lon (h m over the WGS84 ellipsoid, default 0) to the game's `x, y, z`, and back to `lat, lon, h`, in the current anchor's frame as `pose()` gives them; nil before the world is there. Game coordinates change at every rebase (`onBeamNGEarthTeleported`, and quietly while driving): convert again rather than keep them |
+| `toGame(lat, lon, h)`, `toGeo(x, y, z)` | 1.6: lat / lon (h m over the WGS84 ellipsoid, default 0) to the game's `x, y, z`, and back to `lat, lon, h`, in the current anchor's frame as `pose()` gives them; nil before the world is there. Game coordinates change at every rebase (`onBeamNGEarthRebased` from 1.7 says when): convert again rather than keep them |
+| `rebasing()` | 1.7: true between a rebase's two frames (the vehicles are in the new frame already, `toGame` / `toGeo` and `pose()` still in the old one): leave positions alone until `onBeamNGEarthRebased` |
 | `gpsSetRoute(points)` | 1.2: the GPS through waypoints, `points` `{{lat, lon, name?}, ...}`, the last one the destination, at most 11; one route through them all, each waypoint passed in order (within 40 m). `gps().waypoints` is the ones still ahead, `gps().legs` the planned route's `{dist m, dur s}` per leg. True, or `false, why` |
 | `notify(text, seconds)` | a short message on screen |
 | `inTunnel()`, `inTunnel(x, y, z)` | 1.3: the player (1 m over its position), or a point in game coordinates, under a roof: a tunnel, a covered arch, a parking structure (the rule the tunnel sound uses). `true` / `false`, nil before the world is there |
@@ -217,6 +218,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthTeleported` | `teleported` | `{lat, lon}`: a teleport finished, the player is set down |
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
+| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. Every game coordinate an add-on kept is stale: convert again with `toGame` |
 
 ### Places (1.4)
 

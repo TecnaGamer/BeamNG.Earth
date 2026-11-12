@@ -535,6 +535,16 @@ function M.heldCamera(c)
   return h
 end
 
+-- The modding API's rebased event (api.lua, 1.7): the world's origin moved from the anchor `old` (nil: the first one)
+-- to st.anchor, so an add-on's own game coordinates are stale and it converts them again (api.toGame). Said right
+-- after st.anchor changed, in the frame that moved the world.
+function M._apiRebased(old, purpose)
+  local api = rawget(_G, 'beamngEarth_api')
+  if not (api and api._event and st.anchor) then return end
+  pcall(api._event, 'rebased', { lat = st.anchor.lat, lon = st.anchor.lon, oldLat = old and old.lat or nil,
+    oldLon = old and old.lon or nil, anchorId = st.anchorId, purpose = purpose })
+end
+
 local function commitTeleport(msg)
   local tr, err = anchorTerrain(msg)
   gov:heavyNow() -- the user asked for a jump: no waiting for a calm frame
@@ -586,12 +596,14 @@ local function commitTeleport(msg)
   be:reloadCollision()
   M._psum.mod.note('collision')
 
+  local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
   require('beamngEarth/turbinestream').reanchor(st.anchor)
   roads.replace(st.anchor, msg.anchorId)     -- (road geotiles too: roads.lua)
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(msg.lat, msg.lon)
+  M._apiRebased(oldAnchor, 'teleport')
   st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
   edgeguard.newFrame(st.guard)
   sendCommits(msg.anchorId, tr.cx, tr.cy)
@@ -645,9 +657,11 @@ local function finishRebase()
   if rb.purpose == 'view' then M._enterViewFrame(xf)
   elseif rb.purpose == 'carback' then M._leaveViewFrame() end
 
+  local oldAnchor = st.anchor
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
+  M._apiRebased(oldAnchor, rb.purpose)
   st.block, st.terrainPending, st.terrainErrorAt = tr and { cx = tr.cx, cy = tr.cy } or nil, nil, nil
   edgeguard.newFrame(st.guard)
   if tr then sendCommits(msg.anchorId, tr.cx, tr.cy)
