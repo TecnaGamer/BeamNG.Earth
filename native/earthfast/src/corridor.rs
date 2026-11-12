@@ -7,12 +7,14 @@
 //!
 //! For every vertex of a plan, each other plan near and roughly parallel (within ang of its direction) whose
 //! carriageway is within gap_m of its own asks for the height difference between them to fit their gap at bank_s
-//! (m per m; none where the pavements overlap). Who moves (key): a road dipped under a deck holds and the other
-//! follows, a road ranked higher (a through road over a slip road, then grade_rank) holds; between equals the lower
-//! one rises. A point within abut_hold m of the plan's own bridge end and the plan's two ends hold (the junction
-//! there, welded and snapped). The corrections asked are then made smooth along the road: a smoothing spline (weights
-//! wreq where asked, w0 elsewhere, lam on the curvature: (lam / w0)^(1/4) ~ 47 m of easing), solved per plan
-//! (a banded LDL^T). All corrections come from the plans as given (no order dependence).
+//! (m per m; none where the pavements overlap). Who moves (key): a road dipped under a deck holds and a slip road
+//! beside it follows; a higher key holds (a through road over a slip road, then grade_rank); of two equal slip roads
+//! the lower rises; two roads both keyed equal_hold or more (through roads, or one dipped) keep their own (a dual
+//! carriageway's halves on a hillside). A vertex beside a cutting's wall neither asks nor answers (two levels). A
+//! point within abut_hold m of the plan's own bridge end and the plan's two ends hold (the junctions there, welded and
+//! snapped after). The corrections asked are made smooth along the road: a smoothing spline (weights wreq where asked,
+//! w0 elsewhere, lam on the curvature: (lam / w0)^(1/4) ~ 47 m of easing), solved per plan (a banded LDL^T). All
+//! corrections come from the plans as given (no order dependence).
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -41,9 +43,10 @@ impl SegGrid {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], rh: &[f64], key: &[i64], abut: &[[bool; 2]],
+pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], rh: &[f64], key: &[i64],
+                     abut: &[[bool; 2]],
                      cos_ang: f64, bank_s: f64, gap_m: f64, max_diff: f64, abut_hold: f64, wreq: f64, w0: f64,
-                     lam: f64) -> (Vec<f64>, Vec<bool>) {
+                     lam: f64, equal_hold: i64) -> (Vec<f64>, Vec<bool>) {
     let n = off.len() - 1;
     let mut zout = z.to_vec();
     let mut changed = vec![false; n];
@@ -123,8 +126,8 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], rh: &[f64], key:
             if !(px.is_finite() && py.is_finite() && zp[i].is_finite()) {
                 continue;
             }
-            if (abut[j][0] && s[i] <= abut_hold) || (abut[j][1] && s[i] >= last - abut_hold) {
-                continue;
+            if (abut[j][0] && s[i] <= abut_hold) || (abut[j][1] && s[i] >= last - abut_hold) || wall[o + i] {
+                continue;       // (held, or a cutting's wall beside it: two levels, not one pavement)
             }
             // the direction (np.gradient: central, one-sided at the ends)
             let (a, b) = if i == 0 { (0, 1) } else if i == m - 1 { (m - 2, m - 1) } else { (i - 1, i + 1) };
@@ -176,8 +179,8 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], rh: &[f64], key:
                     continue;
                 }
                 let gap = d - rh[k] - rh[j];
-                if gap > gap_m {
-                    continue;
+                if gap > gap_m || wall[off[k] + si] || wall[off[k] + si + 1] {
+                    continue;   // (the other in a cutting there: Porte Maillot's ramps beside the walled trench)
                 }
                 let (dx, dy) = (q[si + 1][0] - q[si][0], q[si + 1][1] - q[si][1]);
                 let dl = dx.hypot(dy);
@@ -192,6 +195,10 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], rh: &[f64], key:
                 let need = (diff.abs() - gap.max(0.0) * bank_s).max(0.0);
                 if need <= 0.0 {
                     continue;
+                }
+                if key[j] >= equal_hold && key[k] >= equal_hold {
+                    continue; // (two through roads hold their own: a dual carriageway's halves on a hillside, one
+                              // dipped under a deck and the other not: BR-381's 2 m notch at a junction between)
                 }
                 let moves = if key[j] != key[k] { key[j] < key[k] } else { diff > 0.0 };
                 if !moves {
@@ -208,7 +215,8 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], rh: &[f64], key:
         if !any {
             continue;
         }
-        // the spline: minimise sum W (d - c)^2 + lam sum h_mid (d'')^2; the ends and the held points fixed at 0
+        // the spline: minimise sum W (d - c)^2 + lam sum h_mid (d'')^2; the ends and the held points fixed at 0 (left
+        // free, the corrections moved the junctions and every road meeting there: Wesley Chapel's ramps worse)
         let mut w = vec![0.0f64; m];
         let mut c = vec![0.0f64; m];
         for i in 0..m {
@@ -320,20 +328,25 @@ fn solve_penta(a0: &[f64], a1: &[f64], a2: &[f64], b: &[f64]) -> Option<Vec<f64>
     Some(y)
 }
 
-/// grading.share_corridors (above): plans (xy (n, 2), off, z), rh (plans,) carriageway half widths, key (plans,)
-/// who holds (below 0: not part of it), abut (plans, 2) bridge ends. Returns (z, changed per plan).
+/// grading.share_corridors (above): plans (xy (n, 2), off, z), wall (n,) a cutting's wall beside the vertex (the
+/// plan's cut: a vertex there neither asks nor answers), rh (plans,) carriageway half widths, key (plans,)
+/// who holds (below 0: not part of it), abut (plans, 2) bridge ends; equal_hold: two plans both keyed at least this
+/// hold (neither moves). Returns (z, changed per plan).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn plan_share_corridors<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
-                                 z: PyReadonlyArray1<'py, f64>, rh: PyReadonlyArray1<'py, f64>,
+                                 z: PyReadonlyArray1<'py, f64>, wall: PyReadonlyArray1<'py, bool>,
+                                 rh: PyReadonlyArray1<'py, f64>,
                                  key: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray2<'py, bool>, ang_deg: f64,
-                                 bank_s: f64, gap_m: f64, max_diff: f64, abut_hold: f64, wreq: f64, w0: f64, lam: f64)
+                                 bank_s: f64, gap_m: f64, max_diff: f64, abut_hold: f64, wreq: f64, w0: f64, lam: f64,
+                                 equal_hold: i64)
                                  -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>)> {
     let (a, o, zz, rh, key, ab) = (xy.as_array(), off.as_array(), z.as_array(), rh.as_array(), key.as_array(),
                                    abut.as_array());
+    let wv: Vec<bool> = wall.as_array().iter().copied().collect();
     let n = if o.is_empty() { 0 } else { o.len() - 1 };
     if a.ncols() < 2 || zz.len() != a.nrows() || o.is_empty() || o[0] != 0 || o[o.len() - 1] as usize != a.nrows()
-        || (1..o.len()).any(|i| o[i] < o[i - 1]) || rh.len() != n || key.len() != n || ab.nrows() != n
+        || (1..o.len()).any(|i| o[i] < o[i - 1]) || wv.len() != a.nrows() || rh.len() != n || key.len() != n || ab.nrows() != n
         || ab.ncols() != 2 {
         return Err(PyValueError::new_err("plan_share_corridors: mismatched plan arrays"));
     }
@@ -344,8 +357,8 @@ pub fn plan_share_corridors<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>
     let keyv: Vec<i64> = key.iter().copied().collect();
     let abv: Vec<[bool; 2]> = (0..n).map(|j| [ab[[j, 0]], ab[[j, 1]]]).collect();
     let cos_ang = ang_deg.to_radians().cos();
-    let (zo, ch) = py.detach(|| corridor_core(&xyv, &offv, &zv, &rhv, &keyv, &abv, cos_ang, bank_s, gap_m, max_diff,
-                                              abut_hold, wreq, w0, lam));
+    let (zo, ch) = py.detach(|| corridor_core(&xyv, &offv, &zv, &wv, &rhv, &keyv, &abv, cos_ang, bank_s, gap_m, max_diff,
+                                              abut_hold, wreq, w0, lam, equal_hold));
     Ok((zo.into_pyarray(py), ch.into_pyarray(py)))
 }
 
@@ -395,8 +408,8 @@ mod tests {
             }
             off.push(xy.len());
         }
-        let (zo, ch) = corridor_core(&xy, &off, &z, &[7.0, 7.0], &[5, 5], &[[false, false]; 2], 45f64.to_radians().cos(),
-                                     0.4, 6.0, 10.0, 25.0, 10.0, 0.01, 50000.0);
+        let (zo, ch) = corridor_core(&xy, &off, &z, &vec![false; xy.len()], &[7.0, 7.0], &[5, 5], &[[false, false]; 2], 45f64.to_radians().cos(),
+                                     0.4, 6.0, 10.0, 25.0, 10.0, 0.01, 50000.0, i64::MAX);
         assert!(!ch[0] && ch[1], "only the lower branch rises: {ch:?}");
         // at 40 m along, the pavements still overlap (gap = 40 sin 10 - 14 < 0): most of the 2.4 m taken out
         let (i0, i1) = (20, 60 + 20);

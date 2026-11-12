@@ -766,6 +766,7 @@ class DirtTest(unittest.TestCase):
         self.assertLess(float(np.abs(residual[np.abs(np.arange(len(xy)) - 100) > 2]).max()), 1e-9,
                         "limiting a hole must not spread its height error over 40 m")
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_damage_is_independent_of_the_natural_grade(self):
         xy = self.xy()
         sp = roads.Spec(3.5, "dirt", False, "track")
@@ -815,6 +816,7 @@ class DirtTest(unittest.TestCase):
             self.assertLess(float(np.abs(z - 100.0).max()), 0.12,
                             "the whole graded carriageway keeps centimetre-scale wear on flat ground")
 
+    @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
     def test_random_lean_is_bounded_in_metres_for_wide_roads_too(self):
         xy = self.xy()
         for width in (2.0, 3.5, 7.0, 12.0):
@@ -1012,7 +1014,9 @@ class MajorRoadTest(unittest.TestCase):
         """GitHub #835: on the coarse global model (30 m cells, metres of noise) a minor dirt road smoothed over 6 m
         rode every bump of the data. There it is smoothed over DIRT_SIGMA_COARSE_M; on fine elevation it is not."""
         spec = roads.Spec(3.5, "dirt", False, "unclassified")
-        self.assertEqual(grading.profile_sigma(spec), grading.DIRT_SIGMA_MINOR_M)
+        # (on fine elevation a gravel road of a class is smoothed as the paved road of its class; a track less)
+        self.assertEqual(grading.profile_sigma(spec), max(grading.SIGMA_M, grading.CLASS_SIGMA_M["unclassified"]))
+        self.assertEqual(grading.profile_sigma(roads.Spec(3.5, "dirt", False, "track")), grading.DIRT_SIGMA_MINOR_M)
         self.assertEqual(grading.profile_sigma(spec, coarse=True), grading.DIRT_SIGMA_COARSE_M)
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified"), coarse=True),
                          grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified")), "paved: unchanged")
@@ -1022,7 +1026,7 @@ class MajorRoadTest(unittest.TestCase):
             return 100.0 + 0.02 * x + 1.5 * np.sin(x / 9.0) + 0.8 * np.sin(x / 4.3 + 1.0)
         xs = np.arange(-200.0, 201.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
-        part = [(np.c_[lo, la], spec)]
+        part = [(np.c_[lo, la], roads.Spec(3.5, "dirt", False, "track"))]     # (a track: 6 m on fine elevation)
         with unittest.mock.patch.object(grading, "DIRT_ROUGH", 0.0):     # (the profile alone, not the potholes)
             fine = grading.plan_roads(FRAME, part, noisy, cuts=False)[0]
             rough = grading.plan_roads(FRAME, part, noisy, cuts=False, coarse=True)[0]
@@ -1489,6 +1493,7 @@ class DirtEndsTest(unittest.TestCase):
     """PR #677 merge: a worn dirt road's damage and lean are zero at its own ends, short parts too (a junction meets
     the joining road at its height, level across)."""
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_short_part_ends_untouched_and_level(self):
         spec = roads.Spec(4.0, "dirt", False, "unclassified")
         for length in (12.0, 30.0, 300.0):
