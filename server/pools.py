@@ -24,12 +24,16 @@ QUEUED_POLL_S = 1.0
 
 
 def tasks_per_child_kw(n):
-    """ProcessPoolExecutor's max_tasks_per_child=n (Python 3.11+, spawn pools: each process replaced by a fresh one
-    after n jobs, its queue kept; the lean memory tiers' road process, budget.tasks_per_child) as keyword arguments;
-    {} for 0 or an older Python."""
-    if not n or n <= 0 or sys.version_info < (3, 11):
+    """RespawningPool's tasks_per_child=n (its processes replaced by fresh ones after n jobs each, the queue kept; the
+    lean memory tiers' road process, budget.tasks_per_child) as keyword arguments; {} for 0.
+    Not ProcessPoolExecutor's max_tasks_per_child: before CPython's gh-115634 fix (not in 3.12, the packaged app's
+    and CI's Python) the executor takes the exited worker's last "idle" token for a live process, starts no
+    replacement and every later job waits for good, shutdown(wait=True) too (the release workflow's test_pools
+    hung on both systems from 07d79eba on, 2026-11-12, while Python 3.14 here passed; tools/build_osm_tag_shards.py
+    met the same hang)."""
+    if not n or n <= 0:
         return {}
-    return {"max_tasks_per_child": int(n)}
+    return {"tasks_per_child": int(n)}
 
 
 class Abandoned(Exception):
@@ -126,7 +130,7 @@ def _shedding(submit):
 class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
-    def __init__(self, name, *args, hung_s=None, **kwargs):
+    def __init__(self, name, *args, hung_s=None, tasks_per_child=0, **kwargs):
         kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
                       initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
@@ -144,6 +148,17 @@ class RespawningPool:
         self._low, self._low_active = collections.deque(), 0
         self._low_cv = threading.Condition()
         self._low_thread = None
+        # tasks_per_child (tasks_per_child_kw; 0: off): the pool's own queue (_gen_loop). A "generation" is one
+        # executor's processes: it is handed tasks_per_child jobs a process, at most `workers` at once (none waits
+        # inside the executor), and once they are all done the pool is rotated: the old processes exit at once with
+        # nothing left to run, the next jobs start fresh ones (never the old beside the new, as rotate() with a
+        # backlog would be)
+        self.tasks_per_child = max(0, int(tasks_per_child or 0))
+        self._gen = collections.deque()         # (outer future, fn, args, kwargs) not handed over yet
+        self._gen_cv = threading.Condition()
+        self._gen_active = 0                    # handed over and not done
+        self._gen_jobs, self._gen_pool = 0, None    # jobs handed to the executor _gen_pool so far
+        self._gen_thread = None
         # hung_s: a job running (out of the queue) this long means its process hangs: the pool is recycled whoever waits
         # for it (GitHub #1058: four road processes stopped finishing jobs after a teleport; the AI road graph's and
         # the terrain patches' bare .result() never timed out, the road geotiles behind them never left the queue to
@@ -158,13 +173,20 @@ class RespawningPool:
         self._last_rotate = time.monotonic()
         threading.Thread(target=self._mem_watch, name=f"{name} memory", daemon=True).start()
 
-    def submit(self, fn, *args, **kwargs):
+    def _to_pool(self, fn, args, kwargs):
+        """The job given to the executor (made again when broken): the executor's future."""
         with self._lock:
             pool = self._pool
         try:
-            fut = runtimeprofiler.collector.submit(_shedding(pool.submit), self.name, fn, args, kwargs)
+            return runtimeprofiler.collector.submit(_shedding(pool.submit), self.name, fn, args, kwargs)
         except BrokenProcessPool:
-            fut = runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
+            return runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
+
+    def submit(self, fn, *args, **kwargs):
+        if self.tasks_per_child:
+            fut = self._queue_gen(fn, args, kwargs)     # (running once handed to a process: result_running, _watch)
+        else:
+            fut = self._to_pool(fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
         if self.hung_s:
@@ -182,6 +204,74 @@ class RespawningPool:
         if self._low:
             with self._low_cv:
                 self._low_cv.notify()
+
+    def _queue_gen(self, fn, args, kwargs):
+        """tasks_per_child's submit: a future of our own, the job in _gen until _gen_loop hands it over."""
+        outer = concurrent.futures.Future()
+        with self._gen_cv:
+            self._gen.append((outer, fn, args, kwargs))
+            if self._gen_thread is None:
+                self._gen_thread = threading.Thread(target=self._gen_loop, daemon=True, name=f"{self.name}-gen")
+                self._gen_thread.start()
+            self._gen_cv.notify_all()
+        return outer
+
+    def _gen_loop(self):
+        while True:
+            try:
+                self._gen_step()
+            except Exception as e:      # (never let the queue's thread die)
+                log.warning("%s queue: %s: %s", self.name, type(e).__name__, e)
+                time.sleep(1.0)
+
+    def _gen_step(self):
+        """One step of tasks_per_child's queue: a job handed to a free process, or the pool rotated when its
+        generation has had its jobs and finished them (at once, not at the next submit: an idle server gets the
+        memory back; the fresh executor starts its processes with its first job)."""
+        limit = self.tasks_per_child * self.workers
+        with self._gen_cv:
+            while True:
+                # (read without self._lock: _renew cancels a broken pool's futures under it, and their callbacks
+                # (_gen_done) wait for _gen_cv, held here)
+                pool = self._pool
+                if pool is not self._gen_pool:      # (rotated, recycled or made again meanwhile: a new generation)
+                    self._gen_pool, self._gen_jobs = pool, 0
+                full = self._gen_jobs >= limit
+                if full and self._gen_active == 0:
+                    job = None
+                    break
+                if not full and self._gen and self._gen_active < self.workers:
+                    job = self._gen.popleft()
+                    if not job[0].set_running_or_notify_cancel():
+                        continue                    # (cancelled while it waited: result_running's abandon)
+                    self._gen_active += 1
+                    self._gen_jobs += 1
+                    break
+                self._gen_cv.wait(timeout=1.0)
+        if job is None:                 # (outside _gen_cv: rotate takes self._lock, under which done callbacks may run)
+            if not self.rotate(f"{limit} jobs done"):
+                time.sleep(0.2)         # (broken: the next job's submit makes it again, a new generation)
+            return
+        outer, fn, args, kwargs = job
+        try:
+            inner = self._to_pool(fn, args, kwargs)
+        except BaseException as e:
+            self._gen_done(None, outer, e)
+            return
+        inner.add_done_callback(lambda f, o=outer: self._gen_done(f, o))
+
+    def _gen_done(self, inner, outer, error=None):
+        with self._gen_cv:
+            self._gen_active -= 1
+            self._gen_cv.notify_all()
+        if error is not None:
+            outer.set_exception(error)
+        elif inner.cancelled():         # (a recycle / a broken pool's shutdown cancelled it in the executor)
+            outer.set_exception(BrokenProcessPool(f"{self.name} job cancelled with its pool"))
+        elif inner.exception() is not None:
+            outer.set_exception(inner.exception())
+        else:
+            outer.set_result(inner.result())
 
     def submit_low(self, fn, *args, **kwargs):
         """submit for work that may wait for the rest (the road processes' trees beside their road tiles: first come
@@ -358,10 +448,17 @@ class RespawningPool:
             pass
         return True
 
-    def shutdown(self, *args, **kwargs):
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        if self.tasks_per_child:            # (its own queue: cancelled, or handed over and finished first, as asked)
+            with self._gen_cv:
+                if cancel_futures:
+                    while self._gen:
+                        self._gen.popleft()[0].cancel()
+                while wait and (self._gen or self._gen_active):
+                    self._gen_cv.wait(timeout=1.0)
         with self._lock:
             pool = self._pool
-        return pool.shutdown(*args, **kwargs)
+        return pool.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 # An ElasticPool's extra processes stop once none of them has had a job for this long (s). BNGE_POOL_EXTRA_IDLE_S=0:
