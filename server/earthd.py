@@ -99,6 +99,7 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import roadsurf as roadsurfmod  # noqa: E402
 import reach as reachmod  # noqa: E402
 import privacyregion as privacyregionmod
 import perfstats  # noqa: E402
@@ -4120,6 +4121,38 @@ class Server:
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
+        area = getattr(self, "_roadsurf_area", None)     # (tests hand in a stand-in server)
+        if area is not None:
+            area(anchor, cx, cy)
+
+    ROADSURF_RESEND_S = 60.0        # s before a cell is handed to roadsurf again (another photo of it: more tiles here)
+
+    def _roadsurf_area(self, anchor, cx, cy):
+        """A block's photo was rendered (its z17 tiles fetched, or some of them): the untagged minor roads of the cells
+        under it judged from the tiles on the disk (roadsurf.py) in a road process, nothing waiting on it (their
+        verdicts are used from the next start). A cell is handed over again after ROADSURF_RESEND_S with a later photo
+        of it (the road process measures it once its tiles are there, roadsurf.measure_area)."""
+        if not roadsurfmod.ON or self.road_pool is None or self.mapdata is None:
+            return
+        size = self.layout.block * heightmap.SQUARE
+        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - size / 2, cx + size / 2]),
+                                                 np.array([cy - size / 2, cy + size / 2]), np.zeros(2))
+        lat0, lat1 = float(min(la)), float(max(la))
+        lon0, lon1 = float(min(lo)), float(max(lo))
+        try:
+            cells = {str(mapcells.cell_of(a, b)) for a in (lat0, lat1) for b in (lon0, lon1)}
+        except ValueError:
+            return
+        sent = self.__dict__.setdefault("_roadsurf_sent", {})
+        now = time.monotonic()
+        if all(now - sent.get(c, -1e9) < self.ROADSURF_RESEND_S for c in cells):
+            return
+        for c in cells:
+            sent[c] = now
+        try:
+            self.road_pool.submit(blockworker.roadsurf_area, lat0, lon0, lat1, lon1)
+        except Exception as e:      # (a refinement for the next start: never this one's failure)
+            log.debug("road surfaces of the block %s: %s", (anchor.id, cx, cy), e)
 
     def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None, base_wait=None, ground=False):
         """_finish_heightmap_now; a block the game asked for (urgent) waiting for its photo: urgent work (urgency.py),
@@ -10297,6 +10330,7 @@ async def main_async(args):
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
+    roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
     procs = lean_processes(getattr(args, "tier", None)) if lean else 4
     if lean:

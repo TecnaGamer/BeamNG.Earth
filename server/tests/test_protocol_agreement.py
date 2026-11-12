@@ -295,6 +295,7 @@ SERVER_TO_MOD = {
     "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
+              "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
@@ -726,7 +727,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(L["VALID_W"], heightmap.VALID)                     # 1023 m (§12 P1)
         self.assertEqual(tuple(L["Q_LADDER"]), heightmap.Q_LADDER)
         for q in heightmap.Q_LADDER:
-            self.assertEqual(heightmap.block_params(1000.0, 1100.0, q)[2], q * L["Q_SCALE"])
+            self.assertEqual(heightmap.block_params(1000.0, 1030.0, q)[2], q * L["Q_SCALE"])   # (a range every quantum holds: 1/1024 holds 64 m)
         self.assertEqual(L["L0"], ff.BASE)
         self.assertEqual(2 * L["HALF"], 4 * ff.BASE)                        # a 1 km block sits on 4 x 4 L0 tiles
         self.assertEqual(L["FAR_SQUARE"], heightmap.FAR_SQUARE)

@@ -95,6 +95,7 @@ mod gradebins;
 mod l0roads;
 mod groundphoto;
 mod layerfold;
+mod roadsurf;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5952,6 +5953,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
     // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
     m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
+    // 231: roadsurf (road_photo_surface: an untagged minor road's surface from the aerial's z17 tiles on the disk,
+    // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
+    // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
+    m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
     // 232: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
     // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
     m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
