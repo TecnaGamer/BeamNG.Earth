@@ -39,6 +39,31 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.resample([(39.0, -76.0)]), [(39.0, -76.0, 0.0)])
         self.assertEqual(routing.resample([]), [])
 
+    def test_resample_crosses_dateline_near_the_route_in_both_directions(self):
+        line = [(-16.5, 179.9), (-16.5, -179.9)]
+        expected = 111320.0 * 0.2 * np.cos(np.deg2rad(16.5))
+        for points in (line, line[::-1]):
+            with self.subTest(points=points):
+                got = routing.resample(points, max_points=5)
+                self.assertAlmostEqual(got[-1][2], expected, places=5)
+                self.assertEqual(got[0][:2], points[0])
+                self.assertAlmostEqual(got[-1][1], points[-1][1], places=6)
+                self.assertTrue(all(179.89 <= abs(lo) <= 180.0 for _, lo, _ in got))
+                self.assertTrue(all(a[2] < b[2] for a, b in zip(got, got[1:])))
+
+    def test_simplify_keeps_a_dateline_bend_and_drops_straight_vertices(self):
+        # The middle of the straight eastbound run is not a corner at the longitude wrap.
+        line = [(0.0, 179.9), (0.0, 180.0), (0.0, -179.9), (0.1, -179.9)]
+        for points in (line, line[::-1]):
+            with self.subTest(points=points):
+                self.assertEqual(routing.simplify(points), [points[0], line[2], points[-1]])
+
+    def test_resample_crosses_dateline_more_than_once(self):
+        line = [(0.0, 179.9), (0.0, -179.9), (0.0, 179.9)]
+        got = routing.resample(line, max_points=9)
+        self.assertAlmostEqual(got[-1][2], 111320.0 * 0.4, places=5)
+        self.assertTrue(all(abs(lo) >= 179.89 for _, lo, _ in got))
+
     def test_url_through_waypoints(self):
         # GitHub #935: the waypoints as OSRM's intermediate coordinates, in order; a bearing only for the start
         u = routing.url(39.28, -76.59, 38.9, -77.03, 370, via=[(39.1, -76.8), (39.0, -76.9)])
