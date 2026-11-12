@@ -10965,7 +10965,7 @@ def main():
                     help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
                          "when this server's own workers are busy (default: BNGE_PEERS)")
     ap.add_argument("--max-ram-gb", type=float, default=None, metavar="GB",
-                    help="the most memory the whole server may hold, in GB (0: Auto, a third of the RAM, 60 % from 22 GB, 1.5 to 24 GB; "
+                    help="the most memory the whole server may hold, in GB (0: Auto, a third of the RAM, 60 %% from 22 GB, 1.5 to 24 GB; "
                          "default: the settings page's Max RAM for BeamNG.Earth, else Auto; budget.py, memwatch.py)")
     ap.add_argument("--workers", type=int, default=WORKERS, help="far-tile worker threads (keep <= 3: the game needs the cores)")
     ap.add_argument("--far-format", choices=farfield.FORMATS, default="cdae",
