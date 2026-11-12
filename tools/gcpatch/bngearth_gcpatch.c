@@ -126,8 +126,7 @@ static void *watch_flag(void *arg) {
                 return NULL;
             }
             on = want;
-            report(on ? "applied: grass kept across terrain block moves (BeamNG.Earth level)%s"
-                      : "stock: another level (the grass follows terrain edits)%s", on ? g_how : NULL);
+            report(on ? "applied: grass kept across terrain block moves (BeamNG.Earth level)%s" : "stock: another level (the grass follows terrain edits)%s", on ? g_how : NULL);
         }
         struct timespec ts = {0, FLAG_POLL_MS * 1000000L};
         nanosleep(&ts, NULL);
