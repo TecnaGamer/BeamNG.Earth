@@ -54,6 +54,7 @@ mod dirsigns_face;
 mod cachemap;
 mod areacover;
 mod geotiles;
+mod chaingraph;
 mod geocontent;
 mod farcontent;
 mod sidewalks;
@@ -104,6 +105,7 @@ mod levelways;
 mod meshtrim;
 mod shelterfit;
 mod tilecuts;
+mod bldclear;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -1556,6 +1558,94 @@ fn np_percentile(v: &[f64], q: f64) -> f64 {
     let (a, b) = (v[lo], v[hi]);
     let d = b - a;
     if g >= 0.5 { b - d * (1.0 - g) } else { a + d * g }
+}
+
+/// roadwidth.clearance_row: the room between the building walls along a street (centreline (k, >= 2)) a carriageway
+/// on its line keeps clear of: every `step` m (end_skip m kept clear of its ends: the corner houses of its junctions) a
+/// ray each way to the first wall within reach; (the q-quantile of twice the nearer wall's distance: the road stays on
+/// its line, so that is the room it has, none within reach no limit; the q-quantile of the wall-to-wall distance where
+/// both sides have one: the street's own width), each over the sections with a wall (both walls), None where fewer than
+/// min_samples or a share under `walled` of the sections have one. q in 0..1: the narrowest share q of them is left to
+/// the buildings' own cut (buildings.road_clearance).
+#[allow(clippy::too_many_arguments)]
+fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
+        line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+        counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<T>, bucket: f64,
+        step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+        -> (Option<f64>, Option<f64>) {
+    let l = line.as_array();
+    let k = l.nrows();
+    if k < 2 {
+        return (None, None);
+    }
+    let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
+    let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let mut s = vec![0.0f64; k];
+    for i in 1..k {
+        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).hypot(ys[i] - ys[i - 1]);
+    }
+    let total = s[k - 1];
+    // (a short street, a cul-de-sac between two buildings: its middle half)
+    let end_skip = end_skip.min(total * 0.25);
+    let step = step.min((total - 2.0 * end_skip) / 2.0).max(0.5);
+    let stop = total - end_skip + 1e-9;
+    let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else { return (None, None) };
+    let sg = segs.as_array();
+    let mut w = Vec::with_capacity(count);
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let dd = end_skip + i as f64 * step;
+        let j = s.partition_point(|&v| v < dd).clamp(1, k - 1);
+        let (tx, ty) = (xs[j] - xs[j - 1], ys[j] - ys[j - 1]);
+        let len = tx.hypot(ty);
+        if !(len >= 1e-6) {
+            continue;
+        }
+        let (nx, ny) = (-ty / len, tx / len);
+        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
+        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
+        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let near = match (a.is_nan(), b.is_nan()) {
+            (true, true) => f64::INFINITY,
+            (true, false) => b,
+            (false, true) => a,
+            (false, false) => a.min(b),
+        };
+        w.push(2.0 * near);
+        rows.push(if a.is_nan() || b.is_nan() { f64::INFINITY } else { a + b });
+    }
+    let total_n = w.len();
+    let quant = |v: Vec<f64>| {
+        // (over the sections that have a wall: a long road's open stretches do not hide its village's houses)
+        let mut v: Vec<f64> = v.into_iter().filter(|x| x.is_finite()).collect();
+        if v.len() < min_samples.max(1) || (v.len() as f64) < walled * total_n as f64 {
+            return None;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(v[((q.clamp(0.0, 1.0) * v.len() as f64).floor() as usize).min(v.len() - 1)])
+    };
+    (quant(w), quant(rows))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                   counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f32>,
+                   bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                   -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
+}
+
+/// clearance_row with float64 walls.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                 counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f64>,
+                 bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                 -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
 }
 
 /// roadwidth.measure_row: the right-of-way between the building walls of a street (centreline (k, >=2)), or None.
@@ -3193,6 +3283,72 @@ pub fn py_hash01_fints(seed: f64, ints: &[i64]) -> f64 {
     }
     s.push(')');
     blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0
+}
+
+/// Python's repr() of a str whose characters are all ASCII (CPython's unicode_repr: single quotes unless it holds a '
+/// and no ", the backslash, \t \n \r and the other controls escaped); None for any other character (repr() asked).
+fn py_ascii_str_repr(v: &str, out: &mut String) -> bool {
+    if !v.is_ascii() {
+        return false;
+    }
+    let quote = if v.contains('\'') && !v.contains('"') { '"' } else { '\'' };
+    out.push(quote);
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    true
+}
+
+/// buildings._hash01(*vals): BLAKE2b-64 of repr(vals) (the tuple's repr: ASCII str, int, bool and None items made
+/// here as CPython writes them, any other item by its own repr(): a float's too, py_float_repr's shortest digits
+/// are not always CPython's, 2208031614071659.3 for 2208031614071659.2), / 2^64.
+/// The Python's repr + encode + hashlib per call was ~3 % of a first visit's far building tiles (version 242).
+#[pyfunction(signature = (*vals))]
+fn hash01(vals: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<f64> {
+    use pyo3::types::{PyBool, PyInt, PyString};
+    let mut s = String::with_capacity(64);
+    s.push('(');
+    let n = vals.len();
+    for (k, v) in vals.iter().enumerate() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        let mut done = false;
+        if let Ok(t) = v.cast_exact::<PyString>() {
+            done = py_ascii_str_repr(t.to_str()?, &mut s);
+        } else if v.is_none() {
+            s.push_str("None");
+            done = true;
+        } else if let Ok(b) = v.cast_exact::<PyBool>() {
+            s.push_str(if b.is_true() { "True" } else { "False" });
+            done = true;
+        } else if v.is_exact_instance_of::<PyInt>() {
+            if let Ok(i) = v.extract::<i64>() {
+                s.push_str(&i.to_string());
+                done = true;
+            }
+        }
+        if !done {
+            s.push_str(&v.repr()?.to_str()?.to_owned());
+        }
+    }
+    if n == 1 {
+        s.push(',');
+    }
+    s.push(')');
+    Ok(blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0)
 }
 
 #[pyfunction]
@@ -5795,6 +5951,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_hypot_test, m)?)?;
     m.add_function(wrap_pyfunction!(oriented_box_core, m)?)?;
     m.add_function(wrap_pyfunction!(hash01_test, m)?)?;
+    m.add_function(wrap_pyfunction!(hash01, m)?)?;
+    m.add_function(wrap_pyfunction!(chaingraph::chain_graph, m)?)?;
     m.add_function(wrap_pyfunction!(building_walls, m)?)?;
     m.add_function(wrap_pyfunction!(float_predictor_f32, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings, m)?)?;
@@ -5869,6 +6027,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geotiles::geo_tiles_dist, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_map, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_world_to_latlon, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_placement, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
@@ -5932,6 +6091,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roofs::slope_wall_floors, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::skeleton_roof_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::sky_walls, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
     // (roads.level_ranges' rules a layer at a time: _skew_decks, _deck_gaps, _lidar_gaps, the grade separations' merge,
     // lidar_gap_candidates)
@@ -6123,6 +6284,18 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deckjoints::junction_groups, m)?)?;
     m.add_function(wrap_pyfunction!(deckjoints::field_pins, m)?)?;
     m.add_function(wrap_pyfunction!(deckjoints::pad_links, m)?)?;
-    m.add("VERSION", 245)?;
+    // 243: bldclear (buildings.road_clearance: footprints against the drawn carriageways, footprint_road_overlap /
+    // footprint_clear: a footprint cut back to the asphalt's edge; GitHub #523 #543 #1184)
+    m.add_function(wrap_pyfunction!(bldclear::footprint_road_overlap, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_clear, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_pieces, m)?)?;
+    // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
+    m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
+    m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
+        // 242: geo_world_to_latlon, chain_graph, hash01, skeleton_roof_uv, sky_walls (world gen speed)
+        // 247: 242 (world gen speed) and 243 (bldclear) in one module
+        // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
+        // _buried, tunnel_cover_roads_over)
+    m.add("VERSION", 248)?;
     Ok(())
 }

@@ -2449,7 +2449,8 @@ class _Planner:
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, railways.seam_roads(xy, z, beside))
+                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside,
+                                                    railways.seam_lowered(xy, z, beside), railways.SEAM_LOWER_M)
                             if railways.railxing.ENABLED:   # (flush with the roads' plans, as tile_mesh with the graded road)
                                 z = railways.flush_to_plans(xy, z, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band

@@ -117,11 +117,17 @@ def measure(name, threads=1, approach=None):
     import grading
     import revisit
     import roads
+    import roadsurf
     prefix = SITES[name][0]
     # One planning thread by default. On main (1.9.1-beta) cells planned at once gave Silistra's bridge a 1.9 m step in
     # some runs only; dev gave the same result with 1 and 4 threads, but a race coming back must not make the ratchet
     # flaky: test_drivability checks threads and approach on their own.
-    with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads):
+    # The photo road-surface verdicts off: they live in the machine's own cache (~/.cache/beamng-earth/roadsurf, written by
+    # whatever session last drove there), so with them the replay planned other roads on a machine that had visited a
+    # site (2026-11-12: Vienna's and DC's cells got verdicts from a game session; the gate's test_drivability failed on
+    # every commit, its steps 0.26 -> 0.34 m at S1 Rautenweg, while BNE_ROADSURF=off runs passed).
+    with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads), \
+            mock.patch.object(roadsurf, "ON", False):
         site = interchanges.load(name, prefix, keep_m=KEEP_M_SITE.get(name, KEEP_M))
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
                              dem=SimpleNamespace(sample=site.sample))

@@ -690,6 +690,67 @@ fn skeleton_faces(loops: &[Vec<P>], gable: bool) -> Option<Faces> {
     Some((faces, gables))
 }
 
+/// buildings._sky_mesh's walls of one building: a quad per edge of ring (n, 2) from z0 to its corners' tops zt (n,)
+/// (P 12 numbers and UV 8 per quad, the block Mesh.quads takes): with windows, u along the walls from u0 in bays of bw
+/// m (CPython's math.hypot: py_hypot), v up from v0 in storeys of fh m; without, every corner at uv. Returns (P, UV)
+/// (version 242: the per-wall loop in Python was ~1/10 of a skyline tile).
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn sky_walls<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, zt: numpy::PyReadonlyArray1<'py, f64>, z0: f64,
+                      u0: f64, v0: f64, fh: f64, bw: f64, windows: bool, uv: (f64, f64))
+                      -> PyResult<(Bound<'py, numpy::PyArray1<f64>>, Bound<'py, numpy::PyArray1<f64>>)> {
+    let (r, zt) = (ring.as_array(), zt.as_array());
+    let n = r.nrows();
+    if zt.len() != n || r.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("sky_walls: a top per corner"));
+    }
+    let (mut p, mut t) = (Vec::with_capacity(12 * n), Vec::with_capacity(8 * n));
+    let mut u = u0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (ax, ay, bx, by) = (r[[i, 0]], r[[i, 1]], r[[j, 0]], r[[j, 1]]);
+        let (za, zb) = (zt[i], zt[j]);
+        p.extend_from_slice(&[ax, ay, z0, bx, by, z0, bx, by, zb, ax, ay, za]);
+        if windows {
+            let du = crate::py_hypot(bx - ax, by - ay) / bw;
+            t.extend_from_slice(&[u, v0, u + du, v0, u + du, v0 + (zb - z0) / fh, u, v0 + (za - z0) / fh]);
+            u += du;
+        } else {
+            t.extend_from_slice(&[uv.0, uv.1, uv.0, uv.1, uv.0, uv.1, uv.0, uv.1]);
+        }
+    }
+    Ok((numpy::IntoPyArray::into_pyarray(p, py), numpy::IntoPyArray::into_pyarray(t, py)))
+}
+
+/// buildings._skel_roof's texture coordinates of skeleton_roof's triangles (tri (m * 3, 3), grad (m, 2)): per corner
+/// (along the slope's level line, up the slope stretched by its length) / uv_m, as the per-triangle Python loop made
+/// them (CPython's math.hypot: py_hypot). Returns (m * 3, 2) (version 242).
+#[pyfunction]
+pub fn skeleton_roof_uv<'py>(py: Python<'py>, tri: PyReadonlyArray2<'py, f64>, grad: PyReadonlyArray2<'py, f64>,
+                             uv_m: f64) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (t, g) = (tri.as_array(), grad.as_array());
+    if t.nrows() != 3 * g.nrows() || t.ncols() < 2 || g.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("skeleton_roof_uv: three corners per slope"));
+    }
+    let mut out = numpy::ndarray::Array2::<f64>::zeros((t.nrows(), 2));
+    for j in 0..g.nrows() {
+        let (gx, gy) = (g[[j, 0]], g[[j, 1]]);
+        let gm = crate::py_hypot(gx, gy);
+        let (d, a, f) = if gm < 1e-9 {
+            ((0.0, 1.0), (1.0, 0.0), 1.0)
+        } else {
+            let d = (gx / gm, gy / gm);
+            (d, (-d.1, d.0), (1.0 + gm * gm).sqrt())
+        };
+        for i in 0..3 {
+            let (px, py_) = (t[[3 * j + i, 0]], t[[3 * j + i, 1]]);
+            out[[3 * j + i, 0]] = (px * a.0 + py_ * a.1) / uv_m;
+            out[[3 * j + i, 1]] = (px * d.0 + py_ * d.1) * f / uv_m;
+        }
+    }
+    Ok(out.into_pyarray(py))
+}
+
 /// buildings._roof's hipped roof over any outline (and its courtyards) by the straight skeleton: outer (n, 2), holes
 /// [(k, 2)] (any winding), slope k, eave e, cap: the most the roof rises (a flat top over it; <= 0: none). Returns
 /// (triangles (m * 3, 3) xyz, counter-clockwise from above; their slopes (m, 2)), or empty arrays when the skeleton

@@ -159,6 +159,41 @@ def measure_row(centreline, walls):
               STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE)
 
 
+# The room a street's carriageway keeps clear of (the user, 2026-11-12: "houses blocking the road"; GitHub #1184, #543):
+# where the map gives no width, a town street took its class's (parking lanes and all: 10.6 m for a residential street)
+# and the houses of a narrow street stood in its lanes (Campulung's old streets, Trastevere, Setagaya's 4 m lanes,
+# Newhey's terraces on the A640: 819 of Setagaya's 3,657 mapped footprints in a carriageway). measure_row narrows only a
+# street walled on both sides consistently; clearance_row is the limit from whatever walls there are: the nearer wall
+# each CLEAR_STEP m (a carriageway stays on its line), their CLEAR_Q quantile over the sections with one (the narrowest
+# CLEAR_Q left to buildings.road_clearance's cut: one house over the line does not narrow a whole street; a long road's
+# open stretches do not hide its village: Newhey Road), with walls along CLEAR_WALLED of it at least.
+CLEAR_STEP = 4.0
+CLEAR_END_SKIP = 8.0     # (a quarter of a shorter street)
+CLEAR_MIN_SAMPLES = 2
+CLEAR_Q = 0.25
+CLEAR_WALLED = 0.25     # share of a street's sections with a wall near (both walls: its own width) for a limit
+CLEAR_SLACK_M = 0.3     # m between a carriageway's (or its sidewalks') edge and the wall at least
+
+
+def clearance_row(centreline, walls):
+    """(The room (m, twice the nearer wall's distance) a carriageway on the street's centreline (k, 2), metres, keeps
+    clear of between the walls, the wall-to-wall width where both sides have one), the CLEAR_Q quantiles of its
+    sections, each None for no limit; None without walls. Pure."""
+    import fast
+    if not len(walls.keys):
+        return None
+    fast.require(243, "clearance_row")
+    k = walls.__dict__.get("_rs")
+    f32 = walls.segs.dtype == np.float32
+    if k is None:
+        k = walls._rs = tuple(np.ascontiguousarray(a, t) for a, t in
+                              ((walls.keys, np.int64), (walls.first, np.int64), (walls.counts, np.int64),
+                               (walls.seg_of, np.int64), (walls.segs, np.float32 if f32 else np.float64)))
+    fn = fast._ef.clearance_row32 if f32 else fast._ef.clearance_row
+    return fn(np.ascontiguousarray(np.asarray(centreline, np.float64)[:, :2]), *k, BUCKET, CLEAR_STEP, CLEAR_END_SKIP,
+              REACH, CLEAR_MIN_SAMPLES, CLEAR_Q, CLEAR_WALLED)
+
+
 def verge_frontage(centreline, walls, width):
     """Shares of each side with façades within 4, 9.5 and 14.5 m of the road edge."""
     import furniture
@@ -283,6 +318,7 @@ class RoadWidths:
         self.cell_fn = cell_fn
         self.store_dir = store_dir
         self.memo = {}                          # fid -> (carriageway, walk) or None (MEMO_MAX at most)
+        self.caps = {}                          # fid -> clearance_row or None (MEMO_MAX at most)
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
         self.reframed = OrderedDict()           # (cell key, frame's cell key) -> (its Walls, segs in that frame)
@@ -296,6 +332,7 @@ class RoadWidths:
             self.walls.clear()
             self.combos.clear()
             self.memo.clear()
+            self.caps.clear()
     def _walls(self, key):
         """The walls of the buildings in cell key, in a frame at the cell's centre."""
         with self.lock:
@@ -435,6 +472,24 @@ class RoadWidths:
                 self.memo.clear()
             self.memo.setdefault(fid, res)
             return self.memo[fid]
+
+    def cap(self, fid, lonlat):
+        """clearance_row of road fid (geometry lonlat (k, 2)): (the room between the walls along it a carriageway on its
+        line keeps clear of, its wall-to-wall width), each None for no limit; None without walls."""
+        with self.lock:
+            if fid in self.caps:
+                return self.caps[fid]
+        ll = np.asarray(lonlat, np.float64)
+        frame, walls = self._near_walls(ll)
+        res = None
+        if len(walls.segs):
+            e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+            res = clearance_row(np.c_[e, n], walls)
+        with self.lock:
+            if len(self.caps) >= MEMO_MAX:
+                self.caps.clear()
+            self.caps.setdefault(fid, res)
+            return self.caps[fid]
 
     def frontage(self, lonlat, width):
         """Side-specific frontage, within a village street's normal range."""
