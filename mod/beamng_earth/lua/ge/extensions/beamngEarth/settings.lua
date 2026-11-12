@@ -130,8 +130,10 @@ M.SCHEMA = {
   rumbleStrips = { kind = 'bool', default = true, label = 'Rumble strip sound' },
   -- GTA-style: a little drag instead of the edge guard's stop when the world is behind (softdrag.lua; off by default)
   softDrag = { kind = 'bool', default = false, label = 'Soft slow-down when the world is behind' },
-  -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
-  dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
+  -- the vehicles' navigation screens (dashboard.lua): the car's own map with our road graph, or with the satellite
+  -- imagery under the roads
+  dashboardMap = { kind = 'enum', default = 'map', values = { 'map', 'satellite' },
+    label = 'Car navigation screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
   profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },
@@ -179,7 +181,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'townSigns', 'adaptiveTraffic', 'models3dmr',
-  'dashboardSatellite',
+  'dashboardMap',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
@@ -275,7 +277,9 @@ values = defaults() -- until load(): the defaults (= today's behaviour)
 -- Settings no longer on the page, left in older files: ignored without a warning (gasStations: gas stations are
 -- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle"; framePacing: the
 -- engine patch dtsmooth keeps game speed steady instead, 2026-11-11 "make consistent performance the default")
-M.RETIRED = { gasStations = true, framePacing = true }
+-- dashboardSatellite: the on / off satellite switch, replaced by dashboardMap (its satellite choice: the stock map
+-- page now stays, with the imagery under its roads)
+M.RETIRED = { gasStations = true, framePacing = true, dashboardSatellite = true }
 
 -- A valid value for key, or nil + error. Numbers are clamped to the range; strings that read as a
 -- number or boolean are accepted (the page sends what its controls hold).
@@ -592,9 +596,9 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
   end,
-  dashboardSatellite = function(v)
+  dashboardMap = function(v)
     local dashboard = ext('beamngEarth_dashboard')
-    if dashboard and dashboard.setEnabled then dashboard.setEnabled(v) end
+    if dashboard and dashboard.setStyle then dashboard.setStyle(v) end
   end,
   hudVisible = function(v)
     if M.pageExists() then ui.visible = v end
