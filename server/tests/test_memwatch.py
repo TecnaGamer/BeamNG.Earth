@@ -54,6 +54,18 @@ class LimitTest(unittest.TestCase):
         self.assertGreaterEqual(small[4], 3)
 
 
+class HelpTest(unittest.TestCase):
+    def test_server_help(self):
+        """earthd's --help (argparse checks every help string: a bare '%' in --max-ram-gb's kept the server from
+        starting at all on Python 3.14)."""
+        import subprocess
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                         "earthd.py"), "--help"], capture_output=True, text=True,
+                           timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertIn("--max-ram-gb", r.stdout)
+
+
 class SettingsFileTest(unittest.TestCase):
     def _settings(self, d):
         tmp = tempfile.mkdtemp()
