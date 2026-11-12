@@ -51,7 +51,7 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn', 'streets' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -1153,7 +1153,7 @@ function M.onTile(msg, currentAnchor, a)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
-      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn', 'streets' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1682,7 +1682,7 @@ M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
-  'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn', 'streets' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()

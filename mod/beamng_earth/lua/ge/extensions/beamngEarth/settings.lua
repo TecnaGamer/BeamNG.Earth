@@ -99,7 +99,8 @@ M.SCHEMA = {
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
-  -- signstream.py, from cody196's PR #363), and the German Autobahn signs (server deautobahn.py); needs Roads
+  -- signstream.py, from cody196's PR #363), the German Autobahn signs (server deautobahn.py) and the street-name
+  -- signs on the traffic signals (server streetsigns.py); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
   -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay

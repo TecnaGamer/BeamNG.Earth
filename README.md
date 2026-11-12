@@ -111,6 +111,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
+- Street-name signs in the US: a green blade on the arm of every traffic signal, naming the street it crosses ("E
+  FAYETTE ST"). Each country's look is a row of `server/data/street_sign_styles.json`. The Highway signs setting
+  switches them too (the environment variable BNE_STREETSIGNS=off turns them off alone).
 - Road signs (off unless the server has `BNE_ROADSIGNS=on`; Settings > World > Road signs): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
   signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
   no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
