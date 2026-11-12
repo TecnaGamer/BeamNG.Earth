@@ -290,5 +290,32 @@
     "fatalLogMessages": 0,
     "recursiveUpdateErrors": 0,
     "warnings": "BeamMP Chat/Session null-element errors and existing texture/input warnings remain"
+  },
+  "queueRecovery": {
+    "timeoutMilliseconds": 30000,
+    "additionalCases": 10,
+    "totalCases": 30,
+    "development": {
+      "passed": 30,
+      "failed": 0
+    },
+    "production": {
+      "passed": 30,
+      "failed": 0
+    },
+    "patched191": {
+      "passed": 30,
+      "failed": 0
+    },
+    "beforeDeadlineCommit": "5e36b77ad35d9f5b7fd11ae89323d417397ffd3a",
+    "beforeDeadlineResults": {
+      "passed": 20,
+      "failed": 10
+    },
+    "mapMathSuitesPassed": 2,
+    "lateReplies": "Expired continuations cannot mutate UI; only the still-desired load can recover through a fresh queued operation",
+    "cleanup": "Local UI released immediately; both independent Lua removals sent before waiting",
+    "nativeLiveValidation": "Earlier live results predate this extension; missing/late replies tested with real Vue/jsdom and a controlled clock",
+    "replacementBrowser": "Previous browser is stopped before awaited setup, including when its replacement times out"
   }
 }

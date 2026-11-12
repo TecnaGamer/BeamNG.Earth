@@ -34,7 +34,7 @@ async function harness(t, { dom = true, view = "all" } = {}) {
   const state = { view: ref(view), servers: ref(publicList.slice()) }
   const h = { window, document: window.document, timers, replies, hooks, state, errors, tabs, buttons, routes, events,
     watchers: 0, observers: 0, imports: 0, refreshes: 0, navigations: 0, pageExists: false }
-  let timerId = 0
+  let timerId = 0, now = 0
   window.vueRouter = {
     currentRoute: ref({ name: "menu.beammp.servers" }),
     afterEach(fn) { hooks.add(fn); return () => hooks.delete(fn) },
@@ -47,26 +47,39 @@ async function harness(t, { dom = true, view = "all" } = {}) {
   window.bngApi = { engineLua(code, callback) {
     if (callback) replies.push(callback)
     else if (code.includes("serverlist.refresh")) h.refreshes++
-    else if (code.includes("setPageExists")) h.pageExists = code.includes("(true)")
+    else if (code.includes("setPageExists")) {
+      h.pageExists = code.includes("(true)"); events.push(`page-exists:${h.pageExists}`)
+    }
   } }
   const lua = { extensions: {
     ui_pause_actions: {
       async registerModTab(tab) {
         events.push("register-tab-start")
-        if (h.pauseGate) await h.pauseGate.promise
         tabs.add(tab.id); events.push("register-tab-end")
+        // Lua applies these synchronous changes before its callback reaches JavaScript.
+        if (h.pauseGate) await h.pauseGate.promise
       },
-      async registerModButton(button) { buttons.add(button.id) },
-      async unregisterModButton(id) { buttons.delete(id) },
+      async registerModButton(button) { buttons.add(button.id); events.push(`register-button:${button.id}`) },
+      async unregisterModButton(id) {
+        buttons.delete(id)
+        if (h.unregisterButtonGate) await h.unregisterButtonGate.promise
+      },
       async unregisterModTab(id) {
         events.push("unregister-tab")
         if (h.failUnregister) throw Error("bridge unavailable")
         tabs.delete(id); buttons.clear()
+        if (h.unregisterGate) await h.unregisterGate.promise
       },
     },
     ui_router_routeManager: {
-      async registerModRoutes() { return { success: true } },
-      async unregisterModRoutes() { events.push("unregister-routes") },
+      async registerModRoutes() {
+        events.push("register-routes")
+        return h.mapGate ? await h.mapGate.promise : { success: true }
+      },
+      async unregisterModRoutes() {
+        events.push("unregister-routes")
+        if (h.unregisterRoutesGate) await h.unregisterRoutesGate.promise
+      },
     },
   } }
   class Observer extends window.MutationObserver {
@@ -75,7 +88,8 @@ async function harness(t, { dom = true, view = "all" } = {}) {
   }
   const context = vm.createContext({ window, document: window.document, MutationObserver: Observer,
     console: { error: (...args) => errors.push(args), warn: () => {} },
-    setTimeout(fn) { timers.set(++timerId, fn); return timerId }, clearTimeout(id) { timers.delete(id) } })
+    setTimeout(fn, delay = 0) { timers.set(++timerId, { fn, due: now + delay }); return timerId },
+    clearTimeout(id) { timers.delete(id) } })
   async function synthetic(id, values) {
     const m = new vm.SyntheticModule(Object.keys(values), function() {
       for (const [key, value] of Object.entries(values)) this.setExport(key, value)
@@ -102,7 +116,10 @@ async function harness(t, { dom = true, view = "all" } = {}) {
       return beammp
     }
     if (specifier === "./earthSettingsStore.js") return store
-    if (specifier.endsWith(".vue")) return component
+    if (specifier.endsWith(".vue")) {
+      if (h.componentGate) await h.componentGate.promise
+      return component
+    }
     if (specifier === "./earthServers.js") return module("earthServers.js", `${copy}/graph-${h.graphRevision || 0}`)
     throw Error(`Unexpected game dependency: ${specifier}`)
   }
@@ -120,9 +137,16 @@ async function harness(t, { dom = true, view = "all" } = {}) {
   h.settle = async () => { for (let i = 0; i < 24; i++) { await Promise.resolve(); await nextTick() } }
   h.route = name => { window.vueRouter.currentRoute.value = { name }; for (const fn of hooks) fn() }
   h.runTimer = () => {
-    const entry = timers.entries().next().value
+    const entry = [...timers].sort((a, b) => a[1].due - b[1].due)[0]
     assert.ok(entry, "a poll is scheduled")
-    timers.delete(entry[0]); return entry[1]()
+    now = entry[1].due; timers.delete(entry[0]); return entry[1].fn()
+  }
+  h.advance = async ms => {
+    const target = now + ms
+    while ([...timers.values()].some(timer => timer.due <= target)) {
+      h.runTimer(); await h.settle()
+    }
+    now = target
   }
   h.respond = async (data, index = 0) => {
     assert.ok(replies[index], "a Lua request is waiting")
@@ -309,4 +333,149 @@ test("a failed pause-tab unload still releases routes and allows the next UI loa
   h.failUnregister = false; await b.onLoad(); await h.settle()
   assert.equal(h.tabs.size, 1); assert.equal(h.routes.size, 1); assert.equal(h.watchers, 2)
   await b.onUnload(); await h.settle(); h.assertStopped()
+})
+
+const outcome = promise => {
+  const result = { state: "pending" }
+  promise.then(() => { result.state = "resolved" }, error => { result.state = "rejected"; result.error = error })
+  return result
+}
+const assertCurrentUi = h => {
+  assert.equal(h.tabs.size, 1); assert.equal(h.routes.size, 1); assert.equal(h.pageExists, true)
+  assert.equal(h.watchers, 2); assert.equal(h.observers, 1); assert.equal(h.styles(), 1)
+}
+
+test("a hung initial bridge call releases the queue without restarting after its late reply", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  const gate = h.unregisterButtonGate = deferred()
+  const first = outcome(a.onLoad()); await h.settle()
+  h.unregisterButtonGate = null
+  const nextLoad = b.onLoad(), next = outcome(nextLoad); await h.settle(); await h.advance(45_000)
+  assert.equal(first.state, "rejected"); assert.match(first.error.message, /timed out/i)
+  await nextLoad; await h.settle()
+  assert.equal(next.state, "resolved"); assertCurrentUi(h)
+  const events = h.events.slice()
+  gate.resolve(); await h.settle()
+  assert.deepEqual(h.events, events); assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a hung tab registration cannot resume an old load over the next UI owner", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  const gate = h.pauseGate = deferred()
+  const first = outcome(a.onLoad()); await h.settle()
+  h.pauseGate = null
+  const nextLoad = b.onLoad(), next = outcome(nextLoad); await h.settle(); await h.advance(45_000)
+  assert.equal(first.state, "rejected"); await nextLoad; await h.settle()
+  assert.equal(next.state, "resolved"); assertCurrentUi(h)
+  const events = h.events.slice()
+  gate.resolve(); await h.settle()
+  assert.deepEqual(h.events, events); assertCurrentUi(h)
+  await a.onUnload(); assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a hung unload releases the queue and its late reply cannot remove the new UI", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  await a.onLoad()
+  const gate = h.unregisterGate = deferred()
+  const unloading = outcome(a.onUnload()); await h.settle()
+  h.unregisterGate = null
+  const nextLoad = b.onLoad(), next = outcome(nextLoad); await h.settle(); await h.advance(45_000)
+  assert.equal(unloading.state, "rejected"); await nextLoad; await h.settle()
+  assert.equal(next.state, "resolved"); assertCurrentUi(h)
+  const events = h.events.slice()
+  gate.resolve(); await h.settle()
+  assert.deepEqual(h.events, events); assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a late failed route reply cannot remove routes registered by the next UI owner", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  const gate = h.mapGate = deferred()
+  const first = outcome(a.onLoad()); await h.settle()
+  h.mapGate = null
+  const nextLoad = b.onLoad(), next = outcome(nextLoad); await h.settle(); await h.advance(45_000)
+  assert.equal(first.state, "rejected"); await nextLoad; await h.settle()
+  assert.equal(next.state, "resolved"); assertCurrentUi(h)
+  const events = h.events.slice()
+  gate.resolve({ success: false }); await h.settle()
+  assert.deepEqual(h.events, events); assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a hanging component import cannot register or start an expired UI load", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  const gate = h.componentGate = deferred()
+  const first = outcome(a.onLoad()); await h.settle()
+  h.componentGate = null
+  const nextLoad = b.onLoad(), next = outcome(nextLoad); await h.settle(); await h.advance(45_000)
+  assert.equal(first.state, "rejected"); await nextLoad; await h.settle()
+  assert.equal(next.state, "resolved"); assertCurrentUi(h)
+  const events = h.events.slice()
+  gate.resolve(); await h.settle()
+  assert.deepEqual(h.events, events); assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a hung unload cleans local UI and attempts both Lua removals before timing out", async t => {
+  const h = await harness(t), ui = await h.load("index.js")
+  await ui.onLoad()
+  h.unregisterGate = deferred(); h.unregisterRoutesGate = deferred()
+  const unloading = outcome(ui.onUnload()); await h.settle()
+  assert.equal(h.routes.size, 0); assert.equal(h.pageExists, false)
+  assert.ok(h.events.includes("unregister-routes"))
+  await h.advance(60_000)
+  assert.equal(unloading.state, "rejected"); h.assertStopped()
+  h.unregisterGate = null; h.unregisterRoutesGate = null
+  await ui.onLoad(); assertCurrentUi(h)
+  await ui.onUnload(); h.assertStopped()
+})
+
+test("a timed-out current load recovers with a fresh operation when its delayed reply arrives", async t => {
+  const h = await harness(t), ui = await h.load("index.js")
+  const gate = h.pauseGate = deferred()
+  const loading = outcome(ui.onLoad()); await h.settle(); await h.advance(45_000)
+  assert.equal(loading.state, "rejected"); assert.equal(h.styles(), 0)
+  h.pauseGate = null; gate.resolve(); await h.settle()
+  await h.window[Symbol.for("beamngEarth.uiLifecycle")].queue
+  assertCurrentUi(h)
+  // Two pages are registered once by the recovery, rather than by both the old and new continuations.
+  assert.equal(h.events.filter(e => e.startsWith("register-button:")).length, 2)
+  await ui.onUnload(); h.assertStopped()
+})
+
+test("a delayed reply cannot revive a timed-out load after an explicit unload", async t => {
+  const h = await harness(t), ui = await h.load("index.js")
+  const gate = h.pauseGate = deferred()
+  const loading = outcome(ui.onLoad()); await h.settle(); await h.advance(45_000)
+  assert.equal(loading.state, "rejected")
+  await ui.onUnload(); h.assertStopped()
+  const events = h.events.slice()
+  h.pauseGate = null; gate.resolve(); await h.settle()
+  await h.window[Symbol.for("beamngEarth.uiLifecycle")].queue
+  assert.deepEqual(h.events, events); h.assertStopped()
+})
+
+test("a stale owner's unload cannot cancel recovery of the current desired load", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  await a.onLoad()
+  const gate = h.pauseGate = deferred()
+  const loading = outcome(b.onLoad()); await h.settle()
+  const stale = outcome(a.onUnload()); await h.settle(); await h.advance(45_000)
+  assert.equal(loading.state, "rejected"); assert.equal(stale.state, "resolved")
+  h.pauseGate = null; gate.resolve(); await h.settle()
+  await h.window[Symbol.for("beamngEarth.uiLifecycle")].queue
+  assertCurrentUi(h)
+  await b.onUnload(); h.assertStopped()
+})
+
+test("a replacement load stops the old browser even if its own bridge reply never arrives", async t => {
+  const h = await harness(t), a = await h.load("index.js"), b = await h.load("index.js", "b")
+  await a.onLoad()
+  h.pauseGate = deferred()
+  const loading = outcome(b.onLoad()); await h.settle(); await h.advance(45_000)
+  assert.equal(loading.state, "rejected")
+  await b.onUnload(); h.assertStopped()
+  await a.onUnload(); h.assertStopped()
 })

@@ -29,13 +29,31 @@ evaluations model graph invalidation rather than reusing the same ES module cach
 before unload, duplicate instances, 50 reloads, stale callbacks, out-of-order replies, latest-public-list restoration,
 authentication route gates, overlapping entry points and cleanup when a bridge call fails.
 
-On Windows, all 20 UI tests pass in development and production Vue builds. The unmodified 1.9.1 source passes 6 and
+The original 20 UI tests pass in development and production Vue builds. The unmodified 1.9.1 source passes 6 and
 fails 14 of the same cases. Both existing map-math suites and all 113 offline Lua test modules on the upstream-based
 branch pass. Applying the same two runtime files to the supplied 1.9.1 snapshot also passes the 20 UI tests and all
 103 Lua modules in that snapshot. Player and BeamMP server packages build. The patched 1.9.1 client ZIP passes CRC
 and source-content checks. The full foundation gate subsequently passed in hosted CI on Ubuntu 22.04 and Windows
 for functional-source commit `cf962f9` (run `43117670493`), including 59 Python modules and native builds/tests.
 The larger server suite beyond that gate was not run.
+
+## Missing bridge replies
+
+Each queued load/unload now has a 30-second deadline. A missing bridge reply or stalled import rejects that
+operation and releases the queue. Every awaited step is tied to the operation's lifetime, so a late result cannot
+resume an expired load, remove a newer owner's routes, or restart its browser. Unload releases local UI state first
+and attempts both independent Lua removals before waiting for replies.
+A replacement load also stops the previous browser before awaiting setup, so a stalled replacement cannot strand it.
+
+If a delayed reply finally arrives while its load is still desired, recovery starts a fresh operation. This handles
+slow/backgrounded games without reviving an unloaded or superseded owner. A stale owner's unload cannot cancel
+recovery of the current owner. Timers are cleared after completion.
+
+Ten additional regressions cover missing replies, late successful/failed replies, stalled imports, independent
+cleanup and recovery after a delayed reply. Against the pre-deadline PR code (`5e36b77`), the complete suite passes
+20 cases and fails these ten. With the change, all 30 pass in development and production Vue builds and against
+the patched 1.9.1 source. Both map-math suites also pass. The in-game/staging results below were recorded before
+this deadline extension; the new missing/late-reply cases use the real-Vue/jsdom harness with its controlled clock.
 
 ## In-game validation
 
