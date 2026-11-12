@@ -117,8 +117,8 @@ class BridgeJunctionSurfaceTest(unittest.TestCase):
         np.testing.assert_allclose(field.at(free[:, :2]), free[:, 2], atol=roadmesh.JUNCTION_CLUSTER_PIN_TOL_M)
         with mock.patch.object(roadmesh, 'JUNCTION_CLUSTER_ON', False):
             self.assertEqual(roadmesh._junction_surfaces(chunks), {})
-        # (the cluster's plain asphalt skins are left to its deck tops: build() knows the decks' material by name)
-        self.assertEqual(roadmesh.CLUSTER_SKIN_M, roads.DECK["m"])
+        # (the cluster's deck skins in world texture coordinates at the decks' own texture length)
+        self.assertEqual(roadmesh.CLUSTER_SKIN_TILE_M, roads.DECK["tl"])
 
     def test_captured_fork_has_no_stacked_collision_faces_in_driving_lanes(self):
         _parts, chunks, ctx, pads, ground = fixture()

@@ -294,7 +294,7 @@ JUNCTION_CLUSTER_ON = os.environ.get("BNE_JUNCTION_CLUSTER", "on") != "off"
 JUNCTION_CLUSTER_MAX_PARTS = 40
 JUNCTION_CLUSTER_MAX_M = 120.0      # m: its parts' box at most this either way (every tile round it has all its parts)
 JUNCTION_PIN_R_M = 8.0
-CLUSTER_SKIN_M = "road_asphalt_2lane"   # (roads.DECK's: the plain deck asphalt build() leaves to a cluster's deck tops)
+CLUSTER_SKIN_TILE_M = 11.0              # m: a cluster's deck skins' texture square in the world (roads.DECK's "tl")
 JUNCTION_CLUSTER_PIN_TOL_M = 0.05   # m: a pin may miss by this much (two arms' ends nearer than a lattice cell apart at
                                     # different heights: Rautenweg's west banks, 4 cm), never more
 
@@ -1271,12 +1271,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
-            # (a cluster's decks overlap all over its junction at one height: their asphalt skins lay on each other,
-            # flickering as noise, Rautenweg in game 2026-11-12. The deck mesh's own asphalt top is the surface there,
-            # its slabs' tops and the pad in the world's texture coordinates, so their overlaps show one texture; the
-            # markings stay)
+            # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
+            # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
+            # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
+            # left out; the markings stay. Left to the deck tops instead, the slabs' tops and the pad shaded apart)
             jf = junctions.get(c.get('fid'))
-            if jf is not None and getattr(jf, 'cluster', False) and c.get('deck') and m == CLUSTER_SKIN_M:
+            if jf is not None and getattr(jf, 'cluster', False) and not c.get('deck') and layer != "mark":
                 continue
         if m not in mats:
             mats.append(m)
@@ -1308,6 +1308,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         field = junctions.get(c.get('fid')) if fz is not None else None
         if field is not None:
             pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN)
+            if getattr(field, 'cluster', False) and c.get('deck'):
+                uu = pp[:, :2] / CLUSTER_SKIN_TILE_M
             P[-1], UV[-1], tri = pp, uu, tt + nverts
         T.append(tri)
         M.append(np.full(len(tri), mi))
