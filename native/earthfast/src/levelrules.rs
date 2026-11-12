@@ -26,6 +26,18 @@ const BRIDGE: i8 = 1;
 const TUNNEL: i8 = 2;
 const GROUND: i8 = 3;
 const KY: f64 = 111320.0;
+/// m: a road met within this of an end of a bridge's stretch is the road joined to it there (the junction at the
+/// bridge's end node: the same map point), not a road under the bridge (make_reach). The crossing's place along the
+/// bridge and the stretch's end are both sums of hypot()s, the same number only to the last bit, and which side of
+/// the end it fell on depended on the C library's hypot (glibc 2.35's and 2.44's differ in the last bit): at
+/// Vienna's S1 / Rautenweg a ramp's bridge (203 m, a road joined at its end) took that road for a crossing on
+/// Ubuntu 22.04 and reached 1.6 m further back and 18.8 m past its end, not on the PC: other decks there, the
+/// release workflow's test_drivability failing on GitHub's runner while the PC's gate passed (2026-11-12). On
+/// every system some did by the same chance (Porte Maillot: two bridges of six with a road joined at their end,
+/// one of them its own road going on at 3.6 degrees: a 30 m longer deck); a road joined at the start never did
+/// (its place is exactly 0). A micrometre: a million times the rounding of a km-long line's metres, far under the
+/// map's ~1 cm coordinate step.
+const END_EPS_M: f64 = 1e-6;
 
 type P = [f64; 2];
 
@@ -496,8 +508,8 @@ impl<'a> Layer<'a> {
                 if !gj.is_empty() {
                     for (g, sc, sin) in seg_hits_core(&sub, &gl, &gs) {
                         let sc = sc + lo0;
-                        if !(lo0 < sc && sc < hi0) {
-                            continue;
+                        if !(lo0 + END_EPS_M < sc && sc < hi0 - END_EPS_M) {
+                            continue;               // (at the stretch's end: joined there, END_EPS_M)
                         }
                         let j = gj[g];
                         let sin = pmax(sin, p.skew_min_sin);
