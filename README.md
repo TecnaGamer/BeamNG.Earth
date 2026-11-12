@@ -73,7 +73,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
   barriers down divided highways (concrete walls, cable barriers or steel rails by the median's width and the
   country's practice, open at crossovers and ramps); street lights, utility poles with wires, traffic signals,
-  stop signs, traffic lights and sidewalks where OpenStreetMap maps them;
+  stop signs, traffic lights and sidewalks where OpenStreetMap maps them (where traffic drives on the left, the
+  signal poles stand on the left kerb with their arm over the road and the stop lines across the incoming lanes);
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
@@ -127,6 +128,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
   Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
   OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
+  Where a town boundary runs through a fork, one pair stands on the road all its branches share; between two towns
+  grown together only the through roads carry them.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
   Autobahn signs above), with each way's road numbers (national
@@ -381,7 +384,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
-  keep working).
+  keep working). Older copies the updater downloaded itself are removed at start, except the previous version and
+  the one your shortcut starts; a copy you downloaded by hand is never touched.
 - **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
   Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
