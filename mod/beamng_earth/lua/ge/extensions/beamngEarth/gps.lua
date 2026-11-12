@@ -410,7 +410,7 @@ local function routeTarget(e, nodes, i, t)
     if p and h then
       a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z)
       local length = math.sqrt(hx * hx + hy * hy)
-      if length > 0.1 then routeA, routeB = M.edgeUnder(nodes, rx, ry, hx / length, hy / length, p.z) end
+      if length > 0.1 then routeA, routeB = M.edgeUnder(nodes, rx, ry, hx / length, hy / length, p.z, M.ON_GRAPH_M) end
     end
     -- Match the route's heading and elevation too: an offset line near a junction or over a lower road is ambiguous.
     differentRoadLoaded = b and routeB and not ((a == routeA and b == routeB) or (a == routeB and b == routeA))
@@ -575,7 +575,8 @@ end
 -- Pure: the nearest graph edge (from id, to id) running the car's way, within its local half-width
 -- or the existing 8 m horizontal tolerance. Rank by distance including the edge's interpolated height when
 -- pz is supplied, so an overlapping road above/below cannot win just because its centreline is closer in XY.
-function M.edgeUnder(nodes, px, py, hx, hy, pz)
+-- A supplied tolerance instead uses the inclusive search radius for approximate planned-route projections.
+function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance)
   local best, bd = nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
@@ -593,10 +594,10 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz)
         if e.inNode == to then rIn, rOut = rOut, rIn end
         ra, rb = rIn or ra, rOut or rb
       end
-      local reach = math.max(8, ra + t * (rb - ra))
+      local reach = tolerance or math.max(8, ra + t * (rb - ra))
       local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
       local distanceSq = d * d + dz * dz
-      if d < reach and distanceSq < bd then best, bd = { from, to }, distanceSq end
+      if (d < reach or (tolerance and d == reach)) and distanceSq < bd then best, bd = { from, to }, distanceSq end
     end
   end
   for id, n in pairs(nodes or {}) do

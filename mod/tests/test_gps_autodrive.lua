@@ -194,7 +194,7 @@ do
   end }
   quatFromDir = function(d) return d end
   log = function() end
-  local function parallel(loaded, offset, deadEnd)
+  local function parallel(loaded, offset, deadEnd, roadOffset)
     offset = offset or 40
     return fixture({ 'a', 'b' }, offset, 6, function(f)
       local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
@@ -202,7 +202,7 @@ do
       if deadEnd then f.x = 95 end
       f.nodes = { w = n(0, offset, { j = {} }), j = n(deadEnd and 100 or 500, offset, {}) }
       if loaded then
-        f.nodes.a, f.nodes.b = n(0, 0, { b = {} }), n(1000, 0, {})
+        f.nodes.a, f.nodes.b = n(0, roadOffset or 0, { b = {} }), n(1000, roadOffset or 0, {})
         -- The only connection is behind the dead end, or far ahead on the longer parallel road.
         if deadEnd then f.nodes.w.links.a = {} else f.nodes.j.links.b = {} end
       end
@@ -235,6 +235,23 @@ do
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0 and #f.drives == 0,
     'a nearby dead end still waits when the intended route itself has not loaded')
+  for _, roadOffset in ipairs({ 10, 25 }) do
+    recoveries = 0
+    f = parallel(true, 60, true, roadOffset)
+    for _ = 1, 350 do f:step() end
+    T.check(recoveries > 0 and #f.drives == 0,
+      'loaded road ' .. roadOffset .. ' m from the route line retains recovery within GPS projection tolerance')
+  end
+  recoveries, moveOnRecovery = 0, true
+  f = parallel(true, 40, true, 10)
+  for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
+  f:step()
+  T.check(recoveries == 1 and f.y == 10 and #f.drives > 0 and f.gps.status().off == 10,
+    'polling resumes a connected route after recovering onto a road offset from the planned line')
+  recoveries, moveOnRecovery = 0, false
+  f = parallel(true, 60, true, 26)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a loaded road outside GPS projection tolerance still waits for a usable route graph')
   spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
 end
 
