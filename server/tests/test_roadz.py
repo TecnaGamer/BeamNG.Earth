@@ -404,6 +404,33 @@ class ObservedTest(unittest.TestCase):
         self.assertIsNone(rz.observed(FRAME, xy, 4.0, 1), "a ground road gives no deck height")
         self.assertIsNotNone(rz.observed(FRAME, xy, 4.0, 0))
 
+    def test_deck_of_another_tier_crossing_overhead(self):
+        """A deck one tier up crosses this sloping bridge at a shallow angle, and hides its own line's heights under
+        it: the stations nearest the upper line do not take its heights (a 10 m tent on the lower deck, whose own
+        heights the grade rule dropped for it)."""
+        x = np.linspace(-300, 300, 121)
+        own = self.src_line(x, np.full(121, 2.0), np.where(np.abs(x) < 30, np.nan, FLAT + 12.0 - 0.02 * x), 1)
+        upper = self.src_line(np.linspace(-150, 150, 31), np.linspace(-40, 40, 31), np.full(31, FLAT + 22.0), 2)
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build([own, upper, ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        self.assertIsNotNone(z)
+        ok = np.isfinite(z)
+        np.testing.assert_allclose(z[ok], FLAT + 12.0 - 0.02 * q[ok], atol=0.05)
+        self.assertGreater(ok.mean(), 0.85, "the deck's own heights either side of the crossing stay")
+
+    def test_road_that_changes_tier_keeps_both(self):
+        """A road up to a higher tier and down again over 150 m is its own: nothing is dropped."""
+        xs = (np.linspace(-300, -75, 46), np.linspace(-75, 75, 31), np.linspace(75, 300, 46))
+        zs = (np.linspace(FLAT + 6.0, FLAT + 12.0, 46), np.full(31, FLAT + 12.0), np.linspace(FLAT + 12.0, FLAT + 6.0, 46))
+        decks = [self.src_line(x, np.full(len(x), 2.0), z, t) for x, z, t in zip(xs, zs, (1, 2, 1))]
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build(decks + [ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        np.testing.assert_allclose(z, np.interp(q, np.concatenate(xs), np.concatenate(zs)), atol=0.05)
+
     def test_off(self):
         bridge = self.src_line(np.linspace(-35, 35, 15), np.zeros(15), np.full(15, 20.0), 1)
         rz = provider_with(roadz.Lines.build([bridge]))
