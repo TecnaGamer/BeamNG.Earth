@@ -480,7 +480,13 @@ FIRST_RAMP_MIN_LEVEL = 3        # (= farfield.GLOBAL_MIN_LEVEL: the anchor's own
 # keeps is rendered again at its own size (Connection._stream: stale when sent after the coarse step).
 FIRST_RAMP_TEX_PX = int(os.environ.get("BNGE_FIRST_RAMP_PX", "128"))
 FIRST_RAMP_NEAR_PX = 256
-FIRST_RAMP_CHAIN = ("eox2023", "eox2016")     # ... from these photos alone (Server.coarse_texture)
+# ... from these photos alone (Server.coarse_texture): the project's own Sentinel-2 packs first where the CDN switch has
+# them in the chain (one request for 8 x 8 tiles; the full texture takes them at those zooms anyway, so the coarse step
+# now looks like what replaces it), EOX for the finer zooms (z13+) and without them. EOX's own throttling hits every
+# player (the user, 2026-11-11): its coarse-cover tiles (~60-100 a cold French teleport, z7-z12) were fetched only for
+# a step the full texture replaces. BNGE_COARSE_EOX=1: EOX alone, as before.
+FIRST_RAMP_CHAIN = (("eox2023", "eox2016") if os.environ.get("BNGE_COARSE_EOX") == "1"
+                    else ("bngs2", "eox2023", "eox2016"))
 FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
 # <= 0, the sea floor carved to L2) in flight at most this share of the far workers (at least one): at a place never
@@ -677,6 +683,14 @@ NICE_FAR_BUILDINGS = 9      # the far buildings': after the far field (on a Stea
                             # buildings took ~23 s of CPU, next to the road tiles and the far field)
 IMAGERY_PREFETCH = 40       # queued tiles whose imagery is fetched ahead of their build (only spare request tokens)
 PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked for again
+# ... and the tiles after those, with a host's spare request tokens alone (netfetch "prefetch": dropped while its bucket is
+# below half), asked again less often: the next 40 of a cold French teleport were IGN's (the near rings, z16-17), its
+# 50/s full for a minute while EOX's tiles further down the queue were not asked yet; EOX then did its ~1,300 after IGN
+# (Lille, Caen, Brest, 2026-11-11: EOX ~5-15/s for the first 60 s, then 30-50/s). That was with IGN's tiles
+# prefetched too (imagery BNGE_PREFETCH_PAST_REGIONAL=1), which is off by default; BNGE_PREFETCH_SPARE=200 with it
+IMAGERY_PREFETCH_SPARE = int(os.environ.get("BNGE_PREFETCH_SPARE", "0"))
+PREFETCH_SPARE_AGAIN_S = 5.0
+PREFETCH_SPARE_PER_PASS = 40    # (at most this many of them a pass of the loop: its time on the event loop)
 PREFETCHED_MAX = 8192       # tiles remembered as prefetched (a connection's record starts again past this)
 # status.backlog (docs/V1_4_SPEC.md §3.0, §4): every status message carries the number of desired
 # tiles of the current anchor not shown yet. Status messages only go out on events (v1.3.1); with
@@ -4903,7 +4917,8 @@ class Server:
         x0, y0, x1, y1 = node.bbox
         try:
             lat, lon, _ = anchor.frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
-            texel = imagerymod.ground_res(float(lat), self.imagery.sharp_zoom(float(lat), float(lon)))
+            reach = imagerymod.zoom_for(float(lat), node.size / farpvsmod.UP_PX_MAX)
+            texel = imagerymod.ground_res(float(lat), self.imagery.sharp_zoom(float(lat), float(lon), reach))
         except Exception as e:                  # (no imagery chain to ask: the level's own)
             log.debug("far texture cap %s: %s", tile.key, e)
             return full
@@ -4936,13 +4951,14 @@ class Server:
             judged = True
         return judged
 
-    def prefetch_imagery(self, anchor, tile):
+    def prefetch_imagery(self, anchor, tile, soon=True):
         """Start downloading a queued tile's imagery (fire and forget), so tile workers rarely
-        wait on the network. Only the first source of the chain; errors surface at build time."""
+        wait on the network. Only the first source of the chain; errors surface at build time. soon: the next tiles
+        (a host that takes no prefetch now still gets them, as demand); else spare request tokens only."""
         if self.imagery is not None:
             frame, x0, y0, size = self.tile_where(anchor, tile)
             px = self.tile_tex_px(anchor, tile)
-            self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=True)
+            self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=soon, gutter=True)
 
     # --- BeamMP shared world generation v2 (mpshare.py, .claude/work/mp_share_v2.md) --------------------------------
     def share_parts(self):
@@ -5044,7 +5060,9 @@ class Server:
         """(frame, x0, y0, size) of the square a tile's texture is rendered over in that frame: the node's for a piece;
         a global tile's own frame and its (Mercator) square, about [-s/2, s/2]^2 there."""
         if isinstance(tile, farfield.GTile):
-            return geotilesmod.frame(tile.x, tile.y, tile.z), -tile.size / 2, -tile.size / 2, tile.size
+            f = geotilesmod.frame(tile.x, tile.y, tile.z)
+            f.merc = (tile.z, tile.x, tile.y)   # (imagery: its exact Mercator square for a gutter's fetches, Imagery.square)
+            return f, -tile.size / 2, -tile.size / 2, tile.size
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         x0, y0, _, _ = node.bbox
         return anchor.frame, x0, y0, node.size
@@ -5054,7 +5072,7 @@ class Server:
         if isinstance(tile, farfield.GTile):
             return self.imagery.render_merc(tile.z, tile.x, tile.y, px, pending=pending)
         frame, x0, y0, size = self.tile_where(anchor, tile)
-        return self.imagery.render(frame, *imagerymod.gutter_square(x0, y0, size, px), px, pending=pending)
+        return self.imagery.render(frame, *imagerymod.gutter_square(x0, y0, size, px), px, pending=pending, gutter=True)
 
     def make_tile(self, anchor, tile, prev=None):
         urgencymod.wait_turn()          # (a block the game waits for first: urgency.py)
@@ -5115,7 +5133,7 @@ class Server:
         args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
         fut = self.far_pool.submit(*args)           # (its geometry meanwhile: kept, a second call reads it back)
         try:
-            ok = im.fetch_needed(frame_q, *sq, px)
+            ok = im.fetch_needed(frame_q, *sq, px, gutter=True)
         except Exception as e:      # (the geometry's call still ends; the usual way after it)
             log.debug("coarse texture %s: %s: %s", tile.key, type(e).__name__, e)
             ok = False
@@ -5168,7 +5186,8 @@ class Server:
                 px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                 frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                later = im.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px) if quick else []
+                later = im.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
+                                       gutter=True) if quick else []
                 if not later and (self.deshadow is not None or self.colormatch is not None):
                     later = [im.done_token()]
                 tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
@@ -5177,7 +5196,7 @@ class Server:
                 args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
                 built, got = self.far_pool.submit(*args).result()
                 if got is None and im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
-                                                   last_only=bool(tex["quick"])):
+                                                   last_only=bool(tex["quick"]), gutter=True):
                     built, got = self.far_pool.submit(*args).result()
                 if got is not None:
                     done = (texture, got[0], got[1])
@@ -5212,7 +5231,7 @@ class Server:
                 # token re-renders it finished here once the photos are in (far_retex)
                 x0q, y0q, _, _ = tile.bbox
                 later = self.imagery.fetch_later(anchor.frame, *imagerymod.gutter_square(
-                    x0q, y0q, tile.size, px_t), px_t)
+                    x0q, y0q, tile.size, px_t), px_t, gutter=True)
             use_fin = analyses and self.far_pool is not None and node is tile and self.fin_worker_worth()
             if analyses and not later and not use_fin and self.far_pool is not None and node is tile:
                 # (no finished tiles here yet: a first visit; raw now in the worker, finished re-rendered right after.
@@ -5243,7 +5262,7 @@ class Server:
                 elif quick:     # (the 3D map: what is on disk now, the slow hosts' photos downloaded meanwhile)
                     x0q, y0q, _, _ = tile.bbox
                     later = im.fetch_later(anchor.frame, *imagerymod.gutter_square(x0q, y0q, tile.size, tex["px"]),
-                                           tex["px"])
+                                           tex["px"], gutter=True)
                     if later:
                         tex["quick"] = True
                 args = (blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile, zoom, q,
@@ -5267,7 +5286,7 @@ class Server:
                     # interpreter for every far thread, the far field waited on it); here only if that fails too
                     x0, y0, _, _ = tile.bbox
                     if im.fetch_needed(anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, tex["px"]),
-                                       tex["px"], last_only=bool(tex.get("quick"))):
+                                       tex["px"], last_only=bool(tex.get("quick")), gutter=True):
                         built, got = self.far_pool.submit(*args).result()
                         self.refetched += 1
                 if got is not None:
@@ -5321,7 +5340,8 @@ class Server:
                     f0 = revisitmod.faults()
                     if quick and not is_global and not later:
                         frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                        later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px)
+                        later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
+                                                         gutter=True)
                     if later:
                         pending = set(pending or ()) | set(later)
                         with self.imagery.quick():
@@ -5502,7 +5522,7 @@ class Server:
             if got is None and upgrade and not self.worker_retex():
                 # (its photos not on disk yet: fetched here, rendered there, as its first build: _make_tile)
                 frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                if im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px):
+                if im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px, gutter=True):
                     got = self.far_pool.submit(*args).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
@@ -9984,11 +10004,17 @@ class Connection:
                 now = time.monotonic()
                 if len(self.prefetched) > PREFETCHED_MAX:
                     self.prefetched.clear()
-                for t in self.queue[self.qi:self.qi + IMAGERY_PREFETCH]:
+                spare = PREFETCH_SPARE_PER_PASS
+                for i, t in enumerate(self.queue[self.qi:self.qi + IMAGERY_PREFETCH + IMAGERY_PREFETCH_SPARE]):
                     ck = self.ck(t.key)
-                    if ck not in self.s.tiles and now - self.prefetched.get(ck, -1e9) >= PREFETCH_AGAIN_S:
+                    soon = i < IMAGERY_PREFETCH
+                    if not soon and spare <= 0:
+                        break
+                    if ck not in self.s.tiles and \
+                            now - self.prefetched.get(ck, -1e9) >= (PREFETCH_AGAIN_S if soon else PREFETCH_SPARE_AGAIN_S):
                         self.prefetched[ck] = now
-                        self.s.prefetch_imagery(anchor, t)
+                        spare -= not soon
+                        self.s.prefetch_imagery(anchor, t, soon)
             if anchor is not None:
                 self.emit_groups()
                 self.flush_old()

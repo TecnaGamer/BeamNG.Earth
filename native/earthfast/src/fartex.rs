@@ -167,6 +167,51 @@ pub fn warp_rgba(a: ArrayView3<u8>, qx: ArrayView2<f64>, qy: ArrayView2<f64>, ce
     out
 }
 
+/// The photo tiles a far texture's footprint needs (imagery._core_tiles): (tx0, tx1, ty0, ty1), the tile range the
+/// bilinear taps of its texels g .. px - g - 1 (both axes) touch, placed exactly as warp_rgba places them (a cell's
+/// corners qx, qy, mosaic or global pixel coordinates, interpolated at the texel centre; taps at floor(p - 0.5) and
+/// the next pixel). Its gutter's texels are left out: they take what is on hand (imagery.Imagery._render).
+#[pyfunction]
+pub fn core_tiles(qx: PyReadonlyArray2<'_, f64>, qy: PyReadonlyArray2<'_, f64>, cells: usize, cw: usize, g: usize,
+                  px: usize) -> PyResult<(i64, i64, i64, i64)> {
+    let (qx, qy) = (qx.as_array(), qy.as_array());
+    if qx.shape() != [cells + 1, cells + 1] || qy.shape() != [cells + 1, cells + 1] || cells * cw != px
+        || cells == 0 || 2 * g >= px {
+        return Err(PyValueError::new_err("core_tiles: the mesh is not (cells + 1)^2, cells * cw != px or no footprint"));
+    }
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    let mut at = |y: usize, x: usize| {
+        let (r, c) = ((y / cw).min(cells - 1), (x / cw).min(cells - 1));
+        let (bx0, by0) = (c * cw, r * cw);
+        let (as_, at_) = (1.0 / cw as f64, 1.0 / cw as f64);
+        let (nwx, nwy) = (qx[[r, c]], qy[[r, c]]);
+        let (swx, swy) = (qx[[r + 1, c]], qy[[r + 1, c]]);
+        let (sex, sey) = (qx[[r + 1, c + 1]], qy[[r + 1, c + 1]]);
+        let (nex, ney) = (qx[[r, c + 1]], qy[[r, c + 1]]);
+        let xin = (x - bx0) as f64 + 0.5;
+        let yin = (y - by0) as f64 + 0.5;
+        // (warp_rgba's own arithmetic, term for term)
+        let xx = nwx + (nex - nwx) * as_ * xin + (swx - nwx) * at_ * yin + (sex - swx - nex + nwx) * as_ * at_ * xin * yin;
+        let yy = nwy + (ney - nwy) * as_ * xin + (swy - nwy) * at_ * yin + (sey - swy - ney + nwy) * as_ * at_ * xin * yin;
+        x0 = x0.min(xx);
+        x1 = x1.max(xx);
+        y0 = y0.min(yy);
+        y1 = y1.max(yy);
+    };
+    let (lo, hi) = (g, px - g - 1);
+    for i in lo..=hi {
+        at(lo, i);
+        at(hi, i);
+        at(i, lo);
+        at(i, hi);
+    }
+    const EPS: f64 = 1e-6;
+    let t = TILE as i64;
+    let tile = |p: f64| (p.floor() as i64).div_euclid(t);
+    Ok((tile(x0 - 0.5 - EPS), tile((x1 - 0.5 + EPS).floor() + 1.0), tile(y0 - 0.5 - EPS),
+        tile((y1 - 0.5 + EPS).floor() + 1.0)))
+}
+
 /// A finished tile as tile_warp takes it: its RGB (256, 256, 3) decoded, or its JPEG (decoded here, on the warp's
 /// threads: imagery.Imagery keeps the finished tiles as their JPEGs, the disk's bytes).
 #[derive(FromPyObject)]
