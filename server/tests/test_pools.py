@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+import time
 import unittest.mock
 from concurrent.futures.process import BrokenProcessPool
 
@@ -367,22 +368,33 @@ class TasksPerChildTest(unittest.TestCase):
     def test_kwargs(self):
         self.assertEqual(pools.tasks_per_child_kw(0), {})
         self.assertEqual(pools.tasks_per_child_kw(None), {})
-        if sys.version_info >= (3, 11):
-            self.assertEqual(pools.tasks_per_child_kw(40), {"max_tasks_per_child": 40})
-        else:
-            self.assertEqual(pools.tasks_per_child_kw(40), {})
+        self.assertEqual(pools.tasks_per_child_kw(40), {"rotate_jobs": 40})
 
     def test_fresh_processes(self):
-        if sys.version_info < (3, 11):
-            self.skipTest("max_tasks_per_child: Python 3.11+")
+        """Jobs queued at once (more than the processes: the case Python 3.12's max_tasks_per_child deadlocked on) all
+        answered; once the backlog is gone the pool is rotated and later jobs run in fresh processes."""
         p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        p.JOBS_CHECK_S = 0.2
         try:
             futs = [p.submit(os.getpid) for _ in range(6)]
-            pids = [f.result(timeout=120) for f in futs]
-            self.assertEqual(len(pids), 6)
-            self.assertGreaterEqual(len(set(pids)), 3, pids)
+            first = {f.result(timeout=120) for f in futs}
+            deadline = time.monotonic() + 60
+            while p.rotations == 0 and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertGreaterEqual(p.rotations, 1, "rotated once the backlog was done")
+            later = p.submit(os.getpid).result(timeout=120)
+            self.assertNotIn(later, first, "a fresh process")
         finally:
             p.shutdown(wait=True)
+
+    def test_jobs_step_waits_for_the_backlog(self):
+        p = pools.RespawningPool.__new__(pools.RespawningPool)
+        p.rotate_jobs, p._jobs_done, p.inflight, p.workers = 4, 5, 3, 1
+        p.rotate = unittest.mock.Mock(return_value=True)
+        self.assertFalse(p._jobs_step(0.0), "a backlog: not yet")
+        p.inflight = 1
+        self.assertTrue(p._jobs_step(0.0))
+        p.rotate.assert_called_once()
 
     def test_budget_setting(self):
         import budget

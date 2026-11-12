@@ -24,12 +24,14 @@ QUEUED_POLL_S = 1.0
 
 
 def tasks_per_child_kw(n):
-    """ProcessPoolExecutor's max_tasks_per_child=n (Python 3.11+, spawn pools: each process replaced by a fresh one
-    after n jobs, its queue kept; the lean memory tiers' road process, budget.tasks_per_child) as keyword arguments;
-    {} for 0 or an older Python."""
-    if not n or n <= 0 or sys.version_info < (3, 11):
+    """A RespawningPool's rotate_jobs=n as keyword arguments (its processes replaced by fresh ones after n jobs, while
+    it has no backlog: RespawningPool._jobs_step); {} for 0. Not ProcessPoolExecutor's max_tasks_per_child: with the
+    spawn context and more jobs queued than processes, Python 3.12's executor deadlocks when a worker leaves after its
+    n jobs (6 of 6 trials hung, CPython 3.12.13; GitHub CI's test_pools hung on every push since 2026-11-12), and the
+    releases bundle 3.12."""
+    if not n or n <= 0:
         return {}
-    return {"max_tasks_per_child": int(n)}
+    return {"rotate_jobs": int(n)}
 
 
 class Abandoned(Exception):
@@ -126,7 +128,7 @@ def _shedding(submit):
 class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
-    def __init__(self, name, *args, hung_s=None, **kwargs):
+    def __init__(self, name, *args, hung_s=None, rotate_jobs=0, **kwargs):
         kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
                       initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
@@ -153,9 +155,11 @@ class RespawningPool:
         self._live_lock = threading.Lock()
         if hung_s:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
-        # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate)
+        # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate); and
+        # rotate_jobs: the pool rotated after that many jobs done since the last rotation (tasks_per_child_kw)
         self.rotations = 0
         self._last_rotate = time.monotonic()
+        self.rotate_jobs, self._jobs_done = max(0, int(rotate_jobs or 0)), 0
         threading.Thread(target=self._mem_watch, name=f"{name} memory", daemon=True).start()
 
     def submit(self, fn, *args, **kwargs):
@@ -176,6 +180,7 @@ class RespawningPool:
     def _done(self, _fut):
         with self._count_lock:
             self.inflight = max(0, self.inflight - 1)
+            self._jobs_done += 1
         if self.hung_s:
             with self._live_lock:
                 self._live.pop(_fut, None)
@@ -311,15 +316,31 @@ class RespawningPool:
             pass
         return True
 
+    JOBS_CHECK_S = 2.0
+
     def _mem_watch(self):
-        """budget.ROTATE_MB's watch: every ROTATE_CHECK_S, the pool rotated when one of its processes is over it."""
+        """budget.ROTATE_MB's watch: every ROTATE_CHECK_S, the pool rotated when one of its processes is over it; and
+        every JOBS_CHECK_S rotate_jobs' (_jobs_step)."""
         import budget
+        last_mem = time.monotonic()
         while True:
-            time.sleep(budget.ROTATE_CHECK_S)
+            time.sleep(self.JOBS_CHECK_S if self.rotate_jobs else budget.ROTATE_CHECK_S)
+            now = time.monotonic()
             try:
-                self._mem_step(time.monotonic())
+                if self.rotate_jobs and self._jobs_step(now):
+                    continue
+                if now - last_mem >= budget.ROTATE_CHECK_S or not self.rotate_jobs:
+                    last_mem = now
+                    self._mem_step(now)
             except Exception as e:      # (never let the watch die)
                 log.debug("%s memory watch: %s: %s", self.name, type(e).__name__, e)
+
+    def _jobs_step(self, now):
+        """rotate_jobs: the pool rotated once that many jobs are done since its last rotation and it has no backlog
+        (its queued jobs would run in the old processes beside the new ones). True when rotated."""
+        if not self.rotate_jobs or self._jobs_done < self.rotate_jobs or self.inflight > self.workers:
+            return False
+        return self.rotate(f"{self._jobs_done} jobs done", now)
 
     def worker_mb(self):
         """{pid: MB} of the current pool's processes (budget.process_mb; None where unreadable)."""
@@ -350,6 +371,8 @@ class RespawningPool:
             self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
             self._last_rotate = time.monotonic() if now is None else now
             self.rotations += 1
+            with self._count_lock:
+                self._jobs_done = 0
         log.info("%s worker processes replaced (%s; %d so far): the old ones finish their jobs and exit",
                  self.name, why, self.rotations)
         try:
