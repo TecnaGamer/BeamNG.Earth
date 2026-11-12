@@ -168,7 +168,7 @@ static void *watch(void *arg) {
             char msg[256];
             if (on) 
             {
-                snprintf(msg, sizeof msg, "applied: game time drops hitches instead of catching up, C = %.1f ms " "(BeamNG.Earth level)%s", g_c_on * 1000, how);
+                snprintf(msg, sizeof msg, "applied: game time drops hitches instead of catching up, C = %.1f ms ", "(BeamNG.Earth level)%s", g_c_on * 1000, how);
             }
             else 
             {
