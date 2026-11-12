@@ -504,12 +504,12 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
     }).collect()
 }
 
-/// roads._beside: the points d m left and right of each vertex of each line (counts of pts in turn).
-fn beside(pts: &[P], counts: &[usize], d: f64) -> (Vec<P>, Vec<P>) {
+/// roads._beside: the points ds[n] m left and right of each vertex of line n (counts of pts in turn).
+fn beside(pts: &[P], counts: &[usize], ds: &[f64]) -> (Vec<P>, Vec<P>) {
     let mut left = pts.to_vec();
     let mut right = pts.to_vec();
     let mut k = 0;
-    for &c in counts {
+    for (&c, &d) in counts.iter().zip(ds) {
         let p = &pts[k..k + c];
         if c >= 2 {
             let lat: Vec<f64> = p.iter().map(|q| q[1]).collect();
@@ -567,6 +567,7 @@ struct Prm {
     urban_sample: f64,
     urban_share: f64,
     urban_beside: f64,
+    urban_highway_beside: f64,
     urban_beside_share: f64,
     urban_both_share: f64,
     dual_gap0: f64,
@@ -593,7 +594,8 @@ impl Prm {
         let g = |k: &str| prm_get(p, k);
         Ok(Prm {
             min_part: g("MIN_PART")?, urban_sample: g("URBAN_SAMPLE_M")?, urban_share: g("URBAN_SHARE")?,
-            urban_beside: g("URBAN_BESIDE_M")?, urban_beside_share: g("URBAN_BESIDE_SHARE")?,
+            urban_beside: g("URBAN_BESIDE_M")?, urban_highway_beside: g("URBAN_HIGHWAY_BESIDE_M")?,
+            urban_beside_share: g("URBAN_BESIDE_SHARE")?,
             urban_both_share: g("URBAN_BOTH_SHARE")?, dual_gap0: g("DUAL_GAP_M0")?, dual_gap1: g("DUAL_GAP_M1")?,
             dual_share: g("DUAL_SHARE")?, dual_cos: g("DUAL_COS")?, mountain_on: g("MOUNTAIN_ON")? != 0.0,
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
@@ -1133,6 +1135,15 @@ impl RoadRules {
         if !asks.is_empty() {
             let urban_fn = urban_fn.unwrap();
             let lines: Vec<(usize, usize)> = asks.iter().map(|q| l.all_pts(q.i)).collect();
+            // (a motorway's or trunk road's built-up land further out, URBAN_HIGHWAY_BESIDE_M: WorldCover's built-up
+            // fringe of a wide rural freeway's own pavement reached the 30 m probes, I-25 at the Colorado / Wyoming line,
+            // wyo-backroads' PR #1117)
+            let reach: Vec<f64> = asks.iter().map(|q| if self.has(l.cls[q.i] as usize, F_MOTORWAY | F_TRUNK) {
+                prm.urban_highway_beside
+            } else {
+                prm.urban_beside
+            }).collect();
+            let edge: Vec<f64> = vec![prm.edge_m; asks.len()];
             let (pts, counts) = py.detach(|| {
                 let mut pts: Vec<P> = Vec::new();
                 let mut counts = Vec::with_capacity(lines.len());
@@ -1142,12 +1153,12 @@ impl RoadRules {
                     counts.push(s.len());
                     pts.extend(s);
                 }
-                let (lf, rt) = beside(&pts, &counts, prm.urban_beside);
+                let (lf, rt) = beside(&pts, &counts, &reach);
                 let mut all = pts.clone();
                 all.extend(lf);
                 all.extend(rt);
                 if european {
-                    let (el, er) = beside(&pts, &counts, prm.edge_m);
+                    let (el, er) = beside(&pts, &counts, &edge);
                     all.extend(el);
                     all.extend(er);
                 }

@@ -84,9 +84,11 @@ def lamp_spacing(region, dense=False):
 
 
 def highway_lit(region, link, urban):
-    """Is a highway (HIGHWAY_CLASSES) lit: every ramp (in the country only at its ends: PARTIAL_END_M); the mainline in
-    built-up land, except where the state lights its interchanges only."""
-    return bool(link) or (bool(urban) and region != "na:ramps")
+    """Is a highway (HIGHWAY_CLASSES) lit: every ramp in built-up land, and in the country only at its ends
+    (PARTIAL_END_M) except in sparse regions (na:sparse), where a rural ramp needs mapped lighting as the rural mainline
+    does (wyo-backroads' PR #1117: I-25's unlit ramps from Carr to Cheyenne); the mainline in built-up land, except
+    where the state lights its interchanges only. Mapped lit=* wins over all of this (place)."""
+    return (bool(link) and (bool(urban) or region != "na:sparse")) or (bool(urban) and region != "na:ramps")
 LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}

@@ -6318,6 +6318,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
-    m.add("VERSION", 259)?;
+    m.add("VERSION", 260)?;
     Ok(())
 }
