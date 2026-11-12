@@ -2709,6 +2709,7 @@ local function onUpdate(dtReal, dtSim)
     end
   end
   t = mark('net', t)
+  pcall(beammp.restoreTick, dtReal)  -- (our own copy back on after a BeamMP session, once it is over: also outside a level)
   if not scenetree.MissionGroup then return end -- no level loaded
   tickMotionBlur()
 
