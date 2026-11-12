@@ -13,6 +13,7 @@ import os
 import sys
 
 SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam Deck shows ~14.5 GB)
+TINY_GB = 13.0              # ... and below this (an 8 or 12 GB PC) its smaller sizes (TINY_*)
 # per process, small profile (desktop size in the module: dem 512 tiles). The sea floors (seacarve.MEM_CELLS) and the
 # imagery tiles (imagery.MEM_TILES, the main process only) keep theirs, the map data cells nearly: smaller,
 # the workers and the server's ground-ahead and imagery threads spent minutes reading them back from disk and
@@ -20,6 +21,8 @@ SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam De
 SMALL_DEM_TILES = 192       # decoded 512² float32 DEM tiles (1 MB each)
 SMALL_WALL_CELLS = 12       # cells of building walls for the street widths (roadwidth.WALL_CELLS, 48)
 SMALL_MAPDATA_MB = 160      # decoded map data layers (mapdata.MEM_MB, 256): a road tile's cells still fit
+TINY_DEM_TILES = 128
+TINY_MAPDATA_MB = 128       # (a Baltimore road tile's cells: ~124 MB)
 SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with one the road tiles never caught up)
 # A desktop's road-tile processes by its threads and memory (each ~1-1.5 GB): driving off right after a teleport into
 # Manhattan at 50 mph, 2 had the road under the car for the first ~15 s and solid ~27 s after, 4 at ~6 s and ~15 s,
@@ -47,7 +50,13 @@ SMALL_FIN_DECODED = 96
 
 
 def total_gb():
-    """The machine's RAM in GB (None if unknown)."""
+    """The machine's RAM in GB (None if unknown). BNGE_TOTAL_GB: taken as this much (tests of the smaller tiers on a
+    bigger machine)."""
+    if os.environ.get("BNGE_TOTAL_GB"):
+        try:
+            return float(os.environ["BNGE_TOTAL_GB"])
+        except ValueError:
+            pass
     try:
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
     except (ValueError, OSError, AttributeError):
@@ -109,14 +118,40 @@ def small(gb=None):
 SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
 
 
+def shed_mb(is_small, gb):
+    """A worker's memory ceiling (SHED_MB) for the profile and the machine's RAM (GB, None unknown); 0: none."""
+    if is_small:
+        return TINY_SHED_MB if gb is not None and gb < TINY_GB else SMALL_SHED_MB
+    if gb is None:
+        return 0
+    for below, mb in DESKTOP_SHED_MB:
+        if gb < below:
+            return mb
+    return 0
+
+
+def low_free_gb(gb):
+    """The free memory (GB) under which a worker drops its caches between jobs (LOW_FREE_*), for RAM gb."""
+    if gb is None:
+        return LOW_FREE_MIN_GB
+    return min(LOW_FREE_MAX_GB, max(LOW_FREE_MIN_GB, LOW_FREE_FRAC * gb))
+
+
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
-    global SHED_MB, ROTATE_MB
-    SHED_MB = SMALL_SHED_MB if is_small else 0
+    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB
+    gb = total_gb()
+    SHED_MB = shed_mb(is_small, gb)
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
         SHED_MB = int(os.environ["BNGE_SHED_MB"])
-    ROTATE_MB = SMALL_ROTATE_MB if is_small else 0
+    LOW_FREE_GB = low_free_gb(gb)
+    if os.environ.get("BNGE_LOW_FREE_GB"):          # (A/B: the free memory in GB, 0 off)
+        LOW_FREE_GB = float(os.environ["BNGE_LOW_FREE_GB"])
+    TREE_MB = tree_mb(gb) if TREE_ON else 0
+    if os.environ.get("BNGE_TREE_MB"):              # (A/B: the whole server's budget in MB, 0 off)
+        TREE_MB = int(os.environ["BNGE_TREE_MB"])
+    ROTATE_MB = rotate_mb(is_small, gb)
     if os.environ.get("BNGE_ROTATE_MB"):            # (A/B: the pools' rotation ceiling in MB, 0 off)
         ROTATE_MB = int(os.environ["BNGE_ROTATE_MB"])
     if is_small:
@@ -124,8 +159,9 @@ def apply(is_small=None):
         import farfield
         import mapdata
         import roadwidth
-        dem.MEM_TILES = SMALL_DEM_TILES
-        mapdata.MEM_MB = SMALL_MAPDATA_MB
+        tiny = gb is not None and gb < TINY_GB
+        dem.MEM_TILES = TINY_DEM_TILES if tiny else SMALL_DEM_TILES
+        mapdata.MEM_MB = TINY_MAPDATA_MB if tiny else SMALL_MAPDATA_MB
         roadwidth.WALL_CELLS = SMALL_WALL_CELLS
         import roads
         roads.FACTS_MEM_KEPT = SMALL_FACTS_CELLS   # (~0.5 MB a city cell's facts, in each process)
@@ -163,9 +199,26 @@ _trimming = False
 # count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
 SHED_MB = 0
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
+TINY_SHED_MB = 1000      # (an 8-12 GB machine: TINY_GB)
+# A desktop's ceiling by its RAM, (below GB, MB); none from the last up. Before 2026-11-11 a desktop had none: a 32 GB
+# PC's server grew to 20 GB after 15 miles of Los Angeles, the system killed it after ~90 miles, other players' games
+# swapped (Discord, GitHub #893 #1026); a road worker's working set in a city is ~0.9-1.3 GB (drive_mem, 2026-11-11)
+DESKTOP_SHED_MB = ((40.0, 2000), (56.0, 3000))
 SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
+# The system's own memory, every profile: a worker holding at least SHED_FLOOR_MB drops its caches between jobs (at most
+# every SHED_MIN_S) while less than LOW_FREE_GB is free (Linux MemAvailable, Windows available physical memory): a
+# ceiling by process cannot know the game's and the other programs' share, and a machine that starts swapping makes the
+# game hitch long before the server's own ceilings are reached (RAM is the strongest predictor of hitches in the
+# performance reports, 8 GB 1,435 / 16 GB 540 / 32 GB 308 over 100 ms an hour, 2026-11-11)
+LOW_FREE_FRAC = 0.08     # of the RAM ...
+LOW_FREE_MIN_GB = 1.0    # ... at least ...
+LOW_FREE_MAX_GB = 3.0    # ... at most
+LOW_FREE_GB = 0.0        # (apply(); 0 off)
+SHED_FLOOR_MB = 600
 _shedders = []
 shed_count = 0
+low_free_sheds = 0
+tree_sheds = 0
 _last_shed = None
 
 
@@ -174,13 +227,16 @@ def register_shed(fn):
     _shedders.append(fn)
 
 
-def memory_mb():
-    """This process's resident + swapped memory in MB (Linux /proc; Windows: private bytes), or None."""
+def memory_mb(private=False):
+    """This process's resident + swapped memory in MB (Linux /proc; Windows: private bytes), or None. private: its
+    own resident pages only (Linux RssAnon: not the shared libraries' pages every process maps; the whole server's
+    table, tree_publish)."""
     try:
         rss = swap = 0
+        key = "RssAnon:" if private else "VmRSS:"
         with open("/proc/self/status") as f:
             for line in f:
-                if line.startswith("VmRSS:"):
+                if line.startswith(key):
                     rss = int(line.split()[1])
                 elif line.startswith("VmSwap:"):
                     swap = int(line.split()[1])
@@ -242,31 +298,70 @@ def process_mb(pid):
 # by a fresh one, at most every ROTATE_MIN_S: the old one's queued and running jobs finish in its own processes, which
 # then exit and give everything back. The caches maybe_shed drops are not all a worker keeps (native memory of the map
 # readers, module-level caches): on the 16 GB Windows test PC (2026-11-11), with the ceiling working, four workers were
-# at 1.8-2.3 GB private after 25 minutes and the server at 14.6 GB. Small machines only (0: off; BNGE_ROTATE_MB).
+# at 1.8-2.3 GB private after 25 minutes and the server at 14.6 GB. 0: off; BNGE_ROTATE_MB. A desktop by its RAM
+# (below GB, MB), none from the last up: a 32 GB profile's road workers were at 2.0-2.4 GB after 25 minutes of LA,
+# London and New York with their caches shed (drive_mem, 2026-11-11), the server at 25 GB, and growing with each
+# new city: the same growth as the 16 GB PC's, later.
 ROTATE_MB = 0
 SMALL_ROTATE_MB = 1800
+DESKTOP_ROTATE_MB = ((40.0, 2800), (56.0, 3800))
 ROTATE_CHECK_S = 30.0
 ROTATE_MIN_S = 300.0
 
 
-def maybe_shed():
-    """Between jobs: the registered caches dropped when this process is over SHED_MB. True when it shed."""
-    if not SHED_MB or not _shedders:
+def rotate_mb(is_small, gb):
+    """The pools' rotation ceiling (ROTATE_MB) for the profile and the machine's RAM (GB, None unknown); 0: none."""
+    if is_small:
+        return SMALL_ROTATE_MB
+    if gb is None:
+        return 0
+    for below, mb in DESKTOP_ROTATE_MB:
+        if gb < below:
+            return mb
+    return 0
+
+
+def maybe_shed(ceiling=True, collect=True):
+    """Between jobs: the registered caches dropped when this process is over SHED_MB, or holds SHED_FLOOR_MB while the
+    whole server is over TREE_MB (and this process over its share: tree_should_shed) or the system has less than
+    LOW_FREE_GB free. True when it shed. ceiling False: not SHED_MB (the server's own process: tree_publisher);
+    collect False: no full garbage collection after it (_shed)."""
+    if not (SHED_MB or LOW_FREE_GB or TREE_MB) or not _shedders:
         return False
     import time
-    global _last_shed
+    global _last_shed, low_free_sheds, tree_sheds
+    priv = memory_mb(private=True) if TREE_MB else None
+    if priv is not None:
+        tree_publish(priv)
     if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
         return False
     mb = memory_mb()
-    if mb is None or mb < SHED_MB:
+    if mb is None:
+        return False
+    why = None
+    if ceiling and SHED_MB and mb >= SHED_MB:
+        why = f"over {SHED_MB}"
+    elif mb >= SHED_FLOOR_MB:
+        if priv is not None:
+            total, n = tree_total()
+            if tree_should_shed(priv, total, n, TREE_MB):
+                why = f"server at {total:.0f} MB of {TREE_MB}"
+                tree_sheds += 1
+        if why is None and LOW_FREE_GB:
+            free = free_gb()
+            if free is not None and free < LOW_FREE_GB:
+                why = f"{free:.1f} GB free"
+                low_free_sheds += 1
+    if why is None:
         return False
     _last_shed = time.monotonic()
-    _shed(mb, f"over {SHED_MB}")
+    _shed(mb, why, collect)
     return True
 
 
-def _shed(mb, why):
-    """The registered caches dropped and the memory given back (maybe_shed, the idle shed)."""
+def _shed(mb, why, collect=True):
+    """The registered caches dropped and the memory given back (maybe_shed, the idle shed). collect: a full garbage
+    collection first (not in the server's own process: its event loop would wait for it)."""
     global shed_count
     import gc
     import logging
@@ -275,7 +370,8 @@ def _shed(mb, why):
             fn()
         except Exception:
             pass
-    gc.collect()
+    if collect:
+        gc.collect()
     trim()
     shed_count += 1
     after = memory_mb()
@@ -341,8 +437,176 @@ def _idle_loop():
         time.sleep(IDLE_CHECK_S)
         try:
             idle_shed_now()
+            if TREE_MB:
+                tree_publish(memory_mb(private=True))   # (an idle worker still holds its memory: TREE_FRESH_S)
         except Exception:
             pass
+
+
+# The whole server's memory, every profile: its processes (the server's own and every worker) each keep their memory in
+# a slot of a small shared block (the server makes it before its workers start; they find it by name, TREE_ENV); a
+# worker over its share of TREE_MB (TREE_FRAC of the RAM) drops its caches between jobs while the sum is over it. Each
+# process's caches are capped on their own, but a desktop runs ~20 processes: a 32 GB PC's server held 19.5 GB after
+# eight minutes of a fresh Los Angeles (drive_mem, 2026-11-11; Discord: "20 GB after 15 miles of LA", the system's
+# out-of-memory killer after ~90 miles), each worker under its own caps.
+TREE_FRAC = 0.33            # of the RAM for the whole server (16 GB: 5.3 GB, 32 GB: 10.6 GB, 64 GB: 21 GB)
+# OFF by default (BNGE_TREE=on, or BNGE_TREE_MB=<MB>): measured 2026-11-11 (drive_mem, LA -> London -> NYC, cold) the
+# budget was out of reach: a shed gives back ~0.3-0.6 GB of a worker's 1-2.4 GB, the rest is not in the registered
+# caches and comes straight back, so a 16 GB machine's server stayed at ~13 GB private (budget 5.3) while its workers
+# shed every 90 s: far tiles -35 % (2 far-tile processes re-reading their DEM tiles), London's road geotiles 23 -> 59 s
+# median; on the 32 GB profile -13 % peak for +5 % CPU. The free-memory shed (LOW_FREE_GB) covers a machine that is
+# really short; the table stays for when the floors come down.
+TREE_ON = os.environ.get("BNGE_TREE", "off").lower() in ("on", "1", "true")
+TREE_MIN_MB = 2500
+TREE_MB = 0                 # (apply(); 0 off)
+TREE_ENV = "BNGE_MEMTABLE"
+TREE_SLOTS = 64
+TREE_FRESH_S = 120.0        # a slot not written this long is a process gone (the workers write after every job, and
+TREE_PUBLISH_S = 30.0       # ... every this often when idle: _idle_loop; the server's own process: tree_publisher)
+_TREE_SLOT = None
+_tree_shm = None
+_tree_owner = False
+_tree_slot = None
+
+
+def tree_mb(gb):
+    """The whole server's memory budget (MB) for RAM gb (None: unknown, no budget)."""
+    if gb is None:
+        return 0
+    return int(max(TREE_MIN_MB, TREE_FRAC * gb * 1000))
+
+
+def tree_should_shed(mine, total, n, budget_mb):
+    """Should a process holding `mine` MB drop its caches, the server at `total` MB in n processes against budget_mb?
+    Over the budget, the processes over an equal share of it: the big ones give their memory back first."""
+    if not budget_mb or total <= budget_mb or mine < SHED_FLOOR_MB:
+        return False
+    return mine >= budget_mb / max(1, n)
+
+
+def _tree_struct():
+    global _TREE_SLOT
+    if _TREE_SLOT is None:
+        import struct
+        _TREE_SLOT = struct.Struct("<qdd")      # pid, MB, time.time() of the write
+    return _TREE_SLOT
+
+
+def tree_init():
+    """The server's process, before its workers start: the shared block made and named for them. Returns its name."""
+    global _tree_shm, _tree_owner
+    try:
+        from multiprocessing import shared_memory
+        size = TREE_SLOTS * _tree_struct().size
+        _tree_shm = shared_memory.SharedMemory(create=True, size=size)
+        _tree_shm.buf[:size] = bytes(size)
+        _tree_owner = True
+        os.environ[TREE_ENV] = _tree_shm.name
+        return _tree_shm.name
+    except Exception:
+        _tree_shm = None
+        return None
+
+
+def tree_close():
+    global _tree_shm
+    if _tree_shm is not None:
+        try:
+            _tree_shm.close()
+            if _tree_owner:
+                _tree_shm.unlink()
+        except Exception:
+            pass
+        _tree_shm = None
+
+
+def _tree_attach():
+    global _tree_shm
+    if _tree_shm is None and os.environ.get(TREE_ENV):
+        try:
+            from multiprocessing import shared_memory
+            try:        # (3.13+: not handed to the resource tracker, which would unlink the server's block at our exit)
+                _tree_shm = shared_memory.SharedMemory(name=os.environ[TREE_ENV], track=False)
+            except TypeError:
+                _tree_shm = shared_memory.SharedMemory(name=os.environ[TREE_ENV])
+                try:
+                    from multiprocessing import resource_tracker
+                    resource_tracker.unregister(_tree_shm._name, "shared_memory")
+                except Exception:
+                    pass
+        except Exception:
+            os.environ.pop(TREE_ENV, None)      # (not again)
+    return _tree_shm
+
+
+def tree_publish(mb, now=None):
+    """This process's memory (MB) into its slot (taken at the first write: its own pid's, else a free or stale one).
+    Best effort: False when there is no block or no slot."""
+    global _tree_slot
+    shm = _tree_attach()
+    if shm is None or mb is None:
+        return False
+    import time
+    now = time.time() if now is None else now
+    st, pid = _tree_struct(), os.getpid()
+    try:
+        if _tree_slot is None or st.unpack_from(shm.buf, _tree_slot * st.size)[0] != pid:
+            _tree_slot = None
+            start = pid % TREE_SLOTS
+            for i in range(TREE_SLOTS):
+                k = (start + i) % TREE_SLOTS
+                p, _, t = st.unpack_from(shm.buf, k * st.size)
+                if p in (0, pid) or now - t > TREE_FRESH_S:
+                    st.pack_into(shm.buf, k * st.size, pid, float(mb), now)
+                    if st.unpack_from(shm.buf, k * st.size)[0] == pid:
+                        _tree_slot = k
+                        break
+            if _tree_slot is None:
+                return False
+        st.pack_into(shm.buf, _tree_slot * st.size, pid, float(mb), now)
+        return True
+    except Exception:
+        return False
+
+
+def tree_total(now=None):
+    """(MB, processes) of the slots written within TREE_FRESH_S; (0.0, 0) without the block."""
+    shm = _tree_attach()
+    if shm is None:
+        return 0.0, 0
+    import time
+    now = time.time() if now is None else now
+    st = _tree_struct()
+    total, n = 0.0, 0
+    try:
+        for k in range(TREE_SLOTS):
+            p, mb, t = st.unpack_from(shm.buf, k * st.size)
+            if p and now - t <= TREE_FRESH_S:
+                total += mb
+                n += 1
+    except Exception:
+        return 0.0, 0
+    return total, n
+
+
+def tree_publisher():
+    """The server's own process: its memory into the block every TREE_PUBLISH_S / 3 (a thread), and its own registered
+    caches (earthd: its DEM tiles and map data cells) dropped as a worker's are, by the whole server's budget or the
+    free memory (not by a worker's ceiling: SHED_MB; no full collection)."""
+    import threading
+    import time
+
+    def loop():
+        while True:
+            try:
+                if _shedders:
+                    maybe_shed(ceiling=False, collect=False)
+                else:
+                    tree_publish(memory_mb(private=True))
+            except Exception:
+                pass
+            time.sleep(TREE_PUBLISH_S / 3)
+    threading.Thread(target=loop, daemon=True, name="mem-table").start()
 
 
 def _malloc_small():

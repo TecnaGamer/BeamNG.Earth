@@ -331,6 +331,19 @@ URGENT_ELSEWHERE = os.environ.get("BNE_URGENT_ELSEWHERE", "on") != "off"
 # in the other lane's block process they queued behind its prefetch heights and photos, a stand-in made beside a
 # block 1.6-4 s late at 100-200 mph down Manhattan (nyc_speed.py, 2026-11-02); not on a small machine (memory)
 PHOTO_PROCESS_MIN_CPUS = 12
+
+
+def photo_process(cpus=None, small=None):
+    """Whether the requested blocks' photos get their process (PHOTO_PROCESS_MIN_CPUS, not on a small machine: the
+    comment above said so, the code only counted CPUs until 2026-11-11, and a 16-thread 16 GB PC ran it at ~0.8-0.9 GB
+    beside a ~9.7 GB server; BNGE_PHOTO_PROCESS=on / off overrides)."""
+    force = os.environ.get("BNGE_PHOTO_PROCESS", "").lower()
+    if force in ("on", "off"):
+        return force == "on"
+    import budget
+    cpus = (os.cpu_count() or 0) if cpus is None else cpus
+    small = budget.small() if small is None else small
+    return cpus >= PHOTO_PROCESS_MIN_CPUS and not small
 # A block waits at most this long for its stand-in photo started beside it (cold: the photo process queued behind
 # imagery downloads and a block built in 1.4 s waited 99.5 s for it, nyc_speed.py --cold 2026-11-02)
 STANDIN_WAIT_S = 1.0
@@ -522,6 +535,7 @@ ROAD_HUNG_EXTRA_S = 60.0
 WORKERS = 3                     # far-tile workers (--workers): while driving (FAR_DRIVE)
 FAR_DRIVE = 3
 FAR_MAX_DESKTOP = 10            # ... up to this many with the 3D map open / the loading boost (desktops, budget.py)
+FAR_ELASTIC = os.environ.get("BNGE_FAR_ELASTIC", "on") != "off"     # ... those past FAR_DRIVE only while used (pools.py)
 
 
 class DynGate:
@@ -10218,6 +10232,15 @@ async def main_async(args):
     if netstatemod.init():
         import atexit
         atexit.register(netstatemod.close)
+    import budget
+    if budget.TREE_MB and budget.tree_init():   # (the whole server's memory table: budget.TREE_MB; workers inherit its name)
+        import atexit
+        atexit.register(budget.tree_close)
+    if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches too: budget.tree_publisher)
+        budget.tree_publisher()
+    log.info("memory: a worker's ceiling %s, caches dropped below %.1f GB free, the whole server's budget %s",
+             f"{budget.SHED_MB} MB" if budget.SHED_MB else "none", budget.LOW_FREE_GB,
+             f"{budget.TREE_MB} MB" if budget.TREE_MB else "off")
     # (telemetry: every process's per-host download counts, summed by telemetry.Reporter; set before the workers start
     # so they inherit it)
     telemetry_on = args.telemetry == "on" and not args.offline and not os.environ.get("CI") \
@@ -10244,7 +10267,7 @@ async def main_async(args):
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
-        if args.near_visual == "detail" and (os.cpu_count() or 0) >= PHOTO_PROCESS_MIN_CPUS:
+        if args.near_visual == "detail" and photo_process():
             # requested blocks' photos and stand-ins in a process of their own (Server._base_process / _stand_in)
             photo_pool = poolsmod.RespawningPool(
                 "photo", 1, mp_context=ctx, initializer=blockworker.init,
@@ -10253,13 +10276,18 @@ async def main_async(args):
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", None,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on"))
-        far_pool = poolsmod.RespawningPool(
-            "far tile", max(args.workers, getattr(args, "far_max", args.workers)), mp_context=ctx, initializer=blockworker.init,
-            initargs=(args.cache_dir, args.offline, args.roads == "on",
-                      args.grading == "on" and args.roads == "on",
-                      args.road_widths == "on" and args.roads == "on", False, None,
-                      logging.getLogger().level, args.airports == "on", args.sea == "on", NICE_FAR,
-                      roadsmod.ROADS_IN_GROUND))
+        far_n = max(args.workers, getattr(args, "far_max", args.workers))
+        far_base = min(args.workers, FAR_DRIVE)
+        far_kw = dict(mp_context=ctx, initializer=blockworker.init,
+                      initargs=(args.cache_dir, args.offline, args.roads == "on",
+                                args.grading == "on" and args.roads == "on",
+                                args.road_widths == "on" and args.roads == "on", False, None,
+                                logging.getLogger().level, args.airports == "on", args.sea == "on", NICE_FAR,
+                                roadsmod.ROADS_IN_GROUND))
+        # the processes beyond the driving ones (the 3D map, the loading boost: Server.far_limit) only while used
+        # (pools.ElasticPool; BNGE_FAR_ELASTIC=off: all of them for the session, as from 1.9.0 to 1.9.1)
+        far_pool = (poolsmod.ElasticPool("far tile", far_base, far_n - far_base, **far_kw)
+                    if FAR_ELASTIC and far_n > far_base else poolsmod.RespawningPool("far tile", far_n, **far_kw))
     if far_pool is not None:
         # compute sharing: far tiles to helpers (--peers) and, in a BeamMP group, split with the players on our anchor,
         # built with the same settings as these workers (peerwork.py)
@@ -10327,6 +10355,14 @@ async def main_async(args):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
+    if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)
+        import rangeread
+        budget.register_shed(server.dem.clear_memory)
+        if mapdata is not None:
+            budget.register_shed(mapdata.clear_memory)
+        budget.register_shed(rangeread.clear_memory)
+    if hasattr(getattr(server.far_pool, "local", server.far_pool), "want"):
+        getattr(server.far_pool, "local", server.far_pool).want = server.far_limit     # (ElasticPool: extras on a boost)
     server.update_check = args.update_check == "on"
     server.geo_tiles = args.geo_tiles == "on"
     server.global_far = args.global_far == "on"

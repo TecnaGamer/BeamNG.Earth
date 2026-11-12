@@ -225,6 +225,78 @@ class HungDumpTest(unittest.TestCase):
         self.assertIn("None", r.stdout)                 # (and the job ran to its end: not stopped)
 
 
+class ElasticPoolTest(unittest.TestCase):
+    """pools.ElasticPool: the far-tile processes past the driving ones only while a burst uses them (GitHub #1114: 22
+    server processes in 1.9.x, every far-tile process kept for the session from the first loading boost on)."""
+
+    def _pool(self, **kw):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=3600.0, **kw)
+        self.addCleanup(p.shutdown)
+        return p
+
+    def test_the_base_first_extras_only_for_a_burst(self):
+        import time
+        p = self._pool()
+        self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+        self.assertIsNone(p.extra, "one job at a time: the base alone")
+        futs = [p.submit(time.sleep, 0.5) for _ in range(3)]
+        self.assertIsNotNone(p.extra, "the base busy: extras started")
+        self.assertEqual(p.inflight, 3)
+        for f in futs:
+            f.result(timeout=60)
+        self.assertEqual(p.extra_starts, 1)
+        self.assertEqual(p.workers, 3)
+
+    def test_no_extras_while_the_caller_wants_the_base_alone(self):
+        import time
+        p = self._pool()
+        p.want = lambda: 1                  # (earthd: Server.far_limit while driving)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        self.assertIsNone(p.extra)
+        p.want = lambda: 3                  # (the 3D map open)
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        self.assertIsNotNone(p.extra)
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_idle_extras_stop(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 0.2) for _ in range(3)]
+        for f in futs:
+            f.result(timeout=60)
+        ex = p.extra
+        deadline = time.monotonic() + 10
+        while ex.inflight and time.monotonic() < deadline:
+            time.sleep(0.05)                # (the done callbacks)
+        now = 1000.0
+        self.assertFalse(p.reap_step(now), "idle from now")
+        self.assertFalse(p.reap_step(now + p.idle_s - 1))
+        with self.assertLogs("earthd.pools", "INFO"):
+            self.assertTrue(p.reap_step(now + p.idle_s))
+        self.assertIsNone(p.extra)
+        self.assertEqual(p.extra_stops, 1)
+        self.assertEqual(p.submit(abs, -5).result(timeout=60), 5, "the base goes on")
+
+    def test_busy_extras_are_kept(self):
+        import time
+        p = self._pool()
+        futs = [p.submit(time.sleep, 1.5) for _ in range(2)]
+        self.assertIsNotNone(p.extra)
+        self.assertFalse(p.reap_step(0.0))
+        self.assertFalse(p.reap_step(10 ** 6), "a job in flight: kept")
+        for f in futs:
+            f.result(timeout=60)
+
+    def test_the_old_way_without_a_reaper(self):
+        p = pools.ElasticPool("test", 1, 2, mp_context=SPAWN, idle_s=0)
+        self.addCleanup(p.shutdown)
+        [f.result(timeout=60) for f in [p.submit(abs, -i) for i in range(3)]]
+        self.assertFalse(p.reap_step(10 ** 6))
+
+
 class RotateTest(unittest.TestCase):
     """The memory watch (budget.ROTATE_MB): a pool whose process is over it gets fresh processes; the jobs already given
     to the old ones finish there (none fails), the old processes exit; nothing with the ceiling off, under it, within
