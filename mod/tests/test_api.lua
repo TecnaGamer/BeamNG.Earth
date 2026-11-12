@@ -24,14 +24,15 @@ package.loaded['beamngEarth/places'] = {
     return true
   end }
 local dest = nil
+local routeData = { version = 7, points = { { 45.0, 7.0 }, { 45.01, 7.0 } }, dist = 1112,
+  dur = 80, elev = { { 0, 250 }, { 1112, 260 } } }
 package.loaded['beamngEarth/gps'] = {
   setDestination = function(lat, lon, name) dest = { lat = lat, lon = lon, name = name } return true end,
   setRoute = function(points) dest = { lat = points[#points].lat, lon = points[#points].lon, name = 'route' } return true end,
   clear = function() dest = nil end,
   status = function() return dest and { lat = dest.lat, lon = dest.lon, name = dest.name, remaining = 1200, eta = 90,
-    off = 3.5, routeVersion = 7 } end,
-  route = function() return dest and { version = 7, points = { { 45.0, 7.0 }, { 45.01, 7.0 } }, dist = 1112,
-    dur = 80, elev = { { 0, 250 }, { 1112, 260 } }, legs = nil } end,
+    off = 3.5, routeVersion = 7, legs = routeData.legs } end,
+  route = function() return dest and routeData end,
 }
 
 local anchor = geodesy.newAnchor(45.0, 7.0)
@@ -276,6 +277,19 @@ r.points[1][1] = 0
 T.check(api.gpsRoute().points[1][1] == 45.0, 'a copy: the caller changes nothing')
 local g = api.gps()
 T.check(g.off == 3.5 and g.routeVersion == 7, 'gps(): off the route, its version')
+T.check(g.legs == nil and r.legs == nil, 'a route without waypoints still has no legs')
+routeData.legs = { { 400, 30 }, { 712, 50 } }
+local a, b = api.gpsRoute(), api.gps()
+a.legs[1][1] = -1
+a.legs[2] = nil
+b.legs[1][2] = -2
+b.legs[3] = { 1, 1 }
+T.check(#routeData.legs == 2 and routeData.legs[1][1] == 400 and routeData.legs[1][2] == 30
+  and routeData.legs[2][1] == 712, 'editing either API snapshot leaves the GPS legs intact')
+T.check(api.gpsRoute().legs[1][1] == 400 and api.gps().legs[1][2] == 30,
+  'subsequent API reads get the original route legs')
+r.elev[1][2] = 0
+T.check(api.gpsRoute().elev[1][2] == 250, 'elevation rows are detached too')
 api.gpsClear()
 local gx, gy, gz = api.toGame(45.0, 7.0)
 T.near(gx, 0, 1e-6, 'toGame: the origin x')
