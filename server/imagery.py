@@ -261,6 +261,7 @@ FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dro
 FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
 SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
 SHARP_PROBE_ALL = os.environ.get("BNGE_SHARP_PROBE_ALL") == "1"
+PREFETCH_STOP_REGIONAL = os.environ.get("BNGE_PREFETCH_STOP_REGIONAL") == "1"     # (Imagery._needed)
 
 
 def ground_res(lat, z):
@@ -1118,11 +1119,15 @@ class Imagery:
                 return
             tx0, ty0, nx, ny, keys = m
             if not range_in_bounds(src, z, tx0, tx0 + nx - 1, ty0, ty0 + ny - 1):
-                # outside the source's area: never asked, and the prefetch ends here as it did when this
-                # source's coverage probe was fetched first (2026-10-15: carrying on to the base sources made
-                # the integration drive's far field 1729 coverage holes; tonight's game measurements all ran
-                # with this behaviour; render fetches what is missing on demand)
-                return
+                # outside the source's area: never asked, and the next source is the one render draws from (it skips
+                # this one too). It ended the prefetch here (2026-10-15: carrying on to the base sources made the
+                # integration drive's far field 1729 coverage holes), but with the regional tile caches first in
+                # the chain (Connecticut's from z16) that ended every prefetch of a z16+ texture outside them: not one
+                # of a cold French teleport's ~2,300 IGN tiles was prefetched, every far render fetched its own
+                # while it waited (2026-11-11). BNGE_PREFETCH_STOP_REGIONAL=1: ends here, as before
+                if PREFETCH_STOP_REGIONAL:
+                    return
+                continue
             if g:
                 cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
                 keys = {t: kk for t, kk in keys.items() if cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1}

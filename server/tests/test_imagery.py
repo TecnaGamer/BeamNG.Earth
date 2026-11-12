@@ -991,6 +991,20 @@ class GutterTest(unittest.TestCase):
             self.assertTrue(new.fetch_needed(f, *sq, px, gutter=True))
             self.assertEqual(new.requests[n:], [])
 
+    def test_prefetch_goes_past_an_out_of_area_regional_source(self):
+        # a regional tile cache first in the chain (Connecticut's from z16) whose box misses the square: the prefetch
+        # carries on to the source render draws from (before: it ended there, no z16+ texture was ever prefetched)
+        f = g.EnuFrame(LAT0, LON0)
+        with tempfile.TemporaryDirectory() as d:
+            im = FakeNet(d, self._serve_all, chain=("czechia", "usgs"), tone=0.0)
+            sq = imagery.gutter_square(0.0, 0.0, 256.0, 256)
+            for _ in range(3):              # (the coverage probes first)
+                im.prefetch(f, *sq, 256, soon=True, gutter=True)
+                im.pool.shutdown(wait=True)
+                im.pool = futures.ThreadPoolExecutor(4)
+            self.assertTrue([r for r in im.requests if r[0] == "usgs" and r[1] == 16])
+            self.assertFalse([r for r in im.requests if r[0] == "czechia"])
+
     def test_shape_uv_inset(self):
         import farfield as ff
         import cdae
