@@ -270,5 +270,16 @@ class KeepPreviousLogTest(unittest.TestCase):
             self.assertEqual(os.listdir(d), ["server.log"])
 
 
+    def test_stale_level_flag_cleared(self):
+        # (a game killed on our map leaves the engine patches' flag behind; a fresh start removes it)
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "temp"))
+            flag = os.path.join(d, "temp", "beamngearth_gcpatch_on")
+            open(flag, "w").write("1")
+            launcher.clear_level_flag(d)
+            self.assertFalse(os.path.exists(flag))
+            launcher.clear_level_flag(d)      # (none there: quiet)
+            launcher.clear_level_flag(None)
+
 if __name__ == "__main__":
     unittest.main()

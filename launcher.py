@@ -1161,6 +1161,18 @@ MODS_OFF_LINES = ("Mods will be disabled after updating",       # (the first sta
 GAME_LOG_WATCH_S = 600       # s after the game's start the log is watched
 
 
+def clear_level_flag(user_dir):
+    """The engine patches' level flag (temp/beamngearth_gcpatch_on, groundcover.lua) removed before a fresh game start:
+    a game that crashed or was killed on the BeamNG.Earth map leaves it behind, and the patches would then run in the
+    menus and on other maps until the mod next loads and unloads our level."""
+    if not user_dir:
+        return
+    try:
+        os.remove(os.path.join(user_dir, "temp", "beamngearth_gcpatch_on"))
+    except OSError:
+        pass
+
+
 def watch_game_log(user_dir, since):
     """In the background: the game's log (written anew at each start) read for the mods-off line."""
     path = os.path.join(user_dir, "beamng.log")
@@ -2024,6 +2036,7 @@ def run(args):
         else:
             if wine:
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
+            clear_level_flag(user_dir)
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
