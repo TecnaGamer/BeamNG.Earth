@@ -49,7 +49,7 @@ import struct
 import threading
 from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 
@@ -188,10 +188,33 @@ import tilepack as tilepackmod  # noqa: E402
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
 # (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
 CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
+# Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
+# once the whole land is built); kept in the environment so the block workers (spawned) read the same
+S2_MAX_ZOOM_ENV = "BNGE_S2_MAX_ZOOM"
+S2_ZOOMS = (12, 14)                     # (the zooms a switch may set: built ones only)
+
+
+def _s2_zoom(z):
+    try:
+        return max(S2_ZOOMS[0], min(S2_ZOOMS[1], int(z)))
+    except (TypeError, ValueError):
+        return S2_ZOOMS[0]
+
+
 SOURCES["bngs2"] = Source(
-    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", 12,
+    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
-    pack=3, max_view_zoom=12)
+    pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)))
+
+
+def set_s2_max_zoom(z):
+    """bngs2's finest zoom (its max_zoom and max_view_zoom) from now on, in this process and the ones it spawns later
+    (call before any Imagery is made: an Imagery keeps the Source it was given)."""
+    z = _s2_zoom(z)
+    os.environ[S2_MAX_ZOOM_ENV] = str(z)
+    if SOURCES["bngs2"].max_zoom != z:
+        SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z)
+    return SOURCES["bngs2"]
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.

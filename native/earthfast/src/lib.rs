@@ -5940,6 +5940,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 222)?;
+    m.add("VERSION", 228)?;
     Ok(())
 }
