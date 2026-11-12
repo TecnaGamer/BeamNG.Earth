@@ -1005,6 +1005,18 @@ class GutterTest(unittest.TestCase):
             self.assertTrue([r for r in im.requests if r[0] == "usgs" and r[1] == 16])
             self.assertFalse([r for r in im.requests if r[0] == "czechia"])
 
+    def test_one_hosts_queue_never_holds_anothers(self):
+        # imagery's fetch threads are per photo host: a host whose tiles wait (its rate) keeps no other's queued
+        pools = imagery.HostPools(1, "t")
+        gate = threading.Event()
+        try:
+            for _ in range(3):
+                pools.of("ign").submit(gate.wait, 5.0)
+            self.assertEqual(pools.of("eox").submit(lambda: 7).result(timeout=2.0), 7)
+        finally:
+            gate.set()
+            pools.shutdown(wait=True)
+
     def test_shape_uv_inset(self):
         import farfield as ff
         import cdae

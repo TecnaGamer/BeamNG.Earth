@@ -522,7 +522,7 @@ class Imagery:
         self.chain = tuple(SOURCES[s] if isinstance(s, str) else s for s in chain)
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
         self.fetcher.register_chain("imagery", [s.url for s in self.chain])
-        self.pool = ThreadPoolExecutor(min(fetch_workers, FETCH_WORKERS), thread_name_prefix="img-fetch")
+        self.pool = HostPools(min(fetch_workers, FETCH_WORKERS), "img-fetch")
         # urgent(): the player's block's photo, fetched on threads of its own as netfetch "urgent" (ahead of the far
         # field's demand: a teleport's first block waited 37 s behind it with EOX at its budget, GitHub #116)
         self.urgent_pool = ThreadPoolExecutor(URGENT_WORKERS, thread_name_prefix="img-urgent")
@@ -996,6 +996,8 @@ class Imagery:
         fut = self._inflight.get(key)
         if fut is None or fut is stale or (kind == "urgent" and not getattr(fut, "urgent", False)):
             pool = self.urgent_pool if kind == "urgent" else self.pool
+            if isinstance(pool, HostPools):
+                pool = pool.of(netfetch.host_of(key[0].url))
             why = (f"{kind}:" + netfetch._caller(2)) if netfetch.NETLOG_STACK else None
             fut = self._inflight[key] = pool.submit(self._load_kind, key, kind, why)
             fut.urgent = kind == "urgent"
@@ -1998,6 +2000,36 @@ class Imagery:
         if self.colormatch is not None:
             self.colormatch.close()
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+class HostPools:
+    """Imagery's fetch threads, a pool of `workers` per photo host: one host's queue never holds another's tiles back.
+    One pool for all of them queued a cold French teleport's ~2,000 IGN tiles (prefetched at its 50/s) ahead of every
+    EOX tile, and their threads waited on IGN's rate: EOX did all its work after IGN's, not beside it (Lille, Caen,
+    Montpellier 2026-11-11: EOX ~5/s for the first 60 s, then 30-50/s). BNGE_IMG_ONE_POOL=1: one pool, as before."""
+
+    def __init__(self, workers, prefix):
+        self.workers, self.prefix = workers, prefix
+        self._pools = {}
+        self._lock = threading.Lock()
+        self._one = os.environ.get("BNGE_IMG_ONE_POOL") == "1"
+
+    def of(self, host):
+        k = "" if self._one else host
+        with self._lock:
+            p = self._pools.get(k)
+            if p is None:
+                p = self._pools[k] = ThreadPoolExecutor(self.workers, thread_name_prefix=self.prefix)
+            return p
+
+    def submit(self, fn, *args, **kw):
+        return self.of("").submit(fn, *args, **kw)
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        with self._lock:
+            pools = list(self._pools.values())
+        for p in pools:
+            p.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 class EnuSquare:
