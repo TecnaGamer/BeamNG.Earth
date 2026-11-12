@@ -336,9 +336,10 @@ class RespawningPool:
                 log.debug("%s memory watch: %s: %s", self.name, type(e).__name__, e)
 
     def _jobs_step(self, now):
-        """rotate_jobs: the pool rotated once that many jobs are done since its last rotation and it has no backlog
-        (its queued jobs would run in the old processes beside the new ones). True when rotated."""
-        if not self.rotate_jobs or self._jobs_done < self.rotate_jobs or self.inflight > self.workers:
+        """rotate_jobs: the pool rotated once that many jobs a process (times its processes) are done since its last
+        rotation and it has no backlog (its queued jobs would run in the old processes beside the new ones). True when
+        rotated."""
+        if not self.rotate_jobs or self._jobs_done < self.rotate_jobs * self.workers or self.inflight > self.workers:
             return False
         return self.rotate(f"{self._jobs_done} jobs done", now)
 

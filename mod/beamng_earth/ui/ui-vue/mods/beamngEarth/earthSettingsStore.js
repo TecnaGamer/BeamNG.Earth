@@ -125,7 +125,7 @@ export const settingsSchema = [
       { id: "memoryUsage", type: "info", name: "World server memory", desc: "The memory the BeamNG.Earth app holds now to build the world (all its processes together), and its limit. The game's own memory is not counted." },
       { id: "maxRamGb", type: "select", default: "auto", name: "Max RAM for BeamNG.Earth", desc: "The most memory the BeamNG.Earth app may use to build the world, all its processes together; the game's own memory is not counted. Auto: a third of your computer's memory, at least 1.5 GB and at most 16 GB (5 GB on a 16 GB PC, 10 GB on a 32 GB one). Near the limit the app drops its caches and restarts its busiest helper processes, and it uses less while your computer is short of memory. Lower it if the game stutters while other programs are open; the world then loads more slowly. More than Auto rarely loads faster.",
         note: "The limit takes effect at once; the app's caches and helper processes are sized for it the next time you start BeamNG.Earth.",
-        options: [ { label: "Auto", value: "auto" }, { label: "2 GB", value: "2" }, { label: "3 GB", value: "3" }, { label: "4 GB", value: "4" }, { label: "6 GB", value: "6" }, { label: "8 GB", value: "8" }, { label: "12 GB", value: "12" }, { label: "16 GB", value: "16" }, { label: "24 GB", value: "24" }, { label: "32 GB", value: "32" } ] },
+        options: [ { label: "Auto", value: "auto" }, { label: "3 GB", value: "3" }, { label: "4 GB", value: "4" }, { label: "6 GB", value: "6" }, { label: "8 GB", value: "8" }, { label: "12 GB", value: "12" }, { label: "16 GB", value: "16" }, { label: "24 GB", value: "24" }, { label: "32 GB", value: "32" } ] },
     ],
   },
   {
