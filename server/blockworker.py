@@ -123,6 +123,8 @@ class _State:
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
         budget.register_shed(self._clear_chunks)
+        import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
+        budget.register_shed(rangeread.clear_memory)
 
     def _clear_chunks(self):
         with self.lock:

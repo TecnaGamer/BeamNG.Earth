@@ -302,3 +302,106 @@ class RespawningPool:
         with self._lock:
             pool = self._pool
         return pool.shutdown(*args, **kwargs)
+
+
+# An ElasticPool's extra processes stop once none of them has had a job for this long (s). BNGE_POOL_EXTRA_IDLE_S=0:
+# kept for the session once started (how the far-tile pool's ten processes stayed from 1.9.0 on: GitHub #1114, #1026)
+EXTRA_IDLE_S = float(os.environ.get("BNGE_POOL_EXTRA_IDLE_S", "") or 60.0)
+REAP_CHECK_S = 5.0
+
+
+class ElasticPool:
+    """A RespawningPool of `base` processes kept for the session and, beside it, up to `extra` more started when every
+    base process has a job and stopped again once they idle for EXTRA_IDLE_S: the far-tile pool's 10 processes (the 3D
+    map, a teleport's loading boost; 3 at once while driving) all stayed for the session from the first boost on, each
+    with its own caches, a desktop's server at 21 processes and ~14 GB after four minutes of a fresh city (GitHub #1114:
+    "unplayable at 22 instances"; 2026-11-11). submit / shutdown / inflight / workers as a RespawningPool's."""
+
+    def __init__(self, name, base, extra, *args, idle_s=None, **kwargs):
+        self.name, self.base_n, self.extra_n = name, max(1, int(base)), max(0, int(extra))
+        self._args, self._kwargs = args, kwargs
+        self.base = RespawningPool(name, self.base_n, *args, **kwargs)
+        self.extra = None
+        self.workers = self.base_n + self.extra_n
+        self.idle_s = EXTRA_IDLE_S if idle_s is None else idle_s
+        self._lock = threading.Lock()
+        self._idle_since = None
+        self.extra_starts = self.extra_stops = 0
+        # want(): the jobs its caller runs at once now (earthd: Server.far_limit, 3 while driving, 10 with the 3D map
+        # open or the loading boost on): no extras while it is within the base. Without it a job finishing and the
+        # next submitted at once could find the base still counting the old one (its future's callbacks run after its
+        # waiter wakes) and start the extras while driving
+        self.want = None
+        if self.extra_n and self.idle_s > 0:
+            threading.Thread(target=self._reap_loop, name=f"{name} reaper", daemon=True).start()
+
+    @property
+    def inflight(self):
+        ex = self.extra
+        return self.base.inflight + (ex.inflight if ex is not None else 0)
+
+    @property
+    def respawns(self):
+        ex = self.extra
+        return self.base.respawns + (ex.respawns if ex is not None else 0)
+
+    def submit(self, fn, *args, **kwargs):
+        """To a base process while one is free of jobs (counted in flight: queued or running) or the caller wants no
+        more than the base at once (want), else to the extras (started now if they are not running)."""
+        if not self.extra_n or self.base.inflight < self.base_n or self._within_base():
+            return self.base.submit(fn, *args, **kwargs)
+        with self._lock:            # (the reaper stops them under it: never a submit to a pool shut down)
+            if self.extra is None:
+                self.extra = RespawningPool(self.name, self.extra_n, *self._args, **self._kwargs)
+                self.extra_starts += 1
+                log.info("%s: %d more processes for a burst (they stop after %.0f s without a job)", self.name,
+                         self.extra_n, self.idle_s)
+            self._idle_since = None
+            return self.extra.submit(fn, *args, **kwargs)
+
+    def _within_base(self):
+        want = self.want
+        if want is None:
+            return False
+        try:
+            return want() <= self.base_n
+        except Exception:
+            return False
+
+    def _reap_loop(self):
+        while True:
+            time.sleep(REAP_CHECK_S)
+            try:
+                self.reap_step(time.monotonic())
+            except Exception as e:      # (never let the reaper die)
+                log.debug("%s reaper: %s: %s", self.name, type(e).__name__, e)
+
+    def reap_step(self, now):
+        """The extras stopped when they have had no job in flight for idle_s up to now. True when stopped."""
+        with self._lock:
+            ex = self.extra
+            if ex is None or self.idle_s <= 0:
+                return False
+            if ex.inflight:
+                self._idle_since = None
+                return False
+            if self._idle_since is None:
+                self._idle_since = now
+                return False
+            if now - self._idle_since < self.idle_s:
+                return False
+            self.extra, self._idle_since = None, None
+            self.extra_stops += 1
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
+        log.info("%s: the %d burst processes stopped (idle %.0f s)", self.name, self.extra_n, self.idle_s)
+        return True
+
+    def shutdown(self, *args, **kwargs):
+        with self._lock:
+            ex, self.extra = self.extra, None
+        if ex is not None:
+            ex.shutdown(*args, **kwargs)
+        return self.base.shutdown(*args, **kwargs)
