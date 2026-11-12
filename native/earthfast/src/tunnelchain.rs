@@ -149,7 +149,8 @@ impl<'a> Net<'a> {
 
 /// The floor of a tunnel line (arc s, its ends' heights in g[0] and g[last]): the lower hull of g, lowered where the map
 /// has the tunnel under flat ground (the ground beside it, side_l / side_r, within flat_m of the ground over it,
-/// cover_g) with less than open_cover over that hull for min_run m or more, to `need` under that ground, eased in and
+/// cover_g) with less than `need` over that hull for min_run m or more, min_run m of it with less than open_cover (an
+/// open road), to `need` under that ground, eased in and
 /// out at `grade` and no lower than `grade` from either end. A city's cut-and-cover tunnel under level streets (Perth's
 /// Graham Farmer Freeway under Northbridge, 1.6 km, GitHub #464 #1018; Stuttgart's B14, GitHub #490; I-395 under
 /// Washington): the hull of a level street is the street, so the tunnel was an open road through the city at street
@@ -173,7 +174,10 @@ pub fn buried_floor_flag(s: &[f64], g: &[f64], gc: &[f64], side_l: &[f64], side_
     if n < 3 || !(need > 0.0) || gc.len() != n || side_l.len() != n || side_r.len() != n {
         return (floor, false);
     }
-    // the stretches under flat ground the hull leaves shallower than need (open_cover: unused, kept for the callers)
+    // the stretches under flat ground the hull leaves shallower than need, where it leaves min_run of the road in the
+    // open (less than open_cover over it): a ramp climbing from a trench to the street under a few streets has its
+    // cover from the hull, and buried it stayed 6.5 m down to a 6 % ramp cut open through those streets (Porte
+    // Maillot's ramp off the Périphérique, 2026-11-12)
     let cand: Vec<bool> = (0..n)
         .map(|i| {
             let (l, r) = (side_l[i] - gc[i], side_r[i] - gc[i]);
@@ -192,7 +196,13 @@ pub fn buried_floor_flag(s: &[f64], g: &[f64], gc: &[f64], side_l: &[f64], side_
         while j + 1 < n && cand[j + 1] {
             j += 1;
         }
-        if s[j] - s[i] >= min_run {
+        let mut bare = 0.0;
+        for q in i..j {
+            if gc[q] - floor[q] < open_cover && gc[q + 1] - floor[q + 1] < open_cover {
+                bare += s[q + 1] - s[q];
+            }
+        }
+        if s[j] - s[i] >= min_run && bare >= min_run {
             for q in i..=j {
                 target[q] = gc[q] - need;
             }
@@ -212,11 +222,18 @@ pub fn buried_floor_flag(s: &[f64], g: &[f64], gc: &[f64], side_l: &[f64], side_
         c[q] = c[q].min(c[q + 1] + grade * (s[q + 1] - s[q]));
     }
     let (z0, z1, total) = (floor[0], floor[n - 1], s[n - 1]);
+    // (and no lower than `grade` from where a road on the ground joins it: HELD)
+    let held: Vec<usize> = (0..n).filter(|&i| side_l[i] == HELD && side_r[i] == HELD && gc[i].is_finite()).collect();
     let mut out = floor.clone();
+    let mut lows = vec![f64::NEG_INFINITY; n];
     for q in 0..n {
         let a = if portals.0 { z0 - grade * s[q] } else { f64::NEG_INFINITY };
         let b = if portals.1 { z1 - grade * (total - s[q]) } else { f64::NEG_INFINITY };
-        let low = a.max(b);
+        let mut low = a.max(b);
+        for &h in &held {
+            low = low.max(gc[h] - grade * (s[q] - s[h]).abs());
+        }
+        lows[q] = low.min(floor[q]);
         out[q] = floor[q].min(c[q]).max(low);
     }
     // (rounded over BURY_SMOOTH_M: three box passes, the ends held, never over the hull: the target follows every
@@ -235,7 +252,7 @@ pub fn buried_floor_flag(s: &[f64], g: &[f64], gc: &[f64], side_l: &[f64], side_
                 sum -= prev[lo];
                 lo += 1;
             }
-            out[q] = (sum / (hi - lo) as f64).min(floor[q]);
+            out[q] = (sum / (hi - lo) as f64).min(floor[q]).max(lows[q]);
         }
         out[0] = z0;
         out[n - 1] = z1;
@@ -405,6 +422,202 @@ pub fn chain_nodes(n: usize, ea: &[i64], eb: &[i64], starts: &[i64], s: &[f64], 
         }
     }
     z
+}
+
+/// roads.tunnel_side_ground: the ground beside a tunnel line as the burial reads it (buried_floor's side_l / side_r,
+/// close_gaps'): per sample i of the line (ground gc), the ground at m offsets going outwards on its left
+/// (left[i * m + j]) and on its right. The nearest offset's, unless the line lies in a trench the ground shows: a wall
+/// on both sides within the offsets (the ground stepping up wall_m or more from one offset to the next, or 1.6 wall_m
+/// over two, to trench_m or more over the line), then the lower wall's top on both sides. One offset saw the floor of a wide trench as flat
+/// ground: I-395's cut through Washington is 45-75 m across, its carriageway 20-60 m from the walls, and the tunnel
+/// was dug 6.5 m under the trench it runs in (2026-11-12). A sample between two trench stretches less than join_m
+/// apart is in the trench too (a lid or a bridge the elevation holds over it). A valley or a hillside (the ground
+/// rising gently, or on one side) is no trench. Pure.
+#[allow(clippy::too_many_arguments)]
+pub fn side_ground(gc: &[f64], left: &[f64], right: &[f64], m: usize, s: &[f64], wall_m: f64, trench_m: f64,
+                   join_m: f64) -> (Vec<f64>, Vec<f64>) {
+    side_ground_held(gc, left, right, m, s, wall_m, trench_m, join_m, &[])
+}
+
+/// The marker in buried_floor's side arrays (both sides) of a sample where the tunnel's road is at the ground: a road
+/// on the ground joins it there (join_arcs).
+pub const HELD: f64 = f64::INFINITY;
+
+/// The stretches (from, to: arcs) of a tunnel line xy (k, 2 flat; arcs s) where a road on the ground (pts rows
+/// starts[r]..starts[r + 1]) that ends on it (within tol m) runs beside it, nearer than `clear` m: a slip road merging
+/// into the tunnel's carriageway, or forking off it at its portal, does so at the ground, and the two run at one
+/// height until they are a carriageway apart, so the tunnel is not under that ground there (Bologna's Viale Sandro
+/// Pertini, mapped as a 580 m tunnel under a roundabout: buried, it ramped down from the fork beside the slip road up
+/// to the roundabout, a 1 m ledge between them, 2026-11-12). The road it goes on from at a portal leaves it at once
+/// (a stretch of no length). Pure.
+pub fn join_arcs(xy: &[f64], s: &[f64], pts: &[f64], starts: &[i64], tol: f64, clear: f64) -> Vec<(f64, f64)> {
+    let n = s.len();
+    let mut out = Vec::new();
+    if n < 2 || xy.len() != 2 * n {
+        return out;
+    }
+    // (distance to the line, the arc there)
+    let near = |px: f64, py: f64| -> (f64, f64) {
+        let (mut best, mut arc) = (f64::INFINITY, 0.0);
+        for i in 0..n - 1 {
+            let (ax, ay, bx, by) = (xy[2 * i], xy[2 * i + 1], xy[2 * i + 2], xy[2 * i + 3]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let d = ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt();
+            if d < best {
+                best = d;
+                arc = s[i] + t * (s[i + 1] - s[i]);
+            }
+        }
+        (best, arc)
+    };
+    const STEP_M: f64 = 4.0;
+    for r in 0..starts.len().saturating_sub(1) {
+        let (a, b) = (starts[r] as usize, starts[r + 1] as usize);
+        if b < a + 2 || 2 * b > pts.len() {
+            continue;
+        }
+        for fwd in [true, false] {
+            let idx: Vec<usize> = if fwd { (a..b).collect() } else { (a..b).rev().collect() };
+            let (d0, a0) = near(pts[2 * idx[0]], pts[2 * idx[0] + 1]);
+            if d0 >= tol {
+                continue;
+            }
+            let (mut lo, mut hi) = (a0, a0);
+            'walk: for w in idx.windows(2) {
+                let (px, py, qx, qy) = (pts[2 * w[0]], pts[2 * w[0] + 1], pts[2 * w[1]], pts[2 * w[1] + 1]);
+                let len = ((qx - px).powi(2) + (qy - py).powi(2)).sqrt();
+                let m = (len / STEP_M).ceil().max(1.0) as usize;
+                for k in 1..=m {
+                    let t = k as f64 / m as f64;
+                    let (d, arc) = near(px + t * (qx - px), py + t * (qy - py));
+                    if d >= clear {
+                        break 'walk;
+                    }
+                    lo = lo.min(arc);
+                    hi = hi.max(arc);
+                }
+            }
+            out.push((lo, hi));
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    out
+}
+
+/// side_ground, the samples within the stretches `held` (and the nearest to each) marked HELD on both sides.
+#[allow(clippy::too_many_arguments)]
+pub fn side_ground_held(gc: &[f64], left: &[f64], right: &[f64], m: usize, s: &[f64], wall_m: f64, trench_m: f64,
+                        join_m: f64, held: &[(f64, f64)]) -> (Vec<f64>, Vec<f64>) {
+    let (mut sl, mut sr) = side_ground_bare(gc, left, right, m, s, wall_m, trench_m, join_m);
+    for &(from, to) in held {
+        let mid = 0.5 * (from + to);
+        let i = s.partition_point(|&v| v < mid);
+        let near = if i > 0 && (i >= s.len() || mid - s[i - 1] <= s[i] - mid) { i - 1 } else { i };
+        for q in 0..sl.len() {
+            if q == near || (s[q] >= from && s[q] <= to) {
+                sl[q] = HELD;
+                sr[q] = HELD;
+            }
+        }
+    }
+    (sl, sr)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn side_ground_bare(gc: &[f64], left: &[f64], right: &[f64], m: usize, s: &[f64], wall_m: f64, trench_m: f64,
+                    join_m: f64) -> (Vec<f64>, Vec<f64>) {
+    let n = gc.len();
+    if m == 0 || left.len() != n * m || right.len() != n * m || s.len() != n {
+        return (vec![f64::NAN; n], vec![f64::NAN; n]);
+    }
+    // the top of the wall on one side (NaN: none)
+    let wall = |side: &[f64], i: usize| -> f64 {
+        // (a step of wall_m from one offset to the next, or of 1.6 wall_m over two: an earth cutting's slope)
+        let (mut prev, mut prev2) = (gc[i], gc[i]);
+        for j in 0..m {
+            let v = side[i * m + j];
+            if !v.is_finite() || !prev.is_finite() || !prev2.is_finite() {
+                prev2 = prev;
+                prev = v;
+                continue;
+            }
+            if (v - prev >= wall_m || v - prev2 >= 1.6 * wall_m) && v - gc[i] >= trench_m {
+                // (the wall's top: the offsets from here on while they still climb)
+                let mut top = v;
+                for q in j + 1..m {
+                    let w = side[i * m + q];
+                    if w.is_finite() && w >= top {
+                        top = w;
+                    } else {
+                        break;
+                    }
+                }
+                return top;
+            }
+            prev2 = prev;
+            prev = v;
+        }
+        f64::NAN
+    };
+    let mut top = vec![f64::NAN; n];
+    for i in 0..n {
+        if !gc[i].is_finite() {
+            continue;
+        }
+        let (l, r) = (wall(left, i), wall(right, i));
+        if l.is_finite() && r.is_finite() {
+            top[i] = l.min(r);
+        }
+    }
+    // a short stretch between two trench stretches: in the trench (the nearer one's top)
+    let mut i = 0;
+    while i < n {
+        if top[i].is_finite() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j + 1 < n && !top[j + 1].is_finite() {
+            j += 1;
+        }
+        if i > 0 && j + 1 < n && s[j + 1] - s[i - 1] < join_m {
+            for q in i..=j {
+                top[q] = if s[q] - s[i - 1] <= s[j + 1] - s[q] { top[i - 1] } else { top[j + 1] };
+            }
+        }
+        i = j + 1;
+    }
+    let mut sl = vec![f64::NAN; n];
+    let mut sr = vec![f64::NAN; n];
+    for i in 0..n {
+        if top[i].is_finite() {
+            sl[i] = top[i].max(gc[i] + trench_m);
+            sr[i] = sl[i];
+        } else {
+            sl[i] = left[i * m];
+            sr[i] = right[i * m];
+        }
+    }
+    (sl, sr)
+}
+
+/// side_ground_held for Python: (side_l, side_r), held at the ground roads' joins (join_arcs: the line xy (k, 2) flat,
+/// the ground roads' points pts (flat) and row starts; tol, clear).
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn tunnel_side_ground<'py>(py: Python<'py>, gc: PyReadonlyArray1<'py, f64>, left: PyReadonlyArray1<'py, f64>,
+                               right: PyReadonlyArray1<'py, f64>, m: usize, s: PyReadonlyArray1<'py, f64>,
+                               wall_m: f64, trench_m: f64, join_m: f64, xy: PyReadonlyArray1<'py, f64>,
+                               pts: PyReadonlyArray1<'py, f64>, starts: PyReadonlyArray1<'py, i64>, tol: f64,
+                               clear: f64)
+                               -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
+    let s = s.as_slice().unwrap();
+    let held = join_arcs(xy.as_slice().unwrap(), s, pts.as_slice().unwrap(), starts.as_slice().unwrap(), tol, clear);
+    let (l, r) = side_ground_held(gc.as_slice().unwrap(), left.as_slice().unwrap(), right.as_slice().unwrap(), m, s,
+                                  wall_m, trench_m, join_m, &held);
+    (l.into_pyarray(py), r.into_pyarray(py))
 }
 
 /// kinds with each open gap shorter than gap_m between two covered runs (inside the tunnel, not at a portal) covered
@@ -614,6 +827,74 @@ mod tests {
         // a gallery on a hillside: one side higher
         let f = buried_floor(&s, &g, &g, &cut, &flat, 4.0, 8.0, 0.06, 2.0, 40.0);
         assert!(f.iter().all(|&v| (v - 20.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn trench_floor_is_not_flat_ground() {
+        use super::side_ground;
+        let n = 20;
+        let s: Vec<f64> = (0..n).map(|i| i as f64 * 4.0).collect();
+        let gc = vec![5.0; n];
+        let m = 4;
+        // a wide trench: the floor for two offsets, then the walls (left at the 3rd offset, right at the 2nd)
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        for _ in 0..n {
+            left.extend([5.1, 5.2, 11.5, 12.0]);
+            right.extend([5.0, 12.0, 12.1, 12.0]);
+        }
+        let (l, r) = side_ground(&gc, &left, &right, m, &s, 2.5, 3.0, 40.0);
+        assert!(l.iter().all(|&v| (v - 12.0).abs() < 1e-9) && r.iter().all(|&v| (v - 12.0).abs() < 1e-9), "{:?}", l);
+        // a level city: the nearest offset's ground
+        let flat: Vec<f64> = (0..n * m).map(|_| 5.2).collect();
+        let (l, r) = side_ground(&gc, &flat, &flat, m, &s, 2.5, 3.0, 40.0);
+        assert!(l.iter().chain(r.iter()).all(|&v| (v - 5.2).abs() < 1e-9));
+        // a hillside (one wall) and a valley rising gently on both sides: the nearest offset's
+        let mut hill = Vec::new();
+        let mut gentle = Vec::new();
+        for _ in 0..n {
+            hill.extend([5.0, 5.0, 5.0, 5.0]);
+            gentle.extend([6.0, 7.0, 8.0, 9.0]);
+        }
+        let (l, _r) = side_ground(&gc, &left, &hill, m, &s, 2.5, 3.0, 40.0);
+        assert!((l[3] - 5.1).abs() < 1e-9);
+        let (l, r) = side_ground(&gc, &gentle, &gentle, m, &s, 2.5, 3.0, 40.0);
+        assert!((l[3] - 6.0).abs() < 1e-9 && (r[3] - 6.0).abs() < 1e-9);
+        // a lid over the trench for 16 m (the ground level with the walls there): still the trench
+        let mut gl = gc.clone();
+        let (mut left2, mut right2) = (left.clone(), right.clone());
+        for i in 8..12 {
+            gl[i] = 12.0;
+            for j in 0..m {
+                left2[i * m + j] = 12.0;
+                right2[i * m + j] = 12.0;
+            }
+        }
+        let (l, _r) = side_ground(&gl, &left2, &right2, m, &s, 2.5, 3.0, 40.0);
+        assert!(l[9] >= 12.0 + 3.0 - 1e-9, "{}", l[9]);
+    }
+
+    #[test]
+    fn ground_road_joining_holds_the_floor() {
+        use super::{buried_floor, join_arcs, side_ground_held, HELD};
+        let s: Vec<f64> = (0..=100).map(|i| i as f64 * 10.0).collect();
+        let xy: Vec<f64> = s.iter().flat_map(|&v| [v, 0.0]).collect();
+        // a slip road ending on the line 300 m in (coming in square), another road ending 30 m beside it, the road the
+        // tunnel goes on from at its portal, and a slip road forking off at the portal, 15 m away after 150 m
+        let pts = [300.0, 40.0, 300.0, 0.3, 500.0, 60.0, 500.0, 30.0, -50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 300.0, 30.0];
+        let arcs = join_arcs(&xy, &s, &pts, &[0, 2, 4, 6, 8], 1.0, 15.0);
+        assert_eq!(arcs.len(), 3, "{:?}", arcs);
+        assert!(arcs[0] == (0.0, 0.0), "{:?}", arcs);                               // the approach
+        assert!(arcs[1].0 == 0.0 && (arcs[1].1 - 148.0).abs() < 5.0, "{:?}", arcs); // the fork, until 15 m apart
+        assert!((arcs[2].0 - 300.0).abs() < 1e-9 && (arcs[2].1 - 300.0).abs() < 1e-9);
+        let g = vec![20.0; s.len()];
+        let flat: Vec<f64> = g.clone();
+        let (l, r) = side_ground_held(&g, &flat, &flat, 1, &s, 2.5, 3.0, 60.0, &arcs);
+        assert!(l[30] == HELD && r[30] == HELD && l[29] == 20.0 && l[14] == HELD && l[16] == 20.0);
+        let f = buried_floor(&s, &g, &g, &l, &r, 4.0, 8.0, 0.06, 2.0, 40.0);
+        assert!(f[30] > 19.0, "{}", f[30]);                         // at the ground where the road joins
+        assert!(f[10] > 19.0, "{}", f[10]);                         // and beside the fork
+        assert!((f[70] - 12.0).abs() < 1e-9, "{}", f[70]);          // buried between the join and the portal
+        assert!(f[35] > 20.0 - 0.06 * 50.0 - 1.0, "{}", f[35]);     // ramping away from the join at 6 %
     }
 
     #[test]

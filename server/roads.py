@@ -5582,8 +5582,12 @@ ROAD_CAP_OVER_M = 1.0   # ... and its portal face reaches at most this far over 
 CHAIN_PINS = os.environ.get("BNE_TUNNEL_CHAINS", "on") != "off"   # a tunnel's joints from its whole network
 PORTAL_RUN_ON = os.environ.get("BNE_TUNNEL_PORTAL_RUN", "off") == "on"   # portal_cover from the inside out (off:
 # the ramps of the drivability replays at Casagranda and Riva steepened; a buried tunnel skips portal_cover anyway)
-BURY_ON = os.environ.get("BNE_TUNNEL_BURY", "off") == "on"   # a tunnel under flat ground buried (tunnel_sides)
-BURY_SIDE_M = 8.0       # m past a tunnel's carriageway edge where the ground beside it is read (a cutting / flat)
+BURY_ON = os.environ.get("BNE_TUNNEL_BURY", "on") != "off"   # a tunnel under flat ground buried (tunnel_side_ground)
+BURY_SIDE_M = 8.0       # m past a tunnel's carriageway edge where the ground beside it is read (a cutting / flat) ...
+BURY_SIDE_STEP_M = 8.0  # ... and every this far on, BURY_SIDE_N times in all (64 m past the first): a trench wider than
+BURY_SIDE_N = 9         # the first read is found by its walls (earthfast.tunnel_side_ground: I-395's cut through
+BURY_WALL_M = 2.5       # Washington is 45-75 m across; the ground stepping up this much from one read to the next)
+BURY_TRENCH_JOIN_M = 60.0   # m: a stretch this short between two trench stretches is in the trench (a lid, a bridge)
 BURY_FLAT_M = 2.0       # m: the ground beside within this of the ground over the line: flat (not a cutting or a slope)
 BURY_GRADE = 0.06       # the ramps down to a buried tunnel's floor and back
 BURY_NEED_M = 6.5       # m a buried tunnel's floor lies under the ground over it: a concrete box (MAJOR_LOW_H) and its
@@ -5596,7 +5600,7 @@ GAP_CLOSE_M = 40.0      # m: an open gap this short between two covered sections
 GAP_TRENCH_M = 3.0      # ... unless the ground beside it stands this far over the line (a cutting: daylight)
 BURY_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
                 "secondary_link", "tertiary", "tertiary_link"}
-ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "off") == "on"  # cover_roads: only roads over the tunnel's level
+ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "on") != "off"  # cover_roads: only roads over the tunnel's level
 BORE_FIT = os.environ.get("BNE_TUNNEL_BORE_FIT", "on") != "off"   # a tube no taller than the room under a road over it
 BORE_FIT_M = 0.7        # m kept between a tube's vault and a road over it (arch_raise's soil + 0.1)
 BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them
@@ -7953,7 +7957,7 @@ def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M,
     reaches TUNNEL_COVER; runs and gaps shorter than min_m merged away). One long 'tunnel' in the map can be a sunken
     road with arches and a rock tunnel along it (Central Park's 79th Street Transverse, 683 m: one tube, 2026-10-17).
     cover_g: the ground the cover is read on where it is not g (g's ends pinned to a joint's floor: _chain_pins).
-    sides: (left, right) ground beside it (tunnel_sides): the floor buried under flat ground (BURY_*,
+    sides: (left, right) ground beside it (tunnel_side_ground): the floor buried under flat ground (BURY_*,
     earthfast.tunnel_sections_buried); flags (a dict): flags["buried"] set when it was (its portals then stand where
     the ramps reach BURY_OPEN_M: portal_cover is not for it); portals: (start, end) is a portal the ramps climb to (not a
     joint or a cell's clip inside the tunnel). The Rust kernel (fast). Pure."""
@@ -7994,18 +7998,39 @@ def _short_piece(s, gc, f, k, oc, fc, pinned):
     return _shallow_full_low(s, gc, f, k)
 
 
-def tunnel_sides(xy, spec):
-    """(left, right) points (k, 2) BURY_SIDE_M past the carriageway's edges of a tunnel line xy (k, 2), where the
-    ground beside it is read (tunnel_sections' sides), or None: not a road buried under flat ground (BURY_CLASSES,
-    BURY_ON). Pure."""
+def tunnel_side_ground(xy, s, g, spec, gfn, ground=None):
+    """(left, right): the ground beside a tunnel line xy (k, 2; arc s, the ground over it g) as the burial reads it
+    (tunnel_sections' sides), or None: not a road buried under flat ground (BURY_CLASSES, BURY_ON). Read with gfn(points
+    (m, 2)) BURY_SIDE_M past the carriageway's edges and BURY_SIDE_N times every BURY_SIDE_STEP_M on: the nearest
+    read's, or where both sides show a wall the trench's top (earthfast.tunnel_side_ground: a tunnel in a trench the
+    ground shows is not under flat ground, however wide the trench). ground ({(fid, "g"): [lines]}, the chain's): where
+    a road on the ground ends on the line, and while it runs beside it (BURY_SIDE_M past the carriageway's edge: a
+    slip road joining, or forking off at the portal), the tunnel's road is at the ground (marked on both sides: no
+    burial there, the ramps start past it). Pure given gfn."""
     if not BURY_ON or spec is None or spec.cls not in BURY_CLASSES or len(xy) < 2:
         return None
+    import fast
+    fast.require(251, "tunnel_side_ground")
     xy = np.asarray(xy, np.float64)[:, :2]
     d = np.gradient(xy, axis=0)
     d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     nrm = np.c_[-d[:, 1], d[:, 0]]
-    off = spec.width / 2 + BURY_SIDE_M
-    return xy + nrm * off, xy - nrm * off
+    off = spec.width / 2 + BURY_SIDE_M + BURY_SIDE_STEP_M * np.arange(BURY_SIDE_N)
+    step = nrm[:, None, :] * off[None, :, None]
+    gl = np.asarray(gfn((xy[:, None, :] + step).reshape(-1, 2)), np.float64)
+    gr = np.asarray(gfn((xy[:, None, :] - step).reshape(-1, 2)), np.float64)
+    lines = [np.asarray(ln, np.float64).reshape(-1, 2) for gk, lns in sorted((ground or {}).items()) if gk[1] == "g"
+             for ln in lns if len(ln) >= 2]
+    lo, hi = xy.min(axis=0) - CHAIN_END_M, xy.max(axis=0) + CHAIN_END_M
+    lines = [ln for ln in lines if ((ln[[0, -1]] >= lo) & (ln[[0, -1]] <= hi)).all(axis=1).any()]
+    pts = np.concatenate(lines) if lines else np.zeros((0, 2))
+    starts = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
+    sl, sr = fast._ef.tunnel_side_ground(
+        np.ascontiguousarray(g, np.float64), np.ascontiguousarray(gl), np.ascontiguousarray(gr), int(BURY_SIDE_N),
+        np.ascontiguousarray(s, np.float64), float(BURY_WALL_M), float(GAP_TRENCH_M), float(BURY_TRENCH_JOIN_M),
+        np.ascontiguousarray(xy.reshape(-1)), np.ascontiguousarray(pts.reshape(-1)), starts, float(CHAIN_END_M),
+        float(spec.width / 2 + BURY_SIDE_M))
+    return np.asarray(sl, np.float64), np.asarray(sr, np.float64)
 
 
 def _shallow_full_low(s, g, floor, kinds):
@@ -8070,6 +8095,39 @@ class TunnelProfiles(BridgeProfiles):
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return self.frame.geodetic_to_enu(la, lo, np.asarray(self.raw(la, lo), np.float64))[2]
+
+    def _resolve(self, start, pool, ground, loaded):
+        """BridgeProfiles._resolve, and the same network whichever of its parts, from whichever cell, it was asked for:
+        the map cell at every end of its parts read (a longer copy of a part clipped by the cell it was found in, a
+        part only another cell holds, the roads mapped on from a portal), until none is new; `ground` then holds the
+        ground roads of exactly those cells, the first copy of each in the cells' order. The road tiles, the terrain
+        blocks and the grading each ask for a network from their own cell, and solved it with whatever cells that had
+        brought: I-395's ramps under Washington pinned to different joints by the tunnel store and the grading, a 1.4 m
+        step in the ground between them (2026-11-12)."""
+        while True:
+            comp = super()._resolve(start, pool, ground, loaded)
+            cells = {}
+            for k in comp:
+                xy = np.asarray(pool[k][1], np.float64)
+                la, lo, _ = self.frame.enu_to_geodetic(xy[[0, -1], 0], xy[[0, -1], 1], 0.0)
+                for la_, lo_ in zip(np.asarray(la), np.asarray(lo)):
+                    ck = mapcells.cell_of(float(la_), float(lo_))
+                    cells.setdefault(str(ck), ck)
+            new = [cells[c] for c in sorted(cells) if c not in loaded]
+            if not new or len(loaded) >= CHAIN_CELLS:
+                break
+            for ck in new:
+                if len(loaded) < CHAIN_CELLS:
+                    loaded.add(str(ck))
+                    self._load(ck, pool, ground)
+        canon = {}
+        for c in sorted(cells):
+            if c in loaded:
+                for gk, lines in self._cell_entries(cells[c])[1]:
+                    canon.setdefault(gk, lines)
+        ground.clear()
+        ground.update(canon)
+        return comp
 
     @staticmethod
     def _part_id(key):
@@ -8174,9 +8232,6 @@ class TunnelProfiles(BridgeProfiles):
         sls, srs = [], []
         for k in keys:
             xy = np.asarray(pool[k][1], np.float64)[:, :2]
-            sd = tunnel_sides(xy, pool[k][0])
-            sls.append(np.asarray(gfn(sd[0]), np.float64) if sd is not None else np.full(len(xy), np.nan))
-            srs.append(np.asarray(gfn(sd[1]), np.float64) if sd is not None else np.full(len(xy), np.nan))
             a, b = nk(xy[0]), nk(xy[-1])
             ends_xy.setdefault(a, xy[0])
             ends_xy.setdefault(b, xy[-1])
@@ -8184,6 +8239,9 @@ class TunnelProfiles(BridgeProfiles):
             eb.append(b)
             ss.append(np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
             gs.append(np.asarray(gfn(xy), np.float64))
+            sd = tunnel_side_ground(xy, ss[-1], gs[-1], pool[k][0], gfn, ground)
+            sls.append(sd[0] if sd is not None else np.full(len(xy), np.nan))
+            srs.append(sd[1] if sd is not None else np.full(len(xy), np.nan))
             starts.append(starts[-1] + len(xy))
         n = nk.n
         deg = np.zeros(n, np.int64)
@@ -8352,6 +8410,7 @@ class TunnelProfiles(BridgeProfiles):
                 continue
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             g = np.asarray(gfn(xy), np.float64)
+            g_raw = g
             underwater = k in underwater_floors
             ge = g[[0, -1]] if underwater else np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
             g = g.copy()
@@ -8373,8 +8432,7 @@ class TunnelProfiles(BridgeProfiles):
                 cover_ground = np.where(np.asarray(d) > .5, np.maximum(g, lz), g)
                 kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
             else:
-                sd = tunnel_sides(xy, pool[k][0])
-                sides = None if sd is None else (np.asarray(gfn(sd[0]), np.float64), np.asarray(gfn(sd[1]), np.float64))
+                sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
                 fl = {}
                 floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
                                                portals=(not pinned[0], not pinned[1]))

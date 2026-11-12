@@ -5859,6 +5859,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads_over, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelchain::tunnel_chain_nodes, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelchain::tunnel_portal_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_side_ground, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
@@ -6296,6 +6297,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
         // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
         // _buried, tunnel_cover_roads_over)
-    m.add("VERSION", 248)?;
+        // 251: tunnel_side_ground (the ground beside a tunnel read out to the walls of a trench)
+    m.add("VERSION", 251)?;
     Ok(())
 }
