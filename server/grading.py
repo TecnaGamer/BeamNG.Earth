@@ -584,7 +584,8 @@ ABUT_MAX_M = 8.0            # m filled at most
 # its surface there, and the track's mesh is flushed with that surface anyway (railways.tile_mesh).
 RAIL_YIELD_ON = os.environ.get("BNE_RAIL_YIELD", "on") != "off"
 RAIL_YIELD_PAD_M = 0.5      # m past the road's carriageway + the bed plan's half width (its core's round end) the bed stops
-RAIL_YIELD_STEP_M = 2.0     # m between the cut bed line's points (the cut lands within this of where it should)
+RAIL_YIELD_SKIP = {"motorway", "trunk"}     # classes a bed never yields to
+RAIL_YIELD_STEP_M = 2.0    # m between the cut bed line's points (the cut lands within this of where it should)
 SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
 SEAM_MIN_M = 0.05          # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
 SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
@@ -2381,8 +2382,12 @@ class _Planner:
                               for k in railways.cells_near(self.frame, own)]
                     beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
                               for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
+                    # (no motorway or trunk: they have no level crossings, and a track in a freeway's median whose
+                    # modelled carriageway reaches over it keeps its bed, Perth's Kwinana Freeway)
                     cways = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.road_half)
-                             for _f, q in plans[:len(pspecs)] if TUNNEL_TAG not in _f] if RAIL_YIELD_ON else []
+                             for (_f, q), sp in zip(plans[:len(pspecs)], pspecs)
+                             if TUNNEL_TAG not in _f and (getattr(sp, "cls", None) or "").removesuffix("_link")
+                             not in RAIL_YIELD_SKIP] if RAIL_YIELD_ON else []
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
@@ -6072,15 +6077,17 @@ def deck_ground_abut_taper(line, s, others, fade=None, joint=None):
 
 def rail_yield_pieces(xy, z, roads_, half):
     """[(xy (k, 2), z (k,))]: the pieces of a rail bed line (xy, bed heights z) outside every road of roads_ ([(xy, z,
-    carriageway half width)]) it meets at grade (its bed within railways.CROSSING_DZ of the road's plan), widened by the
-    bed plan's half width + RAIL_YIELD_PAD_M (RAIL_YIELD_ON). The line as it is ([(xy, z)]) when it meets none. Pure."""
+    carriageway half width)]) it meets at grade (its bed within railways.CROSSING_DZ of the road's plan): the stretches
+    on a carriageway (+ RAIL_YIELD_PAD_M) cut out and RAIL_YIELD_PAD_M + half (the bed plan's core round its cut end)
+    further along the line (RAIL_YIELD_ON). A track beside a road, or in a motorway's median, keeps its bed. The line as
+    it is ([(xy, z)]) when it meets none. Pure."""
     import railways
     xy = np.asarray(xy, np.float64)[:, :2]
     z = np.asarray(z, np.float64)
     if not RAIL_YIELD_ON or not roads_ or len(xy) < 2:
         return [(xy, z)]
-    reach = half + RAIL_YIELD_PAD_M - railways.CROSSING_PAD_M
-    lo, hi = xy.min(0) - half - 30.0, xy.max(0) + half + 30.0
+    reach = RAIL_YIELD_PAD_M - railways.CROSSING_PAD_M
+    lo, hi = xy.min(0) - 30.0, xy.max(0) + 30.0
     crossers = []
     for rxy, rz, rh in roads_:
         r = np.asarray(rxy, np.float64)[:, :2]
@@ -6095,6 +6102,10 @@ def rail_yield_pieces(xy, z, roads_, half):
     blk = railways._blocked(pts, zz, crossers)
     if not blk.any():
         return [(xy, z)]
+    grow = half + RAIL_YIELD_PAD_M       # (along the line past the carriageway: the cut piece's round end clears it)
+    sb = s[blk]
+    near = np.abs(s[:, None] - sb[None, :]).min(axis=1) <= grow + 1e-9
+    blk = blk | near
     out = []
     keep = ~blk
     idx = np.flatnonzero(np.diff(np.concatenate([[0], keep.astype(np.int8), [0]])))

@@ -42,6 +42,13 @@ class RailYieldTest(unittest.TestCase):
         street = (np.array([[-200.0, 1.0], [200.0, 1.0]]), np.full(2, 10.0), 4.0)    # the track in its carriageway
         self.assertEqual(grading.rail_yield_pieces(xy, z, [street], railways.GRADE_HALF_M), [])
 
+    def test_track_beside_a_road_kept(self):
+        """A track in a motorway's median (Perth's Kwinana Freeway), 10 m from a carriageway's centre line: kept."""
+        xy, z = track()
+        road = (np.array([[-200.0, 10.0], [200.0, 10.0]]), np.full(2, 10.0), 7.0)
+        (pxy, _pz), = grading.rail_yield_pieces(xy, z, [road], railways.GRADE_HALF_M)
+        self.assertEqual(len(pxy), len(xy))
+
     def test_off(self):
         xy, z = track()
         road = (np.array([[0.0, -100.0], [0.0, 100.0]]), np.full(2, 10.0), 4.0)
