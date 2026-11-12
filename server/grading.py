@@ -151,6 +151,8 @@ TUNNEL_TAG = ":tun"          # in the fid of the tunnels' own plans (open sectio
 MOUTH_PLAN_M = 4.0          # m into a tunnel from a portal its floor is a grading plan too (Grader._mouth_plans)
 TUNNEL_KEEP_IN_M = 3.0      # (roads.LOW_HOLE_M: a low arch's mouths, flat at its floor)
 TUNNEL_KEEP_M = 5.0         # m beside a covered tunnel's road where the ground over it is left ungraded ...
+PORTAL_REACH_M = 30.0       # m: the cells this near a tunnel's portal grade it (apply roads_only)
+TUNNEL_OWN_MARGIN_M = 30.0  # m round a cell's box: the tunnel parts reaching into it are its plans' (_tunnel_sections)
 OVER_TUNNEL_SMALL_M = 0.5   # ... but for a change smaller than this (a road crossing over it, graded flush)
 WALL_AHEAD_M = 2.5          # ... only beside a segment or this little past its end (a joint between two: VERTEX_STEP)
 YIELD_RAMP_M = 0.5          # m over which a road gives way to another's carriageway at another level (grade_points): in
@@ -5471,19 +5473,19 @@ class _Planner:
 
     def _roads_ground(self, la, lo, base):
         """base (the ground at the points) graded by the roads' plans alone (apply with roads_only, by the points'
-        planning regions): the ground a tunnel's portals stand on. Never plans a tunnel (_cell_road_plans)."""
+        planning regions): the ground a tunnel's portals stand on. Never plans a tunnel (_cell_road_plans). Each point
+        on its own: a part's two portals asked together took in every cell of the box between them, whose roads reach
+        neither (three more cells' road stages for four Fells Point cells, +44 % of their planning, 2026-11-12)."""
         la = np.asarray(la, np.float64)
         lo = np.asarray(lo, np.float64)
         base = np.asarray(base, np.float64)
-        if self.store is None or base.size == 0:
-            return self.apply(la, lo, base, ROAD_LIFT, roads_only=True)
-        parts = self.store.planners_of(la, lo)
-        if len(parts) == 1:
-            return parts[0][0].apply(la, lo, base, ROAD_LIFT, roads_only=True)
+        if base.size == 0:
+            return base
         la_, lo_, b = la.ravel(), lo.ravel(), base.ravel()
         out = np.array(b, np.float64, copy=True)
-        for pl, idx in parts:
-            out[idx] = pl.apply(la_[idx], lo_[idx], b[idx], ROAD_LIFT, roads_only=True)
+        for q in range(len(b)):
+            pl = self if self.store is None else self.store.planners_of(la_[q:q + 1], lo_[q:q + 1])[0][0]
+            out[q] = pl.apply(la_[q:q + 1], lo_[q:q + 1], b[q:q + 1], ROAD_LIFT, roads_only=True)[0]
         return out.reshape(base.shape)
 
     def _tunnel_chains(self):
@@ -5523,6 +5525,7 @@ class _Planner:
         out = []
         ts = roadsmod.tunnel_specs(feats)
         cs = None
+        own = self._clip_box(key, TUNNEL_OWN_MARGIN_M) if key is not None else None
         for i in range(len(feats)):
             if ts[i] is None:
                 continue
@@ -5530,6 +5533,15 @@ class _Planner:
             for j, ring in roadsmod._keyed(roadsmod.TunnelProfiles.keys_of, roadsmod.tunnel_parts, feats, i):
                 if len(ring) < 2:
                     continue
+                if own is not None:
+                    # (a part wholly outside the cell's own box is the plans' of the cells it lies in: solved here too,
+                    # its portals' cells' road stages were planned for a cell that never grades them, +44 % of four
+                    # Fells Point cells' planning, 2026-11-12)
+                    r = np.asarray(ring, np.float64)
+                    e_, n_, _ = self.frame.geodetic_to_enu(r[:, 1], r[:, 0], 0.0)
+                    e_, n_ = np.asarray(e_), np.asarray(n_)
+                    if e_.max() < own[0] or e_.min() > own[2] or n_.max() < own[1] or n_.min() > own[3]:
+                        continue
                 cs = self._tunnel_chains() if cs is None else cs
                 k = (fid, j)
                 try:
@@ -5657,11 +5669,11 @@ class _Planner:
         return self._plan_set(self._keys(lat, lon), roads_only)[0]
 
     @staticmethod
-    def _keys(lat, lon):
-        """The map cells whose plans can reach the points."""
+    def _keys(lat, lon, reach_m=None):
+        """The map cells whose plans can reach the points (reach_m: those within that distance)."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
-        pad = (T_MAX + 40.0) / 111320.0
+        pad = (T_MAX + 40.0 if reach_m is None else reach_m) / 111320.0
         padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lat)))))
         keys = mapcells.cells_for_points(lat, lon, pad, padlon)
         if len(keys) > SPREAD_CELLS:        # points far apart: only the cells around them
@@ -5732,7 +5744,10 @@ class _Planner:
         shape = base.shape
         if base.size == 0:
             return base
-        keys = self._keys(lat, lon)
+        # (roads_only, a tunnel's portal: the cells within PORTAL_REACH_M of it. A portal stands on its own road; the
+        # roads of a cell further off weigh under 2 % there, and reading them planned that cell's road stage for a
+        # cell that may never be visited: 2.9 CPU-s of four Fells Point cells' 13, 2026-11-12)
+        keys = self._keys(lat, lon, PORTAL_REACH_M if roads_only else None)
         if planned_only:
             keys = self._planned_keys(keys)
             if not keys:

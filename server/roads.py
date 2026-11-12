@@ -8424,7 +8424,12 @@ class TunnelProfiles(BridgeProfiles):
             g = np.asarray(gfn(xy), np.float64)
             g_raw = g
             underwater = k in underwater_floors
-            ge = g[[0, -1]] if underwater else np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
+            # (the graded ground only at the ends that are portals: a joint inside the hill takes the network's floor,
+            # and asking for its ground planned the roads of its cell for nothing)
+            at = [e for e in (0, 1) if underwater or not np.isfinite(pins.get(k, (np.nan, np.nan))[e])]
+            ge = g[[0, -1]].copy()
+            if at and not underwater:
+                ge[at] = np.asarray(self._ends_ground(xy[[0, -1]][at]), np.float64)
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
             pinned = [False, False]
