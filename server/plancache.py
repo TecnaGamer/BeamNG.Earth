@@ -354,6 +354,11 @@ class PlanCache:
     def release(self, key):
         xproc.release(self._path(key) + ".lock")
 
+    def busy(self, key):
+        """Is a process planning cell key now (its claim's lock is there)? A stat, nothing opened (a lock open for
+        reading cannot be released on Windows: xproc.once)."""
+        return os.path.exists(self._path(key) + ".lock")
+
 
     # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----
 

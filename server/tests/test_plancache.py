@@ -34,6 +34,35 @@ class PlanCacheTest(unittest.TestCase):
             g.shared = plancache.for_grader(self.dir, g, None, None)
         return g
 
+    def test_delegated_cell_is_read_not_planned_here(self):
+        """grading.PlanStore.delegate (the server's own process): the cell another process planned is read from the
+        plan cache; when the delegate could not, it is planned here as before."""
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))                  # (the other process)
+        b = self.grader(FakeMD(f))
+        asked = []
+
+        def elsewhere(key):
+            asked.append(key)
+            a.store.planner_of_cell(key)._cell_plans(key)
+            return True
+        b.store.delegate = elsewhere
+        za = a.apply(la, lo, np.full(50, 10.0))
+        shutil.rmtree(os.path.join(self.dir, "plans"), True)     # (b asks first: the delegate plans them, in a)
+        a = self.grader(FakeMD(f))
+        made = []
+        orig = grading._Planner._make_cell
+        with mock.patch.object(grading._Planner, "_make_cell", lambda self, key: made.append(key) or orig(self, key)):
+            zb = b.apply(la, lo, np.full(50, 10.0))
+        self.assertEqual(made, [])                  # (nothing planned in b's process: read)
+        np.testing.assert_array_equal(za, zb)
+        c = self.grader(FakeMD(f))
+        c.store.delegate = lambda key: (_ for _ in ()).throw(RuntimeError("no worker"))
+        shutil.rmtree(os.path.join(self.dir, "plans"), True)
+        zc = c.apply(la, lo, np.full(50, 10.0))     # (planned here after all)
+        np.testing.assert_array_equal(za, zc)
+
     def test_other_process_reads_the_same_heights(self):
         f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
         a = self.grader(FakeMD(f))
