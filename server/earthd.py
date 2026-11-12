@@ -684,9 +684,9 @@ HORIZON_RETRY = 30.0
 HORIZON_BLOCK_CACHE = 1024      # DEM tiles' block maxima kept between anchors (16 KB each)
 # Anchor height quantum: relief survey of +-SURVEY_HALF around the anchor at DEM zoom SURVEY_ZOOM.
 SURVEY_HALF = 15000.0
-SURVEY_N = 61                       # 500 m apart
-SURVEY_WINDOW = 1.0                 # blocks: the windows survey_q takes the relief of (+ one survey step: an unaligned block)
-SURVEY_PERCENTILE = 99.0            # of the windows' relief the anchor's quantum must hold (the rest: their own, coarser)
+SURVEY_N = 241                      # 125 m apart (the same z10 tiles as 500 m: ~58k samples)
+SURVEY_WINDOW = 1.0                 # blocks: the windows survey_q takes the relief of (at most: whole survey steps)
+SURVEY_PERCENTILE = 95.0            # of the windows' relief the anchor's quantum must hold (the rest: their own, coarser)
 BLOCK_SURVEY_M = 2048.0             # m: the largest block (1024² at 2 m); Server passes its own
 SURVEY_ZOOM = 10
 DELTA_MARGIN = 0.1          # m added to measured swap-group deltas (crossings between vertices)
@@ -955,19 +955,22 @@ def _num(msg, name, default=None):
 
 
 def survey_q(frame, dem, block_m=BLOCK_SURVEY_M):
-    """Height quantum of an anchor (§1.3): the smallest ladder step whose block range covers the
-    SURVEY_PERCENTILE relief of the windows of SURVEY_WINDOW blocks (block_m m) of a +-15 km survey at
-    DEM z10, plus 10 %. A block only has to hold its own relief (its zBase is its own; one that does not
-    fit takes the next coarser step, heightmap.block_params). The whole survey's relief made every
-    mountain anchor 1/16 m: 6 cm steps on the runways and roads (Courchevel, in-game 2026-10-13); so did
-    its one worst window of 1.5 blocks (the Stelvio's and Courchevel's, whose 2 km blocks within 6 km all
-    hold 1/32 m): its 2 m samples rounded to 6 cm steps were bumps on every steep road, twice the time over
-    0.2 g of 1/32 m in a quarter car (the user, 2026-11-01: "Fix the bumps")."""
+    """Height quantum of an anchor (§1.3): the smallest ladder step whose block range holds the SURVEY_PERCENTILE
+    relief of the block-sized windows (SURVEY_WINDOW blocks of block_m m, at most) of a +-15 km survey at DEM z10, by
+    the blocks' own rule (heightmap.block_q). A block only has to hold its own relief (its zBase is its own; one that
+    does not fit takes the next coarser step, heightmap.block_params). The whole survey's relief made every mountain
+    anchor 1/16 m: 6 cm steps on the runways and roads (Courchevel, in-game 2026-10-13); so did its one worst window of
+    1.5 blocks (the Stelvio's and Courchevel's, whose 2 km blocks within 6 km all hold 1/32 m): its 2 m samples rounded
+    to 6 cm steps were bumps on every steep road, twice the time over 0.2 g of 1/32 m in a quarter car (the user,
+    2026-11-01: "Fix the bumps"). On the 1 m ground the rounding is 4x the curvature again (it goes as Q / square²):
+    windows of a block and a 500 m survey step, plus 10 %, still made the Stelvio, Tyrol and Zermatt 1/32 m where 97-99 %
+    of their real 1 km blocks hold 1/64, and the Brazilian and Japanese hills 1/64 where 95-100 % hold 1/128 (bumpscan
+    2026-11-12: the Stelvio's roads IRI 13.5 m/km at 1/32 m against 6.8 unrounded)."""
     xs = np.linspace(-SURVEY_HALF, SURVEY_HALF, SURVEY_N)
     u = heightmap.surface_u(frame, lambda la, lo: dem.sample(la, lo, SURVEY_ZOOM), xs, xs)
-    k = min(len(xs), int(math.ceil(SURVEY_WINDOW * block_m / (xs[1] - xs[0]))) + 1)
+    k = max(2, min(len(xs), int(math.floor(SURVEY_WINDOW * block_m / (xs[1] - xs[0]) + 1e-9)) + 1))
     win = np.lib.stride_tricks.sliding_window_view(u, (k, k))
-    return heightmap.choose_q(float(np.percentile(win.max(axis=(2, 3)) - win.min(axis=(2, 3)), SURVEY_PERCENTILE)))
+    return heightmap.block_q(float(np.percentile(win.max(axis=(2, 3)) - win.min(axis=(2, 3)), SURVEY_PERCENTILE)))
 
 
 def game_running():

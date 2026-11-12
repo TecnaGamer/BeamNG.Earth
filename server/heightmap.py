@@ -318,6 +318,16 @@ def choose_q(relief, ladder=Q_LADDER):
     return ladder[-1]
 
 
+def block_q(relief, ladder=Q_LADDER):
+    """Smallest quantum of the ladder a block with this relief fits (block_params' rule: its range above the rounded
+    down zBase, ZBASE_STEP + ZBASE_MARGIN at most, within 65534 Q)."""
+    need = relief + ZBASE_STEP + ZBASE_MARGIN
+    for q in ladder:
+        if need <= 65534 * q:
+            return q
+    return ladder[-1]
+
+
 def block_params(u_min, u_max, q):
     """(Q, zBase, maxHeight) for a block with this height range. zBase is a multiple of
     ZBASE_STEP (so of Q); if the block does not fit the anchor's Q, the next coarser quantum

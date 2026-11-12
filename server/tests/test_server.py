@@ -1405,18 +1405,20 @@ class AnchorQTest(unittest.TestCase):
         self.assertEqual(earthd.survey_q(f, d), 1 / 256)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
-        # 3000 m over 30 km is 150 m per window (4 samples, 1.5 km, for a block of 1024 m and a survey step)
+        # 3000 m over 30 km is 100 m per window (9 samples, 1 km, for a block of 1024 m)
         self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 450 m per window
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (750 m)
-        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1500 m
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 128)     # 300 m per window (+ zBase's 72 m: 512)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (600 m)
+        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1200 m
 
         class Peak(Dem):            # flat, with one 1200 m spike: its few windows do not decide (its blocks are coarser)
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 128)     # (its foot, not its top: 1/32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 256)     # (the plain round it, not its top: 1/32)
         self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
+        for relief in (10.0, 180.0, 440.0, 950.0, 1900.0, 5000.0):    # block_q: block_params' rule, its worst zBase
+            self.assertEqual(heightmap.block_q(relief), heightmap.block_params(1031.99, 1031.99 + relief, 1 / 256)[0])
 
         class Range(Dem):           # a mountain range over half the survey: it decides
             def sample(self, lat, lon, zoom, progress=None):

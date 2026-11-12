@@ -437,7 +437,15 @@ DECK_GROUND_MASK_M = 1.5                # m round another deck's footprint its s
 DECK_GROUND_BLEND_M = 4.0               # m past the feet the lowering fades out
 DECK_GROUND_END_M = 3.0                 # m past a deck's ends (onto its approaches) the lowering fades out
 DECK_GROUND_REACH_M = 160.0             # m from a deck's centre line no sample goes (the cells read round a point)
-DECK_GROUND_KEPT = 8192                 # decks' corrections a planner keeps (_deck_patches; most are None)
+# ... but never at a deck's end on the ground (an abutment: no other deck goes on from it): there the ridge along the deck
+# is the approach's own fill, which a short overpass stands on. Lowered to the line between the sides, I-405's
+# northbound decks over a street at 34.0492 N 118.4486 W (27 m, lidar: level at 88 m) had their abutment ends read 5 m
+# low: a 21 % climb on the deck and a 5 m drop off the end of the fill into it ("ledges at the end of overpasses on the
+# 405", Discord 2026-11-06; bumpscan / deckprobe3d 2026-11-12). The lowering fades in over DECK_GROUND_ABUT_M from such
+# an end (deck_ground_abut_taper); joints between decks (a viaduct in parts) are lowered as before.
+DECK_GROUND_ABUT_M = float(os.environ.get("BNE_DECK_GROUND_ABUT", "10"))
+DECK_GROUND_JOINT_M = 3.0               # m from a deck's end to another deck's line: a joint, not an abutment
+DECK_GROUND_KEPT = 8192                # decks' corrections a planner keeps (_deck_patches; most are None)
 DECK_GROUND_PACKS_KEPT = 256            # cell sets' corrected decks kept (_deck_pack_cells)
 UNDER_DECK_MAX_M = 30.0     # m along the road a deck covers at most either side of the crossing (an oblique one)
 UNDER_DECK_PAD_M = 3.0 * SIGMA_MAJOR_M + PROFILE_STEP + UNDER_DECK_SIDE_M + UNDER_DECK_MAX_M    # m round a cell: the
@@ -568,8 +576,17 @@ ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
 ABUT_MIN_M = 0.3            # m: a smaller fill at the end is left out
 ABUT_MAX_M = 8.0            # m filled at most
+# A track crossing a road at grade (or running along the street, Fells Point's Thames Street) has its bed flushed RAIL_TOP_M
+# (~0.55 m) under the road's surface (railways._flush), and the bed's plan, whose ballast top never gives way, pulled the
+# road's own ground down toward it: a 0.3-0.7 m pothole across the road at every level crossing, a 30 cm step along
+# Fells Point's streets (bumpscan, 2026-11-12: 97 crossings in Fells Point, a mean 0.19 m off the road's line). The bed's
+# plan is cut out of the road's carriageway and its own half width round it (rail_yield_pieces): the road alone grades
+# its surface there, and the track's mesh is flushed with that surface anyway (railways.tile_mesh).
+RAIL_YIELD_ON = os.environ.get("BNE_RAIL_YIELD", "on") != "off"
+RAIL_YIELD_PAD_M = 0.5      # m past the road's carriageway + the bed plan's half width (its core's round end) the bed stops
+RAIL_YIELD_STEP_M = 2.0     # m between the cut bed line's points (the cut lands within this of where it should)
 SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
-SEAM_MIN_M = 0.05           # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
+SEAM_MIN_M = 0.05          # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
 SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
 SEAM_RUN_MIN_M = 24.0       # ... over at least this ...
 SEAM_RUN_MAX_M = 80.0       # ... and at most this
@@ -2364,6 +2381,8 @@ class _Planner:
                               for k in railways.cells_near(self.frame, own)]
                     beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
                               for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
+                    cways = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.road_half)
+                             for _f, q in plans[:len(pspecs)] if TUNNEL_TAG not in _f] if RAIL_YIELD_ON else []
                     for fid, xy, z in railways.grade_plans(
                             self.frame, rcells, own, self.elev,
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
@@ -2375,11 +2394,12 @@ class _Planner:
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
                         # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
                         # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
-                        p = Plan(xy, z, railways.GRADE_HALF_M,
-                                 road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
-                        p.rid = road_id(RAIL_TAG + fid)
-                        plans.append((RAIL_TAG + fid, p))
-                        pclip.append(True)
+                        for pxy, pz in rail_yield_pieces(xy, z, cways, railways.GRADE_HALF_M):
+                            p = Plan(pxy, pz, railways.GRADE_HALF_M,
+                                     road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
+                            p.rid = road_id(RAIL_TAG + fid)
+                            plans.append((RAIL_TAG + fid, p))
+                            pclip.append(True)
                 except Exception as e:      # no rail grading rather than no grading
                     log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
             # every plan only within the cell's own box, so each stretch of road is planned by one cell (its dips
@@ -4625,9 +4645,12 @@ class _Planner:
                                                   DECK_GROUND_T0_M, DECK_GROUND_T1_M, DECK_GROUND_MASK_M)
         a = 0
         got = {}
-        for k, (line, half), on in zip(todo, lines, active):
+        for k, (line, half), on, mo in zip(todo, lines, active, mask_of):
             if on:
-                got[k] = (line, half, np.array(rows[soff[a]:soff[a + 1]], np.float64))
+                r = np.array(rows[soff[a]:soff[a + 1]], np.float64)
+                if DECK_GROUND_ABUT_M > 0 and len(r):
+                    r[:, 5] *= deck_ground_abut_taper(line, r[:, 0], [masks[j][0] for j in mo])
+                got[k] = (line, half, r)
                 a += 1
             else:
                 got[k] = None
@@ -6010,6 +6033,75 @@ def rail_plan(fid, xy, z):
     p = Plan(xy, z, railwaysmod.GRADE_HALF_M, road_half=railwaysmod.BALLAST_TOP_M)
     p.rid = road_id(RAIL_TAG + fid)
     return p
+
+
+def deck_ground_abut_taper(line, s, others, fade=None, joint=None):
+    """(m,) factors of a deck's ground correction at its stations' arcs s (DECK_GROUND_*): 0 at an end no other deck
+    goes on from (others: their lines (k, 2+); an abutment: no line within DECK_GROUND_JOINT_M of the point
+    DECK_GROUND_JOINT_M + 2 m on past the end), rising smoothly to 1 over DECK_GROUND_ABUT_M into the deck; 1 all along
+    between two joints. (Another copy of the same deck, or a twin carriageway's beside it, does not go on.) Pure."""
+    fade = DECK_GROUND_ABUT_M if fade is None else fade
+    joint = DECK_GROUND_JOINT_M if joint is None else joint
+    s = np.asarray(s, np.float64)
+    out = np.ones(len(s))
+    line = np.asarray(line, np.float64)[:, :2]
+    seg = np.hypot(*np.diff(line, axis=0).T)
+    if fade <= 0 or len(line) < 2 or not (seg > 1e-9).any():
+        return out
+    length = float(seg.sum())
+    k0, k1 = int(np.argmax(seg > 1e-9)), len(seg) - 1 - int(np.argmax(seg[::-1] > 1e-9))
+    for end, out_dir, d in ((line[0], (line[0] - line[k0 + 1]) / seg[k0], s),
+                            (line[-1], (line[-1] - line[k1]) / seg[k1], length - s)):
+        probe = end + out_dir * (joint + 2.0)
+        free = True
+        for o in others:
+            o = np.asarray(o, np.float64)[:, :2]
+            if len(o) < 2:
+                continue
+            a0, a1 = o[:-1], o[1:]
+            ab = a1 - a0
+            t = np.clip(((probe - a0) * ab).sum(1) / np.maximum((ab ** 2).sum(1), 1e-12), 0.0, 1.0)
+            if float(np.hypot(*(a0 + t[:, None] * ab - probe).T).min()) < joint:
+                free = False
+                break
+        if free:
+            x = np.clip(d / fade, 0.0, 1.0)
+            out *= x * x * (3.0 - 2.0 * x)
+    return out
+
+
+def rail_yield_pieces(xy, z, roads_, half):
+    """[(xy (k, 2), z (k,))]: the pieces of a rail bed line (xy, bed heights z) outside every road of roads_ ([(xy, z,
+    carriageway half width)]) it meets at grade (its bed within railways.CROSSING_DZ of the road's plan), widened by the
+    bed plan's half width + RAIL_YIELD_PAD_M (RAIL_YIELD_ON). The line as it is ([(xy, z)]) when it meets none. Pure."""
+    import railways
+    xy = np.asarray(xy, np.float64)[:, :2]
+    z = np.asarray(z, np.float64)
+    if not RAIL_YIELD_ON or not roads_ or len(xy) < 2:
+        return [(xy, z)]
+    reach = half + RAIL_YIELD_PAD_M - railways.CROSSING_PAD_M
+    lo, hi = xy.min(0) - half - 30.0, xy.max(0) + half + 30.0
+    crossers = []
+    for rxy, rz, rh in roads_:
+        r = np.asarray(rxy, np.float64)[:, :2]
+        if len(r) < 2 or (r.max(0) < lo).any() or (r.min(0) > hi).any():
+            continue
+        crossers.append((r, float(rh) + reach, np.asarray(rz, np.float64)[:len(r)]))
+    if not crossers:
+        return [(xy, z)]
+    pts, s = resample(xy, RAIL_YIELD_STEP_M)
+    s0 = railways._arc(xy)
+    zz = np.interp(s, s0, z)
+    blk = railways._blocked(pts, zz, crossers)
+    if not blk.any():
+        return [(xy, z)]
+    out = []
+    keep = ~blk
+    idx = np.flatnonzero(np.diff(np.concatenate([[0], keep.astype(np.int8), [0]])))
+    for a, b in zip(idx[::2], idx[1::2]):
+        if b - a >= 2:
+            out.append((pts[a:b].copy(), zz[a:b].copy()))
+    return out
 
 
 def merge_plan_set(plans):
