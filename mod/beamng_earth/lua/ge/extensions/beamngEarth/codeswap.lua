@@ -17,6 +17,11 @@
 -- manager then loads the mounted copy's extensions (loadManualUnloadExtensions), or this does after a hook. Nothing is
 -- swapped while no copy is mounted (between BeamMP turning one off and the other on: the running code still turns the
 -- player's copy back on when they leave, beammp.lua), nor when the mounted copy is the same.
+-- BeamMP turns the server's copy on before it turns the player's off, and the mod manager runs a modScript by its
+-- virtual path, so the player's copy's modScript usually runs then: the swap comes from the running code's hooks (the
+-- player's app), and a server's newer copy can take over an older app's code only when its files win (measured on the
+-- Steam Deck 2026-11-11: dev app on a 1.9.1 server swapped at the player's copy going off; a 1.9.1 app on a dev
+-- server kept its own code, which ran fine on the newer files, ~35 fps).
 --
 -- Self-contained (modScript.lua runs it with dofile: a require would return the old copy's module). Rollback: an empty
 -- file settings/beamngEarth_nocodeswap in the game's user folder turns it off.
