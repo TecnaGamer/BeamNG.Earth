@@ -5544,10 +5544,11 @@ class _Planner:
                     la, lo, h = geotiles.world_to_geodetic(st.frame, np.c_[xy, z])
                     e_, n_, _ = self.frame.geodetic_to_enu(la, lo, 0.0)
                     pxy = np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1)
-                    out.append((fid, ts[i], pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
+                    # (by the section's own id, the networks' fid.part#section: its mouths are the networks' too)
+                    out.append((str(sub), ts[i], pxy, np.asarray(h, np.float64) - ROAD_LIFT, kind))
                     if kind and portals is not None:
                         for at, is_mouth in zip((0, -1), st.mouth(sub)):
-                            portals[(fid, tuple(np.round(pxy[at], 3)))] = bool(is_mouth)
+                            portals[(str(sub), tuple(np.round(pxy[at], 3)))] = bool(is_mouth)
         return out
 
     @staticmethod

@@ -95,12 +95,12 @@
   }
  },
  "casagranda_bridge": {
-  "steps": 160,
+  "steps": 147,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 0.3745,
-    "grade": 0.4616,
-    "lift_g": 7.5105
+    "step_m": 0.4731,
+    "grade": 0.4506,
+    "lift_g": 7.8907
    },
    "ground:053629ed-5cd3-43a0-9a3f-45d606754d27": {
     "step_m": 0.2079,
@@ -113,39 +113,39 @@
     "lift_g": 0.0
    },
    "ground:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 5.8772,
+    "step_m": 5.8689,
     "grade": 1.5809,
     "lift_g": 0.4049
    },
    "ground:56a28a10-46e0-4513-aadc-4ad7ffe86ab4": {
-    "step_m": 11.7128,
+    "step_m": 6.2478,
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "tunnel:053629ed-5cd3-43a0-9a3f-45d606754d27.366496#0": {
+   "tunnel:053629ed-5cd3-43a0-9a3f-45d606754d27.366496#1": {
     "step_m": 0.7905,
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#0": {
-    "step_m": 1.8939,
-    "grade": 1.5709,
-    "lift_g": 24.0668
+   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#1": {
+    "step_m": 0.4764,
+    "grade": 0.4504,
+    "lift_g": 7.8967
    },
    "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11678432#1": {
     "step_m": 0.0256,
     "grade": 0.0198,
-    "lift_g": 0.2423
+    "lift_g": 0.217
    }
   }
  },
  "casagranda_portal": {
-  "steps": 53,
+  "steps": 54,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 0.3658,
-    "grade": 0.4485,
-    "lift_g": 7.3473
+    "step_m": 0.4609,
+    "grade": 0.4384,
+    "lift_g": 7.7267
    },
    "ground:0539dd77-5690-403a-9c73-456a26c03b08": {
     "step_m": 0.2707,
@@ -153,8 +153,8 @@
     "lift_g": 0.0
    },
    "ground:24180283-706a-4193-a9d6-18dbee4df38d": {
-    "step_m": 5.7686,
-    "grade": 1.5769,
+    "step_m": 5.8469,
+    "grade": 1.577,
     "lift_g": 0.4057
    },
    "ground:67ef9e2b-a664-421c-bcab-40e8a5123b3e": {
@@ -167,20 +167,20 @@
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.10754560#0": {
-    "step_m": 0.0682,
+   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.10754560#1": {
+    "step_m": 0.0557,
     "grade": 0.1617,
-    "lift_g": 1.6652
+    "lift_g": 0.3571
    },
-   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#0": {
-    "step_m": 1.889,
-    "grade": 1.5674,
-    "lift_g": 23.9853
+   "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11342464#1": {
+    "step_m": 0.4641,
+    "grade": 0.4382,
+    "lift_g": 7.7328
    },
    "tunnel:24180283-706a-4193-a9d6-18dbee4df38d.11678432#1": {
     "step_m": 0.0257,
     "grade": 0.0198,
-    "lift_g": 0.2391
+    "lift_g": 0.2137
    }
   }
  },
@@ -295,20 +295,20 @@
   }
  },
  "dc_capitol_crossing_1083": {
-  "steps": 133,
+  "steps": 134,
   "parts": {
    "bridge:07c9b0e6-db11-491b-a91d-955981528c9f": {
-    "step_m": 0.0369,
-    "grade": 0.0598,
-    "lift_g": 0.3711
+    "step_m": 0.0367,
+    "grade": 0.0599,
+    "lift_g": 0.3692
    },
    "bridge:22ac75d0-7ab8-483f-811d-57e68d09e323": {
-    "step_m": 0.2237,
+    "step_m": 0.2158,
     "grade": 0.0811,
     "lift_g": 1.3576
    },
    "bridge:3119f604-28fd-419e-9d93-f1be4de0fe31": {
-    "step_m": 1.8747,
+    "step_m": 1.1593,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -323,12 +323,12 @@
     "lift_g": 0.0
    },
    "ground:22ac75d0-7ab8-483f-811d-57e68d09e323": {
-    "step_m": 2.9499,
+    "step_m": 2.2724,
     "grade": 0.1167,
     "lift_g": 0.4831
    },
    "ground:3119f604-28fd-419e-9d93-f1be4de0fe31": {
-    "step_m": 2.1524,
+    "step_m": 1.9176,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -348,17 +348,17 @@
     "lift_g": 0.541
    },
    "ground:81bf71fa-fc94-4c53-a4de-a5a0e7757de2": {
-    "step_m": 0.5489,
-    "grade": 0.0096,
-    "lift_g": 0.0854
+    "step_m": 0.3954,
+    "grade": 0.0118,
+    "lift_g": 0.1413
    },
    "ground:8598503b-2f08-46c3-a7d8-f6e61dad6f1a": {
-    "step_m": 1.4057,
-    "grade": 0.2875,
-    "lift_g": 4.2985
+    "step_m": 1.3963,
+    "grade": 0.2374,
+    "lift_g": 4.2649
    },
    "ground:8de3d046-3ac9-4dac-a4a0-d791c5cf566b": {
-    "step_m": 0.6989,
+    "step_m": 1.0393,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -378,7 +378,7 @@
     "lift_g": 0.0
    },
    "ground:e461d052-9d20-4492-a441-5dcdecbc59b6": {
-    "step_m": 0.0283,
+    "step_m": 0.0341,
     "grade": 0.0575,
     "lift_g": 0.8898
    },
@@ -595,32 +595,32 @@
   }
  },
  "paris_maillot_1083": {
-  "steps": 703,
+  "steps": 651,
   "parts": {
    "bridge:03416596-4287-47ca-a11f-def3e0e3acfc": {
-    "step_m": 0.9561,
-    "grade": 0.3849,
-    "lift_g": 5.7324
+    "step_m": 0.0442,
+    "grade": 0.056,
+    "lift_g": 0.5259
    },
    "bridge:4f2616d4-069f-4eb2-8cbf-9e5a4004a138": {
-    "step_m": 0.0779,
-    "grade": 0.0574,
-    "lift_g": 1.4254
+    "step_m": 0.0746,
+    "grade": 0.057,
+    "lift_g": 1.3678
    },
    "bridge:59487550-ed31-4d57-8670-0c8f8fa14916": {
-    "step_m": 0.9482,
-    "grade": 0.4688,
-    "lift_g": 4.9296
+    "step_m": 0.7987,
+    "grade": 0.3589,
+    "lift_g": 3.7895
    },
    "bridge:71e37f88-8864-4e3b-a741-fe720cff5fdc": {
-    "step_m": 0.1223,
-    "grade": 0.0796,
-    "lift_g": 2.1209
+    "step_m": 0.1249,
+    "grade": 0.0772,
+    "lift_g": 2.163
    },
    "bridge:93063b69-441e-4ffa-9dd2-0cc2e8d5af62": {
-    "step_m": 0.6552,
-    "grade": 0.1899,
-    "lift_g": 3.6502
+    "step_m": 1.3672,
+    "grade": 0.2865,
+    "lift_g": 5.4672
    },
    "bridge:9eeccc1a-3c92-4df7-8096-1389dc5a1b59": {
     "step_m": 4.9429,
@@ -628,54 +628,54 @@
     "lift_g": 0.0
    },
    "bridge:bb5e4cb6-9083-4129-82cb-1062c99438e2": {
-    "step_m": 0.1566,
-    "grade": 0.1755,
-    "lift_g": 2.4788
+    "step_m": 0.1455,
+    "grade": 0.2413,
+    "lift_g": 2.1687
    },
    "bridge:cd8b30a4-3e7f-4956-b265-ba19c0ae81b7": {
-    "step_m": 2.0696,
-    "grade": 1.2125,
-    "lift_g": 17.946
+    "step_m": 0.0556,
+    "grade": 0.0961,
+    "lift_g": 1.3507
    },
    "bridge:ea7bf85b-5eee-46fc-9922-321e0b735929": {
-    "step_m": 1.7766,
-    "grade": 0.5104,
-    "lift_g": 5.4892
+    "step_m": 1.7561,
+    "grade": 1.0238,
+    "lift_g": 11.4134
    },
    "bridge:f222a26e-6b74-4b4e-9143-6899669082af": {
-    "step_m": 0.0828,
-    "grade": 0.2144,
-    "lift_g": 2.7002
+    "step_m": 0.0209,
+    "grade": 0.0774,
+    "lift_g": 0.4598
    },
    "bridge:f5366a2d-7e9c-4a28-9ce4-c3976db44833": {
-    "step_m": 0.2085,
-    "grade": 0.1755,
-    "lift_g": 2.4766
+    "step_m": 1.0057,
+    "grade": 0.9842,
+    "lift_g": 11.929
    },
    "bridge:f5b121f5-9e41-4c45-a418-4f2aaee21ac4": {
-    "step_m": 0.1394,
-    "grade": 0.067,
-    "lift_g": 1.4255
+    "step_m": 0.1347,
+    "grade": 0.0635,
+    "lift_g": 1.3679
    },
    "ground:0073f56a-93d4-422d-a0ba-0681ae109e49": {
-    "step_m": 0.0316,
-    "grade": 0.0603,
+    "step_m": 0.0298,
+    "grade": 0.06,
     "lift_g": 0.4918
    },
    "ground:03416596-4287-47ca-a11f-def3e0e3acfc": {
-    "step_m": 0.5903,
+    "step_m": 0.0972,
     "grade": 0.0846,
     "lift_g": 1.5426
    },
    "ground:10ca6b31-9181-4276-9aa1-0e06cdb34ea8": {
-    "step_m": 11.6794,
-    "grade": 0.1231,
-    "lift_g": 0.766
+    "step_m": 1.5412,
+    "grade": 0.132,
+    "lift_g": 0.9517
    },
    "ground:12978cb1-084d-4845-ae57-b8975d1e9168": {
-    "step_m": 4.43,
-    "grade": 0.1732,
-    "lift_g": 1.9646
+    "step_m": 4.4418,
+    "grade": 0.2255,
+    "lift_g": 2.7222
    },
    "ground:14fa10e8-9393-49fa-8172-dcf80f4ece0a": {
     "step_m": 2.7141,
@@ -688,23 +688,23 @@
     "lift_g": 1.2295
    },
    "ground:2195024c-c18c-4f51-836d-b82f75a37373": {
-    "step_m": 4.0612,
+    "step_m": 4.4656,
     "grade": 0.2424,
     "lift_g": 2.7376
    },
    "ground:237fb24a-b548-44d5-8740-9ceac2a05ab2": {
-    "step_m": 5.1982,
+    "step_m": 5.2202,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:23a5c66c-7e2e-45b2-83ec-0332ed3290e0": {
-    "step_m": 0.4422,
-    "grade": 0.2168,
-    "lift_g": 2.3791
+    "step_m": 0.56,
+    "grade": 0.246,
+    "lift_g": 2.8013
    },
    "ground:2cf79278-c00b-48d3-a91f-68e2c07b0f76": {
-    "step_m": 0.3996,
-    "grade": 0.0049,
+    "step_m": 0.1633,
+    "grade": 0.0091,
     "lift_g": 0.0
    },
    "ground:2ffcb849-a3ea-42b3-9af1-9111755c9097": {
@@ -713,14 +713,14 @@
     "lift_g": 0.9079
    },
    "ground:339cedd8-e7b4-4d67-8bc1-327b940ba061": {
-    "step_m": 0.9417,
-    "grade": 0.1244,
-    "lift_g": 2.4298
+    "step_m": 0.7906,
+    "grade": 0.0068,
+    "lift_g": 0.0372
    },
    "ground:35f45a70-54b2-4a00-99d6-34838f375954": {
-    "step_m": 1.746,
-    "grade": 0.1097,
-    "lift_g": 1.092
+    "step_m": 0.6908,
+    "grade": 0.2649,
+    "lift_g": 2.8784
    },
    "ground:3f87a954-7293-4225-b097-b311f8c3ff7a": {
     "step_m": 0.1429,
@@ -743,42 +743,42 @@
     "lift_g": 0.0704
    },
    "ground:4f2616d4-069f-4eb2-8cbf-9e5a4004a138": {
-    "step_m": 0.1456,
+    "step_m": 0.1698,
     "grade": 0.0104,
     "lift_g": 0.0093
    },
    "ground:4fb82534-a20c-40b5-bd19-76b6d8dda0cb": {
-    "step_m": 0.4603,
-    "grade": 0.0616,
-    "lift_g": 0.5935
+    "step_m": 0.3156,
+    "grade": 0.0436,
+    "lift_g": 0.4091
    },
    "ground:59487550-ed31-4d57-8670-0c8f8fa14916": {
-    "step_m": 0.9221,
-    "grade": 0.4566,
-    "lift_g": 4.4389
+    "step_m": 0.4674,
+    "grade": 0.3439,
+    "lift_g": 3.3121
    },
    "ground:5bbbad8b-c99f-4d65-84ee-f7f8d6c88fac": {
-    "step_m": 2.7279,
-    "grade": 0.4178,
-    "lift_g": 8.5733
+    "step_m": 0.9834,
+    "grade": 0.5716,
+    "lift_g": 6.483
    },
    "ground:664365c3-4855-4cfb-b45a-8e6622fbdf82": {
-    "step_m": 0.0165,
-    "grade": 0.0219,
-    "lift_g": 0.23
+    "step_m": 0.0187,
+    "grade": 0.0222,
+    "lift_g": 0.3245
    },
    "ground:6de84dc8-59a9-470e-be0b-47d2613328ff": {
-    "step_m": 0.7112,
-    "grade": 0.1398,
-    "lift_g": 2.5244
+    "step_m": 0.9496,
+    "grade": 0.1417,
+    "lift_g": 2.3259
    },
    "ground:71e37f88-8864-4e3b-a741-fe720cff5fdc": {
-    "step_m": 0.0532,
-    "grade": 0.0773,
-    "lift_g": 0.4781
+    "step_m": 0.0658,
+    "grade": 0.0782,
+    "lift_g": 0.5116
    },
    "ground:817dcbd5-ffc4-43c9-a162-82f9b3e3e92b": {
-    "step_m": 0.2498,
+    "step_m": 0.2281,
     "grade": 0.0155,
     "lift_g": 0.1039
    },
@@ -788,54 +788,54 @@
     "lift_g": 1.4779
    },
    "ground:84d6df6b-c778-48d7-8ac9-157fbe14fc31": {
-    "step_m": 4.4206,
-    "grade": 0.1956,
-    "lift_g": 3.9416
+    "step_m": 4.2526,
+    "grade": 0.1568,
+    "lift_g": 3.1496
    },
    "ground:90b3b3be-760e-4d9e-b0bb-0335a286025c": {
-    "step_m": 2.8392,
+    "step_m": 2.9009,
     "grade": 0.2609,
     "lift_g": 3.8525
    },
    "ground:93063b69-441e-4ffa-9dd2-0cc2e8d5af62": {
-    "step_m": 2.1429,
-    "grade": 0.2057,
-    "lift_g": 3.7671
+    "step_m": 0.2764,
+    "grade": 0.0683,
+    "lift_g": 0.3855
    },
    "ground:9e55eab1-2bf1-45c2-a029-6e98d88bf360": {
-    "step_m": 0.5337,
-    "grade": 0.1282,
-    "lift_g": 2.2147
+    "step_m": 4.7426,
+    "grade": 0.1809,
+    "lift_g": 2.8874
    },
    "ground:9eeccc1a-3c92-4df7-8096-1389dc5a1b59": {
-    "step_m": 0.9503,
+    "step_m": 0.5954,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:a3ed1d4a-cd82-41a5-87cf-e1b6f91668d0": {
-    "step_m": 0.5144,
-    "grade": 0.1077,
-    "lift_g": 1.6298
+    "step_m": 0.4922,
+    "grade": 0.0446,
+    "lift_g": 0.1926
    },
    "ground:a71f4bd8-e9a2-40f4-a389-1975c12c1ef5": {
-    "step_m": 1.3575,
-    "grade": 0.0468,
-    "lift_g": 0.5995
+    "step_m": 0.3729,
+    "grade": 0.045,
+    "lift_g": 0.4758
    },
    "ground:ab1594ff-28b0-4352-858b-437de0ce2fe9": {
-    "step_m": 0.1487,
+    "step_m": 0.147,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:acf2452e-ae4c-42d8-bcbd-4867db0b592d": {
     "step_m": 0.068,
     "grade": 0.0862,
-    "lift_g": 1.5147
+    "lift_g": 1.5146
    },
    "ground:b62db2c3-8b2b-4985-bab4-ed75b89fa611": {
-    "step_m": 0.1665,
-    "grade": 0.0708,
-    "lift_g": 0.6322
+    "step_m": 0.1672,
+    "grade": 0.0707,
+    "lift_g": 0.6324
    },
    "ground:bbc1772a-c0fa-4590-b260-d339d5f06123": {
     "step_m": 0.1574,
@@ -843,114 +843,114 @@
     "lift_g": 0.7112
    },
    "ground:cd8b30a4-3e7f-4956-b265-ba19c0ae81b7": {
-    "step_m": 1.3704,
-    "grade": 1.4844,
-    "lift_g": 17.9077
+    "step_m": 4.3235,
+    "grade": 0.1088,
+    "lift_g": 2.0468
    },
    "ground:d089f4da-9aa6-4eaa-afc3-c06ae6afab1e": {
-    "step_m": 0.5515,
-    "grade": 0.0814,
+    "step_m": 0.5518,
+    "grade": 0.0817,
     "lift_g": 0.4282
    },
    "ground:d283e09c-fdcd-46fa-9690-6a0444ce3695": {
-    "step_m": 2.433,
+    "step_m": 2.4458,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:db50bbb4-4dbd-484c-aa0c-800260ea6f81": {
-    "step_m": 1.2161,
-    "grade": 0.2411,
-    "lift_g": 2.6091
+    "step_m": 0.2544,
+    "grade": 0.2336,
+    "lift_g": 2.5204
    },
    "ground:ea7bf85b-5eee-46fc-9922-321e0b735929": {
     "step_m": 0.7461,
-    "grade": 0.2118,
-    "lift_g": 2.8568
+    "grade": 0.1247,
+    "lift_g": 0.923
    },
    "ground:ee5ecbaf-b833-49da-b3ad-b70b49e5fe92": {
     "step_m": 0.0497,
-    "grade": 0.1064,
+    "grade": 0.1068,
     "lift_g": 0.7954
    },
    "ground:f5366a2d-7e9c-4a28-9ce4-c3976db44833": {
-    "step_m": 0.5841,
-    "grade": 0.1061,
-    "lift_g": 1.7992
+    "step_m": 3.0247,
+    "grade": 0.4242,
+    "lift_g": 5.8723
    },
    "ground:f5b121f5-9e41-4c45-a418-4f2aaee21ac4": {
-    "step_m": 2.1387,
+    "step_m": 0.8611,
     "grade": 0.3425,
-    "lift_g": 4.5129
+    "lift_g": 4.5127
    },
    "ground:fb105231-7641-48d3-adc9-e00c9c8154b3": {
-    "step_m": 0.7718,
+    "step_m": 0.7739,
     "grade": 0.0782,
-    "lift_g": 0.8264
+    "lift_g": 0.826
    },
-   "tunnel:35f45a70-54b2-4a00-99d6-34838f375954.9398624#0": {
-    "step_m": 0.6654,
-    "grade": 0.1795,
-    "lift_g": 3.2161
+   "tunnel:35f45a70-54b2-4a00-99d6-34838f375954.9398624#1": {
+    "step_m": 0.7333,
+    "grade": 0.1726,
+    "lift_g": 4.0197
    },
    "tunnel:664365c3-4855-4cfb-b45a-8e6622fbdf82.5094256#1": {
-    "step_m": 0.385,
-    "grade": 0.1326,
-    "lift_g": 2.4028
+    "step_m": 0.4216,
+    "grade": 0.1455,
+    "lift_g": 2.7905
    },
-   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#0": {
-    "step_m": 0.6817,
-    "grade": 0.1629,
-    "lift_g": 2.8462
+   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#1": {
+    "step_m": 0.5749,
+    "grade": 0.1413,
+    "lift_g": 2.4086
    },
-   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#2": {
+   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#3": {
     "step_m": 0.6682,
     "grade": 0.7056,
     "lift_g": 10.5605
    },
-   "tunnel:fd230cc2-6827-419b-9c7f-dd8c1ba43cd6.0#0": {
-    "step_m": 0.0534,
-    "grade": 0.0502,
-    "lift_g": 1.1036
+   "tunnel:fd230cc2-6827-419b-9c7f-dd8c1ba43cd6.0#1": {
+    "step_m": 0.0471,
+    "grade": 0.0506,
+    "lift_g": 1.0687
    }
   }
  },
  "paris_maillot_ax_1083": {
-  "steps": 303,
+  "steps": 283,
   "parts": {
    "bridge:06600d5d-ffc1-4cf9-910e-559e4439978e": {
-    "step_m": 0.1244,
-    "grade": 0.1259,
-    "lift_g": 2.3306
+    "step_m": 0.1129,
+    "grade": 0.1187,
+    "lift_g": 2.1908
    },
    "bridge:0de1ee05-df89-40dc-a71d-be9ec0096ec4": {
-    "step_m": 2.5631,
-    "grade": 0.8995,
-    "lift_g": 21.8199
+    "step_m": 2.9001,
+    "grade": 0.9373,
+    "lift_g": 23.0115
    },
    "bridge:4f2616d4-069f-4eb2-8cbf-9e5a4004a138": {
     "step_m": 0.0013,
     "grade": 0.0105,
-    "lift_g": 0.4686
+    "lift_g": 0.4674
    },
    "bridge:6f636003-086c-4553-a931-84164580aaa6": {
-    "step_m": 2.0965,
-    "grade": 1.4482,
-    "lift_g": 13.8706
+    "step_m": 2.3236,
+    "grade": 1.4645,
+    "lift_g": 13.9405
    },
    "bridge:72eac86d-9efa-4504-8ba0-5466d4c990a5": {
     "step_m": 0.0963,
-    "grade": 0.127,
-    "lift_g": 1.3205
+    "grade": 0.1227,
+    "lift_g": 1.3043
    },
    "bridge:ea7bf85b-5eee-46fc-9922-321e0b735929": {
-    "step_m": 0.4302,
-    "grade": 0.1402,
-    "lift_g": 1.2803
+    "step_m": 0.0209,
+    "grade": 0.0607,
+    "lift_g": 0.3239
    },
    "ground:0415c1f3-c147-4d84-9dd5-f5e81946ed0a": {
-    "step_m": 8.9888,
-    "grade": 0.1777,
-    "lift_g": 1.0086
+    "step_m": 9.0131,
+    "grade": 0.094,
+    "lift_g": 0.759
    },
    "ground:06600d5d-ffc1-4cf9-910e-559e4439978e": {
     "step_m": 0.0282,
@@ -958,12 +958,12 @@
     "lift_g": 0.3217
    },
    "ground:0de1ee05-df89-40dc-a71d-be9ec0096ec4": {
-    "step_m": 5.6009,
-    "grade": 1.3937,
-    "lift_g": 28.0685
+    "step_m": 5.8527,
+    "grade": 1.4534,
+    "lift_g": 29.677
    },
    "ground:14fa10e8-9393-49fa-8172-dcf80f4ece0a": {
-    "step_m": 0.03,
+    "step_m": 0.0358,
     "grade": 0.084,
     "lift_g": 1.1271
    },
@@ -973,9 +973,9 @@
     "lift_g": 0.962
    },
    "ground:23a5c66c-7e2e-45b2-83ec-0332ed3290e0": {
-    "step_m": 0.4367,
-    "grade": 0.2151,
-    "lift_g": 2.3578
+    "step_m": 0.5731,
+    "grade": 0.2493,
+    "lift_g": 2.8513
    },
    "ground:3f87a954-7293-4225-b097-b311f8c3ff7a": {
     "step_m": 0.1409,
@@ -988,13 +988,13 @@
     "lift_g": 0.3404
    },
    "ground:4f2616d4-069f-4eb2-8cbf-9e5a4004a138": {
-    "step_m": 0.1475,
+    "step_m": 0.1752,
     "grade": 0.0252,
     "lift_g": 0.2784
    },
    "ground:6f636003-086c-4553-a931-84164580aaa6": {
-    "step_m": 1.2453,
-    "grade": 0.879,
+    "step_m": 1.0654,
+    "grade": 0.9536,
     "lift_g": 0.0
    },
    "ground:72eac86d-9efa-4504-8ba0-5466d4c990a5": {
@@ -1003,39 +1003,39 @@
     "lift_g": 0.3273
    },
    "ground:90b3b3be-760e-4d9e-b0bb-0335a286025c": {
-    "step_m": 4.727,
+    "step_m": 4.9198,
     "grade": 0.0441,
     "lift_g": 2.0098
    },
    "ground:936e51bf-1eaf-4b19-9363-897537ea39f0": {
-    "step_m": 3.8426,
-    "grade": 0.1601,
-    "lift_g": 1.4592
+    "step_m": 3.8457,
+    "grade": 0.0736,
+    "lift_g": 1.0168
    },
    "ground:d089f4da-9aa6-4eaa-afc3-c06ae6afab1e": {
-    "step_m": 0.7245,
-    "grade": 0.0809,
+    "step_m": 0.706,
+    "grade": 0.0812,
     "lift_g": 0.6539
    },
    "ground:ea7bf85b-5eee-46fc-9922-321e0b735929": {
-    "step_m": 6.5931,
-    "grade": 0.6842,
-    "lift_g": 6.6941
+    "step_m": 4.2974,
+    "grade": 0.7253,
+    "lift_g": 7.1483
    },
    "ground:ee5ecbaf-b833-49da-b3ad-b70b49e5fe92": {
-    "step_m": 0.0744,
-    "grade": 0.1054,
-    "lift_g": 0.7518
+    "step_m": 0.0832,
+    "grade": 0.1057,
+    "lift_g": 0.6895
    },
    "ground:eeb16a87-89c1-4324-9a78-0b3ad5899a87": {
-    "step_m": 0.5548,
+    "step_m": 0.5232,
     "grade": 0.0622,
     "lift_g": 0.2322
    },
-   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#0": {
-    "step_m": 0.0113,
+   "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#1": {
+    "step_m": 0.0116,
     "grade": 0.0161,
-    "lift_g": 0.2451
+    "lift_g": 0.2449
    }
   }
  },
@@ -1314,7 +1314,7 @@
   }
  },
  "riva_pontera_tunnel": {
-  "steps": 48,
+  "steps": 49,
   "parts": {
    "bridge:37df2d39-f647-49a8-ada8-0344c81bb17f": {
     "step_m": 0.118,
@@ -1381,10 +1381,10 @@
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "tunnel:49a96b66-615b-46e2-a65a-3262c17ff2b1.9351120#0": {
-    "step_m": 0.3715,
-    "grade": 0.2604,
-    "lift_g": 4.7271
+   "tunnel:49a96b66-615b-46e2-a65a-3262c17ff2b1.9351120#1": {
+    "step_m": 0.1989,
+    "grade": 0.2603,
+    "lift_g": 4.2884
    }
   }
  },
@@ -1499,17 +1499,17 @@
   }
  },
  "torbole_adige_tunnel": {
-  "steps": 3,
+  "steps": 1,
   "parts": {
    "tunnel:9de2a749-2d8b-4b14-8e89-17f3dc241c75.355472#1": {
-    "step_m": 0.2215,
+    "step_m": 0.1318,
     "grade": 0.0,
     "lift_g": 0.0
    }
   }
  },
  "vienna_a23_1083": {
-  "steps": 90,
+  "steps": 101,
   "parts": {
    "bridge:28b927b9-f784-426e-9940-5203d45563b4": {
     "step_m": 0.0286,
@@ -1528,11 +1528,16 @@
    },
    "ground:5caf4045-43ac-4ea5-a4fb-bda3bfb05a95": {
     "step_m": 0.1471,
-    "grade": 0.1799,
-    "lift_g": 2.3437
+    "grade": 0.176,
+    "lift_g": 2.3307
    },
    "ground:73a77ad1-12be-421d-8a3d-1fb7faccf20a": {
     "step_m": 0.1369,
+    "grade": 0.0,
+    "lift_g": 0.0
+   },
+   "ground:7bad97ca-be21-4590-b543-48990b87394b": {
+    "step_m": 1.0306,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1542,14 +1547,14 @@
     "lift_g": 0.5089
    },
    "ground:a2f92c75-b1bc-4d47-8afa-f96b96bd2209": {
-    "step_m": 0.3075,
+    "step_m": 0.2961,
     "grade": 0.0338,
     "lift_g": 0.5794
    },
    "ground:c1614c39-5953-4fb7-aeab-0298934d8803": {
-    "step_m": 0.2192,
-    "grade": 0.2593,
-    "lift_g": 2.5659
+    "step_m": 0.2595,
+    "grade": 0.2462,
+    "lift_g": 2.4788
    },
    "ground:c404366c-86b9-43d1-a135-608f3d78b8c9": {
     "step_m": 0.1174,
@@ -1557,7 +1562,7 @@
     "lift_g": 0.6558
    },
    "ground:ce590ac8-ef29-4688-af6d-2bb2052cc5f3": {
-    "step_m": 0.3404,
+    "step_m": 0.3454,
     "grade": 0.1255,
     "lift_g": 1.776
    },
@@ -1566,40 +1571,45 @@
     "grade": 0.0,
     "lift_g": 0.0
    },
-   "tunnel:5caf4045-43ac-4ea5-a4fb-bda3bfb05a95.1923184#0": {
-    "step_m": 0.0831,
-    "grade": 0.1732,
-    "lift_g": 4.0379
+   "tunnel:5caf4045-43ac-4ea5-a4fb-bda3bfb05a95.1923184#1": {
+    "step_m": 0.0875,
+    "grade": 0.171,
+    "lift_g": 4.02
+   },
+   "tunnel:c1614c39-5953-4fb7-aeab-0298934d8803.0#0": {
+    "step_m": 0.0933,
+    "grade": 0.235,
+    "lift_g": 5.2675
    }
   }
  },
  "vienna_kennedy_1083": {
-  "steps": 150,
+  "steps": 149,
   "parts": {
    "ground:2013218c-876e-4e29-b27e-6216368af409": {
-    "step_m": 0.3971,
-    "grade": 0.1389,
-    "lift_g": 0.7125
+    "step_m": 0.3985,
+    "grade": 0.1396,
+    "lift_g": 0.7174
    },
    "ground:62cf3476-cfbe-4350-a08d-1c4c0a63f094": {
-    "step_m": 0.5448,
-    "grade": 0.4679,
-    "lift_g": 3.7441
+    "step_m": 0.582,
+    "grade": 0.4704,
+    "lift_g": 3.8172
    },
    "ground:aadf4ae5-92f2-4ae6-beef-743c15f5be14": {
-    "step_m": 0.8372,
-    "grade": 0.5041,
-    "lift_g": 4.6659
+    "step_m": 0.8535,
+    "grade": 0.5089,
+    "lift_g": 4.732
    },
    "ground:bf8aa3a0-7b9d-410f-858e-a1fdc8690315": {
-    "step_m": 0.1174,
+    "step_m": 0.1168,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:efb7b136-25b2-4516-8de5-c49d9a23a671": {
-    "step_m": 0.386,
-    "grade": 0.113,
-    "lift_g": 1.1813
+    "step_m": 0.4123,
+    "grade": 0.1131,
+    "lift_g": 1.1788
    },
    "ground:efd331e7-07e8-4811-81ee-f4573190a195": {
     "step_m": 0.1486,
@@ -1612,17 +1622,17 @@
     "lift_g": 0.0
    },
    "ground:osm-busway-000088141702": {
-    "step_m": 4.1323,
+    "step_m": 4.1804,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:osm-busway-001066179526": {
-    "step_m": 1.0518,
+    "step_m": 1.0764,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:osm-busway-001079827973": {
-    "step_m": 4.1364,
+    "step_m": 4.1911,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1974,7 +1984,7 @@
   }
  },
  "vienna_suedtiroler_1083": {
-  "steps": 173,
+  "steps": 171,
   "parts": {
    "bridge:19582d0c-f16b-46e9-8a72-eef94ebcba25": {
     "step_m": 0.1255,
@@ -2227,7 +2237,7 @@
     "lift_g": 0.0
    },
    "tunnel:11be7867-633d-4f26-98d7-48f7f8c25930.0#1": {
-    "step_m": 0.3269,
+    "step_m": 0.49,
     "grade": 0.0,
     "lift_g": 0.0
    }
