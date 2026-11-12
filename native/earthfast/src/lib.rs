@@ -102,6 +102,7 @@ mod levelways;
 mod meshtrim;
 mod shelterfit;
 mod tilecuts;
+mod bldclear;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -1554,6 +1555,94 @@ fn np_percentile(v: &[f64], q: f64) -> f64 {
     let (a, b) = (v[lo], v[hi]);
     let d = b - a;
     if g >= 0.5 { b - d * (1.0 - g) } else { a + d * g }
+}
+
+/// roadwidth.clearance_row: the room between the building walls along a street (centreline (k, >= 2)) a carriageway
+/// on its line keeps clear of: every `step` m (end_skip m kept clear of its ends: the corner houses of its junctions) a
+/// ray each way to the first wall within reach; (the q-quantile of twice the nearer wall's distance: the road stays on
+/// its line, so that is the room it has, none within reach no limit; the q-quantile of the wall-to-wall distance where
+/// both sides have one: the street's own width), each over the sections with a wall (both walls), None where fewer than
+/// min_samples or a share under `walled` of the sections have one. q in 0..1: the narrowest share q of them is left to
+/// the buildings' own cut (buildings.road_clearance).
+#[allow(clippy::too_many_arguments)]
+fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
+        line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+        counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<T>, bucket: f64,
+        step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+        -> (Option<f64>, Option<f64>) {
+    let l = line.as_array();
+    let k = l.nrows();
+    if k < 2 {
+        return (None, None);
+    }
+    let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
+    let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let mut s = vec![0.0f64; k];
+    for i in 1..k {
+        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).hypot(ys[i] - ys[i - 1]);
+    }
+    let total = s[k - 1];
+    // (a short street, a cul-de-sac between two buildings: its middle half)
+    let end_skip = end_skip.min(total * 0.25);
+    let step = step.min((total - 2.0 * end_skip) / 2.0).max(0.5);
+    let stop = total - end_skip + 1e-9;
+    let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else { return (None, None) };
+    let sg = segs.as_array();
+    let mut w = Vec::with_capacity(count);
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let dd = end_skip + i as f64 * step;
+        let j = s.partition_point(|&v| v < dd).clamp(1, k - 1);
+        let (tx, ty) = (xs[j] - xs[j - 1], ys[j] - ys[j - 1]);
+        let len = tx.hypot(ty);
+        if !(len >= 1e-6) {
+            continue;
+        }
+        let (nx, ny) = (-ty / len, tx / len);
+        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
+        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
+        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let near = match (a.is_nan(), b.is_nan()) {
+            (true, true) => f64::INFINITY,
+            (true, false) => b,
+            (false, true) => a,
+            (false, false) => a.min(b),
+        };
+        w.push(2.0 * near);
+        rows.push(if a.is_nan() || b.is_nan() { f64::INFINITY } else { a + b });
+    }
+    let total_n = w.len();
+    let quant = |v: Vec<f64>| {
+        // (over the sections that have a wall: a long road's open stretches do not hide its village's houses)
+        let mut v: Vec<f64> = v.into_iter().filter(|x| x.is_finite()).collect();
+        if v.len() < min_samples.max(1) || (v.len() as f64) < walled * total_n as f64 {
+            return None;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(v[((q.clamp(0.0, 1.0) * v.len() as f64).floor() as usize).min(v.len() - 1)])
+    };
+    (quant(w), quant(rows))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                   counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f32>,
+                   bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                   -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
+}
+
+/// clearance_row with float64 walls.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                 counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f64>,
+                 bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                 -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
 }
 
 /// roadwidth.measure_row: the right-of-way between the building walls of a street (centreline (k, >=2)), or None.
@@ -6058,6 +6147,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(building_walls_np, m)?)?;
     m.add_function(wrap_pyfunction!(tilecuts::nearest_segments, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings_lists, m)?)?;
-    m.add("VERSION", 240)?;
+    // 243: bldclear (buildings.road_clearance: footprints against the drawn carriageways, footprint_road_overlap /
+    // footprint_clear: a footprint cut back to the asphalt's edge; GitHub #523 #543 #1184)
+    m.add_function(wrap_pyfunction!(bldclear::footprint_road_overlap, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_clear, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_pieces, m)?)?;
+    // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
+    m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
+    m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
+    m.add("VERSION", 243)?;
     Ok(())
 }

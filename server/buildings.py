@@ -646,7 +646,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -4000,6 +4000,235 @@ def road_across(ring, lines, max_w=ACROSS_W):
     return False
 
 
+# Buildings standing on the drawn carriageways (the user, 2026-11-12: "have you looked at houses blocking the road
+# sometimes?"; GitHub #523, #543, #1184, #433, #74 and Discord). Where a footprint reaches into a ground road's
+# carriageway as the road tiles draw it (road_specs' width with the land cover and the measured widths, placement,
+# tapers), it is cut back to the asphalt's edge (earthfast.footprint_clear: the side facing the road; a pitched roof's
+# box keeps its shape): the outline's slop, a footprint machine-learned from an old photo (Fremantle's High Street:
+# Microsoft's outline of a house pulled down for the 2023 roundabout, 2.3 m into its lanes) or a carriageway drawn
+# wider than the street (Newhey's terraces along the A640, 2 m into its 12 m). A machine-learned footprint that a cut
+# cannot clear (deep in the lanes, the road through it) is left out: a vehicle or a stale photo's house. A mapped one
+# the road runs through stays: a passage (ROAD_THROUGH_M lifts it, tunnels / building_passage are not ground roads).
+ROAD_CLEAR_ON = os.environ.get("BNE_ROAD_CLEAR", "on") != "off"
+ROAD_CLEAR_TOL_M = 0.3          # m a footprint may reach into a carriageway untouched (a curb's width, the outline's slop)
+ROAD_CLEAR_MARGIN_M = 0.25      # m a cut footprint stands back from the carriageway's edge
+ROAD_CLEAR_SHARE = 0.4          # share of a mapped footprint a cut may take (more: it stays as mapped)
+ROAD_CLEAR_ML_SHARE = 0.5       # ... of a machine-learned one (more: left out)
+ROAD_CLEAR_ML_DEPTH_M = 1.0     # m: a machine-learned footprint reaching further into the lanes is left out, not cut (an
+                                # outline traced off a photo is seldom off by more; deeper: a vehicle, or a house the
+                                # road has replaced since the photo)
+ROAD_CLEAR_STEP_M = 0.5         # m between the samples of a footprint
+ROAD_CLEAR_PASSAGE_H = 4.5      # m: a passage's clear height under a mapped building the road runs into (ROAD_PASSAGE_H)
+ROAD_CLEAR_LINTEL_M = 2.5       # m of building over it at least (a storey), else it stands beside the road in pieces
+ROAD_CLEAR_PIECES_MIN = 0.15    # share of a low mapped footprint its pieces off the road keep at least, else left out
+ROAD_CLEAR_SKIP_SUB = ("driveway", "parking_aisle", "drive-through")    # (a garage's drive, a lot's aisles, a drive-thru:
+                                                                        # roofs over them are real)
+ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service"}
+ROAD_CLEAR_SKIP_CLS = CANOPY_CLASSES | BRIDGE_CLASSES | {"ship", "toll_booth", landmarks.LANDMARK}
+
+
+def carriageway_segments(frame, road_layers, x0, y0, size=256.0, margin=60.0, urban_fn=None, widths=None,
+                         left_hand=False, force=False):
+    """(seg (S, 4): ax ay bx by relative to (x0, y0), half (S,): each segment's half width) of the ground
+    carriageways near the square [x0, x0 + size]^2 of frame, drawn as the road tiles draw them (roads.build_tile's
+    ground rings: road_specs(urban_fn, widths, left_hand), the placement's lines, the tapers), of the classes
+    ROAD_CLEAR_CLASSES (no driveways or lot aisles), or None (and with the clearance off, unless force)."""
+    import roads as roadsmod
+    cells = [f for f in road_layers if f is not None and len(f.kind)]
+    if not cells or not (ROAD_CLEAR_ON or force):
+        return None
+    placement = roadsmod.placement_context(cells, urban_fn, widths, left_hand)
+    copies = roadsmod.copies_of(cells)
+
+    def taper_of(f):
+        return roadsmod.road_tapers(f, urban_fn, widths, left_hand)
+    lo, hi = -margin, size + margin
+    segs, halves, seen = [], [], set()
+    for f in cells:
+        cls = f.attrs.get("class")
+        if cls is None:
+            continue
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 2] - x0 >= lo) & (bb[:, 0] - x0 <= hi) & (bb[:, 3] - y0 >= lo)
+                              & (bb[:, 1] - y0 <= hi))
+        specs = None
+        for i in near.tolist():
+            fid = str(f.ids[i])
+            if fid in seen or str(cls[i]) not in ROAD_CLEAR_CLASSES:
+                continue
+            if roadsmod._rule_value(f.rules.get("subclass"), i) in ROAD_CLEAR_SKIP_SUB:
+                continue
+            if specs is None:
+                specs = roadsmod.road_specs(f, urban_fn, widths, left_hand)
+            sp = specs[i] if i < len(specs) else None
+            if sp is None or not np.isfinite(sp.width) or sp.width <= 0:
+                continue
+            seen.add(fid)
+            tapers = None
+            for ring in roadsmod.ground_parts(f, i):
+                if len(ring) < 2:
+                    continue
+                ring = placement.ring(frame, f, i, ring, sp, fid)
+                e, n = mapgeom.enu_xy(f, frame, ring)
+                xy = np.stack([np.asarray(e, np.float64) - x0, np.asarray(n, np.float64) - y0], 1)
+                if xy[:, 0].max() < lo or xy[:, 0].min() > hi or xy[:, 1].max() < lo or xy[:, 1].min() > hi:
+                    continue
+                if tapers is None:
+                    tapers = roadsmod.joint_desc(copies.get(fid, [(f, i)]), taper_of)
+                ws = roadsmod.taper_widths(sp.width, tapers, ring[:, 0], ring[:, 1])
+                segs.append(np.concatenate([xy[:-1], xy[1:]], 1))
+                halves.append(np.full(len(xy) - 1, sp.width / 2.0) if ws is None else (ws[:-1] + ws[1:]) / 4.0)
+    if not segs:
+        return None
+    return np.ascontiguousarray(np.concatenate(segs), np.float64), np.ascontiguousarray(np.concatenate(halves), np.float64)
+
+
+def _clearable(spec):
+    """A building the road clearance may cut or leave out: on the ground, not a canopy driven under, a bridge's frame,
+    a ship, a toll booth, a landmark's model, a parking deck or a tunnel's portal building."""
+    return ((spec.min_h or 0.0) <= 0.5 and spec.cls not in ROAD_CLEAR_SKIP_CLS and not spec.deck and not spec.portal
+            and not spec.ship)
+
+
+def _ground_up(frame, x0, y0, elev, rings):
+    """The ground (the frame's up) at every corner of rings (tile-relative), one elev call; NaN where none."""
+    allr = np.concatenate(rings)
+    la, lo, _ = frame.enu_to_geodetic(allr[:, 0] + x0, allr[:, 1] + y0, np.zeros(len(allr)))
+    la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    g = np.asarray(elev(la, lo), np.float64)
+    up = np.full(len(allr), np.nan)
+    ok = np.isfinite(g)
+    if ok.any():
+        up[ok] = np.asarray(frame.geodetic_to_enu(la[ok], lo[ok], g[ok])[2], np.float64)
+    out, at = [], 0
+    for r in rings:
+        out.append(up[at:at + len(r)])
+        at += len(r)
+    return out
+
+
+def _spec_copy(spec, **kw):
+    s = Spec(**{k: getattr(spec, k) for k in Spec.__slots__})
+    for k, v in kw.items():
+        setattr(s, k, v)
+    return s
+
+
+def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None):
+    """items (tile_buildings') with every clearable footprint (_clearable) kept off the carriageways
+    (carriageway_segments' (seg, half), tile-relative like the rings; the ground at new corners read again):
+    - cut back to their edges where that takes at most ROAD_CLEAR_SHARE of it (ROAD_CLEAR_ML_SHARE of a machine-learned
+      one, which must reach no further than ROAD_CLEAR_ML_DEPTH_M into the lanes);
+    - else a machine-learned one is left out (a vehicle, a house the road replaced since the photo);
+    - else a mapped one the road runs into or through is a passage when it is tall enough (ROAD_CLEAR_PASSAGE_H and a
+      storey over it): its pieces beside the carriageways (earthfast.footprint_pieces) stand up to the passage's height
+      and the whole of it goes on over the road from there, its roof as it was; a lower one keeps its pieces (flat
+      roofs: a pitched roof's box would reach back over the road), and is left out when they are under
+      ROAD_CLEAR_PIECES_MIN of it (a shed or kiosk on the road's line: the map has one of them wrong).
+    stats: a dict that gets the counts per outcome."""
+    if not ROAD_CLEAR_ON or not items or carriageways is None:
+        return items
+    seg, half = carriageways
+    idx = [k for k, (spec, _g0, _g1) in enumerate(items) if _clearable(spec)]
+    if not idx:
+        return items
+    fast.require(243, "footprint_clear")
+    rings = [np.asarray(drawn_ring(items[k][0]), np.float64)[:, :2] for k in idx]
+    boxed = np.array([drawn_ring(items[k][0]) is not items[k][0].ring for k in idx], np.uint8)
+    off = np.r_[0, np.cumsum([len(r) for r in rings])].astype(np.int64)
+    out_xy, out_off, status, share, depth, _over = fast._ef.footprint_clear(
+        np.ascontiguousarray(np.concatenate(rings)), off, boxed, seg, half, ROAD_CLEAR_TOL_M, ROAD_CLEAR_MARGIN_M,
+        max(ROAD_CLEAR_SHARE, ROAD_CLEAR_ML_SHARE), ROAD_CLEAR_STEP_M)
+    drop, cut, split = set(), [], []
+
+    def count(spec, name):
+        if stats is not None:
+            key = ("ml_" if spec.ml else "osm_") + name
+            stats[key] = stats.get(key, 0) + 1
+    for j, k in enumerate(idx):
+        spec = items[k][0]
+        st = int(status[j])
+        if st == 1 and (share[j] > (ROAD_CLEAR_ML_SHARE if spec.ml else ROAD_CLEAR_SHARE)
+                        or (spec.ml and depth[j] > ROAD_CLEAR_ML_DEPTH_M)):
+            st = 2              # (more than its share, or a machine-learned one deep in the lanes: as one the cut could
+                                # not clear)
+        if st == 1:
+            cut.append((k, np.asarray(out_xy[out_off[j]:out_off[j + 1]], np.float64)))
+            count(spec, "trimmed")
+        elif st and spec.ml:
+            drop.add(k)
+            count(spec, "dropped")
+        elif st:
+            split.append((k, rings[j], bool(boxed[j])))
+    items = list(items)
+    if cut:
+        for (k, r), gr in zip(cut, _ground_up(frame, x0, y0, elev, [r for _, r in cut])):
+            if not np.isfinite(gr).all():
+                continue        # (keeps its outline: no ground read under the new one)
+            spec, _g0, _g1 = items[k]
+            spec.ring = r
+            if spec.holes:      # (a courtyard the cut reached is no longer one)
+                from polygon import Path
+                pth = Path(r)
+                spec.holes = [h for h in spec.holes if pth.contains_points(np.asarray(h)[:, :2]).all()] or None
+            spec.gring = gr
+            items[k] = (spec, float(gr.min()), float(gr.max()))
+    extra = []
+    if split:
+        srings = [r for _, r, _b in split]
+        soff = np.r_[0, np.cumsum([len(r) for r in srings])].astype(np.int64)
+        p_xy, p_off, owner, failed = fast._ef.footprint_pieces(
+            np.ascontiguousarray(np.concatenate(srings)), soff, seg, half, ROAD_CLEAR_TOL_M, ROAD_CLEAR_MARGIN_M,
+            ROAD_CLEAR_STEP_M)
+        pieces = [[] for _ in split]
+        for p, o in enumerate(owner):
+            pieces[o].append(np.asarray(p_xy[p_off[p]:p_off[p + 1]], np.float64))
+        allp = [pc for ps in pieces for pc in ps]
+        grounds = iter(_ground_up(frame, x0, y0, elev, allp)) if allp else iter(())
+        for j, (k, ring, was_box) in enumerate(split):
+            spec, g0, g1 = items[k]
+            ps = pieces[j]
+            gs = [next(grounds) for _ in ps]
+            tall = (spec.height or 0.0) >= ROAD_CLEAR_PASSAGE_H + ROAD_CLEAR_LINTEL_M
+            if failed[j]:
+                if tall:            # (crossed all over: the whole of it over the roads)
+                    items[k] = (_spec_copy(spec, min_h=ROAD_CLEAR_PASSAGE_H, height=spec.height - ROAD_CLEAR_PASSAGE_H,
+                                           door=None, porch=False, stoop=None, sign=None), g0, g1)
+                    count(spec, "passage")
+                else:
+                    count(spec, "kept")
+                continue
+            whole = abs(_area2(ring)) / 2
+            kept = sum(abs(_area2(p)) / 2 for p in ps)
+            if not tall and kept < ROAD_CLEAR_PIECES_MIN * whole:
+                drop.add(k)
+                count(spec, "dropped")
+                continue
+            body = []
+            for p, gp in zip(ps, gs):
+                if not np.isfinite(gp).all():
+                    continue
+                h = ROAD_CLEAR_PASSAGE_H if tall else spec.height
+                fl = max(1, int(round(h / max(spec.floor_h or FLOOR_M, 1.0))))
+                body.append((_spec_copy(spec, ring=p, gring=gp, height=h, roof="flat", holes=None, floors=fl,
+                                        floor_h=h / fl, door=None, porch=False, stoop=None, sign=None, steeple=False,
+                                        tank=False, hf=False, skel=False, fr_house=False),
+                             float(gp.min()), g1 if tall else float(gp.max())))   # (tall: its top meets the part over)
+            if tall:
+                items[k] = (_spec_copy(spec, min_h=ROAD_CLEAR_PASSAGE_H, height=spec.height - ROAD_CLEAR_PASSAGE_H,
+                                       ring=ring if was_box else spec.ring, door=None, porch=False,
+                                       stoop=None, sign=None,
+                                       floors=max(1, int(spec.floors or 1) - 1)), g0, g1)
+                count(spec, "passage")
+            else:
+                drop.add(k)
+                count(spec, "pieces")
+            extra += body
+    if drop:
+        items = [it for k, it in enumerate(items) if k not in drop]
+    return items + extra
+
+
 CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulative sums: within ~1e-5 m of the exact mean)
 
 
@@ -4220,7 +4449,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
-                   industrial=None, parts_min_top=None, nyc=None):
+                   industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -4235,7 +4464,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
     any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out.
     nyc: nycmassing.Fetch, New York's measured massing: a building without parts of its own that matches a record
-    takes the record's parts (its setbacks), drawn as the map's parts are."""
+    takes the record's parts (its setbacks), drawn as the map's parts are. carriageways: carriageway_segments' roads,
+    the footprints kept off them (road_clearance; clear_stats its counts)."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     nyc_idx = nyc.index() if nyc is not None else None
     seen = set()
@@ -4624,6 +4854,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]
         spec.portal = bool(at.get("portal"))
+        spec.ml = bool(at.get("ml"))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
         if not ok[i0:i1].all():
             continue
@@ -4650,6 +4881,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         isl = _toll_islands(frame, layers, parts_of, lines, x0, y0)
         if isl:
             out = _toll_mark(out, isl)
+    if carriageways is not None:
+        out = road_clearance(out, carriageways, frame, x0, y0, elev, clear_stats)
     return out
 
 
@@ -5519,7 +5752,8 @@ def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items
 
 
 def road_tile_items(
-    frame, tx, ty, md, ground, decks=None, skip=frozenset(), cache_dir=None
+    frame, tx, ty, md, ground, decks=None, skip=frozenset(), cache_dir=None, urban_fn=None, widths=None,
+    left_hand=False, clear_stats=None
 ):
     """tile_buildings of road tile (tx, ty) (items, custom), from the map cells under it, plus any
     3dmr.eu models found near it by geo-search (threedmr.region_ids/model_position), appended to custom as
@@ -5534,7 +5768,8 @@ def road_tile_items(
 
     The geo-search is the tile's region's (threedmr.region_ids: its REGION_DEG square out to SEARCH_CORRECT_R_M past
     its corners, one cached search): a model counts where model_position puts it, its desc-corrected position when
-    its api point is stale and far off (id 22, the Dragon Bridge: api point 26 km off in the mountains)."""
+    its api point is stale and far off (id 22, the Dragon Bridge: api point 26 km off in the mountains).
+    urban_fn, widths, left_hand: the road tile's road_specs arguments, its carriageways as drawn (road_clearance)."""
     import roads
     import threedmr
 
@@ -5599,6 +5834,9 @@ def road_tile_items(
         else None,
         skip=skip,
         house_land_layers=[c.layers.get("land_use") for c in cds] if house_layers else (),
+        carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0, x1 - x0,
+                                          urban_fn=urban_fn, widths=widths, left_hand=left_hand),
+        clear_stats=clear_stats,
     )
     custom = []
     if cache_dir is not None:
@@ -6066,7 +6304,7 @@ def far_needs(frame, tile, ty):
     return list(roads.cells_of_tile(frame, tile, ty, margin=0.0)), FAR_LAYERS + house_layers
 
 
-def far_items(frame, tile, ty, md, ground, lamp_region=None):
+def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widths=None, left_hand=False):
     """The far (lite) buildings of road tile (tile, ty) (an anchor tile, or a geotile: tile a geotiles.GeoBox, ty None:
     its own buildings, those the road geotile of the same key holds) in frame: (items, lamps [[x, y, z], ...] of its
     streets in frame, the tile's box)."""
@@ -6090,19 +6328,23 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
-                           ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
+                           ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
+                           carriageways=carriageway_segments(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                                                             x1 - x0, urban_fn=urban_fn, widths=widths,
+                                                             left_hand=left_hand))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
     return items, lamps, box
 
 
-def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None):
+def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None, urban_fn=None, widths=None,
+             left_hand=False):
     """A far (render-only) building tile written to the session folder: (vfs path of its JSON, building
     count) or None. The lite mesh of the same buildings as road_tile's."""
     import json
     import os
-    items, lamps, (x0, y0, _x1, _y1) = far_items(frame, tx, ty, md, ground, lamp_region)
+    items, lamps, (x0, y0, _x1, _y1) = far_items(frame, tx, ty, md, ground, lamp_region, urban_fn, widths, left_hand)
     mesh = build(items, lite=True)
     data = {"v": 1}
     if lamps:

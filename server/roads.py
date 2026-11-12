@@ -573,7 +573,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 17     # 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 18     # 18: a town street's carriageway kept clear of the walls along it where the map gives no width (roads._wall_capped, roadwidth.clearance_row: Campulung, Setagaya, Trastevere; GitHub #1184, #543), 2026-11-12; 17: a junction standing over a tunnel the DEM shows open is an underpass: its arms' crossings by the node count (gradesep.JOINED_ENDS, Vienna's S1 under Rautenweg, GitHub #1083), 2026-11-12; 16: a merged highway's ways of other lane counts as lane sections of their own (lanesections.py, PR #880 by DerEifrige-f), the default widths of roads without a mapped width measured on aerials (WIDTH_TABLE: regions, town one-way streets, no parking on top of a mapped lane count), narrow winding rural roads (WINDING_*), 2026-11-12; 15: the road centrelines rounded and curvature continuous by default (roadsmooth.py), 2026-11-12; 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); flagstone / tiles paving cobble (PR #971); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -3942,6 +3942,66 @@ def _measured_widths(feats, specs, widths):
                 out[j] = sp._replace(width=m[0], walk=m[1])
             elif m[0] <= sp.width + 5.:
                 out[j] = europewalks.finish_width(sp, m[0], measured_walk=m[1])
+    return _wall_capped(feats, out, widths)
+
+
+CAP_CLASSES = SIDEWALK_CLASSES          # (and alleys: service ways of subclass alley)
+CAP_LANE_M = 2.75                       # m a mapped lane keeps at least under a cap
+CAP_MIN_DW = 0.3                        # m: a cap narrowing a carriageway less than this leaves it
+CAP_TWO_WAY_M = 5.0                     # m a two-way street keeps unless its walls both sides are closer (one lane)
+
+
+def _wall_capped(feats, specs, widths):
+    """specs with each town street's carriageway kept clear of the buildings along it where the map gives no width
+    (roadwidth.clearance_row through widths' cap: the street's walls' room CLEAR_Q quantile, less CLEAR_SLACK_M each
+    side, less its sidewalks and verges where they fit; at least 3 m, its mapped lanes at CAP_LANE_M, 0.6 x its class's
+    default for a primary / secondary). A road's narrowest stretches beyond the quantile are buildings.road_clearance's.
+    Pure given widths."""
+    cap = getattr(getattr(widths, "__self__", None), "cap", None)
+    if cap is None:
+        return specs
+    import roadwidth
+    import europewalks
+    rules = feats.rules
+    out = list(specs)
+    for j, sp in enumerate(out):
+        if sp is None or sp.link or sp.mountain:     # (a divided road's carriageway too: its nearer wall is its own side's)
+            continue
+        if sp.cls not in CAP_CLASSES and not (sp.cls == "service" and _rule_value(rules.get("subclass"), j) == "alley"):
+            continue
+        if _rule_value(rules.get("width"), j) is not None or _osm(feats, "width", j, *OSM_WIDTH_M) is not None:
+            continue            # (a mapped width stands)
+        if is_ring(feats, j):
+            continue            # (a roundabout's ring: the houses stand round the whole circle)
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+        if b - a < 2:
+            continue
+        near, row = cap(str(feats.ids[j]), feats.lonlat[a:b]) or (None, None)
+        if near is None:
+            continue
+        room = near - 2.0 * roadwidth.CLEAR_SLACK_M
+        if sp.street is not None:
+            outer = max([w.setback + w.width for _, w in sp.street.walks()] + [0.0])
+        else:
+            outer = sp.walk if has_sidewalks(sp) else 0.0
+        if sp.width + 2.0 * outer <= room + CAP_MIN_DW:
+            continue
+        dflt = carriageway(sp.cls, sp.kind, True, None, sp.oneway, sp.lanes, link=sp.link)
+        floor = 3.0 if sp.cls not in {"primary", "secondary"} else 0.6 * dflt
+        if not sp.oneway and (row is None or row - 2.0 * roadwidth.CLEAR_SLACK_M >= CAP_TWO_WAY_M):
+            # (the walls near its line on one side only, the street itself wider: its line off the houses' street, a
+            # two-way road keeps two lanes, the houses over it cut)
+            floor = max(floor, CAP_TWO_WAY_M)
+        if sp.lanes:
+            floor = max(floor, CAP_LANE_M * float(sp.lanes))
+        cw = room - 2.0 * outer
+        if cw < floor:
+            cw = max(floor, min(room, sp.width))    # (its sidewalks past the walls: the carriageway first)
+        if cw >= sp.width - CAP_MIN_DW:
+            continue
+        out[j] = (sp._replace(width=cw) if sp.street is None else
+                  europewalks.finish_width(sp, cw))
     return out
 
 

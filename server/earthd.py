@@ -2350,13 +2350,15 @@ class Server:
         if self.far_bld_pool is not None:
             t0 = time.perf_counter()
             fut = self.far_bld_pool.submit(blockworker.far_buildings_tile, aid, anchor.lat, anchor.lon, zoom, tx, ty,
-                                           self.out_dir, self.vfs_dir, self.lamp_region(anchor))
+                                           self.out_dir, self.vfs_dir, self.lamp_region(anchor), self.left_hand(anchor))
             res = fut.result()
             log.debug("far buildings tile %d_%d: %.2f s (queue + build)", tx, ty, time.perf_counter() - t0)
             return res
         return buildingsmod.far_tile(anchor.frame, tx, ty, self.mapdata,
                                      lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
-                                     self.out_dir, self.vfs_dir, aid, self.lamp_region(anchor))
+                                     self.out_dir, self.vfs_dir, aid, self.lamp_region(anchor),
+                                     urban_fn=self.surface.urban if getattr(self.surface, "urban", None) else None,
+                                     widths=self.road_widths, left_hand=self.left_hand(anchor))
 
     def build_signs_tile(self, aid, tx, ty):
         """signstream.build_tile: the highway signs of road tile (tx, ty) of anchor aid (its roads are with the mod
@@ -2749,7 +2751,8 @@ class Server:
             # (on the graded ground, as blockworker.roads_tile)
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
-                                                 cache_dir=os.path.dirname(self.out_dir))
+                                                 cache_dir=os.path.dirname(self.out_dir), urban_fn=urban,
+                                                 widths=self.road_widths, left_hand=self.left_hand(anchor))
             _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
                 anchor.frame, tx, ty, os.path.dirname(self.out_dir),
                 cell_fn=lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
