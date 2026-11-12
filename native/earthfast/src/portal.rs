@@ -348,7 +348,7 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
 
 /// A mouth's look from its road and ground: 0 a mountain bore (a raked hood, a headwall into the slope), 1 a
 /// cut-and-cover mouth between a cutting's walls or under flat ground (a square-set collar, a level lintel, no rake),
-/// 2 a minor road's mouth in a hillside (stone, a plain ring). major: a motorway .. primary; rise: the ground over the
+/// 2 a minor road's mouth in a hillside (a shorter hood). major: a motorway .. primary; rise: the ground over the
 /// floor ~12 m inside less the ground at the mouth (how fast the hill climbs over the tube); sides: the lower of the
 /// approach's two sides over the road 5 .. 10 m out (a cutting's depth).
 pub fn style(major: bool, th: f64, rise: f64, sides: f64) -> i64 {

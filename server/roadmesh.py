@@ -2547,7 +2547,7 @@ def tunnel(chunks, origin, walls=()):
         stone = low and not c.get("concrete")
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
-        sec = _tunnel_section(hw, th, low, box=low and not stone)    # (a major road's low tube: a concrete box)
+        sec = _tunnel_section(hw, th, low, box=low and not stone and portals.ON)    # (a major road's low tube: a box)
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -2602,7 +2602,7 @@ def tunnel(chunks, origin, walls=()):
             fitd = fits[0 if at == 0 else 1] if new_portal else None
             if fitd is not None:
                 # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
-                # a lane's portal in a hillside in stone
+                # in concrete (a park's low arch: stone)
                 tt = mid[1] - mid[0] if at == 0 else mid[-1] - mid[-2]
                 tt = tt / max(float(np.hypot(*tt)), 1e-9)
                 ul, outv = np.array([-tt[1], tt[0]]), (-tt if at == 0 else tt)
@@ -2611,7 +2611,8 @@ def tunnel(chunks, origin, walls=()):
                     q = mid[at] + ul * sg * (hw + 3.0) + outv * 4.0
                     near[si] = any(float(np.hypot(*(np.asarray(w["base"], np.float64)[:, :2] - q).T).min()) < 5.0
                                    for w in walls if len(w["base"]))
-                stone_p = stone if low else int(fitd["st"]) == 2
+                stone_p = stone if low else False     # (a full tube's mouth: concrete, its hood or box; stone only
+                                                      # on a park's low arch)
                 nv = _add_blocks(P, T, UV, M, nv, portals.structure(
                     fitd, np.r_[mid[at], z[at]] - origin, ul, outv, sec, th, hw, STONE_UV_M if stone_p else CONCRETE_UV_M,
                     near, low), 2 if stone_p else 0, 2 if (low and stone_p) else 7)

@@ -5,7 +5,7 @@ fit(): per tunnel chunk of a road tile (roads._tunnel_chunks) the ground the ent
 rows ("ground": where it does not cover the tube, roadmesh.tunnel builds the tube's outside), and at each end that is
 a portal ("fit"): the ground along the mouth's plane (the headwall's top), beside the approach (the wing walls), the
 approach's own heights, how far the headwall may reach either side before another road, and the mouth's look
-(earthfast.portal_style: a mountain bore, a cut-and-cover mouth, a lane's stone portal).
+(earthfast.portal_style: a mountain bore, a cut-and-cover mouth, a lesser road's shorter hood).
 structure(): the mesh pieces of one mouth for roadmesh.tunnel.
 
 The ground is the tile's own (the graded ground the terrain shows); nothing here changes a tunnel's floor, sections
@@ -45,12 +45,14 @@ MAJOR = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary
 # per look: collar_out, rake, collar_t, wall_t, parapet, top_min, top_max, foot, end_min, wing_t, wing_flare, wing_low
 # 0 a mountain bore on a major road: a raked concrete hood (the E39's and the A2's bores, Mapillary 2026-11-12)
 # 1 a cut-and-cover mouth: a square-set collar, a lintel with a parapet over the ground, walls straight along the road
-# 2 a lane's portal in a hillside: a plain ring in a low stone wall (Rv83 Kilbotn, GitHub #1066)
+# 2 a lesser road's portal in a hillside: a shorter raked concrete hood in a low wall (Rv83 Kilbotn, GitHub #1066: the
+#   entrance survey of 2026-11-12 found raked concrete hoods at 5 of its 8 mountain mouths whatever the road, Loibl,
+#   Laerdal, Kilbotn, Lantos, Damsgard; masonry only at old ones, Malibu Canyon, the N85, Central Park's arches)
 # 3 a low arch (an underpass, a park's transverse): a ring a hand deep in a wall with a parapet, its foot at the floor
 LOOKS = {
     0: (0.9, 2.4, 0.55, 0.6, 0.3, 0.9, 1.8, 1.0, 0.8, 0.5, 0.35, 0.5),
     1: (0.25, 0.0, 0.5, 0.6, 1.0, 0.9, 2.5, 1.0, 1.0, 0.5, 0.0, 0.6),
-    2: (0.35, 0.0, 0.45, 0.6, 0.3, 0.7, 1.4, 1.0, 0.7, 0.5, 0.3, 0.5),
+    2: (0.6, 1.4, 0.45, 0.6, 0.3, 0.7, 1.4, 1.0, 0.7, 0.5, 0.3, 0.5),
     3: (0.15, 0.0, 0.4, 0.5, 0.9, 0.6, 2.5, 0.3, 0.9, 0.45, 0.0, 0.6),
 }
 
