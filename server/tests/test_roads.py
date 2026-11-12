@@ -2055,6 +2055,27 @@ class EntranceFlareTest(unittest.TestCase):
             self.assertEqual(len(tp), 1)
             self.assertAlmostEqual(tp[0][2], 5.5, delta=0.01)
 
+    def test_fast_roads_taper_longer_and_across_classes(self):
+        """A trunk going on as a motorway 3.6 m wider: both run to the mean over the motorway's rate (TAPER_RATE),
+        longer than a street's 12 m per m; BNE_TAPER_RATES=off: no taper (two classes), as before."""
+        f = features([[(0.0, 0.0), (400.0, 0.0), (800.0, 0.0)], [(-800.0, 0.0), (-400.0, 0.0), (0.0, 0.0)]],
+                     ["motorway", "trunk"])
+        specs = roads.road_specs(f)
+        dw = abs(specs[0].width - specs[1].width)
+        if dw < roads.TAPER_MIN_DW:
+            self.skipTest("the class widths are alike")
+        tp = roads.road_tapers(f)
+        self.assertEqual(len(tp[0]), 1)
+        self.assertEqual(len(tp[1]), 1)
+        span = tp[0][0][3]
+        self.assertAlmostEqual(span, min(max(dw * roads.TAPER_RATE["motorway"], roads.TAPER_M[0]), roads.TAPER_M[1]),
+                               delta=0.01)
+        self.assertGreater(span, dw * roads.TAPER_M_PER_M)
+        with mock.patch.object(roads, "TAPER_RATES_ON", False):
+            g = features([[(0.0, 0.0), (400.0, 0.0), (800.0, 0.0)], [(-800.0, 0.0), (-400.0, 0.0), (0.0, 0.0)]],
+                         ["motorway", "trunk"])
+            self.assertEqual(roads.road_tapers(g), [(), ()])
+
     def test_same_class_mapped_width_keeps_the_kernel_taper(self):
         """Two service ways, one with a mapped width: the kernel's taper to the mean stands alone (no flare:
         service ways and mapped widths are left out)."""

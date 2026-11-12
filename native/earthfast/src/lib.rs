@@ -5940,6 +5940,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 222)?;
+    // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
+    m.add("VERSION", 230)?;
     Ok(())
 }

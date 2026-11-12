@@ -5,7 +5,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// lonlat (P, 2) of the roads' lines, off (n + 1) into it; attrs (n, 5): width (NaN: no ground spec), class code (< 0:
-/// none), deck at start (0/1), deck at end (0/1), deck width (NaN: no bridge); own (R, 2): (road, fraction along it) of
+/// none), deck at start (0/1), deck at end (0/1), deck width (NaN: no bridge), and optionally (n, 6) the road's own taper
+/// rate (m per m; then roads of two classes taper at their joints too); own (R, 2): (road, fraction along it) of
 /// its own deck's ends inside it (roads taper only where two meet); params: m per m, shortest, longest, share of the road, least change, most turn (deg),
 /// and (optional) 1: deck mode, a deck's end meeting another deck's end to end, both tapering to half way (no own rows).
 /// Returns (T, 5): road, lon, lat, width at the joint, length (m), in road order then end 0, end 1, own decks.
@@ -63,7 +64,11 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             (if l > 1e-6 { Some([v[0] / l, v[1] / l]) } else { None }, s)
         };
         let cos_max = max_turn.to_radians().cos();
-        let span = |dw: f64, length: f64| (dw * m_per_m).clamp(min_l, max_l).min(share * length);
+        // (a sixth attrs column: each road's own m per m, the faster road's at a joint; a joint of two classes tapers
+        // too where one is faster than m_per_m (a service way going on as a lane keeps its flare): roads.TAPER_RATE)
+        let per_road = at.ncols() > 5;
+        let rate_of = |i: usize| if per_road && at[[i, 5]].is_finite() { at[[i, 5]] } else { m_per_m };
+        let span = |dw: f64, length: f64, rate: f64| (dw * rate).clamp(min_l, max_l).min(share * length);
         for i in 0..n {
             let w = if decks { at[[i, 4]] } else { at[[i, 0]] };
             if !ok[i] || w.is_nan() {
@@ -82,7 +87,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 if let Some(list) = ends.get(&key(lon, lat)) {
                     meeting = list.len();
                     for &(j, ej) in list {
-                        if j == i || at[[j, 1]] != at[[i, 1]] {
+                        if j == i || (at[[j, 1]] != at[[i, 1]] && !(per_road && rate_of(i).max(rate_of(j)) > m_per_m)) {
                             continue;
                         }
                         let (hj, _) = leaving(j, ej);
@@ -101,7 +106,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                         continue;
                     }
                     let wj = at[[j, 4]];
-                    rows.push([i as f64, lon, lat, 0.5 * (w + wj), span((w - wj).abs(), length)]);
+                    rows.push([i as f64, lon, lat, 0.5 * (w + wj), span((w - wj).abs(), length, rate_of(i).max(rate_of(j)))]);
                     continue;
                 }
                 let wj = if deck { at[[j, 4]] } else { at[[j, 0]] };
@@ -115,7 +120,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                     continue;
                 }
                 let target = if deck { wj } else { 0.5 * (w + wj) };
-                rows.push([i as f64, lon, lat, target, span((w - wj).abs(), length)]);
+                rows.push([i as f64, lon, lat, target, span((w - wj).abs(), length, rate_of(i).max(rate_of(j)))]);
             }
         }
         // its own deck on a range of it: the ground either side runs to the deck's width
@@ -139,7 +144,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let u = if s[k] > s[k - 1] { (t - s[k - 1]) / (s[k] - s[k - 1]) } else { 0.0 };
             let lon = ll[[a + k - 1, 0]] + u * (ll[[a + k, 0]] - ll[[a + k - 1, 0]]);
             let lat = ll[[a + k - 1, 1]] + u * (ll[[a + k, 1]] - ll[[a + k - 1, 1]]);
-            rows.push([i as f64, lon, lat, bw, span((w - bw).abs(), total)]);
+            rows.push([i as f64, lon, lat, bw, span((w - bw).abs(), total, rate_of(i))]);
         }
         rows
     });

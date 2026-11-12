@@ -570,7 +570,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 13     # 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 14     # 14: the road centrelines rounded and curvature continuous by default (roadsmooth.py, 2026-11-12); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -2146,7 +2146,14 @@ def _street_spec_key(urban_fn, widths, left_hand):
 # splits into a divided road's carriageways widened each to its own width over the other. MUTCD 3B.09's lane-shift taper is about 50 m a
 # 3.6 m lane at 45 mph (L = WS).
 TAPER_M_PER_M = 12.0
-TAPER_M = (15.0, 90.0)          # m: a taper's length at the least and most ...
+# ... and by the faster road's class (the user, 2026-11-12: "the transition between different lane sizes and counts
+# isn't always smooth"): each side runs half the change over its span, so a rate r is a 2r:1 taper. MUTCD 6C.08 /
+# 3B.09: L = W S (ft, mph) at 45 mph and over, W S^2 / 60 below: 65 mph is 65:1, 45 mph 45:1, 35 mph 20:1, 25 mph
+# 10:1. A joint of two classes tapers too where one of them is tertiary or faster (a trunk going on as a motorway).
+# BNE_TAPER_RATES=off: TAPER_M_PER_M everywhere, same-class joints only, as before.
+TAPER_RATES_ON = os.environ.get("BNE_TAPER_RATES", "on") not in ("off", "0", "false")
+TAPER_RATE = {"motorway": 32.0, "trunk": 28.0, "primary": 18.0, "secondary": 15.0, "tertiary": 13.0}
+TAPER_M = (15.0, 160.0)         # m: a taper's length at the least and most ...
 TAPER_SHARE = 0.45              # ... and at most this share of the road's length (a taper at each end)
 TAPER_MIN_DW = 0.4              # m of width change that tapers
 TAPER_MAX_TURN = 35.0           # degrees between two roads' directions at a joint: one going on as the other
@@ -2179,7 +2186,7 @@ def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
 def _tapers(feats, specs, decks=False):
     """road_tapers' kernel (earthfast.road_tapers): the per-road rows marshalled, the joints found in Rust."""
     import fast
-    fast.require(120 if decks else 117, "road_tapers")
+    fast.require(230 if TAPER_RATES_ON else (120 if decks else 117), "road_tapers")
     n = len(feats)
     out = [()] * n
     bridge = bridge_specs(feats)
@@ -2190,7 +2197,7 @@ def _tapers(feats, specs, decks=False):
     off = np.zeros(n + 1, np.int64)
     off[1:] = np.cumsum(stops - starts)
     lonlat = np.concatenate([feats.lonlat[a:b] for a, b in zip(starts, stops)]) if off[-1] else np.zeros((0, 2))
-    attrs = np.full((n, 5), np.nan)
+    attrs = np.full((n, 6 if TAPER_RATES_ON else 5), np.nan)
     codes, own = {}, []
     for i, sp in enumerate(specs):
         bs = bridge[i]
@@ -2199,6 +2206,8 @@ def _tapers(feats, specs, decks=False):
             continue
         cls = (sp or bs).cls
         attrs[i, 1] = codes.setdefault(cls, len(codes))
+        if TAPER_RATES_ON:
+            attrs[i, 5] = TAPER_RATE.get(cls, TAPER_M_PER_M)
         attrs[i, 2:4] = 0.0
         if sp is not None:
             attrs[i, 0] = sp.width
