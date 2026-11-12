@@ -76,11 +76,11 @@ class ShedTest(unittest.TestCase):
             with mock.patch.object(budget, "_malloc_small"):
                 with mock.patch.object(budget, "total_gb", return_value=64.0):
                     budget.apply(is_small=False)
-                    self.assertEqual(budget.SHED_MB, 0, "a 64 GB desktop: no ceiling")
+                    self.assertEqual(budget.SHED_MB, 3000, "a 64 GB desktop: the 24 GB cap's ceiling")
                     self.assertEqual(budget.LOW_FREE_GB, budget.LOW_FREE_MAX_GB)
                 with mock.patch.object(budget, "total_gb", return_value=31.9):
                     budget.apply(is_small=False)
-                    self.assertEqual(budget.SHED_MB, 2000, "a 32 GB desktop (GitHub #893, OOM after 90 miles)")
+                    self.assertEqual(budget.SHED_MB, 3000, "a 32 GB desktop (GitHub #893, OOM after 90 miles)")
                     self.assertAlmostEqual(budget.LOW_FREE_GB, 0.08 * 31.9)
 
     def test_ceilings_by_ram(self):
@@ -88,10 +88,16 @@ class ShedTest(unittest.TestCase):
         self.assertEqual(budget.shed_mb(True, 15.6), budget.SMALL_SHED_MB, "a 16 GB PC")
         self.assertEqual(budget.shed_mb(True, 7.8), budget.TINY_SHED_MB, "an 8 GB PC")
         self.assertEqual(budget.shed_mb(True, None), budget.SMALL_SHED_MB)
-        self.assertEqual(budget.shed_mb(False, 24.0), 2000)
-        self.assertEqual(budget.shed_mb(False, 48.0), 3000)
-        self.assertEqual(budget.shed_mb(False, 62.0), 0)
-        self.assertEqual(budget.shed_mb(False, None), 0)
+        # a desktop's by the RAM limit (Auto: 60 % of the RAM from 22 GB, at most 24 GB; budget.desktop_sizes)
+        with mock.patch.dict(os.environ, {budget.SETTING_ENV: ""}):
+            d24, d32, d48, d62 = (budget.shed_mb(False, gb) for gb in (24.0, 32.0, 48.0, 62.0))
+            self.assertTrue(2000 <= d24 <= d32 <= d48 <= d62, (d24, d32, d48, d62))
+            self.assertEqual(d32, 3000, "a 32 GB PC's Auto (17.9 GB): the full ceiling")
+            self.assertEqual(d62, 3000, "the cap's")
+            self.assertEqual(budget.rotate_mb(False, 62.0), 4000)
+            self.assertEqual(budget.shed_mb(False, None), 0)
+        with mock.patch.dict(os.environ, {budget.SETTING_ENV: "8"}):    # (the player's 8 GB on a 62 GB PC)
+            self.assertLess(budget.shed_mb(False, 62.0), d24)
         self.assertEqual(budget.low_free_gb(8.0), budget.LOW_FREE_MIN_GB)
         self.assertEqual(budget.low_free_gb(128.0), budget.LOW_FREE_MAX_GB)
         self.assertEqual(budget.low_free_gb(None), budget.LOW_FREE_MIN_GB)
@@ -306,9 +312,9 @@ class TreeBudgetTest(unittest.TestCase):
 class RotateByRamTest(unittest.TestCase):
     def test_desktops_rotate_too(self):
         self.assertEqual(budget.rotate_mb(True, 15.6), budget.SMALL_ROTATE_MB)
-        self.assertEqual(budget.rotate_mb(False, 31.9), 2800, "a 32 GB desktop grows the same way, later")
-        self.assertEqual(budget.rotate_mb(False, 48.0), 3800)
-        self.assertEqual(budget.rotate_mb(False, 62.0), 0)
+        self.assertEqual(budget.rotate_mb(False, 31.9), 4000, "a 32 GB desktop grows the same way, later")
+        self.assertEqual(budget.rotate_mb(False, 48.0), 4000)
+        self.assertEqual(budget.rotate_mb(False, 62.0), 4000, "the RAM limit's cap")
         self.assertEqual(budget.rotate_mb(False, None), 0)
         self.assertGreater(budget.rotate_mb(False, 31.9), budget.shed_mb(False, 31.9), "a shed first, rotation after")
 

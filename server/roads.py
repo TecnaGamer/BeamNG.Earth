@@ -10060,6 +10060,9 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                             ch["portal"] = [isp(c[0, :2]), isp(c[-1, :2])]
                         out.append(ch)
     out.extend(rampmerges.chunks(layouts, exact, fixed=True))
+    import portals                  # (the ground round each mouth: its headwall, wing walls and the tube's cover)
+    import sys
+    out = portals.fit(sys.modules[__name__], tunnels, cells, out, parts)
     return roadmarkings.paint(out)
 
 

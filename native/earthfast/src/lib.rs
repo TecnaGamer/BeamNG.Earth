@@ -33,6 +33,7 @@ mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
 mod tunnelchain;
+mod portal;
 mod gradesep;
 mod lamps;
 mod decks;
@@ -67,6 +68,7 @@ mod gridinterp;
 mod dejunction;
 mod streetlabels;
 mod perfclean;
+mod membudget;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
@@ -6305,6 +6307,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // (levelrules END_EPS_M)
         // 256: tunnel_side_ground (the ground beside a tunnel read out to the walls of a trench, held where a road on
         // the ground joins it; tunnel_sections_buried's network flag)
-    m.add("VERSION", 256)?;
+    // 257: membudget (budget.py / memwatch.py: the settings page's Max RAM, its tiers, sizes and watchdog; 254 before)
+    m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_tier, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+        // 259: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
+    m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
+    m.add("VERSION", 259)?;
     Ok(())
 }

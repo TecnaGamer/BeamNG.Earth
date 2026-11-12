@@ -21,6 +21,10 @@ class BudgetTest(unittest.TestCase):
         self.saved = (dem.MEM_TILES, imagery.MEM_TILES, mapdata.MEM_MB, seacarve.MEM_CELLS, roadwidth.WALL_CELLS)
         self.fin = (imagery.MEM_FINISHED_MB, imagery.MEM_DECODED)
         self.far = (copy.deepcopy(farfield.K_TABLE), copy.deepcopy(farfield.TEX_DEFAULT))
+        # (the tiers by the RAM these tests mock, whatever tier or limit the runner forces: BNGE_BUDGET, the Max RAM)
+        p = mock.patch.dict(os.environ, {"BNGE_BUDGET": "", budget.SETTING_ENV: ""})
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         import farfield
@@ -47,7 +51,8 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(budget.road_processes(16, 8.0), 2)
 
     def test_small_caches(self):
-        self.assertFalse(budget.apply(False))
+        with mock.patch.object(budget, "total_gb", return_value=64.0):     # (Auto's cap: the desktop sizes)
+            self.assertFalse(budget.apply(False))
         self.assertEqual(dem.MEM_TILES, self.saved[0], "the desktop sizes stay")
         with mock.patch.object(budget, "total_gb", return_value=14.5):     # (a Steam Deck: not a lean tier)
             self.assertTrue(budget.apply(True))
@@ -62,7 +67,8 @@ class BudgetTest(unittest.TestCase):
     def test_small_finished_imagery(self):
         """The finished imagery pyramid's memory by the RAM on a small machine (a Steam Deck: ~58 MB of its JPEGs,
         96 decoded, for the desktop's 160 MB and 384), the desktop's kept."""
-        self.assertFalse(budget.apply(False))
+        with mock.patch.object(budget, "total_gb", return_value=64.0):
+            self.assertFalse(budget.apply(False))
         self.assertEqual((imagery.MEM_FINISHED_MB, imagery.MEM_DECODED), self.fin)
         with mock.patch.object(budget, "total_gb", return_value=14.5):
             self.assertTrue(budget.apply(True))

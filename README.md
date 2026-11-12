@@ -313,7 +313,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   the world server runs in fewer processes with smaller caches and a coarser distant land, and the first start picks
   the Low preset; expect some stutter while the world loads. With about 4 GB the game alone does not fit: the app
   warns clearly (in its window and in the game) and runs its smallest server. (`BNGE_LEAN=off` turns the low-memory
-  server off.)
+  server off.) The same low-memory server runs on any computer whose **Max RAM for BeamNG.Earth** is set low.
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
@@ -360,6 +360,15 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
   and the game keeps two until it has loaded.
+- **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
+  processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
+  memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
+  (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
+  page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
+  helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
+  processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the
+  world load more slowly, not crash. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the
+  watchdog off.)
 - Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
   NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;

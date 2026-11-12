@@ -168,8 +168,10 @@ class LowArch(unittest.TestCase):
         P, T, UV, mats, M = roadmesh.tunnel(tube, (0.0, 0.0, 0.0))
         self.assertIn(roadmesh.TUNNEL_STONE, mats)
         self.assertNotIn(1, set(M.tolist()), "no lamps under an arch")
-        # its face to just over the ground over the portal (15 m here), its top stone under that
-        self.assertLess(P[:, 2].max(), 15.0 + roads.PORTAL_GROUND_M + 0.01)
+        # its face to just over the ground over the portal (15 m here; the entrance's headwall a parapet over it,
+        # portals.LOOKS), its top stone under that
+        import portals
+        self.assertLess(P[:, 2].max(), 15.0 + max(roads.PORTAL_GROUND_M, portals.LOOKS[3][4] if portals.ON else 0) + 0.01)
 
 
     def test_a_motorway_s_low_arch_is_concrete(self):

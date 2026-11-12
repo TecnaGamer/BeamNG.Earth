@@ -98,20 +98,72 @@ def tasks_per_child():
         return LEAN_TASKS_PER_CHILD
 
 
-def tier(gb=None):
-    """The machine's memory tier: 'desktop', 'small' (SMALL_GB), 'lean' (LEAN_GB) or 'emergency' (EMERGENCY_GB).
-    BNGE_BUDGET=<tier> forces one (lean / emergency need BNGE_LEAN on); the lean tiers are small machines too."""
+# The player's Max RAM for BeamNG.Earth (the settings page's maxRamGb; cpupin.apply_player_settings or earthd
+# --max-ram-gb put it in SETTING_ENV, which the worker processes inherit): the whole server's limit (native
+# membudget.rs: Auto = a third of the RAM below 22 GB, at least 1.5 GB; 60 % of it from 22 GB up, at most 24 GB;
+# an explicit one at most 90 % of it), its tier (by the limit:
+# Auto gives every machine the tier its RAM alone gave before the setting), the desktop tier's cache sizes and worker
+# ceilings by it (desktop_sizes), and the watchdog that holds the server to it (memwatch.py). LIMIT_MB: this process's
+# (apply()); 0 while the RAM is unknown and the setting Auto (no limit, the desktop sizes, as before).
+SETTING_ENV = "BNGE_MAX_RAM_GB"
+LIMIT_MB = 0.0
+OVER = False                # (memwatch.py: the server over 90 % of its limit; no far-tile burst processes start)
+
+
+def setting_gb():
+    """The player's Max RAM in GB (2^30 bytes) from SETTING_ENV; 0.0 for Auto (unset, "auto", 0 or unreadable)."""
+    v = os.environ.get(SETTING_ENV, "").strip().lower()
+    if v in ("", "auto"):
+        return 0.0
+    try:
+        x = float(v)
+    except ValueError:
+        return 0.0
+    return x if 0 < x < 1e6 else 0.0
+
+
+def total_mb(gb=None):
+    """The RAM in MB (2^20 bytes) for gb GB (10^9 bytes; None: total_gb()); 0.0 when unknown."""
+    gb = total_gb() if gb is None else gb
+    return gb * 1e9 / 2 ** 20 if gb else 0.0
+
+
+def limit_mb(gb=None, setting=None):
+    """The whole server's RAM limit in MB for RAM gb (None: this machine's) and the setting in GB (None: SETTING_ENV;
+    0: Auto); 0.0 when the RAM is unknown and the setting Auto."""
+    setting = setting_gb() if setting is None else setting
+    mb = total_mb(gb)
+    if not mb and not setting:
+        return 0.0
+    import fast
+    return float(fast.ram_limit_mb(setting, mb))
+
+
+def tier(gb=None, setting=None):
+    """The memory tier: 'desktop', 'small', 'lean' or 'emergency', by the RAM limit (limit_mb: Auto keeps the tiers
+    the RAM alone gave, SMALL_GB / LEAN_GB / EMERGENCY_GB). BNGE_BUDGET=<tier> forces one (lean / emergency need
+    BNGE_LEAN on; BNGE_LEAN=off: 'small' instead of them); the lean tiers are small machines too."""
     force = os.environ.get("BNGE_BUDGET", "").lower()
     if force in TIERS and (LEAN_ON or force in ("desktop", "small")):
         return force
-    gb = total_gb() if gb is None else gb
-    if gb is None or gb >= SMALL_GB:
+    mb = limit_mb(gb, setting)
+    if not mb:
         return "desktop"
-    if LEAN_ON and gb < EMERGENCY_GB:
-        return "emergency"
-    if LEAN_ON and gb < LEAN_GB:
-        return "lean"
-    return "small"
+    import fast
+    t = fast.ram_tier(mb)
+    if not LEAN_ON and t in ("lean", "emergency"):
+        return "small"
+    return t
+
+
+def desktop_sizes(limit=None):
+    """The desktop tier's (DEM tiles, map data MB, shed MB, rotate MB, road processes at most, far processes at most)
+    for a limit in MB (None: LIMIT_MB); None without a limit (the desktop sizes of the modules, no ceilings)."""
+    limit = LIMIT_MB if limit is None else limit
+    if not limit:
+        return None
+    import fast
+    return tuple(int(x) for x in fast.ram_desktop_sizes(limit))
 
 
 def lean(gb=None):
@@ -281,9 +333,18 @@ def free_gb():
     return None
 
 
-def small(gb=None):
-    """Is this a small machine (the small profile, the lean tiers too)? BNGE_BUDGET=small / desktop / lean /
-    emergency overrides."""
+def small(gb=None, setting=None):
+    """Is this a small machine (the small profile, the lean tiers too: tier(), by the RAM limit)? BNGE_BUDGET=small /
+    desktop / lean / emergency overrides."""
+    force = os.environ.get("BNGE_BUDGET", "").lower()
+    if force in TIERS:
+        return force != "desktop"
+    return tier(gb, setting) != "desktop"
+
+
+def small_machine(gb=None):
+    """A machine with less than SMALL_GB of RAM, whatever the RAM limit (the CPU's share for the server, cpupin.split:
+    the setting is about memory, not cores). BNGE_BUDGET overrides as small() does."""
     force = os.environ.get("BNGE_BUDGET", "").lower()
     if force in TIERS:
         return force != "desktop"
@@ -294,21 +355,17 @@ def small(gb=None):
 SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~24 cells; a Steam Deck: ~9 server processes)
 
 
-def shed_mb(is_small, gb, tier_=None):
+def shed_mb(is_small, gb, tier_=None, limit=None):
     """A worker's memory ceiling (SHED_MB) for the profile and the machine's RAM (GB, None unknown); 0: none.
-    tier_: the lean tiers' own (tier())."""
+    tier_: the lean tiers' own (tier()); a desktop's by the RAM limit (limit MB, None: limit_mb(gb); desktop_sizes)."""
     if tier_ == "emergency":
         return EMERGENCY_SHED_MB
     if tier_ == "lean":
         return LEAN_SHED_MB
     if is_small:
         return TINY_SHED_MB if gb is not None and gb < TINY_GB else SMALL_SHED_MB
-    if gb is None:
-        return 0
-    for below, mb in DESKTOP_SHED_MB:
-        if gb < below:
-            return mb
-    return 0
+    sizes = desktop_sizes(limit_mb(gb) if limit is None and gb is not None else (limit or 0))
+    return sizes[2] if sizes else 0
 
 
 def low_free_gb(gb):
@@ -321,12 +378,13 @@ def low_free_gb(gb):
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
-    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB, TIER
+    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB, TIER, LIMIT_MB
     gb = total_gb()
+    LIMIT_MB = limit_mb(gb)
     TIER = tier(gb) if is_small else "desktop"
     if TIER == "desktop" and is_small:
         TIER = "small"
-    SHED_MB = shed_mb(is_small, gb, TIER)
+    SHED_MB = shed_mb(is_small, gb, TIER, limit=LIMIT_MB)
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
         SHED_MB = int(os.environ["BNGE_SHED_MB"])
     LOW_FREE_GB = low_free_gb(gb)
@@ -335,7 +393,7 @@ def apply(is_small=None):
     TREE_MB = tree_mb(gb) if TREE_ON else 0
     if os.environ.get("BNGE_TREE_MB"):              # (A/B: the whole server's budget in MB, 0 off)
         TREE_MB = int(os.environ["BNGE_TREE_MB"])
-    ROTATE_MB = rotate_mb(is_small, gb, TIER)
+    ROTATE_MB = rotate_mb(is_small, gb, TIER, limit=LIMIT_MB)
     if os.environ.get("BNGE_ROTATE_MB"):            # (A/B: the pools' rotation ceiling in MB, 0 off)
         ROTATE_MB = int(os.environ["BNGE_ROTATE_MB"])
     if is_small:
@@ -376,6 +434,13 @@ def apply(is_small=None):
             farfield.K_TABLE[cells] = {lvl: k * far_k for lvl, k in table.items()}
         for cells, tex in farfield.TEX_DEFAULT.items():
             farfield.TEX_DEFAULT[cells] = tuple(min(t, far_tex) for t in tex)
+    else:
+        sizes = desktop_sizes()
+        if sizes:           # (the desktop tier by the RAM limit: a 32 GB PC: ~315 DEM tiles, 160 MB of map data)
+            import dem
+            import mapdata
+            dem.MEM_TILES = min(dem.MEM_TILES, sizes[0])
+            mapdata.MEM_MB = min(mapdata.MEM_MB, sizes[1])
     if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
         import dem
         dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])
@@ -404,10 +469,10 @@ SHED_MB = 0
 TIER = "desktop"         # (apply(): tier() of this process's machine)
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
 TINY_SHED_MB = 1000      # (an 8-12 GB machine: TINY_GB)
-# A desktop's ceiling by its RAM, (below GB, MB); none from the last up. Before 2026-11-11 a desktop had none: a 32 GB
-# PC's server grew to 20 GB after 15 miles of Los Angeles, the system killed it after ~90 miles, other players' games
-# swapped (Discord, GitHub #893 #1026); a road worker's working set in a city is ~0.9-1.3 GB (drive_mem, 2026-11-11)
-DESKTOP_SHED_MB = ((40.0, 2000), (56.0, 3000))
+# A desktop's ceiling follows the RAM limit (desktop_sizes: 3000 MB from a 16 GB limit up, a 32 GB PC's Auto).
+# Before 2026-11-11 a desktop had none: a 32 GB PC's server grew to 20 GB after 15 miles of Los Angeles, the system
+# killed it after ~90 miles, other players' games swapped (Discord, GitHub #893 #1026); a road worker's working set in
+# a city is ~0.9-1.3 GB (drive_mem, 2026-11-11)
 SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
 # The system's own memory, every profile: a worker holding at least SHED_FLOOR_MB drops its caches between jobs (at most
 # every SHED_MIN_S) while less than LOW_FREE_GB is free (Linux MemAvailable, Windows available physical memory): a
@@ -508,26 +573,22 @@ def process_mb(pid):
 # new city: the same growth as the 16 GB PC's, later.
 ROTATE_MB = 0
 SMALL_ROTATE_MB = 1800
-DESKTOP_ROTATE_MB = ((40.0, 2800), (56.0, 3800))
+# (a desktop's: desktop_sizes, by the RAM limit)
 ROTATE_CHECK_S = 30.0
 ROTATE_MIN_S = 300.0
 
 
-def rotate_mb(is_small, gb, tier_=None):
+def rotate_mb(is_small, gb, tier_=None, limit=None):
     """The pools' rotation ceiling (ROTATE_MB) for the profile and the machine's RAM (GB, None unknown); 0: none.
-    tier_: the lean tiers' own (tier())."""
+    tier_: the lean tiers' own (tier()); a desktop's by the RAM limit (limit MB, None: limit_mb(gb); desktop_sizes)."""
     if tier_ == "emergency":
         return EMERGENCY_ROTATE_MB
     if tier_ == "lean":
         return LEAN_ROTATE_MB
     if is_small:
         return SMALL_ROTATE_MB
-    if gb is None:
-        return 0
-    for below, mb in DESKTOP_ROTATE_MB:
-        if gb < below:
-            return mb
-    return 0
+    sizes = desktop_sizes(limit_mb(gb) if limit is None and gb is not None else (limit or 0))
+    return sizes[3] if sizes else 0
 
 
 def maybe_shed(ceiling=True, collect=True):
@@ -542,10 +603,15 @@ def maybe_shed(ceiling=True, collect=True):
     priv = memory_mb(private=True) if TREE_MB else None
     if priv is not None:
         tree_publish(priv)
-    if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
-        return False
     mb = memory_mb()
     if mb is None:
+        return False
+    asked = shed_asked(mb)
+    if asked and (_last_shed is None or time.monotonic() - _last_shed >= ASKED_MIN_S):
+        _last_shed = time.monotonic()
+        _shed(mb, asked, collect)
+        return True
+    if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
         return False
     why = None
     if ceiling and SHED_MB and mb >= SHED_MB:
@@ -640,12 +706,34 @@ def idle_shed_now(now=None):
         lock.release()
 
 
+def asked_idle_shed():
+    """An idle worker answers the watchdog's request too (maybe_shed answers it after a job). True when it shed."""
+    global _last_shed
+    import time
+    if not _shedders or not os.environ.get(TREE_ENV):
+        return False
+    lock = job_lock()
+    if not lock.acquire(blocking=False):
+        return False            # (a job runs: maybe_shed after it)
+    try:
+        mb = memory_mb()
+        why = shed_asked(mb) if mb is not None else None
+        if not why or (_last_shed is not None and time.monotonic() - _last_shed < ASKED_MIN_S):
+            return False
+        _last_shed = time.monotonic()
+        _shed(mb, why)
+        return True
+    finally:
+        lock.release()
+
+
 def _idle_loop():
     import time
     while True:
         time.sleep(IDLE_CHECK_S)
         try:
             idle_shed_now()
+            asked_idle_shed()
             if TREE_MB:
                 tree_publish(memory_mb(private=True))   # (an idle worker still holds its memory: TREE_FRESH_S)
         except Exception:
@@ -701,12 +789,56 @@ def _tree_struct():
     return _TREE_SLOT
 
 
+# The memory watchdog's requests (memwatch.py, in the server's main process) in a header after the slots: (epoch,
+# target MB, time). A worker that sees a new epoch drops its caches between jobs (maybe_shed, its idle check) when it
+# holds at least the target (the server's limit shared out by process) and SHED_FLOOR_MB, at most every ASKED_MIN_S.
+ASKED_MIN_S = 20.0
+_asked_seen = 0
+
+
+def shed_ask(target_mb):
+    """The server's main process: every worker holding target_mb or more is asked to drop its caches (a new epoch in
+    the header). False without the block."""
+    shm = _tree_attach()
+    if shm is None:
+        return False
+    import time
+    st = _tree_struct()
+    try:
+        epoch = st.unpack_from(shm.buf, TREE_SLOTS * st.size)[0]
+        st.pack_into(shm.buf, TREE_SLOTS * st.size, epoch + 1, float(target_mb), time.time())
+        return True
+    except Exception:
+        return False
+
+
+def shed_asked(mb):
+    """A worker holding mb: the reason when the watchdog asked for a shed it has not answered and mb is over its
+    target, else None (the epoch is taken as seen either way)."""
+    global _asked_seen
+    shm = _tree_attach() if os.environ.get(TREE_ENV) else None
+    if shm is None:
+        return None
+    st = _tree_struct()
+    try:
+        epoch, target, _t = st.unpack_from(shm.buf, TREE_SLOTS * st.size)
+    except Exception:
+        return None
+    if epoch <= _asked_seen:
+        return None
+    _asked_seen = epoch
+    if mb < max(SHED_FLOOR_MB, target):
+        return None
+    return f"the server over its memory limit, this process over {target:.0f} MB"
+
+
 def tree_init():
-    """The server's process, before its workers start: the shared block made and named for them. Returns its name."""
+    """The server's process, before its workers start: the shared block made and named for them (the slots and the
+    watchdog's header). Returns its name."""
     global _tree_shm, _tree_owner
     try:
         from multiprocessing import shared_memory
-        size = TREE_SLOTS * _tree_struct().size
+        size = (TREE_SLOTS + 1) * _tree_struct().size
         _tree_shm = shared_memory.SharedMemory(create=True, size=size)
         _tree_shm.buf[:size] = bytes(size)
         _tree_owner = True
