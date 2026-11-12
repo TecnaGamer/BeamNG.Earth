@@ -25,6 +25,8 @@ class NetStateTest(unittest.TestCase):
         netstate.close()
         os.environ.pop(netstate.ENV, None)
         netstate._slot, netstate._active, netstate._bytes = None, 0, 0
+        netstate._per_host.clear()
+        netstate._waiting = 0
 
     def test_worker_counts_reach_the_server(self):
         if not netstate.init():
@@ -44,6 +46,26 @@ class NetStateTest(unittest.TestCase):
         finally:
             q.put("done")
             p.join(timeout=30)
+
+    def test_what_the_downloads_are_and_our_limit(self):
+        # (the loading line: "downloading 14 files · worldwide satellite photos, rate-limited")
+        if not netstate.init():
+            self.skipTest("no shared memory here")
+        eox = "tiles.maps.eox.at"
+        self.assertIn(eox, netstate.hosts())
+        netstate.begin(eox)
+        netstate.begin(eox)
+        netstate.begin("s3.amazonaws.com")
+        netstate.wait(eox, True)
+        act, got, top, waiting = netstate.snapshot(detail=True)
+        self.assertEqual((act, top, waiting), (3, eox, 1))
+        netstate.wait(eox, False)
+        netstate.end(10, eox)
+        netstate.end(10, eox)
+        act, got, top, waiting = netstate.snapshot(detail=True)
+        self.assertEqual((act, top, waiting), (1, "s3.amazonaws.com", 0))
+        netstate.end(10, "s3.amazonaws.com")
+        self.assertEqual(netstate.snapshot(detail=True)[2:], (None, 0))
 
     def test_without_the_block(self):
         os.environ.pop(netstate.ENV, None)

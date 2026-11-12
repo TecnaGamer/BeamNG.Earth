@@ -7169,7 +7169,11 @@ class Connection:
         act, mb, rate = meter.read()
         # (the downloads the world waits on, across the server's processes: the loading line's and the edge hold's
         # "downloading" part; the user, 2026-11-04)
-        net = [int(act), round(mb, 1), round(rate, 2)]
+        # ... plus what most of them are and whether our own per-host limit holds them (the user, 2026-11-11: players
+        # with gigabit lines read "1 MB/s" as their connection; it is the photo hosts' request limits)
+        top = getattr(meter, "top", None)
+        what = (netfetch.ROLES.get(top) or "").split(";")[0].strip() if top else ""
+        net = [int(act), round(mb, 1), round(rate, 2), what, bool(getattr(meter, "waiting", 0))]
         counts = (self.ground_progress(aid), roads, trees, far, tuple(net))
         now = time.monotonic()
         if counts == getattr(self, "progress_sent", None) or now - getattr(self, "progress_at", 0.0) < PROGRESS_S:

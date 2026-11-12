@@ -38,6 +38,11 @@ function M.downloadText(net)
   local act, rate = tonumber(net[1]) or 0, tonumber(net[3]) or 0
   if act <= 0 then return nil end
   local s = act == 1 and 'downloading 1 file' or string.format('downloading %d files', act)
+  -- what most of them are, and whether the world's own request limit for that source holds them (the user,
+  -- 2026-11-11: players with gigabit lines read "1 MB/s" as their connection; it is the photo services' request
+  -- limits, many small tiles at a fixed number a second): 'downloading 14 files · satellite photos, rate-limited'
+  local what = type(net[4]) == 'string' and net[4] ~= '' and net[4] or nil
+  if what then s = s .. ' · ' .. what .. (net[5] == true and ', rate-limited' or '') end
   if rate >= 0.05 then s = s .. string.format(' · %.1f MB/s', rate) end
   return s
 end

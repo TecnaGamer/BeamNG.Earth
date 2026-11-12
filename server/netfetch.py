@@ -1188,12 +1188,15 @@ class Fetcher:
         if kind not in ("urgent", "demand"):
             return self._acquire_now(h, url, kind)
         t0 = self.clock()
+        netstate.wait(h.name, True)
         try:
             sem = self._acquire_now(h, url, kind)
         except RateLimited:
             self._bump(h, "limit_fail")
             self._bump(h, "wait_ms", int((self.clock() - t0) * 1000))
             raise
+        finally:
+            netstate.wait(h.name, False)
         ms = int((self.clock() - t0) * 1000)
         if ms >= WAIT_MS_MIN:
             self._bump(h, "waited")
@@ -1290,7 +1293,7 @@ class Fetcher:
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
-                    netstate.begin()        # (the loading line's "downloading" part, across the server's processes)
+                    netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = None
                     try:
                         status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
@@ -1312,7 +1315,7 @@ class Fetcher:
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
-                    netstate.end(len(body) if body else 0)
+                    netstate.end(len(body) if body else 0, h.name)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict
