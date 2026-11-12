@@ -302,3 +302,14 @@ class TrimTest(unittest.TestCase):
         fake.heapmin.side_effect = OSError(0, "nothing")
         with mock.patch.object(budget.sys, "platform", "win32"), mock.patch.dict(sys.modules, {"msvcrt": fake}):
             budget.trim()           # (no error)
+
+
+class HeldMemoryTest(unittest.TestCase):
+    def test_arrays_counted_once_for_the_first_holder(self):
+        import numpy as np
+        import blockworker
+        a = np.zeros(3 * 2 ** 20, np.uint8)
+        b = np.zeros(5 * 2 ** 20, np.uint8)
+        got = blockworker.held_memory([("x", {"a": a, "view": a[10:]}), ("y", [a, {"b": b}]), ("z", [1, "s"])],
+                                      min_mb=1.0)
+        self.assertEqual(got, [(5.0, "y"), (3.0, "x")])

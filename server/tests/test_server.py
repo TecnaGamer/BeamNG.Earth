@@ -1508,6 +1508,14 @@ class MachineProfileTest(unittest.TestCase):
         finally:
             earthd.FAST_BASE_V = old
 
+    def test_photo_process_not_on_a_small_machine(self):
+        with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": ""}):
+            self.assertTrue(earthd.photo_process(16, False))
+            self.assertFalse(earthd.photo_process(16, True), "a 16-thread 16 GB PC: memory first")
+            self.assertFalse(earthd.photo_process(8, False))
+        with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": "on"}):
+            self.assertTrue(earthd.photo_process(4, True))
+
     def test_desktop(self):
         import budget
         a = self._args()

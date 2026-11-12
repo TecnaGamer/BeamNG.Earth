@@ -331,6 +331,19 @@ URGENT_ELSEWHERE = os.environ.get("BNE_URGENT_ELSEWHERE", "on") != "off"
 # in the other lane's block process they queued behind its prefetch heights and photos, a stand-in made beside a
 # block 1.6-4 s late at 100-200 mph down Manhattan (nyc_speed.py, 2026-11-02); not on a small machine (memory)
 PHOTO_PROCESS_MIN_CPUS = 12
+
+
+def photo_process(cpus=None, small=None):
+    """Whether the requested blocks' photos get their process (PHOTO_PROCESS_MIN_CPUS, not on a small machine: the
+    comment above said so, the code only counted CPUs until 2026-11-11, and a 16-thread 16 GB PC ran it at ~0.8-0.9 GB
+    beside a ~9.7 GB server; BNGE_PHOTO_PROCESS=on / off overrides)."""
+    force = os.environ.get("BNGE_PHOTO_PROCESS", "").lower()
+    if force in ("on", "off"):
+        return force == "on"
+    import budget
+    cpus = (os.cpu_count() or 0) if cpus is None else cpus
+    small = budget.small() if small is None else small
+    return cpus >= PHOTO_PROCESS_MIN_CPUS and not small
 # A block waits at most this long for its stand-in photo started beside it (cold: the photo process queued behind
 # imagery downloads and a block built in 1.4 s waited 99.5 s for it, nyc_speed.py --cold 2026-11-02)
 STANDIN_WAIT_S = 1.0
@@ -10223,7 +10236,7 @@ async def main_async(args):
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on")), warm_q))
-        if args.near_visual == "detail" and (os.cpu_count() or 0) >= PHOTO_PROCESS_MIN_CPUS:
+        if args.near_visual == "detail" and photo_process():
             # requested blocks' photos and stand-ins in a process of their own (Server._base_process / _stand_in)
             photo_pool = poolsmod.RespawningPool(
                 "photo", 1, mp_context=ctx, initializer=blockworker.init,

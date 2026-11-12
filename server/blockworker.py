@@ -19,6 +19,7 @@ import math
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 
@@ -219,6 +220,64 @@ def _trace_memory(every_s=60.0, top=10):
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
+def held_memory(roots, min_mb=2.0):
+    """[(MB, name)] of the numpy arrays and bytes reachable from each (name, object) of roots, each object counted for
+    the first root that reaches it, biggest first, those of at least min_mb (BNGE_MEMATTR_S; also tests)."""
+    import gc
+    import numpy as np
+    seen, out = set(), []
+    skip = (str, int, float, bool, type(None))
+    for name, root in roots:
+        tot, stack = 0, [root]
+        while stack:
+            o = stack.pop()
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            if isinstance(o, np.ndarray):
+                if o.base is None:
+                    tot += o.nbytes
+                else:
+                    stack.append(o.base)
+                continue
+            if isinstance(o, (bytes, bytearray)):
+                tot += len(o)
+                continue
+            if isinstance(o, skip) or isinstance(o, type) or callable(o) and not hasattr(o, "__dict__"):
+                continue
+            if type(o).__name__ == "module":
+                continue
+            stack.extend(gc.get_referents(o))
+        if tot >= min_mb * 2 ** 20:
+            out.append((round(tot / 2 ** 20, 1), name))
+    return sorted(out, reverse=True)
+
+
+def _memattr_loop(every_s):
+    """BNGE_MEMATTR_S=s (debug, no tracemalloc: cheap enough for a drive): every s this worker's memory and which of
+    its state's attributes and its modules' dicts hold the most array memory (held_memory)."""
+    def loop():
+        log = logging.getLogger("earthd.worker")
+        here = os.path.dirname(os.path.abspath(__file__))
+        while True:
+            time.sleep(every_s)
+            try:
+                import budget
+                roots = [(f"_s.{k}", v) for k, v in list(vars(_s).items())] if _s is not None else []
+                for mname, mod in list(sys.modules.items()):
+                    if (getattr(mod, "__file__", "") or "").startswith(here):
+                        roots += [(f"{mname}.{k}", v) for k, v in list(vars(mod).items())
+                                  if isinstance(v, (dict, list, set, collections.OrderedDict)) and v]
+                t0 = time.perf_counter()
+                got = held_memory(roots)
+                log.info("memory pid %d: %.0f MB (%.0f private); held arrays: %s (%.1f s)", os.getpid(),
+                         budget.memory_mb() or 0, budget.memory_mb(private=True) or 0,
+                         "; ".join(f"{n} {mb:.0f}" for mb, n in got[:12]), time.perf_counter() - t0)
+            except Exception as e:
+                log.info("memory attribution: %s: %s", type(e).__name__, e)
+    threading.Thread(target=loop, daemon=True, name="mem-attr").start()
+
+
 def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_level=logging.INFO, airports=False,
          sea=False, nice=0, roads_in_ground=None, gas_stations=False):
     """nice: this worker's niceness on top of the server's (earthd NICE_*): the terrain blocks' workers keep the
@@ -240,6 +299,8 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     budget.apply()              # (this process's caches: smaller on a small machine)
     if os.environ.get("BNGE_TRACEMALLOC"):      # debug: this worker's memory (earthd's trace_mem)
         _trace_memory()
+    if os.environ.get("BNGE_MEMATTR_S"):        # debug: which caches hold this worker's arrays
+        _memattr_loop(float(os.environ["BNGE_MEMATTR_S"]))
     import sampler
     sampler.maybe_start(f".{os.getpid()}")      # BNGE_SAMPLE: this worker's own sampling profile (debugging)
     xproc.PRIORITY = nice
