@@ -223,3 +223,66 @@ class HungDumpTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Thread", r.stderr)               # (faulthandler's dump of the running threads)
         self.assertIn("None", r.stdout)                 # (and the job ran to its end: not stopped)
+
+
+class RotateTest(unittest.TestCase):
+    """The memory watch (budget.ROTATE_MB): a pool whose process is over it gets fresh processes; the jobs already given
+    to the old ones finish there (none fails), the old processes exit; nothing with the ceiling off, under it, within
+    ROTATE_MIN_S of the last rotation or with a backlog."""
+
+    def setUp(self):
+        import budget
+        self.budget = budget
+        self._old = (budget.ROTATE_MB, budget.ROTATE_MIN_S)
+
+    def tearDown(self):
+        self.budget.ROTATE_MB, self.budget.ROTATE_MIN_S = self._old
+
+    def test_rotated_gracefully(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+            old_pids = set(p.worker_mb())
+            self.assertTrue(old_pids)
+            running = p.submit(time.sleep, 1.5)
+            time.sleep(0.3)
+            b.ROTATE_MB, b.ROTATE_MIN_S = 0, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "off: never")
+            b.ROTATE_MB = 10 ** 9
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "under the ceiling: no")
+            b.ROTATE_MB = 1                         # (every process is over 1 MB)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+            self.assertEqual(p.rotations, 1)
+            self.assertIsNone(running.result(timeout=60), "the job in the old process finished")
+            self.assertEqual(p.submit(abs, -2).result(timeout=60), 2)
+            self.assertTrue(set(p.worker_mb()).isdisjoint(old_pids), "new jobs run in new processes")
+            b.ROTATE_MIN_S = 3600.0
+            self.assertFalse(p._mem_step(time.monotonic()), "at most every ROTATE_MIN_S")
+        finally:
+            p.shutdown()
+
+    def test_not_with_a_backlog(self):
+        import time
+        b = self.budget
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(abs, -1).result(timeout=60)
+            futs = [p.submit(time.sleep, 0.5) for _ in range(4)]
+            b.ROTATE_MB, b.ROTATE_MIN_S = 1, 0.0
+            self.assertFalse(p._mem_step(time.monotonic() + 1), "jobs waiting beyond the running ones: not now")
+            for f in futs:
+                f.result(timeout=60)
+            time.sleep(0.2)
+            with self.assertLogs("earthd.pools", "INFO"):
+                self.assertTrue(p._mem_step(time.monotonic() + 1))
+        finally:
+            p.shutdown()
+
+    def test_process_mb(self):
+        mb = self.budget.process_mb(os.getpid())
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            self.assertGreater(mb, 1.0)
+        self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
