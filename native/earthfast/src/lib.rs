@@ -4036,6 +4036,11 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             sj[j + 1] = sj[j] + l2[j].sqrt();
         }
         let total = sj[k - 1];
+        // (the points by east: each segment visits only those within its box's east range, not every point; a
+        // rounded line has 2-4x the segments, 2026-11-12. The same mask: a point is in when any segment takes it.)
+        let mut order: Vec<usize> = (0..np_).filter(|&i| ev[i].is_finite() && nv[i].is_finite()).collect();
+        order.sort_by(|&p, &q| ev[p].total_cmp(&ev[q]));
+        let sorted_e: Vec<f64> = order.iter().map(|&i| ev[i]).collect();
         for j in 0..k - 1 {
             let (a0, a1, b0, b1) = (xv[[j, 0]], xv[[j, 1]], xv[[j + 1, 0]], xv[[j + 1, 1]]);
             if a0.min(b0) - hw > x1 || a0.max(b0) + hw < x0 || a1.min(b1) - hw > y1 || a1.max(b1) + hw < y0 {
@@ -4043,8 +4048,12 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             }
             let (ab0, ab1) = (b0 - a0, b1 - a1);
             let len = l2[j].sqrt();
-            for i in 0..np_ {
-                if mv[i] {
+            let (lo_e, hi_e) = (a0.min(b0) - hw, a0.max(b0) + hw);
+            let (lo_n, hi_n) = (a1.min(b1) - hw, a1.max(b1) + hw);
+            let first = sorted_e.partition_point(|&x| x < lo_e);
+            let last = sorted_e.partition_point(|&x| x <= hi_e);
+            for &i in &order[first..last] {
+                if mv[i] || nv[i] < lo_n || nv[i] > hi_n {
                     continue;
                 }
                 let t = ((ev[i] - a0) * ab0 + (nv[i] - a1) * ab1) / l2[j];
@@ -5940,6 +5949,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 228)?;
+    // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
+    m.add("VERSION", 230)?;
     Ok(())
 }

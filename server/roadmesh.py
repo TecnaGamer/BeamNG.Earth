@@ -853,9 +853,9 @@ def road_tol(q):
     return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
-def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
+def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M, step_m=None):
     """(points (m, 3), uvs, triangles, source triangle) of the triangles T over P (n, 2) on the drawn ground (grid:
-    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M): earthfast.follow_tris."""
+    _height_grid), held down in the cells holding a step (FOLLOW_STEP_M, or step_m): earthfast.follow_tris."""
     import fast
     tol = FOLLOW_TOL if tol is None else tol
     P = np.ascontiguousarray(np.asarray(P, np.float64)[:, :2])
@@ -863,7 +863,7 @@ def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
     T = np.ascontiguousarray(T, np.int64)
     fast.require(52, "follow_tris")
     a, b, c, d = fast._ef.follow_tris(P, UV, T, float(cell), np.ascontiguousarray(grid, np.float64), int(i0), int(j0),
-                                      float(tol), FOLLOW_STEP_M, FOLLOW_MAX_UP)
+                                      float(tol), FOLLOW_STEP_M if step_m is None else float(step_m), FOLLOW_MAX_UP)
     return np.asarray(a), np.asarray(b), np.asarray(c), np.asarray(d)
 
 
@@ -1210,6 +1210,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     P, UV, T, M = [], [], [], []
     TL = []                                     # per triangle: its layer's lift over the ground (None: on a deck)
     RI = []                                     # per triangle: its ribbon (-1: a filled polygon), for the fade uv
+    RW = []                                     # per triangle: a raceway's (no step cap: follow_ground, below)
     rpar = []                                   # per ribbon: _fade_uv's (feather share, tl, tu, slen, open ends)
     k0 = nverts = 0
     for ri, ((left, right, v, m, layer, fz), c) in enumerate(rbc):
@@ -1268,6 +1269,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         M.append(np.full(len(tri), mi))
         TL.append(np.full(len(tri), np.nan if fz is not None else LIFT[layer] + lift))
         RI.append(np.full(len(tri), ri))
+        RW.append(np.full(len(tri), str(c.get("fid", "")).startswith("osm-raceway-")))
         ends = c.get("fends") or (1, 1)
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
                      float(bool(ends[0])), float(bool(ends[1]))))
@@ -1295,9 +1297,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         M.append(np.full(len(fan), mats.index(c["m"])))
         TL.append(np.full(len(fan), LIFT[layer_of(c)] + lift))
         RI.append(np.full(len(fan), -1))
+        RW.append(np.zeros(len(fan), bool))
         nverts += k
     P, T, UV, M = np.concatenate(P), np.concatenate(T), np.concatenate(UV), np.concatenate(M)
-    TL, RI = np.concatenate(TL), np.concatenate(RI)
+    TL, RI, RW = np.concatenate(TL), np.concatenate(RI), np.concatenate(RW)
     tid = np.arange(len(T))
     if clip_poly is not None:
         import fast
@@ -1313,7 +1316,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         P, T, UV, tid = _clip_tris(P, T, UV, tid, clip)
         if not len(T):
             return None
-    M, TL, RI = M[tid], TL[tid], RI[tid]
+    M, TL, RI, RW = M[tid], TL[tid], RI[tid], RW[tid]
     FX = ~np.isfinite(TL)                       # per triangle: on its own fixed heights (a deck's), not draped
     if follow:
         dr = np.isfinite(TL)
@@ -1332,10 +1335,18 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 batches = [(m & ~wear, t) for m, t in batches] + [(wear, WEAR_TOL)]
             points, uvs, tris, materials, ribbons = [P], [UV], [T[~dr]], [M[~dr]], [RI[~dr]]
             n0 = len(P)
-            for mask, tol in batches:
+            # (a raceway's surface: no step cap. Its banking (Daytona's 31 deg, 0.85 m along a 1 m square's diagonal)
+            # passes FOLLOW_STEP_M in every square, and the cap sank the asphalt to each square's lowest corner +
+            # FOLLOW_MAX_UP: a sawtooth across the banking with the ground showing through; from PR #992 by
+            # jonathonbarton)
+            if RW.any():
+                batches = [(m & ~RW, t, None) for m, t in batches] + [(m & RW, t, float("inf")) for m, t in batches]
+            else:
+                batches = [(m, t, None) for m, t in batches]
+            for mask, tol, step in batches:
                 if not mask.any():
                     continue
-                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol)
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol, step_m=step)
                 lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
