@@ -683,6 +683,12 @@ NICE_FAR_BUILDINGS = 9      # the far buildings': after the far field (on a Stea
                             # buildings took ~23 s of CPU, next to the road tiles and the far field)
 IMAGERY_PREFETCH = 40       # queued tiles whose imagery is fetched ahead of their build (only spare request tokens)
 PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked for again
+# ... and the tiles after those, with a host's spare request tokens alone (netfetch "prefetch": dropped while its bucket is
+# below half), asked again less often: the next 40 of a cold French teleport were IGN's (the near rings, z16-17), its
+# 50/s full for a minute while EOX's tiles further down the queue were not asked yet; EOX then did its ~1,300 after IGN
+# (Lille, Caen, Brest, 2026-11-11: EOX ~5-15/s for the first 60 s, then 30-50/s). BNGE_PREFETCH_SPARE=0: off
+IMAGERY_PREFETCH_SPARE = int(os.environ.get("BNGE_PREFETCH_SPARE", "200"))
+PREFETCH_SPARE_AGAIN_S = 5.0
 PREFETCHED_MAX = 8192       # tiles remembered as prefetched (a connection's record starts again past this)
 # status.backlog (docs/V1_4_SPEC.md §3.0, §4): every status message carries the number of desired
 # tiles of the current anchor not shown yet. Status messages only go out on events (v1.3.1); with
@@ -4943,13 +4949,14 @@ class Server:
             judged = True
         return judged
 
-    def prefetch_imagery(self, anchor, tile):
+    def prefetch_imagery(self, anchor, tile, soon=True):
         """Start downloading a queued tile's imagery (fire and forget), so tile workers rarely
-        wait on the network. Only the first source of the chain; errors surface at build time."""
+        wait on the network. Only the first source of the chain; errors surface at build time. soon: the next tiles
+        (a host that takes no prefetch now still gets them, as demand); else spare request tokens only."""
         if self.imagery is not None:
             frame, x0, y0, size = self.tile_where(anchor, tile)
             px = self.tile_tex_px(anchor, tile)
-            self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=True, gutter=True)
+            self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=soon, gutter=True)
 
     # --- BeamMP shared world generation v2 (mpshare.py, .claude/work/mp_share_v2.md) --------------------------------
     def share_parts(self):
@@ -9991,11 +9998,13 @@ class Connection:
                 now = time.monotonic()
                 if len(self.prefetched) > PREFETCHED_MAX:
                     self.prefetched.clear()
-                for t in self.queue[self.qi:self.qi + IMAGERY_PREFETCH]:
+                for i, t in enumerate(self.queue[self.qi:self.qi + IMAGERY_PREFETCH + IMAGERY_PREFETCH_SPARE]):
                     ck = self.ck(t.key)
-                    if ck not in self.s.tiles and now - self.prefetched.get(ck, -1e9) >= PREFETCH_AGAIN_S:
+                    soon = i < IMAGERY_PREFETCH
+                    if ck not in self.s.tiles and \
+                            now - self.prefetched.get(ck, -1e9) >= (PREFETCH_AGAIN_S if soon else PREFETCH_SPARE_AGAIN_S):
                         self.prefetched[ck] = now
-                        self.s.prefetch_imagery(anchor, t)
+                        self.s.prefetch_imagery(anchor, t, soon)
             if anchor is not None:
                 self.emit_groups()
                 self.flush_old()
