@@ -816,11 +816,15 @@ COLLISION_BOXES = {
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
     G_BIN: (1.1, ((-0.264, -0.264, -0.003, 0.264, 0.264, 1.111),)),
     "pylon": (35.8, ((-3.893, -4.152, -5.873, 3.893, 4.152, 29.818),)),
+    # the classic lantern on its post (bne_fr_lantern, 5.4 m): its lantern head's footprint over the post's height (the
+    # Colmesh alone is the 0.12 m post to 4.65 m); the France kit's lamp (place: "fr_lantern")
+    "fr_lantern": (5.4, ((-0.30, -0.30, -0.01, 0.30, 0.30, 5.41),)),
     # the game's wooden power pole (powerlines.G_POLE): its Colmesh, the trunk and the cross-arm's head
     "hvpole": (9.96, ((-0.162, -0.162, -0.083, 0.162, 0.162, 5.803),
                       (-0.731, -0.189, 5.803, 0.769, 0.162, 9.948))),
 }
 COLLISION_BOXES.update(citylamps.COLLISION_BOXES)
+COLLISION_BOXES.update(poleprofiles.COLLISION_BOXES)     # (the regional poles: every group a pole style names)
 COLLISION_BOXES.update(designsigns.BOXES)
 ROAD_PROP_GAP_M = 0.15
 

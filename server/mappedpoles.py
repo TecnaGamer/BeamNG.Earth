@@ -37,6 +37,27 @@ EVERYWHERE_MAX_SPAN_M = 250.0
 EVERYWHERE = os.environ.get("BNE_MAPPED_POLES", "on").lower() not in {"off", "0", "false", "no"}
 
 
+# A mapped pole on a carriageway (the map's point and our road's width disagree, or the road is drawn through a
+# junction's corner) is moved to the nearest clear spot within SHIFT_M, else left out with the spans to it (the same
+# road check the guessed poles pass: furniture.RoadClearance)
+SHIFT_M = (1.0, 2.0, 3.0)
+SHIFT_DIRS = 12
+
+
+def _clear_spot(clearance, row):
+    """row (a props row) itself when it clears the roads; else the first clear one found round it (rings SHIFT_M, SHIFT_DIRS
+    spots each, the same in every tile); None when none is."""
+    if clearance.clear(row):
+        return row
+    for r in SHIFT_M:
+        for k in range(SHIFT_DIRS):
+            a = 2.0 * math.pi * k / SHIFT_DIRS
+            moved = [row[0], round(row[1] + r * math.cos(a), 2), round(row[2] + r * math.sin(a), 2), *row[3:]]
+            if clearance.clear(moved):
+                return moved
+    return None
+
+
 def _tags(value):
     if isinstance(value, dict):
         return value
@@ -136,13 +157,13 @@ def _french_kit(pole_profile):
     return franceroads.ON and poleprofiles.kit_enabled(pole_profile)
 
 
-def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, everywhere=False):
+def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, everywhere=False, clearance=None):
     """Append mapped rural FR props and wires in the existing furniture formats.
 
     Points retain their mapped side and coordinates. Missing mapping is unknown,
     not evidence of a buried network. No photo/location-specific exception.
     everywhere: the mapped poles of every country (the stock pole and wires), but France's while its own scenery
-    places them; urban_fn is not used.
+    places them; urban_fn is not used. clearance: the tile's shared furniture.RoadClearance (None: none checked).
     """
     if not everywhere and not _french_kit(pole_profile):
         return
@@ -258,12 +279,20 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
         # (everywhere: the game's own wooden pole, the one furniture.place guesses, at its own height for its wires)
         style = poleprofiles.STOCK if everywhere else _style(choose(key, *xy, float(z[k])), tags, height)
         pole = (*map(float, xy), float(z[k]), yaw.get(key, 0.), style)
+        row = [style.group, round(pole[0], 2), round(pole[1], 2), round(pole[2], 2), round(pole[3], 1), 1.,
+               style.height, 0.]
+        if clearance is not None:
+            row = _clear_spot(clearance, row)
+            if row is None:
+                continue                # (on a carriageway with no clear spot near: its spans go too, below)
+            pole = (row[1], row[2], pole[2], pole[3], style)
         poles[key] = pole
-        if furniture._owns(box, *xy):
-            props.append([style.group, round(pole[0], 2), round(pole[1], 2), round(pole[2], 2),
-                          round(pole[3], 1), 1., style.height, 0.])
+        if furniture._owns(box, *pole[:2]):
+            props.append(row)
     for a, b in sorted(spans):
         # Stable source-id ownership, including reversed/repeated line geometry.
+        if a not in poles or b not in poles:
+            continue                    # (a pole left out: no span to it hangs in the air)
         pa, pb = poles[a], poles[b]
         if not furniture._owns(box, pa[0], pa[1]):
             continue
@@ -289,15 +318,17 @@ def _layers(md, frame, tx, ty, margin=MARGIN_M):
             for k in roads.cells_of_tile(frame, tx, ty, margin=margin)]
 
 
-def tile_poles(frame, tx, ty, md, elev, props, wires, pole_profile, urban_fn=None):
+def tile_poles(frame, tx, ty, md, elev, props, wires, pole_profile, urban_fn=None, clearance=None):
     if md is None or not (EVERYWHERE or _french_kit(pole_profile)):
         return
     import roads
     layers = _layers(md, frame, tx, ty, EVERYWHERE_MAX_SPAN_M + 5. if EVERYWHERE else MARGIN_M)
     if _french_kit(pole_profile):
-        place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, urban_fn)
+        place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, urban_fn,
+              clearance=clearance)
     if EVERYWHERE:
-        place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, everywhere=True)
+        place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, everywhere=True,
+              clearance=clearance)
 
 
 def road_points(md, frame, tx, ty, pole_profile=None):
