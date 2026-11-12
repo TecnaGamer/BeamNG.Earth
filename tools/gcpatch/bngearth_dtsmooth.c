@@ -46,18 +46,30 @@ static const unsigned char SIG[REGION_LEN] = {
     0x0f, 0x87, 0xff, 0xff, 0xff, 0xff,                      // +49 ja     cold (e = -0.1)
     0xf2, 0x0f, 0x10, 0x0d, 0xff, 0xff, 0xff, 0xff,          // +4f movsd  xmm1,[0.1]
     0xf2, 0x0f, 0x5d, 0xc8,                                  // +57 minsd  xmm1,xmm0
-    0x66, 0x0f, 0x28, 0xc1,                                  // +5b movapd xmm0,xmm1             e
+    0x66, 0x0f, 0x28, 0xc1                                 // +5b movapd xmm0,xmm1             e
 };
 static const unsigned char SIG_MASK_FROM[] = {0x08, 0x0d, 0x15, 0x1d, 0x29, 0x31, 0x39, 0x4b, 0x53};  // 4-byte holes
 
 static int masked(size_t i) {
     for (size_t k = 0; k < sizeof SIG_MASK_FROM; k++)
-        if (i >= SIG_MASK_FROM[k] && i < (size_t)SIG_MASK_FROM[k] + 4) return 1;
+    {
+        if (i >= SIG_MASK_FROM[k] && i < (size_t)SIG_MASK_FROM[k] + 4) 
+        {
+            return 1;
+        }
+    }
     return 0;
 }
 
 static int matches(const unsigned char *p) {
-    for (size_t i = 0; i < REGION_LEN; i++) if (!masked(i) && p[i] != SIG[i]) return 0;
+    for (size_t i = 0; i < REGION_LEN; i++)
+    {
+        if (!masked(i) && p[i] != SIG[i]) 
+        {
+            return 0;
+        }   
+    }
+    
     return 1;
 }
 
@@ -68,33 +80,40 @@ static uintptr_t rip_target(const unsigned char *p, size_t disp_off, size_t insn
 }
 
 // Append an instruction `op` + rip disp32 to `target`.
-static void emit_rip(unsigned char *out, size_t *k, const unsigned char *region, const unsigned char *op, size_t n,
-                     uintptr_t target) {
+static void emit_rip(unsigned char *out, size_t *k, const unsigned char *region, const unsigned char *op, size_t n, uintptr_t target) {
     memcpy(out + *k, op, n);
     *k += n;
     int32_t d = (int32_t)((intptr_t)target - (intptr_t)(region + *k + 4));
     memcpy(out + *k, &d, 4);
     *k += 4;
 }
-static void emit(unsigned char *out, size_t *k, const unsigned char *b, size_t n) { memcpy(out + *k, b, n); *k += n; }
+static void emit(unsigned char *out, size_t *k, const unsigned char *b, size_t n) { 
+    memcpy(out + *k, b, n); *k += n; 
+}
 
 // The patched region for `region` (a match of SIG) into code[]; C's slot (the cold block) into *cold. 0 + *why if the
 // surroundings are not as expected.
 static int build_patch(const unsigned char *region, unsigned char *code, uintptr_t *cold_out, const char **why) {
-    uintptr_t one = rip_target(region, 0x08, 0x0c), dtreal = rip_target(region, 0x15, 0x19);
-    uintptr_t m01 = rip_target(region, 0x1d, 0x21), dtraw = rip_target(region, 0x29, 0x2d);
-    uintptr_t k999 = rip_target(region, 0x31, 0x35), debt = rip_target(region, 0x39, 0x3d);
-    uintptr_t cold = rip_target(region, 0x4b, 0x4f), p01 = rip_target(region, 0x53, 0x57);
+    uintptr_t one = rip_target(region, 0x08, 0x0c);
+    uintptr_t dtreal = rip_target(region, 0x15, 0x19);
+    uintptr_t m01 = rip_target(region, 0x1d, 0x21);
+    uintptr_t dtraw = rip_target(region, 0x29, 0x2d);
+    uintptr_t k999 = rip_target(region, 0x31, 0x35);
+    uintptr_t debt = rip_target(region, 0x39, 0x3d);
+    uintptr_t cold = rip_target(region, 0x4b, 0x4f);
+    uintptr_T p01 = rip_target(region, 0x53, 0x57);
     // the cold block: movapd xmm0,xmm1; jmp rel32 back to the region's end; 8-byte aligned (C's slot)
     const unsigned char *cb = (const unsigned char *)cold;
-    if ((cold & 7) || cb[0] != 0x66 || cb[1] != 0x0f || cb[2] != 0x28 || cb[3] != 0xc1 || cb[4] != 0xe9 ||
-        rip_target(cb, 5, 9) != (uintptr_t)(region + REGION_LEN)) {
+    if ((cold & 7) || cb[0] != 0x66 || cb[1] != 0x0f || cb[2] != 0x28 || cb[3] != 0xc1 || cb[4] != 0xe9 || rip_target(cb, 5, 9) != (uintptr_t)(region + REGION_LEN)) {
         *why = "the filter's cold block differs";
         return 0;
     }
     double c1, cm, cp, ck;      // the constants it uses
     memcpy(&c1, (void *)one, 8); memcpy(&cm, (void *)m01, 8); memcpy(&cp, (void *)p01, 8); memcpy(&ck, (void *)k999, 8);
-    if (c1 != 1.0 || cm != -0.1 || cp != 0.1 || ck != 0.999) { *why = "the filter's constants differ"; return 0; }
+    if (c1 != 1.0 || cm != -0.1 || cp != 0.1 || ck != 0.999) { 
+        *why = "the filter's constants differ"; 
+        return 0;
+    }
     size_t k = 0;
     emit_rip(code, &k, region, (const unsigned char *)"\xf2\x0f\x5d\x05", 4, one);     // minsd  xmm0,[1.0]    raw
     emit_rip(code, &k, region, (const unsigned char *)"\xf2\x0f\x11\x05", 4, dtraw);   // movsd  [dtRaw],xmm0
@@ -110,7 +129,10 @@ static int build_patch(const unsigned char *region, unsigned char *code, uintptr
     emit_rip(code, &k, region, (const unsigned char *)"\xf2\x0f\x5d\x05", 4, p01);     // minsd  xmm0,[0.1]
     emit(code, &k, (const unsigned char *)"\x0f\x1f\x84\x00\x00\x00\x00\x00", 8);      // nop8
     emit(code, &k, (const unsigned char *)"\x0f\x1f\x80\x00\x00\x00\x00", 7);          // nop7
-    if (k != REGION_LEN) { *why = "patch size mismatch (bug)"; return 0; }
+    if (k != REGION_LEN) { 
+        *why = "patch size mismatch (bug)"; 
+        return 0;
+    }
     *cold_out = cold;
     return 1;
 }
@@ -121,7 +143,11 @@ static double g_c_on = C_DEFAULT;
 static int store_c(double v) {
     long pagesz = sysconf(_SC_PAGESIZE);
     uintptr_t page = (uintptr_t)g_c & ~(uintptr_t)(pagesz - 1);
-    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 0;
+    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) 
+    {
+        return 0;
+    }
+    
     uint64_t bits;
     memcpy(&bits, &v, 8);
     __atomic_store_n((volatile uint64_t *)g_c, bits, __ATOMIC_RELEASE);   // one aligned 8-byte store
@@ -140,9 +166,14 @@ static void *watch(void *arg) {
             if (!store_c(want ? g_c_on : C_STOCK)) { bnge_report(TAG, STATUS_FILE, "stopped: mprotect refused"); return NULL; }
             on = want;
             char msg[256];
-            if (on) snprintf(msg, sizeof msg, "applied: game time drops hitches instead of catching up, C = %.1f ms "
-                             "(BeamNG.Earth level)%s", g_c_on * 1000, how);
-            else snprintf(msg, sizeof msg, "stock: another level");
+            if (on) 
+            {
+                snprintf(msg, sizeof msg, "applied: game time drops hitches instead of catching up, C = %.1f ms " "(BeamNG.Earth level)%s", g_c_on * 1000, how);
+            }
+            else 
+            {
+                snprintf(msg, sizeof msg, "stock: another level");
+            }
             bnge_report(TAG, STATUS_FILE, msg);
         }
         struct timespec ts = {0, BNGE_FLAG_POLL_MS * 1000000L};
@@ -168,19 +199,33 @@ __attribute__((constructor)) static void bngearth_dtsmooth(void) {
     }
     struct bnge_main m;
     bnge_find_main(&m);
-    if (!m.seen) { bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
+    if (!m.seen) { 
+        bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); 
+        return; 
+    }
 
     unsigned char *region = NULL;
     const char *how = "";
     if (bnge_mapped(&m, REGION, REGION_LEN, PF_R | PF_X) && matches((unsigned char *)(m.base + REGION)))
+    {
         region = (unsigned char *)(m.base + REGION);
+    }
     else {
         int n = 0;
         for (int s = 0; s < m.nseg; s++) {
-            if (!(m.seg[s].flags & PF_X)) continue;
+            if (!(m.seg[s].flags & PF_X)) 
+            {
+                continue;
+            }
             for (unsigned char *p = (unsigned char *)m.seg[s].start; p + REGION_LEN <= (unsigned char *)m.seg[s].end; p++) {
-                if (p[0] != 0x66 || p[1] != 0x0f || p[2] != 0x28 || p[3] != 0xc8 || p[4] != 0xf2) continue;
-                if (matches(p)) { region = p; n++; }
+                if (p[0] != 0x66 || p[1] != 0x0f || p[2] != 0x28 || p[3] != 0xc8 || p[4] != 0xf2) 
+                {
+                    continue;
+                }
+                if (matches(p)) { 
+                    region = p; 
+                    n++; 
+                }
             }
         }
         if (n != 1) {
