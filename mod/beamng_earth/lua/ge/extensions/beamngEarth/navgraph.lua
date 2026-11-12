@@ -184,9 +184,9 @@ function M.compactShortEdges(nodes, protected)
   local function lengthSq(a, b)
     return (a.x - b.x)^2 + (a.y - b.y)^2 + (a.z - b.z)^2
   end
-  local function aligned(a, b, c)
-    local dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y) + (b.z - a.z) * (c.z - b.z)
-    return dot > 0.98 * math.sqrt(lengthSq(a, b) * lengthSq(b, c))
+  local function aligned(a, b, c, d)
+    local dot = (b.x - a.x) * (d.x - c.x) + (b.y - a.y) * (d.y - c.y) + (b.z - a.z) * (d.z - c.z)
+    return dot > 0.98 * math.sqrt(lengthSq(a, b) * lengthSq(c, d))
   end
   local function sameLanes(a, b)
     return a.oneWay == b.oneWay and a.lanes == b.lanes and a.drivability == b.drivability
@@ -209,7 +209,9 @@ function M.compactShortEdges(nodes, protected)
               and before.outRadius == e.inRadius and e.inRadius == e.outRadius and e.outRadius == after.inRadius
               and e.speedLimit == after.speedLimit and e.posted == after.posted
               and lengthSq(P.pos, A.pos) > 1 and lengthSq(B.pos, Q.pos) > 1
-              and aligned(P.pos, A.pos, B.pos) and aligned(A.pos, B.pos, Q.pos) then
+              -- At <=5 cm, coordinate rounding can give the seam a zero or arbitrary direction.
+              and ((aligned(P.pos, A.pos, A.pos, B.pos) and aligned(A.pos, B.pos, B.pos, Q.pos))
+                or (lengthSq(A.pos, B.pos) <= 0.0025 and aligned(P.pos, A.pos, B.pos, Q.pos))) then
               P.links[a], B.links[a] = nil, nil
               P.links[b], B.links[p] = before, before
               before.outNode, before.outPos = b, B.pos

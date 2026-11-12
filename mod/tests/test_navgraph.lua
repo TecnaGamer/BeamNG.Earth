@@ -75,6 +75,21 @@ do
   local ns, count, edges = N.toNodes(tiny, nil, 0, false)
   T.check(count == 3 and edges == 2 and not ns.b and ns.a.links.c and ns.c.links.d,
     'the captured two-way rounding seam no longer reaches the vehicle AI')
+  -- Changing origin can round that seam to coincident points or an arbitrary centimetre-scale heading.
+  for _, twoWay in ipairs({false, true}) do
+    for _, offset in ipairs({{0,0,0}, {0,0.01,0}, {0,0.04,0}, {0.01,-0.01,0.01}}) do
+      local g = seam(); g.nodes.c = {50+offset[1],offset[2],offset[3],10}
+      if twoWay then for _, e in ipairs(g.edges) do e[3],e[4],e[5] = 0,3,2 end end
+      local ns, count = N.toNodes(g, nil, 0, false)
+      T.check(count == 3 and not ns.b and ns.a.links.c and ns.c.links.d,
+        'centimetre-scale rounding cannot turn a continuous road into an AI corner')
+    end
+    local g = seam(); g.nodes.c = {50,0.06,0,10}
+    if twoWay then for _, e in ipairs(g.edges) do e[3],e[4],e[5] = 0,3,2 end end
+    T.check(N.toNodes(g,nil,0,false).b ~= nil, 'larger lateral geometry retains the existing heading checks')
+    g.nodes.c = {50,0,0,10}; g.nodes.d[2] = 50
+    T.check(N.toNodes(g,nil,0,false).b ~= nil, 'coincident points do not remove a genuine road corner')
+  end
 end
 do
   local rg = { nodes = { a = { 0, 0, 0, 4 }, b = { 40, 0, 0, 4 } },
