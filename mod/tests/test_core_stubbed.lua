@@ -156,6 +156,25 @@ end
 -- the session
 
 local core = require('beamngEarth/core')
+local gps = require('beamngEarth/gps')
+local gpsUpdate, gpsFrames = gps.update, {}
+gps.update = function(anchor, player)
+  if anchor and player then
+    gpsFrames[#gpsFrames + 1] = { frame = frameNo, anchor = anchor, player = vec3(player.x, player.y, player.z),
+      vehicle = vec3(veh.pos), lagProbe = core._state().lagProbe ~= nil }
+  end
+  return gpsUpdate(anchor, player)
+end
+local function gpsConsistent(from, label)
+  local checked, bad = 0, 0
+  for i = from + 1, #gpsFrames do
+    local f = gpsFrames[i]
+    checked = checked + 1
+    local dx, dy, dz = f.player.x - f.vehicle.x, f.player.y - f.vehicle.y, f.player.z - f.vehicle.z
+    if f.lagProbe or dx * dx + dy * dy + dz * dz > 1 then bad = bad + 1 end
+  end
+  T.check(checked > 0 and bad == 0, label .. ': GPS receives fresh positions only after the origin move is visible')
+end
 require('beamngEarth/statusbar').enabled = false   -- its own test: test_statusbar.lua (these count text draws)
 -- the governor's wall clock: 16 ms per frame (deterministic heavy-slot timing)
 local wallNow = 0
@@ -342,6 +361,7 @@ T.check(calls.importMaps == imports + 1, 'stale terrain_ready ignored')
 
 ------------------------------------------------------------------------------------------
 -- origin rebase at 10 km (its anchor at the player, unsnapped: the frame change's geometry; snapped below)
+local gpsRebaseStart = #gpsFrames
 core.SNAP_TELEPORTS = false
 T.check(core.setRebaseDistance(500) == 2000 and core.setRebaseDistance(10000) == 10000, 'setRebaseDistance clamps')
 veh.pos = vec3(9690, 0, 1200)
@@ -431,6 +451,7 @@ for id, p in pairs(farBefore) do
 end
 T.check(calls.safeTeleport == 2, 'rebase does not reset the vehicle')
 T.check(core._rebaseLag() == 0, 'measured lag = 0 frames (same frame)')
+gpsConsistent(gpsRebaseStart, 'same-frame rebase')
 
 -- new anchor's far tiles, then far_done -> old tiles deleted progressively
 serverSend({ type = 'far_tile', anchorId = 1, key = 'late', shape = '/x.dae', pos = { 0, 0, 0 } }) -- stale
@@ -454,6 +475,7 @@ T.check(last('prepare_terrain').anchorId == 2, 'new anchor id in prepare_terrain
 -- run phase 2 one frame after phase 1
 core.setRebaseDistance(2000)
 veh.engineLag = 1
+gpsRebaseStart = #gpsFrames
 local function rebaseTo(n, x)
   veh.pos = vec3(x - 250, 0, 1200)
   veh.vel = vec3(25, 0, 0)
@@ -476,8 +498,10 @@ frame()
 T.check(type(core.status()) == 'string', 'status works')
 local function lagOf() local v = core._rebaseLag(); return v end
 T.check(lagOf() == 1, 'measured lag = 1 frame')
+gpsConsistent(gpsRebaseStart, 'first delayed rebase')
 
 moves = calls.setClusterPosRelRot
+gpsRebaseStart = #gpsFrames
 local nCommits = #received('commit_anchor')
 rebaseTo(4, 2001)
 imports = calls.importMaps
@@ -494,6 +518,7 @@ ph = physicsLog[#physicsLog]
 T.check(ph.frame == frameNo and ph.terrainX == scenetree.findObject('bngEarthTerrain').pos.x, 'the physics step that moved the car had the new terrain')
 seen = preRenderLog[frameNo]
 T.check(seen.car.x < 1500 and seen.car.x - seen.last2.x > 1.4, 'frame N+1: car, world and camera all in the new frame, camera behind')
+gpsConsistent(gpsRebaseStart, 'known delayed rebase')
 veh.engineLag = 0
 core.setRebaseDistance(10000)
 local req4 = received('prepare_anchor')[4]
@@ -1025,6 +1050,7 @@ do
   T.check(v and v.x == 200 and v.y == 0, 'a free camera with no target')
   st.player, st.cam = was[1], was[2]
 end
+gps.update = gpsUpdate
 do -- a computer with too little memory (the server's emergency tier): one warning toast a server session
   local toasts, oldGh = {}, rawget(_G, 'guihooks')
   guihooks = { trigger = function(name, data)
