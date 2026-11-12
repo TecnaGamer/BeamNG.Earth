@@ -56,12 +56,17 @@ class CurveProfile(unittest.TestCase):
 
     def test_not_two_flat_pieces(self):
         # the legacy deck: flat ground, one road under the middle: flat, then a 5 % tent. The curve deck
-        # climbs from the abutments: no stretch of more than 30 m stays within 0.2 m of the abutment
+        # climbs from the abutments: no flat stretch of more than 40 m at the abutment's height (the 2 m
+        # floor's longer, gentler climb; the legacy's two flat pieces are 100 m each)
         ln = line(0, 300)
         zs = roads.deck_curve([ln], flat(0.0), crossings=[(0, 150.0, 0.0)])
         s, z = resample([ln], zs)
         low = z < 0.2
-        self.assertLess(low.sum() * 0.5, 30.0)
+        best = run = 0
+        for on in low:
+            run = run + 1 if on else 0
+            best = max(best, run)
+        self.assertLess(best * 0.5, 40.0)
 
     def test_grade_cap_on_short_bridge(self):
         ln = line(0, 60)

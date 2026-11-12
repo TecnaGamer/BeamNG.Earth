@@ -71,10 +71,13 @@ class BridgeLiftsTest(unittest.TestCase):
         near = [np.array([[10.0, -50], [10, 50]])]
         flat = lambda xy: np.full(len(xy), FLAT)        # noqa: E731
         self.assertEqual(grading.bridge_lifts(line, [line], near, flat), [])
-        # (the same crossing, low enough under the deck for the deck to clear it, is still a road under it)
-        low = lambda xy: np.where(np.abs(xy[:, 0] - 10.0) < 4.0, FLAT - 5.0, FLAT)     # noqa: E731
+        # (the same crossing, low enough under the deck for the deck to clear it, is still a road under it; only the
+        # near end needs the fill at the 2 m floor, the far end is already clear)
+        low = lambda xy: np.where(np.abs(xy[:, 0] - 10.0) < 4.0, FLAT - 3.0, FLAT)     # noqa: E731
         out = grading.bridge_lifts(line, [line], near, low)
-        self.assertEqual(len(out), 2)
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(float(out[0][0][0]), 0.0)
+        self.assertGreater(float(out[0][1]), grading.APPROACH_MIN_LIFT)
 
     def test_short_part_of_a_chain_raises_its_free_end(self):
         # (GitHub #306, BR-343 at Teresina: the deck carried 5 m onto the road joined at its end; that short part no
@@ -113,7 +116,7 @@ class BridgeLiftsTest(unittest.TestCase):
             return np.where((np.abs(xy[:, 1]) <= 4.0) & (np.abs(xy[:, 0]) < 30.0), FLAT, out)
         on_deck = grading.bridge_lifts(line, [line], ground, z)
         self.assertEqual(len(on_deck), 2)                   # (the old reading: the cut taken for the deck's height)
-        self.assertGreater(min(lift for _e, lift in on_deck), 5.0)
+        self.assertGreater(min(lift for _e, lift in on_deck), 3.5)   # (the 2 m floor: 3.9)
         self.assertEqual(grading.bridge_lifts(line, [line], ground, z, half=4.0), [])
         # (a real road under at the ground's height is still cleared: nothing beside the deck to read lower)
         flat = lambda xy: np.full(len(xy), FLAT)        # noqa: E731
@@ -253,7 +256,7 @@ class OverpassIntegrationTest(unittest.TestCase):
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
         self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.05, after)
         under = after.min() - depth     # (the deck's slab and girders, from its span)
-        self.assertGreater(under, 4.9, "16 ft headroom under the girders")
+        self.assertGreater(under, roads.MIN_BRIDGE_HEADROOM_M + 0.2, "the real road headroom under the girders")
         self.assertLessEqual(grade, grading.APPROACH_GRADE * 1.05)
         self.assertLess(np.abs(self.lanes).max(), 0.2, "the motorway is not raised")
 
@@ -405,12 +408,17 @@ class EmbankmentApproachTest(unittest.TestCase):
         _fid, _spec, xy, z, _lon = parts[0]
         z = np.asarray(z, np.float64)
         depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
-        need = FLAT + roads.deck_road_clear(depth) + grading.APPROACH_MARGIN_M     # (7.7 m: 2 m over the embankment)
-        self.assertAlmostEqual(z[0], need, delta=0.5, msg="up to the clearance, not the lift again over the fill")
-        self.assertAlmostEqual(z[-1], need, delta=0.5)
+        need = FLAT + roads.deck_road_clear(depth) + grading.APPROACH_MARGIN_M     # (the 2 m floor: 4.0 over FLAT)
+        g_end = elev(*FRAME.enu_to_geodetic(np.array([xy[0, 0], xy[-1, 0]]),
+                                             np.array([xy[0, 1], xy[-1, 1]]), 0.0)[:2])
+        want = np.maximum(g_end, need)
+        self.assertAlmostEqual(z[0], want[0], delta=0.5,
+                               msg="the ground's height or the clearance, whichever is higher (no lift above the fill)")
+        self.assertAlmostEqual(z[-1], want[1], delta=0.5)
         lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([0.0, 0.0]), 0.0)[:2])
         over = np.interp([-12.0, 12.0], np.asarray(xy)[:, 0], z) - lanes
-        self.assertGreaterEqual(over.min(), roads.deck_road_clear(depth) - 0.05, "still clears the motorway")
+        self.assertGreaterEqual(over.min(), roads.deck_road_clear(depth) - grading.APPROACH_MARGIN_M - 0.05,
+                                "still clears the motorway (the deck's own smoothing takes a little off near its ends)")
 
 
 class TwinKeepTest(unittest.TestCase):

@@ -421,13 +421,13 @@ UNDER_POLDER_M = -1.0       # m: a road this far under the sea is behind dikes (
 # Avenue 3 m into a walled trench (the user's report, 2026-10-29). (Not on the coarse models: no cutting there, BR-381.)
 UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 # A deck a source measured (roadz) is as high as measured over the road under it, not its ends' straight line, and the
-# road under it needs only real headroom under it (UNDER_MEASURED_HEADROOM_M, not MIN_BRIDGE_HEADROOM_M's guess for an
-# unmeasured deck): I-75 dipped 1.5 m under a measured overpass at Findlay, Ohio, flat in the photos, its deck 6.7 m
-# over the road (about 5 m under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the
-# ends' line or over it (lower is the ground under a removed deck, not a deck).
+# road under it needs only real headroom under it (UNDER_MEASURED_HEADROOM_M, the same 2 m floor as every road now): I-75
+# dipped 1.5 m under a measured overpass at Findlay, Ohio, flat in the photos, its deck 6.7 m over the road (about 5 m
+# under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the ends' line or over it (lower
+# is the ground under a removed deck, not a deck).
 UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
 UNDER_CLIMB = os.environ.get("BNE_UNDER_CLIMB", "on") != "off"  # the deck as the dips see it climbs from its ends (under_deck_reach)
-UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
+UNDER_MEASURED_HEADROOM_M = 2.0     # m: the car's floor, as MIN_BRIDGE_HEADROOM_M now is
 UNDER_MEASURED_TOL_M = 0.5
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # A road's ground where a deck crosses over it is read from beside the deck (deck_capped): the elevation under a deck is

@@ -6958,9 +6958,10 @@ DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roa
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
 # Usable space below the lowest structural girder, not merely to the road surface.
-# Six metres accommodates tall road vehicles such as semi-trucks; unlimited-height
-# modded vehicles and raised equipment cannot have a finite universal guarantee.
-MIN_BRIDGE_HEADROOM_M = 6.0
+# 2 m is a car's floor: the deck's own height and the road's own ground decide above it, so a real low bridge stays
+# low and a high one is not raised for a guess. The game's tallest trucks are about 4 m; not every viaduct in the world
+# is passable for them, and a truck route is not every bridge.
+MIN_BRIDGE_HEADROOM_M = 2.0
 BRIDGE_HEADROOM_MARGIN_M = 0.15   # mesh simplification/float and vehicle clearance tolerance
 DECK_ROAD_CLEAR = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
 DECK_FULL_DEPTH = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D    # m of slab and girders under a long span's road
