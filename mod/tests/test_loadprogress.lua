@@ -50,4 +50,18 @@ line = L.line(2002, { placed = true, progress = { roads = { 9, 9 }, trees = { 1,
   pending = {} })
 T.check(line == 'Loading 100%', 'downloads alone do not keep a load on (photos stream all the time): ' .. tostring(line))
 L.reset()
+-- driving: the line comes back while the world is behind the car, and ends once it has caught up for QUIET_S (at
+-- speed far tiles always stream in: busy counts alone never end a driving load)
+L.start(3000, 'driving')
+T.check(L.kind() == 'driving', 'a driving load')
+local busy = { placed = true, progress = { roads = { 3, 9 }, trees = { 1, 1 }, far = { 400, 420 } }, pending = {} }
+busy.behind = true
+T.check(L.line(3000, busy):find('roads & buildings 3/9', 1, true) ~= nil, 'behind: the counts as for a teleport')
+busy.behind = false
+T.check(L.line(3001, busy) == 'Loading 100%', 'caught up: done even with tiles still coming')
+T.check(L.line(3001 + L.QUIET_S, busy) == nil and not L.active(), 'and gone after QUIET_S')
+L.start(3100)
+busy.behind = false
+T.check(L.line(3100, busy):find('3/9', 1, true) ~= nil, 'a teleport load still waits for every count')
+L.reset()
 T.done('test_loadprogress')

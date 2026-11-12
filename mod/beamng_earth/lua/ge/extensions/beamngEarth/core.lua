@@ -2070,7 +2070,25 @@ local function creditsFallback() return attributionText(farfield.counters()) end
 local LOAD_LINE_S = 0.25
 local loadLineAt, loadLineText = -math.huge, false
 local function loadLine()
-  if not loadprogress.active() then return false end
+  -- The world behind the car while driving (no load on): the server's catch-up boost, or the edge guard warning;
+  -- BEHIND_SHOW_S (2 s) of it before the line comes back. (Inside: core.lua's main chunk is at Lua's 200 locals.)
+  local function worldBehind()
+    local m = st.guard and st.guard.mode
+    return st.catchupOn == true or m == 'warn' or m == 'hold'
+  end
+  if not loadprogress.active() then
+    -- (driving: the line comes back while the world is behind the car; the user, 2026-11-11: "the loading bar never
+    -- comes back after it hits 100% while driving")
+    if worldBehind() then
+      st.behindSince = st.behindSince or st.clock
+      if st.clock - st.behindSince < 2.0 then return false end
+      loadprogress.start(st.clock, 'driving')
+      loadLineAt = -math.huge
+    else
+      st.behindSince = nil
+      return false
+    end
+  end
   if st.clock - loadLineAt < LOAD_LINE_S then return loadLineText end
   loadLineAt = st.clock
   local p = st.pending
@@ -2087,7 +2105,8 @@ local function loadLine()
   loadLineText = loadprogress.line(st.clock, { placed = placed,
     failure = st.loadingFault and M._anchorload.failure(st.loadingFault),
     groundLine = M._anchorload.text(st.clock, st.pending, st.teleportRetry),
-    progress = lp and lp.anchorId == st.anchorId and lp or nil, pending = pend }) or false
+    progress = lp and lp.anchorId == st.anchorId and lp or nil, pending = pend, behind = worldBehind() }) or false
+  if not loadLineText then st.behindSince = nil end
   return loadLineText
 end
 
