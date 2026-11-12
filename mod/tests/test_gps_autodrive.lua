@@ -78,8 +78,212 @@ local function fixture(path, y, radius, configure)
   G.setAutodrive(true)
   f:mapArrives()
   f:step() -- request the route
+  f.requestArrows = f.arrows
   f:step() -- accept it and drive the planner's path
   return f
+end
+
+-- A nearby service road is not a continuation of a highway whose loaded graph ends first.
+local function diversionRoads(f)
+  local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links, radius = 6 } end
+  f.nodes = {
+    w = n(0, 0, { j = {} }), j = n(100, 0, { k = {}, a = {} }), k = n(200, 0, {}),
+    a = n(100, -100, { b = {} }), b = n(180, -100, { c = {} }),
+    c = n(180, -20, { d = {} }), d = n(800, -20, {}),
+  }
+  f.map.nodes = f.nodes
+  f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+end
+
+for _, offset in ipairs({ 0, -18 }) do
+  local f = fixture({ 'j', 'k' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.route.points = { { offset / 10000, 0 }, { offset / 10000, 0.1 } }
+  end)
+  local target = f.target[#f.target]
+  T.check(target.x <= 200 and math.abs(target.y) < 1e-6,
+    'highway target stays on the connected highway, even when the route line is closer to the service road')
+end
+
+do
+  local f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.route.points = { { 0, 0 }, { 0, 0.01 }, { -0.01, 0.01 }, { -0.01, 0.018 },
+      { -0.002, 0.018 }, { -0.002, 0.08 } }
+  end)
+  local target = f.target[#f.target]
+  T.check(target.x > 700 and target.y == -20 and #f.drives == 1,
+    'a planned exit follows its connecting roads onto the same service road')
+end
+
+do
+  local f = fixture({ 'j', 'k' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.z = 12
+    for _, id in ipairs({ 'w', 'j', 'k' }) do f.nodes[id].pos.z = 12 end
+    f.nodes.lower = { pos = { x = 0, y = 2, z = 0 }, links = { lowerEnd = {} }, radius = 6 }
+    f.nodes.lowerEnd = { pos = { x = 1000, y = 2, z = 0 }, links = {}, radius = 6 }
+    f.route.points = { { 0.0002, 0 }, { 0.0002, 0.1 } }
+  end)
+  local target = f.target[#f.target]
+  T.check(target.z == 12 and target.x <= 200,
+    'target selection stays on the bridge when the road below is closer to the route line')
+end
+
+do
+  local recoveries = 0
+  local savedSpawn, savedQuat, savedLog = spawn, quatFromDir, log
+  spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.x, f.speed = 95, 0
+    f.nodes.j.links.k = nil
+  end)
+  T.check(f.arrows == f.requestArrows and f.modes[#f.modes] == 'stop',
+    'no reachable route sample holds instead of using the destination-nearest side road fallback')
+  f:step(35); f:step(35); f:step(35)
+  T.check(recoveries == 0 and f.arrows == f.requestArrows,
+    'waiting for the route graph does not recover onto another road')
+  f.nodes.j.links.k = {}; f.path = { 'j', 'k' }
+  f.serial = 2; f.map.buildSerial = 2; f:mapArrives(); f:step()
+  local target = f.target[#f.target]
+  T.check(f.arrows > f.requestArrows and target.x <= 200 and target.y == 0 and #f.drives > 0,
+    'the normal polling lifecycle resumes along the highway once its graph connection loads')
+  f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 30, 6, function(f)
+    diversionRoads(f)
+    f.x, f.speed = 95, 0
+    f.nodes.w.radius, f.nodes.j.radius = 50, 50
+    f.nodes.j.links.k = nil
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and f.modes[#f.modes] == 'stop',
+    'an outer lane on the intended wide edge still waits at a graph cut, even over 25 m from its centre')
+  f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.x, f.speed = 95, 0
+    f.nodes.j.links.k = nil
+    f.route.points = { { -0.0018, 0 }, { -0.0018, 0.1 } }
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a route-line offset beside a junction does not turn a graph cut into recovery')
+  f = fixture({ 'j', 'k' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.x, f.z, f.speed = 195, 12, 0
+    for _, id in ipairs({ 'w', 'j', 'k' }) do f.nodes[id].pos.z = 12 end
+    f.nodes.lower = { pos = { x = 0, y = 2, z = 0 }, links = { lowerEnd = {} }, radius = 6 }
+    f.nodes.lowerEnd = { pos = { x = 1000, y = 2, z = 0 }, links = {}, radius = 6 }
+    f.route.points = { { 0.0002, 0 }, { 0.0002, 0.1 } }
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a bridge graph cut does not recover onto the loaded road below')
+  f = fixture(nil, 20, 6, function(f) f.speed = 0 end)
+  f:step(35); f:step(35); f:step(35)
+  T.check(recoveries == 1, 'an off-road car still recovers when its intended route has a usable graph')
+  spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
+end
+
+-- A fully loaded route can be unreachable nearby from a different parallel road.
+do
+  local recoveries, moveOnRecovery, f = 0, false, nil
+  local savedSpawn, savedQuat, savedLog = spawn, quatFromDir, log
+  spawn = { safeTeleport = function(_, p)
+    recoveries = recoveries + 1
+    if moveOnRecovery then f.x, f.y, f.z = p.x, p.y, p.z end
+  end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local function parallel(loaded, offset, deadEnd, roadOffset)
+    offset = offset or 40
+    return fixture({ 'a', 'b' }, offset, 6, function(f)
+      local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
+      f.speed = 0
+      if deadEnd then f.x = 95 end
+      f.nodes = { w = n(0, offset, { j = {} }), j = n(deadEnd and 100 or 500, offset, {}) }
+      if loaded then
+        f.nodes.a, f.nodes.b = n(0, roadOffset or 0, { b = {} }), n(1000, roadOffset or 0, {})
+        -- The only connection is behind the dead end, or far ahead on the longer parallel road.
+        if deadEnd then f.nodes.w.links.a = {} else f.nodes.j.links.b = {} end
+      end
+      f.map.nodes = f.nodes
+      f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 50 }
+    end)
+  end
+  f = parallel(true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries > 0 and f.gps.autodrive() and f.gps.status().off == 40,
+    'an unreachable loaded route 40 m away retains recovery despite being inside the reroute threshold')
+  T.check(#f.drives == 0, 'recovery does not hand the AI a disconnected path or a destination-nearest fallback')
+  recoveries = 0
+  f = parallel(true, 20, true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries > 0 and f.gps.status().off == 20 and #f.drives == 0,
+    'a dead end only 20 m from a loaded route retains recovery without an unsafe fallback')
+  recoveries, moveOnRecovery = 0, true
+  f = parallel(true, 20, true)
+  for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
+  f:step()
+  T.check(recoveries == 1 and f.y == 0 and f.x > 40 and #f.drives > 0 and f.gps.status().off == 0,
+    'after recovering to the intended road, normal GPS polling starts a connected forward path')
+  recoveries, moveOnRecovery = 0, false
+  f = parallel(false)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and #f.drives == 0 and f.modes[#f.modes] == 'stop',
+    'a parallel road alone is not evidence that the intended route graph has loaded')
+  f = parallel(false, 20, true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and #f.drives == 0,
+    'a nearby dead end still waits when the intended route itself has not loaded')
+  for _, roadOffset in ipairs({ 10, 25 }) do
+    recoveries = 0
+    f = parallel(true, 60, true, roadOffset)
+    for _ = 1, 350 do f:step() end
+    T.check(recoveries > 0 and #f.drives == 0,
+      'loaded road ' .. roadOffset .. ' m from the route line retains recovery within GPS projection tolerance')
+  end
+  recoveries, moveOnRecovery = 0, true
+  f = parallel(true, 40, true, 10)
+  for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
+  f:step()
+  T.check(recoveries == 1 and f.y == 10 and #f.drives > 0 and f.gps.status().off == 10,
+    'polling resumes a connected route after recovering onto a road offset from the planned line')
+  recoveries, moveOnRecovery = 0, false
+  f = parallel(true, 60, true, 26)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a loaded road outside GPS projection tolerance still waits for a usable route graph')
+  spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
+end
+
+-- The router can snap its start ahead of a car already on the same loaded road.
+for _, gap in ipairs({ 0, 60, 100 }) do
+  local f = fixture({ 'n1', 'n2', 'n3', 'n4' }, 0, 6, function(f)
+    f.x, f.y = 10, 0
+    f.nodes = {}
+    for i = 0, 13 do f.nodes['n' .. i] = { pos = { x = 80 * i, y = 0, z = 0 }, radius = 6, links = {} } end
+    for i = 0, 12 do f.nodes['n' .. i].links['n' .. (i + 1)] = {} end
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, (10 + gap) / 10000 }, { 0, 0.1 } }, dist = 990 - gap, dur = 50 }
+  end)
+  T.check(#f.drives == 1 and f.drives[1][1] == 'n1',
+    'a car ' .. gap .. ' m behind the route start drives forward on 80 m graph edges')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and f.drives[2][1] == 'n1', 'the initial route gap also works after graph replacement')
+end
+
+do
+  local f = fixture({ 'n1', 'n2', 'j', 'k' }, 0, 6, function(f)
+    local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
+    f.x, f.y = 10, 0
+    f.nodes = { n0 = n(0, 0, { n1 = {} }), n1 = n(80, 0, { n2 = {} }),
+      n2 = n(160, 0, { j = {} }), j = n(200, 0, { k = {}, a = {} }), k = n(240, 0, {}),
+      a = n(200, -20, { b = {} }), b = n(480, -20, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0.007 }, { 0, 0.1 } }, dist = 930, dur = 50 }
+  end)
+  local target = f.target[#f.target]
+  T.check(#f.drives == 1 and target.x <= 240 and target.y == 0,
+    'the initial gap allowance is consumed before later samples reach a service-road detour')
 end
 
 do
