@@ -211,7 +211,7 @@ class GlueTest(unittest.TestCase):
     def test_c31_cells_hold_their_signs(self):
         from PIL import Image
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
-                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.png")
+                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.dds")
         sheet = np.asarray(Image.open(path).convert("RGB")).astype(int)
         self.assertEqual(sheet.shape[:2], (int(speedsigns.C31_SHEET),) * 2)
         at = lambda value, c, s: sheet[(lambda uv: (int((1 - uv[1]) * 1024), int(uv[0] * 1024)))(   # noqa: E731

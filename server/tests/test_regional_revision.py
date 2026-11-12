@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'server'),str(ROOT/'tools')]
 import furniture,geodesy,navgraph,poleprofiles as pp,regionalmarkers,roads,sidewalks,townsigns
 import build_european_surfaces as surfaces
+import mod_textures_dds
 import cdae
 from roadapproaches import Context
 
@@ -120,7 +121,7 @@ class EuropeTest(unittest.TestCase):
                 self.assertTrue(mat['Stages'][0]['detailMap'].startswith('/assets/materials/terrain/asphalt/'))
                 continue
             texture=mat['Stages'][0]['baseColorMap']
-            self.assertTrue(texture.endswith('.color.png'))
+            self.assertTrue(texture.endswith('.color.dds'))     # (shipped as DDS: tools/mod_textures_dds.py)
             with Image.open(levels/texture.lstrip('/')) as im:
                 pixels=np.asarray(im.convert('RGB'),float)
             means[name]=pixels.mean()
@@ -132,11 +133,12 @@ class EuropeTest(unittest.TestCase):
     def test_surface_generator_reproduces_decoded_assets(self):
         with tempfile.TemporaryDirectory() as temp:
             surfaces.build(temp)
-            for src in surfaces.OUT.glob('*.color.png'):
-                with Image.open(src) as a,Image.open(Path(temp,src.name)) as b:
-                    np.testing.assert_array_equal(np.asarray(a),np.asarray(b))
+            made=sorted(Path(temp).glob('*.color.png'))
+            self.assertTrue(made)
+            for got in made:    # (the tool draws PNGs, the mod ships them as DDS: within BC7's error)
+                self.assertGreater(mod_textures_dds.texture_psnr(got,surfaces.OUT/mod_textures_dds.shipped(got.name)),45.,got.name)
             self.assertEqual(json.loads((surfaces.OUT/'main.materials.json').read_text()),
-                             json.loads(Path(temp,'main.materials.json').read_text()))
+                             mod_textures_dds.shipped(json.loads(Path(temp,'main.materials.json').read_text())))
 
 
 class StopsTest(unittest.TestCase):

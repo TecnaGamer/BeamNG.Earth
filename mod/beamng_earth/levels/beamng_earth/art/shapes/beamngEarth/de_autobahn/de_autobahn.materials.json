@@ -15,7 +15,7 @@
         ],
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.dds",
         "opacityFactor": 1.0
       },
       {},
@@ -43,7 +43,7 @@
         ],
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0,
-        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.dds",
         "opacityFactor": 1.0
       },
       {},

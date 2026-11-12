@@ -138,7 +138,7 @@ MATERIAL = "bngEarthFar_v3"     # static material shipped with the mod (§6.2)
 DIRT = (0.39, 0.35, 0.27)
 DIRT_UNTIL, DIRT_BLEND_TO = 1500.0, 2500.0      # m of elevation
 MOD_SHAPES = ("levels", "beamng_earth", "art", "shapes", "beamngEarth")   # in mod/beamng_earth
-MOD_PALETTE = "far_palette.png"
+MOD_PALETTE = "far_palette.dds"     # (a DDS the game takes as it is, never a PNG it cooks: tools/mod_textures_dds.py)
 FORMATS = ("cdae", "dae")
 
 # --- horizon mode (M1h, docs/V1_4_SPEC.md §3.6 "Radius: the real line-of-sight horizon") ---------
@@ -1130,7 +1130,11 @@ def write_mod_assets(mod_dir):
     loader picks up every main.materials.json under the level folder."""
     d = os.path.join(mod_dir, *MOD_SHAPES)
     os.makedirs(d, exist_ok=True)
-    palette_image().save(os.path.join(d, MOD_PALETTE))
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+    import mod_textures_dds as mt         # (a dev tool's step: BC7 needs the PyPI encoder etcpak, see that file)
+    with open(os.path.join(d, MOD_PALETTE), "wb") as f:
+        f.write(mt.encode_dds(np.asarray(palette_image()), "color", mt.DXGI_BC7))
     vfs = "/" + "/".join(MOD_SHAPES) + "/" + MOD_PALETTE
     with open(os.path.join(d, "main.materials.json"), "w") as f:
         json.dump(material_json(vfs), f, indent=2)

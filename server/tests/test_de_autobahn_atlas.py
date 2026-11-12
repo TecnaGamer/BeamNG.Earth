@@ -24,7 +24,7 @@ SHARED_ATLAS_SHA = "1c79aa7a8c1c4db4802f69fa444a39e6e813721fdc2c5175ba2fdd8845a4
 
 class AtlasTest(unittest.TestCase):
     def test_atlas_size_and_uvs(self):
-        im = Image.open(MOD / "de_letters_o.data.png")
+        im = Image.open(MOD / "de_letters_o.data.dds")      # (shipped as DDS, BC4)
         self.assertEqual((im.mode, im.size), ("L", (2048, 1024)))
         cps, glyphs, faces, params, kern = deautobahnfont.tables()
         inked = (glyphs[:, 3] > glyphs[:, 1]) & (glyphs[:, 4] > glyphs[:, 2])
@@ -111,7 +111,7 @@ class MaterialsTest(unittest.TestCase):
 
     def test_packaging(self):
         client = set(package.tree_files("mod/beamng_earth"))
-        for name in ("de_autobahn.materials.json", "de_letters_o.data.png", "OFL.txt", "NOTICE.md"):
+        for name in ("de_autobahn.materials.json", "de_letters_o.data.dds", "OFL.txt", "NOTICE.md"):
             self.assertIn(SCENERY + name, client)
 
     def test_shared_atlas_untouched(self):

@@ -139,7 +139,7 @@
     "persistentId": "0986b3bc-d51c-54d7-abc1-cc6f54bba09d",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_crossbuck.dds",
         "metallicFactor": 0,
         "roughnessFactor": 0.4
       },
@@ -156,7 +156,7 @@
     "persistentId": "55cfb23e-e477-5d52-8476-ccb9e2dbd43c",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_cross_eu.dds",
         "metallicFactor": 0,
         "roughnessFactor": 0.4
       },
@@ -173,7 +173,7 @@
     "persistentId": "05a90f0b-f0d5-565f-80e5-9d497107ded2",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_walk.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_walk.dds",
         "metallicFactor": 0,
         "roughnessFactor": 0.4
       },

@@ -14,8 +14,8 @@
         ],
         "roughnessFactor": 0.88,
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.dds"
       }
     ],
     "persistentId": "aae375e5-bf3e-53cb-92e2-3902ad339cad"
@@ -35,8 +35,8 @@
         ],
         "roughnessFactor": 0.88,
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.dds"
       }
     ],
     "persistentId": "f13437e5-f885-5b48-bbe7-06e578e6b797"
@@ -56,8 +56,8 @@
         ],
         "roughnessFactor": 0.88,
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.dds"
       }
     ],
     "persistentId": "64521a4d-cc03-5c1c-b5eb-91a07bfc2789"
@@ -77,8 +77,8 @@
         ],
         "roughnessFactor": 0.88,
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.dds"
       }
     ],
     "persistentId": "fdcd2a8f-b6f1-5f65-8464-c09960914beb"
@@ -155,8 +155,8 @@
         ],
         "roughnessFactor": 0.88,
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.dds"
       }
     ],
     "persistentId": "308c13c4-b1e0-59f9-b5b0-296392bc2f49"

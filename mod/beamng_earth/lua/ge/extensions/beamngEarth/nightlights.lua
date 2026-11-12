@@ -51,11 +51,11 @@ local function steps(base, ext)
   return { SHAPES .. base .. ext, SHAPES .. base .. '_late' .. ext, SHAPES .. base .. '_dawn' .. ext }
 end
 M.MAPS = {
-  bne_bld_facade = steps('bne_facade_night_e', '.png'),
-  bne_bld_office = steps('bne_office_night_e', '.png'),
-  bne_bld_shop = steps('bne_office_night_e', '.png'),
-  bne_bld_sky = steps('bne_sky_night_e', '.png'),
-  bne_fr_house_glass_lit = steps('fr_houses/glass', '.emissive.png'),
+  bne_bld_facade = steps('bne_facade_night_e', '.dds'),
+  bne_bld_office = steps('bne_office_night_e', '.dds'),
+  bne_bld_shop = steps('bne_office_night_e', '.dds'),
+  bne_bld_sky = steps('bne_sky_night_e', '.dds'),
+  bne_fr_house_glass_lit = steps('fr_houses/glass', '.emissive.dds'),
 }
 M.LATE = { { 23.25, 2 }, { 3, 3 }, { 6.5, 1 } }
 

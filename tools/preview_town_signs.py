@@ -19,6 +19,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'server'))
 import europeinfra as ei
 import signmesh
+from mod_textures_dds import open_texture
 
 ART=ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/regional_signs'
 LABEL_FONT=ROOT/'tools/fonts/town/DejaVuSans.ttf'
@@ -49,7 +50,7 @@ def render(mesh,size=(560,240),folder=ART,atlas=None):
     extent=points[:,[0,2]];lo=extent.min(0);hi=extent.max(0);mid=(lo+hi)/2
     factor=min((ww-64*ss)/max(hi[0]-lo[0],.01),(hh-30*ss)/max(hi[1]-lo[1],.01))
     screen=np.c_[(points[:,0]-mid[0])*factor+ww/2,(mid[1]-points[:,2])*factor+hh/2]
-    opacity=np.asarray(Image.open(atlas or folder/'sign_font_opacity.data.png'),dtype=np.float32)/255
+    opacity=np.asarray(open_texture(atlas or folder/'sign_font_opacity.data.png'),dtype=np.float32)/255   # (shipped as .dds)
     materials=json.loads((folder/'main.materials.json').read_text())
     for indices,material in zip(triangles,mesh.tm):
         v=screen[indices];ab,ac=v[1]-v[0],v[2]-v[0];det=ab[0]*ac[1]-ab[1]*ac[0]
