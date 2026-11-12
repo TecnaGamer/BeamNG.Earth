@@ -215,6 +215,21 @@ do
     'path membership alone does not prefer an edge absent from the active path')
 end
 
+-- Continuity applies inside a segment, not around its clamped endpoints.
+do
+  local roads = {
+    a = { pos = { x = 0, y = 0, z = 0 }, radius = 10, links = { b = { inNode = 'a', inRadius = 10, outRadius = 10 } } },
+    b = { pos = { x = 100, y = 0, z = 0 }, radius = 10, links = { c = { inNode = 'b', inRadius = 2, outRadius = 2 } } },
+    c = { pos = { x = 200, y = 0, z = 0 }, radius = 2, links = {} },
+  }
+  local a, b = G.edgeUnder(roads, 105, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'b' and b == 'c', 'a passed wide endpoint cannot override the nearer forward road at a narrowing')
+  roads.a.links.b.inRadius, roads.a.links.b.outRadius = 2, 2
+  roads.b.links.c.inRadius, roads.b.links.c.outRadius = 10, 10
+  a, b = G.edgeUnder(roads, 95, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'a' and b == 'b', 'a future wide segment is not preferred before reaching its start')
+end
+
 -- Stacked roads can share a heading and be closer in XY on the wrong level.
 do
   local stacked = {

@@ -135,6 +135,21 @@ do
     'continuity keeps the current edge after the rear node is removed from the submitted waypoint list')
 end
 
+-- Past the end of a wide segment, its rounded endpoint must not pin the planner behind the car.
+do
+  local f = fixture({ 'j', 's', 't' }, 3, 10, function(f)
+    local function n(x, radius, links) return { pos = { x = x, y = 0, z = 0 }, radius = radius, links = links } end
+    f.nodes = { w = n(0, 10, { j = { inNode = 'w', inRadius = 10, outRadius = 10 } }),
+      j = n(100, 10, { s = { inNode = 'j', inRadius = 2, outRadius = 2 } }),
+      s = n(200, 2, { t = {} }), t = n(400, 2, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+  end)
+  f.x = 105; f:mapArrives(); f:step()
+  T.check(f.target[1] == 's' and f.drives[#f.drives][1] == 's',
+    'at a narrowing both the planner anchor and vehicle handoff advance beyond the passed wide endpoint')
+end
+
 for _, offset in ipairs({ 0, -18 }) do
   local f = fixture({ 'j', 'k' }, 2, 6, function(f)
     diversionRoads(f)

@@ -683,7 +683,7 @@ end
 -- pz is supplied, so an overlapping road above/below cannot win just because its centreline is closer in XY.
 -- A supplied tolerance instead uses the inclusive search radius for approximate planned-route projections.
 -- Where fork lanes overlap, retain an edge in the active path while the car is still inside its road width.
--- Outside that road (or on another elevation), fall back to the nearest eligible edge as usual.
+-- Outside that segment (including past either endpoint), fall back to the nearest eligible edge as usual.
 function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
   local preferred = {}
   for i = 2, #(path or {}) do
@@ -698,7 +698,8 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
     local dx, dy = b.x - a.x, b.y - a.y
     local L = math.sqrt(dx * dx + dy * dy)
     if L > 0.1 and (dx * hx + dy * hy) / L > 0.5 then
-      local t = math.max(0, math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / (L * L)))
+      local along = ((px - a.x) * dx + (py - a.y) * dy) / (L * L)
+      local t = math.max(0, math.min(1, along))
       local qx, qy = a.x + t * dx - px, a.y + t * dy - py
       local d = math.sqrt(qx * qx + qy * qy)
       local ra, rb = nodes[from].radius or 0, nodes[to].radius or 0
@@ -712,7 +713,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
       local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
       local distanceSq = d * d + dz * dz
       if (d < reach or (tolerance and d == reach)) and distanceSq < bd then best, bd = { from, to }, distanceSq end
-      if preferred[from] and preferred[from][to] and d < ra + t * (rb - ra)
+      if preferred[from] and preferred[from][to] and along >= 0 and along <= 1 and d < ra + t * (rb - ra)
         and math.abs(dz) <= 2 and distanceSq < kd then kept, kd = { from, to }, distanceSq end
     end
   end
