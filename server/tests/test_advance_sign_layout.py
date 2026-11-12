@@ -121,9 +121,8 @@ class AdvanceLayoutTest(unittest.TestCase):
         image,meta=build_sign_glyphs.build()
         committed=json.loads((root/'server'/exitsigns.GLYPHS).read_text(encoding='utf-8'))
         self.assertEqual(json.loads(json.dumps(meta,ensure_ascii=False)),committed)
-        from PIL import Image
-        atlas=Image.open(build_sign_glyphs.ATLAS)
-        self.assertEqual(atlas.tobytes(),image.tobytes())
+        import mod_textures_dds      # (the mod ships the atlas as DDS, BC4: the same within its error)
+        self.assertGreater(mod_textures_dds.texture_psnr(image,mod_textures_dds.shipped(build_sign_glyphs.ATLAS)),40.)
         folder=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/roadside'
         materials=json.loads((folder/'exit.materials.json').read_text())
         for name in ('bne_exit_letters','bne_guide_letters','bne_guide_letters_black'):
