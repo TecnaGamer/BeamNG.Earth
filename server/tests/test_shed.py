@@ -233,6 +233,17 @@ class TreeBudgetTest(unittest.TestCase):
         budget.tree_close()
         os.environ.pop(budget.TREE_ENV, None)
 
+    def test_off_unless_asked(self):
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(budget, "_malloc_small"), \
+                mock.patch.object(budget, "total_gb", return_value=32.0):
+            os.environ.pop("BNGE_TREE_MB", None)
+            with mock.patch.object(budget, "TREE_ON", False):
+                budget.apply(is_small=False)
+                self.assertEqual(budget.TREE_MB, 0, "out of reach in the drives: opt-in (BNGE_TREE=on)")
+            with mock.patch.object(budget, "TREE_ON", True):
+                budget.apply(is_small=False)
+                self.assertEqual(budget.TREE_MB, 10560)
+
     def test_budget_by_ram(self):
         self.assertEqual(budget.tree_mb(32.0), 10560)
         self.assertEqual(budget.tree_mb(6.0), budget.TREE_MIN_MB)

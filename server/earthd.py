@@ -10206,10 +10206,11 @@ async def main_async(args):
     if budget.TREE_MB and budget.tree_init():   # (the whole server's memory table: budget.TREE_MB; workers inherit its name)
         import atexit
         atexit.register(budget.tree_close)
+    if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches too: budget.tree_publisher)
         budget.tree_publisher()
-        log.info("memory: the server's budget %d MB (%.0f %% of the RAM), a worker's ceiling %s, caches dropped below "
-                 "%.1f GB free", budget.TREE_MB, budget.TREE_FRAC * 100, f"{budget.SHED_MB} MB" if budget.SHED_MB
-                 else "none", budget.LOW_FREE_GB)
+    log.info("memory: a worker's ceiling %s, caches dropped below %.1f GB free, the whole server's budget %s",
+             f"{budget.SHED_MB} MB" if budget.SHED_MB else "none", budget.LOW_FREE_GB,
+             f"{budget.TREE_MB} MB" if budget.TREE_MB else "off")
     # (telemetry: every process's per-host download counts, summed by telemetry.Reporter; set before the workers start
     # so they inherit it)
     telemetry_on = args.telemetry == "on" and not args.offline and not os.environ.get("CI") \
@@ -10324,7 +10325,7 @@ async def main_async(args):
                     sea=seacarvemod.SeaCarver(mapdata, args.cache_dir) if args.sea == "on" else None,
                     vegetation=(vegetationmod.Vegetation(mapdata, args.cache_dir) if args.trees == "on" else None))
     server.make_fast_pool = make_fast_pool
-    if budget.TREE_MB:      # (this process's own caches, dropped by the whole server's budget: budget.tree_publisher)
+    if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches: dropped by the free memory / the budget)
         import rangeread
         budget.register_shed(server.dem.clear_memory)
         if mapdata is not None:

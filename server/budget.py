@@ -148,7 +148,7 @@ def apply(is_small=None):
     LOW_FREE_GB = low_free_gb(gb)
     if os.environ.get("BNGE_LOW_FREE_GB"):          # (A/B: the free memory in GB, 0 off)
         LOW_FREE_GB = float(os.environ["BNGE_LOW_FREE_GB"])
-    TREE_MB = tree_mb(gb)
+    TREE_MB = tree_mb(gb) if TREE_ON else 0
     if os.environ.get("BNGE_TREE_MB"):              # (A/B: the whole server's budget in MB, 0 off)
         TREE_MB = int(os.environ["BNGE_TREE_MB"])
     if is_small:
@@ -392,6 +392,13 @@ def _idle_loop():
 # eight minutes of a fresh Los Angeles (drive_mem, 2026-11-11; Discord: "20 GB after 15 miles of LA", the system's
 # out-of-memory killer after ~90 miles), each worker under its own caps.
 TREE_FRAC = 0.33            # of the RAM for the whole server (16 GB: 5.3 GB, 32 GB: 10.6 GB, 64 GB: 21 GB)
+# OFF by default (BNGE_TREE=on, or BNGE_TREE_MB=<MB>): measured 2026-11-11 (drive_mem, LA -> London -> NYC, cold) the
+# budget was out of reach: a shed gives back ~0.3-0.6 GB of a worker's 1-2.4 GB, the rest is not in the registered
+# caches and comes straight back, so a 16 GB machine's server stayed at ~13 GB private (budget 5.3) while its workers
+# shed every 90 s: far tiles -35 % (2 far-tile processes re-reading their DEM tiles), London's road geotiles 23 -> 59 s
+# median; on the 32 GB profile -13 % peak for +5 % CPU. The free-memory shed (LOW_FREE_GB) covers a machine that is
+# really short; the table stays for when the floors come down.
+TREE_ON = os.environ.get("BNGE_TREE", "off").lower() in ("on", "1", "true")
 TREE_MIN_MB = 2500
 TREE_MB = 0                 # (apply(); 0 off)
 TREE_ENV = "BNGE_MEMTABLE"
