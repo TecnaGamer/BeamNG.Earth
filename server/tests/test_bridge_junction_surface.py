@@ -2,6 +2,7 @@
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -105,8 +106,19 @@ class BridgeJunctionSurfaceTest(unittest.TestCase):
                   chunk('c', [(0, 0, 20), (30, 0, 20)]),
                   chunk('d', [(30, 0, 20), (45, 12, 20)]),
                   chunk('e', [(30, 0, 20), (45, -12, 20)])]
-        self.assertEqual(roadmesh._junction_surfaces(chunks), {},
+        # (2026-11-12: two joints a span links are one cluster, one field over all of it, its lone ends pinned; never a
+        # field for only one of the forks)
+        got = roadmesh._junction_surfaces(chunks)
+        self.assertEqual(set(got), {'a', 'b', 'c', 'd', 'e'})
+        self.assertEqual(len({id(f) for f in got.values()}), 1,
                          'a span connecting two forks must not be regraded for only one junction')
+        field = got['a']
+        free = np.array([(-20, 0, 20), (-15, 12, 20), (45, 12, 20), (45, -12, 20)], float)
+        np.testing.assert_allclose(field.at(free[:, :2]), free[:, 2], atol=roadmesh.JUNCTION_CLUSTER_PIN_TOL_M)
+        with mock.patch.object(roadmesh, 'JUNCTION_CLUSTER_ON', False):
+            self.assertEqual(roadmesh._junction_surfaces(chunks), {})
+        # (the cluster's deck skins in world texture coordinates at the decks' own texture length)
+        self.assertEqual(roadmesh.CLUSTER_SKIN_TILE_M, roads.DECK["tl"])
 
     def test_captured_fork_has_no_stacked_collision_faces_in_driving_lanes(self):
         _parts, chunks, ctx, pads, ground = fixture()

@@ -286,10 +286,21 @@ JUNCTION_MAX_BRANCHES = 8
 JUNCTION_CELL_M = 2.0
 JUNCTION_JOIN_M = 0.75
 JUNCTION_JOIN_Z_M = 0.75
+# A junction of several joints a few metres apart (a lid's or a viaduct's: dual carriageways, turn lanes), each short part
+# between two of them, is one field (earthfast junction_groups' clusters; GitHub #1083: Rautenweg over the S1 was 16
+# overlapping slabs at their own heights and tilts); its ends going on alone are pinned to their approaches, centre and
+# edges (JUNCTION_PIN_R_M: the correction's reach). BNE_JUNCTION_CLUSTER=off: per joint only, as before.
+JUNCTION_CLUSTER_ON = os.environ.get("BNE_JUNCTION_CLUSTER", "on") != "off"
+JUNCTION_CLUSTER_MAX_PARTS = 40
+JUNCTION_CLUSTER_MAX_M = 120.0      # m: its parts' box at most this either way (every tile round it has all its parts)
+JUNCTION_PIN_R_M = 8.0
+CLUSTER_SKIN_TILE_M = 11.0              # m: a cluster's deck skins' texture square in the world (roads.DECK's "tl")
+JUNCTION_CLUSTER_PIN_TOL_M = 0.05   # m: a pin may miss by this much (two arms' ends nearer than a lattice cell apart at
+                                    # different heights: Rautenweg's west banks, 4 cm), never more
 
 
 class _JunctionSurface:
-    def __init__(self, entries, joint):
+    def __init__(self, entries, joint, pins=None):
         self.fids = frozenset(c['fid'] for c, _p in entries)
         self.joint = np.asarray(joint, np.float64)
         # A road-relative basis, rather than an anchor's terrain grid: kept geometry and a new anchor's skin must
@@ -306,13 +317,36 @@ class _JunctionSurface:
         i1, j1 = np.ceil((allxy.max(0) + margin) / JUNCTION_CELL_M).astype(int)
         x, y = np.meshgrid(np.arange(self.i0, i1 + 1) * JUNCTION_CELL_M,
                            np.arange(self.j0, j1 + 1) * JUNCTION_CELL_M)
-        self.grid = np.ascontiguousarray(self._height(np.c_[x.ravel(), y.ravel()]).reshape(x.shape))
+        self.pin_xy, self.pin_w = None, None
+        nodes = np.c_[x.ravel(), y.ravel()]
+        base = self._height(nodes)
+        self.grid = np.ascontiguousarray(base.reshape(x.shape))
+        if pins is not None and len(pins):
+            import fast
+            self.pin_xy = np.ascontiguousarray(self.local(np.asarray(pins, np.float64)[:, :2]))
+            self.pin_w = np.zeros(len(pins))
+            target = np.asarray(pins, np.float64)[:, 2]
+            for _ in range(4):
+                r = target - self.at(np.asarray(pins, np.float64)[:, :2])
+                if np.max(np.abs(r)) < 1e-4:
+                    break
+                self.pin_w = self.pin_w + np.asarray(fast._ef.field_pins(self.pin_xy, np.ascontiguousarray(r),
+                                                                         np.zeros((0, 2)), JUNCTION_PIN_R_M, 0))
+                self.grid = np.ascontiguousarray((base + self._pin(nodes)).reshape(self.grid.shape))
+
+    def _pin(self, xy):
+        """The pins' correction at local xy (0 without pins)."""
+        if self.pin_w is None:
+            return np.zeros(len(xy))
+        import fast
+        return np.asarray(fast._ef.field_pins(self.pin_xy, np.ascontiguousarray(self.pin_w, np.float64),
+                                              np.ascontiguousarray(xy, np.float64), JUNCTION_PIN_R_M, 1))
 
     def local(self, xy):
         return (np.asarray(xy, np.float64)[:, :2] - self.joint[:2]) @ self.basis.T
 
     def _grid_height(self, xy):
-        return self._height(xy)
+        return self._height(xy) + self._pin(xy)
 
     def _ensure_grid(self, local):
         """Extend the same lattice when a pad/miter goes beyond the initial profile bounds. Clamping the cell
@@ -421,42 +455,44 @@ def _junction_surfaces(chunks, context=()):
         old = by_fid.get(c['fid'])
         if old is None or key > old[0]:
             by_fid[c['fid']] = (key, c, p)
-    ends = []
-    for fid, (key, c, p) in sorted(by_fid.items()):
-        if key[0] > JUNCTION_MAX_PART_M:
-            continue
-        for at in (0, -1):
-            ends.append((c, p if at == 0 else p[::-1]))
-    groups = []
-    for c, p in ends:
-        for group in groups:
-            ep = np.array([q[0] for _c, q in group])
-            if (np.linalg.norm(ep[:, :2] - p[0, :2], axis=1) <= JUNCTION_JOIN_M).all() and \
-                    np.ptp(np.r_[ep[:, 2], p[0, 2]]) <= JUNCTION_JOIN_Z_M:
-                group.append((c, p))
-                break
-        else:
-            groups.append([(c, p)])
-    candidates = [group for group in groups if len({c['fid'] for c, _p in group}) >= 3]
-    # A shared span at two forks cannot use only one fork's height field: that changes its
-    # surface at the other fork. Conservatively leave all such junctions on existing geometry.
-    occurrences = {}
-    for group in candidates:
-        for fid in {c['fid'] for c, _p in group}:
-            occurrences[fid] = occurrences.get(fid, 0) + 1
+    import fast
+    fast.require(241, "junction_groups")
+    kept = [(c, p) for _fid, (key, c, p) in sorted(by_fid.items()) if key[0] <= JUNCTION_MAX_PART_M]
+    if not kept:
+        return {}
+    ends, plen, half, skip, bbox = [], [], [], [], []
+    for c, p in kept:
+        for q, r in ((p[0], p[1]), (p[-1], p[-2])):
+            d = r[:2] - q[:2]
+            d = d / max(float(np.hypot(*d)), 1e-9)
+            ends.append([q[0], q[1], q[2], d[0], d[1]])
+        plen.append(float(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
+        half.append(float(c['w']) / 2)
+        skip.append(1 if c.get('jskip') else 0)
+        bbox.append([*p[:, :2].min(0), *p[:, :2].max(0)])
+    prm = np.array([JUNCTION_JOIN_M, JUNCTION_JOIN_Z_M, JUNCTION_MAX_PART_M, JUNCTION_MAX_BRANCHES,
+                    1.0 if JUNCTION_CLUSTER_ON else 0.0, JUNCTION_CLUSTER_MAX_PARTS, JUNCTION_CLUSTER_MAX_M], np.float64)
+    _grp, _field, fields, members, pins = fast._ef.junction_groups(
+        np.ascontiguousarray(ends, np.float64), np.asarray(plen, np.float64), np.asarray(half, np.float64),
+        np.asarray(skip, np.int64), np.ascontiguousarray(bbox, np.float64), prm)
     out = {}
-    for group in candidates:
-        if (len({c['fid'] for c, _p in group}) > JUNCTION_MAX_BRANCHES or
-                any(c.get('jskip') or occurrences[c['fid']] > 1 for c, _p in group)):
-            continue
-        field = _JunctionSurface(group, np.mean([p[0] for _c, p in group], axis=0))
-        # Each far endpoint is pinned to its ground approach. Nearby outgoing arms
-        # can pull it up or down; the 2 m lattice can also move an off-grid grade knot.
-        # Reject the whole shared field if any transition would gain a visible step.
-        free = np.asarray([p[-1] for _c, p in group])
-        if np.max(np.abs(field.at(free[:, :2]) - free[:, 2])) > 0.01:
-            continue
-        out.update({c['fid']: field for c, _p in group})
+    for f, (kind, jx, jy, jz) in enumerate(np.asarray(fields)):
+        ent = [(kept[k][0], kept[k][1][::-1] if rev else kept[k][1]) for ff, k, rev in members if ff == f]
+        pp = pins[pins[:, 0] == f][:, 1:]
+        if kind == 0:
+            field = _JunctionSurface(ent, np.array([jx, jy, jz]))
+            # Each far endpoint is pinned to its ground approach. Nearby outgoing arms
+            # can pull it up or down; the 2 m lattice can also move an off-grid grade knot.
+            # Reject the whole shared field if any transition would gain a visible step.
+            if np.max(np.abs(field.at(pp[:, :2]) - pp[:, 2])) > 0.01:
+                continue
+        else:
+            # a cluster of joints (a junction over a lid): one field, its lone ends pinned to their approaches
+            field = _JunctionSurface(ent, np.array([jx, jy, jz]), pins=pp)
+            if len(pp) and np.max(np.abs(field.at(pp[:, :2]) - pp[:, 2])) > JUNCTION_CLUSTER_PIN_TOL_M:
+                continue
+            field.cluster = True
+        out.update({c['fid']: field for c, _p in ent})
     return out
 
 
@@ -1235,6 +1271,13 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             k0 += 2 * k
         else:                                   # on a deck: over its opaque concrete top
             z = np.concatenate((fz, fz)) + LIFT[layer] + DECK_SKIN
+            # (a cluster's decks overlap all over its junction at one height: their skins, and the wear (patches, cracks:
+            # roadwear) of one over another's skin, flickered as noise, Rautenweg in game 2026-11-12. Its plain asphalt
+            # skins take the world's texture coordinates (below: where two lie on each other, one texture), its wear is
+            # left out; the markings stay. Left to the deck tops instead, the slabs' tops and the pad shaded apart)
+            jf = junctions.get(c.get('fid'))
+            if jf is not None and getattr(jf, 'cluster', False) and not c.get('deck') and layer != "mark":
+                continue
         if m not in mats:
             mats.append(m)
         mi = mats.index(m)
@@ -1265,6 +1308,8 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         field = junctions.get(c.get('fid')) if fz is not None else None
         if field is not None:
             pp, uu, tt, _src = field.top(P[-1], UV[-1], tri - nverts, LIFT[layer] + DECK_SKIN)
+            if getattr(field, 'cluster', False) and c.get('deck'):
+                uu = pp[:, :2] / CLUSTER_SKIN_TILE_M
             P[-1], UV[-1], tri = pp, uu, tt + nverts
         T.append(tri)
         M.append(np.full(len(tri), mi))
@@ -1668,6 +1713,8 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         tri[flip] = tri[flip][:, ::-1]
         if active_field is not None and mi == top:
             pp, uu, tt, _src = active_field.top(P[-1] + origin, UV[-1], tri - nv)
+            if getattr(active_field, 'cluster', False):     # (as the pads': world texture coordinates, build()'s note)
+                uu = pp[:, :2] / DECK_TOP_TILE_M
             P[-1], UV[-1], tri = pp - origin, uu, tt + nv
         T.append(tri)
         M.append(np.full(len(tri), mi))
@@ -1760,10 +1807,14 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     for pad in pads:                # (junction pads on bridges: roads.deck_pads; their rim's railings)
         start_p, start_t, start_uv, start_m, start_nv = len(P), len(T), len(UV), len(M), nv
         ring, centre = pad[0], pad[1]
+        joints = np.asarray(pad[3], np.float64) if len(pad) > 3 else np.asarray([centre], np.float64)
         incident = [(r, c) for r, c in rb if c.get('fid') in junctions and any(
-            np.linalg.norm(np.asarray(c['jn'])[at, :2] - centre[:2]) <= JUNCTION_JOIN_M and
-            abs(c['jn'][at][2] - centre[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1))]
+            np.linalg.norm(np.asarray(c['jn'])[at, :2] - q[:2]) <= JUNCTION_JOIN_M and
+            abs(c['jn'][at][2] - q[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1) for q in joints)]
         field = _PadSurface(ring, centre, incident, junctions) if incident else None
+        cl = {id(junctions[c['fid']]) for _r, c in incident}
+        if incident and len(cl) == 1 and getattr(junctions[incident[0][1]['fid']], 'cluster', False):
+            field = junctions[incident[0][1]['fid']]
         _pad(ring, centre, origin, P, T, UV, M, top, side, field)
         nv = sum(len(a) for a in P)
         for pts, out in (pad[2] if len(pad) > 2 else ()):
@@ -1862,7 +1913,7 @@ def _pad(ring, centre, origin, P, T, UV, M, top, side, field=None):
     top_v = np.vstack([c - [0, 0, PAD_DROP], ring - [0, 0, PAD_DROP]]) - o
     i = np.arange(k)
     tris = np.c_[np.zeros(k, np.int64), 1 + i, 1 + (i + 1) % k]
-    uv = np.c_[top_v[:, 0] / DECK_TOP_TILE_M, top_v[:, 1] / DECK_TOP_TILE_M]
+    uv = (top_v[:, :2] + o[:2]) / DECK_TOP_TILE_M      # (world: as a cluster's deck tops, deck()'s quads)
     if field is not None:
         top_v, uv, tris, _src = field.top(top_v + o, uv, tris)
         top_v -= o
