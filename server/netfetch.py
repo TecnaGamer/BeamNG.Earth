@@ -90,13 +90,40 @@ OFFLINE_TEXT = "Offline - using cached data"
 TEST_MBPS = float(os.environ.get("BNGE_NET_MBPS") or 0)
 TEST_LATENCY_S = float(os.environ.get("BNGE_NET_LATENCY_MS") or 0) / 1000.0
 NETLOG = os.environ.get("BNGE_NETLOG")      # debugging: every network request, one line each, from every process
+NETLOG_STACK = os.environ.get("BNGE_NETLOG_STACK") == "1"   # ... with its caller (the server's own frames, innermost first)
+_STACK_SKIP = ("netfetch", "ioprofiler", "threading", "concurrent", "thread", "queue")
+
+
+_why = threading.local()             # .tag: the caller a pool thread fetches for (set by its submitter: imagery)
+
+
+def _caller(depth=2):
+    """"mod.func<mod.func<...@thread" of the server's frames that asked (BNGE_NETLOG_STACK; debugging only); a pool
+    thread's own frames, then its submitter's (imagery._future's tag)."""
+    import sys
+    import multiprocessing
+    out = []
+    f = sys._getframe(depth)
+    here = os.path.dirname(os.path.abspath(__file__))
+    while f is not None and len(out) < 8:
+        fn = f.f_code.co_filename
+        mod = os.path.splitext(os.path.basename(fn))[0]
+        if os.path.dirname(os.path.abspath(fn)) == here and mod not in _STACK_SKIP:
+            out.append(f"{mod}.{f.f_code.co_name}")
+        f = f.f_back
+    me = ("<".join(out) or "-") + "@" + threading.current_thread().name.replace(" ", "_")
+    ctx = getattr(_why, "ctx", None)
+    if ctx:
+        me += "#" + ctx
+    tag = getattr(_why, "tag", None)
+    return (me + "<<" + tag if tag else me + "@@" + multiprocessing.current_process().name.replace(" ", "_"))
 
 
 def _netlog(url, headers, status, body):
-    """Append "<unix time> <pid> <status> <bytes> <url> <range>" to the BNGE_NETLOG file (one write per line:
-    whole lines from every process)."""
+    """Append "<unix time> <pid> <status> <bytes> <url> <range>[ <caller>]" to the BNGE_NETLOG file (one write per
+    line: whole lines from every process)."""
     line = (f"{time.time():.3f} {os.getpid()} {status} {len(body or b'')} {url} "
-            f"{(headers or {}).get('Range', '-')}\n")
+            f"{(headers or {}).get('Range', '-')}{(' ' + _caller()) if NETLOG_STACK else ''}\n")
     try:
         fd = os.open(NETLOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
@@ -338,8 +365,16 @@ POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budg
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
-POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
-                                    daily_budget=100000)
+# 2026-11-11: the photo tiles 50/s, 24 at once: a cold French teleport's ~2,300 tiles kept the 25/s full for its whole
+# far field (the settled time was this host's, EOX finished ~30 s earlier). cartes.gouv.fr "Limites d'usage des API"
+# (read again 2026-11-11): every API has a per-IP limit "à l'exception notable de l'API « Diffusion d'images tuilées
+# WMTS »" (a limit exceeded: HTTP 429 for 5 s, retry-after; netfetch honours it and its breaker stays on). The WFS
+# ("ign_wfs" lane: roadz, bdtopo; 30/s published) keeps its own 25/s. BNGE_IGN_RATE: the photo tiles' rate (25: before).
+_IGN_RATE = float(os.environ.get("BNGE_IGN_RATE") or 50.0)
+POLICIES["data.geopf.fr#ign_wfs"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                            daily_budget=100000)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=_IGN_RATE, burst=2.0 * _IGN_RATE,
+                                    max_conc=max(12, int(_IGN_RATE / 2)), daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case
@@ -1061,7 +1096,10 @@ class Fetcher:
 
     # --- hosts and policies ------------------------------------------------------------------
     def policy(self, host):
-        # (a lane, "host#name": the host's own policy, its own bucket and breaker: get's lane)
+        # (a lane, "host#name": its own policy where there is one ("data.geopf.fr#ign_wfs"), else the host's; its own
+        # bucket and breaker: get's lane)
+        if "#" in host and host in self.policies:
+            return self.policies[host]
         return self.policies.get(host.split("#", 1)[0], self.default_policy)
 
     def host(self, name):

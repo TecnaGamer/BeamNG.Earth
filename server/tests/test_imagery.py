@@ -721,6 +721,24 @@ class ExportImageryTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(z, 17)                             # NAIP's, not USGS's 16
 
+    def test_sharp_zoom_reach_skips_unreachable_regional_probes(self):
+        # a far tile that can never come to a regional tile cache's zooms (REGIONAL_XYZ_MIN_ZOOM) asks no coverage probe
+        # of it: inside its box the answer is its zoom, as a probe would say where it covers; a reachable one probes
+        reqs = []
+
+        def serve(name, z, x, y):
+            reqs.append((name, z))
+            return 200, png(background(z, x, y))
+        with tempfile.TemporaryDirectory() as d:
+            im = FakeNet(d, serve, chain=("czechia", "eox2023"), tone=0.0)
+            lat, lon = 50.0, 15.0
+            self.assertEqual(im.sharp_zoom(lat, lon, reach=14), 17)
+            self.assertEqual(im.sharp_zoom(43.0, 20.0, reach=14), 14)        # (outside its box: EOX's)
+            self.assertEqual(reqs, [])
+            im.sharp_zoom(lat, lon, reach=17)
+            im.pool.shutdown(wait=True)
+            self.assertEqual(reqs, [("czechia", 12)])                         # (the probe, for the reachable)
+
     def test_lazy_then_split_tiles(self):
         im = self.make()
         # 1 m texels: z17 (0.93 m pixels here), NAIP's zoom
@@ -898,6 +916,80 @@ class GutterTest(unittest.TestCase):
                 self.assertAlmostEqual(u * size + x0, 1000.0 + f * 64.0, places=9)
             self.assertGreater(float(imagery.gutter_uv(0.0, px)), 0.5 / px)        # off the wrap seam
             self.assertLess(float(imagery.gutter_uv(1.0, px)), 1 - 0.5 / px)
+
+    def _serve_all(self, name, z, x, y):
+        return 200, png(background(z, x, y))
+
+    def _with_gutter_fetch(self, on, fn):
+        old = imagery.GUTTER_FETCH
+        imagery.GUTTER_FETCH = on
+        try:
+            return fn()
+        finally:
+            imagery.GUTTER_FETCH = old
+
+    def test_merc_tile_asks_only_its_own_photo_tile(self):
+        # a global far tile's footprint ends on photo tile edges: its gutter asks for no photo of its own (before: the
+        # 8 tiles round it); the footprint's texels are the same, the gutter is its edge clamped
+        z, x, y = 10, 300, 400
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            new = FakeNet(d1, self._serve_all, chain=("eox2023",), tone=0.0)
+            old = FakeNet(d2, self._serve_all, chain=("eox2023",), tone=0.0)
+            for px in (128, 256, 512):
+                gp = imagery.gutter(px)
+                new.requests.clear()
+                old.requests.clear()
+                a, used = new.render_merc(z, x, y, px)
+                b, _ = self._with_gutter_fetch(True, lambda: old.render_merc(z, x, y, px))
+                zs = {r[1] for r in new.requests}
+                self.assertEqual(len(zs), 1)
+                dz = zs.pop() - z
+                k = 2 ** max(dz, 0)
+                want = sorted((x * k + i, y * k + j) for i in range(k) for j in range(k)) if dz >= 0 else \
+                    [(x >> -dz, y >> -dz)]
+                self.assertEqual(sorted(r[2:] for r in new.requests), want)
+                self.assertGreater(len(old.requests), len(new.requests))
+                np.testing.assert_array_equal(a[gp:-gp, gp:-gp], b[gp:-gp, gp:-gp])
+                if dz >= 0:     # (at 128 px the photo tile is its parent's: the gutter's inner sides are in it)
+                    np.testing.assert_array_equal(a[:gp, gp:-gp], np.broadcast_to(a[gp, gp:-gp],
+                                                                                 (gp, px - 2 * gp, 3)))
+                    np.testing.assert_array_equal(a[gp:-gp, -gp:], np.broadcast_to(a[gp:-gp, -gp - 1:-gp],
+                                                                                    (px - 2 * gp, gp, 3)))
+                self.assertEqual(set(used), {"eox2023"})
+                # neighbours on hand (fetched before): the gutter takes them, as before
+                new.tiles([r[1:] and (imagery.SOURCES[r[0]],) + r[1:] for r in old.requests])
+                new.requests.clear()
+                c, _ = new.render_merc(z, x, y, px)
+                self.assertEqual(new.requests, [])
+                np.testing.assert_array_equal(c, b)
+
+    def test_enu_gutter_across_a_tile_edge(self):
+        # an anchor tile whose gutter crosses a photo tile's edge but whose footprint does not: the prefetch, the
+        # fetch and the render ask for the footprint's tiles alone, and its texels are those of the old render
+        f = g.EnuFrame(LAT0, LON0)
+        z = 16
+        tx = int((LON0 + 180.0) / 360.0 * 2 ** z) + 1
+        e_b, _, _ = f.geodetic_to_enu(LAT0, tx * 360.0 / 2 ** z - 180.0, 0.0)
+        px = 256
+        sq = imagery.gutter_square(float(e_b) + 1.0, -32.0, 64.0, px)
+        gp = imagery.gutter(px)
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            new = FakeNet(d1, self._serve_all, chain=("usgs",), tone=0.0)
+            old = FakeNet(d2, self._serve_all, chain=("usgs",), tone=0.0)
+            for _ in range(3):              # (the coverage probes first)
+                new.prefetch(f, *sq, px, gutter=True)
+                new.pool.shutdown(wait=True)
+                new.pool = futures.ThreadPoolExecutor(4)
+            pre = sorted(r for r in new.requests if r[1] == z)
+            self.assertTrue(pre and all(r[2] >= tx for r in pre), pre)
+            n = len(new.requests)
+            a, _ = new.render(f, *sq, px, gutter=True)
+            self.assertEqual(new.requests[n:], [])          # nothing the prefetch did not ask
+            b, _ = self._with_gutter_fetch(True, lambda: old.render(f, *sq, px, gutter=True))
+            self.assertTrue(any(r[1] == z and r[2] < tx for r in old.requests))
+            np.testing.assert_array_equal(a[gp:-gp, gp:-gp], b[gp:-gp, gp:-gp])
+            self.assertTrue(new.fetch_needed(f, *sq, px, gutter=True))
+            self.assertEqual(new.requests[n:], [])
 
     def test_shape_uv_inset(self):
         import farfield as ff

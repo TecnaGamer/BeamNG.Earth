@@ -1189,5 +1189,5 @@ class RolesTest(unittest.TestCase):
     def test_sources_md_names_every_source(self):
         doc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "SOURCES.md"),
                    encoding="utf-8").read()
-        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h not in doc]
+        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h.split("#", 1)[0] not in doc]
         self.assertEqual(missing, [])

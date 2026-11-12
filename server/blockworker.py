@@ -3047,7 +3047,7 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     try:
         im.quick_all = bool(tex.get("quick"))
         try:
-            rgb, used = im.render(frame, *sq, px)
+            rgb, used = im.render(frame, *sq, px, gutter=True)
         finally:
             im.quick_all = False
     except imagerymod.ImageryError:
