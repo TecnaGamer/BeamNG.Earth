@@ -456,7 +456,7 @@ def _junction_surfaces(chunks, context=()):
         if old is None or key > old[0]:
             by_fid[c['fid']] = (key, c, p)
     import fast
-    fast.require(239, "junction_groups")
+    fast.require(241, "junction_groups")
     kept = [(c, p) for _fid, (key, c, p) in sorted(by_fid.items()) if key[0] <= JUNCTION_MAX_PART_M]
     if not kept:
         return {}

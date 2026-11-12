@@ -1353,46 +1353,71 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
 class Mesh:
     """Positions, uvs, colours, triangles and their material index, appended to. A material is a token
     (index, RGBA) as _Looks gives. Kept as flat lists of numbers (x y z x y z ..., one material per triangle):
-    a road tile adds ~25k quads, and lists of tuples flattened at the end took ~2.5 s of a Steam Deck's 87 s."""
+    a road tile adds ~25k quads, and lists of tuples flattened at the end took ~2.5 s of a Steam Deck's 87 s. The
+    walls kernel's quads come as numpy blocks (quads): the lists so far closed into a block before each (_flush),
+    arrays() joins the blocks in order."""
 
     def __init__(self):
-        self.P, self.UV, self.C, self.T, self.M = [], [], [], [], []
+        self._P, self._UV, self._C, self._T, self._M = [], [], [], [], []
         self.n = 0
+        self._blocks = []       # [(P (k, 3), UV (k, 2), C (k, 4) uint8, T (t, 3), M (t,))]: before the lists, in order
+
+    # (the whole content as the flat lists it was: x y z x y z ..., for tests and callers that read it)
+    P = property(lambda self: self._flat(0))
+    UV = property(lambda self: self._flat(1))
+    C = property(lambda self: self._flat(2))
+    T = property(lambda self: self._flat(3))
+    M = property(lambda self: self._flat(4))
+
+    def _flat(self, k):
+        self._flush()
+        return np.concatenate([b[k].reshape(-1) for b in self._blocks]).tolist() if self._blocks else []
+
+    def _lists(self):
+        return (np.array(self._P, np.float64).reshape(-1, 3), np.array(self._UV, np.float64).reshape(-1, 2),
+                np.array(self._C, np.uint8).reshape(-1, 4), np.array(self._T, np.int64).reshape(-1, 3),
+                np.array(self._M, np.int64))
+
+    def _flush(self):
+        if self._P or self._UV or self._C or self._T or self._M:
+            self._blocks.append(self._lists())
+            self._P, self._UV, self._C, self._T, self._M = [], [], [], [], []
 
     def quad(self, a, b, c, d, uva, uvb, uvc, uvd, mat):
         """Corners counter-clockwise seen from outside."""
         i = self.n
-        self.P += (*a, *b, *c, *d)
-        self.UV += (*uva, *uvb, *uvc, *uvd)
-        self.C += mat[1] * 4
-        self.T += (i, i + 1, i + 2, i, i + 2, i + 3)
-        self.M += (mat[0], mat[0])
+        self._P += (*a, *b, *c, *d)
+        self._UV += (*uva, *uvb, *uvc, *uvd)
+        self._C += mat[1] * 4
+        self._T += (i, i + 1, i + 2, i, i + 2, i + 3)
+        self._M += (mat[0], mat[0])
         self.n += 4
 
     def quads(self, P, UV, mid, mats):
-        """Quads from a kernel (earthfast.building_walls): P 12 numbers per quad, UV 8, mid the index into mats (material
-        tokens) per quad; the same lists quad() would make."""
+        """Quads from a kernel (earthfast.building_walls_np): P 12 numbers per quad, UV 8, mid the index into mats
+        (material tokens) per quad; a block of the same numbers quad() would add."""
         q = len(mid)
         if not q:
             return
+        self._flush()
         i = self.n
-        self.P += P
-        self.UV += UV
-        cols = [tuple(mt[1]) * 4 if mt is not None else None for mt in mats]
-        for k in mid:
-            self.C += cols[k]
-        self.T += (np.arange(q, dtype=np.int64)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.int64) + i).ravel().tolist()
-        idx = [mt[0] if mt is not None else None for mt in mats]
-        self.M += [idx[k] for k in mid for _ in (0, 1)]
+        mid = np.asarray(mid, np.intp)
+        if any(mats[k] is None for k in np.unique(mid).tolist()):
+            raise TypeError("a wall quad of no material")
+        cols = np.array([tuple(mt[1]) * 4 if mt is not None else (0,) * 16 for mt in mats], np.uint8).reshape(-1, 16)
+        idx = np.array([mt[0] if mt is not None else -1 for mt in mats], np.int64)
+        T = (np.arange(q, dtype=np.int64)[:, None] * 4 + np.array([0, 1, 2, 0, 2, 3], np.int64) + i).reshape(-1, 3)
+        self._blocks.append((np.asarray(P, np.float64).reshape(-1, 3), np.asarray(UV, np.float64).reshape(-1, 2),
+                             cols[mid].reshape(-1, 4), T, np.repeat(idx[mid], 2)))
         self.n += 4 * q
 
     def tri(self, a, b, c, uva, uvb, uvc, mat):
         i = self.n
-        self.P += (*a, *b, *c)
-        self.UV += (*uva, *uvb, *uvc)
-        self.C += mat[1] * 3
-        self.T += (i, i + 1, i + 2)
-        self.M.append(mat[0])
+        self._P += (*a, *b, *c)
+        self._UV += (*uva, *uvb, *uvc)
+        self._C += mat[1] * 3
+        self._T += (i, i + 1, i + 2)
+        self._M.append(mat[0])
         self.n += 3
 
     def poly(self, pts3, uv, mat):
@@ -1407,21 +1432,22 @@ class Mesh:
         else:
             tris = triangulate(xy)
         i = self.n
-        self.P += np.asarray(pts3, np.float64)[:, :3].ravel().tolist()
-        self.UV += np.asarray(uv, np.float64)[:, :2].ravel().tolist()
-        self.C += tuple(mat[1]) * len(pts3)
-        self.T += (np.asarray(tris, np.int64).reshape(-1, 3) + i).ravel().tolist()
-        self.M += [mat[0]] * len(tris)
+        self._P += np.asarray(pts3, np.float64)[:, :3].ravel().tolist()
+        self._UV += np.asarray(uv, np.float64)[:, :2].ravel().tolist()
+        self._C += tuple(mat[1]) * len(pts3)
+        self._T += (np.asarray(tris, np.int64).reshape(-1, 3) + i).ravel().tolist()
+        self._M += [mat[0]] * len(tris)
         self.n += len(pts3)
 
     def arrays(self):
-        P, UV = np.array(self.P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2)
-        T, M = np.array(self.T, np.int64).reshape(-1, 3), np.array(self.M, np.int64)
+        self._flush()
+        blocks = self._blocks or [self._lists()]
+        P, UV, C, T, M = (b[0].copy() if len(blocks) == 1 else np.concatenate(b) for b in zip(*blocks))
         for mi, f in _OWN_UV_SCALE:     # (textures with their own repeat: OWN_UV_M)
             sel = M == mi
             if sel.any():
                 UV[np.unique(T[sel])] *= f
-        return P, UV, T, M, np.array(self.C, np.uint8).reshape(-1, 4)
+        return P, UV, T, M, C
 
 
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
@@ -1461,7 +1487,8 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         vary.append((0, int(band[0]), int(band[1]), 2 * int(band[1])))
     if mats[1] is not None and not lobby:
         vary.append((1, BAND_SHOP[0], BAND_SHOP[1], 1))
-    P, UV, mid = fast._ef.building_walls(
+    fast.require(240, "building_walls_np")
+    P, UV, mid = fast._ef.building_walls_np(
         np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), float(z0), float(z_eave), bool(spec.wall),
         bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
@@ -1470,7 +1497,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         WIN_CELLS if spec.wall else [],
         [-1] if hole else [int(e) for e in (spec.street or ())],    # (a shop's ground floor on its street walls: doors())
         LOBBY_BAND if lobby else None)
-    if mid:
+    if len(mid):
         m.quads(P, UV, mid, mats)
 
 
@@ -4858,6 +4885,8 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     A, B = S[:, :2], S[:, 2:]
     D = B - A
     L2 = np.maximum((D * D).sum(1), 1e-12)
+    fast.require(240, "nearest_segments")
+    A, D = np.ascontiguousarray(A), np.ascontiguousarray(D)
     rows = []
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
     for spec, gmin, gmax in items:
@@ -4871,26 +4900,23 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             continue
         ring = drawn_ring(spec) + np.array([x0, y0])
         best = None
-        # every wall's middle against every road segment at once (a wall at a time: ~6 numpy calls per wall), the same
-        # numbers: each wall's nearest segment k, the nearest point on it Q and its distance
+        # every wall's middle against every road segment at once (earthfast.nearest_segments: numpy's (walls,
+        # segments) arrays per building, the same numbers): each wall's nearest segment K, the nearest point on it QK
+        # and its distance DK
         nxt = np.concatenate((ring[1:], ring[:1]))
         E = nxt - ring
         MID = (ring + nxt) / 2
-        T = np.clip(((MID[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0, 1)
-        Q = A[None] + T[..., None] * D[None]
-        DIST = np.hypot(*(Q - MID[:, None, :]).transpose(2, 0, 1))
-        K = DIST.argmin(1)
+        K, DK, QK = fast._ef.nearest_segments(np.ascontiguousarray(MID, np.float64), A, D, L2)
         # the walls facing a road near them (a shop's ground floor is a shopfront there only: _walls' street edges;
         # its back and side walls are drawn as its upper floors)
         if spec.shop or storefront or not no_door:
             street = []
             for i in range(len(ring)):
-                k = int(K[i])
                 Le = float(math.hypot(*E[i]))
-                if Le < 1.0 or DIST[i][k] > DOOR_ROAD_M:
+                if Le < 1.0 or DK[i] > DOOR_ROAD_M:
                     continue
                 out = np.array([E[i][1], -E[i][0]]) / Le
-                if float(np.dot(Q[i, k] - MID[i], out)) > 0:
+                if float(np.dot(QK[i] - MID[i], out)) > 0:
                     street.append(i)
             spec.street = tuple(street) if street else None
         for i in range(len(ring)):
@@ -4900,16 +4926,16 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             if Le < 2.5:
                 continue
             mid = MID[i]
-            dist = DIST[i]
+            dk = DK[i]
             k = int(K[i])
-            if dist[k] > DOOR_ROAD_M:
+            if dk > DOOR_ROAD_M:
                 continue
             out = np.array([e[1], -e[0]]) / Le
-            if float(np.dot(Q[i, k] - mid, out)) <= 0:
+            if float(np.dot(QK[i] - mid, out)) <= 0:
                 continue                                 # the wall faces away from that road
-            rank = (bool(SMINOR[k]) if storefront else False, float(dist[k]))
+            rank = (bool(SMINOR[k]) if storefront else False, float(dk))
             if best is None or rank < best[0]:
-                best = (rank, a, e / Le, Le, out, i, bool(SMAIN[k]) and dist[k] < SHALF[k] + MAIN_STREET_SETBACK_M,
+                best = (rank, a, e / Le, Le, out, i, bool(SMAIN[k]) and dk < SHALF[k] + MAIN_STREET_SETBACK_M,
                         k)
         if best is None:
             continue

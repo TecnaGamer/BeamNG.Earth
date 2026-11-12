@@ -40,7 +40,7 @@ class DeckPadLevelsTest(unittest.TestCase):
             for ring, centre, *_ in pads:
                 np.testing.assert_allclose(ring[:, 2], centre[2], atol=1e-9)
 
-    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= 239, "earthfast 239 (pad_links)")
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= 241, "earthfast 241 (pad_links)")
     def test_joints_a_short_part_links_share_one_pad(self):
         # a dual carriageway's two joints 12 m apart (a junction on a lid), a cross street through both: one pad, the
         # hull of both joints' parts; with the link longer than PAD_MERGE_M, two

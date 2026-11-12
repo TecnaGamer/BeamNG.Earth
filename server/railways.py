@@ -90,6 +90,13 @@ GROUND_MEMO_MAX = 400000     # points per anchor kept (then forgotten, and asked
 GROUND_MEMO_ANCHORS = 2
 
 
+def _point_memo():
+    """A {point (cm, int64 x, y): z} memo (earthfast.PointMemo: get(keys (n, 2)) -> z, NaN where none; put; clear)."""
+    import fast
+    fast.require(240, "PointMemo")
+    return fast._ef.PointMemo()
+
+
 def point_ground(frame, elev, key=None):
     """ground(xy (n, 2)) -> z in frame at exactly those points, from elev(lat, lon) (the graded physics ground). Not
     roadmesh.drawn_ground: that fills a 2 m grid over the points' whole box, and the lines here span ~1 km (a road
@@ -102,7 +109,7 @@ def point_ground(frame, elev, key=None):
         if memo is None:
             while len(_GROUND_MEMO) >= GROUND_MEMO_ANCHORS:
                 _GROUND_MEMO.pop(next(iter(_GROUND_MEMO)))
-            memo = _GROUND_MEMO[key] = {}
+            memo = _GROUND_MEMO[key] = _point_memo()
 
     def look(xy):
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -114,16 +121,15 @@ def point_ground(frame, elev, key=None):
             return np.zeros(0)
         if memo is None:
             return look(xy)
-        keys = list(map(tuple, np.round(xy * 100.0).astype(np.int64).tolist()))
-        out = np.array([memo.get(k, np.nan) for k in keys], np.float64)
+        keys = np.ascontiguousarray(np.round(xy * 100.0).astype(np.int64))
+        out = memo.get(keys)
         miss = np.flatnonzero(np.isnan(out))
         if len(miss):
             z = look(xy[miss])
             out[miss] = z
             if len(memo) + len(miss) > GROUND_MEMO_MAX:
                 memo.clear()
-            for n, zz in zip(miss.tolist(), z.tolist()):
-                memo[keys[n]] = zz
+            memo.put(np.ascontiguousarray(keys[miss]), np.ascontiguousarray(z, np.float64))
         return out
     return ground
 
@@ -205,13 +211,15 @@ def grade_plans(frame, cells, box, elev, load=None):
         return []
     ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
     memo_key = ("dem", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
-    memo = _GROUND_MEMO.setdefault(memo_key, {})
+    memo = _GROUND_MEMO.get(memo_key)
+    if memo is None:
+        memo = _GROUND_MEMO.setdefault(memo_key, _point_memo())
 
     def ground(xy):
         # (the DEM's heights, remembered per point: every cell's plan asks for the same lines' points)
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
-        keys = list(map(tuple, np.round(xy * 100.0).astype(np.int64).tolist()))
-        out = np.array([memo.get(k, np.nan) for k in keys], np.float64)
+        keys = np.ascontiguousarray(np.round(xy * 100.0).astype(np.int64))
+        out = memo.get(keys)
         miss = np.flatnonzero(np.isnan(out))
         if len(miss):
             la, lo, _ = frame.enu_to_geodetic(xy[miss, 0], xy[miss, 1], 0.0)
@@ -219,8 +227,7 @@ def grade_plans(frame, cells, box, elev, load=None):
             out[miss] = z
             if len(memo) + len(miss) > GROUND_MEMO_MAX:
                 memo.clear()
-            for n, zz in zip(miss.tolist(), z.tolist()):
-                memo[keys[n]] = zz
+            memo.put(np.ascontiguousarray(keys[miss]), np.ascontiguousarray(z, np.float64))
         return out
     pad = GRADE_HALF_M + 15.0
     out = []
@@ -1325,16 +1332,43 @@ def seam_crossers(xy, zb, roads_):
     s = _arc(xy)
     lo, hi = xy.min(0) - 1.0, xy.max(0) + 1.0
     out = []
-    for rxy, rz, rh in roads_:
-        r = np.asarray(rxy, np.float64)[:, :2]
-        if len(r) < 2 or (r.max(0) < lo).any() or (r.min(0) > hi).any():
-            continue
+    lines, box = _seam_boxes(roads_)
+    # (the roads whose box meets the track's, all at once: a numpy max / min per road and track was most of it)
+    near = np.flatnonzero(~((box[:, 2] < lo[0]) | (box[:, 3] < lo[1]) | (box[:, 0] > hi[0]) | (box[:, 1] > hi[1])))
+    for k in near.tolist():
+        rxy, rz, rh = roads_[k]
+        r = lines[k]
         hits = roads._crossings([xy], [r])
         rzz = np.asarray(rz, np.float64)[:len(r)]
         if hits and any(abs(float(rzz[int(np.argmin(np.hypot(*(r - pt).T)))])
                             - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
             out.append((rxy, rz, rh))
     return out
+
+
+_SEAM_BOXES = ()        # ((the roads list, (lines, boxes)), ...): a cell's tracks ask with the same few lists
+
+
+def _seam_boxes(roads_):
+    """([xy (k, 2) float64] per road, boxes (R, 4) x0 y0 x1 y1 of its points; a road of < 2 points one that meets
+    nothing (+inf / -inf)) of roads [(xy, z, half)] (seam_crossers', grading.rail_yield_pieces'), kept for the last few
+    lists asked."""
+    global _SEAM_BOXES
+    for lst, got in _SEAM_BOXES:        # (one read of the tuple: another thread may replace it meanwhile)
+        if lst is roads_:
+            return got
+    lines = [np.asarray(rxy, np.float64)[:, :2] for rxy, _rz, _rh in roads_]
+    box = np.empty((len(lines), 4))
+    box[:, :2], box[:, 2:] = np.inf, -np.inf
+    ok = [k for k, r in enumerate(lines) if len(r) >= 2]
+    if ok:
+        pts = np.concatenate([lines[k] for k in ok])
+        st = np.r_[0, np.cumsum([len(lines[k]) for k in ok])[:-1]]
+        box[ok, :2] = np.minimum.reduceat(pts, st, axis=0)
+        box[ok, 2:] = np.maximum.reduceat(pts, st, axis=0)
+    got = (lines, box)
+    _SEAM_BOXES = ((roads_, got),) + _SEAM_BOXES[:3]
+    return got
 
 
 def _blocked(xy, z, crossers):
