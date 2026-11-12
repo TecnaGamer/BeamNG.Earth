@@ -261,7 +261,10 @@ FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dro
 FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
 SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
 SHARP_PROBE_ALL = os.environ.get("BNGE_SHARP_PROBE_ALL") == "1"
-PREFETCH_STOP_REGIONAL = os.environ.get("BNGE_PREFETCH_STOP_REGIONAL") == "1"     # (Imagery._needed)
+# (Imagery._needed; BNGE_PREFETCH_PAST_REGIONAL=1: on. Off by default: measured 2026-11-11 it made a cold French
+# teleport's IGN requests 2,600-3,100 (from ~2,000-2,400: tiles prefetched at a queued size the build then did not use)
+# and its settled time no shorter in 12 places, with event-loop stalls from the busier fetch threads)
+PREFETCH_STOP_REGIONAL = os.environ.get("BNGE_PREFETCH_PAST_REGIONAL") != "1"
 
 
 def ground_res(lat, z):
@@ -1126,7 +1129,8 @@ class Imagery:
                 # integration drive's far field 1729 coverage holes), but with the regional tile caches first in
                 # the chain (Connecticut's from z16) that ended every prefetch of a z16+ texture outside them: not one
                 # of a cold French teleport's ~2,300 IGN tiles was prefetched, every far render fetched its own
-                # while it waited (2026-11-11). BNGE_PREFETCH_STOP_REGIONAL=1: ends here, as before
+                # while it waited (2026-11-11). It still ends here unless BNGE_PREFETCH_PAST_REGIONAL=1 (see
+                # PREFETCH_STOP_REGIONAL)
                 if PREFETCH_STOP_REGIONAL:
                     return
                 continue
@@ -2006,13 +2010,15 @@ class HostPools:
     """Imagery's fetch threads, a pool of `workers` per photo host: one host's queue never holds another's tiles back.
     One pool for all of them queued a cold French teleport's ~2,000 IGN tiles (prefetched at its 50/s) ahead of every
     EOX tile, and their threads waited on IGN's rate: EOX did all its work after IGN's, not beside it (Lille, Caen,
-    Montpellier 2026-11-11: EOX ~5/s for the first 60 s, then 30-50/s). BNGE_IMG_ONE_POOL=1: one pool, as before."""
+    Montpellier 2026-11-11: EOX ~5/s for the first 60 s, then 30-50/s). Only with BNGE_IMG_HOST_POOLS=1 (it goes with
+    BNGE_PREFETCH_PAST_REGIONAL): without IGN's prefetch one pool held nothing back, and the threads of several pools
+    (decoding photos under the interpreter lock) stalled the server's event loop for 2 s at times."""
 
     def __init__(self, workers, prefix):
         self.workers, self.prefix = workers, prefix
         self._pools = {}
         self._lock = threading.Lock()
-        self._one = os.environ.get("BNGE_IMG_ONE_POOL") == "1"
+        self._one = os.environ.get("BNGE_IMG_HOST_POOLS") != "1"
 
     def of(self, host):
         k = "" if self._one else host

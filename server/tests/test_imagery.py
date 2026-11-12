@@ -995,6 +995,9 @@ class GutterTest(unittest.TestCase):
         # a regional tile cache first in the chain (Connecticut's from z16) whose box misses the square: the prefetch
         # carries on to the source render draws from (before: it ended there, no z16+ texture was ever prefetched)
         f = g.EnuFrame(LAT0, LON0)
+        old = imagery.PREFETCH_STOP_REGIONAL
+        imagery.PREFETCH_STOP_REGIONAL = False      # (BNGE_PREFETCH_PAST_REGIONAL=1)
+        self.addCleanup(setattr, imagery, "PREFETCH_STOP_REGIONAL", old)
         with tempfile.TemporaryDirectory() as d:
             im = FakeNet(d, self._serve_all, chain=("czechia", "usgs"), tone=0.0)
             sq = imagery.gutter_square(0.0, 0.0, 256.0, 256)
@@ -1008,6 +1011,7 @@ class GutterTest(unittest.TestCase):
     def test_one_hosts_queue_never_holds_anothers(self):
         # imagery's fetch threads are per photo host: a host whose tiles wait (its rate) keeps no other's queued
         pools = imagery.HostPools(1, "t")
+        pools._one = False                  # (BNGE_IMG_HOST_POOLS=1)
         gate = threading.Event()
         try:
             for _ in range(3):

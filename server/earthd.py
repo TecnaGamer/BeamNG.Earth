@@ -686,8 +686,9 @@ PREFETCH_AGAIN_S = 2.0      # s before a queued tile's imagery prefetch is asked
 # ... and the tiles after those, with a host's spare request tokens alone (netfetch "prefetch": dropped while its bucket is
 # below half), asked again less often: the next 40 of a cold French teleport were IGN's (the near rings, z16-17), its
 # 50/s full for a minute while EOX's tiles further down the queue were not asked yet; EOX then did its ~1,300 after IGN
-# (Lille, Caen, Brest, 2026-11-11: EOX ~5-15/s for the first 60 s, then 30-50/s). BNGE_PREFETCH_SPARE=0: off
-IMAGERY_PREFETCH_SPARE = int(os.environ.get("BNGE_PREFETCH_SPARE", "200"))
+# (Lille, Caen, Brest, 2026-11-11: EOX ~5-15/s for the first 60 s, then 30-50/s). That was with IGN's tiles
+# prefetched too (imagery BNGE_PREFETCH_PAST_REGIONAL=1), which is off by default; BNGE_PREFETCH_SPARE=200 with it
+IMAGERY_PREFETCH_SPARE = int(os.environ.get("BNGE_PREFETCH_SPARE", "0"))
 PREFETCH_SPARE_AGAIN_S = 5.0
 PREFETCH_SPARE_PER_PASS = 40    # (at most this many of them a pass of the loop: its time on the event loop)
 PREFETCHED_MAX = 8192       # tiles remembered as prefetched (a connection's record starts again past this)
