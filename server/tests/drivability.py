@@ -123,7 +123,9 @@ def measure(name, threads=1, approach=None):
     # flaky: test_drivability checks threads and approach on their own.
     with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads):
         site = interchanges.load(name, prefix, keep_m=KEEP_M_SITE.get(name, KEEP_M))
-        md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}))
+        md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}),
+                             dem=SimpleNamespace(sample=site.sample))
+        _hook_cells(site, md, name)
         store = grading.PlanStore(md, site.sample)
         store.frame_of = lambda region: site.frame
         grader = grading.Grader(site.frame, md, site.sample, store=store)
@@ -151,6 +153,22 @@ def measure(name, threads=1, approach=None):
         for st in structures:
             _measure_structure(report, st, structures, ground)
     return {"site": name, **report.result()}
+
+
+def _hook_cells(site, md, name):
+    """Each replayed roads cell as MapData.cell hands it to the game (mapdata._decoded_layer): its grade separations
+    (gradesep.hook: the bridges the map leaves out, at BNE_GRADESEP's mode, the DEM read from the replay's ground) and
+    its eight neighbours (gradesep.neighbours_hook: lane flow, a road's home cell, regional classes, the other cells'
+    separations). Without them a replay planned other roads than the game builds (2026-11-12: S1 Rautenweg 176.9
+    against the game's 212.6). The cell id (_bnge_cell: roads._FACTS_MEM keeps a cell's facts by it) names the site and
+    its kept radius: a pool process measures one site after another."""
+    import gradesep
+    import mapcells
+    tag = f"drivability:{name}:{KEEP_M_SITE.get(name, KEEP_M)}"
+    for key, f in site.cells.items():
+        k = mapcells.CellKey(*(int(v) for v in key.split("/")))
+        f.__dict__.update(_bnge_cell=(key, "roads", tag), _bnge_gradesep=gradesep.hook(md, k),
+                          _bnge_neighbours=gradesep.neighbours_hook(md, k))
 
 
 APPROACH_HALF_M = 150.0  # m: the square graded first round an approach point
