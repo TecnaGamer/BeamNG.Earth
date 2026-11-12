@@ -2228,7 +2228,7 @@ class _Planner:
                     # it is planned, _elev_decked; the decks of the cells its plans read anyway, _decks_near's)
                     dg = self._cell_deck_patches(key)
                     stack = self._dg_local.__dict__.setdefault("stack", [])
-                    stack.append(self._pack_of([(ln, h, r) for _k, ln, h, r in dg]))
+                    stack.append(self._stack_entry(key, dg))
                     try:
                         got = self._make_cell(key)
                     finally:
@@ -2301,7 +2301,7 @@ class _Planner:
                 return got
             dg = self._cell_deck_patches(key)
             stack = self._dg_local.__dict__.setdefault("stack", [])
-            stack.append(self._pack_of([(ln, h, r) for _k, ln, h, r in dg]))
+            stack.append(self._stack_entry(key, dg))
             try:
                 got = self._make_cell_roads(key)
             finally:
@@ -2412,7 +2412,7 @@ class _Planner:
                 try:
                     self._chain_cands(key, feats, specs)        # (this cell's own: its specs are at hand)
                     ext = self._extensions(parts, ids)
-                    pins = self._pins(parts, ids, ext)
+                    pins = self._pins(parts, ids, ext, key)
                 except Exception as e:      # each part smoothed alone rather than no grading
                     log.debug("grading: road chains of %s: %s: %s", key, type(e).__name__, e)
             pclip = []
@@ -2696,7 +2696,7 @@ class _Planner:
             memo[str(key)] = (cands, arr)
         return arr
 
-    def _pins(self, parts, ids, ext):
+    def _pins(self, parts, ids, ext, cell=None):
         """plan_roads' pins of a cell's parts: an end that no part of its own smoothing goes on from (ext None there) and
         that ends on another road's part smoothed as much or more (a slip road on a motorway, a side road on a trunk or
         on a street of its own class) is held at that road's planned height there (_stronger_z), so the two meet at one
@@ -2741,44 +2741,68 @@ class _Planner:
                         best = (c, bool(int(h) % 2))
                 if best is not None:
                     todo.append((j, end, best[0], best[1]))
-        for (j, end, _c, _l), z in zip(todo, self._stronger_zs([(c, last) for _j, _e, c, last in todo])):
+        for (j, end, _c, _l), z in zip(todo, self._stronger_zs([(c, last) for _j, _e, c, last in todo], cell)):
             if z is not None:
                 out[j][end] = z
                 held = True
         return [tuple(o) for o in out] if held else None
 
-    def _stronger_zs(self, asks):
-        """_stronger_z of each (candidate, at_last) of asks, the ones not kept yet planned in one plan_roads call (the
-        same plans: each part is planned on its own; its cost is per call, ~1 ms, 935 calls in 4 Penn Station cells,
-        2026-10-25)."""
+    def _stronger_zs(self, asks, cell=None):
+        """_stronger_z of each (candidate, at_last) of asks for the plans of cell (the one being planned), the ones not
+        kept yet planned in one plan_roads call per context (the same plans: each part is planned on its own; its cost
+        is per call, ~1 ms, 935 calls in 4 Penn Station cells, 2026-10-25). Each answer a function of the candidate, its
+        end and the cell (_strong_key, _strong_args): one call for all of them planned every part in the first one's
+        context, and a memo by road id and end answered with whichever cell's copy of the road, in whichever cell's
+        context, had asked first: a cell's plans depended on which cells the process had planned before it (Fells Point,
+        2026-11-12)."""
         memo = self.__dict__.setdefault("_strong_memo", {})
-        keys = [self._strong_key(c, last) for c, last in asks]
+        keys = [self._strong_key(c, last, cell) for c, last in asks]
         with self.lock:
             miss = [n for n, k in enumerate(keys) if k not in memo]
-        jobs, seen = [], set()
+        groups, seen = {}, set()
         for n in miss:
             if keys[n] not in seen:
                 seen.add(keys[n])
-                jobs.append(n)
-        if len(jobs) > 1:
+                prep = self._strong_part(*asks[n])
+                ctx = None if hasattr(cell, "bounds") else self._strong_ctx(prep[0])
+                groups.setdefault(ctx, []).append((n, prep))
+        for jobs in groups.values():
+            if len(jobs) < 2:
+                continue            # (_stronger_z below)
             try:
-                preps = [self._strong_part(*asks[n]) for n in jobs]
-                parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in zip(jobs, preps)]
-                ext = self._extensions(parts, [asks[n][0][5] for n in jobs])
+                parts = [(part, asks[n][0][4]) for n, (part, _last, _whole) in jobs]
+                ext = self._extensions(parts, [asks[n][0][5] for n, _p in jobs])
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
-                                   coarse=COARSE_EASE_ON and self._coarse_ll(parts[0][0]),
-                                   obs=self._obs(None, parts[0][0]), decks=self._decks_ll(parts[0][0]))
-                for n, (part, last, whole), p in zip(jobs, preps, plans):
+                                   **self._strong_args(cell, parts[0][0]))
+                for (n, (part, last, whole)), p in zip(jobs, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
                 log.debug("grading: pin heights at once: %s: %s", type(e).__name__, e)
-        return [self._stronger_z(c, last) for c, last in asks]
+        return [self._stronger_z(c, last, cell) for c, last in asks]
+
+    def _strong_args(self, cell, part):
+        """plan_roads' coarse / obs / decks for a _stronger_z plan of lon/lat part: the cell being planned's, as its own
+        plans' (_make_cell_roads), or without a cell the part's own (its middle's cell)."""
+        if hasattr(cell, "bounds"):
+            return {"coarse": COARSE_EASE_ON and self._coarse(cell), "obs": self._obs(cell),
+                    "decks": self._decks_near(cell)}
+        return {"coarse": COARSE_EASE_ON and self._coarse_ll(part), "obs": self._obs(None, part),
+                "decks": self._decks_ll(part)}
+
+    def _strong_ctx(self, part):
+        """_strong_args' context of a part without a cell: its coarse elevation (and so its measured heights, _obs) and
+        its middle's cell (its decks, _decks_ll). Parts of one context are planned in one call."""
+        mid = np.asarray(part, np.float64)[len(part) // 2] if len(part) else None
+        return (bool(COARSE_EASE_ON and self._coarse_ll(part)),
+                None if mid is None else str(mapcells.cell_of(float(mid[1]), float(mid[0]))))
 
     @staticmethod
-    def _strong_key(cand, at_last):
-        xy, rid = cand[0], cand[2]
-        e = xy[-1 if at_last else 0]
-        return (rid, round(float(e[0]), 1), round(float(e[1]), 1))
+    def _strong_key(cand, at_last, cell=None):
+        """_stronger_z's memo key: the cell being planned (its context: _strong_args), the candidate's road, its own
+        geometry (each cell's copy of a road lies ~1e-5 m from the others': not one road id's) and its end."""
+        import hashlib
+        xy = np.ascontiguousarray(cand[0], np.float64)
+        return (str(cell), cand[2], hashlib.blake2b(xy.tobytes(), digest_size=16).digest(), bool(at_last))
 
     def _strong_part(self, cand, at_last):
         """(the lon/lat part planned for _stronger_z, whose end is asked for: its last point?, the whole part?)"""
@@ -2800,10 +2824,8 @@ class _Planner:
         z, other = None, None
         if p is not None:
             z = float(p.z[-1] if at_last else p.z[0])
-            if whole:
-                xy, rid = cand[0], cand[2]
-                e2 = xy[0 if at_last else -1]
-                other = ((rid, round(float(e2[0]), 1), round(float(e2[1]), 1)), float(p.z[0] if at_last else p.z[-1]))
+            if whole:           # (k's own last flag is the part's end asked: at_last may be the run's, _strong_part)
+                other = (k[:3] + (not k[3],), float(p.z[0] if at_last else p.z[-1]))
         memo = self.__dict__.setdefault("_strong_memo", {})
         with self.lock:
             if len(memo) > 4096:
@@ -2812,11 +2834,11 @@ class _Planner:
             if other is not None:
                 memo.setdefault(*other)
 
-    def _stronger_z(self, cand, at_last):
+    def _stronger_z(self, cand, at_last, cell=None):
         """The planned height of a candidate part (_chain_cands') at its first or last point: its own plan (its chains,
-        no pins), within CLIP_MARGIN_M of that point when it is long. Kept per part end (a short part's plan gives both
-        ends' heights: the other kept too)."""
-        k = self._strong_key(cand, at_last)
+        no pins), within CLIP_MARGIN_M of that point when it is long, for the plans of cell. Kept per part end and cell
+        (_strong_key; a short part's plan gives both ends' heights: the other kept too)."""
+        k = self._strong_key(cand, at_last, cell)
         memo = self.__dict__.setdefault("_strong_memo", {})
         with self.lock:
             if k in memo:
@@ -2826,8 +2848,7 @@ class _Planner:
             # (the profile alone: its cutting's walls cost most of a plan and no height, 2026-10-25)
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
                            self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
-                           coarse=COARSE_EASE_ON and self._coarse_ll(part), obs=self._obs(None, part),
-                           decks=self._decks_ll(part))[0]
+                           **self._strong_args(cell, part))[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             log.debug("grading: pin height of %s: %s: %s", cand[5], type(e).__name__, e)
@@ -4747,33 +4768,41 @@ class _Planner:
         revisit.carry(sum(n for n, _ in got), sum(m for _, m in got))
 
     def _decks_in(self, keys):
-        """({key: (line, half width)} of the decks of cells keys, each once; whether a cell was missing)."""
+        """({key: (line, half width)} of the decks of cells keys, each once (the first cell's copy); whether a cell was
+        missing)."""
         out, short = {}, False
         if ENU_AHEAD_ON:
             self._enu_ahead(keys)
         for k in keys:
-            with self.lock:
-                failed = self.failed.get(k)
-            if failed is not None and time.monotonic() - failed < RETRY_S:
-                short = True            # (its road data failed: asked again after RETRY_S, as its plans are)
-                continue
-            try:
-                c = self._cell_enu(k, ground=False)
-            except Exception as e:      # (that cell's decks left out; nothing kept)
-                log.debug("grading: deck ground of %s: %s: %s", k, type(e).__name__, e)
-                with self.lock:
-                    self.failed[k] = time.monotonic()
+            rows = self._deck_rows_of(k)
+            if rows is None:
                 short = True
                 continue
-            rm = self.__dict__.setdefault("_dg_rows", {})
-            got = rm.get(str(k))
-            if got is None or got[0] is not c:      # (made once per cell's parts)
-                got = rm[str(k)] = (c, self._deck_rows(c))
-                if len(rm) > 2 * ENU_CACHE_MAX:
-                    rm.clear()
-            for key, line, half in got[1]:
+            for key, line, half in rows:
                 out.setdefault(key, (line, half))
         return out, short
+
+    def _deck_rows_of(self, k):
+        """_deck_rows of cell k (made once per cell's parts), or None when its road data could not be read (asked
+        again after RETRY_S, as its plans are)."""
+        with self.lock:
+            failed = self.failed.get(k)
+        if failed is not None and time.monotonic() - failed < RETRY_S:
+            return None
+        try:
+            c = self._cell_enu(k, ground=False)
+        except Exception as e:      # (that cell's decks left out; nothing kept)
+            log.debug("grading: deck ground of %s: %s: %s", k, type(e).__name__, e)
+            with self.lock:
+                self.failed[k] = time.monotonic()
+            return None
+        rm = self.__dict__.setdefault("_dg_rows", {})
+        got = rm.get(str(k))
+        if got is None or got[0] is not c:      # (made once per cell's parts)
+            got = rm[str(k)] = (c, self._deck_rows(c))
+            if len(rm) > 2 * ENU_CACHE_MAX:
+                rm.clear()
+        return got[1]
 
     def _cells_round(self, lat, lon, reach):
         """The map cells within reach m of the points (as _keys)."""
@@ -4784,24 +4813,42 @@ class _Planner:
             keys = mapcells.cells_near_points(lat, lon, pad, padlon)
         return keys
 
+    def _home_copies(self, keys, decks):
+        """[(line, half width)] of the decks keys of decks {key: (line, half)}: each its home cell's copy (the cell holding
+        its first point, one of the cells it lies in, which its patch reads anyway), else the one given. Every cell
+        decodes its own copy of a road (~1e-5 m from the others'), and a deck's correction (kept per deck) was made from
+        the copy of whichever cell asked first: plans depended on the order cells were planned in (2026-11-12)."""
+        firsts = np.array([decks[k][0][0] for k in keys], np.float64).reshape(-1, 2)
+        la, lo, _ = self.frame.enu_to_geodetic(firsts[:, 0], firsts[:, 1], 0.0)
+        homes = mapcells.cells_of(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+        out = []
+        for k, home in zip(keys, homes):
+            rows = self._deck_rows_of(home)
+            out.append(next(((ln, h) for kk, ln, h in rows or () if kk == k), decks[k]))
+        return out
+
     def _deck_patches(self, decks):
         """{key: patch or None} of decks {key: (line, half width)}: a patch (line, half, rows (m, 6): station arc, ground
         left, ground right, foot left, foot right, weight) where the elevation holds a bridge under the deck, else None.
         Each deck's own (its samples and the decks round it within DECK_GROUND_REACH_M, whatever cell asks), made once;
         the missing ones in one probe."""
         memo = self.__dict__.setdefault("_dg_memo", OrderedDict())
+        short_memo = self.__dict__.setdefault("_dg_short", {})     # key -> (monotonic time, patch): made short
         out, todo = {}, []
+        now = time.monotonic()
         with self.lock:
             for k in decks:
                 if k in memo:
                     memo.move_to_end(k)
                     out[k] = memo[k]
+                elif k in short_memo and now - short_memo[k][0] < RETRY_S:
+                    out[k] = short_memo[k][1]
                 else:
                     todo.append(k)
         if not todo:
             return out
         import fast
-        lines = [decks[k] for k in todo]
+        lines = self._home_copies(todo, decks)
         # each deck's neighbours (the decks of the cells it lies in: no cells read past them): their footprints are
         # left out of its side samples
         masks, mask_of, mindex, keep, by_cells = [], [], {}, [], {}
@@ -4813,10 +4860,12 @@ class _Planner:
                 near, short = self._decks_in(cells)
                 items = sorted(near.items())
                 for mk, (ml, mh) in items:
-                    if mk not in mindex:
-                        mindex[mk] = len(masks)
+                    # (per cell set: another set's copy of a neighbour deck is another cell's, and a deck's patch then
+                    # depended on the decks patched with it)
+                    if (cells, mk) not in mindex:
+                        mindex[(cells, mk)] = len(masks)
                         masks.append((ml, mh))
-                idx = np.array([mindex[mk] for mk, _v in items], np.int64)
+                idx = np.array([mindex[(cells, mk)] for mk, _v in items], np.int64)
                 bx = np.array([(*ml.min(0) - mh, *ml.max(0) + mh) for _mk, (ml, mh) in items],
                               np.float64).reshape(-1, 4)
                 got = by_cells[cells] = (idx, bx, short)
@@ -4849,10 +4898,14 @@ class _Planner:
                 got[k] = None
         with self.lock:
             for k, ok in zip(todo, keep):
-                if ok:              # (a neighbour cell missing: asked again)
+                if ok:
                     memo[k] = got[k]
+                else:               # (a neighbour cell missing: made again after RETRY_S, as the cell is asked again)
+                    short_memo[k] = (now, got[k])
             while len(memo) > DECK_GROUND_KEPT:
                 memo.popitem(last=False)
+            if len(short_memo) > DECK_GROUND_KEPT:
+                short_memo.clear()
         out.update(got)
         return out
 
@@ -4926,46 +4979,133 @@ class _Planner:
                     memo.popitem(last=False)
         return pack
 
+    def _stack_entry(self, key, dg):
+        """What the elevation reads while cell key is planned (_deck_ground): its corrected decks dg
+        (_cell_deck_patches) as a pack, and its bounds (lon0, lat0, lon1, lat1): the points they hold every deck of."""
+        return self._pack_of([(ln, h, r) for _k, ln, h, r in dg]), (key.bounds() if hasattr(key, "bounds") else None)
+
     def _deck_ground(self, lat, lon, z, e=None, n=None, keys=None):
         """z (n,) at points (lat, lon) (frame ENU e, n when at hand) with the bridges the elevation holds under mapped
         decks taken out (DECK_GROUND_*): z itself when nothing changes. keys: the planned cells round the points whose
-        kept corrections are used (apply); None: the cell this thread is planning's, else the planned cells' the points
-        lie in (the plans' own elevation: never a cell read for it). Pure in the map and the elevation (each point's
-        decks are those within DECK_GROUND_REACH_M of it, whatever else is asked with it: every one of them is kept
-        with the plans of the point's own cell)."""
+        kept corrections are used (apply); None: the cell this thread is planning's for its own points and the decks
+        round the others (_near_pack), else the planned cells' the points lie in (the plans' own elevation: never a cell
+        read for it). Pure in the map and the elevation (each point's decks are those within DECK_GROUND_REACH_M of it,
+        whatever else is asked with it: every one of them is kept with the plans of the point's own cell). A point past
+        the cell being planned read that cell's decks alone, and a height kept per point (railways' ground, the rail
+        nodes, the abutments') was the first planned cell's: plans depended on the order cells were planned in
+        (2026-11-12)."""
         if not DECK_GROUND_ON or not len(z):
             return z
         try:
+            past = None
             if keys is None:
                 stack = self._dg_local.__dict__.get("stack")
                 if stack:
-                    pack = stack[-1]
+                    pack, bounds = stack[-1]
+                    if bounds is not None:
+                        lon0, lat0, lon1, lat1 = (float(v) for v in bounds)
+                        past = ~((lat >= lat0) & (lat <= lat1) & (lon >= lon0) & (lon <= lon1))
+                        if not past.any():
+                            past = None
                 else:
                     keys = self._planned_keys(self._cells_round(lat, lon, 0.0))
                     pack = self._deck_pack_cells(keys) if keys else None
             else:
                 pack = self._deck_pack_cells(keys)
-            if pack is None:
-                return z
-            box = pack[0]
-            inside = (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
-            if not inside.any():
-                return z
-            if e is None:
-                ei, ni, _ = self.frame.geodetic_to_enu(lat[inside], lon[inside], 0.0)
-            else:
-                ei, ni = e[inside], n[inside]
-            import fast
-            got = fast.deck_ground_apply(ei, ni, np.asarray(z, np.float64)[inside], *pack[1:], DECK_GROUND_BLEND_M,
-                                         DECK_GROUND_END_M)
+            out = self._apply_pack(pack, lat, lon, z, e, n, None if past is None else ~past)
+            if past is not None:
+                zp = np.asarray(out, np.float64)[past]
+                got = self._apply_pack(self._near_pack(lat[past], lon[past]), lat[past], lon[past], zp,
+                                       None if e is None else e[past], None if n is None else n[past])
+                if got is not zp:
+                    out = np.array(out, np.float64, copy=True)
+                    out[past] = got
+            return out
         except Exception as ex:     # (the elevation as it is rather than none)
             log.debug("grading: deck ground: %s: %s", type(ex).__name__, ex)
             return z
+
+    def _apply_pack(self, pack, lat, lon, z, e=None, n=None, which=None):
+        """z lowered under the decks of pack (_pack_of) at the points (lat, lon) (which: only those), or z itself."""
+        if pack is None:
+            return z
+        box = pack[0]
+        inside = (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
+        if which is not None:
+            inside &= which
+        if not inside.any():
+            return z
+        if e is None:
+            ei, ni, _ = self.frame.geodetic_to_enu(lat[inside], lon[inside], 0.0)
+        else:
+            ei, ni = e[inside], n[inside]
+        import fast
+        got = fast.deck_ground_apply(ei, ni, np.asarray(z, np.float64)[inside], *pack[1:], DECK_GROUND_BLEND_M,
+                                     DECK_GROUND_END_M)
         if got is None:
             return z
         out = np.array(z, np.float64, copy=True)
         out[inside] = got
         return out
+
+    def _near_pack(self, lat, lon):
+        """_pack_of the corrected decks that can reach any of the points (lat, lon): every deck within
+        DECK_GROUND_REACH_M + END + BLEND of them, from the cells round them (_cell_deck_patches' rule round a cell), or
+        None. Kept per deck set."""
+        r = DECK_GROUND_REACH_M + DECK_GROUND_END_M + DECK_GROUND_BLEND_M
+        pad = r / 111320.0          # (the cells within r of each point, not of their box: no cells read for nothing)
+        cells = mapcells.cells_near_points(lat, lon, pad, pad / max(0.05, math.cos(math.radians(float(np.mean(lat))))))
+        keys, lines, boxes = self._near_decks(cells)
+        if not keys:
+            return None
+        e, n, _ = self.frame.geodetic_to_enu(lat, lon, 0.0)
+        e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+        hit = np.flatnonzero((boxes[:, 2] >= e.min() - r) & (boxes[:, 3] >= n.min() - r) & (boxes[:, 0] <= e.max() + r)
+                             & (boxes[:, 1] <= n.max() + r))
+        if len(hit) and len(e) > 1:     # (a deck within r of one of the points, not only of their box)
+            b = boxes[hit]
+            near = ((e[None, :] >= b[:, :1] - r) & (e[None, :] <= b[:, 2:3] + r) & (n[None, :] >= b[:, 1:2] - r)
+                    & (n[None, :] <= b[:, 3:4] + r)).any(axis=1)
+            hit = hit[near]
+        if not len(hit):
+            return None
+        mk = tuple(sorted(keys[i] for i in hit))
+        memo = self.__dict__.setdefault("_dg_near_packs", OrderedDict())
+        with self.lock:
+            got = memo.get(mk)
+            if got is not None and (got[1] is None or time.monotonic() - got[1] < RETRY_S):
+                memo.move_to_end(mk)
+                return got[0]
+        patches = self._deck_patches({keys[i]: lines[i] for i in hit})
+        act = [p for _k, p in sorted(patches.items()) if p is not None]
+        pack = self._pack_of(act) if act else None
+        dm = self.__dict__.get("_dg_memo", {})
+        with self.lock:
+            # (made from a missing cell's neighbours: made again after RETRY_S, as _deck_patches does)
+            memo[mk] = (pack, None if all(k in dm for k in mk) else time.monotonic())
+            while len(memo) > DECK_GROUND_PACKS_KEPT:
+                memo.popitem(last=False)
+        return pack
+
+    def _near_decks(self, keys):
+        """(deck keys, [(line, half width)], boxes (n, 4): min e, min n, max e, max n) of the decks of cells keys
+        (_decks_in), kept per cell set while every cell was read (_near_pack asks for the same few sets all along)."""
+        mk = tuple(str(k) for k in keys)
+        memo = self.__dict__.setdefault("_dg_near_cells", OrderedDict())
+        with self.lock:
+            if mk in memo:
+                memo.move_to_end(mk)
+                return memo[mk]
+        decks, short = self._decks_in(keys)
+        ks = list(decks)
+        got = (ks, [decks[k] for k in ks],
+               np.array([(*decks[k][0].min(0), *decks[k][0].max(0)) for k in ks], np.float64).reshape(-1, 4))
+        if not short:
+            with self.lock:
+                memo[mk] = got
+                while len(memo) > DECK_GROUND_PACKS_KEPT:
+                    memo.popitem(last=False)
+        return got
 
     def _elev_decked(self, la, lo):
         """self.elev: elev_raw with the bridges it holds under mapped decks taken out (_deck_ground)."""

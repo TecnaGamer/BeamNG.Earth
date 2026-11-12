@@ -4636,11 +4636,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     min(p[1][0] + p[1][1] for p in bparts if p[1] is not None)
                 top = max([fill] + [p[1][0] + p[1][1] for p in bparts if p[1] is not None])
                 # (a part with no material or colour of its own takes its siblings' most common: half of New York by
-                # Gehry's parts are "metal", the others mapped bare)
+                # Gehry's parts are "metal", the others mapped bare; of equally common ones the first part's: a set's
+                # order is the process's string hashing, and a tile's buildings changed from run to run, 2026-11-12)
                 sib = {}
                 for k_ in ("facade_material", "facade_color"):
                     vals = [str(p[2].get(k_)) for p in bparts if len(p) > 2 and p[2].get(k_)]
-                    sib[k_] = max(set(vals), key=vals.count) if vals else None
+                    sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals else None
                 for ppart in bparts:
                     pring, hh = ppart[0], ppart[1]
                     pat = ppart[2] if len(ppart) > 2 else {}

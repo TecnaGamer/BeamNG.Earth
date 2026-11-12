@@ -2231,6 +2231,30 @@ class RealTagsTest(unittest.TestCase):
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
 
+    def test_bare_part_takes_the_first_of_equally_common_colours(self):
+        """A part without a colour takes its siblings' most common one; of equally common ones the first part's, in
+        every process: the choice went by a set's order (the process's string hashing), and a tile's buildings changed
+        from run to run (I-83, Baltimore: bld_p_-2_-1_2 in 1 of 6 hash seeds, 2026-11-12)."""
+        import subprocess
+        code = ("import sys; sys.path[:0] = [%r, %r]; import numpy as np, geodesy, buildings as bld; "
+                "from test_buildings import Feats; f = geodesy.EnuFrame(37.8, -122.4)\n"
+                "def ll(x, y, w, d):\n"
+                "    e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])\n"
+                "    la, lo, _ = f.enu_to_geodetic(e, n, 0.0); return np.stack([lo, la], 1)\n"
+                "b = Feats(['B1'], [ll(10, 10, 30, 30)], **{'class': ['commercial'], 'height': [30.0]})\n"
+                "parts = Feats(['P1', 'P2', 'P3'], [ll(10, 10, 10, 30), ll(20, 10, 10, 30), ll(30, 10, 10, 30)], "
+                "**{'building_id': ['B1'] * 3, 'height': [10.0, 20.0, 30.0], 'min_height': [0.0, 0.0, 0.0], "
+                "'facade_color': ['#ff0000', '#10ee20', '']})\n"
+                "items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.zeros(np.shape(la)), "
+                "part_layers=[parts])\n"
+                "s = {round(sp.height): sp for sp, _g0, _g1 in items}\n"
+                "print(bld._Looks(s[30].seed)[s[30].facade][1] == bld._Looks(s[10].seed)[s[10].facade][1])\n"
+                ) % (str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent))
+        for seed in range(8):
+            out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                                 env=dict(os.environ, PYTHONHASHSEED=str(seed)), timeout=120)
+            self.assertEqual(out.stdout.strip(), "True", f"hash seed {seed}: {out.stdout} {out.stderr[-2000:]}")
+
 
 class ModelBridgeTest(unittest.TestCase):
     """A 3dmr model bridge carries the road (FV=24): _custom_tile_entries bakes it leaned onto the mapped bridge's

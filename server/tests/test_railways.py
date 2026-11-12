@@ -947,6 +947,22 @@ class UnderpassNeighbourTest(unittest.TestCase):
         self.assertEqual(raised, {str(f.ids[0]), str(f.ids[1])})
 
 
+class GroundMemoTest(unittest.TestCase):
+    def test_a_points_height_whatever_point_asked_first(self):
+        """The heights kept per centimetre (point_ground's, grade_plans'): the centimetre's own point's, not the first
+        point that asked in it. Two cells' copies of a line lie ~1e-5 m apart, and a cell's rail beds were the first
+        planned cell's (2026-11-12)."""
+        def slope(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 10.0 + 0.5 * np.asarray(e) + 0.25 * np.asarray(n)
+        p, q = np.array([[12.3401, -4.5601]]), np.array([[12.3449, -4.5649]])     # (one centimetre)
+        a = railways.point_ground(FRAME, slope, ("test-a",))
+        b = railways.point_ground(FRAME, slope, ("test-b",))
+        self.assertEqual(float(a(p)[0]), float(b(q)[0]))
+        self.assertEqual(float(a(q)[0]), float(b(p)[0]))
+        self.assertEqual(float(a(p)[0]), float(railways.point_ground(FRAME, slope)(np.array([[12.34, -4.56]]))[0]))
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -135,5 +135,28 @@ class StoreTest(unittest.TestCase):
             self.assertTrue(all(f.startswith(os.path.join(str(home.z), str(home.x), str(home.y) + ".")) for f in files),
                             files)
 
+class CopiesTest(unittest.TestCase):
+    def test_each_copy_of_a_road_its_own_width(self):
+        """Each map cell decodes its own copy of a road (its bends smoothed in that cell's frame): a width remembered
+        by the road's id alone answered every later copy with the first one's, and a cell's plans depended on which
+        cells were planned before it (2026-11-12)."""
+        segs = row_of_houses(9.0, 1, -150.0, 0.0) + row_of_houses(-9.0, -1, -150.0, 0.0) \
+            + row_of_houses(12.0, 1, 0.0, 150.0) + row_of_houses(-12.0, -1, 0.0, 150.0)
+        walls = roadwidth.Walls(segs)
+
+        def lonlat(x0, x1):
+            la, lo, _ = FRAME.enu_to_geodetic(np.array([x0, x1]), np.array([0.0, 0.0]), 0.0)
+            return np.c_[np.ravel(lo), np.ravel(la)]
+        a, b = lonlat(-140.0, -10.0), lonlat(10.0, 140.0)
+        rw = roadwidth.RoadWidths(lambda key: None)
+        rw._near_walls = lambda ll: (FRAME, walls)
+        first_a, then_b = rw.get("r1", a), rw.get("r1", b)
+        fresh = roadwidth.RoadWidths(lambda key: None)
+        fresh._near_walls = lambda ll: (FRAME, walls)
+        self.assertEqual(then_b, fresh.get("r1", b))
+        self.assertNotEqual(first_a, then_b)
+        self.assertEqual(rw.cap("r1", b), fresh.cap("r1", b))
+
+
 if __name__ == "__main__":
     unittest.main()

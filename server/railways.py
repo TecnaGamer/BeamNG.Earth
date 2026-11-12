@@ -102,7 +102,8 @@ def point_ground(frame, elev, key=None):
     roadmesh.drawn_ground: that fills a 2 m grid over the points' whole box, and the lines here span ~1 km (a road
     tile's workers spun on it for minutes, 2026-10-25). key (the anchor's): heights remembered per point. Every tile
     within REACH_M of a line asks for the same points (each part resampled from its start), ~6 tiles each, and the
-    graded ground's lookups were most of a rail tile's time (16 tiles round Baltimore Penn Station: 28 of 68 s)."""
+    graded ground's lookups were most of a rail tile's time (16 tiles round Baltimore Penn Station: 28 of 68 s); with a
+    key, each point's height is the ground's at its centimetre's own point (the same whichever point asked first)."""
     memo = None
     if key is not None:
         memo = _GROUND_MEMO.get(key)
@@ -125,7 +126,7 @@ def point_ground(frame, elev, key=None):
         out = memo.get(keys)
         miss = np.flatnonzero(np.isnan(out))
         if len(miss):
-            z = look(xy[miss])
+            z = look(keys[miss] / 100.0)        # (at the key's own point, as grade_plans' ground)
             out[miss] = z
             if len(memo) + len(miss) > GROUND_MEMO_MAX:
                 memo.clear()
@@ -222,7 +223,11 @@ def grade_plans(frame, cells, box, elev, load=None):
         out = memo.get(keys)
         miss = np.flatnonzero(np.isnan(out))
         if len(miss):
-            la, lo, _ = frame.enu_to_geodetic(xy[miss, 0], xy[miss, 1], 0.0)
+            # (at the key's own point, not the asking one's: a memo by the centimetre answered every later point in it
+            # with the first one's height, and the copies of a line in neighbouring cells lie ~1e-5 m apart: a cell's
+            # rail beds depended on which cells were planned before it, 2026-11-12)
+            kxy = keys[miss] / 100.0
+            la, lo, _ = frame.enu_to_geodetic(kxy[:, 0], kxy[:, 1], 0.0)
             z = np.asarray(elev(la, lo), np.float64)
             out[miss] = z
             if len(memo) + len(miss) > GROUND_MEMO_MAX:
