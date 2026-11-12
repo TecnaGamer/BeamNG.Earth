@@ -35,6 +35,7 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod deckjoints;
 mod deckmerge;
 mod levels;
 mod levelrules;
@@ -5996,6 +5997,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 238: gradesep_underpasses' prm[7] (a junction over a tunnel: its arms' crossings by the node count); deck_weld
     // (one height at each joint of a deck chain's per-part profile)
     m.add_function(wrap_pyfunction!(decks::deck_weld, m)?)?;
-    m.add("VERSION", 238)?;
+    m.add_function(wrap_pyfunction!(deckjoints::junction_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::field_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::pad_links, m)?)?;
+    m.add("VERSION", 239)?;
     Ok(())
 }
