@@ -6235,6 +6235,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
         // 242: geo_world_to_latlon, chain_graph, hash01, skeleton_roof_uv, sky_walls (world gen speed)
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
-    m.add("VERSION", 247)?;
+    // 248: pmtiles.rs puts a cut line's rule ranges (bridges, tunnels, levels, ...) on the line we have, by its connectors
+    // (a 19 km rail line cut to 14 km had every bridge 880 m off; BNE_PMT_ANCHOR=off: as before), and reads the
+    // max_height_m rule (access restrictions for vehicles over a height)
+    m.add("VERSION", 248)?;
     Ok(())
 }
