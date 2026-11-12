@@ -143,6 +143,9 @@ MOD_TO_SERVER = {
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
+    # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
+    # nothing (fresh numbers); always answered with a 'memory'
+    "memory": {"limitGb": F(NUM, OPT)},
     # 2026-10-25: the settings page's cache folder / BeamMP launcher (apppaths.py): chosen in a window or typed
     "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
@@ -431,6 +434,10 @@ SERVER_TO_MOD = {
                      # ... and the night side's city lights over the ground (none: none could be had)
                      "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
+    # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
+    "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
+               "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
+               "availMB": F(NUM, OPT), "restart": F(bool)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
               "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)
@@ -1111,6 +1118,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         self.assertEqual(until(lambda m: m["type"] == "cache")["capBytes"], 10_000_000_000)
         c.send({"type": "cache", "clear": True})        # ... and "Clear cache"
         self.assertIn("clearedBytes", until(lambda m: m["type"] == "cache"))
+        c.send({"type": "memory"})                      # the page's world server memory line (memwatch.status)
+        self.assertGreater(until(lambda m: m["type"] == "memory")["processes"], 0)
         c.send({"type": "app_path"})                    # the page's cache folder and BeamMP launcher (no choice made)
         self.assertTrue(until(lambda m: m["type"] == "app_paths")["cacheDir"])
         # (shared world building, commented out 2026-10-27)

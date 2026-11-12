@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 257 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 259 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -126,6 +126,45 @@ def proc_tree(root):
     """(CPU seconds, resident MB) of process root and every process under it, or None (not Linux)."""
     require(167, "proc_tree")
     return _ef.proc_tree(int(root))
+
+
+def ram_limit_mb(setting_gb, total_mb):
+    """The server's RAM limit in MB (2^20 bytes): the settings page's Max RAM in GB (0: Auto) on a machine with
+    total_mb of RAM (0: unknown); native membudget.rs."""
+    require(257, "ram_limit_mb")
+    return _ef.ram_limit_mb(float(setting_gb or 0.0), float(total_mb or 0.0))
+
+
+def ram_auto_mb(total_mb):
+    require(257, "ram_auto_mb")
+    return _ef.ram_auto_mb(float(total_mb or 0.0))
+
+
+def ram_tier(limit_mb):
+    """'emergency', 'lean', 'small' or 'desktop' for a limit (MB)."""
+    require(257, "ram_tier")
+    return _ef.ram_tier(float(limit_mb))
+
+
+def ram_desktop_sizes(limit_mb):
+    """(DEM tiles, map data MB, shed MB, rotate MB, road processes at most, far processes at most) of the desktop tier
+    for a limit (MB)."""
+    require(257, "ram_desktop_sizes")
+    return _ef.ram_desktop_sizes(float(limit_mb))
+
+
+def ram_effective_mb(limit_mb, total_mb, avail_mb, reserve_mb):
+    """The limit in force (MB): lowered while the system has less than reserve_mb available (avail < 0: unknown)."""
+    require(257, "ram_effective_mb")
+    return _ef.ram_effective_mb(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb))
+
+
+def ram_watch(limit_mb, total_mb, avail_mb, reserve_mb, over_s, since_shed_s, since_rotate_s, pools):
+    """The memory watchdog's step: (action 'ok' / 'shed' / 'rotate' / 'wait', pool index, the limit in force MB);
+    pools: [(its largest process's MB, has a backlog)]."""
+    require(257, "ram_watch")
+    return _ef.ram_watch(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb), float(over_s),
+                         float(since_shed_s), float(since_rotate_s), [(float(a), bool(b)) for a, b in pools])
 
 
 def md_html(text, base, fold_details=False):

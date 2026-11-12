@@ -166,6 +166,8 @@ local bannerInfo = { port = net.PORT } -- banner.update's inputs, filled every f
 local horizonOn = false       -- hello.horizon (M1h); outlives levels like the connection
 local farRadius = nil         -- status.radius: the server's far-field radius (m), horizon mode only
 local cacheInfo = nil         -- the server's last 'cache' message (download cache usage); outlives levels
+-- (M._memoryInfo: the server's last 'memory' message, its memory and limit for the settings page; not a local: the
+-- main chunk is at its 200 locals)
 local appPaths = nil          -- the server's last 'app_paths' (the cache folder, the BeamMP launcher; apppaths.py)
 local appPathAnswers = 0      -- how many of them answered a choice (the settings page tells a new answer by it)
 local updateInfo = nil       -- a newer version on GitHub: { current, latest, url } (server updates.py)
@@ -1103,6 +1105,7 @@ local function onMessage(msg)
     st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
+    M._memoryInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
     if not st.anchor then st.autoTeleportDone = false end
@@ -1166,6 +1169,7 @@ local function onMessage(msg)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
     cacheInfo = nil
+    M._memoryInfo = nil
     local settings = rawget(_G, 'beamngEarth_settings')
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)
@@ -1519,6 +1523,12 @@ local function onMessage(msg)
       beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
+  elseif t == 'memory' then
+    -- the world server's memory and its limit (server memwatch.status): the settings page's line
+    M._memoryInfo = { usedMB = tonumber(msg.usedMB) or 0, limitMB = tonumber(msg.limitMB) or 0,
+      effMB = tonumber(msg.effMB) or 0, autoMB = tonumber(msg.autoMB) or 0, setting = tonumber(msg.setting) or 0,
+      tier = tostring(msg.tier or ''), processes = tonumber(msg.processes) or 0, peakMB = tonumber(msg.peakMB) or 0,
+      restart = msg.restart == true }
   elseif t == 'cache' then
     -- the download cache (server cache.py): its usage for the settings page; clearedBytes answers a clear
     local prev = cacheInfo
@@ -3298,6 +3308,22 @@ end
 function M.cacheQuery()
   if not cacheReady() then return false end
   net.send({ type = 'cache' })
+  return true
+end
+
+-- The world server's memory (settings page): the last numbers the server sent (nil before any), a request for fresh
+-- ones, and the page's Max RAM (GB, 0 Auto) sent when it differs from the server's (the page's own applyAll does not
+-- override a limit the server was started with until the player changes it)
+function M.memoryState() return M._memoryInfo end
+function M.memoryQuery()
+  if not cacheReady() then return false end
+  net.send({ type = 'memory' })
+  return true
+end
+function M.memorySetLimit(gb)
+  local m = M._memoryInfo
+  if not cacheReady() or not m or m.setting == gb then return false end
+  net.send({ type = 'memory', limitGb = gb })
   return true
 end
 

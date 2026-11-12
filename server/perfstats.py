@@ -275,6 +275,14 @@ class Collector:
                 srv["memMB"] = fast.perf_step(mem, MEMORY_STEPS)
             if len(t) > 2 and t[2] is not None:     # (the worker processes running: the server's size on this machine)
                 srv["workers"] = fast.perf_step(t[2], WORKER_STEPS)
+        try:        # the server's RAM limit (the settings page's Max RAM, rounded), whether the player set it, its tier
+            import budget
+            if budget.LIMIT_MB:
+                srv["memLimitMB"] = fast.perf_step(budget.LIMIT_MB, MEMORY_STEPS)
+                srv["memSet"] = bool(budget.setting_gb())
+                srv["memTier"] = {"desktop": 0, "small": 1, "lean": 2, "emergency": 3}.get(budget.TIER, 0)
+        except Exception:
+            pass
         errs, codes = self.errors.take()
         if errs:
             srv["errors"] = errs

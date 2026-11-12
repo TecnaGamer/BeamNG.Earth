@@ -113,6 +113,7 @@ import places as placesmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
+import memwatch as memwatchmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
@@ -551,6 +552,14 @@ LEAN_POOLS = os.environ.get("BNGE_LEAN_POOLS", "on") != "off"
 # the scope's memory limit in a minute. The emergency tier (a 0.9 GB scope, 2 GB of swap, its extras off: EMERGENCY_OFF)
 # with 2: 6 of 32 blocks late (p50 1.6 s, p90 4.5 s), ~300 road tiles; with 1: 24 of 29 late (p50 7.6 s), 209.
 LEAN_PROCS = {"lean": 2, "emergency": 2}
+# The small tier (a Steam Deck, a 16 GB PC: a RAM limit of ~4.8-6.5 GB by Auto) in the compact layout too: one block
+# process for both lanes, the far buildings in the road-tile processes (SMALL_ROAD_PROCESSES of them, each replaced
+# every budget.tasks_per_child() jobs), one far-tile process; 5 processes instead of 8-9. Measured 2026-11-12: the
+# small layout's server held 8-9.7 GB on a Steam Deck (swap full, the edge guard holding the car 18-23 % of a 40 mph
+# drive) and 11.6 GB private on a 16 GB Windows PC (the game's working set trimmed to 1.2 GB); with its RAM limit
+# (memwatch.py) a game-less cold Baltimore stayed at 6.4-8.1 GB against 5 GB in eight processes: a fresh worker alone
+# holds ~0.4-0.5 GB and the server's own ~2 GB. BNGE_SMALL_COMPACT=off: the small layout.
+SMALL_COMPACT = os.environ.get("BNGE_SMALL_COMPACT", "on").lower() not in ("off", "0", "false", "no")
 # The emergency tier's server arguments turned off (machine_profile): the trees, the gas stations, the airports' runway
 # grading. BNGE_EMERGENCY_TRIM=off keeps them.
 EMERGENCY_TRIM = os.environ.get("BNGE_EMERGENCY_TRIM", "on") != "off"
@@ -7739,6 +7748,10 @@ class Connection:
             self.spawn(self.terrain_patch(msg))
         elif kind == "cache":
             self.on_cache(msg)
+        elif kind == "memory":                  # the settings page's Max RAM: the limit (limitGb, 0 Auto) and the usage
+            if "limitGb" in msg:
+                memwatchmod.set_setting(msg.get("limitGb"))
+            self.send(dict(memwatchmod.status(), type="memory"))
         elif kind == "app_path":                # the settings page's folders: the cache's, the BeamMP launcher's
             self.spawn(self.app_path(msg))
         elif kind == "runtime_profiler":
@@ -10342,7 +10355,8 @@ async def main_async(args):
         import atexit
         atexit.register(netstatemod.close)
     import budget
-    if budget.TREE_MB and budget.tree_init():   # (the whole server's memory table: budget.TREE_MB; workers inherit its name)
+    # (the whole server's memory table and the watchdog's requests: budget.TREE_MB, memwatch.py; workers inherit it)
+    if (budget.TREE_MB or budget.LIMIT_MB) and budget.tree_init():
         import atexit
         atexit.register(budget.tree_close)
     if budget.TREE_MB or budget.LOW_FREE_GB:    # (this process's own caches too: budget.tree_publisher)
@@ -10363,6 +10377,9 @@ async def main_async(args):
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
+    # (the compact layout: the lean tiers', and the small tier's (SMALL_COMPACT): a block process for both lanes, the far
+    # buildings in the road processes, those replaced every budget.tasks_per_child() jobs)
+    compact = lean or (getattr(args, "tier", None) == "small" and SMALL_COMPACT)
     procs = lean_processes(getattr(args, "tier", None)) if lean else 4
     if lean:
         log.info("worker processes: %s (a low-memory machine; BNGE_LEAN_PROCS 4, 2 or 1)",
@@ -10372,7 +10389,7 @@ async def main_async(args):
     ctx = multiprocessing.get_context("spawn") if args.block_process == "on" and procs > 1 else None
     if ctx is not None and procs > 2:
         for lane in (LANE_REQUEST, LANE_PREFETCH):
-            if lean and block_pools:
+            if compact and block_pools:
                 # (a lean tier: the prefetch lane in the request lane's process, its blocks after the requested ones:
                 # Server.block_shared, submit_low)
                 block_pools.append(block_pools[0])
@@ -10434,7 +10451,7 @@ async def main_async(args):
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND),
-            **poolsmod.tasks_per_child_kw(budget.tasks_per_child() if lean else 0))
+            **poolsmod.tasks_per_child_kw(budget.tasks_per_child() if compact else 0))
     make_fast_pool = None
     if road_pool is not None:
         def make_fast_pool(n):          # (the saved areas' fast mode: Server.fast_precache)
@@ -10444,7 +10461,7 @@ async def main_async(args):
                           args.surface == "on", None, logging.getLogger().level,
                           args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
     far_bld_pool = None
-    if road_pool is not None and args.buildings == "on" and not lean:     # (a lean tier: in the road process)
+    if road_pool is not None and args.buildings == "on" and not compact:     # (compact: in the road processes)
         far_bld_pool = poolsmod.RespawningPool(   # far building tiles (blockworker.far_buildings_tile)
             "far building", 1, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
@@ -10513,6 +10530,9 @@ async def main_async(args):
     server.game_cpus = getattr(args, "game_cpus", None)    # (cpupin.py: the game pinned at each hello)
     server.server_cpus = getattr(args, "server_cpus", None)
     server.photo_pool = photo_pool
+    # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
+    memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
+    memwatchmod.start()
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)
     # (a driving player's catch-up lends less: half the game's cores for the whole of a 150 mph drive took its frame
@@ -10895,6 +10915,8 @@ def machine_profile(args, small):
         if budget.SMALL_ANALYSES_OFF:
             args.deshadow, args.colormatch = "off", "off"
         args.tier = budget.tier()
+        if args.tier == "small" and SMALL_COMPACT and args.workers in (WORKERS, budget.SMALL_FAR_WORKERS):
+            args.workers = budget.LEAN_FAR_WORKERS      # (the compact layout's one far-tile process: main_async)
         if args.tier in ("lean", "emergency"):
             # (the lean tiers: one road-tile process and, with LEAN_PROCS 4, one far-tile process; main_async)
             if args.road_processes in (ROAD_PROCESSES, budget.SMALL_ROAD_PROCESSES):
@@ -10917,13 +10939,17 @@ def machine_profile(args, small):
                  {"lean": "low-memory", "emergency": "very low memory"}.get(args.tier, "small"),
                  budget.total_gb() or 0, args.workers, args.road_processes)
     elif args.road_processes == ROAD_PROCESSES:
-        args.road_processes = budget.road_processes()
-        log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,
-                 budget.total_gb() or 0)
-    # more far-tile processes on a big machine, used while the 3D map is open (Server.far_limit)
+        # (by the threads, and at most what the RAM limit holds: budget.desktop_sizes, ~1.2 GB a road process)
+        sizes = budget.desktop_sizes()
+        args.road_processes = min(budget.road_processes(), sizes[4]) if sizes else budget.road_processes()
+        log.info("road-tile processes: %d (%d threads, %.0f GB, the server's limit %.1f GB)", args.road_processes,
+                 os.cpu_count() or 0, budget.total_gb() or 0, budget.LIMIT_MB / 1024)
+    # more far-tile processes on a big machine, used while the 3D map is open (Server.far_limit), at most what the RAM
+    # limit holds (budget.desktop_sizes: ~0.8 GB a far-tile process)
     args.far_max = args.workers
     if not small and (budget.total_gb() or 0) >= 24:
-        args.far_max = max(args.workers, min((os.cpu_count() or 4) - 4, FAR_MAX_DESKTOP))
+        sizes = budget.desktop_sizes()
+        args.far_max = max(args.workers, min((os.cpu_count() or 4) - 4, FAR_MAX_DESKTOP, sizes[5] if sizes else 99))
         log.info("far-tile processes: %d (%d at once while driving)", args.far_max, min(args.workers, FAR_DRIVE))
 
 FAST_POOL_KEEP = 2          # the saved areas' fast mode: its road processes, one per CPU thread but these ...
@@ -10966,6 +10992,9 @@ def main():
     ap.add_argument("--peers", default=os.environ.get("BNGE_PEERS", ""),
                     help="compute sharing: helpers (HOST[:PORT] ...; peerwork.py serve on them) that build far tiles "
                          "when this server's own workers are busy (default: BNGE_PEERS)")
+    ap.add_argument("--max-ram-gb", type=float, default=None, metavar="GB",
+                    help="the most memory the whole server may hold, in GB (0: Auto, a third of the RAM, 60 %% from 22 GB, 1.5 to 24 GB; "
+                         "default: the settings page's Max RAM for BeamNG.Earth, else Auto; budget.py, memwatch.py)")
     ap.add_argument("--workers", type=int, default=WORKERS, help="far-tile worker threads (keep <= 3: the game needs the cores)")
     ap.add_argument("--far-format", choices=farfield.FORMATS, default="cdae",
                     help="far-tile shape format: binary .cdae (default, ~5x faster to load) or Collada .dae")
@@ -11185,6 +11214,9 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("download cache: %s", args.cache_dir)
+    if args.max_ram_gb is not None:     # (the settings page's choice otherwise: cpupin.apply_player_settings)
+        import budget as _b
+        os.environ[_b.SETTING_ENV] = str(args.max_ram_gb) if args.max_ram_gb > 0 else "auto"
     raise_open_files()
     import fast
     try:
@@ -11216,7 +11248,7 @@ def main():
         # split below) it only made every server process equal: the workers' niceness (the ground under the car
         # first, NICE_ROADS / NICE_FAR) counts for nothing between idle-class tasks, and on a Steam Deck a teleport's
         # block took 105-170 s behind the far field and the road tiles (2026-10-20; 1.6 s on a desktop)
-        split = cpupin.split(budget.SMALL_SERVER_SHARE if budget.small() else cpupin.SERVER_SHARE) \
+        split = cpupin.split(budget.SMALL_SERVER_SHARE if budget.small_machine() else cpupin.SERVER_SHARE) \
             if args.pin == "on" and (sys.platform.startswith("linux") or sys.platform == "win32") else (None, None)
         args.sched = "normal" if split[0] else "idle"
     if args.sched == "idle" and hasattr(os, "sched_setscheduler") and hasattr(os, "SCHED_IDLE"):
@@ -11238,7 +11270,8 @@ def main():
         globals()["FAST_BASE_V"] = float(os.environ["BNGE_FAST_BASE_V"])
     if args.pin == "on" and (sys.platform.startswith("linux") or sys.platform == "win32"):   # (Windows: KyzoFox, PR #112)
         try:
-            server_cpus, game_cpus = cpupin.split(budget.SMALL_SERVER_SHARE if small else cpupin.SERVER_SHARE)
+            server_cpus, game_cpus = cpupin.split(budget.SMALL_SERVER_SHARE if budget.small_machine()
+                                                  else cpupin.SERVER_SHARE)
             cpupin.pin_self(server_cpus)
             if server_cpus:
                 log.info("cores: the server on CPUs %s, the game on %s (cpupin.py; --pin off)",

@@ -18,7 +18,7 @@ import numpy as np
 import fast
 
 ON = os.environ.get("BNE_PORTALS", "1") != "0"
-VERSION = 257               # earthfast's portal kernels
+VERSION = 259               # earthfast's portal kernels
 FACE_IN = (1.0, 3.0, 5.0)   # m inside the mouth's plane the ground behind the headwall is read (the highest of them:
                             # the grading flattens the approach a few metres into the mapped mouth, the hill's face
                             # stands 3 - 5 m in; the headwall holds that face, 2026-11-12)

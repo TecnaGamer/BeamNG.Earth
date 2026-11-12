@@ -283,7 +283,7 @@ def owner_of(key, ids, weights=None):
 def share_weight():
     """This machine's capacity for its group (owner_of): its CPU threads, half on the small profile."""
     import budget
-    return round((os.cpu_count() or 4) * (0.5 if budget.small() else 1.0), 1)
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
 
 
 class ReplyCache:
