@@ -36,7 +36,7 @@ def fetching(cache, fetcher):
     """regionaldata as a fresh process has it (no BNE_REGIONAL_DIR), configured with cache / fetcher; as it was
     afterwards."""
     env = {k: v for k, v in os.environ.items() if k != "BNE_REGIONAL_DIR"}
-    fresh = {"cache": None, "fetcher": None, "manifest": None, "down_at": 0.0, "cells": {}}
+    fresh = {"cache": None, "fetcher": None, "pages": None, "cells": {}}
     with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(regionaldata, "_state", fresh), \
             mock.patch.object(regionaldata, "LOCAL", None):
         regionaldata.configure(cache, fetcher)
@@ -148,7 +148,7 @@ class OutageTest(unittest.TestCase):
                 self.assertEqual(regionaldata.signature(), "old")
                 self.assertLess(time.time() - t, 0.2, "no wait for the network")
                 for _ in range(50):
-                    if down.calls and regionaldata._state.get("fetching") is None:
+                    if down.calls and regionaldata._state["pages"].fetching is None:
                         break
                     time.sleep(0.05)
                 self.assertEqual(len(down.calls), 1, "one background refresh")
