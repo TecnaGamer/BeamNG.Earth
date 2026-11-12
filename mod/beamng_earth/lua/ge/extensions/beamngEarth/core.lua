@@ -2631,7 +2631,6 @@ local function onUpdate(dtReal, dtSim)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.redirectBigMap then stg.redirectBigMap(st.inOurLevel) end
-  if st.inOurLevel then gps.update(st.anchor, st.player) end
   seasonlook.update(st.inOurLevel, st.anchor and st.anchor.lat)
   t = mark('ui', t)
   local frameMs = frameMs0
@@ -2769,6 +2768,9 @@ local function onUpdate(dtReal, dtSim)
   end
 
   updatePlayer(dtReal)
+  -- Rebase commits can change the anchor after the previous frame's player sample. Route only with
+  -- this frame's position, once the vehicle move has become visible in the matching world frame.
+  if st.inOurLevel and not st.lagProbe then gps.update(st.anchor, st.player) end
   if st.active then
     if not dropHoldFailed and (not st.paused or dropHold.active) then     -- (it runs on while it paused the game)
       local ok, err = pcall(updateDropHold, dtReal)
