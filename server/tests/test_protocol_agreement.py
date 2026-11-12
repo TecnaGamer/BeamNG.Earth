@@ -295,6 +295,7 @@ SERVER_TO_MOD = {
     "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
+              "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
