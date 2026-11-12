@@ -169,6 +169,8 @@ MEM_MISSES = 200000
 MT_CDN_K = 3
 MT_CDN_MAX_ZOOM = GLOBAL_ZOOM
 MT_CDN_RETRY_S = 600.0              # the index not to be had: the endpoint alone, asked again after this
+PACK_WAIT_S = 8.0                   # another process fetching a pack: its tile waited for at most this long
+PACK_CLAIM_STALE_S = 30.0           # a pack claim older than this: its process ended mid-fetch
 _cdn_env = os.environ.get("BNGE_DEM_CDN", "").strip()
 MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_env
 
@@ -719,33 +721,84 @@ class Dem:
                     return None
             if data is not None:
                 return data
-            url = f"{mt_cdn_base(self.cdn_release)}/{tilepack.path(pz, px, py)}"
+            # (one process fetches a pack, the others wait for its tiles on disk: a cold place's 25 packs were asked
+            # 48 times by the server's processes at once, 2026-11-12)
+            claim = os.path.join(self.cache_dir, "bngmt", self.cdn_release, "claims", f"{pz}_{px}_{py}")
+            if not self._pack_claim(claim):
+                got = self._pack_wait(path, miss(z, x, y)[1])
+                if got is not False:
+                    self._count("bngmt:waited")
+                    return got
             try:
-                body = self.fetcher.get(url, kind=kind).body
-                tz_, tpx, tpy, tk, tiles = tilepack.parse(body)
-                if (tz_, tpx, tpy, tk) != (pz, px, py, k):
-                    raise tilepack.PackError(f"pack {tz_}/{tpx}/{tpy} k{tk} where {pz}/{px}/{py} k{k} was asked")
-            except netfetch.Deferred:
-                raise                               # (a prefetch refused: the caller waits, as for the endpoint)
-            except (netfetch.FetchError, tilepack.PackError) as e:
-                self._count("bngmt:fallback")
-                log.debug("dem: pack %s: %s: %s: the endpoint", url, type(e).__name__, e)
-                return False
-            out = None
-            misses = []
-            for i in range((1 << k) ** 2):
-                tz, tx, ty = tilepack.tile_at(pz, px, py, k, i)
-                b = tiles.get(i)
-                if b is None:
-                    misses.append(miss(tz, tx, ty))
-                    continue
-                self._keep((name, tz, tx, ty), self._path(MAPTERHORN, tz, tx, ty), b)
-                if (tx, ty) == (x, y):
-                    out = b
-            if misses:
-                self._remember_miss(misses)
-            self._count("bngmt:net")
-            return out
+                return self._fetch_pack(pz, px, py, k, x, y, kind, miss)
+            finally:
+                try:
+                    os.remove(claim)
+                except OSError:
+                    pass
+
+    def _pack_claim(self, claim):
+        """True: this process fetches the pack (its claim file made, or claims cannot be made here); False: another
+        process has fetched it within PACK_CLAIM_STALE_S."""
+        for _ in range(2):
+            try:
+                os.makedirs(os.path.dirname(claim), exist_ok=True)
+                os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(claim) < PACK_CLAIM_STALE_S:
+                        return False
+                    os.remove(claim)        # (a process that ended mid-pack)
+                except OSError:
+                    pass
+            except OSError:
+                return True
+        return True
+
+    def _pack_wait(self, path, marker):
+        """The tile another process's pack fetch writes at path: its bytes, None (the pack lacks it: its 404
+        recorded), or False when it did not come within PACK_WAIT_S (fetched here then)."""
+        end = time.monotonic() + PACK_WAIT_S
+        while time.monotonic() < end:
+            time.sleep(CLAIM_POLL_S * 2)
+            data = self.disk.read(path)
+            if data is not None:
+                return data
+            if missindex.known(marker):
+                return None
+        return False
+
+    def _fetch_pack(self, pz, px, py, k, x, y, kind, miss):
+        import tilepack
+        name = MAPTERHORN["name"]
+        url = f"{mt_cdn_base(self.cdn_release)}/{tilepack.path(pz, px, py)}"
+        try:
+            body = self.fetcher.get(url, kind=kind).body
+            tz_, tpx, tpy, tk, tiles = tilepack.parse(body)
+            if (tz_, tpx, tpy, tk) != (pz, px, py, k):
+                raise tilepack.PackError(f"pack {tz_}/{tpx}/{tpy} k{tk} where {pz}/{px}/{py} k{k} was asked")
+        except netfetch.Deferred:
+            raise                                   # (a prefetch refused: the caller waits, as for the endpoint)
+        except (netfetch.FetchError, tilepack.PackError) as e:
+            self._count("bngmt:fallback")
+            log.debug("dem: pack %s: %s: %s: the endpoint", url, type(e).__name__, e)
+            return False
+        out = None
+        misses = []
+        for i in range((1 << k) ** 2):
+            tz, tx, ty = tilepack.tile_at(pz, px, py, k, i)
+            b = tiles.get(i)
+            if b is None:
+                misses.append(miss(tz, tx, ty))
+                continue
+            self._keep((name, tz, tx, ty), self._path(MAPTERHORN, tz, tx, ty), b)
+            if (tx, ty) == (x, y):
+                out = b
+        if misses:
+            self._remember_miss(misses)
+        self._count("bngmt:net")
+        return out
 
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request

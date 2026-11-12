@@ -480,6 +480,35 @@ class CdnPackTest(unittest.TestCase):
                                        "https://tiles.mapterhorn.com/12/700/1501.webp"],
                              "the index asked once, then the endpoint for MT_CDN_RETRY_S")
 
+    def test_another_process_fetching_the_pack(self):
+        """A pack another process is fetching (its claim): this one waits for the tile on disk instead of asking."""
+        with tempfile.TemporaryDirectory() as d:
+            f = PackFetcher(packs={(12, 87, 187)})
+            dem = demmod.Dem(d, fetcher=f)
+            dem.cdn_release = "0.0.13"
+            dem._cdn_index()
+            n = len(f.calls)
+            claim = os.path.join(d, "bngmt", "0.0.13", "claims", "12_87_187")
+            os.makedirs(os.path.dirname(claim))
+            open(claim, "w").close()
+            path = dem._path(demmod.MAPTERHORN, 12, 700, 1500)
+
+            def other():
+                time.sleep(0.2)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as fh:
+                    fh.write(b"theirs")
+            t = threading.Thread(target=other)
+            t.start()
+            self.assertEqual(dem._download(demmod.MAPTERHORN, 12, 700, 1500), b"theirs")
+            t.join()
+            self.assertEqual(len(f.calls), n, "nothing asked")
+            self.assertEqual(dem.stats["bngmt:waited"], 1)
+            os.utime(claim, (time.time() - 60, time.time() - 60))      # a stale claim: fetched here
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 12, 701, 1500))
+            self.assertEqual(len(f.calls), n + 1)
+            self.assertFalse(os.path.exists(claim), "its claim removed after the fetch")
+
 
 if __name__ == "__main__":
     unittest.main()
