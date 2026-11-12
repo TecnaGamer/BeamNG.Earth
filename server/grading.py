@@ -2201,6 +2201,15 @@ class _Planner:
             return []               # offline: no block waits on the same failing fetch again
         import xproc
         xproc.check_cancel()        # (a block / road tile of a place a teleport left: not planned for it)
+        deleg = getattr(self.store, "delegate", None)
+        if deleg is not None and self.shared is not None:
+            # (the server's own process: a worker process plans the cell, this thread waits for its plans and reads
+            # them below as any other process's, PlanStore.delegate; planned here as before when it could not)
+            try:
+                if not self.shared.has(key):
+                    deleg(key)
+            except Exception as e:
+                log.debug("grading: cell %s's plans not made elsewhere: %s: %s", key, type(e).__name__, e)
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
         try:
             import revisit
@@ -5880,6 +5889,12 @@ class PlanStore:
         self.tunnel_raw = None
         self.dem = None
         self.shared = None
+        # delegate(cell key): has another process plan the cell (its plans come through shared), returning when it has
+        # or could not; None: every cell is planned where it is asked for. The server's own process sets it
+        # (earthd.Server.plan_elsewhere): a first visit's far tiles, lakes and tunnels asked it for ~20 cells' plans,
+        # ~23 CPU-s on its "plans" threads under the interpreter lock its far textures and event loop need
+        # (22 % of its lock-holding samples on a cold Dijon visit, 2026-11-12)
+        self.delegate = None
         self.lock = threading.Lock()
         self.planners = OrderedDict()   # (rx, ry) -> _Planner, the least recently used first
 
