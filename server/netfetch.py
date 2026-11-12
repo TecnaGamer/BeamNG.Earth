@@ -941,8 +941,18 @@ class HttpsTransport:
                     conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
                 ioprofiler.headers_received()
+                rh = {k.lower(): v for k, v in r.getheaders()}
+                if r.status == 200 and (headers or {}).get("Range") and \
+                        _range_ignored(headers, rh.get("content-length")):
+                    # a range asked for and the whole file coming (the CDN's osmtags archive, 2,366 MB for a 9-80 KB
+                    # range, twice on 2026-11-11, read into memory beside a teleport): not read, the connection
+                    # dropped; the caller sees a 200 with no body (a range error to it, as before, without the file)
+                    log.warning("net: %s: HTTP 200 with %s bytes for %s: not read", url, rh.get("content-length"),
+                                headers.get("Range"))
+                    conn.close()
+                    return r.status, rh, b""
                 body = r.read()
-                out = r.status, {k.lower(): v for k, v in r.getheaders()}, body
+                out = r.status, rh, body
             except (http.client.HTTPException, OSError):
                 conn.close()
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
@@ -954,6 +964,24 @@ class HttpsTransport:
                 raise
             self._give(key, conn)
             return out
+
+
+RANGE_IGNORED_MIN = 16 * 1024 * 1024    # bytes: a 200 this big (and 8x the range) for a range request is not read
+
+
+def _range_ignored(headers, content_length):
+    """A request with a Range header answered 200 with a body far larger than the range (the server ignored it): True
+    when Content-Length is over RANGE_IGNORED_MIN and 8x the range asked for (a small file sent whole is read)."""
+    rng = (headers or {}).get("Range")
+    if not rng or not content_length:
+        return False
+    try:
+        n = int(content_length)
+        a, b = rng.split("=", 1)[1].split(",", 1)[0].split("-", 1)
+        want = int(b) - int(a) + 1 if a and b else 0
+    except (ValueError, IndexError):
+        return False
+    return n > RANGE_IGNORED_MIN and n > 8 * max(want, 1)
 
 
 # IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
