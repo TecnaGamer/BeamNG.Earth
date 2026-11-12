@@ -35,6 +35,7 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod deckjoints;
 mod deckmerge;
 mod levels;
 mod levelrules;
@@ -6058,6 +6059,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(building_walls_np, m)?)?;
     m.add_function(wrap_pyfunction!(tilecuts::nearest_segments, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings_lists, m)?)?;
-    m.add("VERSION", 240)?;
+    // 241: deckjoints (a deck junction of several joints one field, its lone ends pinned: junction_groups, field_pins;
+    // the pads of joints a short part links merged: pad_links; GitHub #1083), gradebins' overlap yield
+    m.add_function(wrap_pyfunction!(deckjoints::junction_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::field_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::pad_links, m)?)?;
+    m.add("VERSION", 241)?;
     Ok(())
 }
