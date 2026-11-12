@@ -317,9 +317,9 @@ do
   spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
   quatFromDir = function(d) return d end
   log = function() end
-  local function gap(loaded, height)
+  local function gap(loaded, height, startX)
     return fixture({ 'j' }, 2, 4, function(f)
-      f.x, f.speed = 95, 0
+      f.x, f.speed = startX or 95, 0
       f.nodes = { w = { pos = { x = 0, y = 0, z = 0 }, radius = 4, links = { j = {} } },
         j = { pos = { x = 100, y = 0, z = 0 }, radius = 4, links = {} } }
       if loaded then
@@ -334,6 +334,11 @@ do
   T.check(f.modes[#f.modes] == 'stop' and #f.drives == 0, 'a graph gap holds rather than sending a disconnected path')
   for _ = 1, 70 do f:step() end
   T.check(recoveries == 1, 'a loaded continuation across a 120 m graph gap retains normal no-progress recovery')
+  recoveries = 0; f = gap(true, nil, 40)
+  T.check(#f.drives == 1, 'the vehicle first drives the valid segment before the gap')
+  f.x = 95; f.gps.onAiRouteDone(1)
+  for _ = 1, 70 do f:step() end
+  T.check(recoveries == 1, 'a completed local path still recovers when the continuation is loaded but disconnected')
   recoveries = 0; f = gap(false)
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0, 'an unloaded continuation still waits for the graph')

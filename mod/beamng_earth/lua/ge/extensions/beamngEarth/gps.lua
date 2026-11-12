@@ -1222,7 +1222,8 @@ function M.update(anchor, player)
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
-      elseif not autoFinished and now - progAt > M.AUTO_NOPROGRESS_S then
+      -- A completed path waits for streaming, but an unreachable loaded continuation still needs recovery.
+      elseif (not autoFinished or not tg) and now - progAt > M.AUTO_NOPROGRESS_S then
         stuckTries = stuckTries + 1
         if stuckTries >= 2 then         -- the path given again did not help: onto the route ahead
           stuckTries = 0
