@@ -347,7 +347,8 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
-    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
+    _CDN_HOST: "satellite photos of the distant land, road tags and the weekly railway, lane and sign data (the "
+               "project's own tile host); the other photo sources, Pages' copy of the data meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
