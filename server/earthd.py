@@ -728,7 +728,7 @@ MAP_RETEX_BOOST = 4         # the 3D map open: RETEX_INFLIGHT and RETEX_RATE tim
 RETEX_INFLIGHT = 2         # (2: the 3D map's quick textures sharpen as their photos come, 2026-11-07)
 RETEX_REPEAT = 3
 # Shown in the mod's UI (V1_3_SPEC §C), after the imagery credits.
-ELEVATION_CREDIT = "Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen"
+ELEVATION_CREDIT = "Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen"
 
 log = logging.getLogger("earthd")
 
@@ -10985,6 +10985,15 @@ def main():
             args.imagery = cdnmod.chain(args.imagery, netfetch.Fetcher(offline=args.offline), args.cache_dir)
         except Exception as e:
             log.warning("cdn: %s: %s", type(e).__name__, e)
+    if "BNGE_DEM_CDN" not in os.environ:     # (Mapterhorn's z0-12 from the tile host where the switch says: dem.py)
+        import cdn as cdnmod
+        try:
+            rel = cdnmod.dem_release(netfetch.Fetcher(offline=args.offline), args.cache_dir)
+        except Exception as e:
+            log.warning("cdn: %s: %s", type(e).__name__, e)
+            rel = None
+        os.environ["BNGE_DEM_CDN"] = rel or "off"   # (the block workers read it at their import of dem)
+        demmod.MT_CDN_RELEASE = rel
     if args.cells != 32 and args.near_visual not in MESH_LAYOUT:
         ap.error("--cells 64 needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     if args.block != TERRAIN_BLOCK and args.near_visual not in MESH_LAYOUT:

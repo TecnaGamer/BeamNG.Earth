@@ -142,7 +142,8 @@ class Source:
 
 SOURCES = {
     "usgs": Source("usgs", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-                   16, "USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=10),
+                   16, "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12),
+                   min_zoom=10),
     "eox2023": Source("eox2023", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg",
                       14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
                           "Copernicus Sentinel data 2023), CC BY-NC-SA 4.0"),
@@ -158,7 +159,7 @@ SOURCES = {
 SOURCES["naip"] = Source(
     "naip", "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer/exportImage"
             "?bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=jpg&f=image",
-    17, "USDA NAIP via USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=17,
+    17, "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12), min_zoom=17,
     export=2, lazy=True, probe_source="usgs")
 # The same NAIP from USDA's own service: newer flights (2024-25, some states 0.3 m) and 2-5x faster
 # (1.6-4 s per 1024² in-game 2026-10-13 vs ~10 s), but blank in places (Maryland, Denver: black, so

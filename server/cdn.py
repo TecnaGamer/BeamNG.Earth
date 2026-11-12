@@ -3,7 +3,11 @@ CDN_BASE, tile packs (tilepack.py) built by the data repo's GitHub Action. A swi
 (SWITCH_URL, cdn.json) turns each dataset on or off for every player (the kill switch: R2 bills per request and has no
 spending cap), read at the server's start and every SWITCH_TTL_S; unreachable or off: the original sources as before.
 
-    cdn.json: {"imagery": {"bngs2": {"enabled": true}}}
+    cdn.json: {"imagery": {"bngs2": {"enabled": true}},
+               "dem": {"bngmt": {"enabled": true, "release": "0.0.13"}}}
+
+"dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
+the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
 import json
 import logging
@@ -61,3 +65,13 @@ def chain(names, fetcher, cache_dir):
     i = names.index(BEFORE)
     log.info("cdn: %s on (%s)", S2.name, CDN_BASE)
     return tuple(names[:i] + [S2.name] + names[i:])
+
+
+def dem_release(fetcher, cache_dir):
+    """The Mapterhorn pack release the switch turns on ("dem" -> "bngmt"), or None."""
+    on = (switch(fetcher, cache_dir).get("dem") or {}).get("bngmt") or {}
+    rel = str(on.get("release") or "").strip()
+    if not on.get("enabled") or not rel or "/" in rel or ".." in rel:
+        return None
+    log.info("cdn: Mapterhorn packs %s on (%s)", rel, CDN_BASE)
+    return rel

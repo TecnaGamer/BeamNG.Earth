@@ -26,7 +26,8 @@ per request: one dict update under a lock. At start a background thread walks th
 this module) and merges it with the index; until then ready is False and nothing is evicted.
 
 Eviction (a background thread): when the tracked bytes exceed the cap, least recently used files go
-until LOW_WATER (90 %) of the cap is left, at most every EVICT_S. Never evicted: gravity/, files this
+until LOW_WATER (90 %) of the cap is left, at most every EVICT_S; the raw elevation tiles (KEEP_PREFIXES) are passed over
+while they are at most KEEP_SHARE of that (dear to download again, small beside the rest). Never evicted: gravity/, files this
 server process used within PROTECT_S (an hour: the area around the player), and markers (_marker: empty files such
 as "no seams", and the tile columns' miss indexes, missindex.py: they save requests; clear() removes them).
 The start-up walk also hands the old per-tile 404 marker files (<y>.404) to missindex (migrate_misses, a thread of
@@ -72,6 +73,13 @@ INDEX_HEADER = "# beamng-earth cache index 1"
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
            "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
+# Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
+# maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in
+# the cache (the decoded mirror, revisit, map data, sea floor, photos), so plain least-recently-used eviction under the
+# 20 GB default cap dropped them after ~7 other places and a return downloaded every one again. Eviction now passes
+# over them while they are at most KEEP_SHARE of what it cuts down to (their own oldest go first beyond that).
+KEEP_PREFIXES = ("dem/mapterhorn/", "dem/aws-terrarium/")
+KEEP_SHARE = 0.25
 MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
                                     # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
@@ -496,7 +504,22 @@ class Cache(NoCache):
         order = self._unpinned(order, lambda item: item[1])
         self._last_evict = self.now()
         n = b = 0
-        for _, key in order:
+        kept = self._kept_bytes()
+        held = []
+        for item in order:
+            key = item[1]
+            if self._used <= target:
+                break
+            keep = key.startswith(KEEP_PREFIXES)
+            if keep and kept <= KEEP_SHARE * target:
+                held.append(item)               # (taken only if the rest is not enough)
+                continue
+            got = self._remove(key, floor, empty_too=False)
+            if got is not None:
+                n, b = n + 1, b + got
+                if keep:
+                    kept -= got
+        for _, key in held:
             if self._used <= target:
                 break
             got = self._remove(key, floor, empty_too=False)
@@ -508,6 +531,11 @@ class Cache(NoCache):
             log.info("cache: evicted %d least recently used files (%s); %s of %s in use", n, _gb(b),
                      _gb(self._used), _gb(cap) if cap else "unlimited")
         return n, b
+
+    def _kept_bytes(self):
+        """Bytes of the tracked KEEP_PREFIXES files."""
+        with self._lock:
+            return sum(e[0] or 0 for k, e in self._entries.items() if k.startswith(KEEP_PREFIXES))
 
     def _unpinned(self, items, key_of):
         """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""

@@ -56,8 +56,8 @@ MAX_DEM_KEYS = 64               # DEM tiles looked up per far tile (a footprint 
 IMAGERY = {
     "md6in": "State of Maryland, MD iMAP / DoIT",
     "naipusda": "USDA NAIP",
-    "naip": "USDA NAIP via USGS The National Map",
-    "usgs": "USGS The National Map",
+    "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
+    "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
     "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
@@ -68,7 +68,7 @@ IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
 # (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
 IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
 ELEVATION = {
-    demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
+    demmod.MAPTERHORN["name"]: "Mapterhorn (https://mapterhorn.com/attribution)",     # (z0-12 from the project's tile host: still Mapterhorn's)
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
     "lidarbc": "Contains information licensed under the Open Government Licence - British Columbia (LidarBC)",
     "hrdem": "Contains information licensed under the Open Government Licence - Canada "
