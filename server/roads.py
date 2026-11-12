@@ -792,8 +792,11 @@ SKEW_MIN_SIN = math.sin(math.radians(20.0))    # flatter crossings are taken as 
 
 
 def _feature_boxes(feats):
-    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats."""
-    got = feats.__dict__.get("_lonlat_boxes")
+    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats (as "_feature_boxes":
+    surface._lonlat_boxes keeps its own (lon0, lon1, lat0, lat1) as "_lonlat_boxes"; under one key, whichever ran first
+    on a layer gave the other its columns crossed, and paint_roads then took every road for off the block: no road paint
+    in the ground and no carriageway in its photo, the Discord "mountain roads 100% gravel/grass since 1.6.3")."""
+    got = feats.__dict__.get("_feature_boxes")
     if got is None:
         n = len(feats)
         got = np.full((n, 4), np.nan)
@@ -810,7 +813,7 @@ def _feature_boxes(feats):
             for i in np.flatnonzero(ok):
                 seg = ll[a[i]:b[i]]
                 got[i] = (seg[:, 0].min(), seg[:, 1].min(), seg[:, 0].max(), seg[:, 1].max())
-        feats.__dict__["_lonlat_boxes"] = got
+        feats.__dict__["_feature_boxes"] = got
     return got
 
 

@@ -197,7 +197,7 @@ def smooth(feats, frame):
         rt.__dict__["_rows"] = None
         rt.__dict__["_major"] = None
     feats.coord_off, feats.en, feats.lonlat = new_co, en, lonlat
-    for key in ("_xy_in", "_centres", "_boxes", "_lonlat_boxes"):
+    for key in ("_xy_in", "_centres", "_boxes", "_boxes_in", "_ll_boxes", "_lonlat_boxes", "_feature_boxes"):
         feats.__dict__.pop(key, None)
     return feats
 
