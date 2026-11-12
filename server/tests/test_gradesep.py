@@ -197,6 +197,23 @@ class UnderpassTest(unittest.TestCase):
         self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
         self.assertIn([], [roads.level_ranges(f, i) for i in (1, 2)], "the piece it crosses: ground, no tube")
 
+    def test_a_junction_over_a_long_tunnel_in_the_open_bridges_it(self):
+        # GitHub #1083 (Vienna's S1 under Rautenweg): the junction's node stands 1 m beside the tunnel's line, so its
+        # arms cross it within END_M of their ends; the arm going on from the node still crosses over (JOINED_ENDS)
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        cutting = lambda e, n: np.where(np.abs(e - e0[0]) < 12.0, 0.0, 7.0)       # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (1.0, 0.0)], [(1.0, 0.0), (200.0, 0.0)], [(0.0, -60.0), (0.0, 60.0)]],
+                            ["secondary", "secondary", "motorway"], flags=[(2, "is_tunnel")]), cutting)
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
+        self.assertEqual(roads.level_ranges(f, 2), [], "the tunnel: ground under the bridge")
+        joined, gradesep.JOINED_ENDS = gradesep.JOINED_ENDS, False
+        try:
+            g = hooked(features([[(-200.0, 0.0), (1.0, 0.0)], [(1.0, 0.0), (200.0, 0.0)], [(0.0, -60.0), (0.0, 60.0)]],
+                                ["secondary", "secondary", "motorway"], flags=[(2, "is_tunnel")]), cutting)
+            self.assertEqual([k for _, _, k in roads.level_ranges(g, 2)], ["tunnel"])
+        finally:
+            gradesep.JOINED_ENDS = joined
+
     def test_a_long_tunnel_on_flat_ground_stays_a_tunnel(self):
         # the same on a flat DEM (a covered tunnel the DEM does not show): no bridge over it
         f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],

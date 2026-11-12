@@ -25,6 +25,9 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+/// m: the Gaussian along a road its fill_z climb is smoothed over (approach_add_core)
+const FILL_SMOOTH_M: f64 = 10.0;
+
 /// The approach ramp (module doc); None when nothing is raised.
 #[allow(clippy::too_many_arguments)]
 pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, others: &[(&[[f64; 2]], f64)],
@@ -97,8 +100,35 @@ pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, ot
     }
     if let Some(z) = fill_z {
         let z0 = if at_end { z[n - 1] } else { z[0] };
+        // what the road's own climb takes off the ramp; smoothed along it (FILL_SMOOTH_M, 238): where the ramp met a road
+        // climbing away from the bridge it left a sag, the grade turning 8 % in a metre (the A6 at Heilbronn, GitHub
+        // #1176), now a rounded one; held exact at the raised end
+        let r: Vec<f64> = (0..n).map(|i| add[i].min((z[i] - z0).max(0.0))).collect();
+        let sig = FILL_SMOOTH_M;
         for i in 0..n {
-            add[i] = (add[i] - (z[i] - z0).max(0.0)).max(0.0);
+            let d_end = if at_end { total - s[i] } else { s[i] };
+            // (a Gaussian-weighted straight line fitted round each vertex: a steady climb kept as it is, also where the
+            // window runs off the line's end, a kink rounded)
+            let (mut s0, mut s1, mut s2, mut r0, mut r1) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for j in 0..n {
+                let ds = s[j] - s[i];
+                if ds.abs() > 3.0 * sig {
+                    continue;
+                }
+                // (the vertices' own spacing as their weight: an uneven plan line is no lopsided average)
+                let span = 0.5 * (s[(j + 1).min(n - 1)] - s[j.saturating_sub(1)]).max(1e-3);
+                let w = (-0.5 * (ds / sig) * (ds / sig)).exp() * span;
+                s0 += w;
+                s1 += w * ds;
+                s2 += w * ds * ds;
+                r0 += w * r[j];
+                r1 += w * r[j] * ds;
+            }
+            let den = s0 * s2 - s1 * s1;
+            let rs = if den > 1e-9 * s0 * s0.max(1.0) { (s2 * r0 - s1 * r1) / den } else if s0 > 0.0 { r0 / s0 } else { r[i] };
+            let hold = (d_end / (2.0 * sig)).min(1.0);       // (none at the raised end itself)
+            let rr = (r[i] + (rs - r[i]) * hold).max(0.0);
+            add[i] = (add[i] - rr).max(0.0);
         }
     }
     if add.iter().cloned().fold(f64::NEG_INFINITY, f64::max) < 1e-3 {
@@ -220,6 +250,20 @@ mod tests {
         let a = approach_add_core(&xy, false, 6.0, 4.0, &[(&beside, 3.0)], 2.0, None, 0.5, 0.05, 30.0, 320.0, 1.0, 0.1,
                                   None).unwrap();
         assert!(a[0] <= 0.0 + 1e-9, "8 m off, 4 + 3 + 1 m of it taken: nothing left for the slope");
+    }
+
+    #[test]
+    fn a_fill_meets_a_climbing_road_in_a_rounded_sag() {
+        // the A6 at Heilbronn (GitHub #1176): a 3.1 m abutment lift, the road climbing 3.5 % away from the bridge; the
+        // ramp's surface met it 48 m on with the grade turning 8 % in a metre
+        let xy = line(101, 1.0);
+        let z: Vec<f64> = (0..101).map(|i| 204.8 + 0.035 * i as f64).collect();
+        let a = approach_add_core(&xy, false, 3.1, 4.0, &[], 2.0, None, 0.5, 0.05, 30.0, 320.0, 1.0, 0.1, Some(&z))
+            .unwrap();
+        assert!((a[0] - 3.1).abs() < 1e-9);
+        let top: Vec<f64> = a.iter().zip(&z).map(|(a, z)| a + z).collect();
+        let worst = (1..100).map(|i| (top[i + 1] - 2.0 * top[i] + top[i - 1]).abs()).fold(0.0f64, f64::max);
+        assert!(worst < 0.01, "grade change per metre {worst}");
     }
 
     #[test]

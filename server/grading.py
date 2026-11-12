@@ -103,6 +103,7 @@ CORRIDOR_W0 = 0.01          # ... and elsewhere (pulling back to the plan as mad
 CORRIDOR_LAM = 50000.0      # ... against its curvature: eased over ~(LAM / W0) ** 0.25 ~ 47 m
 CORRIDOR_THROUGH = 1000     # added to a through road's key (not a slip road): two through roads side by side
                             # (a dual carriageway's halves on a hillside, BR-381's) each keep their own height
+DIP_HOLDS = os.environ.get("BNE_DIP_HOLDS", "off") == "on"   # (a dipped road held over every other: _corridor_key)
 EXTRAP_M = float(os.environ.get("BNE_GRADE_EXTRAP", "4"))             # m a segment's line is carried on past an end where its plan goes on (grade_points: no
                             # washboard of the vertex step on a grade)
 STEEP_RUN = 0.5
@@ -295,6 +296,17 @@ JR_TRUSTED_HALF_M = 4.0     # m: a deck's half width where its cell has none (th
 # end higher than the junction rises only to the junction's height, and an arm is filled to the ramp's surface, less
 # where it climbs above its raised end (approach.rs junction_arm_raise, approach_add's fill_z)
 JR_FILL = os.environ.get("BNE_JR_FILL", "on") != "off"
+# an abutment's approach ramp is a surface too (approach_add's fill_z, smoothed: approach.rs FILL_SMOOTH_M): the road's
+# own climb above its end is taken off the ramp; as an offset on top, the bank roads beside Vienna's S1 trench, whose
+# ends lie down in the cut, rose 7 m over the bank (GitHub #1083)
+APPROACH_FILL = os.environ.get("BNE_APPROACH_FILL", "on") != "off"
+# a ground road ending at a deck's joint goes on from it, it does not pass under it (bridge_lifts): a lid junction's arms,
+# met by its decks at their joints, asked 8 m of clearance over themselves (S1 Rautenweg, Suedtiroler Platz, #1083)
+JOINT_ROADS_ON = os.environ.get("BNE_JOINT_ROADS", "on") != "off"
+JOINT_TOL_M = 0.75          # m: a crossing this near a part's end and a ground road's end is that road joining there
+# an abutment's lift from the bridge whose end is nearest the road end, not the first within APPROACH_TOUCH_M: a 1.4 m
+# deck piece's end took its neighbour's joint 1.4 m off (no lift: its approach stayed down in the cut, #1083)
+NEAREST_END = os.environ.get("BNE_NEAREST_END", "on") != "off"
 # an abutment whose short approach ends at a junction another deck raises is as high as that junction carries it, for
 # the dips under its deck (_end_raised: I-75 dipped 1.6 m under SR 56's decks 11-13 m over it, stub_carried_raise)
 JR_CARRY = os.environ.get("BNE_JR_CARRY", "on") != "off"
@@ -3044,7 +3056,8 @@ class _Planner:
                 # Freeway rising 3-4 m to each of its street bridges, the user 2026-11-01)
                 a = approach_add(p.xy, at_end, lift, p.half, others,
                                  MEASURED_SIDE_RUN if measured or solved else SLOPE_RUN,
-                                 XS_FIXED_GRADE if solved and _never_raised(specs[i]) else None)
+                                 XS_FIXED_GRADE if solved and _never_raised(specs[i]) else None,
+                                 fill_z=p.z if APPROACH_FILL else None)
                 _la, _lo, _ = self.frame.enu_to_geodetic(np.array([e[0]]), np.array([e[1]]), 0.0)
                 log.debug("grading: approach %s at %s (%.6f, %.6f): lift %.1f m, raised %s, %d caps", fid, np.round(e[:2], 1),
                           float(_la[0]), float(_lo[0]), lift, None if a is None else round(float(np.max(a)), 2),
@@ -5099,6 +5112,8 @@ class _Planner:
         hit = np.flatnonzero(d <= APPROACH_TOUCH_M)
         if not len(hit):
             return None
+        if NEAREST_END:
+            hit = hit[np.argsort(d[hit], kind="stable")]
         bi = hc["end_of"][int(hit[0])]
         bridge = np.asarray(hc["bridges"][bi], np.float64)[:, :2]
         cls = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi]
@@ -5135,6 +5150,8 @@ class _Planner:
         hit = np.flatnonzero(d <= APPROACH_TOUCH_M)
         if not len(hit):
             return None
+        if NEAREST_END:
+            hit = hit[np.argsort(d[hit], kind="stable")]
         bridge = hc["bridges"][hc["end_of"][int(hit[0])]]
         sol = self._xsolve(bridge) if XS_ON else None
         # the bridge's own cells (a few, it is short): the roads crossing under it and the parts it joins
@@ -6467,8 +6484,18 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     if s[-1] < 2 * APPROACH_MIN_CROSS_M and not chain:
         return []
     ground_lines = list(ground_lines)
+    gends = np.array([[g[0][:2], g[-1][:2]] for g in ground_lines], np.float64).reshape(-1, 2) if ground_lines \
+        else np.zeros((0, 2))
+
+    def off_joint(cs, sp):
+        if not JOINT_ROADS_ON or not len(gends):
+            return cs
+        return [c for c in cs if min(float(c[1]), sp - float(c[1])) > JOINT_TOL_M
+                or float(np.hypot(*(gends - c[2]).T).min()) > JOINT_TOL_M]
     by = roadsmod._crossings_by([line], ground_lines) if half is not None and under_z is None else None
-    cr = [c for g in by for c in g] if by is not None else roadsmod._crossings([line], ground_lines)
+    if by is not None:
+        by = [off_joint(g, s[-1]) for g in by]
+    cr = [c for g in by for c in g] if by is not None else off_joint(roadsmod._crossings([line], ground_lines), s[-1])
     nr = len(cr)
     if rail_lines:
         cr = cr + roadsmod._crossings([line], list(rail_lines))
@@ -6517,9 +6544,10 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         sp = float(np.hypot(*np.diff(part, axis=0).T).sum())
         pj = joined_ends(part)
         if by is not None:
-            got = [(c, ground_lines[g]) for g, cs in enumerate(roadsmod._crossings_by([part], ground_lines)) for c in cs]
+            got = [(c, ground_lines[g]) for g, cs in enumerate(roadsmod._crossings_by([part], ground_lines))
+                   for c in off_joint(cs, sp)]
         else:
-            got = [(c, None) for c in roadsmod._crossings([part], ground_lines)]
+            got = [(c, None) for c in off_joint(roadsmod._crossings([part], ground_lines), sp)]
         got = [(c, gl) for c, gl in got if (float(c[1]) >= APPROACH_MIN_CROSS_M or pj[0])
                and (float(c[1]) <= sp - APPROACH_MIN_CROSS_M or pj[1])]
         if by is not None and got:
@@ -6947,12 +6975,14 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
 
 
 def _corridor_key(p, spec, fid):
-    """share_corridors' who-holds key of a plan: -1 out of it (no road carriageway, a tunnel's own plan); a road dipped
-    under a deck holds over every other; then a through road over a slip road (Overture's link subclass, a _link
-    class), then grade_rank."""
+    """share_corridors' who-holds key of a plan: -1 out of it (no road carriageway, a tunnel's own plan); a through
+    road over a slip road (Overture's link subclass, a _link class), then grade_rank. (A road dipped under a deck held
+    over every other, DIP_HOLDS, along its whole plan: a slip road dipped under the M1's overpass 500 m off held at the
+    roundabout it leaves, beside the raised road it forks from, and stepped 1.4 m off that road's fill, GitHub #960;
+    Wesley Chapel's and Findlay's dips, which it was made for, ride the same without it.)"""
     if spec is None or len(p.xy) < 2 or p.road_half < CORRIDOR_MIN_RH or TUNNEL_TAG in str(fid):
         return -1
-    if getattr(p, "rank", GRADE_RANK_NONE) == GRADE_RANK_NONE:
+    if DIP_HOLDS and getattr(p, "rank", GRADE_RANK_NONE) == GRADE_RANK_NONE:
         return 10 ** 6
     link = bool(getattr(spec, "link", False)) or (spec.cls or "").endswith("_link")
     return int(grade_rank(spec)) + (0 if link else CORRIDOR_THROUGH)
@@ -6976,8 +7006,8 @@ def _wall_vertices(p):
 
 def share_corridors(plans, specs):
     """Roads whose carriageways touch or overlap side by side agree in height there: the difference left between two is
-    what their gap holds at CORRIDOR_BANK, none where the pavements overlap. A road dipped under a deck holds and the
-    other follows (the dip carried onto the ramp beside it), a through road holds over a slip road, a higher grade_rank
+    what their gap holds at CORRIDOR_BANK, none where the pavements overlap. A through road holds over a slip road (a
+    dipped one's dip carried onto the ramp beside it; DIP_HOLDS: a dipped road over every other), a higher grade_rank
     over a lower; of two equal slip roads the lower rises, two through roads (a dual carriageway's halves, one dipped)
     keep their own. Not beside a cutting's wall (two levels). Each plan's corrections eased along it on a smoothing
     spline, its ends and its bridge ends held (native/earthfast corridor.rs). Two branches leaving a fork at a few degrees each

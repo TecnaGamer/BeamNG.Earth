@@ -1487,7 +1487,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         vary.append((0, int(band[0]), int(band[1]), 2 * int(band[1])))
     if mats[1] is not None and not lobby:
         vary.append((1, BAND_SHOP[0], BAND_SHOP[1], 1))
-    fast.require(237, "building_walls_np")
+    fast.require(240, "building_walls_np")
     P, UV, mid = fast._ef.building_walls_np(
         np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), float(z0), float(z_eave), bool(spec.wall),
         bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
@@ -4885,7 +4885,7 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     A, B = S[:, :2], S[:, 2:]
     D = B - A
     L2 = np.maximum((D * D).sum(1), 1e-12)
-    fast.require(237, "nearest_segments")
+    fast.require(240, "nearest_segments")
     A, D = np.ascontiguousarray(A), np.ascontiguousarray(D)
     rows = []
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]

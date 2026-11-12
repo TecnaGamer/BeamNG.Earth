@@ -93,7 +93,7 @@ GROUND_MEMO_ANCHORS = 2
 def _point_memo():
     """A {point (cm, int64 x, y): z} memo (earthfast.PointMemo: get(keys (n, 2)) -> z, NaN where none; put; clear)."""
     import fast
-    fast.require(237, "PointMemo")
+    fast.require(240, "PointMemo")
     return fast._ef.PointMemo()
 
 

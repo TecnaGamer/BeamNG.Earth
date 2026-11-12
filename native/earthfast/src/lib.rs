@@ -447,7 +447,7 @@ fn segment_crossings_g(
 
 /// segment_crossings_g on lists of lines: parts and ground each a list of float64 (k, >= 2) arrays (their first two
 /// columns), packed here: roads._crossings / _crossings_by stacked them in numpy on every call (~1 % of a 16-tile
-/// Fells Point probe's CPU, 2026-11-12). 237.
+/// Fells Point probe's CPU, 2026-11-12). 240.
 #[pyfunction]
 fn segment_crossings_lists(py: Python<'_>, parts: Vec<PyReadonlyArray2<'_, f64>>, ground: Vec<PyReadonlyArray2<'_, f64>>)
                            -> PyResult<Vec<(usize, usize, f64, f64, f64)>> {
@@ -3171,7 +3171,7 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// lobby, 197); None: the shop sheet's band shop_k.
 /// building_walls with its P, UV and mid as numpy arrays (float64, float64, uint8), not lists: buildings.Mesh keeps
 /// them as blocks (a Python float per number and numpy's conversion of the lists at the end were ~2 % of a road tile
-/// set's CPU, Fells Point 2026-11-12). 237.
+/// set's CPU, Fells Point 2026-11-12). 240.
 #[pyfunction]
 #[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
                     roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
@@ -6044,8 +6044,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
-    // 237: tilecuts (roads.build_tile's cut lists as masks of the tile's roads packed once: road_cut_boxes,
-    // inside_road_cuts; retaining_walls' deck_floor)
+    // 238: gradesep_underpasses' prm[7] (a junction over a tunnel: its arms' crossings by the node count); deck_weld
+    // (one height at each joint of a deck chain's per-part profile)
+    m.add_function(wrap_pyfunction!(decks::deck_weld, m)?)?;
+    // 240: the road tiles' kernels (tilecuts: build_tile's cut lists as masks of the tile's roads packed once,
+    // road_cut_boxes / inside_road_cuts; retaining_walls' deck_floor; offset_polyline; railways' PointMemo; doors'
+    // nearest_segments), building_walls_np (Mesh's numpy blocks), segment_crossings_lists (roads._crossings)
     m.add_function(wrap_pyfunction!(tilecuts::road_cut_boxes, m)?)?;
     m.add_function(wrap_pyfunction!(tilecuts::inside_road_cuts, m)?)?;
     m.add_function(wrap_pyfunction!(tilecuts::deck_floor, m)?)?;
@@ -6054,6 +6058,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(building_walls_np, m)?)?;
     m.add_function(wrap_pyfunction!(tilecuts::nearest_segments, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings_lists, m)?)?;
-    m.add("VERSION", 237)?;
+    m.add("VERSION", 240)?;
     Ok(())
 }
