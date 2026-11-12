@@ -209,12 +209,17 @@ class UnderDeckReachTest(unittest.TestCase):
         import fast
         jar = fast._ef.junction_arm_raise
         args = (grading.APPROACH_GRADE, grading.APPROACH_MIN_RUN, grading.APPROACH_MAX_RUN, grading.APPROACH_MIN_LIFT)
-        level = jar(np.array([9.9]), np.array([8.0]), np.array([26.0]), 26.0, *args)
-        up = jar(np.array([9.9]), np.array([8.0]), np.array([26.0]), 34.6, *args)
-        down = jar(np.array([9.9]), np.array([8.0]), np.array([26.0]), 20.0, *args)
+        one = (np.array([9.9]), np.array([8.0]), np.array([26.0]), np.array([26.0]))     # (lift, stub, z_b, z_far)
+        level = jar(*one, 26.0, *args)
+        up = jar(*one, 34.6, *args)
+        down = jar(*one, 20.0, *args)
         self.assertAlmostEqual(up[0], level[0] - 8.6, places=9, msg="an arm end 8.6 m higher: only to the junction")
         self.assertAlmostEqual(down[0], level[0], places=9, msg="a lower arm end: the ramp's offset, as before")
-        self.assertIsNone(jar(np.array([9.9]), np.array([8.0]), np.array([26.0]), 36.0, *args))
+        self.assertIsNone(jar(*one, 36.0, *args))
+        # an abutment mapped down in a cut (Vienna's S1 under Rautenweg): the stub's climb out of it is taken off
+        cut = jar(np.array([10.0]), np.array([10.0]), np.array([153.9]), np.array([160.5]), 160.5, *args)
+        flat = jar(np.array([10.0]), np.array([10.0]), np.array([160.5]), np.array([160.5]), 160.5, *args)
+        self.assertAlmostEqual(cut[0], flat[0] - 6.6, places=9)
 
 
 class OverpassIntegrationTest(unittest.TestCase):

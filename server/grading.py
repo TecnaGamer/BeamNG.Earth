@@ -3306,11 +3306,14 @@ class _Planner:
                         found.append((lift, L, far, b, got))
                 if found:
                     e2 = np.asarray(e, np.float64)[:2]
-                    zg = self._z_raw(np.array([f[2] for f in found] + [e2], np.float64))
-                    zf, ze = (zg[:-1], float(zg[-1])) if JR_FILL else (np.zeros(len(found)), 0.0)
+                    nf = len(found)
+                    zg = self._z_raw(np.array([f[2] for f in found] + [f[3] for f in found] + [e2], np.float64))
+                    zf, zb, ze = (zg[:nf], zg[nf:2 * nf], float(zg[-1])) if JR_FILL else \
+                        (np.zeros(nf), np.zeros(nf), 0.0)
                     import fast
                     best = fast._ef.junction_arm_raise(np.array([f[0] for f in found], np.float64),
                                                        np.array([f[1] for f in found], np.float64),
+                                                       np.ascontiguousarray(zb, np.float64),
                                                        np.ascontiguousarray(zf, np.float64), ze, float(APPROACH_GRADE),
                                                        float(APPROACH_MIN_RUN), float(APPROACH_MAX_RUN),
                                                        float(APPROACH_MIN_LIFT))

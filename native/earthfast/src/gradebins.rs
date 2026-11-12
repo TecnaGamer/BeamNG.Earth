@@ -33,6 +33,9 @@ pub const RANK_SIDE_MAX_DIFF: i64 = 6;
 /// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
 /// smoothness there)
 pub const RANK_HOLD_MAX: i64 = 114;
+/// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
+/// segment (a step held in a plan over a few cm) is carried on at this
+pub const EXTRAP_MAX_GRADE: f64 = 0.35;
 
 /// The scalar knobs (grading's constants, in grade_points' argument order).
 #[derive(Clone, Copy)]
@@ -268,7 +271,16 @@ fn target(g: &Seg, qx: f64, qy: f64, tu: f64, t: f64, along: f64, p: &Prm) -> (f
         let e = g.ext;
         let lo = if g.link & 1 != 0 { -e } else { 0.0 };
         let hi = if g.link & 2 != 0 { 1.0 + e } else { 1.0 };
-        target = g.za + (g.zb - g.za) * tu.clamp(lo, hi);
+        let tc = tu.clamp(lo, hi);
+        target = g.za + (g.zb - g.za) * tc;
+        // (carried on past an end at EXTRAP_MAX_GRADE at most: a tunnel section's last 0.14 m segment holding a 5.2 m
+        // step from its floor to its graded portal, carried 4 m on, stood the ground 22 m over the road at Porte
+        // Maillot and 14 m under it beside, GitHub #1083)
+        let slope = (g.zb - g.za) / g.len;
+        if slope.abs() > EXTRAP_MAX_GRADE && !(0.0..=1.0).contains(&tc) {
+            let (base, over) = if tc > 1.0 { (g.zb, (tc - 1.0) * g.len) } else { (g.za, tc * g.len) };
+            target = base + slope.clamp(-EXTRAP_MAX_GRADE, EXTRAP_MAX_GRADE) * over;
+        }
     }
     // m past a bridge abutment's end (abut_d: how far along the road it lies from this segment): over the deck
     let mut past = 0.0f64;

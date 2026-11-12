@@ -138,39 +138,6 @@ impl<'a> Lines<'a> {
         let (o, oend) = self.next(l, last, kind, tol, turn)?;
         self.at(o, if oend { self.len(o) - over } else { over })
     }
-    /// m from point p to line l (its segments).
-    fn dist(&self, l: usize, p: (f64, f64)) -> f64 {
-        let mut best = f64::INFINITY;
-        for k in self.st[l] + 1..self.st[l + 1] {
-            let (ax, ay) = (self.xy[[k - 1, 0]], self.xy[[k - 1, 1]]);
-            let (bx, by) = (self.xy[[k, 0]], self.xy[[k, 1]]);
-            let (dx, dy) = (bx - ax, by - ay);
-            let l2 = (dx * dx + dy * dy).max(1e-12);
-            let t = (((p.0 - ax) * dx + (p.1 - ay) * dy) / l2).clamp(0.0, 1.0);
-            best = best.min((p.0 - (ax + t * dx)).hypot(p.1 - (ay + t * dy)));
-        }
-        best
-    }
-    /// Every line (not UNDER, a railway for a railway, a road for a road) joined to line l's end (last) or start within
-    /// tol m, whatever its turn: (line, its end there is its last point), in line order.
-    fn joined(&self, l: usize, last: bool, kind: &numpy::ndarray::ArrayView1<i64>, tol: f64) -> Vec<(usize, bool)> {
-        let p = self.end(l, last);
-        let (gx, gy) = ((p.0 / ENDS_G).floor() as i64, (p.1 / ENDS_G).floor() as i64);
-        let mut near: Vec<(usize, bool)> = Vec::new();
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                if let Some(v) = self.ends().get(&(gx + dx, gy + dy)) {
-                    near.extend(v.iter().copied());
-                }
-            }
-        }
-        near.sort_unstable();
-        near.dedup();
-        near.into_iter().filter(|&(o, oend)| {
-            let q = self.end(o, oend);
-            o != l && !under(kind[o]) && (kind[o] == RAIL) == (kind[l] == RAIL) && (q.0 - p.0).hypot(q.1 - p.1) < tol
-        }).collect()
-    }
     fn bbox(&self, l: usize) -> (f64, f64, f64, f64) {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
         for k in self.st[l]..self.st[l + 1] {
@@ -478,17 +445,12 @@ pub fn gradesep_spans<'py>(
     let (sep, side, clear, min_half, min_sin, tol, turn) = (prm[0], prm[1], prm[2], prm[3], prm[4], prm[5], prm[6]);
     let ln = Lines::new(xy, starts);
     let n = ln.n();
-    // prm[7] (optional, 0 off): m at most along each other road leaving a junction a line over a short tunnel ends at
-    // within that tunnel's band, spanned until clear of it (arm_spans)
-    let arm_max = if prm.len() > 7 { prm[7] } else { 0.0 };
     let mut spans: Vec<(usize, f64, f64, f64)> = Vec::new();
-    let mut lower: Vec<Option<usize>> = Vec::new(); // (per span: the tunnel it passes over, how 1)
     for r in 0..cand.nrows() {
         let (i, j, si, sj, sin, how) =
             (cand[[r, 0]] as usize, cand[[r, 1]] as usize, cand[[r, 2]], cand[[r, 3]], cand[[r, 4]], cand[[r, 5]]);
         if how == 2.0 {
             spans.push((i, 0.0, ln.len(i), 2.0));
-            lower.push(None);
             continue;
         }
         let (up, lo, s) = if how == 1.0 {
@@ -523,7 +485,6 @@ pub fn gradesep_spans<'py>(
         let sn = sin.max(min_sin).min(1.0);
         let h = ((half[lo] + clear) / sn + half[up] * (1.0 - sn * sn).sqrt() / sn).max(min_half);
         spans.push((up, s - h, s + h, how));
-        lower.push(if how == 1.0 { Some(lo) } else { None });
     }
     // past a line's end: on along the straightest line joined there (one step)
     let mut more = Vec::new();
@@ -539,9 +500,6 @@ pub fn gradesep_spans<'py>(
             }
         }
     }
-    if arm_max > 0.0 {
-        more.extend(arm_spans(&ln, &spans, &lower, &kind, &half, clear, tol, arm_max));
-    }
     spans.extend(more);
     let mut out = Array2::<f64>::zeros((spans.len(), 4));
     for (r, &(l, a, b, how)) in spans.iter().enumerate() {
@@ -551,45 +509,6 @@ pub fn gradesep_spans<'py>(
         out[[r, 3]] = how;
     }
     out.into_pyarray(py)
-}
-
-/// The other roads leaving a junction that a line over a short tunnel (how 1) reaches inside the tunnel's band: a
-/// junction on an underpass's lid (OSM maps the underpass as the lower road's short tunnel, the junction's roads on
-/// the ground over it). Only the straightest went on, so the junction's other roads started on the ground inside the
-/// cut, the elevation's trench under the lid where it leaves the lid out: steps of 3-8 m between one deck part and the
-/// next at the junction (Vienna's S1 under Rautenweg, GitHub #1083). Each such road from the junction until its
-/// carriageway is clear of the tunnel's band (half width + clear + its own half width from the tunnel's line), at most
-/// arm_max m; none for one the junction is clear of already.
-#[allow(clippy::too_many_arguments)]
-fn arm_spans(ln: &Lines, spans: &[(usize, f64, f64, f64)], lower: &[Option<usize>],
-             kind: &numpy::ndarray::ArrayView1<i64>, half: &numpy::ndarray::ArrayView1<f64>, clear: f64, tol: f64,
-             arm_max: f64) -> Vec<(usize, f64, f64, f64)> {
-    let mut out = Vec::new();
-    for (&(l, a, b, how), lo) in spans.iter().zip(lower) {
-        let Some(lo) = *lo else { continue };
-        for (last, over) in [(false, -a), (true, b - ln.len(l))] {
-            if over <= 0.0 {
-                continue;
-            }
-            for (o, oend) in ln.joined(l, last, kind, tol) {
-                let need = half[lo] + clear + half[o];
-                let lo_ = ln.len(o);
-                let along = |t: f64| ln.at(o, if oend { lo_ - t } else { t });
-                if along(0.0).map_or(true, |p| ln.dist(lo, p) >= need) {
-                    continue;
-                }
-                let mut t = 0.0;
-                while t < lo_.min(arm_max) {
-                    t = (t + 1.0).min(lo_);
-                    if along(t).map_or(false, |p| ln.dist(lo, p) >= need) {
-                        break;
-                    }
-                }
-                out.push(if oend { (o, lo_ - t, lo_, how) } else { (o, 0.0, t, how) });
-            }
-        }
-    }
-    out
 }
 
 /// numpy's interp for one x over increasing xp (binary search for the last xp[j] <= x; x at xp[j] exactly: fp[j]; the

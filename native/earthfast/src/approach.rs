@@ -9,8 +9,10 @@
 //! the next junction of a diverging diamond, 18 m over the ground there: Wesley Chapel's SR 56 over I-75, GitHub #1043).
 //!
 //! junction_arm_raise: what is left at a junction's arm end of an approach's cosine ramp (its abutment's lift, the
-//! stub's length), and never more over the arm end's own ground than over the junction's: an arm end lower than the
-//! junction gets the ramp's offset, one higher only what reaches the junction's height (the same rule as fill_z).
+//! stub's length), less what the stub climbs from its abutment's ground to the junction's (a surface, as fill_z: an
+//! abutment mapped down in a cut, a junction on the ground beside it, Vienna's S1 under Rautenweg, GitHub #1083), and
+//! never more over the arm end's own ground than over the junction's: an arm end lower than the junction gets the
+//! ramp's offset, one higher only what reaches the junction's height (the same rule).
 //!
 //! stub_carried_raise: how far an abutment whose short approach ends at a junction another deck raises is carried up
 //! with it (the approach climbs at ramp_grade at most from the junction), up to its own lift.
@@ -132,15 +134,16 @@ pub fn approach_add<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, at_end
 }
 
 /// The raise at a junction's arm end (module doc): per candidate approach its abutment's lift and stub length, the
-/// ground at the stub's junction end (z_far) and at the arm end (z_e). (best m, its candidate) or None under min_lift.
+/// ground at the abutment (z_b), at the stub's junction end (z_far) and at the arm end (z_e). (best m, its candidate)
+/// or None under min_lift.
 #[allow(clippy::too_many_arguments)]
-pub fn junction_arm_raise_core(lift: &[f64], stub: &[f64], z_far: &[f64], z_e: f64, grade: f64, min_run: f64,
-                               max_run: f64, min_lift: f64) -> Option<(f64, usize)> {
+pub fn junction_arm_raise_core(lift: &[f64], stub: &[f64], z_b: &[f64], z_far: &[f64], z_e: f64, grade: f64,
+                               min_run: f64, max_run: f64, min_lift: f64) -> Option<(f64, usize)> {
     let mut best: Option<(f64, usize)> = None;
     for i in 0..lift.len() {
         let run = (lift[i] * std::f64::consts::PI / (2.0 * grade)).clamp(min_run, max_run);
         let v = lift[i] * 0.5 * (1.0 + (std::f64::consts::PI * (stub[i] / run).min(1.0)).cos())
-            + (z_far[i] - z_e).min(0.0);
+            - (z_far[i] - z_b[i]).max(0.0) + (z_far[i] - z_e).min(0.0);
         if v >= min_lift && best.map_or(true, |(b, _)| v > b) {
             best = Some((v, i));
         }
@@ -151,15 +154,14 @@ pub fn junction_arm_raise_core(lift: &[f64], stub: &[f64], z_far: &[f64], z_e: f
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn junction_arm_raise(lift: PyReadonlyArray1<'_, f64>, stub: PyReadonlyArray1<'_, f64>,
-                          z_far: PyReadonlyArray1<'_, f64>, z_e: f64, grade: f64, min_run: f64, max_run: f64,
-                          min_lift: f64) -> PyResult<Option<(f64, usize)>> {
-    let (l, s, z) = (lift.as_array(), stub.as_array(), z_far.as_array());
-    if l.len() != s.len() || l.len() != z.len() {
+                          z_b: PyReadonlyArray1<'_, f64>, z_far: PyReadonlyArray1<'_, f64>, z_e: f64, grade: f64,
+                          min_run: f64, max_run: f64, min_lift: f64) -> PyResult<Option<(f64, usize)>> {
+    let (l, s, b, z) = (lift.as_array(), stub.as_array(), z_b.as_array(), z_far.as_array());
+    if l.len() != s.len() || l.len() != z.len() || l.len() != b.len() {
         return Err(PyValueError::new_err("junction_arm_raise: mismatched arrays"));
     }
-    let (lv, sv, zv): (Vec<f64>, Vec<f64>, Vec<f64>) =
-        (l.iter().copied().collect(), s.iter().copied().collect(), z.iter().copied().collect());
-    Ok(junction_arm_raise_core(&lv, &sv, &zv, z_e, grade, min_run, max_run, min_lift))
+    let v = |a: numpy::ndarray::ArrayView1<f64>| a.iter().copied().collect::<Vec<f64>>();
+    Ok(junction_arm_raise_core(&v(l), &v(s), &v(b), &v(z), z_e, grade, min_run, max_run, min_lift))
 }
 
 /// m an abutment (ground z_b, asked lift) is raised with the junction at its short approach's other end (ground z_far,
@@ -234,11 +236,13 @@ mod tests {
 
     #[test]
     fn arm_end_higher_than_the_junction_gets_only_the_junction_height() {
-        let got = junction_arm_raise_core(&[9.9], &[8.0], &[26.0], 34.6, 0.05, 30.0, 320.0, 0.5).unwrap();
+        let got = junction_arm_raise_core(&[9.9], &[8.0], &[26.3], &[26.0], 34.6, 0.05, 30.0, 320.0, 0.5).unwrap();
         assert!(got.0 < 1.4 && got.0 > 1.0, "{}", got.0);
-        let low = junction_arm_raise_core(&[5.3], &[8.0], &[30.0], 24.0, 0.05, 30.0, 320.0, 0.5).unwrap();
-        assert!((low.0 - junction_arm_raise_core(&[5.3], &[8.0], &[30.0], 30.0, 0.05, 30.0, 320.0, 0.5).unwrap().0)
-            .abs() < 1e-12, "a lower arm end: the ramp's offset, as before");
+        let low = junction_arm_raise_core(&[5.3], &[8.0], &[30.0], &[30.0], 24.0, 0.05, 30.0, 320.0, 0.5).unwrap();
+        assert!((low.0 - junction_arm_raise_core(&[5.3], &[8.0], &[30.0], &[30.0], 30.0, 0.05, 30.0, 320.0, 0.5)
+            .unwrap().0).abs() < 1e-12, "a lower arm end: the ramp's offset, as before");
+        let cut = junction_arm_raise_core(&[10.0], &[10.0], &[153.9], &[160.5], 160.5, 0.05, 30.0, 320.0, 0.5).unwrap();
+        assert!(cut.0 < 10.0 - 6.0, "an abutment down in a cut: the stub's climb out of it taken off");
     }
 
     #[test]
