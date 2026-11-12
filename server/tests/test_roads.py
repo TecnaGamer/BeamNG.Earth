@@ -117,8 +117,9 @@ class RulesTest(unittest.TestCase):
         # TerrainMaterials: a heightfield shader, not something a road decal can carry)
         for v in ("rock", "bedrock", "rocky", "grass", "grass_paver"):
             self.assertEqual(roads.surface_kind("residential", v), "dirt", v)
-        for v in ("stone", "stones"):           # (OSM: mostly stone paving)
+        for v in ("stone", "stones", "flagstone", "flagstones", "tiles"):     # (OSM: stone paving; PR #971's)
             self.assertEqual(roads.surface_kind("residential", v), "cobble", v)
+            self.assertEqual(roads.surface_kind("track", v), "cobble", v)     # (paved, not a dirt track)
         # a value not understood at all is the class's own surface, not the dirt road
         self.assertEqual(roads.surface_kind("residential", "whatever"), "paved")
         self.assertEqual(roads.surface_kind("track", "whatever"), "dirt")
