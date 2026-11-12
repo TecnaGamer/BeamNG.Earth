@@ -41,7 +41,8 @@ def build(source, target):
     tiles = defaultdict(list)
     for row in records:
         tiles[data.tile(row['lat'], row['lon'])].append(row)
-    manifest = {'format': data.FORMAT, 'zoom': data.ZOOM, 'built': digest,
+    built = hashlib.sha256(f'{data.FORMAT}:{data.REVISION}:{digest}'.encode()).hexdigest()
+    manifest = {'format': data.FORMAT, 'zoom': data.ZOOM, 'built': built, 'producer_revision': data.REVISION,
                 'source': data.SOURCE, 'source_sha256': digest, 'license': 'CC0-1.0', 'terms': data.TERMS,
                 'generated': datetime.now(timezone.utc).isoformat(), 'bearing': 'travel_clockwise_from_north',
                 'records': len(records), 'duplicates': len(accepted) - len(records), 'rejected': dict(reasons),

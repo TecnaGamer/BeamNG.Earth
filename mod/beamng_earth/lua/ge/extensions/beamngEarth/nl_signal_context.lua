@@ -1,5 +1,5 @@
 -- Offline WKD built-up road sections and OSM lane-turn matching. No gameplay network.
-local M={}
+local M={BLOCK_BYTES=65536,BLOCK_LIMIT=8}
 local PI,ORIGIN=math.pi,20037508.342789244
 local function u16(s,i)local a,b=s:byte(i,i+1);return a+b*256 end
 local function u24(s,i)local a,b,c=s:byte(i,i+2);return a+b*256+c*65536 end
@@ -8,17 +8,24 @@ function M.mercator(lat,lon)return lon*ORIGIN/180,math.log(math.tan(PI/4+math.ra
 local function split(s)local a={};for v in ((s or '')..'|'):gmatch('(.-)|')do a[#a+1]=v end;return a end
 
 function M.new(index,data,decode)
-  assert(data:sub(1,8)=='BNECON1\0','Invalid offline context pack')
+  local read=type(data)=='function'and data or function(at,n)return data:sub(at,at+n-1)end
+  assert(read(1,8)=='BNECON1\0','Invalid offline context pack')
   local cache,order={},{}
-  local function tile(key)
+  local function tile(key,signalsOnly)
+    local slots=signalsOnly and index.signal_tiles or index.tiles
+    local slot=slots[key]
+    if signalsOnly and index.signal_tiles then key='s:'..key end
     if cache[key] then return cache[key] end
-    local slot=index.tiles[key];local rows={}
+    local rows={}
     if slot then
+      local offsets=read(slot[1],slot[2]*4)
       for k=0,slot[2]-1 do
-        local at=u32(data,slot[1]+k*4);local kind=data:byte(at);local id=u32(data,at+1)
-        local n,len=u16(data,at+5),u16(data,at+7);at=at+9
-        local meta=len>0 and decode(data:sub(at,at+len-1)) or nil;at=at+len
-        local points={};for j=0,n-1 do points[#points+1]=u24(data,at+j*6)/2;points[#points+1]=u24(data,at+j*6+3)/2 end
+        local at=u32(offsets,1+k*4);local header=read(at,9)
+        local kind,id=header:byte(1),u32(header,2)
+        local n,len=u16(header,6),u16(header,8)
+        local body=read(at+9,len+n*6)
+        local meta=len>0 and decode(body:sub(1,len))or nil
+        local points={};for j=0,n-1 do points[#points+1]=u24(body,len+1+j*6)/2;points[#points+1]=u24(body,len+4+j*6)/2 end
         rows[#rows+1]={kind=kind,id=id,meta=meta,points=points}
       end
     end
@@ -86,7 +93,7 @@ function M.new(index,data,decode)
     local rows,seen={},{}
     for gx=math.floor((x-reach+ORIGIN)/span),math.floor((x+reach+ORIGIN)/span)do
       for gy=math.floor((ORIGIN-y-reach)/span),math.floor((ORIGIN-y+reach)/span)do
-        for _,row in ipairs(tile(gx..'_'..gy))do if row.kind==2 then
+        for _,row in ipairs(tile(gx..'_'..gy,true))do if row.kind==2 then
           local id=row.meta.osm_node_id
           if not seen[id]then
             seen[id]=true;local px,py=row.points[1],row.points[2]
@@ -100,19 +107,57 @@ function M.new(index,data,decode)
   return lookup,signals
 end
 
-local lookup,signalPoints,attempted
-function M.readBinary(path)
-  local file=io.open(path,'rb')
+-- Seek the existing pack in small blocks. The national payload never becomes
+-- a Lua string; decoded rows still have the same bounded 16-tile cache.
+function M.open(index,decode,opener)
+  local file=(opener or io.open)(index.data,'rb')
   if not file then return end
-  local data=file:read('*all');file:close();return data
+  local blocks,order={},{}
+  local stats={bytes_read=0,blocks_read=0,resident_bytes=0,peak_resident_bytes=0}
+  local closed=false
+  local function close()
+    if not closed then file:close();closed=true end
+    blocks={};order={};stats.resident_bytes=0
+  end
+  local function read(at,n)
+    assert(not closed and at>=1 and n>=0 and n<=1048576 and at+n-1<=index.data_bytes,'Invalid context read')
+    local pieces={}
+    while n>0 do
+      local key=math.floor((at-1)/M.BLOCK_BYTES)
+      local block=blocks[key]
+      if not block then
+        assert(file:seek('set',key*M.BLOCK_BYTES),'Context seek failed')
+        block=assert(file:read(math.min(M.BLOCK_BYTES,index.data_bytes-key*M.BLOCK_BYTES)),'Context read failed')
+        blocks[key]=block;order[#order+1]=key
+        stats.bytes_read=stats.bytes_read+#block;stats.blocks_read=stats.blocks_read+1
+        stats.resident_bytes=stats.resident_bytes+#block
+        if #order>M.BLOCK_LIMIT then
+          local old=table.remove(order,1);stats.resident_bytes=stats.resident_bytes-#blocks[old];blocks[old]=nil
+        end
+        stats.peak_resident_bytes=math.max(stats.peak_resident_bytes,stats.resident_bytes)
+      end
+      local offset=(at-1)%M.BLOCK_BYTES;local take=math.min(n,#block-offset)
+      assert(take>0,'Truncated context block')
+      pieces[#pieces+1]=block:sub(offset+1,offset+take);at=at+take;n=n-take
+    end
+    return table.concat(pieces)
+  end
+  local ok,a,b=pcall(function()
+    assert(file:seek('end')==index.data_bytes,'Context size mismatch')
+    return M.new(index,read,decode)
+  end)
+  if not ok then close();return nil,a end
+  return a,b,close,stats
 end
+
+local lookup,signalPoints,attempted,closePack
 function M.lookup(lat,lon,dx,dy,count)
   if not attempted then
     attempted=true
     local ok,index=pcall(require,'beamngEarth/nl_groenpol_context_index')
     if ok and jsonDecode then
-      local data=M.readBinary(index.data)
-      if type(data)=='string' and #data==index.data_bytes and data:sub(1,8)=='BNECON1\0' then lookup,signalPoints=M.new(index,data,jsonDecode) end
+      lookup,signalPoints,closePack,M.stats=M.open(index,jsonDecode)
+      if not lookup then signalPoints=nil end
     end
   end
   return lookup and lookup(lat,lon,dx,dy,count) or {zone='unknown',zone_source='context_pack_unavailable',turns_source='turn_lanes_unavailable'}
@@ -121,5 +166,8 @@ function M.signalPoints(lat,lon,radius)
   if not attempted then M.lookup(lat,lon,0,0,1)end
   return signalPoints and signalPoints(lat,lon,radius) or {}
 end
-function M.reset()lookup,signalPoints,attempted=nil,nil,nil end
+function M.reset()
+  if closePack then closePack()end
+  lookup,signalPoints,attempted,closePack=nil,nil,nil,nil;M.stats=nil
+end
 return M

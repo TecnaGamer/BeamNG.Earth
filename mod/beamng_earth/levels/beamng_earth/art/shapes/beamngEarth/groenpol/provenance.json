@@ -14722,5 +14722,32 @@
   "conversion": "Original components. Heads remain at authored scale. Separate beams have explicit unit-axis normalization and pole tops an explicit upper_end fit. Loose straight poles use original stripe pitch and rear-housing grey; 300 mm arrow lens UVs reuse authored 200 mm arrow registration. Original FBX unchanged.",
   "shared_components": "Bare heads omit only the connected 5 mm source backboard. Double boards widen that original board; housing, lenses and UV registrations keep their authored dimensions.",
   "loose_mounting_foot": "All 112 original triangles of Cylinder.052, rigid transform only; no clipping, normalization or invented crossbar.",
-  "double_mounting_foot": "All 180 original Cylinder.053 triangles, rigid transform only. Its centre bar joins the original Cylinder.052 upright, lowered by the authored bar-to-socket distance; neither foot is stretched."
+  "double_mounting_foot": "All 180 original Cylinder.053 triangles, rigid transform only. Its centre bar joins the original Cylinder.052 upright, lowered by the authored bar-to-socket distance; neither foot is stretched.",
+  "runtime_textures": {
+    "groenpol_nl_BaseColor.dds": {
+      "sha256": "024ea09c12d7a4afae1a4c5629f097d1c2bbf4806ad6c16b0df9f733249defc2",
+      "format": "DDS BC7",
+      "producer": "tools/mod_textures_dds.py"
+    },
+    "groenpol_nl_d.dds": {
+      "sha256": "9320c478f8a0642df203d070f18f92828958340a0436ae258b313ced4ccba33a",
+      "format": "DDS BC7",
+      "producer": "tools/mod_textures_dds.py"
+    },
+    "lens_channel_0_v2.color.dds": {
+      "sha256": "796c93900ae0cb7235f608c64e0daa34c9ab4d759cfe3ea78b65e28128a864ca",
+      "format": "DDS BC7",
+      "producer": "tools/mod_textures_dds.py"
+    },
+    "lens_channel_1_v2.color.dds": {
+      "sha256": "778ce8a6f3f5c944856144bc40760a08a2fd2150eca8ae78495cd883a6f383ea",
+      "format": "DDS BC7",
+      "producer": "tools/mod_textures_dds.py"
+    },
+    "lens_channel_2_v2.color.dds": {
+      "sha256": "409df8cd72eeb7a5b6b67f4a338ecc17e26188a00b05541dd4fb1c2a6e4594bb",
+      "format": "DDS BC7",
+      "producer": "tools/mod_textures_dds.py"
+    }
+  }
 }

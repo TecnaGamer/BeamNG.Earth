@@ -13,9 +13,9 @@ M.SHAPE = M.ROOT .. 'head_vehicle_sven_v4.dae'
 M.SUPPORT_SHAPE = M.ROOT .. 'mast_straight_sven_v4.dae'
 M.STATIC_SHAPE = M.ROOT .. 'static_vehicle_sven_v4.dae'
 M.STATIC_SHAPE_300 = M.ROOT .. 'static_vehicle_300_sven_v4.dae'
-M.RESOURCES = { 'head_vehicle_sven_v4.dae', 'mast_straight_sven_v4.dae', 'components.json', 'main.materials.json', 'groenpol_nl_BaseColor.png',
-  'groenpol_nl_d.png',
-  'lens_channel_0_v2.color.png', 'lens_channel_1_v2.color.png', 'lens_channel_2_v2.color.png' }
+M.RESOURCES = { 'head_vehicle_sven_v4.dae', 'mast_straight_sven_v4.dae', 'components.json', 'main.materials.json', 'groenpol_nl_BaseColor.dds',
+  'groenpol_nl_d.dds',
+  'lens_channel_0_v2.color.dds', 'lens_channel_1_v2.color.dds', 'lens_channel_2_v2.color.dds' }
 local loaded = false
 local zones=setmetatable({},{__mode='k'})
 function M.junctionZone(graph,junction,frame)

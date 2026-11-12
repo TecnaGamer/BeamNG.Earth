@@ -137,7 +137,7 @@ T.check(live()[1]:getID()~=first and math.abs(live()[1].m.p.z-raised[10]-plan.la
 local turn=approach(51.445,4.929,0,1)
 local raisedId=live()[1]:getID();apply(fixture(turn),1,frame)
 T.check(live()[1]:getID()~=raisedId,'direction change updates head at same XY')
-FS.fileExists=function(_,p) return p~=P.ROOT..'lens_channel_2_v2.color.png' end
+FS.fileExists=function(_,p) return p~=P.ROOT..'lens_channel_2_v2.color.dds' end
 apply(fixture(dutch),1,frame)
 T.check(#live()==0 and #supports()==0,'missing Dutch asset omits visible assembly instead of reviving stock')
 FS.fileExists=function() return true end

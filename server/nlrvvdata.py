@@ -4,19 +4,23 @@ Shared with tools/build_nl_rvv.py; standard library only so the data repository
 can run the producer independently of the world server.
 """
 import math
+import json
+import re
 
-FORMAT, ZOOM = 1, 12
+FORMAT, ZOOM, REVISION = 2, 12, 2
 SOURCE = 'https://opendata.ndw.nu/verkeersborden_actueel_beeld.csv.gz'
 TERMS = 'https://docs.ndw.nu/algemeen/data-gebruiksvoorwaarden/'
 # Only mappings whose pictogram exists in our vector-generated atlas. Never
 # substitute a generic sign for a qualified/unknown RVV code.
 ROLES = {
     'B1': 'prio.main_road', 'B2': 'prio.main_road_end', 'B6': 'prio.give_way', 'B7': 'prio.stop',
-    'C1': 'reg.no_vehicles', 'C2': 'reg.no_entry', 'D1': 'mand.roundabout', 'D4': 'mand.ahead',
+    'C1': 'reg.no_vehicles', 'C2': 'reg.no_entry', 'C3': 'info.oneway',
+    'D1': 'mand.roundabout', 'D3': 'mand.pass_either', 'D4': 'mand.ahead',
     'E1': 'reg.no_parking', 'E2': 'reg.no_stopping', 'E4': 'info.parking',
     'F1': 'reg.no_overtaking', 'F2': 'reg.no_overtaking_end', 'F5': 'prio.oncoming', 'F6': 'prio.over_oncoming',
+    'F8': 'reg.end_restrictions',
     'G1': 'info.motorway', 'G2': 'info.motorway_end',
-    'G7': 'mand.pedestrian', 'G11': 'mand.bicycle', 'L8': 'info.dead_end',
+    'G7': 'mand.pedestrian', 'G11': 'mand.bicycle', 'L2': 'info.crossing_right', 'L8': 'info.dead_end',
     'J2': 'warn.curve_right', 'J3': 'warn.curve_left', 'J4': 'warn.double_right', 'J5': 'warn.double_left',
     'J8': 'warn.crossroads', 'J9': 'warn.roundabout', 'J10': 'warn.level_gate', 'J11': 'warn.level_nogate',
     'J16': 'warn.roadworks', 'J17': 'warn.narrow_both', 'J18': 'warn.narrow_right', 'J19': 'warn.narrow_left',
@@ -30,6 +34,58 @@ VARIANTS = {
 }
 COMPASS = {s: i * 22.5 for i, s in enumerate(
     ('N', 'NNO', 'NO', 'ONO', 'O', 'OZO', 'ZO', 'ZZO', 'Z', 'ZZW', 'ZW', 'WZW', 'W', 'WNW', 'NW', 'NNW'))}
+
+
+def text_plates(value, normalized=False):
+    """Complete, plain-text plates only; None means the entire sign is unsafe.
+
+    Current-state CSV uses TYPE(text); API JSON uses {type,text,openingHours}.
+    Empty plates, symbol placeholders and missing exception targets are not
+    discarded: their main sign remains unsupported as well.
+    """
+    if value in (None, '', '[]'):
+        return []
+    if isinstance(value, list) and not value:
+        return []
+    if isinstance(value, str):
+        if value.lstrip().startswith('['):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
+        else:
+            rows = []
+            for part in value.split(';'):
+                match = re.fullmatch(r'(VRIJ|UIT|VOOR)\(([^()]*)\)', part.strip())
+                if not match:
+                    return None
+                rows.append({'type': match[1], 'text': match[2]})
+            value = rows
+    if not isinstance(value, list) or not 1 <= len(value) <= 3:
+        return None
+    out = []
+    for plate in value:
+        if not isinstance(plate, dict) or plate.get('openingHours') not in (None, ''):
+            return None
+        kind = plate.get('kind' if normalized else 'type')
+        raw = plate.get('text')
+        if kind not in ('VRIJ', 'UIT', 'VOOR') or not isinstance(raw, str):
+            return None
+        if any(ord(c) < 32 and c not in '\r\n\t' for c in raw):
+            return None
+        text = ' '.join(raw.split())
+        if (not 1 <= len(text) <= 96 or '[[' in text or ']]' in text
+                or text.casefold() in ('onleesbaar', 'onbekend', 'uitgezonderd', 'except')):
+            return None
+        if kind == 'UIT' and not text.casefold().startswith('uitgezonderd '):
+            return None
+        out.append({'kind': kind, 'text': text})
+    return out
+
+
+def meaning(row):
+    return (row.get('role'), row.get('speed'),
+            tuple((p['kind'], p['text']) for p in row.get('plates', ())))
 
 
 def tile(lat, lon):
@@ -47,7 +103,8 @@ def normalize(row):
         return None, 'not_placed'
     if row.get('placement') != 'L':
         return None, 'not_roadside'
-    if row.get('zoneCode') or row.get('textSigns') not in (None, '', '[]'):
+    plates = text_plates(row.get('textSigns'))
+    if row.get('zoneCode') or plates is None:
         return None, 'qualifier_not_supported'
     code, black = str(row.get('rvvCode') or '').upper(), str(row.get('blackCode') or '').upper()
     role = VARIANTS.get((code, black)) if black else ROLES.get(code)
@@ -68,7 +125,7 @@ def normalize(row):
     # George's bearing is the road user's viewing/travel direction (0 = north),
     # not the sign face's outward normal. Preserve it explicitly in the schema.
     return {'id': ident, 'lat': lat, 'lon': lon, 'bearing': bearing, 'code': code,
-            'role': role, 'speed': speed}, None
+            'role': role, 'speed': speed, 'plates': plates}, None
 
 
 def deduplicate(records):
@@ -90,7 +147,7 @@ def deduplicate(records):
                 for other in grid.get((cx + dx, cy + dy), ()):
                     distance = math.hypot((row['lon'] - other['lon']) * 111320 * math.cos(math.radians(row['lat'])),
                                           (row['lat'] - other['lat']) * 111320)
-                    if (distance <= .5 and (row['role'], row['speed']) == (other['role'], other['speed'])
+                    if (distance <= .5 and meaning(row) == meaning(other)
                             and abs((row['bearing'] - other['bearing'] + 180) % 360 - 180) <= 5):
                         match = other
                         break

@@ -21,8 +21,12 @@ positions are omitted. A successful owned assembly suppresses its old prop
 locally, rather than deleting Dutch props country-wide.
 
 WKD built-up sections and OSM lane/signal context are included as a dated offline
-pack (about 46 MiB decoded). It is loaded only when the opt-in needs it, not by
-the default stock signal path. See the adjacent `context_attribution.md` and
+pack (about 46 MiB on disk). The opt-in reader uses at most eight 64 KiB raw
+blocks plus a separate 16-tile decoded cache, rather than loading the national
+payload into one Lua string. Signal-only pointer tables avoid reading road
+records when finding nearby signal nodes. Regenerate these deterministically
+with `python tools/build_nl_signal_index.py`. The default stock path never opens
+the pack. See the adjacent `context_attribution.md` and
 `context_provenance.json` for source URLs, queries, hashes and ODbL notice.
 This pack does not contain the BGT road adapter, BGT polygons or the earlier
 location-specific BGT pole overrides. Moving that independent context pack to
@@ -33,3 +37,4 @@ native sign/road queues. The low-level tests exercise ownership, reloads,
 rebasing, lane/head counts, mounting, headings, shield clearance and road feet.
 These are offline/stubbed tests, not proof of visual correctness at every
 junction. In-game placement review and performance measurement remain needed.
+Runtime textures use DDS, avoiding the engine's PNG cooking path on current dev.

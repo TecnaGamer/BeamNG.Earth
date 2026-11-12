@@ -32,7 +32,12 @@
   "wkd_complete_country": "NL",
   "coordinate_quantization_mercator_m": 0.5,
   "simplification_m": 1,
-  "data_bytes": 47899029,
-  "data_sha256": "d1cdf826f70e47767a59c4ce002f09a1671f93a51ece6163799fa3d07364a565",
-  "osm_base_timestamp": "2026-11-06T21:32:19Z"
+  "data_bytes": 47996125,
+  "data_sha256": "13ee676f124840c73c8b49296775c39522aaf09f601cb33fc8b01652c0a160f5",
+  "osm_base_timestamp": "2026-11-06T21:32:19Z",
+  "signal_index": {
+    "tiles": 2283,
+    "bytes": 97096,
+    "producer": "tools/build_nl_signal_index.py"
+  }
 }

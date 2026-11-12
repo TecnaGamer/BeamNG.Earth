@@ -15,6 +15,37 @@ import roadsigns
 import speedsigns
 
 
+def plate_layout(row, main_width):
+    """Readable source text, in source order; never truncate or replace glyphs."""
+    plates = data.text_plates(row.get('plates'), normalized=True)
+    if plates is None:
+        return None
+    glyphs = exitsigns.lettering()['glyphs']
+    layout = []
+    for plate in plates:
+        text = plate['text']
+        if any(c not in glyphs for c in text):
+            return None
+        words = text.split()
+        longest = max(exitsigns.guide_width(w, .10) for w in words)
+        width = max(main_width, .8, min(1.1, longest + .12))
+        font_height = .10 * min(1., (width - .12) / max(longest, 1e-9))
+        if font_height < .065:
+            return None
+        lines, line = [], ''
+        for word in words:
+            candidate = (line + ' ' + word).strip()
+            if line and exitsigns.guide_width(candidate, font_height) > width - .12:
+                lines.append(line);line = word
+            else:
+                line = candidate
+        lines.append(line)
+        if len(lines) > 3:
+            return None
+        layout.append({'width': width, 'height': .10 + .14 * len(lines), 'lines': lines, 'font_height': font_height})
+    return layout
+
+
 class Source(railtags.Shards):
     def __init__(self, cache_dir, fetcher):
         super().__init__(cache_dir, fetcher, 'nl-rvv')
@@ -79,6 +110,9 @@ def place(records, frame, box, pavements, elev, decks=()):
             if role not in set(data.ROLES.values()) | set(data.VARIANTS.values()) and not (
                     role is None and type(speed) is int and 5 <= speed <= 130):
                 continue
+            width = .6 if role is None else roadsigns.tables()[1]['sizes']['default'][by_id[role][1]['shape']][0]
+            if plate_layout(row, width) is None:
+                continue
             point = exitsigns._xy(frame, [[lon, lat]])[0]
             if not (box[0] <= point[0] < box[2] and box[1] <= point[1] < box[3]):
                 continue
@@ -105,16 +139,39 @@ def render(placed, box):
     """One tile mesh, shared atlas/lettering and metal materials, no per-sign objects."""
     roles, systems, by_id = roadsigns.tables()
     ordinary, speed = [], []
+    panels = exitsigns.Mesh((box[0], box[1], 0.))
     for row in placed:
         x, y = row['point']
         dx, dy = row['travel']
         z = row['z']
+        main_width = .6 if row.get('role') is None else systems['sizes']['default'][by_id[row['role']][1]['shape']][0]
+        layout = plate_layout(row, main_width)
+        if layout is None:
+            continue
+        lift = sum(p['height'] + .08 for p in layout)
         if row.get('role') is not None:
             cell, role = by_id[row['role']]
             width = systems['sizes']['default'][role['shape']][0]
-            ordinary.append([x, y, z, z, dx, dy, cell, roadsigns.SHAPES[role['shape']], width, 2.2])
+            ordinary.append([x, y, z, z, dx, dy, cell, roadsigns.SHAPES[role['shape']], width, 2.2 + lift])
         else:
-            speed.append([x, y, z, z, dx, dy, row['speed'], 0, 1])
+            speed.append([x, y, z, z + .2 + lift, dx, dy, row['speed'], 0, 1])
+        panels.centre = np.array([x, y, z])
+        panels.face, panels.right = np.array([-dx, -dy, 0.]), np.array([dy, -dx, 0.])
+        bottom = 2.2 + lift
+        for plate in layout:
+            w, h = plate['width'], plate['height']
+            bottom -= h + .08
+            panels.rounded(w, bottom, h, .025, .05, 2, back=True, front=False)
+            outer = panels.outline(w, bottom, h, .025)
+            inner = panels.outline(w - .024, bottom + .012, h - .024, .013)
+            for a, b, c, d in zip(outer, np.roll(outer, -1, axis=0), np.roll(inner, -1, axis=0), inner):
+                panels.quad([(.05, *a), (.05, *b), (.05, *c), (.05, *d)], 6)
+            for i in range(1, len(inner) - 1):
+                panels.triangle(np.c_[np.full(3, .05), inner[[0, i, i+1]]], 1)
+            for i, text in enumerate(plate['lines']):
+                panels.guide_text(text, 0., bottom + h - .15 - .14 * i, plate['font_height'], w - .12, black=True)
+            for height in (bottom + .05, bottom + h - .05):
+                panels.box((-.13, -.06, height - .015), (.02, .06, height + .015), 2)
     mesh = None
     if ordinary:
         p, t, uv, mi = fast._ef.road_sign_mesh(np.ascontiguousarray(ordinary, np.float64), roles['cols'], roles['rows'],
@@ -125,7 +182,7 @@ def render(placed, box):
         p, t, uv, mi = fast._ef.speed_sign_mesh(np.ascontiguousarray(speed, np.float64), speedsigns.STYLE_VIENNA,
                                                 cp, glyph, cap, [float(box[0]), float(box[1]), 0.])
         mesh = plazas.merge(mesh, (p, t, uv, speedsigns.MATERIALS, mi))
-    return mesh
+    return plazas.merge(mesh, panels.result())
 
 
 def keep_inferred(signs, claims, speed=False):
@@ -141,7 +198,7 @@ def keep_inferred(signs, claims, speed=False):
         dx, dy = row[2:4]
         norm = math.hypot(dx, dy)
         meaning = row[4] if speed else rules[int(row[4])]
-        duplicate = any((c.get('speed') == meaning if speed else c.get('role') == meaning)
+        duplicate = any(not c.get('plates') and (c.get('speed') == meaning if speed else c.get('role') == meaning)
                         and float(np.linalg.norm(c['point'] - row[:2])) <= 8.
                         and norm > 0 and float(c['travel'] @ (row[2:4] / norm)) >= math.cos(math.radians(5))
                         for c in claims)

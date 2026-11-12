@@ -26,8 +26,11 @@ infrastructure data already streamed by Earth:
 
 The last two are inferred scenery, not surveyed sign positions. The public NDW
 reader additionally supports the RVV-to-atlas mappings in `server/nlrvvdata.py`
-and numeric A1 speed limits. Unknown artwork, zones and supplementary qualifiers
-are rejected and counted rather than turned into an unconditional restriction.
+and numeric A1 speed limits. Complete plain-text underboards are preserved in
+order and rendered with shared plates and the existing lettering atlas. Unknown
+artwork, zones, symbol underboards, time conditions and incomplete qualifiers
+are rejected rather than turned into an unconditional restriction. Qualified
+NDW signs never suppress unconditional inferred signs.
 This does not reproduce the earlier 827-face catalogue. A matching nearby
 inferred sign is omitted only after its same-facing, same-meaning NDW counterpart
 has successfully produced a mesh. Missing data never clears existing signs.
@@ -70,7 +73,9 @@ Only a road tile's records are rendered, in its existing optional sign queue.
 No game request downloads the national CSV or contacts the George API. Pole feet
 must clear drawn pavements and bridge footprints; the source compass heading is
 transformed into the current frame. Runtime records carry source IDs only,
-coordinates, heading, RVV code and supported role/speed; photo URLs are removed.
+coordinates, heading, RVV code, supported role/speed and complete supported
+underboard text; photo URLs are removed. Format 2 prevents older readers from
+silently discarding qualifiers. Build IDs include the producer revision.
 
 [NDW's general data terms](https://docs.ndw.nu/algemeen/data-gebruiksvoorwaarden/)
 state CC0 unless a dataset or product states otherwise. Verify the specific
@@ -82,10 +87,11 @@ That external deployment is not performed by this PR. Until then the reader
 fails open and the four-role fallback remains. `BNE_DATA_PAGES` can select a test
 host with the same layout; it must include the other normal Earth datasets too.
 
-Validation on the first 10,000 official CSV records produced 3,994 supported
-records in 827 tiles, collapsed one duplicate, and rejected 2,535 unsupported
-artwork variants, 3,336 qualified/zone records, 125 non-roadside mounts and three
-invalid locations/headings. This sample is not the published national dataset
+Validation on the first 10,000 official CSV records produced 4,704 normalized
+records in 865 tiles, collapsed one duplicate, and rejected 2,462 unsupported
+artwork variants, 2,698 qualified/zone records, 125 non-roadside mounts and four
+invalid locations/headings. Text that cannot fit legibly or lacks font glyphs
+is additionally rejected during placement. This sample is not the national dataset
 and does not measure placement acceptance against generated roads.
 
 ## Validation

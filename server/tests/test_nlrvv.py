@@ -24,6 +24,34 @@ def record(**kw):
 
 
 class PublicData(unittest.TestCase):
+    def test_complete_text_plates_keep_their_meaning_and_order(self):
+        row = record();row['textSigns']='UIT(uitgezonderd bestemmingsverkeer);VOOR(100 m)'
+        got, reason = data.normalize(row)
+        self.assertIsNone(reason)
+        self.assertEqual(got['plates'], [dict(kind='UIT', text='uitgezonderd bestemmingsverkeer'),
+                                         dict(kind='VOOR', text='100 m')])
+        row['textSigns']=json.dumps([dict(type='VRIJ', text='ma t/m za 06.00-18.00 h')])
+        self.assertEqual(data.normalize(row)[0]['plates'][0]['text'], 'ma t/m za 06.00-18.00 h')
+
+    def test_incomplete_or_symbolic_plates_never_become_unqualified_signs(self):
+        for value in ('VRIJ()', 'UIT(uitgezonderd)', 'RICH()', 'UIT([[fietser]])',
+                      'VRIJ(onleesbaar)', 'VRIJ(goed);VRIJ()', 'VRIJ(abc\x00def)',
+                      json.dumps([dict(type='VRIJ', text='maandag', openingHours='Mo 06:00-18:00')])):
+            row=record();row['textSigns']=value
+            self.assertEqual(data.normalize(row), (None, 'qualifier_not_supported'), value)
+
+    def test_different_text_qualifiers_are_not_duplicate_records(self):
+        a=data.normalize(record())[0]
+        b=dict(a,id='b',plates=[dict(kind='VOOR',text='100 m')])
+        c=dict(a,id='c',plates=[dict(kind='VOOR',text='200 m')])
+        self.assertEqual(len(data.deduplicate([a,b,c])),3)
+
+    def test_additional_shared_atlas_roles(self):
+        for code,role in [('C3','info.oneway'),('D3','mand.pass_either'),('F8','reg.end_restrictions'),
+                          ('L2','info.crossing_right')]:
+            row=record();row['rvvCode']=code
+            self.assertEqual(data.normalize(row)[0]['role'],role)
+
     def test_only_attributes_escape_normalization(self):
         row = record(imageUrl='https://example.invalid/photo', externalId='private')
         got, reason = data.normalize(row)
@@ -93,9 +121,9 @@ class PublicData(unittest.TestCase):
             def get(self, url, **kw):
                 self.urls.append(url)
                 if url.endswith('/manifest.json'):
-                    return SimpleNamespace(body=json.dumps({'built': 'test-build', 'format': 1, 'zoom': 12}).encode())
+                    return SimpleNamespace(body=json.dumps({'built': 'test-build', 'format': data.FORMAT, 'zoom': 12}).encode())
                 if url.endswith(f'/{x}/{y}.json.gz'):
-                    return SimpleNamespace(body=gzip.compress(json.dumps({'format': 1, 'records': [row]}).encode()))
+                    return SimpleNamespace(body=gzip.compress(json.dumps({'format': data.FORMAT, 'records': [row]}).encode()))
                 raise AssertionError('unexpected request: ' + url)
 
         with tempfile.TemporaryDirectory() as folder, patch.object(nlrvv.roadsigns, 'NL_ON', True):
@@ -121,6 +149,26 @@ class PublicData(unittest.TestCase):
         got = nlrvv.keep_inferred(rows, [claim])
         np.testing.assert_array_equal(got, rows[1:])
         np.testing.assert_array_equal(nlrvv.keep_inferred(rows, []), rows)
+        qualified=dict(claim,plates=[dict(kind='UIT',text='uitgezonderd bestemmingsverkeer')])
+        np.testing.assert_array_equal(nlrvv.keep_inferred(rows,[qualified]),rows)
+
+    def test_text_panels_share_the_batch_and_remain_below_their_main_sign(self):
+        if not hasattr(nlrvv.fast._ef,'road_sign_mesh'):
+            self.skipTest('native renderer unavailable')
+        row=dict(point=np.array([10.,20.]),travel=np.array([1.,0.]),z=0.,role='prio.give_way',
+                 plates=[dict(kind='UIT',text='uitgezonderd bestemmingsverkeer'),dict(kind='VOOR',text='100 m')])
+        layout=nlrvv.plate_layout(row,.75)
+        self.assertEqual(' '.join(layout[0]['lines']),'uitgezonderd bestemmingsverkeer')
+        p,t,uv,materials,mi=nlrvv.render([row],(0.,0.,100.,100.))
+        self.assertTrue(np.isfinite(p).all())
+        self.assertIn('bne_guide_letters_black',materials)
+        glyph=materials.index('bne_guide_letters_black')
+        letters=p[t[mi==glyph].ravel()]
+        lift=sum(v['height']+.08 for v in layout)
+        self.assertTrue((letters[:,2]>=2.2).all())
+        self.assertTrue((letters[:,2]<2.2+lift).all())
+        bad=dict(row,plates=[dict(kind='VRIJ',text='[[fietser]]')])
+        self.assertIsNone(nlrvv.render([bad],(0.,0.,100.,100.)))
 
     def test_real_native_batch_uses_our_shared_assets(self):
         if not hasattr(nlrvv.fast._ef, 'road_sign_mesh'):
