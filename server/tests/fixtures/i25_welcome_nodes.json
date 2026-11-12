@@ -1,0 +1,67 @@
+{
+  "license": "ODbL 1.0; OpenStreetMap contributors",
+  "verified": "2026-11-09",
+  "source": "https://api.openstreetmap.org/api/0.6/map.json?bbox=-104.92,40.99,-104.89,41.02",
+  "nodes": [
+    {
+      "id": 12208361207,
+      "lat": 40.9982641,
+      "lon": -104.9070974,
+      "tags": {
+        "board_type": "welcome_sign",
+        "information": "board",
+        "inscription": "Welcome to | colorful | Colorado",
+        "tourism": "information"
+      }
+    },
+    {
+      "id": 12208361208,
+      "lat": 40.9994853,
+      "lon": -104.9062861,
+      "tags": {
+        "board_type": "welcome_sign",
+        "information": "board",
+        "inscription": "Welcome to | Wyoming",
+        "tourism": "information"
+      }
+    }
+  ],
+  "roads": [
+    {
+      "fid": "1491fa3f-6a83-4c43-97f7-ab9019cc7d28",
+      "wid": 174667200,
+      "path": [
+        [
+          -104.9069602,
+          40.9967062
+        ],
+        [
+          -104.9066974,
+          40.9981629
+        ],
+        [
+          -104.9062445,
+          41.000936
+        ]
+      ]
+    },
+    {
+      "fid": "d893d8df-ae12-4eb2-ba4a-eb352b908e00",
+      "wid": 49209186,
+      "path": [
+        [
+          -104.9062861,
+          41.0022072
+        ],
+        [
+          -104.9069294,
+          40.9981634
+        ],
+        [
+          -104.9069665,
+          40.9979145
+        ]
+      ]
+    }
+  ]
+}

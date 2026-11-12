@@ -100,6 +100,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
   OpenStreetMap (rebuilt weekly). Settings > World > Highway signs turns them off.
+- US state welcome and recreation boards (from wyo-backroads' contribution): a "Welcome to ..." board where an
+  Interstate, US or numbered state route crosses into a state (the state's sign as photographed where a photo with
+  clear reuse terms exists, else a lettered blue board), brown park guide boards before exits posted to a state or
+  national park, and entrance boards where a road enters a named park, campground, national forest or grassland.
+  `BNE_WELCOME_SIGNS=0` / `BNE_RECREATION_SIGNS=0` turn them off.
 - Autobahn signs in Germany: the German chain at every exit, Kreuz and Dreieck, with the sign text as mapped in
   OpenStreetMap (rebuilt weekly). The 2000 / 1000 m announcement board with the junction's number and name, the 1000 /
   500 m advance boards with the destinations over their lanes, the A, B and E plates and pictograms, the 300 / 200 /

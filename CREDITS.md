@@ -249,3 +249,13 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   `server/data/quebec_bounds.NOTICE.md`. No Statistics Canada endorsement implied.
 - Expanded DejaVu Sans Bold atlas (Latin/Greek/Cyrillic/Armenian/Georgian): retains
   `tools/fonts/DejaVu-LICENSE.txt`; white glyph atlas also used for ARRÊT and DUR.
+
+## State welcome and recreation boards (wyo-backroads, PRs #1117 / #1118)
+
+- State welcome faces: photographs from Wikimedia Commons (CC0, CC BY and CC BY-SA, one author per state), cropped,
+  perspective-rectified and stored as DDS textures; each face's author, source and licence are in
+  `server/data/welcome/ATTRIBUTION.md`. These images keep their own licences (not MIT); the CC BY-SA faces are
+  shared under the same licence. States without such a photo get a lettered board drawn by the server.
+- Brown recreation, park and forest entrance boards: original procedural geometry and the existing guide lettering;
+  their agency badges are simple drawn shapes (no NPS arrowhead or Forest Service shield). Names come from the map
+  data (Overture Maps, © OpenStreetMap contributors, ODbL).

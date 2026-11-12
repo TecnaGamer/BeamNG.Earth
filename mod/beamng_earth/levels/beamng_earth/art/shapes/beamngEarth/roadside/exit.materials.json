@@ -379,5 +379,131 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_recreation_brown_opaque": {
+    "name": "bne_recreation_brown_opaque",
+    "mapTo": "bne_recreation_brown_opaque",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.3137254901960784,
+          0.16862745098039217,
+          0.07450980392156863,
+          1.0
+        ],
+        "roughnessFactor": 0.75,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": false,
+    "castShadows": true
+  },
+  "bne_forest_cream": {
+    "name": "bne_forest_cream",
+    "mapTo": "bne_forest_cream",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.79,
+          0.38,
+          1
+        ],
+        "roughnessFactor": 0.92,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": false,
+    "castShadows": true
+  },
+  "bne_forest_timber": {
+    "name": "bne_forest_timber",
+    "mapTo": "bne_forest_timber",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.31,
+          0.2,
+          0.1,
+          1
+        ],
+        "roughnessFactor": 0.92,
+        "metallicFactor": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "alphaTest": false,
+    "castShadows": true
+  },
+  "bne_forest_letters_cream": {
+    "name": "bne_forest_letters_cream",
+    "mapTo": "bne_forest_letters_cream",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.99,
+          0.87,
+          0.55,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
+  },
+  "bne_forest_letters_brown": {
+    "name": "bne_forest_letters_brown",
+    "mapTo": "bne_forest_letters_brown",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.2,
+          0.075,
+          0.025,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/roadside/sign_letters_o.data.dds",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
   }
 }

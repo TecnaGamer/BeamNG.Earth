@@ -19,7 +19,7 @@ import railtags
 import roads
 import signcontext
 
-Spec = namedtuple('SignRoad', 'width cls oneway dir link kmh', defaults=(False, None))
+Spec = namedtuple('SignRoad', 'width cls oneway dir link kmh walk sides', defaults=(False, None, 0., ()))
 NEIGHBOURHOODS = 64             # combined rows kept (Context._hoods)
 CELL_FRAMES = 4                 # anchors a cell keeps rows for
 
@@ -63,8 +63,9 @@ def cell_specs(feats, urban=None, widths=None, left_hand=False):
     return got
 
 
-def spec(value, link=False):
-    return Spec(value.width, value.cls, value.oneway, value.dir, link, value.kmh)
+def spec(value, link=False, left_hand=False):
+    sides = roads.walk_sides(value, left_hand) if roads.has_sidewalks(value) else ()
+    return Spec(value.width, value.cls, value.oneway, value.dir, link, value.kmh, value.walk, sides)
 
 
 def cross(points):
@@ -90,7 +91,7 @@ def feature_id(feats, i):
 
 def outline(value, line, frame=None, left_hand=False, link=False):
     """Use the beta renderer's centreline, width and mitered offsets unchanged."""
-    return spec(value, link), line, value.width
+    return spec(value, link, left_hand), line, value.width
 
 
 def polygon(line, width):
