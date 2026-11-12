@@ -255,6 +255,37 @@ do
   spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
 end
 
+-- The router can snap its start ahead of a car already on the same loaded road.
+for _, gap in ipairs({ 0, 60, 100 }) do
+  local f = fixture({ 'n1', 'n2', 'n3', 'n4' }, 0, 6, function(f)
+    f.x, f.y = 10, 0
+    f.nodes = {}
+    for i = 0, 13 do f.nodes['n' .. i] = { pos = { x = 80 * i, y = 0, z = 0 }, radius = 6, links = {} } end
+    for i = 0, 12 do f.nodes['n' .. i].links['n' .. (i + 1)] = {} end
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, (10 + gap) / 10000 }, { 0, 0.1 } }, dist = 990 - gap, dur = 50 }
+  end)
+  T.check(#f.drives == 1 and f.drives[1][1] == 'n1',
+    'a car ' .. gap .. ' m behind the route start drives forward on 80 m graph edges')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and f.drives[2][1] == 'n1', 'the initial route gap also works after graph replacement')
+end
+
+do
+  local f = fixture({ 'n1', 'n2', 'j', 'k' }, 0, 6, function(f)
+    local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
+    f.x, f.y = 10, 0
+    f.nodes = { n0 = n(0, 0, { n1 = {} }), n1 = n(80, 0, { n2 = {} }),
+      n2 = n(160, 0, { j = {} }), j = n(200, 0, { k = {}, a = {} }), k = n(240, 0, {}),
+      a = n(200, -20, { b = {} }), b = n(480, -20, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0.007 }, { 0, 0.1 } }, dist = 930, dur = 50 }
+  end)
+  local target = f.target[#f.target]
+  T.check(#f.drives == 1 and target.x <= 240 and target.y == 0,
+    'the initial gap allowance is consumed before later samples reach a service-road detour')
+end
+
 do
   local f = fixture()
   T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j,s,t',

@@ -421,7 +421,9 @@ local function routeTarget(e, nodes, i, t)
       end
     end
   end
-  local previousS = s0
+  -- The first join starts at the car, which can be behind the router's snapped start.
+  -- Accepted samples below reset previousS, so this allowance is only used for the initial join.
+  local previousS = s0 - (auto and previous and math.sqrt((previous.x - rx)^2 + (previous.y - ry)^2) or 0)
   local best = nil
   local via, lastVia, misses = {}, s0, 0
   -- sample along the route every SAMPLE_M from the player's spot (the simplified route's vertices can be far apart)
