@@ -83,6 +83,7 @@ mod gsrows;
 mod places;
 mod planends;
 mod planset;
+mod corridor;
 mod junctions;
 mod wallsindex;
 mod mappedlamps;
@@ -5959,6 +5960,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
     // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
     m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
-    m.add("VERSION", 233)?;
+    // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
+    // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
+    m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
+    m.add("VERSION", 234)?;
     Ok(())
 }

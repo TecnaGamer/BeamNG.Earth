@@ -275,12 +275,24 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None, 
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
     wear_of = worn if worn is not None else {}
-    for feats in cells:
+    # (each feature from the cell holding its longest copy: a long line's copies stitched from the map's tiles can be
+    # cut short in some cells, and its level ranges (fractions of its length) then land 100+ m off in the short one:
+    # a rail bridge over a road at 60.7771,11.21896 laid on the ground across it, a 2.3 m hump, GitHub #1137)
+    longest = {}
+    for ci, feats in enumerate(cells):
         if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
             continue
         for i in _box_hits(feats.boxes(frame), near, _is(feats.attrs["subtype"], ("rail",))):
             fid = str(feats.ids[i])
-            if fid in seen:
+            L = roads._feature_length_m(feats, i)
+            if fid not in longest or L > longest[fid][0] + 1.0:
+                longest[fid] = (L, ci)
+    for ci, feats in enumerate(cells):
+        if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
+            continue
+        for i in _box_hits(feats.boxes(frame), near, _is(feats.attrs["subtype"], ("rail",))):
+            fid = str(feats.ids[i])
+            if fid in seen or longest.get(fid, (0.0, ci))[1] != ci:
                 continue
             got = drawn(feats, i, bridges=True)
             if got is None:

@@ -89,6 +89,20 @@ CONT_JOIN_M = 0.5           # m: the heights two pieces of one road meet at, if 
 WELD_ON = os.environ.get("BNE_WELD_CONTINUATIONS", "on") != "off"
 WELD_TAPER_M = 20.0         # m over which two same-road pieces meet at one height (weld_continuations)
 WELD_MAX_STEP_M = 1.0       # m: a bigger step is a real junction / bad data, not a split piece
+# Roads side by side agree in height (share_corridors): a fork's branches, a slip road along its motorway or the road it
+# joins, a dual carriageway's halves, a road dipped under a deck and the ramp beside it (GitHub #1043, #1045)
+CORRIDOR_ON = os.environ.get("BNE_SHARE_CORRIDORS", "on") != "off"
+CORRIDOR_ANG_DEG = 45.0     # deg: another road this near the plan's own direction runs beside it (more: it crosses)
+CORRIDOR_BANK = 0.4         # m per m of gap between the two carriageways a height difference may take (a bank)
+CORRIDOR_GAP_M = 6.0        # m between the carriageways' edges beyond which a road is not beside
+CORRIDOR_MAX_DIFF_M = 3.0   # m: a bigger difference is two levels (or bad data), left alone
+CORRIDOR_ABUT_HOLD_M = 25.0  # m from the plan's own bridge end that holds (the deck's seam)
+CORRIDOR_MIN_RH = 2.4       # m: a carriageway at least this wide (half): no paths, no tracks
+CORRIDOR_WREQ = 10.0        # the spline's weight where a correction is asked ...
+CORRIDOR_W0 = 0.01          # ... and elsewhere (pulling back to the plan as made) ...
+CORRIDOR_LAM = 50000.0      # ... against its curvature: eased over ~(LAM / W0) ** 0.25 ~ 47 m
+CORRIDOR_THROUGH = 1000     # added to a through road's key (not a slip road): two through roads side by side
+                            # (a dual carriageway's halves on a hillside, BR-381's) each keep their own height
 EXTRAP_M = float(os.environ.get("BNE_GRADE_EXTRAP", "4"))             # m a segment's line is carried on past an end where its plan goes on (grade_points: no
                             # washboard of the vertex step on a grade)
 STEEP_RUN = 0.5
@@ -1066,13 +1080,20 @@ def profile_sigma(spec, coarse=False):
             return max(DIRT_SIGMA_COARSE_M, DIRT_SIGMA_M)
         if spec.cls in DIRT_SOFT_CLASSES:
             return DIRT_SIGMA_M          # a main dirt road stays as smooth as it was (dirt_bumps' "main" ones too)
-        return DIRT_SIGMA_MINOR_M        # a minor one keeps the ground's own bumps
+        if spec.cls in CLASS_SIGMA_M or spec.cls in ("service", "living_street"):
+            # (a graded gravel road is built to its class's alignment: smoothed as the paved road of its class. At 6 m
+            # minor dirt roads rode the elevation data's metre noise: IRI 1.5-2.3 against 0.6-1.2, Norfolk, Latvia)
+            return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M))
+        return DIRT_SIGMA_MINOR_M        # a track keeps more of the ground's own shape
     if spec.cls in MAJOR_CLASSES and not getattr(spec, "link", False):
         return max(SIGMA_M, SIGMA_MAJOR_M)
     return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
 
 
-DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "1.0"))    # strength of a minor dirt road's damage (1: as below)
+# strength of a minor dirt road's damage (1: as below). Off by default: its 3-4 cm potholes every ~5 m across the
+# whole carriageway read as constant whoops at speed (~100 jolts per km at 45 mph, IRI 8-10 against 2-3.5 without;
+# GitHub #830, #835, #964, Discord 2026-11-06 .. 11-09 "more like a motocross track"). BNE_DIRT_BUMP=1 for the rally feel
+DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "0"))
 DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.15"))  # a MAIN dirt road is this much of it (softer)
 # which dirt roads count as "main" (the ones kept soft): the classes a country road is signed as, not just the
 # motorway ones (a mapped `secondary` gravel road is a main road where you drive it at 80 km/h)
@@ -1284,7 +1305,8 @@ BANK_SIGMA_M = 12.0         # remove discrete box-window steps in cross slope, n
 RING_LEVEL_ON = os.environ.get("BNE_RING_LEVEL", "on") != "off"
 
 
-DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0.015"))   # cross slope a worn dirt road leans to (m per m)
+DIRT_BANK_M = float(os.environ.get("BNE_DIRT_BANK", "0"))   # cross slope a worn dirt road leans to (m per m); off with
+# the damage (BNE_DIRT_BANK=0.015 as it was)
 DIRT_BANK_EDGE_M = 0.04         # maximum synthetic lift/drop of either edge, also on wide gravel roads
 DIRT_BANK_WAVES = ((27.0, 1.0), (13.0, 0.6), (7.0, 0.35))      # how often the lean changes sides (m)
 
@@ -2350,6 +2372,11 @@ class _Planner:
                                  int(st[4]), float(st[5]))
                 except Exception as e:      # the plans as the passes left them rather than no grading
                     log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
+            if CORRIDOR_ON and plans:
+                try:            # roads side by side at one height (before the welds and snaps that join them again)
+                    share_corridors(plans, pspecs)
+                except Exception as e:      # each on its own rather than no grading
+                    log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
             if WELD_ON and plans:
                 try:            # one road planned in pieces meets itself at one height (a dip across a junction)
                     weld_continuations(plans, pspecs)
@@ -5483,7 +5510,8 @@ class _Planner:
                     pxy, pzz = np.r_[p[None], xy[m]], np.r_[pz, z[m]]
                 if len(pxy) >= 2:
                     mp = Plan(pxy, pzz, hw)
-                    mp.rank = grade_rank(spec)
+                    mp.rank = GRADE_RANK_NONE    # (no grade rank: PR #1050's rank rule pulled the road over a
+                    # portal 1.3-1.9 m down to the floor beside the covered zone, a 2.3 m step: Norway #1137)
                     out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
         return out
 
@@ -6873,6 +6901,67 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
             np_.steep = getattr(p, "steep", False)
             set_widen(np_, getattr(p, "widen", None))
             plans[i] = (plans[i][0], np_)
+
+
+def _corridor_key(p, spec, fid):
+    """share_corridors' who-holds key of a plan: -1 out of it (no road carriageway, a tunnel's own plan); a road dipped
+    under a deck holds over every other; then a through road over a slip road (Overture's link subclass, a _link
+    class), then grade_rank."""
+    if spec is None or len(p.xy) < 2 or p.road_half < CORRIDOR_MIN_RH or TUNNEL_TAG in str(fid):
+        return -1
+    if getattr(p, "rank", GRADE_RANK_NONE) == GRADE_RANK_NONE:
+        return 10 ** 6
+    link = bool(getattr(spec, "link", False)) or (spec.cls or "").endswith("_link")
+    return int(grade_rank(spec)) + (0 if link else CORRIDOR_THROUGH)
+
+
+def _wall_vertices(p):
+    """(n,) bool: a vertex of Plan p beside a cutting's wall (its cut, either side, on a segment it ends)."""
+    n = len(p.xy)
+    out = np.zeros(n, bool)
+    cut = getattr(p, "cut", None)
+    if cut is None or n < 2:
+        return out
+    c = np.asarray(cut, np.float64).reshape(-1, 6)
+    if len(c) != n - 1:
+        return out
+    seg = np.isfinite(c[:, 0]) | np.isfinite(c[:, 3])
+    out[:-1] |= seg
+    out[1:] |= seg
+    return out
+
+
+def share_corridors(plans, specs):
+    """Roads whose carriageways touch or overlap side by side agree in height there: the difference left between two is
+    what their gap holds at CORRIDOR_BANK, none where the pavements overlap. A road dipped under a deck holds and the
+    other follows (the dip carried onto the ramp beside it), a through road holds over a slip road, a higher grade_rank
+    over a lower; of two equal slip roads the lower rises, two through roads (a dual carriageway's halves, one dipped)
+    keep their own. Not beside a cutting's wall (two levels). Each plan's corrections eased along it on a smoothing
+    spline, its ends and its bridge ends held (native/earthfast corridor.rs). Two branches leaving a fork at a few degrees each
+    climbed or fell on their own while their pavements still overlapped, and the blend gave the overlap to one: a
+    0.4-0.8 m ramp across the lanes within 3 m (GitHub #1043 Wesley Chapel, #1045 Findlay's diverging diamond). plans
+    [(fid, Plan)] in place; specs: their Specs. Returns how many changed."""
+    if not plans:
+        return 0
+    import fast
+    fast.require(234, "plan_share_corridors")
+    ps = [p for _f, p in plans]
+    xy, off, z = _plan_lines(ps)
+    rh = np.array([float(p.road_half) for p in ps], np.float64)
+    key = np.array([_corridor_key(p, sp, f) for (f, p), sp in zip(plans, specs)], np.int64)
+    if (key >= 0).sum() < 2:
+        return 0
+    abut = np.array([p.abut for p in ps], bool).reshape(-1, 2)
+    wall = np.concatenate([_wall_vertices(p) for p in ps]) if ps else np.zeros(0, bool)
+    zn, changed = fast._ef.plan_share_corridors(xy, off, z, wall, rh, key, abut, float(CORRIDOR_ANG_DEG),
+                                                float(CORRIDOR_BANK), float(CORRIDOR_GAP_M),
+                                                float(CORRIDOR_MAX_DIFF_M), float(CORRIDOR_ABUT_HOLD_M),
+                                                float(CORRIDOR_WREQ), float(CORRIDOR_W0), float(CORRIDOR_LAM),
+                                                CORRIDOR_THROUGH)
+    idx = np.flatnonzero(changed).tolist()
+    for i in idx:
+        plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
+    return len(idx)
 
 
 def weld_continuations(plans, specs=None):
