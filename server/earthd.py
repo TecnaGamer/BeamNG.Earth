@@ -10319,7 +10319,7 @@ async def main_async(args):
         import atexit
         atexit.register(netstatemod.close)
     import budget
-    # (the whole server's memory table and the watchdog's requests: budget.TREE_MB, memwatch.py; workers inherit its name)
+    # (the whole server's memory table and the watchdog's requests: budget.TREE_MB, memwatch.py; workers inherit it)
     if (budget.TREE_MB or budget.LIMIT_MB) and budget.tree_init():
         import atexit
         atexit.register(budget.tree_close)

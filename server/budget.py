@@ -435,7 +435,7 @@ def apply(is_small=None):
             farfield.TEX_DEFAULT[cells] = tuple(min(t, far_tex) for t in tex)
     else:
         sizes = desktop_sizes()
-        if sizes:           # (the desktop tier by the RAM limit: a 32 GB PC's Auto ~315 DEM tiles and 160 MB of map data)
+        if sizes:           # (the desktop tier by the RAM limit: a 32 GB PC: ~315 DEM tiles, 160 MB of map data)
             import dem
             import mapdata
             dem.MEM_TILES = min(dem.MEM_TILES, sizes[0])

@@ -1104,7 +1104,8 @@ local function onMessage(msg)
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
     st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
-    cacheInfo, M._memoryInfo = nil, nil
+    cacheInfo = nil
+    M._memoryInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
     if not st.anchor then st.autoTeleportDone = false end
@@ -1167,7 +1168,8 @@ local function onMessage(msg)
     st.mapPort = msg.mapPort -- the world map's tile endpoint on 127.0.0.1 (server/maptiles.py; nil = an older server)
     -- the download cache: the new server's usage follows its hello; it gets the page's size cap (the
     -- server keeps it for its next start too)
-    cacheInfo, M._memoryInfo = nil, nil
+    cacheInfo = nil
+    M._memoryInfo = nil
     local settings = rawget(_G, 'beamngEarth_settings')
     if settings and settings.cacheCapGb then net.send({ type = 'cache', capGb = settings.cacheCapGb() }) end
     -- gas stations on, after every hello (a server started without them too; this comes before any tile request)

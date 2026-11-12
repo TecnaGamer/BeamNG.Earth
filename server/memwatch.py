@@ -138,11 +138,13 @@ def status():
         except Exception:
             s["total"] = 0.0
     auto = budget.limit_mb(setting=0.0)
-    return {"usedMB": round(s["total"] or 0.0), "limitMB": round(s["limit"]), "effMB": round(s["eff"] or s["limit"]),
-            "autoMB": round(auto), "setting": s["setting"], "tier": s.get("tier") or budget.TIER,
-            "processes": s["processes"], "sheds": s["sheds"], "rotations": s["rotations"], "peakMB": round(s["peak"]),
-            "availMB": round(s["avail"]) if s["avail"] is not None and s["avail"] >= 0 else None,
-            "restart": bool(s["setting"] != s["startSetting"])}
+    out = {"usedMB": round(s["total"] or 0.0), "limitMB": round(s["limit"]), "effMB": round(s["eff"] or s["limit"]),
+           "autoMB": round(auto), "setting": s["setting"], "tier": s.get("tier") or budget.TIER,
+           "processes": s["processes"], "sheds": s["sheds"], "rotations": s["rotations"], "peakMB": round(s["peak"]),
+           "restart": bool(s["setting"] != s["startSetting"])}
+    if s["avail"] is not None and s["avail"] >= 0:
+        out["availMB"] = round(s["avail"])
+    return out
 
 
 class _Watch:
