@@ -154,8 +154,8 @@
     "newPRs": []
   },
   "notRun": [
-    "Full server/native foundation gate",
-    "Actual first join/reconnect and streamed-world load against a staging BeamMP server carrying the patch"
+    "Full server suite beyond the foundation gate",
+    "Clean first join/reconnect with both app and server carrying the fix"
   ],
   "pullRequestBaseCommit": "01e902f06994772fb214db9a9bbe899a6251a32e",
   "postRebaseChecks": {
@@ -166,5 +166,29 @@
     "prSummaries": 343,
     "openPRHeads": 117,
     "changedPRHeadsSinceFullAudit": 0
+  },
+  "hostedFoundationCI": {
+    "functionalSourceCommit": "cf962f9e365f4ff5b83d2850e1b31343278af2fc",
+    "run": 43117670493,
+    "ubuntu22": "success",
+    "windows": "success",
+    "pythonModules": 59,
+    "luaModules": 113,
+    "uiRegressions": 20,
+    "mapMathSuites": 2,
+    "rustTests": 19,
+    "nativeBuildsAndPackages": "passed"
+  },
+  "mixedVersionLiveSession": {
+    "localAppUI": "pristine 1.9.1 (both local files matched original archive)",
+    "activeServerUI": "matches the patch",
+    "browserStyleCount": 2,
+    "routesPresent": true,
+    "worldActive": true,
+    "farTiles": 531,
+    "failedFarTiles": 0,
+    "vehicleHasGround": true,
+    "cleanFixedClientFirstJoinPass": false,
+    "requiredDeployment": "Both app-embedded mod and server ZIP must carry the fix before a clean game start."
   }
 }

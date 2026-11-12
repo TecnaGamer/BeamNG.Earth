@@ -33,7 +33,9 @@ On Windows, all 20 UI tests pass in development and production Vue builds. The u
 fails 14 of the same cases. Both existing map-math suites and all 113 offline Lua test modules on the upstream-based
 branch pass. Applying the same two runtime files to the supplied 1.9.1 snapshot also passes the 20 UI tests and all
 103 Lua modules in that snapshot. Player and BeamMP server packages build. The patched 1.9.1 client ZIP passes CRC
-and source-content checks. The full server/native foundation gate was not run for this UI-only change.
+and source-content checks. The full foundation gate subsequently passed in hosted CI on Ubuntu 22.04 and Windows
+for functional-source commit `cf962f9` (run `43117670493`), including 59 Python modules and native builds/tests.
+The larger server suite beyond that gate was not run.
 
 ## In-game validation
 
@@ -51,9 +53,21 @@ One preliminary game launch with `-windowed` crashed during startup: the install
 missing global `setFullScreen`. The successful runs omitted that option. The final test log records a normal engine
 shutdown; the preliminary crash is not counted as a passed test or evidence about multiplayer stability.
 
+## Update both the app copy and the server copy
+
+The app installs an unpacked copy of the mod before the player joins. A stock app can therefore start the original
+UI before BeamMP downloads a patched server ZIP. A later live staging check confirmed this mixed deployment: the
+patched ZIP was active and the streamed world loaded, but two Earth browser styles remained. The original local
+files matched pristine 1.9.1. This is not a clean first-join pass with the fixed client.
+
+The new owner guard cannot identify a legacy instance that never registered an owner. A clean validation requires
+the fixed UI in the app's embedded mod as well as the server ZIP: close the game and old app, start an updated app
+build, then join the updated server. The stock app's installer compares file contents and can replace a manual local
+patch on its next start, so updating only the installed files is not a durable app update.
+
 For a staging server, put the changed UI files in its `Resources/Client/beamng_earth.zip`; the server sends this copy
-to players and can replace a locally patched mod. Restart the game after updating, to clear any instances left by
-the old code. Then check:
+to players and can replace a locally patched mod. Use the updated client app described above, and restart the game
+after updating to clear instances left by the old code. Then check:
 
 1. Start the companion and BeamMP, open the Earth server category, and join after a server restart.
 2. Check that the browser stays responsive through mod download/reload and that the world finishes loading.
