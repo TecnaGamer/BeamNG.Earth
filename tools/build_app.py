@@ -28,6 +28,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = "BeamNG.Earth"
+APP_ID = "io.github.tecnagamer.beamng_earth"     # (the AppImage's AppStream component ID and desktop file name)
 IS_WIN = os.name == "nt"
 SEP = ";" if IS_WIN else ":"
 
@@ -218,9 +219,19 @@ def appimage(dist, png, out, tool):
     # libreadline ("symbol lookup error: rl_trim_arg_from_keyseq"), so every update from 1.8.1 .. 1.8.2-beta.dev.226
     # fell back to the old copy (2026-11-07). The PyInstaller bootloader needs only libc, libdl, libz and libpthread.
     os.symlink(os.path.join("usr", "lib", NAME, NAME), os.path.join(appdir, "AppRun"))
-    with open(os.path.join(appdir, "beamng-earth.desktop"), "w") as f:
-        f.write(f"[Desktop Entry]\nType=Application\nName={NAME}\nComment=Drive the real world in BeamNG.drive\n"
-                "Exec=BeamNG.Earth\nIcon=beamng-earth\nCategories=Game;\nTerminal=false\n")
+    # the desktop file and the AppStream metadata (tools/appimage/<APP_ID>.appdata.xml) are named after its component
+    # ID: appimagetool reads usr/share/metainfo/<desktop file name>.appdata.xml, and appstreamcli validate-tree wants
+    # that name to be the ID and the desktop file in usr/share/applications too
+    desktop = (f"[Desktop Entry]\nType=Application\nName={NAME}\nComment=Drive the real world in BeamNG.drive\n"
+               "Exec=BeamNG.Earth\nIcon=beamng-earth\nCategories=Game;\nTerminal=false\n")
+    apps, meta = os.path.join(appdir, "usr", "share", "applications"), os.path.join(appdir, "usr", "share", "metainfo")
+    os.makedirs(apps)
+    os.makedirs(meta)
+    for d in (appdir, apps):
+        with open(os.path.join(d, APP_ID + ".desktop"), "w") as f:
+            f.write(desktop)
+    shutil.copyfile(os.path.join(ROOT, "tools", "appimage", APP_ID + ".appdata.xml"),
+                    os.path.join(meta, APP_ID + ".appdata.xml"))
     shutil.copyfile(png, os.path.join(appdir, "beamng-earth.png"))
     shutil.copyfile(png, os.path.join(appdir, ".DirIcon"))
     env = dict(os.environ, ARCH="x86_64")
