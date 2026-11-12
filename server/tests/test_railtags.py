@@ -148,6 +148,68 @@ class OutageTest(unittest.TestCase):
             self.assertEqual(sum(u.endswith("/10/20.json.gz") for u in calls), 1)
 
 
+class DataHostTest(unittest.TestCase):
+    """A manifest's "data" (the build's files on the tile host, R2 behind the CDN; the manifest stays on Pages): the
+    shards are read there, Pages when it fails (not when it answers 404), and a manifest without one reads Pages."""
+
+    DATA = "https://tiles.test/data/rail/b1"
+
+    class Site:
+        def __init__(self, manifest, down=(), files=None):
+            self.manifest, self.down, self.calls = manifest, down, []
+            self.files = files if files is not None else {"/1/2.json.gz": gzip.compress(b'{"nodes": []}')}
+
+        def get(self, url, kind="demand", **_kw):
+            self.calls.append(url)
+            if url.endswith("manifest.json"):
+                return SimpleNamespace(body=json.dumps(self.manifest).encode())
+            if any(url.startswith(d) for d in self.down):
+                raise netfetch.FetchFailed(url + ": HTTP 522", url)
+            for k, v in self.files.items():
+                if url.endswith(k):
+                    return SimpleNamespace(body=v)
+            raise netfetch.NotFound(url)
+
+    def test_data_url(self):
+        self.assertEqual(railtags.data_url({"data": self.DATA + "/"}), self.DATA)
+        for bad in ({}, {"data": None}, {"data": "http://tiles.test/x"}, {"data": 5}, {"data": "https://"}, None, []):
+            self.assertIsNone(railtags.data_url(bad), bad)
+
+    def test_shards_from_the_data_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz"])
+            self.assertEqual(s.shard(5, 5), {}, "a 404 there: none")
+            self.assertEqual(site.calls[2:], [f"{self.DATA}/5/5.json.gz"], "not asked of Pages")
+            # (a fresh process: the pinned manifest names the host too)
+            site2 = self.Site({"built": "b1"})
+            s2 = railtags.Shards(d, site2, "rail")
+            self.assertEqual(s2.version(), "b1")
+            self.assertEqual(s2.data, self.DATA)
+            self.assertEqual(site2.calls, [])
+
+    def test_pages_when_the_data_host_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA}, down=("https://tiles.test",))
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz", f"{s.base}/1/2.json.gz"])
+
+    def test_both_failing_is_not_none_there(self):
+        site = self.Site({}, down=("https://tiles.test",), files={})
+        with self.assertRaises(netfetch.FetchFailed):
+            railtags.fetch_data(site, self.DATA, "https://pages.test/rail", "1/2.json.gz")
+
+    def test_an_old_manifest_reads_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b0"})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{s.base}/1/2.json.gz"])
+
+
 class KnownPinnedTest(unittest.TestCase):
     """Shards.known(): the pinned manifest's build before this run asked for it (the tiles' cache keys the same from
     a run's start: None until the manifest came before, 2026-11-04)."""

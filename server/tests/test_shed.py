@@ -55,7 +55,9 @@ class ShedTest(unittest.TestCase):
 
     def test_memory_mb(self):
         mb = budget.memory_mb()
-        if sys.platform.startswith("linux"):
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            # (Windows: private bytes; it returned None there until 2026-11-11, a ctypes argument overflow, and the
+            # ceiling never ran on Windows)
             self.assertGreater(mb, 1.0)
 
     def test_call_runs_job_then_sheds(self):
@@ -301,18 +303,14 @@ class TreeBudgetTest(unittest.TestCase):
             collect.assert_not_called()
 
 
-class TrimTest(unittest.TestCase):
-    def test_windows_compacts_the_heap(self):
-        fake = mock.Mock()
-        with mock.patch.object(budget.sys, "platform", "win32"), mock.patch.dict(sys.modules, {"msvcrt": fake}):
-            budget.trim()
-        fake.heapmin.assert_called_once_with()
-
-    def test_windows_nothing_to_give_back(self):
-        fake = mock.Mock()
-        fake.heapmin.side_effect = OSError(0, "nothing")
-        with mock.patch.object(budget.sys, "platform", "win32"), mock.patch.dict(sys.modules, {"msvcrt": fake}):
-            budget.trim()           # (no error)
+class RotateByRamTest(unittest.TestCase):
+    def test_desktops_rotate_too(self):
+        self.assertEqual(budget.rotate_mb(True, 15.6), budget.SMALL_ROTATE_MB)
+        self.assertEqual(budget.rotate_mb(False, 31.9), 2800, "a 32 GB desktop grows the same way, later")
+        self.assertEqual(budget.rotate_mb(False, 48.0), 3800)
+        self.assertEqual(budget.rotate_mb(False, 62.0), 0)
+        self.assertEqual(budget.rotate_mb(False, None), 0)
+        self.assertGreater(budget.rotate_mb(False, 31.9), budget.shed_mb(False, 31.9), "a shed first, rotation after")
 
 
 class HeldMemoryTest(unittest.TestCase):

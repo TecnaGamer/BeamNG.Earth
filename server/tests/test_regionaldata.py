@@ -167,3 +167,35 @@ class OutageTest(unittest.TestCase):
                 json.dump({"built": "new", "files": {}}, fh)
             with fetching(cache, Never()):
                 self.assertEqual(regionaldata.signature(), "new")
+
+
+class DataHostTest(unittest.TestCase):
+    """The manifest's "data" (the build's files on the tile host, R2 behind the CDN): files read there, Pages when it
+    fails."""
+
+    def test_files_from_the_data_host_then_pages(self):
+        import json
+        body = (FIXTURE / countrybounds.FILE).read_bytes()
+        m = json.loads((FIXTURE / "manifest.json").read_bytes())
+        m["data"] = "https://tiles.test/data/regional/k1"
+
+        class Site:
+            def __init__(self, down):
+                self.down, self.asked = down, []
+
+            def get(self, url, kind="demand"):
+                self.asked.append(url)
+                if url.endswith("/manifest.json"):
+                    return mock.Mock(body=json.dumps(m).encode())
+                if self.down and url.startswith("https://tiles.test/"):
+                    raise OSError("HTTP 522")
+                return mock.Mock(body=body)
+        for down in (False, True):
+            with tempfile.TemporaryDirectory() as cache:
+                site = Site(down)
+                with fetching(cache, site):
+                    self.assertTrue(regionaldata.file(countrybounds.FILE))
+                want = [f"https://tiles.test/data/regional/k1/{countrybounds.FILE}"]
+                if down:
+                    want.append(f"{regionaldata._base()}/{countrybounds.FILE}")
+                self.assertEqual(site.asked[1:], want)

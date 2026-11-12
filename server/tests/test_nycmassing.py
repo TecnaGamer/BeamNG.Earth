@@ -283,6 +283,25 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(len(asked), 2, "the manifest and the one listed shard")
         self.assertEqual(nm.Source(self.tmp.name, fetcher=None).shard(KEY)["bin"].tolist(), [9], "from disk")
 
+    def test_shards_from_the_host_the_manifest_names(self):
+        import json
+        import netfetch
+        asked = []
+
+        class Site:
+            def get(self, url, kind="demand"):
+                asked.append(url)
+                if url.endswith("/manifest.json"):
+                    m = json.loads(manifest_bytes([KEY]))
+                    m["data"] = "https://tiles.test/data/nycmassing/v1/k1"
+                    return mock.Mock(body=json.dumps(m).encode())
+                if url.startswith("https://tiles.test/") and url.endswith(f"/{KEY.y}.npz"):
+                    return mock.Mock(body=shard_bytes([record(9)]))
+                raise netfetch.NotFound(url)
+        src = nm.Source(self.tmp.name, fetcher=Site(), base="https://example.invalid/nyc")
+        self.assertEqual(src.shard(KEY)["bin"].tolist(), [9])
+        self.assertEqual(asked[1:], [f"https://tiles.test/data/nycmassing/v1/k1/{KEY.z}/{KEY.x}/{KEY.y}.npz"])
+
     def test_nothing_asked_or_kept_before_publishing(self):
         import netfetch
         asked = []

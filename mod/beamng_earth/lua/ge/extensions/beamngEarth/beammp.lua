@@ -33,14 +33,45 @@ function M.onPostJoin() layoutDue = true end
 -- off, so the BeamNG.Earth level and the servers tab were gone until the game restarted. Called from the server's copy
 -- in BeamMP's onBeamMPServerLeave, before BeamMP's cleanup removes it. A player without our app has no such mod:
 -- nothing happens (core_modmanager.activateMod logs "mod not existing").
+-- Switched on once BeamMP's session is over (M.restoreTick): in the leave hook BeamMP still counts the session, and its
+-- MPModManager.checkMod turned our copy straight off again ("This mod should not be running: beamng_earth", Steam Deck
+-- and a player's bug report, 2026-11-10/11), so the level stayed gone until the game restarted; with the code swap
+-- (codeswap.lua) the player's copy's code had come in for that moment and then had no files at all.
 M.LOCAL_MOD = 'beamng_earth'
-function M.onServerLeave()
+M.RESTORE_TRIES = 3             -- switched on again this many times when something turned it off meanwhile
+M.RESTORE_GAP_S = 1.0
+local restoreDue, restoreTries, restoreWait = false, 0, 0
+
+local function localEntry()
   local mm = rawget(_G, 'core_modmanager')
-  if type(mm) ~= 'table' or type(mm.getModDB) ~= 'function' or type(mm.activateMod) ~= 'function' then return false end
+  if type(mm) ~= 'table' or type(mm.getModDB) ~= 'function' or type(mm.activateMod) ~= 'function' then return nil end
   local ok, entry = pcall(mm.getModDB, M.LOCAL_MOD)
-  if not ok or type(entry) ~= 'table' or entry.active then return false end
+  if not ok or type(entry) ~= 'table' then return nil end
+  return entry, mm
+end
+
+function M.onServerLeave()
+  local entry = localEntry()
+  if not entry or entry.active then return false end
+  restoreDue, restoreTries, restoreWait = true, 0, 0
+  return M.restoreTick(0)
+end
+
+-- Each frame (core.lua onUpdate, also outside a level): our copy switched on once BeamMP's session is over. -> true when
+-- it was switched on now.
+function M.restoreTick(dt)
+  if not restoreDue then return false end
+  restoreWait = restoreWait - (dt or 0)
+  if restoreWait > 0 or M.inSession() then return false end
+  local entry, mm = localEntry()
+  if not entry or entry.active or restoreTries >= M.RESTORE_TRIES then
+    restoreDue = false          -- (on and still on RESTORE_GAP_S later: done)
+    return false
+  end
+  restoreTries = restoreTries + 1
+  restoreWait = M.RESTORE_GAP_S
   log('I', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. M.LOCAL_MOD .. ') switched back on')
-  return pcall(mm.activateMod, M.LOCAL_MOD)
+  return (pcall(mm.activateMod, M.LOCAL_MOD))
 end
 
 -- Is the game in a BeamMP session? (BeamMP's own extension MPCoreNetwork; nil outside BeamMP.)
@@ -118,6 +149,6 @@ end
 function M.show() guihooks.trigger('showConfirmationDialog', M.dialog()) end
 
 -- (tests) the session's state back to the start
-function M.reset() waited, hidden, layoutDue = 0, false, false end
+function M.reset() waited, hidden, layoutDue, restoreDue, restoreTries, restoreWait = 0, false, false, false, 0, 0 end
 
 return M

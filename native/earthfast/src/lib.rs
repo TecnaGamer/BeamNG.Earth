@@ -5766,6 +5766,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
@@ -5939,6 +5940,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 221)?;
+    m.add("VERSION", 222)?;
     Ok(())
 }

@@ -103,14 +103,36 @@ _G.openWebBrowser = nil
 -- leaving a server: the player's own BeamNG.Earth (switched off by BeamMP at the join) back on
 do
   local activated, db = {}, { beamng_earth = { active = false } }
-  core_modmanager = { getModDB = function(n) return db[n] end, activateMod = function(n) activated[#activated + 1] = n end }
-  T.check(beammp.onServerLeave() and activated[1] == 'beamng_earth', 'left: our own mod switched back on')
+  core_modmanager = { getModDB = function(n) return db[n] end,
+    activateMod = function(n) activated[#activated + 1] = n; db[n].active = true end }
+  _G.MPCoreNetwork = { isMPSession = function() return false end }
+  beammp.reset()
+  T.check(beammp.onServerLeave() and activated[1] == 'beamng_earth', 'left (session over): our own mod switched back on')
+  T.check(not beammp.restoreTick(5) and #activated == 1, 'still on later: done')
   db.beamng_earth.active = true
   T.check(not beammp.onServerLeave() and #activated == 1, 'already on: left alone')
   db.beamng_earth = nil
   T.check(not beammp.onServerLeave() and #activated == 1, 'no local copy (no app): nothing')
+
+  -- the leave hook comes while BeamMP still counts the session (its checkMod would turn ours straight off again): on
+  -- once the session is over; again (up to RESTORE_TRIES) when turned off meanwhile
+  db.beamng_earth = { active = false }
+  activated = {}
+  local inMp = true
+  _G.MPCoreNetwork = { isMPSession = function() return inMp end }
+  beammp.reset()
+  T.check(not beammp.onServerLeave() and #activated == 0, 'leave hook in the session: not yet')
+  T.check(not beammp.restoreTick(0.1) and #activated == 0, 'session still on: not yet')
+  inMp = false
+  T.check(beammp.restoreTick(0.1) and #activated == 1, 'session over: switched on')
+  db.beamng_earth.active = false           -- (turned off again by someone)
+  T.check(not beammp.restoreTick(0.5) and #activated == 1, 'the gap first')
+  T.check(beammp.restoreTick(0.6) and #activated == 2, 'turned off meanwhile: on again')
+  for _ = 1, 10 do db.beamng_earth.active = false; beammp.restoreTick(2) end
+  T.check(#activated == beammp.RESTORE_TRIES, 'at most RESTORE_TRIES times: ' .. #activated)
   core_modmanager = nil
-  T.check(not beammp.onServerLeave(), 'no mod manager: nothing')
+  beammp.reset()
+  T.check(not beammp.onServerLeave() and not beammp.restoreTick(1), 'no mod manager: nothing')
 end
 
 T.done('test_beammp')

@@ -140,7 +140,7 @@ def low_free_gb(gb):
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
-    global SHED_MB, LOW_FREE_GB, TREE_MB
+    global SHED_MB, LOW_FREE_GB, TREE_MB, ROTATE_MB
     gb = total_gb()
     SHED_MB = shed_mb(is_small, gb)
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
@@ -151,6 +151,9 @@ def apply(is_small=None):
     TREE_MB = tree_mb(gb) if TREE_ON else 0
     if os.environ.get("BNGE_TREE_MB"):              # (A/B: the whole server's budget in MB, 0 off)
         TREE_MB = int(os.environ["BNGE_TREE_MB"])
+    ROTATE_MB = rotate_mb(is_small, gb)
+    if os.environ.get("BNGE_ROTATE_MB"):            # (A/B: the pools' rotation ceiling in MB, 0 off)
+        ROTATE_MB = int(os.environ["BNGE_ROTATE_MB"])
     if is_small:
         import dem
         import farfield
@@ -255,12 +258,67 @@ def memory_mb(private=False):
             c.cb = ctypes.sizeof(c)
             k32 = ctypes.WinDLL("kernel32")
             k32.GetCurrentProcess.restype = wintypes.HANDLE
-            psapi = ctypes.WinDLL("psapi")
-            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            # (argtypes: without them ctypes passed the pseudo handle (2**64 - 1 as HANDLE) as a C int, OverflowError,
+            # and this returned None on every Windows machine: the worker memory ceiling never ran there, 2026-11-11 -
+            # 16 GB test PC: eight workers at 0.9-3.6 GB private each, 33 of 36.8 GB committed after 30 minutes)
+            k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
+            k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+            if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
                 return c.PrivateUsage / 2 ** 20
         except Exception:
             pass
     return None
+
+
+def process_mb(pid):
+    """Another process's memory in MB as memory_mb counts its own (Linux: resident + swapped; Windows: private bytes),
+    or None."""
+    try:
+        rss = swap = 0
+        with open(f"/proc/{int(pid)}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1])
+                elif line.startswith("VmSwap:"):
+                    swap = int(line.split()[1])
+        return (rss + swap) / 1024.0
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import perfstats
+            got = perfstats._win_proc(int(pid))
+            return got[1] if got else None
+        except Exception:
+            pass
+    return None
+
+
+# A pool whose worker is still over ROTATE_MB (pools.RespawningPool's memory watch, every ROTATE_CHECK_S) is replaced
+# by a fresh one, at most every ROTATE_MIN_S: the old one's queued and running jobs finish in its own processes, which
+# then exit and give everything back. The caches maybe_shed drops are not all a worker keeps (native memory of the map
+# readers, module-level caches): on the 16 GB Windows test PC (2026-11-11), with the ceiling working, four workers were
+# at 1.8-2.3 GB private after 25 minutes and the server at 14.6 GB. 0: off; BNGE_ROTATE_MB. A desktop by its RAM
+# (below GB, MB), none from the last up: a 32 GB profile's road workers were at 2.0-2.4 GB after 25 minutes of LA,
+# London and New York with their caches shed (drive_mem, 2026-11-11), the server at 25 GB, and growing with each
+# new city: the same growth as the 16 GB PC's, later.
+ROTATE_MB = 0
+SMALL_ROTATE_MB = 1800
+DESKTOP_ROTATE_MB = ((40.0, 2800), (56.0, 3800))
+ROTATE_CHECK_S = 30.0
+ROTATE_MIN_S = 300.0
+
+
+def rotate_mb(is_small, gb):
+    """The pools' rotation ceiling (ROTATE_MB) for the profile and the machine's RAM (GB, None unknown); 0: none."""
+    if is_small:
+        return SMALL_ROTATE_MB
+    if gb is None:
+        return 0
+    for below, mb in DESKTOP_ROTATE_MB:
+        if gb < below:
+            return mb
+    return 0
 
 
 def maybe_shed(ceiling=True, collect=True):
@@ -578,18 +636,27 @@ def _malloc_small():
 
 
 def trim():
-    """Give the freed memory back now: glibc's malloc_trim; on Windows the C runtime's heap compacted (msvcrt.heapmin:
-    its free blocks back to the system, after a shed; before 2026-11-11 nothing there, GitHub #893)."""
-    if sys.platform == "win32":
-        try:
-            import msvcrt
-            msvcrt.heapmin()
-        except Exception:       # (OSError when there is nothing to give back)
-            pass
-        return
+    """Give the freed memory back now (glibc: malloc_trim; Windows: HeapCompact of the process's heaps, which
+    decommits their large free blocks: the C runtime's malloc is the process heap there; BNGE_WIN_TRIM=0 off)."""
     libc = _libc() if sys.platform.startswith("linux") else None
     if libc is not None and hasattr(libc, "malloc_trim"):
         libc.malloc_trim(0)
+    elif sys.platform == "win32" and os.environ.get("BNGE_WIN_TRIM", "1") != "0":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetProcessHeaps.argtypes = (wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+            k32.GetProcessHeaps.restype = wintypes.DWORD
+            k32.HeapCompact.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            k32.HeapCompact.restype = ctypes.c_size_t
+            n = k32.GetProcessHeaps(0, None)
+            heaps = (wintypes.HANDLE * max(1, n))()
+            n = min(k32.GetProcessHeaps(len(heaps), heaps), len(heaps))
+            for i in range(n):
+                k32.HeapCompact(heaps[i], 0)
+        except Exception:
+            pass
 
 
 # Windows has no niceness: priority classes. The server's own (earthd --nice, default 10) is "below normal"; its workers
