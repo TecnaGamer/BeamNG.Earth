@@ -160,6 +160,8 @@ impl Pt {
     }
 }
 
+const OVERLAP_YIELD_M: f64 = 1.0;   // m (pass 1's overlap yield)
+
 #[inline(always)]
 fn smooth(v: f64) -> f64 {
     let v = v.clamp(0.0, 1.0);
@@ -429,7 +431,21 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     if st.bid >= 0 && st.bid & LEG_ROAD_MASK != g.rid & LEG_ROAD_MASK {
         yf = yf.max(apart(target - st.bz));
     }
-    yf *= smooth((d - g.rh) / ramp);
+    // (two carriageways overlapping in plan at other levels, a wall between them: the point is the road's whose
+    // carriageway it lies deeper in. This one gives way from where the point lies yield_ramp deeper in the other's
+    // than in its own (st.cdeep: the deepest's d - rh, negative inside), not only past its own edge: Vienna's S1 east
+    // carriageway in its trench rose 1.6 m where a 14 m bank ramp's carriageway reached 1.5 m over its lanes, GitHub
+    // #1083, Rautenweg)
+    // (only a higher road over a lower one's lanes: a road in its cutting is not raised by a bank road's, the bank
+    // road's edge may still come down to it; at most OVERLAP_YIELD_M: only a carriageway's edge strip gives way so, two
+    // crossing deep into each other (one that should be a bridge) still blend, a wall across the lanes there was worse,
+    // Porte Maillot's Voie AX; none past a road's end, over a deck, whose own rules hold there, GitHub #909)
+    let over = if st.carid >= 0 && st.carid != g.rid && target > st.carz && q.past <= 1e-6 {
+        (-st.cdeep).clamp(0.0, OVERLAP_YIELD_M)
+    } else {
+        0.0
+    };
+    yf *= smooth((d - g.rh + over) / ramp);
     // (a lower-ranked road gives way over a higher-ranked one's ground (grading.grade_rank): a built (paved / cobble)
     // road keeps its own ground where an unpaved dirt road or track runs beside it, and a built side road eases onto
     // a higher built one the same way. On the higher road's carriageway the lower one gives way whole; past its

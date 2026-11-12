@@ -9920,6 +9920,61 @@ def _abutment_end(part, ground_fn):
     return (np.vstack([line[keep], cut]), np.r_[z[keep], np.interp(PAD_ABUT_REACH_M, s, z)], half)
 
 
+# The pads of joints a deck part no longer than PAD_MERGE_M links are one pad, the hull of all their parts (GitHub #1083:
+# a junction over a lid, Rautenweg over the S1, is four joints 6-13 m apart: their pads overlapped at their own heights,
+# each one's railing standing in the others'; roadmesh puts the merged pad on the junction's one field).
+# BNE_PAD_MERGE_M=0: per joint, as before.
+PAD_MERGE_M = float(os.environ.get("BNE_PAD_MERGE_M", "24"))
+
+
+def _padded(parts):
+    """Whether a joint's parts [(line from the joint, z, half)] get a pad: two or more, two not going on straight."""
+    if len(parts) < 2:
+        return False
+    if len(parts) == 2:
+        d = []
+        for line, _z, _h in parts:
+            v = line[min(len(line) - 1, 1)] - line[0]
+            d.append(v / max(np.hypot(*v), 1e-9))
+        return float(np.dot(d[0], d[1])) >= PAD_STRAIGHT_COS
+    return True
+
+
+def _merge_pad_joints(joints, owner):
+    """joints [(q, parts)] with those whose pads a deck part no longer than PAD_MERGE_M links made one: (q the joints'
+    mean, its .joints the joints, every part of them). earthfast.pad_links."""
+    if PAD_MERGE_M <= 0 or len(joints) < 2:
+        return joints
+    import fast
+    fast.require(241, "pad_links")
+    jp, dk, dl = [], [], []
+    for k, (_q, parts) in enumerate(joints):
+        for part in parts:
+            o = owner.get(id(part))
+            ok = o is not None and o[2] is part
+            jp.append(k)
+            dk.append(o[0] if ok else -1)
+            dl.append(o[1] if ok else 0.0)
+    padded = np.array([1 if _padded(parts) else 0 for _q, parts in joints], np.int64)
+    comp = np.asarray(fast._ef.pad_links(np.array(jp, np.int64), np.array(dk, np.int64), np.array(dl, np.float64),
+                                         padded, PAD_MERGE_M))
+    out = []
+    for k, (q, parts) in enumerate(joints):
+        r = int(comp[k])
+        if r < 0:
+            out.append((q, parts))
+        elif r == k:
+            ks = np.flatnonzero(comp == r)
+            m = np.mean([joints[i][0] for i in ks], axis=0).view(_Merged)
+            m.joints = np.array([joints[i][0] for i in ks])
+            out.append((m, [p for i in ks for p in joints[i][1]]))
+    return out
+
+
+class _Merged(np.ndarray):
+    """A merged pad's centre (the joints' mean) carrying its joints."""
+
+
 def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
@@ -9933,17 +9988,21 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     fast.require(113, "deck_pad_rim")
     join = _EndJoin(PAD_JOIN_M)
     nodes, inc = [], {}
-    for fid, spec, xy, z in decks:
+    owner = {}                  # id(part tuple) -> (deck index, its length)
+    for di, (fid, spec, xy, z) in enumerate(decks):
         xy = np.asarray(xy, np.float64)[:, :2]
         z = np.asarray(z, np.float64)
         if len(xy) < 2 or not np.isfinite(z).all():
             continue
+        length = float(np.hypot(*np.diff(xy, axis=0).T).sum())
         for at in (0, -1):
             nd = join(xy[at])
             if nd == len(nodes):
                 nodes.append(xy[at].copy())
             line, zz = (xy, z) if at == 0 else (xy[::-1], z[::-1])
-            inc.setdefault(nd, []).append((line, zz, spec.width / 2))
+            part = (line, zz, spec.width / 2)
+            owner[id(part)] = (di, length, part)
+            inc.setdefault(nd, []).append(part)
     if PAD_ABUT_ON:
         for incident in inc.values():
             if len(incident) == 1:
@@ -9977,16 +10036,12 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
                     if matches:
                         groups[min(matches)[1]].append((ln, zz, half))
         joints.extend((q, parts) for parts in groups)
+    joints = _merge_pad_joints(joints, owner)
     for q, parts in joints:
         if len(parts) < 2:
             continue
-        if len(parts) == 2:
-            d = []
-            for line, _z, _h in parts:
-                v = line[min(len(line) - 1, 1)] - line[0]
-                d.append(v / max(np.hypot(*v), 1e-9))
-            if float(np.dot(d[0], d[1])) < PAD_STRAIGHT_COS:
-                continue                        # (a deck going on straight: its own end, an abutment, no corner)
+        if not isinstance(q, _Merged) and not _padded(parts):
+            continue                            # (a deck going on straight: its own end, an abutment, no corner)
         # a ramp parting from or joining its road (no corner to cut): its joint paved just to the decks' edges (their
         # slabs' PARAPET_W), the rim's railing the outer one where the parts' own stop, overlapping each other there
         margin = PAD_FORK_MARGIN_M if _fork(parts) else PAD_MARGIN_M
@@ -10022,7 +10077,9 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
                         run = []
                 if len(run) >= 2:
                     walls.append((rim[run, :3], rim[run, 3:5]))
-        out.append((hull, np.array([q[0], q[1], zc]), walls))
+        js = getattr(q, "joints", None)
+        js = np.c_[js, np.full(len(js), zc)] if js is not None else np.array([[q[0], q[1], zc]])
+        out.append((hull, np.array([q[0], q[1], zc]), walls, js))
     return out
 
 
