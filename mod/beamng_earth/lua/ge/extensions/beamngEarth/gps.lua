@@ -658,9 +658,9 @@ end
 M.speedOverride = nil
 
 -- Pure: the vehicle Lua that sets its AI on a path of node ids (nil: off).
-function M.aiCommand(ids, aggression)
+function M.aiCommand(ids, aggression, brake)
   local load = 'if not beamngEarth_autodrive then extensions.load("beamngEarth_autodrive") end; '
-  if not ids then return load .. 'beamngEarth_autodrive.stop("disabled")' end
+  if not ids then return load .. (brake and 'beamngEarth_autodrive.arrive()' or 'beamngEarth_autodrive.stop("disabled")') end
   local q = {}
   for i, id in ipairs(ids) do q[i] = string.format('%q', tostring(id)) end
   local speed = tonumber(M.speedOverride)
@@ -1015,7 +1015,8 @@ local function setArrows(key, target, tail, nodes)
   end
 end
 
-function M.setAutodrive(on)
+-- brake is used only for arrival; an ordinary toggle hands control straight back to the player.
+function M.setAutodrive(on, brake)
   on = on and true or false
   if on == auto then return auto end
   auto = on
@@ -1028,11 +1029,18 @@ function M.setAutodrive(on)
     lastCheck = -math.huge
   else
     local veh = playerVeh()
-    if veh then veh:queueLuaCommand(M.aiCommand(nil)) end
+    if veh then veh:queueLuaCommand(M.aiCommand(nil, nil, brake)) end
   end
   return auto
 end
 function M.autodrive() return auto end
+
+local function approach(distance)
+  if not auto or paused then return end
+  local veh = playerVeh()
+  if veh then veh:queueLuaCommand(string.format(
+    'if beamngEarth_autodrive then beamngEarth_autodrive.approach(%.3f) end', distance)) end
+end
 
 local function damage(veh)
   local m = rawget(_G, 'map')
@@ -1174,6 +1182,9 @@ function M.update(anchor, player)
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
     local api = rawget(_G, 'beamngEarth_api')      -- (the modding API's event: other mods' jobs end here)
     if api and api._event then pcall(api._event, 'routeArrived', { lat = dest.lat, lon = dest.lon, name = dest.name }) end
+    -- Finish with the stock brakes and parking brake rather than releasing the controls and coasting.
+    -- Manual cancellation still releases control immediately; a local path ending is not arrival.
+    if auto then M.setAutodrive(false, true) end
     M.clear()
   end
   if not route and not ahead and dist < M.ARRIVE_M then arrive() return end
@@ -1253,6 +1264,7 @@ function M.update(anchor, player)
       for _, w in ipairs(tg.via or {}) do wps[#wps + 1] = vec3(w.x, w.y, w.z) end
       wps[#wps + 1] = vec3(tg.x, tg.y, tg.z)
       if setArrows(key, wps, not tg.final and { e = e, s = tg.s, z = tg.z } or nil, nodes) then targetS = tg.s end
+      if not ahead and tg.final then approach(remaining) end
       return
     end
   end
@@ -1261,6 +1273,7 @@ function M.update(anchor, player)
   if not id then return end
   local final = nd <= M.FINAL_M
   setArrows(final and 'final' or id, final and vec3(tx, ty, pos.z) or vec3(pos.x, pos.y, pos.z), nil, nodes)
+  if not ahead and final then approach(dist) end
 end
 
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).

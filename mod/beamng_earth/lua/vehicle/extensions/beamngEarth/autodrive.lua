@@ -82,6 +82,22 @@ function M.forwardStart(ids, md, p, heading)
   return out
 end
 
+-- Use the stock speed planner to brake before the real destination. A user speed setting is a ceiling
+-- here: 'set' otherwise overrides the planner's stopping profile, even at the end of the road.
+function M.approach(distance)
+  if ai.mode ~= 'manual' then return end
+  if lastSpeed then ai.setSpeedMode('limit') end
+  ai.setStopPoint(nil, math.max(0, distance - 5))
+end
+
+function M.arrive()
+  M.reset()
+  -- Discard the finished target so stop mode cannot turn back toward it after an overshoot. Entering
+  -- manual also enables the stock update callback if an earlier local-path stop already disabled it.
+  ai.setMode('manual')
+  ai.setMode('stop') -- service brakes first; the stock controller applies the parking brake at rest
+end
+
 function M.drive(ids, version, force, speed, aggression)
   local md = mapmgr.mapData
   if not valid(ids, md) then

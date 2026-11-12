@@ -22,7 +22,9 @@ local function fixture(path, y, radius, configure)
     f.drives[#f.drives + 1] = args.wpTargetList
     env.ai.mode = 'manual'
   end, setMode = function(mode) env.ai.mode = mode; f.modes[#f.modes + 1] = mode end,
-    setPath = function(path) f.extensions[#f.extensions + 1] = path end }
+    setPath = function(path) f.extensions[#f.extensions + 1] = path end,
+    setSpeedMode = function(mode) f.speedMode = mode end,
+    setStopPoint = function(_, distance) f.stopDistance = distance end }
   env.mapmgr = { requestMap = function() f.requests = f.requests + 1 end }
   env.obj = { queueGameEngineLua = function() G.retryAutodrive() end }
   env.extensions = { load = function()
@@ -387,6 +389,7 @@ end
 
 do
   local f = fixture()
+  T.check(f.stopDistance and f.stopDistance > 0, 'a loaded final approach tells the stock planner where to brake')
   T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j,s,t',
     'the first AI target stays ahead of the car, without the rear endpoint')
   local first = f.nodes[f.drives[1][1]].pos
@@ -629,6 +632,29 @@ do
   T.check(#f.drives == 2 and table.concat(f.drives[2], ',') == 'j,s,t',
     'a continuation with a merged node resumes instead of waiting at the old endpoint')
   T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries, 'continuation needs no recovery or progress retry')
+end
+
+do
+  local f = fixture()
+  f.x, f.y = 380, -60
+  f:step()
+  T.check(not f.gps.autodrive() and f.gps.status() == nil, 'arrival clears Autodrive and its destination')
+  T.check(f.modes[#f.modes] == 'stop', 'arrival brakes with the stock AI rather than releasing its controls')
+  local modes = #f.modes
+  f:step(10)
+  T.check(#f.modes == modes, 'clearing the arrived destination does not override the stop command')
+  f = fixture()
+  f.gps.clear()
+  T.check(f.modes[#f.modes] == 'disabled', 'manual route clearing still releases control immediately')
+  f = fixture()
+  f.gps.setAutodrive(false)
+  f.x, f.y = 380, -60; f:step()
+  T.check(f.modes[#f.modes] == 'disabled', 'manual driving to the destination does not engage AI braking')
+  f = fixture(nil, nil, nil, function(f)
+    f.route.points[#f.route.points] = { -0.006, 0.08 }
+    f.route.dist = 825
+  end)
+  T.check(f.stopDistance == nil, 'a temporary graph endpoint does not become a destination braking point')
 end
 
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
