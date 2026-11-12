@@ -1219,6 +1219,8 @@ def tunnel_floors(profiles, feats, box):
     def collect(parts):
         out = {}
         for fid, _spec, xy, z, _lon in parts:
+            if not np.isfinite(z).all():
+                continue
             out.setdefault(part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
         return out
     return collect(profiles.parts(feats, box) if AI_TUNNELS else ()), collect(profiles.open_parts(feats, box))

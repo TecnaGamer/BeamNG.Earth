@@ -308,6 +308,34 @@ class GraphTest(unittest.TestCase):
         self.assertEqual([e[2:] for e in g["edges"]], [e[2:] for e in expected["edges"]],
                          "open roads keep ordinary lanes, speeds and width, without portal narrowing")
 
+    def test_missing_open_floor_elevation_stays_out_of_the_ai_graph(self):
+        f = features([[(-150, 0), (150, 0)]], ["motorway"], flags=[(0, "is_tunnel")])
+
+        def missing(lat, lon):
+            return np.full(np.broadcast(lat, lon).shape, np.nan)
+
+        profiles = roads.TunnelProfiles(FRAME, lambda key: f, missing)
+        box = (-256, -128, 256, 128)
+        self.assertFalse(roads._tunnel_chunks(profiles, [f], box), "the renderer skips the invalid floor")
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            closed, opened = navgraph.tunnel_floors(profiles, [f], box)
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels=closed, open_tunnels=opened)
+        self.assertFalse(opened, "an unbuilt open floor cannot supply AI heights")
+        self.assertFalse(g["edges"], "no AI road crosses the unbuilt section")
+        self.assertTrue(all(np.isfinite(n).all() for n in g["nodes"].values()))
+
+    def test_tunnel_floors_skip_invalid_sections_without_losing_valid_ones(self):
+        xy = np.array([[0., 0.], [100., 0.]])
+        heights = ([3., 4.], [3., np.nan], [np.inf, 4.], [3., -np.inf])
+        parts = [(f"road.0#{i}", None, xy, z, 0.) for i, z in enumerate(heights)]
+        profiles = SimpleNamespace(parts=lambda *_: parts, open_parts=lambda *_: parts)
+        with mock.patch.object(navgraph, "AI_TUNNELS", True):
+            closed, opened = navgraph.tunnel_floors(profiles, [], (0, 0, 100, 100))
+        for floors in (closed, opened):
+            self.assertEqual(set(floors), {"road"})
+            self.assertEqual(len(floors["road"]), 1, "skip invalid parts, keeping their valid sibling")
+            np.testing.assert_array_equal(floors["road"][0][1], [3., 4.])
+
     def test_open_profiles_do_not_enable_closed_or_missing_tunnels(self):
         f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
         fid = str(f.ids[0])
