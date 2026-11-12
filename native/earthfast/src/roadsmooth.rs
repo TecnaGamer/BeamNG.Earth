@@ -622,6 +622,271 @@ pub fn road_smooth_g2<'py>(
     ))
 }
 
+// ---- a whole layer at once (roadsmooth.smooth, kernel 235) ---------------------------------------------------------
+//
+// roadsmooth.smooth's Python round the line kernels (its interior connectors' pins, the layer's coordinates rebuilt
+// with the new lines, the rules' fractions carried over) was ~2.3 of the 2.8 CPU-s a 16-tile road probe spent
+// smoothing (I-83 Baltimore, 2026-11-12): the same steps here, with the same arithmetic as the numpy they replace.
+
+/// The cumulative lengths of a line (numpy's r_[0, cumsum(hypot(*diff(xy).T))]: summed in order).
+fn cum_len(xy: &[Pt]) -> Vec<f64> {
+    let mut s = Vec::with_capacity(xy.len());
+    s.push(0.0f64);
+    for k in 1..xy.len() {
+        let d = (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        s.push(s[k - 1] + d);
+    }
+    s
+}
+
+/// roadsmooth.connector_pins: the interior vertex indices of line xy where its interior connectors are (at: their
+/// fractions of its length): the vertex within pin_m of one, else both vertices of the piece it lies on; sorted, unique.
+pub fn connector_pins(xy: &[Pt], at: &[f64], pin_m: f64) -> Vec<usize> {
+    let k = xy.len();
+    if at.is_empty() || k < 3 {
+        return Vec::new();
+    }
+    let s = cum_len(xy);
+    let total = s[k - 1];
+    let mut pins: Vec<usize> = Vec::new();
+    for &f in at {
+        let t = f * total;
+        // (numpy's argmin: the first of the smallest; a NaN wins at once)
+        let mut v = 0usize;
+        let mut best = (s[0] - t).abs();
+        if !best.is_nan() {
+            for (j, &sj) in s.iter().enumerate().skip(1) {
+                let d = (sj - t).abs();
+                if d.is_nan() {
+                    v = j;
+                    break;
+                }
+                if d < best {
+                    best = d;
+                    v = j;
+                }
+            }
+        }
+        if (s[v] - t).abs() <= pin_m {
+            pins.push(v);
+        } else {
+            // np.clip(np.searchsorted(s, t) - 1, 0, k - 2): the first index with s[i] >= t (left), less one
+            let left = s.partition_point(|&x| x < t) as i64;
+            let piece = (left - 1).clamp(0, k as i64 - 2) as usize;
+            pins.push(piece);
+            pins.push(piece + 1);
+        }
+    }
+    pins.retain(|&v| v > 0 && v + 1 < k);
+    pins.sort_unstable();
+    pins.dedup();
+    pins
+}
+
+/// roadsmooth.smooth's pins of its G2 lines: xy (N, 2) the lines' points, off (n + 1) into it; at (m,) the interior
+/// connectors' fractions, at_off (n + 1) into it, per line. Returns (pin_off (n + 1), pins): each line's interior
+/// vertex indices to keep.
+#[pyfunction]
+pub fn road_connector_pins<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    off: PyReadonlyArray1<'py, i64>,
+    at_off: PyReadonlyArray1<'py, i64>,
+    at: PyReadonlyArray1<'py, f64>,
+    pin_m: f64,
+) -> PyResult<(Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>)> {
+    let (a, off, aoff, at) = (xy.as_array(), off.as_array(), at_off.as_array(), at.as_array());
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(m.to_string());
+    if a.ndim() != 2 || a.shape()[1] < 2 {
+        return Err(bad("xy must be (N, 2)"));
+    }
+    let n = off.len().saturating_sub(1);
+    if aoff.len() != n + 1 {
+        return Err(bad("at_off must match off"));
+    }
+    let rows = a.shape()[0] as i64;
+    for i in 0..n {
+        if off[i] < 0 || off[i + 1] < off[i] || off[i + 1] > rows || aoff[i] < 0 || aoff[i + 1] < aoff[i]
+            || aoff[i + 1] as usize > at.len() {
+            return Err(bad("bad offsets"));
+        }
+    }
+    let mut pin_off = vec![0i64];
+    let mut pins: Vec<i64> = Vec::new();
+    for i in 0..n {
+        let (a0, a1) = (aoff[i] as usize, aoff[i + 1] as usize);
+        if a1 > a0 {
+            let (s, e) = (off[i] as usize, off[i + 1] as usize);
+            let pts: Vec<Pt> = (s..e).map(|k| [a[[k, 0]], a[[k, 1]]]).collect();
+            let fr: Vec<f64> = (a0..a1).map(|k| at[k]).collect();
+            pins.extend(connector_pins(&pts, &fr, pin_m).into_iter().map(|v| v as i64));
+        }
+        pin_off.push(pins.len() as i64);
+    }
+    Ok((Array1::from_vec(pin_off).into_pyarray(py), Array1::from_vec(pins).into_pyarray(py)))
+}
+
+/// Equality as Python's float / complex comparisons have it (-0.0 is 0.0), as a hashable key; None for a NaN.
+fn eq_key(p: Pt) -> Option<(u64, u64)> {
+    if p[0].is_nan() || p[1].is_nan() {
+        return None;
+    }
+    let norm = |v: f64| if v == 0.0 { 0u64 } else { v.to_bits() };
+    Some((norm(p[0]), norm(p[1])))
+}
+
+type Rebuilt<'py> = (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
+                     Bound<'py, PyArray1<bool>>);
+
+/// roadsmooth.smooth's new coordinates: a layer's en / lonlat (N, 2) by rings (coord_off (R + 1)) with the rings
+/// `rings` (k,) replaced by the points pts (M, 2), pts_off (k + 1). Returns (new coord_off, en, lonlat, new_pt): a
+/// replaced ring's points that are its old vertices (the same en exactly; the last such old vertex) and its ends keep
+/// their lon / lat; the others (new_pt) are left 0 for the caller's one conversion.
+#[pyfunction]
+pub fn road_smooth_rebuild<'py>(
+    py: Python<'py>,
+    en: PyReadonlyArray2<'py, f64>,
+    lonlat: PyReadonlyArray2<'py, f64>,
+    coord_off: PyReadonlyArray1<'py, i64>,
+    rings: PyReadonlyArray1<'py, i64>,
+    pts: PyReadonlyArray2<'py, f64>,
+    pts_off: PyReadonlyArray1<'py, i64>,
+) -> PyResult<Rebuilt<'py>> {
+    let (en, ll, co, rings, pts, poff) =
+        (en.as_array(), lonlat.as_array(), coord_off.as_array(), rings.as_array(), pts.as_array(), pts_off.as_array());
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(m.to_string());
+    let nr = co.len().saturating_sub(1);
+    let npts = en.shape()[0];
+    if en.ndim() != 2 || en.shape()[1] < 2 || ll.shape()[0] != npts || ll.shape()[1] < 2 || pts.shape()[1] < 2 {
+        return Err(bad("en / lonlat / pts must be (N, 2)"));
+    }
+    if poff.len() != rings.len() + 1 || co.is_empty() || co[0] != 0 || co[nr] as usize > npts {
+        return Err(bad("bad offsets"));
+    }
+    for r in 0..nr {
+        if co[r + 1] < co[r] {
+            return Err(bad("bad coord_off"));
+        }
+    }
+    let mut repl: Vec<Option<usize>> = vec![None; nr];
+    for (j, &r) in rings.iter().enumerate() {
+        if r < 0 || r as usize >= nr || poff[j] < 0 || poff[j + 1] < poff[j] || poff[j + 1] as usize > pts.shape()[0] {
+            return Err(bad("bad ring / pts_off"));
+        }
+        repl[r as usize] = Some(j);
+    }
+    let mut new_co = vec![0i64; nr + 1];
+    for r in 0..nr {
+        let len = match repl[r] {
+            Some(j) => poff[j + 1] - poff[j],
+            None => co[r + 1] - co[r],
+        };
+        new_co[r + 1] = new_co[r] + len;
+    }
+    let total = new_co[nr] as usize;
+    let mut out_en = vec![0.0f64; total * 2];
+    let mut out_ll = vec![0.0f64; total * 2];
+    let mut new_pt = vec![false; total];
+    let mut index: std::collections::HashMap<(u64, u64), usize> = std::collections::HashMap::new();
+    for r in 0..nr {
+        let (a0, b0) = (co[r] as usize, co[r + 1] as usize);
+        let a1 = new_co[r] as usize;
+        match repl[r] {
+            None => {
+                for k in 0..b0 - a0 {
+                    out_en[2 * (a1 + k)] = en[[a0 + k, 0]];
+                    out_en[2 * (a1 + k) + 1] = en[[a0 + k, 1]];
+                    out_ll[2 * (a1 + k)] = ll[[a0 + k, 0]];
+                    out_ll[2 * (a1 + k) + 1] = ll[[a0 + k, 1]];
+                }
+            }
+            Some(j) => {
+                let (p0, p1) = (poff[j] as usize, poff[j + 1] as usize);
+                let m = p1 - p0;
+                index.clear();
+                for k in a0..b0 {
+                    if let Some(key) = eq_key([en[[k, 0]], en[[k, 1]]]) {
+                        index.insert(key, k);       // (the last vertex of these coordinates, as a dict keeps it)
+                    }
+                }
+                for q in 0..m {
+                    let p = [pts[[p0 + q, 0]], pts[[p0 + q, 1]]];
+                    out_en[2 * (a1 + q)] = p[0];
+                    out_en[2 * (a1 + q) + 1] = p[1];
+                    new_pt[a1 + q] = true;
+                    if q > 0 && q + 1 < m {
+                        if let Some(&k) = eq_key(p).and_then(|key| index.get(&key)) {
+                            out_ll[2 * (a1 + q)] = ll[[k, 0]];
+                            out_ll[2 * (a1 + q) + 1] = ll[[k, 1]];
+                            new_pt[a1 + q] = false;
+                        }
+                    }
+                }
+                if m > 0 && b0 > a0 {
+                    for (q, k) in [(0usize, a0), (m - 1, b0 - 1)] {
+                        out_ll[2 * (a1 + q)] = ll[[k, 0]];
+                        out_ll[2 * (a1 + q) + 1] = ll[[k, 1]];
+                        new_pt[a1 + q] = false;
+                    }
+                }
+            }
+        }
+    }
+    Ok((
+        Array1::from_vec(new_co).into_pyarray(py),
+        Array2::from_shape_vec((total, 2), out_en).expect("en").into_pyarray(py),
+        Array2::from_shape_vec((total, 2), out_ll).expect("lonlat").into_pyarray(py),
+        Array1::from_vec(new_pt).into_pyarray(py),
+    ))
+}
+
+/// roadsmooth.smooth's rule fractions: frac (m,) of the rows of features feature (m,), each row of a changed line
+/// (lines (k,) the features, knot_off (k + 1) into old_s / new_s: its knots) carried over by the length at the knots
+/// (np.interp(f * old[-1], old, new) / new[-1], f where the new length is 0); the other rows as they are.
+#[pyfunction]
+pub fn road_smooth_fractions<'py>(
+    py: Python<'py>,
+    feature: PyReadonlyArray1<'py, i64>,
+    frac: PyReadonlyArray1<'py, f64>,
+    lines: PyReadonlyArray1<'py, i64>,
+    knot_off: PyReadonlyArray1<'py, i64>,
+    old_s: PyReadonlyArray1<'py, f64>,
+    new_s: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let (feat, frac, lines, koff) = (feature.as_array(), frac.as_array(), lines.as_array(), knot_off.as_array());
+    let bad = |m: &str| pyo3::exceptions::PyValueError::new_err(m.to_string());
+    let old = old_s.as_slice().map_err(|_| bad("old_s must be contiguous"))?;
+    let new = new_s.as_slice().map_err(|_| bad("new_s must be contiguous"))?;
+    if feat.len() != frac.len() || koff.len() != lines.len() + 1 || old.len() != new.len() {
+        return Err(bad("feature / frac, lines / knot_off and old_s / new_s must match"));
+    }
+    let mut of: std::collections::HashMap<i64, (usize, usize)> = std::collections::HashMap::new();
+    for (j, &f) in lines.iter().enumerate() {
+        let (a, b) = (koff[j], koff[j + 1]);
+        if a < 0 || b <= a || b as usize > old.len() {
+            return Err(bad("bad knot_off"));
+        }
+        of.insert(f, (a as usize, b as usize));
+    }
+    let out: Vec<f64> = feat
+        .iter()
+        .zip(frac.iter())
+        .map(|(f, &v)| match of.get(f) {
+            Some(&(a, b)) => {
+                let (o, nw) = (&old[a..b], &new[a..b]);
+                let last = nw[nw.len() - 1];
+                if last > 0.0 {
+                    crate::gradesep::np_interp(v * o[o.len() - 1], o, nw) / last
+                } else {
+                    v
+                }
+            }
+            None => v,
+        })
+        .collect();
+    Ok(Array1::from_vec(out).into_pyarray(py))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

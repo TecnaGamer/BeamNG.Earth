@@ -17,6 +17,7 @@ import re
 
 import numpy as np
 
+import fast
 import geodesy
 import mapgeom
 import railtags
@@ -338,33 +339,27 @@ def split(f, frame=None, context=None):
     attrs["src_record"] = np.asarray(attrs.get("src_record", [""] * len(jobs)), object)
     attrs["osm_lanes"] = np.asarray(attrs.get("osm_lanes", [np.nan] * len(jobs)), np.float64)
     attrs[railtags.LANE_PARTS] = np.asarray(attrs.get(railtags.LANE_PARTS, [None] * len(jobs)), object)
-    coords, po, ro, co = [], [0], [0], [0]
-    rr = {k: [] for k in f.rules}
-    rr.setdefault("connectors", [])
+    # the new layer's geometry and rule rows gathered natively (lanesections.rs, kernel 235): each job a copy of its
+    # feature, or of its section's (or moved mouth's) line, and the rows over it
+    fast.require(235, "lane_split_coords")
+    moved = np.array([r[4] is not None for r in jobs], bool)
+    lines = [np.asarray(r[4], np.float64).reshape(-1, 2) for r in jobs if r[4] is not None]
+    p_off = np.r_[0, np.cumsum([len(r[4]) if r[4] is not None else 0 for r in jobs])].astype(np.int64)
+    po, ro, co, coords = fast._ef.lane_split_coords(
+        np.ascontiguousarray(f.part_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
+        np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.lonlat, np.float64).reshape(-1, 2), old,
+        moved, np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64), p_off)
+    if not len(coords):
+        coords = np.zeros(0, np.float64)
+    ja = np.array([r[2] for r in jobs], np.float64)
+    jb = np.array([r[3] for r in jobs], np.float64)
+    extra = []                                      # (job, connector id, at) of the sections' cut points
     for z, (_fid, i, a, b, p, tags, n, prof) in enumerate(jobs):
-        split_ = p is not None
-        for part in ([[p]] if split_ else f.parts(i)):
-            for ring in part:
-                coords.extend(ring)
-                co.append(len(coords))
-            ro.append(len(co) - 1)
-        po.append(len(ro) - 1)
-        whole = a == 0. and b == 1.
-        for name, table in f.rules.items():
-            for r in table.rows(i):
-                u, v = float(table.start[r]), float(table.end[r])
-                if whole:               # (a road not cut: its rows as they are)
-                    rr[name].append((z, table.value[r], min(max(u, 0.), 1.), min(max(v, 0.), 1.)))
-                    continue
-                point = abs(u - v) < 1e-8
-                if (point and a - 1e-7 <= u <= b + 1e-7) or (not point and v > a and u < b):
-                    rr[name].append((z, table.value[r], min(max((u - a) / (b - a), 0.), 1.),
-                                     min(max((v - a) / (b - a), 0.), 1.)))
         if prof is None:
             continue
         for at, value in ((a, 0.), (b, 1.)):
             if 0. < at < 1.:
-                rr["connectors"].append((z, f"lane:{f.ids[i]}:{round(at * 1e9)}", value, value))
+                extra.append((z, f"lane:{f.ids[i]}:{round(at * 1e9)}", value))
         attrs[PROFILE][z] = prof
         attrs["osm_lanes"][z] = n
         # Preserve the section's tags, rather than repeating the dominant way's turn arrows.
@@ -375,18 +370,39 @@ def split(f, frame=None, context=None):
             attrs[railtags.lane_attr("placement")][z] = None     # (in its line: prof["end_off"])
         attrs[railtags.LANE_PARTS][z] = None
     tables = {}
-    for name, rows in rr.items():
-        if not rows:
+    for name in list(f.rules) + ([] if "connectors" in f.rules else ["connectors"]):
+        table = f.rules.get(name)
+        if table is not None and len(table):
+            rows, zs, us, vs = fast._ef.lane_split_rules(
+                np.ascontiguousarray(table.feature, np.int64), np.ascontiguousarray(table.start, np.float64),
+                np.ascontiguousarray(table.end, np.float64), old, ja, jb)
+            values = np.asarray(table.value)[rows]
+        else:
+            rows = zs = np.zeros(0, np.int64)
+            us = vs = np.zeros(0)
+            values = None
+        if name == "connectors":
+            if extra:           # (after each job's own rows, in job order)
+                ez = np.array([e[0] for e in extra], np.int64)
+                order = np.lexsort((np.r_[np.arange(len(zs)), np.arange(len(ez))],
+                                    np.r_[np.zeros(len(zs), np.int64), np.ones(len(ez), np.int64)], np.r_[zs, ez]))
+                vals = np.empty(len(zs) + len(ez), object)
+                if len(zs):
+                    vals[:len(zs)] = list(values)
+                vals[len(zs):] = [e[1] for e in extra]
+                zs = np.r_[zs, ez][order]
+                us = np.r_[us, [e[2] for e in extra]][order]
+                vs = np.r_[vs, [e[2] for e in extra]][order]
+                values = vals[order]
+            if len(zs):
+                values = np.array(list(values), dtype=str)
+        if not len(zs):
             tables[name] = f.rules[name] if name in f.rules and not len(f.rules[name]) else mapgeom.RuleTable(
                 np.zeros(0, np.int32), np.zeros(0, str), np.zeros(0), np.zeros(0))
             continue
-        tables[name] = mapgeom.RuleTable(np.array([r[0] for r in rows], np.int32),
-                                        np.array([r[1] for r in rows], dtype=f.rules[name].value.dtype
-                                                 if name in f.rules and name != "connectors" else str),
-                                        np.array([r[2] for r in rows], np.float64),
-                                        np.array([r[3] for r in rows], np.float64))
-    out = mapgeom.Features(f.layer, np.array([r[0] for r in jobs]), f.kind[old], np.array(po, np.int64),
-                           np.array(ro, np.int64), np.array(co, np.int64), np.array(coords, np.float64),
+        tables[name] = mapgeom.RuleTable(zs.astype(np.int32), values, np.asarray(us, np.float64),
+                                        np.asarray(vs, np.float64))
+    out = mapgeom.Features(f.layer, np.array([r[0] for r in jobs]), f.kind[old], po, ro, co, coords,
                            own=None if f.own is None else f.own[old],
                            clipped=None if f.clipped is None else f.clipped[old], attrs=attrs, rules=tables)
     # Join versions are retained; geometry/specification memos intentionally are not.

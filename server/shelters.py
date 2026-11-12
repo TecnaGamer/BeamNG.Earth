@@ -13,6 +13,8 @@ import json
 import logging
 import math
 
+import threading
+
 import numpy as np
 
 import mapcells
@@ -207,51 +209,49 @@ def _body_points(ox, oy, yaw, d=None):
                     np.float64)
 
 
-def _intrusion(ox, oy, yaw, roads, d=None):
-    """m the deepest point of the shelter's body is inside any carriageway (0 when none is)."""
-    worst = 0.0
-    pts9 = _body_points(ox, oy, yaw, d)
+_pack_memo = threading.local()
+
+
+def _packed(roads):
+    """(centre lines (N, 2) one after another, offsets (R + 1), half widths (R)) of the carriageways roads (build_tile's
+    (fid, spec, centreline (k, 3), lon)) for the native tests; the last list's kept per thread (a tile's shelters all
+    ask with the same one)."""
+    got = getattr(_pack_memo, "v", None)
+    if got is not None and got[0] is roads:
+        return got[1]
+    lines, halves = [], []
     for item in roads or ():
-        spec, pts = item[1], np.asarray(item[2], np.float64)
-        if len(pts) < 2:
-            continue
-        half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
-        a, b = pts[:-1, :2], pts[1:, :2]
-        ab = b - a
-        ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-        for p in pts9:
-            t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            dist = np.hypot(*(p - (a + t[:, None] * ab)).T)
-            worst = max(worst, half - float(dist.min()))
-    return worst
+        pts = np.asarray(item[2], np.float64)
+        lines.append(pts[:, :2] if pts.ndim == 2 else pts.reshape(-1, 2))
+        halves.append(float(getattr(item[1], "width", 0.0) or 0.0) * 0.5)
+    off = np.zeros(len(lines) + 1, np.int64)
+    np.cumsum([len(ln) for ln in lines], out=off[1:])
+    xy = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
+    packed = (xy, off, np.array(halves, np.float64))
+    _pack_memo.v = (roads, packed)
+    return packed
+
+
+def _intrusion(ox, oy, yaw, roads, d=None):
+    """m the deepest point of the shelter's body is inside any carriageway (0 when none is): earthfast
+    shelter_intrusion, each of its 9 points against each road's centre line."""
+    import fast
+    fast.require(235, "shelter_intrusion")
+    return fast._ef.shelter_intrusion(_body_points(ox, oy, yaw, d), *_packed(roads))
 
 
 def _clear_of_roads(ox, oy, yaw, roads, d=None):
-    """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of."""
+    """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of: each pass the
+    deepest post (earthfast shelter_worst_post) moved off its road's centre line, away from it on the shelter's side."""
+    import fast
+    fast.require(235, "shelter_worst_post")
+    packed = _packed(roads)
     for _ in range(CLEAR_PASSES):
-        worst = None
-        for item in roads or ():
-            spec, pts = item[1], np.asarray(item[2], np.float64)
-            if len(pts) < 2:
-                continue
-            half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
-            a, b = pts[:-1, :2], pts[1:, :2]
-            ab = b - a
-            ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-            for p in _posts(ox, oy, yaw, d):
-                t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-                foot = a + t[:, None] * ab
-                dist = np.hypot(*(p - foot).T)
-                k = int(np.argmin(dist))
-                short = half + POST_PAD_M - float(dist[k])
-                if short > 1e-3 and (worst is None or short > worst[0]):
-                    # (off the road's own centre line: the shelter's centre says which side it is on)
-                    n = np.array([ox, oy]) - foot[k]
-                    worst = (short, n / max(float(np.hypot(*n)), 1e-6))
+        worst = fast._ef.shelter_worst_post(_posts(ox, oy, yaw, d), float(ox), float(oy), *packed, float(POST_PAD_M))
         if worst is None:
             break
-        ox += float(worst[1][0]) * worst[0]
-        oy += float(worst[1][1]) * worst[0]
+        ox += float(worst[1]) * worst[0]
+        oy += float(worst[2]) * worst[0]
     return ox, oy
 
 

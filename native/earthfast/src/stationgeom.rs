@@ -21,6 +21,41 @@ fn open_len(r: &numpy::ndarray::ArrayView2<f64>) -> usize {
     n
 }
 
+/// busstations.centroid's area centroid of a ring xy (k, c >= 2): opened (its last row dropped when every column is
+/// within 1e-6 of the first's), then with 3 or more points and an area over 1e-6 the shoelace centroid, numpy's
+/// pairwise sums of cr = x * roll(y, -1) - roll(x, -1) * y; None where the caller takes the mean (kernel 235: ~35,000
+/// numpy centroids of a station group's items, 2.7 % of an I-83 Baltimore road probe, 2026-11-12).
+#[pyfunction]
+pub fn ring_centroid(xy: PyReadonlyArray2<'_, f64>) -> PyResult<Option<(f64, f64)>> {
+    let r = xy.as_array();
+    let (mut n, c) = (r.nrows(), r.ncols());
+    if c < 2 {
+        return Ok(None);
+    }
+    if n >= 2 {
+        let mut d = f64::NEG_INFINITY;
+        for j in 0..c {
+            let v = (r[[0, j]] - r[[n - 1, j]]).abs();
+            d = if d.is_nan() || v.is_nan() { f64::NAN } else { d.max(v) };
+        }
+        if d < 1e-6 {
+            n -= 1;
+        }
+    }
+    if n < 3 {
+        return Ok(None);
+    }
+    let nx = |i: usize| (i + 1) % n;
+    let cr: Vec<f64> = (0..n).map(|i| r[[i, 0]] * r[[nx(i), 1]] - r[[nx(i), 0]] * r[[i, 1]]).collect();
+    let a = crate::junctionsnap::np_sum(&cr) * 0.5;
+    if !(a.abs() > 1e-6) {
+        return Ok(None);
+    }
+    let sx: Vec<f64> = (0..n).map(|i| (r[[i, 0]] + r[[nx(i), 0]]) * cr[i]).collect();
+    let sy: Vec<f64> = (0..n).map(|i| (r[[i, 1]] + r[[nx(i), 1]]) * cr[i]).collect();
+    Ok(Some((crate::junctionsnap::np_sum(&sx) / (6.0 * a), crate::junctionsnap::np_sum(&sy) / (6.0 * a))))
+}
+
 /// busstations.contains(ring, p): p inside the polygon (even-odd), ring opened first.
 fn contains(r: &numpy::ndarray::ArrayView2<f64>, n: usize, x: f64, y: f64) -> bool {
     let mut inside = false;
