@@ -70,11 +70,18 @@ class Entrance(unittest.TestCase):
         z = np.zeros(10)
         g = np.full(10, 20.0)
         g[4:6] = 6.0                    # under th + COVER_NEED
-        P, T, UV, C = portals.cover(mid, left, z, g, 5.0, 6.8, (False, False), 4.0, 1.0)
+        sec = roadmesh._tunnel_section(5.0, 6.8)
+        P, T, UV, C = portals.cover(mid, left, z, g, 5.0, 6.8, (False, False), 4.0, 1.0, sec)
         self.assertTrue(len(T))
         self.assertGreaterEqual(P[:, 2].max(), 6.8 + portals.COVER_OVER - 1e-6)
         self.assertTrue((np.asarray(C) == 1).any(), "soil on its top")
         self.assertTrue(((P[:, 0] >= 10.0 - 1e-6) & (P[:, 0] <= 35.0 + 1e-6)).all(), "only round the thin rows")
+        # its ends inside the hill leave the tube's opening clear (no wall across the road)
+        tri = P[np.asarray(T)]
+        cen = tri.mean(1)
+        ends = np.all(np.abs(tri[:, :, 0] - tri[:, :1, 0]) < 1e-6, axis=1)
+        inside = ends & (np.abs(cen[:, 1]) < 4.0) & (cen[:, 2] > 0.2) & (cen[:, 2] < 4.0)
+        self.assertFalse(inside.any(), "an end cap across the tube's opening")
 
     def test_styles_from_the_ground(self):
         import fast
@@ -83,7 +90,8 @@ class Entrance(unittest.TestCase):
         self.assertEqual(ef.portal_style(True, 6.8, 10.0, 0.5), 0)    # a motorway bore into a mountain: a raked hood
         self.assertEqual(ef.portal_style(False, 6.8, 10.0, 0.5), 2)   # a lane's in a hillside
         self.assertEqual(ef.portal_style(True, 6.8, 1.0, 0.0), 1)     # under flat ground: cut-and-cover
-        self.assertEqual(ef.portal_style(True, 6.8, 10.0, 4.0), 1)    # out of a deep cutting
+        self.assertEqual(ef.portal_style(True, 6.8, 10.0, 4.0), 0)    # out of a rock cut into a hill: still a hood
+        self.assertEqual(ef.portal_style(True, 6.8, 10.0, 9.5), 1)    # out of a trough deeper than the opening
 
 
 class Box(unittest.TestCase):

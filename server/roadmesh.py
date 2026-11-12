@@ -2591,9 +2591,14 @@ def tunnel(chunks, origin, walls=()):
             sc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(cn, axis=0).T))]
             sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
             gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
+            # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
+            for e_, f_ in enumerate(fits if c.get("portal") else ()):
+                if f_ is not None and (c.get("portal") or (False, False))[e_]:
+                    d_ = sm if e_ == 0 else sm[-1] - sm
+                    gr = np.where(d_ <= portals.setback(f_) + 0.5 if portals.setback(f_) > 0 else False, np.inf, gr)
             nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
                                                              gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
-                                                             SOIL_UV_M), 0)
+                                                             SOIL_UV_M, sec), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):

@@ -105,6 +105,8 @@ pub struct Prm {
     pub side_r: f64,        // ... and on its right (less where another road runs beside the mouth)
     pub flat: f64,          // m beside the opening the headwall keeps its height over the crown (the tube's cover
                             // behind it), before its shoulders slope down
+    pub inner_from: f64,    // m out of the headwall the collar's inside begins (a hood over the tube's own end: the
+                            // tube's walls are its inside up to the mouth; both drawn there flickered)
     pub top_min: f64,       // m of headwall over the crown at least ...
     pub top_max: f64,       // ... and at most (higher ground goes on as ground)
     pub foot: f64,          // m its foot reaches under the floor
@@ -121,7 +123,8 @@ impl Prm {
               side: v[7], top_min: v[8], top_max: v[9], foot: v[10], end_min: v[11], wing_t: v[12],
               wing_flare: v[13], wing_low: v[14], uv_m: v[15],
               side_r: v.get(16).copied().unwrap_or(v[7]),
-              flat: v.get(17).copied().unwrap_or(v[4]) }
+              flat: v.get(17).copied().unwrap_or(v[4]),
+              inner_from: v.get(18).copied().unwrap_or(0.0) }
     }
 }
 
@@ -232,8 +235,9 @@ pub fn portal(f: &Frame, prm: &Prm, sec: &[[f64; 2]], face_x: &[f64], face_g: &[
             let j = i + 1;
             let axis = f.w(0.0, (st[i] + st[j]) / 4.0, prm.th / 2.0);
             // inside (the tube's surface going on), the ring seen from the road, outside
-            m.quad([(f.w(o[i][0], 0.0, o[i][1]), [arc[i], 0.0]), (f.w(o[i][0], st[i], o[i][1]), [arc[i], st[i]]),
-                    (f.w(o[j][0], st[j], o[j][1]), [arc[j], st[j]]), (f.w(o[j][0], 0.0, o[j][1]), [arc[j], 0.0])],
+            let (si, sj) = (prm.inner_from.min(st[i]), prm.inner_from.min(st[j]));
+            m.quad([(f.w(o[i][0], si, o[i][1]), [arc[i], si]), (f.w(o[i][0], st[i], o[i][1]), [arc[i], st[i]]),
+                    (f.w(o[j][0], st[j], o[j][1]), [arc[j], st[j]]), (f.w(o[j][0], sj, o[j][1]), [arc[j], sj])],
                    Look::Toward(axis), M_COLLAR, uv);
             m.quad([(f.w(o[i][0], st[i], o[i][1]), [o[i][0], o[i][1]]), (f.w(r[i][0], st[i], r[i][1]), [r[i][0], r[i][1]]),
                     (f.w(r[j][0], st[j], r[j][1]), [r[j][0], r[j][1]]), (f.w(o[j][0], st[j], o[j][1]), [o[j][0], o[j][1]])],
@@ -300,7 +304,7 @@ pub fn portal(f: &Frame, prm: &Prm, sec: &[[f64; 2]], face_x: &[f64], face_g: &[
 /// close the box where a run ends at the line's end (no headwall there). Runs of uncovered rows, a row either side.
 #[allow(clippy::too_many_arguments)]
 pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw: f64, th: f64, over: f64,
-             need: f64, foot: f64, caps: (bool, bool), uv_m: f64, soil_uv_m: f64) -> Mesh {
+             need: f64, foot: f64, caps: (bool, bool), uv_m: f64, soil_uv_m: f64, opening: &[[f64; 2]]) -> Mesh {
     let mut m = Mesh::default();
     let k = mid.len();
     if k < 2 || left.len() != k || z.len() != k || ground.len() != k { return m; }
@@ -334,11 +338,25 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
                 m.quad([(pt(a, hw, top), [hw, s[a]]), (pt(a, -hw, top), [-hw, s[a]]), (pt(b, -hw, top), [-hw, s[b]]),
                         (pt(b, hw, top), [hw, s[b]])], Look::Dir([0.0, 0.0, 1.0]), M_SOIL, soil_uv_m);
             }
+            // its ends inside the hill: the box's section less the tube's opening (a full rectangle stood across the
+            // tunnel's inside, a wall in the way, until 2026-11-12's review of the handed-over kernel)
             for (at, nb, cap) in [(i, i + 1, i > 0 || caps.0), (j, j - 1, j + 1 < k || caps.1)] {
-                if !cap { continue; }
+                if !cap || opening.len() < 3 { continue; }
                 let d = [mid[at][0] - mid[nb][0], mid[at][1] - mid[nb][1], 0.0];
-                m.quad([(pt(at, hw, -foot), [hw, -foot]), (pt(at, hw, top), [hw, top]), (pt(at, -hw, top), [-hw, top]),
-                        (pt(at, -hw, -foot), [-hw, -foot])], Look::Dir(d), M_FACE, uv_m);
+                let n = opening.len();
+                let mut poly: Vec<(f64, f64)> = Vec::with_capacity(n + 6);
+                poly.push((opening[0][0], -foot));
+                for q in opening { poly.push((q[0], q[1])); }
+                poly.push((opening[n - 1][0], -foot));
+                poly.push((-hw, -foot));
+                poly.push((-hw, top));
+                poly.push((hw, top));
+                poly.push((hw, -foot));
+                let ring: Vec<(f64, f64)> = poly.iter().rev().cloned().collect();
+                let tris: Vec<[usize; 3]> = crate::ear_clip(&ring).iter()
+                    .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+                let v: Vec<([f64; 3], [f64; 2])> = ring.iter().map(|&(x, h)| (pt(at, x, h), [x, h])).collect();
+                m.add(&v, &tris, Look::Dir(d), M_FACE, uv_m);
             }
         }
         i = j + 1;
@@ -350,10 +368,12 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
 /// cut-and-cover mouth between a cutting's walls or under flat ground (a square-set collar, a level lintel, no rake),
 /// 2 a minor road's mouth in a hillside (a shorter hood). major: a motorway .. primary; rise: the ground over the
 /// floor ~12 m inside less the ground at the mouth (how fast the hill climbs over the tube); sides: the lower of the
-/// approach's two sides over the road 5 .. 10 m out (a cutting's depth).
+/// approach's two sides over the road 5 .. 10 m out (a cutting's depth). A bore into a hill keeps its hood out of a
+/// rock cut too (Kilbotn, Laerdal: the first rule, a cut of 0.45 th, made them flat lintels); only a trough deeper
+/// than the opening (its walls over the mouth: an urban U-trough) gets the lintel.
 pub fn style(major: bool, th: f64, rise: f64, sides: f64) -> i64 {
     let hill = rise >= 0.5 * th;
-    if !hill || sides >= 0.45 * th { return 1; }
+    if !hill || sides >= th + 2.0 { return 1; }
     if major { 0 } else { 2 }
 }
 
@@ -397,7 +417,8 @@ pub fn portal_mesh<'py>(py: Python<'py>, p: [f64; 3], left: [f64; 2], out: [f64;
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn tunnel_cover_mesh<'py>(py: Python<'py>, mid: PyReadonlyArray2<'py, f64>, left: PyReadonlyArray2<'py, f64>,
                               z: PyReadonlyArray1<'py, f64>, ground: PyReadonlyArray1<'py, f64>, hw: f64, th: f64,
-                              over: f64, need: f64, foot: f64, cap0: bool, cap1: bool, uv_m: f64, soil_uv_m: f64)
+                              over: f64, need: f64, foot: f64, cap0: bool, cap1: bool, uv_m: f64, soil_uv_m: f64,
+                              opening: PyReadonlyArray2<'py, f64>)
                               -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>,
                                            Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>)> {
     let (mv, lv) = (mid.as_array(), left.as_array());
@@ -405,7 +426,11 @@ pub fn tunnel_cover_mesh<'py>(py: Python<'py>, mid: PyReadonlyArray2<'py, f64>, 
     if lv.shape()[0] != k { return Err(pyo3::exceptions::PyValueError::new_err("tunnel_cover_mesh: rows differ")); }
     let m2: Vec<[f64; 2]> = (0..k).map(|i| [mv[[i, 0]], mv[[i, 1]]]).collect();
     let l2: Vec<[f64; 2]> = (0..k).map(|i| [lv[[i, 0]], lv[[i, 1]]]).collect();
-    let m = cover(&m2, &l2, z.as_slice()?, ground.as_slice()?, hw, th, over, need, foot, (cap0, cap1), uv_m, soil_uv_m);
+    let ov = opening.as_array();
+    let op: Vec<[f64; 2]> = (0..ov.shape()[0]).map(|i| [ov[[i, 0]], ov[[i, 1]]]).collect();
+    let (o, _) = if op.len() >= 5 { outline(&op, th) } else { (Vec::new(), Vec::new()) };
+    let m = cover(&m2, &l2, z.as_slice()?, ground.as_slice()?, hw, th, over, need, foot, (cap0, cap1), uv_m, soil_uv_m,
+                  &o);
     Ok(mesh_out(py, m))
 }
 
@@ -432,7 +457,7 @@ mod tests {
     fn prm() -> Prm {
         Prm { th: 6.8, hw: 5.0, collar_out: 0.6, rake: 2.0, collar_t: 0.5, wall_t: 0.6, parapet: 0.4, side: 3.0,
               top_min: 0.9, top_max: 4.0, foot: 1.0, end_min: 1.0, wing_t: 0.5, wing_flare: 0.25, wing_low: 0.6,
-              uv_m: 4.0, side_r: 3.0, flat: 0.5 }
+              uv_m: 4.0, side_r: 3.0, flat: 0.5, inner_from: 0.0 }
     }
 
     fn frame() -> Frame { Frame { p: [10.0, 20.0, 100.0], u: [0.0, 1.0], o: [1.0, 0.0] } }
@@ -497,15 +522,34 @@ mod tests {
         let left = vec![[0.0, 1.0]; 10];
         let z = vec![0.0; 10];
         let mut g = vec![20.0; 10];
-        assert!(cover(&mid, &left, &z, &g, 7.0, 6.8, 0.3, 0.5, 1.0, (false, false), 4.0, 1.0).t.is_empty());
+        let (o, _) = outline(&sec(5.0, 6.8), 6.8);
+        assert!(cover(&mid, &left, &z, &g, 7.0, 6.8, 0.3, 0.5, 1.0, (false, false), 4.0, 1.0, &o).t.is_empty());
         g[0] = 3.0;
         g[1] = 5.0;
-        let m = cover(&mid, &left, &z, &g, 7.0, 6.8, 0.3, 0.5, 1.0, (false, false), 4.0, 1.0);
-        // rows 0..2 (a row past the bare ones): 2 spans x (2 sides + top) x 2 triangles, one cap inside the hill
-        assert_eq!(m.t.len(), 2 * 3 * 2 + 2);
+        let m = cover(&mid, &left, &z, &g, 7.0, 6.8, 0.3, 0.5, 1.0, (false, false), 4.0, 1.0, &o);
+        // rows 0..2 (a row past the bare ones): 2 spans x (2 sides + top) x 2 triangles, and the cap inside the hill
+        let caps: Vec<usize> = (0..m.t.len()).filter(|&q| m.t[q].iter().all(|&v| (m.p[v as usize][0] - 10.0).abs() < 1e-9))
+            .collect();
+        assert_eq!(m.t.len() - caps.len(), 2 * 3 * 2);
+        assert!(!caps.is_empty());
         assert!(m.p.iter().all(|p| p[0] <= 10.0 + 1e-9));
         let soil = m.m.iter().filter(|&&c| c == M_SOIL).count();
         assert_eq!(soil, 4);
+        // the cap is the box's end less the tube's opening: nothing of it over the road inside the tube (a wall
+        // across the tunnel)
+        for &q in &caps {
+            let t = m.t[q];
+            let c = [(m.p[t[0] as usize][1] + m.p[t[1] as usize][1] + m.p[t[2] as usize][1]) / 3.0,
+                     (m.p[t[0] as usize][2] + m.p[t[1] as usize][2] + m.p[t[2] as usize][2]) / 3.0];
+            assert!(!(c[0].abs() < 4.5 && c[1] > 0.1 && c[1] < 4.0), "cap inside the opening at {:?}", c);
+        }
+        let area: f64 = caps.iter().map(|&q| {
+            let t = m.t[q];
+            let (a, b, c) = (m.p[t[0] as usize], m.p[t[1] as usize], m.p[t[2] as usize]);
+            ((b[1] - a[1]) * (c[2] - a[2]) - (c[1] - a[1]) * (b[2] - a[2])).abs() / 2.0
+        }).sum();
+        // 14 m x (1 + 7.1) m less the opening (~10 m x 6 m)
+        assert!(area > 40.0 && area < 75.0, "{}", area);
     }
 
     #[test]
@@ -513,6 +557,7 @@ mod tests {
         assert_eq!(style(true, 6.8, 10.0, 0.5), 0);     // a motorway bore into a mountain
         assert_eq!(style(false, 6.8, 10.0, 0.5), 2);    // a lane's
         assert_eq!(style(true, 6.8, 1.0, 0.0), 1);      // under flat ground
-        assert_eq!(style(true, 6.8, 10.0, 4.0), 1);     // from a cutting
+        assert_eq!(style(true, 6.8, 10.0, 4.0), 0);     // out of a rock cut: still a hood
+        assert_eq!(style(true, 6.8, 10.0, 9.5), 1);     // out of a trough deeper than the opening
     }
 }
