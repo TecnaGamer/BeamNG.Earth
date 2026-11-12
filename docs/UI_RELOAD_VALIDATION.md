@@ -77,3 +77,23 @@ after updating to clear instances left by the old code. Then check:
 
 The first-join/reconnect check requires a staging server carrying the patched client ZIP. BeamMP's own independent
 route-unregistration behavior is outside this change.
+
+## Clean patched-client staging check
+
+The user subsequently started a rebuilt 1.9.1 app containing the two UI changes, then joined the patched staging
+server in BeamNG.drive 0.40.5. Both installed local UI files and both downloaded server-ZIP files match the patch.
+Direct inspection found one Earth browser stylesheet, the current browser and entry-point owners, and all four
+Earth routes plus the three checked BeamMP routes in both Vue and Lua. The native game reports active multiplayer,
+launcher connected, world active and transport connected, 531 live far tiles, zero failed far tiles and terrain below
+the vehicle. The read-only companion pose feed advances with samples under one second old.
+
+The user opened the normal pause-menu Earth tab successfully. Using the game's normal Lua/UI bridge, the settings,
+welcome, 2D map and 3D map screens then all mounted with exactly one browser stylesheet. The check made no settings
+or welcome-choice changes and returned to the user's pause menu with the orbit camera restored, physics running,
+multiplayer connected and both map modes closed. A first automated attempt while the game was minimized timed out;
+it is not counted as a pass. Repeating with the game visible completed successfully.
+
+Both hosted foundation jobs also passed for documentation commit `e19c440` (run `43126338910`), whose runtime files
+are unchanged from `cf962f9`. A real reconnect is still pending. The check did not restart or disconnect the user's
+game. Separate BeamMP Chat/Session null-element errors and warnings for unchanged release texture assets remain
+outside this teardown fix.

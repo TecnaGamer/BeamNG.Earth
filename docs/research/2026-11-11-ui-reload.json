@@ -155,7 +155,7 @@
   },
   "notRun": [
     "Full server suite beyond the foundation gate",
-    "Clean first join/reconnect with both app and server carrying the fix"
+    "Real multiplayer reconnect with both app and server carrying the fix"
   ],
   "pullRequestBaseCommit": "01e902f06994772fb214db9a9bbe899a6251a32e",
   "postRebaseChecks": {
@@ -177,7 +177,14 @@
     "uiRegressions": 20,
     "mapMathSuites": 2,
     "rustTests": 19,
-    "nativeBuildsAndPackages": "passed"
+    "nativeBuildsAndPackages": "passed",
+    "documentationCommit": {
+      "sha": "e19c44095a0c6b54a3eeca5ad12ee180a98f061f",
+      "run": 43126338910,
+      "ubuntu22": "success",
+      "windows": "success",
+      "runtimeFilesUnchanged": true
+    }
   },
   "mixedVersionLiveSession": {
     "localAppUI": "pristine 1.9.1 (both local files matched original archive)",
@@ -190,5 +197,50 @@
     "vehicleHasGround": true,
     "cleanFixedClientFirstJoinPass": false,
     "requiredDeployment": "Both app-embedded mod and server ZIP must carry the fix before a clean game start."
+  },
+  "cleanPatchedClientLiveSession": {
+    "app": "Rebuilt supplied 1.9.1-beta source with the two runtime UI changes",
+    "localAndServerUIFilesMatchPatch": true,
+    "browserStyleCount": 1,
+    "browserOwnerRegistered": true,
+    "entryPointOwnerRegistered": true,
+    "vue": "3.5.43",
+    "earthRoutesPresent": 4,
+    "beammpRoutesPresent": 3,
+    "multiplayer": true,
+    "launcherConnected": true,
+    "worldActive": true,
+    "transport": "connected",
+    "farTiles": 531,
+    "failedFarTiles": 0,
+    "groundRayDistanceMetres": 2.22314453125,
+    "poseFeedAdvances": true,
+    "poseAgesSeconds": [
+      0.352,
+      0.321
+    ],
+    "pauseMenuEarthTab": "User reports it opens normally",
+    "screensMounted": [
+      "beamngEarthSettings",
+      "beamngEarthWelcome",
+      "beamngEarthMap",
+      "beamngEarthMap3d"
+    ],
+    "browserStyleCountDuringEveryScreen": 1,
+    "afterScreenCheck": {
+      "route": "pause",
+      "camera": "orbit",
+      "multiplayer": true,
+      "physicsRunning": true,
+      "mapOpen": false,
+      "map3dActive": false
+    },
+    "settingsOrWelcomeChoicesChanged": false,
+    "initialScreenAttempt": "Timed out while minimized; normal visible-window retest passed",
+    "reconnect": "pending",
+    "notEstablished": [
+      "Driving performance benchmark",
+      "Game-wide or third-party-mod error-free behavior"
+    ]
   }
 }
