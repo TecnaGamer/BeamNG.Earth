@@ -144,6 +144,10 @@ class RespawningPool:
         self._live_lock = threading.Lock()
         if hung_s:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
+        # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate)
+        self.rotations = 0
+        self._last_rotate = time.monotonic()
+        threading.Thread(target=self._mem_watch, name=f"{name} memory", daemon=True).start()
 
     def submit(self, fn, *args, **kwargs):
         with self._lock:
@@ -294,6 +298,53 @@ class RespawningPool:
                 pass
         try:
             old.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        return True
+
+    def _mem_watch(self):
+        """budget.ROTATE_MB's watch: every ROTATE_CHECK_S, the pool rotated when one of its processes is over it."""
+        import budget
+        while True:
+            time.sleep(budget.ROTATE_CHECK_S)
+            try:
+                self._mem_step(time.monotonic())
+            except Exception as e:      # (never let the watch die)
+                log.debug("%s memory watch: %s: %s", self.name, type(e).__name__, e)
+
+    def worker_mb(self):
+        """{pid: MB} of the current pool's processes (budget.process_mb; None where unreadable)."""
+        import budget
+        with self._lock:
+            pool = self._pool
+        return {pid: budget.process_mb(pid) for pid in list((getattr(pool, "_processes", None) or {}).keys())}
+
+    def _mem_step(self, now):
+        """One memory check at now (time.monotonic()): True when it rotated the pool."""
+        import budget
+        if budget.ROTATE_MB <= 0 or now - self._last_rotate < budget.ROTATE_MIN_S:
+            return False
+        mbs = [mb for mb in self.worker_mb().values() if mb is not None]
+        if not mbs or max(mbs) < budget.ROTATE_MB:
+            return False
+        if self.inflight > self.workers:
+            return False                    # (a backlog: it would run in the old processes beside the new ones)
+        return self.rotate(f"a process at {max(mbs):.0f} MB, over {budget.ROTATE_MB} MB", now)
+
+    def rotate(self, why, now=None):
+        """A fresh pool for the jobs from now on; the old one finishes what it was given (queued and running jobs: none
+        fails) and its processes exit after, giving their memory back (budget.ROTATE_MB). True when rotated."""
+        with self._lock:
+            old = self._pool
+            if getattr(old, "_broken", False):
+                return False                # (broken: _renew's to make again)
+            self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
+            self._last_rotate = time.monotonic() if now is None else now
+            self.rotations += 1
+        log.info("%s worker processes replaced (%s; %d so far): the old ones finish their jobs and exit",
+                 self.name, why, self.rotations)
+        try:
+            old.shutdown(wait=False, cancel_futures=False)
         except Exception:
             pass
         return True

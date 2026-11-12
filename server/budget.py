@@ -112,10 +112,13 @@ SMALL_FACTS_CELLS = 192         # roads._FACTS_MEM entries on a small machine (~
 def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
-    global SHED_MB
+    global SHED_MB, ROTATE_MB
     SHED_MB = SMALL_SHED_MB if is_small else 0
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
         SHED_MB = int(os.environ["BNGE_SHED_MB"])
+    ROTATE_MB = SMALL_ROTATE_MB if is_small else 0
+    if os.environ.get("BNGE_ROTATE_MB"):            # (A/B: the pools' rotation ceiling in MB, 0 off)
+        ROTATE_MB = int(os.environ["BNGE_ROTATE_MB"])
     if is_small:
         import dem
         import farfield
@@ -209,6 +212,41 @@ def memory_mb():
         except Exception:
             pass
     return None
+
+
+def process_mb(pid):
+    """Another process's memory in MB as memory_mb counts its own (Linux: resident + swapped; Windows: private bytes),
+    or None."""
+    try:
+        rss = swap = 0
+        with open(f"/proc/{int(pid)}/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1])
+                elif line.startswith("VmSwap:"):
+                    swap = int(line.split()[1])
+        return (rss + swap) / 1024.0
+    except (OSError, ValueError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import perfstats
+            got = perfstats._win_proc(int(pid))
+            return got[1] if got else None
+        except Exception:
+            pass
+    return None
+
+
+# A pool whose worker is still over ROTATE_MB (pools.RespawningPool's memory watch, every ROTATE_CHECK_S) is replaced
+# by a fresh one, at most every ROTATE_MIN_S: the old one's queued and running jobs finish in its own processes, which
+# then exit and give everything back. The caches maybe_shed drops are not all a worker keeps (native memory of the map
+# readers, module-level caches): on the 16 GB Windows test PC (2026-11-11), with the ceiling working, four workers were
+# at 1.8-2.3 GB private after 25 minutes and the server at 14.6 GB. Small machines only (0: off; BNGE_ROTATE_MB).
+ROTATE_MB = 0
+SMALL_ROTATE_MB = 1800
+ROTATE_CHECK_S = 30.0
+ROTATE_MIN_S = 300.0
 
 
 def maybe_shed():
