@@ -391,6 +391,29 @@ function M.routeConnected(links, from, to, limit)
   return false
 end
 
+-- A loaded edge beyond a graph gap can continue this road even though no path joins them yet.
+-- Check both road tangents in 3D, so a parallel service road or a road below a bridge is not a continuation.
+function M.loadedContinuation(from, to, nodes)
+  local function ends(point)
+    local s = point.segment
+    local a, b = nodes[s.a], nodes[s.b]
+    if (s[3] - s[1]) * point.dx + (s[4] - s[2]) * point.dy < 0 then a, b = b, a end
+    local dx, dy, dz = b.pos.x - a.pos.x, b.pos.y - a.pos.y, b.pos.z - a.pos.z
+    local length = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if length < 0.1 then return end
+    return a.pos, b.pos, dx / length, dy / length, dz / length, math.max(a.radius or 0, b.radius or 0)
+  end
+  local _, finish, ax, ay, az, ar = ends(from)
+  local begin, _, bx, by, bz, br = ends(to)
+  if not ax or not bx then return false end
+  local dx, dy, dz = begin.x - finish.x, begin.y - finish.y, begin.z - finish.z
+  local hx, hy, hz = ax + bx, ay + by, az + bz
+  local norm = hx * hx + hy * hy + hz * hz
+  local forward = dx * hx + dy * hy + dz * hz
+  local width = math.min(ar, br)
+  return forward > 0 and norm > 0 and dx * dx + dy * dy + dz * dz - forward * forward / norm <= width * width
+end
+
 local function routeTarget(e, nodes, i, t)
   local serial = graphSerial()
   if segCache.nodes ~= nodes or segCache.serial ~= serial then
@@ -405,6 +428,7 @@ local function routeTarget(e, nodes, i, t)
   local d0, _, previous = M.nearestEdge(segs, rx, ry, hx, hy)
   if d0 > M.ON_GRAPH_M then previous = nil end
   local differentRoadLoaded = false
+  local continuationLoaded = false
   if auto then
     -- On-road, start on the car's actual edge, including elevation: the route line may be nearer a parallel road.
     local veh = playerVeh()
@@ -445,11 +469,12 @@ local function routeTarget(e, nodes, i, t)
     -- turned round across the highway to reach it, then circled at 4 mph (GitHub #180, reproduced on US-1, 2026-10-23)
     local function connected(bp, distanceSq)
       if distanceSq > M.ON_GRAPH_M^2 then return false end
-      return not previous or M.routeConnected(segCache.links, previous, bp, s - previousS + 2 * M.ON_GRAPH_M)
-        -- A simplified route can lie nearer an exit for one sample. Do not let that tentative
-        -- projection prevent a closer continuation still reachable from the car before the fork.
-        or (distanceSq < previousDistanceSq and start
-          and M.routeConnected(segCache.links, start, bp, s - startS + 2 * M.ON_GRAPH_M))
+      if not previous or M.routeConnected(segCache.links, previous, bp, s - previousS + 2 * M.ON_GRAPH_M) then return true end
+      if M.loadedContinuation(previous, bp, nodes) then continuationLoaded = true end
+      -- A simplified route can lie nearer an exit for one sample. Do not let that tentative
+      -- projection prevent a closer continuation still reachable from the car before the fork.
+      return distanceSq < previousDistanceSq and start
+        and M.routeConnected(segCache.links, start, bp, s - startS + 2 * M.ON_GRAPH_M)
     end
     local d, z, bp = M.nearestEdge(segs, x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k], connected)
     local final = s >= e.cum[n] - 1e-6
@@ -476,7 +501,7 @@ local function routeTarget(e, nodes, i, t)
     if via[#via] == best then via[#via] = nil end
     best.via = via
   end
-  return best, differentRoadLoaded
+  return best, differentRoadLoaded or continuationLoaded
 end
 
 -- Pure: points {x, y} every step along polyline e (x, y, cum) from distance s0 to s1 (both ends included).

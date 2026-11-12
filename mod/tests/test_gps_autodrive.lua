@@ -311,6 +311,38 @@ do
 end
 
 -- The router can snap its start ahead of a car already on the same loaded road.
+do
+  local recoveries = 0
+  local savedSpawn, savedQuat, savedLog = spawn, quatFromDir, log
+  spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local function gap(loaded, height)
+    return fixture({ 'j' }, 2, 4, function(f)
+      f.x, f.speed = 95, 0
+      f.nodes = { w = { pos = { x = 0, y = 0, z = 0 }, radius = 4, links = { j = {} } },
+        j = { pos = { x = 100, y = 0, z = 0 }, radius = 4, links = {} } }
+      if loaded then
+        f.nodes.next = { pos = { x = 220, y = 0, z = height or 0 }, radius = 4, links = { far = {} } }
+        f.nodes.far = { pos = { x = 1000, y = 0, z = height or 0 }, radius = 4, links = {} }
+      end
+      f.map.nodes = f.nodes
+      f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+    end)
+  end
+  local f = gap(true)
+  T.check(f.modes[#f.modes] == 'stop' and #f.drives == 0, 'a graph gap holds rather than sending a disconnected path')
+  for _ = 1, 70 do f:step() end
+  T.check(recoveries == 1, 'a loaded continuation across a 120 m graph gap retains normal no-progress recovery')
+  recoveries = 0; f = gap(false)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'an unloaded continuation still waits for the graph')
+  recoveries = 0; f = gap(true, -12)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a lower road beyond a bridge cut is not a loaded continuation')
+  spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
+end
+
 for _, gap in ipairs({ 0, 60, 100 }) do
   local f = fixture({ 'n1', 'n2', 'n3', 'n4' }, 0, 6, function(f)
     f.x, f.y = 10, 0
