@@ -280,7 +280,9 @@ APPROACH_MAX_RUN = 320.0    # m: the longest ramp
 APPROACH_TOUCH_M = 2.5      # m: a road whose end is this close to an abutment leads onto the bridge
 APPROACH_MIN_CROSS_M = 6.0  # m: a road crossing a deck closer than this to its end is a junction at grade (not
                             # under it)
-RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck (a track's bridge over a road is 10-12 m, a road's 6 m rule left it out)
+RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck over a road with a height limit (a track's bridge over a
+                            # road is 10-12 m, a road's 6 m rule left it out; without a limit the 6 m rule stands: the
+                            # drivability ratchet's Compiegne roundabout dipped under a 7 m rail deck, 89 -> 113)
 APPROACH_FLAT_M = 20.0      # m from an abutment the deck needs its full clearance (beyond: it may fall at DECK_GRADE)
 APPROACH_MARGIN_M = 0.3     # m over the clearance (the deck profile's smoothing takes a little off near its ends)
 JUNCTION_RAISE_ON = os.environ.get("BNE_JUNCTION_RAISE", "on") != "off"   # an approach's junction rises with it
@@ -3554,7 +3556,7 @@ class _Planner:
             # to clear it)
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
             max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
-            mc = RAIL_MIN_CROSS_M if rail else APPROACH_MIN_CROSS_M
+            mc = RAIL_MIN_CROSS_M if rail and limits else APPROACH_MIN_CROSS_M     # (shorter: signed roads only)
             if L < 2 * mc or (L > max_l and not rail and not cw_deck):
                 continue
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
@@ -3603,7 +3605,10 @@ class _Planner:
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
                 b, L, fixed, rail = spans[bi]
-                mc = RAIL_MIN_CROSS_M if rail else APPROACH_MIN_CROSS_M
+                sign = _limit_at(limits, pt) if rail and limits else None
+                mc = RAIL_MIN_CROSS_M if sign is not None else APPROACH_MIN_CROSS_M
+                if L < 2 * mc:
+                    continue                    # (a short rail deck: a span only over a road with a height limit)
                 if arc_b < mc or arc_b > L - mc:
                     continue                    # a junction at the bridge's end
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
@@ -3641,7 +3646,6 @@ class _Planner:
                 clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
                 if measured:                    # (its real headroom, not the one a guessed deck is given)
                     clear -= roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M
-                sign = _limit_at(limits, pt) if rail and limits else None
                 if sign is not None:            # (a rail deck over a road with a height limit: that, not the guess)
                     clear = depth + sign + RAIL_SIGN_MARGIN_M + ROAD_LIFT
                     signed.add(len(cands))
