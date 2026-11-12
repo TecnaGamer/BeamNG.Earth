@@ -84,6 +84,7 @@ mod places;
 mod planends;
 mod planset;
 mod corridor;
+mod approach;
 mod junctions;
 mod wallsindex;
 mod mappedlamps;
@@ -5963,6 +5964,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
     // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
     m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
-    m.add("VERSION", 234)?;
+    // 236: approach (grading.approach_add ported, with fill_z: a raised junction's arms filled to a ramp surface, not
+    // offset over their own climb; junction_arm_raise, stub_carried_raise, under_deck_reach: GitHub #1043 Wesley Chapel)
+    m.add_function(wrap_pyfunction!(approach::approach_add, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
+    m.add("VERSION", 236)?;
     Ok(())
 }

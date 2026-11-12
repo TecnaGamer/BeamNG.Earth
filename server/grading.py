@@ -290,6 +290,14 @@ JR_BESIDE = os.environ.get("BNE_JR_BESIDE", "on") != "off"
 JR_OWN_CLASS = os.environ.get("BNE_JR_OWN_CLASS", "on") != "off"
 JR_TRUSTED = os.environ.get("BNE_JR_TRUSTED", "on") != "off"
 JR_TRUSTED_HALF_M = 4.0     # m: a deck's half width where its cell has none (the road under is read past it)
+# a raised junction is a height, not an offset (GitHub #1043, Wesley Chapel's diverging diamond: its arms climbing 8.6 m
+# from a pond to the next junction stood 18 m over the ground there, the decks 13 m over I-75 for its real 7 m): an arm
+# end higher than the junction rises only to the junction's height, and an arm is filled to the ramp's surface, less
+# where it climbs above its raised end (approach.rs junction_arm_raise, approach_add's fill_z)
+JR_FILL = os.environ.get("BNE_JR_FILL", "on") != "off"
+# an abutment whose short approach ends at a junction another deck raises is as high as that junction carries it, for
+# the dips under its deck (_end_raised: I-75 dipped 1.6 m under SR 56's decks 11-13 m over it, stub_carried_raise)
+JR_CARRY = os.environ.get("BNE_JR_CARRY", "on") != "off"
 JR_UNDER_ON_M = 1.5         # m: a crossing point this near a ground road's line is that road's (_Planner._under_trusted)
 JUNCTION_UNDER_CLASSES = {"motorway", "trunk"}     # ... over a road of these classes (a freeway overpass)
 JUNCTION_MIN_LIFT = 3.0     # m: an inferred abutment lift this big (or more) raises its junction with it ...
@@ -404,6 +412,7 @@ UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 # over the road (about 5 m under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the
 # ends' line or over it (lower is the ground under a removed deck, not a deck).
 UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
+UNDER_CLIMB = os.environ.get("BNE_UNDER_CLIMB", "on") != "off"  # the deck as the dips see it climbs from its ends (under_deck_reach)
 UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
 UNDER_MEASURED_TOL_M = 0.5
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
@@ -3097,7 +3106,8 @@ class _Planner:
                 # Baltimore's interchanges a raised street's fill reached a measured motorway deck's abutment and stood
                 # the deck 4.7 m high)
                 a = approach_add(p.xy, at_end, lift, p.half,
-                                 self._roads_beside(p.xy, e, lift) if JR_BESIDE else _others, SLOPE_RUN)
+                                 self._roads_beside(p.xy, e, lift) if JR_BESIDE else _others, SLOPE_RUN,
+                                 fill_z=p.z if JR_FILL else None)
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
             if add is not None:
@@ -3279,12 +3289,12 @@ class _Planner:
             if cands is None:
                 raise LookupError("a cell's road parts round it could not be read")
             if len(cands):
+                found = []          # (lift, stub length, its junction end, the abutment, its _end_lift)
                 for b in cands:
                     got = self._end_lift(b)
                     if got is None or len(got) != 4 or got[3] or float(got[0]) < JUNCTION_MIN_LIFT or not self._jr_at(b):
                         continue            # (an inferred lift of JUNCTION_MIN_LIFT or more over a freeway only)
                     lift = min(float(got[0]), APPROACH_MAX_LIFT)
-                    run = float(np.clip(lift * math.pi / (2 * APPROACH_GRADE), APPROACH_MIN_RUN, APPROACH_MAX_RUN))
                     for line, _half in got[2]:
                         ln = np.asarray(line, np.float64)[:, :2]
                         if len(ln) < 2:
@@ -3293,14 +3303,25 @@ class _Planner:
                         L = float(np.hypot(*np.diff(ln, axis=0).T).sum())
                         if L > JUNCTION_STUB_M or np.hypot(*(far - e[:2])) > JUNCTION_ZONE_M:
                             continue
-                        v = lift * 0.5 * (1.0 + math.cos(math.pi * min(L / run, 1.0)))
-                        if v >= APPROACH_MIN_LIFT:
-                            log.debug("grading: junction at %s: %.1f m from the abutment at %s (lift %.1f, stub %.0f m)",
-                                      np.round(np.asarray(e, np.float64)[:2], 1), v, np.round(b, 1), lift, L)
-                        if v >= APPROACH_MIN_LIFT and (res is None or v > res[0]):
-                            res = (v, [o for o in got[1] if float(roadsmod._seg_dist(np.asarray(e, np.float64)[None, :2],
-                                       np.asarray(o[0], np.float64)[:-1, :2], np.asarray(o[0], np.float64)[1:, :2]).min())
-                                       > o[1] + APPROACH_TOUCH_M])
+                        found.append((lift, L, far, b, got))
+                if found:
+                    e2 = np.asarray(e, np.float64)[:2]
+                    zg = self._z_raw(np.array([f[2] for f in found] + [e2], np.float64))
+                    zf, ze = (zg[:-1], float(zg[-1])) if JR_FILL else (np.zeros(len(found)), 0.0)
+                    import fast
+                    best = fast._ef.junction_arm_raise(np.array([f[0] for f in found], np.float64),
+                                                       np.array([f[1] for f in found], np.float64),
+                                                       np.ascontiguousarray(zf, np.float64), ze, float(APPROACH_GRADE),
+                                                       float(APPROACH_MIN_RUN), float(APPROACH_MAX_RUN),
+                                                       float(APPROACH_MIN_LIFT))
+                    if best is not None:
+                        v, n = best
+                        lift, L, _far, b, got = found[n]
+                        log.debug("grading: junction at %s: %.1f m from the abutment at %s (lift %.1f, stub %.0f m)",
+                                  np.round(e2, 1), v, np.round(b, 1), lift, L)
+                        res = (v, [o for o in got[1] if float(roadsmod._seg_dist(e2[None], np.asarray(o[0], np.float64)
+                                                                                 [:-1, :2], np.asarray(o[0], np.float64)
+                                                                                 [1:, :2]).min()) > o[1] + APPROACH_TOUCH_M])
         except Exception as ex:     # no junction raise rather than no grading
             log.debug("grading: junction lift at %s: %s: %s", k, type(ex).__name__, ex)
             res = None
@@ -3447,7 +3468,12 @@ class _Planner:
                     deck = float(np.min(cz))
                 else:
                     ze = deck_ends(bi)
-                    deck = float(np.min(ze[0] + (ze[1] - ze[0]) * corridor / L))
+                    # (or higher where it climbs from its ends as the abutments' lifts were asked: bridge_lifts; the
+                    # straight line between its ends alone dug I-75 under SR 56's decks at Wesley Chapel, GitHub #1043)
+                    import fast
+                    deck = float(fast._ef.under_deck_reach(float(ze[0]), float(ze[1]), float(L), float(corridor[0]),
+                                                           float(corridor[1]), float(roadsmod.DECK_GRADE),
+                                                           float(APPROACH_FLAT_M), bool(UNDER_CLIMB and not rail)))
                     if UNDER_MEASURED_ON and not rail:
                         # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
                         # straight line, which dug I-75 1.5 m down under the 108 m deck at Findlay, Ohio, flat in the
@@ -4313,6 +4339,19 @@ class _Planner:
                              else SLOPE_RUN)
             if a is not None:
                 best = max(best, float(a[-1] if at_end else a[0]))
+            if JR_CARRY and JUNCTION_RAISE_ON and JR_RAISE and best < lift:
+                # (its short approach's junction raised by another deck's: as high as that carries it, the approach
+                # climbing RAMP_GRADE at most from it: ramp_envelope)
+                ln = np.asarray(line, np.float64)[:, :2]
+                L = float(np.hypot(*np.diff(ln, axis=0).T).sum())
+                if L <= JUNCTION_STUB_M:
+                    far = ln[0] if at_end else ln[-1]
+                    jl = self._junction_lift(far, np.asarray(xy, np.float64)[:2])
+                    if jl is not None:
+                        zf, zb = self._z_raw(np.array([far, np.asarray(xy, np.float64)[:2]]))
+                        import fast
+                        best = fast._ef.stub_carried_raise(best, float(lift), float(zb), float(zf), float(jl[0]), L,
+                                                           float(RAMP_GRADE))
         return best
 
     def _end_filled(self, line, at_end):
@@ -6992,49 +7031,26 @@ TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
 TRIM_RAMP_M = 20.0          # m from the main's painted edge a trimmed side road eases to its own profile
 
 
-def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):
+def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None, fill_z=None):
     """m to add to a road plan's vertices (xy (n, 2)) rising to `lift` at its first (at_end False) or last vertex (a
     bridge's abutment), falling off along the road (arc length) on a cosine ramp whose steepest grade is APPROACH_GRADE;
     at most what keeps the fill slope (side_run x the height out, SLOPE_RUN by default) clear of the other roads
-    [(line (k, 2), half width)] beside it, with APPROACH_GAP_M to spare. None when nothing is raised. Pure."""
+    [(line (k, 2), half width)] beside it, with APPROACH_GAP_M to spare. fill_z (the plan's heights): less by what the
+    road climbs above its raised end (a ramp's surface, not an offset). None when nothing is raised. earthfast
+    approach_add (approach.rs). Pure."""
+    import fast
+    fast.require(236, "approach_add")
     side_run = SLOPE_RUN if side_run is None else side_run
-    xy = np.asarray(xy, np.float64)[:, :2]
-    if len(xy) < 2 or lift < APPROACH_MIN_LIFT:
-        return None
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
-    d = (s[-1] - s) if at_end else s
-    run = float(np.clip(lift * math.pi / (2 * (grade or APPROACH_GRADE)), APPROACH_MIN_RUN,
-                        APPROACH_MAX_RUN * (APPROACH_GRADE / grade if grade else 1.0)))
-    u = np.clip(d / run, 0.0, 1.0)
-    add = lift * 0.5 * (1.0 + np.cos(math.pi * u))
-    on = add > 1e-3
-    if not on.any():
-        return None
-    q0 = xy[on]
-    lo_q, hi_q = q0.min(0), q0.max(0)
-    for line, oh in others:
-        line = np.asarray(line, np.float64)[:, :2]
-        if len(line) < 2:
-            continue
-        reach = half + oh + APPROACH_GAP_M + side_run * lift
-        if (line.max(0) < lo_q - reach).any() or (line.min(0) > hi_q + reach).any():
-            continue                    # too far to matter
-        q = xy[on]
-        a, b = line[:-1], line[1:]
-        ab = b - a
-        L2 = np.maximum((ab * ab).sum(1), 1e-12)
-        t = np.clip(((q[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(q[:, None, :] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1)).min(1)
-        cap = np.maximum(0.0, (dist - half - oh - APPROACH_GAP_M) / max(side_run, 1e-6))
-        add[on] = np.minimum(add[on], cap)
-    # a cap lowers the ramp before it at APPROACH_CAP_GRADE at most, instead of a step at the cap
-    for i in range(1, len(add)):
-        add[i] = min(add[i], add[i - 1] + APPROACH_CAP_GRADE * (s[i] - s[i - 1]))
-    for i in range(len(add) - 2, -1, -1):
-        add[i] = min(add[i], add[i + 1] + APPROACH_CAP_GRADE * (s[i + 1] - s[i]))
-    if add.max() < 1e-3:
-        return None
-    return add
+    xy = np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2])
+    lines = [np.asarray(line, np.float64)[:, :2] for line, _oh in others]
+    oxy = np.ascontiguousarray(np.concatenate(lines) if lines else np.zeros((0, 2)), np.float64)
+    ooff = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
+    ohalf = np.array([float(oh) for _line, oh in others], np.float64)
+    fz = np.zeros(0) if fill_z is None else np.ascontiguousarray(np.asarray(fill_z, np.float64))
+    return fast._ef.approach_add(xy, bool(at_end), float(lift), float(half), oxy, ooff, ohalf, float(side_run),
+                                 float(grade or 0.0), float(APPROACH_MIN_LIFT), float(APPROACH_GRADE),
+                                 float(APPROACH_MIN_RUN), float(APPROACH_MAX_RUN), float(APPROACH_GAP_M),
+                                 float(APPROACH_CAP_GRADE), fz)
 
 
 def _is_link(spec):
