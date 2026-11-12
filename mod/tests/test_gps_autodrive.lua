@@ -116,6 +116,25 @@ do
   T.check(f.target[#f.target].x > 900, 'graph replacement preserves the main-road choice at the fork')
 end
 
+-- At a shallow fork the truck remains inside its current highway lane even when the ramp centre is nearer.
+do
+  local f = fixture({ 'j', 'main', 'end' }, -2, 4, function(f)
+    local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 4, links = links } end
+    f.nodes = { w = n(0, -4, { j = {} }), j = n(300, -4, { main = {}, ramp = {} }),
+      main = n(420, -4, { ['end'] = {} }), ['end'] = n(1000, -4, {}),
+      ramp = n(360, -2, { exit = {} }), exit = n(500, 30, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { -0.0004, 0 }, { -0.0004, 0.1 } }, dist = 1000, dur = 60 }
+  end)
+  f.x = 340
+  f:mapArrives(); f:step()
+  T.check(f.target[1] == 'main', 'a nearer exit centre does not replace the current underfoot highway edge')
+  T.check(f.target[#f.target].x > 900, 'the overlap at the fork retains the highway continuation')
+  f.x = 350; f:mapArrives(); f:step()
+  T.check(f.target[1] == 'main' and f.target[#f.target].x > 900,
+    'continuity keeps the current edge after the rear node is removed from the submitted waypoint list')
+end
+
 for _, offset in ipairs({ 0, -18 }) do
   local f = fixture({ 'j', 'k' }, 2, 6, function(f)
     diversionRoads(f)

@@ -79,6 +79,7 @@ local lastCheck = -math.huge
 local info = nil        -- { dist, bearing, remaining, eta } at the last check
 local auto = false      -- autodrive on
 local autoPath = nil    -- the node ids last given to the AI
+local autoRoadPath = nil -- the same path including its rear endpoint, for underfoot edge continuity
 local autoFinished = nil -- completed local endpoint: wait for a continuation instead of resubmitting it
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local autoForce = true -- restart after a stall/recovery, destination change or pause, even on the same path
@@ -410,7 +411,7 @@ local function routeTarget(e, nodes, i, t)
     local p, h = veh and veh:getPosition(), veh and veh:getDirectionVector()
     local a, b, routeA, routeB
     if p and h then
-      a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z)
+      a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z, nil, autoRoadPath)
       local length = math.sqrt(hx * hx + hy * hy)
       if length > 0.1 then routeA, routeB = M.edgeUnder(nodes, rx, ry, hx / length, hy / length, p.z, M.ON_GRAPH_M) end
     end
@@ -681,8 +682,16 @@ end
 -- or the existing 8 m horizontal tolerance. Rank by distance including the edge's interpolated height when
 -- pz is supplied, so an overlapping road above/below cannot win just because its centreline is closer in XY.
 -- A supplied tolerance instead uses the inclusive search radius for approximate planned-route projections.
-function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance)
-  local best, bd = nil, math.huge
+-- Where fork lanes overlap, retain an edge in the active path while the car is still inside its road width.
+-- Outside that road (or on another elevation), fall back to the nearest eligible edge as usual.
+function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
+  local preferred = {}
+  for i = 2, #(path or {}) do
+    local a, b = path[i - 1], path[i]
+    preferred[a] = preferred[a] or {}; preferred[b] = preferred[b] or {}
+    preferred[a][b], preferred[b][a] = true, true
+  end
+  local best, bd, kept, kd = nil, math.huge, nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
     if not (a and b) or not drivable(e, from) then return end
@@ -703,6 +712,8 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance)
       local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
       local distanceSq = d * d + dz * dz
       if (d < reach or (tolerance and d == reach)) and distanceSq < bd then best, bd = { from, to }, distanceSq end
+      if preferred[from] and preferred[from][to] and d < ra + t * (rb - ra)
+        and math.abs(dz) <= 2 and distanceSq < kd then kept, kd = { from, to }, distanceSq end
     end
   end
   for id, n in pairs(nodes or {}) do
@@ -711,6 +722,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance)
       try(other, id, e)
     end
   end
+  best = kept or best
   if best then return best[1], best[2] end
 end
 
@@ -805,7 +817,7 @@ local function driveArrowsPath(gm, nodes)
   local a, b
   if hl > 0.1 then
     -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
-    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
+    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z, nil, autoRoadPath)
   end
   local ids = M.pathNodes(gm.routePlanner.path, nodes, a, b)
   -- the planner's path can be older than the graph (planned before the last apply): a step that is no edge now
@@ -829,6 +841,8 @@ local function driveArrowsPath(gm, nodes)
   veh:queueLuaCommand(M.aiCommand(ids))
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
+  autoRoadPath = { a } -- the rear node is context only; the vehicle still drives toward b first
+  for _, id in ipairs(ids) do autoRoadPath[#autoRoadPath + 1] = id end
   autoForce, autoBlocked = false, false
   -- A continuation gets its own progress window; waiting at the old endpoint was not a failed attempt.
   if autoFinished then progRemaining, progAt, stuckTries = nil, nil, 0 end
@@ -953,7 +967,7 @@ local function setArrows(key, target, tail, nodes)
     local p, d = veh and veh:getPosition(), veh and veh:getDirectionVector()
     local hl = d and math.sqrt(d.x * d.x + d.y * d.y) or 0
     local a, b
-    if hl > 0.1 then a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z) end
+    if hl > 0.1 then a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z, nil, autoRoadPath) end
     if not b then if veh then holdAutodrive(veh) end; return end
     -- Pin the planner to the forward junction before the distant route waypoints. Otherwise it can choose a
     -- parallel road as its start, even though that road cannot be reached from the vehicle's current segment.
@@ -977,7 +991,7 @@ function M.setAutodrive(on)
   if on == auto then return auto end
   auto = on
   autoFinished = nil
-  autoPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, false, nil
+  autoPath, autoRoadPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
   progRemaining, progAt, stuckTries = nil, nil, 0
   if on then
@@ -1222,7 +1236,7 @@ end
 function M.reset()
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
   lineKey = nil
-  autoPath, autoSerial, pathWait, vehGraph = nil, nil, nil, {}
+  autoPath, autoRoadPath, autoSerial, pathWait, vehGraph = nil, nil, nil, nil, {}
   autoForce, autoBlocked = true, false
   autoFinished = nil
 end

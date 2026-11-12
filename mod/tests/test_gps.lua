@@ -196,6 +196,25 @@ do
   T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
 end
 
+-- Overlapping fork lanes retain an active path only while it is physically underfoot.
+do
+  local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 4, links = links } end
+  local roads = { a = n(0, 0, { b = {} }), b = n(100, 0, {}),
+    c = n(0, 3, { d = {} }), d = n(100, 3, {}) }
+  local path = { 'a', 'b' }
+  local a, b = G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path)
+  T.check(a == 'a' and b == 'b', 'inside the active highway lane: a nearer ramp centre does not steal the anchor')
+  T.check(G.edgeUnder(roads, 50, 5, 1, 0, 0, nil, path) == 'c',
+    'outside the active road width: choose the actual road, without the eight-metre continuity tolerance')
+  roads.a.pos.z, roads.b.pos.z = 4, 4
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path on another elevation is not preferred')
+  roads.a.pos.z, roads.b.pos.z = 0, 0
+  roads.a.links.b = { oneWay = true, inNode = 'b' }
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path cannot override a one-way restriction')
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, { 'a', 'c', 'b' }) == 'c',
+    'path membership alone does not prefer an edge absent from the active path')
+end
+
 -- Stacked roads can share a heading and be closer in XY on the wrong level.
 do
   local stacked = {
