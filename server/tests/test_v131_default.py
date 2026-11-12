@@ -17,6 +17,7 @@ is the one additive field of M0.)
 import hashlib
 import inspect
 import json
+import math
 import os
 import sys
 import tempfile
@@ -123,10 +124,22 @@ def compute(server_dir):
             sub = int(round(2.0 / getattr(heightmap, "SQUARE", 2.0)))
             info = heightmap.generate(frame, lambda la, lo: dem.sample(la, lo, 15), p, 256.0, -512.0, (300.0, -400.0),
                                       1 / 64, **({"size": 1024 * sub} if sub > 1 else {}))
+            # Since 2026-11-12 zBase sits on an 8 m step (heightmap.ZBASE_STEP; v1.3.1: 64 m, whose base 1/1024's 64 m
+            # range could not hold): the same heights, written from a higher base. Moved back to v1.3.1's base (the
+            # 64 m floor of the 8 m one) the PNG's values must be v1.3.1's bit for bit.
+            step = getattr(heightmap, "ZBASE_STEP", 64.0)
+            shift = 0
+            if step != 64.0:
+                zb = info["zBase"]
+                old = math.floor(zb / 64.0) * 64.0
+                shift = int(round((zb - old) / info["q"]))
+                info = dict(info, zBase=old)
             out["heightmap"] = {k: _r(v) for k, v in sorted(info.items()) if k != "seconds"}
             from PIL import Image
             with Image.open(p) as im:
                 px = np.asarray(im)[sub - 1::sub, ::sub]
+                if shift:
+                    px = (px.astype(np.int64) + shift).astype(px.dtype)
                 out["heightmap_png"] = [px.shape[1], im.mode, _h(px.tobytes())]
         finally:
             s.hm_pool.shutdown(wait=True)

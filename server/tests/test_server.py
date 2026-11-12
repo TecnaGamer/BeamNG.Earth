@@ -282,7 +282,7 @@ class ServerTest(ServerHarness):
         self.assertIsNone(a1["floorZ"], "not in a tunnel")
         aid = a1["anchorId"]
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
-        self.assertEqual(a1["terrain"]["q"], 1 / 64)                  # 600 m relief
+        self.assertEqual(a1["terrain"]["q"], 1 / 128)     # 600 m relief over the survey, under 512 m in a block (survey_q on block-sized windows, 2026-11-12)
         self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 

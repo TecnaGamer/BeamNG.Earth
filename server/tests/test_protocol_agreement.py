@@ -726,7 +726,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(L["VALID_W"], heightmap.VALID)                     # 1023 m (§12 P1)
         self.assertEqual(tuple(L["Q_LADDER"]), heightmap.Q_LADDER)
         for q in heightmap.Q_LADDER:
-            self.assertEqual(heightmap.block_params(1000.0, 1100.0, q)[2], q * L["Q_SCALE"])
+            self.assertEqual(heightmap.block_params(1000.0, 1030.0, q)[2], q * L["Q_SCALE"])   # (a range every quantum holds: 1/1024 holds 64 m)
         self.assertEqual(L["L0"], ff.BASE)
         self.assertEqual(2 * L["HALF"], 4 * ff.BASE)                        # a 1 km block sits on 4 x 4 L0 tiles
         self.assertEqual(L["FAR_SQUARE"], heightmap.FAR_SQUARE)
