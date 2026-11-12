@@ -6167,10 +6167,11 @@ def rail_yield_pieces(xy, z, roads_, half):
     reach = RAIL_YIELD_PAD_M - railways.CROSSING_PAD_M
     lo, hi = xy.min(0) - 30.0, xy.max(0) + 30.0
     crossers = []
-    for rxy, rz, rh in roads_:
-        r = np.asarray(rxy, np.float64)[:, :2]
-        if len(r) < 2 or (r.max(0) < lo).any() or (r.min(0) > hi).any():
-            continue
+    lines, box = railways._seam_boxes(roads_)       # (the roads near the line by their boxes, all at once)
+    for k in np.flatnonzero(~((box[:, 2] < lo[0]) | (box[:, 3] < lo[1]) | (box[:, 0] > hi[0])
+                              | (box[:, 1] > hi[1]))).tolist():
+        _rxy, rz, rh = roads_[k]
+        r = lines[k]
         crossers.append((r, float(rh) + reach, np.asarray(rz, np.float64)[:len(r)]))
     if not crossers:
         return [(xy, z)]

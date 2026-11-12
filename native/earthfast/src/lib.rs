@@ -101,6 +101,7 @@ mod roadsurf;
 mod levelways;
 mod meshtrim;
 mod shelterfit;
+mod tilecuts;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -442,6 +443,36 @@ fn segment_crossings_g(
 ) -> Vec<(usize, usize, f64, f64, f64)> {
     let (pa, ps, ga, gs) = (parts.as_array(), part_starts.as_array(), ground.as_array(), ground_starts.as_array());
     py.detach(|| segment_crossings_core(pa, ps, ga, gs))
+}
+
+/// segment_crossings_g on lists of lines: parts and ground each a list of float64 (k, >= 2) arrays (their first two
+/// columns), packed here: roads._crossings / _crossings_by stacked them in numpy on every call (~1 % of a 16-tile
+/// Fells Point probe's CPU, 2026-11-12). 237.
+#[pyfunction]
+fn segment_crossings_lists(py: Python<'_>, parts: Vec<PyReadonlyArray2<'_, f64>>, ground: Vec<PyReadonlyArray2<'_, f64>>)
+                           -> PyResult<Vec<(usize, usize, f64, f64, f64)>> {
+    fn pack(lines: &[PyReadonlyArray2<'_, f64>]) -> PyResult<(numpy::ndarray::Array2<f64>, numpy::ndarray::Array1<i64>)> {
+        let n: usize = lines.iter().map(|l| l.as_array().nrows()).sum();
+        let mut pts = numpy::ndarray::Array2::<f64>::zeros((n, 2));
+        let mut starts = numpy::ndarray::Array1::<i64>::zeros(lines.len() + 1);
+        let mut k = 0usize;
+        for (j, l) in lines.iter().enumerate() {
+            let a = l.as_array();
+            if a.ncols() < 2 && a.nrows() > 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err("segment_crossings_lists: lines (k, >= 2)"));
+            }
+            for r in 0..a.nrows() {
+                pts[[k, 0]] = a[[r, 0]];
+                pts[[k, 1]] = a[[r, 1]];
+                k += 1;
+            }
+            starts[j + 1] = k as i64;
+        }
+        Ok((pts, starts))
+    }
+    let (pa, ps) = pack(&parts)?;
+    let (ga, gs) = pack(&ground)?;
+    Ok(py.detach(|| segment_crossings_core(pa.view(), ps.view(), ga.view(), gs.view())))
 }
 
 /// segment_crossings_g on views (gradesep's underpasses call it in Rust).
@@ -3138,6 +3169,26 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's). shop_band
 /// (v0, v1, unit m): the shop floor from rows v0..v1 of its own sheet, a whole repeat per unit m (an office tower's
 /// lobby, 197); None: the shop sheet's band shop_k.
+/// building_walls with its P, UV and mid as numpy arrays (float64, float64, uint8), not lists: buildings.Mesh keeps
+/// them as blocks (a Python float per number and numpy's conversion of the lists at the end were ~2 % of a road tile
+/// set's CPU, Fells Point 2026-11-12). 237.
+#[pyfunction]
+#[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
+                    shop_band=None))]
+#[allow(clippy::too_many_arguments)]
+fn building_walls_np<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, z0: f64, z_eave: f64, wall: bool,
+                          plain: bool, band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool,
+                          door_edge: i64, door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64,
+                          lite: bool, c: Vec<f64>, vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>,
+                          shop_edges: Vec<i64>, shop_band: Option<(f64, f64, f64)>)
+                          -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<u8>>)> {
+    let (p, uv, mid) = building_walls(py, ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop,
+                                      door_edge, door_pos, roof_flat, seed, windows_false, front, lite, c, vary,
+                                      win_cells, shop_edges, shop_band)?;
+    Ok((p.into_pyarray(py), uv.into_pyarray(py), mid.into_pyarray(py)))
+}
+
 #[pyfunction]
 #[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
                     roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
@@ -5993,6 +6044,16 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
-    m.add("VERSION", 236)?;
+    // 237: tilecuts (roads.build_tile's cut lists as masks of the tile's roads packed once: road_cut_boxes,
+    // inside_road_cuts; retaining_walls' deck_floor)
+    m.add_function(wrap_pyfunction!(tilecuts::road_cut_boxes, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::inside_road_cuts, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::deck_floor, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::offset_polyline, m)?)?;
+    m.add_class::<tilecuts::PointMemo>()?;
+    m.add_function(wrap_pyfunction!(building_walls_np, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::nearest_segments, m)?)?;
+    m.add_function(wrap_pyfunction!(segment_crossings_lists, m)?)?;
+    m.add("VERSION", 237)?;
     Ok(())
 }

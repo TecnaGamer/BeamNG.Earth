@@ -2886,12 +2886,15 @@ def _end_index(feats):
         n = len(feats)
         index, keys = {}, [None] * n
         if n:
-            starts = feats.coord_off[feats.ring_off[feats.part_off[:-1]]]
-            stops = feats.coord_off[feats.ring_off[feats.part_off[1:]]]
-            for i, (a, b) in enumerate(zip(starts.tolist(), stops.tolist())):
-                if b - a < 2:
-                    continue
-                k = (_end_key(*feats.lonlat[a]), _end_key(*feats.lonlat[b - 1]))
+            starts = np.asarray(feats.coord_off[feats.ring_off[feats.part_off[:-1]]], np.int64)
+            stops = np.asarray(feats.coord_off[feats.ring_off[feats.part_off[1:]]], np.int64)
+            rows = np.flatnonzero(stops - starts >= 2)
+            # (_end_key's numbers for every row at once: round(float(v) * 1e6) is numpy's rint of the float64 product)
+            ll = np.asarray(feats.lonlat, np.float64)
+            a = np.rint(ll[starts[rows]] * 1e6).astype(np.int64).tolist()
+            b = np.rint(ll[stops[rows] - 1] * 1e6).astype(np.int64).tolist()
+            for i, ka, kb in zip(rows.tolist(), a, b):
+                k = ((ka[0], ka[1]), (kb[0], kb[1]))
                 keys[i] = k
                 index.setdefault(k[0], []).append((i, 0))
                 index.setdefault(k[1], []).append((i, 1))
@@ -5573,28 +5576,14 @@ def centre_colour(lon):
 
 def offset_polyline(pts, d):
     """The polyline moved d m (or d[k] m at each point) to its left (xy; z kept), with mitred joints (miter at most
-    2x). Pure."""
+    2x): earthfast.offset_polyline (numpy's arithmetic). Pure."""
     pts = np.asarray(pts, np.float64)
     if len(pts) < 2:
         return pts.copy()
-    t = np.diff(pts[:, :2], axis=0)
-    L = np.hypot(t[:, 0], t[:, 1])
-    L[L < 1e-9] = 1e-9
-    t /= L[:, None]
-    nrm = np.stack([-t[:, 1], t[:, 0]], axis=1)          # left normals per segment
-    vn = np.empty((len(pts), 2))
-    vn[0], vn[-1] = nrm[0], nrm[-1]
-    if len(pts) > 2:
-        m = nrm[:-1] + nrm[1:]
-        ml = np.hypot(m[:, 0], m[:, 1])
-        ml[ml < 1e-9] = 1e-9
-        m /= ml[:, None]
-        cosh = np.clip(np.sum(m * nrm[1:], axis=1), 0.5, 1.0)  # miter scale 1/cos(half angle), at most 2
-        vn[1:-1] = m / cosh[:, None]
-    out = pts.copy()
+    import fast
+    fast.require(237, "offset_polyline")
     d = np.asarray(d, np.float64)
-    out[:, :2] += vn * (d[:, None] if d.ndim else d)
-    return out
+    return fast._ef.offset_polyline(np.ascontiguousarray(pts), np.ascontiguousarray(d.reshape(-1) if d.ndim else d[None]))
 
 
 def _seg_dist(p, a, b):
@@ -5620,13 +5609,14 @@ def _within_any(c, cuts, boxes):
     if bb is None:
         if not cuts:
             return False
-        lo = np.array([np.asarray(p)[:, :2].min(0) - h for p, h in cuts])
-        hi = np.array([np.asarray(p)[:, :2].max(0) + h for p, h in cuts])
-        bb = boxes[id(cuts)] = (lo, hi, cuts)
-    lo, hi, _ = bb
+        items = list(cuts)          # (a _RoadCuts as its list)
+        lo = np.array([np.asarray(p)[:, :2].min(0) - h for p, h in items])
+        hi = np.array([np.asarray(p)[:, :2].max(0) + h for p, h in items])
+        bb = boxes[id(cuts)] = (lo, hi, items, cuts)
+    lo, hi, items, _ = bb
     import furniture
     for i in np.flatnonzero((lo[:, 0] <= c[0]) & (hi[:, 0] >= c[0]) & (lo[:, 1] <= c[1]) & (hi[:, 1] >= c[1])):
-        if furniture._seg_dist_min(c, cuts[i][0]) < cuts[i][1]:
+        if furniture._seg_dist_min(c, items[i][0]) < items[i][1]:
             return True
     return False
 
@@ -5639,9 +5629,96 @@ def cut_outside(pts, blockers, spacing=2.0, min_piece=None):
     d = densify(np.asarray(pts, np.float64), spacing)
     import fast
     fast.require(0, "inside_blockers")      # the Rust test (712 calls a tile set, ~1 s of numpy)
-    segs, starts, hws = _blocker_segments(blockers)
-    inside = np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws))
+    if isinstance(blockers, _RoadCuts):
+        inside = blockers.inside(np.ascontiguousarray(d[:, :2]))
+    else:
+        segs, starts, hws = _blocker_segments(blockers)
+        inside = np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(d[:, :2]), segs, starts, hws))
     return _runs_outside(d, inside, MIN_PIECE_M if min_piece is None else min_piece)
+
+
+class _TileRoads:
+    """A tile's roads [(fid, spec, pts, lon)] packed once as blockers (their centre lines xy, in order): segs (m, 4),
+    starts (R + 1,) (a line of < 2 points: none), boxes (R, 4) (earthfast.road_cut_boxes), and the per-road arrays
+    build_tile's cut lists are made of (masks of them: _RoadCuts)."""
+
+    def __init__(self, roads):
+        import fast
+        fast.require(237, "road_cut_boxes")
+        self.lines = [p2[:, :2] for _f2, _s2, p2, _l2 in roads]
+        self.fids = np.empty(len(roads), object)
+        self.fids[:] = [f2 for f2, _s2, _p2, _l2 in roads]
+        self.half = np.array([s2.width / 2 for _f2, s2, _p2, _l2 in roads], np.float64)
+        self.index = {}
+        for j, f2 in enumerate(self.fids.tolist()):
+            self.index.setdefault(f2, []).append(j)
+        n = np.array([len(ln) - 1 if len(ln) >= 2 else 0 for ln in self.lines], np.int64)
+        self.starts = np.r_[0, np.cumsum(n)].astype(np.int64)
+        keep = [np.asarray(ln, np.float64) for ln in self.lines if len(ln) >= 2]
+        if keep:
+            self.segs = np.ascontiguousarray(np.concatenate([np.concatenate([ln[:-1], ln[1:]], axis=1) for ln in keep]))
+        else:
+            self.segs = np.zeros((0, 4))
+        self.boxes = fast._ef.road_cut_boxes(self.segs, self.starts)
+
+    def mask(self, pairs_of, fid, base):
+        """base (R,) bool with the roads f2 of pairs_of.get(fid) ({fid: {f2}}) off (a copy when any is)."""
+        got = pairs_of.get(fid)
+        if not got:
+            return base
+        out = base.copy()
+        for f2 in got:
+            for j in self.index.get(f2, ()):
+                out[j] = False
+        return out
+
+
+def _pairs_of(pairs):
+    """{a: {b}} of a set of (a, b) pairs."""
+    out = {}
+    for a, b in pairs:
+        out.setdefault(a, set()).add(b)
+    return out
+
+
+class _RoadCuts:
+    """One road's cut list [(centre line xy, half width)] (cut_outside's blockers) as the tile's roads (_TileRoads) with
+    keep (R,) bool and their half widths hw (R,), then the extra (line, half) of a list: the same list, in the same order,
+    as the Python list of tuples it stands for (iteration, len, truth, +), and cut_outside tests it in one kernel call
+    over the packed roads (earthfast.inside_road_cuts) plus the extra's (inside_blockers): a pure any, the same
+    answer."""
+    __slots__ = ("roads", "keep", "hw", "extra")
+
+    def __init__(self, roads, keep, hw, extra=()):
+        self.roads, self.keep, self.hw, self.extra = roads, keep, hw, extra
+
+    def __bool__(self):
+        return bool(self.keep.any()) or bool(self.extra)
+
+    def __len__(self):
+        return int(self.keep.sum()) + len(self.extra)
+
+    def __iter__(self):
+        lines, hw = self.roads.lines, self.hw.tolist()
+        for j in np.flatnonzero(self.keep).tolist():
+            yield (lines[j], hw[j])
+        yield from self.extra
+
+    def __getitem__(self, k):
+        return list(self)[k]
+
+    def __add__(self, other):
+        return _RoadCuts(self.roads, self.keep, self.hw, list(self.extra) + list(other))
+
+    def inside(self, pts):
+        """(n,) bool: the points (n, 2) within a cut's half width of its line."""
+        import fast
+        r = self.roads
+        out = np.asarray(fast._ef.inside_road_cuts(pts, r.segs, r.starts, r.boxes, self.keep, self.hw))
+        if self.extra:
+            segs, starts, hws = _blocker_segments(self.extra)
+            out = out | np.asarray(fast._ef.inside_blockers(pts, segs, starts, hws))
+        return out
 
 
 _BLOCKERS = ()                  # ((blockers list, its segment arrays), ...): the last few lists (a tile alternates
@@ -6811,34 +6888,34 @@ def _clearance_deficits(lines, zs, crossings, depth=None):
     return out
 
 
+def _lines64(lines):
+    """lines as float64 arrays (the crossing kernel's argument: it reads their first two columns)."""
+    f64 = np.float64
+    return [ln if type(ln) is np.ndarray and ln.dtype == f64 else np.asarray(ln, f64) for ln in lines]
+
+
 def _crossings(lines, ground_lines):
     """(part index, arc m, point xy) where a ground road (polylines in metres) crosses under a deck
-    part (earthfast.segment_crossings). Pure."""
+    part (earthfast.segment_crossings_lists). Pure."""
     import fast
-    lp = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
-    gp = [np.asarray(gl, np.float64)[:, :2] for gl in ground_lines]
-    if not lp or not gp:
+    lines, ground_lines = list(lines), list(ground_lines)
+    if not lines or not ground_lines:
         return []
-    fast.require(57, "segment_crossings")
-    starts = lambda ps: np.r_[0, np.cumsum([len(p) for p in ps])].astype(np.int64)
-    got = fast._ef.segment_crossings(np.ascontiguousarray(np.vstack(lp)), starts(lp),
-                                     np.ascontiguousarray(np.vstack(gp)), starts(gp))
-    return [(pi, arc, np.array([x, y])) for pi, arc, x, y in got]
+    fast.require(237, "segment_crossings_lists")
+    got = fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines))
+    return [(pi, arc, np.array([x, y])) for pi, _g, arc, x, y in got]
 
 
 def _crossings_by(lines, ground_lines):
     """_crossings for each of ground_lines apart, in one kernel call: [[(part index, arc m, point xy)] per ground line],
     each list as _crossings(lines, [that line]) gives it. Pure."""
     import fast
-    lp = [np.asarray(ln, np.float64)[:, :2] for ln in lines]
-    gp = [np.asarray(gl, np.float64)[:, :2] for gl in ground_lines]
-    out = [[] for _ in gp]
-    if not lp or not gp:
+    lines, ground_lines = list(lines), list(ground_lines)
+    out = [[] for _ in ground_lines]
+    if not lines or not out:
         return out
-    fast.require(76, "segment_crossings_g")
-    starts = lambda ps: np.r_[0, np.cumsum([len(p) for p in ps])].astype(np.int64)
-    for pi, g, arc, x, y in fast._ef.segment_crossings_g(np.ascontiguousarray(np.vstack(lp)), starts(lp),
-                                                          np.ascontiguousarray(np.vstack(gp)), starts(gp)):
+    fast.require(237, "segment_crossings_lists")
+    for pi, g, arc, x, y in fast._ef.segment_crossings_lists(_lines64(lines), _lines64(ground_lines)):
         out[g].append((pi, arc, np.array([x, y])))
     return out
 
@@ -8806,24 +8883,36 @@ WALL_UNDER_MIN_H_M = 2.0    # m: a wall under a deck stands at least this over t
 def _deck_floor(xy, z, decks):
     """Per point xy (k, 2) at road heights z (k,): the underside (m) of the lowest bridge deck over it (deck chunks:
     "n" points [x, y, z], "w" m; within half its width + WALL_DECK_REACH_M of its nearest segment, WALL_DECK_OVER_M
-    or more over z), +inf where none. Pure."""
+    or more over z), +inf where none (earthfast.deck_floor: a numpy round per chunk was ~1.5 % of a road tile set's
+    CPU, I-83 Baltimore 2026-11-12). Pure."""
+    import fast
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
     z = np.asarray(z, np.float64)
-    floor = np.full(len(xy), np.inf)
-    for ch in decks or ():
-        n = np.asarray(ch["n"], np.float64)[:, :3]
-        if len(n) < 2 or not len(xy):
-            continue
-        a, ab = n[:-1], n[1:] - n[:-1]
-        L2 = np.maximum((ab[:, :2] ** 2).sum(1), 1e-12)
-        t = np.clip(((xy[:, None, :] - a[None, :, :2]) * ab[None, :, :2]).sum(2) / L2, 0.0, 1.0)     # (k, segs)
-        d = np.hypot(*(a[None, :, :2] + t[:, :, None] * ab[None, :, :2] - xy[:, None, :]).transpose(2, 0, 1))
-        k = np.argmin(d, axis=1)
-        r = np.arange(len(xy))
-        zd = a[k, 2] + t[r, k] * ab[k, 2]
-        near = (d[r, k] <= float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M) & (zd - z >= WALL_DECK_OVER_M)
-        floor = np.where(near, np.minimum(floor, zd - WALL_DECK_UNDER_M), floor)
-    return floor
+    pack = _deck_floor_pack(decks)
+    if pack is None or not len(xy):
+        return np.full(len(xy), np.inf)
+    fast.require(237, "deck_floor")
+    return np.asarray(fast._ef.deck_floor(np.ascontiguousarray(xy), np.ascontiguousarray(z), *pack,
+                                          float(WALL_DECK_OVER_M), float(WALL_DECK_UNDER_M)), np.float64)
+
+
+_DECK_FLOOR_PACK = [(None, None)]   # [(the decks list, its packed arrays)]: one tile's walls ask with the same list
+
+
+def _deck_floor_pack(decks):
+    """(points (n, 3), starts (C + 1,), reach (C,): half the width + WALL_DECK_REACH_M) of the deck chunks, or None."""
+    if not decks:
+        return None
+    last = _DECK_FLOOR_PACK[0]
+    if last[0] is decks:
+        return last[1]
+    ns = [np.asarray(ch["n"], np.float64)[:, :3] for ch in decks]
+    pts = np.ascontiguousarray(np.concatenate(ns)) if ns else np.zeros((0, 3))
+    starts = np.r_[0, np.cumsum([len(n) for n in ns])].astype(np.int64)
+    reach = np.array([float(ch.get("w") or 0) / 2 + WALL_DECK_REACH_M for ch in decks], np.float64)
+    pack = (pts, starts, reach)
+    _DECK_FLOOR_PACK[0] = (decks, pack)
+    return pack
 
 
 def _under_decks(xy, z, decks):
@@ -10820,6 +10909,23 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     import franceroads
     paint_continuations = franceroads.continuations(roads) if franceroads.ON else set()
     paint_joins = rampmerges.through_joins(roads, going_on)
+    # (the cut lists below as masks of the tile's roads packed once, _RoadCuts: a list of every other road per cut kind
+    # and road was O(roads^2) a tile, each packed again for the kernel)
+    if roads:
+        tr = _TileRoads(roads)
+        fids_l = tr.fids.tolist()
+        straight_of, stems_of, going_of = _pairs_of(straight), _pairs_of(stems), _pairs_of(going_on)
+        paintc_of, cornered_of = _pairs_of(paint_continuations), _pairs_of(cornered)
+        hw_cut = tr.half + CUT_MARGIN
+        built_m = np.array([s2.kind in BUILT for _f2, s2, _p2, _l2 in roads], bool)
+        ring_m = np.array([f2 in ring_dir for f2 in fids_l], bool)
+        width_a = np.array([s2.width for _f2, s2, _p2, _l2 in roads], np.float64)
+        sw_m = np.array([bool(has_sidewalks(s2)) for _f2, s2, _p2, _l2 in roads], bool)
+        walk_a = np.array([s2.walk if sw else 0.0 for (_f2, s2, _p2, _l2), sw in zip(roads, sw_m.tolist())],
+                          np.float64)
+        ring_hw = tr.half + np.where(ring_m, islands.ENTRY_CLEAR_M, 0.0)
+        decal_far = tr.half + (EDGE_DECAL["w"] + EDGE_DECAL_GAP_M)
+        all_m = np.ones(len(roads), bool)
     grassy, leaves = set(), {}                  # ((fid, side) of a rural road whose edge is grass, the fallen leaves
     if wear and cover_fn is not None and roads:  # along its edges: roadwear.verges)
         import roadwear
@@ -10854,32 +10960,38 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if str(country or "").upper() == "SE":
                 ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
         ex = rampmerges.trim(fid, ex, merge_layouts)
-        blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
-        edge_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
-                         if f2 != fid and (fid, f2) not in straight] + zebras
-        centre_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
-                           if f2 != fid and (fid, f2) not in straight and (fid, f2) not in stems] + zebras
-        paint_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
-                          if f2 != fid and (fid, f2) not in paint_continuations]
-        decal_blockers = [(p2[:, :2], s2.width / 2 + (CUT_MARGIN if (fid, f2) in going_on else
-                                                      EDGE_DECAL["w"] + EDGE_DECAL_GAP_M))
-                          for f2, s2, p2, _ in roads if f2 != fid and s2.kind in BUILT]
-        # ring roads: sidewalks stop ENTRY_CLEAR_M outside the carriageway (no stub into the circle)
-        walk_blockers = [(p2[:, :2],
-                          (s2.width / 2 + (islands.ENTRY_CLEAR_M if f2 in ring_dir else 0.0)
-                           if (fid, f2) in cornered or f2 in ring_dir
-                           else sidewalk_stop(spec, fid, s2, f2)))
-                         for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts) + trams
+        # (every other road (ne) at its half width + CUT_MARGIN; edge lines not at a road it goes straight on in,
+        # centre lines nor at its stems; French paint not at its continuations)
+        ne = np.fromiter((f2 != fid for f2 in fids_l), bool, len(fids_l))
+        nst = tr.mask(straight_of, fid, ne)
+        blockers = _RoadCuts(tr, ne, hw_cut)
+        edge_blockers = _RoadCuts(tr, nst, hw_cut, zebras)
+        centre_blockers = _RoadCuts(tr, tr.mask(stems_of, fid, nst), hw_cut, zebras)
+        paint_blockers = _RoadCuts(tr, tr.mask(paintc_of, fid, ne), hw_cut)
+        # (the gravel edge decal: built carriageways, CUT_MARGIN from one it goes on in, else the decal's width + gap)
+        decal_blockers = _RoadCuts(tr, ne & built_m,
+                                   np.where(~tr.mask(going_of, fid, all_m), hw_cut, decal_far))
+        # ring roads: sidewalks stop ENTRY_CLEAR_M outside the carriageway (no stub into the circle); elsewhere
+        # sidewalk_stop's rule for every other road at once (the wider road's, then the smaller id's, runs on)
+        nw = -width_a
+        runs_on = nw < -spec.width
+        for j in np.flatnonzero(nw == -spec.width).tolist():
+            runs_on[j] = fids_l[j] < fid
+        stop = np.where(sw_m & runs_on, tr.half + walk_a, tr.half)
+        walk_blockers = _RoadCuts(tr, ne, np.where(~tr.mask(cornered_of, fid, all_m) | ring_m, ring_hw, stop),
+                                  list(walk_cuts) + trams)
         crossing_rails = [c for c in rail_cuts if railways.crosses(pts[:, :2], c[0])]
         walk_blockers += crossing_rails
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid] + trams + crossing_rails
+        curb_blockers = _RoadCuts(tr, ne, tr.half, trams + crossing_rails)
         cut_boxes = {}                          # (_within_any's boxes of this road's cut lists)
         lb_memo = {}                            # (line_blockers by look kind and side, below)
-        line_base = [(f2, s2, p2, l2) for f2, s2, p2, l2 in roads
-                     if f2 != fid and (fid, f2) not in straight and not rampmerges.related(fid, f2, merge_layouts)
-                     and not rampmerges.continuation(fid, spec, f2, s2, paint_joins)]
+        line_ok = nst.copy()                    # (nor a ramp's related road or its continuation)
+        for j in np.flatnonzero(nst).tolist():
+            if rampmerges.related(fid, fids_l[j], merge_layouts) or \
+                    rampmerges.continuation(fid, spec, fids_l[j], roads[j][1], paint_joins):
+                line_ok[j] = False
         for look, w, line in ex:
             french_paint = franceroads.enabled(spec) and look["m"] == franceroads.PAINT_MATERIAL
             paint_cuts = paint_blockers if french_paint else blockers
@@ -10907,9 +11019,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                              if main == fid and (look.get('kind') == 'lane'
                                                  or (look.get('kind') == 'edge' and side != ramp_side))}
                 centre_kind = look.get("kind") in ("centre", "lane")
-                line_blockers = lb_memo[lb_key] = [
-                    (p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in line_base
-                    if f2 not in protected and not (centre_kind and (fid, f2) in stems)] + zebras
+                keep = tr.mask({fid: protected}, fid, line_ok)
+                line_blockers = lb_memo[lb_key] = _RoadCuts(
+                    tr, tr.mask(stems_of, fid, keep) if centre_kind else keep, hw_cut, zebras)
             wb = curb_blockers if look.get("median") else walk_blockers
             if (walk or gutter) and (fid, side) in inner:
                 continue                        # facing a traffic island: no sidewalk there
@@ -10919,8 +11031,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 path_cuts = ([(mapped[:, :2], max(2.9, .5 * (w + style.width)))
                               for _, mapped, style in mapped_walks] if footway is not None else [])
                 if detached:
-                    wb = [(p2[:, :2], s2.width / 2 + .45 * w) for f2, s2, p2, _ in roads if f2 != fid]
-                    wb += list(walk_cuts)
+                    wb = _RoadCuts(tr, ne, tr.half + .45 * w, list(walk_cuts))
                 wb = wb + path_cuts
                 # whole runs near the tile first (joined across tile borders below), clipped to the tile after
                 for piece in clip_polyline(line, *near):
