@@ -249,6 +249,7 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
+G_SIGNAL_LEFT = "signal_left"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
@@ -541,12 +542,11 @@ def approach_pose(u, what, left_hand=False):
     The yaw is the same on either side of the road: it is the turn that faces the model's front toward the drivers,
     and turning it the other way for left-hand traffic stood every head and sign with its back to them (GitHub #595,
     the UK). A sign stands on the kerb side traffic keeps to (the left where it drives on the left). The signal is the
-    stock boom (s_trafficlight_boom_sn): its arm reaches to the drivers' left from its pole, and a turn cannot mirror
-    it, so its pole stands on the drivers' right everywhere and the arm is over the road (on the left kerb and facing
-    them, the arm would hang over the pavement)."""
+    stock boom (s_trafficlight_boom_sn): its arm reaches to the drivers' left from its pole. Left-hand traffic uses
+    a reflected copy (signalshape.lua), so its pole can stand on the left kerb with its arm over the road too."""
     inc = -np.asarray(u, np.float64)[:2]
     right = np.array([inc[1], -inc[0]])         # the right of travel (along inc)
-    side = -right if left_hand and what != G_SIGNAL else right
+    side = -right if left_hand else right
     return side, round(_yaw(right[0], right[1]), 1)
 
 
@@ -585,8 +585,8 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
-    Each on the approach's right (approach_pose: a sign on its left where traffic drives on the left, a signal's
-    boom on its right everywhere), at the junction's edge, facing the drivers who come in. decks: [(centreline (k, 3),
+    Each on the approach's kerb side (left where traffic drives on the left), at the junction's edge, facing the
+    drivers who come in. decks: [(centreline (k, 3),
     half width)] of the bridge decks near (signal_spot).
     Sweden: junction_controls' rules, and the give-way signs in the country too.
     Germany (de_on, de_ctx: the tile's designs.context, and the junction's point inside Germany: designs.inside): the
@@ -668,7 +668,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         for arm, what in put:
             side, yaw = approach_pose(arm[2], what, left_hand)
             b1 = yellow_b1 and what == G_YIELD
-            group = G_B1 if b1 else what
+            group = G_B1 if b1 else G_SIGNAL_LEFT if left_hand and what == G_SIGNAL else what
             if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)
                 import signplacement
@@ -811,6 +811,7 @@ COLLISION_BOXES = {
                    (-0.900, -0.348, 7.772, 0.901, 0.300, 8.000))),
     G_POLELAMP: (1.1, ((-2.891, -0.110, -0.365, 0.039, 0.110, 0.699),)),
     G_SIGNAL: (9.4, ((-0.277, -0.327, -0.397, 0.263, 0.296, 9.365),)),
+    G_SIGNAL_LEFT: (9.4, ((-0.263, -0.327, -0.397, 0.277, 0.296, 9.365),)),
     G_STOP: (3.0, ((-0.460, -0.028, -0.987, 0.436, 0.029, 3.004),)),
     G_YIELD: (3.0, ((-0.356, -0.042, -0.075, 0.357, 0.032, 3.336),)),
     G_HYDRANT: (1.5, ((-0.327, -0.377, -0.145, 0.327, 0.377, 1.324),)),
@@ -1357,7 +1358,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
-    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
+    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD) or clearance.clear(r)]
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)

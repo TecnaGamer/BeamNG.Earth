@@ -1026,10 +1026,11 @@ def _priority_way(edges, approaches, priorities):
 def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None,
              decks=(), ground=None, de_ctx=None, pieces=None, yields=None, priorities=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
-    prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
+    prop y, prop z, prop yaw, left shape?]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
     approach its stop point on the kerb-side half of the lane (where the AI's closest-edge search finds that
     approach), the travel direction, the phase (0 / 1, by the approach's axis) and the head's prop transform.
+    left shape: optional 1 for the reflected left-kerb boom (right-hand approaches retain their 11 fields).
     Germany (de_ctx: the German junction signs' context, _de_context; pieces: the roads' ground parts {fid: [(k, 2)]}):
     a junction inside it the kernel decides (_de_decide, the road tiles' decision) in town and out of town, a "stop"
     on its 206 and right-before-left arms (the spec's B4: an invisible stop for the AI at right before left), no head
@@ -1100,12 +1101,16 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             pp = None
             if prop:
                 side, yaw = furniture.approach_pose(u, what, left_hand)
-                pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines, group=what,
+                group = furniture.G_SIGNAL_LEFT if left_hand and what == furniture.G_SIGNAL else what
+                pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines, group=group,
                                            base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
-            app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
-                        round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
+            approach = [nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
+                        round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head
+            if left_hand and what == furniture.G_SIGNAL:
+                approach.append(1)       # optional app[12]: the reflected left-kerb signal shape
+            app.append(approach)
         if app:
             out.append({"j": name, "kind": kind, "app": app})
     return out

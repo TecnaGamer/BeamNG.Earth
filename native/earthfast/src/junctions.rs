@@ -202,6 +202,7 @@ struct K {
     bulb_m: f64, taper_m: f64, nose_deg: f64, nose_gap_m: f64, nose_max_m: f64, cw_cell_m: f64, cw_gap: f64,
     cw_w: f64, stop_gap: f64, stop_w: f64, node_tol: f64, merge_m: f64, connector_m: f64, connector_widths: f64,
     pave_radius: f64, pave_radius_major: f64, service_r: f64, curb_w: f64, radius_tries: Vec<f64>,
+    left_hand: bool,            // traffic drives on the left: the stop line across the branch's other half
 }
 
 const HAS_WALK: u8 = 1;
@@ -964,7 +965,9 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
             if branch_len(pts, vi, si) > ts + 2.0 {
                 let cs = add(pi, mul(ui, ts));
                 let zs = z_along(pts, vi, si, ts);
-                let (sa, sb) = (add(cs, mul(nl, 0.2)), add(cs, mul(nl, dw - 0.3)));
+                // (right-hand traffic coming in along -ui drives on ui's left: nl; left-hand on its right)
+                let inc = if k.left_hand { mul(nl, -1.0) } else { nl };
+                let (sa, sb) = (add(cs, mul(inc, 0.2)), add(cs, mul(inc, dw - 0.3)));
                 out.stops.push(([sa[0], sa[1], zs], [sb[0], sb[1], zs]));
             }
             let (t0, t1) = (t - k.cw_w / 2.0, t + k.cw_w / 2.0);
@@ -1006,8 +1009,12 @@ fn rows2<'py>(py: Python<'py>, v: &[P2]) -> Bound<'py, PyAny> {
 /// (fids, the Python objects; fid_rank: their sorted order), width, curb-return radius (RADII by class), sidewalk
 /// width (spec.walk), flags (1 has_walk, 2 has_parking, 4 roundabout, 8 has_sidewalks, 16 service, 32 a major
 /// class), its two sides' walks (fw_state 0 no street record / 1 none or set back / 2 a walk; fw_width, fw_rank:
-/// (width, surface) order; walks: the 2 n objects); consts in junctions._consts' order. Returns find's 6-tuple.
+/// (width, surface) order; walks: the 2 n objects); consts in junctions._consts' order; left_hand: traffic drives
+/// on the left (the stop lines across the incoming half on the branch's right; zolaski333's PR #1134). Returns find's
+/// 6-tuple.
 #[pyfunction]
+#[pyo3(signature = (pts, off, fids, fid_rank, width, rad, walk, flags, fw_state, fw_width, fw_rank, walks, walk_w,
+                    parking_m, pavement, bounds, consts, radius_tries, cw_w, stop_w, left_hand=false))]
 #[allow(clippy::too_many_arguments)]
 pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
                            fids: Bound<'py, PyList>, fid_rank: PyReadonlyArray1<'py, i64>,
@@ -1016,7 +1023,7 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
                            fw_state: PyReadonlyArray2<'py, u8>, fw_width: PyReadonlyArray2<'py, f64>,
                            fw_rank: PyReadonlyArray2<'py, i64>, walks: Bound<'py, PyList>, walk_w: Option<f64>,
                            parking_m: f64, pavement: bool, bounds: Option<(f64, f64, f64, f64)>, consts: Vec<f64>,
-                           radius_tries: Vec<f64>, cw_w: f64, stop_w: f64)
+                           radius_tries: Vec<f64>, cw_w: f64, stop_w: f64, left_hand: bool)
                            -> PyResult<Bound<'py, PyTuple>> {
     let pa = pts.as_array();
     let offa = off.as_array();
@@ -1061,7 +1068,7 @@ pub fn junctions_find<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
         branch_m: c[6], bulb_m: c[7], taper_m: c[8], nose_deg: c[9], nose_gap_m: c[10], nose_max_m: c[11],
         cw_cell_m: c[12], cw_gap: c[13], cw_w, stop_gap: c[14], stop_w, node_tol: c[15], merge_m: c[16],
         connector_m: c[17], connector_widths: c[18], pave_radius: c[19], pave_radius_major: c[20], service_r: c[21],
-        curb_w: c[22], radius_tries,
+        curb_w: c[22], radius_tries, left_hand,
     };
     let bounds = bounds.map(|b| [b.0, b.1, b.2, b.3]);
     let o = py.detach(|| find_core(&k, &net, walk_w, parking_m, pavement, bounds));

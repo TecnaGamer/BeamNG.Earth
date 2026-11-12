@@ -6325,7 +6325,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 261: pmtiles.rs puts a cut line's rule ranges (bridges, tunnels, levels, ...) on the line we have, by its
     // connectors (a 19 km rail line cut to 14 km had every bridge 880 m off; BNE_PMT_ANCHOR=off: as before), and reads
     // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193); roadz's
-    // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180)
+    // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180); junctions_find's left_hand (left-hand
+    // traffic's stop lines on the incoming half, zolaski333's PR #1134)
     m.add("VERSION", 261)?;
     Ok(())
 }
