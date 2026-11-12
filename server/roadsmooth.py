@@ -64,8 +64,11 @@ G2_MAX_DEV_M = 1.0              # m from the arcs' line, else smaller windows (t
 G2_PARAMS = np.array([G2_SHIFT_M, G2_CELL_M, G2_OUT_M, G2_OUT_DEG, G2_MAX_DEV_M, G2_OUT_TOL_M], np.float64)
 PIN_M = 1.0                     # m: an interior connector this near a vertex pins it (else the piece's two vertices)
 # a railway's bend (plan 035: a train's flange panels strike a rail at every corner of the mapped polyline; the sharpest in
-# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=off leaves the rails as mapped.
-RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "on") not in ("off", "0", "false")
+# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=on rounds them.
+# (Off unless asked since the roads' smoothing is on by default, 2026-11-12: the rails were only ever rounded under
+# BNE_ROAD_SMOOTH=on, and their switch pins (pinned_vertices, every rail end against every line in Python) cost ~1 s
+# a cell in Chicago's rail yards.)
+RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "off") in ("on", "1", "true")
 RAIL_RADIUS_M = {"standard_gauge": 250.0, "narrow_gauge": 80.0, "light_rail": 80.0}
 # A switch: another rail line's end lying on a line (the map has it a few tenths of a metre off its vertex, a cell's
 # lines are not split at every switch) keeps the line's vertices beside it as mapped, else the arc moved the line up to

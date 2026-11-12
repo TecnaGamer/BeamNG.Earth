@@ -234,6 +234,8 @@ class SmoothFeaturesTest(unittest.TestCase):
         self.frame = geodesy.EnuFrame(49.04, 28.04, 0.0)
         was, roadsmooth.ON = roadsmooth.ON, True
         self.addCleanup(setattr, roadsmooth, "ON", was)
+        rail, roadsmooth.RAIL_ON = roadsmooth.RAIL_ON, True       # (the rails' arcs: BNE_RAIL_CURVES=on)
+        self.addCleanup(setattr, roadsmooth, "RAIL_ON", rail)
 
     def test_off_changes_nothing(self):
         roadsmooth.ON = False
