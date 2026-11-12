@@ -63,6 +63,9 @@ local fpA = cs.remembered()
 T.check(type(fpA) == 'string' and fpA:find('busparked.lua:50', 1, true) ~= nil, 'fingerprint: the files and sizes')
 mounted = { [cs.DIR .. 'busparked.lua'] = 50, [cs.DIR .. 'parking.lua'] = 300, [cs.DIR .. 'core.lua'] = 1000 }
 T.check(cs.fingerprint() == fpA, 'fingerprint: independent of the listing order')
+mounted[cs.DIR .. 'release.lua'] = 20
+T.check(cs.fingerprint() == fpA, 'fingerprint: a packaged copy\'s release.lua is not code')
+mounted[cs.DIR .. 'release.lua'] = nil
 
 -- the same copy mounted again: nothing
 T.check(cs.check('same', true) == false and #unloadedLog == 0, 'the same copy: nothing unloaded')

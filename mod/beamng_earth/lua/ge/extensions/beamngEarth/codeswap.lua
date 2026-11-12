@@ -31,6 +31,9 @@ M.DIR = '/lua/ge/extensions/beamngEarth/'
 M.OFF_FILE = '/settings/beamngEarth_nocodeswap'
 M.GLOBAL = 'beamngEarthCodeFingerprint'   -- (a global: it outlives the modules, so a newer copy's modScript can read it)
 M.CORE = 'beamngEarth_core'
+-- Not code: release.lua names the release, written only into packaged copies (tools/package.py), so a BeamMP server's
+-- copy of the player's own version would look like another one (the Deck, 2026-11-11: two needless swaps a join)
+M.SKIP = { ['release.lua'] = true }
 
 local function fs() return rawget(_G, 'FS') end
 
@@ -42,9 +45,10 @@ function M.fingerprint()
   if not ok or type(files) ~= 'table' or #files == 0 then return nil end
   local parts = {}
   for _, p in ipairs(files) do
-    if type(p) == 'string' then
+    local name = type(p) == 'string' and (p:match('([^/]+)$') or p):lower()
+    if name and not M.SKIP[name] then
       local okS, n = pcall(F.fileSize, F, p)
-      parts[#parts + 1] = (p:match('([^/]+)$') or p):lower() .. ':' .. tostring(okS and n or '?')
+      parts[#parts + 1] = name .. ':' .. tostring(okS and n or '?')
     end
   end
   if #parts == 0 then return nil end
