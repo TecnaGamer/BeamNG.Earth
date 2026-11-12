@@ -570,7 +570,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 13     # 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 14     # 14: the regional gravel rule needs REGIONAL_MIN_ROADS mapped roads, not one road's segments (GitHub #834), and a residential / unclassified street with built-up land beside it stays paved (REGIONAL_BESIDE_SHARE, GitHub #824); 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1773,17 +1773,30 @@ REGIONAL_MIN_M = 3000.0
 # (Estonia's unclassified roads have no surface at all, its service roads are mapped gravel; Iowa's driveways none,
 # its county roads gravel)
 REGIONAL_POOL_MIN_M = 1500.0
+# ... and from REGIONAL_MIN_ROADS different roads or more (by name; an unnamed way on its own): the length alone let one
+# mapped road decide a whole 7 km window (GitHub #834: County Road 1089's five unpaved segments made every untagged
+# residential and service road round Hunt County, Texas gravel, the paved County Road 1103 too; mappers there tag the
+# gravel roads and leave the paved ones untagged, so one gravel road is no sample of the rest)
+REGIONAL_MIN_ROADS = 3
+# a residential / unclassified / unknown road with built-up land (WorldCover) beside it at URBAN_BESIDE_M on either side
+# for this share of its samples is a street of a village or subdivision, paved, whatever the gravel roads around
+# (GitHub #824, Discord 2026-11-07/08 "neighborhoods turn into dirt roads"): of the mapped residential / unclassified roads
+# of seven US, Canadian and Finnish places (2026-11-12 sample, ~145 km), 3 % of the unpaved and 69 % of the paved
+# ones by length reach it. Service roads keep the rule (farm driveways stand in their farmyard's built-up land).
+REGIONAL_BESIDE_SHARE = 0.2
 REGIONAL_ON = os.environ.get("BNE_REGIONAL_SURFACE", "on") != "off"
 GOOD_SMOOTHNESS = {"excellent", "good", "intermediate"}
 
 
 def _regional_rows(feats):
-    """(ids, classes, lengths m, unpaved) of feats' REGIONAL_CLASSES roads that have a surface value. Kept on feats."""
+    """(ids, classes, lengths m, unpaved, road keys) of feats' REGIONAL_CLASSES roads that have a surface value; a
+    road's key is its name ("n:" + name) or, unnamed, its id. Kept on feats."""
     got = feats.__dict__.get("_regional_rows")
     if got is not None:
         return got
     cls_a = feats.attrs.get("class")
-    ids, cl, un, idx = [], [], [], []
+    names = feats.attrs.get("name")
+    ids, cl, un, idx, keys = [], [], [], [], []
     if cls_a is not None:
         vals = _map_surface_values(feats)
         fids = feats.ids
@@ -1795,15 +1808,18 @@ def _regional_rows(feats):
             cl.append(c)
             un.append(surface_kind(c, vals[i]) in ("gravel", "dirt"))
             idx.append(i)
+            nm = "" if names is None or names[i] is None else str(names[i]).strip()
+            keys.append("n:" + nm if nm and nm not in ("None", "nan") else "i:" + str(fids[i]))
     lens = _lengths_all(feats)[np.asarray(idx, np.int64)] if idx else np.zeros(0)
-    got = feats.__dict__["_regional_rows"] = (ids, cl, np.nan_to_num(np.asarray(lens, np.float64)), un)
+    got = feats.__dict__["_regional_rows"] = (ids, cl, np.nan_to_num(np.asarray(lens, np.float64)), un, keys)
     return got
 
 
 def regional_unpaved(feats):
     """The REGIONAL_CLASSES whose surfaced roads in feats' cell and the eight around it (mapdata's _bnge_neighbours)
-    are mostly unpaved (REGIONAL_*): a class by its own roads when it has REGIONAL_MIN_M of them, else by the minor
-    classes' together. Each road once. Kept on feats."""
+    are mostly unpaved (REGIONAL_*): a class by its own roads when it has REGIONAL_MIN_M of them on REGIONAL_MIN_ROADS
+    roads, else (or when its unpaved ones are fewer roads than that) by the minor classes' together; the unpaved ones
+    REGIONAL_MIN_ROADS roads or more either way. Each feature once. Kept on feats."""
     got = feats.__dict__.get("_regional_unpaved")
     if got is not None:
         return got
@@ -1814,20 +1830,30 @@ def regional_unpaved(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("regional surface: neighbours: %s: %s", type(e).__name__, e)
-    seen, tot, unp = set(), {}, {}
+    seen, tot, unp, roads_t, roads_u = set(), {}, {}, {}, {}
     for f in layers:
-        ids, cl, lens, un = _regional_rows(f)
-        for fid, c, ln, u in zip(ids, cl, lens.tolist(), un):
+        ids, cl, lens, un, keys = _regional_rows(f)
+        for fid, c, ln, u, k in zip(ids, cl, lens.tolist(), un, keys):
             if fid in seen:
                 continue
             seen.add(fid)
             tot[c] = tot.get(c, 0.0) + ln
+            roads_t.setdefault(c, set()).add(k)
             if u:
                 unp[c] = unp.get(c, 0.0) + ln
+                roads_u.setdefault(c, set()).add(k)
     pool_t, pool_u = sum(tot.values()), sum(unp.values())
-    pooled = pool_t >= REGIONAL_POOL_MIN_M and pool_u >= REGIONAL_SHARE * pool_t
+    pool_ru = set().union(*roads_u.values()) if roads_u else set()
+    pooled = (pool_t >= REGIONAL_POOL_MIN_M and pool_u >= REGIONAL_SHARE * pool_t
+              and len(pool_ru) >= REGIONAL_MIN_ROADS)
+
+    def own(c):         # (mostly unpaved on too few roads to tell: the minor classes' together)
+        if unp.get(c, 0.0) < REGIONAL_SHARE * tot[c]:
+            return False
+        return len(roads_u.get(c, ())) >= REGIONAL_MIN_ROADS or pooled
     got = frozenset(c for c in REGIONAL_CLASSES
-                    if (unp.get(c, 0.0) >= REGIONAL_SHARE * tot[c] if tot.get(c, 0.0) >= REGIONAL_MIN_M else pooled))
+                    if (own(c) if tot.get(c, 0.0) >= REGIONAL_MIN_M and len(roads_t.get(c, ())) >= REGIONAL_MIN_ROADS
+                        else pooled))
     feats.__dict__["_regional_unpaved"] = got
     return got
 
@@ -3149,7 +3175,7 @@ def _road_rules():
     if got is None:
         import fast
         import roadlanes
-        fast.require(189, "RoadRules")
+        fast.require(228, "RoadRules")      # (228: the regional gravel rule's built-up-beside test)
         names = list(STYLE)
         nan = float("nan")
         tab = np.array([[STYLE[c][0], ONEWAY_STYLE.get(c, nan), LANE_W.get(c, nan), URBAN_ARTERIAL.get(c, nan),
@@ -3179,7 +3205,7 @@ def _spec_prm():
             "MOUNTAIN_ON": float(MOUNTAIN_ON), "MOUNTAIN_SWITCHBACKS": float(MOUNTAIN_SWITCHBACKS),
             "MOUNTAIN_SPAN_M": MOUNTAIN_SPAN_M, "MOUNTAIN_TURN_DEG": MOUNTAIN_TURN_DEG,
             "MOUNTAIN_ROAD_M": MOUNTAIN_ROAD_M, "MOUNTAIN_MAX_LANES": float(MOUNTAIN_MAX_LANES),
-            "SE_TOWN_MAX_KMH": SE_TOWN_MAX_KMH, "EDGE_M": SPEC_EDGE_M}
+            "SE_TOWN_MAX_KMH": SE_TOWN_MAX_KMH, "EDGE_M": SPEC_EDGE_M, "REGIONAL_BESIDE_SHARE": REGIONAL_BESIDE_SHARE}
 
 
 SPEC_EDGE_M = 9.0       # m beside a European street where its frontage is read (europewalks.plan's frontage)

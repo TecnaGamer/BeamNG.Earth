@@ -2122,6 +2122,30 @@ class GravelTest(unittest.TestCase):
         sp = roads.road_specs(self.roads(4, "gravel"), urban_fn=town)[-1]
         self.assertEqual((sp.kind, sp.urban), ("paved", True))
 
+    def test_one_mapped_road_is_no_sample(self):
+        # GitHub #834: one county road's unpaved segments made every untagged road of the window gravel
+        f = self.roads(4, "gravel")
+        f.attrs["name"] = np.array(["County Road 1089"] * 4 + ["County Road 1103"])
+        self.assertEqual(roads.road_specs(f)[-1].kind, "paved")
+        f = self.roads(4, "gravel")
+        f.attrs["name"] = np.array(["County Road 1089", "County Road 1090", "", "None", "County Road 1103"])
+        self.assertEqual(roads.road_specs(f)[-1].kind, "gravel")      # (three names, two unnamed ways: 4 roads)
+
+    def test_a_street_with_built_up_land_beside_it_stays_paved(self):
+        # a village's / subdivision's street (GitHub #824): built-up land 30 m south of the untagged road at y = -50,
+        # none on it (not a town street by the land-cover test), none beside the mapped gravel roads
+        def beside(lat, lon):
+            n = (np.asarray(lat) - LAT) * M_LAT
+            return np.abs(n + 80.0) < 5.0
+        sp = roads.road_specs(self.roads(4, "gravel"), urban_fn=beside)[-1]
+        self.assertEqual((sp.kind, sp.urban), ("paved", False))
+        nowhere = lambda lat, lon: np.zeros(np.shape(lat), bool)  # noqa: E731
+        self.assertEqual(roads.road_specs(self.roads(4, "gravel"), urban_fn=nowhere)[-1].kind, "gravel")
+        # a service road keeps the rule (a farm driveway in its farmyard's built-up land)
+        f = self.roads(4, "gravel", extra_cls="service")
+        f.attrs["osm_surface"] = np.array(["gravel"] * 4 + [""])
+        self.assertEqual(roads.road_specs(f, urban_fn=beside)[-1].kind, "gravel")
+
     def test_off(self):
         from unittest import mock
         with mock.patch.object(roads, "REGIONAL_ON", False):

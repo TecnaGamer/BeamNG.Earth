@@ -580,6 +580,7 @@ struct Prm {
     mountain_max_lanes: f64,
     se_town_kmh: f64,
     edge_m: f64,
+    reg_beside: f64,
 }
 
 impl Prm {
@@ -593,6 +594,7 @@ impl Prm {
             mountain_switchbacks: g("MOUNTAIN_SWITCHBACKS")?, mountain_span: g("MOUNTAIN_SPAN_M")?,
             mountain_turn: g("MOUNTAIN_TURN_DEG")?, mountain_road: g("MOUNTAIN_ROAD_M")?,
             mountain_max_lanes: g("MOUNTAIN_MAX_LANES")?, se_town_kmh: g("SE_TOWN_MAX_KMH")?, edge_m: g("EDGE_M")?,
+            reg_beside: g("REGIONAL_BESIDE_SHARE")?,
         })
     }
 }
@@ -1063,7 +1065,10 @@ impl RoadRules {
                     && (!self.has(c, F_MOTORWAY | F_TRUNK) || mb >= prm.urban_both_share);
                 k += count;
                 let mut kind = l.skind[i];
-                if regional[i] && !urban {
+                // (a village's or subdivision's street: built-up land beside it, roads.REGIONAL_BESIDE_SHARE; a
+                // service road keeps the rule: a farm driveway runs through its farmyard's built-up land)
+                let streets = !self.has(c, F_SERVICE) && bmean(&by[sl.clone()]) >= prm.reg_beside;
+                if regional[i] && !urban && !streets {
                     kind = GRAVEL;
                 }
                 let ow = l.has_ow[i];
