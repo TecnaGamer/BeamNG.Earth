@@ -11,12 +11,12 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
-  750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's median across the carriageway, none in a tunnel
-  or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
-  The sheets a cell reads are kept (hklidar.py, shared with the terrain) for its neighbours; a road build
-  waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its heights
-  are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share or
-  baked pack).
+  750 x 600 m sheet a zip): ground roads the DTM, decks the one surface earthfast.deck_lidar finds in the DSM's pixels
+  round the line, none in a tunnel or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK
+  terms: free use with attribution). The sheets a cell reads are kept (hklidar.py, shared with the terrain) for its
+  neighbours; a road build waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its
+  heights are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share
+  or baked pack).
 - "lidar": the US, USGS 3DEP point clouds (Entwine Point Tiles on AWS, public domain): for every road bridge of the
   cell, its deck measured along its own map line (earthfast.deck_lidar: the points' surfaces per 4 m station, one
   drivable surface picked by a Viterbi pass; any non-noise class, as class 17 is not to be trusted: Baltimore 2014
@@ -68,6 +68,10 @@ NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
+# the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
+# heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
+# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line). Not VERSION: every source's cells
+HK_CELLS = "hk2"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
@@ -260,13 +264,13 @@ def sources_at(lat, lon, lidar=None):
 
 def hk_tags(key):
     """The Hong Kong government data map cell key's road plans are made with, when its box meets HK_BOUNDS with
-    CLIP_PAD_M to spare: "hk1", its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
+    CLIP_PAD_M to spare: HK_CELLS, its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
     lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
     pad = CLIP_PAD_M / 111320.0
     if not (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
             and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
         return ()
-    return (("hk1",) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+    return ((HK_CELLS,) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
 
 
 def hk_cell(key):
@@ -288,7 +292,7 @@ def hk_credited_near(cache_dir, lat, lon, near_m):
     d = near_m / 111320.0
     k = max(0.05, math.cos(math.radians(lat)))
     for key in mapcells.cells_for_bbox(lat - d, lon - d / k, lat + d, lon + d / k):
-        p = os.path.join(cache_dir, "roadz", f"v{VERSION}", "hk", str(key) + ".npz")
+        p = os.path.join(cache_dir, "roadz", f"v{VERSION}", HK_CELLS, str(key) + ".npz")
         try:
             mt = os.stat(p).st_mtime
             got = _HK_LINES.get(p)
@@ -670,6 +674,8 @@ class RoadZ:
         import roads
         if src == "lidar" and not roads.LIDAR_GAPS_ON:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
+        if src == "hk":
+            src = HK_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
     def lines(self, src, key):
