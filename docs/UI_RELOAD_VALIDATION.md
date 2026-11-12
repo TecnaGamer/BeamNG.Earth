@@ -93,7 +93,20 @@ or welcome-choice changes and returned to the user's pause menu with the orbit c
 multiplayer connected and both map modes closed. A first automated attempt while the game was minimized timed out;
 it is not counted as a pass. Repeating with the game visible completed successfully.
 
-Both hosted foundation jobs also passed for documentation commit `e19c440` (run `43126338910`), whose runtime files
-are unchanged from `cf962f9`. A real reconnect is still pending. The check did not restart or disconnect the user's
-game. Separate BeamMP Chat/Session null-element errors and warnings for unchanged release texture assets remain
-outside this teardown fix.
+The user also completed one normal Leave/rejoin cycle without closing BeamNG. The same process log records the
+first connection at 83.74463 seconds, Leave at 508.13588 seconds (including BeamMP's Lua reload), and a second
+connection at 565.50129 seconds. After the UI refresh completed, inspection confirmed one browser stylesheet, both
+current owners, and all seven checked routes present in Vue and Lua. World streaming is active/connected, with 513
+live far tiles and zero failed tiles. The camera-based ground ray hits terrain at 5.00049 metres; this join has no
+active player vehicle. Settings, welcome and the 2D map mount again after reconnect, retaining one browser instance
+and returning to play with the original free camera. The 3D map was exercised in the earlier vehicle session.
+
+One readback during the reconnect's UI refresh found zero browser styles and missing routes; a later readback
+confirmed normal ownership/routes without a source change or forced reload. This transient snapshot is retained
+in the local evidence and is not counted as a stable UI pass. BeamMP's Leave action reloads Lua, so the user restored
+local debugger access after reconnect before the final inspection. No debugger bypass is part of the shipped fix.
+
+Both hosted foundation jobs also passed for documentation commits `e19c440` (run `43126338910`) and `9d79858`
+(run `43128840964`), whose runtime files are unchanged from `cf962f9`. The user handled all game launches and
+disconnects. Separate BeamMP Chat/Session null-element errors and warnings for unchanged release texture assets
+remain outside this teardown fix.

@@ -154,8 +154,7 @@
     "newPRs": []
   },
   "notRun": [
-    "Full server suite beyond the foundation gate",
-    "Real multiplayer reconnect with both app and server carrying the fix"
+    "Full server suite beyond the foundation gate"
   ],
   "pullRequestBaseCommit": "01e902f06994772fb214db9a9bbe899a6251a32e",
   "postRebaseChecks": {
@@ -181,6 +180,13 @@
     "documentationCommit": {
       "sha": "e19c44095a0c6b54a3eeca5ad12ee180a98f061f",
       "run": 43126338910,
+      "ubuntu22": "success",
+      "windows": "success",
+      "runtimeFilesUnchanged": true
+    },
+    "liveValidationCommit": {
+      "sha": "9d79858011d11d4c829fa30af458ba4e63a97075",
+      "run": 43128840964,
       "ubuntu22": "success",
       "windows": "success",
       "runtimeFilesUnchanged": true
@@ -237,10 +243,52 @@
     },
     "settingsOrWelcomeChoicesChanged": false,
     "initialScreenAttempt": "Timed out while minimized; normal visible-window retest passed",
-    "reconnect": "pending",
+    "reconnect": "One normal user-managed Leave/rejoin cycle passed in the same game process",
     "notEstablished": [
       "Driving performance benchmark",
       "Game-wide or third-party-mod error-free behavior"
     ]
+  },
+  "sameProcessReconnect": {
+    "passed": true,
+    "firstJoinGameSeconds": 83.74463,
+    "leaveGameSeconds": 508.13588,
+    "rejoinGameSeconds": 565.50129,
+    "includesBeamMPLuaReload": true,
+    "browserStyleCount": 1,
+    "bothOwnersRegistered": true,
+    "vueRoutesPresent": 7,
+    "luaRoutesPresent": 7,
+    "multiplayer": true,
+    "launcherConnected": true,
+    "worldActive": true,
+    "transport": "connected",
+    "farTiles": 513,
+    "failedFarTiles": 0,
+    "groundProbe": {
+      "source": "camera",
+      "distanceMetres": 5.00048828125,
+      "activePlayerVehicle": false
+    },
+    "screensMountedAfterReconnect": [
+      "beamngEarthSettings",
+      "beamngEarthWelcome",
+      "beamngEarthMap"
+    ],
+    "browserStyleCountDuringEveryScreen": 1,
+    "final": {
+      "route": "play",
+      "camera": "free",
+      "multiplayer": true,
+      "physicsRunning": true,
+      "mapOpen": false,
+      "map3dActive": false
+    },
+    "map3d": "Passed in earlier vehicle session; not repeated with no active player vehicle",
+    "transientSnapshot": "Zero styles/missing routes during refresh, then recovered without source changes or forced reload",
+    "debugger": "User restored temporary local access after Leave reloaded Lua; not shipped in patch",
+    "fatalLogMessages": 0,
+    "recursiveUpdateErrors": 0,
+    "warnings": "BeamMP Chat/Session null-element errors and existing texture/input warnings remain"
   }
 }
