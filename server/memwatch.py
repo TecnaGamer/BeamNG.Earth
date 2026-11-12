@@ -30,6 +30,9 @@ log = logging.getLogger("earthd.memwatch")
 
 CHECK_S = float(os.environ.get("BNGE_MEMWATCH_S", "") or 5.0)
 LOG_EVERY_S = 300.0         # a summary line in the log this often
+# A shed request goes to the processes holding more than this times an equal share of the limit: a shed costs a worker
+# its warm caches (map data cells read again: +17-47 % a road tile, 2026-11-04), so the small ones keep theirs
+SHED_SHARE = 1.25
 ON = os.environ.get("BNGE_MEMWATCH", "on").lower() not in ("off", "0", "false", "no")
 
 _lock = threading.Lock()
@@ -177,10 +180,10 @@ class _Watch:
         over_s = now - self.over_since if self.over_since is not None else 0.0
         action, idx, eff = fast.ram_watch(limit, total, avail, reserve, over_s, now - self.last_shed,
                                           now - self.last_rotate, cands)
-        budget.OVER = action != "ok"
+        budget.OVER = bool(limit) and total >= eff     # (over the limit itself: no far-tile burst processes)
         if action == "shed":
             self.last_shed = now
-            share = eff / max(1, len(mbs))
+            share = SHED_SHARE * eff / max(1, len(mbs))    # (the biggest processes: a shed costs a worker its warm caches)
             budget.shed_ask(share)
             log.info("memory: the server at %.0f MB of %.0f (%d processes): caches dropped where over %.0f MB",
                      total, eff, len(mbs), share)

@@ -140,7 +140,7 @@ class WatchTest(unittest.TestCase):
         total = sum(mbs.values())
         self.assertEqual(self.w.step(mbs, total, 8000, [a, b, busy]), "shed")
         self.assertTrue(budget.OVER)
-        self.assertAlmostEqual(self.asks[0], 4000 / 5)
+        self.assertAlmostEqual(self.asks[0], memwatch.SHED_SHARE * 4000 / 5)
         self.t[0] += 10
         self.assertEqual(self.w.step(mbs, total, 8000, [a, b, busy]), "wait")
         self.t[0] += 15             # (over the limit 25 s, the shed 25 s ago)
