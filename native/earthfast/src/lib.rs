@@ -33,6 +33,7 @@ mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
 mod tunnelchain;
+mod portal;
 mod gradesep;
 mod lamps;
 mod decks;
@@ -6296,6 +6297,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
         // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
         // _buried, tunnel_cover_roads_over)
-    m.add("VERSION", 248)?;
+        // 252: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
+    m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
+    m.add("VERSION", 252)?;
     Ok(())
 }

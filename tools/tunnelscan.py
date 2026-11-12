@@ -19,6 +19,16 @@ broken or out of place"):
   breaks_upper a ground road or a deck crossing over a covered section lower than the tube's top + 0.3 m
   untagged     a ground road (motorway..tertiary) with the DEM more than 8 m over its own lower hull for 40 m or more:
                ground over a road the map does not call a tunnel
+The entrances as built (2026-11-12, the user: "focus on tunnel entrances"; the road tile's tunnel mesh round each
+mouth, roadmesh.tunnel on roads._tunnel_chunks, and the terrain block's holes, roads.tunnel_hole_mask, on a 1 m grid):
+  gap          a mouth with 3 or more terrain-hole squares within 30 m that nothing covers (not the opening's floor at
+               its level, no mesh over them or under them less than 1 m below their lowest corner): sky or the void
+               under the terrain seen through the ground beside / over the mouth
+  proud        the portal's structure more than 3 m over the ground beside the opening (2.5 m or more beyond the tube's
+               wall, at the mouth's plane; the highest of the ground there and 1.5 and 3 m behind it, the hill it holds back): a
+               slab standing on the hillside ("a concrete bunker", GitHub #403 / #1066)
+  bare         a full tube with more than 5 m within 40 m of its mouth where the ground is under its crown + 0.5 m and
+               nothing covers the vault from outside (the tube is faced inwards: sky through it, "a floating shell")
 Prints a summary and the worst of each with lat/lon; --json writes everything. A scratch cache by default
 (~/bnge-tests/tunnels/cache): never the user's."""
 import json
@@ -51,6 +61,29 @@ PLACES = {      # name: (lat, lon, R m) - the survey's places (complaints and va
     "moirana": (66.2950, 14.1500, 2500.0),        # Korgfjelltunnelen ends (Discord 11-08/09)
     "folkestone": (51.0960, 1.1430, 1500.0),      # Eurotunnel terminal (Discord 11-11)
 }
+ENTRANCES = {   # the entrance survey's extra places (2026-11-12, the user: "focus on tunnel entrances"): small radii
+    "goeschenen": (46.6672, 8.5838, 500.0),       # Gotthard road tunnel north portal (Discord 10-28)
+    "loibl": (46.4420, 14.2610, 900.0),           # Loiblpass tunnel (Discord 10-23/25: "entrances blocked")
+    "laerdal": (61.0660, 7.5060, 900.0),          # Laerdalstunnelen, east portal
+    "arlberg": (47.1290, 10.2560, 900.0),         # Arlberg road tunnel, St. Anton portal
+    "sasago": (35.6090, 138.7900, 900.0),         # Chuo Expressway Sasago tunnel, east portals (twin bores)
+    "nagao": (35.2540, 139.0010, 700.0),          # Nagao pass tunnel, Hakone (Discord 10-24: blocked)
+    "eisenhower": (39.6793, -105.9200, 700.0),    # Eisenhower-Johnson west portals (twin bores, mountain)
+    "caldecott": (37.8566, -122.2140, 600.0),     # Caldecott east portals (four bores)
+    "lantos": (37.5775, -122.5115, 500.0),        # Tom Lantos tunnels north portals (CA-1)
+    "fortpitt": (40.4376, -80.0139, 400.0),       # Fort Pitt north portal onto its bridge
+    "centralpark": (40.7797, -73.9660, 500.0),    # the 79th Street Transverse's arches (short underpasses)
+    "mysen": (59.56722, 11.36478, 400.0),         # R4 Braatenbrua underpass (the user's report 2026-10-21)
+    "malaga": (36.7180, -4.4780, 600.0),          # GitHub #450 underpass under the A-7
+    "sydney": (-33.8745, 151.2190, 700.0),        # Cross City Tunnel east approach (Discord 11-09)
+    "oresund": (55.6290, 12.6480, 900.0),         # Drogden tunnel's Kastrup approach (Discord 11-08: flooded)
+    "konrad": (48.77682, 9.18387, 350.0),         # Stuttgart Konrad-Adenauer-Strasse underpass ramps
+    "northbridge": (-31.9437, 115.8536, 500.0),   # Perth Graham Farmer Freeway tunnel (GitHub #464 / #1018)
+    "i395": (38.9020, -77.0144, 400.0),           # DC I-395 3rd Street tunnel, north mouths
+    "ported": (48.8161, 2.3603, 500.0),           # Paris Porte d'Italie ramps (GitHub #1172)
+    "floyfjell": (60.3890, 5.3399, 400.0),        # Bergen Floyfjellstunnelen south portals (twin, urban)
+}
+PLACES.update(ENTRANCES)
 TH_FULL = 6.8
 DUMP = False
 PROFILE = None      # --profile M: every built tunnel section within M m of the place printed sample by sample
@@ -76,6 +109,10 @@ def main():
         k = args.index("--profile")
         PROFILE = float(args[k + 1])
         del args[k:k + 2]
+    if "--no-entrance" in args:
+        global ENTRANCE
+        ENTRANCE = False
+        args.remove("--no-entrance")
     if "--dump" in args:
         DUMP = True
         args.remove("--dump")
@@ -211,7 +248,8 @@ def scan(cache, lat, lon, R):
             if any(q2 in mapped and np.hypot(*(mapped[q2][1] - mid).T).min() < 3.0 for q2 in pids[:k]):
                 del mapped[q]
     res = {k: [] for k in ("left_out", "opened", "joint_rise", "joint_step", "steep", "thin", "portal_open",
-                           "portal_deep", "blocked", "mouth_step", "breaks_upper", "untagged")}
+                           "portal_deep", "blocked", "mouth_step", "breaks_upper", "untagged") + ENTRANCE_CATS}
+    mouth_pts = []          # (p, out, fid, cls) of every mouth: entrance_checks
     res["parts"] = len(mapped)
     res["built"] = len(subs)
     res["length_m"] = 0.0
@@ -236,6 +274,36 @@ def scan(cache, lat, lon, R):
 
     joint_floor = {}
     res["dump"] = []
+    res["mouths"] = []      # every covered section's mouth: where, which way out, its floor, the ground round it
+    gsecs = []              # the grading's own covered sections (their ends: the floor the terrain is cut to)
+    if g is not None:
+        seen_g = set()
+        for ck, f in cellkeys.items():
+            if f is None or not len(f):
+                continue
+            try:
+                pl = g.store.planner_of_cell(cellobj[ck])
+                for gfid, _sp, gxy, gz, kind in pl._tunnel_sections(f):
+                    if not kind:
+                        continue
+                    gla, glo, _h = pl.frame.enu_to_geodetic(np.asarray(gxy)[:, 0], np.asarray(gxy)[:, 1], 0.0)
+                    ge, gn, _u = frame.geodetic_to_enu(gla, glo, 0.0)
+                    key = (gfid, round(float(ge[0]), 1), round(float(gn[0]), 1))
+                    if key not in seen_g:
+                        seen_g.add(key)
+                        gsecs.append((np.c_[np.asarray(ge), np.asarray(gn)], np.asarray(gz, np.float64)))
+            except Exception as ex:
+                print("grader sections:", type(ex).__name__, ex)
+
+    def grader_floor(p):
+        best = None
+        for gxy, gz in gsecs:
+            for e in (0, -1):
+                d = float(np.hypot(*(gxy[e] - p)))
+                if d < 3.0 and (best is None or d < best[0]):
+                    best = (d, float(gz[e]))
+        return None if best is None else best[1]
+
     for pid, (spec, xy) in sorted(mapped.items()):
         L = float(arc(xy)[-1])
         res["length_m"] += L
@@ -325,6 +393,30 @@ def scan(cache, lat, lon, R):
                 step = zo - (zf - slope * 2.0)
                 if abs(step) > 0.5:
                     res["mouth_step"].append((round(step, 2), fid[:16], spec_.cls, ll(p)))
+                # the entrance's record: the ground round the mouth over the floor's line (out of the tube: dout)
+                hwt = hw + 1.2
+                r1 = lambda v: [round(float(x), 1) for x in np.asarray(v).ravel()]     # noqa: E731
+                din = np.array([0.0, 3.0, 6.0, 12.0, 20.0])
+                dout = np.array([2.0, 5.0, 10.0, 20.0, 40.0])
+                lat_o = np.array([1.0, 4.0, 8.0])
+                gz_m = grader_floor(p)
+                mouth_pts.append((p.copy(), -tin, fid, spec_.cls))
+                res["mouths"].append({
+                    "fid": fid, "cls": spec_.cls, "ll": ll(p), "out": [round(float(-tin[0]), 3), round(float(-tin[1]), 3)],
+                    "hw": round(hw, 1), "th": round(th, 1), "zf": round(zf, 2), "slope": round(slope, 3),
+                    "len": round(float(s_[-1])), "up": round(float(tun.portal_ups(fid)[e]), 1),
+                    "cover_in": r1(raw_xy(np.array([p + tin * d for d in din])) - (zf + slope * din)),
+                    "face_l": r1(graded_xy(np.array([p + nrm * (hwt + o) for o in lat_o])) - zf),
+                    "face_r": r1(graded_xy(np.array([p - nrm * (hwt + o) for o in lat_o])) - zf),
+                    "axis_out": r1(graded_xy(np.array([p - tin * d for d in dout])) - (zf - slope * dout)),
+                    "dem_out": r1(dem_xy(np.array([p - tin * d for d in dout])) - (zf - slope * dout)),
+                    "side_l": r1(graded_xy(np.array([p - tin * d + nrm * (hwt + 2.0) for d in dout]))
+                                 - (zf - slope * dout)),
+                    "side_r": r1(graded_xy(np.array([p - tin * d - nrm * (hwt + 2.0) for d in dout]))
+                                 - (zf - slope * dout)),
+                    "grader": None if gz_m is None else round(gz_m - zf, 2),
+                    "blocked": round(float(np.nanmax(over)), 1), "step": round(step, 2),
+                    "open": round(cin, 1), "deep": round(cout, 1)})
             # roads and decks over it
             lines = [gl for *_x, gl in ground_lines]
             for gi, cr in enumerate(roads._crossings_by([sxy], lines)):
@@ -389,6 +481,8 @@ def scan(cache, lat, lon, R):
             if d.min() < PROFILE * 0.5:
                 gz, dz = graded_xy(gl), dem_xy(gl)
                 print(f"GROUND {gfid[:14]} {gcls} " + " ".join(f"{a:.1f}/{b:.1f}" for a, b in zip(gz, dz)))
+    if ENTRANCE:
+        entrance_checks(res, mouth_pts, tun, cells, graded_xy, ll)
     for p, lst in joint_floor.items():
         if len(lst) >= 2:
             zs = [z for _p, z in lst]
@@ -423,12 +517,180 @@ def scan(cache, lat, lon, R):
     return res
 
 
+ENTRANCE = True        # --no-entrance: skip the built entrances' checks
+ENTRANCE_CATS = ("gap", "proud", "bare")
+ENT_HALF = 30.0        # m round a mouth: its holes' and mesh's box
+GAP_MIN = 3            # hole squares
+PROUD_M = 3.0
+PROUD_X = 2.5          # m beyond the tube's wall
+BARE_M = 5.0
+BARE_REACH = 40.0
+
+
+def _covered(pts, tri_xy, tri_z=None, over=None):
+    """For points pts (n, 2): whether a triangle's plan (tri_xy (m, 3, 2)) contains it, and (tri_z (m, 3) and over
+    (n,) given) the triangle lies over `over` there."""
+    import numpy as np
+    hit = np.zeros(len(pts), bool)
+    if not len(tri_xy) or not len(pts):
+        return hit
+    a, b, c = tri_xy[:, 0], tri_xy[:, 1], tri_xy[:, 2]
+    det = (b[:, 1] - c[:, 1]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 1] - c[:, 1])
+    ok = np.abs(det) > 1e-6
+    a, b, c, det = a[ok], b[ok], c[ok], det[ok]
+    tz = tri_z[ok] if tri_z is not None else None
+    for i0 in range(0, len(pts), 256):
+        q = pts[i0:i0 + 256]
+        l1 = ((b[None, :, 1] - c[None, :, 1]) * (q[:, None, 0] - c[None, :, 0])
+              + (c[None, :, 0] - b[None, :, 0]) * (q[:, None, 1] - c[None, :, 1])) / det[None]
+        l2 = ((c[None, :, 1] - a[None, :, 1]) * (q[:, None, 0] - c[None, :, 0])
+              + (a[None, :, 0] - c[None, :, 0]) * (q[:, None, 1] - c[None, :, 1])) / det[None]
+        l3 = 1.0 - l1 - l2
+        ins = (l1 >= -1e-6) & (l2 >= -1e-6) & (l3 >= -1e-6)
+        if tz is not None:
+            z = l1 * tz[None, :, 0] + l2 * tz[None, :, 1] + l3 * tz[None, :, 2]
+            ins &= z > over[i0:i0 + 256, None]
+        hit[i0:i0 + 256] = ins.any(1)
+    return hit
+
+
+def entrance_checks(res, mouth_pts, tun, cells, graded_xy, ll):
+    """The built entrances' categories (the module's head: gap, proud, bare) and per mouth res["entrances"]."""
+    import numpy as np
+    import roadmesh
+    import roads
+    res["entrances"] = []
+    done = []
+    for p, out, fid, cls in mouth_pts:
+        if any(np.hypot(*(p - q)) < 1.0 for q in done):
+            continue
+        done.append(p)
+        cx, cy = (np.round(p / 2.0) * 2.0).tolist()
+        ex = (cx - ENT_HALF - 16, cy - ENT_HALF - 16, cx + ENT_HALF + 16, cy + ENT_HALF + 16)
+        try:
+            chunks = roads._tunnel_chunks(tun, cells, ex)
+            mesh = roadmesh.tunnel(chunks, np.zeros(3), [])
+        except Exception as e:
+            print("entrance mesh:", type(e).__name__, e)
+            continue
+        nn = int(2 * ENT_HALF)
+        ax = cx - ENT_HALF + np.arange(nn + 1)
+        ay = cy - ENT_HALF + np.arange(nn + 1)
+        gx, gy = np.meshgrid(ax, ay)
+        u = graded_xy(np.c_[gx.ravel(), gy.ravel()]).reshape(gx.shape)
+        near_parts = tun.parts(cells, ex)
+        u = roads.arch_raise(near_parts, tun.heights, gx.ravel(), gy.ravel(), u.ravel(), tun.mouths).reshape(gx.shape)
+        hole = roads.tunnel_hole_mask(near_parts, u[:-1, :-1].copy(), cx, cy, 1.0, tun.heights, tun.mouths)
+        if mesh is not None:
+            Pm, Tm = np.asarray(mesh[0]), np.asarray(mesh[1])
+            tri = Pm[Tm]
+        else:
+            Pm = np.zeros((0, 3))
+            tri = np.zeros((0, 3, 3))
+        # the floors: every tunnel chunk's ribbon (w / 2 + the tube's shoulder each side)
+        floors = []
+        for c in chunks:
+            if c.get("tunnel") and c.get("deck"):
+                n = np.asarray(c["n"], np.float64)
+                floors.append((n[:, :2], float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER, n[:, 2]))
+
+        def floor_z(q):
+            """The floor's height under each point on a tunnel floor's ribbon (NaN: none)."""
+            got = np.full(len(q), np.nan)
+            for xy, hw, zz in floors:
+                a, b = xy[:-1], xy[1:]
+                d = b - a
+                L2 = np.maximum((d * d).sum(1), 1e-12)
+                t = ((q[:, None, :] - a[None]) * d[None]).sum(2) / L2[None]
+                inside = (t >= 0.0) & (t <= 1.0)
+                pr = a[None] + np.clip(t, 0, 1)[..., None] * d[None]
+                dist = np.hypot(*(q[:, None, :] - pr).transpose(2, 0, 1))
+                ok = (dist <= hw + 0.3) & inside
+                zs = np.where(ok, zz[:-1][None] + np.clip(t, 0, 1) * (zz[1:] - zz[:-1])[None], np.nan)
+                with np.errstate(all="ignore"):
+                    zmin = np.nanmin(np.where(ok, zs, np.inf), axis=1)
+                hit = ok.any(1)
+                got[hit] = np.fmin(got[hit], zmin[hit])
+            return got
+        rec = {"ll": ll(p), "fid": fid[:16], "cls": cls, "holes": 0, "gap": 0, "proud": 0.0, "bare": 0.0}
+        if hole is not None and hole.any():
+            iy, ix = np.nonzero(hole)
+            q = np.c_[cx - ENT_HALF + ix + 0.5, cy - ENT_HALF + iy + 0.5]
+            # each square's lowest corner (the hole's bottom edge)
+            lo = np.minimum.reduce([u[iy, ix], u[iy + 1, ix], u[iy, ix + 1], u[iy + 1, ix + 1]])
+            keep = np.hypot(*(q - p).T) <= ENT_HALF
+            q, lo = q[keep], lo[keep]
+            rec["holes"] = int(len(q))
+            if len(q):
+                # covered: the square lies on a floor at the floor's level (the opening's own floor), or some of the
+                # mesh is over / under it no more than a metre below its lowest corner (a headwall's top, a cover's,
+                # a wing's: what one sees through the hole); else the void under the terrain shows
+                fz = floor_z(q)
+                cov = np.isfinite(fz) & (lo <= fz + 1.0)
+                cov |= _covered(q, tri[:, :, :2], tri[:, :, 2], lo - 1.0)
+                rec["gap"] = int((~cov).sum())
+        # proud: the structure's vertices at the mouth's plane beyond the tube's wall over the ground there
+        hw0 = th = None
+        for c in chunks:
+            if c.get("tunnel") and (c.get("deck") or c.get("tube_only")):
+                n = np.asarray(c["n"], np.float64)
+                if min(np.hypot(*(n[0, :2] - p)), np.hypot(*(n[-1, :2] - p))) < 1.0:
+                    hw0 = float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER
+                    th = float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
+                    break
+        if hw0 is not None and len(tri):
+            lv = np.array([-out[1], out[0]])
+            sv = (Pm[:, :2] - p) @ out
+            xv = (Pm[:, :2] - p) @ lv
+            sel = (sv > -1.5) & (sv < 2.0) & (np.abs(xv) >= hw0 + PROUD_X) & (np.abs(xv) < hw0 + 12.0)
+            if sel.any():
+                # (over the ground in front and the ground it holds back behind it, the higher)
+                gz = np.maximum.reduce([graded_xy(Pm[sel, :2] - out[None] * b) for b in (0.0, 1.5, 3.0)])
+                k = int(np.argmax(Pm[sel, 2] - gz))
+                rec["proud"] = round(float(Pm[sel, 2][k] - gz[k]), 1)
+                rec["proud_at"] = [round(float(xv[sel][k]), 1), round(float(sv[sel][k]), 1), round(float(Pm[sel, 2][k]), 1),
+                                   round(float(gz[k]), 1)]
+            # bare: the tube's rows within BARE_REACH of the mouth, thin ground and nothing over the crown
+            if th >= TH_FULL - 0.05:
+                bare = 0.0
+                for c in chunks:
+                    if not (c.get("tunnel") and (c.get("deck") or c.get("tube_only"))) or c.get("no_tube"):
+                        continue
+                    if float(c.get("tunnel_h") or roadmesh.TUNNEL_H) < TH_FULL - 0.05:
+                        continue
+                    n = np.asarray(c["n"], np.float64)
+                    sl = np.r_[0.0, np.cumsum(np.hypot(*np.diff(n[:, :2], axis=0).T))]
+                    t = np.arange(0.0, sl[-1], 1.0)
+                    if not len(t):
+                        continue
+                    q = np.c_[np.interp(t, sl, n[:, 0]), np.interp(t, sl, n[:, 1])]
+                    zq = np.interp(t, sl, n[:, 2])
+                    near = np.hypot(*(q - p).T) <= BARE_REACH
+                    if not near.any():
+                        continue
+                    q, zq = q[near], zq[near]
+                    thin = graded_xy(q) - zq < th + 0.5
+                    if thin.any():
+                        cov = _covered(q[thin], tri[:, :, :2], tri[:, :, 2], zq[thin] + th + 0.05)
+                        bare += float((~cov).sum())
+                rec["bare"] = bare
+        res["entrances"].append(rec)
+        if rec["gap"] >= GAP_MIN:
+            res["gap"].append((rec["gap"], fid[:16], cls, rec["ll"]))
+        if rec["proud"] > PROUD_M:
+            res["proud"].append((rec["proud"], fid[:16], cls, rec["ll"]))
+        if rec["bare"] > BARE_M:
+            res["bare"].append((rec["bare"], fid[:16], cls, rec["ll"]))
+
+
 def report(res):
     name, lat, lon, R = res["place"]
     print(f"{name} {lat},{lon} R {R:.0f}: {res['parts']} tunnel parts ({res['length_m'] / 1000:.1f} km), "
           f"{res['built']} built")
     for k in ("left_out", "opened", "joint_rise", "joint_step", "steep", "thin", "portal_open", "portal_deep",
-              "blocked", "mouth_step", "breaks_upper", "untagged"):
+              "blocked", "mouth_step", "breaks_upper", "untagged") + ENTRANCE_CATS:
+        if k not in res:
+            continue
         v = res[k]
         if k in ("mouth_step", "breaks_upper"):
             worst = sorted(v, key=lambda x: x[0] if k == "breaks_upper" else -abs(x[0]))[:3]

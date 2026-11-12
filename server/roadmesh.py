@@ -23,6 +23,7 @@ import numpy as np
 
 import cdae
 import heightmap
+import portals
 import shells
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
@@ -2388,6 +2389,7 @@ CONCRETE_UV_M = 4.0        # m per repeat of the concrete (as a tunnel's)
 LOW_PORTAL_UP = 1.4        # m a low arch's portal face reaches over the vault (to the ground over it) ...
 LOW_PORTAL_SIDE = 3.0      # ... and beside the opening
 LOW_RISE = 0.4             # a low arch's vault rises this share of its height from its walls (a segmental arch)
+BOX_HAUNCH_M = 0.5         # m a cut-and-cover box's corner haunch reaches into its roof and walls
 ARCH_CAP_OVER = 0.75       # m a low arch's top lies over its vault (roads.ARCH_SOIL_MIN of soil there, + a little)
 LOW_CAP_MIN = 1.0          # m: a stone top shorter than this (a road just behind the face) is left out
 LOW_CAP_M = 7.0            # m a low arch's stone top runs back from its portal face over the mouth: the terrain there
@@ -2402,12 +2404,17 @@ TUNNEL_LAMP_DROP = 0.25    # ... its middle this far under the wall's top, ...
 TUNNEL_LAMP_IN = 0.08      # ... this far in from the wall
 
 
-def _tunnel_section(hw, th=TUNNEL_H, low=False):
+def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False):
     """The tube's cross-section from the left road edge's floor over the vault to the right one: (lateral offset
     from the centre line, positive = left; height over the floor) for half-width hw (centre to wall) and a vault
     th over the floor (its walls in proportion). low: a park arch's segmental vault, a shallow circular arc rising
-    LOW_RISE of th from its walls (Central Park's transverse arches)."""
-    if low:
+    LOW_RISE of th from its walls (Central Park's transverse arches). box: a cut-and-cover box, its roof flat at th
+    with a haunch BOX_HAUNCH_M into each upper corner (a major road's low tube: Perth's Northbridge, Washington's
+    I-395 and Paris's Porte d'Italie mouths are rectangular, not arches, 2026-11-12)."""
+    if box:
+        hn = min(BOX_HAUNCH_M, 0.25 * th, 0.25 * hw)
+        vault = [(hw, th - hn), (hw - hn, th), (-hw + hn, th), (-hw, th - hn)]
+    elif low:
         rise = LOW_RISE * th
         wall = th - rise
         r = (hw * hw + rise * rise) / (2 * rise)
@@ -2537,7 +2544,7 @@ def tunnel(chunks, origin, walls=()):
         stone = low and not c.get("concrete")
         mat = 3 if stone else 5                               # (its portal faces: 2, the stone in daylight; a full
                                                             # tube's inside: 5, TUNNEL_INNER)
-        sec = _tunnel_section(hw, th, low)
+        sec = _tunnel_section(hw, th, low, box=low and not stone)    # (a major road's low tube: a concrete box)
         k, m = len(mid), len(sec)
         rows = np.empty((m, k, 3))
         for j, (off, h) in enumerate(sec):
@@ -2572,10 +2579,46 @@ def tunnel(chunks, origin, walls=()):
         # the lamps: under the vault along both lines, every other step, faced down (a long tunnel's; not under an arch)
         if not low:
             nv = _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin)
+        fits = c.get("fit") or (None, None)
+        new_portal = portals.ON
+        if new_portal and not low and c.get("ground") is not None and len(c["ground"]) == len(c["n"]) and k >= 2:
+            # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
+            # chunk's ground at the ribbon's rows, by the arc along it
+            cn = np.asarray(c["n"], np.float64)[:, :2]
+            sc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(cn, axis=0).T))]
+            sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
+            gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
+            nv = _add_blocks(P, T, UV, M, nv, portals.cover(mid - np.asarray(origin, np.float64)[:2], u, z - origin[2],
+                                                             gr - origin[2], hw, th, (False, False), CONCRETE_UV_M,
+                                                             SOIL_UV_M), 0)
         pups = c.get("portal_up") or (None, None)
         caps = c.get("cap_m") or (None, None)       # (a road over the mouth: its stone top shorter, TunnelProfiles.caps)
         for end, at, pup, cap_m in zip(c.get("portal") or (False, False), (0, k - 1), pups, caps):
             if not end:
+                continue
+            fitd = fits[0 if at == 0 else 1] if new_portal else None
+            if fitd is not None:
+                # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
+                # a lane's portal in a hillside in stone
+                tt = mid[1] - mid[0] if at == 0 else mid[-1] - mid[-2]
+                tt = tt / max(float(np.hypot(*tt)), 1e-9)
+                ul, outv = np.array([-tt[1], tt[0]]), (-tt if at == 0 else tt)
+                near = [False, False]
+                for si, sg in enumerate((1.0, -1.0)):
+                    q = mid[at] + ul * sg * (hw + 3.0) + outv * 4.0
+                    near[si] = any(float(np.hypot(*(np.asarray(w["base"], np.float64)[:, :2] - q).T).min()) < 5.0
+                                   for w in walls if len(w["base"]))
+                stone_p = stone if low else int(fitd["st"]) == 2
+                nv = _add_blocks(P, T, UV, M, nv, portals.structure(
+                    fitd, np.r_[mid[at], z[at]] - origin, ul, outv, sec, th, hw, STONE_UV_M if stone_p else CONCRETE_UV_M,
+                    near, low), 2 if stone_p else 0)
+                if low and (cap_m is None or cap_m >= LOW_CAP_MIN):
+                    # a low arch's top over its mouth (the terrain is cut away there): at the ground behind the
+                    # headwall, as wide as the headwall
+                    soil = portals.crown_top(fitd, th, low) - portals.parapet(fitd, low)
+                    nv = _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, hw + min(float(fitd["sl"]), float(fitd["sr"])),
+                                   soil + (LOW_PORTAL_UP - ARCH_CAP_OVER), th, origin,
+                                   LOW_CAP_M if cap_m is None else min(LOW_CAP_M, float(cap_m)), 2 if stone_p else 0)
                 continue
             # the face: from the opening's outline out to a frame PORTAL_FRAME wider and higher, both sides
             inner = rows[:, at]
@@ -2614,6 +2657,23 @@ def tunnel(chunks, origin, walls=()):
     remap = np.zeros(len(allm), np.int64)
     remap[used] = np.arange(len(used))
     return (np.concatenate(P), Tall, np.concatenate(UV), [allm[i] for i in used], remap[Mall])
+
+
+def _add_blocks(P, T, UV, M, nv, mesh, face_mat):
+    """A portal kernel's mesh (positions, triangles, uvs, codes: 0 the structure, 1 soil) appended to tunnel()'s
+    lists, the structure in material index face_mat; returns the new vertex count."""
+    Pm, Tm, UVm, Cm = mesh
+    if not len(Tm):
+        return nv
+    P.append(np.asarray(Pm, np.float64))
+    UV.append(np.asarray(UVm, np.float64))
+    Tm, Cm = np.asarray(Tm, np.int64) + nv, np.asarray(Cm, np.int64)
+    for code, mat in ((0, face_mat), (1, 4)):
+        sel = Cm == code
+        if sel.any():
+            T.append(Tm[sel])
+            M.append(mat)
+    return nv + len(Pm)
 
 
 def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=None, side_mat=2):
