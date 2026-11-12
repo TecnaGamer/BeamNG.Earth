@@ -813,7 +813,9 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(de_junctions), *de)     # (the German junction parts last)
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
+                    *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
+                    bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear),
@@ -832,6 +834,16 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
 
 def _md_versions():
     return _s.md.versions() if _s.md is not None else None
+
+
+def _surf_tags(frame, x0, y0, x1, y1):
+    """() or (tag,): the photo's road surface verdicts this run uses over the box (frame's metres) and round it
+    (roadsurf.area_tags): a cached road or far tile made with other road kinds is not this one."""
+    import roadsurf
+    if not roadsurf.ON:
+        return ()
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1], np.float64), np.array([y0, y1], np.float64), np.zeros(2))
+    return roadsurf.area_tags(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
 
 
 def roadsmod_tile_bbox(tx, ty):
@@ -1671,17 +1683,18 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     in use, designs.cache_parts over the content's reach in its own frame)."""
     import revisit
     import threedmr
+    import geotiles
+    z, gx, gy = geotiles.parse(key)
+    tile = geotiles.geobox(gx, gy, z)
     de = ()
     if de_junctions:
         import designs
-        import geotiles
-        z, gx, gy = geotiles.parse(key)
-        tile = geotiles.geobox(gx, gy, z)
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
-                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), bool(de_junctions), *de)     # (the German junction parts last)
+                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
+                       bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
@@ -2961,6 +2974,13 @@ def _imagery(tex):
     return ims[key]
 
 
+def roadsurf_area(lat0, lon0, lat1, lon1):
+    """earthd._roadsurf_area here: the photo's verdicts on the untagged minor roads of the cells under the box
+    (roadsurf.measure_area, from the z17 tiles on the disk). Returns the cells measured."""
+    import roadsurf
+    return len(roadsurf.measure_area(getattr(_s, "md", None), lat0, lon0, lat1, lon1))
+
+
 def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cache, fuel_pads=None, out_px=None,
                quick=False):
     """earthd.Server.write_base here, for a server without its imagery analyses (a small machine): the block's base
@@ -3051,10 +3071,14 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
+    import surface as surfacemod
+    surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
+    if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
+        surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
     k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
                     mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
                     bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
-                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
+                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
     got = revisit.load(_s.cache_dir, "far", k)
     quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:

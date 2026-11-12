@@ -99,6 +99,7 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import roadsurf as roadsurfmod  # noqa: E402
 import reach as reachmod  # noqa: E402
 import privacyregion as privacyregionmod
 import perfstats  # noqa: E402
@@ -4081,6 +4082,32 @@ class Server:
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
+        if not (set(pending) - {surfacemod.PHOTO_ROADS_PENDING}):
+            self._roadsurf_area(anchor, cx, cy)
+
+    def _roadsurf_area(self, anchor, cx, cy):
+        """A block's photo had every imagery tile it needs on the disk: the untagged minor roads of the cells under it
+        judged from those tiles (roadsurf.py) in a road process, each cell once a run, nothing waiting on it (their
+        verdicts are used from the next start)."""
+        if not roadsurfmod.ON or self.road_pool is None or self.mapdata is None:
+            return
+        size = self.layout.block * heightmap.SQUARE
+        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - size / 2, cx + size / 2]),
+                                                 np.array([cy - size / 2, cy + size / 2]), np.zeros(2))
+        lat0, lat1 = float(min(la)), float(max(la))
+        lon0, lon1 = float(min(lo)), float(max(lo))
+        try:
+            cells = {str(mapcells.cell_of(a, b)) for a in (lat0, lat1) for b in (lon0, lon1)}
+        except ValueError:
+            return
+        done = self.__dict__.setdefault("_roadsurf_cells", set())
+        if cells <= done:
+            return
+        done |= cells
+        try:
+            self.road_pool.submit(blockworker.roadsurf_area, lat0, lon0, lat1, lon1)
+        except Exception as e:      # (a refinement for the next start: never this one's failure)
+            log.debug("road surfaces of the block %s: %s", (anchor.id, cx, cy), e)
 
     def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None, base_wait=None, ground=False):
         """_finish_heightmap_now; a block the game asked for (urgent) waiting for its photo: urgent work (urgency.py),
@@ -10252,6 +10279,7 @@ async def main_async(args):
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
+    roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
         for lane in (LANE_REQUEST, LANE_PREFETCH):
