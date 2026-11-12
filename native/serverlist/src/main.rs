@@ -303,9 +303,14 @@ impl List {
 
 fn main() {
     let addr = std::env::var("BNGE_LIST_ADDR").unwrap_or_else(|_| "0.0.0.0:47640".to_string());
-    let server = Server::http(&addr).expect("listen");
+    // any panic ends the process (systemd starts it again): tiny_http's accept thread died on EMFILE and left the
+    // process running but answering nothing for two hours, 2026-11-11
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("panic: {info}");
+        std::process::abort();
+    }));
+    let server = Arc::new(Server::http(&addr).expect("listen"));
     eprintln!("bnge-serverlist on {addr}");
-    let mut list = List { entries: HashMap::new() };
     let geo = Arc::new(Mutex::new(Arc::new(Geo::default())));
     let keep = geo.clone();
     std::thread::spawn(move || keep_geo(keep));
@@ -320,118 +325,159 @@ fn main() {
         let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf));
         u64::from_le_bytes(buf) ^ SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
     };
-    let mut perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
-    let mut tel = telemetry::Telemetry::new(Some(tel_dir));
+    let perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
+    let tel = telemetry::Telemetry::new(Some(tel_dir));
     // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
     // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
-    let mut advanced: Option<(Instant, String)> = None;
-    let mut perf_cache: HashMap<u64, (Instant, String)> = HashMap::new();
-    loop {
-        let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        tel.tick(Instant::now(), unix_now);
-        perf.tick(Instant::now(), unix_now);
-        let mut req = match server.recv_timeout(Duration::from_secs(5)) {
-            Ok(Some(r)) => r,
-            Ok(None) => continue,
-            Err(_) => continue,
-        };
-        let now = Instant::now();
-        let path = req.url().split('?').next().unwrap_or("").to_string();
-        let resp = match (req.method(), path.as_str()) {
-            (Method::Get, "/servers") => {
-                let g = geo.lock().unwrap().clone();
-                json(200, serde_json::to_string(&list.servers(now, &g)).unwrap())
+    let state = Arc::new(Mutex::new(State { list: List { entries: HashMap::new() }, tel, perf, advanced: None,
+                                            perf_cache: HashMap::new() }));
+    {
+        // (the 5 s tick: forget old installs, samples, today's files)
+        let st = state.clone();
+        std::thread::spawn(move || loop {
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            {
+                let mut s = st.lock().unwrap_or_else(|e| e.into_inner());
+                s.tel.tick(Instant::now(), unix_now);
+                s.perf.tick(Instant::now(), unix_now);
             }
-            (Method::Post, "/announce") => {
-                let mut body = Vec::new();
-                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
-                match (read, client_ip(&req)) {
-                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
-                    (Ok(_), Some(ip)) => match serde_json::from_slice::<Announce>(&body) {
-                        Ok(a) => match list.announce(ip, a, now) {
-                            Ok(()) => json(200, "{\"ok\":true}".into()),
-                            Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
-                        },
-                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
-                    },
-                    _ => json(400, "{\"error\":\"bad request\"}".into()),
-                }
-            }
-            (Method::Post, "/telemetry") => {
-                let mut body = Vec::new();
-                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
-                match (read, client_ip(&req)) {
-                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
-                    (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(&body) {
-                        Ok(mut r) => {
-                            let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
-                            let (id, p) = (r.id(), r.perf.take());
-                            match tel.report(ip, cc, r, now, unix_now) {
-                                Ok(()) => {
-                                    if let (Some(p), Some((v, os))) = (p, tel.info(&id)) {
-                                        perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
-                                    }
-                                    json(200, "{\"ok\":true}".into())
-                                }
-                                Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
-                            }
-                        }
-                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
-                    },
-                    _ => json(400, "{\"error\":\"bad request\"}".into()),
-                }
-            }
-            (Method::Get, "/stats") => json(200, tel.public(now, unix_now).to_string()),
-            (Method::Get, "/stats/now") => json(200, tel.now(now, unix_now).to_string()),
-            (Method::Get, "/stats/range") => {
-                // ?from=<unix s>&to=<unix s> (to defaults to now)
-                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
-                let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
-                    .and_then(|v| v.parse::<u64>().ok());
-                match arg("from") {
-                    Some(from) => match tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
-                        Ok(v) => json(200, v.to_string()),
+            std::thread::sleep(Duration::from_secs(5));
+        });
+    }
+    let mut workers = Vec::new();
+    for _ in 0..WORKERS {
+        let (server, st, geo, token) = (server.clone(), state.clone(), geo.clone(), token.clone());
+        workers.push(std::thread::spawn(move || loop {
+            let mut req = match server.recv() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let mut body = Vec::new();
+            let read = if *req.method() == Method::Post {
+                req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body)
+            } else {
+                Ok(0)
+            };
+            let now = Instant::now();
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let resp = {
+                let mut s = st.lock().unwrap_or_else(|e| e.into_inner());
+                handle(&mut s, &req, read, &body, &geo, &token, now, unix_now)
+            };
+            let _ = req.respond(resp);
+        }));
+    }
+    for w in workers {
+        let _ = w.join();
+    }
+}
+
+/// The collector's state, shared by the request threads (main): each reads its request's body and writes its
+/// response outside the lock (a slow client held the one loop, and the accepted connections piled up until the
+/// process ran out of file descriptors: "No file descriptors available", 502 for two hours, 2026-11-11).
+struct State {
+    list: List,
+    tel: telemetry::Telemetry,
+    perf: perf::Perf,
+    advanced: Option<(Instant, String)>,
+    perf_cache: HashMap<u64, (Instant, String)>,
+}
+
+const WORKERS: usize = 16; // request threads
+
+#[allow(clippy::too_many_arguments)]
+fn handle(s: &mut State, req: &Request, read: std::io::Result<usize>, body: &[u8], geo: &Arc<Mutex<Arc<Geo>>>,
+          token: &Option<String>, now: Instant, unix_now: u64) -> Response<std::io::Cursor<Vec<u8>>> {
+    let path = req.url().split('?').next().unwrap_or("").to_string();
+    match (req.method(), path.as_str()) {
+        (Method::Get, "/servers") => {
+            let g = geo.lock().unwrap().clone();
+            json(200, serde_json::to_string(&s.list.servers(now, &g)).unwrap())
+        }
+        (Method::Post, "/announce") => {
+            match (read, client_ip(req)) {
+                (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                (Ok(_), Some(ip)) => match serde_json::from_slice::<Announce>(body) {
+                    Ok(a) => match s.list.announce(ip, a, now) {
+                        Ok(()) => json(200, "{\"ok\":true}".into()),
                         Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
                     },
-                    None => json(400, "{\"error\":\"from\"}".into()),
-                }
+                    Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                },
+                _ => json(400, "{\"error\":\"bad request\"}".into()),
             }
-            (Method::Get, "/stats/private") => {
-                let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
-                match (&token, auth) {
-                    (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, tel.private(now, unix_now).to_string()),
-                    (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
-                    (None, _) => json(404, "{\"error\":\"not found\"}".into()),
-                }
+        }
+        (Method::Post, "/telemetry") => {
+            match (read, client_ip(req)) {
+                (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(body) {
+                    Ok(mut r) => {
+                        let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
+                        let (id, p) = (r.id(), r.perf.take());
+                        match s.tel.report(ip, cc, r, now, unix_now) {
+                            Ok(()) => {
+                                if let (Some(p), Some((v, os))) = (p, s.tel.info(&id)) {
+                                    s.perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
+                                }
+                                json(200, "{\"ok\":true}".into())
+                            }
+                            Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                        }
+                    }
+                    Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                },
+                _ => json(400, "{\"error\":\"bad request\"}".into()),
             }
-            (Method::Get, "/stats/performance") => {
-                // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
-                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
-                let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(7).min(400);
-                let fresh = perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
-                if !fresh {
-                    perf_cache.insert(days, (now, perf.public(unix_now, days).to_string()));
-                }
-                json(200, perf_cache[&days].1.clone())
+        }
+        (Method::Get, "/stats") => json(200, s.tel.public(now, unix_now).to_string()),
+        (Method::Get, "/stats/now") => json(200, s.tel.now(now, unix_now).to_string()),
+        (Method::Get, "/stats/range") => {
+            // ?from=<unix s>&to=<unix s> (to defaults to now)
+            let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+            let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+                .and_then(|v| v.parse::<u64>().ok());
+            match arg("from") {
+                Some(from) => match s.tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
+                    Ok(v) => json(200, v.to_string()),
+                    Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                },
+                None => json(400, "{\"error\":\"from\"}".into()),
             }
-            (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
-            (Method::Get, "/stats/advanced") => {
-                if advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
-                    let mut v = tel.private(now, unix_now);
-                    v["errors7d"] = perf.errors(unix_now);
-                    advanced = Some((now, v.to_string()));
-                }
-                json(200, advanced.as_ref().unwrap().1.clone())
+        }
+        (Method::Get, "/stats/private") => {
+            let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+            match (token, auth) {
+                (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, s.tel.private(now, unix_now).to_string()),
+                (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
+                (None, _) => json(404, "{\"error\":\"not found\"}".into()),
             }
-            (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
-            (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
-            (Method::Get, "/players/private") => Response::from_string("")
-                .with_status_code(301)
-                .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
-            _ => json(404, "{\"error\":\"not found\"}".into()),
-        };
-        let _ = req.respond(resp);
+        }
+        (Method::Get, "/stats/performance") => {
+            // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
+            let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+            let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(7).min(400);
+            let fresh = s.perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
+            if !fresh {
+                s.perf_cache.insert(days, (now, s.perf.public(unix_now, days).to_string()));
+            }
+            json(200, s.perf_cache[&days].1.clone())
+        }
+        (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
+        (Method::Get, "/stats/advanced") => {
+            if s.advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
+                let mut v = s.tel.private(now, unix_now);
+                v["errors7d"] = s.perf.errors(unix_now);
+                s.advanced = Some((now, v.to_string()));
+            }
+            json(200, s.advanced.as_ref().unwrap().1.clone())
+        }
+        (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
+        (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
+        (Method::Get, "/players/private") => Response::from_string("")
+            .with_status_code(301)
+            .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
+        _ => json(404, "{\"error\":\"not found\"}".into()),
     }
 }
 
