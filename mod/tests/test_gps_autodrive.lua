@@ -65,7 +65,7 @@ local function fixture(path, y, radius, configure)
     f.arrows = f.arrows + 1
     f.target = target
     local path = {}
-    for _, id in ipairs(f.path) do path[#path + 1] = { wp = id } end
+    for _, id in ipairs(f.path) do path[#path + 1] = type(id) == 'table' and id or { wp = id } end
     core_groundMarkers.routePlanner.path = path
   end }
   function f:step(seconds)
@@ -193,6 +193,67 @@ end
 
 -- The stock AI clears its route on completion but stays in manual mode. Its GE notification is asynchronous.
 do
+  local f = fixture({ 'w', 'j' })
+  f.x, f.speed = 98, 0 -- local graph/path ends here, but the GPS destination is still farther ahead
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == 1 and f.modes[#f.modes] == 'stop',
+    'a completed local endpoint holds instead of immediately restarting the same waypoint')
+  for _ = 1, 35 do f:step(2) end
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 1 and f.gps.autodrive(),
+    'stall checks and graph replacement cannot restart an already completed endpoint')
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'waiting for a continuation does not trigger stuck-vehicle recovery')
+  f.path = { 'j', 's', 't' }; f:step()
+  T.check(#f.drives == 2 and #f.extensions == 0,
+    'a usable continuation resumes through a fresh lane-aware start')
+  f.speed = 20 -- moving, but not yet past the progress-distance threshold
+  f:step()
+  T.check(#f.drives == 2 and not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'the first update after a long wait does not immediately restart the continuation')
+  f:step(f.gps.AUTO_NOPROGRESS_S - 1)
+  T.check(#f.drives == 2 and not f.gps.noProgressReplans,
+    'a continuation gets a full progress timeout after waiting')
+  f:step(2)
+  T.check(#f.drives == 3 and f.gps.noProgressReplans == 1 and not f.gps.autoRecoveries,
+    'progress recovery still works if the resumed route makes no progress')
+end
+
+do
+  local f = fixture({ 'w', 'j' }, nil, nil, function(f) f.x = 98 end)
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1); f:step()
+  T.check(f.gps.noProgressReplans == 1, 'the old path can have a failed progress attempt before completing')
+  f.speed = 0
+  f.gps.onAiRouteDone(1); f:step()
+  f:step(70)
+  f.path = { 'j', 's', 't' }; f:step()
+  f.speed = 20; f:step()
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1)
+  T.check(f.gps.noProgressReplans == 2 and not f.gps.autoRecoveries,
+    'the continuation does not inherit the old path recovery-attempt count')
+end
+
+do
+  local f = fixture({ 'w', 'j' })
+  f.path = { 'j', 's' }; f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.extensions == 1, 'the local path can extend before its completion notification arrives')
+  f.x, f.y, f.path = 110, -10, { 's' }
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == 2 and f.drives[2][1] == 's',
+    'a delayed completion cannot block a single extended waypoint still ahead of the car')
+end
+
+do
+  local f = fixture({ 'w', 'j' })
+  f.x, f.speed = 98, 0
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  f.gps.setAutodrive(false)
+  f.x = 40
+  f.gps.setAutodrive(true); f:step()
+  T.check(#f.drives == 2, 'explicitly enabling Autodrive clears the completed endpoint')
+end
+
+do
   local f = fixture()
   f.gps.onAiRouteDone(2); f:step()
   T.check(#f.drives == 1, 'another vehicle finishing its route does not restart the player')
@@ -218,6 +279,53 @@ do
   f.gps.onAiRouteDone(1); f:step()
   T.check(#f.drives == starts and f.modes[#f.modes] == 'disabled',
     'a late completion notification cannot re-enable disabled Autodrive')
+end
+
+-- Projected road endpoints still count when the final target is below the road on a slope.
+do
+  local f = fixture({ 'w', 'j', { pos = { x = 199.8, y = 0, z = 2.994 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 1.5 }, fixed = true } }, 2, 6, function(f)
+    f.nodes.s.pos = { x = 200, y = 0, z = 3 }
+    f.nodes.t.pos = { x = 400, y = 0, z = 6 }
+    f.route = { points = { { 0, 0 }, { 0, 0.02 } }, dist = 200, dur = 10 }
+  end)
+  T.check(table.concat(f.drives[1], ',') == 'j,s', 'GPS hands off the sloped final edge through its projected endpoint')
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 'j,s', 'a map refresh retains the sloped final approach')
+  f.x, f.z = 125, 0.75
+  f.path = { { pos = { x = 125, y = 0, z = 0.75 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 2.994 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 1.5 }, fixed = true } }
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 's' and #f.modes == 0,
+    'a map refresh inside the final edge resumes even when the planner removed every waypoint id')
+  f.x, f.z = 175, 2.25; f:step()
+  T.check(not f.gps.autodrive() and not f.gps.status(), 'the vehicle can reach the normal arrival threshold on the slope')
+end
+
+-- A display route can omit a required sub-metre graph node even without a graph replacement.
+do
+  local function configure(f)
+    f.x = 20
+    f.nodes = { w = { pos = { x = 0, y = 0, z = 0 }, links = { j = {} }, radius = 6 },
+      j = { pos = { x = 40, y = 0, z = 0 }, links = { s = {} }, radius = 6 },
+      s = { pos = { x = 40.07, y = 0, z = 0 }, links = { t = {} }, radius = 6 },
+      t = { pos = { x = 400, y = 0, z = 0 }, links = {}, radius = 6 } }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.04 } }, dist = 400, dur = 30 }
+  end
+  local f = fixture({ 'w', 'j', 't' }, 2, 6, configure)
+  T.check(table.concat(f.drives[1], ',') == 'j,s,t', 'merged internal node is restored before the first AI start')
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 'j,s,t', 'map replacement retains the restored connection')
+  f = fixture({ 'w', 'j' }, 2, 6, configure)
+  f.x, f.speed = 39.5, 0
+  f.gps.onAiRouteDone(1); f:step(0.1); f:step(35)
+  T.check(#f.drives == 1 and f.modes[#f.modes] == 'stop', 'a truly ended local path still waits safely')
+  f.path = { 'w', 'j', 't' }; f:step()
+  T.check(#f.drives == 2 and table.concat(f.drives[2], ',') == 'j,s,t',
+    'a continuation with a merged node resumes instead of waiting at the old endpoint')
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries, 'continuation needs no recovery or progress retry')
 end
 
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do

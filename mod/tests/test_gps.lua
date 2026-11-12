@@ -65,6 +65,69 @@ sl = G.routeSlice(e, 150, 5000, 25)
 T.check(sl[#sl][2] == 100 and #sl == 3, 'a slice past the end stops at the destination')
 local ids = G.pathNodes({ { pos = 1 }, { wp = 'a' }, { wp = 'a' }, { wp = 'b' }, { pos = 2, fixed = true }, { pos = 3 } })
 T.check(#ids == 2 and ids[1] == 'a' and ids[2] == 'b', 'the AI path: the graph nodes of the planner path, in order, once')
+do
+  local nodes = {
+    a = { pos = { x = 0, y = 0, z = 0 }, links = {} },
+    b = { pos = { x = 100, y = 0, z = 10 }, links = { a = {} } },
+    upper = { pos = { x = 100, y = 0, z = 30 }, links = { a = {} } },
+  }
+  local function ending(x, y, z)
+    return G.pathNodes({ { wp = 'a', pos = nodes.a.pos }, { pos = { x = x, y = y, z = z }, fixed = true } }, nodes)
+  end
+  local got = ending(99.99, 0, 9.999)
+  T.check(table.concat(got, ',') == 'a,b', 'a destination just before a node retains the final drivable edge')
+  got = ending(50, 0, 5)
+  T.check(table.concat(got, ',') == 'a,b', 'a position-only destination partway along an edge retains its forward endpoint')
+  T.check(table.concat(ending(50, 0, 15), ',') == 'a,upper', 'terminal edge selection includes elevation')
+  T.check(nodes.b.links.a ~= nil and #got == 2, 'terminal edge lookup supports single-sided game links')
+  T.check(#ending(120, 0, 12) == 1, 'a destination beyond the loaded edge does not invent a continuation')
+  T.check(#ending(50, 8, 5) == 1, 'an off-road destination does not select a nearby edge')
+  T.check(#ending(0, 0, 0) == 1, 'a destination at the existing endpoint adds nothing')
+  T.check(#G.pathNodes({ { pos = { x = 50, y = 0, z = 5 } } }, nodes) == 0,
+    'a path without a known graph endpoint does not invent an approach')
+  local projected = { pos = { x = 50, y = 0, z = 5 }, linkCount = 2 }
+  local path = { { wp = 'a', pos = nodes.a.pos }, projected,
+    { pos = { x = 50, y = 0, z = 3.5 }, fixed = true } }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination below a slope retains the edge through the projected road endpoint')
+  path[3].pos = { x = 50, y = 8, z = 5 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination beside the road uses its planned road projection')
+  path[3].pos = { x = 50, y = 0, z = 15 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'the planned road projection takes precedence over another road near the destination')
+  projected.linkCount = nil; path[3].pos.y = 8
+  T.check(#G.pathNodes(path, nodes) == 1, 'an arbitrary coordinate-only tail is not a road projection')
+  projected.linkCount = 2
+  local ended = { { wp = 'a' }, projected, { wp = 'b' }, { pos = { x = 110, y = 8, z = 10 } } }
+  T.check(table.concat(G.pathNodes(ended, nodes), ',') == 'a,b',
+    'a projection before the last named waypoint is not reused')
+  local unnamed = { { pos = { x = 20, y = 0, z = 2 }, linkCount = 2 }, projected, path[3] }
+  T.check(table.concat(G.pathNodes(unnamed, nodes, 'a', 'b'), ',') == 'a,b',
+    'two projected road points identify the final directed edge when both ids were removed')
+  T.check(#G.pathNodes(unnamed, nodes) == 0, 'a position-only path still requires a confirmed starting edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'b', 'a') == 0, 'a position-only path cannot run backward along the confirmed edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'upper') == 0, 'the projected endpoint must lie on the confirmed edge at its elevation')
+  unnamed[1].pos.z = 6
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'the projected start must also lie on the confirmed edge')
+  unnamed[1].pos = projected.pos
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'a zero-length projected path does not invent a continuation')
+  unnamed[1].pos = { x = 20, y = 0, z = 2 }; unnamed[1].linkCount = nil
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an arbitrary coordinate start cannot seed a final-edge route')
+  unnamed[1].linkCount = 2
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(#ending(50, 0, 5) == 1, 'the final edge cannot be driven against its one-way direction')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot override one-way restrictions')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path still obeys one-way restrictions')
+  nodes.b.links.a.inNode = 'a'
+  T.check(table.concat(ending(50, 0, 5), ',') == 'a,b', 'the legal direction of a one-way terminal edge is accepted')
+  nodes.b.links.a = { drivability = 0 }
+  T.check(#ending(50, 0, 5) == 1, 'a non-drivable terminal edge is not appended')
+  nodes.b.links.a = nil
+  T.check(#ending(50, 0, 5) == 1, 'a missing terminal edge does not snap to a disconnected or elevated node')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot bridge a missing graph edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path cannot bridge a missing edge')
+end
 local cmd = G.aiCommand({ 'a', 'b"c' })
 T.check(cmd:find('beamngEarth_autodrive.drive', 1, true) and cmd:find('"a","b\\"c"', 1, true),
   'the AI command sends quoted node ids to the vehicle route helper')
@@ -330,5 +393,51 @@ do
   T.check(G.route() == nil, 'clear has no maneuver data')
   G.CHECK_S, G.REROUTE_S = check, reroute
   beamngEarth_core, getPlayerVehicle = savedCore, savedGet
+end
+-- Marker simplification must not remove topology: nearby nodes may still be required edges.
+do
+  local function node(x, links, z) return { pos = { x = x, y = 0, z = z or 0 }, links = links or {} } end
+  local nodes = { a = node(0), b = node(0.07, { a = {} }), c = node(40, { b = {} }) }
+  local path = { { wp = 'a', pos = nodes.a.pos }, { wp = 'c', pos = nodes.c.pos } }
+  local function ids() return table.concat(G.pathNodes(path, nodes), ',') end
+  T.check(ids() == 'a,b,c', 'restore a merged 7 cm edge stored on its far endpoint')
+  T.check(#G.validFrom(G.pathNodes(path, nodes), 1, { nodes }) == 3, 'restored path is connected')
+  T.check(#path == 2 and path[2].wp == 'c', 'restoring the AI path leaves the marker path unchanged')
+  nodes.d = node(0.5, { b = {} }); nodes.c.links = { d = {} }
+  T.check(ids() == 'a,b,d,c', 'restore multiple nodes merged into the same marker')
+  nodes.b.links.d = {}; nodes.d.links.a = {} -- a short cycle, not an unbounded search
+  local joined = G.pathNodes(path, nodes)
+  T.check(#joined <= 4 and joined[#joined] == 'c', 'short cycles terminate with a connected path')
+  nodes.b.links.d, nodes.d.links.a = nil, nil
+  nodes.d.pos.x = 1.01
+  T.check(ids() == 'a,c', 'do not repair a chain which leaves the marker merge radius')
+  nodes.d.pos.x = 0.5; nodes.d.pos.z = 12
+  T.check(ids() == 'a,c', 'an overlapping elevated road is not a merged node')
+  nodes.d.pos.z = 0
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(ids() == 'a,c', 'do not restore a connection against a one-way edge')
+  nodes.b.links.a.inNode = 'a'
+  T.check(ids() == 'a,b,d,c', 'restore a short connection in its legal direction')
+  nodes.d.links.b = { drivability = 0 }
+  T.check(ids() == 'a,c', 'an undrivable short connector is not restored')
+  nodes.d.links.b = nil
+  T.check(ids() == 'a,c', 'a genuine disconnected route is left for validation to truncate')
+  nodes.a.links.c = {}
+  T.check(ids() == 'a,c', 'an existing direct edge needs no reconstruction')
+  nodes.a.links.c = { oneWay = true, inNode = 'c' }; nodes.d.links.b = {}
+  T.check(ids() == 'a,c', 'an existing illegal direct edge is not replaced with an invented detour')
+  nodes.a.links.c = nil
+  path = { { wp = 'a' }, { wp = 'c' }, { wp = 'a' } }
+  nodes.b.links.a = {}
+  T.check(ids() == 'a,b,d,c,a', 'restore only a local merge gap and retain the planned return')
+  path = { { wp = 'missing' }, { wp = 'c' } }
+  T.check(ids() == 'missing,c', 'missing graph nodes remain invalid without throwing')
+  nodes = { a = node(0.6), b = node(-0.6, { a = {} }), c = node(-40, { b = {} }) }
+  path = { { wp = 'a', pos = { x = 0, y = 0, z = 0 } }, { wp = 'c', pos = nodes.c.pos } }
+  T.check(ids() == 'a,b,c', 'the merge radius is centred on the retained marker position, not its waypoint')
+  nodes.b.pos.x = -1
+  T.check(ids() == 'a,b,c', 'the stock inclusive one-metre merge boundary is restored')
+  nodes.b.pos.x = -1.001
+  T.check(ids() == 'a,c', 'nodes beyond the stock merge radius remain invalid')
 end
 T.done('test_gps')

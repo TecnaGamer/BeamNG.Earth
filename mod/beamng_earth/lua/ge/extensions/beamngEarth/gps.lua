@@ -79,6 +79,7 @@ local lastCheck = -math.huge
 local info = nil        -- { dist, bearing, remaining, eta } at the last check
 local auto = false      -- autodrive on
 local autoPath = nil    -- the node ids last given to the AI
+local autoFinished = nil -- completed local endpoint: wait for a continuation instead of resubmitting it
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local autoForce = true -- restart after a stall/recovery, destination change or pause, even on the same path
 local autoBlocked = false
@@ -247,6 +248,7 @@ function M.setDestination(lat, lon, name)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
+  autoFinished = nil
   vias = {}
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
   leastRemaining, routeFails = nil, 0
@@ -441,11 +443,101 @@ local function appendTail(gm, e, s0, z0)
   M.addRest(rp, total - math.min(s0 + M.TAIL_M, total))
 end
 
--- Pure: the graph node ids of a planner path ({wp = id | nil}...): its graph stretch, ids in order, repeats dropped.
-function M.pathNodes(path)
-  local out = {}
+-- Restore only nodes the marker planner could merge into one point (within 1 m in 3D).
+-- This is not a general route repair: real graph gaps must still be cut by validFrom.
+local function unmergedNodes(from, to, centre, nodes, links)
+  if not centre or not nodes[from] or not nodes[to] then return end
+  local queue, parent, i = { from }, { [from] = false }, 1
+  while i <= #queue do
+    local id = queue[i]; i = i + 1
+    for nextId, edge in pairs(links[id] or {}) do
+      if parent[nextId] == nil and ((edge.drivability or 1) > 0)
+        and (not edge.oneWay or edge.inNode == nil or edge.inNode == id) then
+        local p = nodes[nextId].pos
+        local dx, dy, dz = p.x - centre.x, p.y - centre.y, (p.z or 0) - (centre.z or 0)
+        if nextId == to or dx * dx + dy * dy + dz * dz <= 1 then
+          parent[nextId] = id
+          if nextId == to then
+            local out = {}
+            while id ~= from do table.insert(out, 1, id); id = parent[id] end
+            return out
+          end
+          queue[#queue + 1] = nextId
+        end
+      end
+    end
+  end
+end
+
+-- Pure: graph nodes in planner order, with consecutive duplicates removed. The stock planner can strip the
+-- final wp when projecting a destination onto an edge; retain that edge's forward endpoint for the AI.
+function M.pathNodes(path, nodes, edgeFrom, edgeTo)
+  local out, links, previous = {}, nil, nil
   for _, p in ipairs(path or {}) do
-    if p.wp ~= nil and out[#out] ~= p.wp then out[#out + 1] = p.wp end
+    if p.wp ~= nil and out[#out] ~= p.wp then
+      local from = out[#out]
+      if nodes and from and not M.edge(nodes, from, p.wp) then
+        if not links then
+          links = {}
+          for id in pairs(nodes) do links[id] = {} end
+          for id, n in pairs(nodes) do
+            for other, edge in pairs(n.links or {}) do
+              if nodes[other] then
+                local data = type(edge) == 'table' and edge or {}
+                links[id][other], links[other][id] = data, data
+              end
+            end
+          end
+        end
+        local centre = previous.pos or (nodes[from] and nodes[from].pos)
+        for _, id in ipairs(unmergedNodes(from, p.wp, centre, nodes, links) or {}) do out[#out + 1] = id end
+      end
+      out[#out + 1], previous = p.wp, p
+    end
+  end
+  local from, last = out[#out], path and path[#path]
+  -- fixStartEnd clears a projected road node's wp but keeps its linkCount. Prefer that road point
+  -- to the requested destination, which may sit beside the road or below it on a slope.
+  for i = #(path or {}), 1, -1 do
+    if path[i].wp ~= nil then break end
+    if path[i].linkCount ~= nil then last = path[i]; break end
+  end
+  -- Inside the final edge the planner can project away both endpoint ids. Its two road points
+  -- may still identify the forward part of the directed edge already confirmed beneath the car.
+  local first = path and path[1]
+  local anchored = not from and edgeFrom and edgeTo and first and first.pos
+    and first.linkCount ~= nil and last and last.linkCount ~= nil
+  if anchored then from = edgeFrom end
+  local start = nodes and nodes[from]
+  if start and last and not last.wp and last.pos then
+    local a, p = start.pos, last.pos
+    local best, errorSq = nil, 1 -- same 1 m positional tolerance as the stock planner's node merging
+    for id, n in pairs(nodes) do
+      local edge = M.edge(nodes, from, id)
+      if (not anchored or id == edgeTo) and edge and (type(edge) ~= 'table' or ((edge.drivability or 1) > 0
+        and (not edge.oneWay or edge.inNode == nil or edge.inNode == from))) then
+        local dx, dy, dz = n.pos.x - a.x, n.pos.y - a.y, (n.pos.z or 0) - (a.z or 0)
+        local lengthSq = dx * dx + dy * dy + dz * dz
+        if lengthSq > 0 then
+          local px, py, pz = p.x - a.x, p.y - a.y, (p.z or 0) - (a.z or 0)
+          local t = (px * dx + py * dy + pz * dz) / lengthSq
+          local ex, ey, ez = px - t * dx, py - t * dy, pz - t * dz
+          local distanceSq = ex * ex + ey * ey + ez * ez
+          local forward = true
+          if anchored then
+            local q = first.pos
+            local qx, qy, qz = q.x - a.x, q.y - a.y, (q.z or 0) - (a.z or 0)
+            local t0 = (qx * dx + qy * dy + qz * dz) / lengthSq
+            forward = t0 >= 0 and t0 < t and (qx - t0 * dx)^2 + (qy - t0 * dy)^2 + (qz - t0 * dz)^2 < 1
+          end
+          if forward and t > 0 and t <= 1 and distanceSq < errorSq then best, errorSq = id, distanceSq end
+        end
+      end
+    end
+    if best then
+      if anchored then out[1] = from end
+      out[#out + 1] = best
+    end
   end
   return out
 end
@@ -474,6 +566,7 @@ end
 function M.onAiRouteDone(id)
   local veh = auto and playerVeh()
   if not veh or veh:getId() ~= id then return end
+  autoFinished = autoPath and autoPath[#autoPath]
   -- Completion leaves the stock AI in manual mode with no active route. Force a waypoint start,
   -- including when a compatible update was already queued before this notification arrived.
   M.retryAutodrive()
@@ -623,7 +716,14 @@ local function driveArrowsPath(gm, nodes)
     return -- never give a new-graph route to an old vehicle graph, even after the timeout
   end
   pathWait = nil
-  local ids = M.pathNodes(gm.routePlanner.path)
+  local p, d = veh:getPosition(), veh:getDirectionVector()
+  local hl = math.sqrt(d.x * d.x + d.y * d.y)
+  local a, b
+  if hl > 0.1 then
+    -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
+    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
+  end
+  local ids = M.pathNodes(gm.routePlanner.path, nodes, a, b)
   -- the planner's path can be older than the graph (planned before the last apply): a step that is no edge now
   -- disabled the AI's Lua (ai.lua getEdgeLaneConfig, Lauterbrunnen 2026-10-15). The valid part is driven and the
   -- route planned again at the next check
@@ -632,19 +732,23 @@ local function driveArrowsPath(gm, nodes)
     ids, routedTo = valid, nil
     M.pathCuts = (M.pathCuts or 0) + 1
   end
-  local p, d = veh:getPosition(), veh:getDirectionVector()
-  local hl = math.sqrt(d.x * d.x + d.y * d.y)
-  local a, b
-  if hl > 0.1 then
-    -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
-    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
-  end
   ids = M.connectedStart(ids, a, b, nodes)
   if not ids or #ids == 0 then holdAutodrive(veh); return end
+  if #ids == 1 and ids[1] == autoFinished then
+    local n = nodes[ids[1]]
+    local dx, dy, dz = p.x - n.pos.x, p.y - n.pos.y, p.z - (n.pos.z or p.z)
+    local reach = math.max(8, n.radius or 0)
+    -- A late completion may follow an extension to a still-distant endpoint. Only hold at the reached one;
+    -- a replacement map alone does not make that endpoint a usable continuation.
+    if dx * dx + dy * dy + dz * dz <= reach * reach then holdAutodrive(veh); return end
+  end
   veh:queueLuaCommand(M.aiCommand(ids))
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
   autoForce, autoBlocked = false, false
+  -- A continuation gets its own progress window; waiting at the old endpoint was not a failed attempt.
+  if autoFinished then progRemaining, progAt, stuckTries = nil, nil, 0 end
+  autoFinished = nil
 end
 
 -- Pure: the index k of the path edge (ids[k] -> ids[k+1]) nearest (px, py) in nodes (positions), or nil.
@@ -788,6 +892,7 @@ function M.setAutodrive(on)
   on = on and true or false
   if on == auto then return auto end
   auto = on
+  autoFinished = nil
   autoPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
   progRemaining, progAt, stuckTries = nil, nil, 0
@@ -975,7 +1080,7 @@ function M.update(anchor, player)
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
-      elseif now - progAt > M.AUTO_NOPROGRESS_S then
+      elseif not autoFinished and now - progAt > M.AUTO_NOPROGRESS_S then
         stuckTries = stuckTries + 1
         if stuckTries >= 2 then         -- the path given again did not help: onto the route ahead
           stuckTries = 0
@@ -1021,6 +1126,7 @@ function M.reset()
   lineKey = nil
   autoPath, autoSerial, pathWait, vehGraph = nil, nil, nil, {}
   autoForce, autoBlocked = true, false
+  autoFinished = nil
 end
 
 return M
