@@ -55,8 +55,20 @@ class ShedTest(unittest.TestCase):
 
     def test_memory_mb(self):
         mb = budget.memory_mb()
-        if sys.platform.startswith("linux"):
+        if sys.platform.startswith("linux") or sys.platform == "win32":
             self.assertGreater(mb, 1.0)
+
+    def test_resident_mb(self):
+        """The memory log's "rss": this process's memory in RAM, on Windows too (its working set; it read 0 there)."""
+        mb = budget.resident_mb()
+        if sys.platform.startswith("linux") or sys.platform == "win32":
+            self.assertGreater(mb, 1.0)
+            keep = bytearray(64 * 2 ** 20)      # (zeroed: its pages are touched)
+            self.assertGreater(budget.resident_mb(), mb + 32.0, "64 MB more in use")
+            self.assertGreater(budget.memory_mb(), 64.0)
+            del keep
+        import blockworker
+        self.assertEqual(blockworker._rss_mb() > 1.0, mb is not None)
 
     def test_call_runs_job_then_sheds(self):
         budget.SHED_MB = 1

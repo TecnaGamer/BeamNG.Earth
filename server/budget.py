@@ -171,6 +171,35 @@ def register_shed(fn):
     _shedders.append(fn)
 
 
+def _win_memory():
+    """(working set, private bytes) of this process in bytes (Windows), or None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                               "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                               "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                               "PrivateUsage")]
+        c = PMC()
+        c.cb = ctypes.sizeof(c)
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi = ctypes.WinDLL("psapi")
+        # (64-bit handle and pointer: as lower_priority's)
+        psapi.GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD)
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            return c.WorkingSetSize, c.PrivateUsage
+    except Exception:
+        pass
+    return None
+
+
 def memory_mb():
     """This process's resident + swapped memory in MB (Linux /proc; Windows: private bytes), or None."""
     try:
@@ -184,27 +213,20 @@ def memory_mb():
         return (rss + swap) / 1024.0
     except (OSError, ValueError):
         pass
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            from ctypes import wintypes
+    win = _win_memory()
+    return win[1] / 2 ** 20 if win else None
 
-            class PMC(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
-                    (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
-                                                   "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
-                                                   "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
-                                                   "PrivateUsage")]
-            c = PMC()
-            c.cb = ctypes.sizeof(c)
-            k32 = ctypes.WinDLL("kernel32")
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            psapi = ctypes.WinDLL("psapi")
-            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
-                return c.PrivateUsage / 2 ** 20
-        except Exception:
-            pass
-    return None
+
+def resident_mb():
+    """This process's memory in RAM now, in MB (Linux: its resident set; Windows: its working set, the mapped cache
+    files' pages in use included), or None. The memory log's "rss" (BNGE_TRACEMALLOC): it read 0 on Windows."""
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+    except (OSError, ValueError, AttributeError):
+        pass
+    win = _win_memory()
+    return win[0] / 2 ** 20 if win else None
 
 
 def maybe_shed():
@@ -237,7 +259,14 @@ def maybe_shed():
 
 
 def _malloc_small():
-    """Linux (glibc): at most ARENA_MAX malloc arenas, and the freed memory given back every TRIM_S (a thread)."""
+    """Linux (glibc): at most ARENA_MAX malloc arenas, and the freed memory given back every TRIM_S (a thread).
+
+    Nothing on Windows, measured there (2026-11-12, a 32-thread PC, four teleports round Manhattan, the server's 17
+    processes two minutes after the last): its heaps keep no freed memory to speak of (7.0 GB in use of the 7.8 GB
+    they had committed, Python's own small-object arenas 1.77 of 1.83 GB), having no arena per thread. Asking them
+    for it every 30 s (HeapSetInformation's HeapOptimizeResources and HeapCompact on every heap) left the processes'
+    private bytes where they were (12.60 GB for 12.65) and took up to 39 ms a call; ucrt's _heapmin gave nothing
+    back in a test of 48 threads' mixed allocations."""
     global _trimming
     if not sys.platform.startswith("linux") or _trimming:
         return
@@ -263,7 +292,7 @@ def _malloc_small():
 
 
 def trim():
-    """Give the freed memory back now (glibc; nothing elsewhere)."""
+    """Give the freed memory back now (glibc; nothing elsewhere: _malloc_small's note on Windows)."""
     libc = _libc() if sys.platform.startswith("linux") else None
     if libc is not None and hasattr(libc, "malloc_trim"):
         libc.malloc_trim(0)
