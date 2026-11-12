@@ -5393,8 +5393,30 @@ class _Planner:
             t = roadsmod.TunnelProfiles(self.frame, lambda key: md.cell(key, layers=("roads",), kind="demand")
                                         .layers.get("roads"), self.elev)
             t.wet = self.wet
+            t.raw = self.tunnel_raw      # (the tunnels' raw ground, as the road tiles' chain store reads it: _tunnel_pins)
             self._chains = t
         return self._chains
+
+    def _tunnel_pins(self, key, ring):
+        """roads.TunnelProfiles.part_pins for tunnel part key (geodetic floor heights of its ends inside the hill, NaN
+        at a portal; None: none): the process's tunnel chain store's when it is there, else this frame's own; both
+        solve the chain on the same raw ground."""
+        if not roadsmod.CHAIN_PINS:
+            return None
+        get = getattr(self.store, "tunnel_store", None) if getattr(self, "store", None) is not None else None
+        cs = get() if callable(get) else None
+        if cs is not None:
+            try:
+                st = cs.store_at(float(ring[0][1]), float(ring[0][0]))
+                if st.raw is not None:
+                    return st.part_pins(key, ring)
+            except Exception as e:      # (this frame's own then)
+                log.debug("grading: the chain store's pins: %s: %s", type(e).__name__, e)
+        try:
+            return self._chains_for().part_pins(key, ring)
+        except Exception as e:          # (the part's own ends, as before)
+            log.debug("grading: tunnel pins: %s: %s", type(e).__name__, e)
+            return None
 
     def _drowned(self, key, ring):
         """roads.TunnelProfiles.drowned for tunnel part key (ring: its lon / lat points): the process's tunnel chain
@@ -5491,11 +5513,32 @@ class _Planner:
                     g = g.copy()
                     pack = PlanPack(list(road_plans)) if pack is None else pack
                     g[[0, -1]] = grade_points(xy[[0, -1], 0], xy[[0, -1], 1], g[[0, -1]], pack)
-                floor, kinds = roadsmod.tunnel_sections(s, g)
-                kinds = roadsmod.portal_cover(kinds, g - floor, ts[i], s)
+                pins = self._tunnel_pins((str(feats.ids[i]), j), ring)
+                pins = list(pins) if pins is not None else [float("nan"), float("nan")]
+                gc = None               # (the ground the cover is read on where g's ends are pinned)
+                for e, h in enumerate(pins):
+                    if np.isfinite(h):  # (a joint inside the hill: the tunnel network's floor, no portal there)
+                        if gc is None:
+                            g = g.copy()
+                            gc = g.copy()
+                        g[0 if e == 0 else -1] = h
+                        if portals is not None:
+                            portals[(str(feats.ids[i]), tuple(np.round(xy[0 if e == 0 else -1], 3)))] = False
+                sd = roadsmod.tunnel_sides(xy, ts[i])
+                sides = None
+                if sd is not None:      # (the ground beside it: a tunnel under flat ground is buried, as the meshes')
+                    sides = []
+                    for side in sd:
+                        sla, slo, _ = self.frame.enu_to_geodetic(side[:, 0], side[:, 1], 0.0)
+                        sides.append(np.asarray(self.elev(sla, slo), np.float64))
+                fl = {}
+                floor, kinds = roadsmod.tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
+                                                        portals=(not np.isfinite(pins[0]), not np.isfinite(pins[1])))
+                if not fl.get("buried"):
+                    kinds = roadsmod.portal_cover(kinds, (g if gc is None else gc) - floor, ts[i], s)
                 if over is None:
                     over = self._roads_over_tunnels(feats, ts)
-                kinds = roadsmod.cover_roads(xy, s, kinds, *over)
+                kinds = roadsmod.cover_roads(xy, s, kinds, *over, cover=(g if gc is None else gc) - floor)
                 i0 = 0
                 while i0 < len(kinds):
                     i1 = i0
