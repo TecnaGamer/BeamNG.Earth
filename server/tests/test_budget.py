@@ -21,6 +21,10 @@ class BudgetTest(unittest.TestCase):
         self.saved = (dem.MEM_TILES, imagery.MEM_TILES, mapdata.MEM_MB, seacarve.MEM_CELLS, roadwidth.WALL_CELLS)
         self.fin = (imagery.MEM_FINISHED_MB, imagery.MEM_DECODED)
         self.far = (copy.deepcopy(farfield.K_TABLE), copy.deepcopy(farfield.TEX_DEFAULT))
+        # (the tiers by the RAM these tests mock, whatever tier or limit the runner forces: BNGE_BUDGET, the Max RAM)
+        p = mock.patch.dict(os.environ, {"BNGE_BUDGET": "", budget.SETTING_ENV: ""})
+        p.start()
+        self.addCleanup(p.stop)
 
     def tearDown(self):
         import farfield
