@@ -4082,13 +4082,17 @@ class Server:
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
-        if not (set(pending) - {surfacemod.PHOTO_ROADS_PENDING}):
-            self._roadsurf_area(anchor, cx, cy)
+        area = getattr(self, "_roadsurf_area", None)     # (tests hand in a stand-in server)
+        if area is not None:
+            area(anchor, cx, cy)
+
+    ROADSURF_RESEND_S = 60.0        # s before a cell is handed to roadsurf again (another photo of it: more tiles here)
 
     def _roadsurf_area(self, anchor, cx, cy):
-        """A block's photo had every imagery tile it needs on the disk: the untagged minor roads of the cells under it
-        judged from those tiles (roadsurf.py) in a road process, each cell once a run, nothing waiting on it (their
-        verdicts are used from the next start)."""
+        """A block's photo was rendered (its z17 tiles fetched, or some of them): the untagged minor roads of the cells
+        under it judged from the tiles on the disk (roadsurf.py) in a road process, nothing waiting on it (their
+        verdicts are used from the next start). A cell is handed over again after ROADSURF_RESEND_S with a later photo
+        of it (the road process measures it once its tiles are there, roadsurf.measure_area)."""
         if not roadsurfmod.ON or self.road_pool is None or self.mapdata is None:
             return
         size = self.layout.block * heightmap.SQUARE
@@ -4100,10 +4104,12 @@ class Server:
             cells = {str(mapcells.cell_of(a, b)) for a in (lat0, lat1) for b in (lon0, lon1)}
         except ValueError:
             return
-        done = self.__dict__.setdefault("_roadsurf_cells", set())
-        if cells <= done:
+        sent = self.__dict__.setdefault("_roadsurf_sent", {})
+        now = time.monotonic()
+        if all(now - sent.get(c, -1e9) < self.ROADSURF_RESEND_S for c in cells):
             return
-        done |= cells
+        for c in cells:
+            sent[c] = now
         try:
             self.road_pool.submit(blockworker.roadsurf_area, lat0, lon0, lat1, lon1)
         except Exception as e:      # (a refinement for the next start: never this one's failure)

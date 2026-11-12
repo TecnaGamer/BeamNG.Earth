@@ -484,9 +484,9 @@ def measure_area(md, lat0, lon0, lat1, lon1):
                     _area_done.discard(str(key))
                 continue
             if got is not None:
-                if got.get("skipped") == "tiles":
+                if got.get("skipped") == "tiles" or got.get("unmeasured"):
                     with _lock:
-                        _area_done.discard(str(key))     # (asked again after the next photo)
+                        _area_done.discard(str(key))     # (asked again after the next photo: more of its tiles)
                 got = {k: v for k, v in got.items() if k not in ("feats", "verdict", "rows")}
                 if got.get("paved") or got.get("unpaved"):
                     log.info("road surfaces of %s from the photo (%s): %d paved, %d unpaved, %d unsure, %d unmeasured "
