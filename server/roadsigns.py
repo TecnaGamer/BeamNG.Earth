@@ -23,6 +23,7 @@ import speedsigns
 
 KERNEL = 162                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
+NL_ON = os.environ.get("BNE_NL_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
 METAL = "bne_exit_metal"
@@ -56,7 +57,19 @@ def tables():
 
 def system(country):
     """The country's sign system (sign_systems.json), or None: no road signs there yet."""
+    if (country or "").upper() == "NL" and not NL_ON:
+        return None
     return tables()[1]["countries"].get((country or "").upper())
+
+
+def supported(signs, sys_row):
+    """Limit a pilot to reviewed roles; a new global rule must not silently opt a country in."""
+    allowed = sys_row.get("only")
+    off = sys_row.get("off", ())
+    rules = tables()[1]["rules"]
+    keep = [rules[int(r)] not in off and (allowed is None or rules[int(r)] in allowed)
+            for r in signs[:, 4]]
+    return signs[np.asarray(keep, dtype=bool)]
 
 
 def widest(sizes):
@@ -410,7 +423,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
         return None
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
-    signs = signs[[tables()[1]["rules"][int(r)] not in sys_row.get("off", ()) for r in signs[:, 4]]] if len(signs) else signs
+    signs = supported(signs, sys_row)
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None
