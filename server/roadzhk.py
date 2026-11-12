@@ -1,7 +1,7 @@
 """Hong Kong's road heights for roadz's "hk" source (GitHub #1078, Path A): the Transport Department's Road Network
 centrelines (signed level tier, route number, street name) with heights read from the CEDD 2020 airborne LiDAR, ground
-roads from the DTM and decks from the DSM across the carriageway. Pure given the fetched inputs (RoadZ._hk fetches
-them).
+roads from the DTM and decks from the DSM pixels round each deck line (the US source's deck_lidar picks the one surface
+that runs along it). Pure given the fetched inputs (RoadZ._hk fetches them).
 
 The centrelines come twice from the same service, in lon/lat (EPSG:4326, for the map) and in HK1980 Grid metres
 (EPSG:2326, the LiDAR's grid): the server projects them, so no projection is written here."""
@@ -9,17 +9,18 @@ from typing import NamedTuple
 
 import numpy as np
 
-STEP_M = 4.0                # m between a line's stations (roadz.LIDAR_STEP_M)
-DECK_HALF_M = 3.0           # m either side of a deck's centreline its DSM is read
-DECK_READS = (-1.0, -0.5, 0.0, 0.5, 1.0)    # (times DECK_HALF_M: the reads across)
-DECK_ALONG = (-2.0, 0.0, 2.0)   # m along the line from the station the reads across are taken at
-# the reads' percentile: the deck's surface under vehicles, lamps and parapets, and over the gaps a speckled DSM has in
-# a viaduct (the 25th of 5 reads across took the ground through them: Tsing Sha Highway at 22.3777 N 114.1815 E). Over
-# the Sha Tin sites' TD decks, the median of the 15 against that: stations within 1 m of their 7-station running median
-# 82 -> 93 %, crossings with the higher tier 4.5 m or more over the lower 96 -> 99 % (138), bridge parts reaching
-# MIN_COVER 57 -> 67 % (82), 2026-11-10
-DECK_PCT = 50.0
-DECK_MIN_READS = 3
+import fast
+
+STEP_M = 4.0                # m between a line's stations, deck_lidar's too (roadz.LIDAR_STEP_M)
+PIX_M = 0.5                 # m, the DSM's pixel
+DECK_HALF_M = 4.0           # m either side of a deck's line its DSM pixels count
+# earthfast.deck_lidar's settings over those pixels (taken as class 2): roadz's call has the same points, gap and
+# smoothing, and a grade of 0.10 (LIDAR_MAX_GRADE). Over the median of 15 reads across a deck, at Tai Wai and Lai Chi
+# Kok: bridge parts with measured heights 39 -> 63 % and 64 -> 74 % of their length, 2026-11-11
+DECK_MAX_GRADE = 0.14
+DECK_MIN_PTS = 3
+DECK_GAP_M = 24.0           # m of a deck's stations without a surface that are bridged over
+DECK_SIGMA_M = 4.0          # m, the smoothing
 # a deck under a higher tier's line reads that one in the DSM; the ground under a deck keeps its DTM (no decks in it)
 OCCLUDE_M = 8.0
 GRID_M = 64.0               # m, the cells _near buckets segments by
@@ -117,24 +118,54 @@ def _near(p, a, b, reach):
     return out
 
 
-def _low(v):
-    """(n,) the DECK_PCT percentile of each row of v (n, k) over its finite values; NaN with under DECK_MIN_READS."""
-    v = np.sort(v, axis=1)
-    cnt = np.isfinite(v).sum(1)
-    out = np.full(len(v), np.nan)
-    ok = np.flatnonzero(cnt >= DECK_MIN_READS)
-    pos = (cnt[ok] - 1) * DECK_PCT / 100.0
-    a = np.floor(pos).astype(np.int64)
-    b = np.minimum(a + 1, cnt[ok] - 1)
-    out[ok] = v[ok, a] + (v[ok, b] - v[ok, a]) * (pos - a)
+def _corridor(xy, h):
+    """(m, 2) the pixel centres (PIX_M grid) within h of the polyline xy (k, 2), each once."""
+    d = np.diff(xy, axis=0)
+    seg = np.hypot(d[:, 0], d[:, 1])
+    arc = np.r_[0.0, np.cumsum(seg)]
+    t = np.arange(0.0, arc[-1] + 1e-9, PIX_M / 2)
+    j = np.clip(np.searchsorted(arc, t, side="right") - 1, 0, len(seg) - 1)
+    u = d[j] / np.maximum(seg[j], 1e-9)[:, None]
+    c = xy[j] + u * (t - arc[j])[:, None]
+    o = np.arange(-h, h + 1e-9, PIX_M / 2)
+    px = (c[:, None, 0] - u[:, None, 1] * o[None]).ravel()
+    py = (c[:, None, 1] + u[:, None, 0] * o[None]).ravel()
+    cell = np.unique(np.floor(np.c_[px, py] / PIX_M).astype(np.int64), axis=0)
+    return (cell + 0.5) * PIX_M
+
+
+def _deck_heights(xy_runs, dsm):
+    """[(n,) height] per run of xy_runs ((n, 2) each): fast._ef.deck_lidar of the run's line on the DSM pixels in its
+    corridor, one batched dsm() read for all runs; NaN where it found no surface."""
+    cors = [_corridor(x, DECK_HALF_M) for x in xy_runs]
+    allp = np.vstack(cors)
+    zz = np.asarray(dsm(np.ascontiguousarray(allp[:, 0]), np.ascontiguousarray(allp[:, 1])), np.float64)
+    out = []
+    for x, c, z in zip(xy_runs, cors, np.split(zz, np.cumsum([len(c) for c in cors])[:-1])):
+        res = np.full(len(x), np.nan)
+        ok = np.isfinite(z)
+        if len(x) >= 2 and ok.any():
+            pts = np.ascontiguousarray(np.c_[c[ok], z[ok]])
+            s, zl, _cnt = fast._ef.deck_lidar(np.ascontiguousarray(x), pts, np.full(len(pts), 2, np.uint8), DECK_HALF_M,
+                                              STEP_M, DECK_MAX_GRADE, DECK_MIN_PTS, DECK_GAP_M, DECK_SIGMA_M)
+            f = np.isfinite(zl)
+            if f.any():
+                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(x, axis=0).T))]
+                res = np.interp(arc, s[f], zl[f])
+                sf = s[f]
+                i = np.clip(np.searchsorted(sf, arc), 1, max(len(sf) - 1, 1))
+                near = np.minimum(np.abs(arc - sf[np.minimum(i, len(sf) - 1)]), np.abs(arc - sf[i - 1]))
+                # (none where no surface station is within 3/4 of a step: not drawn across)
+                res[near > 0.75 * (s[1] - s[0])] = np.nan
+        out.append(res)
     return out
 
 
 def rows(lines, runs, dtm, dsm):
     """roadz Lines.build rows (lonlat, z, level, ref, name) of the runs (stations): ground from dtm(x, y), a deck the
-    DECK_PCT percentile of dsm(x, y) across the carriageway at DECK_ALONG; NaN in a tunnel, where the LiDAR has none, and on a deck
-    within OCCLUDE_M of a higher tier's line (any of lines: its DSM is that deck's). dtm / dsm are called once each, and
-    only with points to read."""
+    one surface of dsm(x, y) along its line (_deck_heights); NaN in a tunnel, where the LiDAR has none, where a deck has
+    no surface, and on a deck within OCCLUDE_M of a higher tier's line (any of lines: its DSM is that deck's). dtm / dsm
+    are called once each, and only with points to read."""
     ground = [r for r in runs if lines[r[0]].level == 0]
     decks = [r for r in runs if lines[r[0]].level > 0]
     z = {}
@@ -145,12 +176,7 @@ def rows(lines, runs, dtm, dsm):
             z[id(r)] = part
     if decks:
         xy = np.vstack([r[2] for r in decks])
-        u = np.vstack([r[3] for r in decks])
-        s = np.tile(np.asarray(DECK_READS) * DECK_HALF_M, len(DECK_ALONG))[None]
-        a = np.repeat(np.asarray(DECK_ALONG, np.float64), len(DECK_READS))[None]
-        px = xy[:, None, 0] + u[:, None, 0] * a - u[:, None, 1] * s
-        py = xy[:, None, 1] + u[:, None, 1] * a + u[:, None, 0] * s
-        got = _low(np.asarray(dsm(px.ravel(), py.ravel()), np.float64).reshape(len(xy), s.shape[1]))
+        got = np.concatenate(_deck_heights([r[2] for r in decks], dsm))
         lvl = np.concatenate([np.full(len(r[2]), lines[r[0]].level) for r in decks])
         for tier in sorted(set(lvl.tolist())):
             higher = [ln.xy for ln in lines if ln.level > tier]

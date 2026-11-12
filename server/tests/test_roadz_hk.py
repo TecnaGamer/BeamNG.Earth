@@ -222,7 +222,7 @@ class SourceTest(unittest.TestCase):
         self.assertFalse(roadz.hk_cell(mapcells.cell_of(48.85, 2.35)))
         with mock.patch.object(roadz, "HK_ON", False):
             self.assertNotIn("hk", roadz.sources_at(22.38, 114.2))
-            self.assertNotIn("hk1", roadz.hk_tags(KEY))
+            self.assertNotIn(roadz.HK_CELLS, roadz.hk_tags(KEY))
 
     def test_credited_where_its_lines_are_kept(self):
         import credits
