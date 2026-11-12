@@ -1550,6 +1550,9 @@ def hand_over():
     if not new:
         return False
     env = clean_env()                   # (the new copy without this one's AppImage variables and library path)
+    old = selfupdate.packaged_path()
+    if old:                             # (the new copy keeps this file: the player's shortcut starts it, GitHub #900)
+        env[selfupdate.HANDED_OVER_FROM] = old
     print(f"Starting the updated BeamNG.Earth: {os.path.basename(new)}", flush=True)
     try:
         proc = subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
@@ -1593,6 +1596,25 @@ def smart_app_control_on():
             return int(winreg.QueryValueEx(k, "VerifiedAndReputablePolicyState")[0]) == 1
     except (OSError, ValueError):
         return False
+
+
+def prune_old_copies(environ=None):
+    """The packaged copy that runs (no newer one to hand over to): the old copies beside it that nothing needs are
+    deleted (selfupdate.prune_old, GitHub #900), the one a hand-over started this from kept. Never fails the start."""
+    environ = os.environ if environ is None else environ
+    if not (FROZEN or environ.get("APPIMAGE")):
+        return []
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import install
+        import selfupdate
+        selfupdate.note_started_from(environ.get(selfupdate.HANDED_OVER_FROM))
+        gone = selfupdate.prune_old(install.version())
+    except Exception:
+        return []
+    if gone:
+        print(f"Removed {len(gone)} old BeamNG.Earth file(s): {', '.join(gone)}", flush=True)
+    return gone
 
 
 HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
@@ -1711,6 +1733,7 @@ def main():
         return
     if hand_over():
         return
+    prune_old_copies()
     ap = argparse.ArgumentParser(description="Start the BeamNG.Earth world server and BeamNG.drive.")
     ap.add_argument("--no-game", action="store_true", help="only the server (start the game yourself)")
     ap.add_argument("--no-gcpatch", action="store_true",

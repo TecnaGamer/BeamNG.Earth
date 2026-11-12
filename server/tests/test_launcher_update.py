@@ -101,6 +101,7 @@ class HandOver(unittest.TestCase):
         dropped = []
         with mock.patch.object(launcher, "FROZEN", True), \
                 mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
+                mock.patch.object(selfupdate, "packaged_path", lambda: "/x/BeamNG.Earth-old.exe"), \
                 mock.patch.object(selfupdate, "drop_staged",
                                   lambda path=None, blocked_by=None: dropped.append(blocked_by or 1)), \
                 mock.patch.object(launcher, "smart_app_control_on", lambda: sac), \
@@ -118,6 +119,9 @@ class HandOver(unittest.TestCase):
         self.assertTrue(r)
         self.assertEqual(dropped, [])
         self.assertEqual(popen.call_args[0][0][0], "/x/BeamNG.Earth-new.exe")
+        import selfupdate
+        self.assertEqual(popen.call_args[1]["env"].get(selfupdate.HANDED_OVER_FROM), "/x/BeamNG.Earth-old.exe",
+                         "the new copy is told which file started it (kept: the player's shortcut, GitHub #900)")
 
     def test_a_new_copy_that_dies_at_once_is_dropped_and_this_one_runs(self):
         r, dropped, _ = self.go(wait=1)
