@@ -5579,6 +5579,33 @@ ARCH_SIZE_SKIP_M = 5.0  # m at a low arch's mouths left out when its height is s
 ROAD_CAP_JOIN_M = 20.0  # a road with an end this near a low arch's mouth joins it (its own road going on), not one over it
 ROAD_CAP_GAP_M = 0.5    # m a low arch's stone top stops short of a carriageway over its mouth ...
 ROAD_CAP_OVER_M = 1.0   # ... and its portal face reaches at most this far over that road
+CHAIN_PINS = os.environ.get("BNE_TUNNEL_CHAINS", "on") != "off"   # a tunnel's joints from its whole network
+PORTAL_RUN_ON = os.environ.get("BNE_TUNNEL_PORTAL_RUN", "off") == "on"   # portal_cover from the inside out (off:
+# the ramps of the drivability replays at Casagranda and Riva steepened; a buried tunnel skips portal_cover anyway)
+BURY_ON = os.environ.get("BNE_TUNNEL_BURY", "off") == "on"   # a tunnel under flat ground buried (tunnel_sides)
+BURY_SIDE_M = 8.0       # m past a tunnel's carriageway edge where the ground beside it is read (a cutting / flat)
+BURY_FLAT_M = 2.0       # m: the ground beside within this of the ground over the line: flat (not a cutting or a slope)
+BURY_GRADE = 0.06       # the ramps down to a buried tunnel's floor and back
+BURY_NEED_M = 6.5       # m a buried tunnel's floor lies under the ground over it: a concrete box (MAJOR_LOW_H) and its
+                        # roof and soil (8.5 m for a full tube dug the replays' lid junctions 2-3 m under their trenches)
+BURY_RUN_M = 150.0      # m of flat ground the hull leaves open, at least, to bury a tunnel under it (shorter: a box
+                        # under a shallow mound, Goeschenen's, portal_cover)
+BURY_OPEN_M = 6.0       # m: a buried tunnel is covered where its box (MAJOR_LOW_H) fits under the ground with soil over
+                        # it; up to there the ramp is an open trench (a 5 m box under 4 m of street stood through it)
+GAP_CLOSE_M = 40.0      # m: an open gap this short between two covered sections of a tunnel is covered ...
+GAP_TRENCH_M = 3.0      # ... unless the ground beside it stands this far over the line (a cutting: daylight)
+BURY_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
+                "secondary_link", "tertiary", "tertiary_link"}
+ROAD_OVER_ON = os.environ.get("BNE_TUNNEL_ROAD_OVER", "off") == "on"  # cover_roads: only roads over the tunnel's level
+BORE_FIT = os.environ.get("BNE_TUNNEL_BORE_FIT", "on") != "off"   # a tube no taller than the room under a road over it
+BORE_FIT_M = 0.7        # m kept between a tube's vault and a road over it (arch_raise's soil + 0.1)
+BORE_FIT_MAX_M = 250.0  # m: covered sections up to this long are fitted under the roads over them
+TUNNEL_FULL_H = 6.8     # m: roadmesh.TUNNEL_H (a full tube's height: the shorter ones are kept in heights)
+CHAIN_PORTAL_M = 3.0    # m: a tunnel part's end this near its own road's ground part is a portal (_chain_pins) ...
+CHAIN_END_M = 1.0       # ... or this near another ground road's end, or on one running on in line with it
+CHAIN_JOIN_M = 1.5      # m: tunnel parts' ends this near one another are one joint of the network
+PORTAL_TAIL_N = 9       # a part's last points (DECK_STEP apart: ~32 m) where a road it was carried past ends
+CHAIN_INLINE_COS = 0.87 # (within 30 degrees)
 TUNNEL_LOW_H = 3.6      # m: the lowest tube (floor to vault)
 MAJOR_LOW_H = 5.0       # m: ... on a major road (CONCRETE_WALL_CLASSES: road tunnels clear ~4.5 m, a truck ~4 m)
 # A covered section (a low arch or a tube) goes on along the tunnel until every ground road crossing over it within
@@ -5598,42 +5625,47 @@ def portal_cover(kinds, cover, spec, s=None):
     """kinds with a major road's (CONCRETE_WALL_CLASSES) open run at either end of its tunnel covered (a low arch, in
     concrete: roadmesh) where the median ground over its floor is PORTAL_SHALLOW_COVER_M or more: the map's portal is a
     cut-and-cover box under shallow ground there (the Gotthard road tunnel's north portal under the meadow at
-    Goeschenen stood 90 m further in, an open cut before it, 2026-10-28). Park roads keep their open cuts (Central
-    Park's transverses). A run shorter than SECTION_MIN_M (s: the samples' arc) is the section it leads into instead:
-    a 4 m low arch before CA-1's northbound Tom Lantos tube had a 5 m tube's portal face, the 6.8 m tube's terrain hole
-    right behind it open above that face, a notch of sky in the hill over the mouth (2026-11-09). The meshes
-    (TunnelProfiles) and the grading both."""
+    Goeschenen stood 90 m further in, an open cut before it, 2026-10-28). BNE_TUNNEL_PORTAL_RUN=on: covered only from
+    the section it leads into outwards while that ground lasts (I-395's ramp out of a Washington street stood as a 5 m
+    box across the street it leaves; off by default: it steepened the ramps of the Casagranda and Riva replays, and a
+    buried city tunnel skips portal_cover anyway). Park roads keep their open cuts (Central Park's transverses). A run
+    shorter than SECTION_MIN_M (s: the samples' arc) is the section it leads into instead: a 4 m low arch before
+    CA-1's northbound Tom Lantos tube had a 5 m tube's portal face, the 6.8 m tube's terrain hole right behind it open
+    above that face, a notch of sky in the hill over the mouth (2026-11-09).
+    The meshes (TunnelProfiles) and the grading both: earthfast.tunnel_portal_cover."""
     kinds = np.array(kinds, np.int64)
     if spec is None or spec.cls not in CONCRETE_WALL_CLASSES or not (kinds > 0).any():
         return kinds
-    cover = np.asarray(cover, np.float64)
-    n = len(kinds)
-    for rng in (range(n), range(n - 1, -1, -1)):
-        run, nxt = [], None
-        for q in rng:
-            if kinds[q] != 0:
-                nxt = q
-                break
-            run.append(q)
-        if run and len(run) < n and np.isfinite(cover[run]).any() and \
-                float(np.nanmedian(cover[run])) >= PORTAL_SHALLOW_COVER_M:
-            short = s is not None and nxt is not None and abs(float(s[nxt]) - float(s[run[0]])) < SECTION_MIN_M
-            kinds[run] = kinds[nxt] if short else 1
-    return kinds
+    cover = np.ascontiguousarray(cover, np.float64)
+    # (no arcs: every run counts as long)
+    s = np.arange(len(kinds)) * SECTION_MIN_M if s is None else np.ascontiguousarray(s, np.float64)
+    import fast
+    fast.require(248, "tunnel_portal_cover")
+    return np.asarray(fast._ef.tunnel_portal_cover(np.ascontiguousarray(kinds), cover, s, PORTAL_SHALLOW_COVER_M,
+                                                   SECTION_MIN_M, PORTAL_RUN_ON), np.int64)
 
 
-def cover_roads(xy, s, kinds, lines, halves):
+def cover_roads(xy, s, kinds, lines, halves, cover=None):
     """kinds (tunnel_sections') with each covered section carried on until the ground roads crossing over it (lines
     (k, 2) in xy's frame, carriageway half widths) are covered, TUNNEL_ROAD_*: earthfast.tunnel_cover_roads. The
     road meshes (TunnelProfiles) and the grading (grading._tunnel_sections) both: an open section the grading did
-    not know of cut its trench through the A-7's lanes near Malaga (GitHub #450)."""
+    not know of cut its trench through the A-7's lanes near Malaga (GitHub #450). cover (the ground over the floor per
+    sample): a road crossing where it is under TUNNEL_LOW_H is at the tunnel road's level, not over a tube, and carries
+    nothing on (ROAD_OVER_ON; BNE_TUNNEL_ROAD_OVER=off: every road crossing)."""
     kinds = np.asarray(kinds, np.int64)
     if not lines or not (kinds > 0).any() or len(xy) < 2:
         return kinds
     import fast
-    fast.require(95, "tunnel_cover_roads")
     pts = np.ascontiguousarray(np.concatenate(lines))
     starts = np.concatenate([[0], np.cumsum([len(ln) for ln in lines])]).astype(np.int64)
+    if cover is not None and ROAD_OVER_ON:
+        fast.require(248, "tunnel_cover_roads_over")
+        return np.asarray(fast._ef.tunnel_cover_roads_over(
+            np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2]), np.ascontiguousarray(s, np.float64),
+            np.ascontiguousarray(kinds), np.ascontiguousarray(cover, np.float64), TUNNEL_LOW_H, pts, starts,
+            np.asarray(halves, np.float64), TUNNEL_ROAD_CLEAR_M, TUNNEL_ROAD_MIN_SIN, TUNNEL_ROAD_REACH_M,
+            SECTION_MIN_M), np.int64)
+    fast.require(95, "tunnel_cover_roads")
     return np.asarray(fast._ef.tunnel_cover_roads(
         np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2]), np.ascontiguousarray(s, np.float64),
         np.ascontiguousarray(kinds), pts, starts, np.asarray(halves, np.float64), TUNNEL_ROAD_CLEAR_M,
@@ -7913,13 +7945,18 @@ class BridgeProfiles:
         return key[0]
 
 
-def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M):
+def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M, cover_g=None, sides=None,
+                    flags=None, portals=(True, True)):
     """A tunnel's road level and its sections from the ground over it (g at arc lengths s): (floor, kinds). floor: the
     lower convex hull of (s, g), the road's level under the covered parts and the ground where it lies open; kinds per
     sample: 0 open road, 1 a low arch, 2 a full tunnel (a run with TUNNEL_OPEN_COVER over the floor, full where it
     reaches TUNNEL_COVER; runs and gaps shorter than min_m merged away). One long 'tunnel' in the map can be a sunken
     road with arches and a rock tunnel along it (Central Park's 79th Street Transverse, 683 m: one tube, 2026-10-17).
-    The Rust kernel (fast). Pure."""
+    cover_g: the ground the cover is read on where it is not g (g's ends pinned to a joint's floor: _chain_pins).
+    sides: (left, right) ground beside it (tunnel_sides): the floor buried under flat ground (BURY_*,
+    earthfast.tunnel_sections_buried); flags (a dict): flags["buried"] set when it was (its portals then stand where
+    the ramps reach BURY_OPEN_M: portal_cover is not for it); portals: (start, end) is a portal the ramps climb to (not a
+    joint or a cell's clip inside the tunnel). The Rust kernel (fast). Pure."""
     s = np.ascontiguousarray(s, np.float64)
     g = np.ascontiguousarray(g, np.float64)
     oc = TUNNEL_OPEN_COVER if open_cover is None else open_cover
@@ -7927,9 +7964,48 @@ def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M)
     step = float(np.median(np.diff(s))) if len(s) > 1 else 1.0
     min_n = max(1, int(math.ceil(min_m / max(step, 1e-6))))
     import fast
-    fast.require(28, "tunnel_sections")
-    f, k = fast._ef.tunnel_sections(s, g, float(oc), float(fc), int(min_n))
-    return _shallow_full_low(s, g, np.asarray(f), np.asarray(k))
+    if sides is not None and BURY_ON:
+        fast.require(248, "tunnel_sections_buried")
+        gc = g if cover_g is None else np.ascontiguousarray(cover_g, np.float64)
+        f, k, buried = fast._ef.tunnel_sections_buried(
+            s, g, gc, np.ascontiguousarray(sides[0], np.float64), np.ascontiguousarray(sides[1], np.float64),
+            np.asarray([oc, fc, BURY_NEED_M, BURY_GRADE, BURY_FLAT_M, BURY_RUN_M, GAP_CLOSE_M,
+                        GAP_TRENCH_M, BURY_OPEN_M, float(portals[0]), float(portals[1])], np.float64), int(min_n))
+        if flags is not None:
+            flags["buried"] = bool(buried)
+        return _short_piece(s, gc, np.asarray(f), np.array(k, np.int64), oc, fc, cover_g is not None)
+    if cover_g is None:
+        fast.require(28, "tunnel_sections")
+        f, k = fast._ef.tunnel_sections(s, g, float(oc), float(fc), int(min_n))
+        return _shallow_full_low(s, g, np.asarray(f), np.asarray(k))
+    fast.require(248, "tunnel_sections_cover")
+    cover_g = np.ascontiguousarray(cover_g, np.float64)
+    f, k = fast._ef.tunnel_sections_cover(s, g, cover_g, float(oc), float(fc), int(min_n))
+    return _short_piece(s, cover_g, np.asarray(f), np.array(k, np.int64), oc, fc, True)
+
+
+def _short_piece(s, gc, f, k, oc, fc, pinned):
+    """_shallow_full_low, a pinned piece (a part of a tunnel network: pinned) shorter than the shortest section with
+    all of it under the hill covered: a stretch of the tube, not an open road on the hill's top (Tromsø's roundabouts
+    inside the mountain come as 2-30 m pieces). Pure."""
+    cv = gc - f
+    if pinned and len(k) and not k.any() and (cv >= oc).all():
+        k[:] = 2 if (cv >= fc).any() else 1
+    return _shallow_full_low(s, gc, f, k)
+
+
+def tunnel_sides(xy, spec):
+    """(left, right) points (k, 2) BURY_SIDE_M past the carriageway's edges of a tunnel line xy (k, 2), where the
+    ground beside it is read (tunnel_sections' sides), or None: not a road buried under flat ground (BURY_CLASSES,
+    BURY_ON). Pure."""
+    if not BURY_ON or spec is None or spec.cls not in BURY_CLASSES or len(xy) < 2:
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    d = np.gradient(xy, axis=0)
+    d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    nrm = np.c_[-d[:, 1], d[:, 0]]
+    off = spec.width / 2 + BURY_SIDE_M
+    return xy + nrm * off, xy - nrm * off
 
 
 def _shallow_full_low(s, g, floor, kinds):
@@ -7987,6 +8063,8 @@ class TunnelProfiles(BridgeProfiles):
                                     # meets a full tunnel inside the hill (no hole, no portal face there)
         self._tls = threading.local()   # a thread's solved sections, kept with its parts (_commit) or dropped
         self._drowned = {}          # part id (fid.j) -> its chain has a part under water (drowned)
+        self._pins = {}             # part id -> (start, end) geodetic floor heights of its ends inside the hill
+                                    # (_chain_pins; NaN at a portal)
         self._subsea = set()        # part ids whose underwater profile was solved successfully
 
     def _raw_ground(self, xy):
@@ -8013,7 +8091,7 @@ class TunnelProfiles(BridgeProfiles):
             if kind == 0:
                 self.open.add(sub)
                 continue
-            if kind == 1:
+            if kind == 1 or th < TUNNEL_FULL_H - 0.05:
                 self.heights[sub] = th
             self.ups[sub] = ups
             self.mouths[sub] = mouths
@@ -8075,6 +8153,160 @@ class TunnelProfiles(BridgeProfiles):
         with self.lock:
             return bool(self._drowned.get(pid))
 
+    def _chain_pins(self, comp, pool, ground):
+        """{key: (start, end)}: the floor height (this frame's z, NaN at a portal) at each end of the chain comp's parts
+        where the tunnel goes on inside the hill: a joint with another part of it, or a closed end
+        (earthfast.tunnel_chain_nodes over the whole network, on the raw ground alone, so every process gets the
+        same). A part's ends at the ground were joints too: a tunnel split anywhere climbed out of the hill to the
+        split (GitHub #1160 #1161; Tromsø's roundabouts inside the mountain drawn on its top, GitHub #490 too). Also
+        kept as geodetic heights per part (part_pins: the grading's). Nothing for a part alone (CHAIN_PINS off: none)."""
+        keys = [k for k in sorted(comp) if len(pool[k][1]) >= 2]
+        out = {}
+        if not CHAIN_PINS:
+            return out
+        if len(keys) < 2:
+            return out
+        import fast
+        fast.require(248, "tunnel_chain_nodes")
+        gfn = self._raw_ground if self.raw is not None else self._ground
+        nk = _EndJoin(CHAIN_JOIN_M)     # (wider than the chain's own 0.5 m: Tromsø's roundabout pieces end ~1 m apart)
+        ea, eb, starts, ss, gs, ends_xy = [], [], [0], [], [], {}
+        sls, srs = [], []
+        for k in keys:
+            xy = np.asarray(pool[k][1], np.float64)[:, :2]
+            sd = tunnel_sides(xy, pool[k][0])
+            sls.append(np.asarray(gfn(sd[0]), np.float64) if sd is not None else np.full(len(xy), np.nan))
+            srs.append(np.asarray(gfn(sd[1]), np.float64) if sd is not None else np.full(len(xy), np.nan))
+            a, b = nk(xy[0]), nk(xy[-1])
+            ends_xy.setdefault(a, xy[0])
+            ends_xy.setdefault(b, xy[-1])
+            ea.append(a)
+            eb.append(b)
+            ss.append(np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
+            gs.append(np.asarray(gfn(xy), np.float64))
+            starts.append(starts[-1] + len(xy))
+        n = nk.n
+        deg = np.zeros(n, np.int64)
+        for a, b in zip(ea, eb):
+            deg[a] += 1
+            deg[b] += 1
+        # a portal: a ground road (or the tunnel's own road) goes on from the node; the other single ends are free. A
+        # road's end at the node (CHAIN_PORTAL_M: one mapped on from it), or a road running on in line through it (a
+        # tunnel carried past its mapped end, _clear_portals); not a street over the hill that only passes near it
+        # (Porte Maillot's streets over its underground junctions held them at the surface)
+        own = {k[0] for k in keys}
+        # (the map cells of every node read for the roads mapped on from it: the chain was gathered from whichever
+        # cells the asking tile or cell loaded first, and a grading cell missing a portal's approach pinned that portal
+        # inside the hill where the road tiles' store had it a portal: I-395's ramps under Washington)
+        ground = dict(ground or {})
+        nla, nlo, _ = self.frame.enu_to_geodetic(np.asarray([ends_xy[q][0] for q in range(n)], np.float64),
+                                                 np.asarray([ends_xy[q][1] for q in range(n)], np.float64), 0.0)
+        done = set()
+        for la_, lo_ in zip(np.asarray(nla), np.asarray(nlo)):
+            ck = mapcells.cell_of(float(la_), float(lo_))
+            if str(ck) not in done:
+                done.add(str(ck))
+                try:
+                    self._load(ck, {}, ground)
+                except Exception as e:      # (a cell not at hand: the roads already read)
+                    log.debug("tunnel chain approach cell %s: %s: %s", ck, type(e).__name__, e)
+        tang, last = {}, {}
+        for k, a_, b_ in zip(keys, ea, eb):
+            xy = np.asarray(pool[k][1], np.float64)[:, :2]
+            for nd, p0, p1, tail in ((a_, xy[0], xy[min(1, len(xy) - 1)], xy[:PORTAL_TAIL_N]),
+                                     (b_, xy[-1], xy[max(len(xy) - 2, 0)], xy[-PORTAL_TAIL_N:])):
+                d = p0 - p1
+                tang.setdefault(nd, d / max(float(np.hypot(*d)), 1e-9))
+                last.setdefault(nd, tail)
+        nodes_xy = np.asarray([ends_xy[q] for q in range(n)], np.float64)
+        approach = np.zeros(n, bool)
+        for gk, lns in (ground or {}).items():
+            for ln in lns:
+                ln = np.asarray(ln, np.float64).reshape(-1, 2)
+                if len(ln) < 2:
+                    continue
+                de = np.minimum(np.hypot(*(nodes_xy - ln[0]).T), np.hypot(*(nodes_xy - ln[-1]).T))
+                approach |= de < (CHAIN_PORTAL_M if gk[0] in own else CHAIN_END_M)
+                near = _seg_dist(nodes_xy, ln[:-1], ln[1:])
+                seg = near.argmin(axis=1)
+                hit = near[np.arange(n), seg] < CHAIN_END_M
+                for q in np.flatnonzero(hit & ~approach):
+                    v = ln[seg[q] + 1] - ln[seg[q]]
+                    v = v / max(float(np.hypot(*v)), 1e-9)
+                    tail = last.get(q)
+                    if q not in tang or abs(float(np.dot(v, tang[q]))) <= CHAIN_INLINE_COS or tail is None or \
+                            len(tail) < 2:
+                        continue
+                    # (and the road's own end on the tunnel's last metres: the map's portal it was carried past)
+                    if _seg_dist(np.asarray([ln[0], ln[-1]]), tail[:-1], tail[1:]).min() < CHAIN_END_M:
+                        approach[q] = True
+        # every single end a portal too, as before: a portal onto a bridge has no ground road at it (Stuttgart's B14 at
+        # the Heslacher tunnel was closed 43 m down in the hill as a dead end); a junction at a portal needs the road
+        approach |= deg == 1
+        # (a connected network with no road mapped on from any of its ends: every single end of it a portal, as before;
+        # a chain also holds parts crossing it, not joined)
+        root = list(range(n))
+
+        def find(q):
+            while root[q] != q:
+                root[q] = root[root[q]]
+                q = root[q]
+            return q
+        for a, b in zip(ea, eb):
+            root[find(a)] = find(b)
+        comps = np.asarray([find(q) for q in range(n)], np.int64)
+        for c in np.unique(comps):
+            m = comps == c
+            if not approach[m].any():
+                approach[m] = deg[m] == 1
+        node_g = np.asarray(gfn(nodes_xy), np.float64)
+        fixed = np.where(approach, node_g, np.nan)
+        z = np.asarray(fast._ef.tunnel_chain_nodes(
+            int(n), np.asarray(ea, np.int64), np.asarray(eb, np.int64), np.asarray(starts, np.int64),
+            np.ascontiguousarray(np.concatenate(ss)), np.ascontiguousarray(np.concatenate(gs)),
+            np.ascontiguousarray(np.concatenate(sls)), np.ascontiguousarray(np.concatenate(srs)),
+            np.ascontiguousarray(fixed), float(TUNNEL_COVER),
+            np.asarray([TUNNEL_OPEN_COVER, BURY_NEED_M, BURY_GRADE, BURY_FLAT_M, BURY_RUN_M]
+                       if BURY_ON else [], np.float64)), np.float64)
+        # pinned: a node inside (not a portal) the network solved; a free single end the kernel made a portal at its
+        # ground keeps the part's own end (its graded ground)
+        pin = np.isfinite(z) & ~approach & ~((deg == 1) & (np.abs(z - node_g) < 1e-6))
+        _la, _lo, h = self.frame.enu_to_geodetic(nodes_xy[:, 0], nodes_xy[:, 1], np.where(pin, z, 0.0))
+        h = np.where(pin, np.asarray(h, np.float64), np.nan)
+        zz = np.where(pin, z, np.nan)
+        geo = {}
+        for k, a, b in zip(keys, ea, eb):
+            out[k] = (float(zz[a]), float(zz[b]))
+            geo[self._part_id(k)] = (float(h[a]), float(h[b]))
+        with self.lock:
+            self._pins.update(geo)
+        return out
+
+    def part_pins(self, key, ring):
+        """(start, end) geodetic floor heights of tunnel part key's (fid, j) ends inside the hill (_chain_pins; NaN at a
+        portal), ring its lon/lat points: the grading's (grading.Grader._tunnel_sections), which solves the same
+        chains on the same raw ground."""
+        pid = self._part_id(key)
+        with self.lock:
+            got = self._pins.get(pid)
+        if got is not None or not CHAIN_PINS:
+            return got
+        pool, ground, loaded = {}, {}, set()
+        for p in (ring[0], ring[-1]):
+            ck = mapcells.cell_of(float(p[1]), float(p[0]))
+            if str(ck) not in loaded:
+                loaded.add(str(ck))
+                self._load(ck, pool, ground)
+        if key not in pool:
+            return None
+        comp = self._resolve(key, pool, ground, loaded)
+        self._chain_pins(comp, pool, ground)
+        with self.lock:
+            got = self._pins.get(pid)
+            if got is None:
+                got = self._pins[pid] = (float("nan"), float("nan"))
+            return got
+
     def _ends_ground(self, xy):
         if self.ends is None:
             return self._ground(xy)
@@ -8111,6 +8343,8 @@ class TunnelProfiles(BridgeProfiles):
         for a, b in jends.values():
             jdeg[a] = jdeg.get(a, 0) + 1
             jdeg[b] = jdeg.get(b, 0) + 1
+        dry = [k for k in comp if k not in underwater_floors]
+        pins = self._chain_pins(dry, pool, ground) if len(dry) == len(comp) else {}
         for k in comp:
             xy = np.asarray(pool[k][1], np.float64)
             if len(xy) < 2:
@@ -8122,6 +8356,14 @@ class TunnelProfiles(BridgeProfiles):
             ge = g[[0, -1]] if underwater else np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
+            pinned = [False, False]
+            gc = None                   # (the ground the cover is read on, where g's ends are pinned)
+            for e, pz in enumerate(pins.get(k, ())):
+                if np.isfinite(pz):     # (a joint inside the hill: the network's floor there, no portal)
+                    if gc is None:
+                        gc = g.copy()
+                    g[0 if e == 0 else -1] = pz
+                    pinned[e] = True
             if underwater:
                 floor = underwater_floors[k]
                 la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
@@ -8131,9 +8373,14 @@ class TunnelProfiles(BridgeProfiles):
                 cover_ground = np.where(np.asarray(d) > .5, np.maximum(g, lz), g)
                 kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
             else:
-                floor, kinds = tunnel_sections(s, g)
-                kinds = portal_cover(kinds, g - floor, pool[k][0], s)
-                kinds = self._cover_roads(xy, s, kinds, ground)
+                sd = tunnel_sides(xy, pool[k][0])
+                sides = None if sd is None else (np.asarray(gfn(sd[0]), np.float64), np.asarray(gfn(sd[1]), np.float64))
+                fl = {}
+                floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
+                                               portals=(not pinned[0], not pinned[1]))
+                if not fl.get("buried"):
+                    kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
+                kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -8146,7 +8393,7 @@ class TunnelProfiles(BridgeProfiles):
             if not underwater:
                 floor = self._observed_floor(k, pool, xy, s, floor, secs,
                                              tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
-            cover = g - floor
+            cover = (g if gc is None else gc) - floor
             log.debug("tunnel %s: sections %s over %.0f m", k, secs, s[-1])
             subs = {}
             for n, (a, b, kd) in enumerate(secs):
@@ -8154,6 +8401,8 @@ class TunnelProfiles(BridgeProfiles):
                     subs[n] = (0, None, None, None, None)
                     continue
                 th = roadmesh.TUNNEL_H
+                low_h = MAJOR_LOW_H if pool[k][0] is not None and pool[k][0].cls in CONCRETE_WALL_CLASSES \
+                    else TUNNEL_LOW_H         # (a motorway's box clears a truck, its top in a mound if need be)
                 if kd == 1:
                     c_ = cover[a:b + 1]
                     k0, k1 = int(len(c_) * 0.2), max(int(len(c_) * 0.8), int(len(c_) * 0.2) + 1)
@@ -8165,14 +8414,20 @@ class TunnelProfiles(BridgeProfiles):
                     inner = (s_ >= s_[0] + ARCH_SIZE_SKIP_M) & (s_ <= s_[-1] - ARCH_SIZE_SKIP_M)
                     if inner.any():
                         base = min(base, float(c_[inner].min()))
-                    low_h = MAJOR_LOW_H if pool[k][0] is not None and pool[k][0].cls in CONCRETE_WALL_CLASSES \
-                        else TUNNEL_LOW_H         # (a motorway's box clears a truck, its top in a mound if need be)
                     th = float(np.clip(base - TUNNEL_SOIL_M, low_h, roadmesh.TUNNEL_H))
+                if BORE_FIT and s[b] - s[a] <= BORE_FIT_MAX_M:
+                    # (the tube under a road or a railway crossing over it: no taller than the room under it allows; a
+                    # section is one height, so only a short one: one road near the Gotthard tunnel's portal made all
+                    # 17 km of it a low arch)
+                    fit = self._bore_fit(xy[a:b + 1], s[a:b + 1], floor[a:b + 1], ground)
+                    if fit is not None and fit < th:
+                        th = float(max(fit, low_h))
                 ups = []
                 for near in (s[a:b + 1] <= s[a] + PORTAL_LOOK_M, s[a:b + 1] >= s[b] - PORTAL_LOOK_M):
                     cv = float(np.max(cover[a:b + 1][near])) if near.any() else th
                     ups.append(float(np.clip(cv + PORTAL_GROUND_M - th, PORTAL_UP_MIN, roadmesh.PORTAL_FRAME)))
                 mouths = (n == 0 or secs[n - 1][2] == 0, n == len(secs) - 1 or secs[n + 1][2] == 0)
+                mouths = (mouths[0] and not (a == 0 and pinned[0]), mouths[1] and not (b == len(xy) - 1 and pinned[1]))
                 if underwater:
                     joined = tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None)))
                     mouths = (mouths[0] and not (a == 0 and joined[0]),
@@ -8246,7 +8501,7 @@ class TunnelProfiles(BridgeProfiles):
             if rs[i] is not None:
                 self._hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
 
-    def _cover_roads(self, xy, s, kinds, ground):
+    def _cover_roads(self, xy, s, kinds, ground, cover=None):
         """kinds with each covered section carried on until the ground roads crossing over it are covered (their
         carriageway and TUNNEL_ROAD_CLEAR_M past it): earthfast.tunnel_cover_roads (GitHub #450)."""
         lines, halves = [], []
@@ -8259,7 +8514,30 @@ class TunnelProfiles(BridgeProfiles):
                 if len(ln) >= 2:
                     lines.append(ln)
                     halves.append(hw)
-        return cover_roads(xy, s, kinds, lines, halves)
+        return cover_roads(xy, s, kinds, lines, halves, cover)
+
+    def _bore_fit(self, xy, s, floor, ground):
+        """m: the tallest tube (floor to vault) that stays BORE_FIT_M under every ground road and railway crossing over
+        the section (xy, arc s, floor) as graded (TunnelProfiles' ground), or None: none crosses it. A 6.8 m tube under
+        a road 4-5 m over the floor stood through that road's lanes (Paris's A6b at Porte d'Italie, GitHub #1172; I-395
+        under Capitol Crossing; Discord 2026-11-10: "the tunnel piece is taller than the clearance between the lower
+        roadway and the upper roadway")."""
+        lines = [np.asarray(ln, np.float64).reshape(-1, 2) for lns in (ground or {}).values() for ln in lns]
+        lines = [ln for ln in lines if len(ln) >= 2]
+        if not lines or len(xy) < 2 or s[-1] <= 2.0:
+            return None
+        pts, arcs = [], []
+        for cr in _crossings_by([np.asarray(xy, np.float64)[:, :2]], lines):
+            for _pi, arc, pt in cr:
+                if 0.5 < arc < s[-1] - 0.5:
+                    pts.append(pt)
+                    arcs.append(arc)
+        if not pts:
+            return None
+        zr = np.asarray(self._ground(np.asarray(pts, np.float64)), np.float64)
+        room = zr - np.interp(np.asarray(arcs), s, floor) - BORE_FIT_M
+        room = room[np.isfinite(room)]
+        return float(room.min()) if len(room) else None
 
     def _road_caps(self, xy, floor, th, ups, mouths, width, ground):
         """A low arch's stone tops (roadmesh.LOW_CAP_M back from each portal face over its mouth) and face reaches where

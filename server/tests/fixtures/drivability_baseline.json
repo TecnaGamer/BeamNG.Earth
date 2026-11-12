@@ -295,7 +295,7 @@
   }
  },
  "dc_capitol_crossing_1083": {
-  "steps": 102,
+  "steps": 133,
   "parts": {
    "bridge:07c9b0e6-db11-491b-a91d-955981528c9f": {
     "step_m": 0.0369,
@@ -348,14 +348,14 @@
     "lift_g": 0.541
    },
    "ground:81bf71fa-fc94-4c53-a4de-a5a0e7757de2": {
-    "step_m": 0.1798,
-    "grade": 0.0136,
-    "lift_g": 0.279
+    "step_m": 0.5489,
+    "grade": 0.0096,
+    "lift_g": 0.0854
    },
    "ground:8598503b-2f08-46c3-a7d8-f6e61dad6f1a": {
-    "step_m": 0.1487,
-    "grade": 0.3043,
-    "lift_g": 4.7111
+    "step_m": 1.4057,
+    "grade": 0.2875,
+    "lift_g": 4.2985
    },
    "ground:8de3d046-3ac9-4dac-a4a0-d791c5cf566b": {
     "step_m": 0.6989,

@@ -32,6 +32,7 @@ mod underpass;
 mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
+mod tunnelchain;
 mod gradesep;
 mod lamps;
 mod decks;
@@ -1892,11 +1893,29 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
                         open_cover: f64, full_cover: f64, min_n: usize)
                         -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>) {
     let (s, g) = (s.as_array(), g.as_array());
+    let (s, g) = (s.as_slice().unwrap(), g.as_slice().unwrap());
+    let (floor, kinds) = sections_of(s, g, g, open_cover, full_cover, min_n);
+    (floor.into_pyarray(py), kinds.into_pyarray(py))
+}
+
+/// tunnel_sections with the floor's hull on g (its ends pinned: a joint inside the hill at the tunnel network's
+/// height, tunnelchain) and the cover read on cover_g (the real ground there). (floor, kinds)
+#[pyfunction]
+fn tunnel_sections_cover<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyReadonlyArray1<'py, f64>,
+                              cover_g: PyReadonlyArray1<'py, f64>, open_cover: f64, full_cover: f64, min_n: usize)
+                              -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>) {
+    let (floor, kinds) = sections_of(s.as_slice().unwrap(), g.as_slice().unwrap(), cover_g.as_slice().unwrap(),
+                                     open_cover, full_cover, min_n);
+    (floor.into_pyarray(py), kinds.into_pyarray(py))
+}
+
+fn sections_of(s: &[f64], g: &[f64], gc: &[f64], open_cover: f64, full_cover: f64, min_n: usize)
+               -> (Vec<f64>, Vec<i64>) {
     let n = s.len();
     let mut floor = vec![0.0f64; n];
-    let mut kinds = vec![0i64; n];
+    let kinds;
     if n == 0 {
-        return (floor.into_pyarray(py), kinds.into_pyarray(py));
+        return (floor, vec![]);
     }
     // the lower hull (monotone chain over s ascending)
     let mut hull: Vec<usize> = Vec::new();
@@ -1914,15 +1933,50 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
         let (a, b) = (hull[k], hull[(k + 1).min(hull.len() - 1)]);
         floor[i] = if b == a || s[b] <= s[a] { g[a] } else { g[a] + (g[b] - g[a]) * (s[i] - s[a]) / (s[b] - s[a]) };
     }
-    // covered runs and their kinds
-    let covered: Vec<bool> = (0..n).map(|i| g[i] - floor[i] >= open_cover).collect();
+    kinds = kinds_of(gc, &floor, open_cover, full_cover, min_n);
+    (floor, kinds)
+}
+
+/// tunnel_sections over a buried floor (tunnelchain::buried_floor): the hull of g, lowered under flat ground the map
+/// has a tunnel under (side_l / side_r: the ground beside it) to `need` under it, ramps of `grade` from its ends; the
+/// kinds read on cover_g, short open gaps under no cutting closed (tunnelchain::close_gaps). prm: [open_cover,
+/// full_cover, need, grade, flat_m, min_run, gap_m, trench_m, open_cover of a buried line, start is a portal, end is a
+/// portal (1 / 0)]. (floor, kinds, buried)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn tunnel_sections_buried<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyReadonlyArray1<'py, f64>,
+                               cover_g: PyReadonlyArray1<'py, f64>, side_l: PyReadonlyArray1<'py, f64>,
+                               side_r: PyReadonlyArray1<'py, f64>, prm: PyReadonlyArray1<'py, f64>, min_n: usize)
+                               -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, bool) {
+    let (s, g, gc) = (s.as_slice().unwrap(), g.as_slice().unwrap(), cover_g.as_slice().unwrap());
+    let prm = prm.as_slice().unwrap();
+    let ends = if prm.len() >= 11 { (prm[9] > 0.5, prm[10] > 0.5) } else { (true, true) };
+    let (floor, buried) = tunnelchain::buried_floor_flag(s, g, gc, side_l.as_slice().unwrap(),
+                                                         side_r.as_slice().unwrap(), prm[0], prm[2], prm[3], prm[4],
+                                                         prm[5], ends);
+    // (a buried line covered only where its box fits under the ground: prm[8], its portals where the ramps reach that)
+    let open = if buried && prm.len() >= 9 { prm[8] } else { prm[0] };
+    let mut kinds = kinds_of(gc, &floor, open, prm[1], min_n);
+    if prm.len() >= 8 {
+        tunnelchain::close_gaps(s, gc, side_l.as_slice().unwrap(), side_r.as_slice().unwrap(), &mut kinds, prm[6],
+                                prm[7]);
+    }
+    (floor.into_pyarray(py), kinds.into_pyarray(py), buried)
+}
+
+/// The sections' kinds from the ground over the floor: 2 where a covered run (gc - floor >= open_cover, min_n samples
+/// or more) reaches full_cover, else 1; open gaps of fewer than min_n samples between covered runs closed.
+pub(crate) fn kinds_of(gc: &[f64], floor: &[f64], open_cover: f64, full_cover: f64, min_n: usize) -> Vec<i64> {
+    let n = floor.len();
+    let mut kinds = vec![0i64; n];
+    let covered: Vec<bool> = (0..n).map(|i| gc[i] - floor[i] >= open_cover).collect();
     let mut runs: Vec<(usize, usize, i64)> = Vec::new();
     let mut i = 0usize;
     while i < n {
         if !covered[i] { i += 1; continue; }
         let mut j = i;
         while j + 1 < n && covered[j + 1] { j += 1; }
-        let deep = (i..=j).any(|q| g[q] - floor[q] >= full_cover);
+        let deep = (i..=j).any(|q| gc[q] - floor[q] >= full_cover);
         if j + 1 - i >= min_n { runs.push((i, j, if deep { 2 } else { 1 })); }
         i = j + 1;
     }
@@ -1940,7 +1994,7 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
     for (a, b, kind) in merged {
         for q in a..=b { kinds[q] = kind; }
     }
-    (floor.into_pyarray(py), kinds.into_pyarray(py))
+    kinds
 }
 
 /// grading.resample: points every step m along xy (k, 2), the last point kept, and their arc lengths.
@@ -5803,6 +5857,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(junctionsnap::hold_junction_corridors, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads_over, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_chain_nodes, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_portal_cover, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
@@ -5870,6 +5927,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bank_profile, m)?)?;
     m.add_function(wrap_pyfunction!(resample, m)?)?;
     m.add_function(wrap_pyfunction!(tunnel_sections, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnel_sections_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnel_sections_buried, m)?)?;
     m.add_function(wrap_pyfunction!(smooth_profile, m)?)?;
     m.add_function(wrap_pyfunction!(chain_extensions, m)?)?;
     m.add_function(wrap_pyfunction!(route_samples, m)?)?;
@@ -6236,6 +6295,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
         // 242: geo_world_to_latlon, chain_graph, hash01, skeleton_roof_uv, sky_walls (world gen speed)
         // 247: 242 (world gen speed) and 243 (bldclear) in one module
+        // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
+        // _buried, tunnel_cover_roads_over)
     // 249: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
     m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
     m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;

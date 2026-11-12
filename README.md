@@ -142,7 +142,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
-  tunnels through hills, with portals, lights and low arches where little is over them.
+  tunnels through hills, with portals, lights and low arches where little is over them; a tunnel mapped in several
+  pieces (or as a network with junctions and roundabouts inside the mountain) kept at one level inside the hill, and
+  city tunnels under level streets dug down under them, their portals where the ramps reach that depth
+  (`BNE_TUNNEL_CHAINS=off`, `BNE_TUNNEL_BURY=off` for the old behaviour).
 - Water: the sea with real depth (cars sink), lakes, and rivers kept beside the roads.
 - Airports with graded, marked runways; racetracks (circuits, ovals and pit lanes, with their real banking);
   landmarks such as the pyramids of Giza.
