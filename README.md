@@ -83,7 +83,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
   A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
   smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
-  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  track at grade lies flush with it; a road under a short rail bridge dips to clear it (to the height limit its sign
+  gives, `maxheight`, when the map has one), and the bridges of a long rail line stand where the map puts them.
+  Railway stations are built from the map: platforms at the country's height
   beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics

@@ -280,6 +280,7 @@ APPROACH_MAX_RUN = 320.0    # m: the longest ramp
 APPROACH_TOUCH_M = 2.5      # m: a road whose end is this close to an abutment leads onto the bridge
 APPROACH_MIN_CROSS_M = 6.0  # m: a road crossing a deck closer than this to its end is a junction at grade (not
                             # under it)
+RAIL_MIN_CROSS_M = 2.0      # m: ... and under a rail deck (a track's bridge over a road is 10-12 m, a road's 6 m rule left it out)
 APPROACH_FLAT_M = 20.0      # m from an abutment the deck needs its full clearance (beyond: it may fall at DECK_GRADE)
 APPROACH_MARGIN_M = 0.3     # m over the clearance (the deck profile's smoothing takes a little off near its ends)
 JUNCTION_RAISE_ON = os.environ.get("BNE_JUNCTION_RAISE", "on") != "off"   # an approach's junction rises with it
@@ -395,6 +396,14 @@ UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a l
 # a ravine the user saw, 2026-11-09): lowered at most this much (plan 035). BNE_RAIL_UNDER_LIDAR_DROP=off: as before.
 _rud = os.environ.get("BNE_RAIL_UNDER_LIDAR_DROP", "1.0")
 RAIL_UNDER_LIDAR_DROP_M = None if _rud == "off" else float(_rud)
+# A road with a height limit under the rail bridge (a maxheight sign: Overture's vehicle-height access restriction, the
+# "max_height_m" rule) is lowered for the limit itself, its height and RAIL_SIGN_MARGIN_M over it under the deck, by at
+# most RAIL_UNDER_SIGNED_DROP_M (a bus, 3.3 m under the line over II/301 by Zdar nad Metuji, was 2 m short, 2026-11-12).
+# BNE_RAIL_SIGNED_UNDER=off: the limit is not read.
+RAIL_SIGNED_ON = os.environ.get("BNE_RAIL_SIGNED_UNDER", "on") != "off"
+RAIL_SIGN_MARGIN_M = 0.25
+RAIL_UNDER_SIGNED_DROP_M = 2.5
+LIMIT_NEAR_M = 4.0          # m: a limit's range holds where the road crosses under the bridge when it passes this near
 UNDER_FLAT_M = 12.0         # m either side of the crossing kept at the dip's full depth (under_dip)
 UNDER_MAX_GRADE = 0.10      # a dip's ramp made steeper, up to this, to end inside its road part (under_dip)
 UNDER_JOINT_FLAT_M = 12.0   # at a junction, every road takes the deepest dip within this of it ...
@@ -3486,9 +3495,10 @@ class _Planner:
         cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
-        bridges, ground, over = [], {}, []
+        bridges, ground, over, limits = [], {}, [], []
         for k in keys:
             c = self._cell_enu(k)
+            limits += c.get("height_limits", ())
             if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
                 over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
                 over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
@@ -3544,7 +3554,8 @@ class _Planner:
             # to clear it)
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
             max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
-            if L < 2 * APPROACH_MIN_CROSS_M or (L > max_l and not rail and not cw_deck):
+            mc = RAIL_MIN_CROSS_M if rail else APPROACH_MIN_CROSS_M
+            if L < 2 * mc or (L > max_l and not rail and not cw_deck):
                 continue
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
@@ -3582,6 +3593,7 @@ class _Planner:
                 ez[j] = got
             return got
         cands, decks, cand_xs, cand_cw = [], [], [], []
+        signed = set()                  # (the candidates under a rail deck whose road has a height limit)
         for i, cr in enumerate(crs):
             if not cr:
                 continue
@@ -3591,7 +3603,8 @@ class _Planner:
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
                 b, L, fixed, rail = spans[bi]
-                if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
+                mc = RAIL_MIN_CROSS_M if rail else APPROACH_MIN_CROSS_M
+                if arc_b < mc or arc_b > L - mc:
                     continue                    # a junction at the bridge's end
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
                 cz, measured = None, False
@@ -3628,6 +3641,10 @@ class _Planner:
                 clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
                 if measured:                    # (its real headroom, not the one a guessed deck is given)
                     clear -= roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M
+                sign = _limit_at(limits, pt) if rail and limits else None
+                if sign is not None:            # (a rail deck over a road with a height limit: that, not the guess)
+                    clear = depth + sign + RAIL_SIGN_MARGIN_M + ROAD_LIFT
+                    signed.add(len(cands))
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
                 cand_xs.append((bi, pt))
@@ -3641,7 +3658,8 @@ class _Planner:
         lidar = UNDER_LIDAR_ON and not coarse and dem is not None and hasattr(dem, "coarse_at")
         requirements, xs_floor = [], []
         floor = seatiles.SEA_E + UNDER_SEA_M
-        for (i, sc, top), (deck, fixed), z, (bi, pt), top_cw in zip(cands, decks, zc, cand_xs, cand_cw):
+        for n_c, ((i, sc, top), (deck, fixed), z, (bi, pt), top_cw) in enumerate(zip(cands, decks, zc, cand_xs,
+                                                                                         cand_cw)):
             if top_cw is not None and _cw.family(ground[gids[i]][3]) is not None:
                 continue                        # (a carriageway under a carriageway's deck: solved together)
             if top_cw is not None:
@@ -3679,7 +3697,8 @@ class _Planner:
                         xs_floor.append((np.asarray(pt, f64), target, _road_fids(i, lines, [ground[g][3] for g in gids],
                                                                                 gids), sol["reach"]))
                     continue
-            if rail_span[bi] and lidar and railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
+            if rail_span[bi] and lidar and n_c not in signed and \
+                    railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
                 continue                        # (a short rail bridge over a road on level ground: no bridge, a level
                                                 # crossing; railways.parts lays it on the ground: plan 035)
             if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
@@ -3687,7 +3706,7 @@ class _Planner:
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
             target = max(top, z - UNDER_MAX_DROP_M)
             if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None:
-                target = max(target, z - RAIL_UNDER_LIDAR_DROP_M)
+                target = max(target, z - (RAIL_UNDER_SIGNED_DROP_M if n_c in signed else RAIL_UNDER_LIDAR_DROP_M))
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
             if target < z - 0.1:
@@ -4655,6 +4674,17 @@ class _Planner:
             for ring, out_ in [(r, rail_xy) for r in rail] + [(r, rail_gxy) for r in rail_g]:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
+        limits = []
+        if f is not None and len(f) and ground and RAIL_SIGNED_ON:
+            hl = roadsmod.height_limit_lines(f)
+            if hl:
+                allh = np.concatenate([r for r, _h in hl])
+                he, hn, _ = self.frame.geodetic_to_enu(allh[:, 1], allh[:, 0], 0.0)
+                hxy = np.stack([np.asarray(he, np.float64), np.asarray(hn, np.float64)], axis=1)
+                k0 = 0
+                for r, h in hl:
+                    limits.append((hxy[k0:k0 + len(r)], h))
+                    k0 += len(r)
         span_xy = []
         if span_ll:
             alls = np.concatenate(span_ll)
@@ -4668,6 +4698,7 @@ class _Planner:
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
+                "height_limits": limits,
                 # (each line's box [min e, min n, max e, max n], made once: the passes skip the far ones at once)
                 "ground_box": _line_boxes([g[0] for g in ground_l]), "rail_ground_box": _line_boxes(rail_gxy)}
 
@@ -6859,6 +6890,18 @@ def fill_abutment(z, at_end, step=PROFILE_STEP):
     q = p.copy()
     q[:n] = np.minimum(np.maximum(p[:n], e), p[:n] + ABUT_MAX_M)
     return q[::-1] if at_end else q
+
+
+def _limit_at(limits, pt):
+    """m: the lowest height limit [(xy (k, 2), m)] holding at pt (a limit's polyline passing within LIMIT_NEAR_M), or
+    None."""
+    best = None
+    pt = np.asarray(pt, np.float64)[None, :2]
+    for xy, h in limits:
+        if len(xy) >= 2 and (best is None or h < best) and \
+                float(roadsmod._seg_dist(pt, xy[:-1, :2], xy[1:, :2]).min()) <= LIMIT_NEAR_M:
+            best = h
+    return best
 
 
 def underpass_offsets(lines, requirements, queries=None):

@@ -6318,6 +6318,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
-    m.add("VERSION", 260)?;
+    // 261: pmtiles.rs puts a cut line's rule ranges (bridges, tunnels, levels, ...) on the line we have, by its
+    // connectors (a 19 km rail line cut to 14 km had every bridge 880 m off; BNE_PMT_ANCHOR=off: as before), and reads
+    // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193)
+    m.add("VERSION", 261)?;
     Ok(())
 }
