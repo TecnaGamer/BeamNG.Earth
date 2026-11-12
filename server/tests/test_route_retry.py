@@ -62,6 +62,14 @@ class RouteRetryTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("error", sent[0])
 
+    def test_maneuvers_reach_the_client_unchanged(self):
+        steps = [{"type": "roundabout", "exit": 3, "name": "Main Road", "leg": 1, "offset": 400,
+                  "location": {"lat": 64.05, "lon": -16.18}}]
+        self.answers({"points": [[63.77, -18.09], [64.05, -16.18]], "dist": 130100, "dur": 5000, "steps": steps})
+        c, sent = connection()
+        asyncio.run(earthd.Connection.route(c, dict(self.MSG)))
+        self.assertEqual(sent[0]["steps"], steps)
+
     def test_it_gives_up_after_its_tries(self):
         calls = self.answers(netfetch.RateLimited("HTTP 429"))
         c, sent = connection()

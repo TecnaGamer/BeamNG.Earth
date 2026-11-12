@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 6) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6) |
+| `version()` | `major, minor` (1, 7) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'` (1.7) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -163,7 +163,7 @@ end
 | `place()` | `{street, place, region, country}` (each optional) as the status bar shows it, or nil |
 | `teleport(lat, lon, name)` | true once taken (as the map's Go), else `false, why` |
 | `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning, waypoints, legs}` or nil |
-| `gpsRoute()` | 1.6: the planned route as the map draws it: `{version, points = {{lat, lon}, ...}, dist (m), dur (s), elev = {{distM, elevM}, ...}, legs}`, or nil without one. `version` changes with every new plan (a replan after a wrong turn too); `gps()` also has `off` (m off the route) and `routeVersion` from 1.6. A copy: keep it as long as you like |
+| `gpsRoute()` | 1.6: the planned route as the map draws it: `{version, points = {{lat, lon}, ...}, dist (m), dur (s), elev = {{distM, elevM}, ...}, legs, steps}`, or nil without one. `steps` from 1.7: see "Route maneuvers" below. `version` changes with every new plan (a replan after a wrong turn too); `gps()` also has `off` (m off the route) and `routeVersion` from 1.6. A copy: keep it as long as you like |
 | `toGame(lat, lon, h)`, `toGeo(x, y, z)` | 1.6: lat / lon (h m over the WGS84 ellipsoid, default 0) to the game's `x, y, z`, and back to `lat, lon, h`, in the current anchor's frame as `pose()` gives them; nil before the world is there. Game coordinates change at every rebase (`onBeamNGEarthTeleported`, and quietly while driving): convert again rather than keep them |
 | `gpsSetRoute(points)` | 1.2: the GPS through waypoints, `points` `{{lat, lon, name?}, ...}`, the last one the destination, at most 11; one route through them all, each waypoint passed in order (within 40 m). `gps().waypoints` is the ones still ahead, `gps().legs` the planned route's `{dist m, dur s}` per leg. True, or `false, why` |
 | `notify(text, seconds)` | a short message on screen |
@@ -173,6 +173,31 @@ end
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
+
+### Route maneuvers (1.7)
+
+With `api.has('routeSteps')`, `api.gpsRoute().steps` is the planned route's maneuvers from OSRM, in travel order.
+It is nil when the companion did not supply them (an older app), and an empty table when supplied but none were
+usable. The steps and their nested tables are copies. A successful replan replaces them and changes `version`;
+a failed replan keeps the current route's steps. A new destination or `gpsClear()` drops the old route.
+
+Each step has:
+
+| field | meaning |
+|---|---|
+| `type`, `modifier` | OSRM maneuver type (`'depart'`, `'turn'`, `'roundabout'`, `'arrive'`, etc.) and optional turn modifier (`'right'`, `'slight left'`, etc.). Unknown types may be added by OSRM; treat them as turns using `modifier` |
+| `name` | the road's name, empty string where not known |
+| `location` | `{lat, lon}` of the maneuver, degrees (independent of the simplified overview's vertices) |
+| `distance`, `duration` | metres/seconds **from** this maneuver to the next, not the distance remaining to this maneuver |
+| `offset`, `leg` | metres from the planned route's start and one-based leg index. Each waypoint ends a leg; its arrival and the next departure are both retained |
+| `exit` | optional roundabout/rotary exit number |
+| `bearingBefore`, `bearingAfter` | optional direction of travel before/after the maneuver, compass degrees |
+| `ref`, `destinations`, `rotary_name`, `driving_side` | optional OSRM road reference, destination text, rotary name and `'left'`/`'right'` driving side |
+| `lanes` | optional `{ {valid = bool, indications = {'straight', 'right', ...}}, ... }`, left to right in travel direction, at the maneuver's own intersection |
+
+These fields describe the whole planned trip, including stops already passed. They are not a live instruction
+index. Poll `api.gps().routeVersion` and fetch a new `gpsRoute()` snapshot only when it changes, rather than copying
+a long trip every frame. See [OSRM's route steps](https://project-osrm.org/docs/v5.24.0/api/#routestep-object) for maneuver semantics.
 
 The session `navgraph_*.json` also keeps tunnel-only minimap stretches in `lines`; each entry is
 `[x1, y1, x2, y2, drivability, postedSpeedMs]`. The sixth field is the legal road speed in m/s (including the
