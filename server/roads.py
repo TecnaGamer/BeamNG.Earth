@@ -7950,7 +7950,7 @@ class BridgeProfiles:
 
 
 def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M, cover_g=None, sides=None,
-                    flags=None, portals=(True, True)):
+                    flags=None, portals=(True, True), net_buried=False):
     """A tunnel's road level and its sections from the ground over it (g at arc lengths s): (floor, kinds). floor: the
     lower convex hull of (s, g), the road's level under the covered parts and the ground where it lies open; kinds per
     sample: 0 open road, 1 a low arch, 2 a full tunnel (a run with TUNNEL_OPEN_COVER over the floor, full where it
@@ -7960,7 +7960,8 @@ def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M,
     sides: (left, right) ground beside it (tunnel_side_ground): the floor buried under flat ground (BURY_*,
     earthfast.tunnel_sections_buried); flags (a dict): flags["buried"] set when it was (its portals then stand where
     the ramps reach BURY_OPEN_M: portal_cover is not for it); portals: (start, end) is a portal the ramps climb to (not a
-    joint or a cell's clip inside the tunnel). The Rust kernel (fast). Pure."""
+    joint or a cell's clip inside the tunnel); net_buried: the part's network was buried (_chain_pins): a part of it
+    joined inside is buried too (the ramp up from the buried floor). The Rust kernel (fast). Pure."""
     s = np.ascontiguousarray(s, np.float64)
     g = np.ascontiguousarray(g, np.float64)
     oc = TUNNEL_OPEN_COVER if open_cover is None else open_cover
@@ -7974,7 +7975,8 @@ def tunnel_sections(s, g, open_cover=None, full_cover=None, min_m=SECTION_MIN_M,
         f, k, buried = fast._ef.tunnel_sections_buried(
             s, g, gc, np.ascontiguousarray(sides[0], np.float64), np.ascontiguousarray(sides[1], np.float64),
             np.asarray([oc, fc, BURY_NEED_M, BURY_GRADE, BURY_FLAT_M, BURY_RUN_M, GAP_CLOSE_M,
-                        GAP_TRENCH_M, BURY_OPEN_M, float(portals[0]), float(portals[1])], np.float64), int(min_n))
+                        GAP_TRENCH_M, BURY_OPEN_M, float(portals[0]), float(portals[1]),
+                        float(bool(net_buried) and not all(portals))], np.float64), int(min_n))
         if flags is not None:
             flags["buried"] = bool(buried)
         return _short_piece(s, gc, np.asarray(f), np.array(k, np.int64), oc, fc, cover_g is not None)
@@ -8326,6 +8328,16 @@ class TunnelProfiles(BridgeProfiles):
             np.ascontiguousarray(fixed), float(TUNNEL_COVER),
             np.asarray([TUNNEL_OPEN_COVER, BURY_NEED_M, BURY_GRADE, BURY_FLAT_M, BURY_RUN_M]
                        if BURY_ON else [], np.float64)), np.float64)
+        if BURY_ON:     # (the network was buried: the burial moved a joint off the hull's)
+            z0 = np.asarray(fast._ef.tunnel_chain_nodes(
+                int(n), np.asarray(ea, np.int64), np.asarray(eb, np.int64), np.asarray(starts, np.int64),
+                np.ascontiguousarray(np.concatenate(ss)), np.ascontiguousarray(np.concatenate(gs)),
+                np.ascontiguousarray(np.concatenate(sls)), np.ascontiguousarray(np.concatenate(srs)),
+                np.ascontiguousarray(fixed), float(TUNNEL_COVER), np.zeros(0)), np.float64)
+            both = np.isfinite(z) & np.isfinite(z0)
+            if (np.abs(z - z0)[both] > 0.05).any():
+                with self.lock:
+                    self.__dict__.setdefault("_net_buried", set()).update(self._part_id(k) for k in keys)
         # pinned: a node inside (not a portal) the network solved; a free single end the kernel made a portal at its
         # ground keeps the part's own end (its graded ground)
         pin = np.isfinite(z) & ~approach & ~((deg == 1) & (np.abs(z - node_g) < 1e-6))
@@ -8435,7 +8447,8 @@ class TunnelProfiles(BridgeProfiles):
                 sides = tunnel_side_ground(xy, s, g_raw, pool[k][0], gfn, ground)
                 fl = {}
                 floor, kinds = tunnel_sections(s, g, cover_g=gc, sides=sides, flags=fl,
-                                               portals=(not pinned[0], not pinned[1]))
+                                               portals=(not pinned[0], not pinned[1]),
+                                               net_buried=self._part_id(k) in self.__dict__.get("_net_buried", ()))
                 if not fl.get("buried"):
                     kinds = portal_cover(kinds, (g if gc is None else gc) - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground, (g if gc is None else gc) - floor)

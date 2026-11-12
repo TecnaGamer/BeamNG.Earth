@@ -1940,7 +1940,7 @@ fn sections_of(s: &[f64], g: &[f64], gc: &[f64], open_cover: f64, full_cover: f6
 /// has a tunnel under (side_l / side_r: the ground beside it) to `need` under it, ramps of `grade` from its ends; the
 /// kinds read on cover_g, short open gaps under no cutting closed (tunnelchain::close_gaps). prm: [open_cover,
 /// full_cover, need, grade, flat_m, min_run, gap_m, trench_m, open_cover of a buried line, start is a portal, end is a
-/// portal (1 / 0)]. (floor, kinds, buried)
+/// portal (1 / 0), a part of a buried network (1 / 0)]. (floor, kinds, buried)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn tunnel_sections_buried<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyReadonlyArray1<'py, f64>,
@@ -1953,8 +1953,12 @@ fn tunnel_sections_buried<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g
     let (floor, buried) = tunnelchain::buried_floor_flag(s, g, gc, side_l.as_slice().unwrap(),
                                                          side_r.as_slice().unwrap(), prm[0], prm[2], prm[3], prm[4],
                                                          prm[5], ends);
-    // (a buried line covered only where its box fits under the ground: prm[8], its portals where the ramps reach that)
+    // (a part of a buried network, prm[11]: joined inside to a floor the burial lowered, it is the ramp up from it:
+    // I-395's 106 m piece from the tunnel under Washington's Mall up to D Street was a tube to its last metre)
+    // (a buried line covered only where its box fits under the ground: prm[8], its portals where the ramps reach that;
+    // a network's part between joints keeps the hull's own measure: under ground that undulates it was open in places)
     let open = if buried && prm.len() >= 9 { prm[8] } else { prm[0] };
+    let buried = buried || (prm.len() >= 12 && prm[11] > 0.5);
     let mut kinds = kinds_of(gc, &floor, open, prm[1], min_n);
     if prm.len() >= 8 {
         tunnelchain::close_gaps(s, gc, side_l.as_slice().unwrap(), side_r.as_slice().unwrap(), &mut kinds, prm[6],
