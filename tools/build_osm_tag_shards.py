@@ -12,12 +12,19 @@ near, the group's whole geometry column (14-19 MB). A tile of this archive is ~3
 manifest, the archive's head, a leaf directory, the tiles; the first three shared by everything around).
 
 Output, in OUT_DIR:
-- osmtags.pmtiles: tile type 0 (our own blob, below, raw deflate), gzip directories, zoom SHARD_ZOOM only, tiles in
-  tile-id order (clustered).
-- manifest.json: {"format", "zoom", "built", "source", "source_etag", "archive": "osmtags.pmtiles", "bytes", "tiles",
-  "rows", "schema", "license"}. The server reads it from the data repo's GitHub Pages (<pages>/osmtags/); "archive"
-  is made an absolute URL when the archive is hosted elsewhere (the planet's is ~2.5 GB: Pages sites stop at 1 GB).
-  "schema": the blob's columns in order (schema()); the server decodes by it and refuses one without osmtags' columns.
+- osmtags-000.pmtiles, osmtags-001.pmtiles, ...: the tiles in tile-id order cut into parts of at most --part-bytes
+  (PART_BYTES) each, every part a whole PMTiles v3 archive of its own (header, directories, its tiles): tile type 0
+  (our own blob, below, raw deflate), gzip directories, zoom SHARD_ZOOM only, clustered. (Why parts: Cloudflare's
+  free plan caches files up to 512 MB; the planet's one 2.4 GB archive answered every range read from R2, BYPASS,
+  2026-11-11. A part is one tile-id run: a place's tiles are in a part or two, read like the one archive was.)
+- manifest.json: {"format", "zoom", "built", "source", "source_etag", "parts": [{"archive": "osmtags-000.pmtiles",
+  "first", "last", "bytes", "tiles"}, ...], "bytes", "tiles", "rows", "schema", "license"}: "first" / "last" the
+  part's first and last tile id, the parts in that order; a tile id in no part's run is not in the archive. The
+  server reads it from the data repo's GitHub Pages (<pages>/osmtags/); each part's "archive" is made an absolute URL
+  where the parts are hosted elsewhere (R2 behind tiles.tgforever.net: Pages sites stop at 1 GB). "schema": the
+  blob's columns in order (schema()); the server decodes by it and refuses one without osmtags' columns.
+  --part-bytes 0: one archive, osmtags.pmtiles, and the manifest's "archive" naming it instead of "parts" (the first
+  layout, 2026-11-11; the server reads both).
 
 A tile holds every row of the Layercake file whose float32 bbox touches the tile (the test osmtags.py makes per cell:
 a tile's cells' tests at once, their edges being the same doubles), in file order, of the rows osmtags decodes (a tag
@@ -62,6 +69,8 @@ import numpy as np
 
 FORMAT = 1
 SHARD_ZOOM = 12
+PART_BYTES = 400_000_000        # an archive part at most (Cloudflare's free plan caches files up to 512 MB)
+PART_SLACK = 1 << 16            # (a part's header, root directory and metadata: within this)
 TILE_MAGIC = b"OTG1"
 
 # --- osmtags.py's query (tests/test_osm_tag_shards.py keeps these equal to server/osmtags.py's) ---------------------
@@ -340,13 +349,16 @@ def directories(entries, root_max=16384 - 127):
         size *= 2
 
 
-def write_pmtiles(path, entries, data_path, bounds, n_rows, z=SHARD_ZOOM, root_max=16384 - 127):
-    """The archive at path: header, root directory, metadata, leaves, then the tile data (data_path's bytes)."""
+def write_pmtiles(path, entries, data_path, bounds, n_rows, z=SHARD_ZOOM, root_max=16384 - 127, data_start=0,
+                  data_len=None):
+    """The archive at path: header, root directory, metadata, leaves, then the tile data (data_path's data_len bytes
+    from data_start; the entries' offsets are from there)."""
     root, leaves = directories(entries, root_max)
     meta = gzip.compress(json.dumps({"name": "BeamNG.Earth OSM road tags", "format": f"otg{FORMAT}",
                                      "rows": n_rows, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
                                     ).encode(), 9, mtime=0)
-    data_len = os.path.getsize(data_path)
+    if data_len is None:
+        data_len = os.path.getsize(data_path) - data_start
     root_off = 127
     meta_off = root_off + len(root)
     leaf_off = meta_off + len(meta)
@@ -366,14 +378,55 @@ def write_pmtiles(path, entries, data_path, bounds, n_rows, z=SHARD_ZOOM, root_m
         f.write(meta)
         f.write(leaves)
         with open(data_path, "rb") as d:
-            shutil.copyfileobj(d, f, 1 << 22)
+            d.seek(data_start)
+            left = data_len
+            while left > 0:
+                b = d.read(min(left, 1 << 22))
+                if not b:
+                    raise IOError(f"{data_path}: {left} bytes short")
+                f.write(b)
+                left -= len(b)
     os.replace(path + ".part", path)
+
+
+def split_parts(entries, part_bytes):
+    """[(i0, i1)]: entries (tile-id order, their data contiguous in that order) cut into runs whose archive stays
+    within part_bytes (the tile data, plus a bound on the directories: <= 8 B an entry before gzip, and PART_SLACK for
+    the header, root directory and metadata)."""
+    out, i0, size = [], 0, 0
+    for i, e in enumerate(entries):
+        if i > i0 and size + e[2] + 8 * (i - i0 + 1) + PART_SLACK > part_bytes:
+            out.append((i0, i))
+            i0, size = i, 0
+        size += e[2]
+    out.append((i0, len(entries)))
+    return out
+
+
+def write_parts(out, entries, data_path, bounds, n_rows, z, root_max, part_bytes):
+    """The archive's parts in out (osmtags-NNN.pmtiles), each a PMTiles archive of one tile-id run: the manifest's
+    "parts"."""
+    parts = []
+    for k, (i0, i1) in enumerate(split_parts(entries, part_bytes)):
+        ents = entries[i0:i1]
+        start = ents[0][1] if ents else 0
+        length = ents[-1][1] + ents[-1][2] - start if ents else 0
+        name = f"osmtags-{k:03d}.pmtiles"
+        path = os.path.join(out, name)
+        write_pmtiles(path, [(t, o - start, n, r) for t, o, n, r in ents], data_path, bounds, n_rows, z, root_max,
+                      data_start=start, data_len=length)
+        size = os.path.getsize(path)
+        if size > part_bytes:
+            raise SystemExit(f"{name}: {size} B, over the {part_bytes} B a part may have")
+        parts.append({"archive": name, "first": int(ents[0][0]) if ents else 0,
+                      "last": int(ents[-1][0]) if ents else 0, "bytes": size, "tiles": len(ents)})
+    return parts
 
 
 # ------------------------------------------------------------------------------------------------ the source
 _CON = None
 DUCKDB_MEMORY = "1500MB"        # a decode worker's DuckDB buffer pool at most
-DECODE_TASKS = 25               # row groups a decode worker takes before a fresh process replaces it (its memory back)
+DECODE_TASKS = 25               # row groups a decode worker takes before fresh processes replace it (its memory back)
 
 
 def _connect(threads=2):
@@ -382,7 +435,7 @@ def _connect(threads=2):
     # (no cache of the remote file's bytes, a capped buffer pool: one connection per decode worker for its whole life
     # grew the planet build's memory ~1 GB every 2 min to the runner's 16 GB, and the runner was stopped, 2026-11-11)
     for sql in ("LOAD httpfs", "SET enable_http_metadata_cache = true", "SET parquet_metadata_cache = true",
-                "SET enable_geoparquet_conversion = false", "SET enable_external_file_cache = false",
+                "SET enable_geoparquet_conversion = false", "SET enable_progress_bar = false", "SET enable_external_file_cache = false",
                 f"SET memory_limit = '{DUCKDB_MEMORY}'"):
         try:
             con.execute(sql)
@@ -651,8 +704,10 @@ def cut_area(args):
     return entries, n_rows
 
 
-def build(src, out, bbox=None, workers=4, tmp=None, log=print, z=SHARD_ZOOM, root_max=16384 - 127):
-    """The archive and manifest in out from src (the Layercake file's URL or path; bbox: only that region)."""
+def build(src, out, bbox=None, workers=4, tmp=None, log=print, z=SHARD_ZOOM, root_max=16384 - 127,
+          part_bytes=PART_BYTES):
+    """The archive's parts and the manifest in out from src (the Layercake file's URL or path; bbox: only that
+    region; part_bytes 0: one archive, the first layout)."""
     t0 = time.time()
     os.makedirs(out, exist_ok=True)
     etag0 = etag_of(src)
@@ -672,15 +727,19 @@ def build(src, out, bbox=None, workers=4, tmp=None, log=print, z=SHARD_ZOOM, roo
             clip = tuple(int(v[0]) for v in tile_ranges(*(np.array([v], np.float32) for v in bbox), z))
         paths, done, coarse, races = {}, 0, {}, []
         jobs = [(src, rg, first, n, tmp, z, cz, clip) for rg, first, n, _ in groups]
-        with ProcessPoolExecutor(workers, max_tasks_per_child=DECODE_TASKS) as ex:
-            for rg, n, path, areas, rr in ex.map(decode_group, jobs):
-                paths[rg] = path
-                for a in areas:
-                    coarse.setdefault(a, set()).add(rg)
-                races += rr
-                done += 1
-                if done % 50 == 0 or done == len(jobs):
-                    log(f"  decoded {done}/{len(jobs)} row groups, {time.time() - t0:.0f} s")
+        # (a fresh pool per chunk of DECODE_TASKS row groups a worker: max_tasks_per_child hung the planet build for good
+        # right after its first workers were replaced, "decoded 50/2477" then 5 h of nothing, 2026-11-11)
+        chunk = max(1, workers * DECODE_TASKS)
+        for c0 in range(0, len(jobs), chunk):
+            with ProcessPoolExecutor(workers) as ex:
+                for rg, n, path, areas, rr in ex.map(decode_group, jobs[c0:c0 + chunk]):
+                    paths[rg] = path
+                    for a in areas:
+                        coarse.setdefault(a, set()).add(rg)
+                    races += rr
+                    done += 1
+                    if done % 50 == 0 or done == len(jobs):
+                        log(f"  decoded {done}/{len(jobs)} row groups, {time.time() - t0:.0f} s")
         if etag_of(src) != etag0:
             raise SystemExit(f"{src} changed during the build ({etag0} -> {etag_of(src)})")
         # the raceways inside each raceway's bbox (osmtags._inside_rows, file-wide; float32 comparisons)
@@ -710,17 +769,23 @@ def build(src, out, bbox=None, workers=4, tmp=None, log=print, z=SHARD_ZOOM, roo
                 if k % 100 == 0 or k == len(jobs):
                     log(f"  cut {k}/{len(jobs)} areas, {len(entries):,} tiles, {time.time() - t0:.0f} s")
         lo = bbox or (-180.0, -85.0511, 180.0, 85.0511)
-        arch = os.path.join(out, "osmtags.pmtiles")
-        write_pmtiles(arch, entries, data_path, lo, n_rows, z, root_max)
         manifest = {"format": FORMAT, "zoom": z, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": src if src.startswith("http") else os.path.basename(src), "source_etag": etag0,
-                    "archive": "osmtags.pmtiles", "bytes": os.path.getsize(arch), "tiles": len(entries),
-                    "rows": n_rows, "schema": schema(), "license": "ODbL 1.0, (c) OpenStreetMap contributors"}
+                    "source": src if src.startswith("http") else os.path.basename(src), "source_etag": etag0}
+        if part_bytes:
+            parts = write_parts(out, entries, data_path, lo, n_rows, z, root_max, part_bytes)
+            manifest.update(parts=parts, bytes=sum(p["bytes"] for p in parts))
+        else:
+            arch = os.path.join(out, "osmtags.pmtiles")
+            write_pmtiles(arch, entries, data_path, lo, n_rows, z, root_max)
+            manifest.update(archive="osmtags.pmtiles", bytes=os.path.getsize(arch))
+        manifest.update(tiles=len(entries), rows=n_rows, schema=schema(),
+                        license="ODbL 1.0, (c) OpenStreetMap contributors")
         if bbox is not None:
             manifest["bbox"] = list(bbox)
         with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f)
-        log(f"{len(entries):,} tiles, {n_rows:,} rows, {os.path.getsize(arch) / 1e6:.1f} MB, {time.time() - t0:.0f} s")
+        log(f"{len(entries):,} tiles, {n_rows:,} rows, {manifest['bytes'] / 1e6:.1f} MB in "
+            f"{len(manifest.get('parts', [1]))} part(s), {time.time() - t0:.0f} s")
         return manifest
     finally:
         if own_tmp:
@@ -736,9 +801,12 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--tmp", help="the row groups' decoded rows (default: a temporary folder)")
     ap.add_argument("--zoom", type=int, default=SHARD_ZOOM, help=argparse.SUPPRESS)
+    ap.add_argument("--part-bytes", type=int, default=PART_BYTES,
+                    help="an archive part at most (bytes; 0: one archive, osmtags.pmtiles, the first layout)")
     a = ap.parse_args()
     bbox = tuple(float(v) for v in a.bbox.split(",")) if a.bbox else None
-    build(a.source, a.out, bbox, a.workers, a.tmp, log=lambda s: print(s, flush=True), z=a.zoom)
+    build(a.source, a.out, bbox, a.workers, a.tmp, log=lambda s: print(s, flush=True), z=a.zoom,
+          part_bytes=a.part_bytes)
 
 
 if __name__ == "__main__":

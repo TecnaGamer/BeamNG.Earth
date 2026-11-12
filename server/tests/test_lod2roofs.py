@@ -152,6 +152,23 @@ class ShardTest(Base):
             self.assertIsNotNone(lr.Source(d, f).tile(frame, -200, -200, 200, 200))
             self.assertEqual(len(f.urls), asked)
 
+    def test_shards_from_the_host_the_folders_manifest_names(self):
+        import json
+        body = shard([(LAT, LON, 3100, 9.0, 3.0)])
+
+        class Site(Fetcher):
+            def get(self, url, kind="demand", **_):
+                self.urls.append(url)
+                if url.endswith("/manifest.json"):
+                    return Body(json.dumps({"built": "2026-11-09", "data": "https://tiles.test/data/lod2/k1"}).encode())
+                return Body(body)
+        with tempfile.TemporaryDirectory() as d:
+            f = Site()
+            self.assertIsNotNone(lr.Source(d, f).tile(geodesy.EnuFrame(LAT, LON), -200, -200, 200, 200))
+            x, y = lr.tile_of(LAT, LON)
+            self.assertIn(f"https://tiles.test/data/lod2/k1/{x}/{y}.npz", f.urls)
+            self.assertFalse([u for u in f.urls if u.endswith(".npz") and u.startswith(lr.railtags.PAGES)])
+
     def test_a_broken_shard_reads_as_none(self):
         self.assertEqual(lr.decode(b"not a shard"), {})
 

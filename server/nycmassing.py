@@ -136,6 +136,7 @@ class Source:
         self._cells = None              # the manifest's cells ("z/x/y" set), None: not had
         self._cells_at = -1e18          # when the manifest was last asked for (MANIFEST_RETRY_S)
         self._absent = None             # cells()'s answer meanwhile: False (not published) or None (not had)
+        self.data = None                # the manifest's "data" host of the shards (railtags.data_url), None: beside it
 
     def _path(self, key):
         return os.path.join(self.dir, f"{key.z}_{key.x}_{key.y}.npz") if self.dir else None
@@ -234,11 +235,14 @@ class Source:
                 except OSError as e:
                     log.debug("nyc massing: keep manifest: %s", e)
         try:
-            cells = set(json.loads(body.decode("utf-8")).get("cells", {}).keys())
+            j = json.loads(body.decode("utf-8"))
+            cells = set(j.get("cells", {}).keys())
         except (ValueError, AttributeError, UnicodeDecodeError):
             return None
+        import railtags
         with self.lock:
             self._cells = cells
+            self.data = railtags.data_url(j)    # (the shards' host the manifest names, None: beside it)
         return cells
 
     def _fetch(self, key):
@@ -250,8 +254,9 @@ class Source:
             fetcher = self.fetcher
             if fetcher is None:
                 fetcher = self.fetcher = netfetch.Fetcher()
+        import railtags
         try:
-            return fetcher.get(f"{self.base}/{key.z}/{key.x}/{key.y}.npz", kind="demand").body
+            return railtags.fetch_data(fetcher, self.data, self.base, f"{key.z}/{key.x}/{key.y}.npz")
         except netfetch.NotFound:
             return b""
         except Exception as e:          # (offline, limits, the site failing: the map's buildings, asked again later)

@@ -113,6 +113,14 @@ class Source:
         self.lock = threading.Lock()
         self.shards = {}            # (folder, x, y) -> {lat, lon, code, height, roof} arrays, or {} none there
         self.down_at = 0.0
+        self.sites = {}             # folder -> railtags.Shards: its manifest (pinned, refreshed daily), its "data" host
+
+    def _site(self, folder):
+        with self.lock:
+            s = self.sites.get(folder)
+            if s is None:
+                s = self.sites[folder] = railtags.Shards(self.cache_dir, self.fetcher, folder)
+            return s
 
     def shard(self, x, y, folder="lod2"):
         with self.lock:
@@ -151,7 +159,11 @@ class Source:
         if self.fetcher is None or time.time() - self.down_at < RETRY_S:
             return None
         try:
-            body = self.fetcher.get(f"{railtags.PAGES}/{folder}/{x}/{y}.npz", kind="demand").body
+            # (the folder's manifest names the host of its shards, data_url: R2 behind the CDN; none had (offline,
+            # an old manifest): Pages, as before)
+            site = self._site(folder)
+            site.version()
+            body = site.get(f"{x}/{y}.npz")
         except netfetch.NotFound:
             body = b""
         except Exception as e:      # (offline, or not published: the predicted roofs)

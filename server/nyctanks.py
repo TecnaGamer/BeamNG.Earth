@@ -152,11 +152,14 @@ class Source:
                 return None
             _keep(path, body, self.dir)
         try:
-            cells = set(json.loads(body.decode("utf-8")).get("cells", {}).keys())
+            j = json.loads(body.decode("utf-8"))
+            cells = set(j.get("cells", {}).keys())
         except (ValueError, AttributeError, UnicodeDecodeError):
             return None
+        import railtags
         with self.lock:
             self._cells = cells
+            self.data = railtags.data_url(j)    # (the shards' host the manifest names, None: beside it)
         return cells
 
     def shard(self, key):
@@ -201,8 +204,10 @@ class Source:
             if self.fetcher is None:
                 self.fetcher = netfetch.Fetcher()
             fetcher = self.fetcher
+        import railtags
         try:
-            return fetcher.get(f"{self.base}/{key.z}/{key.x}/{key.y}.npz", kind="demand").body
+            return railtags.fetch_data(fetcher, getattr(self, "data", None), self.base,
+                                       f"{key.z}/{key.x}/{key.y}.npz")
         except netfetch.NotFound:
             return b""
         except Exception as e:
