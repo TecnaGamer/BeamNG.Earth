@@ -108,6 +108,12 @@ def player_settings(user_dir):
         out["teleport_full"] = env == "1"
     if d.get("models3dmr") is False:
         out["models3dmr"] = False
+    ram = str(d.get("maxRamGb", "auto"))       # the settings page's Max RAM for BeamNG.Earth (budget.SETTING_ENV)
+    try:
+        if ram != "auto" and 0 < float(ram) < 1e6:
+            out["max_ram_gb"] = float(ram)
+    except ValueError:
+        pass
     # the Low / Medium presets' lighter ground (heightmap.ground_square); a file from before the setting existed follows
     # its quality preset, as the mod's settings do (settings.lua: a knob a file lacks takes its preset's value)
     grid = d.get("groundGrid")
@@ -131,6 +137,9 @@ def apply_player_settings(user_dir, nice, default_nice, environ=None):
     if chosen.get("priority") == "normal" and nice == default_nice:
         nice = 0
         notes.append("normal priority")
+    if chosen.get("max_ram_gb") and not environ.get("BNGE_MAX_RAM_GB"):
+        environ["BNGE_MAX_RAM_GB"] = f"{chosen['max_ram_gb']:g}"   # (budget.SETTING_ENV; the workers inherit it)
+        notes.append(f"at most {chosen['max_ram_gb']:g} GB of memory")
     if chosen.get("models3dmr") is False and not environ.get("BNE_3DMR"):
         environ["BNE_3DMR"] = "off"            # (threedmr.enabled; the worker processes inherit it)
         notes.append("no 3dmr.eu models")

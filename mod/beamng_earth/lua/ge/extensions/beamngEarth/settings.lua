@@ -158,6 +158,11 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
+  -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
+  -- third of the RAM, 1.5 to 16 GB
+  maxRamGb = { kind = 'enum', default = 'auto', values = { 'auto', '2', '3', '4', '6', '8', '12', '16', '24', '32' },
+    label = 'Max RAM for BeamNG.Earth' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
@@ -177,7 +182,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm' }
 
 -- Stored but not on the settings page
@@ -407,6 +412,22 @@ function M.get(key) return values[key] end
 
 -- The download cache's cap for the server: GB, 0 = unlimited.
 function M.cacheCapGb() return math.max(0, tonumber(values.cacheCapGb) or 0) end
+-- The world server's memory limit in GB (0: Auto)
+function M.maxRamGb() return math.max(0, tonumber(values.maxRamGb) or 0) end
+
+-- The page's "World server memory" line from the server's 'memory' message (core.memoryState()).
+function M.memoryLine(m)
+  if type(m) ~= 'table' then return 'no information from the server' end
+  local function gb(mb) return string.format('%.1f GB', (tonumber(mb) or 0) / 1024) end
+  local line = gb(m.usedMB) .. ' of ' .. gb(m.limitMB)
+  if (tonumber(m.setting) or 0) > 0 then line = line .. ' (set)' else line = line .. ' (Auto)' end
+  if (tonumber(m.effMB) or 0) > 0 and (tonumber(m.effMB) or 0) < (tonumber(m.limitMB) or 0) - 1 then
+    line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
+  end
+  line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
+  return line
+end
 
 -- bytes as the page shows them: "350 MB", "1.2 GB", "20 GB" (decimal units, as the cap)
 local function size(b, whole)
@@ -588,6 +609,10 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.cacheSetCap then core.cacheSetCap(M.cacheCapGb()) end
   end,
+  maxRamGb = function()
+    local core = ext('beamngEarth_core')
+    if core and core.memorySetLimit then core.memorySetLimit(M.maxRamGb()) end
+  end,
   devOutlineKm = function(v)
     local dev = ext('beamngEarth_dev')
     if dev and dev.setParam then dev.setParam('outlineKm', v) end
@@ -693,6 +718,10 @@ function M.uiState()
   local c = core and core.cacheState and core.cacheState() or nil
   status.cache = { line = M.cacheLine(c), clears = c and c.clears or 0, clearedBytes = c and c.clearedBytes or nil,
     clearedText = c and c.clearedBytes and size(c.clearedBytes) or nil }
+  -- the world server's memory and its limit (the server's 'memory' message), asked with the cache numbers
+  if core and core.memoryQuery and cachePolls % M.CACHE_POLL == 1 then core.memoryQuery() end
+  local mem = core and core.memoryState and core.memoryState() or nil
+  status.memory = { line = M.memoryLine(mem) }
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil

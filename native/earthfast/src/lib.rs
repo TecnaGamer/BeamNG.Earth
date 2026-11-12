@@ -65,6 +65,7 @@ mod gridinterp;
 mod dejunction;
 mod streetlabels;
 mod perfclean;
+mod membudget;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
@@ -6161,6 +6162,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
     m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
-    m.add("VERSION", 243)?;
+    // 246: membudget (budget.py / memwatch.py: the settings page's Max RAM for BeamNG.Earth, its tiers, sizes and watchdog)
+    m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_tier, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+    m.add("VERSION", 246)?;
     Ok(())
 }

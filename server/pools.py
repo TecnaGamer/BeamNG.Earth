@@ -420,6 +420,9 @@ class ElasticPool:
             return self.extra.submit(fn, *args, **kwargs)
 
     def _within_base(self):
+        import budget
+        if budget.OVER:             # (the server near its memory limit, memwatch.py: no burst processes)
+            return True
         want = self.want
         if want is None:
             return False
