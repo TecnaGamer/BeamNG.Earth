@@ -349,12 +349,19 @@ def _deck_z(decks, fid, x, y):
     return None if best is None else best[1]
 
 
+def _open_floor(parts, points):
+    """One contiguous open section must cover the whole mapped-tunnel stretch of an edge."""
+    return bool(points) and any(all(_deck_z({None: [part]}, None, *p) is not None for p in points) for part in parts)
+
+
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
-          mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=()):
+          mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=(), open_tunnels=None):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius, (optional portal radius, posted speed, rough-road flag, rumble candidate)]], `lines` for tunnel-only minimap
     stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
-    (the last field was added in 1.9 for add-ons that read legal limits). Of the roads in the square of half size
+    (the last field was added in 1.9 for add-ons that read legal limits). open_tunnels: fid -> [(xy, z)] of dry
+    mapped-tunnel sections the renderer builds as ordinary open roads; these do not need the tube AI opt-in.
+    Of the roads in the square of half size
     `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
     are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z, structural depth)] of the bridge parts
@@ -390,6 +397,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     # through one is the AI's too, its nodes at the tunnel's floor; a tunnel not built (under water, none at hand) stays
     # the minimap's only (the AI's graph broke at every tunnel since they were built, 1.4.20; the user, 2026-11-05)
     tunnel_node = {}        # name -> fid of the tunnel its height is read from
+    open_node = {}          # mapped tunnels rendered as open roads: their floor is drivable without tube/portal opt-in
     tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
     mainline = _mainline_connectors(feats_list)     # (CROSSOVER_M)
     density_lines = []      # [(centreline xy, spec)] of the drivable roads near, for the traffic profile (_traffic_profile)
@@ -400,7 +408,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             continue
         rspecs = roads.road_specs(feats, urban_fn, widths, left_hand)      # the roads the road tiles (and their props) see
         bspecs = roads.bridge_specs(feats)
-        specs = [sp if sp is not None else bs for sp, bs in zip(rspecs, bspecs)]
+        tspecs = roads.tunnel_specs(feats)
+        specs = [sp if sp is not None else bs if bs is not None else ts for sp, bs, ts in zip(rspecs, bspecs, tspecs)]
         rules = feats.rules
         sub = rules.get("subclass")
         con = rules.get("connectors")
@@ -568,7 +577,16 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     # each end inside the tunnel on its built floor (an end past a portal is on the ground)
                     ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, deck_xy[j], full[j]), (b, deck_xy[j + 1], full[j + 1]))
                                if any(t0 * L < at_ < t1 * L for t0, t1 in tunnel_ranges)]
-                    if AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
+                    checks = []
+                    for t0, t1 in tunnel_ranges:
+                        lo_, hi_ = max(full[j], t0 * L), min(full[j + 1], t1 * L)
+                        if hi_ > lo_:
+                            arc = [lo_, (lo_ + hi_) / 2, hi_]
+                            checks.extend(zip(np.interp(arc, s, p[:, 0]), np.interp(arc, s, p[:, 1])))
+                    if open_tunnels and _open_floor(open_tunnels.get(fid, ()), checks):
+                        for nm_, _q in ends_in:
+                            open_node[nm_] = fid
+                    elif AI_TUNNELS and tunnels and fid in tunnels and w >= TUNNEL_AI_MIN_W and all(
                             _deck_z(tunnels, fid, float(q_[0]), float(q_[1])) is not None for _, q_ in ends_in):
                         for nm_, _q in ends_in:
                             tunnel_node[nm_] = fid      # (the AI's too: through the built tunnel)
@@ -670,10 +688,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 dz = _deck_z(decks, node_fid.get(nm), *deck_centres.get(nm, (X[k], Y[k])))
                 if dz is not None:
                     Z[k] = dz
-        if tunnel_node:
+        for floors, sources in ((tunnels, tunnel_node), (open_tunnels, open_node)):
             for k, nm in enumerate(used):
-                if nm in tunnel_node:
-                    tz = _deck_z(tunnels, tunnel_node[nm], *deck_centres.get(nm, (X[k], Y[k])))
+                if nm in sources:
+                    tz = _deck_z(floors, sources[nm], *deck_centres.get(nm, (X[k], Y[k])))
                     if tz is not None:
                         Z[k] = tz
         radius = {}
@@ -1194,6 +1212,16 @@ def region_at(db, lat, lon, borders=False):
 def part_fid(pid):
     """The road feature's id of a chain part's id (roads.ChainView: "<fid>.<part>#<section>")."""
     return re.sub(r"(\.\d+)?(#\d+)?$", "", str(pid))
+
+
+def tunnel_floors(profiles, feats, box):
+    """The same classified floor sections the road renderer uses: closed tubes (opt-in) and dry open roads."""
+    def collect(parts):
+        out = {}
+        for fid, _spec, xy, z, _lon in parts:
+            out.setdefault(part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)))
+        return out
+    return collect(profiles.parts(feats, box) if AI_TUNNELS else ()), collect(profiles.open_parts(feats, box))
 
 
 # The AI through built tunnels: off until their portals fit the roads leading in (Fort Pitt Tunnel, 2026-11-05: the

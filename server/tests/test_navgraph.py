@@ -286,6 +286,59 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(any(130 < m < 200 for m in mids), "an edge through it")
         self.assertFalse(g["lines"], "nothing left for the minimap alone")
 
+    def test_open_underpass_uses_the_rendered_road_with_tube_ai_off(self):
+        f = features([[(-150, 0), (150, 0)]], ["motorway"], flags=[(0, "is_tunnel")])
+        f.rules["oneway"] = rules([(0, 1.0)], "float")
+        profiles = roads.TunnelProfiles(FRAME, lambda key: f, flat)
+        box = (-256, -128, 256, 128)
+        chunks = roads._tunnel_chunks(profiles, [f], box)
+        self.assertTrue(chunks and not any(c.get("tunnel") for c in chunks), "the renderer builds an open road")
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            closed, opened = navgraph.tunnel_floors(profiles, [f], box)
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels=closed, open_tunnels=opened)
+        self.assertTrue(opened)
+        self.assertFalse(closed)
+        self.assertFalse(g["lines"], "the rendered ground road is connected in the AI graph")
+        self.assertTrue(g["edges"])
+        self.assertTrue(all(e[2] == 1 and g["nodes"][e[0]][0] < g["nodes"][e[1]][0] for e in g["edges"]),
+                        "one-way direction survives")
+        plain = features([[(-150, 0), (150, 0)]], ["motorway"])
+        plain.rules["oneway"] = f.rules["oneway"]
+        expected = navgraph.build(FRAME, [plain], flat, (0, 0))
+        self.assertEqual([e[2:] for e in g["edges"]], [e[2:] for e in expected["edges"]],
+                         "open roads keep ordinary lanes, speeds and width, without portal narrowing")
+
+    def test_open_profiles_do_not_enable_closed_or_missing_tunnels(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        fid = str(f.ids[0])
+        floor = (np.array([[110.0, 0.0], [220.0, 0.0]]), np.array([3.0, 3.0]))
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels={fid: [floor]}, open_tunnels={})
+        self.assertTrue(g["lines"], "built closed tubes still require their separate opt-in")
+        self.assertFalse(any(130 < n[0] < 200 for n in g["nodes"].values()))
+
+    def test_open_floor_coverage_cannot_join_separate_open_sections(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.2, 0.8)])
+        fid = str(f.ids[0])
+        opened = {fid: [(np.array([[60., 0.], [140., 0.]]), np.array([3., 3.])),
+                        (np.array([[150., 0.], [240., 0.]]), np.array([3., 3.]))]}
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), open_tunnels=opened)
+        self.assertTrue(any(min(ln[0], ln[2]) < 140 and max(ln[0], ln[2]) > 150 for ln in g["lines"]),
+                        "two open sections cannot bridge an unbuilt closed section between them")
+        self.assertFalse(navgraph._open_floor(opened[fid], []))
+
+    def test_open_floor_covers_only_the_tunnel_part_of_a_boundary_edge(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        fid = str(f.ids[0])
+        opened = {fid: [(np.array([[120., 0.], [210., 0.]]), np.array([3., 3.]))]}
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), open_tunnels=opened)
+        self.assertFalse(g["lines"], "a partly ordinary-road edge needs coverage only over its mapped tunnel range")
+        inside = [n for n in g["nodes"].values() if 130 < n[0] < 200]
+        self.assertTrue(inside)
+        self.assertTrue(all(abs(n[2] - 3.) < .05 for n in inside), "the graph uses the rendered open floor")
+
     def test_the_approach_narrows_to_the_tube_at_the_portal(self):
         """A road wider than its tunnel's tube narrows to the tube's AI half width at the portal over PORTAL_LEAD_M
         (Fort Pitt: the AI spread its lanes over the wide approach into the pier): the portal node's radius is the

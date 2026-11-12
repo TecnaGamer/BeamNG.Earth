@@ -2220,19 +2220,15 @@ class Server:
             if secrossings.wanted(self.country(anchor), de_nodes) else None
         # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
         de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
-        tun = {}
-        try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
-            if not navgraphmod.AI_TUNNELS:
-                raise LookupError("AI tunnels off")
+        tun, open_tun = {}, {}
+        try:
             with self.grader_lock:
                 if anchor.tunnels is None:
                     anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
-            for fid, _spec, xy, z, _lon in anchor.tunnels.parts(feats, (x - w, y - w, x + w, y + w)):
-                tun.setdefault(navgraphmod.part_fid(fid), []).append((np.asarray(xy, np.float64)[:, :2],
-                                                                   np.asarray(z, np.float64)))
+            tun, open_tun = navgraphmod.tunnel_floors(anchor.tunnels, feats, (x - w, y - w, x + w, y + w))
         except Exception as e:
             log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
-        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun,
+        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, open_tunnels=open_tun,
                                   widths=self.road_widths,
                                   left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                   signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
