@@ -411,7 +411,10 @@ function M.loadedContinuation(from, to, nodes)
   local norm = hx * hx + hy * hy + hz * hz
   local forward = dx * hx + dy * hy + dz * hz
   local width = math.min(ar, br)
-  return forward > 0 and norm > 0 and dx * dx + dy * dy + dz * dz - forward * forward / norm <= width * width
+  -- Road width allows lateral offset, not another road's elevation. Allow at most two metres
+  -- of height error after extrapolating the grade through the gap, even on a wide carriageway.
+  return forward > 0 and norm > 0 and math.abs(dz - forward * hz / norm) <= 2
+    and dx * dx + dy * dy + dz * dz - forward * forward / norm <= width * width
 end
 
 local function routeTarget(e, nodes, i, t)

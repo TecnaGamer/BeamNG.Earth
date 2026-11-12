@@ -337,9 +337,16 @@ do
   recoveries = 0; f = gap(false)
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0, 'an unloaded continuation still waits for the graph')
-  recoveries = 0; f = gap(true, -12)
-  for _ = 1, 350 do f:step() end
-  T.check(recoveries == 0, 'a lower road beyond a bridge cut is not a loaded continuation')
+  for _, height in ipairs({ -4, -12 }) do
+    recoveries = 0; f = gap(true, height)
+    for _ = 1, 350 do f:step() end
+    T.check(recoveries == 0, 'a road ' .. -height .. ' m below a bridge cut is not a loaded continuation')
+  end
+  recoveries = 0; f = gap(true)
+  f.nodes.w.pos.z, f.nodes.j.pos.z, f.nodes.next.pos.z, f.nodes.far.pos.z = -6, 0, 7.2, 54
+  f.serial = f.serial + 1
+  for _ = 1, 70 do f:step() end
+  T.check(recoveries == 1, 'a loaded continuation follows the road grade across an uphill gap')
   spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
 end
 
