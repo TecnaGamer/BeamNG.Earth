@@ -45,7 +45,7 @@ static const unsigned char SIGNATURE[0x36] = {
     0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x55, 0x41, 0x54, 0x49, 0x89, 0xfc, 0x53,
     0x48, 0x83, 0xec, 0x38, 0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00, 0x48, 0x89, 0x45,
     0xd8, 0x31, 0xc0, 0x40, 0xf6, 0xc6, 0x01, 0x0f, 0x85, 0x53, 0x01, 0x00, 0x00, 0x83, 0xe6, 0x0e,
-    0x0f, 0x84, 0x30, 0x01, 0x00, 0x00,
+    0x0f, 0x84, 0x30, 0x01, 0x00, 0x00
 };
 
 // One line for the player / the mod's diagnostics: stderr and <user>/temp/beamngEarth_gcpatch.txt.
@@ -58,20 +58,32 @@ static void report(const char *fmt, const char *detail) {
 #define IMM_OFF (IMM - HANDLER)   /* 0x2F: the imm8 within the signature */
 
 
-struct mainprog { uintptr_t base; int covered; int seen; uintptr_t xs[8], xe[8]; int nx; };
+struct mainprog { 
+    uintptr_t base; 
+    int covered; 
+    int seen; 
+    uintptr_t xs[8]
+    uintptr_t xe[8]; 
+    int nx; 
+};
 
 // The first object dl_iterate_phdr reports is the main program; is HANDLER in its executable PT_LOAD?
 static int find_main(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size;
     struct mainprog *m = data;
-    if (m->seen) return 1;
+    if (m->seen) 
+    {
+        return 1;
+    }
     m->seen = 1;
     m->base = (uintptr_t)info->dlpi_addr;
     for (int i = 0; i < info->dlpi_phnum; i++) {
         const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
         if (ph->p_type == PT_LOAD && (ph->p_flags & PF_X)) {
             if (ph->p_vaddr <= HANDLER && HANDLER + sizeof SIGNATURE <= ph->p_vaddr + ph->p_filesz)
+            {
                 m->covered = 1;
+            }
             if (m->nx < 8) {
                 m->xs[m->nx] = m->base + ph->p_vaddr;
                 m->xe[m->nx] = m->base + ph->p_vaddr + ph->p_filesz;
@@ -90,7 +102,10 @@ static const char *g_how = "";
 static int set_byte(unsigned char v) {
     long pagesz = sysconf(_SC_PAGESIZE);
     uintptr_t page = (uintptr_t)g_imm & ~(uintptr_t)(pagesz - 1);
-    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) return 0;
+    if (mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) 
+    {
+        return 0;
+    }
     *(volatile unsigned char *)g_imm = v;
     __sync_synchronize();
     mprotect((void *)page, (size_t)pagesz, PROT_READ | PROT_EXEC);
@@ -121,7 +136,10 @@ static void *watch_flag(void *arg) {
 }
 
 __attribute__((constructor)) static void bngearth_gcpatch(void) {
-    if (!bnge_is_main_game()) return;
+    if (!bnge_is_main_game()) 
+    {
+        return;
+    }
     if (getenv("BNGEARTH_GCPATCH_OFF")) {
         report("off (BNGEARTH_GCPATCH_OFF set)%s", NULL);
         return;
@@ -138,12 +156,18 @@ __attribute__((constructor)) static void bngearth_gcpatch(void) {
         code = (unsigned char *)(m.base + HANDLER);
         for (size_t i = 0; i < sizeof SIGNATURE; i++) {
             if (i == IMM_OFF) continue;
-            if (code[i] != SIGNATURE[i]) { code = NULL; break; }
+            if (code[i] != SIGNATURE[i]) { 
+                code = NULL; 
+                break; 
+            }
         }
     }
     const char *how = "";
     unsigned char *imm = NULL;
-    if (code) imm = code + IMM_OFF;
+    if (code) 
+    {
+        imm = code + IMM_OFF;
+    }
     else {
         // another build: search its code for the handler's core, `test sil, 1; jne rel32; and esi, 0x0E; je rel32`,
         // one match only (0.40 (2026-10-19): the same core in a prologue with other registers, at 0x15fb3c5)
@@ -151,13 +175,21 @@ __attribute__((constructor)) static void bngearth_gcpatch(void) {
         int matches = 0;
         for (int k = 0; k < m.nx; k++) {
             for (unsigned char *p = (unsigned char *)m.xs[k]; p + sizeof CORE <= (unsigned char *)m.xe[k]; p++) {
-                if (p[0] != 0x40 || p[1] != 0xf6) continue;
+                if (p[0] != 0x40 || p[1] != 0xf6) 
+                {
+                    continue;
+                }
                 size_t i = 0;
                 for (; i < sizeof CORE; i++) {
-                    if (i >= 6 && i <= 9) continue;         // the jne's rel32
+                    if (i >= 6 && i <= 9) 
+                    { 
+                        continue; 
+                    } // the jne's rel32
                     if (p[i] != CORE[i]) break;
                 }
-                if (i == sizeof CORE) { imm = p + 12; matches++; }
+                if (i == sizeof CORE) { 
+                    imm = p + 12; matches++; 
+                }
             }
         }
         if (matches != 1) {
@@ -168,8 +200,14 @@ __attribute__((constructor)) static void bngearth_gcpatch(void) {
         }
         how = " (found by its signature in this build)";
     }
-    if (*imm == PATCHED) { report("already applied%s", NULL); return; }
-    if (*imm != STOCK) { report("not applied: unexpected byte (another build)%s", NULL); return; }
+    if (*imm == PATCHED) { 
+        report("already applied%s", NULL); 
+        return; 
+    }
+    if (*imm != STOCK) { 
+        report("not applied: unexpected byte (another build)%s", NULL); 
+        return; 
+    }
     g_imm = imm;
     g_how = how;
     pthread_t t;
