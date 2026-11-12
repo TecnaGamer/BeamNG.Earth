@@ -49,6 +49,15 @@ pub struct SourceIn {
     e5xx: Option<u64>,
     err: Option<u64>,
     retry: Option<u64>,
+    // our own limits (clients from 2026-11-11 on): background requests dropped, demand ones that waited (and ms),
+    // refused after waiting, refused by the daily budget
+    deferred: Option<u64>,
+    waited: Option<u64>,
+    #[serde(rename = "waitMs")]
+    wait_ms: Option<u64>,
+    #[serde(rename = "limitFail")]
+    limit_fail: Option<u64>,
+    budget: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +90,16 @@ pub struct Source {
     pub e5xx: u64,
     pub err: u64,
     pub retry: u64,
+    #[serde(default)]
+    pub deferred: u64,
+    #[serde(default)]
+    pub waited: u64,
+    #[serde(default, rename = "waitMs")]
+    pub wait_ms: u64,
+    #[serde(default, rename = "limitFail")]
+    pub limit_fail: u64,
+    #[serde(default)]
+    pub budget: u64,
 }
 
 impl Source {
@@ -94,6 +113,11 @@ impl Source {
         self.e5xx += o.e5xx;
         self.err += o.err;
         self.retry += o.retry;
+        self.deferred += o.deferred;
+        self.waited += o.waited;
+        self.wait_ms += o.wait_ms;
+        self.limit_fail += o.limit_fail;
+        self.budget += o.budget;
     }
 }
 
@@ -296,7 +320,10 @@ impl Telemetry {
                 }
                 let c = |v: Option<u64>| v.unwrap_or(0).min(10_000_000);
                 let add = Source { req: c(s.req), mb: s.mb.unwrap_or(0.0).clamp(0.0, 1.0e6), ok: c(s.ok), e4xx: c(s.e4xx),
-                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry) };
+                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry),
+                                   deferred: c(s.deferred), waited: c(s.waited),
+                                   wait_ms: s.wait_ms.unwrap_or(0).min(1_000_000_000), limit_fail: c(s.limit_fail),
+                                   budget: c(s.budget) };
                 entry.sources.entry(host.to_ascii_lowercase()).or_default().add(&add);
             }
         }

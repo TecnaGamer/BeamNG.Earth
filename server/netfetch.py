@@ -953,7 +953,12 @@ SLOW_MBPS = 0.4                 # MB/s a large response comes in at or slower (t
 
 # --- per-host state ----------------------------------------------------------------------------
 COUNTERS = ("requests", "bytes", "s2xx", "s3xx", "s4xx", "s404", "s429", "s5xx", "errors", "retries",
-            "trips", "deferred", "unavailable")
+            "trips", "deferred", "unavailable",
+            # our own limits (telemetry: how often the world waits on them, the user 2026-11-11: "make sure your
+            # checking our own set rate limits"): demand / urgent requests that waited WAIT_MS_MIN or more for a slot
+            # or a token, the ms they waited, those refused after max_wait, and refusals by the daily budgets
+            "waited", "wait_ms", "limit_fail", "budget")
+WAIT_MS_MIN = 5
 
 
 class Host:
@@ -1134,6 +1139,7 @@ class Fetcher:
         with self._lock:
             used = h.day["requests"]
         if p.daily_hard is not None and used >= p.daily_hard:
+            self._bump(h, "budget")
             raise BudgetExceeded(f"{h.name}: daily limit of {p.daily_hard} requests reached", url, h.name)
         if kind == "predownload" and p.daily_hard is not None and used >= PREDOWNLOAD_SHARE * p.daily_hard:
             raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily limit (downloads "
@@ -1157,6 +1163,7 @@ class Fetcher:
             raise BudgetExceeded(f"{h.name}: past {round(100 * PREDOWNLOAD_SHARE)} % of the daily budget (downloads "
                                  "ahead)", url, h.name)
         if kind not in ("demand", "urgent") and used >= BUDGET_WARN * p.daily_budget:
+            self._bump(h, "budget")
             raise BudgetExceeded(f"{h.name}: past {round(100 * BUDGET_WARN)} % of the daily budget", url, h.name)
 
     def allow(self, host, kind="prefetch"):
@@ -1177,7 +1184,23 @@ class Fetcher:
 
     def _acquire(self, h, url, kind):
         """A request slot and a token for one attempt (raises Deferred / RateLimited). Returns the semaphore taken
-        (_release gives it back)."""
+        (_release gives it back). A demand / urgent request's wait for them is counted (waited, wait_ms, limit_fail)."""
+        if kind not in ("urgent", "demand"):
+            return self._acquire_now(h, url, kind)
+        t0 = self.clock()
+        try:
+            sem = self._acquire_now(h, url, kind)
+        except RateLimited:
+            self._bump(h, "limit_fail")
+            self._bump(h, "wait_ms", int((self.clock() - t0) * 1000))
+            raise
+        ms = int((self.clock() - t0) * 1000)
+        if ms >= WAIT_MS_MIN:
+            self._bump(h, "waited")
+            self._bump(h, "wait_ms", ms)
+        return sem
+
+    def _acquire_now(self, h, url, kind):
         p = h.policy
         if kind == "urgent":
             sem = h.urgent_sem if h.urgent_sem.acquire(blocking=False) else h.sem

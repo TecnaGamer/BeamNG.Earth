@@ -199,6 +199,22 @@ class TokenBucketTest(unittest.TestCase):
         self.assertEqual(len(tr.calls), 1)
 
 
+    def test_waits_on_our_own_limit_are_counted(self):
+        # (telemetry's "waited on our limit" / "refused by our limit": netfetch COUNTERS waited, wait_ms, limit_fail)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=1.0, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        f.get(url(USGS, 1))                             # waits ~1 s for the next token
+        t = f.host(USGS).total
+        self.assertEqual(t["waited"], 1)
+        self.assertGreaterEqual(t["wait_ms"], 900)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=0.01, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        with self.assertRaises(nf.RateLimited):
+            f.get(url(USGS, 1))
+        self.assertEqual(f.host(USGS).total["limit_fail"], 1)
+
     def test_a_pause_while_waiting_gives_up(self):
         """A demand request waiting for a token when another worker's request meets a Retry-After does
         not sleep out the pause and then fire (the breaker would allow one probe, not every waiter):

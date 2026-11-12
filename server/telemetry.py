@@ -6,7 +6,8 @@ Every REPORT_S the server sends https://earth.tgforever.net/telemetry (the proje
     {"id": a random install id (TELEMETRY_ID file in the cache; no name, account or hardware in it),
      "v": the app version, "os": windows / linux / deck / macos, "game": a game connected now, "mp": in BeamMP,
      "interval": REPORT_S,
-     "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}}}   (since the last report)
+     "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry", "deferred", "waited",
+                        "waitMs", "limitFail", "budget"}}}   (since the last report)
 
 Nothing else: no place, no position, no IP kept (the collector derives the country from the address and drops it).
 Off with the settings page's Anonymous usage statistics switch (read before every report), BNE_TELEMETRY=off (or
@@ -57,7 +58,11 @@ TIMEOUT_S = 10.0
 ID_FILE = "telemetry_id"
 PROC_KEEP_S = 3600.0        # a dead process's totals file is removed this long after its last write
 KEYS = {"req": ("requests",), "mb": ("bytes",), "ok": ("s2xx",), "e4xx": ("s4xx",), "e404": ("s404",),
-        "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",)}
+        "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",),
+        # our own limits: background requests dropped (deferred), demand ones that waited (and ms) or were refused,
+        # daily-budget refusals (netfetch COUNTERS)
+        "deferred": ("deferred",), "waited": ("waited",), "waitMs": ("wait_ms",), "limitFail": ("limit_fail",),
+        "budget": ("budget",)}
 
 
 def install_id(cache_dir):
