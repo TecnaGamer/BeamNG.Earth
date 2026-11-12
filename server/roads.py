@@ -673,8 +673,11 @@ SKEW_MIN_SIN = math.sin(math.radians(20.0))    # flatter crossings are taken as 
 
 
 def _feature_boxes(feats):
-    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats."""
-    got = feats.__dict__.get("_lonlat_boxes")
+    """(n, 4) lon/lat boxes (lon0, lat0, lon1, lat1) of the features, remembered on feats. Its own memo: surface's
+    _lonlat_boxes keeps (lon0, lon1, lat0, lat1) on the same feats, and while both used "_lonlat_boxes" whichever ran
+    first on a decoded cell set the layout for the other (the block's road paint skipped every road it read off-grid
+    through this one's layout: lanes drawn over grass and gravel grip, Usui Pass and Ome, 1.6.3 on)."""
+    got = feats.__dict__.get("_feature_boxes")
     if got is None:
         n = len(feats)
         got = np.full((n, 4), np.nan)
@@ -691,7 +694,7 @@ def _feature_boxes(feats):
             for i in np.flatnonzero(ok):
                 seg = ll[a[i]:b[i]]
                 got[i] = (seg[:, 0].min(), seg[:, 1].min(), seg[:, 0].max(), seg[:, 1].max())
-        feats.__dict__["_lonlat_boxes"] = got
+        feats.__dict__["_feature_boxes"] = got
     return got
 
 

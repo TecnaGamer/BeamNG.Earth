@@ -1191,6 +1191,25 @@ class PaintRoadsTest(unittest.TestCase):
         self.assertEqual(int(out[64, 74]), sf.ASPHALT, "paved wins at the crossing")
         self.assertEqual(int(idx[64, 10]), sf.GRASS, "input untouched")
 
+    def test_paint_after_the_bridges_boxes(self):
+        """roads._feature_boxes and surface._lonlat_boxes kept two box layouts under one memo key: on a cell whose
+        bridges were worked out first (a block process's grading on a first visit) the block's paint read the bridge
+        code's (lon0, lat0, lon1, lat1) as its own (lon0, lon1, lat0, lat1), took every road for off the block and
+        painted none (lane lines over grass, gravel grip: Usui Pass, Ome route 53; 1.6.3 on). Either order paints the
+        same and each keeps its own layout."""
+        lat, lon = self.grid()
+        f = features([[(-200, 0), (200, 0)]], ["residential"])
+        idx = np.full(lat.shape, sf.GRASS, np.uint8)
+        want = sf.paint_roads(idx, lat, lon, [features([[(-200, 0), (200, 0)]], ["residential"])], 2.0)
+        rb = roads._feature_boxes(f).copy()
+        out = sf.paint_roads(idx, lat, lon, [f], 2.0)
+        self.assertEqual(int(out[64, 10]), sf.ASPHALT, "painted after the bridges' boxes")
+        np.testing.assert_array_equal(out, want)
+        np.testing.assert_array_equal(roads._feature_boxes(f), rb)
+        g = features([[(-200, 0), (200, 0)]], ["residential"])
+        sf.paint_roads(idx, lat, lon, [g], 2.0)
+        np.testing.assert_array_equal(roads._feature_boxes(g), rb, "the bridges' boxes after the paint's")
+
     def test_bare_verge_beside_roads(self):
         """Grass tufts stood on the asphalt along road edges (the user, 2026-10-20): a road without sidewalks gets a
         bare verge (VERGE_M a side) where the ground carries grass; rock stays rock. On the block's 1 m samples, each
