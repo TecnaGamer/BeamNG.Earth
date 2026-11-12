@@ -2017,23 +2017,10 @@ class EnuSquare:
 def _core_tiles(fx, fy, cells, cw, g, px):
     """(tx0, tx1, ty0, ty1): the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as
     _mosaic_keys) the bilinear taps of a texture's footprint texels (g .. px - g - 1 on both axes) touch, as the warp
-    (earthfast warp_rgba) places them: the cell's corners interpolated bilinearly at the texel centre, taps at
-    floor(p - 0.5) and the next pixel. Pure."""
-    i = np.arange(g, px - g)
-    e0, e1 = np.full(i.size, g), np.full(i.size, px - g - 1)
-    rows = np.concatenate([e0, e1, i, i])
-    cols = np.concatenate([i, i, e0, e1])
-    r, c = np.minimum(rows // cw, cells - 1), np.minimum(cols // cw, cells - 1)
-    u = (cols - c * cw + 0.5) / cw
-    v = (rows - r * cw + 0.5) / cw
-
-    def at(q):
-        q00, q01, q10, q11 = q[r, c], q[r, c + 1], q[r + 1, c], q[r + 1, c + 1]
-        return q00 + (q01 - q00) * u + (q10 - q00) * v + (q11 - q01 - q10 + q00) * u * v
-    xs, ys = at(fx), at(fy)
-    eps = 1e-6
-    return (math.floor(float(xs.min()) - 0.5 - eps) // TILE, (math.floor(float(xs.max()) - 0.5 + eps) + 1) // TILE,
-            math.floor(float(ys.min()) - 0.5 - eps) // TILE, (math.floor(float(ys.max()) - 0.5 + eps) + 1) // TILE)
+    (earthfast warp_rgba) places them (Rust: earthfast core_tiles)."""
+    fast.require(222, "core_tiles")
+    return fast._ef.core_tiles(np.ascontiguousarray(fx, np.float64), np.ascontiguousarray(fy, np.float64),
+                               int(cells), int(cw), int(g), int(px))
 
 
 def _unfilled_tiles(filled, cells, cw, fx, fy):
