@@ -17,7 +17,7 @@ MODULES = (
     "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle",
     "test_connection_cleanup", "test_initial_loading", "test_tile_ownership", "test_matslots", "test_stream_reconnect",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
-    "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
+    "test_road_seams", "test_drivability", "test_roadgeo", "test_fast", "test_restart",
     "test_revisit", "test_revisit_side", "test_revisitpack", "test_plancache", "test_bake_formats", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",

@@ -222,12 +222,13 @@ def _trace_memory(every_s=60.0, top=10):
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
-def held_memory(roots, min_mb=2.0):
+def held_memory(roots, min_mb=2.0, exclude=()):
     """[(MB, name)] of the numpy arrays and bytes reachable from each (name, object) of roots, each object counted for
-    the first root that reaches it, biggest first, those of at least min_mb (BNGE_MEMATTR_S; also tests)."""
+    the first root that reaches it, biggest first, those of at least min_mb (BNGE_MEMATTR_S; also tests). exclude:
+    objects never walked into (the server's own: its attributes' bound methods lead back to all of it)."""
     import gc
     import numpy as np
-    seen, out = set(), []
+    seen, out = {id(o) for o in exclude}, []
     skip = (str, int, float, bool, type(None))
     for name, root in roots:
         tot, stack = 0, [root]
@@ -255,9 +256,28 @@ def held_memory(roots, min_mb=2.0):
     return sorted(out, reverse=True)
 
 
-def _memattr_loop(every_s):
+def _mallinfo():
+    """glibc's malloc in this process (Linux; BNGE_MEMATTR_S): "malloc N MB in use, F free, M mmapped", or "": the
+    native allocations tracemalloc never sees (the Rust module's, the C libraries') against what Python holds."""
+    try:
+        import ctypes
+
+        class MI2(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_size_t) for n in ("arena", "ordblks", "smblks", "hblks", "hblkhd", "usmblks",
+                                                       "fsmblks", "uordblks", "fordblks", "keepcost")]
+        libc = ctypes.CDLL("libc.so.6")
+        libc.mallinfo2.restype = MI2
+        m = libc.mallinfo2()
+        return (f"malloc {(m.uordblks + m.hblkhd) / 2 ** 20:.0f} MB in use, {m.fordblks / 2 ** 20:.0f} free, "
+                f"{m.hblkhd / 2 ** 20:.0f} mmapped")
+    except Exception:
+        return ""
+
+
+def _memattr_loop(every_s, extra_roots=None, exclude=()):
     """BNGE_MEMATTR_S=s (debug, no tracemalloc: cheap enough for a drive): every s this worker's memory and which of
-    its state's attributes and its modules' dicts hold the most array memory (held_memory)."""
+    its state's attributes and its modules' dicts hold the most array memory (held_memory). extra_roots: () -> [(name,
+    object)] more roots (the server's own process: its Server's attributes, earthd main_async)."""
     def loop():
         log = logging.getLogger("earthd.worker")
         here = os.path.dirname(os.path.abspath(__file__))
@@ -266,14 +286,25 @@ def _memattr_loop(every_s):
             try:
                 import budget
                 roots = [(f"_s.{k}", v) for k, v in list(vars(_s).items())] if _s is not None else []
+                if extra_roots is not None:
+                    roots += extra_roots()
+                # (objects one level down: "server.dem._lru", not all of server.dem)
+                deep = []
+                for name, v in roots:
+                    d = getattr(v, "__dict__", None)
+                    if isinstance(d, dict) and not isinstance(v, type) and type(v).__name__ != "module":
+                        deep += [(f"{name}.{k}", x) for k, x in list(d.items())]
+                    else:
+                        deep.append((name, v))
+                roots = deep
                 for mname, mod in list(sys.modules.items()):
                     if (getattr(mod, "__file__", "") or "").startswith(here):
                         roots += [(f"{mname}.{k}", v) for k, v in list(vars(mod).items())
                                   if isinstance(v, (dict, list, set, collections.OrderedDict)) and v]
                 t0 = time.perf_counter()
-                got = held_memory(roots)
-                log.info("memory pid %d: %.0f MB (%.0f private); held arrays: %s (%.1f s)", os.getpid(),
-                         budget.memory_mb() or 0, budget.memory_mb(private=True) or 0,
+                got = held_memory(roots, exclude=exclude)
+                log.info("memory pid %d: %.0f MB (%.0f private, %s); held arrays: %s (%.1f s)", os.getpid(),
+                         budget.memory_mb() or 0, budget.memory_mb(private=True) or 0, _mallinfo(),
                          "; ".join(f"{n} {mb:.0f}" for mb, n in got[:12]), time.perf_counter() - t0)
             except Exception as e:
                 log.info("memory attribution: %s: %s", type(e).__name__, e)

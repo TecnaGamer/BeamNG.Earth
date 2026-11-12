@@ -14,6 +14,7 @@ measure() reports, for the decks within RADIUS_M of the place:
   low             the crossings whose gap is under LOW_GAP_M (a deck that blocks, or lies on, the road under it)
 These are measurements, not expectations: test_interchanges.py checks what holds today and that the replay runs.
 """
+import ast
 import json
 import os
 import sys
@@ -65,16 +66,73 @@ def _bilinear(axis, z, x, y):
     return out, inside
 
 
-def load(name):
-    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon))."""
-    with np.load(FIXTURES / f"interchange_{name}.npz", allow_pickle=False) as a:
-        data = {k: a[k] for k in a.files}
+STRUCTURED = (".attr.osm_lane_parts",)     # object columns the capture keeps as text (Python literals: no pickles)
+
+
+def _structured(key, values):
+    """A fixture column as Features holds it: a STRUCTURED one's text read back ("" -> None)."""
+    if not key.endswith(STRUCTURED):
+        return values
+    out = np.empty(len(values), object)
+    out[:] = [ast.literal_eval(str(v)) if str(v) else None for v in values]
+    return out
+
+
+def _keep_near(data, prefix, frame, keep_m):
+    """The features of one cell's arrays (prefix) within keep_m of the frame's origin (their bounding box), the rest
+    left out: the planner plans whole cells, and a replay measured near its place need not plan a city 1 km away."""
+    ids = data[prefix + "ids"]
+    part_off, ring_off, coord_off = (np.asarray(data[prefix + k], np.int64) for k in ("part_off", "ring_off", "coord_off"))
+    lonlat = np.asarray(data[prefix + "lonlat"], np.float64)
+    e, n, _ = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.0)
+    xy = np.c_[e, n]
+    keep = []
+    for i in range(len(ids)):
+        c0, c1 = coord_off[ring_off[part_off[i]]], coord_off[ring_off[part_off[i + 1]]]
+        if c1 > c0:
+            lo, hi = xy[c0:c1].min(axis=0), xy[c0:c1].max(axis=0)
+            if np.hypot(*np.maximum(np.maximum(lo, -hi), 0.0)) <= keep_m:
+                keep.append(i)
+    new_part, new_ring, new_coord, coords = [0], [0], [0], []
+    for i in keep:
+        for p in range(part_off[i], part_off[i + 1]):
+            for r in range(ring_off[p], ring_off[p + 1]):
+                coords.append(lonlat[coord_off[r]:coord_off[r + 1]])
+                new_coord.append(new_coord[-1] + len(coords[-1]))
+            new_ring.append(len(new_coord) - 1)
+        new_part.append(len(new_ring) - 1)
+    index = np.full(len(ids), -1, np.int64)
+    index[keep] = np.arange(len(keep))
+    out = dict(data)
+    out.update({prefix + "part_off": np.array(new_part, np.int64), prefix + "ring_off": np.array(new_ring, np.int64),
+                prefix + "coord_off": np.array(new_coord, np.int64),
+                prefix + "lonlat": np.concatenate(coords) if coords else np.zeros((0, 2))})
+    for k, v in data.items():
+        rest = k[len(prefix):] if k.startswith(prefix) else None
+        if rest in ("ids", "kind", "own", "clipped") or (rest or "").startswith("attr."):
+            out[k] = v[keep]
+        elif (rest or "").startswith("rule.") and rest.endswith(".feature"):
+            rows = index[np.asarray(v, np.int64)] >= 0
+            base = k[:-len("feature")]
+            for col in ("feature", "value", "start", "end"):
+                out[base + col] = data[base + col][rows]
+            out[k] = index[np.asarray(v, np.int64)[rows]].astype(v.dtype)
+    return out
+
+
+def load(name, prefix="interchange", keep_m=None):
+    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon)) of
+    fixtures/PREFIX_NAME.npz; keep_m: only the roads within this of the place (_keep_near)."""
+    with np.load(FIXTURES / f"{prefix}_{name}.npz", allow_pickle=False) as a:
+        data = {k: _structured(k, a[k]) for k in a.files}
     lat, lon = (float(v) for v in data["origin"])
     frame = geodesy.EnuFrame(lat, lon)
     cells = {}
     for i, key in enumerate(data["cells"]):
         if f"cell{i}.ids" not in data:
             continue
+        if keep_m is not None:
+            data = _keep_near(data, f"cell{i}.", frame, keep_m)
         k = mapcells.CellKey(*(int(v) for v in str(key).split("/")))
         clat, clon = k.center()
         cells[str(k)] = mapgeom.Features.from_arrays("roads", data, f"cell{i}.").localize(geodesy.EnuFrame(clat, clon))

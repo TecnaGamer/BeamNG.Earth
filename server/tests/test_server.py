@@ -1402,21 +1402,24 @@ class AnchorQTest(unittest.TestCase):
                 return 1000 + self.relief * (np.asarray(lat) - LAT) / 0.27     # +-15 km = +-0.135 deg
         f = geodesy.EnuFrame(LAT, LON)
         d = Dem(10)
-        self.assertEqual(earthd.survey_q(f, d), 1 / 256)
+        self.assertEqual(earthd.survey_q(f, d), 1 / 1024)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
-        # 3000 m over 30 km is 150 m per window (4 samples, 1.5 km, for a block of 1024 m and a survey step)
-        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 450 m per window
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (750 m)
-        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1500 m
+        # 3000 m over 30 km is 100 m per window (9 samples, 1 km, for a block of 1024 m)
+        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 512)      # (+ zBase's 16 m: 128 m)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 128)     # 300 m per window
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (600 m)
+        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1200 m
 
         class Peak(Dem):            # flat, with one 1200 m spike: its few windows do not decide (its blocks are coarser)
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 128)     # (its foot, not its top: 1/32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 1024)     # (the plain round it, not its top: 1/32)
         self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
+        for relief in (10.0, 180.0, 440.0, 950.0, 1900.0, 5000.0):    # block_q: block_params' rule, its worst zBase
+            self.assertEqual(heightmap.block_q(relief), heightmap.block_params(
+                1015.99, 1015.99 + relief, heightmap.Q_LADDER[0])[0])
 
         class Range(Dem):           # a mountain range over half the survey: it decides
             def sample(self, lat, lon, zoom, progress=None):
@@ -1497,8 +1500,8 @@ class MachineProfileTest(unittest.TestCase):
         old = earthd.FAST_BASE_V
         try:
             a = self._args()
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("BNGE_FAST_BASE_V", None)
+            with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(budget, "tier", return_value="small"):
+                os.environ.pop("BNGE_FAST_BASE_V", None)     # (the small tier: a 6 GB test runner is a lean one)
                 earthd.machine_profile(a, True)
             self.assertEqual(a.road_processes, budget.SMALL_ROAD_PROCESSES)
             self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS)
@@ -1507,6 +1510,66 @@ class MachineProfileTest(unittest.TestCase):
             self.assertEqual(earthd.FAST_BASE_V, earthd.SMALL_FAST_BASE_V)
         finally:
             earthd.FAST_BASE_V = old
+
+    def test_lean(self):
+        """An 8 GB machine (budget.tier 'lean'): one road-tile and one far-tile process, the tier kept for main_async's
+        pools; a player's own --workers / --road-processes stand."""
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier in ("lean", "emergency"):
+                a = self._args()
+                with mock.patch.object(budget, "tier", return_value=tier):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.road_processes, a.workers, a.far_max, a.tier),
+                                 (budget.LEAN_ROAD_PROCESSES, budget.LEAN_FAR_WORKERS, budget.LEAN_FAR_WORKERS, tier))
+            a = self._args()
+            a.workers, a.road_processes = 4, 3
+            with mock.patch.object(budget, "tier", return_value="lean"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers), (3, 4), "the player's choice")
+            a = self._args()
+            with mock.patch.object(budget, "tier", return_value="small"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers), (budget.SMALL_ROAD_PROCESSES, budget.SMALL_FAR_WORKERS))
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_emergency_trims_the_extras(self):
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier, trim, want in (("emergency", "on", "off"), ("lean", "on", "on"), ("emergency", "off", "on")):
+                a = self._args()
+                a.trees = a.gas_stations = a.airports = a.roads = a.buildings = "on"
+                with mock.patch.object(budget, "tier", return_value=tier), \
+                        mock.patch.object(earthd, "EMERGENCY_TRIM", trim == "on"):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.trees, a.gas_stations, a.airports), (want,) * 3, (tier, trim))
+                self.assertEqual((a.roads, a.buildings), ("on", "on"), "the essentials stay")
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_lean_processes(self):
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": ""}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"])
+            self.assertEqual(earthd.lean_processes("emergency"), earthd.LEAN_PROCS["emergency"])
+            self.assertEqual(earthd.lean_processes("small"), 4)
+        for v in ("1", "2", "4"):
+            with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": v}):
+                self.assertEqual(earthd.lean_processes("lean"), int(v))
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": "7"}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"], "not a level: the default")
+
+    def test_block_shared(self):
+        s = earthd.Server.__new__(earthd.Server)
+        p, q = object(), object()
+        s.block_pools = [(p, q), (p, q)]
+        self.assertTrue(s.block_shared())
+        s.block_pools = [(p, q), (object(), object())]
+        self.assertFalse(s.block_shared())
+        s.block_pools = []
+        self.assertFalse(s.block_shared())
 
     def test_photo_process_not_on_a_small_machine(self):
         with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": ""}):

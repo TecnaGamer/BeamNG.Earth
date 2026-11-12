@@ -358,3 +358,37 @@ class RotateTest(unittest.TestCase):
         if sys.platform.startswith("linux") or sys.platform == "win32":
             self.assertGreater(mb, 1.0)
         self.assertIsNone(self.budget.process_mb(2 ** 22 + 12345))   # (no such process)
+
+
+class TasksPerChildTest(unittest.TestCase):
+    """The lean memory tiers' road process replaced after so many jobs (pools.tasks_per_child_kw): every job still
+    answered, by fresh processes, the queue kept."""
+
+    def test_kwargs(self):
+        self.assertEqual(pools.tasks_per_child_kw(0), {})
+        self.assertEqual(pools.tasks_per_child_kw(None), {})
+        if sys.version_info >= (3, 11):
+            self.assertEqual(pools.tasks_per_child_kw(40), {"max_tasks_per_child": 40})
+        else:
+            self.assertEqual(pools.tasks_per_child_kw(40), {})
+
+    def test_fresh_processes(self):
+        if sys.version_info < (3, 11):
+            self.skipTest("max_tasks_per_child: Python 3.11+")
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, **pools.tasks_per_child_kw(2))
+        try:
+            futs = [p.submit(os.getpid) for _ in range(6)]
+            pids = [f.result(timeout=120) for f in futs]
+            self.assertEqual(len(pids), 6)
+            self.assertGreaterEqual(len(set(pids)), 3, pids)
+        finally:
+            p.shutdown(wait=True)
+
+    def test_budget_setting(self):
+        import budget
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": ""}):
+            self.assertEqual(budget.tasks_per_child(), budget.LEAN_TASKS_PER_CHILD)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "0"}):
+            self.assertEqual(budget.tasks_per_child(), 0)
+        with unittest.mock.patch.dict(os.environ, {"BNGE_TASKS_PER_CHILD": "7"}):
+            self.assertEqual(budget.tasks_per_child(), 7)

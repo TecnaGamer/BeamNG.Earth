@@ -106,6 +106,7 @@ def east_north(lonlat):
     return (lonlat[:, 0] - LON0) * 1e5, (lonlat[:, 1] - LAT0) * 1.1e5
 
 
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
 class LinesTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -167,6 +168,52 @@ class LinesTest(unittest.TestCase):
         self.assertEqual(left, [])
 
 
+def deck_profile(dsm):
+    """(north, z) of the stations of a 120 m deck line up the y axis (x = 0) through rows(), the DSM dsm(x, y)."""
+    xy = np.c_[np.zeros(31), np.arange(31) * 4.0]
+    line = roadzhk.TdLine(1, "", "", xy * 0, xy)
+    runs = roadzhk.stations([line], lambda ll: np.ones(len(ll), bool))
+    (_ll, z, _lv, _ref, _name), = roadzhk.rows([line], runs, None, dsm)
+    return runs[0][2][:, 1], z
+
+
+def rough(x, y):
+    """Ground beside a deck as the DSM has it under trees and on a hillside: 5 to 13 m, a different height a pixel."""
+    return 5.0 + 8.0 * ((np.floor(x * 2) * 7919 + np.floor(y * 2) * 104729) % 1000) / 1000.0
+
+
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+class DeckSurfaceTest(unittest.TestCase):
+    """A deck's height along its line is one surface of the DSM, not a median of the reads across it."""
+
+    def test_clean_deck_reads_its_height(self):
+        y, z = deck_profile(lambda x, y: np.where(np.abs(x) <= 4.0, 20.0 + 0.03 * y, 5.0))
+        np.testing.assert_allclose(z, 20.0 + 0.03 * y, atol=0.05)
+
+    def test_line_near_the_edge_of_a_wide_deck(self):
+        y, z = deck_profile(lambda x, y: np.where((x >= -3.0) & (x <= 5.0), 20.0 + 0.06 * y, 5.0))
+        np.testing.assert_allclose(z, 20.0 + 0.06 * y, atol=0.1)
+
+    def test_narrow_sloping_deck_beside_rough_ground(self):
+        """A 3.2 m slip road with its line 0.3 m inside one edge and ground like a hillside beside it: the deck at
+        every station (the median of the reads across took the ground, whose reads were most of them)."""
+        y, z = deck_profile(lambda x, y: np.where((x >= -0.3) & (x <= 2.9), 20.0 + 0.06 * y, rough(x, y)))
+        np.testing.assert_allclose(z, 20.0 + 0.06 * y, atol=0.1)
+
+    def test_higher_surface_over_part_of_the_corridor_is_no_step(self):
+        """A deck 10 m higher (or a barrier wall) over half the corridor for 40 m of the line: the profile stays on
+        the lower deck, or has a gap, and never jumps to the other surface and back."""
+        def dsm(x, y):
+            over = (x >= -2.0) & (y >= 40.0) & (y <= 80.0)
+            return np.where(over, 30.0, np.where(np.abs(x) <= 6.0, 20.0, 5.0))
+        y, z = deck_profile(dsm)
+        ok = np.isfinite(z)
+        self.assertLessEqual(np.abs(np.diff(z[ok])).max(), 0.6, "a step of more than the grade a bridge has")
+        clear = (y < 36.0) | (y > 84.0)
+        np.testing.assert_allclose(z[clear], 20.0, atol=0.1)
+        np.testing.assert_allclose(z[ok], 20.0, atol=0.1, err_msg="the lower deck's surface, or none")
+
+
 class SourceTest(unittest.TestCase):
     def test_bounds_and_off_switch(self):
         self.assertIn("hk", roadz.sources_at(22.38, 114.2))
@@ -175,7 +222,7 @@ class SourceTest(unittest.TestCase):
         self.assertFalse(roadz.hk_cell(mapcells.cell_of(48.85, 2.35)))
         with mock.patch.object(roadz, "HK_ON", False):
             self.assertNotIn("hk", roadz.sources_at(22.38, 114.2))
-            self.assertNotIn("hk1", roadz.hk_tags(KEY))
+            self.assertNotIn(roadz.HK_CELLS, roadz.hk_tags(KEY))
 
     def test_credited_where_its_lines_are_kept(self):
         import credits
@@ -207,6 +254,23 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(info["source"], "hk")
         self.assertAlmostEqual(info["offset"], 11.0 - 8.0, delta=0.5)
         np.testing.assert_allclose(z, 20.0 - info["offset"], atol=1e-6)
+
+
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+class StaleCellTest(unittest.TestCase):
+    """Cells built when a deck was the median of the reads across it are on users' disks: not read again."""
+
+    def test_cell_of_the_median_estimator_not_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            stale = os.path.join(d, "roadz", f"v{roadz.VERSION}", "hk", str(KEY.z), str(KEY.x), f"{KEY.y}.npz")
+            os.makedirs(os.path.dirname(stale))
+            ll = np.c_[LON0 + np.arange(5) / 1e4, np.full(5, LAT0)]
+            roadz.Lines.build([(ll, np.full(5, 99.0), 1, "", "STALE")]).save(stale)
+            fetcher = FakeFetcher()
+            ln = roadz.RoadZ(d, fetcher, None).lines("hk", KEY)
+        self.assertEqual(by_name(ln, "STALE"), [])
+        self.assertTrue(by_name(ln, "SHA TIN ROAD"), "built from the LiDAR again")
+        self.assertTrue(fetcher.downloads)
 
 
 class SlowFetcher(FakeFetcher):
@@ -280,6 +344,12 @@ class NotSharedTest(unittest.TestCase):
             self.assertNotEqual(self.pc._revisit_key(tuple(KEY)), on)
             paris = self.pc._revisit_key(self.paris)
         self.assertEqual(self.pc._revisit_key(self.paris), paris)
+
+    def test_plans_of_the_median_estimator_not_reused(self):
+        import revisit
+        terrain = tuple(t for t in roadz.hk_tags(KEY) if t.startswith("hkdtm"))
+        median = revisit.format_key("plans", plancache.plans_format(), *self.pc.persist[1], tuple(KEY), "hk1", *terrain)
+        self.assertNotEqual(self.pc._revisit_key(tuple(KEY)), median)
 
     def test_share_tools_turn_it_off(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")

@@ -97,6 +97,14 @@ M.SWAP_QUIET_MS = 150
 -- A collision rebuild (be:reloadCollision, ~10-25 ms on a Steam Deck) in a frame that already spent RELOAD_ROOM_MS on
 -- imports waits for the next frame, RELOAD_WAIT_FRAMES at most, unless the car is held over a collider (holdActive):
 -- an urgent import, another and the rebuild made 70-80 ms frames on a Deck's Baltimore drive (2026-10-23)
+-- No non-urgent be:reloadCollision while the player's car rolls between ROLL_MIN_MS and FAST_MS, for ROLL_DEFER_S at
+-- most: a rebuild while a car's wheels roll on the terrain block traps them in it (in game 2026-11-10, Roamer and stock
+-- pickup alike, 49.92283,-116.98674 and 36.98141,-110.11461: within 0.1 s of each rebuild the rear wheels' contact force
+-- jumped from ~7 kN to 30-180 kN and the car stopped dead at 3-5 m/s, wheels sunk 0.28 m, stuck for good; at 14 m/s a
+-- 94 kN hit it drove out of; parked, rebuilds did nothing). Off-road the trees' 6 s rebuilds hit almost every
+-- pull-away. Urgent rebuilds (a collider reached within URGENT_S, the hold) still run at once.
+M.ROLL_MIN_MS = 0.1
+M.ROLL_DEFER_S = 30
 M.RELOAD_ROOM_MS = 8.0
 M.RELOAD_WAIT_FRAMES = 3
 local reloadWaits = 0
@@ -1954,6 +1962,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   local urgent = collisionDirty and (holdActive or M.urgentColliders()) and sinceReload() > M.URGENT_GAP_S * 1000
   local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
+  if due and not urgent and M.deferWhileRolling(lastSpeed, sinceReload()) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -2156,6 +2165,13 @@ end
 
 -- Is a collider made since the last rebuild one the car reaches soon (its tile within URGENT_S of driving, 150 m at
 -- least)? Then the rebuild runs now, not after RELOAD_EVERY_S.
+-- Pure: does a non-urgent collision rebuild wait (ROLL_MIN_MS, ROLL_DEFER_S above)? speed: the player's car's ground
+-- speed (m/s, nil: unknown), sinceMs: ms since the last rebuild.
+function M.deferWhileRolling(speed, sinceMs)
+  if not speed or speed < M.ROLL_MIN_MS or speed >= M.FAST_MS then return false end
+  return (sinceMs or 0) < M.ROLL_DEFER_S * 1000
+end
+
 function M.urgentColliders()
   if #newColliders == 0 then return false end
   local p = playerNow()

@@ -49,7 +49,8 @@ class BudgetTest(unittest.TestCase):
     def test_small_caches(self):
         self.assertFalse(budget.apply(False))
         self.assertEqual(dem.MEM_TILES, self.saved[0], "the desktop sizes stay")
-        self.assertTrue(budget.apply(True))
+        with mock.patch.object(budget, "total_gb", return_value=14.5):     # (a Steam Deck: not a lean tier)
+            self.assertTrue(budget.apply(True))
         self.assertEqual((dem.MEM_TILES, roadwidth.WALL_CELLS, mapdata.MEM_MB),
                          (budget.SMALL_DEM_TILES, budget.SMALL_WALL_CELLS, budget.SMALL_MAPDATA_MB))
         self.assertEqual((imagery.MEM_TILES, seacarve.MEM_CELLS), (self.saved[1], self.saved[3]),
@@ -68,12 +69,168 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(imagery.MEM_FINISHED_MB, 58)
         self.assertEqual(imagery.MEM_DECODED, budget.SMALL_FIN_DECODED)
         imagery.MEM_FINISHED_MB = self.fin[0]
-        with mock.patch.object(budget, "total_gb", return_value=4.0):
+        with mock.patch.object(budget, "total_gb", return_value=4.0), mock.patch.object(budget, "LEAN_ON", False):
             budget.apply(True)
-        self.assertEqual(imagery.MEM_FINISHED_MB, budget.SMALL_FIN_MB, "at least this")
+        self.assertEqual(imagery.MEM_FINISHED_MB, budget.SMALL_FIN_MB, "at least this (the lean tiers off)")
         im = imagery.Imagery(os.path.join(os.path.dirname(__file__), "_no_cache"), fetcher=mock.Mock())
         self.assertEqual(im.mem_finished, budget.SMALL_FIN_MB * 1_000_000, "read when the cache is made")
         im.close()
+
+
+class LeanTierTest(unittest.TestCase):
+    """The lean memory tiers (2026-11-12, "also check for machines with 8gb or even 4gb of ram"): an 8 GB PC's
+    server in four processes with smaller caches and a coarser far field, a 4 GB one smaller still."""
+
+    def setUp(self):
+        import copy
+        import farfield
+        import pmtiles
+        import photosurface
+        import rangeread
+        import roads
+        self.mods = [(m, n, getattr(m, n)) for m, n in (
+            (dem, "MEM_TILES"), (imagery, "MEM_TILES"), (imagery, "MEM_FINISHED_MB"), (imagery, "MEM_DECODED"),
+            (mapdata, "MEM_MB"), (seacarve, "MEM_CELLS"), (roadwidth, "WALL_CELLS"), (pmtiles, "MEM_TILES_MB"),
+            (rangeread, "MEM_BYTES"), (photosurface, "MEM_TILES"), (roads, "FACTS_MEM_KEPT"),
+            (budget, "SHED_MB"), (budget, "ROTATE_MB"), (budget, "TIER"), (budget, "LOW_FREE_GB"),
+            (budget, "TREE_MB"))]
+        self.far = (copy.deepcopy(farfield.K_TABLE), copy.deepcopy(farfield.TEX_DEFAULT))
+        p = mock.patch.dict(os.environ, {"BNGE_BUDGET": "", "BNGE_SHED_MB": "", "BNGE_ROTATE_MB": "",
+                                         "BNGE_DEM_MEM_TILES": ""})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def tearDown(self):
+        import farfield
+        for m, n, v in self.mods:
+            setattr(m, n, v)
+        farfield.K_TABLE.clear(), farfield.K_TABLE.update(self.far[0])
+        farfield.TEX_DEFAULT.clear(), farfield.TEX_DEFAULT.update(self.far[1])
+
+    def test_tier_by_ram(self):
+        self.assertEqual(budget.tier(64.0), "desktop")
+        self.assertEqual(budget.tier(14.5), "small", "a Steam Deck")
+        self.assertEqual(budget.tier(12.5), "small", "a 12 GB PC: the small profile's tiny sizes")
+        self.assertEqual(budget.tier(8.3), "lean", "an 8 GB PC")
+        self.assertEqual(budget.tier(7.6), "lean")
+        self.assertEqual(budget.tier(6.3), "lean", "a 6 GB PC")
+        self.assertEqual(budget.tier(4.1), "emergency", "a 4 GB PC")
+        self.assertTrue(budget.small(8.3) and budget.lean(8.3) and budget.lean(4.1) and not budget.lean(14.5))
+        with mock.patch.object(budget, "LEAN_ON", False):
+            self.assertEqual(budget.tier(4.1), "small", "BNGE_LEAN=off: the small profile as before")
+        with mock.patch.dict(os.environ, {"BNGE_BUDGET": "lean"}):
+            self.assertEqual(budget.tier(64.0), "lean")
+            self.assertTrue(budget.small(64.0))
+        with mock.patch.dict(os.environ, {"BNGE_BUDGET": "emergency"}):
+            self.assertEqual(budget.tier(64.0), "emergency")
+        with mock.patch.dict(os.environ, {"BNGE_BUDGET": "desktop"}):
+            self.assertEqual(budget.tier(4.0), "desktop")
+            self.assertFalse(budget.small(4.0))
+
+    def _apply(self, gb):
+        with mock.patch.object(budget, "total_gb", return_value=gb):
+            return budget.apply()
+
+    def test_lean_sizes(self):
+        import farfield
+        import pmtiles
+        import rangeread
+        k0, tex0 = dict(farfield.K_TABLE[64]), farfield.TEX_DEFAULT[64]
+        self.assertTrue(self._apply(8.3))
+        self.assertEqual(budget.TIER, "lean")
+        self.assertEqual((budget.SHED_MB, budget.ROTATE_MB), (budget.LEAN_SHED_MB, budget.LEAN_ROTATE_MB))
+        self.assertEqual((dem.MEM_TILES, mapdata.MEM_MB, roadwidth.WALL_CELLS),
+                         (budget.LEAN_DEM_TILES, budget.LEAN_MAPDATA_MB, budget.LEAN_WALL_CELLS))
+        self.assertGreaterEqual(mapdata.MEM_MB, 128, "a road tile's cells fit (Baltimore's: ~124 MB)")
+        self.assertEqual((imagery.MEM_TILES, pmtiles.MEM_TILES_MB, rangeread.MEM_BYTES, seacarve.MEM_CELLS),
+                         (budget.LEAN_IMAGERY_TILES, budget.LEAN_PMTILES_MB, budget.LEAN_RANGEREAD_MB * 2 ** 20,
+                          budget.LEAN_SEA_CELLS))
+        self.assertLessEqual(imagery.MEM_FINISHED_MB, budget.LEAN_FIN_MB)
+        self.assertAlmostEqual(farfield.K_TABLE[64][1], k0[1] * budget.LEAN_FAR_K)
+        self.assertEqual(farfield.TEX_DEFAULT[64], tuple(min(t, budget.LEAN_FAR_TEX) for t in tex0))
+
+    def test_emergency_sizes(self):
+        import farfield
+        k0 = dict(farfield.K_TABLE[64])
+        self.assertTrue(self._apply(4.1))
+        self.assertEqual(budget.TIER, "emergency")
+        self.assertEqual((budget.SHED_MB, budget.ROTATE_MB),
+                         (budget.EMERGENCY_SHED_MB, budget.EMERGENCY_ROTATE_MB))
+        self.assertEqual((dem.MEM_TILES, mapdata.MEM_MB), (budget.EMERGENCY_DEM_TILES, budget.EMERGENCY_MAPDATA_MB))
+        self.assertAlmostEqual(farfield.K_TABLE[64][1], k0[1] * budget.EMERGENCY_FAR_K)
+        self.assertEqual(max(farfield.TEX_DEFAULT[64]), budget.EMERGENCY_FAR_TEX)
+
+    def test_lean_off_keeps_the_tiny_sizes(self):
+        with mock.patch.object(budget, "LEAN_ON", False):
+            self.assertTrue(self._apply(8.3))
+        self.assertEqual(budget.TIER, "small")
+        self.assertEqual((dem.MEM_TILES, mapdata.MEM_MB, budget.SHED_MB),
+                         (budget.TINY_DEM_TILES, budget.TINY_MAPDATA_MB, budget.TINY_SHED_MB))
+
+    def test_a_small_machine_unchanged(self):
+        self.assertTrue(self._apply(14.5))
+        self.assertEqual(budget.TIER, "small")
+        self.assertEqual((dem.MEM_TILES, budget.SHED_MB), (budget.SMALL_DEM_TILES, budget.SMALL_SHED_MB))
+
+    def test_memory_notice(self):
+        self.assertIsNone(budget.memory_notice(16.5))
+        self.assertIsNone(budget.memory_notice(64.0))
+        head, text = budget.memory_notice(8.3)
+        self.assertEqual(head, "Low memory")
+        self.assertIn("8 GB", text)
+        self.assertIn("16 GB", text, "what the game asks for")
+        head, text = budget.memory_notice(4.1)
+        self.assertEqual(head, "Not enough memory")
+        self.assertIn("4 GB", text)
+        self.assertIn("close every other program", text)
+        with mock.patch.object(budget, "LEAN_ON", False):
+            self.assertIsNone(budget.memory_notice(4.1), "BNGE_LEAN=off: no notice either")
+
+
+class CgroupMemoryTest(unittest.TestCase):
+    """budget.free_gb / total_gb under a cgroup v2 memory limit (a container, the low-memory tests' capped scopes):
+    the room under the limit counts when smaller than the machine's."""
+
+    def _tree(self, limits):
+        import tempfile
+        root = tempfile.mkdtemp(prefix="cgtest_")
+        self.addCleanup(__import__("shutil").rmtree, root, True)
+        base = os.path.join(root, "sys", "fs", "cgroup")
+        d = base
+        for name, mx, cur, inactive in limits:
+            d = os.path.join(d, name)
+            os.makedirs(d)
+            open(os.path.join(d, "memory.max"), "w").write(mx + "\n")
+            open(os.path.join(d, "memory.current"), "w").write(f"{cur}\n")
+            open(os.path.join(d, "memory.stat"), "w").write(f"anon {cur}\ninactive_file {inactive}\n")
+        return d, base
+
+    def test_tightest_limit(self):
+        d, base = self._tree([("user.slice", "max", 9_000_000_000, 0),
+                              ("app.slice", "4000000000", 3_000_000_000, 500_000_000),
+                              ("run.scope", "1500000000", 1_400_000_000, 100_000_000)])
+        self.assertAlmostEqual(budget.cgroup_limit_gb(d, base), 1.5)
+        # run.scope: 1.5 - 1.4 + 0.1 inactive cache = 0.2 GB; app.slice 4 - 3 + 0.5 = 1.5: the tighter wins
+        self.assertAlmostEqual(budget.cgroup_free_gb(d, base), 0.2)
+
+    def test_unlimited(self):
+        d, base = self._tree([("user.slice", "max", 9_000_000_000, 0), ("run.scope", "max", 1_000_000_000, 0)])
+        self.assertIsNone(budget.cgroup_limit_gb(d, base))
+        self.assertIsNone(budget.cgroup_free_gb(d, base))
+
+    def test_free_and_total_take_the_limit(self):
+        with mock.patch.object(budget, "cgroup_free_gb", return_value=0.25), \
+                mock.patch.object(budget, "cgroup_limit_gb", return_value=1.5), \
+                mock.patch.dict(os.environ, {"BNGE_TOTAL_GB": ""}):
+            if sys.platform.startswith("linux"):
+                self.assertAlmostEqual(budget.free_gb(), 0.25)
+                self.assertAlmostEqual(budget.total_gb(), 1.5)
+            with mock.patch.object(budget, "CGROUP_MEM", False):
+                self.assertGreater(budget.total_gb() or 99, 1.5, "BNGE_CGROUP_MEM=off: the machine's")
+
+    def test_no_cgroup(self):
+        self.assertIsNone(budget.cgroup_free_gb(""))
+        self.assertIsNone(budget.cgroup_limit_gb(""))
 
 
 class PriorityTest(unittest.TestCase):

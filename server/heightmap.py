@@ -62,10 +62,13 @@ CHUNK = int(128 / SQUARE)           # samples: ChunkCache's chunk, 128 m (the bl
 CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
 CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
                                     # block's own chunks are all it reads them for, and all 512 were +128 MB a process)
-# Height quanta (m), finest first: 65536 Q = 256 ... 4096 m of range per block.
-Q_LADDER = (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
+# Height quanta (m), finest first: 65536 Q = 64 ... 4096 m of range per block. On the 1 m ground the rounding is a
+# curvature of ~Q per m² the tyres feel: a quarter car's roughness (IRI) of Phoenix's roads (bumpscan, 2026-11-12) was
+# 3.2 m/km at 1/128, 1.8 at 1/256, 1.25 at 1/512, 0.99 at 1/1024 (0.82 unrounded): a flat place's blocks take 1/1024
+# or 1/512 now (a block's relief within 48 / 112 m).
+Q_LADDER = (1 / 1024, 1 / 512, 1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
 Q_DEFAULT = 1 / 64
-ZBASE_STEP = 64.0                   # zBase is a multiple of this (and so of every Q)
+ZBASE_STEP = 8.0                    # zBase is a multiple of this (and so of every Q; 64 m took 1/1024's whole range)
 ZBASE_MARGIN = 8.0                  # m below the lowest sample
 
 
@@ -314,6 +317,16 @@ def choose_q(relief, ladder=Q_LADDER):
     need = relief * 1.1 + ZBASE_STEP + ZBASE_MARGIN
     for q in ladder:
         if 65535 * q >= need:
+            return q
+    return ladder[-1]
+
+
+def block_q(relief, ladder=Q_LADDER):
+    """Smallest quantum of the ladder a block with this relief fits (block_params' rule: its range above the rounded
+    down zBase, ZBASE_STEP + ZBASE_MARGIN at most, within 65534 Q)."""
+    need = relief + ZBASE_STEP + ZBASE_MARGIN
+    for q in ladder:
+        if need <= 65534 * q:
             return q
     return ladder[-1]
 

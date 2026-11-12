@@ -536,6 +536,35 @@ ROAD_HUNG_EXTRA_S = 60.0
 WORKERS = 3                     # far-tile workers (--workers): while driving (FAR_DRIVE)
 FAR_DRIVE = 3
 FAR_MAX_DESKTOP = 10            # ... up to this many with the 3D map open / the loading boost (desktops, budget.py)
+# The lean memory tiers (budget.tier: an 8 GB machine, a 4-6 GB one): their pools by LEAN_PROCS (main_async), the far
+# buildings in the road-tile process, the process counts machine_profile sets. BNGE_LEAN_POOLS=off: the small
+# profile's pools (a process per block lane, the far tiles' and the far buildings' own) with the lean caches and counts
+LEAN_POOLS = os.environ.get("BNGE_LEAN_POOLS", "on") != "off"
+# How many processes the lean tiers' server runs in all (BNGE_LEAN_PROCS): 4 = the server, one block process for both
+# lanes, one road-tile process (the far buildings in it), one far-tile process; 2 = the server and one road-tile
+# process (the blocks and the far tiles in the server's threads: one copy of the map data instead of three); 1 =
+# everything in the server's process (--block-process off). Measured 2026-11-12 (drive_mem: a cold Baltimore at 30 mph
+# then I-95 at 60 mph, the Low preset's graphics, the server in a 2.5 GB scope with 2 GB of swap): 4 processes peaked
+# at 4.2 GB (swap full), 2 at 3.1 GB (swap ~1 GB), both with every terrain block in time (p90 1.1-1.2 s) and ~400 road
+# tiles; 1 peaked at 3.1 GB too but had 10 of 17 blocks late (p50 5.8 s, p90 20 s), a quarter of the road tiles and a
+# tenth of the far tiles (everything under one interpreter lock). The small profile's eight processes were killed by
+# the scope's memory limit in a minute. The emergency tier (a 0.9 GB scope, 2 GB of swap, its extras off: EMERGENCY_OFF)
+# with 2: 6 of 32 blocks late (p50 1.6 s, p90 4.5 s), ~300 road tiles; with 1: 24 of 29 late (p50 7.6 s), 209.
+LEAN_PROCS = {"lean": 2, "emergency": 2}
+# The emergency tier's server arguments turned off (machine_profile): the trees, the gas stations, the airports' runway
+# grading. BNGE_EMERGENCY_TRIM=off keeps them.
+EMERGENCY_TRIM = os.environ.get("BNGE_EMERGENCY_TRIM", "on") != "off"
+EMERGENCY_OFF = ("trees", "gas_stations", "airports")
+
+
+def lean_processes(tier):
+    """The lean tier's process count (LEAN_PROCS; BNGE_LEAN_PROCS 4, 2 or 1 overrides)."""
+    v = os.environ.get("BNGE_LEAN_PROCS", "")
+    if v in ("1", "2", "4"):
+        return int(v)
+    return LEAN_PROCS.get(tier, 4)
+
+
 FAR_ELASTIC = os.environ.get("BNGE_FAR_ELASTIC", "on") != "off"     # ... those past FAR_DRIVE only while used (pools.py)
 
 
@@ -685,9 +714,9 @@ HORIZON_RETRY = 30.0
 HORIZON_BLOCK_CACHE = 1024      # DEM tiles' block maxima kept between anchors (16 KB each)
 # Anchor height quantum: relief survey of +-SURVEY_HALF around the anchor at DEM zoom SURVEY_ZOOM.
 SURVEY_HALF = 15000.0
-SURVEY_N = 61                       # 500 m apart
-SURVEY_WINDOW = 1.0                 # blocks: the windows survey_q takes the relief of (+ one survey step: an unaligned block)
-SURVEY_PERCENTILE = 99.0            # of the windows' relief the anchor's quantum must hold (the rest: their own, coarser)
+SURVEY_N = 241                      # 125 m apart (the same z10 tiles as 500 m: ~58k samples)
+SURVEY_WINDOW = 1.0                 # blocks: the windows survey_q takes the relief of (at most: whole survey steps)
+SURVEY_PERCENTILE = 95.0            # of the windows' relief the anchor's quantum must hold (the rest: their own, coarser)
 BLOCK_SURVEY_M = 2048.0             # m: the largest block (1024² at 2 m); Server passes its own
 SURVEY_ZOOM = 10
 DELTA_MARGIN = 0.1          # m added to measured swap-group deltas (crossings between vertices)
@@ -956,19 +985,22 @@ def _num(msg, name, default=None):
 
 
 def survey_q(frame, dem, block_m=BLOCK_SURVEY_M):
-    """Height quantum of an anchor (§1.3): the smallest ladder step whose block range covers the
-    SURVEY_PERCENTILE relief of the windows of SURVEY_WINDOW blocks (block_m m) of a +-15 km survey at
-    DEM z10, plus 10 %. A block only has to hold its own relief (its zBase is its own; one that does not
-    fit takes the next coarser step, heightmap.block_params). The whole survey's relief made every
-    mountain anchor 1/16 m: 6 cm steps on the runways and roads (Courchevel, in-game 2026-10-13); so did
-    its one worst window of 1.5 blocks (the Stelvio's and Courchevel's, whose 2 km blocks within 6 km all
-    hold 1/32 m): its 2 m samples rounded to 6 cm steps were bumps on every steep road, twice the time over
-    0.2 g of 1/32 m in a quarter car (the user, 2026-11-01: "Fix the bumps")."""
+    """Height quantum of an anchor (§1.3): the smallest ladder step whose block range holds the SURVEY_PERCENTILE
+    relief of the block-sized windows (SURVEY_WINDOW blocks of block_m m, at most) of a +-15 km survey at DEM z10, by
+    the blocks' own rule (heightmap.block_q). A block only has to hold its own relief (its zBase is its own; one that
+    does not fit takes the next coarser step, heightmap.block_params). The whole survey's relief made every mountain
+    anchor 1/16 m: 6 cm steps on the runways and roads (Courchevel, in-game 2026-10-13); so did its one worst window of
+    1.5 blocks (the Stelvio's and Courchevel's, whose 2 km blocks within 6 km all hold 1/32 m): its 2 m samples rounded
+    to 6 cm steps were bumps on every steep road, twice the time over 0.2 g of 1/32 m in a quarter car (the user,
+    2026-11-01: "Fix the bumps"). On the 1 m ground the rounding is 4x the curvature again (it goes as Q / square²):
+    windows of a block and a 500 m survey step, plus 10 %, still made the Stelvio, Tyrol and Zermatt 1/32 m where 97-99 %
+    of their real 1 km blocks hold 1/64, and the Brazilian and Japanese hills 1/64 where 95-100 % hold 1/128 (bumpscan
+    2026-11-12: the Stelvio's roads IRI 13.5 m/km at 1/32 m against 6.8 unrounded)."""
     xs = np.linspace(-SURVEY_HALF, SURVEY_HALF, SURVEY_N)
     u = heightmap.surface_u(frame, lambda la, lo: dem.sample(la, lo, SURVEY_ZOOM), xs, xs)
-    k = min(len(xs), int(math.ceil(SURVEY_WINDOW * block_m / (xs[1] - xs[0]))) + 1)
+    k = max(2, min(len(xs), int(math.floor(SURVEY_WINDOW * block_m / (xs[1] - xs[0]) + 1e-9)) + 1))
     win = np.lib.stride_tricks.sliding_window_view(u, (k, k))
-    return heightmap.choose_q(float(np.percentile(win.max(axis=(2, 3)) - win.min(axis=(2, 3)), SURVEY_PERCENTILE)))
+    return heightmap.block_q(float(np.percentile(win.max(axis=(2, 3)) - win.min(axis=(2, 3)), SURVEY_PERCENTILE)))
 
 
 def game_running():
@@ -3395,7 +3427,7 @@ class Server:
             for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                 if k not in keys:
                     keys.append(k)
-        for _, q in self.block_pools:
+        for _, q in {id(q_): (p_, q_) for p_, q_ in self.block_pools}.values():     # (a shared lane: once)
             try:
                 q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys))
             except Exception as e:      # a full / closed queue only costs the lookahead
@@ -3642,7 +3674,9 @@ class Server:
             if pool is not None:
                 self.hm_stage[key] = "the block process"
                 submitted, submitted_pc = time.time(), time.perf_counter()
-                pfut = self.hm_proc[key] = pool.submit(
+                # (one block process for both lanes, a lean tier: a prefetched block waits for the requested ones)
+                submit = pool.submit_low if lane == LANE_PREFETCH and self.block_shared() else pool.submit
+                pfut = self.hm_proc[key] = submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                     fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
@@ -3665,6 +3699,11 @@ class Server:
                 return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base)
         finally:
             self.hm_stage.pop(key, None)
+
+    def block_shared(self):
+        """Do both block lanes share one process (a lean tier: main_async)?"""
+        bp = self.block_pools
+        return len(bp) > LANE_PREFETCH and bp[LANE_PREFETCH][0] is bp[LANE_REQUEST][0]
 
     def block_planned(self, anchor, cx, cy):
         """Are the road plans of every map cell under block (cx, cy) made (here, or on disk: this run's plan cache, the
@@ -7469,6 +7508,12 @@ class Connection:
                  "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
+            import budget
+            if budget.TIER in ("lean", "emergency"):    # (a low-memory machine: the mod warns on the emergency tier)
+                m["memoryTier"] = budget.TIER
+                note = budget.memory_notice(tier_=budget.TIER)
+                if note:
+                    m["memoryNote"] = note[1]
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()
@@ -10286,9 +10331,21 @@ async def main_async(args):
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
-    if args.block_process == "on":
-        ctx = multiprocessing.get_context("spawn")
+    lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
+    procs = lean_processes(getattr(args, "tier", None)) if lean else 4
+    if lean:
+        log.info("worker processes: %s (a low-memory machine; BNGE_LEAN_PROCS 4, 2 or 1)",
+                 {4: "one each for the blocks, the road tiles and the far tiles",
+                  2: "one for the road tiles; the blocks and the far tiles in the server's own"}.get(
+                      procs, "none: everything in the server's own process"))
+    ctx = multiprocessing.get_context("spawn") if args.block_process == "on" and procs > 1 else None
+    if ctx is not None and procs > 2:
         for lane in (LANE_REQUEST, LANE_PREFETCH):
+            if lean and block_pools:
+                # (a lean tier: the prefetch lane in the request lane's process, its blocks after the requested ones:
+                # Server.block_shared, submit_low)
+                block_pools.append(block_pools[0])
+                continue
             warm_q = ctx.Queue(maxsize=64)
             # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
             # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
@@ -10339,13 +10396,14 @@ async def main_async(args):
         except airportsmod.AirportsUnavailable as e:
             log.warning("airports: no runway grading (%s)", e)
     road_pool = None
-    if args.block_process == "on" and args.roads == "on" and args.road_processes > 0:
+    if ctx is not None and args.roads == "on" and args.road_processes > 0:
         road_pool = poolsmod.RespawningPool(      # road tiles (blockworker.roads_tile)
             "road tile", args.road_processes, mp_context=ctx, initializer=blockworker.init,
             hung_s=ROAD_TILE_TIMEOUT_S + ROAD_HUNG_EXTRA_S,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
                       args.surface == "on", None, logging.getLogger().level,
-                      args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
+                      args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND),
+            **poolsmod.tasks_per_child_kw(budget.tasks_per_child() if lean else 0))
     make_fast_pool = None
     if road_pool is not None:
         def make_fast_pool(n):          # (the saved areas' fast mode: Server.fast_precache)
@@ -10355,7 +10413,7 @@ async def main_async(args):
                           args.surface == "on", None, logging.getLogger().level,
                           args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
     far_bld_pool = None
-    if road_pool is not None and args.buildings == "on":
+    if road_pool is not None and args.buildings == "on" and not lean:     # (a lean tier: in the road process)
         far_bld_pool = poolsmod.RespawningPool(   # far building tiles (blockworker.far_buildings_tile)
             "far building", 1, mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, True, args.grading == "on", args.road_widths == "on",
@@ -10506,6 +10564,10 @@ async def main_async(args):
                     f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} {st.size / 1e6:.0f} MB"
                     for st in top))
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()
+    if os.environ.get("BNGE_MEMATTR_S"):        # debug: which of the Server's attributes hold this process's arrays
+        blockworker._memattr_loop(float(os.environ["BNGE_MEMATTR_S"]),
+                                  lambda: [(f"server.{k}", v) for k, v in list(vars(server).items())],
+                                  exclude=(server,))
 
     async def sessions():
         while True:
@@ -10801,9 +10863,28 @@ def machine_profile(args, small):
             args.workers = budget.SMALL_FAR_WORKERS
         if budget.SMALL_ANALYSES_OFF:
             args.deshadow, args.colormatch = "off", "off"
-        log.info("small machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
-                 "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)", budget.total_gb() or 0, args.workers,
-                 args.road_processes)
+        args.tier = budget.tier()
+        if args.tier in ("lean", "emergency"):
+            # (the lean tiers: one road-tile process and, with LEAN_PROCS 4, one far-tile process; main_async)
+            if args.road_processes in (ROAD_PROCESSES, budget.SMALL_ROAD_PROCESSES):
+                args.road_processes = budget.LEAN_ROAD_PROCESSES
+            if args.workers in (WORKERS, budget.SMALL_FAR_WORKERS):
+                args.workers = budget.LEAN_FAR_WORKERS
+        if args.tier == "emergency" and EMERGENCY_TRIM:
+            # (4-6 GB, below what the game itself needs: the world's extras off, its ground and roads kept. In a 0.9 GB
+            # scope with 2 GB of swap the untrimmed server was killed after 14.5 minutes of a cold Baltimore and I-95,
+            # 2.9 GB at its peak; trimmed it lasted the drive at 2.6 GB, its teleports 40 s instead of 90: drive_mem
+            # 2026-11-12)
+            off = [n for n in EMERGENCY_OFF if getattr(args, n, "off") == "on"]
+            for n in off:
+                setattr(args, n, "off")
+            if off:
+                log.info("very low memory: %s off (BNGE_EMERGENCY_TRIM=off keeps them)",
+                         ", ".join(n.replace("_", " ") for n in off))
+        log.info("%s machine (%.1f GB): %d far-tile and %d road-tile processes, smaller caches, imagery analyses "
+                 "off (budget.py; BNGE_BUDGET=desktop for the desktop sizes)",
+                 {"lean": "low-memory", "emergency": "very low memory"}.get(args.tier, "small"),
+                 budget.total_gb() or 0, args.workers, args.road_processes)
     elif args.road_processes == ROAD_PROCESSES:
         args.road_processes = budget.road_processes()
         log.info("road-tile processes: %d (%d threads, %.0f GB)", args.road_processes, os.cpu_count() or 0,

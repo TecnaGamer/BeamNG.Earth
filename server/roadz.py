@@ -11,12 +11,12 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
-  750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's median across the carriageway, none in a tunnel
-  or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
-  The sheets a cell reads are kept (hklidar.py, shared with the terrain) for its neighbours; a road build
-  waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its heights
-  are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share or
-  baked pack).
+  750 x 600 m sheet a zip): ground roads the DTM, decks the one surface earthfast.deck_lidar finds in the DSM's pixels
+  round the line, none in a tunnel or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK
+  terms: free use with attribution). The sheets a cell reads are kept (hklidar.py, shared with the terrain) for its
+  neighbours; a road build waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its
+  heights are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share
+  or baked pack).
 - "lidar": the US, USGS 3DEP point clouds (Entwine Point Tiles on AWS, public domain): for every road bridge of the
   cell, its deck measured along its own map line (earthfast.deck_lidar: the points' surfaces per 4 m station, one
   drivable surface picked by a Viterbi pass; any non-noise class, as class 17 is not to be trusted: Baltimore 2014
@@ -68,6 +68,10 @@ NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
 HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
+# the "hk" source's cell folder (<source> above) and the tag of the plans made with it (hk_tags): changed with its
+# heights, so that cells and plans kept under the old one are not read (hk / hk1: a deck the median of 15 DSM reads
+# across it; hk2: the one surface deck_lidar finds in the DSM pixels round its line). Not VERSION: every source's cells
+HK_CELLS = "hk2"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
@@ -116,6 +120,8 @@ CLEAN_SPIKE_M = 1.5
 CLEAN_WIN_M = 20.0
 CLEAN_GAP_M = 30.0
 CLEAN_SIGMA_M = 3.0
+TIER_CROSS_M = 60.0         # m: a run on another deck tier this short, the same tier before and after, is a deck
+                            # crossing over or under the road (a road's own change of tier and back is two ramps)
 MIN_COVER = 0.6             # share of a part's stations with a height, or the part keeps the inference
 DATUM_NEAR_M = 300.0        # m round a part's ends its source's ground roads give the datum offset
 DATUM_NEAR_MIN = 5
@@ -258,13 +264,13 @@ def sources_at(lat, lon, lidar=None):
 
 def hk_tags(key):
     """The Hong Kong government data map cell key's road plans are made with, when its box meets HK_BOUNDS with
-    CLIP_PAD_M to spare: "hk1", its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
+    CLIP_PAD_M to spare: HK_CELLS, its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
     lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
     pad = CLIP_PAD_M / 111320.0
     if not (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
             and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
         return ()
-    return (("hk1",) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+    return ((HK_CELLS,) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
 
 
 def hk_cell(key):
@@ -286,7 +292,7 @@ def hk_credited_near(cache_dir, lat, lon, near_m):
     d = near_m / 111320.0
     k = max(0.05, math.cos(math.radians(lat)))
     for key in mapcells.cells_for_bbox(lat - d, lon - d / k, lat + d, lon + d / k):
-        p = os.path.join(cache_dir, "roadz", f"v{VERSION}", "hk", str(key) + ".npz")
+        p = os.path.join(cache_dir, "roadz", f"v{VERSION}", HK_CELLS, str(key) + ".npz")
         try:
             mt = os.stat(p).st_mtime
             got = _HK_LINES.get(p)
@@ -668,6 +674,8 @@ class RoadZ:
         import roads
         if src == "lidar" and not roads.LIDAR_GAPS_ON:
             src = "lidar-nogaps"            # (built without the ground stretches: not the cells with them)
+        if src == "hk":
+            src = HK_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
     def lines(self, src, key):
@@ -1458,7 +1466,7 @@ class RoadZ:
         d = np.gradient(xy, axis=0)
         qdir = np.ascontiguousarray(d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
-            segs, segz, oks, cells = [], [], [], []
+            segs, segz, oks, lvs, cells = [], [], [], [], []
             if src in DEFERRED and self._lidar_skipped(keys, src):
                 return None                 # (this run goes without a cell's lidar: the inference, every process)
             for k in keys:
@@ -1477,13 +1485,22 @@ class RoadZ:
                 segs.append(seg)
                 segz.append(sz)
                 oks.append((want & nm_ok[line_of]).astype(np.uint8))
+                lvs.append(lv)
                 cells.append((k, ln, vxy))
             if not segs:
                 continue
             reach = half + (LIDAR_REACH_M if src == "lidar" else MATCH_REACH_M)
-            z, dist = fast._ef.roadz_match(np.ascontiguousarray(xy), qdir, np.ascontiguousarray(np.vstack(segs)),
-                                           np.ascontiguousarray(np.vstack(segz)),
-                                           np.ascontiguousarray(np.concatenate(oks)), float(reach), MATCH_COS)
+            q, seg, ok = np.ascontiguousarray(xy), np.ascontiguousarray(np.vstack(segs)), np.concatenate(oks)
+            z, dist = fast._ef.roadz_match(q, qdir, seg, np.ascontiguousarray(np.vstack(segz)), ok, float(reach),
+                                           MATCH_COS)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            tiers = np.concatenate(lvs)[ok > 0]
+            if level > 0 and len(tiers) and tiers.min() > 0 and tiers.max() > tiers.min():
+                # decks of several tiers (Hong Kong's ELEVATION 1, 2, ...): the same match again, for each station's
+                # tier (the tier as the segments' "height"), and never another tier's deck where it only crosses
+                tier, _ = fast._ef.roadz_match(q, qdir, seg, np.repeat(np.concatenate(lvs)[:, None], 2, 1).astype(
+                    np.float64), ok, float(reach), MATCH_COS)
+                z = np.where(crossing_runs(s, tier, TIER_CROSS_M), np.nan, z)
             if not np.isfinite(z).any():
                 continue
             off = 0.0
@@ -1491,7 +1508,6 @@ class RoadZ:
                 off = self._local_offset(src, cells, xy, frame)
                 if off is None:
                     continue
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             zc = np.asarray(fast._ef.profile_clean(s, np.ascontiguousarray(z - off), CLEAN_GRADE, CLEAN_SPIKE_M,
                                                    CLEAN_WIN_M, CLEAN_GAP_M, CLEAN_SIGMA_M), np.float64)
             cover = float(np.isfinite(zc).mean())
@@ -1541,6 +1557,22 @@ class RoadZ:
         offs = [self._cell_offset(src, k, ln) for k, ln, _ in cells]
         offs = [o for o in offs if o is not None]
         return float(np.median(offs)) if offs else None
+
+
+def crossing_runs(s, tier, max_m):
+    """Where a road's stations (arc lengths s) matched a deck that only crosses it. tier (n,): the tier of the source
+    line each station matched (NaN: none). True on every run of one tier at most max_m long with one other tier
+    both before and after it (stations without a match skipped). A road that changes tier has a different tier on
+    each side of the change, and stays."""
+    out = np.zeros(len(tier), bool)
+    idx = np.flatnonzero(np.isfinite(tier))
+    t = np.asarray(tier)[idx]
+    a = np.r_[0, np.flatnonzero(np.diff(t) != 0) + 1]       # each run's first matched station, and (b) one past it
+    b = np.r_[a[1:], len(t)]
+    for j in range(1, len(a) - 1):
+        if t[a[j] - 1] == t[b[j]] and s[idx[b[j] - 1]] - s[idx[a[j]]] <= max_m:
+            out[idx[a[j]:b[j]]] = True
+    return out
 
 
 def install(cache_dir, fetcher, md):
