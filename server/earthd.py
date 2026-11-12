@@ -600,6 +600,11 @@ class DynGate:
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
 TRACE_TOP = 15                  # ... and the allocation sites in each
 PROVISIONAL_ELSEWHERE = os.environ.get("BNGE_PROV_HERE") != "1"   # a teleport's first block in a block process
+# The road plans this process's own work asks for (its far tiles' ground, lakes, tunnels) are made by the prefetch
+# lane's block process, not on this process's threads (Server.plan_elsewhere; BNE_PLAN_ELSEWHERE=off: here, as before)
+PLAN_ELSEWHERE = os.environ.get("BNE_PLAN_ELSEWHERE", "on") != "off"
+WARM_SPLIT = os.environ.get("BNE_WARM_SPLIT", "on") != "off"     # (Server.warm_roads; off: both lanes plan ahead)
+PLAN_ELSEWHERE_S = 120.0    # s a cell's plans are waited for from there before they are made here after all
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
@@ -3409,6 +3414,10 @@ class Server:
                     self.plan_store = gradingmod.PlanStore(
                         self.mapdata, self._plan_elev if getattr(self, "lids", None) is not None
                         else (lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)), self.road_widths)
+                    if PLAN_ELSEWHERE and getattr(self, "plan_elsewhere", None) is not None:
+                        self.plan_store.delegate = self.plan_elsewhere
+                # (plan_elsewhere: an anchor for the worker's store settings)
+                self._plan_anchor = tuple(getattr(anchor, n, None) for n in ("id", "lat", "lon"))
                 grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
                                           store=self.plan_store)
                 grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
@@ -3419,6 +3428,19 @@ class Server:
                 grader.shared = plancachemod.for_grader(self.cache_dir, grader, self.road_widths, grader.wet)
                 anchor.grader = grader       # publish only after a pinned bundle passed compatibility checks
             return anchor.grader
+
+    def plan_elsewhere(self, key):
+        """grading.PlanStore.delegate of this process: cell key's plans made by the prefetch lane's block process
+        (blockworker.plan_cell; its own interpreter, the plans read back from the run's plan cache), waited for here.
+        False when there is no such process (a lean tier's one block process builds the requested blocks: the cell is
+        planned here as before) or it could not."""
+        bp = getattr(self, "block_pools", None) or ()
+        at = getattr(self, "_plan_anchor", None)
+        if at is None or at[0] is None or len(bp) <= LANE_PREFETCH or bp[LANE_PREFETCH][0] is bp[LANE_REQUEST][0]:
+            return False
+        fut = bp[LANE_PREFETCH][0].submit(blockworker.plan_cell, at[0], at[1], at[2],
+                                          (int(key[0]), int(key[1]), int(key[2])))
+        return bool(fut.result(timeout=PLAN_ELSEWHERE_S))
 
     def warm_roads(self, anchor, x, y, vx, vy, tree=None):
         """Queue the road plans of the cells the physics block will cover along the player's straight path
@@ -3439,9 +3461,15 @@ class Server:
             for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                 if k not in keys:
                     keys.append(k)
-        for _, q in {id(q_): (p_, q_) for p_, q_ in self.block_pools}.values():     # (a shared lane: once)
+        # (the prefetch lane's process plans them; the requested blocks' process, while it builds a block, only reads
+        # the planned ones into its memory, WARM_SPLIT: its own warm thread planned every cell round the player beside a first visit's
+        # graded block, under one interpreter lock: 21 cells' plans, ~30 CPU-s, in the process whose block and whose
+        # road tiles waited for 4 of them, the prefetch lane's process beside it planning none; York PA, 2026-11-12)
+        bp = self.block_pools
+        split = WARM_SPLIT and len(bp) > LANE_PREFETCH and bp[LANE_PREFETCH][0] is not bp[LANE_REQUEST][0]
+        for lane, (_, q) in {id(q_): (n_, (p_, q_)) for n_, (p_, q_) in enumerate(self.block_pools)}.values():
             try:
-                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys))
+                q.put_nowait((anchor.id, anchor.lat, anchor.lon, keys, split and lane == LANE_REQUEST))
             except Exception as e:      # a full / closed queue only costs the lookahead
                 log.debug("road plans ahead: %s", e)
         if self.road_pool is not None:      # road tiles plan in their processes: this one needs none ahead
