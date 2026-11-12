@@ -114,6 +114,7 @@ def compute(server_dir):
             hello = dict(w.msgs[-1])
             hello.pop("sessionId")
             hello.pop("appVersion", None)     # the release (VERSION): changes every release
+            hello.pop("serverVersion", None)  # (the release's VERSION too since 2026-11-12: netfetch.SERVER_VERSION)
             # since 2026-11-01 hello always names the block (M1's: 2 km, no field = the 1024² block at 2 m)
             if sub > 1 and (hello.get("blockSize"), hello.get("squareSize")) == (1024 * sub, 2.0 / sub):
                 del hello["blockSize"], hello["squareSize"]
