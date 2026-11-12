@@ -170,8 +170,8 @@ function M.tooSteep(p, q)
   return math.abs(p[3] - q[3]) > M.MAX_GRADE * math.max(run, 1.0)
 end
 
--- Contract isolated sub-metre seams on an otherwise continuous one-way carriageway. The stock marker planner
--- merges points this close, but the vehicle AI given both nodes can make a sharp lane adjustment and nearly stop.
+-- Contract isolated sub-metre seams on a continuous road with matching directed lane metadata. The stock marker
+-- planner merges points this close, but the vehicle AI given both nodes can make a sharp lane adjustment and stop.
 -- Keep junctions, clip boundaries, controls and changes in lanes/width/rules; the downstream node stays stable.
 function M.compactShortEdges(nodes, protected)
   local function other(id, except)
@@ -189,7 +189,7 @@ function M.compactShortEdges(nodes, protected)
     return dot > 0.98 * math.sqrt(lengthSq(a, b) * lengthSq(b, c))
   end
   local function sameLanes(a, b)
-    return a.oneWay and b.oneWay and a.lanes == b.lanes and a.drivability == b.drivability
+    return a.oneWay == b.oneWay and a.lanes == b.lanes and a.drivability == b.drivability
       and a.rough == b.rough and a.rumble == b.rumble
   end
   local ids, removed = {}, 0
@@ -200,7 +200,7 @@ function M.compactShortEdges(nodes, protected)
     if A and not protected[a] then
       for b, e in pairs(A.links) do
         local B = nodes[b]
-        if e.oneWay and e.inNode == a and not protected[b] and lengthSq(A.pos, B.pos) <= 1 then
+        if e.inNode == a and not protected[b] and lengthSq(A.pos, B.pos) <= 1 then
           local p, q = other(a, b), other(b, a)
           if p and q and p ~= q then
             local P, Q = nodes[p], nodes[q]
