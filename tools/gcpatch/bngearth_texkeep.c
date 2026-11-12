@@ -130,16 +130,25 @@ static int acquire(void *obj) {
     int *rc = refs(obj);
     int c = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
     for (;;) {
-        if (!(c > 0 || c == REFS_ZERO)) return 0;
+        if (!(c > 0 || c == REFS_ZERO)) 
+        {
+            return 0;
+        }
         int n = (c > 0 ? c : 0) + 1;
-        if (__atomic_compare_exchange_n(rc, &c, n, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return 1;
+        if (__atomic_compare_exchange_n(rc, &c, n, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) 
+        {
+            return 1;
+        }
     }
 }
 
 // Is the device mutex (pthread_mutex_t, glibc layout: __owner at int [2]) held by this thread?
 static int own_device_mutex(void *obj) {
     char *dev = *(char **)((char *)obj + OBJ_DEVICE);
-    if (!dev) return 0;
+    if (!dev) 
+    {
+        return 0;
+    }
     int owner = ((volatile int *)(dev + DEV_MUTEX))[2];
     return owner == (int)syscall(SYS_gettid);
 }
@@ -151,17 +160,30 @@ static void release(void *obj) {
     int c = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
     for (;;) {
         if (c > 1) {
-            if (__atomic_compare_exchange_n(rc, &c, c - 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
+            if (__atomic_compare_exchange_n(rc, &c, c - 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) 
+            {
+                return;
+            }
             continue;
         }
-        if (c != 1) { atomic_fetch_add(&st_dropped, 1); return; }   // not ours any more: leave it alone
+        if (c != 1) { 
+            atomic_fetch_add(&st_dropped, 1); 
+            return; 
+        }   // not ours any more: leave it alone
         int held = own_device_mutex(obj);
-        if (!__atomic_compare_exchange_n(rc, &c, -1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
+        if (!__atomic_compare_exchange_n(rc, &c, -1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) 
+        {
+            continue;
+        }
+        
         void **vt = *(void ***)obj;
         if (held) {
             char *dev = *(char **)((char *)obj + OBJ_DEVICE);
             void *mgr = *(void **)(dev + DEV_TEXMGR);
-            if (mgr) g_request_delete(mgr, obj);
+            if (mgr) 
+            {
+                g_request_delete(mgr, obj);
+            }
         } else {
             ((destroy_fn)vt[2])(obj);
         }
@@ -174,9 +196,15 @@ static int path_key(void *path, void *profile, char *out, size_t n) {
     int k = snprintf(out, n, "%p", profile);
     for (int i = 0; i < 6; i++) {
         const char *rep = *(const char **)((char *)path + 8 * i);
-        if (!rep) return 0;
+        if (!rep) 
+        {
+            return 0;
+        }
         unsigned len = *(const unsigned *)(rep + 4);
-        if (len > 512 || (size_t)k + 1 + len + 1 > n) return 0;
+        if (len > 512 || (size_t)k + 1 + len + 1 > n) 
+        {
+            return 0;
+        }
         out[k++] = '|';
         memcpy(out + k, rep + 0x20, len);
         k += (int)len;
@@ -186,7 +214,13 @@ static int path_key(void *path, void *profile, char *out, size_t n) {
 }
 
 static int find(const char *key) {
-    for (int i = 0; i < g_nkeep; i++) if (strcmp(g_keep[i].key, key) == 0) return i;
+    for (int i = 0; i < g_nkeep; i++)
+    {
+        if (strcmp(g_keep[i].key, key) == 0) 
+        {
+            return i;
+        }
+    }
     return -1;
 }
 
@@ -198,7 +232,10 @@ static void take_out(int i, void **victims, int *nv) {
 
 static unsigned kept_mb(void) {
     unsigned mb = 0;
-    for (int i = 0; i < g_nkeep; i++) mb += g_keep[i].mb_est;
+    for (int i = 0; i < g_nkeep; i++) 
+    {
+        mb += g_keep[i].mb_est;
+    }
     return mb;
 }
 
@@ -206,24 +243,36 @@ static void release_all(void) {
     void *victims[MAX_KEEP + 1];
     int nv = 0;
     pthread_mutex_lock(&g_lock);
-    while (g_nkeep > 0) take_out(g_nkeep - 1, victims, &nv);
+    while (g_nkeep > 0) 
+    {
+        take_out(g_nkeep - 1, victims, &nv);
+    }
     atomic_store(&st_kept_mb, 0);
     pthread_mutex_unlock(&g_lock);
-    for (int i = 0; i < nv; i++) release(victims[i]);
+    for (int i = 0; i < nv; i++) 
+    {
+        release(victims[i]);
+    }
 }
 
 static void log_call(const char *what, int site, const char *key, void *obj, unsigned long long ns) {
-    if (!g_log) return;
+    if (!g_log) 
+    {
+        return;
+    }
     if (!g_logf) {
         char p[512];
         bnge_temp_path(p, sizeof p, LOG_FILE);
         g_logf = fopen(p, "a");
-        if (!g_logf) { g_log = 0; return; }
+        if (!g_logf) { 
+            g_log = 0; 
+            return; 
+        }
     }
-    unsigned w = obj ? *(unsigned *)((char *)obj + OBJ_WIDTH) : 0, h = obj ? *(unsigned *)((char *)obj + OBJ_HEIGHT) : 0;
+    unsigned w = obj ? *(unsigned *)((char *)obj + OBJ_WIDTH) : 0;
+    unsigned h = obj ? *(unsigned *)((char *)obj + OBJ_HEIGHT) : 0;
     const char *name = strchr(key, '|');      // (after the profile)
-    fprintf(g_logf, "%.3f site%d %s %ux%u %.2f ms refs %d %s\n", now_ns() / 1e9, site, what, w, h, ns / 1e6,
-            obj ? *refs(obj) : 0, name ? name + 1 : key);
+    fprintf(g_logf, "%.3f site%d %s %ux%u %.2f ms refs %d %s\n", now_ns() / 1e9, site, what, w, h, ns / 1e6, obj ? *refs(obj) : 0, name ? name + 1 : key);
     fflush(g_logf);
 }
 
@@ -231,7 +280,10 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     uintptr_t ret = (uintptr_t)__builtin_return_address(0);
     int site = ret == g_ret_cached ? 1 : ret == g_ret_packed ? 2 : 0;
     if (!atomic_load_explicit(&g_on, memory_order_relaxed)) {
-        if (g_nkeep) release_all();           // the level ended: back to stock (unlocked read: a later call catches up)
+        if (g_nkeep) 
+        {
+            release_all();
+        } // the level ended: back to stock (unlocked read: a later call catches up)
         return g_orig(mgr, path, profile);
     }
     char key[KEY_MAX];
@@ -245,17 +297,24 @@ static void *hook_create(void *mgr, void *path, void *profile) {
         }
         return g_orig(mgr, path, profile);
     }
-    if (!path_key(path, profile, key, sizeof key) || !strcasestr(key, "terrainmaterialcache"))
+    if (!path_key(path, profile, key, sizeof key) || !strcasestr(key, "terrainmaterialcache")) {
         return g_orig(mgr, path, profile);
+    }
 
     if (site == 2) {                          // re-packed: the stock texture, nothing of ours kept for this path
         void *victims[1];
         int nv = 0;
         pthread_mutex_lock(&g_lock);
         int i = find(key);
-        if (i >= 0) take_out(i, victims, &nv);
+        if (i >= 0) 
+        {
+            take_out(i, victims, &nv);
+        }
         pthread_mutex_unlock(&g_lock);
-        if (nv) { release(victims[0]); atomic_fetch_add(&st_evicted, 1); }
+        if (nv) { 
+            release(victims[0]); 
+            atomic_fetch_add(&st_evicted, 1); 
+        }
         unsigned long long t0 = now_ns();
         void *obj = g_orig(mgr, path, profile);
         unsigned long long dt = now_ns() - t0;
@@ -272,12 +331,19 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     if (now - g_last_call_ns > GEN_GAP_NS) {             // a new rebuild: entries unused for KEEP_GENS rebuilds go
         g_gen++;
         for (int k = g_nkeep - 1; k >= 0; k--)
-            if (g_keep[k].gen + KEEP_GENS < g_gen) { take_out(k, stale, &nstale); atomic_fetch_add(&st_evicted, 1); }
+        {
+            if (g_keep[k].gen + KEEP_GENS < g_gen) { 
+                take_out(k, stale, &nstale); 
+                atomic_fetch_add(&st_evicted, 1); }
+        }
         atomic_store(&st_kept_mb, kept_mb());
     }
     g_last_call_ns = now;
     pthread_mutex_unlock(&g_lock);
-    for (int k = 0; k < nstale; k++) release(stale[k]);
+    for (int k = 0; k < nstale; k++) 
+    {
+        release(stale[k]);
+    }
 
     if (!g_dry) {
         pthread_mutex_lock(&g_lock);
@@ -310,10 +376,18 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     atomic_fetch_add(&st_misses, 1);
     atomic_fetch_add(&st_miss_ns, dt);
     log_call(g_dry ? "dry" : "miss", 1, key, obj, dt);
-    if (!obj || g_dry) return obj;
+    if (!obj || g_dry) 
+    {
+        return obj;
+    }
     void **vt = *(void ***)obj;
-    if ((uintptr_t)vt[2] != g_destroy_self) { atomic_fetch_add(&st_foreign, 1); return obj; }
-    if (!acquire(obj)) return obj;
+    if ((uintptr_t)vt[2] != g_destroy_self) { 
+        atomic_fetch_add(&st_foreign, 1); 
+        return obj; 
+    }
+    if (!acquire(obj)) {
+        return obj;
+    }
 
     void *victims[MAX_KEEP + 1];
     int nv = 0;
@@ -321,11 +395,17 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     unsigned long long bytes = (unsigned long long)w * h * 4 / 3;
     pthread_mutex_lock(&g_lock);
     int i = find(key);
-    if (i >= 0) take_out(i, victims, &nv);    // (another thread kept one meanwhile)
+    if (i >= 0) 
+    {
+        take_out(i, victims, &nv);
+    } // (another thread kept one meanwhile)
     g_keep[g_nkeep].key = strdup(key);
     if (!g_keep[g_nkeep].key) {
         pthread_mutex_unlock(&g_lock);
-        for (int k = 0; k < nv; k++) release(victims[k]);
+        for (int k = 0; k < nv; k++) 
+        {
+            release(victims[k]);
+        }
         release(obj);
         return obj;
     }
@@ -337,24 +417,32 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     g_nkeep++;
     while (g_nkeep > MAX_KEEP || (g_nkeep > 1 && kept_mb() > MAX_KEEP_MB)) {
         int lru = 0;
-        for (int k = 1; k < g_nkeep; k++) if (g_keep[k].used < g_keep[lru].used) lru = k;
+        for (int k = 1; k < g_nkeep; k++) 
+        {
+            if (g_keep[k].used < g_keep[lru].used) 
+            {
+                lru = k;
+            }
+        }
         take_out(lru, victims, &nv);
         atomic_fetch_add(&st_evicted, 1);
     }
     atomic_store(&st_kept_mb, kept_mb());
     pthread_mutex_unlock(&g_lock);
-    for (int k = 0; k < nv; k++) release(victims[k]);
+    for (int k = 0; k < nv; k++) 
+    {
+        release(victims[k]);
+    }
     return obj;
 }
 
 static void status_line(char *msg, size_t n, const char *state) {
-    unsigned long long hits = atomic_load(&st_hits), misses = atomic_load(&st_misses), packed = atomic_load(&st_packed);
-    double miss_ms = atomic_load(&st_miss_ns) / 1e6, packed_ms = atomic_load(&st_packed_ns) / 1e6;
-    snprintf(msg, n, "%s; kept %d (~%u MB est.); cached-pack calls: %llu hits, %llu %s (%.0f ms, %.2f ms each); "
-             "re-packed calls %llu (%.0f ms); evicted %llu, dropped %llu, foreign %llu",
-             state, g_nkeep, atomic_load(&st_kept_mb), hits, misses, g_dry ? "stock (dry run)" : "misses", miss_ms,
-             misses ? miss_ms / misses : 0.0, packed, packed_ms, (unsigned long long)atomic_load(&st_evicted),
-             (unsigned long long)atomic_load(&st_dropped), (unsigned long long)atomic_load(&st_foreign));
+    unsigned long long hits = atomic_load(&st_hits); 
+    unsigned long long misses = atomic_load(&st_misses); 
+    unsigned long long packed = atomic_load(&st_packed);
+    double miss_ms = atomic_load(&st_miss_ns) / 1e6;
+    double packed_ms = atomic_load(&st_packed_ns) / 1e6;
+    snprintf(msg, n, "%s; kept %d (~%u MB est.); cached-pack calls: %llu hits, %llu %s (%.0f ms, %.2f ms each); ", "re-packed calls %llu (%.0f ms); evicted %llu, dropped %llu, foreign %llu", state, g_nkeep, atomic_load(&st_kept_mb), hits, misses, g_dry ? "stock (dry run)" : "misses", miss_ms, misses ? miss_ms / misses : 0.0, packed, packed_ms, (unsigned long long)atomic_load(&st_evicted), (unsigned long long)atomic_load(&st_dropped), (unsigned long long)atomic_load(&st_foreign));
 }
 
 // The level flag -> g_on; the status file every 2 s while something changed.
@@ -367,13 +455,10 @@ static void *watch(void *arg) {
     for (;;) {
         int on = access(flag, F_OK) == 0;
         atomic_store(&g_on, on);
-        unsigned long long sum = atomic_load(&st_hits) + atomic_load(&st_misses) + atomic_load(&st_packed) +
-                                 atomic_load(&st_evicted) + (unsigned long long)g_nkeep;
+        unsigned long long sum = atomic_load(&st_hits) + atomic_load(&st_misses) + atomic_load(&st_packed) + atomic_load(&st_evicted) + (unsigned long long)g_nkeep;
         if (on != last_on || (++tick % 8 == 0 && sum != last_sum)) {
             char msg[512];
-            status_line(msg, sizeof msg, on ? (g_dry ? "applied (dry run: counting only), BeamNG.Earth level"
-                                                     : "applied: terrain packs kept across rebuilds (BeamNG.Earth level)")
-                                            : "stock: another level");
+            status_line(msg, sizeof msg, on ? (g_dry ? "applied (dry run: counting only), BeamNG.Earth level" : "applied: terrain packs kept across rebuilds (BeamNG.Earth level)") : "stock: another level");
             bnge_report(TAG, STATUS_FILE, msg);
             last_on = on;
             last_sum = sum;
@@ -389,7 +474,10 @@ static int same(const struct bnge_main *m, uintptr_t vaddr, const unsigned char 
 }
 
 __attribute__((constructor)) static void bngearth_texkeep(void) {
-    if (!bnge_is_main_game()) return;
+    if (!bnge_is_main_game()) 
+    {
+        return;
+    }
     // (opt-in for now, BNGEARTH_TEXKEEP=1: a review 2026-11-03 found a rare permanent-deadlock path (the device mutex's
     // owner read from glibc's layout) and release_all's lock order; to be fixed before it is on by default)
     const char *on_ = getenv("BNGEARTH_TEXKEEP");
@@ -403,16 +491,25 @@ __attribute__((constructor)) static void bngearth_texkeep(void) {
     }
     struct bnge_main m;
     bnge_find_main(&m);
-    if (!m.seen) { bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); return; }
+    if (!m.seen) { 
+        bnge_report(TAG, STATUS_FILE, "not applied: the game's code was not found"); 
+        return; 
+    }
     const char *why = NULL;
     if (!same(&m, CREATE_TEXTURE, SIG_CREATE, sizeof SIG_CREATE)) why = "createTexture differs";
     else if (!same(&m, SITE_CACHED_CALL, SIG_SITE_CACHED, SITE_CALL_LEN)) why = "the pack loader's cached call differs";
     else if (!same(&m, SITE_PACKED_CALL, SIG_SITE_PACKED, SITE_CALL_LEN)) why = "the pack loader's re-pack call differs";
     else if (!same(&m, REQUEST_DELETE, SIG_REQUEST_DELETE, sizeof SIG_REQUEST_DELETE)) why = "requestDeleteTexture differs";
-    else if (!same(&m, DESTROY_SELF, SIG_DESTROY_SELF, sizeof SIG_DESTROY_SELF)) why = "destroySelf differs";
+    else if (!same(&m, DESTROY_SELF, SIG_DESTROY_SELF, sizeof SIG_DESTROY_SELF)) why = "destroySelf differs"; // sbm4mwpmbc -- skip cleaning this up, because im self conscious about messing it up lol
     for (int i = 0; !why && i < 3; i++) {
-        if (!bnge_mapped(&m, VTABLE_SLOTS[i], 8, PF_R)) why = "a vtable slot is not mapped";
-        else if (*(uintptr_t *)(m.base + VTABLE_SLOTS[i]) != m.base + CREATE_TEXTURE) why = "a vtable slot differs";
+        if (!bnge_mapped(&m, VTABLE_SLOTS[i], 8, PF_R)) 
+        {
+            why = "a vtable slot is not mapped";
+        }
+        else if (*(uintptr_t *)(m.base + VTABLE_SLOTS[i]) != m.base + CREATE_TEXTURE) 
+        {
+            why = "a vtable slot differs";
+        }
     }
     if (why) {
         char msg[256];
@@ -449,6 +546,5 @@ __attribute__((constructor)) static void bngearth_texkeep(void) {
         return;
     }
     pthread_detach(t);
-    bnge_report(TAG, STATUS_FILE, g_dry ? "ready (dry run): counting while the BeamNG.Earth level runs"
-                                        : "ready: applied while the BeamNG.Earth level runs");
+    bnge_report(TAG, STATUS_FILE, g_dry ? "ready (dry run): counting while the BeamNG.Earth level runs" : "ready: applied while the BeamNG.Earth level runs");
 }
