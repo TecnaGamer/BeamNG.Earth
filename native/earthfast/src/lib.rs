@@ -6026,6 +6026,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadz::deck_lidar, m)?)?;
     m.add_function(wrap_pyfunction!(roadz::deck_blend, m)?)?;
     m.add_function(wrap_pyfunction!(roadz::lidar_gap_stretch, m)?)?;
+        // 261: tier_crossing_runs (roadz.observed: a deck of another tier only crossing, glki6's PR #1171) and
+        // pixel_corridor (roadzhk: the DSM pixels round a deck line, glki6's PR #1180)
+    m.add_function(wrap_pyfunction!(roadz::tier_crossing_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::pixel_corridor, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_of, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_info, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_quad, m)?)?;
@@ -6320,7 +6324,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
     // 261: pmtiles.rs puts a cut line's rule ranges (bridges, tunnels, levels, ...) on the line we have, by its
     // connectors (a 19 km rail line cut to 14 km had every bridge 880 m off; BNE_PMT_ANCHOR=off: as before), and reads
-    // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193)
+    // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193); roadz's
+    // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180)
     m.add("VERSION", 261)?;
     Ok(())
 }
