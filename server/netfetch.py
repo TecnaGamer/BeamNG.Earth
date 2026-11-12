@@ -63,7 +63,21 @@ from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
 
-SERVER_VERSION = "0.4.0"
+def _app_version():
+    """This copy's VERSION (the folder above server/, or the packaged app's bundle: updates.local_version's place), for
+    the User-Agent the data hosts see and the hello's serverVersion; it said "0.4.0" since October (Cloudflare's
+    analytics, 2026-11-11)."""
+    import sys
+    root = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+            v = f.read().strip()
+    except OSError:
+        v = ""
+    return "".join(c for c in v if c.isalnum() or c in ".-+")[:40] or "unknown"
+
+
+SERVER_VERSION = _app_version()
 PROJECT_URL = "https://github.com/TecnaGamer/BeamNG.Earth"
 USER_AGENT = f"BeamNG.Earth/{SERVER_VERSION} (+{PROJECT_URL})"
 KINDS = ("demand", "prefetch", "background", "predownload", "urgent")
