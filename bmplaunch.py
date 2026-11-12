@@ -239,13 +239,59 @@ def log_too_old(text, at_least=3):
     return (text or "").count(TOO_OLD) >= at_least
 
 
-def running(port=CORE_PORT):
-    """A BeamMP launcher already listens (started by the player, or left over)."""
+def windows_listening(port, table=None):
+    """Windows: does a process listen on TCP port (IPv4, any address)? From the system's TCP table
+    (iphlpapi GetExtendedTcpTable), at once; None when it could not be asked. A connection attempt to a port nobody
+    listens on takes Windows ~1 s on localhost (it retries the refused SYN), and the launcher asked twice before the
+    game started (its own server's port, BeamMP's: measured 2026-11-12 on the Windows test PC, 1.0 s and 0.5 s of a
+    ten-second start). table: the raw MIB_TCPTABLE_OWNER_PID bytes (tests)."""
+    import struct
+    if table is None:
+        if not IS_WIN:
+            return None
+        try:
+            import ctypes
+            iphlp = ctypes.WinDLL("iphlpapi")
+            size = ctypes.c_ulong(0)
+            # (AF_INET 2, TCP_TABLE_OWNER_PID_LISTENER 3: rows of state, local address, port, remote, port, pid)
+            iphlp.GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 3, 0)
+            for _ in range(3):
+                buf = ctypes.create_string_buffer(size.value + 4096)
+                size = ctypes.c_ulong(len(buf))
+                if iphlp.GetExtendedTcpTable(buf, ctypes.byref(size), False, 2, 3, 0) == 0:
+                    table = buf.raw[:size.value]
+                    break
+            else:
+                return None
+        except (OSError, AttributeError, ValueError):
+            return None
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        n = struct.unpack_from("<I", table, 0)[0]
+        for i in range(n):
+            local_port = struct.unpack_from("<6I", table, 4 + 24 * i)[2]
+            if socket.ntohs(local_port & 0xFFFF) == port:
+                return True
+        return False
+    except struct.error:
+        return None
+
+
+def listening(port, timeout=0.5):
+    """Does something listen on 127.0.0.1:port? Windows: its TCP table (windows_listening); else, or when that could not
+    be asked, a connection attempt."""
+    seen = windows_listening(port) if IS_WIN else None
+    if seen is not None:
+        return seen
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def running(port=CORE_PORT):
+    """A BeamMP launcher already listens (started by the player, or left over)."""
+    return listening(port)
 
 
 def _get(url, user_agent, timeout=60):

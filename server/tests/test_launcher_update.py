@@ -56,6 +56,18 @@ class UpdateAtStart(unittest.TestCase):
         self.assertFalse(r)
         self.assertEqual(asked, [])
 
+    def test_a_slow_github_does_not_hold_the_start(self):
+        import threading
+        gate = threading.Event()
+        with mock.patch.object(launcher, "UPDATE_CHECK_S", 0.2):
+            r = launcher.update_at_start(argparse.Namespace(no_update_check=False), ask=lambda q: "y",
+                                         popup=lambda text: True, packaged=True,
+                                         check=lambda current, net: gate.wait(5) and {"current": "1", "latest": "2"},
+                                         download=lambda *a: self.fail("asked"), start=lambda: True)
+        gate.set()
+        self.assertFalse(r)
+        self.assertEqual(launcher.bounded(lambda: 7, 1), 7)
+
     def test_a_source_copy_or_the_switch_asks_nothing(self):
         self.assertEqual(self.go(packaged=False), (False, []))
         self.assertEqual(self.go(args=argparse.Namespace(no_update_check=True)), (False, []))
