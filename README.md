@@ -579,10 +579,11 @@ environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports a
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
   states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
-  Canada, and more), USDA NAIP and USGS The National Map (public domain) in the US, and Sentinel-2
+  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and Sentinel-2
   cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
   data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
-- Elevation: Mapterhorn (see https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen; the polar caps from
+- Elevation: Mapterhorn (https://mapterhorn.com/attribution; zooms 0-12 served from BeamNG.Earth's own tile host,
+  repacked from Mapterhorn's archive as Mapterhorn allows), AWS Terrain Tiles / Mapzen; the polar caps from
   85 deg on: Copernicus DEM GLO-30 (produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus
   Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA).
 - Canada: HRDEM (contains information licensed under the Open Government Licence - Canada, Natural Resources

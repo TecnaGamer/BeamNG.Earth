@@ -5115,7 +5115,7 @@
   ]
  ],
  "hello": {
-  "attribution": "Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen",
+  "attribution": "Elevation: Mapterhorn (https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen",
   "cells": 64,
   "farFormat": "cdae",
   "format": 4,

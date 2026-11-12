@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -340,6 +341,174 @@ class MirrorClaimTest(unittest.TestCase):
             self.assertFalse(Path(claim).exists())
             del a
             gc.collect()
+
+class NoWriteTest(unittest.TestCase):
+    """A cache that cannot be written (a full disk): the downloaded tile is kept in memory and used, not failed and
+    downloaded again at its next try; a 404 that cannot be recorded is remembered in memory too."""
+
+    def test_full_disk(self):
+        import netfetch
+
+        class F(TerrariumFetcher):
+            def get(self, url, *, kind="demand", headers=None):
+                if "/9/" in url:
+                    self.calls.append(url)
+                    raise netfetch.NotFound(url)
+                return super().get(url, kind=kind, headers=headers)
+        saved = dict(demmod._coverage)
+        demmod._coverage.update(index=None, at=time.time(), failed=True)         # (no file list: every tile asked)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                f = F()
+                dem = demmod.Dem(d, fetcher=f)
+                real_open = open
+
+                def full(path, mode="r", *a, **k):
+                    if "w" in mode and str(path).endswith(".tmp"):
+                        raise OSError(28, "No space left on device")
+                    return real_open(path, mode, *a, **k)
+                with mock.patch("builtins.open", full), \
+                        mock.patch.object(demmod.missindex, "_append", side_effect=OSError(28, "full")):
+                    a = dem._download(demmod.MAPTERHORN, 12, 700, 1500)
+                    b = dem._download(demmod.MAPTERHORN, 12, 700, 1500)
+                    self.assertIsNone(dem._download(demmod.MAPTERHORN, 9, 87, 187))
+                    self.assertIsNone(dem._download(demmod.MAPTERHORN, 9, 87, 187))
+                self.assertIs(a, b)
+                self.assertEqual(len(f.calls), 2, f.calls)
+                self.assertEqual(dem.stats["dem:nowrite"], 1)
+                self.assertEqual(dem.stats["mapterhorn:memory"], 1)
+                self.assertFalse(os.path.exists(dem._path(demmod.MAPTERHORN, 12, 700, 1500)))
+        finally:
+            demmod._coverage.clear()
+            demmod._coverage.update(saved)
+
+
+class PackFetcher(TerrariumFetcher):
+    """The tile host's Mapterhorn packs (dem.MT_CDN_*): an index listing the packs in `packs`, each pack holding the
+    tiles TerrariumFetcher would give for the endpoint except those in `holes`; the endpoint itself as
+    TerrariumFetcher."""
+
+    def __init__(self, packs, holes=(), fail=False):
+        super().__init__()
+        self.packs, self.holes, self.fail = set(packs), set(holes), fail
+
+    def miss_alive(self, path, url):
+        import netfetch
+        return netfetch.miss_alive(path, None)
+
+    def get(self, url, *, kind="demand", headers=None):
+        import netfetch
+        import tilepack
+        if "/dem/mapterhorn/" not in url:
+            return super().get(url, kind=kind, headers=headers)
+        self.calls.append(url)
+        if self.fail:
+            raise netfetch.HostUnavailable("down")
+        if url.endswith("/index.bin"):
+            body = tilepack.index_build(3, 12, self.packs)
+        else:
+            z, px, py = (int(v) for v in url[:-len(".bngp")].rsplit("/", 3)[1:])
+            if (z, px, py) not in self.packs:
+                raise netfetch.NotFound(url)
+            k = min(3, z)
+            tiles = {}
+            for i in range((1 << k) ** 2):
+                tz, tx, ty = tilepack.tile_at(z, px, py, k, i)
+                if (tz, tx, ty) not in self.holes:
+                    tiles[i] = TerrariumFetcher.get(self, f"https://tiles.mapterhorn.com/{tz}/{tx}/{ty}.webp").body
+                    self.calls.pop()
+            body = tilepack.build(z, px, py, k, tiles)
+
+        class R:
+            pass
+        R.body = body
+        return R()
+
+
+class CdnPackTest(unittest.TestCase):
+    """Mapterhorn's z0-12 from the tile host's packs: one request for 64 tiles, every one written where the endpoint's
+    would be (the same bytes); a tile the pack lacks and every tile of a pack the index does not list are 404s without
+    asking the endpoint; z13+ and a failing host go to the endpoint."""
+
+    def setUp(self):
+        self.saved = dict(demmod._coverage)
+        demmod._coverage.update(index=None, at=time.time(), failed=True)
+
+    def tearDown(self):
+        demmod._coverage.clear()
+        demmod._coverage.update(self.saved)
+
+    def test_packs(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = PackFetcher(packs={(12, 87, 187), (2, 0, 0)}, holes={(12, 701, 1501)})
+            dem = demmod.Dem(d, fetcher=f)
+            dem.cdn_release = "0.0.13"
+            a = dem._download(demmod.MAPTERHORN, 12, 700, 1500)
+            self.assertEqual(f.calls, [demmod.mt_cdn_base("0.0.13") + "/index.bin",
+                                       demmod.mt_cdn_base("0.0.13") + "/12/87/187.bngp"])
+            ref = TerrariumFetcher().get("https://tiles.mapterhorn.com/12/700/1500.webp").body
+            self.assertEqual(a, ref, "the endpoint's bytes")
+            n = len(f.calls)
+            self.assertEqual(dem._download(demmod.MAPTERHORN, 12, 703, 1499), TerrariumFetcher().get(
+                "https://tiles.mapterhorn.com/12/703/1499.webp").body, "a tile of the same pack: from disk")
+            self.assertIsNone(dem._download(demmod.MAPTERHORN, 12, 701, 1501), "not in its pack: a 404")
+            self.assertTrue(demmod.missindex.known(os.path.join(d, "mapterhorn", "12", "701", "1501.404")))
+            self.assertIsNone(dem._download(demmod.MAPTERHORN, 12, 0, 0), "a pack the index does not list")
+            self.assertTrue(demmod.missindex.known(os.path.join(d, "mapterhorn", "12", "7", "7.404")), "all 64")
+            self.assertEqual(len(f.calls), n, "none of those asked anything")
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 2, 1, 3))
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 13, 1400, 3000))
+            self.assertEqual(f.calls[n:], [demmod.mt_cdn_base("0.0.13") + "/2/0/0.bngp",
+                                           "https://tiles.mapterhorn.com/13/1400/3000.webp"])
+            # another process: the index read from disk, nothing asked
+            f2 = PackFetcher(packs={(12, 87, 187)})
+            dem2 = demmod.Dem(d, fetcher=f2)
+            dem2.cdn_release = "0.0.13"
+            self.assertIsNone(dem2._download(demmod.MAPTERHORN, 12, 8, 8))
+            self.assertIsNotNone(dem2._download(demmod.MAPTERHORN, 12, 702, 1502))
+            self.assertEqual(f2.calls, [])
+
+    def test_host_down_falls_back_to_the_endpoint(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = PackFetcher(packs={(12, 87, 187)}, fail=True)
+            dem = demmod.Dem(d, fetcher=f)
+            dem.cdn_release = "0.0.13"
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 12, 700, 1500))
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 12, 700, 1501))
+            self.assertEqual(f.calls, [demmod.mt_cdn_base("0.0.13") + "/index.bin",
+                                       "https://tiles.mapterhorn.com/12/700/1500.webp",
+                                       "https://tiles.mapterhorn.com/12/700/1501.webp"],
+                             "the index asked once, then the endpoint for MT_CDN_RETRY_S")
+
+    def test_another_process_fetching_the_pack(self):
+        """A pack another process is fetching (its claim): this one waits for the tile on disk instead of asking."""
+        with tempfile.TemporaryDirectory() as d:
+            f = PackFetcher(packs={(12, 87, 187)})
+            dem = demmod.Dem(d, fetcher=f)
+            dem.cdn_release = "0.0.13"
+            dem._cdn_index()
+            n = len(f.calls)
+            claim = os.path.join(d, "bngmt", "0.0.13", "claims", "12_87_187")
+            os.makedirs(os.path.dirname(claim))
+            open(claim, "w").close()
+            path = dem._path(demmod.MAPTERHORN, 12, 700, 1500)
+
+            def other():
+                time.sleep(0.2)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as fh:
+                    fh.write(b"theirs")
+            t = threading.Thread(target=other)
+            t.start()
+            self.assertEqual(dem._download(demmod.MAPTERHORN, 12, 700, 1500), b"theirs")
+            t.join()
+            self.assertEqual(len(f.calls), n, "nothing asked")
+            self.assertEqual(dem.stats["bngmt:waited"], 1)
+            os.utime(claim, (time.time() - 60, time.time() - 60))      # a stale claim: fetched here
+            self.assertIsNotNone(dem._download(demmod.MAPTERHORN, 12, 701, 1500))
+            self.assertEqual(len(f.calls), n + 1)
+            self.assertFalse(os.path.exists(claim), "its claim removed after the fetch")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -568,8 +568,8 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(imagery.Imagery(self.tmp.name, imagery.BASE_CHAIN).attribution(),
                          "Imagery: State of Maryland, MD iMAP / DoIT six-inch imagery; "
                          "USDA NAIP (public domain); "
-                         "USDA NAIP via USGS The National Map (public domain); "
-                         "USGS The National Map (public domain); " + eox
+                         "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); "
+                         "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); " + eox
                          + "2023), CC BY-NC-SA 4.0; " + eox + "2016 & 2017), CC BY 4.0")
         self.assertNotIn("Sentinel-2 cloudless", imagery.ATTRIBUTION)
         for n in imagery.DEFAULT_CHAIN:                     # the overlay's font is ASCII only

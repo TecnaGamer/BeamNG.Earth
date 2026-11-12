@@ -153,6 +153,31 @@ def coverage_index(doc):
     return out
 AWS = dict(name="aws-terrarium", ext="png", size=256,
            url="https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png")
+# Raw tiles whose disk write failed (a full disk: OSError 28) kept in memory instead, up to this many bytes per process,
+# and their 404s remembered here: the write's error failed the tile (and its far tile), whose next try downloaded the
+# same bytes again, every few seconds while the disk stayed full (telemetry 2026-11-11: 862k far tiles failed with
+# OSError 28 in 7 days, one line of earthd). MEM_MISSES: 404s kept so at most.
+MEM_RAW_BYTES = 96 * 1024 * 1024
+MEM_MISSES = 200000
+# Mapterhorn's z0-12 from the project's own tile host (cdn.py; the data repo's dem workflow, tools/build_mt_packs.py):
+# planet.pmtiles' tiles repacked as they are (the same bytes as tiles.mapterhorn.com: compared tile for tile, 2026-11-11)
+# into packs of 8 x 8 (tilepack.py; zooms 0-2 one pack each), so one request is 64 tiles and the Mapterhorn endpoint
+# (one maintainer, donations; players asked it 53 M times a day, 2026-11-11) is left the deeper zooms. index.bin: which
+# packs exist (tilepack.index_*), the last file of a release written: a pack it does not list is open sea, its 64 tiles
+# 404s without a request. Off unless the switch (cdn.json "dem" -> "bngmt") or BNGE_DEM_CDN (a release, or "off")
+# names a release; a pack that cannot be had falls back to the endpoint.
+MT_CDN_K = 3
+MT_CDN_MAX_ZOOM = GLOBAL_ZOOM
+MT_CDN_RETRY_S = 600.0              # the index not to be had: the endpoint alone, asked again after this
+PACK_WAIT_S = 8.0                   # another process fetching a pack: its tile waited for at most this long
+PACK_CLAIM_STALE_S = 30.0           # a pack claim older than this: its process ended mid-fetch
+_cdn_env = os.environ.get("BNGE_DEM_CDN", "").strip()
+MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_env
+
+
+def mt_cdn_base(release):
+    import imagery as imagerymod
+    return f"{imagerymod.CDN_BASE}/dem/mapterhorn/{release}"
 
 
 class DemUnavailable(IOError):
@@ -263,6 +288,14 @@ class Dem:
         self.hkdtm = (hkdtmmod.HkDtm(hklidar.at(os.path.dirname(cache_dir), self.fetcher)) if hkdtmmod.ON
                       else None)
         self.hkdtm_served = set()       # tile keys with Hong Kong's LiDAR heights in them
+        self._mem_raw = OrderedDict()   # (src name, z, x, y) -> bytes not written to disk (MEM_RAW_BYTES)
+        self._mem_raw_bytes = 0
+        self._mem_miss = OrderedDict()  # (src name, z, x, y) -> 404s not written to disk (MEM_MISSES)
+        self._nowrite_logged = False
+        self.cdn_release = MT_CDN_RELEASE   # the packs' release (MT_CDN_*), None: the endpoint alone
+        self._cdn_idx = None            # (release, index bytes) once read
+        self._cdn_failed_at = -1e18
+        self._pack_locks = {}           # pack key -> lock: one fetch of a pack at a time in this process
 
 
     def clear_memory(self):
@@ -537,27 +570,235 @@ class Dem:
         if data is not None:
             self._count(src["name"] + ":disk")
             return data
+        mk = (src["name"], z, x, y)
+        if self._mem_raw or self._mem_miss:
+            with self._lock:
+                data = self._mem_raw.get(mk)
+                if data is not None:
+                    self._mem_raw.move_to_end(mk)
+                elif mk in self._mem_miss:
+                    return None
+            if data is not None:
+                self._count(src["name"] + ":memory")
+                return data
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
             return None
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
+            got = self._download_pack(z, x, y, kind)
+            if got is not False:
+                return got
         try:
             data = self.fetcher.get(url, kind=kind).body
         except netfetch.NotFound:
-            missindex.record(miss, self.disk)   # (again: its time starts the miss TTL)
+            self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
             self._count(src["name"] + ":404")
             return None
         except netfetch.FetchError:
             self._count(src["name"] + ":error")
             raise
-        tmp = f"{path}.{threading.get_ident()}.tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        staging.replace_cached(tmp, path)
-        self.disk.wrote(path, len(data))
-        missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
+        self._keep(mk, path, data)
+        try:
+            missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
+        except OSError:
+            pass
         self._count(src["name"] + ":net")
         return data
+
+    def _keep(self, mk, path, data):
+        """Downloaded tile bytes written to the disk cache; when that fails (a full disk, a folder that cannot be
+        written) kept in this process's memory instead (MEM_RAW_BYTES, the oldest dropped), so the tile is not failed
+        and downloaded again at its next try."""
+        tmp = f"{path}.{threading.get_ident()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            staging.replace_cached(tmp, path)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            with self._lock:
+                old = self._mem_raw.pop(mk, None)
+                self._mem_raw_bytes -= len(old) if old is not None else 0
+                self._mem_raw[mk] = data
+                self._mem_raw_bytes += len(data)
+                while self._mem_raw_bytes > MEM_RAW_BYTES and len(self._mem_raw) > 1:
+                    self._mem_raw_bytes -= len(self._mem_raw.popitem(last=False)[1])
+                first, self._nowrite_logged = not self._nowrite_logged, True
+            self._count("dem:nowrite")
+            if first:
+                log.warning("dem: tiles cannot be written to the cache (%s: %s): kept in memory for this session",
+                            type(e).__name__, e)
+            return False
+        self.disk.wrote(path, len(data))
+        return True
+
+    def _remember_miss(self, items):
+        """404s [(memory key, marker path)] recorded in their columns' miss indexes (missindex.py); kept in memory
+        when that cannot be written."""
+        try:
+            missindex.record([m for _, m in items], self.disk)
+        except OSError:
+            with self._lock:
+                for mk, _ in items:
+                    self._mem_miss[mk] = True
+                while len(self._mem_miss) > MEM_MISSES:
+                    self._mem_miss.popitem(last=False)
+            self._count("dem:nowrite_miss")
+
+    # --- Mapterhorn's z0-12 from the project's tile host (MT_CDN_*) --------------------------------
+    def _cdn_index(self):
+        """The release's index.bin (bytes: tilepack.index_has), from disk or the tile host once; None when it cannot
+        be had (the endpoint alone for MT_CDN_RETRY_S)."""
+        rel = self.cdn_release
+        got = self._cdn_idx
+        if got is not None and got[0] == rel:
+            return got[1]
+        if time.monotonic() - self._cdn_failed_at < MT_CDN_RETRY_S:
+            return None
+        import tilepack
+        path = os.path.join(self.cache_dir, "bngmt", rel, "index.bin")
+        data = None
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            tilepack.index_check(data)
+        except (OSError, tilepack.PackError):
+            data = None
+        if data is None:
+            try:
+                data = self.fetcher.get(mt_cdn_base(rel) + "/index.bin", kind="demand").body
+                tilepack.index_check(data)
+            except (netfetch.FetchError, tilepack.PackError) as e:
+                log.info("dem: the tile host's Mapterhorn packs (%s): no index (%s: %s): the endpoint meanwhile",
+                         rel, type(e).__name__, e)
+                self._cdn_failed_at = time.monotonic()
+                return None
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, path)
+            except OSError:
+                pass
+        self._cdn_idx = (rel, data)
+        return data
+
+    def _download_pack(self, z, x, y, kind):
+        """Mapterhorn tile (z, x, y) (z <= MT_CDN_MAX_ZOOM) from its pack on the tile host: the pack fetched once and
+        every tile of it written to the cache as Mapterhorn's own (a tile it lacks: a 404 remembered, as the endpoint
+        would answer). The bytes, None (no tile there), or False: ask the endpoint (no index, the host failing, a
+        damaged pack)."""
+        import tilepack
+        idx = self._cdn_index()
+        if idx is None:
+            return False
+        k = min(MT_CDN_K, z)
+        (pz, px, py), _ = tilepack.pack_of(z, x, y, k)
+        name = MAPTERHORN["name"]
+
+        def miss(tz, tx, ty):
+            return (name, tz, tx, ty), os.path.join(self.cache_dir, name, str(tz), str(tx), f"{ty}.404")
+        if not tilepack.index_has(idx, pz, px, py):     # open sea: none of its tiles exists
+            self._remember_miss([miss(*tilepack.tile_at(pz, px, py, k, i)) for i in range((1 << k) ** 2)])
+            self._count("bngmt:unlisted")
+            return None
+        with self._lock:
+            lock = self._pack_locks.setdefault((pz, px, py), threading.Lock())
+        with lock:
+            path = self._path(MAPTERHORN, z, x, y)
+            data = self.disk.read(path)             # (another tile of the pack fetched it meanwhile)
+            if data is not None:
+                self._count(name + ":disk")
+                return data
+            with self._lock:
+                data = self._mem_raw.get((name, z, x, y))
+                if data is None and (name, z, x, y) in self._mem_miss:
+                    return None
+            if data is not None:
+                return data
+            # (one process fetches a pack, the others wait for its tiles on disk: a cold place's 25 packs were asked
+            # 48 times by the server's processes at once, 2026-11-12)
+            claim = os.path.join(self.cache_dir, "bngmt", self.cdn_release, "claims", f"{pz}_{px}_{py}")
+            if not self._pack_claim(claim):
+                got = self._pack_wait(path, miss(z, x, y)[1])
+                if got is not False:
+                    self._count("bngmt:waited")
+                    return got
+            try:
+                return self._fetch_pack(pz, px, py, k, x, y, kind, miss)
+            finally:
+                try:
+                    os.remove(claim)
+                except OSError:
+                    pass
+
+    def _pack_claim(self, claim):
+        """True: this process fetches the pack (its claim file made, or claims cannot be made here); False: another
+        process has fetched it within PACK_CLAIM_STALE_S."""
+        for _ in range(2):
+            try:
+                os.makedirs(os.path.dirname(claim), exist_ok=True)
+                os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(claim) < PACK_CLAIM_STALE_S:
+                        return False
+                    os.remove(claim)        # (a process that ended mid-pack)
+                except OSError:
+                    pass
+            except OSError:
+                return True
+        return True
+
+    def _pack_wait(self, path, marker):
+        """The tile another process's pack fetch writes at path: its bytes, None (the pack lacks it: its 404
+        recorded), or False when it did not come within PACK_WAIT_S (fetched here then)."""
+        end = time.monotonic() + PACK_WAIT_S
+        while time.monotonic() < end:
+            time.sleep(CLAIM_POLL_S * 2)
+            data = self.disk.read(path)
+            if data is not None:
+                return data
+            if missindex.known(marker):
+                return None
+        return False
+
+    def _fetch_pack(self, pz, px, py, k, x, y, kind, miss):
+        import tilepack
+        name = MAPTERHORN["name"]
+        url = f"{mt_cdn_base(self.cdn_release)}/{tilepack.path(pz, px, py)}"
+        try:
+            body = self.fetcher.get(url, kind=kind).body
+            tz_, tpx, tpy, tk, tiles = tilepack.parse(body)
+            if (tz_, tpx, tpy, tk) != (pz, px, py, k):
+                raise tilepack.PackError(f"pack {tz_}/{tpx}/{tpy} k{tk} where {pz}/{px}/{py} k{k} was asked")
+        except netfetch.Deferred:
+            raise                                   # (a prefetch refused: the caller waits, as for the endpoint)
+        except (netfetch.FetchError, tilepack.PackError) as e:
+            self._count("bngmt:fallback")
+            log.debug("dem: pack %s: %s: %s: the endpoint", url, type(e).__name__, e)
+            return False
+        out = None
+        misses = []
+        for i in range((1 << k) ** 2):
+            tz, tx, ty = tilepack.tile_at(pz, px, py, k, i)
+            b = tiles.get(i)
+            if b is None:
+                misses.append(miss(tz, tx, ty))
+                continue
+            self._keep((name, tz, tx, ty), self._path(MAPTERHORN, tz, tx, ty), b)
+            if (tx, ty) == (x, y):
+                out = b
+        if misses:
+            self._remember_miss(misses)
+        self._count("bngmt:net")
+        return out
 
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request

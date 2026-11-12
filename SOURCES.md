@@ -43,7 +43,8 @@ For the OpenStreetMap keys read by the server and weekly data builders, see the
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
-| Mapterhorn terrain tiles | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data (as fine as 1 m in parts of Europe and the US) with global data elsewhere. | New places use the coarser backup below. | named |
+| Mapterhorn terrain tiles ([attribution](https://mapterhorn.com/attribution)) | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data (as fine as 1 m in parts of Europe and the US) with global data elsewhere. | New places use the coarser backup below. | named |
+| Mapterhorn terrain tiles, zooms 0-12, on BeamNG.Earth's own tile host | `tiles.tgforever.net` | The same tiles as above for the coarser zooms (the distant terrain, and the ground every deeper zoom starts from), repacked from Mapterhorn's planet archive into packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on; the deeper zooms always come from Mapterhorn. | Mapterhorn's own tile server, as before. | named |
 | Mapterhorn coverage list | `download.mapterhorn.com` | Which areas have detailed heights, so the server does not ask for tiles that do not exist. Fetched about once a week. | New places may load a little slower. | named |
 | AWS Terrain Tiles (backup) | `s3.amazonaws.com` | Coarser heights (SRTM and similar) where Mapterhorn has none or does not answer. | Only matters while Mapterhorn is down too; with both down, new places have no terrain. | named |
 | Copernicus DEM GLO-30 | `copernicus-dem-30m.s3.amazonaws.com` | Heights near the North and South Poles, where the other sources stop. | No terrain past about 85° north or south. | named |
@@ -66,9 +67,9 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 |---|---|---|---|---|
 | Regional aerial photos (state and national mapping agencies) | see the list below | the regions below, mostly 10-30 cm per pixel | Coarser photos from the next source (US national photos or Sentinel-2). | optional |
 | Maryland six-inch photos (MD iMAP) | `mdgeodata.md.gov` | Maryland, 15 cm per pixel | Coarser photos meanwhile. | named |
-| USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
+| USGS / USDA NAIP aerial photos (Map services and data available from U.S. Geological Survey, National Geospatial Program) | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
-| USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
+| USGS The National Map photos (Map services and data available from U.S. Geological Survey, National Geospatial Program) | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
 | BeamNG.Earth's own tile host (Sentinel-2, ESA WorldCover 2021 composite, CC BY 4.0) | `tiles.tgforever.net` | the whole land to ~40 m per pixel, the distant land; packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. | The sources below, as before. | named |
 | Sentinel-2 cloudless (EOX) | `tiles.maps.eox.at` | the whole world, 10 m per pixel; the distant land everywhere and the near ground outside the regions above. Also the world map's base layers. | New ground outside the regions above may stay plain (the land cover's colours). | named |
 

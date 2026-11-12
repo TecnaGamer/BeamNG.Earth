@@ -9,12 +9,21 @@ A pack holds the (2^k)^2 tiles of zoom z under the tile (z - k, px, py), row by 
     (no data: open sea, outside the source).
 
 Its path under a source's base: {z}/{px}/{py}.bngp (px, py: the pack's own tile at z - k).
+
+A source's index (index.bin next to its zoom folders; the DEM packs, dem.MT_CDN_*) says which packs exist, so a pack it
+does not list is known to be empty without a request (open sea):
+
+    b"BNGI", version (u8, 1), k (u8), max zoom (u8), 0 (u8), then per zoom z = 0 .. max zoom a bitmap of its packs'
+    grid (2^(z - k) x 2^(z - k), one pack for z <= k), row by row from the north-west, bit (py * n + px) at byte >> 3,
+    bit & 7 (least significant first), each zoom's bitmap starting on a byte.
 """
 import struct
 
 MAGIC = b"BNGP"
 VERSION = 1
 HEAD = struct.Struct("<4sBBBBII")
+INDEX_MAGIC = b"BNGI"
+INDEX_HEAD = struct.Struct("<4sBBBB")
 
 
 class PackError(ValueError):
@@ -69,3 +78,52 @@ def parse(data):
                 raise PackError("tile past the pack's end")
             out[i] = data[base + o:base + o + ln]
     return z, px, py, k, out
+
+
+def _index_layout(k, max_zoom):
+    """[(byte offset, grid side)] per zoom 0 .. max_zoom of an index's bitmaps, and its whole size."""
+    out, off = [], INDEX_HEAD.size
+    for z in range(max_zoom + 1):
+        n = 1 << max(0, z - k)
+        out.append((off, n))
+        off += (n * n + 7) // 8
+    return out, off
+
+
+def index_build(k, max_zoom, packs):
+    """An index's bytes from packs: an iterable of (z, px, py) that exist."""
+    layout, size = _index_layout(k, max_zoom)
+    b = bytearray(size)
+    b[:INDEX_HEAD.size] = INDEX_HEAD.pack(INDEX_MAGIC, VERSION, k, max_zoom, 0)
+    for z, px, py in packs:
+        off, n = layout[z]
+        if not (0 <= px < n and 0 <= py < n):
+            raise PackError(f"pack {z}/{px}/{py} outside the grid")
+        i = py * n + px
+        b[off + (i >> 3)] |= 1 << (i & 7)
+    return bytes(b)
+
+
+def index_check(data):
+    """(k, max zoom) of an index's bytes; PackError when it is none (or cut short)."""
+    if len(data) < INDEX_HEAD.size:
+        raise PackError("short index")
+    magic, ver, k, max_zoom, _ = INDEX_HEAD.unpack_from(data, 0)
+    if magic != INDEX_MAGIC or ver != VERSION or k > 6 or max_zoom > 20:
+        raise PackError("not a pack index")
+    if len(data) != _index_layout(k, max_zoom)[1]:
+        raise PackError("index of the wrong size")
+    return k, max_zoom
+
+
+def index_has(data, z, px, py):
+    """Does the index list pack (z, px, py)? False beyond its zooms or grid."""
+    k, max_zoom = INDEX_HEAD.unpack_from(data, 0)[2:4]
+    if not 0 <= z <= max_zoom:
+        return False
+    n = 1 << max(0, z - k)
+    if not (0 <= px < n and 0 <= py < n):
+        return False
+    off = INDEX_HEAD.size + sum(((1 << max(0, zz - k)) ** 2 + 7) // 8 for zz in range(z))
+    i = py * n + px
+    return bool(data[off + (i >> 3)] >> (i & 7) & 1)
