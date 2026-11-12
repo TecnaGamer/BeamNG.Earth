@@ -58,6 +58,29 @@ T.check(bp and math.abs(bp.x - 20) < 1e-9 and math.abs(bp.y - 100) < 1e-9 and bp
 _, _, bp = G.nearestEdge(dsegs, 10, 100, 0, 1)
 T.check(bp and math.abs(bp.x) < 1e-9 and bp.dy > 0, 'and on the northbound one, facing north')
 local e = { x = { 0, 100, 100 }, y = { 0, 0, 100 }, cum = { 0, 100, 200 } }
+do
+  local a = { 0, 0, 100, 0, 0, 0, a = 'a', b = 'b' }
+  local b = { 100, 0, 200, 0, 0, 1, a = 'b', b = 'c' }
+  local c = { 200, 0, 300, 0, 0, -1, a = 'c', b = 'd' }
+  local links = G.routeLinks({ a, b, c })
+  local p = { segment = a, t = 0.4 }
+  local q = { segment = b, t = 0.6 }
+  T.check(G.routeConnected(links, p, q, 120) and not G.routeConnected(links, p, q, 119),
+    'projection connection includes partial edges and respects its distance limit')
+  T.check(not G.routeConnected(links, q, p, 1000), 'a connection cannot go backwards through a one-way edge')
+  T.check(G.routeConnected(links, { segment = a, t = 0.5 }, { segment = a, t = 0.25 }, 25),
+    'a two-way edge can be driven either way')
+  T.check(not G.routeConnected(links, q, { segment = c, t = 0.5 }, 1000),
+    'a reverse-stored one-way edge cannot be entered in the wrong direction')
+  T.check(G.routeConnected(links, { segment = c, t = 0.5 }, { segment = c, t = 0.1 }, 40),
+    'reverse-stored one-way projections connect in their permitted direction')
+  a[6] = 1
+  local back = { 200, 0, 0, 0, 0, 1, a = 'c', b = 'a' }
+  links = G.routeLinks({ a, b, back })
+  local start, finish = { segment = a, t = 0.8 }, { segment = a, t = 0.2 }
+  T.check(G.routeConnected(links, start, finish, 340) and not G.routeConnected(links, start, finish, 339),
+    'a valid directed loop reaches an earlier projection only by driving the loop')
+end
 local sl = G.routeSlice(e, 50, 160, 25)
 T.check(#sl == 6 and sl[1][1] == 50 and sl[3][1] == 100 and sl[3][2] == 0 and sl[6][1] == 100 and sl[6][2] == 60,
   'the route sliced every 25 m round its corner, both ends included')
@@ -171,6 +194,40 @@ do
   wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
   wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
   T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
+end
+
+-- Overlapping fork lanes retain an active path only while it is physically underfoot.
+do
+  local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 4, links = links } end
+  local roads = { a = n(0, 0, { b = {} }), b = n(100, 0, {}),
+    c = n(0, 3, { d = {} }), d = n(100, 3, {}) }
+  local path = { 'a', 'b' }
+  local a, b = G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path)
+  T.check(a == 'a' and b == 'b', 'inside the active highway lane: a nearer ramp centre does not steal the anchor')
+  T.check(G.edgeUnder(roads, 50, 5, 1, 0, 0, nil, path) == 'c',
+    'outside the active road width: choose the actual road, without the eight-metre continuity tolerance')
+  roads.a.pos.z, roads.b.pos.z = 4, 4
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path on another elevation is not preferred')
+  roads.a.pos.z, roads.b.pos.z = 0, 0
+  roads.a.links.b = { oneWay = true, inNode = 'b' }
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path cannot override a one-way restriction')
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, { 'a', 'c', 'b' }) == 'c',
+    'path membership alone does not prefer an edge absent from the active path')
+end
+
+-- Continuity applies inside a segment, not around its clamped endpoints.
+do
+  local roads = {
+    a = { pos = { x = 0, y = 0, z = 0 }, radius = 10, links = { b = { inNode = 'a', inRadius = 10, outRadius = 10 } } },
+    b = { pos = { x = 100, y = 0, z = 0 }, radius = 10, links = { c = { inNode = 'b', inRadius = 2, outRadius = 2 } } },
+    c = { pos = { x = 200, y = 0, z = 0 }, radius = 2, links = {} },
+  }
+  local a, b = G.edgeUnder(roads, 105, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'b' and b == 'c', 'a passed wide endpoint cannot override the nearer forward road at a narrowing')
+  roads.a.links.b.inRadius, roads.a.links.b.outRadius = 2, 2
+  roads.b.links.c.inRadius, roads.b.links.c.outRadius = 10, 10
+  a, b = G.edgeUnder(roads, 95, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'a' and b == 'b', 'a future wide segment is not preferred before reaching its start')
 end
 
 -- Stacked roads can share a heading and be closer in XY on the wrong level.

@@ -53,12 +53,45 @@ function M.stop(mode)
   ai.setMode(mode or 'stop')
 end
 
+-- GE plans from the vehicle reference point; the stock AI drives from obj:getFrontPosition(). A queued restart
+-- can therefore target a node already behind the AI. Drop only the passed prefix on its outgoing road.
+function M.forwardStart(ids, md, p, heading)
+  if not md.positions then return ids end
+  local first = 1
+  while first < #ids do
+    local a, b = md.positions[ids[first]], md.positions[ids[first + 1]]
+    if not a or not b then break end
+    local dx, dy = b.x - a.x, b.y - a.y
+    local lengthSq = dx * dx + dy * dy
+    if lengthSq < 1e-8 then break end
+    if dx * heading.x + dy * heading.y <= 0.5 * math.sqrt(lengthSq) then break end
+    local t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq
+    if t < 0 then break end
+    local edge = md.graph[ids[first]][ids[first + 1]]
+    local ra, rb = edge.inRadius, edge.outRadius
+    if edge.inNode == ids[first + 1] then ra, rb = rb, ra end
+    ra, rb = ra or (md.radius and md.radius[ids[first]]) or 8, rb or (md.radius and md.radius[ids[first + 1]]) or 8
+    local reach = ra + math.min(1, t) * (rb - ra)
+    local ex, ey = p.x - a.x - t * dx, p.y - a.y - t * dy
+    if ex * ex + ey * ey > reach * reach or math.abs(p.z - a.z - t * (b.z - a.z)) > 2 then break end
+    first = first + 1
+  end
+  if first == 1 then return ids end
+  local out = {}
+  for i = first, #ids do out[#out + 1] = ids[i] end
+  return out
+end
+
 function M.drive(ids, version, force, speed, aggression)
   local md = mapmgr.mapData
   if not valid(ids, md) then
     M.stop()
     mapmgr.requestMap()
     return 'waiting'
+  end
+  if obj and obj.getFrontPosition and obj.getPosition and obj.getDirectionVector then
+    local front, ref = obj:getFrontPosition(), obj:getPosition()
+    ids = M.forwardStart(ids, md, { x = front.x, y = front.y, z = ref.z }, obj:getDirectionVector())
   end
   local suffix = not force and ai.mode == 'manual' and md == lastMap and version == lastVersion
     and speed == lastSpeed and aggression == lastAggression and M.extension(lastPath, ids)
