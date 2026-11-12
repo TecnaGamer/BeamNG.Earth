@@ -54,10 +54,12 @@ static inline int bnge_is_main_game(void) {
     char buf[8192];
     size_t n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
+
     if (n == 0)
     {
         return 0;
     }
+
     buf[n] = 0;
     size_t len0 = strlen(buf);
     const char *exe = "BeamNG.drive.x64";
@@ -72,6 +74,8 @@ static inline int bnge_is_main_game(void) {
         {
             return 0;
         }
+    }
+    
     return 1;
 }
 
@@ -93,6 +97,7 @@ static inline int bnge_find_main_cb(struct dl_phdr_info *info, size_t size, void
     m->base = (uintptr_t)info->dlpi_addr;
     for (int i = 0; i < info->dlpi_phnum && m->nseg < 16; i++) {
         const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        
         if (ph->p_type != PT_LOAD)
         {
             continue;
