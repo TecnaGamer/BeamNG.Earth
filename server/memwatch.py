@@ -185,7 +185,7 @@ class _Watch:
             log.info("memory: the server at %.0f MB of %.0f (%d processes): caches dropped where over %.0f MB",
                      total, eff, len(mbs), share)
         elif action == "rotate":
-            self.last_rotate = self.last_shed = now
+            self.last_rotate = now
             p = pools[idx]
             p.rotate(f"the server at {total:.0f} MB of its {eff:.0f} MB limit for {over_s:.0f} s, a process at "
                      f"{cands[idx][0]:.0f} MB", now)
