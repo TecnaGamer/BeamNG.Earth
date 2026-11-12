@@ -657,6 +657,33 @@ do
   T.check(f.stopDistance == nil, 'a temporary graph endpoint does not become a destination braking point')
 end
 
+-- Exercise the actual recovery through the no-progress timer, not just edge selection.
+do
+  local oldSpawn, oldQuat, oldLog = spawn, quatFromDir, log
+  local placed
+  spawn = { safeTeleport = function(_, p, q) placed = { pos = p, direction = q } end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local f = fixture({ 'j', 's', 't' }, 0, 6, function(f)
+    f.speed = 0
+    f.nodes = { w = { pos = { x = 0, y = 0, z = 0 }, links = {}, radius = 6 },
+      j = { pos = { x = 100, y = 0, z = 0 }, links = { w = {} }, radius = 6 },
+      s = { pos = { x = 300, y = 0, z = 0 }, links = { j = {} }, radius = 6 },
+      t = { pos = { x = 500, y = 0, z = 0 }, links = { s = {} }, radius = 6 } }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.05 } }, dist = 500, dur = 30 }
+  end)
+  f:step(31)
+  T.check(not placed, 'the first no-progress interval retries without teleporting')
+  f:step(); f:step(31)
+  T.check(placed and f.gps.autoRecoveries == 1, 'the second no-progress interval invokes recovery')
+  T.check(placed and math.abs(placed.pos.x - 190) < 1e-9 and placed.pos.y == 0,
+    'recovery places the vehicle 150 metres ahead on the route')
+  T.check(placed and placed.direction.x > 0.99 and placed.direction.y == 0,
+    'recovery faces east even though the selected edge is stored westbound')
+  spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end

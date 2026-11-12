@@ -135,7 +135,8 @@ end
 
 -- Pure: the distance from (px, py) to the nearest segment of segs, that segment's z, and {x, y, dx, dy}: the point on it
 -- and its direction (the way it may be driven for a one-way edge). With a heading (hx, hy): only segments that may be
--- driven that way (a one-way edge against it is left out: the other carriageway of a divided road).
+-- driven that way (a one-way edge against it is left out: the other carriageway of a divided road). Two-way
+-- edges face along that heading, independently of their stored endpoint order.
 -- Optional accept(point, distanceSquared) filters projections without discarding a farther eligible edge.
 function M.nearestEdge(segs, px, py, hx, hy, accept)
   local bd, bz, bp = math.huge, 0, nil
@@ -148,8 +149,9 @@ function M.nearestEdge(segs, px, py, hx, hy, accept)
     local qx, qy = ax + t * dx - px, ay + t * dy - py
     local d = qx * qx + qy * qy
     if d < bd then
-      local point = { x = qx + px, y = qy + py, dx = (s[6] or 0) < 0 and -dx or dx, dy = (s[6] or 0) < 0 and -dy or dy,
-        segment = s, t = t }
+      local fx, fy = dx, dy
+      if (s[6] or 0) < 0 or ((s[6] or 0) == 0 and hx and dx * hx + dy * hy < 0) then fx, fy = -dx, -dy end
+      local point = { x = qx + px, y = qy + py, dx = fx, dy = fy, segment = s, t = t }
       if not accept or accept(point, d) then bd, bz, bp = d, s[5], point end
     end
     ::next::
