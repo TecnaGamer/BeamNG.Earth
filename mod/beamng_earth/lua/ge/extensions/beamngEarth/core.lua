@@ -3545,4 +3545,16 @@ M.onExtensionUnloaded = onExtensionUnloaded
 M._trafficvisuals = require('beamngEarth/trafficvisuals')
 M._addons = require('beamngEarth/addons')       -- the Add-ons page's game side (a field: the 200-local limit)
 
+-- Another copy of the mod mounted under this code (a BeamMP server's copy replacing the player's when they join, theirs
+-- back when they leave): that copy's code loaded in place of ours (codeswap.lua: the BeamMP 1-2 fps of mismatched
+-- versions). The copy we were loaded from is remembered now.
+M._codeswap = require('beamngEarth/codeswap')
+pcall(M._codeswap.remember)
+M.onModActivated = function(mod)
+  pcall(M._codeswap.check, 'turned on: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
+end
+M.onModDeactivated = function(mod)
+  pcall(M._codeswap.check, 'turned off: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
+end
+
 return M
