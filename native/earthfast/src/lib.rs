@@ -5993,6 +5993,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
     m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
-    m.add("VERSION", 236)?;
+    // 238: gradesep_underpasses' prm[7] (a junction over a tunnel: its arms' crossings by the node count); deck_weld
+    // (one height at each joint of a deck chain's per-part profile)
+    m.add_function(wrap_pyfunction!(decks::deck_weld, m)?)?;
+    m.add("VERSION", 238)?;
     Ok(())
 }

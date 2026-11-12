@@ -741,3 +741,85 @@ pub(crate) fn deck_gaps_round(ring: &[[f64; 2]], ends: &[[f64; 4]], boxes: &[[f6
     }
     (hits, others)
 }
+
+/// One height at each joint of a branched deck chain (roads.deck_profile_once's per-part profile, 238): every node with
+/// two or more part ends (node ids a[k], b[k] of part k) is set to the highest of those ends, each part's profile
+/// raised to it from that end by a smoothstep fading over min(its length, fade_m), the two ends' raises added (a short
+/// part goes from one to the other). z, s (arc m): every part's points, part k rows off[k]..off[k + 1]. Parts whose ends
+/// already agree are left as they are. Pure.
+pub fn deck_weld_core(z: &[f64], s: &[f64], off: &[usize], a: &[usize], b: &[usize], fade_m: f64) -> Vec<f64> {
+    let n = a.len();
+    let nodes = a.iter().chain(b.iter()).copied().max().map_or(0, |m| m + 1);
+    let mut top = vec![f64::NEG_INFINITY; nodes];
+    let mut cnt = vec![0usize; nodes];
+    for k in 0..n {
+        let (i0, i1) = (off[k], off[k + 1]);
+        if i1 <= i0 {
+            continue;
+        }
+        for (nd, v) in [(a[k], z[i0]), (b[k], z[i1 - 1])] {
+            if v.is_finite() {
+                cnt[nd] += 1;
+                top[nd] = top[nd].max(v);
+            }
+        }
+    }
+    let mut out = z.to_vec();
+    for k in 0..n {
+        let (i0, i1) = (off[k], off[k + 1]);
+        if i1 <= i0 + 1 {
+            continue;
+        }
+        let len = s[i1 - 1] - s[i0];
+        let c0 = if cnt[a[k]] > 1 && z[i0].is_finite() { top[a[k]] - z[i0] } else { 0.0 };
+        let c1 = if cnt[b[k]] > 1 && z[i1 - 1].is_finite() { top[b[k]] - z[i1 - 1] } else { 0.0 };
+        if c0 <= 0.0 && c1 <= 0.0 {
+            continue;
+        }
+        let d = len.min(fade_m).max(1e-6);
+        let fall = |t: f64| {
+            let u = (t / d).clamp(0.0, 1.0);
+            1.0 - u * u * (3.0 - 2.0 * u)
+        };
+        for i in i0..i1 {
+            let t = s[i] - s[i0];
+            out[i] = z[i] + c0 * fall(t) + c1 * fall(len - t);
+        }
+    }
+    out
+}
+
+#[pyfunction]
+pub fn deck_weld<'py>(py: Python<'py>, z: PyReadonlyArray1<'py, f64>, s: PyReadonlyArray1<'py, f64>,
+                      off: PyReadonlyArray1<'py, i64>, a: PyReadonlyArray1<'py, i64>, b: PyReadonlyArray1<'py, i64>,
+                      fade_m: f64) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    let (z, s, off, a, b) = (z.as_array(), s.as_array(), off.as_array(), a.as_array(), b.as_array());
+    let n = a.len();
+    if b.len() != n || off.len() != n + 1 || z.len() != s.len() || off.iter().any(|&v| v < 0 || v as usize > z.len())
+        || (1..off.len()).any(|i| off[i] < off[i - 1]) || a.iter().chain(b.iter()).any(|&v| v < 0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("deck_weld: mismatched arrays"));
+    }
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let ov: Vec<usize> = off.iter().map(|&v| v as usize).collect();
+    let av: Vec<usize> = a.iter().map(|&v| v as usize).collect();
+    let bv: Vec<usize> = b.iter().map(|&v| v as usize).collect();
+    let got = py.detach(|| deck_weld_core(&zv, &sv, &ov, &av, &bv, fade_m));
+    Ok(got.into_pyarray(py))
+}
+
+#[cfg(test)]
+mod weld_tests {
+    use super::deck_weld_core;
+
+    #[test]
+    fn joints_meet_at_the_highest_end() {
+        // two parts meeting at node 1: 10.0 and 11.0 there; a free end each (nodes 0, 2) kept
+        let z = [9.0, 9.5, 10.0, 11.0, 11.0, 11.0];
+        let s = [0.0, 5.0, 10.0, 0.0, 5.0, 10.0];
+        let got = deck_weld_core(&z, &s, &[0, 3, 6], &[0, 1], &[1, 2], 40.0);
+        assert!((got[2] - 11.0).abs() < 1e-9 && (got[3] - 11.0).abs() < 1e-9);
+        assert!((got[0] - 9.0).abs() < 1e-9 && (got[5] - 11.0).abs() < 1e-9);
+        assert!(got[1] > 9.5 && got[1] < 10.5);
+    }
+}

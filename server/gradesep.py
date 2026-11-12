@@ -36,7 +36,7 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 1             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+VERSION = 2             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -60,6 +60,8 @@ PORTAL_OUT_M = 10.0         # is an underpass: ground under the line over it, wh
 CUT_SIDE_M = (15.0, 25.0, 35.0, 45.0)  # m along the line over a longer one's crossing where its ground is read either
                             # side: a cutting (SEP_M over the crossing's ground somewhere on both) makes it an underpass
                             # (a dual carriageway's cutting is 40 m wide and more: Highway 3 at Hameenlinna)
+JOINED_ENDS = os.environ.get("BNE_GRADESEP_JOINED", "on") != "off"   # a junction over a tunnel: its arms' crossings
+                            # within END_M of the node count for the underpass test (_underpasses)
 NEAR_M = 60.0           # m round the cell's own lines that neighbours' lines are taken from
 RAIL_HALF_M = 2.5       # m: a track's half width (its ballast)
 
@@ -363,11 +365,12 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
     def ground(x, y):
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
         return np.asarray(_dem(md).sample(np.asarray(la), np.asarray(lo), DEM_ZOOM), np.float64)
+    fast.require(238 if JOINED_ENDS else 169, "gradesep_underpasses")
     return np.asarray(fast._ef.gradesep_underpasses(
         np.ascontiguousarray(pts, np.float64).reshape(-1, 2), np.ascontiguousarray(starts, np.int64),
         np.ascontiguousarray(kinds, np.int64), np.ascontiguousarray(groups, np.int64),
-        [TOUCH_M, END_M, PORTAL_OUT_M, SHORT_ROAD_TUNNEL_M, UNDERPASS_COVER_M, roads.TUNNEL_OPEN_COVER, SEP_M],
-        list(CUT_SIDE_M), ground), bool)
+        [TOUCH_M, END_M, PORTAL_OUT_M, SHORT_ROAD_TUNNEL_M, UNDERPASS_COVER_M, roads.TUNNEL_OPEN_COVER, SEP_M]
+        + ([1.0] if JOINED_ENDS else []), list(CUT_SIDE_M), ground), bool)
 
 
 def _dem(md):
