@@ -1353,7 +1353,20 @@ PASSAGE_M = 40.0        # m: a tunnel range this short between two bridge ranges
 
 
 def _feature_length_m(feats, i):
-    """Length of feature i in metres (its rings, lon scaled by cos lat). Pure."""
+    """Length of feature i in metres (its rings, lon scaled by cos lat). Pure; kept per layer (railways.parts asks for
+    every rail of a city's cells in every bed node's window)."""
+    memo = feats.__dict__.get("_flen") if hasattr(feats, "__dict__") else None
+    if memo is None:
+        if not hasattr(feats, "__dict__"):
+            return _feature_length_new(feats, i)
+        memo = feats.__dict__.setdefault("_flen", {})
+    got = memo.get(i)
+    if got is None:
+        got = memo[i] = _feature_length_new(feats, i)
+    return got
+
+
+def _feature_length_new(feats, i):
     total = 0.0
     for part in feats.parts(i):
         for ring in part:
@@ -2845,8 +2858,10 @@ def placement_shift(feats, i, lon, lat, spec, joints=()):
 
 
 def is_placed(feats, i, spec):
-    """Whether a part of feature i has a placement=* that moves it (placement_full)."""
-    return spec is not None and any(placement_full(t, spec) for _a, _b, _w, t in lane_tag_parts(feats, i))
+    """Whether a part of feature i has a placement=* that moves it (placement_full). Only the rows _placement_rows
+    finds a placement in are read (each road's lane tags made into dicts was ~4 % of a fresh cell's planning)."""
+    return spec is not None and i in _placement_rows(feats) \
+        and any(placement_full(t, spec) for _a, _b, _w, t in lane_tag_parts(feats, i))
 
 
 def _placement_rows(feats):
@@ -3116,9 +3131,21 @@ def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     return pl
 
 
+_PLAIN = (float, int, bool, str, type(None))
+
+
 def _spec_json(sp):
-    return {f: (v.item() if hasattr(v, "item") else list(v) if isinstance(v, tuple) else v)
-            for f, v in sp._asdict().items() if f != "street" or v is not None}
+    """sp as the shared facts keep it: numpy scalars as numbers, tuples as lists, no street when it has none (its
+    fields' types looked at once each: ~45k specs a first visit's four cells)."""
+    out = {}
+    for f, v in zip(sp._fields, sp):
+        t = type(v)
+        if t in _PLAIN:
+            if f != "street" or v is not None:
+                out[f] = v
+        else:
+            out[f] = v.item() if hasattr(v, "item") else list(v) if isinstance(v, tuple) else v
+    return out
 
 
 def spec_from_json(data):
@@ -4047,22 +4074,18 @@ class _EndJoin:
 
 
 def _chain_graph(lines):
-    """Nodes (end points within 0.5 m joined) and edges (start node, end node, arc lengths) of parts."""
-    join, nodes = _EndJoin(), []
-
-    def node(p):
-        k = join(p)
-        if k == len(nodes):
-            nodes.append(np.asarray(p[:2], np.float64))
-        return k
-    edges = []
-    for ln in lines:
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln[:, :2], axis=0).T))]
-        edges.append((node(ln[0]), node(ln[-1]), s))
+    """Nodes (end points within 0.5 m joined, as _EndJoin) and edges (start node, end node, arc lengths) of parts
+    (earthfast.chain_graph)."""
+    import fast
+    fast.require(242, "chain_graph")
+    pts, a, b, s, off = fast._ef.chain_graph([np.ascontiguousarray(ln, np.float64) for ln in lines], 0.5)
+    nodes = list(pts)
+    off = off.tolist()
+    edges = [(i, j, s[off[k]:off[k + 1]].copy()) for k, (i, j) in enumerate(zip(a.tolist(), b.tolist()))]
     adj = [[] for _ in nodes]
-    for a, b, s in edges:
-        adj[a].append((b, s[-1]))
-        adj[b].append((a, s[-1]))
+    for i, j, sk in edges:
+        adj[i].append((j, sk[-1]))
+        adj[j].append((i, sk[-1]))
     return nodes, edges, adj
 
 

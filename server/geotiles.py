@@ -86,9 +86,9 @@ class WorldFrame(geodesy.EnuFrame):
             return super().enu_to_geodetic(e, n, u)
         E, N = np.broadcast_arrays(np.asarray(e, np.float64), np.asarray(n, np.float64))
         shape = E.shape
-        p = np.zeros((E.size, 3))
-        p[:, 0], p[:, 1] = E.ravel(), N.ravel()
-        la, lo, _ = _ef().geo_world_to_geodetic(float(self.lat0), float(self.lon0), p)
+        fast.require(242, "geo_world_to_latlon")      # (lat / lon only: the heights it threw away were 1/3 of the work)
+        la, lo = _ef().geo_world_to_latlon(float(self.lat0), float(self.lon0), np.ascontiguousarray(E.ravel()),
+                                           np.ascontiguousarray(N.ravel()))
         if shape == ():
             return np.float64(la[0]), np.float64(lo[0]), np.float64(0.0)
         return la.reshape(shape), lo.reshape(shape), np.zeros(shape)
@@ -306,6 +306,18 @@ class GeoBox:
     def owns(self, x, y):
         """Whether each point (x, y) of this frame's world (h = 0) lies in the tile: scalars in, a bool out; arrays in,
         a bool array."""
+        if isinstance(x, float) and isinstance(y, float):
+            # (one point, the far buildings' centre test per building: the same tests on plain floats, the kernel only
+            # in the edges' band; the arrays' path cost ~5 % of a first visit's far building tiles)
+            i0, j0, i1, j1 = self.inner
+            if x >= i0 and x <= i1 and y >= j0 and y <= j1:
+                return True
+            b = self.box
+            if x < b[0] - OWN_EDGE_M or x > b[2] + OWN_EDGE_M or y < b[1] - OWN_EDGE_M or y > b[3] + OWN_EDGE_M:
+                return False
+            fast.require(NEED_CONTENT, "geo_owns")
+            return bool(fast._ef.geo_owns(float(self.frame.lat0), float(self.frame.lon0), self.z, self.gx, self.gy,
+                                          np.array([x], np.float64), np.array([y], np.float64))[0])
         scalar = np.ndim(x) == 0 and np.ndim(y) == 0
         X, Y = np.broadcast_arrays(np.atleast_1d(np.asarray(x, np.float64)), np.atleast_1d(np.asarray(y, np.float64)))
         X, Y = X.ravel(), Y.ravel()

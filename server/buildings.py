@@ -15,7 +15,6 @@ footprints and a ground-height function; no game state.
 """
 from runtimeprofiler import step as profile_step
 import os
-import hashlib
 import math
 
 import numpy as np
@@ -588,9 +587,10 @@ INDUSTRIAL_LAND_CLASSES = {"", "yes", "industrial", "commercial", "service", "wa
 
 
 def _hash01(*vals):
-    """A number in [0, 1) from the values (stable across runs and machines)."""
-    h = hashlib.blake2b(repr(vals).encode(), digest_size=8).digest()
-    return int.from_bytes(h, "little") / 2.0 ** 64
+    """A number in [0, 1) from the values (stable across runs and machines): BLAKE2b-64 of repr(vals) / 2^64
+    (earthfast.hash01: ~400k calls a first visit's far building tiles)."""
+    fast.require(242, "hash01")
+    return fast._ef.hash01(*vals)
 
 
 # ------------------------------------------------------------------------------------------- polygons
@@ -1411,6 +1411,20 @@ class Mesh:
                              cols[mid].reshape(-1, 4), T, np.repeat(idx[mid], 2)))
         self.n += 4 * q
 
+    def tris(self, P, UV, mat):
+        """Triangles P (3k, 3) with texture coordinates UV (3k, 2), all of material mat: a block of the same numbers
+        tri() would add for each."""
+        P = np.asarray(P, np.float64).reshape(-1, 3)
+        k = len(P) // 3
+        if not k:
+            return
+        self._flush()
+        i = self.n
+        self._blocks.append((P[:3 * k].copy(), np.asarray(UV, np.float64).reshape(-1, 2)[:3 * k].copy(),
+                             np.tile(np.asarray(tuple(mat[1]), np.uint8), (3 * k, 1)),
+                             np.arange(i, i + 3 * k, dtype=np.int64).reshape(-1, 3), np.full(k, mat[0], np.int64)))
+        self.n += 3 * k
+
     def tri(self, a, b, c, uva, uvb, uvc, mat):
         i = self.n
         self._P += (*a, *b, *c)
@@ -2145,20 +2159,15 @@ def _skel_roof(m, spec, ring, z_eave, rm, fac):
         float(spec.skel_cap or 0.0), spec.roof == "gabled")
     if not len(grad):
         return False
-    for j in range(len(gab) // 3):
-        a, b, c = (tuple(float(x) for x in gab[3 * j + i]) for i in range(3))
-        m.tri(a, b, c, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
-    for j in range(len(grad)):
-        gx, gy = float(grad[j, 0]), float(grad[j, 1])
-        gm = math.hypot(gx, gy)
-        if gm < 1e-9:
-            d, a, f = (0.0, 1.0), (1.0, 0.0), 1.0
-        else:
-            d = (gx / gm, gy / gm)
-            a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
-        pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
-        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
-        m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
+    # (the gables, then the slopes, as blocks: the per-triangle loop with its texture coordinates in Python was ~3 % of
+    # a first visit's far building tiles; earthfast.skeleton_roof_uv, the same numbers)
+    fast.require(242, "skeleton_roof_uv")
+    ng = len(gab) // 3
+    if ng:
+        m.tris(np.asarray(gab, np.float64)[:3 * ng, :3], np.tile(np.array([(0, 0.995), (0.02, 0.995), (0.01, 0.999)],
+                                                                           np.float64), (ng, 1)), fac)
+    tri = np.ascontiguousarray(np.asarray(tri, np.float64)[:3 * len(grad), :3])
+    m.tris(tri, fast._ef.skeleton_roof_uv(tri, np.ascontiguousarray(grad, np.float64), float(ROOF_UV_M)), rm)
     return True
 
 
@@ -4216,6 +4225,41 @@ def _tank_items(frame, x0, y0, x1, y1, elev, tanks, used, own=None):
     return out
 
 
+SMALL_MARGIN = 0.5         # _small_rows' slack: under half the threshold's height and area (its sums are not the loop's)
+
+
+def _small_rows(f, frame, a, min_size):
+    """(n,) bool: the buildings of layer f (attrs a) surely under min_size (min height m, min footprint m2), as
+    tile_buildings' test has it (the height, else the floors x 3.2, else 0; the outer ring's area in frame), with
+    SMALL_MARGIN of slack: the whole layer at once (the skyline's tiles tested a city's every house one by one: most of
+    their time). All False where its columns are not plain floats."""
+    n = len(f.kind)
+    none = np.zeros(n, bool)
+
+    def col(k):
+        c = a.get(k)
+        if c is None:
+            return np.full(n, np.nan)
+        c = np.asarray(c)
+        return c.astype(np.float64) if c.dtype.kind == "f" else None
+    hc, fc = col("height"), col("num_floors")
+    if hc is None or fc is None or not n or len(f.lonlat) < 2:
+        return none
+    h = np.where(np.isfinite(hc), hc, np.where(np.isfinite(fc), fc * 3.2, 0.0))
+    p0 = f.part_off[:-1]
+    ok = f.part_off[1:] > p0
+    r0 = f.ring_off[np.minimum(p0, len(f.ring_off) - 2)]
+    ok &= f.ring_off[np.minimum(p0 + 1, len(f.ring_off) - 1)] > r0
+    c0 = f.coord_off[np.minimum(r0, len(f.coord_off) - 2)]
+    c1 = f.coord_off[np.minimum(r0 + 1, len(f.coord_off) - 1)]
+    ok &= (c1 - c0) >= 4
+    xy = f.xy_in(frame)
+    t = xy[:-1, 0] * xy[1:, 1] - xy[1:, 0] * xy[:-1, 1]
+    cs = np.r_[0.0, np.cumsum(t)]
+    area = np.abs(cs[np.where(ok, c1 - 1, 0)] - cs[np.where(ok, c0, 0)]) / 2
+    return ok & (h < SMALL_MARGIN * min_size[0]) & (area < SMALL_MARGIN * min_size[1])
+
+
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
@@ -4256,6 +4300,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 pm = PIECE_LEN_M
                 near_ |= (np.hypot(bb_[:, 2] - bb_[:, 0], bb_[:, 3] - bb_[:, 1]) >= SPLIT_MIN_L) \
                     & (bb_[:, 2] >= x0 - pm) & (bb_[:, 0] < x1 + pm) & (bb_[:, 3] >= y0 - pm) & (bb_[:, 1] < y1 + pm)
+            if min_size is not None:            # ... and not the ones surely under min_size (_small_rows)
+                near_ &= ~_small_rows(f, frame, a, min_size)
             rows = np.flatnonzero(near_).tolist()
         # (New York's measured massing: the rows whose outline takes a record, nycmassing.Records)
         nyc_rows = nyc_idx.match_layer(f, frame, rows) if nyc_idx is not None and isinstance(f, mapgeom.Features) \
@@ -6314,16 +6360,12 @@ def _sky_mesh(items):
         dv = int(_hash01(spec.seed, "sky v") * SKY_WIN_FLOORS) / SKY_WIN_FLOORS
         v0, v1 = (z0 - zb) / fh + dv, (z1 - zb) / fh + dv
         u = int(_hash01(spec.seed, "sky u") * SKY_WIN_BAYS) / SKY_WIN_BAYS
-        for i in range(n):
-            a, b = ring[i], ring[(i + 1) % n]
-            za, zb_ = float(zt[i]), float(zt[(i + 1) % n])
-            if windows:
-                du = float(math.hypot(*(b - a))) / bw
-                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], zb_), (a[0], a[1], za),
-                       (u, v0), (u + du, v0), (u + du, v0 + (zb_ - z0) / fh), (u, v0 + (za - z0) / fh), wall)
-                u += du
-            else:
-                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], zb_), (a[0], a[1], za), uv, uv, uv, uv, wall)
+        # (the walls as a block: earthfast.sky_walls, the numbers the per-wall loop made)
+        fast.require(242, "sky_walls")
+        P_, UV_ = fast._ef.sky_walls(np.ascontiguousarray(ring), np.ascontiguousarray(zt, np.float64), float(z0),
+                                     float(u), float(v0), float(fh), float(bw), bool(windows),
+                                     (float(uv[0]), float(uv[1])))
+        m.quads(P_, UV_, np.zeros(n, np.intp), [wall])
         m.poly([(p[0], p[1], float(z)) for p, z in zip(ring, zt)], [uv] * n, roof)
         if spec.roof == "pyramidal":    # (a tower's crown or a spire: its apex over the middle, sky_items)
             c = ring.mean(0)
