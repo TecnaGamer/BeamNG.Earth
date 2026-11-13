@@ -613,4 +613,72 @@ do
   T.check(d(4, roads.ROLL_DEFER_S * 1000 + 1) == false, '... ROLL_DEFER_S at most')
   T.check(d(roads.FAST_MS, 6000) == false, 'at FAST_MS and above: no wait')
 end
+-- rebuild by deadline (NEED): a collider made within the collision radius waits until the car is within needReach of
+-- what it covers (its boxes), and one rebuild then makes everything pending solid; the old rule (tile centre within
+-- URGENT_S + the tile's half-diagonal) rebuilt at once
+do
+  roads.clear()
+  gov.allow, gov.tries = nil, 0
+  local every, check = roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 1e9, 0
+  local carN = { pos = vec3(110, -150, 10.5) }   -- tile 0_0's centre 278 m away, the deck's box 250 m
+  function carN:getPosition() return self.pos end
+  getPlayerVehicle = function() return carN end
+  files['/t/nd.json'] = '{ chunks = { }, deck = { shape = "/t/deck_8_0_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'colliders = { deck = { { 100, 100, 7.8, 120, 110, 12 } } } }'
+  local function upd() elapsedMs = elapsedMs + 16; roads.update(gov, 8) end   -- (the reloaded module: unwrapped)
+  local function settle() for _ = 1, 80 do upd() end end    -- (past URGENT_GAP_S)
+  local function decks()
+    local n = 0
+    for _, o in ipairs(statics()) do if o.fields.shapeName == '/t/deck_8_0_0.cdae' then n = n + 1 end end
+    return n
+  end
+  roads.NEED = false
+  settle()
+  roads.onTile({ anchorId = 8, key = '0_0', path = '/t/nd.json', n = 0 }, 8)
+  local r0 = S.calls.reloadCollision
+  upd()
+  T.check(decks() == 1 and S.calls.reloadCollision == r0 + 1, 'old rule: the deck rebuilds at once (its tile within reach)')
+  roads.clear()
+  settle()
+  roads.NEED = true
+  T.check(roads.needReach(0) == roads.NEED_MIN_M + roads.NEED_PAD_M and roads.needReach(20) == 20 * roads.NEED_S +
+    roads.NEED_PAD_M and roads.needReach(40) == 40 * roads.URGENT_S + roads.NEED_PAD_M, 'needReach: floor, NEED_S, URGENT_S when fast')
+  roads.onTile({ anchorId = 8, key = '0_0', path = '/t/nd.json', n = 0 }, 8)
+  r0 = S.calls.reloadCollision
+  settle()
+  T.check(decks() == 1 and S.calls.reloadCollision == r0, 'NEED: made, but no rebuild 250 m from its box')
+  T.check(math.abs(roads.needDistance() - 250) < 1e-6, 'its distance: to the deck box, not the tile')
+  carN.pos = vec3(110, 100 - roads.needReach(0) + 1, 10.5)
+  upd()
+  T.check(S.calls.reloadCollision == r0 + 1, 'the car within needReach of the box: rebuilt')
+  local log = roads.reloadLog()
+  T.check(log[#log].why == 'urgent' and log[#log].n == 1 and log[#log].kinds.deck == 1, 'the reload log says why and what')
+  T.check(roads.needDistance() == math.huge, 'nothing pending after it')
+  settle()
+  T.check(S.calls.reloadCollision == r0 + 1, 'and nothing more')
+  T.check(roads.onlyColliderDirt({ tile = 2, tileNear = 1 }) and not roads.onlyColliderDirt({ tile = 1, request = 1 }),
+    'onlyColliderDirt: made colliders only')
+  -- right after a rebuild a collider inside needReach but beyond hardReach waits for NEED_GAP_S (the same tile's next
+  -- collider a frame later rides along); one within hardReach goes after URGENT_GAP_S
+  files['/t/nd2.json'] = '{ chunks = { }, deck = { shape = "/t/deck_8_1_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'colliders = { deck = { { 356, 100, 7.8, 376, 110, 12 } } } }'
+  carN.pos = vec3(356 - roads.needReach(0) + 5, 105, 10.5)      -- inside needReach, beyond hardReach
+  T.check(356 - carN.pos.x > roads.hardReach(0), '(the test spot is beyond hardReach)')
+  roads.onTile({ anchorId = 8, key = '1_0', path = '/t/nd2.json', n = 0 }, 8)
+  upd()
+  T.check(S.calls.reloadCollision == r0 + 1, 'inside needReach right after a rebuild: waits')
+  for _ = 1, math.ceil(roads.NEED_GAP_S * 1000 / 16) do upd() end
+  T.check(S.calls.reloadCollision == r0 + 2, '... until NEED_GAP_S after it')
+  roads.onDrop({ anchorId = 8, key = '1_0' }); upd()
+  for _ = 1, 3 do upd() end
+  r0 = S.calls.reloadCollision
+  carN.pos = vec3(356 - roads.hardReach(0) + 5, 105, 10.5)      -- within hardReach
+  roads.onTile({ anchorId = 8, key = '1_0', path = '/t/nd2.json', n = 0 }, 8)
+  for _ = 1, math.ceil(roads.URGENT_GAP_S * 1000 / 16) + 1 do upd() end
+  T.check(S.calls.reloadCollision >= r0 + 1 and S.calls.reloadCollision <= r0 + 2, 'within hardReach: after URGENT_GAP_S')
+  roads.clear()
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = every, check
+  getPlayerVehicle = nil
+end
 T.done('test_roads')
