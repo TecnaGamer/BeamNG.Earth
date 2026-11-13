@@ -36,9 +36,16 @@ _S1 = {0: "dm_sin", 1: "dm_cos", 2: "dm_tan", 3: "dm_asin", 4: "dm_acos", 5: "dm
 _S2 = {32: "dm_atan2", 33: "dm_pow", 34: "dm_hypot"}
 
 
+_F64D = np.dtype(np.float64)
+_ND = np.ndarray
+
+
 def _unary(op, x):
     if type(x) in _SCALAR:              # (a Python or numpy float: the scalar kernel, a numpy float64 back as numpy)
         return _F64(getattr(_ef, _S1[op])(x))
+    if type(x) is _ND and x.dtype == _F64D and x.ndim:      # (the common case, without numpy's type machinery)
+        r = _ef.dm_vec(op, x.ravel())
+        return r if x.ndim == 1 else r.reshape(x.shape)
     a = np.asarray(x)
     dt = _out_dtype(a)
     r = _ef.dm_vec(op, np.ascontiguousarray(a, np.float64).ravel()).reshape(a.shape)
@@ -48,8 +55,12 @@ def _unary(op, x):
 
 
 def _binary(op, x, y):
-    if type(x) in _SCALAR and type(y) in _SCALAR:
+    tx, ty = type(x), type(y)
+    if tx in _SCALAR and ty in _SCALAR:
         return _F64(getattr(_ef, _S2[op])(x, y))
+    if tx is _ND and ty is _ND and x.dtype == _F64D and y.dtype == _F64D and x.shape == y.shape and x.ndim:
+        r = _ef.dm_vec(op, x.ravel(), y.ravel())
+        return r if x.ndim == 1 else r.reshape(x.shape)
     a, b = np.asarray(x), np.asarray(y)
     dt = _out_dtype(a, b)
     a, b = np.broadcast_arrays(a, b)
