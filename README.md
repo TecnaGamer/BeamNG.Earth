@@ -243,7 +243,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   update changes how that part of the world is built.
 - After an app update, a place you've been to is shown as it was last built (its ground, roads, sidewalks, street
   furniture, trees and signs, all of that one version together) while the new version is built in the background,
-  then swapped in; only the parts the update changed are loaded again. Versions older than 30 days are not used
+  then swapped in: the ground and road surfaces that changed are prepared out of sight and switched in one frame, and
+  only the parts the update changed are loaded again. Versions older than 30 days are not used
   (`BNE_STALE_DAYS`), it is off in BeamMP sessions, and `BNE_STALE_REVISIT=off` turns it off.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and

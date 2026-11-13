@@ -104,6 +104,9 @@ class GenerationsTest(unittest.TestCase):
         # other build switches: other content, never a stand-in
         with mock.patch.dict(os.environ, {"BNE_SOME_SWITCH": "1"}), _Bump("f"):
             self.assertEqual(revisit.older(self.d, now=1010.0), [])
+            # (tests only: a real change made with a switch, swapped in as an update's would be)
+            with mock.patch.dict(os.environ, {"BNGE_STALE_ANY_SWITCHES": "1"}):
+                self.assertTrue(revisit.older(self.d, now=1010.0))
 
     def test_off_switch_and_not_a_build_switch(self):
         revisit.register(self.d, now=0.0)
@@ -397,13 +400,13 @@ class ServerRulesTest(unittest.TestCase):
 
 
 class StaleRunTest(unittest.TestCase):
-    """earthd Connection.stale_run with stand-ins: what is shown together and when the swap comes. While the anchor is
-    shown from the older version nothing is sent again; the current version's road geotiles are built behind (after the
-    older ones are all shown, behind the live work); the swap is: the anchor leaves the stale mode with swap_wait up
-    (no live road tile), the blocks come, and only then the trackers ask for everything again."""
+    """earthd Connection.stale_run with stand-ins: while the anchor is shown from the older version the current one's
+    road geotiles are built behind (after the older ones are all shown, behind the live work), and nothing is sent
+    again; then ONE swap is asked for (stale_swap); one that fails leaves the older version for the anchor (held),
+    never released later."""
 
     def run_case(self, missing=(), near_missing=False, settle=True, hub_after=None, leave_after=None,
-                 fail=(), ticks=60):
+                 fail=(), ticks=60, swap_ok=True, active=7):
         import asyncio
         import functools
         import types
@@ -413,26 +416,20 @@ class StaleRunTest(unittest.TestCase):
         near = [(a, b) for a, b, _d in geotiles.tiles_near(frame, 0.0, 0.0, 500.0)]
         far = [(a, b) for a, b, d in geotiles.tiles_near(frame, 0.0, 0.0, 900.0) if d > 500.0]
         events, calls = [], []
-        anchor = types.SimpleNamespace(id=7, frame=frame, stale=({"id": "old", "plans": "1.1"},), stale_missing=set(),
-                                       stale_why=None, swap_wait=False)
+        gen = {"id": "old", "plans": "1.1"}
+        anchor = types.SimpleNamespace(id=7, frame=frame, stale=(gen,), stale_missing=set(), stale_why=None,
+                                       stale_held=False)
         sent = set(near)
         if missing:
             miss = set(far[:2]) if not near_missing else {near[0]}
             sent -= miss
             anchor.stale_missing |= miss
-        roads_tr = types.SimpleNamespace(geo=True, sent=sent, car=set(near), aid=7 if settle else 3,
-                                         redo_all=lambda: events.append(("redo", "roads", bool(anchor.stale),
-                                                                         anchor.swap_wait, block["stale"])))
-        veg = types.SimpleNamespace(redo_all=lambda: events.append(("redo", "veg")))
-        signs = types.SimpleNamespace(refresh=lambda: events.append(("redo", "signs")))
-        block = {"stale": True}
+        roads_tr = types.SimpleNamespace(geo=True, sent=sent, car=set(near), aid=7 if settle else 3)
         tick = [0]
 
         def prebuild(a, gx, gy, low):
             calls.append(((gx, gy), low, bool(a.stale)))
-            if (gx, gy) in fail:
-                return False
-            return True
+            return (gx, gy) not in fail
 
         from concurrent.futures import ThreadPoolExecutor as TPE
         ex = TPE(2)
@@ -440,28 +437,22 @@ class StaleRunTest(unittest.TestCase):
         server = types.SimpleNamespace(is_abandoned=lambda aid: leave_after is not None and tick[0] >= leave_after,
                                        stale_exec=lambda: ex, stale_prebuild=prebuild, root=tempfile.gettempdir(),
                                        _share_hub=None)
-        conn = types.SimpleNamespace(s=server, active=7, preparing_aid=None, closing=False, roads=roads_tr, veg=veg,
-                                     signs=signs, focus=(0.0, 0.0), stale_busy=False)
+        conn = types.SimpleNamespace(s=server, active=active, preparing_aid=7 if active != 7 else None, closing=False,
+                                     roads=roads_tr, focus=(0.0, 0.0))
         conn.stale_keys = functools.partial(earthd.Connection.stale_keys, conn)
-        conn.stale_block = lambda aid: (7, 0.0, 0.0) if block["stale"] else None
 
-        def refresh(aid):               # (the block in use built again: two ticks)
-            if anchor.stale:
-                events.append(("refresh while stale",))
-                return
-            events.append(("refresh", anchor.swap_wait))
-            if block["stale"] and not conn.stale_busy:
-                conn.stale_busy = True
-                block["at"] = tick[0] + 2
-        conn.stale_refresh = refresh
+        async def swap(a, g, t0):
+            events.append(("swap", bool(a.stale), len(calls)))
+            if swap_ok:
+                a.stale = ()
+            return swap_ok
+        conn.stale_swap = swap
         real_sleep = asyncio.sleep
 
         async def fast_sleep(_s):
             tick[0] += 1
             if hub_after is not None and tick[0] >= hub_after:
                 server._share_hub = object()
-            if conn.stale_busy and tick[0] >= block.get("at", 1e9):
-                conn.stale_busy, block["stale"] = False, False
             if tick[0] > ticks:
                 conn.closing = True
             await real_sleep(0.01)
@@ -472,21 +463,13 @@ class StaleRunTest(unittest.TestCase):
         asyncio.run(go())
         return anchor, events, calls, near, far, tick[0]
 
-    def test_all_built_behind_then_the_blocks_then_the_tiles(self):
+    def test_all_built_behind_then_one_swap(self):
         anchor, events, calls, near, _far, _ = self.run_case()
         self.assertEqual(anchor.stale, ())
-        self.assertFalse(anchor.swap_wait)
         self.assertEqual(sorted(c[0] for c in calls), sorted(near), "each geotile shown built behind once")
         self.assertTrue(all(low and stale for _k, low, stale in calls), "behind the live work, while the older is shown")
         self.assertEqual([c[0] for c in calls][0], near[0], "nearest first")
-        self.assertNotIn(("refresh while stale",), events)
-        redo = [e for e in events if e[0] == "redo"]
-        self.assertEqual([e[1] for e in redo], ["roads", "veg", "signs"])
-        # at the tiles redo: no longer stale, the wait over, the block the current one
-        self.assertEqual(redo[0][2:], (False, False, False))
-        first_redo = events.index(redo[0])
-        self.assertTrue(any(e[0] == "refresh" and e[1] is True for e in events[:first_redo]),
-                        "the blocks built while no live road tile is (swap_wait)")
+        self.assertEqual(events, [("swap", True, len(near))], "one swap, after all of it was built, still stale then")
 
     def test_nothing_behind_before_the_older_version_is_all_shown(self):
         anchor, events, calls, _near, _far, _ = self.run_case(settle=False, ticks=12)
@@ -494,25 +477,26 @@ class StaleRunTest(unittest.TestCase):
         self.assertTrue(anchor.stale, "still shown from the older version")
         self.assertEqual(events, [])
 
-    def test_a_far_missing_tile_is_built_behind_and_held(self):
+    def test_no_swap_before_the_anchor_is_the_players(self):
+        anchor, events, _calls, _near, _far, _ = self.run_case(active=3, ticks=12)
+        self.assertEqual(events, [])
+        self.assertTrue(anchor.stale)
+
+    def test_a_far_missing_tile_is_built_behind_before_the_swap(self):
         anchor, events, calls, near, far, _ = self.run_case(missing=True)
         self.assertEqual(sorted(c[0] for c in calls), sorted(set(near) | set(far[:2])))
-        self.assertTrue(all(stale for _k, _low, stale in calls), "all built before the swap: nothing shown mixed")
-        self.assertEqual(anchor.stale, ())
+        self.assertEqual([e[:2] for e in events], [("swap", True)])
+        self.assertEqual(events[0][2], len(calls), "the swap after every one of them was built behind")
 
-    def test_a_missing_tile_near_the_car_swaps_early(self):
+    def test_a_missing_tile_near_the_car_swaps_early_through_the_same_barrier(self):
         anchor, events, calls, near, _far, _ = self.run_case(missing=True, near_missing=True)
-        self.assertEqual(anchor.stale, ())
-        # the swap began before everything was built behind: the rest is built at full priority, after the stale mode
-        self.assertTrue(any(not stale for _k, _low, stale in calls))
-        self.assertTrue(all(not low for _k, low, stale in calls if not stale))
-        redo = [e for e in events if e[0] == "redo"]
-        self.assertEqual(redo[0][2:], (False, False, False), "even then: the blocks first, then the tiles")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][:2], ("swap", True))
+        self.assertLess(events[0][2], len(near), "before everything was built behind")
 
-    def test_a_shared_session_ends_it(self):
+    def test_a_shared_session_swaps(self):
         anchor, events, _calls, _near, _far, _ = self.run_case(settle=False, hub_after=3)
-        self.assertEqual(anchor.stale, ())
-        self.assertIn("roads", [e[1] for e in events if e[0] == "redo"])
+        self.assertEqual([e[0] for e in events], ["swap"])
 
     def test_left_behind_nothing_is_swapped(self):
         anchor, events, _calls, _near, _far, _ = self.run_case(settle=False, leave_after=3)
@@ -520,14 +504,167 @@ class StaleRunTest(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_a_tile_that_cannot_be_kept_does_not_hold_the_swap(self):
+        import earthd
         import geotiles
         frame = geodesy.EnuFrame(39.2834, -76.5934)
         bad = [(a, b) for a, b, _d in geotiles.tiles_near(frame, 0.0, 0.0, 500.0)][1]
-        import earthd
         anchor, events, calls, _near, _far, _ = self.run_case(fail={bad}, ticks=200)
-        self.assertEqual(anchor.stale, ())
         self.assertEqual(sum(1 for c in calls if c[0] == bad), earthd.Server.STALE_TRIES)
-        self.assertIn("roads", [e[1] for e in events if e[0] == "redo"])
+        self.assertEqual([e[0] for e in events], ["swap"])
+
+    def test_a_failed_swap_keeps_the_older_version_and_is_not_tried_again(self):
+        anchor, events, _calls, _near, _far, ticks = self.run_case(swap_ok=False, ticks=80)
+        self.assertEqual([e[0] for e in events], ["swap"], "one try")
+        self.assertTrue(anchor.stale, "the older version stays, whole")
+        self.assertTrue(anchor.stale_held)
+        self.assertLess(ticks, 80, "and the run ends: nothing is released later")
+
+
+class StaleSwapTest(unittest.TestCase):
+    """earthd Connection.stale_swap: the commit barrier's protocol. Nothing of the current version is sent unstaged
+    before the mod's commit: the blocks and skins carry the swap's token between swap_begin and swap_end, the content
+    of tiles the mod has is held back until 'swap_done'; a block that comes out the same is not sent; any failure is
+    swap_abort and the older version whole."""
+
+    def make(self, block_same=False, mod_ok=True, mod_answers=True, build_fails=False, skins=2, contents=1):
+        import asyncio
+        import collections
+        import types
+        import earthd
+        d = tempfile.mkdtemp(prefix="bnge_swap_")
+        self.addCleanup(shutil.rmtree, d, True)
+        sent, events = [], []
+        gen = {"id": "old", "plans": "1.1"}
+        key = (7, 0.0, 0.0)
+        with open(os.path.join(d, "hm.png"), "wb") as f:
+            f.write(b"old heights")
+        with open(os.path.join(d, "old.ter"), "wb") as f:
+            f.write(b"old ter")
+        anchor = types.SimpleNamespace(id=7, stale=(gen,), stale_fresh=set(), stale_held=False, swap_gate=None)
+        server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"ter": "old.ter", "stale": "old"}}),
+                                       hm_committed=collections.deque([key]), hm_sent=collections.deque([key]),
+                                       ui_pool=None, is_abandoned=lambda aid: False, hm_name=lambda k: "hm.png",
+                                       _remove=lambda p: events.append(("removed", os.path.basename(p))))
+
+        async def terrain(a, cx, cy, lane=None):
+            events.append(("build", (a.id, cx, cy) in a.stale_fresh, bool(a.stale)))
+            if build_fails:
+                raise RuntimeError("no block")
+            with open(os.path.join(d, "hm.png"), "wb") as f:
+                f.write(b"old heights" if block_same else b"new heights")
+            with open(os.path.join(d, "new.ter"), "wb") as f:
+                f.write(b"old ter" if block_same else b"new ter")
+            info = {"ter": "new.ter"}
+            server.hm[(a.id, cx, cy)] = info        # (as _hm_done)
+            return info
+        server.terrain = terrain
+
+        class Tracker:
+            geo = True
+
+            def __init__(self):
+                self.redo, self.building, self.swap, self.swap_staged, self.held = set(), set(), None, 0, []
+
+            def swap_begin(self, token):
+                self.swap = token
+                events.append(("tracker begin", token))
+
+            def redo_all(self):         # (the tracker's builds: the skins staged, the content held)
+                assert self.swap is not None
+                for i in range(skins):
+                    conn.send({"type": "roads_skin", "key": f"g{i}", "swap": self.swap})
+                    self.swap_staged += 1
+                self.held = [{"type": "roads_tile", "key": f"g{i}"} for i in range(contents)]
+
+            def swap_end(self, ok):
+                events.append(("tracker end", ok))
+                self.swap = None
+                if ok:
+                    for m in self.held:
+                        conn.send(m)
+                    return len(self.held)
+                return 0
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+
+        def send(m):
+            sent.append(m)
+            if m["type"] == "swap_end" and mod_answers:      # (the mod: staged, committed, says so)
+                loop.call_soon(lambda: conn.swap_done.set_result(mod_ok))
+        conn = types.SimpleNamespace(s=server, roads=Tracker(), active=7, closing=False, send=send, loop=loop,
+                                     veg=types.SimpleNamespace(redo_all=lambda: events.append(("veg redo",))),
+                                     signs=types.SimpleNamespace(refresh=lambda: events.append(("signs",))),
+                                     terrain_msg=lambda k, info: {"cx": k[1], "cy": k[2], "ter": info["ter"]},
+                                     spawn=lambda c: c.close(), SWAP_BUILD_S=5.0, SWAP_COMMIT_S=0.3)
+        conn._block_digest = lambda k, info: earthd.Connection._block_digest(conn, k, info)
+        conn._remove_later = lambda p: earthd.Connection._remove_later(conn, p)
+
+        class Inline:
+            def submit(self, fn, *a):
+                from concurrent.futures import Future
+                f = Future()
+                f.set_result(fn(*a))
+                return f
+        server.ui_pool = Inline()
+        ok = loop.run_until_complete(earthd.Connection.stale_swap(conn, anchor, gen, 0.0))
+        return ok, anchor, server, conn, sent, events, key
+
+    def types_of(self, sent):
+        return [(m["type"], m.get("swap")) for m in sent]
+
+    def test_staged_then_committed_then_the_content(self):
+        ok, anchor, server, conn, sent, events, key = self.make()
+        self.assertTrue(ok)
+        token = sent[0]["gen"]
+        self.assertEqual(self.types_of(sent), [
+            ("swap_begin", None), ("terrain_refresh", token), ("roads_skin", token), ("roads_skin", token),
+            ("swap_end", None), ("roads_tile", None)])
+        # the block was built as this version's while the anchor was still the older one's, and not shown meanwhile
+        self.assertEqual(events[0], ("build", True, True))
+        self.assertEqual(anchor.stale, ())
+        self.assertEqual(server.hm[key], {"ter": "new.ter"})
+        self.assertIsNone(anchor.swap_gate, "the blocks' gate is open again")
+        # the content, the trees and the signs only after the mod's commit
+        self.assertLess(events.index(("tracker end", True)), events.index(("veg redo",)))
+        self.assertEqual(sent.index(next(m for m in sent if m["type"] == "roads_tile")), len(sent) - 1)
+
+    def test_a_block_that_did_not_change_is_not_sent(self):
+        ok, anchor, server, conn, sent, events, key = self.make(block_same=True)
+        self.assertTrue(ok)
+        self.assertNotIn("terrain_refresh", [m["type"] for m in sent])
+        self.assertEqual(server.hm[key], {"ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
+        self.assertIn(("removed", "new.ter"), events)
+
+    def test_the_mod_cannot_commit_the_older_version_stays_whole(self):
+        for kw in ({"mod_ok": False}, {"mod_answers": False}):
+            ok, anchor, server, conn, sent, events, key = self.make(**kw)
+            self.assertFalse(ok, kw)
+            self.assertEqual(sent[-1]["type"], "swap_abort", kw)
+            self.assertNotIn("roads_tile", [m["type"] for m in sent], "no content released")
+            self.assertTrue(anchor.stale, "the older version's again")
+            self.assertEqual(server.hm[key].get("stale"), "old")
+            self.assertIn(("tracker end", False), events)
+            self.assertNotIn(("veg redo",), events)
+            self.assertIn(("removed", "new.ter"), events)
+            self.assertIsNone(anchor.swap_gate)
+
+    def test_a_block_that_cannot_be_built_nothing_is_sent_but_the_abort(self):
+        ok, anchor, server, conn, sent, events, key = self.make(build_fails=True)
+        self.assertFalse(ok)
+        self.assertEqual([m["type"] for m in sent], ["swap_abort"])
+        self.assertTrue(anchor.stale)
+        self.assertEqual(server.hm[key].get("stale"), "old")
+
+    def test_block_requests_wait_behind_the_swap(self):
+        import inspect
+        import earthd
+        src = inspect.getsource(earthd.Connection.prepare_terrain)
+        self.assertIn("swap_gate", src)
+        self.assertLess(src.index("await gate.wait()"), src.index("self.s.terrain(anchor, cx, cy)"))
+        # a block the older version lacks is built only once the swap is committed
+        self.assertIn("stale_wait_swap", inspect.getsource(earthd.Server.make_heightmap))
+        # and no ungraded stand-in under the older version's skins
+        self.assertIn('getattr(anchor, "stale", ())', inspect.getsource(earthd.Connection.provisional_follow))
 
 
 class _Loop:

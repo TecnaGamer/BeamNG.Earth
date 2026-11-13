@@ -11,8 +11,10 @@ timed for the "older version shown while the current one is built" work (revisit
                   round the car within which the kind was complete 0 / 2 / 5 / 10 / 20 s after the graded block (m; the
                   nearest tile still missing then, among those that came in the end), and the time after the graded
                   block the kind was complete under the car (0), within 150 m and 300 m
-  swap            what the swap sent (with --settle: the probe poses on until the server says the swap is done or the
-                  seconds are over): blocks, road contents, skins, tree tiles, sign tiles sent AGAIN, and when
+  swap            what was sent AGAIN outside the barrier (with --settle: the probe poses on until the server says
+                  the swap is done or the seconds are over): blocks, road contents, skins, tree tiles, sign tiles
+  barrier         the generation swap's commit barrier, as the mod sees it (the probe answers swap_done at once): when
+                  it began, the blocks and skins staged under its token, when it was committed
 
 --bump TAG sets BNGE_SIM_BUMP (another code key and other format markers: an update's keys without one); --stale off
 sets BNE_STALE_REVISIT=off (the behaviour before). CACHE is used as it is (make a copy for each run: a run changes
@@ -94,7 +96,7 @@ def main():
     try:
         c.send({"type": "hello", "protocol": 4, "format": 4, "modVersion": "staleprobe", "streamLease": 1,
                 "vegFlat": True, "geoTiles": 17, "roadGeo": 1, "farGeo": 1, "turbineGeo": 1, "globalFar": 1,
-                "trafficVisuals": 1, "readySet": 1, "held": [], "sessions": [], "slotsHeld": []})
+                "trafficVisuals": 1, "readySet": 1, "swapGen": 1, "held": [], "sessions": [], "slotsHeld": []})
         c.until(lambda m: m["type"] == "hello", timeout=60)
         c.send({"type": "graphics", "lodScale": 1.3, "treeScale": 1.3, "buildingScale": 1.3, "photoPx": 2048})
         if a.warm:
@@ -138,7 +140,8 @@ def visit(c, lat, lon, req, timeout, settle, log_path, server_dir):
     aid, gz = ready["anchorId"], float(ready.get("groundZ") or 0.0)
     c.send({"type": "commit_anchor", "anchorId": aid})
     first = {"content": {}, "skin": {}, "trees": {}, "signs": {}}       # kind -> key -> (s, m from the car)
-    again = {"content": [], "skin": [], "trees": [], "signs": [], "block": []}
+    again = {"content": [], "skin": [], "trees": [], "signs": [], "block": [], "barrier": []}
+    barrier = None
     t_graded, t_done, last_pose, t_end = None, None, 0.0, None
     slots_gone, slot_of, held = [], {}, set()
     end = time.monotonic() + timeout
@@ -165,6 +168,20 @@ def visit(c, lat, lon, req, timeout, settle, log_path, server_dir):
             continue
         t, typ = time.monotonic() - t0, m.get("type")
         if m.get("anchorId") != aid:
+            continue
+        if typ == "swap_begin":             # (the mod's commit barrier: what follows with the token is staged)
+            barrier = {"gen": m["gen"], "t0": round(t, 1), "blocks": 0, "skins": 0}
+            again["barrier"].append(barrier)
+            continue
+        if typ == "swap_end":               # (all staged: committed in one frame, said so)
+            barrier["t_commit"] = round(t, 1)
+            c.send({"type": "swap_done", "gen": m["gen"], "ok": True})
+            continue
+        if typ == "swap_abort":
+            barrier["aborted"] = round(t, 1)
+            continue
+        if m.get("swap") is not None:
+            barrier["blocks" if typ == "terrain_refresh" else "skins"] += 1
             continue
         if typ == "terrain_refresh":
             if t_graded is None:
@@ -218,13 +235,15 @@ def visit(c, lat, lon, req, timeout, settle, log_path, server_dir):
             "graded_s": None if t_graded is None else round(t_graded, 2),
             "far_done_s": None if t_done is None else round(t_done, 2), "kinds": kinds,
             "swap": {k: {"n": len(v), "first_s": v[0] if v else None, "last_s": v[-1] if v else None}
-                     for k, v in again.items()}}
+                     for k, v in again.items() if k != "barrier"},
+            "barrier": again["barrier"]}
 
 
 def _swapped(log_path):
     try:
         with open(log_path, errors="replace") as f:
-            return "the current version's blocks are in" in f.read()
+            txt = f.read()
+            return "the current version swapped in" in txt or "the swap to the current version was given up" in txt
     except OSError:
         return False
 

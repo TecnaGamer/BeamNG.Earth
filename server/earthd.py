@@ -868,7 +868,9 @@ class Anchor:
     stale_closed: bool = False                     # the verdict is in (or was given up): it does not change after
     stale_missing: set = field(default_factory=set)    # road geotiles the older version lacks (built behind, held)
     stale_why: str = None                          # what ends the stale mode early (a block the older version lacks)
-    swap_wait: bool = False                        # the swap's blocks are being built: no live road tile meanwhile
+    stale_fresh: set = field(default_factory=set)  # block keys the swap builds as this version's while still stale
+    stale_held: bool = False                       # a swap was given up: the older version stays for this anchor
+    swap_gate: object = None                       # an asyncio.Event while a swap runs: block requests wait for it
     ramp: bool = False                             # a teleport's: its far field coarse first (FIRST_RAMP)
 
 
@@ -2700,14 +2702,18 @@ class Server:
     #   shown where there are, built where not.
     # Behind it (Connection.stale_run) the current generation's content and skin of every road geotile shown or wanted
     # are built into the cache (blockworker.prebuild_geo_skin: a scratch folder, nothing sent, the road pool's low
-    # queue). The swap, once they all are: the blocks in use built again and sent (terrain_refresh, as a provisional
-    # block's graded one), then the tiles sent again from the cache nearest first (the trackers' redo: the ones that
-    # did not change are not sent). It comes early when the older version lacks something the car needs now (a block
-    # ahead, a road tile within STALE_NEAR_M): then the current block is built first and the road tiles follow as they
-    # are built. Never in a BeamMP session (the players would stand on different ground), with BNE_STALE_REVISIT=off,
-    # or for a mod without geotiles.
+    # queue). The swap, once they all are (Connection.stale_swap), is ATOMIC in the game: the blocks in use are built
+    # again, and the ground that changed (those blocks, every skin that differs) is staged in the mod under a token
+    # (swap_begin; terrain_refresh / roads_skin {swap}) and committed there in one frame once all of it is made
+    # (swap_end -> swap_done): never an older road surface or sidewalk collision on this version's terrain, nor the
+    # reverse. What did not change is not sent at all (digests). The swap comes early when the older version lacks
+    # something the car needs now (a block ahead, a road tile within STALE_NEAR_M): the same barrier, the block asked
+    # for waiting behind it. A swap that fails (a build, the mod's commit) is given up whole (swap_abort): the older
+    # version stays for that anchor; nothing is released on a timeout. Only for a mod with the barrier (hello.swapGen)
+    # and geotiles; never in a BeamMP session (the players would stand on different ground) or with
+    # BNE_STALE_REVISIT=off.
     STALE_NEAR_M = 250.0            # a road geotile the older version lacks this near the car: the swap begins
-    STALE_MAX_S = 900.0             # the stale mode's longest
+    STALE_SWAP_WAIT_S = 900.0       # a block the older version lacks waits this long for the swap at most
     STALE_JOBS = 2                  # road geotiles built behind at once
     STALE_TRIES = 2                 # a geotile that cannot be kept (short builds) is left to the swap after this many
     _stale_lock = threading.Lock()  # the anchors' verdicts (stale_probe, stale_of)
@@ -2793,6 +2799,22 @@ class Server:
                     anchor.stale_closed = True
         return getattr(anchor, "stale", ()) or ()
 
+    def stale_wait_swap(self, anchor, cx, cy, gone=None):
+        """Worker thread: the older version has no block (cx, cy) of anchor. Its swap is asked for (stale_why:
+        Connection.stale_run) and waited for: this version's block is built only once the swap is committed, so it is
+        never sent under the older version's road skins. A swap given up (stale_held) or STALE_SWAP_WAIT_S over: built
+        all the same (the car needs ground), said in the log."""
+        anchor.stale_why = f"block ({cx:.0f}, {cy:.0f}) is not in the older version"
+        end = time.monotonic() + Server.STALE_SWAP_WAIT_S
+        while getattr(anchor, "stale", ()) and not getattr(anchor, "stale_held", False) and time.monotonic() < end:
+            if gone is not None and gone():
+                raise poolsmod.Abandoned()
+            time.sleep(0.25)
+        if getattr(anchor, "stale", ()):
+            log.warning("block (%s, %s) of anchor %d: built as this version's although the older one is still shown "
+                        "(its swap %s): the ground under the car comes first", cx, cy, anchor.id,
+                        "was given up" if getattr(anchor, "stale_held", False) else "did not come in time")
+
     def stale_exec(self):
         ex = getattr(self, "_stale_exec", None)
         if ex is None:
@@ -2822,10 +2844,8 @@ class Server:
         if anchor is None or self.mapdata is None or self.road_pool is None or Server.is_abandoned(self, aid):
             return None
         # (an anchor shown from an older version: that version's content and skin, or nothing yet (None: asked again),
-        # never the current one's beside it; and nothing while the swap's blocks are built: Connection.stale_run)
+        # never the current one's beside it: Connection.stale_run)
         st = Server.stale_of(self, anchor)
-        if not st and getattr(anchor, "swap_wait", False):
-            return None
         job = revisitmod.StaleJob(blockworker.roads_geo, st, only=True) if st else blockworker.roads_geo
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         fut = self.road_pool.submit(
@@ -4202,7 +4222,7 @@ class Server:
                 submit = pool.submit_low if lane == LANE_PREFETCH and self.block_shared() else pool.submit
                 # (an anchor shown from an older version: that version's block, alone; when it has none the stale mode
                 # ends, Connection.stale_run, and this one is built)
-                st = Server.stale_of(self, anchor)
+                st = () if key in getattr(anchor, "stale_fresh", ()) else Server.stale_of(self, anchor)
                 info = None
                 for job in ((revisitmod.StaleJob(blockworker.build, st, only=True),) if st else ()) + (blockworker.build,):
                     pfut = self.hm_proc[key] = submit(
@@ -4215,7 +4235,7 @@ class Server:
                         self.hm_proc.pop(key, None)
                     if info is not None:
                         break
-                    anchor.stale_why = f"block ({cx:.0f}, {cy:.0f}) is not in the older version"
+                    Server.stale_wait_swap(self, anchor, cx, cy, gone)
                     submitted, submitted_pc = time.time(), time.perf_counter()
                 if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
                     started, finished = info.pop("started"), info.pop("finished", None)
@@ -4229,13 +4249,13 @@ class Server:
             urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
             with urgent() if urgent is not None else contextlib.nullcontext():     # the player waits for it (teleport,
                 # resync): ahead of every other download
-                st = Server.stale_of(self, anchor)
+                st = () if key in getattr(anchor, "stale_fresh", ()) else Server.stale_of(self, anchor)
                 if st:
                     try:
                         with revisitmod.stale(st, only=True):
                             return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base)
                     except revisitmod.StaleMiss:
-                        anchor.stale_why = f"block ({cx:.0f}, {cy:.0f}) is not in the older version"
+                        Server.stale_wait_swap(self, anchor, cx, cy, gone)
                 return self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base)
         finally:
             self.hm_stage.pop(key, None)
@@ -7359,8 +7379,9 @@ class Connection:
         self.base_busy = False                  # a base photo refresh is running (base_refresh)
         self.pads_busy = False                  # a block is being built again with its new pads (pads_refresh)
         self.roads_busy = False                 # ... with the roads of map cells that came after it (roads_refresh)
-        self.stale_busy = False                 # ... an older version's block built again (stale_refresh)
-        self.stale_retry = 0.0                  # ... not before (a rebuild that failed)
+        self.swap_gen = False                   # the mod has the generation swap's commit barrier (hello.swapGen)
+        self.swap_token = None                  # the swap running (stale_swap), its 'swap_done' future
+        self.swap_done = None
         self.prov_live = {}                     # key -> a provisional block sent before its road cells (prov_refresh)
         self.prov_busy = False                  # ... one being built again
         self.prov_last = None                   # ... the last provisional block sent (the mod's next commit)
@@ -8583,6 +8604,8 @@ class Connection:
                 m["trafficVisuals"] = distanttraffic.PROTO
             # ... and the road tiles too when it places those (hello.roadGeo: roads.lua's ROAD_GEO; content kept across
             # rebases, a skin per anchor: roads.GeoTracker)
+            # (the commit barrier of a generation swap, roads.lua swapCommit: without it no older version is shown)
+            self.swap_gen = msg.get("swapGen") == 1
             road_geo = geo and msg.get("roadGeo") == roadsmod.ROAD_GEO and self.s.roads_geo_ok()
             if road_geo != self.road_geo:
                 self.road_geo = road_geo
@@ -8662,6 +8685,10 @@ class Connection:
             self.spawn(self.prepare_terrain(msg))
         elif kind == "commit_anchor":
             self.commit_anchor(msg.get("anchorId"))
+        elif kind == "swap_done":               # the mod committed (or could not) a generation swap (stale_swap)
+            fut = self.swap_done
+            if fut is not None and not fut.done() and msg.get("gen") == self.swap_token:
+                fut.set_result(bool(msg.get("ok")))
         elif kind == "commit_terrain":
             self.commit_terrain(msg)
         elif kind == "pose":
@@ -9210,7 +9237,7 @@ class Connection:
         anchor = self.s.new_anchor(lat, lon)
         anchor.ramp = teleport
         self.preparing_aid = anchor.id
-        if getattr(self, "road_geo", False) and Server.stale_allowed(self.s):
+        if getattr(self, "road_geo", False) and getattr(self, "swap_gen", False) and Server.stale_allowed(self.s):
             # (its last version shown while this one is built, when this one has no first block yet: stale_run)
             self.veg.digests = True
             loop_ = asyncio.get_running_loop()
@@ -9360,6 +9387,9 @@ class Connection:
             dt = time.perf_counter() - t1
             if dt > 0.1:
                 (log.info if dt > 0.5 else log.debug)("terrain request %s: update_far %.2f s", (aid, cx, cy), dt)
+        gate = getattr(anchor, "swap_gate", None)
+        if gate is not None:            # (a generation swap is being staged: no other block until it is committed)
+            await gate.wait()
         t0 = time.perf_counter()
         self.terrain_wait += 1
         try:
@@ -9411,6 +9441,8 @@ class Connection:
         s = self.s
         if PROVISIONAL_FOLLOW_S <= 0 or not PROVISIONAL_FIRST or not s.grading or anchor.id != self.active:
             return None
+        if getattr(anchor, "stale", ()) or getattr(anchor, "stale_why", None):
+            return None                 # (shown from an older version: no ungraded ground under its road skins)
         key = (anchor.id, cx, cy)
         info = s.prov_info.get(key)     # (asked again: its provisional block at once)
         wait, planned, t_check = 0.0, False, time.perf_counter()
@@ -9885,7 +9917,6 @@ class Connection:
             self.pads_refresh(aid)
             self.roads_refresh(aid)
             self.prov_refresh(aid)
-            self.stale_refresh(aid)
         # (the 3D map's view frame high up, pose.view: no roads, trees, buildings, turbines or traffic round its target,
         # built as round a car: none of them shows from there, and their builds held the far tiles back and stalled the
         # event loop 2.1 s over Turin, 2026-11-07; nearer the ground they come, as what the view shows)
@@ -10138,12 +10169,13 @@ class Connection:
 
     async def stale_run(self, anchor):
         """An anchor shown from an older version (anchor.stale): the current one's road geotiles built behind it, then
-        the swap (Server's notes above stale_older). Ends with the anchor (a teleport away: nothing swapped)."""
+        the swap behind the mod's commit barrier (Server's notes above stale_older; stale_swap). Ends with the anchor
+        (a teleport away: nothing swapped)."""
         s, loop = self.s, asyncio.get_running_loop()
         gen = anchor.stale[0]
         t0 = time.monotonic()
         done, flying, tries, later, quads = set(), {}, {}, {}, {}
-        why, t_swap, built = None, None, [0]
+        why, built = None, [0]
 
         def finish(k, f):
             flying.pop(k, None)
@@ -10163,19 +10195,19 @@ class Connection:
         while not self.closing:
             await asyncio.sleep(1.0)
             if s.is_abandoned(anchor.id) or anchor.id not in (self.active, getattr(self, "preparing_aid", None)):
-                anchor.stale, anchor.swap_wait = (), False      # (left: nothing swapped)
+                anchor.stale = ()                           # (left: nothing swapped)
                 log.info("anchor %d: left while shown from the older version %s", anchor.id, gen["id"])
                 return
+            if not anchor.stale:
+                return
             now = time.monotonic()
-            if anchor.stale and why is None:
+            if why is None:
                 if getattr(s, "_share_hub", None) is not None:
                     why = "a BeamMP session began"
                 elif anchor.stale_why:
                     why = anchor.stale_why
-                elif now - t0 > Server.STALE_MAX_S:
-                    why = "the current version took too long"
             keys = self.stale_keys(anchor, quads) if getattr(self.roads, "geo", False) else []
-            if anchor.stale and why is None:
+            if why is None:
                 near = [k for d, k in keys if k in anchor.stale_missing and k not in done and d <= Server.STALE_NEAR_M]
                 if near:
                     why = f"road geotile {near[0]} near the car is not in the older version"
@@ -10185,7 +10217,7 @@ class Connection:
             tr = self.roads
             settled = (anchor.id == self.active and getattr(tr, "aid", None) == anchor.id and bool(keys)
                        and all(k in tr.sent or k in anchor.stale_missing for k in getattr(tr, "car", ())))
-            for _d, k in keys if (settled or why is not None or not anchor.stale) else ():
+            for _d, k in keys if (settled or why is not None) else ():
                 if len(flying) >= Server.STALE_JOBS:
                     break
                 if k in done or k in flying or later.get(k, 0.0) > now:
@@ -10193,97 +10225,157 @@ class Connection:
                 fut = flying[k] = loop.run_in_executor(s.stale_exec(), s.stale_prebuild, anchor, k[0], k[1],
                                                        why is None)
                 fut.add_done_callback(lambda f, kk=k: finish(kk, f))
-            if anchor.stale:
-                # (all of it built: every one of those geotiles built behind)
-                if why is None and (not settled or flying or not all(k in done for _d, k in keys)):
-                    continue
-                # the swap: the blocks first (stale_refresh), no live road tile meanwhile
-                t_swap = time.monotonic()
-                anchor.stale, anchor.swap_wait = (), True
-                log.info("anchor %d: the swap to the current version begins %.1f s after the older one was shown (%s; "
-                         "%d road geotiles built behind, %d of %d ready)", anchor.id, t_swap - t0,
-                         why or "all of it is built", built[0], sum(1 for _d, k in keys if k in done), len(keys))
+            if why is None and (not settled or flying or not all(k in done for _d, k in keys)):
                 continue
-            self.stale_refresh(anchor.id)
-            if self.stale_busy or self.stale_block(anchor.id) is not None:
-                if time.monotonic() - t_swap < 300.0:
-                    continue
+            if anchor.id != self.active:
+                continue                                    # (not committed yet: nothing of it is shown)
+            log.info("anchor %d: the swap to the current version begins %.1f s after the older one was shown (%s; "
+                     "%d road geotiles built behind, %d of %d ready)", anchor.id, time.monotonic() - t0,
+                     why or "all of it is built", built[0], sum(1 for _d, k in keys if k in done), len(keys))
+            ok = await self.stale_swap(anchor, gen, t0)
+            if not ok:
+                # (the older version stays, whole: no second try this anchor; what was built is in the cache for the
+                # next anchor. Never released by a timeout)
+                anchor.stale_held = True
             break
-        anchor.swap_wait = False
-        if self.closing:
-            return
-        if getattr(self.roads, "geo", False) and hasattr(self.roads, "redo_all"):
-            self.roads.redo_all()
-        if hasattr(self.veg, "redo_all"):
-            self.veg.redo_all()
-        self.signs.refresh()
-        log.info("anchor %d: the current version's blocks are in %.1f s after the swap began (%.1f s after the older "
-                 "one was shown): its road tiles, trees and signs sent again where they changed", anchor.id,
-                 time.monotonic() - (t_swap or t0), time.monotonic() - t0)
         import shutil
         if not flying:
             shutil.rmtree(os.path.join(s.root, "stale_scratch"), ignore_errors=True)
 
-    def stale_block(self, aid):
-        """The block in use (or the last one sent) of anchor aid that is still an older version's, or None."""
-        s = self.s
-        return next((k for k in list(s.hm_committed)[-1:] + list(s.hm_sent)[-1:]
-                     if k[0] == aid and (s.hm.get(k) or {}).get("stale")), None)
+    SWAP_BUILD_S = 600.0        # s the swap's own builds (its blocks, the tiles asked again) may take
+    SWAP_COMMIT_S = 60.0        # s the mod may take to stage and commit them
 
-    def stale_refresh(self, aid):
-        """The block in use built again (terrain_refresh, as roads_refresh) when it is an older version's and its anchor
-        is no longer shown from that one (the swap, or a block prefetched before it). One at a time; not sent when the
-        current version's is the same block."""
-        s = self.s
-        anchor = s.anchors.get(aid)
-        if self.stale_busy or anchor is None or getattr(anchor, "stale", ()) or time.monotonic() < self.stale_retry:
-            return
-        key = self.stale_block(aid)
-        if key is None:
-            return
-        self.stale_busy = True
-
-        def digest(info):
-            import hashlib
-            h = hashlib.sha1()
-            for name in (s.hm_name(key), (info or {}).get("ter")):
-                try:
-                    with open(os.path.join(s.out_dir, name), "rb") as f:
-                        h.update(f.read())
-                except (OSError, TypeError):
-                    h.update(b"?")
-            return h.digest()
-
-        async def run():
-            old = s.hm.pop(key, None)
-            t0 = time.perf_counter()
+    def _block_digest(self, key, info):
+        import hashlib
+        h = hashlib.sha1()
+        for name in (self.s.hm_name(key), (info or {}).get("ter")):
             try:
-                d0 = await self.loop.run_in_executor(s.ui_pool, digest, old)
-                info = await s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH)
-                d1 = await self.loop.run_in_executor(s.ui_pool, digest, info)
-            except poolsmod.Abandoned:
-                if old is not None:
-                    s.hm[key] = old
-                return
-            except Exception:
-                log.exception("block %s of the current version (the older one stays)", key)
-                if old is not None:
-                    s.hm[key] = old
-                self.stale_retry = time.monotonic() + 30.0
-                return
-            finally:
-                self.stale_busy = False
-            s.hm_sent.append(key)
-            same = d0 == d1
-            log.info("block %s of the current version in %.2f s: %s", key, time.perf_counter() - t0,
-                     "the same as the older one's, nothing sent" if same else "sent in place of the older one's")
-            if not same:
-                self.send({"type": "terrain_refresh", "anchorId": key[0], **self.terrain_msg(key, info)})
-            old_ter = (old or {}).get("ter")
-            if old_ter and old_ter != info.get("ter"):
-                await asyncio.sleep(PROVISIONAL_KEEP_S)
-                s._remove(os.path.join(s.out_dir, old_ter))
-        self.spawn(run())
+                with open(os.path.join(self.s.out_dir, name), "rb") as f:
+                    h.update(f.read())
+            except (OSError, TypeError):
+                h.update(b"?")
+        return h.digest()
+
+    async def stale_swap(self, anchor, gen, t0):
+        """The swap of an anchor from the older version to the current one, behind the mod's commit barrier: nothing of
+        the current version replaces anything shown until ALL of it is staged in the game, then the mod commits it in
+        one frame (core.lua 'swap_begin' ... 'swap_done'; roads.lua swapCommit):
+          1. the blocks in use are built again (this version's), not sent; one that comes out the same is not part
+             of the swap;
+          2. 'swap_begin' {gen}; from here every block the mod asks for waits (swap_gate), the anchor's lookups are
+             this version's, and the road tracker (GeoTracker.swap) tags the skins it sends (staged hidden by the mod)
+             and holds back the content of tiles the mod already has;
+          3. the changed blocks sent as terrain_refresh {swap: gen} (held by the mod), every geotile sent asked for
+             again (redo_all: only what changed is sent);
+          4. 'swap_end' {gen}; the mod answers 'swap_done' {gen, ok} once every staged skin is made and it has
+             committed them and the terrain together;
+          5. then the held content (a tile each, replaced as any tile), the trees and the signs again.
+        Any failure (a block that cannot be built, the tracker or the mod not done in time, ok false): 'swap_abort',
+        the mod drops what it staged, the anchor is the older version's again, whole. -> swapped?"""
+        s = self.s
+        tr = self.roads
+        token = self.swap_serial = getattr(self, "swap_serial", 0) + 1
+        keys = []
+        for k in list(s.hm_committed)[-1:] + list(s.hm_sent)[-1:]:
+            if k[0] == anchor.id and k not in keys and (s.hm.get(k) or {}).get("stale"):
+                keys.append(k)
+        fresh, olds = {}, {}
+        deadline = time.monotonic() + self.SWAP_BUILD_S
+        gate = anchor.swap_gate = asyncio.Event()
+        try:
+            # 1. this version's blocks, beside the ones shown
+            for key in keys:
+                old = s.hm.pop(key, None)
+                olds[key] = old
+                d0 = await self.loop.run_in_executor(s.ui_pool, self._block_digest, key, old)
+                anchor.stale_fresh.add(key)
+                try:
+                    info = await asyncio.wait_for(s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH),
+                                                  max(1.0, deadline - time.monotonic()))
+                finally:
+                    anchor.stale_fresh.discard(key)
+                    s.hm.pop(key, None)
+                    if old is not None:
+                        s.hm[key] = old             # (still the one shown)
+                d1 = await self.loop.run_in_executor(s.ui_pool, self._block_digest, key, info)
+                if info.get("stale"):
+                    raise RuntimeError(f"block {key} came from the older version again")
+                fresh[key] = (info, d0 == d1)
+            if self.closing or s.is_abandoned(anchor.id) or anchor.id != self.active:
+                raise RuntimeError("the anchor was left")
+            # 2. the barrier
+            self.swap_done = asyncio.get_running_loop().create_future()
+            self.swap_token = token
+            anchor.stale = ()
+            if hasattr(tr, "swap_begin"):
+                tr.swap_begin(token)
+            self.send({"type": "swap_begin", "anchorId": anchor.id, "gen": token})
+            # 3. what changed, staged
+            blocks = 0
+            for key, (info, same) in fresh.items():
+                if not same:
+                    blocks += 1
+                    self.send({"type": "terrain_refresh", "anchorId": key[0], "swap": token,
+                               **self.terrain_msg(key, info)})
+            if getattr(tr, "geo", False) and hasattr(tr, "redo_all"):
+                tr.redo_all()
+                while tr.redo or tr.building:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("the road tiles of this version were not all built in time")
+                    if self.closing or s.is_abandoned(anchor.id) or anchor.id != self.active:
+                        raise RuntimeError("the anchor was left")
+                    await asyncio.sleep(0.25)
+            staged = getattr(tr, "swap_staged", 0)
+            # 4. the mod's commit
+            self.send({"type": "swap_end", "anchorId": anchor.id, "gen": token})
+            ok = await asyncio.wait_for(self.swap_done, self.SWAP_COMMIT_S)
+            if not ok:
+                raise RuntimeError("the game could not commit the swap")
+        except Exception as e:
+            log.warning("anchor %d: the swap to the current version was given up (%s: %s): the older version stays, "
+                        "whole", anchor.id, type(e).__name__, e)
+            self.send({"type": "swap_abort", "anchorId": anchor.id, "gen": token})
+            if hasattr(tr, "swap_end"):
+                tr.swap_end(False)
+            anchor.stale = (gen,)
+            for key, (info, _same) in fresh.items():
+                ter = info.get("ter")
+                if ter and ter != (olds.get(key) or {}).get("ter"):
+                    s._remove(os.path.join(s.out_dir, ter))
+            return False
+        finally:
+            self.swap_token = None
+            anchor.swap_gate = None
+            gate.set()
+        # 5. committed: this version is the anchor's
+        for key, (info, same) in fresh.items():
+            old = olds.get(key) or {}
+            if same:                    # (the mod keeps the block it has: its info without the mark)
+                kept = dict(old)
+                kept.pop("stale", None)
+                s.hm[key] = kept
+                if info.get("ter") and info.get("ter") != old.get("ter"):
+                    s._remove(os.path.join(s.out_dir, info["ter"]))
+            else:
+                s.hm[key] = info
+                s.hm_sent.append(key)
+                if old.get("ter") and old.get("ter") != info.get("ter"):
+                    self.spawn(self._remove_later(os.path.join(s.out_dir, old["ter"])))
+        for k in [k for k, info in list(s.hm.items()) if k[0] == anchor.id and info.get("stale")]:
+            if k not in s.hm_committed and k not in list(s.hm_sent)[-2:]:
+                s.hm.pop(k, None)       # (older blocks nobody shows: built again when asked for)
+        held = tr.swap_end(True) if hasattr(tr, "swap_end") else 0
+        if hasattr(self.veg, "redo_all"):
+            self.veg.redo_all()
+        self.signs.refresh()
+        log.info("anchor %d: the current version swapped in %.1f s after the older one was shown: %d blocks and %d "
+                 "skins committed together, %d tiles' content after them; trees and signs sent again where they "
+                 "changed", anchor.id, time.monotonic() - t0, blocks, staged, held)
+        return True
+
+    async def _remove_later(self, path):
+        await asyncio.sleep(PROVISIONAL_KEEP_S)
+        self.s._remove(path)
 
     def roads_refresh(self, aid):
         """The block in use built again (terrain_refresh) when it was built before every road cell under it was on disk

@@ -152,6 +152,7 @@ _ENV_IGNORED = frozenset({
     "BNGE_ROADSURF_T0",     # (the run's start for the road surface verdicts: their digests are in the keys)
     "BNGE_SIM_BUMP",        # (revisit.SIM_BUMP: in the code id, and an older generation's blocks must still be found)
     "BNGE_BLOCK_NOTE_LOG",
+    "BNGE_STALE_ANY_SWITCHES",
 })
 
 _code = []

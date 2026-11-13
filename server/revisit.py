@@ -599,8 +599,11 @@ def older(cache_dir, now=None):
     now = time.time() if now is None else now
     cur = generation()
     keep_s = stale_days() * 86400.0
+    # (BNGE_STALE_ANY_SWITCHES: tests only, a generation of other build switches counts too: a real change of
+    # the roads and the ground to swap, made with a switch instead of an update)
+    any_switches = bool(os.environ.get("BNGE_STALE_ANY_SWITCHES"))
     gens = [g for g in _read_gens(cache_dir)
-            if g["id"] != cur["id"] and g["switches"] == cur["switches"] and now - g["t"] <= keep_s]
+            if g["id"] != cur["id"] and (any_switches or g["switches"] == cur["switches"]) and now - g["t"] <= keep_s]
     gens.sort(key=lambda g: -g["t"])
     return gens[:STALE_GENS]
 

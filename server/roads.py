@@ -12474,13 +12474,30 @@ class GeoTracker:
                       "content_cpu": 0.0, "skin_cpu": 0.0, "redo": 0, "redo_same": 0}
         self.closed = False
         self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
+        self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
         self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
 
     def redo_all(self):
-        """Every geotile sent is asked for again, content and skin (earthd Connection.stale_run's swap: they were an
+        """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
         older version's): nearest first as any tile; the content or skin that comes back the same is not sent."""
         self.redo = set(self.sent)
         self.retry = {}
+
+    def swap_begin(self, token):
+        """A generation swap runs (earthd Connection.stale_swap): until swap_end every skin sent carries "swap": token
+        (the mod stages it hidden and commits them all with the terrain: roads.lua swapCommit), and the content of
+        a tile the mod already has is held back (sent after the commit: a tile's content is replaced as one)."""
+        self.swap, self.swap_held, self.swap_staged = token, [], 0
+
+    def swap_end(self, ok):
+        """The swap is over: committed (ok: the held content sent now) or given up (dropped; the tiles are asked for
+        again by the next redo). -> the content messages sent."""
+        held, self.swap, self.swap_held = self.swap_held, None, []
+        if not ok:
+            return 0
+        for conn, m in held:
+            conn.send(m)
+        return len(held)
 
     def close(self):
         """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
@@ -12795,7 +12812,10 @@ class GeoTracker:
                 slots = pool(conn, files)
                 if slots:
                     m["slots"] = slots
-            conn.send(m)
+            if self.swap is not None and again:
+                self.swap_held.append((conn, m))    # (a tile the mod has: its content after the swap's commit)
+            else:
+                conn.send(m)
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
         sk = res.get("skin")
@@ -12809,6 +12829,9 @@ class GeoTracker:
             self.skins.add(key)
             self.stats["skins"] += 1
             m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": sk[0]}
+            if self.swap is not None:   # (staged by the mod, committed with the swap's terrain)
+                m["swap"] = self.swap
+                self.swap_staged += 1
             data = staging.inline_json(out_dir, sk[0]) if out_dir else None
             if data is not None:
                 m["data"] = data
