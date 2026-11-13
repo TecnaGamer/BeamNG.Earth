@@ -239,6 +239,44 @@ table.sort(spread)
 T.check(#filled == #spread and table.concat(filled, ' ') == table.concat(spread, ' '),
   'the same items, filled at once or spread over passes')
 trees.clear()
+-- the loading cover (fill) warms the shapes a tile's rows will need, shown or not yet (a far tile's bushes): one item
+-- each, far under the car; a pass while driving after it finds them loaded (any number in one frame)
+trees.reset()
+files['/t/warm'] = '{ items = { {2, 5, 10, 5, 0, 1, 1.5, 0.0}, {2, 9, 10, 5, 0, 1, 3.3, 0.0} } }'
+trees.onTile({ anchorId = 3, key = '8_0', path = '/t/warm', n = 2 }, 3)
+local w0 = trees.warmed
+trees.update(3, { x = 50, y = 50, z = 7 }, nil, trees.LOADING_FRAME_MS, true)
+T.check(trees.warmed - w0 == 2 and count() == 2, 'the cover: a far tile\'s two bush shapes warmed (' .. (trees.warmed - w0) .. ')')
+local deep = true
+for it in pairs(items) do if it.m.p.z > 7 - trees.WARM_DEPTH_M + 1 then deep = false end end
+T.check(deep, '... under the car')
+trees.update(3, { x = 50, y = 50, z = 7 }, nil, trees.LOADING_FRAME_MS, true)
+T.check(trees.warmed - w0 == 2, '... once')
+trees.update(3, { x = 2048 + 50, y = 50 }, nil, 4.0)
+T.check(count() == 4, 'driving there: both bushes in one frame, their shapes warmed (' .. count() .. ')')
+-- the session's shapes saved, and warmed at the next level start (catalogue shapes only, each once)
+do
+  local savedWrite, savedEnc = writeFile, jsonEncode
+  writeFile = function(p, text) files[p] = text; return true end
+  jsonEncode = function(t)
+    local q = {}
+    for _, sh in ipairs(t.shapes) do q[#q + 1] = string.format('%q', sh) end
+    return '{ v = 1, shapes = { ' .. table.concat(q, ', ') .. ', "/levels/x/evil" } }'
+  end
+  T.check(trees.saveShapes(true) and files[trees.SHAPES_FILE] ~= nil, 'the shapes saved')
+  T.check(not trees.saveShapes(true), '... not again while the set is the same')
+  trees.clear()
+  trees.reset()
+  for it in pairs(items) do items[it] = nil end
+  local w1 = trees.warmed
+  local n = trees.prewarmSaved()
+  T.check(n == 2 and trees.warmed - w1 == 2 and count() == 2, 'the next level: its two shapes warmed, not the stranger (' .. n .. ')')
+  T.check(trees.prewarmSaved() == 0, '... once')
+  writeFile, jsonEncode = savedWrite, savedEnc
+end
+trees.clear()
+trees.reset()
+for it in pairs(items) do items[it] = nil end      -- (the warm Forest's: the level takes them)
 trees.FORESTS_PER_FRAME = savedF
 trees.SHAPE_VARIANTS = savedV
 
@@ -268,8 +306,25 @@ do
     if name:find('door') then door = name elseif name:find('tree') then tree = name end
   end
   T.check(door ~= nil and not door:find('___', 1, true), 'a door: its one spelling (' .. tostring(door) .. ')')
-  T.check(tree ~= nil and tree:find('___', 1, true) ~= nil, 'a tree: the tile\'s variant (' .. tostring(tree) .. ')')
+  T.check(tree ~= nil and not tree:find('___', 1, true), 'a tree of a small population: its first spelling ('
+    .. tostring(tree) .. ')')
   trees.clear()
+  trees.reset()
+  -- ... the tile's variant once the shape has SPLIT_ITEMS items a spelling before it (0: always)
+  local saved = trees.SPLIT_ITEMS
+  trees.SPLIT_ITEMS = 0
+  files['/t/dv2'] = '{ groups = { "door", "deciduous" }, items = { {1, 6, 10, 5, 0, 1, 12, 0.0} } }'
+  trees.onTile({ anchorId = 5, key = '1_0', path = '/t/dv2', n = 1 }, 5)
+  trees.update(5, { x = 300, y = 50 })
+  tree = nil
+  for it in pairs(items) do
+    local name = tostring(it.d and (it.d.shapeFile or it.d.name or it.d))
+    if name:find('tree') then tree = name end
+  end
+  T.check(tree ~= nil and tree:find('___', 1, true) ~= nil, 'a tree: the tile\'s variant (' .. tostring(tree) .. ')')
+  trees.SPLIT_ITEMS = saved
+  trees.clear()
+  trees.reset()
 end
 
 -- bushes only near the player

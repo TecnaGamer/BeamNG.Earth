@@ -2339,7 +2339,8 @@ function M.reset()
   for n, d in pairs(slotDropped) do slotsGone[#slotsGone + 1] = { n, d[1], d[2] } end
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
-  far, farQ = {}, {}
+  far, farQ, farSeen = {}, {}, {}
+  held, parked, newColliders, swapQuiet = {}, {}, {}, nil     -- (walkQ entries of objects gone with the level)
   collisionDirty, deletesDirty, dirtyAt = false, false, {}
 end
 

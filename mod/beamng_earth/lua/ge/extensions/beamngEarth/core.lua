@@ -1034,7 +1034,10 @@ local function slotsGoneNow()
 end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
+-- In the loading cover coverMs a frame (and coverDecode times net's decode share): every message at once there made
+-- single 230-470 ms frames of tile imports at loads and teleports (Windows, game perf report 2026-11-12, #5).
 M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+  coverMs = 30.0, coverDecode = 4,
   -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
@@ -2751,7 +2754,8 @@ local function onUpdate(dtReal, dtSim)
     M._alloc.roll(st.clock)
     M._alloc.frame()
     local kbD = collectgarbage('count')
-    local msgs = net.update(dtReal, cover)    -- (decoding spread over frames, net.lua; all at once in the cover)
+    -- (decoding spread over frames, net.lua; coverDecode times as much a frame in the cover)
+    local msgs = net.update(dtReal, cover and nq.coverDecode or nil)
     local dD = collectgarbage('count') - kbD
     local al = M._alloc
     if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
@@ -2760,7 +2764,7 @@ local function onUpdate(dtReal, dtSim)
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
     local waiting = #nq.q - nq.head + 1
-    local budget = cover and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local budget = cover and nq.coverMs or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
     -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
     local minN, done = math.ceil(waiting / nq.drainDiv), 0
     local n0 = hitchClock()
@@ -2982,6 +2986,12 @@ local function onLevelStart()
   activateWorld()
   -- the connected server's shape materials (its hello came at the main menu, before this level's objects)
   if lastHello and lastHello.prewarm then roads.prewarm(lastHello.prewarm) end
+  -- the last session's tree shapes loaded now, under the loading screen (trees.prewarmSaved)
+  do
+    local okW, nW = pcall(trees.prewarmSaved)
+    if not okW then log('W', 'beamngEarth', 'tree shapes prewarm: ' .. tostring(nW))
+    elseif nW > 0 then log('I', 'beamngEarth', 'tree shapes prewarmed: ' .. nW) end
+  end
   -- Something to stand on until the first anchor arrives (our level has no GroundPlane).
   local ok, err = terrain.loadFlat()
   if ok then
@@ -2992,6 +3002,10 @@ local function onLevelStart()
     setStatus('Flat terrain failed: ' .. tostring(err))
   end
   if net.isConnected() then
+    -- the level took every tile object: the server forgets what it sent this connection (its geotiles are kept as
+    -- sent across anchors), else after another level and back the roads and buildings stayed missing until a
+    -- teleport (game perf report 2026-11-12, #10; a no-op for the connection's first level)
+    net.send({ type = 'world_reset' })
     M._trafficvisuals.session(st.sessionId, lastHello and lastHello.trafficVisuals == M._trafficvisuals.PROTO)
     st.autoTeleportDone = true
     startTeleport()
@@ -3054,6 +3068,7 @@ local function onClientEndMission()
   groundcover.enginePatch(false)
   roads.reset()
   sea.reset()
+  if st.inOurLevel then pcall(trees.saveShapes, true) end    -- (the next level start warms them: prewarmSaved)
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
@@ -3642,7 +3657,7 @@ M.onVehicleSpawned = function() M._psum.mod.note('spawn') end
 M.onVehicleDestroyed = function() M._psum.mod.note('despawn') end
 M.onVehicleActiveChanged = function(_, active) M._psum.mod.note(active and 'spawn' or 'despawn') end
 M.onClientEndMission = onClientEndMission
-M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
+M.onExit = function() notePlayerPos(true); if st.inOurLevel then pcall(trees.saveShapes, true) end end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission
 M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
