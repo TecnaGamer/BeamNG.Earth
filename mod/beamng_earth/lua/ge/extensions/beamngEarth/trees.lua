@@ -49,7 +49,7 @@ M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock 
 -- The caps above are for a car at rest. At speed (PROP_LEAD_MIN_MS and over) the furniture and guard-rail tiles ahead
 -- of the car count PROP_LEAD_S seconds of driving nearer (PROP_LEAD_MAX_M at most) for them: a door's 120 m is 2.4 s at
 -- 110 mph (keep-up measure, 2026-11-13, tools/keepup.py). 0: off.
-M.PROP_LEAD_S = 0
+M.PROP_LEAD_S = 4
 M.PROP_LEAD_MIN_MS = 12
 M.PROP_LEAD_MAX_M = 400
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
@@ -84,7 +84,7 @@ M.LOADING_FRAME_MS = 12.0
 -- ... and NEAR_URGENT_MS (0: off) in a pass whose nearest tile with work left is within NEAR_URGENT_M of the car (or
 -- the camera): a warm 110 mph Manhattan drive had trees, lamps and furniture within 50 m of the car still waiting in
 -- pending passes (keep-up measure 2026-11-13, tools/keepup.py)
-M.NEAR_URGENT_MS = 0
+M.NEAR_URGENT_MS = 8
 M.NEAR_URGENT_M = 150
 local CHECK_ROWS = 256
 -- Registering a new Forest costs ~9 ms (in-game 2026-10-26: 8-10 ms each, named or not, whatever its data file), and
@@ -99,7 +99,7 @@ M.POOL_SPARE_CALM = 32
 -- ... and POOL_SPARE_DRIVE while driving (0: none, as before), made at the end of a pass that made no Forest and loaded
 -- no new shape even when it changed items: a new tile's first items then wait for no Forest of their own (~9 ms,
 -- FORESTS_PER_FRAME) in the pass that reaches them (keep-up measure 2026-11-13, tools/keepup.py)
-M.POOL_SPARE_DRIVE = 0
+M.POOL_SPARE_DRIVE = 2
 -- The engine tells shapes apart by their path, so a tile's items use one of SHAPE_VARIANTS spellings of each shape's
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
@@ -1070,7 +1070,7 @@ end
 -- (tools). A stop used to lift the cap too (the governor's loading frames cover standing still), and a parked player
 -- sees every hitch: the far clump shapes' first loads landed several in single frames while slow (a Napa session,
 -- 2026-11-10: repeated 104-356 ms hitches, tree passes of +24 items; PR #1128 by SwimmingRemy).
-M.NEW_SHAPES_PER_FRAME = 1
+M.NEW_SHAPES_PER_FRAME = 2
 -- ... and NEW_SHAPES_FILL a pass in a fill (it was any number: the Steam Deck's warm level load had passes of 4-7 new
 -- shapes, 100-384 ms of the engine's tick each, 2026-11-13); the cover's warm-up shares it (WARM_PER_PASS)
 M.NEW_SHAPES_FILL = 3

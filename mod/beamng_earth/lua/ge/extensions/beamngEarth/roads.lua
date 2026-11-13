@@ -2260,7 +2260,7 @@ function M.reloadLog() return reloadLog end
 -- SURFACE_FIRST: the drawn ground surfaces (a skin's road mesh with its markings, its sidewalks) rank with the colliders
 -- by the same distance, not after every one of them (a building's collision mesh 600 m ahead came before the sidewalk
 -- the car was about to reach: keep-up measure 2026-11-13, tools/keepup.py). false: as before.
-M.SURFACE_FIRST = false
+M.SURFACE_FIRST = true
 function M.nextWalk(q)
   if #q == 0 then return 1 end
   local p, dir = playerNow()

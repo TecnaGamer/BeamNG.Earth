@@ -33,6 +33,8 @@ package.loaded['beamngEarth/windturbines'] = {
   dropKey = function(key) turbineDrops[#turbineDrops + 1] = key end,
 }
 local roads = require('beamngEarth/roads')
+T.check(roads.SURFACE_FIRST == true, 'drawn road surfaces ranked with the colliders by default (2026-11-13)')
+roads.SURFACE_FIRST = false     -- (the tests below: the base order; SURFACE_FIRST's own tests turn it on)
 local update = roads.update
 roads.update = function(...)
   elapsedMs = elapsedMs + 16

@@ -44,6 +44,11 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+-- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
+-- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
+T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2
+  and trees.NEW_SHAPES_PER_FRAME == 2, 'detail keep-up defaults on')
+trees.PROP_LEAD_S, trees.NEAR_URGENT_MS, trees.POOL_SPARE_DRIVE, trees.NEW_SHAPES_PER_FRAME = 0, 0, 0, 1
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
