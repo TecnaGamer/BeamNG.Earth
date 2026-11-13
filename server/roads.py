@@ -8358,6 +8358,9 @@ class TunnelProfiles(BridgeProfiles):
                     canon.setdefault(gk, lines)
         ground.clear()
         ground.update(canon)
+        # (the cells this network was read from, for its solve in this thread: subsea._final tells a bore whose
+        # continuation is in a cell not read from one the map simply ends)
+        self._tls.read = frozenset(loaded)
         return comp
 
     @staticmethod

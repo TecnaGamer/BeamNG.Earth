@@ -23,6 +23,39 @@ def node(p):
     return round(float(p[0]), 6), round(float(p[1]), 6)
 
 
+# What a network that cannot be solved for good answers: no floors, the parts' marks as they are (left out whole, as
+# an unsolved one's), and NO revisit.fault. None (the caller faults: nothing built on it is kept) is for a network
+# that may still change: an input missing, or map cells its resolve did not read.
+LEFT_OUT = ({}, {})
+
+
+def _final(owner, points, why):
+    """Is the network's shape final: its resolve (roads.TunnelProfiles._resolve) read the map cell at every loose end
+    without reaching its limit of cells, and the cells at these chain ends (points, owner's frame) among them? Then
+    the map holds no continuation, and waiting for one made the cell's plans short on EVERY visit: a 26 m covered
+    ramp onto a Hudson pier (one end over the water, nothing mapped beyond) kept Times Square's map cell from ever
+    being kept, and with it every terrain block and road geotile round it (a warm revisit's graded block 38 s,
+    2026-11-13). Logged once a network."""
+    import mapcells
+    import roads
+    tls = getattr(owner, "_tls", None)
+    read = getattr(tls, "read", None)
+    if not read or len(read) >= roads.CHAIN_CELLS:
+        return False
+    pts = np.asarray(points, np.float64).reshape(-1, 2)
+    la, lo, _ = owner.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
+    cells = {str(mapcells.cell_of(float(a), float(b))) for a, b in zip(np.asarray(la), np.asarray(lo))}
+    if not cells <= set(read):
+        return False
+    said = owner.__dict__.setdefault("_subsea_final", set())
+    key = (why, tuple(sorted(cells)), round(float(la[0]), 4), round(float(lo[0]), 4))
+    if key not in said:
+        said.add(key)
+        log.info("underwater tunnel at %.5f, %.5f left out for good: %s (its map cells are all read: the map has "
+                 "no more of it)", float(la[0]), float(lo[0]), why)
+    return True
+
+
 def profiles(owner, comp, pool):
     try:
         return _profiles(owner, comp, pool)
@@ -53,6 +86,8 @@ def _profiles(owner, comp, pool):
         xy = np.concatenate(pieces)
         arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
         if arc[-1] <= 0 or node(xy[0]) == node(xy[-1]):
+            if _final(owner, xy[[0, -1]], "a chain without portals (a loop)"):
+                return LEFT_OUT
             log.warning("subsea chain has no identifiable portals")
             return None
         s = np.linspace(0., arc[-1], max(2, math.ceil(arc[-1] / STEP) + 1))
@@ -93,6 +128,9 @@ def _profiles(owner, comp, pool):
         portals = free[group]
         if len(portals) < 2:
             if any((c["depth"] > .5).any() for i, c in enumerate(chains) if root(i) == group):
+                if _final(owner, [c["xy"][at] for i, c in enumerate(chains) if root(i) == group for at in (0, -1)],
+                          "fewer than two mapped portals"):
+                    return LEFT_OUT
                 log.warning("subsea component has fewer than two mapped portals")
                 return None
             continue
@@ -137,6 +175,9 @@ def _profiles(owner, comp, pool):
         for at, p in [(0, c["portal"][0]), (-1, c["portal"][1])]:
             if len(ends[node(c["xy"][at])]) == 1:
                 if c["depth"][at] > .5:
+                    if _final(owner, [ch["xy"][e] for ch in chains for e in (0, -1)],
+                              "a chain ends under water with nothing mapped beyond"):
+                        return LEFT_OUT
                     log.warning("subsea chain ends under water; awaiting its missing source continuation")
                     return None
                 lower[at] = upper[at] = p
