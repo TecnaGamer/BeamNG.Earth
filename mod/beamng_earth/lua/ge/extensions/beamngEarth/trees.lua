@@ -46,6 +46,12 @@ M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock 
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
+-- The caps above are for a car at rest. At speed (PROP_LEAD_MIN_MS and over) the furniture and guard-rail tiles ahead
+-- of the car count PROP_LEAD_S seconds of driving nearer (PROP_LEAD_MAX_M at most) for them: a door's 120 m is 2.4 s at
+-- 110 mph (keep-up measure, 2026-11-13, tools/keepup.py). 0: off.
+M.PROP_LEAD_S = 0
+M.PROP_LEAD_MIN_MS = 12
+M.PROP_LEAD_MAX_M = 400
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -85,6 +91,10 @@ M.POOL_SPARE = 4
 -- the level's start, a stop): a drive through town took ~20 new Forests a minute, a ~9 ms frame every 3 s (the game's
 -- time then ran unevenly, 2026-10-29); while driving none is made for the pool, only one a tile needs at once.
 M.POOL_SPARE_CALM = 32
+-- ... and POOL_SPARE_DRIVE while driving (0: none, as before), made at the end of a pass that made no Forest and loaded
+-- no new shape even when it changed items: a new tile's first items then wait for no Forest of their own (~9 ms,
+-- FORESTS_PER_FRAME) in the pass that reaches them (keep-up measure 2026-11-13, tools/keepup.py)
+M.POOL_SPARE_DRIVE = 0
 -- The engine tells shapes apart by their path, so a tile's items use one of SHAPE_VARIANTS spellings of each shape's
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
@@ -592,7 +602,7 @@ end
 -- A tree pass's order (M.update): the keys, distances and targets of the tiles it changes, in arrays kept between passes, and their sort
 -- keys: the distance in quarter metres times ORDER_SLOTS plus the entry's index (plain numbers: the default sort)
 local ORDER_SLOTS = 2 ^ 20
-local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, n = 0 }
+local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, capd = {}, n = 0 }
 function M.orderKey(d, i) return math.floor(math.min(d, 1e7) * 4) * ORDER_SLOTS + i end
 local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.setFoci, collisionfoci.lua)
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
@@ -1101,6 +1111,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
     M.placeGeo(t)
   end
   t.id = key
+  t.furn = tostring(tileKey):match('^[pg]g%d') ~= nil or tostring(tileKey):match('^p') ~= nil  -- (street furniture, rails)
   setTile(key, t)
   dirty = true
   if M.onKeepupTile then M.onKeepupTile(key, t) end       -- (keepup.lua: a debug recorder, off unless a tool starts it)
@@ -1558,7 +1569,7 @@ end
 -- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
 function M.spareWanted(frameMs)
   if frameMs == nil then return M.POOL_SPARE end
-  return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
+  return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or M.POOL_SPARE_DRIVE
 end
 
 function M.update(anchorId, player, view, frameMs, fill)
@@ -1649,7 +1660,15 @@ function M.update(anchorId, player, view, frameMs, fill)
     return false
   end
   local oKeys, oD, oSort = passOrder.keys, passOrder.d, passOrder.sort
-  local oWant, oBand, oNear = passOrder.want, passOrder.band, passOrder.near
+  local oWant, oBand, oNear, oCapD = passOrder.want, passOrder.band, passOrder.near, passOrder.capd
+  -- the street furniture's lead at speed (PROP_LEAD_S): its tiles ahead of the car measured that much nearer for the
+  -- groups' caps (GROUP_MAX_M), so a door / hydrant / sign shows seconds ahead at any speed, not 120-200 m out
+  local leadM, lhx, lhy = 0, 0, 0
+  local psp = player.speed or 0
+  if M.PROP_LEAD_S > 0 and psp > M.PROP_LEAD_MIN_MS and psp < 150 then
+    leadM = math.min(M.PROP_LEAD_MAX_M, psp * M.PROP_LEAD_S)
+    lhx, lhy = (player.vx or 0) / psp, (player.vy or 0) / psp
+  end
   local nOrder = 0
   for li = 1, #tileList do
     local key = tileList[li]
@@ -1659,19 +1678,23 @@ function M.update(anchorId, player, view, frameMs, fill)
       local dCar = boxDist(player, t)
       local dist = view and math.min(boxDist(view, t), dCar) or dCar
       local want = tileThreshold(dist, t)
-      local band = groupBand(t, dist)
+      local capD = dist
+      if leadM > 0 and t.furn and (t.cx - player.x) * lhx + (t.cy - player.y) * lhy > -(t.half or 128) then
+        capD = math.max(0, dist - leadM)
+      end
+      local band = groupBand(t, capD)
       local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
       if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
-        oWant[nOrder], oBand[nOrder], oNear[nOrder] = want, band, near
+        oWant[nOrder], oBand[nOrder], oNear[nOrder], oCapD[nOrder] = want, band, near, capD
         oSort[nOrder] = M.orderKey(dist, nOrder)
       end
     end
     ::continue::
   end
   for i = nOrder + 1, passOrder.n do
-    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i] = nil, nil, nil, nil, nil, nil
+    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i], oCapD[i] = nil, nil, nil, nil, nil, nil, nil
   end
   passOrder.n = nOrder
   table.sort(oSort)
@@ -1705,6 +1728,7 @@ function M.update(anchorId, player, view, frameMs, fill)
     local at = oSort[oi] % ORDER_SLOTS
     local dist = oD[at]
     local want, band, near = oWant[at], oBand[at], oNear[at]
+    local capDist = oCapD[at] or dist
     t, fd = tiles[oKeys[at]], nil
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
@@ -1738,12 +1762,12 @@ function M.update(anchorId, player, view, frameMs, fill)
           for _, limit in ipairs(M.TILE_CAP) do
             if dist <= limit[1] then rowCap = limit[2]; break end
           end
-          if cap and dist > cap then
+          if cap and capDist > cap then
             r = 2
           elseif not rowCap or t.n <= rowCap then
             r = 0
           end
-        elseif cap and dist > cap then
+        elseif cap and capDist > cap then
           r = 2     -- this group is not shown this far out
         end
         -- the far clumps beyond CLUMP_M, the trees they stand for within it
@@ -1802,7 +1826,8 @@ function M.update(anchorId, player, view, frameMs, fill)
   if fill and frameMs and M.WARM_PER_PASS > 0 and not warmShapes(player, limit, elapsed) then dirty = true end
   if frameMs and everN ~= savedN then M.saveShapes(false) end
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
-  if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.spareWanted(frameMs) then
+  if (budget == M.PER_FRAME * M.EVERY_N or M.POOL_SPARE_DRIVE > 0 and newShapes == 0) and newForests == 0
+      and #pool < M.spareWanted(frameMs) then
     pool[#pool + 1] = newForest():getID()
   end
 end

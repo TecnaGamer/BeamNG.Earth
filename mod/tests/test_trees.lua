@@ -886,4 +886,21 @@ do -- the keep-up recorder's view (keepup.lua): rows that should stand near a sp
   trees.onDrop({ anchorId = 1, key = '0_1' })
   trees.update(1, { x = 50, y = 50 })
 end
+do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the groups' caps (a door's 120 m)
+  trees.onRows(7, 'p1_0', { { 0, 300, 128, 0, 0, 1, 2.2, 0.0 } }, { 'door' })
+  local function doors() local n = 0; for it in pairs(items) do if it.m.p.x == 300 and it.m.p.y == 128 then n = n + 1 end end; return n end
+  local fast = { x = 100, y = 128, vx = 30, vy = 0, speed = 30 }
+  trees.update(7, fast)
+  T.check(doors() == 0, 'PROP_LEAD_S off: a door 156 m out (its tile) is not shown')
+  trees.PROP_LEAD_S = 4
+  trees.update(7, { x = 110, y = 128, vx = 30, vy = 0, speed = 30 })
+  T.check(doors() == 1, 'PROP_LEAD_S 4 at 30 m/s: shown (120 m nearer)')
+  trees.update(7, { x = 120, y = 128, vx = -30, vy = 0, speed = 30 })
+  T.check(doors() == 0, '... not for a tile behind the car')
+  trees.PROP_LEAD_S = 0
+  trees.dropKey('7:p1_0')
+  trees.update(7, { x = 130, y = 128 })
+end
+T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
+  'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
 T.done('test_trees')

@@ -2257,6 +2257,10 @@ function M.reloadLog() return reloadLog end
 -- buildings, wires), each by the distance to its tile's centre (behind a fast car counting three times): the tiles
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
 -- mesh by its distance to the camera instead when that is nearer (viewAt: what is drawn follows the camera).
+-- SURFACE_FIRST: the drawn ground surfaces (a skin's road mesh with its markings, its sidewalks) rank with the colliders
+-- by the same distance, not after every one of them (a building's collision mesh 600 m ahead came before the sidewalk
+-- the car was about to reach: keep-up measure 2026-11-13, tools/keepup.py). false: as before.
+M.SURFACE_FIRST = false
 function M.nextWalk(q)
   if #q == 0 then return 1 end
   local p, dir = playerNow()
@@ -2279,7 +2283,9 @@ function M.nextWalk(q)
         k = math.min(k, math.sqrt(vx * vx + vy * vy))
       end
     end
-    if e.renderOnly or e.what == 'wire' then k = k + 1e6 end
+    if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
+      k = k + 1e6
+    end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end

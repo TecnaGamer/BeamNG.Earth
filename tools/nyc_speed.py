@@ -370,6 +370,7 @@ def main():
     ap.add_argument("--bake", action="append", help="with --cold: a baked pack (.bnge) put in the fresh cache first")
     ap.add_argument("--vehicle", default=os.environ.get("BNGE_DRIVE_VEHICLE", "ball"),
                     help="the driven vehicle: a jbeam model ('ball': a simple prop, the default) or 'car' (the session's)")
+    ap.add_argument("--lua-setup", default=None, help="Lua run in the game before each timed drive (A/B switches)")
     ap.add_argument("--keepup", action="store_true", help="record the details' keep-up (tools/keepup.py) in each run")
     ap.add_argument("--accel", type=float, default=0.0, help="m/s^2: set off from a near standstill (0: at speed at once)")
     a = ap.parse_args()
@@ -408,6 +409,8 @@ def main():
         pos = log_size()
         # (no vehicle-vehicle collisions during the run: traffic and parked cars on the route threw the car off)
         lua("be:setDynamicCollisionEnabled(false) return 1")
+        if a.lua_setup:     # (switches for an A/B, e.g. "require('beamngEarth/trees').PROP_LEAD_S = 4")
+            print(f"lua setup: {lua(a.lua_setup + ' return 1')}", flush=True)
         if a.keepup:        # (the detail keep-up recorder: tools/keepup.py)
             lua("return require('beamngEarth/keepup').start()")
         w = Watch(os.path.join(d, "watch.jsonl"))
