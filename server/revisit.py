@@ -336,8 +336,10 @@ def compact(cache_dir, before=None):
 # session folder (place) and keeping one hard-links the session's file in (Side on store), so neither writes its
 # bytes again: every warm visit unzipped and wrote each far texture, ~0.5 GB of a warm 8 min drive at 150 mph
 # (2026-11-04, Discord: "hard on the drive"). Zips of before keep them inside and still load.
-SIDE_KINDS = frozenset({"far", "fartex"})
-SIDE_NAMES = ("tex.dds", "mask.dds")
+# (and a block's base photo, earthd Server.base_revisit_key: its photo linked the same way, the game's packed copy of it
+# written as a file of its own both ways, for that one lives in the game's cache folder, which the game writes)
+SIDE_KINDS = frozenset({"far", "fartex", "basephoto"})
+SIDE_NAMES = ("tex.dds", "mask.dds", "photo", "base.dds")
 SIDE_SUFFIXES = tuple("." + n for n in SIDE_NAMES)
 
 

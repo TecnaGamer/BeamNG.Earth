@@ -64,6 +64,7 @@ import errno  # noqa: E402
 import glob  # noqa: E402
 import functools  # noqa: E402
 import itertools  # noqa: E402
+import io  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import math  # noqa: E402
@@ -4099,11 +4100,100 @@ class Server:
         aid = getattr(anchor, "id", None)
         rev = next(self.base_rev) if aid is not None and (aid, cx, cy) in getattr(self, "hm_committed", ()) else 0
         kw = {"rev": rev} if rev else {}
+        bk = self.base_revisit_key(anchor, cx, cy) if not rev else None
+        if bk is not None:
+            name = self._base_revisited(anchor, cx, cy, bk, photo)
+            if name is not None:
+                return name, photo, time.perf_counter() - t1
+        f0 = revisitmod.faults()
         name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
                 name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+        if bk is not None and name is not None:
+            self._base_keep(anchor, cx, cy, bk, name, f0)
         return name, photo, time.perf_counter() - t1
+
+    # A block's finished base photo kept in the revisit cache (kind "basephoto": the photo file and the game's packed
+    # copy, linked in): a place loaded again in a fresh server process took it from there instead of painting it again.
+    # Its first block waited 12.7 s (Windows) / 12.6-47.6 s (Steam Deck) for the roofs' mask alone (the buildings
+    # stage: the map cells read cold), 14-58 s for the whole photo, and the BC7 pack of a Deck's CPU after it (game perf
+    # report 2026-11-12, #6). Kept only when final: nothing still to come (base_pending), not stale, every map cell
+    # under it on disk and nothing read short meanwhile (revisit.faults).
+    def base_revisit_key(self, anchor, cx, cy):
+        """The revisit key of the block's finished base photo, or None (revisit off, no imagery)."""
+        im = self.imagery
+        if not revisitmod.ON or im is None or not hasattr(im, "chain") or not hasattr(anchor, "lat"):
+            return None
+        try:
+            return revisitmod.key("basephoto", round(float(anchor.lat), 7), round(float(anchor.lon), 7), float(cx),
+                                  float(cy), self.layout.block, heightmap.SQUARE, BASE_RENDER_PX, self.base_px,
+                                  BASE_AO, [s.name for s in im.chain], self.tone, im.leaf_on, im.season_mode,
+                                  self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
+                                  self.mapdata.versions() if self.mapdata is not None else None,
+                                  self.road_widths is not None, self.surface is not None, anchor.zooms[0],
+                                  terraincache.PHOTO_EXT, terraincache.NO_PACK)
+        except Exception as e:          # (no cache rather than no photo)
+            log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
+            return None
+
+    def _base_pack_path(self, name):
+        return os.path.join(terraincache.cache_dir(self.user_dir),
+                            terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(self.base_px)) + ".dds")
+
+    def _base_revisited(self, anchor, cx, cy, bk, photo):
+        """The block's photo from the revisit cache under this session's name, then its packed copy (the newer file,
+        as write_base orders them), its rgb into photo: the file name, or None."""
+        try:
+            hit = revisitmod.load(self.cache_dir, "basephoto", bk)
+            if hit is None:
+                return None
+            blobs, _extra = hit
+            if "photo" not in blobs or (not terraincache.NO_PACK and "base.dds" not in blobs):
+                return None
+            name = self.base_name((anchor.id, cx, cy))
+            path = os.path.join(self.out_dir, name)
+            ph = blobs["photo"]
+            data = ph.read() if isinstance(ph, revisitmod.Side) else ph
+            with Image.open(io.BytesIO(data)) as im:
+                rgb = np.asarray(im.convert("RGB"), np.uint8)
+            if rgb.shape[:2] != (self.base_px, self.base_px):
+                return None
+            revisitmod.place(ph, path)              # (a Side hard-linked: the game only reads it)
+            if "base.dds" in blobs:         # (after the photo: the cache entry must be the newer file; its own copy)
+                b = blobs["base.dds"]
+                os.makedirs(terraincache.cache_dir(self.user_dir), exist_ok=True)
+                revisitmod.place(b.read() if isinstance(b, revisitmod.Side) else b, self._base_pack_path(name))
+        except Exception as e:          # (painted again rather than no photo)
+            log.info("revisit: base photo %s not taken: %s: %s", (anchor.id, cx, cy), type(e).__name__, e)
+            return None
+        key = (anchor.id, cx, cy)           # (final when kept: nothing to render again, base_refresh)
+        self.base_pending[key] = frozenset()
+        self.base_stale.discard(key)
+        photo.append(rgb)
+        with self.base_lock:    # (the stand-ins of the blocks after it take its overlap, as write_base's)
+            self.recent_full.append((anchor.id, cx, cy, rgb))
+        log.info("base photo %s from the revisit cache", (anchor.id, cx, cy))
+        return name
+
+    def _base_keep(self, anchor, cx, cy, bk, name, f0):
+        """The block's photo just made kept in the revisit cache when it is final (see base_revisit_key)."""
+        key = (anchor.id, cx, cy)
+        if self.base_pending.get(key) or key in self.base_stale or revisitmod.faults() != f0:
+            return
+        size = self.layout.block * heightmap.SQUARE
+        if not self._photo_data_cached(anchor, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M, size):
+            return
+        path = os.path.join(self.out_dir, name)
+        blobs = {"photo": revisitmod.Side(path)}
+        if not terraincache.NO_PACK:
+            pack = self._base_pack_path(name)
+            if not os.path.exists(pack):
+                return
+            with open(pack, "rb") as f:     # (bytes: a file of its own in the revisit cache, not a link)
+                blobs["base.dds"] = f.read()
+        if os.path.exists(path):
+            revisitmod.store(self.cache_dir, "basephoto", bk, blobs)
 
     def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):
         """write_base in a block process (blockworker.base_photo): the file name, or None when it lacked an imagery
@@ -7491,6 +7581,27 @@ class Connection:
         self.brfar = (vegetationmod.Tracker(br_m, br_drop, buildingsmod.BRIDGE_FAR_PER_POSE, "brfar",
                                             skip_m=roadsmod.SEND_M - roadsmod.TILE) if bridges else None)
 
+    def forget_world(self):
+        """The mod's level started again in the same game after another level (message world_reset): the level took
+        every object, so the mod has none of the tiles this connection sent. The geotile trackers keep what they sent
+        across anchors (the mod re-places it) and the far field keeps its global tiles at a commit: after a stock map
+        and back, the road and building tiles stayed missing until a teleport (game perf report 2026-11-12, #10). Every
+        tracker forgets what it sent, and the next commit starts with no previous frame (as after a server restart)."""
+        self.roads.close()
+        self.roads = road_tracker(self)
+        self.signs.close()
+        self.signs = signstream.Tracker()
+        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "turbines", None),
+                   self.distant_traffic, self.distant_traffic_far):
+            if tr is not None:
+                tr.forget()
+        self.nav.close()
+        self.nav = navgraphmod.Tracker()
+        self.active = None              # (far tiles in flight land unwanted: not desired, skipped)
+        self.shown, self.sent, self.desired, self.groups, self.queue, self.qi = {}, {}, {}, [], [], 0
+        self.refined, self.node_changed, self.failed = set(), {}, set()
+        log.info("world reset: the mod's level started again, every tile sent anew")
+
     def build_far_geo(self, kind):
         """The far geotile tracker's build(gx, gy) of kind (Server.build_far_geo)."""
         return lambda gx, gy: self.s.build_far_geo(kind, gx, gy)
@@ -7829,6 +7940,8 @@ class Connection:
             _perf(self.s).on_setup(msg.get("setup"))      # the machine and settings, once a connection
         elif kind == "perf_summary":            # ... and a 5-minute window of frame times, scene and world generation
             _perf(self.s).on_summary(msg.get("summary"))
+        elif kind == "world_reset":             # the mod's level started again after another one (the level took
+            self.forget_world()                 # every tile): all sent again
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = road_tracker(self)
@@ -9083,6 +9196,7 @@ class Connection:
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
                 name = None
+                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), revisitmod.faults()
                 if pool is not None:
                     # (in the block process: from the finished tiles with the analyses on; they were all rendered
                     # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
@@ -9101,6 +9215,8 @@ class Connection:
                     # deleted here, the game packed the photo again on its main thread, ~0.75 s frames, 2026-11-03)
                     info.setdefault("old_bases", []).append(old)
                 log.info("base photo of %s rendered again with its NAIP (%s)", key, name)
+                if bk is not None:          # (the place's final photo: a later visit's first takes it, revisit)
+                    await self.loop.run_in_executor(s.hm_pool, s._base_keep, anchor, key[1], key[2], bk, name, f0)
                 s.note_base(key, name)
                 self.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
                            "base": f"{s.vfs_dir}/{name}", "baseSize": size})

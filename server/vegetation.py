@@ -1654,6 +1654,12 @@ class Tracker:
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
+    def forget(self):
+        """The mod has none of the tiles sent (its level loaded again, earthd Connection.forget_world): every one is
+        wanted again (those building land as new ones)."""
+        self.sent = set()
+        self.aid = None
+
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
         car = getattr(self, "car", ())
