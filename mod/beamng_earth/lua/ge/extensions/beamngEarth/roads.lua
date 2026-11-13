@@ -104,6 +104,10 @@ M.NEED_HARD_MIN_M = 30
 -- rest (on a Steam Deck at 80 mph in Phoenix the import queue grew to 140 behind ~20 ms imports, and an I-10 overpass's
 -- deck turned solid only as the car reached it, behind the sidewalks' and buildings' colliders of the same tiles)
 M.DRIVE_FIRST_M = 400
+-- A walk whose nextWalk key (m: distance, or along the path ahead when fast) is within this is a 'near' unit of the
+-- governor's lanes (always first); the rest of a place's meshes share with the far tiles while those wait (2026-11-13:
+-- a cached Fells Point's far field waited ~10 s behind every building and sidewalk of the place)
+M.NEAR_FIRST_M = 400
 -- ... and one the car reaches within URGENT_S (150 m at least) is made at once, whatever the governor's budget (its cost
 -- still charged: what follows waits), one every URGENT_EVERY_FRAMES at most: at ~20 ms an import on a Steam Deck, the
 -- 2-4 ms budget let ~3 a second through, fewer than a city's tiles bring at 80 mph
@@ -1339,7 +1343,15 @@ end
 -- Server message `bldfar_drop` {anchorId, key} (`bldsky_drop` with sky).
 function M.onFarDrop(msg, kind)
   if kind == true then kind = 'S' end
-  if geotile.isKey(msg.key) then return M.dropFarGeo(M.farGeoKey(kind or 'F', msg.key)) end
+  if geotile.isKey(msg.key) then
+    local key = M.farGeoKey(kind or 'F', msg.key)
+    local f = far[key]
+    if f and f.geo and f.kind == 'F' and M.packPending(f) then
+      f.dropWait = f.dropWait or now()   -- (its square's pack not made yet: it stays until it is, updateFarGeo)
+      return true
+    end
+    return M.dropFarGeo(key)
+  end
   local key = tileKey(msg.anchorId, (kind or '') .. msg.key)
   if not kind then farSeen[key] = nil end
   local f = far[key]
@@ -1394,6 +1406,14 @@ end
 -- and road mesh are made; a skyline tile while all 16 far buildings tiles of its square are here. Their street lamps
 -- are trees.lua geotiles (one per road geotile key, placed and moved with the trees'), shown while their tile shows.
 M.FAR_GEO = 1
+-- Far building packs (hello.farPack, server buildings.PACK_*): past the road geotiles' own far tiles the far buildings
+-- of a whole skyline square (geotile.Z - 2) come as one shape, kind 'P' (a third of a town's shape files were far
+-- buildings tiles, 2026-11-13). A pack shows until its square's 16 far tiles are all here and made (or waiting hidden);
+-- a far tile dropped while its square's pack is not made yet stays until it is (PACK_HANDOVER_S at most), and a
+-- skyline square hides under its shown pack.
+M.FAR_PACK = 1
+M.PACK_HANDOVER_S = 15
+function M.debugFar() return far end       -- (tests)
 M.farGeo = false
 function M.setFarGeo(on) M.farGeo = on and true or false end
 local function farGeoKey(kind, gkey) return tostring(kind) .. ':' .. tostring(gkey) end
@@ -1495,7 +1515,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   local h = data.h
   if old and old.geo and h ~= nil and old.h == h and not filesGone(old.parts) then
     release()
-    old.orphan, old.anchor = nil, currentAnchor
+    old.orphan, old.anchor, old.dropWait = nil, currentAnchor, nil
     M.geoStats.farKept = (M.geoStats.farKept or 0) + 1
     return true
   end
@@ -1507,7 +1527,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
     lamps = M.flatLamps(data.lamps) }
-  if k == 'S' then
+  if k == 'S' or k == 'P' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
   end
@@ -1559,9 +1579,46 @@ function M.nearShowsDeck(gkey, tk)
   return t.skin ~= nil and t.skin.road == nil and (t.skin.pending or 0) <= 0
 end
 
+-- The pack (kind 'P') of far buildings tile f's skyline square, or nil.
+local function packOf(f)
+  local z, x, y = geotile.parse(f.gkey)
+  if not z then return nil end
+  local n = M.SKY_UNIT
+  return far[farGeoKey('P', geotile.key(math.floor(x / n), math.floor(y / n), z - 2))]
+end
+-- Is far tile f's square's pack here but its shape not made yet (f's drop waits for it)?
+function M.packPending(f)
+  local pk = packOf(f)
+  if not pk then return false end
+  for _, p in pairs(pk.parts) do if not p.id then return true end end
+  return false
+end
+-- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
+function M.packCovered(f)
+  if not f.packKeys then
+    local z, x, y = f.sky[1], f.sky[2], f.sky[3]
+    if not z then return false end
+    local n = 2 ^ (geotile.Z - z)
+    f.packKeys = {}
+    for j = 0, n - 1 do
+      for i = 0, n - 1 do f.packKeys[#f.packKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+    end
+  end
+  for _, k in ipairs(f.packKeys) do
+    local ff = far[k]
+    if not ff or ff.dropWait then return false end
+    for _, p in pairs(ff.parts) do if not p.id and not p.deferred then return false end end
+  end
+  return true
+end
+
 -- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
 function M.farGeoHidden(f, sub)
+  if f.kind == 'P' then return M.packCovered(f) end
   if f.kind == 'S' then
+    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
+    local pp = pk and pk.parts.shape
+    if pp and pp.id and not pp.hidden then return true end
     if not f.skyKeys then           -- (its square's far buildings tiles' keys, once)
       local z, x, y = f.sky[1], f.sky[2], f.sky[3]
       if not z then return false end
@@ -1581,9 +1638,24 @@ function M.farGeoHidden(f, sub)
   return M.nearShowsBuildings(p.near, p.nearKey)
 end
 
+-- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
+-- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
+-- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
+M.LAZY_WAIT_MAX_S = 20
+function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
+
 local function updateFarGeo(key, f)
+  if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
+    if not M.packPending(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+  end
   local shown = false
   for sub, p in pairs(f.parts) do
+    local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
+    if not p.id and p.deferred and (not waits or now() - p.deferred > M.LAZY_WAIT_MAX_S * 1000) then
+      p.deferred = nil          -- (LAZY_FAR_PARTS: it would show now; made next, ahead of the other far parts)
+      p.waitedOut = waits or nil      -- (waited too long for its road geotile: made, shown or hidden by the rule)
+      table.insert(farQ, 1, key .. '#' .. sub)
+    end
     if p.id then
       local hide = M.farGeoHidden(f, sub)
       if hide ~= (p.hidden or false) then
@@ -1600,6 +1672,11 @@ end
 -- The far tiles' hide checks, round-robin: at most FAR_CHECKS_PER_FRAME a frame (all ~600 of them every frame cost
 -- ~0.85 ms of every frame while driving, 2026-10-29; a far building shown or hidden a few frames later is not seen)
 M.FAR_CHECKS_PER_FRAME = 80
+-- A far geotile's part (far buildings, skyline, far bridge piece) that would be hidden the moment it is made (its
+-- road geotile already shows its own buildings / deck, every far buildings tile under a skyline square came) is not
+-- made until it would show (2026-11-13: each a shape file of its own, ~5 ms and a first draw, for an object never seen
+-- while the car stays in town)
+M.LAZY_FAR_PARTS = true
 local farCursor = nil
 local function updateFarOne(key, f)
     if f.geo then
@@ -1642,12 +1719,15 @@ local function updateFar(gov)
     farCursor = key
     key, f = next(far, key)
   end
-  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
+  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk', 'mid') do
     local key = table.remove(farQ, 1)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
     local p = f and f.geo and sub and f.parts[sub]
-    if p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
+    if p and not p.id and anchorObj and M.LAZY_FAR_PARTS and not p.waitedOut and M.farGeoWaits(f, sub) then
+      p.deferred = p.deferred or now()  -- (hidden the moment it would be made: made once it would show, updateFarGeo)
+      M.geoStats.farDeferred = (M.geoStats.farDeferred or 0) + 1
+    elseif p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
       local t0 = now()
       loadMaterials()
       farPartPlace(f, p, anchorObj)
@@ -1659,7 +1739,7 @@ local function updateFar(gov)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
     elseif f and not f.geo and not f.id then
       local t0 = now()
@@ -1667,7 +1747,7 @@ local function updateFar(gov)
       local ok, id = pcall(createWalk, { shape = f.shape, pos = f.pos }, false)
       if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, 'mid')
       noteUnit('bldfar', ms, f.shape)
     end
   end
@@ -1939,8 +2019,14 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     forced = M.urgentWalk(walkQ)
   end
   sinceUrgent = sinceUrgent + 1
-  while #walkQ > 0 and (forced or gov:try('roadWalk')) do
-    local q = table.remove(walkQ, forced or M.nextWalk(walkQ))
+  while #walkQ > 0 do
+    -- (lanes, governor.lua: a mesh within NEAR_FIRST_M of the car, or a forced one, is 'near'; the rest 'mid', which
+    -- shares with the far tiles while they wait)
+    local idx, key = forced, nil
+    if not idx then idx, key = M.nextWalk(walkQ) end
+    local lane = (key and key > M.NEAR_FIRST_M) and 'mid' or 'near'     -- (no car: as before, unrestricted)
+    if not forced and not gov:try('roadWalk', lane) then break end
+    local q = table.remove(walkQ, idx)
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
     if t and q.tile and q.tile ~= t then t = nil end
@@ -1980,7 +2066,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, lane)
       noteUnit(tostring(q.what), ms, walk and walk.shape)
       sinceChange = stopwatch.new()
     end
@@ -2168,7 +2254,7 @@ function M.reloadLog() return reloadLog end
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
 -- mesh by its distance to the camera instead when that is nearer (viewAt: what is drawn follows the camera).
 function M.nextWalk(q)
-  if #q <= 1 then return 1 end
+  if #q == 0 then return 1 end
   local p, dir = playerNow()
   if not p then return 1 end
   local best, bestKey = 1, math.huge
@@ -2193,7 +2279,7 @@ function M.nextWalk(q)
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
-  return best
+  return best, bestKey
 end
 
 -- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.

@@ -24,8 +24,8 @@ local function frame(gov, opts)
     local kind = opts.kind or 'cdae'
     local cost = opts.queue and opts.queue[1] or opts.cost or 3
     if not gov:try(kind) then break end
-    now = now + cost
-    gov:charge(kind, cost)
+    now = now + cost + (opts.defer or 0)     -- (defer: the engine's own work per unit, outside its Lua cost)
+    gov:charge(kind, cost, opts.lane)
     if opts.queue then table.remove(opts.queue, 1) end
     spent, units = spent + cost, units + 1
   end
@@ -128,7 +128,9 @@ do
   local q2 = {}
   for k = 1, 600 do q2[k] = 0.3 end
   local sOff = frame(g2, { kind = 'reveal', queue = q2 })
-  T.check(sOff > 100, 'cap off: the banked tokens run in one frame (' .. string.format('%.0f', sOff) .. ' ms)')
+  -- (the frame cap, FRAME_CAP_MS, still bounds it: base + spent under 33 ms)
+  T.check(sOff > governor.FAR_CAP_MS and sOff <= governor.FRAME_CAP_MS - BASE + 1e-9,
+    'far cap off: the banked tokens run up to the frame cap (' .. string.format('%.0f', sOff) .. ' ms)')
 end
 
 -- with every estimate near its prior the cap binds nothing: the same frames admit the same units as without it
@@ -137,12 +139,13 @@ do
   local g2 = governor.new({ clock = clock })
   g2:setFarCap(0)
   local pat, pat2 = {}, {}
-  for i = 1, 500 do
-    local kind = (i % 3 == 0) and 'reveal' or 'cdae'
-    local cost = (kind == 'reveal') and 0.2 or (2 + (i * 37 % 50) / 25)       -- 2 .. 4 ms
-    local _, u = frame(g, { kind = kind, cost = cost })
-    local _, u2 = frame(g2, { kind = kind, cost = cost })
-    pat[i], pat2[i] = u, u2
+  for _, run in ipairs({ { g, pat }, { g2, pat2 } }) do     -- (one after the other: each its own frames' wall times)
+    for i = 1, 500 do
+      local kind = (i % 3 == 0) and 'reveal' or 'cdae'
+      local cost = (kind == 'reveal') and 0.2 or (2 + (i * 37 % 50) / 25)       -- 2 .. 4 ms
+      local _, u = frame(run[1], { kind = kind, cost = cost })
+      run[2][i] = u
+    end
   end
   T.check(table.concat(pat, ',') == table.concat(pat2, ','), 'sane estimates: the cap changes no decision')
 end
@@ -292,5 +295,95 @@ do
   T.check(g:roomFor(4), 'the next frame starts empty')
   g:requestHeavy(true)
   T.check(not g:roomFor(100), 'never in a heavy frame')
+end
+-- engine share (2026-11-13): what a frame took beyond its base and its units' Lua is learned per kind, planned with
+-- the unit, and base stays the frame without streaming
+do
+  local g = governor.new({ clock = clock })
+  for _ = 1, 400 do frame(g, { kind = 'cdaeTex256', cost = 4, defer = 6 }) end
+  T.near(g.def.cdaeTex256, 6, 0.5, 'the engine share converges to the deferred cost (' .. string.format('%.2f', g.def.cdaeTex256) .. ')')
+  T.near(g.base, BASE, 0.5, 'base excludes the units and their engine share (' .. string.format('%.2f', g.base) .. ')')
+  T.near(g:cost('cdaeTex256'), 10, 0.6, 'planned cost = Lua estimate + engine share')
+  -- the rate: ~b of planned cost per frame (Lua + engine), not b of Lua alone
+  local total = 0
+  for _ = 1, 200 do local s, u = frame(g, { kind = 'cdaeTex256', cost = 4, defer = 6 }); total = total + u * 10 end
+  T.near(total / 200, g.b, 0.3, 'sustained planned spend ~ b per frame')
+  -- a kind without deferred work learns ~0
+  local g2 = governor.new({ clock = clock })
+  for _ = 1, 300 do frame(g2, { cost = 3 }) end
+  T.check((g2.def.cdae or 0) < 0.05, 'no deferred work: share ~0')
+end
+
+-- the frame cap: outside the cover no frame plans past FRAME_CAP_MS (its first unit excepted)
+do
+  local g = governor.new({ clock = clock })
+  g:setLoading(true)
+  for _ = 1, 100 do frame(g, { cost = 3, defer = 3 }) end
+  local worst = 0
+  for _ = 1, 300 do
+    local q = {}
+    for k = 1, 30 do q[k] = 3 end
+    local t0 = now
+    frame(g, { queue = q, defer = 3 })
+    worst = math.max(worst, now - t0)
+  end
+  T.check(worst <= governor.FRAME_CAP_MS + 3.5, 'loading, not covered: frames stay near the 33 ms cap (worst ' .. worst .. ')')
+end
+
+-- the loading cover: the whole cover budget at once, frames up to COVER_FRAME_MS, heavy ops at once, then back down
+do
+  local g = governor.new({ clock = clock })
+  for _ = 1, 80 do frame(g, { cost = 3 }) end
+  g:setLoading(true); g:setCover(true)
+  local q = {}
+  for k = 1, 4000 do q[k] = 3 end
+  local s1, u1 = frame(g, { queue = q })
+  T.check(u1 >= 5, 'the cover\'s first frame already streams (' .. u1 .. ' units)')
+  T.near(g.b, math.min(governor.COVER_TARGET_MS, governor.COVER_FRAME_MS - BASE), 0.01, 'b = what the cover frame leaves')
+  local worst, units = 0, u1
+  for i = 1, 100 do
+    local t0 = now
+    local _, u = frame(g, { queue = q, defer = 1 })
+    if i > 15 then worst = math.max(worst, now - t0) end      -- (once the engine share of the kind is learned)
+    units = units + u
+  end
+  T.check(worst <= governor.COVER_FRAME_MS + 4.5, 'cover frames stay near COVER_FRAME_MS (worst ' .. worst .. ')')
+  T.check(units > 500, 'and stream ~8x the loading budget (' .. units .. ' units in 101 frames)')
+  local _, _, h = frame(g, { heavy = true, queue = q })
+  T.check(h, 'in the cover a heavy op is granted at once')
+  g:chargeEngine(200)
+  T.check(g.tokens >= 0, 'no engine debt in the cover')
+  g:setCover(false); g:setLoading(false)
+  for _ = 1, 40 do frame(g, { queue = q }) end
+  T.check(g.b <= governor.DEFAULT_TARGET_MS + 1e-9, 'after the cover b is back at the normal target within 40 frames (' .. g.b .. ')')
+  -- a unit bigger than the whole cover budget still runs, alone
+  local g2 = governor.new({ clock = clock })
+  g2:setLoading(true); g2:setCover(true)
+  local big = { 45, 45, 45 }
+  local _, ub = frame(g2, { queue = big })
+  T.check(ub == 1, 'a 45 ms unit runs alone in a cover frame')
+end
+
+-- lanes: while far tiles wait, mid units (meshes away from the car) take at most ~(1 - FAR_SHARE) of the two lanes
+do
+  local g = governor.new({ clock = clock })
+  g:setLoading(true)
+  local mid, far = 0, 0
+  for _ = 1, 600 do
+    g:beginFrame(true)
+    g.farWait = true
+    while g:try('roadWalk', 'mid') do now = now + 6; g:charge('roadWalk', 6, 'mid'); mid = mid + 6 end
+    while g:try('cdaeTex256', 'far') do now = now + 4; g:charge('cdaeTex256', 4, 'far'); far = far + 4 end
+    now = now + BASE
+  end
+  local share = far / (mid + far)
+  T.check(math.abs(share - governor.FAR_SHARE) < 0.1, 'far tiles get ~FAR_SHARE of the streaming (' .. string.format('%.2f', share) .. ')')
+  -- near units never give way; mid units run freely when no far tile waits
+  g.farWait = true
+  g.laneUse.mid, g.laneUse.far = 1000, 0
+  g.tokens = 100
+  T.check(not g:try('roadWalk', 'mid') and g:try('roadWalk', 'near'), 'mid gives way, near does not')
+  g.farWait = false
+  T.check(g:try('roadWalk', 'mid'), 'no far tile waiting: mid runs')
 end
 T.done('test_governor')

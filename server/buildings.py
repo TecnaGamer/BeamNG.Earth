@@ -5287,6 +5287,17 @@ FAR_SEND_M = float(os.environ.get("BNE_BLDFAR_SEND_M", "1600"))    # far buildin
                                                                     # sent within this (Euclidean: roads.tiles_near)
 FAR_DROP_M = float(os.environ.get("BNE_BLDFAR_DROP_M", str(FAR_SEND_M + 300)))     # ... dropped beyond
 FAR_PER_POSE = 4
+# Far building packs (2026-11-13, the expo O work: a Fells Point place held ~377 far buildings tiles, a shape file each -
+# a third of the place's shape files, each ~2-5 ms to load in the game and a first draw): past PACK_INNER_M the far
+# buildings of a whole skyline square (geotiles.SKY_Z, 4 x 4 road geotiles) come as one shape (kind "bldpack", prefix
+# bp_), the road geotiles' own far tiles only within it (their squares, whole). PACK_INNER_M stays past the road tiles'
+# drop reach (roads.DROP_M 960 m): a pack's square never holds a road geotile showing its own buildings. The mod
+# shows a pack until its square's far tiles are all in and made (roads.lua farGeoHidden 'P'). hello.farPack ==
+# FAR_PACK (the mod's roads.FAR_PACK) and BNE_BLDPACK != off.
+FAR_PACK = 1
+PACK_ON = os.environ.get("BNE_BLDPACK", "on") != "off"
+PACK_INNER_M = float(os.environ.get("BNE_BLDPACK_INNER_M", "1000"))
+PACK_PER_POSE = 2
 FAR_GEO = 1                 # the far geotiles' protocol (hello.farGeo, the mod's roads.lua M.FAR_GEO): far buildings,
                             # skyline and far bridges in the global tiles' frames (blockworker.far_geo)
 

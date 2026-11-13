@@ -116,6 +116,7 @@ CORE = lua_consts("core.lua")
 GOV = lua_consts("governor.lua")
 XO = lua_consts("crossover.lua")
 FAR = lua_consts("farfield.lua")
+SCREEN_ORDER = re.search(r"^M\.SCREEN_ORDER = (true|false)", (MOD_DIR / "farfield.lua").read_text(), re.M).group(1) == "true"
 EDGE = lua_consts("edgeguard.lua")
 
 
@@ -348,6 +349,13 @@ class Governor:
         self.w1 = self.w2 = None
         self.prev_heavy = False
         self.frame_spent, self.frame_units = 0.0, 0
+        self.far_cap = g["FAR_CAP_MS"] or None
+        self.cover = False
+        self.far_wait = False
+        self.lane_use = {"mid": 0.0, "far": 0.0}
+        self.defer = {}                 # per kind engine share (governor.lua def)
+        self.frame_lua = self.frame_def = self.frame_other = 0.0
+        self.frame_kinds = set()
         self.last_stream = -math.inf
         self.heavy_pending, self.heavy_since, self.heavy_req = False, None, None
         self.heavy_frame = -math.inf
@@ -359,25 +367,47 @@ class Governor:
     def set_target(self, ms):
         self.target = max(GOV["MIN_TARGET_MS"], min(GOV["MAX_TARGET_MS"], ms))
 
+    def cover_target(self):
+        g = GOV
+        room = g["COVER_FRAME_MS"] - (self.base if self.base is not None else g["COVER_FRAME_MS"] - g["COVER_TARGET_MS"])
+        return max(g["LOADING_TARGET_MS"], min(g["COVER_TARGET_MS"], room))
+
     def target_now(self):
+        if self.cover:
+            return self.cover_target()
         return GOV["LOADING_TARGET_MS"] if self.loading else self.target
 
+    def frame_cap(self):
+        return GOV["COVER_FRAME_MS"] if self.cover else GOV["FRAME_CAP_MS"]
+
     def max_unit(self):
-        return max((self.est.get(k, 0.0) for k in self.used), default=0.0)
+        return max((self.est.get(k, 0.0) + self.defer.get(k, 0.0) for k in self.used), default=0.0)
 
     def begin_frame(self, has_work, wall_ms):
         g = GOV
         self.frame += 1
+        prev_lua, prev_def, prev_other = self.frame_lua, self.frame_def, self.frame_other
+        prev_units, prev_kinds = self.frame_units, self.frame_kinds
+        self.frame_lua = self.frame_def = self.frame_other = 0.0
+        self.frame_kinds = set()
         if wall_ms is not None:
             if not self.prev_heavy:
+                if prev_units > 0 and self.base is not None:
+                    excess = min(g["DEF_MAX_MS"], max(0.0, wall_ms - self.base - prev_lua - prev_other))
+                    share = excess / prev_units
+                    for kind in prev_kinds:
+                        d = self.defer.get(kind, 0.0)
+                        self.defer[kind] = d + g["DEF_ALPHA"] * (share - d)
                 self.hist_n += 1
-                self.hist[(self.hist_n - 1) % len(self.hist)] = wall_ms
+                self.hist[(self.hist_n - 1) % len(self.hist)] = max(0.0, wall_ms - prev_lua - prev_def)
                 n = min(self.hist_n, len(self.hist))
                 s = sorted(self.hist[:n])
                 self.base = s[(n + 1) // 2 - 1] if n % 2 == 1 else 0.5 * (s[n // 2 - 1] + s[n // 2])
             self.w1, self.w2 = wall_ms, self.w1
         self.prev_heavy = False
         self.frame_spent, self.frame_units = 0.0, 0
+        self.lane_use["mid"] *= g["LANE_DECAY"]
+        self.lane_use["far"] *= g["LANE_DECAY"]
         if self.heavy_pending and self.heavy_req < self.frame - 1:
             self.heavy_pending = False
         target = self.target_now()
@@ -387,6 +417,12 @@ class Governor:
             self.b, self.tokens, self.blocked = 0.0, 0.0, True
             return
         self.blocked = False
+        if self.cover:
+            self.b = target if has_work else 0.0
+            self.tokens = self.b
+            return
+        if self.b > g["LOADING_TARGET_MS"] and not self.heavy_pending:
+            self.b = max(target, self.b - 1.0)
         if self.heavy_pending:
             self.b = max(0.0, self.b - g["RAMP_DOWN_HEAVY"])
         elif has_work:
@@ -400,21 +436,37 @@ class Governor:
         if self.heavy_pending or not has_work:
             self.tokens = min(self.tokens, self.b)
 
-    def try_(self, kind):
+    def try_(self, kind, lane=None):
+        g = GOV
         self.used.add(kind)
         if self.blocked or self.heavy_frame == self.frame:
             return False
         e = self.est.get(kind, 1.0)
-        if self.tokens < e:
+        c = e + self.defer.get(kind, 0.0)
+        if self.tokens < c and not (self.cover and self.frame_units == 0):
             return False
-        if self.frame_spent + e > self.b + self.max_unit():
+        if self.frame_spent + self.frame_def + c > self.b + self.max_unit():
+            return False
+        if self.frame_units > 0:
+            if self.far_cap and not self.cover and self.frame_spent + e > self.far_cap:
+                return False
+            if (self.base or 0.0) + self.frame_spent + self.frame_def + self.frame_other + c > self.frame_cap():
+                return False
+        if lane == "mid" and self.far_wait and \
+                self.lane_use["mid"] - self.lane_use["far"] * (1 - g["FAR_SHARE"]) / g["FAR_SHARE"] > g["LANE_GRACE_MS"]:
             return False
         return True
 
-    def charge(self, kind, ms):
+    def charge(self, kind, ms, lane=None):
         ms = max(0.0, ms)
-        self.tokens -= ms
+        d = self.defer.get(kind, 0.0)
+        self.tokens -= ms + d
         self.frame_spent += ms
+        self.frame_lua += ms
+        self.frame_def += d
+        self.frame_kinds.add(kind)
+        if lane in ("mid", "far"):
+            self.lane_use[lane] += ms + d
         self.frame_units += 1
         self.last_stream = self.frame
         e = self.est.get(kind, ms)
@@ -424,6 +476,7 @@ class Governor:
         ms = max(0.0, ms)
         self.tokens -= ms
         self.frame_spent += ms
+        self.frame_lua += ms
 
     def _grant(self):
         self.heavy_pending, self.heavy_since = False, None
@@ -443,7 +496,7 @@ class Governor:
                 self.b = max(0.0, self.b_prev - g["RAMP_DOWN_HEAVY"])
         self.heavy_req = self.frame
         self.tokens = min(self.tokens, self.b)
-        if urgent:
+        if urgent or self.cover:
             return self._grant()
         if self.b > 0 or self.frame - self.last_stream <= g["QUIET_BEFORE"]:
             return False
@@ -1165,12 +1218,21 @@ class FarField:
                     + FAR["VIEW_MARGIN_DEG"]
                 cosmax = math.cos(math.radians(min(half, FAR["VIEW_MAX_DEG"])))
             pen2 = FAR["VIEW_PENALTY"] * FAR["VIEW_PENALTY"]
+            cov2 = FAR["COVERED_PENALTY"] * FAR["COVERED_PENALTY"]
             best, bd = None, math.inf
             for inst in q:
                 if self.pending.get(inst.key) is inst and inst.queued:
                     dx = max(inst.x0 - cam["x"], 0.0, cam["x"] - inst.x1)
                     dy = max(inst.y0 - cam["y"], 0.0, cam["y"] - inst.y1)
                     d = dx * dx + dy * dy
+                    if SCREEN_ORDER and self.near_visual != "mesh":     # (farfield.lua: by size on screen where
+                        # the block is the near ground, covered tiles after; this port orders in mesh mode only)
+                        sz = max(inst.x1 - inst.x0, inst.y1 - inst.y0, 1.0)
+                        d = d / (sz * sz)
+                        if d == 0:
+                            d = 1e-6 * (sz * sz) / 65536
+                        if self.cover_of(inst) == "interior":
+                            d = (d + 1) * cov2
                     if cosmax is not None and d > 0:
                         cx, cy = (inst.x0 + inst.x1) / 2 - cam["x"], (inst.y0 + inst.y1) / 2 - cam["y"]
                         r = math.sqrt(cx * cx + cy * cy)

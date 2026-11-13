@@ -44,7 +44,7 @@ SUBDIR = "revisit"
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
 
 WHERE_DIR = "where"
-WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
+WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "bldpack", "fargeo", "far")    # (cellfacts: per cell, no place)
 NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
 COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
 _START = int(time.time())

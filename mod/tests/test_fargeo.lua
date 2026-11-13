@@ -199,13 +199,34 @@ for k, v in pairs(fdata) do fdata2[k] = v end
 fdata2.h, fdata2.shape = 'f2', '/s/bf2_' .. K .. '.cdae'
 roads.onFarTile(farMsg(K, { clat, clon }, fdata2), 1)
 run(1, B)
-T.check(#objsWith('bf_' .. K) == 0 and #objsWith('bf2_' .. K) == 1, 'new content: the old object gone, the new made')
+-- (LAZY_FAR_PARTS: K's road geotile shows its own buildings, so the new far part is not made while it would be hidden)
+T.check(#objsWith('bf_' .. K) == 0 and #objsWith('bf2_' .. K) == 0, 'new content: the old object gone, the new one waits (hidden)')
+T.check((roads.geoStats.farDeferred or 0) >= 1, 'the hidden part counted as deferred')
+roads.LAZY_FAR_PARTS = false
+roads.onFarTile(farMsg(K, { clat, clon }, fdata), 1)
+run(1, B)
+roads.onFarTile(farMsg(K, { clat, clon }, fdata2), 1)
+run(1, B)
+T.check(#objsWith('bf2_' .. K) == 1 and objsWith('bf2_' .. K)[1].hidden == true, 'lazy off: made at once, hidden')
+roads.LAZY_FAR_PARTS = true
+-- a deferred part is made once it would show: K's road geotile goes
+local fdata3 = {}
+for k, v in pairs(fdata) do fdata3[k] = v end
+fdata3.h, fdata3.shape = 'f3', '/s/bf3_' .. K .. '.cdae'
+roads.onFarTile(farMsg(K, { clat, clon }, fdata3), 1)
+run(1, B)
+T.check(#objsWith('bf3_' .. K) == 0, 'deferred while K shows its own buildings')
+roads.onDrop({ anchorId = 1, key = K })
+for _ = 1, 5 do run(1, B) end
+T.check(#objsWith('bf3_' .. K) == 1 and objsWith('bf3_' .. K)[1].hidden == false,
+  'K\'s road geotile gone: the deferred far buildings made and shown')
 
 -- drops
 roads.onFarDrop({ anchorId = 1, key = SK }, 'B')
 roads.onFarDrop({ anchorId = 1, key = SK }, true)
 roads.onFarDrop({ anchorId = 1, key = K })
 run(1, B)
-T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0, 'dropped: their objects gone')
+T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0 and #objsWith('bf3_') == 0,
+  'dropped: their objects gone')
 
 T.done('test_fargeo')
