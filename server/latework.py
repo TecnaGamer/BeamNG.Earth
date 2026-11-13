@@ -5,8 +5,10 @@ nothing made on it (revisit faults): a cold Manhattan visit left 53-65 of its ~1
 of them again on the next visit (graded first block 63 s instead of 23 s). The server's own process now reads the
 lidar ahead (roadz.RoadZ.prefetch) and nothing waits for it, so the rule cells grow; this is what gets them kept.
 
-Every road geotile whose content a session built and did not keep (Server.build_roads_geo -> note) is built again,
-once the lidar of its cells is in (on disk, or its read failed), in a process of its own at the lowest priority
+Every map cell whose plans this run made short (its ".short" marker in the run's plan cache: Server.late_scan) is
+planned again (blockworker.late_plan), and every road geotile whose content a session built and did not keep
+(Server.build_roads_geo -> note) is built again, once the lidar of their cells is in (on disk, or its read failed;
+the cells first: the blocks and tiles read them), in processes of their own at the lowest priority
 (earthd's late pool: blockworker.init_late, its own plan and lidar-decision run, so it reads none of the run's rule
 decisions nor its short plans and facts, and waits for any lidar it still lacks: roadz.precache_gaps_wait), nearest
 the player first, one at a time. What it makes complete (the cells' plans, their facts, the geotile's content) is kept
@@ -32,7 +34,13 @@ LATE_FAR_M = 6000.0         # m: a geotile this far from the player when its tur
 LATE_PAD_M = 300.0          # m round a geotile whose cells' lidar is waited for (its roads' neighbours: CLIP_PAD_M ...)
 LATE_POLL_S = 2.0           # s between looks when nothing is due
 LATE_WAIT_S = 5.0           # s before a geotile whose lidar is not in yet is looked at again
-LATE_MAX = 600              # geotiles queued at most (the nearest kept)
+LATE_MAX = 600              # items queued at most (the nearest kept)
+LATE_SCAN_S = 10.0          # s between looks for the run's plan cells made short (scan)
+CELL_FIRST_M = 500.0        # m: a cell's plans before a geotile this much nearer (the blocks and tiles read them)
+
+
+def _name(k):
+    return f"road geotile {k[1]}_{k[2]}" if k[0] == "g" else f"cell {k[1]}/{k[2]}/{k[3]}'s plans"
 
 
 def processes():
@@ -45,26 +53,33 @@ def processes():
 
 
 class LateWork:
-    """build(gx, gy) -> True (kept) / False (still short) / None (could not run): the late pool's prebuild
-    (earthd.Server.prebuild_late); kept(gx, gy) -> bool: its content in the revisit cache already; cells(gx, gy) ->
-    the map cells whose lidar it reads; lidar: roadz.RoadZ (or None) whose prefetch state says when they are in."""
+    """Items: ("g", gx, gy) a road geotile's content, ("c", z, x, y) a map cell's road plans. build(item) -> True
+    (kept) / False (still short) / None (could not run): the late pool's job (earthd.Server.late_build); kept(item) ->
+    bool: in the revisit cache already; cells(item) -> the map cells whose lidar it reads; lidar: roadz.RoadZ (or None)
+    whose prefetch state says when they are in; scan() -> items to note (the run's plan cells made short), asked
+    every LATE_SCAN_S."""
 
-    def __init__(self, build, kept, cells, lidar=None, workers=1):
-        self.build, self.kept, self.cells, self.lidar = build, kept, cells, lidar
-        self.where = None           # (gx, gy) -> m from the player (the server's latest focus), or None
-        self.q = {}                 # (gx, gy) -> [tries, not before (monotonic)]
-        self.busy = set()           # geotiles being looked at / built now
+    def __init__(self, build, kept, cells, lidar=None, workers=1, scan=None):
+        self.build, self.kept, self.cells, self.lidar, self.scan = build, kept, cells, lidar, scan
+        self.where = None           # item -> m from the player (the server's latest focus), or None
+        self.q = {}                 # item -> [tries, not before (monotonic)]
+        self.busy = set()           # items being looked at / built now
         self.cv = threading.Condition()
         self.thread = None
         self.workers = max(1, int(workers))     # builds at once (the late pool's processes)
         self.stats = {"noted": 0, "kept": 0, "short": 0, "given_up": 0, "dropped": 0, "already": 0, "busy_s": 0.0}
         self.stop = False
+        self.seen = set()           # items scan() named once (a cell's short plans file stays: noted once)
+        self.scanned = 0.0
 
     def note(self, gx, gy):
         """Geotile (gx, gy)'s content was built this session: built again later if it was not kept."""
+        self.note_item(("g", int(gx), int(gy)))
+
+    def note_item(self, k):
         if not ON:
             return
-        k = (int(gx), int(gy))
+        k = tuple(k)
         with self.cv:
             if k in self.q:
                 return
@@ -75,18 +90,43 @@ class LateWork:
                 del self.q[far]
             self.q[k] = [0, time.monotonic()]
             self.stats["noted"] += 1
+            self.start()            # (the lock is re-entrant: threading.Condition's RLock)
+            self.cv.notify()
+
+    def _scan(self):
+        """Note the items scan() names (one thread at a time, every LATE_SCAN_S)."""
+        if self.scan is None:
+            return
+        with self.cv:
+            if time.monotonic() - self.scanned < LATE_SCAN_S:
+                return
+            self.scanned = time.monotonic()
+        try:
+            got = [tuple(k) for k in self.scan()]
+        except Exception as e:
+            log.debug("late work: scan: %s: %s", type(e).__name__, e)
+            return
+        for k in got:
+            with self.cv:
+                new = k not in self.seen
+                self.seen.add(k)
+            if new:
+                self.note_item(k)
+
+    def start(self):
+        """The workers' threads (note starts them too): scan() asked from now on."""
+        with self.cv:
             if self.thread is None:
                 for _ in range(self.workers):
                     self.thread = threading.Thread(target=self._loop, name="late-work", daemon=True)
                     self.thread.start()
-            self.cv.notify()
 
     def _dist(self, k):
         w = self.where
         if w is None:
             return 0.0
         try:
-            return float(w(*k))
+            return float(w(k)) - (CELL_FIRST_M if k[0] == "c" else 0.0)
         except Exception:
             return math.inf
 
@@ -102,7 +142,7 @@ class LateWork:
         if prov is None:
             return True
         waiting, todo = False, []
-        for c in self.cells(*k):
+        for c in self.cells(k):
             if not prov.lidar_wanted(c) or prov.lidar_on_disk(c):
                 continue
             st = prov.prefetch_state(c)
@@ -124,14 +164,13 @@ class LateWork:
                 del self.q[k]
                 self.stats["dropped"] += 1
                 continue
-            if due > now or k in self.busy:
-                continue
-            best = k
-            break
+            if best is None and due <= now and k not in self.busy:
+                best = k
         return best
 
     def _loop(self):
         while not self.stop:
+            self._scan()
             with self.cv:
                 k = self._pick()
                 if k is None:
@@ -153,14 +192,14 @@ class LateWork:
                     if k in self.q:
                         self.q[k][1] = time.monotonic() + LATE_WAIT_S
                 return
-            if self.kept(*k):
+            if self.kept(k):
                 with self.cv:
                     self.q.pop(k, None)
                     if tries == 0:
                         self.stats["already"] += 1
                 return
             t0 = time.monotonic()
-            ok = self.build(*k)
+            ok = self.build(k)
             took = time.monotonic() - t0
         except Exception as e:      # (tried again later)
             log.debug("late work: geotile %s: %s: %s", k, type(e).__name__, e)
@@ -174,15 +213,14 @@ class LateWork:
             if ok:
                 self.q.pop(k, None)
                 self.stats["kept"] += 1
-                log.info("late work: road geotile %d_%d built again and kept (%.1f s, try %d; %d kept, %d queued)",
-                         k[0], k[1], took, tries + 1, self.stats["kept"], len(self.q))
+                log.info("late work: %s built again and kept (%.1f s, try %d; %d kept, %d queued)", _name(k), took,
+                         tries + 1, self.stats["kept"], len(self.q))
                 return
             self.stats["short"] += 1
             tries += 1
             if tries >= LATE_TRIES:
                 self.q.pop(k, None)
                 self.stats["given_up"] += 1
-                log.info("late work: road geotile %d_%d still short after %d builds: left to the next visit",
-                         k[0], k[1], tries)
+                log.info("late work: %s still short after %d builds: left to the next visit", _name(k), tries)
             elif k in self.q:
                 self.q[k] = [tries, time.monotonic() + LATE_RETRY_S * tries]

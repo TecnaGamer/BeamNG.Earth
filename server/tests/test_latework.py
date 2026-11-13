@@ -239,7 +239,8 @@ class PlanUpgradeTest(unittest.TestCase):
 
 
 class LateWorkTest(unittest.TestCase):
-    """latework.LateWork: built again once the lidar is in, nearest first, kept or tried again, never forever."""
+    """latework.LateWork: built again once the lidar is in, nearest first (a cell's plans before a geotile), kept or
+    tried again, never forever; the run's short plan cells found by its scan."""
 
     def run_until(self, lw, cond, timeout=5.0):
         end = time.monotonic() + timeout
@@ -265,41 +266,51 @@ class LateWorkTest(unittest.TestCase):
 
             def prefetch(self, keys):
                 pass
-        lw = latework.LateWork(lambda gx, gy: built.append((gx, gy)) or True, lambda gx, gy: (gx, gy) in built,
-                               lambda gx, gy: [CELL], Prov())
+        lw = latework.LateWork(lambda k: built.append(k) or True, lambda k: k in built, lambda k: [CELL], Prov())
         with mock.patch.object(latework, "LATE_WAIT_S", 0.05), mock.patch.object(latework, "LATE_POLL_S", 0.05):
             lw.note(1, 1)
             time.sleep(0.3)
             self.assertEqual(built, [], "built before its lidar was in")
             state["in"] = True
             self.run_until(lw, lambda: built)
-        self.assertEqual(built, [(1, 1)])
+        self.assertEqual(built, [("g", 1, 1)])
         self.assertEqual(lw.stats["kept"], 1)
 
     def test_nearest_first_short_retried_then_left(self):
         built = []
-        lw = latework.LateWork(lambda gx, gy: built.append((gx, gy)) or False, lambda gx, gy: False,
-                               lambda gx, gy: [], None)
-        lw.where = lambda gx, gy: float(gx)
+        lw = latework.LateWork(lambda k: built.append(k) or False, lambda k: False, lambda k: [], None)
+        lw.where = lambda k: float(k[1]) if k[0] == "g" else float(k[2])
         with mock.patch.object(latework, "LATE_RETRY_S", 0.3), mock.patch.object(latework, "LATE_POLL_S", 0.05), \
-                mock.patch.object(latework, "LATE_FAR_M", 50.0):
+                mock.patch.object(latework, "LATE_FAR_M", 50.0), mock.patch.object(latework, "CELL_FIRST_M", 15.0):
             with lw.cv:                 # (all queued before the first pick)
                 for gx in (30, 10, 20, 99):
                     lw.note(gx, 0)
-            self.run_until(lw, lambda: lw.stats["given_up"] == 3, 10.0)
-        self.assertEqual(built[:3], [(10, 0), (20, 0), (30, 0)], "nearest first")
-        self.assertEqual(sorted(set(built)), [(10, 0), (20, 0), (30, 0)], "the far one dropped")
-        self.assertEqual(len(built), 3 * latework.LATE_TRIES, "tried LATE_TRIES times, then left to the next visit")
+                lw.note_item(("c", 14, 22, 0))      # (22 m, less CELL_FIRST_M: 7 m, before the 10 m geotile)
+            self.run_until(lw, lambda: lw.stats["given_up"] == 4, 10.0)
+        self.assertEqual(built[:4], [("c", 14, 22, 0), ("g", 10, 0), ("g", 20, 0), ("g", 30, 0)], "nearest first")
+        self.assertNotIn(("g", 99, 0), built, "the far one dropped")
+        self.assertEqual(len(built), 4 * latework.LATE_TRIES, "tried LATE_TRIES times, then left to the next visit")
         self.assertEqual(lw.stats["dropped"], 1)
 
     def test_kept_already_not_built(self):
         built = []
-        lw = latework.LateWork(lambda gx, gy: built.append((gx, gy)) or True, lambda gx, gy: True,
-                               lambda gx, gy: [], None)
+        lw = latework.LateWork(lambda k: built.append(k) or True, lambda k: True, lambda k: [], None)
         with mock.patch.object(latework, "LATE_POLL_S", 0.05):
             lw.note(3, 3)
             self.run_until(lw, lambda: lw.stats["already"])
         self.assertEqual(built, [])
+
+    def test_scan_notes_short_cells_once(self):
+        built, scans = [], []
+
+        def scan():
+            scans.append(1)
+            return [("c", 14, 1, 2)]
+        lw = latework.LateWork(lambda k: built.append(k) or True, lambda k: False, lambda k: [], None, scan=scan)
+        with mock.patch.object(latework, "LATE_POLL_S", 0.02), mock.patch.object(latework, "LATE_SCAN_S", 0.05):
+            lw.start()
+            self.run_until(lw, lambda: len(scans) >= 4)
+        self.assertEqual(built, [("c", 14, 1, 2)], "planned again once, kept")
 
 
 if __name__ == "__main__":

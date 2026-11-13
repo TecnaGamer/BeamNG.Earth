@@ -968,8 +968,10 @@ class RoadZ:
                     self._pf_wants(st)
                     k = self._pf_next(st)
                     if k is None:
-                        if not st["busy"] and not st["logged"] and st["t0"] is not None:
+                        if (not st["busy"] and not st["logged"] and st["t0"] is not None
+                                and st.get("logged_n") != len(st["done"]) + len(st["failed"])):
                             st["logged"] = True
+                            st["logged_n"] = len(st["done"]) + len(st["failed"])
                             log.info("lidar prefetch: %d cells read, %d failed, last %.1f s after the first was asked "
                                      "for (%d requests, %.1f MB)", len(st["done"]), len(st["failed"]),
                                      (st["last"] or st["t0"]) - st["t0"], self.stats["requests"],

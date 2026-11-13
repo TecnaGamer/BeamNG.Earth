@@ -2708,47 +2708,76 @@ class Server:
     LATE_TIMEOUT_S = 1200.0         # s a late build may take (its process waits for the lidar it lacks itself)
 
     def start_late(self, pool):
-        """Road content built short built again in pool once its lidar is in (latework.py)."""
-        import geotiles
+        """What a session built short (road geotiles' content, map cells' plans) built again in pool once its lidar is
+        in (latework.py)."""
         import roadz
         self.late_pool = pool
+        self.late = latework.LateWork(self.late_build, self.late_kept, Server.late_cells, roadz.PROVIDER,
+                                      getattr(pool, "workers", 1), self.late_scan)
+        self.late.start()
 
-        def cells(gx, gy):
-            _la, _lo, s, w, n, e = geotiles.info(gx, gy)
-            pad = latework.LATE_PAD_M / 111320.0
-            padx = pad / max(0.05, dmath.cos(math.radians((s + n) / 2)))
-            return mapcells.cells_for_bbox(s - pad, w - padx, n + pad, e + padx)
-        self.late = latework.LateWork(self.prebuild_late, lambda gx, gy: self.geo_prebuilt(gx, gy) is not None,
-                                      cells, roadz.PROVIDER, getattr(pool, "workers", 1))
+    @staticmethod
+    def late_cells(item):
+        """The map cells whose lidar a late item reads: its box's, LATE_PAD_M round it."""
+        import geotiles
+        if item[0] == "g":
+            _la, _lo, s, w, n, e = geotiles.info(item[1], item[2])
+        else:
+            w, s, e, n = mapcells.CellKey(*item[1:4]).bounds()
+        pad = latework.LATE_PAD_M / 111320.0
+        padx = pad / max(0.05, dmath.cos(math.radians((s + n) / 2)))
+        return mapcells.cells_for_bbox(s - pad, w - padx, n + pad, e + padx)
 
-    def prebuild_late(self, gx, gy):
-        """latework's build: geotile (gx, gy)'s road content built into the revisit cache in the late pool (its own
-        plan and lidar-decision run, the lidar waited for: blockworker.prebuild_geo's pre-cache path). True when kept,
-        False when still short, None when it could not run."""
+    def late_kept(self, item):
+        """Is a late item kept already? A geotile's content in the revisit cache; a cell's plans: the late job reads
+        a kept copy at once, so asked there."""
+        return item[0] == "g" and self.geo_prebuilt(item[1], item[2]) is not None
+
+    def late_scan(self):
+        """The cells this run's plan cache holds plans of made short (their ".short" markers: plancache.store)."""
+        run = os.environ.get(plancachemod.RUN_ENV)
+        if not run:
+            return []
+        out = []
+        for p in glob.glob(os.path.join(self.cache_dir, "plans", run, plancachemod.FRAMES, "*", "*.npz.short")):
+            try:
+                z, x, y = (int(v) for v in os.path.basename(p)[:-len(".npz.short")].split("_"))
+            except ValueError:
+                continue
+            out.append(("c", z, x, y))
+        return out
+
+    def late_build(self, item):
+        """latework's build of an item in the late pool (its own plan and lidar-decision run, the lidar waited for):
+        True when kept, False when still short, None when it could not run."""
         if self.late_pool is None or self.mapdata is None:
             return None
-        lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
-        scratch = os.path.join(self.root, "late_scratch")
+        if item[0] == "g":
+            gx, gy = item[1], item[2]
+            lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
+            fut = self.late_pool.submit(
+                blockworker.prebuild_geo, gx, gy, gzoom, os.path.join(self.root, "late_scratch"), self.buildings, lh,
+                mph, self.gas_stations, buried, lamps, country, "/temp/beamngEarth/late_scratch",
+                pole_profile=Server.pole_profile(self), wait_gaps=True, de_junctions=designsmod.enabled(self.dej_on),
+                towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self))
+        else:
+            fut = self.late_pool.submit(blockworker.late_plan, *item[1:4])
         try:
-            k = poolsmod.result_running(self.late_pool.submit(
-                blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
-                lamps, country, "/temp/beamngEarth/late_scratch", pole_profile=Server.pole_profile(self),
-                wait_gaps=True, de_junctions=designsmod.enabled(self.dej_on), towns_on=Server.towns_enabled(self),
-                wear=Server.wear_arg(self)), self.LATE_TIMEOUT_S)
+            got = poolsmod.result_running(fut, self.LATE_TIMEOUT_S)
         except concurrent.futures.TimeoutError:
-            log.warning("late work: road geotile %d_%d: no answer in %.0f s", gx, gy, self.LATE_TIMEOUT_S)
+            log.warning("late work: %s: no answer in %.0f s", latework._name(item), self.LATE_TIMEOUT_S)
             if hasattr(self.late_pool, "recycle"):
-                self.late_pool.recycle(f"late geotile {gx}_{gy} hung")
+                self.late_pool.recycle(f"late {latework._name(item)} hung")
             return None
         except Exception as e:
-            log.info("late work: road geotile %d_%d: %s: %s", gx, gy, type(e).__name__, e)
+            log.info("late work: %s: %s: %s", latework._name(item), type(e).__name__, e)
             return None
-        return k is not None
+        return None if got is None and item[0] == "c" else bool(got)
 
     def late_focus(self, anchor, x, y):
-        """The player's place (anchor frame x, y) for the lidar prefetch and the late work: nearest first."""
+        """The player's place (anchor frame x, y) for the lidar prefetch and the late work: nearest first. Returns
+        the prefetch's cell -> m."""
         import geotiles
-        import roadz
         frame = anchor.frame
 
         def cell_m(k, frame=frame, x=x, y=y):
@@ -2756,12 +2785,14 @@ class Server:
             e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
             return math.hypot(float(e) - x, float(n) - y)
 
-        def geo_m(gx, gy, frame=frame, x=x, y=y):
-            la, lo = geotiles.centre(gx, gy)
-            e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
-            return math.hypot(float(e) - x, float(n) - y)
+        def item_m(item):
+            if item[0] == "g":
+                la, lo = geotiles.centre(item[1], item[2])
+                e, n, _ = frame.geodetic_to_enu(la, lo, 0.0)
+                return math.hypot(float(e) - x, float(n) - y)
+            return cell_m(mapcells.CellKey(*item[1:4]))
         if self.late is not None:
-            self.late.where = geo_m
+            self.late.where = item_m
         return cell_m
 
     def build_roads_tile(self, aid, tx, ty):
