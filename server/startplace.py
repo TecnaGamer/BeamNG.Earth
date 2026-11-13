@@ -14,20 +14,27 @@ import os
 GAME_STATE = ("settings", "cloud", "game-state.json")
 PLACES = ("settings", "beamngEarth_places.json")
 LASTPOS = ("settings", "beamngEarth_lastpos.json")
+MAX_BYTES = 1 << 20     # a file larger than this is not read (none of the three is near it; never a huge parse)
 LEVEL = "beamng_earth"
 RANDOM = "bne_random"
 PREFIX = "bne_place_"
 
 
 def _read(user_dir, parts):
-    """The JSON of user_dir/parts (its last part in lower case too), or None."""
+    """The JSON of user_dir/parts (its last part in lower case too), or None (none, unreadable, over MAX_BYTES)."""
     head, name = parts[:-1], parts[-1]
-    for n in (name, name.lower()):
+    for n in dict.fromkeys((name, name.lower())):
         try:
-            with open(os.path.join(user_dir, *head, n), encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, ValueError):
+            with open(os.path.join(user_dir, *head, n), "rb") as f:
+                data = f.read(MAX_BYTES + 1)
+        except OSError:
             continue
+        if len(data) > MAX_BYTES:
+            return None
+        try:
+            return json.loads(data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
     return None
 
 
