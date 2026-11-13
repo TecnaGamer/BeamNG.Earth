@@ -2433,6 +2433,14 @@ local function perfContext()
     end
   end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
+  -- the single slow pieces of the last second (a "roads" or "net" frame is mostly one: a collision rebuild, a
+  -- building mesh's first load, a terrain commit message; London 2026-11-12)
+  local big = roads.lastBig
+  if big and os.clock() - big.at < 1.0 then d[#d + 1] = string.format('roads unit %s %.0f ms', big.kind, big.ms) end
+  local slowMsg = M._netq.lastSlow
+  if slowMsg and os.clock() - slowMsg.at < 1.0 then
+    d[#d + 1] = string.format('message %s %.0f ms', slowMsg.type, slowMsg.ms)
+  end
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '', M._alloc.text())
@@ -2730,6 +2738,11 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
+      if ms >= 20 then          -- (a hitch's context: perfContext names the message that made a "net" frame)
+        local s = nq.lastSlow or {}
+        s.type, s.ms, s.at = tostring(msg.type), ms, os.clock()
+        nq.lastSlow = s
+      end
     end
     M._alloc.roll(st.clock)
     M._alloc.frame()
@@ -3503,17 +3516,19 @@ function M.dashboardContext()
   local player
   local pl = st.player
   if pl then
-    player = { lat = pl.lat, lon = pl.lon, speed = pl.speed } -- speed is m/s
+    -- x, y: the world frame (the road graph's: the screens draw its roads round the car); north: true north's angle
+    -- clockwise from the frame's +y at the car (radians)
+    player = { lat = pl.lat, lon = pl.lon, speed = pl.speed, x = pl.x, y = pl.y, north = 0 } -- speed is m/s
+    local anchor = st.anchor
+    if anchor and anchor.northAt then
+      local okN, nx, ny = pcall(anchor.northAt, anchor, pl.x, pl.y)
+      if okN and tonumber(nx) and tonumber(ny) then player.north = math.atan2(nx, ny) end
+    end
     local veh = getPlayerVehicle and getPlayerVehicle(0)
     if veh then
       local ok, dir = pcall(function() return veh:getDirectionVector() end)
       if ok and dir and math.abs(dir.x) + math.abs(dir.y) >= 1e-6 then
-        local heading = math.deg(math.atan2(dir.x, dir.y))
-        local anchor = st.anchor
-        if anchor and anchor.northAt then
-          local okN, nx, ny = pcall(anchor.northAt, anchor, pl.x, pl.y)
-          if okN and tonumber(nx) and tonumber(ny) then heading = heading - math.deg(math.atan2(nx, ny)) end
-        end
+        local heading = math.deg(math.atan2(dir.x, dir.y)) - math.deg(player.north)
         player.heading = (heading + 360) % 360 -- degrees clockwise from true north
       end
     end
@@ -3527,6 +3542,7 @@ function M.dashboardContext()
     active = st.inOurLevel == true,
     connected = net.isConnected(),
     mapPort = st.mapPort,
+    anchorId = st.anchorId,         -- (the road graph's frame must be this one: dashboard.lua)
     attribution = attributionText(farfield.counters()),
     imageryCreditsByArea = creditsByArea,
     otherCredits = serverOtherCredits,

@@ -1,4 +1,6 @@
--- Satellite imagery on the vehicle's own BeamNavigator WebView while BeamNG.Earth is active.
+-- Satellite imagery on the vehicle's own BeamNavigator WebView while BeamNG.Earth is active, with the server's road
+-- graph drawn over it as lines (the user, 2026-11-12, London: "Nav screeb blurry mess": the photo alone, 1 m a pixel
+-- from 10 m Sentinel-2 imagery in most of the world, showed no road to follow).
 -- BeamNavigator calls ui_uinavi.requestVehicleDashboardMap with the screen's actual material tag;
 -- that is the supported registration point, so this works without per-vehicle JBeam mappings.
 local M = {}
@@ -11,10 +13,10 @@ M.VIEW_INTERVAL_S = 0.1
 M.TILE_INTERVAL_S = 0.5
 M.RESTORE_RELOAD_S = 0.5
 
-local OFFSETS = {
-  { 0, 0 }, {-1, 0}, {1, 0}, {0, -1}, {0, 1},
-  {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
-}
+-- The photo tiles round the car: every tile within VIEW_RADIUS_PX of it (the farthest screen corner of a 512 x 256 screen
+-- with the car 62 % down is ~300 px away; the fixed 3 x 3 block left bare corners when the car was near a tile's edge)
+M.VIEW_RADIUS_PX = 320
+M.ROADS_YIELD = 600       -- the roads' conversion pauses for a frame after this many nodes / edges (no hitch per graph)
 
 local enabled = true
 local active = false
@@ -126,7 +128,7 @@ local function applyScreen(rec)
   local prefix = M.DASHBOARD_URI .. '?vehicle=' .. rec.vehicleId .. '&screen='
   target:queueJSUITexture(rec.tag, 'window.location.replace(' .. jsonEncode(prefix)
     .. '+encodeURIComponent(' .. jsonEncode(rec.tag) .. ')+"&return="+encodeURIComponent(window.location.href))')
-  rec.applied, rec.sentTiles, rec.lastViewAt = true, false, 0
+  rec.applied, rec.sentTiles, rec.lastViewAt, rec.roadsKey = true, false, 0, nil
   lastTilesSignature = nil
 end
 
@@ -156,7 +158,10 @@ local function registerScreen(tag, initmap, vehId, callback)
     screens[key] = rec
   end
   rec.initmap, rec.stockRequest = initmap, callback
-  rec.restoring = false
+  -- a request comes from a navigator starting (a spawn, the car reloaded with its id kept: Ctrl+R): its screen shows
+  -- the stock page again, ours to load anew (in-game 2026-11-12: after a reload the stock page stayed, the record
+  -- still marked as ours)
+  rec.restoring, rec.applied = false, false
   if active and enabled and id == playerVehicleId() then applyScreen(rec) end
 end
 
@@ -191,15 +196,24 @@ M.project = project
 local function tileLayout(lat, lon, zoom)
   local x, y, n = project(lat, lon, zoom)
   if not x then return nil end
-  local cx, cy = math.floor(x), math.floor(y)
-  local requests, tiles = {}, {}
-  for _, d in ipairs(OFFSETS) do
-    local worldX, tileY = cx + d[1], cy + d[2]
-    if tileY >= 0 and tileY < n then
-      local tileX = worldX % n
-      requests[#requests + 1] = { zoom, tileX, tileY, 'sat' }
-      tiles[#tiles + 1] = { x = worldX, y = tileY, tileX = tileX }
+  local r = M.VIEW_RADIUS_PX / 256
+  local list = {}
+  for worldX = math.floor(x - r), math.floor(x + r) do
+    for tileY = math.floor(y - r), math.floor(y + r) do
+      if tileY >= 0 and tileY < n then
+        local ddx = math.max(worldX - x, 0, x - worldX - 1)
+        local ddy = math.max(tileY - y, 0, y - tileY - 1)
+        if ddx * ddx + ddy * ddy <= r * r then
+          list[#list + 1] = { x = worldX, y = tileY, tileX = worldX % n, d = ddx * ddx + ddy * ddy }
+        end
+      end
     end
+  end
+  table.sort(list, function(a, b) return a.d < b.d end)     -- the car's own tile first
+  local requests, tiles = {}, {}
+  for i, t in ipairs(list) do
+    requests[i] = { zoom, t.tileX, t.y, 'sat' }
+    tiles[i] = { x = t.x, y = t.y, tileX = t.tileX }
   end
   return { zoom = zoom, pixelX = x * 256, pixelY = y * 256, requests = requests, tiles = tiles }
 end
@@ -216,6 +230,108 @@ M.zoomFor = zoomFor
 
 local function keyFor(z, x, y)
   return string.format('sat/%d/%d/%d', z, x, y)
+end
+
+------------------------------------------------------------------------------------------
+-- The roads over the photo
+
+-- Pure: a graph edge's drivability (server navgraph.py DRIVE: main roads 1, tertiary 0.9, town streets 0.8, living
+-- streets 0.5, service 0.4, busways / tracks 0.2) as the page's road class: 3 main, 2 town street, 1 service, 0 track.
+function M.roadClass(d)
+  d = tonumber(d) or 1
+  if d >= 0.85 then return 3 end
+  if d >= 0.7 then return 2 end
+  if d >= 0.3 then return 1 end
+  return 0
+end
+
+local function finite(v) return type(v) == 'number' and v == v and v > -1e7 and v < 1e7 end
+local function r1(v) return tostring(math.floor(v * 10 + 0.5) / 10) end
+
+-- Pure: the page's setRoads argument (JSON text) for graph g ({ anchor, nodes = { name = {x, y, z, radius} },
+-- edges = { {a, b, oneway, lo, li, speed, drivability, half width} } }): n = node x, y pairs in metres from (ox, oy)
+-- (0.1 m), e = (node a, node b, class, half width in dm) per road, each road once (not its reverse), only nodes a road
+-- uses. Also the road count. yieldEvery: a coroutine.yield after that many edges / nodes (in a coroutine).
+function M.roadsText(g, key, yieldEvery)
+  local nodes = type(g) == 'table' and type(g.nodes) == 'table' and g.nodes or {}
+  local index, order, edges, seen = {}, {}, {}, {}
+  local ox, oy
+  local function id(name, p)
+    local i = index[name]
+    if not i then
+      i = #order
+      index[name] = i
+      order[#order + 1] = p
+      if not ox then ox, oy = math.floor(p[1]), math.floor(p[2]) end
+    end
+    return i
+  end
+  local roads = 0
+  for k, e in ipairs(type(g) == 'table' and type(g.edges) == 'table' and g.edges or {}) do
+    local na, nb = e[1], e[2]
+    local a, b = nodes[na], nodes[nb]
+    if na ~= nb and type(a) == 'table' and type(b) == 'table' and finite(a[1]) and finite(a[2]) and finite(b[1])
+        and finite(b[2]) and not seen[tostring(nb) .. '\0' .. tostring(na)] then
+      seen[tostring(na) .. '\0' .. tostring(nb)] = true
+      local half = tonumber(e[8]) or math.max(tonumber(a[4]) or 0, tonumber(b[4]) or 0)
+      if not finite(half) or half <= 0 then half = 3 end
+      local ia, ib = id(na, a), id(nb, b)
+      edges[#edges + 1] = ia .. ',' .. ib .. ',' .. M.roadClass(e[7]) .. ',' .. math.floor(math.min(half, 40) * 10 + 0.5)
+      roads = roads + 1
+    end
+    if yieldEvery and k % yieldEvery == 0 then coroutine.yield() end
+  end
+  local n = {}
+  for i, p in ipairs(order) do
+    n[i] = r1(p[1] - ox) .. ',' .. r1(p[2] - oy)
+    if yieldEvery and i % yieldEvery == 0 then coroutine.yield() end
+  end
+  local anchor = type(g) == 'table' and g.anchor
+  return '{"key":' .. string.format('%q', tostring(key or '')) .. ',"anchor":'
+    .. (type(anchor) == 'number' and tostring(anchor) or string.format('%q', tostring(anchor)))
+    .. ',"ox":' .. (ox or 0) .. ',"oy":' .. (oy or 0) .. ',"n":[' .. table.concat(n, ',') .. '],"e":['
+    .. table.concat(edges, ',') .. ']}', roads
+end
+
+local roadsJob = nil          -- { key, co }: a graph's conversion in progress
+local roadsBuilt = nil        -- { key, text, roads }: the last graph converted
+
+-- The server's road graph (navgraph.lua's, moved with a rebase) as the page's roads, converted over a few frames.
+local function updateRoads()
+  local ok, nav = pcall(require, 'beamngEarth/navgraph')
+  local g = ok and type(nav) == 'table' and type(nav.graph) == 'function' and nav.graph() or nil
+  if type(g) ~= 'table' then return end
+  local key = tostring(g.anchor) .. ':' .. tostring(g.serial) .. (g.moved and ':moved' or '') .. ':' .. tostring(g.nodes)
+  if roadsBuilt and roadsBuilt.key == key then return end
+  if not roadsJob or roadsJob.key ~= key then
+    roadsJob = { key = key, co = coroutine.create(function() return M.roadsText(g, key, M.ROADS_YIELD) end) }
+  end
+  local okR, text, roads = coroutine.resume(roadsJob.co)
+  if not okR then
+    if log then log('W', 'beamngEarth.dashboard', 'roads for the car screens: ' .. tostring(text)) end
+    roadsJob, roadsBuilt = nil, { key = key, text = nil }
+  elseif coroutine.status(roadsJob.co) == 'dead' then
+    roadsJob, roadsBuilt = nil, { key = key, text = text, roads = roads }
+  end
+end
+
+local function sendRoads()
+  if not roadsBuilt or not roadsBuilt.text then return end
+  for _, rec in pairs(screens) do
+    if rec.applied and rec.vehicleId == currentVehicle and rec.roadsKey ~= roadsBuilt.key then
+      local target = vehicleFor(rec.vehicleId)
+      if target and type(target.queueJSUITexture) == 'function' then
+        target:queueJSUITexture(rec.tag, 'window.beamngEarthDashboard&&window.beamngEarthDashboard.setRoads('
+          .. roadsBuilt.text .. ')')
+        rec.roadsKey = roadsBuilt.key
+      end
+    end
+  end
+end
+
+-- Pure: metres a photo pixel at a zoom and latitude (Web Mercator, 256 px tiles).
+function M.metresPerPixel(lat, zoom)
+  return 156543.03392804097 * math.cos(math.rad(lat)) / 2 ^ zoom
 end
 
 local function imageryCredits(ctx)
@@ -266,7 +382,11 @@ local function sendView(ctx, layout, status, now)
   local view
   if layout and player then
     view = { pixelX = layout.pixelX, pixelY = layout.pixelY, zoom = layout.zoom,
-      heading = tonumber(player.heading) or 0, attribution = imageryCredits(ctx), status = status or '' }
+      heading = tonumber(player.heading) or 0, attribution = imageryCredits(ctx), status = status or '',
+      -- the roads' frame: the car in the world frame, true north there, the photo's metres a pixel
+      x = finite(player.x) and player.x or nil, y = finite(player.y) and player.y or nil,
+      north = finite(player.north) and player.north or 0, anchor = ctx.anchorId,
+      mpp = M.metresPerPixel(player.lat, layout.zoom) }
   else
     view = { status = status or '', attribution = imageryCredits(ctx) }
   end
@@ -311,6 +431,8 @@ local function updateDashboard(now, ctx)
   end
   local tileUpdate = updateTiles(ctx, layout, now)
   sendTiles(tileUpdate)
+  updateRoads()
+  sendRoads()
   local status = (lastTilesSignature == '' and 'Satellite tiles are loading') or ''
   sendView(ctx, layout, status, now)
 end
@@ -326,7 +448,7 @@ function M.screenReady(vehicleId, tag)
     restoreScreen(rec)
     return false
   end
-  rec.sentTiles = false
+  rec.sentTiles, rec.roadsKey = false, nil
   lastTilesSignature, lastTilesAt, lastViewAt = nil, 0, 0
   return true
 end
@@ -439,6 +561,7 @@ function M.onClientEndMission()
   restoreScreens()
   currentVehicle = nil
   lastTilesAt, lastViewAt, lastTilesSignature = 0, 0, nil
+  roadsJob, roadsBuilt = nil, nil
 end
 
 function M.onVehicleSwitched(oldId, newId)
