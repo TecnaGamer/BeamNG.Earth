@@ -14,21 +14,24 @@ Modes, by what the player did (Preloader.request):
 
 Single ownership: every bit of state here lives on the server's asyncio event loop and is touched only there (request,
 teleport, close, the running job's coroutine). The blocking parts (downloads, map cells, photos, the start place's
-files) run one at a time on the preloader's own thread (its executor) and come back to the loop; between two parts the
-job looks whether it is still wanted. A plan anchor is reserved (Server.alloc_anchor_id) and recorded before its jobs
+files) run one at a time on the preloader's own daemon thread (DaemonExecutor) and come back to the loop; between two
+parts the job looks whether it is still wanted. A plan anchor is reserved (Server.alloc_anchor_id) and recorded before its jobs
 are handed out, on the loop, so a teleport (which also runs on the loop) always sees it: a teleport farther than
 CANCEL_M stops the job and abandons its plan anchors through the server's one abandoned-anchors writer
 (Server.set_abandoned). Any teleport, and close, makes a start place still being read obsolete (gen).
 """
 import asyncio
+import concurrent.futures
 import logging
 import math
+import queue
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 log = logging.getLogger("earthd.preload")
 
+SHUTDOWN_S = 5.0            # s Preloader.shutdown waits for a running part
 HOVER_M = 256.0             # a hover's map cells: the road tiles within this of the place
 CANCEL_M = 3000.0           # a teleport (or a preload of a place) farther than this stops a preload
 RANK = {"hover": 0, "pick": 1, "start": 2}
@@ -50,6 +53,52 @@ def same(a, b):
 
 class _Stop(Exception):
     pass
+
+
+class DaemonExecutor:
+    """One daemon thread running the submitted calls in order (the preloader's parts): a part blocked on the network
+    at exit never holds the process (a ThreadPoolExecutor's threads are joined at exit)."""
+
+    def __init__(self, name="preload"):
+        self.q = queue.Queue()
+        self.closed = False
+        self.thread = threading.Thread(target=self._loop, name=name, daemon=True)
+        self.thread.start()
+
+    def submit(self, fn, *args):
+        f = concurrent.futures.Future()
+        if self.closed:
+            f.cancel()
+            return f
+        self.q.put((f, fn, args))
+        return f
+
+    def _loop(self):
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            f, fn, args = item
+            if not f.set_running_or_notify_cancel():
+                continue
+            try:
+                f.set_result(fn(*args))
+            except BaseException as e:      # (the caller's future has it)
+                f.set_exception(e)
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.closed = True
+        if cancel_futures:
+            while True:
+                try:
+                    item = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                if item is not None:
+                    item[0].cancel()
+        self.q.put(None)
+        if wait:
+            self.thread.join()
 
 
 class Job:
@@ -121,13 +170,31 @@ class Preloader:
         self._abandon(lambda at: far(at, to))
 
     def close(self):
-        """No more preloads (the server stops): the running one stops, a start place being read is dropped."""
+        """No more preloads: the running one stops at its next part, a queued one is dropped, a start place being read
+        is dropped, the plans handed out are abandoned. Event loop only (shutdown also waits)."""
         self.closed = True
         self.gen += 1
         for j in (self.job, self.queued):
             if j is not None:
                 j.dead = True
         self.queued = None
+        self._abandon(lambda at: True)
+
+    async def shutdown(self, timeout=SHUTDOWN_S):
+        """The server stops: close, then the running part waited for (timeout s at most: a part blocked on the network
+        is left to its daemon thread), then the executor shut with its queued parts cancelled. Before the network and
+        the disk cache close (earthd main_async)."""
+        self.close()
+        task = self.task
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout)
+            except asyncio.TimeoutError:
+                log.info("preload: a part still running at shutdown (left to its thread)")
+            except Exception:           # (the job's own error: logged by it)
+                pass
+        if self.ex is not None:
+            self.ex.shutdown(wait=False, cancel_futures=True)
 
     async def start_place(self, user_dir, read=None):
         """The place the game's level start will teleport to, read on the preloader's thread (startplace.start_point)
@@ -148,17 +215,21 @@ class Preloader:
         return got
 
     def _abandon(self, which):
+        """The plan anchors whose place which(at) picks abandoned; tracked here until the server says the abandoned
+        list with them landed (set_abandoned True; else its retry publishes them, and the next call asks again)."""
         gone = [p for p in self.plans if which(p[1])]
         if not gone:
             return
+        landed = self.s.set_abandoned(add=[a for a, _at in gone])
+        if landed is False:
+            return
         self.plans = [p for p in self.plans if p not in gone]
-        self.s.set_abandoned(add=[a for a, _at in gone])
         for _a, at in gone:
             log.info("preload: the plans for %.5f, %.5f dropped (the player goes elsewhere)", *at)
 
     def _executor(self):
         if self.ex is None:
-            self.ex = ThreadPoolExecutor(1, thread_name_prefix="preload")
+            self.ex = DaemonExecutor()
         return self.ex
 
     async def _drain(self):

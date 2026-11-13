@@ -296,6 +296,9 @@ PRELOAD = os.environ.get("BNE_PRELOAD", "on") != "off"
 _ANCHOR_ID_LOCK = threading.Lock()      # (Server.alloc_anchor_id)
 _ABANDON_LOCK = threading.RLock()       # (Server.set_abandoned: the abandoned anchors and their file)
 _ABANDON_SEQ = itertools.count()        # (each write's temporary file its own)
+ABANDON_RETRY_S = 0.005                 # s before a failed abandoned-anchors write is tried again ...
+ABANDON_RETRY_MAX_S = 1.0               # ... doubling to this, until it lands
+ABANDON_RETRY_WARN = 20                 # tries before it is logged as a warning
 # download_ahead: the raw data of the terrain blocks and road tiles ahead of a driving player, fetched into the
 # disk caches before anything there is built (a block in a new area waited ~0.5-2 s on its elevation tiles,
 # 2026-10-15). Points AHEAD_S s ahead on the straight path (at most AHEAD_MAX_M), at netfetch "prefetch"
@@ -3861,33 +3864,67 @@ class Server:
 
     def set_abandoned(self, add=(), remove=()):
         """Anchors abandoned (add) or not any more (remove), and the file the worker processes read written (the one
-        writer: a teleport's on the event loop and a preload's alike, under one lock)."""
+        writer: a teleport's on the event loop and a preload's alike, under one lock). True when the file has them now;
+        False when its publication waits for a retry (write_abandoned: it lands, never dropped)."""
         with _ABANDON_LOCK:
             self.abandoned.update(add)
             self.abandoned.difference_update(remove)
-            self.write_abandoned()      # (the lock is re-entrant)
+            return self.write_abandoned()      # (the lock is re-entrant)
 
     def write_abandoned(self):
-        """The abandoned anchors written for the worker processes (set_abandoned's file, under its lock)."""
+        """The abandoned anchors written for the worker processes (set_abandoned's file, under its lock). A write that
+        fails (Windows: a worker reading the file holds the rename off, a sharing violation) leaves the list dirty and a
+        retry thread publishes the latest list until it lands (ABANDON_RETRY_S, doubling to ABANDON_RETRY_MAX_S).
+        True when written now."""
         with _ABANDON_LOCK:
-            Server._write_abandoned(self)
+            if Server._write_abandoned(self):
+                self.__dict__["_abandon_dirty"] = False
+                return True
+            self.__dict__["_abandon_dirty"] = True
+            if not self.__dict__.get("_abandon_retrying"):
+                self.__dict__["_abandon_retrying"] = True
+                threading.Thread(target=Server._abandon_retry, args=(self,), name="abandoned-retry",
+                                 daemon=True).start()
+            return False
+
+    def _abandon_retry(self):
+        """(write_abandoned's thread) the latest list published again until it lands."""
+        wait, tries = ABANDON_RETRY_S, 0
+        while True:
+            time.sleep(wait)
+            tries += 1
+            with _ABANDON_LOCK:
+                if not self.__dict__.get("_abandon_dirty"):
+                    self.__dict__["_abandon_retrying"] = False
+                    return
+                if Server._write_abandoned(self):
+                    self.__dict__["_abandon_dirty"] = False
+                    self.__dict__["_abandon_retrying"] = False
+                    if tries >= ABANDON_RETRY_WARN:
+                        log.info("abandoned anchors file written after %d tries", tries + 1)
+                    return
+            if tries == ABANDON_RETRY_WARN:
+                log.warning("abandoned anchors file: not written after %d tries (still trying)", tries + 1)
+            wait = min(ABANDON_RETRY_MAX_S, wait * 2)
 
     def _write_abandoned(self):
         """(_ABANDON_LOCK held) blockworker.ABANDONED_FILE in out_dir: the worker processes' running blocks and road
         tiles of those anchors give up at their next road-plan wait or stage. Through a temporary file of its own per
-        write, renamed over it: a reader sees the old list or the new one, never a part."""
+        write, renamed over it: a reader sees the old list or the new one, never a part. True when it landed."""
         p = os.path.join(self.out_dir, blockworker.ABANDONED_FILE)
         tmp = f"{p}.{os.getpid()}-{threading.get_ident()}-{next(_ABANDON_SEQ)}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(sorted(int(a) for a in self.abandoned), f)
             os.replace(tmp, p)
+            return True
         except OSError as e:
-            log.debug("abandoned anchors file: %s", e)
+            log.debug("abandoned anchors file: %s (tried again)", e)
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+            return False
 
     def is_abandoned(self, aid):
         """Did a teleport leave anchor aid (abandoned: its queued work is not wanted)?"""
@@ -11587,8 +11624,8 @@ async def main_async(args):
             await srv.serve_forever()
     finally:
         pl = server.__dict__.get("_preloader")
-        if pl is not None:
-            pl.close()
+        if pl is not None:          # (before the network and the disk cache close: its running part ends first)
+            await pl.shutdown()
         profile_task.cancel()
         try:
             await profile_task

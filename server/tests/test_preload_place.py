@@ -322,6 +322,144 @@ class AbandonedWriterTest(unittest.TestCase):
                 self.assertEqual(len(json.load(f)), 1198)
 
 
+class AbandonedPublicationTest(unittest.TestCase):
+    """Windows: a worker reading the file holds the server's rename off (a sharing violation). The list stays dirty
+    and its latest version lands once the reader lets go, every anchor in it; the readers try again too."""
+
+    def server(self, d):
+        s = SimpleNamespace(out_dir=d, abandoned=set())
+        s.write_abandoned = lambda: earthd.Server.write_abandoned(s)
+        return s
+
+    def test_a_held_reader_delays_the_list_never_loses_it(self):
+        from unittest import mock
+        real = os.replace
+        left = {"n": 6}
+
+        def held(src, dst):
+            if left["n"] > 0:
+                left["n"] -= 1
+                raise PermissionError(13, "the file is in use by another process")
+            return real(src, dst)
+        with tempfile.TemporaryDirectory() as d, mock.patch("earthd.os.replace", side_effect=held):
+            s = self.server(d)
+            path = os.path.join(d, earthd.blockworker.ABANDONED_FILE)
+            self.assertFalse(earthd.Server.set_abandoned(s, add=[1]), "not landed yet")
+            self.assertFalse(earthd.Server.set_abandoned(s, add=[2]))     # (meanwhile: the latest list lands)
+            t0 = time.time()
+            while time.time() - t0 < 5:
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        if json.load(f) == [1, 2]:
+                            break
+                except (OSError, ValueError):
+                    pass
+                time.sleep(0.01)
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), [1, 2], "every anchor, once the reader let go")
+            self.assertEqual(left["n"], 0)
+            while s.__dict__.get("_abandon_retrying") and time.time() - t0 < 5:
+                time.sleep(0.01)
+            self.assertFalse(s.__dict__.get("_abandon_dirty"))
+            self.assertEqual([n for n in os.listdir(d) if n.endswith(".tmp")], [], "no temporary file left")
+            self.assertTrue(earthd.Server.set_abandoned(s, add=[3]), "a free file: at once")
+
+    def test_the_workers_read_again_and_keep_the_last_list(self):
+        from unittest import mock
+        bw = earthd.blockworker
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, bw.ABANDONED_FILE)
+            with open(path, "w") as f:
+                json.dump([5], f)
+            real = open
+            left = {"n": 2}
+
+            def flaky(p, *a, **k):
+                if p == path and left["n"] > 0:
+                    left["n"] -= 1
+                    raise PermissionError(13, "in use")
+                return real(p, *a, **k)
+            with mock.patch("builtins.open", side_effect=flaky):
+                self.assertTrue(bw.abandoned(d, 5), "read again after two sharing violations")
+            os.utime(path, ns=(time.time_ns(), time.time_ns() + 10 ** 9))   # (changed: read again ...)
+            with mock.patch("builtins.open", side_effect=PermissionError(13, "in use")):
+                self.assertTrue(bw.abandoned(d, 5), "... unreadable now: the list last read")
+
+
+class PreloaderPublicationTest(unittest.TestCase):
+    def test_plans_tracked_until_their_abandonment_landed(self):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        s = FakeServer()
+        landed = {"ok": False}
+
+        def set_abandoned(add=(), remove=()):
+            s.abandoned.update(add)
+            return landed["ok"]
+        s.set_abandoned = set_abandoned
+        pl = preload.Preloader(s, executor=ManualExecutor())
+        pl.plans = [(7, FELLS)]
+        pl.teleport(*NYC)
+        self.assertEqual(pl.plans, [(7, FELLS)], "not landed: still tracked")
+        landed["ok"] = True
+        pl.teleport(*NYC)
+        self.assertEqual(pl.plans, [])
+
+
+class ShutdownTest(unittest.TestCase):
+    def test_shutdown_while_a_part_is_blocked(self):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        s = FakeServer()
+        gate = threading.Event()
+        started = threading.Event()
+
+        def stuck(keys):                    # (an elevation download that does not come back)
+            started.set()
+            gate.wait(10)
+            return 1, False
+        s.dem = SimpleNamespace(keys_around=lambda la, lo, r, z: [(z, la, lo)], prefetch=stuck)
+        pl = preload.Preloader(s, sharing=lambda: True, dem_zoom=lambda la: 15)     # (its real daemon executor)
+
+        async def go():
+            pl.request(*FELLS, "start")
+            for _ in range(200):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(started.is_set())
+            t0 = time.monotonic()
+            box["task"] = pl.task
+            await pl.shutdown(timeout=0.3)
+            return time.monotonic() - t0
+        box = {}
+        took = loop.run_until_complete(go())
+        self.assertLess(took, 2.0, "bounded: the blocked part left to its thread")
+        self.assertEqual(s.abandoned, {7}, "its plans abandoned")
+        self.assertTrue(pl.ex.thread.daemon, "a daemon thread: never holds the exit")
+        self.assertIsNone(pl.request(*NYC, "pick"), "closed")
+        gate.set()
+        loop.run_until_complete(asyncio.wait([box["task"]], timeout=2))     # (the job sees it is closed and ends)
+        self.assertTrue(box["task"].done())
+        pl.ex.thread.join(2)
+        self.assertFalse(pl.ex.thread.is_alive(), "its thread ends once the part does")
+        self.assertNotIn("cells", [c[0] for c in s.calls], "nothing after the blocked part")
+
+    def test_shutdown_waits_for_a_short_part(self):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        s = FakeServer()
+        pl = preload.Preloader(s, dem_zoom=lambda la: 15)
+
+        async def go():
+            pl.request(*NYC, "hover")
+            await asyncio.sleep(0)
+            await pl.shutdown(timeout=5.0)
+        loop.run_until_complete(go())
+        self.assertIsNone(pl.task)
+        self.assertLessEqual(len(s.calls), 1, "stopped after the part that was running")
+
+
 class ConnectionTest(unittest.TestCase):
     def test_messages_reach_the_preloader(self):
         was = earthd.PRELOAD
