@@ -4122,7 +4122,11 @@ ROAD_CLEAR_LINTEL_M = 2.5       # m of building over it at least (a storey), els
 ROAD_CLEAR_PIECES_MIN = 0.15    # share of a low mapped footprint its pieces off the road keep at least, else left out
 ROAD_CLEAR_SKIP_SUB = ("driveway", "parking_aisle", "drive-through")    # (a garage's drive, a lot's aisles, a drive-thru:
                                                                         # roofs over them are real)
-ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service"}
+# ... and the racetracks (OpenStreetMap highway=raceway, drawn 12 m wide unless mapped): a building on the racing
+# surface is cut back or left out as on a street (Spa-Francorchamps, Overture 2026-10-21.0: Microsoft's footprints
+# of 282 and 679 m2, 4.0 and 4.9 m from the track's centre line, stood on its asphalt). Only the clearance: a raceway
+# is still not a road that lifts a building over it (THROUGH_CLASSES).
+ROAD_CLEAR_CLASSES = THROUGH_CLASSES | {"service", "raceway"}
 ROAD_CLEAR_SKIP_CLS = CANOPY_CLASSES | BRIDGE_CLASSES | {"ship", "toll_booth", landmarks.LANDMARK}
 
 
