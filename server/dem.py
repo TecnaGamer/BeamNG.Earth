@@ -74,9 +74,11 @@ def _mirror_mb():
 
 
 MIRROR_MB = _mirror_mb()
-# (an experiment, off: the mirror's tiles packed, earthfast f32z.rs, ~11 % of the .npy, ~3 ms to unpack, but each
-# process's own array instead of shared mapped pages: measure the memory on a Steam Deck before turning it on)
-MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD") == "1"
+# The mirror's tiles packed (earthfast f32z.rs: ~13 % of the .npy, 120-175 KB a tile; 1.7 ms to pack, 0.7 ms to unpack
+# against ~4 ms to decode the WebP and fill its holes), each process's own array instead of shared mapped pages. On by
+# default since 2026-11-13: the plain .npy were 1.1-3.1 GB of a cold visit's 4.8-7.9 GB of disk writes, from ~0.15 GB
+# of WebP (expo baseline 2026-11-12). BNGE_DEM_MIRROR_ZSTD=0: the .npy (memory-mapped) as before.
+MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD", "1") != "0"
 if MIRROR_ZSTD:
     fast.require(146, "the packed DEM mirror (f32_pack)")
 CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)

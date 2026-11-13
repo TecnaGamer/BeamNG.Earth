@@ -64,7 +64,7 @@ class BasePhotoRevisitTest(unittest.TestCase):
         name = painted(srv, a1, 0.0, 384.0, rgb)
         bk = srv.base_revisit_key(a1, 0.0, 384.0)
         srv._base_kept(a1, 0.0, 384.0, ())
-        srv._base_keep(a1, 0.0, 384.0, bk, name, revisit.faults())
+        srv._base_keep(a1, 0.0, 384.0, bk, name, (revisit.Build(),))
         # a fresh server process: another session folder, the same place as anchor 3
         srv2 = fake_server(os.path.join(self.tmp.name, "2"))
         srv2.cache_dir = srv.cache_dir
@@ -93,15 +93,15 @@ class BasePhotoRevisitTest(unittest.TestCase):
         name = painted(srv, a1, 0.0, 0.0, np.zeros((64, 64, 3), np.uint8))
         bk = srv.base_revisit_key(a1, 0.0, 0.0)
         srv.base_pending[(1, 0.0, 0.0)] = frozenset({"naip"})       # (a lazy source still to come)
-        srv._base_keep(a1, 0.0, 0.0, bk, name, revisit.faults())
+        srv._base_keep(a1, 0.0, 0.0, bk, name, (revisit.Build(),))
         self.assertIsNone(revisit.load(srv.cache_dir, "basephoto", bk))
         srv.base_pending.clear()
-        f0 = revisit.faults()
-        revisit.fault()                                             # (something it read failed meanwhile)
-        srv._base_keep(a1, 0.0, 0.0, bk, name, f0)
+        with revisit.scope() as f0:
+            revisit.fault()                                         # (something it read failed meanwhile)
+        srv._base_keep(a1, 0.0, 0.0, bk, name, (f0,))
         self.assertIsNone(revisit.load(srv.cache_dir, "basephoto", bk))
         srv._photo_data_cached = lambda *a: False                   # (a map cell under it not on disk)
-        srv._base_keep(a1, 0.0, 0.0, bk, name, revisit.faults())
+        srv._base_keep(a1, 0.0, 0.0, bk, name, (revisit.Build(),))
         self.assertIsNone(revisit.load(srv.cache_dir, "basephoto", bk))
         self.assertIsNone(srv._base_revisited(a1, 0.0, 0.0, bk, []))
 

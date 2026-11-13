@@ -487,6 +487,7 @@ class BaseRoutingTest(unittest.TestCase):
         self.assertEqual((S._base_process(p, earthd.LANE_REQUEST), S._base_process(p, earthd.LANE_PREFETCH)),
                          ("prefetch", "photo"))
         calls = []
+        s.base_revisit_key = lambda anchor, cx, cy: None     # (revisit off here: no kept base photo)
 
         def write_base(anchor, cx, cy, photo=None, quick=False):
             calls.append((cx, cy))

@@ -316,6 +316,13 @@ atexit.register(collector.close)
 
 class ThreadPoolExecutor(_ThreadPoolExecutor):
     def submit(self, fn, /, *args, **kwargs):
+        # (the revisit cache's build scopes: a task's faults count for the build that submitted it and for whoever takes
+        # its result, not for every build of the process: revisit.task)
+        import revisit
+        fn, own = revisit.task(fn)
+        return revisit.bind(self._submit(fn, *args, **kwargs), own)
+
+    def _submit(self, fn, /, *args, **kwargs):
         parent = _context.get()
         if parent is not None and not collector.enabled:
             # A thread spawned inside a profiled process job shares its telemetry

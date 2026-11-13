@@ -642,6 +642,21 @@ class MapData:
             v["levelways"] = levelways.VERSION
         return v
 
+    def warm_manifests(self):
+        """The weekly datasets' manifests (rails, lanes, stations: versions()' keys) fetched now, in the background (the
+        server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
+        ask, and none of those was found again by the next run (versions)."""
+        def run():
+            for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
+                        getattr(self, "station_tags", None)):
+                if src is None:
+                    continue
+                try:
+                    src.version()
+                except Exception as e:
+                    log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
+        threading.Thread(target=run, daemon=True, name="manifests").start()
+
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
 
@@ -1333,6 +1348,10 @@ class MapData:
                 cd.layers[layer], prov, _ = entry
             if layer == "buildings":
                 self._bdtopo(key, layer, cd.layers[layer])
+            elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
+                # (its ranges made on the lidar rule for want of the lidar: what is made on them is kept on the layer,
+                # so whatever takes the layer is not kept either: revisit.fault in the taker's thread)
+                revisit.fault(lidar=True)
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record

@@ -177,6 +177,9 @@ class Rules:
         return [values[idx[j]] if h else None for j, h in zip(i.tolist(), hit.tolist())]
 
 
+PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may have pinned meanwhile (Shards.known)
+
+
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
     <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
@@ -204,8 +207,12 @@ class Shards:
         if self.built is not None or not ON:
             return self.built
         got = getattr(self, "_pinned", False)
-        if got is False:
+        # (none pinned yet: looked for again, at most every PIN_RECHECK_S: another process pins it a few seconds into a
+        # first run, and a process that had looked once kept None in its keys for the whole run while the others had
+        # the build, the next run's keys: a first visit's plans, cell facts and tiles were never found again, 2026-11-13)
+        if got is False or (got is None and time.monotonic() - getattr(self, "_pin_at", 0.0) > PIN_RECHECK_S):
             got = None
+            self._pin_at = time.monotonic()
             pin = os.path.join(self.dir, "manifest.json") if self.dir else None
             if pin and os.path.exists(pin):
                 try:

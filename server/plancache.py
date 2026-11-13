@@ -298,6 +298,15 @@ class PlanCache:
                     # Optional export provenance must not disable normal local caching. Without a
                     # valid marker this cell remains unexportable, including any stale earlier marker.
                     pass
+            # (made short of something, this run's other processes read it so: is_short; before the plans)
+            if persist:
+                try:
+                    os.remove(p + ".short")
+                except FileNotFoundError:
+                    pass
+            else:
+                with open(p + ".short", "wb"):
+                    pass
             os.replace(tmp, p)
             # Export only plans whose complete-input condition the grader actually observed.
             # The digest binds the marker to this version; an interrupted replacement fails closed.
@@ -323,6 +332,11 @@ class PlanCache:
         with self._lock:
             self.stats["written"] += 1
         return True
+
+    def is_short(self, key):
+        """Were cell key's plans in this run's folder made short of something (store's persist false)? Read so, the
+        reader's builds are not kept either (grading.Grader._plan_cell). The revisit cache's and baked packs' never are."""
+        return os.path.exists(self._path(key) + ".short")
 
     def claim(self, key):
         """Before planning cell key: (state, False) when it is in the cache (or another process planned it while we

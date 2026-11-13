@@ -4138,13 +4138,16 @@ class Server:
             name = self._base_revisited(anchor, cx, cy, bk, photo)
             if name is not None:
                 return name, photo, time.perf_counter() - t1
-        f0 = revisitmod.faults()
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
-        if name is None:
-            with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+        f0 = revisitmod.begin()             # (this photo's own faults: revisit.scope)
+        try:
+            name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
+            if name is None:
+                with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
+                    name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+        finally:
+            revisitmod.end(f0)
         if bk is not None and name is not None:
-            self._base_keep(anchor, cx, cy, bk, name, f0)
+            self._base_keep(anchor, cx, cy, bk, name, (f0,))
         return name, photo, time.perf_counter() - t1
 
     # A block's finished base photo kept in the revisit cache (kind "basephoto": the photo file and the game's packed
@@ -4212,7 +4215,7 @@ class Server:
     def _base_keep(self, anchor, cx, cy, bk, name, f0):
         """The block's photo just made kept in the revisit cache when it is final (see base_revisit_key)."""
         key = (anchor.id, cx, cy)
-        if self.base_pending.get(key) or key in self.base_stale or revisitmod.faults() != f0:
+        if self.base_pending.get(key) or key in self.base_stale or not revisitmod.all_complete(f0):
             return
         size = self.layout.block * heightmap.SQUARE
         if not self._photo_data_cached(anchor, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M, size):
@@ -5595,26 +5598,29 @@ class Server:
                     if pending is not None:     # (kept with corrections still to come: their regions, as rendered)
                         pending |= kept_pending(extra)
                 else:
-                    f0 = revisitmod.faults()
-                    if quick and not is_global and not later:
-                        frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                        later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
-                                                         gutter=True)
-                    if later:
-                        pending = set(pending or ()) | set(later)
-                        with self.imagery.quick():
+                    f0 = revisitmod.begin()         # (this render's faults alone: revisit.scope)
+                    try:
+                        if quick and not is_global and not later:
+                            frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
+                            later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px),
+                                                             px, gutter=True)
+                        if later:
+                            pending = set(pending or ()) | set(later)
+                            with self.imagery.quick():
+                                rgb, used = self.render_tile(anchor, tile, px, pending)
+                        else:
                             rgb, used = self.render_tile(anchor, tile, px, pending)
-                    else:
-                        rgb, used = self.render_tile(anchor, tile, px, pending)
-                    if geo is not None:
-                        w0 = time.perf_counter()
-                        built, geo = geo.result(), None
-                        geo_wait = time.perf_counter() - w0
-                    rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
-                    if not is_global:
-                        rgb = self.road_faces(anchor, node, px, rgb)
-                        self.write_road_mask(anchor, node, px, texture)
-                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                        if geo is not None:
+                            w0 = time.perf_counter()
+                            built, geo = geo.result(), None
+                            geo_wait = time.perf_counter() - w0
+                        rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
+                        if not is_global:
+                            rgb = self.road_faces(anchor, node, px, rgb)
+                            self.write_road_mask(anchor, node, px, texture)
+                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                    finally:
+                        revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
                 material = self.matslots.take(ck)
                 self.degraded.discard(ck)
@@ -5693,12 +5699,12 @@ class Server:
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
-        still to come (pending), nothing it read failed meanwhile (f0: revisit.faults() before; None: not checked, a
+        still to come (pending), nothing it read failed (f0: its revisit.Build, the render's scope; None: not checked, a
         render again for a region that came). One whose only corrections to come are colour-match / de-shadow regions
         is kept with them (extra "pending": kept_pending gives them back; the tile is then rendered again when they
         are ready, as one rendered now): the global far tiles waited on regions that were still queued at every
         visit, and their textures were rendered twice each time (2026-11-12)."""
-        if not revisitmod.ON or (f0 is not None and revisitmod.faults() != f0):
+        if not revisitmod.ON or (f0 is not None and not f0.complete):
             return
         regions = []
         for rk in pending or ():
@@ -9474,15 +9480,18 @@ class Connection:
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
                 name = None
-                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), revisitmod.faults()
+                # (each step's own faults, in the thread it runs in: revisit.scoped_call)
+                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), []
                 if pool is not None:
                     # (in the block process: from the finished tiles with the analyses on; they were all rendered
                     # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
-                    name = await self.loop.run_in_executor(s.hm_pool, s._base_elsewhere, anchor, key[1], key[2],
-                                                           pool, [], False, rev)
+                    name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s._base_elsewhere,
+                                                              anchor, key[1], key[2], pool, [], False, rev)
+                    f0.append(b)
                 if name is None:
-                    name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
-                                                           rev)
+                    name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s.write_base, anchor,
+                                                              key[1], key[2], pool, rev)
+                    f0.append(b)
                 info = s.hm.get(key)
                 if name is None or info is None:
                     return
@@ -10808,6 +10817,8 @@ async def main_async(args):
     try:
         mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
+        if mapdata is not None:
+            mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
         if os.environ.get("BNGE_WORLD_BUNDLE"):
             from worldbundle import PinnedPlanCache
             PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],

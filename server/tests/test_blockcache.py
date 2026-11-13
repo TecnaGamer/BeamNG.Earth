@@ -267,6 +267,38 @@ class BlockCacheTest(unittest.TestCase):
         self.assertFalse(nxt.kept)
         self.assertIsNone(_Built(self, self.cache, heightmap.ChunkCache(), step, 0.0, self.out("c")).hit)
 
+    def test_another_builds_fault_does_not_stop_it(self):
+        """A fault of another build (its own thread and scope, revisit.scope) while this block is built: kept; a fault
+        in a thread no build's scope covers: not kept (revisit's per-build faults, 2026-11-13)."""
+        import threading
+
+        def other():
+            with revisit.scope():
+                revisit.fault()
+
+        orig = heightmap.generate
+
+        def generate_with(fn):
+            def gen(*a, **k):
+                t = threading.Thread(target=fn)
+                t.start()
+                t.join()
+                return orig(*a, **k)
+            return gen
+        heightmap.generate = generate_with(other)
+        try:
+            ok = _Built(self, self.cache, heightmap.ChunkCache(), 0.0, 0.0, self.out("a"))
+        finally:
+            heightmap.generate = orig
+        self.assertTrue(ok.kept)
+        heightmap.generate = generate_with(revisit.fault)
+        try:
+            step = heightmap.grid(SIZE)
+            bad = _Built(self, self.cache, heightmap.ChunkCache(), step, 0.0, self.out("b"))
+        finally:
+            heightmap.generate = orig
+        self.assertFalse(bad.kept)
+
     def test_plans_not_known_complete(self):
         """Plans of a cell made short, or of unknown completeness: no block kept; once known complete, kept."""
         key = (14, 4600, 6200)
@@ -373,6 +405,11 @@ class BlockCacheTest(unittest.TestCase):
         self.assertEqual(blockcache.budget_mb(1e9), blockcache.MIN_MB)
         self.assertEqual(blockcache.budget_mb(1e12), blockcache.MAX_MB_CAP)
 
+
+
+def tearDownModule():
+    import revisit      # (the Builds made here hold a scope each, closed by finish or blockworker.build's unwind)
+    revisit.unwind(0)
 
 if __name__ == "__main__":
     unittest.main()
