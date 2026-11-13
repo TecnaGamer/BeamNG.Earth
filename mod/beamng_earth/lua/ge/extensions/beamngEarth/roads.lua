@@ -1638,18 +1638,11 @@ function M.farGeoHidden(f, sub)
   return M.nearShowsBuildings(p.near, p.nearKey)
 end
 
--- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Hidden now, or its road geotile (far buildings, a bridge
--- piece) is here and still being made: it shows its own soon (a teleport's town: the far parts of every road geotile
--- of the place came first and were hidden a few seconds later). At most LAZY_WAIT_MAX_S for a road geotile that does
--- not get made.
+-- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
+-- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
+-- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
 M.LAZY_WAIT_MAX_S = 20
-function M.farGeoWaits(f, sub)
-  if M.farGeoHidden(f, sub) then return true end
-  local p = f.parts[sub]
-  if f.kind == 'S' or not p or not p.near then return false end
-  local t = tiles[p.nearKey or geoKey(p.near)]
-  return t ~= nil and t.geo and not t.ghost and true or false
-end
+function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
 
 local function updateFarGeo(key, f)
   if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
