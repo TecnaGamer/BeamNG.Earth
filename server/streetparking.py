@@ -195,6 +195,70 @@ def areas(frame, box, features):
                 yield kind, tags, rings, parking.lot_unpaved(feats, i)
 
 
+# A square with street-side parking round it (amenity=parking + parking=street_side between the street and a mapped
+# pedestrian area): the parked cars' row abuts the square, the square is the walk; no sidewalk is drawn along the street
+# over the bays (Broadway Square at Fells Point, a sidewalk over its parking rows: the user's report 14, 2026-11-12).
+# A bay within PLAZA_TOUCH_M of a pedestrian area cuts the generated sidewalks over it (roads.build_tile's walk_cuts).
+PLAZA_TOUCH_M = 1.5
+PLAZA_CUT_PAD_M = 0.5       # m the cut reaches past the bay's long sides
+
+
+def plaza_bay_cuts(frame, tx, ty, md):
+    """[(axis (2, 2), half width)] of road tile (tx, ty)'s street-side bays that abut a pedestrian area (squares): the
+    walk cuts of build_tile. md: the map data (land_use, infrastructure)."""
+    import roads
+    import surface
+    box = roads.tile_bbox(tx, ty)
+    try:
+        layers = [md.cell(key, layers=("land_use", "infrastructure"), kind="demand").layers
+                  for key in roads.cells_of_tile(frame, tx, ty, 20.0)]
+    except (OSError, RuntimeError, ValueError):
+        return []
+    near = (box[0] - 20.0, box[1] - 20.0, box[2] + 20.0, box[3] + 20.0)
+    squares, seen = [], set()
+    for lay in layers:
+        f = lay.get("land_use")
+        if f is None or not len(f):
+            continue
+        m = surface._plazas(f)
+        if m is None:
+            continue
+        fb = f.boxes(frame)
+        for i in np.flatnonzero(m):
+            if str(f.ids[i]) in seen or fb[i, 2] < near[0] or fb[i, 0] > near[2] or fb[i, 3] < near[1] or \
+                    fb[i, 1] > near[3]:
+                continue
+            seen.add(str(f.ids[i]))
+            for part in f.parts(i):
+                if part and len(part[0]) >= 4:
+                    squares.append(np.column_stack(mapgeom.enu_xy(f, frame, part[0])))
+    if not squares:
+        return []
+    bays = [rings[0] for kind, _t, rings, _u in areas(frame, near, [lay.get("infrastructure") for lay in layers])
+            if kind == "street" and len(rings[0]) >= 4]
+    out = []
+    for ring in bays:
+        ring = np.asarray(ring, np.float64)[:, :2]
+        lo, hi = ring.min(0) - PLAZA_TOUCH_M, ring.max(0) + PLAZA_TOUCH_M
+        touch = False
+        for sq in squares:
+            if (sq.max(0) < lo).any() or (sq.min(0) > hi).any():
+                continue
+            d = roads._on_carriageways(ring, {0: (np.vstack([sq, sq[:1]]), PLAZA_TOUCH_M)}, 0.0)
+            if d.any() or polygon.contains_points(sq, ring).any():
+                touch = True
+                break
+        if not touch:
+            continue
+        c = ring.mean(0)
+        _, _, vt = np.linalg.svd(ring - c, full_matrices=False)
+        u = vt[0]
+        v = np.array([-u[1], u[0]])
+        a, b = (ring - c) @ u, (ring - c) @ v
+        out.append((np.array([c + u * a.min(), c + u * a.max()]), float(b.max() - b.min()) / 2 + PLAZA_CUT_PAD_M))
+    return out
+
+
 def adjust_walks(walks, bays, protected, barriers):
     """Leave room for mapped bays in inferred walks. Surveyed sidewalk lines keep their geometry."""
     import roads

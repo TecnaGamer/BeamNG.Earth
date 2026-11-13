@@ -26,6 +26,7 @@ import time
 import numpy as np
 
 import secrossings
+import streetparking
 import dem as demmod
 import development as developmentmod
 import farfield
@@ -1269,7 +1270,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
              if towns_on and props is not None and out_dir is not None else None)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
-                                 walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
+                                 # (the stations' made-up driveways: no sidewalk across them; nor along a square's
+                                 # street-side parking rows, streetparking.plaza_bay_cuts)
+                                 walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)
+                                                        if walks is not None and _s.md is not None else []),
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
