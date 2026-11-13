@@ -2051,22 +2051,6 @@ def motorway_shoulder(spec):
 
 
 
-def _dir_kmh(feats, i, ncon, lengths=None):
-    """(one-way direction along the geometry +1 / -1 or 0, speed limit km/h or None, m per junction or None)
-    of feature i; ncon: connectors per feature (None: unknown); lengths: _lengths(feats) (None: measured
-    here)."""
-    rules = feats.rules
-    v = _rule_value(rules.get("oneway"), i)
-    d = 0 if v is None else (-1 if float(v) < 0 else 1)
-    k = _rule_value(rules.get("max_speed_kmh"), i)
-    gap = None
-    if ncon is not None and ncon[i] >= 2:
-        L = (lengths if lengths is not None else _lengths(feats, i))[i if lengths is not None else 0]
-        if L is not None and not np.isnan(L):
-            gap = float(L) / (ncon[i] - 1)
-    return d, (float(k) if k is not None and float(k) > 0 else None), gap
-
-
 def _lengths(feats, only=None):
     """Length (m, lon scaled by the cos of each feature's first latitude) of every feature's geometry, NaN for
     fewer than two points; only: just that feature (an array of one). All features at once: one numpy pass
@@ -4962,20 +4946,6 @@ def bridge_profile_mode():
     return "legacy" if os.environ.get("BNE_BRIDGE_PROFILE", "curve").lower() == "legacy" else "curve"
 
 
-def _upper_hull(s, z):
-    """Indices of the least concave majorant's vertices of points (s ascending, z). Pure."""
-    h = []
-    for i in range(len(s)):
-        while len(h) >= 2:
-            a, b = h[-2], h[-1]
-            if (s[b] - s[a]) * (z[i] - z[a]) - (z[b] - z[a]) * (s[i] - s[a]) >= 0:
-                h.pop()
-            else:
-                break
-        h.append(i)
-    return h
-
-
 def _simple_path(lines, graph=None):
     """[(edge index, reversed)] in order along the chain if the parts form one open path, else None."""
     nodes, edges, adj = _chain_graph(lines) if graph is None else graph
@@ -6620,12 +6590,6 @@ def join_walk_ends(runs, carriageways):
         runs[kj] = None
         alias[kj] = ki
     return [r for r in runs if r is not None]
-
-
-def _left_normal(two):
-    d = two[1] - two[0]
-    n = math.hypot(*d)
-    return np.array([-d[1], d[0]]) / n if n > 1e-9 else np.array([0.0, 0.0])
 
 
 def _seg_dist_min(line, p):

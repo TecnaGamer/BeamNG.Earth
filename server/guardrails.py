@@ -201,12 +201,6 @@ def _surface_info(frame, points, elev, decks, deck_preference=None):
     return np.where(use_deck, deck_z, ground_z), ground_z, wide_z
 
 
-def _surface_z(frame, points, elev, decks, deck_preference=None):
-    """Heights of XY points (see _surface_info)."""
-    return _surface_info(frame, points, elev, decks, deck_preference)[0]
-
-
-
 # Stock Italy guardrail modules are 3 m long and overlap by 0.2 m at 2.8 m spacing.
 # They are Forest items: the engine batches repeated shapes and caches their collision mesh.
 MODULE_LENGTH_M = 3.0

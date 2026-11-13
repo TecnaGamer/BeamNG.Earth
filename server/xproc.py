@@ -68,12 +68,6 @@ def _holder(lock):
         return None
 
 
-def _less_urgent(lock, kind):
-    """Whether lock's holder is less urgent than this process asking for kind."""
-    h = _holder(lock)
-    return h is not None and h[:2] > _rank(kind)
-
-
 def alive(pid):
     """Whether process pid still runs (True when it cannot be told)."""
     if pid is None or pid <= 0 or pid == os.getpid():

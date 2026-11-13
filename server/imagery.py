@@ -1386,11 +1386,6 @@ class Imagery:
                 self._warm_thread.start()
             self._warm_cv.notify()
 
-    def far_unwarm(self, tag):
-        """A far tile no longer wanted sharper (gone, hidden): out of far_warm's queue."""
-        with self._warm_cv:
-            self._far_warm.pop(tag, None)
-
     def lazy_keys(self, frame, x0, y0, size, px):
         """The lazy sources' keys (src, z, x, y: one per exported parent, route_keys') a render of the square x0, y0,
         size of frame at px would use (their own zoom range, bounds), in chain order."""

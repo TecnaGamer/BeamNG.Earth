@@ -651,10 +651,6 @@ class TokenBucket:
                 return True
             return False
 
-    def give_back(self):
-        with self.lock:
-            self.tokens = min(self.burst, self.tokens + 1.0)
-
     def pause(self, until):
         """No tokens until `until` (clock time); the bucket is emptied."""
         with self.lock:
