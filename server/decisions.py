@@ -395,9 +395,12 @@ class Store:
             return got[0]
         try:
             with open(os.path.join(self._dir(vk), "manifest.bngm"), "rb") as f:
-                return self._parse_manifest(vk, f.read())
+                blocks = self._parse_manifest(vk, f.read())
         except (OSError, ValueError):
             return None
+        with self._lock:                # (kept, due at once: manifest() reads it again before a download)
+            self._man.setdefault(vk, (blocks, time.monotonic()))
+        return blocks
 
     def _parse_manifest(self, vk, body):
         doc = json.loads(fast._ef.dec_open_manifest(body, pubkeys()))
