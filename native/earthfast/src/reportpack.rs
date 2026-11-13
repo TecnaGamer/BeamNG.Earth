@@ -217,6 +217,41 @@ fn coord_at(chars: &[char], i: usize) -> Option<(usize, String)> {
     (x.abs() <= 180.0).then(|| (j, format!("{:.2}", x)))
 }
 
+/// A map tile key "g<z>_<x>_<y>" (geotiles.key) finer than COARSE_Z at chars[i]: (end, the key of its COARSE_Z tile).
+const COARSE_Z: u32 = 14; // (~2.4 km at the equator, finer towards the poles)
+fn tile_key_at(chars: &[char], i: usize) -> Option<(usize, String)> {
+    if chars[i] != 'g' || (i > 0 && (chars[i - 1].is_ascii_alphanumeric())) {
+        return None;
+    }
+    let mut j = i + 1;
+    let mut nums = [0u64; 3];
+    for (k, n) in nums.iter_mut().enumerate() {
+        let s = j;
+        while j < chars.len() && chars[j].is_ascii_digit() && j - s < 10 {
+            *n = *n * 10 + (chars[j] as u64 - '0' as u64);
+            j += 1;
+        }
+        if j == s {
+            return None;
+        }
+        if k < 2 {
+            if j >= chars.len() || chars[j] != '_' {
+                return None;
+            }
+            j += 1;
+        }
+    }
+    if j < chars.len() && chars[j].is_ascii_alphanumeric() {
+        return None;
+    }
+    let z = nums[0] as u32;
+    if z <= COARSE_Z || z > 30 {
+        return None;
+    }
+    let sh = z - COARSE_Z;
+    Some((j, format!("g{COARSE_Z}_{}_{}", nums[1] >> sh, nums[2] >> sh)))
+}
+
 fn word_eq(chars: &[char], i: usize, name: &[char]) -> bool {
     let n = name.len();
     if i + n > chars.len() || (i > 0 && chars[i - 1].is_alphanumeric()) {
@@ -274,6 +309,13 @@ pub fn scrub(text: &str, names: &[Vec<char>], coarse: bool) -> String {
         if c.is_ascii_hexdigit() || c == ':' {
             if let Some(e) = ipv6_at(&chars, i) {
                 out.push_str("<ip>");
+                i = e;
+                continue;
+            }
+        }
+        if coarse && c == 'g' {
+            if let Some((e, k)) = tile_key_at(&chars, i) {
+                out.push_str(&k);
                 i = e;
                 continue;
             }
@@ -680,6 +722,8 @@ mod tests {
         assert_eq!(c("at 40.712776, -74.005974 (z 12.5, x 1234.5678)"), "at 40.71, -74.01 (z 12.5, x 1234.5678)");
         assert_eq!(c("v1.9.123 and 1e-5 and 3.14159e2"), "v1.9.123 and 1e-5 and 3.14159e2");
         assert_eq!(scrub("40.712776", &[], false), "40.712776");
+        assert_eq!(c("tile g17_38597_49262 and g14_1_2, bg17_1_1"), "tile g14_4824_6157 and g14_1_2, bg17_1_1");
+        assert_eq!(scrub("g17_38597_49262", &[], false), "g17_38597_49262");
         let v: Value = serde_json::from_str(r#"{"lat": 40.712776, "player": {"lon": -74.005974, "camLat": 1.23456,
             "x": 33.123456}, "spot": {"cell": "a"}, "pick": {"name": "road_123"}, "latLon": [40.7127, -74.0059],
             "where": "Main St", "note": "near 40.712776, -74.005974"}"#).unwrap();

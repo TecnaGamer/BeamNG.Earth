@@ -252,9 +252,9 @@ def sources_at(server, lat, lon):
                 b = getattr(src, "bounds", None)
                 if not b or (b[0] <= lat <= b[2] and b[1] <= lon <= b[3]):
                     names.append(getattr(src, "name", str(src)))
-            out["imagery"] = names
+            out["imageryChain"] = names      # (the photo chain; a source without a box may still not cover the point)
         except Exception as e:
-            out["imagery"] = f"error: {type(e).__name__}"
+            out["imageryChain"] = f"error: {type(e).__name__}"
         try:
             out["imageryStats"] = im.stats_snapshot()
         except Exception:
@@ -360,13 +360,15 @@ def logs_json(user_dir, cache_dir):
 def write_context(path, state, logs, names):
     """server.json and logs.json into the report folder, scrubbed."""
     ef = _ef()
-    with open(os.path.join(path, "server.json.tmp"), "w", encoding="utf-8") as fh:
-        fh.write(ef.report_scrub_json(json.dumps(state, default=str), names, False))
-    os.replace(os.path.join(path, "server.json.tmp"), os.path.join(path, "server.json"))
-    if logs:                # (plain on disk: the send window shows it; gzipped on the way)
-        with open(os.path.join(path, "logs.json.tmp"), "w", encoding="utf-8") as fh:
-            fh.write(ef.report_scrub_json(json.dumps(logs), names, False))
-        os.replace(os.path.join(path, "logs.json.tmp"), os.path.join(path, "logs.json"))
+    for name, obj in (("server.json", state), ("logs.json", logs)):    # (logs plain on disk: the send window shows them)
+        if not obj:
+            continue
+        # (NaN / inf, which Python writes and JSON has not, as null; anything else unknown as its text)
+        text = json.dumps(json.loads(json.dumps(obj, default=str), parse_constant=lambda _c: None))
+        clean = ef.report_scrub_json(text, names, False)
+        with open(os.path.join(path, name + ".tmp"), "w", encoding="utf-8") as fh:
+            fh.write(clean)
+        os.replace(os.path.join(path, name + ".tmp"), os.path.join(path, name))
 
 
 def scrub_saved(path, names):

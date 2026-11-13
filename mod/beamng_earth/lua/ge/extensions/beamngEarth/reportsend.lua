@@ -270,7 +270,20 @@ local function send(w)
   end
 end
 
-M.PRIVACY = 'Sent privately to the BeamNG.Earth developers (the project\'s own server); not published. Kept 90 days. '
+-- Tests (the console, MCP): the Send button of the window that is open, with its boxes set as given ({screenshot,
+-- exactLocation, logs}); false when no window is open.
+function M.clickSend(choices)
+  local w = win
+  if not w then return false end
+  choices = choices or {}
+  if choices.screenshot ~= nil then w.shot = choices.screenshot == true end
+  if choices.exactLocation ~= nil then w.exact = choices.exactLocation == true end
+  if choices.logs ~= nil then w.logs = choices.logs == true end
+  send(w)
+  return true
+end
+
+M.PRIVACY ='Sent privately to the BeamNG.Earth developers (the project\'s own server); not published. Kept 90 days. '
   .. 'Nothing is sent until you click Send, and sending works with anonymous usage statistics off too: each report '
   .. 'is your own choice. User names and home folders are removed; a random install id (no name or account) is sent '
   .. 'with it so we can tell reports from one computer apart.'

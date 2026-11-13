@@ -120,7 +120,8 @@ class ReportSendTest(unittest.TestCase):
 
     def test_context_files_scrubbed(self):
         home = os.path.expanduser("~")
-        reportsend.write_context(self.dir, {"env": {"BNE_X": f"{home}/cache"}, "spot": {"aim": {"lat": 40.712776}}},
+        reportsend.write_context(self.dir, {"env": {"BNE_X": f"{home}/cache"}, "spot": {"aim": {"lat": 40.712776}},
+                                            "fps": float("nan"), "obj": object()},
                                  {"server.log": f"started in {home}/BeamNG.Earth\npeer 203.0.113.7 joined"},
                                  reportsend.user_names())
         with open(os.path.join(self.dir, "server.json"), encoding="utf-8") as fh:
