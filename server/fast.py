@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 282 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 283 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -266,7 +266,7 @@ def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
 def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move, grade):
     """railroadseam.couple's native work (railseam.rs): the moved bed heights (n,), or None when nothing moved. The
     roads flattened: their points rxy (m, 2), heights rz (m,), road r = rows off[r]:off[r + 1], half widths rh."""
-    require(172, "rail_seam_couple")
+    require(283, "rail_seam_couple")     # (283: a vertex keeps to its own band after the run-out)
     return _ef.rail_seam_couple(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(z, np.float64), float(half),
                                 np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
                                 np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),

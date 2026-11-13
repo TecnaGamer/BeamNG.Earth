@@ -260,6 +260,41 @@ class GradePointsTest(unittest.TestCase):
         sel = (s_y >= main.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
         self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the built side road eases down, no step")
 
+    def open_tunnel_case(self, open_tunnel, angle_deg=90.0):
+        """grade_points along a bus lane (rank: no class) crossing a primary's tunnel part open all along (its core,
+        sidewalks too, held as its carriageway, as _make_cell plans it) 1.6 m under it: (s, heights) every metre."""
+        tun = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([188.2, 188.2]), 7.3)
+        tun.rank = grading.grade_rank(roads.Spec(8.6, "paved", True, "primary"))
+        tun.open_tunnel = open_tunnel
+        a = np.radians(angle_deg)
+        d = np.array([np.cos(a), np.sin(a)])
+        bus = grading.Plan(np.array([-60.0 * d, 60.0 * d]), np.array([189.8, 189.8]), 4.5, road_half=3.5)
+        bus.rank = grading.grade_rank(roads.Spec(7.0, "paved", True, "busway"))
+        tun.rid, bus.rid = 1, 2
+        s = np.arange(-30.0, 30.01, 1.0)
+        pts = s[:, None] * d[None, :]
+        return s, grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(s), 189.8), [tun, bus])
+
+    def test_a_road_crossing_an_open_tunnel_eases_onto_it(self):
+        # GitHub #1169, Kennedybruecke in Vienna: the "Unterfahrung" lies under a plaza the elevation leaves out, so its
+        # tunnel is open all along; a bus lane mapped over it (rank: no class, 14 under the primary's, past
+        # RANK_SIDE_MAX_DIFF) kept its own ground up to the section's held carriageway and stepped 1.2 m there. Flagged
+        # open_tunnel, the crossing road eases onto it over the side ease's reach instead.
+        s, old = self.open_tunnel_case(False)
+        self.assertGreater(float(np.abs(old[:-2] - 2 * old[1:-1] + old[2:]).max()), 1.0, "(the step this fixes)")
+        s, z = self.open_tunnel_case(True)
+        held = np.abs(s) <= 7.3 - 0.01
+        self.assertTrue(np.allclose(z[held], 188.2 + 0.0, atol=0.01), "the open section's carriageway holds")
+        # (the drivability ratchet's step, a ledge or a kink on 1 m samples: 1.37 m without; the ease's S-curve bends
+        # 0.11 m over 1 m for the 1.6 m it comes down)
+        self.assertLess(float(np.abs(z[:-2] - 2 * z[1:-1] + z[2:]).max()), 0.15, "the bus lane eases onto it, no step")
+        self.assertAlmostEqual(float(z[-1]), 189.8, delta=0.02, msg="past the ease the bus lane keeps its ground")
+
+    def test_a_road_beside_an_open_tunnel_keeps_its_ground(self):
+        # ... while a road running along it (a street on the cover beside its trench) is not eased onto it: the flag
+        # changes nothing for a road at 20 degrees to it.
+        np.testing.assert_array_equal(self.open_tunnel_case(True, 20.0)[1], self.open_tunnel_case(False, 20.0)[1])
+
     def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
         # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
         # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.

@@ -149,6 +149,7 @@ WALL_T_M = 0.8              # (roadmesh.retaining_walls) and the ground at its n
 WALL_FLAT_M = roadsmod.roadmesh.GRID_M  # ... after one terrain grid step (heightmap.SQUARE) at the road's level behind the wall: rising at the
                             # wall itself, the grid's triangles stood as dark wedges in front of its face; the wall's
                             # top (roadmesh.WALL_THICK_M) covers the strip
+OPEN_TUNNEL_EASE = os.environ.get("BNE_OPEN_TUNNEL_EASE", "on") != "off"    # (_make_cell: Plan.open_tunnel)
 TUNNEL_TAG = ":tun"          # in the fid of the tunnels' own plans (open sections, mouths): apply(roads_only) skips them
 MOUTH_PLAN_M = 4.0          # m into a tunnel from a portal its floor is a grading plan too (Grader._mouth_plans)
 TUNNEL_KEEP_IN_M = 3.0      # (roads.LOW_HOLE_M: a low arch's mouths, flat at its floor)
@@ -775,7 +776,7 @@ class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
     __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
-                 "widen")
+                 "widen", "open_tunnel")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -788,6 +789,7 @@ class Plan:
         self.max_wall = WALL_MAX_H_M    # its cuttings' walls at most this tall (wall_max_h)
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
+        self.open_tunnel = False        # a tunnel part's open section: a lower road crossing it eases onto it (_plan_flags)
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
@@ -1487,6 +1489,7 @@ def _replan(p, xy, z, abut=None, cut=False):
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = bool(getattr(p, "steep", False))
+    q.open_tunnel = bool(getattr(p, "open_tunnel", False))
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -2338,10 +2341,17 @@ class _Planner:
         if feats is not None and len(feats):
             portals = {}
             secs = self._tunnel_sections(feats, key, portals=portals)
+            covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
                     p = Plan(xy, z, spec.width / 2 + shoulder(spec))
                     p.rank = grade_rank(spec)
+                    # (a tunnel part open all along, no cover anywhere over it: the map's underpass under a deck or lid
+                    # the elevation leaves out. A road crossing it is that deck, mapped on the ground over the tunnel:
+                    # it eases onto the held carriageway whatever its class, gradebins OPEN_TUNNEL (Kennedybruecke in
+                    # Vienna: a bus lane stepped 1.2 m down to it, GitHub #1169). An open stretch by a portal is a real
+                    # trench, the roads beside it on the cover: they keep their ground)
+                    p.open_tunnel = OPEN_TUNNEL_EASE and fid.rsplit("#", 1)[0] not in covered
                     plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
@@ -6127,6 +6137,7 @@ def mapped_plan(p, fn):
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = getattr(p, "steep", False)
+    q.open_tunnel = getattr(p, "open_tunnel", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -6419,6 +6430,7 @@ def trim_plan(p, box):
             q.rank = getattr(p, "rank", GRADE_RANK_NONE)
             q.bank = pb
             q.steep = getattr(p, "steep", False)
+            q.open_tunnel = getattr(p, "open_tunnel", False)
             set_widen(q, pw)
             out.append(q)
         i = j + 1
@@ -6531,7 +6543,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(217, "plan_merge")     # (217: the trimmed plans' banks / widens)
+    fast.require(283, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -6541,8 +6553,7 @@ def merge_plan_set(plans):
         np.array([p.half for p in plans], f64), np.array([getattr(p, "road_half", p.half) for p in plans], f64),
         np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64), _plan_ranks(plans, None),
         np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
-        np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
-        np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+        _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
         *_per_plan([getattr(p, "cut", None) for p in plans], 6),
         np.array([float(np.max(w)) if w is not None and len(w) else 0.0 for w in wds], f64), bool(WELD_ON),
         bool(TRIM_SIDE_MOUTHS_ON), float(CHAIN_JOIN_M), float(WELD_MAX_STEP_M), float(WELD_TAPER_M),
@@ -6566,6 +6577,17 @@ def merge_plan_set(plans):
     pack = PlanPack.__new__(PlanPack)
     pack.__dict__.update(got["pack"])
     return pack
+
+
+PLAN_STEEP, PLAN_OPEN_TUNNEL = 1, 2     # (earthfast gradebins STEEP / OPEN_TUNNEL)
+
+
+def _plan_flags(plans):
+    """(plans,) uint8: each plan's flags as grade_points reads them (PlanPack's st): PLAN_STEEP a pass road's
+    (Plan.steep), PLAN_OPEN_TUNNEL a tunnel's open section (Plan.open_tunnel: a lower-ranked road crossing it takes the
+    side ease onto it, whatever the class gap)."""
+    return np.array([(PLAN_STEEP if getattr(p, "steep", False) else 0)
+                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0) for p in plans], np.uint8)
 
 
 def _per_plan(vs, width=None):
@@ -6611,7 +6633,7 @@ class PlanPack:
 
     def __init__(self, plans):
         import fast
-        fast.require(211, "plan_pack")
+        fast.require(283, "plan_pack")     # (283: the plans' flags, _plan_flags)
         f64 = np.float64
         xy, off, z = _plan_lines(plans)
         rids = [getattr(p, "rid", -1) for p in plans]
@@ -6622,8 +6644,7 @@ class PlanPack:
             np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64),
             np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for p in plans], np.int64),
             np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
-            np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
-            np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+            _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
             *_per_plan([getattr(p, "cut", None) for p in plans], 6), float(DUPE_XY_M),
             -dmath.cos(math.radians(CONT_TURN_DEG)), float(CONT_JOIN_M), -dmath.cos(math.radians(LINK_TURN_DEG)),
             float(ABUT_NEAR_M), float(T_MAX), int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M),
