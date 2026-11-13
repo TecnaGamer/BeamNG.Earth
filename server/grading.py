@@ -2378,25 +2378,84 @@ class _Planner:
             if got is not None:
                 self._stage_read(key)
                 return got
-            dg = self._cell_deck_patches(key)
-            stack = self._dg_local.__dict__.setdefault("stack", [])
-            stack.append(self._stack_entry(key, dg))
-            import revisit
+            # (one process of the run makes a cell's road stage, the others wait for it and read it: the shared plan
+            # cache's stage_*, earthfast's stageshare. Each made its neighbours' stages again for its own cell's
+            # tunnels: a first block's cells planned side by side in four processes cost 13.5 CPU-s each where 6.5
+            # were its own, 2026-11-13)
+            claim = getattr(self.shared, "stage_claim", None) if self.shared is not None else None
+            shared, mine = (None, False)
+            # (its claim only when this process makes no other stage meanwhile, _STAGE_CROWD: a block's process plans
+            # its cells side by side on one interpreter lock, and a road tile's process waiting for one of those
+            # stages waited several times as long as making it itself; such a process still reads the others')
+            with _STAGE_CROWD_LOCK:
+                alone = _STAGE_CROWD[0] == 0
+                _STAGE_CROWD[0] += 1
+            if claim is not None:
+                try:
+                    shared, mine = claim(key, hold=alone)
+                except Exception as e:
+                    if type(e).__name__ == "Abandoned":
+                        with _STAGE_CROWD_LOCK:
+                            _STAGE_CROWD[0] -= 1
+                        raise
+                    log.debug("grading: road stage of %s not shared: %s: %s", key, type(e).__name__, e)
             try:
-                with revisit.scope() as b:
-                    got = self._make_cell_roads(key)
+                if shared is not None:
+                    got = self._stage_adopt(key, *shared)
+                    if got is not None:
+                        return got
+                dg = self._cell_deck_patches(key)
+                stack = self._dg_local.__dict__.setdefault("stack", [])
+                stack.append(self._stack_entry(key, dg))
+                import revisit
+                try:
+                    with revisit.scope() as b:
+                        got = self._make_cell_roads(key)
+                finally:
+                    stack.pop()
+                if got is not None:
+                    with self.lock:
+                        if b.n or b.lidar:
+                            self.stage_short.add(key)
+                        else:
+                            self.stage_short.discard(key)
+                        memo[key] = got
+                        while len(memo) > self.ROAD_STAGES_KEPT:
+                            memo.popitem(last=False)
+                    if mine:
+                        try:
+                            self.shared.stage_store(key, got[1], got[2], bool(b.n or b.lidar))
+                        except Exception as e:      # (the others make it themselves)
+                            log.debug("grading: road stage of %s not kept for the run: %s: %s", key,
+                                      type(e).__name__, e)
             finally:
-                stack.pop()
-            if got is not None:
-                with self.lock:
-                    if b.n or b.lidar:
-                        self.stage_short.add(key)
-                    else:
-                        self.stage_short.discard(key)
-                    memo[key] = got
-                    while len(memo) > self.ROAD_STAGES_KEPT:
-                        memo.popitem(last=False)
+                with _STAGE_CROWD_LOCK:
+                    _STAGE_CROWD[0] -= 1
+                if mine:
+                    self.shared.stage_release(key)
             return got
+
+    def _stage_adopt(self, key, plans, keeps, short):
+        """Cell key's road stage as another process of the run made it (plans, keeps; short: made short of something,
+        read so) taken as this process's: (feats, plans, keeps) with the cell's roads as _make_cell_roads fetches them,
+        or None when they cannot be fetched (made here then: its failure handled there)."""
+        try:
+            feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception as e:
+            log.debug("grading: roads of %s for its shared road stage: %s: %s", key, type(e).__name__, e)
+            return None
+        got = (feats, plans, keeps)
+        with self.lock:
+            memo = self.__dict__.setdefault("_road_stages", OrderedDict())
+            if short:
+                self.stage_short.add(key)
+            else:
+                self.stage_short.discard(key)
+            got = memo.setdefault(key, got)
+            while len(memo) > self.ROAD_STAGES_KEPT:
+                memo.popitem(last=False)
+        self._stage_read(key)
+        return got
 
     def _stage_read(self, key):
         """Cell key's road stage read from memory: made short of something, the reader is short too (_short_read)."""
@@ -5925,8 +5984,15 @@ class _Planner:
                 with dem.urgent():
                     return self._cell_plans(k)
             return self._cell_plans(k)
-        with ThreadPoolExecutor(min(len(missing), PLAN_THREADS), thread_name_prefix="plans") as ex:
-            list(ex.map(one, missing))
+        n = min(len(missing), PLAN_THREADS)
+        with _STAGE_CROWD_LOCK:         # (their road stages made side by side: none of them claimed, _road_stage)
+            _STAGE_CROWD[0] += n
+        try:
+            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex:
+                list(ex.map(one, missing))
+        finally:
+            with _STAGE_CROWD_LOCK:
+                _STAGE_CROWD[0] -= n
 
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once); roads_only: not the tunnels' (TUNNEL_TAG)."""
@@ -6234,6 +6300,28 @@ def _deck_z_hook(frame, lines, fids=None):
 
 if CW_ON:
     roadsmod.DECK_Z_HOOK = _deck_z_hook
+
+
+def cells_of_points(lat, lon):
+    """The map cells Grader.prepare plans for the points (each planning region's _Planner._keys of its own points, in
+    its order), without a store: the server's own process asks which cells a first block will wait for
+    (earthd.Server.plan_first)."""
+    import geotiles
+    lat = np.asarray(lat, np.float64).ravel()
+    lon = np.asarray(lon, np.float64).ravel()
+    rx, ry = geotiles.region_of(lat, lon)
+    rx, ry = np.atleast_1d(rx), np.atleast_1d(ry)
+    out = []
+    for a, b in sorted({(int(a), int(b)) for a, b in zip(rx, ry)}):
+        m = (rx == a) & (ry == b)
+        for k in _Planner._keys(lat[m], lon[m]):
+            if k not in out:
+                out.append(k)
+    return out
+
+
+_STAGE_CROWD = [0]              # road stages being made, or cells planned side by side, in this process now
+_STAGE_CROWD_LOCK = threading.Lock()
 
 
 PLANNERS_KEPT = 6               # planning regions a PlanStore keeps in memory (~30 km each)

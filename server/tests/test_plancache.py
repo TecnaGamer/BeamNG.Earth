@@ -195,6 +195,181 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(os.listdir(root), ["new"], "a run still writing (its newest folder) is kept")
 
 
+class RoadStageTest(unittest.TestCase):
+    """A cell's road stage shared by the run's processes (plancache's stage_*, earthfast's stageshare; grading
+    _Planner._road_stage): made by one, read by the others, the same plans and heights as each making its own."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        os.environ[plancache.RUN_ENV] = "test"
+        self.addCleanup(os.environ.pop, plancache.RUN_ENV, None)
+
+    def other_pid(self):
+        """Another live process's id (a child that sleeps; os.getppid is not there on every platform's test host)."""
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(p.wait)
+        self.addCleanup(p.kill)
+        return p.pid
+
+    def grader(self, md, elev=None):
+        g = grading.Grader(FRAME, md, elev or (lambda la, lo: 10.0 + 0.01 * np.asarray(la) * 0))
+        g.shared = plancache.for_grader(self.dir, g, None, None)
+        return g
+
+    def cells(self, g, la, lo):
+        return sorted({k for pl, idx in g.store.planners_of(np.asarray(la), np.asarray(lo))
+                       for k in pl._keys(np.asarray(la)[idx], np.asarray(lo)[idx])})
+
+    def test_round_trip_is_exact(self):
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        key = self.cells(a, la, lo)[0]
+        pl = a.store.planner_of_cell(key)
+        feats, plans, keeps = pl._road_stage(key)
+        self.assertGreater(len(plans), 0)
+        self.assertGreater(a.shared.stats.get("stage_written", 0), 0, "kept for the run's other processes")
+        got = a.shared.stage_load(key)
+        self.assertIsNotNone(got)
+        rp, rk, short = got
+        self.assertFalse(short)
+        self.assertEqual([fid for fid, _p in rp], [fid for fid, _p in plans])
+        for (_f, x), (_g, y) in zip(plans, rp):
+            for name in ("xy", "z", "cut", "bank", "widen"):
+                u, v = getattr(x, name), getattr(y, name)
+                self.assertEqual(u is None, v is None, name)
+                if u is not None:
+                    self.assertEqual((np.asarray(u).dtype, np.asarray(u).shape), (v.dtype, v.shape), name)
+                    self.assertEqual(np.ascontiguousarray(u).tobytes(), v.tobytes(), name)
+                    self.assertTrue(v.flags.writeable, "arrays of the reader's own")
+            self.assertEqual((x.half, x.abut, x.road_half, x.rid, x.rank, x.max_wall, x.steep, x.bbox),
+                             (y.half, y.abut, y.road_half, y.rid, y.rank, y.max_wall, y.steep, y.bbox))
+        self.assertEqual(len(rk), len(keeps))
+
+    def test_other_process_reads_the_stage_and_plans_the_same(self):
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        for key in self.cells(a, la, lo):                   # (one process made the cells' road stages, not their plans)
+            a.store.planner_of_cell(key)._road_stage(key)
+            self.assertFalse(a.shared.has(key))
+        b = self.grader(FakeMD(f))                          # (another process plans the cell: it takes the stage)
+        with mock.patch.object(grading._Planner, "_make_cell_roads", side_effect=AssertionError("made again")):
+            zb = b.apply(la, lo, np.zeros(50))
+        self.assertGreater(b.shared.stats.get("stage_read", 0), 0)
+        os.environ[plancache.RUN_ENV] = "alone"             # (a run where nothing was shared)
+        with mock.patch.object(plancache, "STAGE_ON", False):
+            c = self.grader(FakeMD(f))
+            zc = c.apply(la, lo, np.zeros(50))
+            self.assertEqual(c.shared.stats.get("stage_written", 0), 0)
+        self.assertEqual(zb.tobytes(), zc.tobytes(), "the same heights as planned alone")
+
+    def test_cells_planned_side_by_side_claim_no_stage(self):
+        """A process planning several cells at once (a block's: one interpreter lock for all) takes no stage claim and
+        keeps no stage for the others (they make their own meanwhile, as before), but reads theirs."""
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        key = self.cells(a, la, lo)[0]
+        with grading._STAGE_CROWD_LOCK:
+            grading._STAGE_CROWD[0] += 2
+        try:
+            seen = []
+            real = a.shared.stage_claim
+            a.shared.stage_claim = lambda k, **kw: (seen.append(kw.get("hold")), real(k, **kw))[1]
+            a.store.planner_of_cell(key)._road_stage(key)
+            self.assertEqual(seen, [False])
+            self.assertEqual(a.shared.stats.get("stage_written", 0), 0)
+            self.assertIsNone(a.shared.stage_load(key))
+            b = self.grader(FakeMD(f))
+            self.assertEqual(b.shared.stage_claim(key), (None, True), "free for a process that makes it alone")
+            p = grading.Plan(np.array([[0.0, 0.0], [10.0, 0.0]]), np.array([1.0, 2.0]), 3.0)
+            b.shared.stage_store(key, [("a", p)], [], False)
+            b.shared.stage_release(key)
+            got, mine = a.shared.stage_claim(key, hold=False)
+            self.assertEqual((got[0][0][0], mine), ("a", False), "another process's stage read")
+        finally:
+            with grading._STAGE_CROWD_LOCK:
+                grading._STAGE_CROWD[0] -= 2
+        self.assertEqual(grading._STAGE_CROWD[0], 0)
+
+    def test_short_stage_read_short(self):
+        import revisit
+        f = features([[(-300, 20), (300, 20)]], ["residential"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+
+        def faulty(la_, lo_):           # (an elevation download failed while the stage was made)
+            revisit.fault()
+            return 10.0 + 0.0 * np.asarray(la_)
+        a = self.grader(FakeMD(f), faulty)
+        key = self.cells(a, la, lo)[0]
+        a.store.planner_of_cell(key)._road_stage(key)
+        self.assertTrue(a.shared.stage_load(key)[2], "made short of something")
+        b = self.grader(FakeMD(f))
+        b.apply(la, lo, np.zeros(50))
+        self.assertTrue(b.shared.is_short(key), "plans made from a short stage are short: not kept for later visits")
+
+    def test_one_maker_the_others_wait(self):
+        c = plancache.PlanCache(self.dir, "s")
+        self.assertEqual(c.stage_claim(KEY), (None, True))
+        other = plancache.PlanCache(self.dir, "s")
+        with mock.patch.object(os, "getpid", return_value=self.other_pid()):    # (another live process asks)
+            t0 = time.monotonic()
+            self.assertEqual(other.stage_claim(KEY, wait_s=0.3), (None, False), "made there after the wait")
+            self.assertGreaterEqual(time.monotonic() - t0, 0.3)
+            got = []
+            t = threading.Thread(target=lambda: got.append(other.stage_claim(KEY, wait_s=20.0)))
+            t.start()
+            time.sleep(0.2)
+            self.assertEqual(got, [], "waiting")
+            p = grading.Plan(np.array([[0.0, 0.0], [10.0, 0.0]]), np.array([1.0, 2.0]), 3.0)
+            self.assertTrue(c.stage_store(KEY, [("a", p)], [], False))
+            c.stage_release(KEY)
+            t.join(5.0)
+        self.assertEqual(len(got), 1)
+        (plans, keeps, short), mine = got[0]
+        self.assertFalse(mine)
+        self.assertEqual((plans[0][0], plans[0][1].z.tolist(), keeps, short), ("a", [1.0, 2.0], [], False))
+
+    def test_dead_or_less_favoured_holder_not_waited_for(self):
+        c = plancache.PlanCache(self.dir, "s")
+        path = c._stage_path(KEY)
+        os.makedirs(os.path.dirname(path))
+        with open(path + ".claim", "w") as fh:
+            fh.write("1 0 4000000000")                  # (its process is gone)
+        self.assertEqual(c.stage_claim(KEY), (None, True), "taken over")
+        c.stage_release(KEY)
+        with open(path + ".claim", "w") as fh:
+            fh.write(f"1 3 {self.other_pid()}")         # (a road tile's process, below this one)
+        t0 = time.monotonic()
+        self.assertEqual(c.stage_claim(KEY), (None, False), "made here without the claim")
+        self.assertLess(time.monotonic() - t0, 1.0)
+        with xproc.favoured():                          # (itself a road tile's process on a first block's cell)
+            with mock.patch.object(xproc, "PRIORITY", 3):
+                self.assertEqual(xproc._rank("demand"), (1, 0))
+        with mock.patch.object(xproc, "PRIORITY", 3):
+            self.assertEqual(xproc._rank("demand"), (1, 3))
+
+    def test_damaged_stage_made_again(self):
+        f = features([[(-300, 20), (300, 20)]], ["residential"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        key = self.cells(a, la, lo)[0]
+        a.store.planner_of_cell(key)._road_stage(key)
+        path = a.shared._stage_path(key)
+        with open(path, "r+b") as fh:
+            fh.seek(os.path.getsize(path) // 2)
+            fh.write(b"\xff\xfe")
+        self.assertIsNone(a.shared.stage_load(key))
+        md = FakeMD(f)
+        b = self.grader(md)
+        zb = b.apply(la, lo, np.zeros(50))
+        self.assertGreater(md.calls, 0, "made here")
+        self.assertEqual(zb.tobytes(), self.grader(FakeMD(f)).apply(la, lo, np.zeros(50)).tobytes())
+
+
 class LockTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

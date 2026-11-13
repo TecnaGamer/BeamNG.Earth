@@ -340,7 +340,10 @@ def source_id(here):
 # keys apart (decisions.py: items built on the project's machine are found under the player's own keys).
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
                 "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
-                "BNE_TELEMETRY")
+                "BNE_TELEMETRY",
+                # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
+                # plancache's stage_*)
+                "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE")
 
 
 def code_key():

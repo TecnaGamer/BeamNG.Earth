@@ -37,6 +37,19 @@ VERSIONS_RECHECK_S = 2.0    # s between reads of the map data's versions for the
 RUN_ENV = "BNGE_PLAN_RUN"
 
 
+STAGE_ON = os.environ.get("BNE_STAGE_SHARE", "on") != "off"   # (road stages shared by the run's processes; off: each its own)
+STAGE_WAIT_S = 45.0         # s a process waits for another making a cell's road stage before it makes it too
+STAGE_SLICE_MS = 200        # ms of that wait between two looks at the waiting job's cancel check
+
+
+def _stage_ef():
+    """The native module's stage functions (earthfast 290), or None when the sharing is off."""
+    if not STAGE_ON:
+        return None
+    import fast
+    return fast.native(290, "shared road stages")
+
+
 def _pack(arrays, g, items):
     """items (arrays of one dtype, shape (n_i, ...)) as one array g (concatenated along the first axis) and g_n
     (the n_i); a dtype per group, as the plans make them (exact round trip)."""
@@ -471,6 +484,124 @@ class PlanCache:
         """Is a process planning cell key now (its claim's lock is there)? A stat, nothing opened (a lock open for
         reading cannot be released on Windows: xproc.once)."""
         return os.path.exists(self._path(key) + ".lock")
+
+
+    # ---- road stages (grading._Planner._road_stage): made by one process of the run, read by the others ----
+    # A cell's road stage (its roads' plans and kept strips, before its tunnels) is what the tunnels of the cells round
+    # it are graded by, so every process that planned a cell made its neighbours' stages too: four processes planning a
+    # first block's four cells each made all four stages (13.5 CPU-s a cell where 6.5 were its own, Fells Point,
+    # 2026-11-13). The files, the claims and the wait are earthfast's (stageshare.rs): this is the plans' form of them.
+
+    def _stage_path(self, key):
+        return os.path.join(self.dir, "stage", f"{int(key[0])}_{int(key[1])}_{int(key[2])}.stage")
+
+    def stage_claim(self, key, wait_s=None, hold=True):
+        """Before making cell key's road stage: ((plans, keeps, short), False) when a process of this run made it (now,
+        or while we waited for it); (None, True) when this process makes it (stage_store, then stage_release);
+        (None, False) when it makes it without the claim (a less urgent holder, a wait past wait_s, a damaged file).
+        hold false: the claim is never taken (the caller makes several stages at once on one interpreter lock: a
+        process waiting for one of them would wait several times as long as making it itself); another process's
+        stage is still read, and waited for while it is being made."""
+        ef = _stage_ef()
+        if ef is None:
+            return None, False
+        path = self._stage_path(key)
+        if not hold:
+            got = self.stage_load(key)
+            if got is not None or not ef.stage_busy(path):
+                return got, False
+        rank, prio = xproc._rank("demand")
+        pid = os.getpid()
+        t0 = time.monotonic()
+        st = ef.stage_claim(path, rank, prio, pid)
+        waited = False
+        while st == ef.STAGE_HELD:
+            if time.monotonic() - t0 > (STAGE_WAIT_S if wait_s is None else wait_s):
+                return None, False
+            if not waited:
+                waited = True
+                with self._lock:
+                    self.stats["stage_waited"] = self.stats.get("stage_waited", 0) + 1
+            xproc.check_cancel()        # (a block / road tile of a place a teleport left)
+            st = ef.stage_wait(path, rank, prio, pid, STAGE_SLICE_MS)
+        if waited:
+            with self._lock:
+                self.stats["stage_wait_s"] = self.stats.get("stage_wait_s", 0.0) + time.monotonic() - t0
+        if st == ef.STAGE_READY:
+            return self.stage_load(key), False
+        if st == ef.STAGE_MINE and not hold:
+            ef.stage_release(path)
+            return None, False
+        return None, st == ef.STAGE_MINE
+
+    def stage_release(self, key):
+        ef = _stage_ef()
+        if ef is not None:
+            ef.stage_release(self._stage_path(key))
+
+    def stage_store(self, key, plans, keeps, short):
+        """Cell key's road stage for the run's other processes (short: made short of something, read so). False when
+        it could not be written (they make it themselves)."""
+        ef = _stage_ef()
+        if ef is None:
+            return False
+        meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
+                           "rid": int(p.rid), "rank": int(getattr(p, "rank", -1)),
+                           "max_wall": float(p.max_wall), "cut": p.cut is not None,
+                           "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
+                           "widen": getattr(p, "widen", None) is not None}
+                          for fid, p in plans],
+                "keeps": [float(hw) for _xy, hw in keeps], "short": bool(short)}
+        arrays = {}
+        try:
+            _pack(arrays, "p", [p.xy for _f, p in plans])
+            _pack(arrays, "z", [p.z for _f, p in plans])
+            _pack(arrays, "c", [p.cut for _f, p in plans if p.cut is not None])
+            _pack(arrays, "b", [p.bank for _f, p in plans if getattr(p, "bank", None) is not None])
+            _pack(arrays, "w", [p.widen for _f, p in plans if getattr(p, "widen", None) is not None])
+            _pack(arrays, "k", [xy for xy, _hw in keeps])
+            rows = [(n, a.dtype.str, [int(d) for d in a.shape], np.ascontiguousarray(a).tobytes())
+                    for n, a in arrays.items()]
+            ok = bool(ef.stage_put(self._stage_path(key), json.dumps(meta).encode("utf-8"), rows, os.getpid()))
+        except (OSError, ValueError, TypeError):    # (plans of mixed arrays, a full disk: each process makes its own)
+            return False
+        if ok:
+            with self._lock:
+                self.stats["stage_written"] = self.stats.get("stage_written", 0) + 1
+        return ok
+
+    def stage_load(self, key):
+        """(plans, keeps, short) of cell key's road stage as a process of this run made it, or None."""
+        from grading import Plan, set_widen
+        ef = _stage_ef()
+        if ef is None:
+            return None
+        try:
+            got = ef.stage_get(self._stage_path(key))
+            if got is None:
+                return None
+            meta = json.loads(bytes(got[0]).decode("utf-8"))
+            f = {n: np.frombuffer(data, np.dtype(dt)).reshape([int(d) for d in shape])
+                 for n, dt, shape, data in got[1]}
+            lists = {g: (_split(f, g) if g + "_n" in f else []) for g in ("p", "z", "c", "b", "w", "k")}
+            plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
+            for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
+                pl = Plan(xy, z, m["half"], tuple(m["abut"]), next(cuts) if m["cut"] else None, m["road_half"])
+                pl.rid, pl.max_wall = m["rid"], m["max_wall"]
+                pl.rank = int(m.get("rank", -1))
+                pl.steep = bool(m.get("steep", False))
+                pl.bank = next(banks) if m.get("bank") else None
+                if m.get("widen"):
+                    set_widen(pl, next(widens))
+                plans.append((m["fid"], pl))
+            if len(plans) != len(meta["plans"]) or len(lists["k"]) != len(meta["keeps"]):
+                return None
+            keeps = list(zip(lists["k"], meta["keeps"]))
+        except (OSError, ValueError, KeyError, TypeError, StopIteration):   # (damaged: made here)
+            return None
+        with self._lock:
+            self.stats["stage_read"] = self.stats.get("stage_read", 0) + 1
+        return plans, keeps, bool(meta.get("short"))
 
 
     # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----

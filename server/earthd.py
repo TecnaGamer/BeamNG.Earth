@@ -610,6 +610,8 @@ PROVISIONAL_ELSEWHERE = os.environ.get("BNGE_PROV_HERE") != "1"   # a teleport's
 # The road plans this process's own work asks for (its far tiles' ground, lakes, tunnels) are made by the prefetch
 # lane's block process, not on this process's threads (Server.plan_elsewhere; BNE_PLAN_ELSEWHERE=off: here, as before)
 PLAN_ELSEWHERE = os.environ.get("BNE_PLAN_ELSEWHERE", "on") != "off"
+FIRST_FANOUT = os.environ.get("BNE_FIRST_FANOUT", "on") != "off"   # (Server.plan_first; off: the block's process plans them)
+FIRST_FANOUT_CPUS = 8       # threads the server's processes may run on (server_threads) for plan_first to hand cells out
 WARM_SPLIT = os.environ.get("BNE_WARM_SPLIT", "on") != "off"     # (Server.warm_roads; off: both lanes plan ahead)
 PLAN_ELSEWHERE_S = 120.0    # s a cell's plans are waited for from there before they are made here after all
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
@@ -632,6 +634,29 @@ PREFETCH_PARALLEL = 2
 # BNE_PREFETCH_PROCS sets it.
 PREFETCH_PROCS_CPUS = 12
 PREFETCH_PROCS_GB = 24.0
+
+
+def server_threads():
+    """The CPU threads this process (and the workers it starts) may run on now: the machine's, or fewer when the
+    launcher pinned the server beside the game (cpupin; the loading boost widens it)."""
+    n = os.cpu_count() or 4
+    try:
+        return min(n, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):       # (Windows: no affinity call here; the machine's)
+        return n
+
+
+def sharing_machine():
+    """Is this a machine where the first block's cells are handed out and the road stages shared (plan_first,
+    plancache's stage_*): PREFETCH_PROCS_CPUS threads or more and not a small one (budget.small), unless
+    BNE_STAGE_SHARE / BNE_FIRST_FANOUT say "on". Measured on a 16-thread PC (the graded first block 1.3-2.6x sooner);
+    on a Steam Deck (8 threads, the small tier) neither showed a gain in four rounds of cold first visits and each
+    made some run later (the provisional block +1.1 s with cells handed out, a graded block +10 s once with the
+    stages shared, 2026-11-13): there, and on machines between not measured yet, everything is as before."""
+    if "on" in (os.environ.get("BNE_STAGE_SHARE"), os.environ.get("BNE_FIRST_FANOUT")):
+        return True
+    import budget
+    return (os.cpu_count() or 0) >= PREFETCH_PROCS_CPUS and not budget.small()
 
 
 def prefetch_procs():
@@ -3568,6 +3593,51 @@ class Server:
         fut = bp[LANE_PREFETCH][0].submit(blockworker.plan_cell, at[0], at[1], at[2],
                                           (int(key[0]), int(key[1]), int(key[2])))
         return bool(fut.result(timeout=PLAN_ELSEWHERE_S))
+
+    def plan_first(self, anchor, cx, cy):
+        """A teleport's first block's map cells planned from the request on, each in a worker process of its own
+        (blockworker.plan_first): the prefetch lane's block processes first, then the road tiles' (idle until the
+        anchor is committed, and their first tiles wait for these plans anyway). The graded block's process planned
+        all of them itself, once the provisional block was out, on one interpreter lock: 4 cells' 23 CPU-s took it
+        20 s of a cold Fells Point visit's 30 s while the other processes waited for them (2026-11-13). It and the
+        road tiles read the plans from the run's plan cache (plancache claim: they wait for the cell's planner). A
+        cell no process is free for is planned by the block's process as before. BNE_FIRST_FANOUT=off: none."""
+        if not FIRST_FANOUT or not self.grading or os.environ.get("BNGE_WORLD_BUNDLE") \
+                or not os.environ.get(plancachemod.RUN_ENV):
+            return 0
+        bp = self.block_pools
+        lanes = []                  # (pool, processes)
+        if len(bp) > LANE_PREFETCH and bp[LANE_PREFETCH][0] is not bp[LANE_REQUEST][0]:
+            lanes.append((bp[LANE_PREFETCH][0], int(getattr(bp[LANE_PREFETCH][0], "workers", 1) or 1)))
+        if self.road_pool is not None:
+            lanes.append((self.road_pool, int(getattr(self.road_pool, "workers", 1) or 1)))
+        if not lanes:
+            return 0
+        # (not on a machine whose server has few threads: the cells' planners would only take them from the provisional
+        # block, which starts now too. A Steam Deck's server on 4 threads: the provisional block 1.1 s later
+        # (9.4 for 8.3 s) in two pairs, the graded one no sooner, 2026-11-13. Its road stages are shared all the same)
+        cpus = server_threads()
+        if cpus < FIRST_FANOUT_CPUS or not sharing_machine():
+            return 0
+        half = self.layout.block * heightmap.SQUARE / 2
+        keys = blockworker.first_cells(anchor.lat, anchor.lon, cx, cy, half)
+        # (not more at once than half of those threads: the provisional block and the far field start now too)
+        room = max(1, cpus // 2)
+        n = 0
+        for pool, procs in lanes:
+            for _ in range(procs):
+                if n >= len(keys) or n >= room:
+                    break
+                k = keys[n]
+                n += 1
+                try:
+                    fut = pool.submit(blockworker.plan_first, anchor.id, anchor.lat, anchor.lon,
+                                      (int(k[0]), int(k[1]), int(k[2])), self.out_dir)
+                    fut.add_done_callback(lambda f: f.cancelled() or f.exception())    # (its plans are read from disk)
+                except Exception as e:      # (the block's process plans it)
+                    log.debug("first block's cell %s not handed out: %s: %s", k, type(e).__name__, e)
+        log.info("anchor %d: %d of the first block's %d cells handed to worker processes", anchor.id, n, len(keys))
+        return n
 
     def warm_roads(self, anchor, x, y, vx, vy, tree=None):
         """Queue the road plans of the cells the physics block will cover along the player's straight path
@@ -8826,6 +8896,11 @@ class Connection:
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
         provisional = teleport and PROVISIONAL_FIRST and self.s.grading and not os.environ.get("BNGE_WORLD_BUNDLE")
+        if provisional:     # (the graded one's cells planned meanwhile, a process each: Server.plan_first)
+            try:
+                self.s.plan_first(anchor, cx, cy)
+            except Exception as e:
+                log.warning("anchor %d: first block's cells not handed out: %s: %s", anchor.id, type(e).__name__, e)
         if self.s.surface is not None and not provisional:
             # the anchor's first block is built once and kept while the player stands still: give the
             # land cover around it a moment to arrive (blocks built while driving never wait)
@@ -11057,6 +11132,10 @@ async def main_async(args):
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
+    if not sharing_machine() and not os.environ.get("BNE_STAGE_SHARE"):
+        # (likewise: no shared road stages on a small machine, here and in the workers; sharing_machine)
+        os.environ["BNE_STAGE_SHARE"] = "off"
+        plancachemod.STAGE_ON = False
     import roadz as roadzmod
     if roadzmod.PREFETCH_ON:                    # (likewise: the lidar read ahead here, taken by them when on disk)
         os.environ[roadzmod.PREFETCH_ENV] = "1"

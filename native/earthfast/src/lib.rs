@@ -82,6 +82,7 @@ mod pmtiles;
 mod underdeck;
 mod deckground;
 mod railseam;
+mod stageshare;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -6416,6 +6417,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bc1fast::bc1_encode_fast, m)?)?;
     m.add_function(wrap_pyfunction!(bc1fast::mip_levels_fast, m)?)?;
     m.add_function(wrap_pyfunction!(bc1fast::bc1_ispc_linked, m)?)?;
-    m.add("VERSION", 287)?;
+    // 290 (286 on its branch; 288 and 289 are other branches'): road stages shared by the server's processes (stageshare:
+    // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
+    // grading._Planner._road_stage)
+    stageshare::register(m)?;
+    m.add("VERSION", 290)?;
     Ok(())
 }

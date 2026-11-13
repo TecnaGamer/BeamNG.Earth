@@ -433,6 +433,7 @@ PARENT_POLL_S = 2.0
 
 WARM_RECHECK_S = 1.0        # s between _warm_loop's looks at the cells other processes were planning
 _BUILDING = [0]             # blocks being built in this process now (build)
+_FIRST = [0]                # a first block's cells being planned in this process now (plan_first)
 
 
 def _read_warm(warm_q):
@@ -487,11 +488,14 @@ def _warm_loop():
         with _s.cv:
             job = None
             while job is None:
-                job = _warm_next(_s.want, getattr(_s, "warm_read_only", False) and _BUILDING[0] > 0)
+                # (none beside a first block's cell being planned in this process, plan_first: the two would share
+                # one interpreter lock, and the block waits for that cell)
+                job = None if _FIRST[0] > 0 else \
+                    _warm_next(_s.want, getattr(_s, "warm_read_only", False) and _BUILDING[0] > 0)
                 if job is None:
                     # (the cells other processes are planning now are looked at again: no pose may come to say so)
                     # ... nor that this process's block is built: the cells left are planned here then)
-                    _s.cv.wait(WARM_RECHECK_S if any(not g.planned(k) for g, k in _s.want) else None)
+                    _s.cv.wait(WARM_RECHECK_S if _FIRST[0] > 0 or any(not g.planned(k) for g, k in _s.want) else None)
         try:
             t0 = time.perf_counter()
             job[0].warm(job[1])
@@ -513,6 +517,48 @@ def plan_cell(aid, lat, lon, key):
     k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
     g.store.planner_of_cell(k)._cell_plans(k)
     return g.shared.has(k)
+
+
+def first_cells(lat, lon, cx, cy, half):
+    """The map cells a block of anchor (lat, lon) at (cx, cy), half wide, plans before it grades (plan_ahead's points,
+    Grader.prepare's cells): earthd.Server.plan_first hands them to the processes."""
+    frame = geodesy.EnuFrame(lat, lon)
+    xs = cx + np.linspace(-half, half, 5)
+    ys = cy + np.linspace(-half, half, 5)
+    X, Y = np.meshgrid(xs, ys)
+    la, lo, _ = frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+    return gradingmod.cells_of_points(np.asarray(la), np.asarray(lo))
+
+
+def plan_first(aid, lat, lon, key, out_dir):
+    """One of a teleport's first block's map cells planned in this process (earthd.Server.plan_first: each of the
+    block's cells in a process of its own from the request on, instead of all of them on the block process's one
+    interpreter lock once its provisional block is out), at the terrain blocks' priority (xproc.favoured, the urgent
+    elevation lane); the block and the road tiles read the plans from the run's plan cache as any other process's.
+    True when planned here, False when it was planned or being planned already, None when this process does not
+    grade. Given up once a teleport leaves the anchor (pools.Abandoned)."""
+    import mapcells
+    with _abandon_check(out_dir, aid):
+        g, _ = _s.anchor(aid, lat, lon)
+        if g is None or getattr(g, "store", None) is None or g.shared is None:
+            return None
+        k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+        if g.planned(k):
+            return False
+        try:
+            if g.shared.has(k) or g.shared.busy(k):
+                return False
+        except Exception:       # (planned here: its claim says who makes them)
+            pass
+        import contextlib
+        urgent = getattr(getattr(g, "dem", None), "urgent", None)
+        _FIRST[0] += 1
+        try:
+            with xproc.favoured(), (urgent() if urgent is not None else contextlib.nullcontext()):
+                g.store.planner_of_cell(k)._cell_plans(k)
+        finally:
+            _FIRST[0] -= 1
+        return True
 
 
 @profile_step('Road plans ahead')
