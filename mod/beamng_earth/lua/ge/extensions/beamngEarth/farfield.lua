@@ -118,7 +118,8 @@ M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many ob
 M.VIEW_PENALTY = 3      -- import order: outside the camera's view cone a tile counts this many times as far
 M.VIEW_MARGIN_DEG = 15  -- the cone: half the horizontal field of view plus this ...
 M.VIEW_MAX_DEG = 80     -- ... at most this far off the camera's heading
-M.SCREEN_ORDER = true   -- import order by size on screen (distance / edge), not distance (peekImport; false: the old)
+M.SCREEN_ORDER = true   -- import order by size on screen (distance / edge), not distance (peekImport; false: the old),
+                        -- where the block is the near ground ('terrain' / 'detail')
 M.COVERED_PENALTY = 4   -- ... a tile under the shown block counts this many times as far
 M.SPARE_MAX = 400
 M.SPARE_S = 120
@@ -1284,7 +1285,7 @@ local function peekImport(cam)
     end
     local pen2 = M.VIEW_PENALTY * M.VIEW_PENALTY
     local cov2 = M.COVERED_PENALTY * M.COVERED_PENALTY
-    local screen = M.SCREEN_ORDER
+    local screen = M.SCREEN_ORDER and blockShown()   -- (mesh mode: the tiles are the near ground, nearest first)
     local best, bd = nil, huge
     for i = mH, mT do
       local inst = mainQ[i]

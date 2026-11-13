@@ -1225,7 +1225,8 @@ class FarField:
                     dx = max(inst.x0 - cam["x"], 0.0, cam["x"] - inst.x1)
                     dy = max(inst.y0 - cam["y"], 0.0, cam["y"] - inst.y1)
                     d = dx * dx + dy * dy
-                    if SCREEN_ORDER:     # (farfield.lua: by size on screen, covered tiles after)
+                    if SCREEN_ORDER and self.near_visual != "mesh":     # (farfield.lua: by size on screen where
+                        # the block is the near ground, covered tiles after; this port orders in mesh mode only)
                         sz = max(inst.x1 - inst.x0, inst.y1 - inst.y0, 1.0)
                         d = d / (sz * sz)
                         if d == 0:
