@@ -2386,6 +2386,14 @@ def run(args):
                                  name="enginepatch", daemon=True).start()
             except Exception as e:      # (never in the way of the game)
                 say(f"(engine patches: {e})")
+            # ... and terfast (enginepatch_terfast.py: a terrain block swap's cell scans without their divisions;
+            # off with BNGEARTH_TERFAST_WIN=0 or BNGEARTH_TERFAST_OFF=1)
+            try:
+                import enginepatch_terfast
+                threading.Thread(target=enginepatch_terfast.attach, args=(user_dir,), kwargs={"log": say},
+                                 name="enginepatch-terfast", daemon=True).start()
+            except Exception as e:
+                say(f"(engine patches, terfast: {e})")
         if early:
             follow_server()
         say()
