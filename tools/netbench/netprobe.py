@@ -14,8 +14,9 @@ trees_s, far_s; loaded_s: all of them, the mod's loading line ends) and settled_
 terrain, trees and buildings, 2048 px ground photos, horizon view).
 
 The server's environment is this process's: start it behind the cache proxy (proxy.sh env) to spare the hosts.
---link MBIT:RTT has the proxy deliver at that line's speed (link.py) and keeps the server's own per-host request limits
-(no sitepatch), so the times are a player's on that line.
+--link MBIT:RTT has the proxy deliver at that line's speed (link.py) and keeps the server as a player's: its own
+per-host request limits (no sitepatch), the live lidar wait (BNE_LIDAR_GAPS_WAIT unset), so the times are a player's on
+that line (the bytes then vary a little run to run).
 """
 import argparse
 import collections
@@ -127,7 +128,9 @@ class Server:
         # then 1 s with the cell's reads stopped: how much of the lidar a run read followed the machine's load (with ten
         # servers at once a city's 30-110 MB, run to run, 2026-11-12); read whole it is the same every run
         env = dict(os.environ, BNE_TELEMETRY="off", BNGE_NETLOG=self.netlog, PYTHONUNBUFFERED="1",
-                   BNE_NETSTATS_PROC=os.path.join(self.out, "proc"), BNE_LIDAR_GAPS_WAIT="900")
+                   BNE_NETSTATS_PROC=os.path.join(self.out, "proc"))
+        if not a.link:      # (a timed run waits as a player's server does: its times are the point, not equal bytes)
+            env["BNE_LIDAR_GAPS_WAIT"] = "900"
         if a.link:
             env.update(line_env(env, a.link))
         else:   # sitepatch: netfetch's per-host limits lifted in every server process (the proxy keeps its own upstream)
