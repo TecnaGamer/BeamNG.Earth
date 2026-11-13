@@ -687,5 +687,40 @@ end
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
+-- Physics pause is not a stationary vehicle: the GPS may keep updating its route, but must not recover it.
+do
+ for _, pauseKind in ipairs({'physics', 'engine'}) do
+  local oldBe, oldSpawn, oldQuat, oldLog = be, spawn, quatFromDir, log
+  local running, recoveries = true, 0
+  be = { getPhysicsRunning = function() return pauseKind ~= 'physics' or running end,
+         getEnabled = function() return pauseKind ~= 'engine' or running end }
+  spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local f = fixture(nil, 0, 6)
+  f.speed = 0
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1) -- one genuine retry before pausing
+  local retries = f.gps.noProgressReplans
+  running = false
+  for _ = 1, 6 do f:step(f.gps.AUTO_NOPROGRESS_S + 1) end
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'a paused simulation never replans for stalled progress or teleports the vehicle')
+  T.check(f.gps.status().remaining ~= nil and f.gps.autodrive(),
+    'the GPS remains available and Autodrive stays enabled while physics is paused')
+  running = true
+  f:step()
+  f:step(f.gps.AUTO_NOPROGRESS_S - 1)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'resuming grants a full progress interval instead of counting paused time')
+  f:step(2)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries + 1,
+    'the first genuine stall after resume retries instead of inheriting a recovery attempt')
+  f:step(); f:step(f.gps.AUTO_NOPROGRESS_S + 1)
+  T.check(recoveries == 1, 'normal recovery still works after the resumed vehicle remains stalled')
+  be, spawn, quatFromDir, log = oldBe, oldSpawn, oldQuat, oldLog
+ end
+end
+
+
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')
