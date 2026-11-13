@@ -693,9 +693,9 @@
     "lift_g": 0.0
    },
    "ground:23a5c66c-7e2e-45b2-83ec-0332ed3290e0": {
-    "step_m": 0.5596,
-    "grade": 0.2459,
-    "lift_g": 2.7784
+    "step_m": 0.56,
+    "grade": 0.246,
+    "lift_g": 2.8018
    },
    "ground:2cf79278-c00b-48d3-a91f-68e2c07b0f76": {
     "step_m": 0.1633,
@@ -848,9 +848,9 @@
     "lift_g": 2.0468
    },
    "ground:d089f4da-9aa6-4eaa-afc3-c06ae6afab1e": {
-    "step_m": 0.5523,
-    "grade": 0.0816,
-    "lift_g": 0.428
+    "step_m": 0.5518,
+    "grade": 0.0817,
+    "lift_g": 0.4281
    },
    "ground:d283e09c-fdcd-46fa-9690-6a0444ce3695": {
     "step_m": 2.4458,

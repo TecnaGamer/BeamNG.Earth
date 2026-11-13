@@ -22,7 +22,7 @@ _ef = fast.native(262, "dnp")
 
 _OPS = dict(sin=0, cos=1, tan=2, arcsin=3, arccos=4, arctan=5, sinh=6, cosh=7, tanh=8, arcsinh=9, arctanh=10, exp=11,
             log=12, log2=13, log10=14, cbrt=15, expm1=16, log1p=17, arccosh=18)
-_ATAN2, _POW = 32, 33
+_ATAN2, _POW, _HYPOT = 32, 33, 34
 
 
 def _out_dtype(*arrays):
@@ -30,7 +30,17 @@ def _out_dtype(*arrays):
     return dt if dt in (np.float32, np.float16) else np.float64
 
 
+_SCALAR = (float, int, np.float64)
+_F64 = np.float64
+_S1 = {0: "dm_sin", 1: "dm_cos", 2: "dm_tan", 3: "dm_asin", 4: "dm_acos", 5: "dm_atan", 6: "dm_sinh", 7: "dm_cosh",
+       8: "dm_tanh", 9: "dm_asinh", 10: "dm_atanh", 11: "dm_exp", 12: "dm_log", 13: "dm_log2", 14: "dm_log10",
+       15: "dm_cbrt", 16: "dm_expm1", 17: "dm_log1p", 18: "dm_acosh"}
+_S2 = {32: "dm_atan2", 33: "dm_pow", 34: "dm_hypot"}
+
+
 def _unary(op, x):
+    if type(x) in _SCALAR:              # (a Python or numpy float: the scalar kernel, a numpy float64 back as numpy)
+        return _F64(getattr(_ef, _S1[op])(x))
     a = np.asarray(x)
     dt = _out_dtype(a)
     r = _ef.dm_vec(op, np.ascontiguousarray(a, np.float64).ravel()).reshape(a.shape)
@@ -40,6 +50,8 @@ def _unary(op, x):
 
 
 def _binary(op, x, y):
+    if type(x) in _SCALAR and type(y) in _SCALAR:
+        return _F64(getattr(_ef, _S2[op])(x, y))
     a, b = np.asarray(x), np.asarray(y)
     dt = _out_dtype(a, b)
     a, b = np.broadcast_arrays(a, b)
@@ -82,12 +94,10 @@ def _float(a):
 
 
 def hypot(x, y, out=None):
-    """np.hypot as sqrt(x * x + y * y) (exact operations; no overflow at the sizes this server meets). out: numpy's
-    third argument (hypot(*v.T) of an (n, 3) v writes the result into its third column, as numpy did)."""
-    a, b = _float(np.asarray(x)), _float(np.asarray(y))
-    if out is None:
-        return np.sqrt(a * a + b * b)
-    return np.sqrt(a * a + b * b, out=out)
+    """np.hypot: the libm crate's hypot, the kernels' own (x.dhypot(y)), so that a length measured in Python and the
+    same length measured in a kernel agree to the bit. out: numpy's third argument (hypot(*v.T) of an (n, 3) v writes
+    the result into its third column, as numpy did)."""
+    return _store(_binary(_HYPOT, x, y), out)
 
 
 def sq(x):
@@ -218,22 +228,25 @@ def inv(a):
     return solve(a, np.eye(len(a)))
 
 
-LSTSQ_RANK_TOL = 1e-9   # a column below this share of the largest counts as dependent (QR's diagonal is no exact
-                        # rank test, and a^T a's eigenvalues square the condition: numpy's eps-level rcond would keep noise)
+LSTSQ_RANK_TOL = 1e-10  # a (unit-scaled) column whose QR diagonal is below this share of the largest counts as
+                        # dependent (QR's diagonal is no exact rank test; numpy's eps-level rcond on singular values)
 
 
 def lstsq(a, b, rcond=None):
-    """np.linalg.lstsq's (x, residuals, rank, singular values): x by Householder QR when a (r, c) has full column rank,
-    else numpy's minimum-norm x from the eigen decomposition of a^T a (rank: its eigenvalues over 1e-12 of the
-    largest); residuals the summed squares of b - a x (as numpy: empty unless r > c and a has full rank); singular
-    values None."""
+    """np.linalg.lstsq's (x, residuals, rank, singular values): the columns scaled to unit length, then x by
+    Householder QR when they are independent, else numpy's minimum-norm x from the eigen decomposition of a^T
+    a (rank: its eigenvalues over 1e-12 of the largest); residuals the summed squares of b - a x (as numpy: empty
+    unless r > c and a has full rank); singular values None. (Unscaled, a plane fit in projected metres, columns
+    x ~ 1e6 beside a column of ones, read as rank-deficient.)"""
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     vb = b.ndim == 1
     b2 = b[:, None] if vb else b
     r, c = a.shape
-    eps = np.finfo(np.float64).eps * max(r, c) if rcond is None or rcond < 0 else rcond
-    eps = max(eps, LSTSQ_RANK_TOL)
-    x = _ef.dm_lstsq(np.ascontiguousarray(a), np.ascontiguousarray(b2), float(eps)) if r >= c else None
+    scale = np.sqrt(np.add.reduce(a * a, axis=0))
+    scale = np.where(scale > 0.0, scale, 1.0)
+    s_ = a / scale
+    tol = LSTSQ_RANK_TOL if rcond is None or rcond < 0 else max(rcond, LSTSQ_RANK_TOL)
+    x = _ef.dm_lstsq(np.ascontiguousarray(s_), np.ascontiguousarray(b2), float(tol)) if r >= c else None
     rank = c
     if x is None:
         w, v = eigh(matmul(a.T, a))
@@ -241,9 +254,11 @@ def lstsq(a, b, rcond=None):
         rank = int(keep.sum())
         inv_w = np.where(keep, 1.0 / np.where(keep, w, 1.0), 0.0)
         x = matmul(v * inv_w, matmul(v.T, matmul(a.T, b2)))
+    else:
+        x = x / scale[:, None]
     res = b2 - matmul(a, x)
     resid = np.add.reduce(res * res, axis=0) if r > c and rank == c else np.zeros(0)
-    return (x[:, 0] if vb else x), (resid if not vb or not len(resid) else resid), rank, None
+    return (x[:, 0] if vb else x), resid, rank, None
 
 
 def eigh(a):
