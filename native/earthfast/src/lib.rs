@@ -80,6 +80,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -6331,6 +6332,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // station_snap_edges, station_link_chains: railstations.snap_edges / _links' chains, King's Cross / Euston tiles)
     m.add_function(wrap_pyfunction!(stationgeom::station_snap_edges, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_link_chains, m)?)?;
-    m.add("VERSION", 263)?;
+    // 264: London reports 2026-11-12: a rail / walkway bridge's piers kept off every road and footway under it
+    // (railpiers: rail_pier_sites; railways._sited counted only the roads the track crosses at grade)
+    m.add_function(wrap_pyfunction!(railpiers::rail_pier_sites, m)?)?;
+    m.add("VERSION", 264)?;
     Ok(())
 }

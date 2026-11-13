@@ -1540,33 +1540,67 @@ def _sleepers(s, xy, u, top, i, j, gone=0.0):
     return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zt, zt + SLEEPER_H
 
 
-PIER_ROAD_M = 1.5           # m a pier keeps off a road's carriageway under the bridge
+PIER_ROAD_M = 1.5           # m a pier keeps off a road's carriageway (its sidewalks included) or a footway under the bridge
+PIER_OBST_REACH_M = 60.0    # m round the tile the roads and footways the piers keep off are taken (a site moves up to
+                            # 0.4 of a span along the deck: within reach of any tile that draws it)
 
 
-def _sited(pr, crossers, ground):
-    """The piers pr (_piers') clear of the roads under the deck (crossers: [(centreline, half width, z)]; a pier stood
-    in the lanes of a road under a rail bridge, 2026-10-25), each reaching PIER_FOOT_M under the lowest ground at its
-    four corners (from the ground at the line's centre one hung in the air where the ground fell away to the road)."""
-    if pr is None:
-        return None
-    c, along, across, z0, z1 = pr
-    keep = np.ones(len(c), bool)
-    for line, hw, _z in crossers:
-        if len(line) < 2:
+def pier_obstacles(frame, cells, box, reach=PIER_OBST_REACH_M):
+    """(a (m, 2), b (m, 2), half (m,)): the segments of every ground road (its carriageway's half width and its drawn
+    sidewalks) and footway near box, what a bridge's piers keep off. The level crossings' list (crossers: the roads the
+    track's own ground parts cross) has none of the roads under a bridge: a pier stood on the kerb of Caledonian Road
+    under the North London line (the user's report, London 2026-11-12)."""
+    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
+    seen, lines = set(), []
+    for feats in cells:
+        if feats is None or len(feats) == 0:
             continue
-        a, b = line[:-1], line[1:]
-        d = b - a
-        L2 = np.maximum((d * d).sum(1), 1e-12)
-        t = np.clip(((c[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(c[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
-        keep &= dist > hw + PIER_ROAD_M + max(PIER_W, PIER_T) / 2
-    if not keep.any():
+        specs = roads.road_specs(feats)
+        for i in _box_hits(feats.boxes(frame), near):
+            sp = specs[i]
+            fid = str(feats.ids[i])
+            if sp is None or fid in seen:
+                continue
+            seen.add(fid)
+            half = sp.width / 2 + (float(sp.walk or 0.0) if roads.has_sidewalks(sp) else 0.0)
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                lines.append((np.column_stack((e, n)), half))
+    lines += [(xy, w / 2) for xy, w in walk_ways(frame, cells, box, reach=reach)]
+    a, b, h = [], [], []
+    for xy, half in lines:
+        xy = np.asarray(xy, np.float64)
+        if len(xy) >= 2:
+            a.append(xy[:-1, :2])
+            b.append(xy[1:, :2])
+            h.append(np.full(len(xy) - 1, float(half)))
+    if not a:
+        return np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0)
+    return np.ascontiguousarray(np.concatenate(a)), np.ascontiguousarray(np.concatenate(b)), np.concatenate(h)
+
+
+def pier_sites(s, xy, u, top, zg, i, j, obstacles, ground, every, under, min_h, pier_half):
+    """The piers under clip i..j of a bridge piece (its arcs s, line xy, left unit u, deck top and ground per point):
+    (centres, along, across, z0, z1) or None. Sites every `every` m from the piece's start where the deck's underside
+    (top - under) stands min_h or more over the ground, each moved up to 0.4 of a span along the piece off the roads and
+    footways under it (obstacles: pier_obstacles, kept PIER_ROAD_M + pier_half off their edges) or left out
+    (earthfast.rail_pier_sites); each reaching PIER_FOOT_M under the lowest ground at its four corners (from the ground
+    at the line's centre one hung in the air where the ground fell away to the road)."""
+    import fast
+    fast.require(264, "rail_pier_sites")
+    oa, ob, half = obstacles
+    f64 = np.float64
+    c, along, across, zg_c, z1 = fast._ef.rail_pier_sites(
+        np.ascontiguousarray(s, f64), np.ascontiguousarray(np.asarray(xy, f64)[:, :2]),
+        np.ascontiguousarray(np.asarray(u, f64)[:, :2]), np.ascontiguousarray(top, f64),
+        np.ascontiguousarray(zg, f64), int(i), int(j), float(every), float(under), float(min_h), oa, ob,
+        np.ascontiguousarray(half + PIER_ROAD_M + float(np.max(pier_half)), f64))
+    if not len(c):
         return None
-    c, along, across, z0, z1 = c[keep], along[keep], across[keep], z0[keep], z1[keep]
-    corners = np.concatenate([c + sa * along * PIER_T / 2 + sc * across * PIER_W / 2
-                              for sa in (-1, 1) for sc in (-1, 1)])
-    zg = np.asarray(ground(corners), np.float64).reshape(4, len(c)).min(axis=0)
-    return c, along, across, np.minimum(z0, zg - PIER_FOOT_M), z1
+    pa, pw = pier_half
+    corners = np.concatenate([c + sa * along * pa + sc * across * pw for sa in (-1, 1) for sc in (-1, 1)])
+    zc = np.asarray(ground(corners), np.float64).reshape(4, len(c)).min(axis=0)
+    return c, along, across, np.minimum(zg_c, zc) - PIER_FOOT_M, z1
 
 
 def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat, tile=3.0):
@@ -1681,25 +1715,6 @@ def _tram_deck(mesh, p, uu, t, v, concrete):
     for edge, normal in ((left, out_l), (right, -out_l)):
         mesh.strip(np.c_[edge, top], np.c_[edge, bottom], 0.0, 0.5, v, concrete, normal)
     mesh.strip(np.c_[left, bottom], np.c_[right, bottom], 0.0, 0.9, v, concrete, -up)
-
-
-def _piers(s, xy, u, t, zg, i, j):
-    """The piers under a deck run: (centres, along, across, z0, z1), every PIER_EVERY from the part's start where the
-    deck is PIER_MIN_H or more over the ground, not at its ends (the abutments: the embankment)."""
-    ss = np.arange(PIER_EVERY, s[-1] - PIER_EVERY / 2, PIER_EVERY)
-    ss = ss[(ss >= s[i]) & (ss <= s[j])]
-    if not len(ss):
-        return None
-    zt = np.interp(ss, s, t) - DECK_D
-    zgs = np.interp(ss, s, zg)
-    keep = zt - zgs >= PIER_MIN_H
-    ss, zt, zgs = ss[keep], zt[keep], zgs[keep]
-    if not len(ss):
-        return None
-    cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
-    ux, uy = np.interp(ss, s, u[:, 0]), np.interp(ss, s, u[:, 1])
-    un = np.c_[ux, uy] / np.maximum(np.hypot(ux, uy), 1e-9)[:, None]
-    return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zgs - PIER_FOOT_M, zt
 
 
 GRADED_NEAR_M = 40.0        # m around the tile where the track's heights read the graded ground (tile_mesh far_ground)
@@ -2328,6 +2343,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     ballast, concrete, steel = mesh.mat(BALLAST), mesh.mat(CONCRETE), mesh.mat(STEEL)
     up = np.array([0.0, 0.0, 1.0])
     small = []                                      # sleepers and piers: drawn last, as room allows
+    obstacles = None                                # (pier_obstacles: made when a deck needs them)
     finals = [z for z, _g in prof]                  # (each part's bed, flush with the roads it crosses: below)
     for n_part, ((fid, cls, kind, xy), (zb, zg), sw, gone) in enumerate(zip(rails, prof, switch, carried)):
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
@@ -2387,9 +2403,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                     _tram_deck(mesh, p, uu, t, v, concrete)
                 else:
                     _deck(mesh, p, uu, t, v, ballast_w, concrete)
-                pr = _sited(_piers(s, xy, u, top, zg, i, j), crossers, ground)
+                pier_w = min(PIER_W, 2 * TRAM_DECK_HALF_M) if cls == "tram" else PIER_W
+                if obstacles is None:
+                    obstacles = pier_obstacles(frame, cells, box)
+                pr = pier_sites(s, xy, u, top, zg, i, j, obstacles, ground, PIER_EVERY, DECK_D, PIER_MIN_H,
+                                np.array([PIER_T / 2, pier_w / 2]))
                 if pr is not None:
-                    pier_w = min(PIER_W, 2 * TRAM_DECK_HALF_M) if cls == "tram" else PIER_W
                     small.append((pr, PIER_T / 2, pier_w / 2, concrete))
             st = t - SLEEPER_SINK + SLEEPER_H           # the sleepers' top: the rails' foot
             if cls == "tram":                       # railheads embedded flush in the slab, no exposed sleepers
@@ -2439,7 +2458,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             rows += [r for r in buffer_rows(dead_ends(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
                                                                                  box[2] + REACH_M, box[3] + REACH_M)))
                           if roads.box_owns(box, r[1], r[2])]
-    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
+    if walk and obstacles is None:
+        obstacles = pier_obstacles(frame, cells, box)
+    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small, obstacles)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (TILE_VERTS_MAX - mesh.nv) // 8
