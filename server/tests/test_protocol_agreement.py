@@ -477,6 +477,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
+                       "report_status", "report_context_done",       # the reporter's Send window: a player's click (test_reportsend)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data

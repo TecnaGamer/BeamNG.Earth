@@ -159,10 +159,11 @@ time, so it works whatever the usage-statistics switches say (also with them off
 - **Private**: sent to the BeamNG.Earth developers only (the project's server, earth.tgforever.net, `POST /report`).
   Reports are **not published** and are never listed publicly; only the developers can read them, with a private
   key.
-- **Stored**: each report as sent, with the time it arrived, the app version and the random install id (to group
-  reports from one computer; the address it came from is used only for rate limits in memory and is not stored).
+- **Stored**: each report as sent, with the time it arrived, the app version, the random install id (to group
+  reports from one computer) and the country it was sent from (looked up from the connection's address, like the
+  statistics above; the address itself is used only for rate limits in memory and is not stored).
   **Kept 90 days**, then deleted.
-- **Limits**: at most 2 MB per report, 10 reports an hour and 30 a day per install.
+- **Limits**: at most 2 MB per report, 30 reports an hour and 100 a day per install.
 - The report id the window shows (like `K7QD-3M9X`) lets you point us to your report on Discord or GitHub.
 
 The code: `mod/beamng_earth/lua/ge/extensions/beamngEarth/reportsend.lua` (the window), `server/reportsend.py` and

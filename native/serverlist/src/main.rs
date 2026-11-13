@@ -386,7 +386,7 @@ fn main() {
             let path = req.url().split('?').next().unwrap_or("").to_string();
             if *req.method() == Method::Post && path == "/report" {
                 // (its own thread: a big body read slowly must not hold a request thread)
-                upload(req, reps.clone(), slots.clone());
+                upload(req, reps.clone(), slots.clone(), geo.clone());
                 continue;
             }
             if path == "/reports/list" || path.starts_with("/reports/") {
@@ -444,7 +444,7 @@ fn take_slot(slots: &Arc<Slots>) -> Option<Slot> {
 
 /// POST /report in a thread of its own: the body read within UPLOAD_S, checked (reports::parse), admitted (rate limits,
 /// disk), written outside the lock.
-fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>) {
+fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>, geo: Arc<Mutex<Arc<Geo>>>) {
     // (the slot taken before the thread: a flood of uploads is refused here, not one thread each)
     let Some(slot) = take_slot(&slots) else {
         let _ = req.respond(json(503, "{\"error\":\"busy, try again later\"}".into()));
@@ -523,7 +523,8 @@ fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>) {
                 return;
             }
         };
-        let meta = reports::Reports::meta(&p, &ticket, now);
+        let table = geo.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let meta = reports::Reports::meta(&p, &ticket, now, &table.country(ip)); // (the address itself is not kept)
         let wrote = reports::Reports::write(&folder, &p, &meta);
         let id = reports::show_id(&ticket.id);
         let ok = wrote.is_ok();

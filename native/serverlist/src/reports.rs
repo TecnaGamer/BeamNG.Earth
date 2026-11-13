@@ -30,6 +30,7 @@ use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct Limits {
     pub max_body: usize,       // the request body (base64 makes binary parts 4/3 as big)
     pub max_shot: usize,       // the screenshot, decoded
@@ -56,12 +57,12 @@ impl Default for Limits {
             max_logs: 256 * 1024,
             max_logs_raw: 8 << 20,
             max_total: 2_000_000,
-            install_hour: 10,
-            install_day: 30,
-            ip_hour: 20,
-            ip_day: 60,
-            ip_attempts_hour: 120,
-            global_day: 2000,
+            install_hour: 30,
+            install_day: 100,
+            ip_hour: 60,
+            ip_day: 200,
+            ip_attempts_hour: 300,
+            global_day: 5000,
             disk_cap: 5 << 30,
             keep_days: 90,
         }
@@ -129,6 +130,9 @@ pub struct Meta {
     pub title: String,
     #[serde(default)]
     pub sent: Sent,
+    /// The sender's country (ISO code from the connection's address, "" unknown; the address itself is not kept).
+    #[serde(default)]
+    pub country: String,
     pub files: BTreeMap<String, u64>,
 }
 
@@ -467,11 +471,12 @@ impl Reports {
         res
     }
 
-    pub fn meta(p: &Parsed, t: &Ticket, now: u64) -> Meta {
+    pub fn meta(p: &Parsed, t: &Ticket, now: u64, country: &str) -> Meta {
         let mut files: BTreeMap<String, u64> = p.files.iter().map(|(n, b)| (n.to_string(), b.len() as u64)).collect();
         files.insert("meta.json".into(), 0);
         Meta { id: t.id.clone(), date: t.date.clone(), received: now, received_at: stamp(now), v: p.v.clone(),
-               install: p.install.clone(), kind: p.kind.clone(), title: p.title.clone(), sent: p.sent.clone(), files }
+               install: p.install.clone(), kind: p.kind.clone(), title: p.title.clone(), sent: p.sent.clone(),
+               country: country.to_string(), files }
     }
 
     /// The write's outcome: listed, or its reservation (and its rate-limit hits stay: a failed write is rare).
@@ -718,7 +723,7 @@ mod tests {
         b["install"] = install.into();
         let p = parse(&serde_json::to_vec(&b).unwrap(), &r.lim)?;
         let t = r.admit(&p, ip.parse().unwrap(), now)?;
-        let m = Reports::meta(&p, &t, now);
+        let m = Reports::meta(&p, &t, now, "DE");
         Reports::write(&r.path_of(&t), &p, &m).unwrap();
         let id = t.id.clone();
         r.finish(t, Some(m));
@@ -727,32 +732,34 @@ mod tests {
 
     #[test]
     fn rate_limits() {
-        let mut r = Reports::new(tmpdir("rate"), Limits::default());
+        let lim = Limits::default();
+        let mut r = Reports::new(tmpdir("rate"), lim.clone());
         let now = 1_762_905_600;
         let a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        for i in 0..10 {
+        for i in 0..lim.install_hour as u64 {
             stored(&mut r, "203.0.113.1", a, now + i).unwrap();
         }
-        assert_eq!(stored(&mut r, "203.0.113.1", a, now + 20).unwrap_err().0, 429, "11th in an hour from an install");
+        assert_eq!(stored(&mut r, "203.0.113.1", a, now + 20).unwrap_err().0, 429, "one over the hour's cap from an install");
         assert!(stored(&mut r, "203.0.113.1", a, now + 3600).is_ok(), "the next hour");
-        // the day's cap per install: 30
+        // the day's cap per install
         let mut t = now + 7200;
+        let step = 3600 / (lim.install_hour as u64 - 1);
         while stored(&mut r, &format!("198.51.100.{}", t % 200), a, t).is_ok() {
-            t += 3600 / 9;
+            t += step;
         }
-        assert_eq!(r.by_install[a].len(), 30);
-        // per address: other installs from one address, 20 an hour
+        assert_eq!(r.by_install[a].len(), lim.install_day);
+        // per address: other installs from one address, ip_hour an hour
         let ip = "192.0.2.9";
         let mut ok = 0;
-        for i in 0..25 {
+        for i in 0..lim.ip_hour as u64 + 5 {
             if stored(&mut r, ip, &format!("{i:032x}"), now + 100_000 + i).is_ok() {
                 ok += 1;
             }
         }
-        assert_eq!(ok, 20);
+        assert_eq!(ok, lim.ip_hour);
         // bad requests from an address: refused once over the hour's attempts
         let ip: IpAddr = "192.0.2.10".parse().unwrap();
-        for _ in 0..120 {
+        for _ in 0..lim.ip_attempts_hour {
             r.attempt(ip, now).unwrap();
         }
         assert_eq!(r.attempt(ip, now + 10).unwrap_err().0, 429);

@@ -89,7 +89,7 @@ def line(m):
     sent = m.get("sent") or {}
     flags = "".join(c for c, k in (("S", "screenshot"), ("L", "exactLocation"), ("G", "logs")) if sent.get(k))
     return f"{m.get('id', '?')[:4]}-{m.get('id', '?')[4:]}  {m.get('receivedAt', '')}  {m.get('v', '')[:22]:22s} " \
-           f"{m.get('kind', ''):5s} {flags:3s} {m.get('title', '')[:70]}"
+           f"{m.get('kind', ''):5s} {flags:3s} {m.get('country', '') or '--':2s} {m.get('title', '')[:70]}"
 
 
 def pull_one(base, token, m, out):
