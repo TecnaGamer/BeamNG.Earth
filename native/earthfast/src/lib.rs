@@ -122,6 +122,7 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod paintlist;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6423,6 +6424,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     stageshare::register(m)?;
     // 293 (291 and 292 are other branches'): RoadReach.grow takes the driver's intent (intent_turn, intent_brake,
     // intent_s: server/reach.py intent())
-    m.add("VERSION", 293)?;
+    // 295 (on 293; 294 is the stage-sharing fix branch's; written as 288 on 285, then 291 on 290): a ground photo's
+    // whole paint in one call from paint lists made once per set of map cells (paintlist: PaintStyle, PaintRoads,
+    // PaintPolys, PaintFields, paint_photo, pil_raster; server/paintlist.py, surface.paint_square), roadtone's coverage
+    // loop shared with it
+    paintlist::register(m)?;
+    m.add("VERSION", 295)?;
     Ok(())
 }

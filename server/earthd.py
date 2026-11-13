@@ -468,6 +468,9 @@ HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they w
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
 FIN_WORKER_WINDOW, FIN_WORKER_MIN_TRIES, FIN_WORKER_SHARE, FIN_WORKER_PROBE = 40, 10, 0.3, 5   # (fin_worker_worth)
 FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders them all here, as before)
+# A far texture rendered here has its roads painted in a far-tile process (road_faces, blockworker.far_paint), where
+# the cells' paint lists are kept (paintlist.py); 0: painted here (the same paint lists, the same pixels)
+PAINT_WORKER = os.environ.get("BNGE_PAINT_WORKER", "1") != "0"
 NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
 # The event loop's thread a step above the server's other threads (budget.raise_thread, Windows): a block built 17 s
@@ -5825,7 +5828,7 @@ class Server:
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode}
+                       "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px_t)}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
@@ -6275,6 +6278,21 @@ class Server:
             log.debug("rock faces of %s: %s", tile.key, e)
             return rgb
 
+    def tile_pads(self, anchor, tile, px):
+        """The gas station and runway pads round a far tile's photo square (surface._square_pads) for the far-tile
+        process that paints its roads (blockworker._far_tile_), or None where its texels are too coarse for roads."""
+        if not roadsmod.ROADS_IN_GROUND or self.surface is None:
+            return None
+        try:
+            x0, y0, _, _ = tile.bbox
+            sq = imagerymod.gutter_square(x0, y0, tile.size, px)
+            if sq[2] / max(px, 1) > surfacemod.PHOTO_ROADS_MAX_TEXEL:
+                return None
+            return surfacemod._square_pads(anchor.frame, *sq, self.surface)
+        except Exception as e:          # (painted without them)
+            log.debug("pads of %s: %s: %s", tile.key, type(e).__name__, e)
+            return None
+
     def road_faces(self, anchor, tile, px, rgb):
         """The far tile's photo with the carriageways painted in (roads.ROADS_IN_GROUND, surface.paint_square: the
         near ring the drawn block does not cover); as it was otherwise or if that fails."""
@@ -6282,8 +6300,21 @@ class Server:
             return rgb
         try:
             x0, y0, _, _ = tile.bbox
-            return surfacemod.paint_square(rgb, anchor.frame, *imagerymod.gutter_square(x0, y0, tile.size, px),
-                                           self.surface, self.road_widths)
+            sq = imagerymod.gutter_square(x0, y0, tile.size, px)
+            if PAINT_WORKER and self.far_pool is not None and self.surface is not None and \
+                    sq[2] / max(rgb.shape[1], 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
+                # in a far-tile process (blockworker.far_paint: the cells' paint lists are kept there), with this
+                # server's gas station and runway pads; here only if that fails. In this interpreter the paint's Python
+                # was 44-153 sample-s a visit beside the event loop (expo-baseline 2026-11-12)
+                try:
+                    out, n, lidar = self.far_pool.submit(blockworker.far_paint, anchor.lat, anchor.lon, *sq, rgb,
+                                                         surfacemod._square_pads(anchor.frame, *sq,
+                                                                                 self.surface)).result()
+                    revisitmod.carry(n, lidar)          # (what the paint read short: this texture is not kept)
+                    return out
+                except Exception as e:      # (a pool in trouble: painted here)
+                    log.debug("road faces of %s in a far-tile process: %s: %s", tile.key, type(e).__name__, e)
+            return surfacemod.paint_square(rgb, anchor.frame, *sq, self.surface, self.road_widths)
         except Exception as e:          # the photo as it is
             log.debug("road faces of %s: %s", tile.key, e)
             return rgb
@@ -6351,7 +6382,7 @@ class Server:
                    "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                             self.road_mask_px(tile.level)) if self.road_masks else None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                   "season_mode": im.season_mode}
+                   "season_mode": im.season_mode, "pads": self.tile_pads(anchor, tile, px)}
             lvl = tile.level
             got = self.far_pool.submit(blockworker.far_tile, anchor.id, anchor.lat, anchor.lon, tile,
                                        anchor.zooms[lvl], None, anchor.zooms[lvl - 1], self.near_visual in BLOCK_DRAWN,

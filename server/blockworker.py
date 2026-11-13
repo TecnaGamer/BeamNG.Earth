@@ -127,6 +127,8 @@ class _State:
             budget.register_shed(rw.clear_memory)
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
+        import paintlist            # (the photos' paint lists: they hold their cells' layers)
+        budget.register_shed(paintlist.clear)
         budget.register_shed(self._clear_chunks)
         import rangeread            # (the remote files' block LRU, up to rangeread.MEM_BYTES: kept by a shed before)
         budget.register_shed(rangeread.clear_memory)
@@ -3481,18 +3483,49 @@ def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, m
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.road_faces)
         try:
             import surface as surfacemod
-            rgb = surfacemod.paint_square(rgb, frame, *sq, getattr(_s, "surface", None), _s.widths)
+            # (the server's pads with the job; a helper's: none. The far pool's processes had no Surface, and the
+            # textures made here went without their roads painted in)
+            rgb = surfacemod.paint_square(rgb, frame, *sq, _paint_surface(), _s.widths, pads=tex.get("pads") or ())
         except Exception as e:
             log.debug("road faces of %s: %s", tile.key, e)
     if mask:                            # (earthd.Server.write_road_mask)
         try:
             import surface as surfacemod
-            m = surfacemod.road_mask(frame, *sq, mask[1], getattr(_s, "surface", None), _s.widths)
+            m = surfacemod.road_mask(frame, *sq, mask[1], _paint_surface(), _s.widths)
             if m is not None:
                 imagerymod.write_dds(mask[0], np.repeat(m[..., None], 3, axis=2))
         except Exception as e:
             log.debug("road mask of %s: %s", tile.key, e)
     return built, (imagerymod.write_dds(tex["path"], rgb), used)
+
+
+def _paint_surface():
+    """The Surface this process paints roads into photos with: its own, or (the far pool's processes, which make no
+    land-cover masks) one made for the paint on first use, its gas station pads handed in with each job."""
+    surf = getattr(_s, "surface", None)
+    if surf is None and getattr(_s, "md", None) is not None:
+        surf = getattr(_s, "paint_surface", None)
+        if surf is None:
+            import surface as surfacemod
+            surf = _s.paint_surface = surfacemod.Surface(_s.md)
+    return surf
+
+
+def far_paint(lat, lon, x0, y0, size, rgb, pads):
+    """earthd.Server.road_faces here: the photo rgb over [x0, x0 + size]² of the anchor's frame with its cells' roads
+    painted in (surface.paint_square from the paint lists this process keeps, paintlist.py; pads: the server's gas
+    station and runway pads there). Returns (rgb, faults, lidar faults): what the paint read short (revisit.fault; at
+    least one when its scope is incomplete), for the server's texture build (revisit.carry: not kept then)."""
+    import revisit
+    import surface as surfacemod
+    surf = _paint_surface()
+    if surf is None:
+        return rgb, 0, 0
+    with revisit.scope() as b:
+        out = surfacemod.paint_square(rgb, geodesy.EnuFrame(lat, lon), x0, y0, size, surf, _s.widths, pads=pads or ())
+    # (incomplete without a count of its own: a fault of a thread no scope covers, this process's Surface fetching in
+    # the background meanwhile; told as one)
+    return out, b.n if b.complete or b.n or b.lidar else 1, b.lidar
 
 
 # --- CPU accounting ---------------------------------------------------------------------------------------------------
@@ -3540,5 +3573,6 @@ base_entry = _accounted(base_entry)
 far_geometry = _accounted(far_geometry)
 far_global_geometry = _accounted(far_global_geometry)
 far_tile = _accounted(far_tile)
+far_paint = _accounted(far_paint)
 base_photo = _accounted(base_photo)
 navgraph = _accounted(navgraph)
