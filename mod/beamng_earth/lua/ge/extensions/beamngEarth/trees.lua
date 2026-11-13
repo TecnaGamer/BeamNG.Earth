@@ -81,6 +81,11 @@ M.SHAPE_ITEMS_PER_FRAME = 4000
 M.FRAME_MS = 4.0          -- (2.5 for an evening, 2026-10-29: no steadier game time, and the trees, poles and
                           -- signs fell 2,000+ items behind at 70-120 mph, their collision late)
 M.LOADING_FRAME_MS = 12.0
+-- ... and NEAR_URGENT_MS (0: off) in a pass whose nearest tile with work left is within NEAR_URGENT_M of the car (or
+-- the camera): a warm 110 mph Manhattan drive had trees, lamps and furniture within 50 m of the car still waiting in
+-- pending passes (keep-up measure 2026-11-13, tools/keepup.py)
+M.NEAR_URGENT_MS = 0
+M.NEAR_URGENT_M = 150
 local CHECK_ROWS = 256
 -- Registering a new Forest costs ~9 ms (in-game 2026-10-26: 8-10 ms each, named or not, whatever its data file), and
 -- the tiles that came at once made several in one frame: FORESTS_PER_FRAME at most, and POOL_SPARE kept ready in the
@@ -1698,6 +1703,10 @@ function M.update(anchorId, player, view, frameMs, fill)
   end
   passOrder.n = nOrder
   table.sort(oSort)
+  -- a tile near the car with work left (its rows not all made): the pass's time limit raised to NEAR_URGENT_MS (0: off)
+  if M.NEAR_URGENT_MS > 0 and nOrder > 0 and oD[oSort[1] % ORDER_SLOTS] <= M.NEAR_URGENT_M then
+    limit = math.max(limit, M.NEAR_URGENT_MS)
+  end
   local nearMade = false
   local rowsScanned = 0
   local function finish()
