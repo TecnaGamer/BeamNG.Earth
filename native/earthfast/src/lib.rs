@@ -82,6 +82,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -6340,6 +6341,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
     // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
+    // and a rail / walkway bridge's piers kept off every road and footway under it
+    // (railpiers: rail_pier_sites; railways._sited counted only the roads the track crosses at grade)
+    m.add_function(wrap_pyfunction!(railpiers::rail_pier_sites, m)?)?;
     m.add("VERSION", 266)?;
     Ok(())
 }

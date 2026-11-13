@@ -654,6 +654,29 @@ class RailwayTest(unittest.TestCase):
         self.assertFalse((np.abs(low[:, 0] - 125.0) < hw + 0.5).any(), "none in the road")
         self.assertTrue((low[:, 2] <= dip(low[:, :2]) - railways.PIER_FOOT_M + 1e-6).all(), "all in the ground")
 
+    def test_a_pier_site_on_a_street_under_the_bridge_moves_off_it_and_its_footway(self):
+        """The North London line over Caledonian Road (the user's report, London 2026-11-12): a long embankment piece
+        mapped as a bridge, its pier every PIER_EVERY from the piece's start; the one that fell on the street stood on
+        its kerb (the level crossings' list, which the pier test read, has no road under a bridge). The site moves along
+        the deck off the street and the footway beside it."""
+        f = features([[(-300.0, 100.0), (0.0, 100.0)], [(0.0, 100.0), (300.0, 100.0)],
+                      [(100.0, -100.0), (100.0, 300.0)], [(108.0, -100.0), (108.0, 300.0)]],
+                     ["standard_gauge", "standard_gauge", "primary", "footway"],
+                     subtypes=["rail", "rail", "road", "road"], flags=[(1, "is_bridge")])
+
+        def embankment(xy):          # the line 6 m up, the street in the dip under it
+            return 10.0 - 6.0 * np.clip(1.0 - np.abs(xy[:, 0] - 100.0) / 30.0, 0.0, 1.0)
+        oa, ob, half = railways.pier_obstacles(FRAME, [f], roads.tile_bbox(0, 0))
+        self.assertTrue(len(oa), "the street and the footway are obstacles")
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], embankment)
+        con = P[np.unique(T[M == 1])]
+        feet = con[con[:, 2] < 4.5]                 # the piers' feet (the deck's underside is far over them)
+        self.assertTrue(len(feet), "the pier is moved, not left out")
+        street = roads.road_specs(f)[2].width / 2
+        clear = street + railways.PIER_ROAD_M
+        self.assertFalse((np.abs(feet[:, 0] - 100.0) < clear).any(), "none on the street or its kerb")
+        self.assertFalse((np.abs(feet[:, 0] - 108.0) < 1.0 + railways.PIER_ROAD_M).any(), "none on the footway")
+
     def test_ground_through_a_deck_raises_it_on_gentle_ramps(self):
         """Ground under a bridge's middle higher than its ends (bad data, or a ridge): the deck over it, the line
         climbing to it at GRADE at most and back down to the ground past the ramps."""
