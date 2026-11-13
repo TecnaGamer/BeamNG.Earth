@@ -5,6 +5,7 @@ each cell's edges; builds are deterministic, resumable, shardable and split into
 file:// and from an HTTP server with range reads (and a pinned region download), and every case it cannot answer (no
 archive, another release / format / content / source, a cell outside the coverage, a damaged tile) raises Unavailable,
 which mapdata turns into the source's own path. The block path's rows-to-cells kernel follows the parquet bbox test."""
+import zlib
 import http.server
 import importlib.util
 import os
@@ -58,7 +59,7 @@ def fake_layer(layer, key, n=None):
     points; text with unicode, empty and repeated values; NaN floats; a JSON tags column."""
     if n is None and (key.x, key.y) in (SEA, (SEA[0], SEA[1] - 1)):
         return sea_layer(layer, key) if layer == "water" else (overture.empty(layer), {})
-    rng = np.random.default_rng(abs(hash((layer, key.x, key.y))) % (1 << 32))
+    rng = np.random.default_rng(zlib.crc32(f"{layer}/{key.x}/{key.y}".encode()))   # (str hash() is salted per process)
     lon0, lat0, lon1, lat1 = key.bounds()
     n = int(rng.integers(0, 6)) if n is None else n
     ids = mg.text_column(sorted(uuid_of(int(v)) for v in rng.choice(10 ** 6, n, replace=False)))
