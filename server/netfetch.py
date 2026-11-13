@@ -374,6 +374,18 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# swisstopo's WMTS (SWISSIMAGE, the "swiss" photos): the FSDI's General Terms of Use (geo.admin.ch/en/general-terms-of-use-
+# fsdi, §2.3's table, read 2026-11-13) allow wmts.geo.admin.ch 1'200 requests / minute (20/s; 631 M a year in all;
+# doubled on 2025-01-01, geo.admin.ch/en/change-limits-fair-use) as fair use, and desktop applications are fair use. The
+# regional tile hosts' 6/s x4 held a cold Stelvio far field 168 s on its 1,175 tiles (expo baseline, 2026-11-12): 15/s
+# (3/4 of the limit), 8 at once.
+POLICIES["wmts.geo.admin.ch"] = replace(POLICIES["wmts.geo.admin.ch"], rate=15.0, burst=30.0, max_conc=8,
+                                        daily_budget=40000)
+# New York State's orthoimagery (orthos.its.ny.gov ArcGIS export, NYS ITS Geospatial Services): no request limit is
+# published (the service's metadata and licence, gis.ny.gov/orthoimagery and its FAQs, read 2026-11-13: free, "Users
+# can use web services"; the server's own caps: 4096 px images). One request at a time (~1.4 s each) kept a cold
+# Manhattan's photos fetching for 177 s: 3 at once at 2/s, still a few times under what one map viewer asks for.
+POLICIES["orthos.its.ny.gov"] = replace(POLICIES["orthos.its.ny.gov"], rate=2.0, burst=6.0, max_conc=3)
 # The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
