@@ -115,6 +115,7 @@ mod shelterfit;
 mod tilecuts;
 mod bldclear;
 mod bnwt;
+mod aerialcov;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6372,6 +6373,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // server/farrestore.py; 269 was left for the block chunk cache)
     m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
     m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
-    m.add("VERSION", 275)?;
+    // 276 (on 275; was 271 on its branch): the 1 m aerial packs' coverage files (aerialcov: aerial_cov_table, aerial_pack_where,
+    // aerial_pack_state; server/aerialpacks.py)
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
+    m.add("VERSION", 276)?;
     Ok(())
 }

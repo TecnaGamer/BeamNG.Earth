@@ -17,9 +17,12 @@
 //! Player reports from the game's reporter: reports.rs (POST /report; private GET /reports/list and
 //! /reports/<id>/<file> with the token).
 //!
+//! On-demand builds of the 1 m aerial packs: aerial.rs (POST /aerial/request, GET /aerial/status; BNGE_AERIAL_SPOOL).
+//!
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
 
+mod aerial;
 mod perf;
 mod reports;
 mod telemetry;
@@ -334,7 +337,9 @@ fn main() {
     // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
     // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
     let state = Arc::new(Mutex::new(State { list: List { entries: HashMap::new() }, tel, perf, advanced: None,
-                                            perf_cache: HashMap::new() }));
+                                            perf_cache: HashMap::new(),
+                                            aerial: aerial::Aerial::new(std::env::var_os("BNGE_AERIAL_SPOOL")
+                                                .map(PathBuf::from)) }));
     {
         // (the 5 s tick: forget old installs, samples, today's files)
         let st = state.clone();
@@ -580,6 +585,7 @@ struct State {
     perf: perf::Perf,
     advanced: Option<(Instant, String)>,
     perf_cache: HashMap<u64, (Instant, String)>,
+    aerial: aerial::Aerial,
 }
 
 const WORKERS: usize = 16; // request threads
@@ -627,6 +633,18 @@ fn handle(s: &mut State, req: &Request, read: std::io::Result<usize>, body: &[u8
                 },
                 _ => json(400, "{\"error\":\"bad request\"}".into()),
             }
+        }
+        (Method::Post, "/aerial/request") => match (read, client_ip(req)) {
+            (Ok(n), _) if n > 4096 => json(413, "{\"state\":\"refused\"}".into()),
+            (Ok(_), Some(ip)) => {
+                let (code, b) = s.aerial.request(ip, body, now);
+                json(code, b)
+            }
+            _ => json(400, "{\"state\":\"refused\"}".into()),
+        },
+        (Method::Get, "/aerial/status") => {
+            let (code, b) = s.aerial.status(req.url().split_once('?').map(|x| x.1).unwrap_or(""));
+            json(code, b)
         }
         (Method::Get, "/stats") => json(200, s.tel.public(now, unix_now).to_string()),
         (Method::Get, "/stats/now") => json(200, s.tel.now(now, unix_now).to_string()),

@@ -11739,6 +11739,8 @@ def main():
     sampler.maybe_start()           # BNGE_SAMPLE=<path>: a sampling profile of this process's threads (debugging)
     import budget
     try:                            # the settings page's Performance choices (GitHub #529): before the priority and
+        if args.user_dir:               # (aerialpacks.consent in every process: the player's statistics choice)
+            os.environ.setdefault("BNGE_USER_DIR", os.path.abspath(args.user_dir))
         args.nice, chosen = cpupin.apply_player_settings(args.user_dir, args.nice, NICE)    # the cores' split below
         if chosen:
             log.info("the settings page: the server on %s", ", ".join(chosen))
