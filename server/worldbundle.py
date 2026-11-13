@@ -282,8 +282,10 @@ def validate_artifact(data, artifact=None):
     from grading import set_widen
     plans, ci, bi, wi = [], 0, 0, 0
     fields = {"fid", "half", "abut", "road_half", "rid", "rank", "max_wall", "cut", "bank", "steep", "widen"}
+    optional = {"open_tunnel"}      # (PLANS_FORMAT 65: a tunnel's open section, grading.Plan.open_tunnel)
     for item, xy, heights in zip(plans_meta, groups["p"], groups["z"]):
-        if (not isinstance(item, dict) or set(item) != fields or len(xy) < 2 or len(xy) != len(heights)
+        if (not isinstance(item, dict) or not fields <= set(item) <= fields | optional or len(xy) < 2
+                or len(xy) != len(heights) or type(item.get("open_tunnel", False)) is not bool
                 or not _text(item["fid"])
                 or type(item["rid"]) is not int or not -1 <= item["rid"] <= 2 ** 31 - 1
                 or type(item["rank"]) is not int or not -1 <= item["rank"] <= 10000
@@ -311,6 +313,7 @@ def validate_artifact(data, artifact=None):
             wi += 1
         p = Plan(xy, heights, item["half"], tuple(item["abut"]), cut, item["road_half"])
         p.rid, p.max_wall, p.bank, p.steep = item["rid"], item["max_wall"], bank, item["steep"]
+        p.open_tunnel = item.get("open_tunnel", False)
         p.rank = item["rank"]
         set_widen(p, widen)
         plans.append((item["fid"], p))

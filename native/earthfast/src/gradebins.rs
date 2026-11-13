@@ -33,6 +33,16 @@ pub const RANK_SIDE_MAX_DIFF: i64 = 6;
 /// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
 /// smoothness there)
 pub const RANK_HOLD_MAX: i64 = 114;
+/// a segment's flags (grading.PlanPack's st): a mountain pass road's (Plan.steep: its whole core its carriageway, its
+/// sides falling at steep_run) ...
+pub const STEEP: u8 = 1;
+/// ... and a tunnel's open section (Plan.open_tunnel: the map's tunnel on the ground, where the elevation shows no
+/// cover over it). A lower-ranked road crossing it (60 degrees or more, fading out by 30) at a point it is the
+/// highest-ranked road of takes the side ease onto its ground, whatever the class gap (RANK_SIDE_MAX_DIFF is for a
+/// road's own junction approaches): such a road is mapped over the tunnel, not on its ground, and held to the old
+/// blend it stepped down to the section's held carriageway at its edge (Kennedybruecke in Vienna: a bus lane over the
+/// open "Unterfahrung" stepped 1.2 m, GitHub #1169).
+pub const OPEN_TUNNEL: u8 = 2;
 /// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
 /// segment (a step held in a plan over a few cm) is carried on at this
 pub const EXTRAP_MAX_GRADE: f64 = 0.35;
@@ -64,7 +74,7 @@ struct Seg {
     len: f64,       // l2.sqrt()
     ext: f64,       // extrap / len
     za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
-    abut: bool, steep: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
+    abut: bool, steep: bool, open: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
     cut: [f64; 6], da: f64, db: f64, far0: f64, far0_base: f64,
 }
 
@@ -85,7 +95,8 @@ fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
     let l2 = abx * abx + aby * aby;
     Seg {
         ax, ay, abx, aby, l2, lox: ax.min(bx), hix: ax.max(bx), loy: ay.min(by), hiy: ay.max(by), len: l2.sqrt(), ext: p.extrap / l2.sqrt(), za: s.za[i], zb: s.zb[i], h, rh, rid: s.rid[i], rk,
-        abut: s.abut[i] != 0, steep: s.steep[i] != 0, link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
+        abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0,
+        link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
         has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
     }
 }
@@ -124,6 +135,8 @@ pub struct Pt {
     // second-highest rank there (equal to hrank when another road of its rank is at the point, so its carriageway
     // is not held over that one's)
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
+    // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
+    hopen: bool,
 }
 
 impl Pt {
@@ -133,7 +146,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
         }
     }
 
@@ -350,6 +363,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         let reach = shoulder + p.rank_fade;
         st.hyield = 1.0 - smooth(((d - g.rh) / reach).clamp(0.0, 1.0));
         st.hcar = d <= g.rh;
+        st.hopen = g.open;
         st.hdx = g.abx / g.len.max(1e-9);       // (its direction there: the side ease below)
         st.hdy = g.aby / g.len.max(1e-9);
     }
@@ -454,7 +468,8 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     // (an abutment or bridge is not on the point's ground), and a road's own other stretches never give way: hairpins
     // as before)
     let mut tgt = target;
-    let side_ease = g.rk < RANK_BUILT || st.hrank - g.rk <= RANK_SIDE_MAX_DIFF;
+    let ranked = g.rk < RANK_BUILT || st.hrank - g.rk <= RANK_SIDE_MAX_DIFF;
+    let side_ease = ranked || st.hopen;
     if g.rk >= 0 && st.hrank > g.rk && side_ease && !g.abut && st.hid != g.rid {
         // (on the higher road's own carriageway its ground is held whole, whatever the height difference: a dirt path
         // 1-2 m lower beside the asphalt still left a dip in it. Past the painted edge the height fade decides: a road
@@ -472,7 +487,14 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
             let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
             smooth((c - 0.5) / (0.866 - 0.5))
         };
-        let raise = st.hyield * rf * align;
+        // (a tunnel's open section only: a road crossing it, mapped over the tunnel, eases onto it whatever the class
+        // gap; one running beside it, a street along the top of its trench, keeps its own ground: a residential street
+        // over the A23's cover beside its portal stepped 1.2 m at the cover's edge, eased down to the open section)
+        let cross = if ranked { 1.0 } else {
+            let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
+            1.0 - smooth((c - 0.5) / (0.866 - 0.5))
+        };
+        let raise = st.hyield * rf * align * cross;
         if st.hcar {
             yf = yf.max(raise);
         } else {

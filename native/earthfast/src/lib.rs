@@ -1857,8 +1857,9 @@ macro_rules! grade_segs {
 /// grading.grade_points by the reference traversal (gradebins::bucketed: segments outer, the points in BUCKET m
 /// squares): the binned one's twin for the identity tests and BNE_GRADE_BINNED=off. cut (segments, 6): a cutting's
 /// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
-/// a banked curve, grading.bank); steep: a mountain pass road's (grading.Plan.steep: its sides fall to the natural
-/// ground at steep_run, from steep_t_min, between its retaining wall and its parapet); link: bit 0 the plan goes on
+/// a banked curve, grading.bank); steep: flags, gradebins::STEEP a mountain pass road's (grading.Plan.steep: its sides
+/// fall to the natural ground at steep_run, from steep_t_min, between its retaining wall and its parapet),
+/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel); link: bit 0 the plan goes on
 /// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
 /// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
 /// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
@@ -6416,6 +6417,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 282 (on 281): the shared decision archives (decisions: BNGD blocks of road plans and
     // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
     decisions::register(m)?;
-    m.add("VERSION", 282)?;
+    m.add("VERSION", 283)?;
     Ok(())
 }

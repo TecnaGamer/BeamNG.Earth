@@ -180,7 +180,20 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
         }
         let up = tent(&s, &dv.iter().map(|&x| x.max(0.0)).collect::<Vec<_>>(), grade);
         let down = tent(&s, &dv.iter().map(|&x| (-x).max(0.0)).collect::<Vec<_>>(), grade);
-        Some((0..n).map(|k| zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] }).collect::<Vec<f64>>())
+        // A vertex with a band of its own keeps to it: a move run out from another road's stretch of the track only
+        // fills the room this vertex's roads leave (between their two strictest bounds where they disagree, and out
+        // to its own move where that is clipped at max_move). Run out whole, a 3-5 m move down to a bus lane the
+        // track lies in carried 2 m down the track at its grade onto a street it crosses at grade 30 m on, its bed
+        // 2.3 m under that street's lanes: a 2.65 m step there (Kennedybruecke in Vienna, GitHub #1169).
+        Some((0..n).map(|k| {
+            let v = zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] };
+            if !both[k] {
+                return v;
+            }
+            let own = zv[k] + dv[k];
+            let (a, b) = (lo[k].min(hi[k]).min(own), lo[k].max(hi[k]).max(own));
+            if v < a { a } else if v > b { b } else { v }
+        }).collect::<Vec<f64>>())
     });
     Ok(out.map(|v| v.into_pyarray(py)))
 }
