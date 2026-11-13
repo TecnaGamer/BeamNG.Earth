@@ -3411,9 +3411,11 @@ end
 -- A destination picked on the world map (its "Teleport here?" box, a search result): the server fetches its elevation
 -- tiles and map cells in the background before the teleport is confirmed (earthd preload_place; the fastest world
 -- generators load the destination ahead, the user 2026-11-11: "sub second world gen, even with clear cashe").
-function M.preloadPlace(lat, lon)
+-- hover: a search result, saved or recent place the pointer rests on (the map's PRELOAD_HOVER_MS): the light part only
+-- (earthd Server.preload "hover").
+function M.preloadPlace(lat, lon, hover)
   if not net.isConnected() or type(lat) ~= 'number' or type(lon) ~= 'number' then return false end
-  net.send({ type = 'preload_place', lat = lat, lon = lon })
+  net.send({ type = 'preload_place', lat = lat, lon = lon, hover = hover and true or nil })
   return true
 end
 

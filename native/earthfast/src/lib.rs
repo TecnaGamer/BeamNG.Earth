@@ -6421,6 +6421,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
     // grading._Planner._road_stage)
     stageshare::register(m)?;
-    m.add("VERSION", 290)?;
+    // 293 (291 and 292 are other branches'): RoadReach.grow takes the driver's intent (intent_turn, intent_brake,
+    // intent_s: server/reach.py intent())
+    m.add("VERSION", 293)?;
     Ok(())
 }

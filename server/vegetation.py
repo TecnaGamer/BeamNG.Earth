@@ -1665,13 +1665,15 @@ class Tracker:
         car = getattr(self, "car", ())
         return sum(1 for k in car if k in self.sent), len(car)
 
-    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None):
+    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
         (view), the car's first; dropped beyond drop_m of both. foci: other vehicles' collision foci (x, y, r, ...)
-        whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m."""
+        whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
+        tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
+        (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
         import roads as roadsmod
         if self.geo:
-            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame)
+            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
         if aid != self.aid:
             for f in self.futs.values():
                 f.cancel()                  # the old anchor's that have not started
@@ -1713,7 +1715,7 @@ class Tracker:
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
 
-    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame):
+    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
         """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
         inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
         what was sent and in flight."""
@@ -1744,6 +1746,12 @@ class Tracker:
             for p in spots:
                 skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
         car = [k for k in near(x, y, self.send_m) if k not in skip]
+        if tree is not None and car:
+            import reach
+            try:
+                car = reach.order_geotiles(tree, frame, car, x, y, z)
+            except Exception as e:      # (nearest first, as before)
+                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
         self.car = set(car)
         seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
         others = []

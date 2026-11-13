@@ -110,6 +110,32 @@ class GraphTreeTest(unittest.TestCase):
         self.assertEqual(len(got["frontier"]), 0)
         self.assertLess(float(got["pts"][:, 2].max()), 60.0, "the roads end before the horizon")
 
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= reach.INTENT_NEED, "earthfast >= reach.INTENT_NEED")
+    def test_the_drivers_intent_at_the_junction_ahead(self):
+        # a cross junction 100 m ahead at 12 m/s (the city's parameters: every way about as likely)
+        def grow(**kw):
+            net = fast._ef.RoadReach()
+            cell(net, "14/0/0", [
+                ("s", [(0.0, 0.0), (100.0, 0.0)], 4, 0, [(0.0, "A"), (1.0, "X")]),
+                ("e", [(100.0, 0.0), (600.0, 0.0)], 4, 0, [(0.0, "X"), (1.0, "E")]),
+                ("l", [(100.0, 0.0), (100.0, 500.0)], 4, 0, [(0.0, "X"), (1.0, "L")]),
+                ("r", [(100.0, 0.0), (100.0, -500.0)], 4, 0, [(0.0, "X"), (1.0, "R")]),
+            ])
+            return net.grow(0.0, 0.0, 12.0, 0.0, 40.0, p_min=0.01, class_k=0.75, **kw)
+        def chances(got):
+            return chance_near(got, 400.0, 0.0), chance_near(got, 100.0, 300.0), chance_near(got, 100.0, -300.0)
+        s0, l0, r0 = chances(grow())
+        self.assertAlmostEqual(l0, r0, delta=0.02)
+        s1, l1, r1 = chances(grow(intent_turn=1.0, intent_s=10.0))
+        self.assertGreater(l1, 2.0 * l0, "turning left: the left way likelier")
+        self.assertLess(r1, r0)
+        s2, l2, r2 = chances(grow(intent_brake=1.0, intent_s=10.0))
+        self.assertLess(s2, s0, "braking for the junction: straight on less likely")
+        self.assertAlmostEqual(l2, r2, delta=0.02)
+        self.assertEqual(chances(grow(intent_turn=1.0, intent_s=2.0)), (s0, l0, r0), "a junction past intent_s: as is")
+        with self.assertRaises(ValueError):
+            grow(intent_turn=float("nan"))
+
     def test_the_frontier_goes_on_straight(self):
         net = fast._ef.RoadReach()
         quad = [[-100.0, -100.0], [1000.0, -100.0], [1000.0, 100.0], [-100.0, 100.0]]
@@ -356,10 +382,107 @@ class GeoTrackerTreeTest(unittest.TestCase):
         self.assertTrue(t.unwanted(north, now=loop.t + reach.UNWANTED_GRACE_S + 0.1), "not wanted for a while")
         near = geotiles.tiles_near(frame, 0.0, 300.0, 10.0, exact=True)[0][:2]
         self.assertFalse(t.unwanted(near, now=loop.t + 10.0), "right by the car")
-        # without a tree (slow, or no road): as before, nothing dropped
-        t.on_pose(conn, 1, 0.0, 0.0, loop, None, vel=(10.0, 0.0), frame=frame, tree=tr)
+        # without a tree (slower than reach.MIN_V, or no road): as before, nothing dropped
+        t.on_pose(conn, 1, 0.0, 0.0, loop, None, vel=(reach.MIN_V / 2, 0.0), frame=frame, tree=tr)
         self.assertFalse(t.tree_on)
         self.assertFalse(t.unwanted(east, now=loop.t + 10.0))
+
+    def test_city_speed_the_tiles_round_the_car_then_the_tree(self):
+        # 18 mph up a street going north (x = 0) with a turn east 300 m on: the tiles right round the car first
+        # (roads.INSURE_M, by their distance), then the tree's way (north, then east) before the tiles the tree does
+        # not reach (south behind the car, west), where distance order took them all in rings
+        import geodesy
+        import geotiles
+        import roads
+        frame = geodesy.EnuFrame(40.0, -100.0, 0.0)
+        v = 8.5
+        pts = [[0.0, d, d / v, 1.0] for d in np.arange(0.0, 300.0, 32.0)]
+        pts += [[d, 300.0, (300.0 + d) / v, 1.0] for d in np.arange(0.0, 700.0, 32.0)]
+        pts = np.array(pts)
+        tr = reach.Tree({"pts": pts, "mpp": pts[:, :3], "frontier": np.zeros((0, 4))}, 0.0, 0.0, 0.0, v, 0.0)
+        t = roads.GeoTracker()
+        t.pool = object()
+        loop = FakeLoop()
+        conn = SimpleNamespace(s=None, send=lambda m: None)
+        order = []
+        for _ in range(12):         # (each pose starts BUILD_PER_POSE; the jobs finish at once)
+            t.on_pose(conn, 1, 0.0, 0.0, loop, None, vel=(0.0, v), frame=frame, tree=tr)
+            self.assertTrue(t.tree_on)
+            for k, f in loop.jobs:
+                if k not in order:
+                    order.append(k)
+                t.building.discard(k)
+                t.sent.add(k)
+                t.skins.add(k)
+            loop.jobs = []
+        def first(x, y):
+            k = geotiles.tiles_near(frame, x, y, 1.0, exact=True)[0][:2]
+            return order.index(k) if k in order else len(order)
+        under = first(0.0, 0.0)
+        self.assertLess(under, roads.BUILD_PER_POSE, "the tile under the car in the first round")
+        self.assertLess(first(500.0, 300.0), first(-500.0, -300.0), "the way it goes before behind it")
+        self.assertLess(first(500.0, 300.0), first(-500.0, 300.0), "the turn it may take before the other side")
+
+    def test_detail_tiles_in_the_trees_order(self):
+        import geodesy
+        import geotiles
+        frame = geodesy.EnuFrame(40.0, -100.0, 0.0)
+        tr = straight_tree(v=10.0, length=1200.0)
+        keys = [(a, b) for a, b, _d in geotiles.tiles_near(frame, 0.0, 0.0, 1280.0)]
+        got = reach.order_geotiles(tr, frame, keys, 0.0, 0.0)
+        self.assertEqual(sorted(got), sorted(keys))
+
+        def at(x, y):
+            return got.index(geotiles.tiles_near(frame, x, y, 1.0, exact=True)[0][:2])
+        self.assertLess(at(0.0, 0.0), 4, "the tile under the car first")
+        self.assertLess(at(900.0, 0.0), at(-900.0, 0.0), "ahead along the way before behind")
+        self.assertLess(at(900.0, 0.0), at(0.0, 900.0), "... and before the side")
+
+    def test_road_plans_ahead_nearest_first_behind_later(self):
+        import earthd
+        import geodesy
+        import mapcells
+        frame = geodesy.EnuFrame(40.75, -73.98, 0.0)
+        c = mapcells.cell_of(40.75, -73.98)
+        east, west = mapcells.CellKey(14, c.x + 1, c.y), mapcells.CellKey(14, c.x - 1, c.y)
+        cla, clo = c.center()
+        x, y, _ = frame.geodetic_to_enu(cla, clo, 0.0)          # (the car in the middle of its cell)
+        x, y = float(x), float(y)
+        ke = earthd.warm_cell_key(frame, east, x, y, 15.0, 0.0)
+        kw = earthd.warm_cell_key(frame, west, x, y, 15.0, 0.0)
+        self.assertLess(ke, kw, "going east: the cell ahead first")
+        self.assertGreater(kw, 1.5 * earthd.warm_cell_key(frame, west, x, y, 0.0, 0.0), "behind: counted farther")
+
+    def test_intent_from_the_poses(self):
+        it = reach.Intent()
+        self.assertEqual(it.value(), (0.0, 0.0))
+        for i in range(6):                  # turning left at 0.4 rad/s, 12 m/s
+            a = 0.4 * i * 0.25
+            it.feed(i * 0.25, 12.0 * math.cos(a), 12.0 * math.sin(a))
+        turn, brake = it.value()
+        self.assertGreater(turn, 0.9)
+        self.assertEqual(brake, 0.0)
+        it = reach.Intent()
+        for i in range(6):                  # braking at 4 m/s^2 straight on, turning right a little
+            a = -0.2 * i * 0.25
+            v = 20.0 - 4.0 * i * 0.25
+            it.feed(i * 0.25, v * math.cos(a), v * math.sin(a))
+        turn, brake = it.value()
+        self.assertLess(turn, -0.3)
+        self.assertAlmostEqual(brake, 1.0, delta=0.05)
+        it = reach.Intent()
+        for i in range(6):                  # a gentle curve at a steady speed: nothing
+            a = 0.03 * i * 0.25
+            it.feed(i * 0.25, 15.0 * math.cos(a), 15.0 * math.sin(a))
+        self.assertEqual(it.value(), (0.0, 0.0))
+
+    def test_city_parameters(self):
+        self.assertEqual(reach.p_min_at(30.0), reach.P_MIN)
+        self.assertAlmostEqual(reach.p_min_at(10.0), reach.P_MIN_CITY)
+        self.assertEqual(reach.class_k_at(30.0), reach.CLASS_K)
+        self.assertAlmostEqual(reach.class_k_at(10.0), reach.CLASS_K_CITY)
+        self.assertTrue(reach.CLASS_K < reach.class_k_at(18.0) < reach.CLASS_K_CITY)
+        self.assertAlmostEqual(reach.horizon_s(10.0) * 10.0, reach.HORIZON_MIN_M, msg="a slow car's: past the disc")
 
 
 class ServerUnwantedTest(unittest.TestCase):

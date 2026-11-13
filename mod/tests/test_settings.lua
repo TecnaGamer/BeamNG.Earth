@@ -660,4 +660,18 @@ T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the 
 files[settings.FILE] = { version = 2, townSigns = false }
 T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
+
+-- the map's preload of a place: picked (the box) or pointed at (hover: the light part), to core.preloadPlace
+do
+  local calls = {}
+  local core0 = beamngEarth_core
+  beamngEarth_core = { preloadPlace = function(lat, lon, hover) calls[#calls + 1] = { lat, lon, hover }; return true end }
+  T.check(settings.uiMapPreload(40.5, '-73.25').ok == true, 'a pick goes to the core')
+  T.check(calls[1][1] == 40.5 and calls[1][2] == -73.25 and calls[1][3] == false, 'a pick: not a hover')
+  settings.uiMapPreload(40.5, -73.25, true)
+  T.check(calls[2][3] == true, 'a hover says so')
+  beamngEarth_core = nil
+  T.check(settings.uiMapPreload(1, 2, true).ok == false, 'no core: nothing')
+  beamngEarth_core = core0
+end
 T.done('test_settings')
