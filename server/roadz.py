@@ -158,6 +158,7 @@ LIDAR_GAPS_SLOW_WAIT_S = 1.0
 # pre-cache that shares the live road pool, keep LIDAR_GAPS_WAIT_S.
 PRECACHE_LIDAR_WAIT_S = float(os.environ.get("BNGE_PRECACHE_LIDAR_WAIT", "900"))
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
+_LONG_WAIT = [0]            # precache_gaps_wait contexts open in this process (their long wait, not PREFETCHED_WAIT_S)
 
 
 @contextlib.contextmanager
@@ -167,10 +168,38 @@ def precache_gaps_wait(seconds=None):
     global LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
     old = LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
     LIDAR_GAPS_WAIT_S = LIDAR_GAPS_SLOW_WAIT_S = float(PRECACHE_LIDAR_WAIT_S if seconds is None else seconds)
+    _LONG_WAIT[0] += 1
     try:
         yield
     finally:
+        _LONG_WAIT[0] -= 1
         LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S = old
+
+
+# The lidar off planning's critical path (2026-11-13; a cold Manhattan visit read 541 MB of 3DEP EPT nodes from inside
+# planning before its graded first block, and left 53 of its 95 cells on the rule): in a server run (earthd sets
+# PREFETCH_ENV before its workers start) the server's own process reads the cells' lidar ahead (RoadZ.prefetch: the
+# place's road cells at the teleport, the cells along the player's path while driving, the cells a planning process
+# asked for; nearest the player first, PREFETCH_CELLS at once, never stopped by a rule decision), and a planning process
+# takes a cell's lidar only when it is on disk already: PREFETCHED_WAIT_S (0) instead of LIDAR_GAPS_WAIT_S, the rule
+# meanwhile, decided for the run as before (gap_answers). A cell asked for and not on disk is asked of the server's
+# process (a "want" file in the run's decisions folder, read by its prefetch). What was planned on the rule is planned
+# again once the lidar is in, in the background (earthd.LateWork). BNE_LIDAR_PREFETCH=off: the waits as before.
+PREFETCH_ENV = "BNGE_LIDAR_PREFETCH"
+PREFETCH_ON = os.environ.get("BNE_LIDAR_PREFETCH", "on") != "off"
+PREFETCHED_WAIT_S = float(os.environ.get("BNGE_LIDAR_PREFETCH_WAIT", "0"))
+PREFETCH_CELLS = int(os.environ.get("BNGE_LIDAR_PREFETCH_CELLS", "4"))     # cells read at once (each: the node pool)
+PREFETCH_POLL_S = 1.0       # s between the prefetch's looks at the cells the run's processes asked for
+PREFETCH_FAR_M = 8000.0     # m: a queued cell this far from the player when its turn comes is dropped (teleported away)
+PREFETCH_RETRY_S = 60.0     # s before a cell whose read failed is read again
+WANT_DIR = "want"
+_tl = threading.local()     # .prefetch: this thread reads for the prefetch (its reads never stop: _read)
+
+
+def prefetched():
+    """Does this process plan with the server's lidar prefetch (PREFETCH_ENV, set by earthd), i.e. take a cell's
+    lidar only when it is on disk (gap_answers)? Not inside a pre-cache's long wait (precache_gaps_wait)."""
+    return PREFETCH_ON and os.environ.get(PREFETCH_ENV) == "1" and not _LONG_WAIT[0]
 
 
 # The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
@@ -802,10 +831,14 @@ class RoadZ:
                 self._pool = ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept")
             return self._pool
 
-    def warm(self, keys):
-        """Fetch / build the sources' cells of keys (in that order) in a background thread, so the road processes find
-        them on disk (earthd.Server.warm_place). Returns at once."""
+    def warm(self, keys, where=None):
+        """Fetch / build the sources' cells of keys (in that order) in the background, so the road processes find them
+        on disk (earthd.Server.warm_place): the prefetch (PREFETCH_ON: nearest the player first, where(key) -> m) or a
+        thread of its own. Returns at once."""
         if not self.enabled or self.fetcher is None or not keys:
+            return
+        if PREFETCH_ON:
+            self.prefetch(keys, where)
             return
 
         def run():
@@ -817,6 +850,166 @@ class RoadZ:
                     except Exception as e:      # (the road processes ask again)
                         log.debug("roadz warm %s %s: %s", src, k, e)
         threading.Thread(target=run, name="roadz-warm", daemon=True).start()
+
+    # ---- the lidar prefetch (the server's own process: PREFETCH_ON) ----
+    def _pf(self):
+        with self._lock:
+            st = self.__dict__.get("_pf_state")
+            if st is None:
+                st = self._pf_state = {"queue": {}, "seq": 0, "where": None, "done": {}, "failed": {}, "threads": 0,
+                                       "busy": set(), "cv": threading.Condition(), "polled": 0.0,
+                                       "t0": None, "last": None, "n": 0, "logged": True}
+            return st
+
+    def prefetch(self, keys, where=None):
+        """Queue cells keys' road heights (every source at each: the lidar's first of all) to be read in the
+        background, PREFETCH_CELLS at once, a prefetch's reads never stopped (_read); where(key) -> m from the player
+        (the server's latest focus, kept for the next calls too): the nearest queued cell is read first, one past
+        PREFETCH_FAR_M dropped; without one, the newest call's cells first in their order. Returns at once."""
+        if not self.enabled or self.fetcher is None:
+            return
+        st = self._pf()
+        with st["cv"]:
+            if where is not None:
+                st["where"] = where
+            st["seq"] -= 1000000    # (a newer call's cells before an older one's when there is no where)
+            added = 0
+            for i, k in enumerate(keys):
+                k = mapcells.CellKey(int(k[0]), int(k[1]), int(k[2]))
+                if k in st["done"] or k in st["busy"]:
+                    continue
+                if k not in st["queue"]:
+                    added += 1
+                st["queue"][k] = min(st["queue"].get(k, float("inf")), st["seq"] + i)
+            if not added:
+                return
+            if st["t0"] is None:
+                st["t0"] = time.monotonic()
+            st["logged"] = False
+            want = min(PREFETCH_CELLS, max(1, len(st["queue"])))
+            while st["threads"] < want:
+                st["threads"] += 1
+                threading.Thread(target=self._pf_loop, name="roadz-prefetch", daemon=True).start()
+            st["cv"].notify_all()
+
+    def prefetch_state(self, key):
+        """The prefetch's state of cell key: "done" (read: on disk, or nothing to read), "failed" (tried, failed),
+        "queued", "busy" or None (never asked for). No network."""
+        st = self._pf()
+        k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+        with st["cv"]:
+            if k in st["done"]:
+                return "done"
+            if k in st["busy"]:
+                return "busy"
+            if k in st["failed"]:       # (queued again for a later try: its builds do without it meanwhile)
+                return "failed"
+            if k in st["queue"]:
+                return "queued"
+        return None
+
+    def _pf_wants(self, st):
+        """The cells the run's processes asked for (want files: gap_answers), queued (under st's lock)."""
+        now = time.monotonic()
+        if now - st["polled"] < PREFETCH_POLL_S:
+            return
+        st["polled"] = now
+        d = self._session_dir()
+        if not d:
+            return
+        d = os.path.join(d, WANT_DIR)
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        for name in names:
+            try:
+                os.remove(os.path.join(d, name))
+                _src, z, x, y = name.split("_")
+                k = mapcells.CellKey(int(z), int(x), int(y))
+            except (OSError, ValueError):
+                continue
+            if k not in st["done"] and k not in st["busy"]:
+                st["queue"].setdefault(k, st["seq"])
+                st["logged"] = False
+                if st["t0"] is None:
+                    st["t0"] = now
+
+    def _pf_next(self, st):
+        """The next cell to read (under st's lock), or None: the nearest the player (st["where"]), else the first."""
+        where = st["where"]
+        best, bd = None, None
+        for k, seq in list(st["queue"].items()):
+            f = st["failed"].get(k)
+            if f is not None and time.monotonic() - f < PREFETCH_RETRY_S:
+                continue
+            d = seq
+            if where is not None:
+                try:
+                    d = float(where(k))
+                except Exception:
+                    d = float("inf")
+                if d > PREFETCH_FAR_M:
+                    del st["queue"][k]      # (the player is far from it now: asked again when near)
+                    continue
+            if bd is None or (d, str(k)) < bd:
+                best, bd = k, (d, str(k))
+        if best is not None:
+            del st["queue"][best]
+        return best
+
+    def _pf_loop(self):
+        st = self._pf()
+        _tl.prefetch = True
+        while True:
+            with st["cv"]:
+                k = None
+                while k is None:
+                    self._pf_wants(st)
+                    k = self._pf_next(st)
+                    if k is None:
+                        if (not st["busy"] and not st["logged"] and st["t0"] is not None
+                                and st.get("logged_n") != len(st["done"]) + len(st["failed"])):
+                            st["logged"] = True
+                            st["logged_n"] = len(st["done"]) + len(st["failed"])
+                            log.info("lidar prefetch: %d cells read, %d failed, last %.1f s after the first was asked "
+                                     "for (%d requests, %.1f MB)", len(st["done"]), len(st["failed"]),
+                                     (st["last"] or st["t0"]) - st["t0"], self.stats["requests"],
+                                     self.stats["bytes"] / 1e6)
+                        st["cv"].wait(PREFETCH_POLL_S)
+                st["busy"].add(k)
+            ok = True
+            try:
+                la, lo = k.center()
+                for src in sources_at(la, lo, self.lidar):
+                    if self.lines(src, k) is None:
+                        ok = False
+            except Exception as e:      # (asked again after PREFETCH_RETRY_S, or by the planning processes)
+                log.debug("roadz prefetch %s: %s: %s", k, type(e).__name__, e)
+                ok = False
+            with st["cv"]:
+                st["busy"].discard(k)
+                st["last"] = time.monotonic()
+                if ok:
+                    st["done"][k] = st["last"]
+                    st["failed"].pop(k, None)
+                else:
+                    st["failed"][k] = st["last"]
+                    st["queue"].setdefault(k, st["seq"])    # (again once PREFETCH_RETRY_S is past)
+
+    def _want(self, src, key):
+        """Ask the server's prefetch for cell key's src (a want file in the run's decisions folder: _pf_wants)."""
+        d = self._session_dir()
+        if not d:
+            return
+        p = os.path.join(d, WANT_DIR, f"{src}_{key.z}_{key.x}_{key.y}")
+        try:
+            if not os.path.exists(p):
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "wb"):
+                    pass
+        except OSError:
+            pass
 
     def _get_json(self, url, headers=None, lane=None):
         return json.loads(self._fetch(url, headers, lane).decode("utf-8"))
@@ -1018,7 +1211,9 @@ class RoadZ:
         """(xyz (n, 3) Mercator / the dataset's heights, class (n,)) of the EPT nodes' points in boxes, LIDAR_FETCH_THREADS
         reads at once, in node order. Stops (LidarDropped) once this run goes without cell key's lidar (gap_answers):
         the reads went on after the decision, ~1.2 GB in 78 s of a Seattle first visit beside everything the road
-        tiles waited for (2026-11-04)."""
+        tiles waited for (2026-11-04). A prefetch's read (_tl.prefetch: the server's own, nearest the player first)
+        goes on to the end."""
+        pf = getattr(_tl, "prefetch", False)    # (the caller's thread: the node reads run on the pool's)
         bb = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
         # the boxes as a grid of MASK_M cells (the points kept: those in a box's cells)
         nx = int(math.ceil((bb[2] - bb[0]) / MASK_M)) + 1
@@ -1060,7 +1255,7 @@ class RoadZ:
             part's claim, PART_CLAIMS) is left (ELSEWHERE) on the first pass and waited for on the second (wait):
             the main process builds the place's cells ahead (warm) while the block and road-tile processes ask for
             the same cells, and each read every node of them until its files were down."""
-            if key is not None and str(key) in self._dropped:
+            if key is not None and not pf and str(key) in self._dropped:
                 raise LidarDropped(str(key))
             pp = os.path.join(part_dir, f"{k}.npz") if part_dir else None
             if pp and os.path.exists(pp):
@@ -1357,14 +1552,27 @@ class RoadZ:
                     log.debug("roadz %s gaps %s: %s: %s", src, key, type(e).__name__, e)
                     done[str(key)] = None
             threads = []
+            pre = prefetched()      # (the server's prefetch reads them: taken only when on disk, PREFETCHED_WAIT_S)
             for key in todo:
                 p = self._decision(src, key)
                 if p and os.path.exists(p):
                     continue                # (decided already: _decide reads it)
+                if pre:
+                    f = self._path(src, key)
+                    if f and os.path.exists(f):
+                        build(key)          # (a read of the files on disk)
+                        continue
+                    self._want(src, key)    # (asked of the server's prefetch)
+                    if PREFETCHED_WAIT_S <= 0:
+                        continue            # (the rule for the run: planned again once the lidar is in, LateWork)
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
                 t.start()
                 threads.append(t)
-            end = time.monotonic() + (LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S)
+            if pre:
+                wait = PREFETCHED_WAIT_S
+            else:
+                wait = LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S
+            end = time.monotonic() + wait
             for t in threads:
                 t.join(max(0.0, end - time.monotonic()))
             if any(t.is_alive() for t in threads):

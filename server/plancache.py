@@ -131,12 +131,20 @@ class PlanCache:
         from roads import spec_from_json
         try:
             src = self._path(key)
+            final = False
             if not os.path.exists(src):
                 src = self._kept(key)
                 if src is None:
                     src = self._baked(key)
                 if src is None:
                     return None
+            elif os.path.exists(src + ".short"):
+                # (made short in this run, and complete since in the revisit cache (latework.py: planned again once
+                # its lidar was in, in a process of the late pool): that copy, read as complete, is_short)
+                got = self._kept(key)
+                if got is not None:
+                    src, final = got, True
+            self._note_final(key, final)
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
@@ -177,9 +185,33 @@ class PlanCache:
         (store: written after the file, and only for complete plans); the revisit cache's and the baked packs' copies
         always (only complete plans are kept there). Unsure: False (grading._PLANS_COMPLETE, the disk block cache)."""
         p = self._path(key)
+        if self._final(key):
+            return True
         if os.path.exists(p):
             return os.path.exists(p + ".complete")
         return True
+
+    def _note_final(self, key, final):
+        """load read cell key's run file (final False) or the revisit cache's complete copy in place of the run's short
+        one (True): what is_short / known_complete answer for it in this thread (the one that read it: another
+        thread's read of the short file before the copy came stays short)."""
+        tl = self.__dict__.get("_tl")
+        if tl is None:
+            with self._lock:
+                tl = self.__dict__.setdefault("_tl", threading.local())
+        got = getattr(tl, "finals", None)
+        if got is None:
+            got = tl.finals = set()
+        k = (int(key[0]), int(key[1]), int(key[2]))
+        if final:
+            got.add(k)
+        else:
+            got.discard(k)
+
+    def _final(self, key):
+        tl = self.__dict__.get("_tl")
+        got = getattr(tl, "finals", None) if tl is not None else None
+        return bool(got) and (int(key[0]), int(key[1]), int(key[2])) in got
 
     def _revisit_key(self, key):
         import revisit
@@ -335,7 +367,10 @@ class PlanCache:
 
     def is_short(self, key):
         """Were cell key's plans in this run's folder made short of something (store's persist false)? Read so, the
-        reader's builds are not kept either (grading.Grader._plan_cell). The revisit cache's and baked packs' never are."""
+        reader's builds are not kept either (grading.Grader._plan_cell). The revisit cache's and baked packs' never are:
+        nor the run's short plans once load read their complete copy instead (latework.py)."""
+        if self._final(key):
+            return False
         return os.path.exists(self._path(key) + ".short")
 
     def claim(self, key):

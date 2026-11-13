@@ -355,6 +355,48 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
 
 
+LATE_RUN = "-late"
+
+
+def init_late(*initargs):
+    """init for the late pool's processes (latework.py: road content a session built short, built again once its lidar
+    is in): a plan run and lidar-decision run of their own (plancache.RUN_ENV, xproc.RUN_ENV + LATE_RUN), so they read
+    none of the session's rule decisions nor what was planned short on them (its run's plan files, cell facts and
+    carriageway regions); what they make complete is kept in the revisit cache, as any process's."""
+    late_env()
+    import revisit          # (why a late build was not kept, logged: blockworker._geo_content's "not kept" line)
+    revisit.SITES = True
+    init(*initargs)
+
+
+LATE_AID = -2       # (the late pool's planning anchor: the plans are the planning regions', whatever the anchor)
+
+
+def late_plan(z, x, y):
+    """latework: map cell (z, x, y)'s road plans made here (the late pool: its own plan and lidar-decision run, the
+    lidar waited for), kept in the revisit cache when complete. True when they are kept (made now or before), False
+    when still short, None when this process does not grade."""
+    import mapcells
+    import revisit
+    import roadz
+    k = mapcells.CellKey(int(z), int(x), int(y))
+    la, lo = k.center()
+    g, _ = _s.anchor(LATE_AID, la, lo)
+    if g is None or getattr(g, "store", None) is None or g.shared is None or g.shared.persist is None:
+        return None
+    with roadz.precache_gaps_wait():
+        g.store.planner_of_cell(k)._cell_plans(k)
+    return revisit.has(_s.cache_dir, "plans", g.shared._revisit_key(k))
+
+
+def late_env():
+    """The late pool's own plan and lidar-decision runs in this process's environment (init_late)."""
+    import plancache
+    for env in (plancache.RUN_ENV, xproc.RUN_ENV):
+        if os.environ.get(env) and not os.environ[env].endswith(LATE_RUN):
+            os.environ[env] += LATE_RUN
+
+
 def _watch_parent(ppid):
     """Exit with the server: a killed server (SIGTERM) left its block processes running. Windows: os.getppid() keeps
     the parent's id after it is gone, so the poll never saw it go (from Madderose's PR #41: orphaned workers held the
