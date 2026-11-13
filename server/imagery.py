@@ -404,7 +404,11 @@ def zoom_caps(src, lat):
         lim = dict(src.zoom_max_lat)
         while mz in lim and a > lim[mz]:
             mz -= 1
-        mv = min(mv, mz) if mv >= src.max_zoom else mv
+        if mz != src.max_zoom and mv >= src.max_zoom:
+            mv = mz             # (its finest view zoom follows its finest zoom down, as bngs2's max_view_zoom = max_zoom)
+    # (no limit hit: both as the source says; a finer view than max_zoom still takes its tiles enlarged when its
+    # max_view_zoom allows: capping mv at max_zoom for every source made finer views skip them, 2026-11-13: the far
+    # rings' imagery and terrain came late, the drive test's commit margin fell from +12 m to -44 m)
     return mz, mv
 
 

@@ -234,5 +234,21 @@ class ConsentTest(unittest.TestCase):
             telemetry.ON = False
             self.assertFalse(aerialpacks.consent())      # BNE_TELEMETRY=off
 
+
+class ZoomCapsTest(unittest.TestCase):
+    def test_sources_without_a_latitude_limit_unchanged(self):
+        import imagery
+        for name, src in imagery.SOURCES.items():
+            if not src.zoom_max_lat:
+                for lat in (0.0, 45.0, 70.0):
+                    self.assertEqual(imagery.zoom_caps(src, lat), (src.max_zoom, src.max_view_zoom), name)
+
+    def test_limit_drops_both_zooms(self):
+        import imagery
+        from dataclasses import replace
+        src = replace(imagery.SOURCES["bngs2"], max_zoom=14, max_view_zoom=14, zoom_max_lat=((14, 50.0),))
+        self.assertEqual(imagery.zoom_caps(src, 40.0), (14, 14))
+        self.assertEqual(imagery.zoom_caps(src, 60.0), (13, 13))
+
 if __name__ == "__main__":
     unittest.main()
