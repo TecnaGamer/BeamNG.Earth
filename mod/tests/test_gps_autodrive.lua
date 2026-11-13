@@ -684,6 +684,41 @@ do
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
 end
 
+-- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
+-- Autodrive on its confirmed graph chain instead of reducing every refresh to the reached first waypoint.
+do
+  local module = '/lua/ge/extensions/gameplay/route/route'
+  local original, pins = package.loaded[module], nil
+  local nativePath = { 'w', 'j', 's', 't' }
+  package.loaded[module] = function()
+    return { path = {}, setupPathMultiWaypoints = function(self, ids)
+      pins = ids
+      for _, id in ipairs(nativePath) do
+        self.path[#self.path + 1] = { wp = id, pos = map.getMap().nodes[id].pos }
+      end
+    end }
+  end
+  local function roads(f)
+    local function n(x, links) return { pos = { x = x, y = 0, z = 0 }, radius = 6, links = links } end
+    f.nodes = { w = n(0, { j = {} }), j = n(100, { s = {} }), s = n(500, { t = {} }), t = n(1000, {}),
+      u = n(200, { v = {} }), v = n(300, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+  end
+  local f = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(f.drives[#f.drives] and table.concat(f.drives[#f.drives], ',') == 'j,s,t',
+    'an overlapping marker chain is replanned through exact nodes rather than driven as one short waypoint')
+  T.check(pins and pins[1] == 'w' and pins[2] == 'j' and pins[#pins] == 't',
+    'node planning retains the occupied directed edge and the confirmed route target')
+  nativePath = { 'w', 'j' }
+  local partial = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(not partial.gps.nodePlans, 'a native planner that omits an unreachable pin is not accepted as a continuation')
+  local point = { segment = { 1000, 0, 500, 0, a = 't', b = 's' }, dx = 1, dy = 0 }
+  local exact = f.gps.targetNodes('w', 'j', { via = { { projection = point } }, projection = point })
+  T.check(table.concat(exact, ',') == 'w,j,t', 'pins follow travel direction, not edge storage order, without duplicate endpoints')
+  package.loaded[module] = original
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
