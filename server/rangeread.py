@@ -13,9 +13,10 @@ parquet through the fsspec filesystem below, whose reads land here.
     read fetches the blocks it lacks, consecutive ones in one Range request (at most MAX_RUN
     blocks), and keeps each block as its own file <cache_dir>/<block index>.blk (written atomically,
     so a crash or the cache cap's LRU eviction only costs a re-fetch). Two threads that need the
-    same block fetch it once. One in-memory LRU for all RemoteFiles of the process (MEM_BYTES)
-    serves re-reads of hot blocks (a parquet footer is read once per query); everything else
-    comes from the disk (and the OS page cache): a long drive passes dozens of source files.
+    same block fetch it once. One LRU for all RemoteFiles of the process (MEM_BYTES) serves re-reads
+    of hot blocks (a parquet footer is read once per query): it holds each block's file
+    memory-mapped, so the bytes are the system's file cache, one copy for every server process
+    (MAP_MIN); everything else comes from the disk: a long drive passes dozens of source files.
   * NetfetchFS: an fsspec filesystem over RemoteFiles for DuckDB (duckdb.register_filesystem). The
     request kind is the protocol (nfdemand://, nfprefetch://, nfbackground://, nfpredownload://),
     because DuckDB reads from its own threads; paths are resolved to RemoteFiles by a callable.
@@ -27,6 +28,7 @@ needs revalidating; the caller puts the release id into cache_dir.
 import datetime
 import io
 import logging
+import mmap
 import os
 import re
 import threading
@@ -68,6 +70,19 @@ def _quiet_call(quiet, fn, *a):
         netfetch._quiet.on = prev
 BLOCK_WAIT_S = 60.0         # a block another process is fetching is waited for this long (xproc.once)
 MEM_BYTES = 64 * 1024 * 1024    # in-memory block LRU shared by every RemoteFile of the process
+# A block's file at least this long is kept in that LRU memory-mapped (read-only), not as a copy of its bytes: every
+# server process that read remote files held its own 64 MiB of them for good (the last blocks of the last place:
+# Windows, 2026-11-12, 67 MB in each of 10 processes two teleports into Manhattan), the same blocks in most of them.
+# Mapped, they are the system's file cache: one copy whatever the number of processes, and the system's to drop when
+# memory is short. Measured there from a first visit's state (three teleports, the raw blocks on disk, the cells
+# built again): 7 processes with 67 MB of blocks each, 469 MB of copies -> 2 MB (467 MB mapped); a block's first
+# read from disk 290 -> 180 us, a 4 KB read of a held block 1.7 -> 2.4 us, a 2 MiB read the same (rrbench, scratch).
+# Shorter ones (the lidar bias's 16 KB blocks, a file's short last block) stay copies: a mapping
+# costs a descriptor (CPython's mmap keeps its own; earthd.raise_open_files) and an address range, 512 of them at
+# most this way. BNGE_RANGE_MAP=0: copies, as before (A/B). A mapped file cannot be deleted or replaced on Windows:
+# the cache cap's eviction skips it (cache.py) and a second write of the same block keeps the copy there
+# (staging.replace_cached), as for the DEM's and the map data's mapped mirrors.
+MAP_MIN = 128 * 1024 if os.environ.get("BNGE_RANGE_MAP", "1") != "0" else None
 CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)")
 # Errors after which the next mirror is asked (the same bytes from another host); NotFound is not
 # one of them: a release file that is missing on one mirror is missing.
@@ -89,7 +104,7 @@ class Missing(RangeError):
 
 
 # --- the process-wide in-memory block LRU -------------------------------------------------------
-_mem = OrderedDict()            # (cache_dir, block index) -> bytes
+_mem = OrderedDict()            # (cache_dir, block index) -> bytes, or its file's mmap (MAP_MIN)
 _mem_lock = threading.Lock()
 _mem_used = 0
 
@@ -115,9 +130,30 @@ def _mem_put(k, b):
 
 
 def mem_bytes():
-    """Bytes of blocks held in memory (at most MEM_BYTES)."""
+    """Bytes of blocks held in memory (at most MEM_BYTES), the mapped ones (mem_mapped) among them."""
     with _mem_lock:
         return _mem_used
+
+
+def mem_mapped():
+    """(blocks, bytes) of them held as their files' mappings: the system's file cache, not this process's own."""
+    with _mem_lock:
+        m = [len(b) for b in _mem.values() if isinstance(b, mmap.mmap)]
+    return len(m), sum(m)
+
+
+def _map_file(path, want):
+    """The block file at path memory-mapped read-only when it is want bytes long and worth a mapping (MAP_MIN), else
+    None (the caller reads it)."""
+    if MAP_MIN is None or want < MAP_MIN:
+        return None
+    try:
+        with open(path, "rb") as f:
+            if os.fstat(f.fileno()).st_size != want:
+                return None
+            return mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    except (OSError, ValueError):       # (no such file, or a file system that cannot map: read as before)
+        return None
 
 
 def clear_memory():
@@ -179,15 +215,18 @@ class RemoteFile:
             with self._lock:
                 self.stats["mem_blocks"] += 1
             return b
-        try:
-            with open(self._path(i), "rb") as f:
-                b = f.read()
-        except OSError:
-            return None
         # a damaged block (a crash after os.replace but before the data reached the disk leaves it
         # short or empty): refetched. Without the file's size only a full block can be checked.
-        if len(b) != (self._block_len(i) if self.size is not None else self.block):
-            return None
+        want = self._block_len(i) if self.size is not None else self.block
+        b = _map_file(self._path(i), want)
+        if b is None:
+            try:
+                with open(self._path(i), "rb") as f:
+                    b = f.read()
+            except OSError:
+                return None
+            if len(b) != want:
+                return None
         with self._lock:
             self.stats["disk_blocks"] += 1
         self._remember(i, b)
@@ -201,7 +240,9 @@ class RemoteFile:
 
     def _store(self, i, b):
         self._write(self._path(i), b)
-        self._remember(i, b)
+        # (kept as the file's mapping, not the downloaded bytes: on a first visit every block comes this way)
+        m = _map_file(self._path(i), len(b))
+        self._remember(i, b if m is None else m)
 
     def _fetch_runs(self, runs, kind):
         """{i: bytes} of the runs [(i0, i1)]: one alone here, several at once (PAR_BLOCKS). A failed one's error is
@@ -398,8 +439,10 @@ class RemoteFile:
         missing = [i for i in range(i0, i1) if i not in got]
         if missing:
             raise RangeError(f"missing blocks {missing} for range {start}-{end - 1}")
-        buf = b"".join(got[i] for i in range(i0, i1))
-        out = buf[start - i0 * self.block:end - i0 * self.block]
+        # (each block's part of the range, copied once, from views: a mapped block gives only the pages read, and a
+        # block shorter than it should be leaves the range short, below)
+        out = b"".join([memoryview(got[i])[max(start - i * self.block, 0):end - i * self.block]
+                        for i in range(i0, i1)])
         # (a block left out mid-range would shift every byte after it: a corrupt page for DuckDB, not an error)
         if len(out) != end - start:
             raise RangeError(f"short read for range {start}-{end - 1}: {len(out)} bytes")

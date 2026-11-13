@@ -1296,7 +1296,9 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   is rebuilt from the raw blocks, a block of the wrong length (a crash after `os.replace` without
   fsync can leave it short or empty) is fetched again. Hot blocks are also kept in memory, in one
   LRU for the process (`rangeread.MEM_BYTES`, 64 MiB; it was 32 MiB per COG and 8 MiB per parquet
-  file, up to ~0.75 GiB after a long drive). One dense city cell is
+  file, up to ~0.75 GiB after a long drive), as their files' read-only mappings (`rangeread.MAP_MIN`):
+  the system's file cache, one copy for all the server's processes, where each held its own 64 MiB
+  for good after a first visit (7 processes, 469 MB, now 2 MB of copies; Windows, 2026-11-12). One dense city cell is
   3.3 MB of layer files and ~66 MB of raw blocks (they serve the neighbours too: the next cells
   cost 0-9 MB); a desert cell 60-90 KB and 35 MB.
 - **Release pinning**: `overture.RELEASE = "2026-09-23.1"`; `mapdata.py --latest` prints the newest;
