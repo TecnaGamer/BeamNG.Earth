@@ -98,6 +98,7 @@ mod corridor;
 mod approach;
 mod junctions;
 mod wallsindex;
+mod roadwalls;
 mod mappedlamps;
 mod vegclumps;
 mod roadwear;
@@ -1590,6 +1591,23 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
     }
     let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
     let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else { return (None, None) };
+    let sg = segs.as_array();
+    clearance_core(&xs, &ys, step, end_skip, reach, min_samples, q, walled,
+                   |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// clearance_row's sections and quantiles over a centreline (xs, ys; k >= 2 points), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clearance_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, _reach: f64, min_samples: usize, q: f64, walled: f64,
+        ray: R) -> (Option<f64>, Option<f64>) {
+    let k = xs.len();
+    if k < 2 {
+        return (None, None);
+    }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
         s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
@@ -1600,9 +1618,6 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
     let step = step.min((total - 2.0 * end_skip) / 2.0).max(0.5);
     let stop = total - end_skip + 1e-9;
     let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
-    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
-                                                         seg_of.as_slice()) else { return (None, None) };
-    let sg = segs.as_array();
     let mut w = Vec::with_capacity(count);
     let mut rows = Vec::with_capacity(count);
     for i in 0..count {
@@ -1614,9 +1629,9 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
             continue;
         }
         let (nx, ny) = (-ty / len, tx / len);
-        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
-        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
-        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
         let near = match (a.is_nan(), b.is_nan()) {
             (true, true) => f64::INFINITY,
             (true, false) => b,
@@ -1671,6 +1686,23 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     }
     let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
     let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
+                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
+    let sg = segs.as_array();
+    measure_core(&xs, &ys, step, end_skip, min_samples, walled, agree,
+                 |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// measure_row's cross-sections, median and agreement over a centreline (xs, ys), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn measure_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, min_samples: usize, walled: f64, agree: f64, ray: R)
+        -> Option<f64> {
+    let k = xs.len();
+    if k < 2 {
+        return None;
+    }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
         s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
@@ -1682,9 +1714,6 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     // numpy.arange(end_skip, total - end_skip + 1e-9, step)
     let stop = total - end_skip + 1e-9;
     let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
-    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
-                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
-    let sg = segs.as_array();
     let mut w = Vec::with_capacity(count);
     let mut n = 0usize;
     for i in 0..count {
@@ -1699,9 +1728,9 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
         }
         n += 1;
         let (nx, ny) = (-ty / len, tx / len);
-        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
-        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
-        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
         let v = a + b;
         if !v.is_nan() {
             w.push(v);
@@ -6162,6 +6191,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(planends::plan_bridges_joined, m)?)?;
     m.add_function(wrap_pyfunction!(planends::plan_bridge_chain, m)?)?;
     m.add_function(wrap_pyfunction!(wallsindex::walls_index, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_near_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_walls, m)?)?;
     // 194: planends (grading's bridge-end queries a cell's plan ends at a time: _ends_near, bridge_chain, the joined
     // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
     // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
@@ -6378,6 +6409,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
     m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
     m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
-    m.add("VERSION", 276)?;
+    // 281: a cell's roads measured between the building walls in two calls without the interpreter lock (roadwalls:
+    // road_near_cells, road_walls; roadwidth.RoadWidths.measure_many), measure_row / clearance_row's loops shared
+    // with them (measure_core, clearance_core)
+    m.add("VERSION", 281)?;
     Ok(())
 }

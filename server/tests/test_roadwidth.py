@@ -136,6 +136,83 @@ class StoreTest(unittest.TestCase):
                             files)
             gc.collect()  # (the walls' mappings sit in a reference cycle until collected: Windows deletes no mapped file)
 
+class ManyTest(unittest.TestCase):
+    """RoadWidths.measure_many: a cell's roads measured in one pass, the very numbers of one get / cap a road, a road
+    across a cell's edge (the walls of both cells) included."""
+
+    def town(self):
+        import geodesy
+        import mapcells
+        home = mapcells.cell_of(39.283, -76.597)
+        lon0, lat0, lon1, lat1 = home.bounds()
+        frame = geodesy.EnuFrame(0.5 * (lat0 + lat1), lon1)         # (on the cell's east edge)
+        rings = []
+        for y_face, sign in ((9.0, 1), (-9.0, -1), (89.0, 1), (71.0, -1)):
+            for x in np.arange(-400.0, 400.0, 8.0):
+                rings.append([(x, y_face), (x + 7.5, y_face), (x + 7.5, y_face + sign * 10), (x, y_face + sign * 10),
+                              (x, y_face)])
+        cells = {}
+        for r in rings:
+            la, lo, _ = frame.enu_to_geodetic(np.array([p[0] for p in r]), np.array([p[1] for p in r]), 0.0)
+            k = mapcells.cell_of(float(la[0]), float(lo[0]))
+            ll, off = cells.setdefault((k.x, k.y), ([], [0]))
+            ll += list(zip(lo, la))
+            off.append(len(ll))
+
+        def cell_fn(key):
+            got = cells.get((key.x, key.y))
+            if got is None:
+                return None
+
+            class F:
+                lonlat, coord_off = np.array(got[0]), np.array(got[1])
+
+                def __len__(self):
+                    return len(self.coord_off) - 1
+            return F()
+
+        def road(pts):
+            la, lo, _ = frame.enu_to_geodetic(np.array([p[0] for p in pts], float), np.array([p[1] for p in pts], float), 0.0)
+            return np.c_[np.ravel(lo), np.ravel(la)]
+        roads_ = [("in", road([(-380, 0.4), (-200, -0.3), (-120, 0.2)])), ("across", road([(-150, 0.5), (0, 0), (160, -0.5)])),
+                  ("east", road([(60, 80.2), (300, 79.8)])), ("edge", road([(-20, 80), (25, 80)])),
+                  ("open", road([(-300, 400), (300, 420)])), ("far", road([(5000, 5000), (5100, 5000)])),
+                  ("short", road([(-250, 0), (-246, 0)])), ("point", road([(-250, 0)]))]
+        self.assertEqual(len(cells), 2, "houses on both sides of the cell's edge")
+        return cell_fn, roads_
+
+    def test_same_as_one_road_at_a_time(self):
+        cell_fn, roads_ = self.town()
+        one = roadwidth.RoadWidths(cell_fn)
+        want = [(one.get(f, ll), one.cap(f, ll)) for f, ll in roads_]
+        self.assertIsNotNone(want[0][0], "a walled street")
+        self.assertIsNotNone(want[1][0], "walled across the cells' edge")
+        self.assertIsNone(want[4][0])
+        many = roadwidth.RoadWidths(cell_fn)
+        many.measure_many([(f, ll, 3) for f, ll in roads_])
+
+        def no_walls(ll):
+            raise AssertionError("measured again")
+        many._near_walls = no_walls
+        got = [(many.get(f, ll), many.cap(f, ll)) for f, ll in roads_ if len(ll) > 0]
+        self.assertEqual([repr(g) for g in got], [repr(w) for w in want], "bit for bit")
+
+    def test_only_what_is_asked_and_missing(self):
+        cell_fn, roads_ = self.town()
+        many = roadwidth.RoadWidths(cell_fn)
+        f, ll = roads_[0]
+        many.measure_many([(f, ll, 2), (roads_[1][0], roads_[1][1], 1)])
+        self.assertIn(roadwidth._memo_key(f, ll), many.caps)
+        self.assertNotIn(roadwidth._memo_key(f, ll), many.memo)
+        self.assertIn(roadwidth._memo_key(*roads_[1]), many.memo)
+        self.assertNotIn(roadwidth._memo_key(*roads_[1]), many.caps)
+        many.measure_many([])
+        bad = np.array([(float("nan"), 39.0), (-76.0, 39.0)])
+        many.measure_many([("nan", bad, 3), (f, ll, 3)])           # (odd coordinates: left to get / cap)
+        self.assertNotIn(roadwidth._memo_key("nan", bad), many.memo)
+        self.assertEqual(repr(many.get(f, ll)), repr(roadwidth.RoadWidths(cell_fn).get(f, ll)))
+
+
 class CopiesTest(unittest.TestCase):
     def test_each_copy_of_a_road_its_own_width(self):
         """Each map cell decodes its own copy of a road (its bends smoothed in that cell's frame): a width remembered
