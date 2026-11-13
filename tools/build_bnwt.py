@@ -91,7 +91,8 @@ def units_of_rect(x0, y0, x1, y1, uz):
 
 def world_units(release, archive, uz, raw_dir):
     """The units any source file of the archive's layers reaches (the rest of the world has no feature: no tile)."""
-    idx = overture.StacIndex(release, raw_dir, None)
+    import netfetch
+    idx = overture.StacIndex(release, raw_dir, netfetch.Fetcher())  # (another release than the bundled index's: fetched)
     n = 1 << uz
     out = set()
     for layer in bnwt.ARCHIVES[archive]["layers"]:
