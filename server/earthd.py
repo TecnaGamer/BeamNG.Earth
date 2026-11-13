@@ -203,7 +203,7 @@ def _catchup_note(conn, on):
 
 
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
-SERVER_LIST_URL = "https://earth.tgforever.net/servers"
+SERVER_LIST_URL = os.environ.get("BNGE_SERVER_LIST_URL", "https://earth.tgforever.net/servers")
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
 # 32-cell tiles), 4 = 64-cell tiles down to L-1 (farfield.CONTENT_FORMAT). A mod's hello.format is
 # the newest format it reads (it reads every older one from 3: core.lua FORMATS), so a mod older

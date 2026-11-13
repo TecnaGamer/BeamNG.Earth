@@ -390,6 +390,10 @@ POLICIES["orthos.its.ny.gov"] = replace(POLICIES["orthos.its.ny.gov"], rate=2.0,
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
                                  offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
+# A self-hosted BeamMP collector gets the server list's limits too (keep existing policies for known hosts).
+_SERVER_LIST_HOST = urlsplit(os.environ.get("BNGE_SERVER_LIST_URL", "https://earth.tgforever.net/servers")).hostname
+if _SERVER_LIST_HOST:
+    POLICIES.setdefault(_SERVER_LIST_HOST, POLICIES["earth.tgforever.net"])
 # Our prebaked input tiles (bnwt.py, BNGE_BNWT_URL: off when unset): range reads of a few archives on a CDN, like the
 # project's tile host (which they will likely share); a host of its own gets the same policy
 _BNWT_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip()
