@@ -124,6 +124,7 @@ import roadmesh as roadmeshmod  # noqa: E402
 import roadwear  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
+import farrestore as farrestoremod  # noqa: E402
 import signstream  # noqa: E402
 import roadsigns as roadsignsmod  # noqa: E402
 import designs as designsmod  # noqa: E402
@@ -821,6 +822,12 @@ PIECE_PARTS = 24            # nodes whose geometry and texture the server keeps 
 GLOBAL_AID = 0
 
 
+def kept_pending(extra):
+    """The correction regions a kept far texture was rendered without (Server.keep_texture's extra "pending"), as
+    the pending set holds them: (rx, ry) or (imagery.DS_PENDING, rx, ry)."""
+    return {tuple(rk) for rk in (extra or {}).get("pending") or ()}
+
+
 @dataclass
 class TileInfo:
     """A built far tile (server-wide cache entry)."""
@@ -1284,6 +1291,11 @@ class Server:
         # is open, FAR_DRIVE of them while driving: tile_workers is the pool's whole size, main() sizes it)
         self.far_max = tile_workers
         self.far_drive = min(tile_workers, FAR_DRIVE)
+        # a cached place's far tiles put back in bulk (farrestore.py: restore_far), in a thread of its own; the tiles a
+        # batch has under way (the streamers pass over them meanwhile: Connection._next_tile) and those tried once
+        self.restore_pool = ThreadPoolExecutor(1, thread_name_prefix="far-restore")
+        self.restoring, self.restore_tried = set(), set()
+        self.restore_stats = {"batches": 0, "asked": 0, "restored": 0, "seconds": 0.0}
         self.far_gate = DynGate(lambda: self.far_limit())
         # Road plans (grading) of the map cells ahead of the player, made before a block needs them: a
         # cell's first plans (and street widths) take 2-10 s, more than a block move allows at speed
@@ -5429,6 +5441,9 @@ class Server:
                 tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                        "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                        "season_mode": im.season_mode, "quick": quick and bool(later)}
+                fin_n = self.fin_name_len()
+                if fin_n:                   # (its shape kept for the bulk restore: farrestore.py)
+                    tex["keep_fin"] = fin_n
                 args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
                 built, got = self.far_pool.submit(*args).result()
                 if got is None and im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
@@ -5436,6 +5451,8 @@ class Server:
                     built, got = self.far_pool.submit(*args).result()
                 if got is not None:
                     done = (texture, got[0], got[1])
+                    if fin_n and not later:     # (final as rendered: no analyses to come; the restore's texture)
+                        self.keep_texture(self.tex_key(anchor, tile, px), texture, got[0], got[1], (), None)
                 else:
                     later = []
             elif self.far_pool is not None:
@@ -5493,6 +5510,8 @@ class Server:
                        "season_mode": im.season_mode}
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
+                if not raw_quick and self.fin_name_len():   # (a final texture: kept for the bulk restore)
+                    tex["keep_fin"] = self.fin_name_len()
                 if raw_quick:
                     tex["quick"] = quick        # (driving: every photo, fetched first if missing; the map: what is there)
                 elif quick:     # (the 3D map: what is on disk now, the slow hosts' photos downloaded meanwhile)
@@ -5513,6 +5532,7 @@ class Server:
                     later = later or [im.done_token()]
                     raw_quick = True
                     tex.pop("fin", None)
+                    tex.pop("keep_fin", None)
                     tex["quick"] = quick
                     args = args[:-1] + (tex,)
                     built, got = self.far_pool.submit(*args).result()
@@ -5572,6 +5592,8 @@ class Server:
                                          os.path.join(self.out_dir, surfacemod.road_mask_name(texture)))
                     revisitmod.place(blobs["tex.dds"], os.path.join(self.out_dir, texture))
                     tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
+                    if pending is not None:     # (kept with corrections still to come: their regions, as rendered)
+                        pending |= kept_pending(extra)
                 else:
                     f0 = revisitmod.faults()
                     if quick and not is_global and not later:
@@ -5618,8 +5640,16 @@ class Server:
                     self.piece_parts.popitem(last=False)
             built = farfield.clip_built(built, tile.quad)
         t2 = time.perf_counter()
-        size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
-                                    textured=material is not None, tex_px=px_t)
+        sp = getattr(built, "shape_plain", None) if node is tile else None
+        if sp is not None and material is not None and self.far_format == "cdae" and cdae.PACKED and \
+                sp[1] == len(material) and sp[2] == px_t:
+            # (the worker encoded it, kept for the bulk restore: only the name stamped in here; farrestore.py)
+            data = farrestoremod.stamp(sp[0], sp[1], material)
+            self.write_file(path, data)
+            size = len(data)
+        else:
+            size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
+                                        textured=material is not None, tex_px=px_t)
         dt = time.perf_counter() - t0
         self.build_stats.append(dt)
         tex_s = t2 - t1 - geo_wait
@@ -5664,18 +5694,243 @@ class Server:
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
         still to come (pending), nothing it read failed meanwhile (f0: revisit.faults() before; None: not checked, a
-        render again for a region that came)."""
-        if not revisitmod.ON or pending or (f0 is not None and revisitmod.faults() != f0):
+        render again for a region that came). One whose only corrections to come are colour-match / de-shadow regions
+        is kept with them (extra "pending": kept_pending gives them back; the tile is then rendered again when they
+        are ready, as one rendered now): the global far tiles waited on regions that were still queued at every
+        visit, and their textures were rendered twice each time (2026-11-12)."""
+        if not revisitmod.ON or (f0 is not None and revisitmod.faults() != f0):
             return
+        regions = []
+        for rk in pending or ():
+            if not isinstance(rk, tuple) or not rk or rk[0] == imagerymod.IMG_PENDING or \
+                    not all(isinstance(v, (str, int, np.integer)) for v in rk):
+                return                  # (a quick render's photos still to come: not kept)
+            regions.append([v if isinstance(v, str) else int(v) for v in rk])
         try:
             blobs = {"tex.dds": revisitmod.Side(os.path.join(self.out_dir, texture))}     # (linked in, not copied)
             mp = os.path.join(self.out_dir, surfacemod.road_mask_name(texture))
             if os.path.exists(mp):
                 blobs["mask.dds"] = revisitmod.Side(mp)
-            revisitmod.store(self.cache_dir, "fartex", tk, blobs,
-                             {"tex_bytes": int(tex_bytes), "used": {str(n): int(c) for n, c in (used or {}).items()}})
+            extra = {"tex_bytes": int(tex_bytes), "used": {str(n): int(c) for n, c in (used or {}).items()}}
+            if regions:
+                extra["pending"] = sorted(regions, key=str)
+            revisitmod.store(self.cache_dir, "fartex", tk, blobs, extra)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far texture %s not kept: %s: %s", texture, type(e).__name__, e)
+
+    def fin_name_len(self):
+        """The pooled material names' length while far tiles are kept for the bulk restore (farrestore.py: the
+        workers keep each finished shape with a placeholder name that long), else 0."""
+        if not farrestoremod.ON or not revisitmod.ON or self.far_format != "cdae" or not cdae.PACKED or \
+                self.far_pool is None or self.imagery is None:
+            return 0
+        return len(self.matslots.name(0))
+
+    def maybe_restore(self, conn, anchor):
+        """Event loop (Connection._stream): the connection's queued far tiles that the revisit cache may hold finished
+        put back in bulk (restore_far) when there are MIN_BATCH or more not tried yet; once per queue. Not with the
+        3D map open (its textures follow the screen) nor for a coarse cover's or a piece's tiles."""
+        if getattr(conn, "_restore_q", None) is conn.queue:
+            return
+        conn._restore_q = conn.queue
+        if not self.fin_name_len() or self.map_on():
+            return
+        cands = []
+        for t in conn.queue[conn.qi:]:
+            if isinstance(t, farfield.Piece) or t.key in self.coarse_keys or t.key in conn.sent or \
+                    t.key not in conn.desired:
+                continue
+            ck = conn.ck(t.key)
+            if ck in self.tiles or ck in self.tile_inflight or ck in self.restore_tried or ck in self.restoring or \
+                    ck in conn.inflight:
+                continue
+            cands.append(t)
+        if len(cands) < farrestoremod.MIN_BATCH:
+            return
+        if len(self.restore_tried) > 200_000:
+            self.restore_tried.clear()
+        cks = [self.far_ck(anchor.id, t.key) for t in cands]
+        self.restoring.update(cks)
+        self.restore_tried.update(cks)
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(self.restore_pool, self.restore_far, anchor, cands, loop)
+
+        def done(f, cks=cks):
+            if not f.cancelled() and f.exception() is not None:
+                log.warning("far restore failed: %r", f.exception())
+            if any(ck in self.restoring for ck in cks):     # (a batch that ended early: the usual way for the rest)
+                self.restoring.difference_update(cks)
+                for c in self.connections:
+                    c.wake.set()
+        fut.add_done_callback(done)
+
+    def restore_far(self, anchor, tiles, loop):
+        """Restore thread: far tiles of anchor put back from the revisit cache's finished shapes (farrestore.py), the
+        nearest first, in chunks (farrestore.FIRST_CHUNK, then CHUNK): a far worker finds which are kept (their keys
+        need its map data), one native call writes them; each chunk's TileInfos go to the event loop (_restored), the
+        rest is built the usual way. Each chunk's find runs while the one before is written. None of the first chunk
+        kept: all left to the usual way."""
+        n_name = self.fin_name_len()
+        if not n_name:
+            return
+        im = self.imagery
+        analyses = self.deshadow is not None or self.colormatch is not None
+        fin = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain} if analyses else None
+        bounds = [0] + list(range(farrestoremod.FIRST_CHUNK, len(tiles), farrestoremod.CHUNK)) + [len(tiles)]
+        chunks = [tiles[i:j] for i, j in zip(bounds, bounds[1:])]
+
+        def submit(chunk):
+            t0 = time.perf_counter()
+            specs, prep, why = self._restore_prepare(anchor, chunk, n_name, fin)
+            fut = self.far_pool.submit(blockworker.far_restore_find, anchor.id, anchor.lat, anchor.lon, specs) \
+                if specs else None
+            return chunk, prep, why, fut, t0
+        nxt = submit(chunks[0]) if chunks else None
+        k = 0
+        while nxt is not None:
+            chunk, prep, why, fut, t0 = nxt
+            found = fut.result() if fut is not None else []
+            t1 = time.perf_counter()
+            k += 1
+            # (the next chunk's find in a far worker while this one is written; one at a time: more at once woke the
+            # elastic pool's spare processes, seconds to start)
+            nxt = submit(chunks[k]) if k < len(chunks) and (k > 1 or any(f is not None for f in found)) else None
+            infos, t2 = self._restore_write(anchor, prep, found, why, n_name, t0)
+            st = self.restore_stats
+            st["batches"] += 1
+            st["asked"] += len(chunk)
+            st["restored"] += len(infos)
+            st["seconds"] += time.perf_counter() - t0
+            log.info("far restore: %d of %d tiles in %.0f ms (find %.0f, write %.0f); not kept: %s", len(infos),
+                     len(chunk), 1000 * (time.perf_counter() - t0), 1000 * (t1 - t0), 1000 * (t2 - t1),
+                     dict(sorted(why.items())) or "-")
+            loop.call_soon_threadsafe(self._restored, [self.far_ck(anchor.id, t.key) for t in chunk], infos)
+            if k == 1 and nxt is None:  # (none of the nearest kept: a place not seen with this build; the rest at once)
+                rest = [self.far_ck(anchor.id, t.key) for c in chunks[1:] for t in c]
+                if rest:
+                    loop.call_soon_threadsafe(self._restored, rest, {})
+
+    def _restore_prepare(self, anchor, chunk, n_name, fin):
+        """restore_far: the far worker's specs of a chunk's tiles (blockworker.far_restore_find), with what the write
+        needs of each (prep), and the count of tiles left out by why (a global tile without a kept texture)."""
+        im = self.imagery
+        specs, prep, why = [], [], {}
+        for tile in chunk:
+            ck = self.far_ck(anchor.id, tile.key)
+            px = self.tile_tex_px(anchor, tile)
+            # (the size it needs now, else one kept larger (the far PVS gives tiles the screen resolves more of up to
+            # farpvs.UP_PX_MAX once it is there; the restore asks before it), else one kept smaller (sharpened when
+            # sent like one built so: Connection.tex_short): the PVS sizes textures as it goes)
+            pxs = [px] + [px << k for k in (1, 2) if px << k <= farpvsmod.UP_PX_MAX] + \
+                [px >> k for k in range(1, 4) if px >> k >= farrestoremod.MIN_PX]
+            texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
+            gtex = None
+            if isinstance(tile, farfield.GTile):
+                zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
+                gref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
+                for p_ in pxs:
+                    got = revisitmod.load(self.cache_dir, "fartex", self.tex_key(anchor, tile, p_))
+                    if got is not None and isinstance(got[0].get("tex.dds"), revisitmod.Side):
+                        gtex = got
+                        break
+                if gtex is None:
+                    why["global texture"] = why.get("global texture", 0) + 1
+                    continue
+                specs.append(("global", tile.z, tile.x, tile.y, zoom, gref, self.layout, [p_], n_name))
+            else:
+                lvl = tile.level
+                q = self.anchor_q(anchor) if lvl <= 0 else None
+                ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
+                zoom = anchor.zooms[max(lvl, 0)]
+                tex = {"path": os.path.join(self.out_dir, texture), "px": px,
+                       "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
+                                self.road_mask_px(lvl)) if self.road_masks else None,
+                       "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
+                       "season_mode": im.season_mode, "keep_fin": n_name}
+                if fin is not None:
+                    tex["fin"] = fin
+                specs.append(("tile", tile, zoom, q, ref_zoom, self.near_visual in BLOCK_DRAWN, self.layout, tex,
+                              pxs))
+            prep.append((tile, ck, texture, zoom, gtex))
+        return specs, prep, why
+
+    def _restore_write(self, anchor, prep, found, why, n_name, t0):
+        """restore_far: the found tiles of a chunk written (farrestore.restore: one native call), their material
+        names taken -> ({ck: TileInfo}, the time the write ended)."""
+        items, meta = [], []
+        for (tile, ck, texture, zoom, gtex), got in zip(prep, found):
+            if got is None:
+                w = "global shape" if gtex is not None else f"L{tile.level} shape"
+                why[w] = why.get(w, 0) + 1
+                continue
+            loc, sides, px = got
+            if gtex is not None:
+                sides = {"tex.dds": gtex[0]["tex.dds"].path}
+            if "tex.dds" not in sides:
+                continue
+            material = self.matslots.take(ck)
+            if len(material) != n_name:     # (past 99,999 names: the usual way)
+                continue
+            tex_path = os.path.join(self.out_dir, texture)
+            side_list = [(sides["tex.dds"], staging.tmp_for(tex_path), tex_path)]
+            if gtex is None and "mask.dds" in sides and self.road_masks and self.road_mask_px(tile.level):
+                mp = os.path.join(self.out_dir, surfacemod.road_mask_name(texture))
+                side_list.append((sides["mask.dds"], staging.tmp_for(mp), mp))
+            shape = os.path.join(self.out_dir, self.tile_name(*ck))
+            slot = os.path.join(self.out_dir, matslotsmod.MatSlots.file(material))
+            items.append((loc, farrestoremod.placeholder(n_name), material,
+                          (staging.tmp_for(shape), shape, staging.tmp_for(slot), slot), side_list))
+            meta.append((tile, ck, px, texture, zoom, gtex, material, set(sides)))
+        res = farrestoremod.restore(items, staging.WARM_READ) if items else []
+        t2 = time.perf_counter()
+        infos = {}
+        for (tile, ck, px, texture, zoom, gtex, material, have), r in zip(meta, res):
+            if isinstance(r, str):
+                log.debug("far restore: %s: %s", tile.key, r)
+                continue
+            size, extra, grid = r
+            if not set(extra.get("sides") or ()) <= have:      # (a kept texture file gone: built again)
+                continue
+            pending = frozenset()
+            if gtex is not None:
+                tex_bytes, used = int(gtex[1]["tex_bytes"]), gtex[1]["used"]
+                if self.colormatch is not None or self.deshadow is not None:
+                    pending = frozenset(kept_pending(gtex[1]))
+            else:
+                tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
+            sources = frozenset()
+            if self.credits is not None:
+                frame, x0, y0, s = self.tile_where(anchor, tile)
+                sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
+            info = TileInfo(list(extra["pos"]), float(extra["err"]), extra["sink"], float(extra["skirt"]), grid,
+                            size, t2 - t0, material, texture, tex_bytes, 0.0, credits=sources,
+                            err_n=extra.get("err_n"))
+            info.tile = tile
+            info.tex_px = px
+            info.coarse = False
+            if gtex is not None:
+                info.frame = farfield.global_frame_ll(tile.z, tile.x, tile.y)
+            info.shape = matslotsmod.MatSlots.file(material)
+            info.rev = self.tex_rev.get(ck, 0)
+            info.cm_pending = pending
+            self.degraded.discard(ck)
+            infos[ck] = info
+        return infos, t2
+
+    def _restored(self, cks, infos):
+        """Event loop: a restore chunk's tiles: the ones put back into the tile cache (as a build's: _tile_done), the
+        rest left to the usual build; the streamers woken."""
+        loop = asyncio.get_running_loop()
+        for ck in cks:
+            self.restoring.discard(ck)
+            info = infos.get(ck)
+            if info is None or ck in self.tiles or ck in self.tile_inflight:
+                continue
+            f = loop.create_future()
+            f.set_result(info)
+            self._tile_done(ck, f)
+        for c in self.connections:
+            c.wake.set()
 
     @staticmethod
     def write_file(path, data):
@@ -6272,7 +6527,7 @@ class Server:
 
     def prune(self, keep_from):
         """Forget anchors older than keep_from and delete their files."""
-        busy = {k[0] for k in self.tile_inflight}
+        busy = {k[0] for k in self.tile_inflight} | {k[0] for k in self.restoring}
         retry = False
         # (the session folders listed once: a glob per anchor and file kind, ~10 each, scanned folders of thousands of
         # files on the event loop, 2 s stalls when the 3D map's view moved the origin often, 2026-11-07)
@@ -6505,6 +6760,7 @@ class Connection:
         self.queue = []                 # tiles to build, by priority
         self.qi = 0
         self.graded_wait = []           # graded tiles passed over at the GRADED_SHARE cap, by priority (_next_tile)
+        self.restore_wait = []          # tiles passed over while a bulk restore has them (Server.restoring; _next_tile)
         self.next_group = 1
         self.inflight = {}              # (anchorId, key) -> (asyncio future, Tile)
         self.prefetched = {}            # (anchorId, key) -> when its imagery prefetch was last asked for
@@ -8712,6 +8968,7 @@ class Connection:
         self.ppolys = {}
         self.desired, self.sent, self.groups, self.queue, self.qi = {}, keep, [], [], 0
         self.graded_wait = []
+        self.restore_wait = []
         old_grid = self.s.horizon_grids.get(old.id) if old is not None else None
         self.prev_horizon = (old.frame, old_grid) if old_grid is not None and old_grid.merc is not None else None
         # (the global far tiles' split state is any anchor's: kept, so their hysteresis holds across the rebase)
@@ -10159,6 +10416,7 @@ class Connection:
         self.queue = [todo[k] for k in sorted(range(len(todo)), key=prio)]
         self.qi = 0
         self.graded_wait = []
+        self.restore_wait = []
         self.failed.clear()
 
     def graded(self, t):
@@ -10172,6 +10430,22 @@ class Connection:
         ones (GRADED_SHARE: they go first again once a graded slot is free)."""
         def wanted(t):
             return t.key not in self.sent and self.ck(t.key) not in self.inflight and t.key in self.desired
+        restoring = getattr(self.s, "restoring", ())
+        if not hasattr(self, "restore_wait"):
+            self.restore_wait = []
+        i = 0
+        while i < len(self.restore_wait):       # (a bulk restore's tiles once it let go of them: first, by priority)
+            t = self.restore_wait[i]
+            if self.ck(t.key) in restoring:
+                i += 1
+                continue
+            del self.restore_wait[i]
+            if not wanted(t):
+                continue
+            if not graded_ok and self.graded(t):
+                self.graded_wait.append(t)
+                continue
+            return t
         if graded_ok:
             while self.graded_wait:
                 t = self.graded_wait.pop(0)
@@ -10181,6 +10455,9 @@ class Connection:
             t = self.queue[self.qi]
             self.qi += 1
             if not wanted(t):
+                continue
+            if self.ck(t.key) in restoring:
+                self.restore_wait.append(t)
                 continue
             if not graded_ok and self.graded(t):
                 self.graded_wait.append(t)
@@ -10314,8 +10591,14 @@ class Connection:
             workers += self.s.remote_slots()
             # (graded tiles: at most GRADED_SHARE of the workers, the rest go on to the ungraded ones meanwhile)
             g_cap = max(1, int(workers * GRADED_SHARE)) if getattr(self.s, "grading", False) else workers
-            g_n = sum(1 for _, t in self.inflight.values() if self.graded(t))
-            while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
+            # (only builds under way count: a tile the server has already, a bulk restore's, is sent in this pass; held
+            # to the workers' count behind tiles still to build, a restored place's tiles went out over a minute)
+            g_n = sum(1 for f, t in self.inflight.values() if self.graded(t) and not f.done())
+            busy = sum(1 for f, _ in self.inflight.values() if not f.done())
+            if anchor is not None and not self.teleport_pending and self.first_ramp is None and \
+                    hasattr(self.s, "maybe_restore"):
+                self.s.maybe_restore(self, anchor)      # (a cached place's tiles in bulk: farrestore.py)
+            while anchor is not None and not self.teleport_pending and busy < workers:
                 t = self._next_tile(g_n < g_cap)
                 if t is None and g_n >= g_cap:
                     # (nothing else to build: the cap would only leave workers idle; Laramie 2026-11-11, the near
@@ -10323,8 +10606,11 @@ class Connection:
                     t = self._next_tile(True)
                 if t is None:
                     break
-                g_n += self.graded(t)
-                self.inflight[self.ck(t.key)] = (self.s.tile(anchor, t), t)
+                fut = self.s.tile(anchor, t)
+                self.inflight[self.ck(t.key)] = (fut, t)
+                if not fut.done():
+                    busy += 1
+                    g_n += self.graded(t)
             if anchor is not None and self.s.imagery is not None and not self.teleport_pending and \
                     self.first_ramp is None:    # (the coarse cover fetches its few satellite photos itself)
                 # a tile at most every PREFETCH_AGAIN_S (a prefetch skips sources short of request tokens): the

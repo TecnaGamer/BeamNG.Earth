@@ -171,6 +171,7 @@ MOD_TO_SERVER = {
     # "peers": {"me": F(str), "members": F(list)},
     # roads (roads.py; additive): the mod removed its roads (switched off and on again): send them again
     "roads_reset": {},
+    "world_reset": {},                  # the mod's level started again after another level in the same game: forget what was sent
     # gas stations (gasstations.py; additive): on, sent after every hello
     "gas_stations": {"on": F(bool)},
     # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed

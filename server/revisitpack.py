@@ -397,6 +397,28 @@ class Store:
             return raw
         return None
 
+    def locate(self, kind, key):
+        """Where item key's record lies, for a reader of its own (farrestore: native, many at once): (pack file,
+        offset of its stored bytes, stored length, codec, raw length, crc32), or None. One in a pack the next prune
+        would remove is copied forward first (get), as a read would."""
+        k = key20(key)
+        got = self._lookup(kind, k)
+        if got is None:
+            self.stats["misses"] += 1
+            return None
+        p = got[0]
+        if p.old and not p.mine:
+            if self.get(kind, key) is None:
+                return None
+            with self.lock:
+                got = self._find(kind, k)
+            if got is None:
+                return None
+            p = got[0]
+        _k, _tag, codec, off, n, raw_n, crc = got[1]
+        self.stats["hits"] += 1
+        return p.path + PACK_SUFFIX, off + REC.size, n, codec, raw_n, crc
+
     def _forget(self, p):
         """Pack p is gone: out of the index (another pack may hold some of its items)."""
         with self.lock:

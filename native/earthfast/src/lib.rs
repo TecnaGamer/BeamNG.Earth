@@ -74,6 +74,7 @@ mod perfclean;
 mod membudget;
 mod mdhtml;
 mod reportpack;
+mod farrestore;
 mod roadlanes;
 mod waytags;
 mod pmtiles;
@@ -6367,6 +6368,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(blockstore::blockstore_put_block, m)?)?;
     m.add_function(wrap_pyfunction!(blockstore::blockstore_get_block, m)?)?;
     m.add_function(wrap_pyfunction!(blockstore::blockstore_prune, m)?)?;
-    m.add("VERSION", 274)?;
+    // 275 (on 274; was 270 on its branch): a cached place's far field put back in one call (farrestore: far_restore, far_shape_stamp;
+    // server/farrestore.py; 269 was left for the block chunk cache)
+    m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
+    m.add("VERSION", 275)?;
     Ok(())
 }
