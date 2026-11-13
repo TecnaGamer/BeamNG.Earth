@@ -9,8 +9,9 @@ Per place: prepare_anchor (purpose teleport) -> anchor_ready -> commit_anchor + 
 (the mod's sendCommits), then a pose every POSE_S with a chase camera looking north, and one 'where' (the status
 bar). Far tiles' pooled slots are let go as the mod does (pose.slotsGone). A place ends once it has loaded and the
 server is idle (Settle), or after --cap s, or once --until is reached. marks: s from the teleport to anchor_ready (the
-car on its ground), far_done, each load_progress part done for good (ground_s: the graded first block, roads_s,
-trees_s, far_s; loaded_s: all of them, the mod's loading line ends) and settled_s. hello and graphics are the mod's own with the player's settings (normal
+car on its ground), graded_s (the graded first block in: terrain_refresh), far_done, each load_progress part done for
+good (ground_s: the graded first block with its final photo, roads_s, trees_s, far_s; loaded_s: all of them, the
+mod's loading line ends) and settled_s. hello and graphics are the mod's own with the player's settings (normal
 terrain, trees and buildings, 2048 px ground photos, horizon view).
 
 The server's environment is this process's: start it behind the cache proxy (proxy.sh env) to spare the hosts.
@@ -294,6 +295,8 @@ class Visit:
             for k in (m.get("remove", []) if typ == "far_swap" else [m["key"]]):
                 if k in self.slots:
                     self.gone.append(list(self.slots.pop(k)))
+        elif typ == "terrain_refresh" and "graded_s" not in marks:     # (the graded first block: refine_first)
+            marks["graded_s"] = round(time.monotonic() - t0, 1)
         elif typ == "far_done" and "far_done" not in marks:
             marks["far_done"] = round(time.monotonic() - t0, 1)
         elif typ == "load_progress":

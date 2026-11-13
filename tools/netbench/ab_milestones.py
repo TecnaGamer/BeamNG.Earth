@@ -2,17 +2,17 @@
 """When each place reached its loading milestones, and how much it had downloaded by then, in the A/B runs
 (AB_ROOT/{before,after}, bench.sh) as a markdown table. Prints to stdout.
 
-Milestones (netprobe's marks, s after the teleport): anchor (the car on its provisional ground), ground (the graded
-first block), roads (roads and buildings round the player), trees, far (the distant land), loaded (all of them: the
-mod's loading line ends). A run with a line (NB_LINK) gives a player's times on it; without, the network is free and
-the times are the CPU's.
+Milestones (netprobe's marks, s after the teleport): anchor (the car on its provisional ground), graded (the graded
+first block in), ground (that block with its final photo: also its photo analyses, background CPU work), roads (roads
+and buildings round the player), trees, far (the distant land), loaded (all of them: the mod's loading line ends).
+A run with a line (NB_LINK) gives a player's times on it; without, the network is free and the times are the CPU's.
 """
 import json
 import os
 
 ROOT = os.environ["AB_ROOT"]
 RUNS = ("before", "after")
-MILESTONES = ("anchor", "ground", "roads", "trees", "far", "loaded")
+MILESTONES = ("anchor", "graded", "ground", "roads", "trees", "far", "loaded")
 
 
 def mark(marks, name):

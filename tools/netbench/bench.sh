@@ -12,7 +12,8 @@
 #   NB_JOBS       servers at once with --split (default 6): each takes ~10 GB of memory, and a server drops its caches
 #                 once the machine has under 3 GB free (downloads again what it dropped: noise in the counts)
 #   NB_LINK       MBIT:RTT_MS: a player's line (netprobe --link): the times are load times on it. Use a low NB_JOBS (2):
-#                 servers sharing the CPU are slower
+#                 servers sharing the CPU are slower; and NB_FRESH_BASE=1: a reused base ran beside other places than
+#                 the after side does (its background photo analyses, CPU-bound, went at half the pace beside a city)
 #   NB_UNTIL      a place ends once this part has loaded (netprobe --until: ground, roads, trees, far, loaded)
 #   NB_PLACES     the places measured, by label (default all five)
 #   NB_FRESH_BASE 1: measure the base again. Otherwise a base run is reused (build/netbench/base-runs/<key>) while its
