@@ -10,7 +10,35 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import earthd  # noqa: E402
 
 
+class DevPreloadTest(unittest.TestCase):
+    """BNE_PRELOAD off (the default): a pick's preload as before the redesign, a hover nothing."""
+
+    def setUp(self):
+        self._was = earthd.PRELOAD
+        earthd.PRELOAD = False
+        self.addCleanup(setattr, earthd, "PRELOAD", self._was)
+
+    def test_a_pick_as_before_a_hover_nothing(self):
+        conn, calls = PreloadPlaceTest._fake(self)
+        preload = earthd.Connection.preload_place
+        preload(conn, {"type": "preload_place", "lat": 40.7116, "lon": -74.0127, "hover": True})
+        self.assertFalse(hasattr(conn, "_preload") or hasattr(conn.s, "_preload"), "a hover: nothing")
+        preload(conn, {"type": "preload_place", "lat": 40.7116, "lon": -74.0127})
+        t0 = time.time()
+        while conn._preload["busy"] and time.time() - t0 < 5:
+            time.sleep(0.01)
+        self.assertEqual(len(calls["dem"]), 1)
+        self.assertEqual(calls["warm"], [(40.7116, -74.0127, 0.0, 0.0)])
+        self.assertEqual(calls["photo"], [earthd.QUICK_BASE_PX, earthd.BASE_PX])
+        self.assertFalse(hasattr(conn.s, "_preload"), "not the redesign's state")
+
+
 class PreloadPlaceTest(unittest.TestCase):
+    def setUp(self):
+        self._was = earthd.PRELOAD
+        earthd.PRELOAD = True
+        self.addCleanup(setattr, earthd, "PRELOAD", self._was)
+
     def _fake(self):
         calls = {"dem": [], "warm": []}
 

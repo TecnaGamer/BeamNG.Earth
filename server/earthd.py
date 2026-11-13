@@ -292,6 +292,10 @@ PRELOAD_CANCEL_M = 3000.0       # ... and a teleport farther than this from a pr
 # The place the game's level start goes to (startplace.py) loaded while the game loads (Server.preload "start").
 # BNE_START_PRELOAD=off: not
 START_PRELOAD = os.environ.get("BNE_START_PRELOAD", "on") != "off"
+# The preload redesign (Server.preload: hover, the pick's decision archives, the level start's place and its plans) is
+# off until its races are gone (a review of bc332f34): BNE_PRELOAD=on turns it on; off, a pick's preload_place runs as
+# before (Connection.preload_place_dev) and a hover does nothing
+PRELOAD = os.environ.get("BNE_PRELOAD", "off") == "on"
 _ANCHOR_ID_LOCK = threading.Lock()      # (Server.alloc_anchor_id)
 _PRELOAD_LOCK = threading.Lock()        # (Server.preload's state: the preload thread, the event loop's teleports)
 # download_ahead: the raw data of the terrain blocks and road tiles ahead of a driving player, fetched into the
@@ -8897,7 +8901,67 @@ class Connection:
             return
         if not (math.isfinite(lat) and math.isfinite(lon) and -90.0 <= lat <= 90.0):
             return
+        if not PRELOAD:                 # (off: a pick as before, a hover nothing)
+            if msg.get("hover") is not True:
+                Connection.preload_place_dev(self, msg)
+            return
         Server.preload(self.s, lat, (lon + 180.0) % 360.0 - 180.0, "hover" if msg.get("hover") is True else "pick")
+
+    def preload_place_dev(self, msg):
+        """(BNE_PRELOAD off: as before the preload redesign.) A destination picked on the world map (its "Teleport
+        here?" box, a search result; mod core.preloadPlace): its first block's elevation tiles and the road tiles' map cells (Server.warm_place's, in a frame at the place)
+        fetched in the background before the teleport is asked for (the fastest world generators load the destination
+        ahead; the user, 2026-11-11: "sub second world gen, even with clear cashe"). One at a time; a newer pick
+        replaces a waiting one. Never waits, never builds."""
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90.0 <= lat <= 90.0):
+            return
+        lon = (lon + 180.0) % 360.0 - 180.0
+        st = self.__dict__.setdefault("_preload", {"next": None, "busy": False, "last": None})
+        st["next"] = (lat, lon)
+        if st["busy"]:
+            return
+        st["busy"] = True
+        s = self.s
+
+        def run():
+            try:
+                while st["next"] is not None:
+                    la, lo = st["next"]
+                    st["next"] = None
+                    last = st["last"]
+                    if last is not None and abs(last[0] - la) < 1e-3 and abs(last[1] - lo) < 1e-3:
+                        continue
+                    st["last"] = (la, lo)
+                    t0 = time.monotonic()
+                    dem_n = cells_n = 0
+                    if s.dem is not None:
+                        zoom = demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM)
+                        reach = s.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
+                        dem_n, _ = s.dem.prefetch(s.dem.keys_around(la, lo, reach, zoom))
+                    spot = SimpleNamespace(frame=geodesy.EnuFrame(la, lo))
+                    if s.mapdata is not None:
+                        cells_n = s.warm_place(spot, 0.0, 0.0)
+                    photo = 0
+                    if s.imagery is not None and s.near_visual == "detail":
+                        # (the first block's photos: the stand-in's, then its own, so their aerial tiles are on disk
+                        # when the teleport asks: a cold Paducah block waited 2.7 s for its stand-in, 2026-11-11)
+                        size = s.layout.block * heightmap.SQUARE
+                        for px in (QUICK_BASE_PX, BASE_PX):
+                            if st["next"] is not None:
+                                break           # (a newer pick: that one now)
+                            s.imagery.render(spot.frame, -size / 2, -size / 2, size, px, set())
+                            photo += 1
+                    log.info("preload %.5f, %.5f: %d elevation tiles, %d map cells queued, %d photos (%.1f s)", la,
+                             lo, dem_n, cells_n, photo, time.monotonic() - t0)
+            except Exception as e:          # (only the head start is lost)
+                log.info("preload: %s: %s", type(e).__name__, e)
+            finally:
+                st["busy"] = False
+        threading.Thread(target=run, name="preload-place", daemon=True).start()
 
     def abandon_old(self, aid):
         """A teleport leaves anchor aid: its queued work is dropped (Server.abandoned), unless another connection is
@@ -9002,7 +9066,7 @@ class Connection:
         # under TELEPORT_PAUSE_M away waited 26 s for a graded first block in Manhattan, 2026-10-25)
         declared = msg.get("purpose") == "teleport"
         teleport = old is None or declared
-        if teleport:                # (a preload of another place stops: Server.preload_cancel)
+        if teleport and PRELOAD:    # (a preload of another place stops: Server.preload_cancel)
             Server.preload_cancel(self.s, lat, lon)
         if old is None and not self.s.boost_on:
             # (joining the world: full priority loading as after a teleport, when the player chose it; the user,
@@ -11478,7 +11542,7 @@ async def main_async(args):
     # rate from ~52 to ~40 fps, nyc_speed.py 2026-11-02)
     server.catchup_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus, CATCHUP_LEND_SHARE)
                            if server.boost_cpus else None) or server.boost_cpus
-    if START_PRELOAD and args.roads == "on":
+    if PRELOAD and START_PRELOAD and args.roads == "on":
         # (the place the game's level start teleports to, loaded while the game loads: startplace.py; its files read
         # on a thread of its own, never before the server listens)
         threading.Thread(target=start_preload, args=(server, args.user_dir), name="start-place", daemon=True).start()
