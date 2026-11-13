@@ -10,6 +10,7 @@ shares with a larger one (GitHub #127: Melbourne's Federation Square, two paving
 each other). Render only (the terrain under it collides); the road mesh draws over it (a road's lift is higher). Pure
 given its inputs (elev)."""
 import numpy as np
+import dnp
 
 STEP_M = 2.0            # m: the longest edge after subdivision (the physics block's 2 m lattice)
 LIFT_M = 0.04           # m over the graded ground (under the road mesh's asphalt: detail mode lifts it 0.05)
@@ -196,7 +197,7 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
             continue
         e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
         xy = np.stack([np.asarray(e), np.asarray(n)], 1)
-        if np.hypot(*(xy[0] - xy[-1])) < 1e-6:
+        if dnp.hypot(*(xy[0] - xy[-1])) < 1e-6:
             xy = xy[:-1]
         if (xy[:, 0].max() < x0 or xy[:, 0].min() > x1 or xy[:, 1].max() < y0 or xy[:, 1].min() > y1
                 or len(xy) < 3):
@@ -270,7 +271,7 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
     # paving up and down them, its top-down tiling smeared into streaks: the user, 2026-11-11 at the WTC)
     e = V[T]
     n = np.cross(e[:, 1] - e[:, 0], e[:, 2] - e[:, 0])
-    level = np.hypot(n[:, 0], n[:, 1]) <= MAX_SLOPE * np.abs(n[:, 2])
+    level = dnp.hypot(n[:, 0], n[:, 1]) <= MAX_SLOPE * np.abs(n[:, 2])
     if not level.all():
         if not level.any():
             return None

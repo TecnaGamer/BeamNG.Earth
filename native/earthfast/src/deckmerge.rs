@@ -2,6 +2,7 @@
 //! related pair of deck parts toward each other (a numpy (len(A), len(B)) projection per pair and round, 0.75 s of a
 //! cold Manhattan road tile, 2026-11-08) and _ground_pins' joints a ground road goes on from. The numpy versions'
 //! operations in their order, so the heights come out bit for bit the same (server/tests/deckmerge_reference.py).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -61,7 +62,7 @@ fn seg_dt(xy: &numpy::ndarray::ArrayView2<f64>, b0: usize, s: usize, ax: f64, ay
     let l2 = np_maximum(abx * abx + aby * aby, 1e-12);
     let tt = np_clip(((ax - px) * abx + (ay - py_) * aby) / l2, 0.0, 1.0);
     let (nx, ny) = (px + tt * abx, py_ + tt * aby);
-    ((ax - nx).hypot(ay - ny), tt)
+    ((ax - nx).dhypot(ay - ny), tt)
 }
 
 const BLOCK: usize = 16;            // segments per box (Blocks)
@@ -147,7 +148,7 @@ impl Blocks {
             let r = self.boxes[f0 + b];
             let gx = (r[0] - ax).max(ax - r[2]).max(0.0);
             let gy = (r[1] - ay).max(ay - r[3]).max(0.0);
-            if gx.hypot(gy) > best + PRUNE_M {
+            if gx.dhypot(gy) > best + PRUNE_M {
                 continue;
             }
             let (s0, s1) = span(b);
@@ -215,7 +216,7 @@ pub fn deck_merge_round<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, of
                 };
                 let (px, py_) = (xy[[b0 + m, 0]], xy[[b0 + m, 1]]);
                 let (tbx, tby) = (xy[[b0 + m + 1, 0]] - px, xy[[b0 + m + 1, 1]] - py_);
-                let cos = (tax * tbx + tay * tby).abs() / (tax.hypot(tay) * tbx.hypot(tby) + 1e-12);
+                let cos = (tax * tbx + tay * tby).abs() / (tax.dhypot(tay) * tbx.dhypot(tby) + 1e-12);
                 // soft: full weight 2 m into the overlap and when parallel, none at its edge (a hard mask made 4 m
                 // steps mid-viaduct where a neighbour's footprint started)
                 let depth = np_clip((c - dmin) / 2.0, 0.0, 1.0);
@@ -256,7 +257,7 @@ pub fn deck_ground_pins<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, 
             let (bx, by) = (ends[[r, 0]], ends[[r, 1]]);
             let mut n = 0;
             for c in 0..ne {
-                if (ends[[c, 0]] - bx).hypot(ends[[c, 1]] - by) < 0.5 {
+                if (ends[[c, 0]] - bx).dhypot(ends[[c, 1]] - by) < 0.5 {
                     n += 1;
                 }
             }
@@ -276,7 +277,7 @@ pub fn deck_ground_pins<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, 
             }
             seg.clear();
             for v in a..b - 1 {
-                seg.push((gl[[v + 1, 0]] - gl[[v, 0]]).hypot(gl[[v + 1, 1]] - gl[[v, 1]]));
+                seg.push((gl[[v + 1, 0]] - gl[[v, 0]]).dhypot(gl[[v + 1, 1]] - gl[[v, 1]]));
             }
             if crate::levels::np_sum(&seg) < pin_road_m {
                 continue;
@@ -284,7 +285,7 @@ pub fn deck_ground_pins<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, 
             for e in [a, b - 1] {
                 let (ex, ey) = (gl[[e, 0]], gl[[e, 1]]);
                 for &(sx, sy) in &shared {
-                    if (ex - sx).hypot(ey - sy) < pin_m {
+                    if (ex - sx).dhypot(ey - sy) < pin_m {
                         out.push(sx);
                         out.push(sy);
                     }

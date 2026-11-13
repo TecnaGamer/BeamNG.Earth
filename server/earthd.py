@@ -81,6 +81,8 @@ from runtimeprofiler import ThreadPoolExecutor  # noqa: E402
 from dataclasses import dataclass, field, replace  # noqa: E402
 
 import numpy as np  # noqa: E402
+import dmath
+import dnp
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
@@ -899,7 +901,7 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     follow table; in its fast mode the box test is on the point v * fast_ahead ahead."""
     lead, reach, ahead = rule.mode(vx, vy)
     v2 = vx * vx + vy * vy
-    if (rule.min_lead > 0 and rule.min_lead_v ** 2 < v2 and v2 * lead * lead < rule.min_lead ** 2
+    if (rule.min_lead > 0 and rule.min_lead_v * rule.min_lead_v < v2 and v2 * lead * lead < rule.min_lead * rule.min_lead
             and (cx - px) * vx + (cy - py) * vy > 0
             and max(abs(px - cx), abs(py - cy)) <= rule.min_lead + rule.grid):
         # (follow.lua centreAhead: the centre just committed is ahead; the next request once the player is past it)
@@ -959,7 +961,7 @@ def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None):
     ln2 = np.maximum((d * d).sum(1), 1e-9)
     t = np.clip(((px - a[:, 0]) * d[:, 0] + (py - a[:, 1]) * d[:, 1]) / ln2, 0.0, 1.0)
     q = a + d * t[:, None]
-    dist = np.hypot(q[:, 0] - px, q[:, 1] - py)
+    dist = dnp.hypot(q[:, 0] - px, q[:, 1] - py)
     j = int(np.argmin(dist))
     seg = float(np.sqrt(ln2[j]))
     if dist[j] > ROUTE_NEAR_M or ((d[j, 0] * vx + d[j, 1] * vy) / (seg * sp)) < ROUTE_ALIGN:
@@ -3453,7 +3455,7 @@ class Server:
             la, lo, _ = anchor.frame.enu_to_geodetic(px, py, 0.0)
             la, lo = float(la), float(lo)
             dlat = r / 111320.0
-            dlon = r / (111320.0 * max(0.05, math.cos(math.radians(la))))
+            dlon = r / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
             for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                 if k not in keys:
                     keys.append(k)
@@ -3524,7 +3526,7 @@ class Server:
                 jobs = []
                 for la, lo in pts if layers else ():
                     dlat = reach / 111320.0
-                    dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
+                    dlon = reach / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
                     for key in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                         todo = tuple(ly for ly in layers if not self.mapdata.has(key, ly))
                         if todo and all(key != j[0] for j in jobs):
@@ -4577,7 +4579,7 @@ class Server:
             with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
                 rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
             log.debug("base photo %s r%d: %s", (anchor.id, cx, cy), rev,
-                      {k: round(v / BASE_RENDER_PX ** 2, 3) for k, v in used.items()})
+                      {k: round(v / (BASE_RENDER_PX * BASE_RENDER_PX), 3) for k, v in used.items()})
         except Exception as e:      # an imagery failure must not cost the terrain
             log.info("base photo %s: %s", (anchor.id, cx, cy), e)
             return None
@@ -4889,14 +4891,14 @@ class Server:
         if d < s:
             return px                       # (under the camera)
         n = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
-        tv = math.tan(math.radians(fov) / 2)
-        half = math.atan(math.hypot(tv, tv * farfield.ASPECT))
-        slack = math.asin(min(1.0, s * 0.7071 / d))
-        ang = math.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
+        tv = dmath.tan(math.radians(fov) / 2)
+        half = dmath.atan(math.hypot(tv, tv * farfield.ASPECT))
+        slack = dmath.asin(min(1.0, s * 0.7071 / d))
+        ang = dmath.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
         if ang - slack > half:
             return min(px, MAP_TEX_OFF_PX)
         on_screen = s * (MAP_SCREEN_H / (2 * tv)) / d
-        want = 2 ** math.ceil(math.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
+        want = 2 ** math.ceil(dmath.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
         return int(max(MAP_TEX_MIN_PX, min(px, want)))
 
     @property
@@ -5715,7 +5717,7 @@ class Server:
                 continue
             for x in range(n):
                 la, lo = farfield.global_frame_ll(z, x, y)
-                d = math.hypot((la - lat0), (((lo - lon0 + 180.0) % 360.0) - 180.0) * math.cos(math.radians(lat0)))
+                d = math.hypot((la - lat0), (((lo - lon0 + 180.0) % 360.0) - 180.0) * dmath.cos(math.radians(lat0)))
                 cands.append((d, x, y))
         cands.sort()
         level = farfield.GLOBAL_MIN_LEVEL + int(anchor.zf) - z
@@ -6572,8 +6574,8 @@ class Connection:
         # each fetched their own tile before the route reached the map; a 220 px chart needs no more)
         step = pts[-1][2] / max(len(pts) - 1, 1) if len(pts) > 1 else 0.0
         if step > 0:
-            tile_m = 40075016.7 * max(math.cos(math.radians(float(np.mean(lats)))), 0.05)
-            zoom = int(min(zoom, max(8, math.floor(math.log2(tile_m / (4 * step))))))
+            tile_m = 40075016.7 * max(dmath.cos(math.radians(float(np.mean(lats)))), 0.05)
+            zoom = int(min(zoom, max(8, math.floor(dmath.log2(tile_m / (4 * step))))))
         elev = route_profile_smooth(self.s.dem.sample(lats, lons, zoom))
         return [[round(p[2], 1), round(float(e), 1)] for p, e in zip(pts, elev)]
 
@@ -9799,9 +9801,9 @@ class Connection:
             h, fov = float(c.get("h") or 0.0), float(c.get("fovDeg") or 60.0)
         except (TypeError, ValueError):
             h, fov = 0.0, 60.0
-        ppr = h / (2 * math.tan(math.radians(fov) / 2)) if h > 0 and 1.0 < fov < 170.0 else 0.0
+        ppr = h / (2 * dmath.tan(math.radians(fov) / 2)) if h > 0 and 1.0 < fov < 170.0 else 0.0
         ppr = max(ppr, farpvsmod.PPR_MIN)
-        return 2.0 ** (math.ceil(math.log2(ppr) * 2) / 2)
+        return 2.0 ** (math.ceil(dmath.log2(ppr) * 2) / 2)
 
     def _pvs_drop(self):
         if self.pvs is not None:
@@ -9885,8 +9887,8 @@ class Connection:
         """The pixels per radian the screen-space LOD goes by: this pose's (h / (2 tan(vfov / 2))), at most
         LOD_PPR_ZOOM times a LOD_BASE_FOV_DEG camera's, the most of the last LOD_PPR_WINDOW_S seconds."""
         now = time.monotonic() if now is None else now
-        ppr = h / (2 * math.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
-        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * math.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
+        ppr = h / (2 * dmath.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
+        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * dmath.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
         hist = self.__dict__.setdefault("ppr_hist", deque())     # (a sliding maximum: decreasing pprs)
         while hist and hist[-1][1] <= ppr:
             hist.pop()

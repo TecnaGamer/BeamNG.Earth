@@ -10,6 +10,7 @@
 //!   clustered into surfaces, the deck's surface chosen by a Viterbi pass (grades, a "nothing seen" state);
 //! - `deck_blend`: a profile eased onto given end heights (the graded road it meets) within a grade-change budget.
 //! All pure functions of their inputs (deterministic: no hashing, no threads that change results).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -172,7 +173,7 @@ fn on_seg(s: &[f64; 4], x: f64, y: f64) -> (f64, f64) {
     let (abx, aby) = (s[2] - s[0], s[3] - s[1]);
     let l2 = abx * abx + aby * aby;
     let t = if l2 > 1e-12 { (((x - s[0]) * abx + (y - s[1]) * aby) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    (t, (x - (s[0] + t * abx)).hypot(y - (s[1] + t * aby)))
+    (t, (x - (s[0] + t * abx)).dhypot(y - (s[1] + t * aby)))
 }
 
 /// Heights along a map road from a source's 3D lines. q (n, 2): the road's stations; qdir (n, 2): its unit direction
@@ -205,7 +206,7 @@ pub fn roadz_match<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qdir: Py
                 }
                 let s = &segs[k];
                 let (sx, sy) = (s[2] - s[0], s[3] - s[1]);
-                let sl = sx.hypot(sy);
+                let sl = sx.dhypot(sy);
                 if sl < 1e-6 || ((sx * ux + sy * uy) / sl).abs() < min_cos {
                     continue;
                 }
@@ -325,20 +326,20 @@ pub fn clean(s: &[f64], z: &[f64], max_grade: f64, spike_m: f64, win_m: f64, max
             let (mut acc, mut wsum) = (0.0, 0.0);
             for j in a..=b {
                 let d = s[j] - s[i];
-                let w = (-0.5 * (d / sigma_m) * (d / sigma_m)).exp();
+                let w = (-0.5 * (d / sigma_m) * (d / sigma_m)).dexp();
                 acc += w * src[j];
                 wsum += w;
                 let mirror_lo = 2.0 * s[a] - s[j];
                 if j > a && s[i] - mirror_lo <= reach {
                     let dm = mirror_lo - s[i];
-                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).exp();
+                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).dexp();
                     acc += wm * (2.0 * src[a] - src[j]);
                     wsum += wm;
                 }
                 let mirror_hi = 2.0 * s[b] - s[j];
                 if j < b && mirror_hi - s[i] <= reach {
                     let dm = mirror_hi - s[i];
-                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).exp();
+                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).dexp();
                     acc += wm * (2.0 * src[b] - src[j]);
                     wsum += wm;
                 }
@@ -393,7 +394,7 @@ pub fn deck_lidar<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, pts: P
         }
         let mut arc = vec![0.0; k];
         for i in 1..k {
-            arc[i] = arc[i - 1] + (lv[i][0] - lv[i - 1][0]).hypot(lv[i][1] - lv[i - 1][1]);
+            arc[i] = arc[i - 1] + (lv[i][0] - lv[i - 1][0]).dhypot(lv[i][1] - lv[i - 1][1]);
         }
         let len = arc[k - 1];
         let m = ((len / step.max(0.5)).ceil() as usize).max(1) + 1;

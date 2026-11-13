@@ -15,6 +15,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import citylamps
 import designsigns
@@ -108,7 +110,7 @@ def _h01(*vals):
 
 
 def _arclen(p):
-    d = np.hypot(*np.diff(p[:, :2], axis=0).T)
+    d = dnp.hypot(*np.diff(p[:, :2], axis=0).T)
     return np.concatenate([[0.0], np.cumsum(d)])
 
 
@@ -119,7 +121,7 @@ def _project(line, q):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((q[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0, 1)
     p = a[None] + t[..., None] * d[None]
-    dist = np.hypot(*(q[:, None, :] - p).transpose(2, 0, 1))
+    dist = dnp.hypot(*(q[:, None, :] - p).transpose(2, 0, 1))
     k = dist.argmin(1)
     s = _arclen(line)
     return s[k] + t[np.arange(len(q)), k] * np.sqrt(L2[k])
@@ -141,7 +143,7 @@ def _at(line, s):
 def _yaw(dx, dy):
     """Degrees of a Forest item's rotation that turns its local +x toward (dx, dy) (trees.lua: setFromEuler
     with -yaw about z, the engine's clockwise headings)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    return math.degrees(dmath.atan2(dy, dx)) % 360.0
 
 
 def _clear(p, others, own):
@@ -171,8 +173,8 @@ def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
         k = max(2, int(math.ceil(span / WIRE_SEG_M)))
         t = np.linspace(0.0, 1.0, k + 1)
         for ax, ay, az in (anchors if anchors is not None else [(off, 0.0, WIRE_Z) for off in WIRE_ARMS]):
-            c0, s0 = math.cos(math.radians(w0)), math.sin(math.radians(w0))
-            c1, s1 = math.cos(math.radians(w1)), math.sin(math.radians(w1))
+            c0, s0 = dmath.cos(math.radians(w0)), dmath.sin(math.radians(w0))
+            c1, s1 = dmath.cos(math.radians(w1)), dmath.sin(math.radians(w1))
             a = np.array([x0 + c0 * ax - s0 * ay, y0 + s0 * ax + c0 * ay, z0 + az])
             b = np.array([x1 + c1 * ax - s1 * ay, y1 + s1 * ax + c1 * ay, z1 + az])
             p = a[None] + (b - a)[None] * t[:, None]
@@ -204,16 +206,16 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
         run = 0.0
         for a, b in zip(line[:-1], line[1:]):
             d = b - a
-            L = float(np.linalg.norm(d))
+            L = float(dnp.norm(d))
             if L < 1e-6:
                 continue
             d /= L
             if solid:
                 ref = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.95 else np.array([1.0, 0.0, 0.0])
                 sd = np.cross(d, ref)
-                sd = sd / (np.linalg.norm(sd) or 1.0) * r
+                sd = sd / (dnp.norm(sd) or 1.0) * r
                 up = np.cross(sd, d)
-                up = up / (np.linalg.norm(up) or 1.0) * r
+                up = up / (dnp.norm(up) or 1.0) * r
                 i = len(P)
                 corners = (-sd - up, sd - up, sd + up, -sd + up)
                 P += [a + c for c in corners] + [b + c for c in corners]
@@ -228,10 +230,10 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
             side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
             if abs(d[0]) + abs(d[1]) < 1e-6:        # (a vertical wire: d x z is zero, the ribbons had no width and a
                 side = np.array([0.0, 1.0, 0.0])    # catenary's droppers were never drawn)
-            side = side / (np.linalg.norm(side) or 1.0) * r
+            side = side / (dnp.norm(side) or 1.0) * r
             up = np.array([side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2],
                            side[0] * d[1] - side[1] * d[0]])
-            up = up / (np.linalg.norm(up) or 1.0) * r
+            up = up / (dnp.norm(up) or 1.0) * r
             for v in (side, up):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
@@ -270,10 +272,10 @@ def _arms(roads):
     for fid, spec, pts, _ in roads:
         if len(pts) < 2:
             continue
-        length = float(np.sum(np.hypot(*np.diff(pts[:, :2], axis=0).T)))
+        length = float(np.sum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T)))
         for p, q, start in ((pts[0], pts[1], True), (pts[-1], pts[-2], False)):
             d = q[:2] - p[:2]
-            L = float(np.hypot(*d))
+            L = float(dnp.hypot(*d))
             if L < 1e-3:
                 continue
             k = (round(float(p[0]) / JUNCTION_SNAP_M), round(float(p[1]) / JUNCTION_SNAP_M))
@@ -285,7 +287,7 @@ def _arms(roads):
         mp = np.array([np.asarray(ends[k][0][3][:2], np.float64) for k in multi])
         for k in [k for k, v in ends.items() if len(v) == 1]:
             p = np.asarray(ends[k][0][3][:2], np.float64)
-            d = np.hypot(*(mp - p).T)
+            d = dnp.hypot(*(mp - p).T)
             j = int(np.argmin(d))
             if d[j] <= ARM_JOIN_M:
                 ends[multi[j]].append(ends.pop(k)[0])
@@ -412,7 +414,7 @@ def _is_signalled(arms, signals=None):
         return False
     c = np.array([sum(float(a[3][0]) for a in arms), sum(float(a[3][1]) for a in arms)]) / len(arms)
     reach = max(a[1].width for a in arms) / 2 + SIGNAL_NEAR_M
-    return bool((np.hypot(signals[:, 0] - c[0], signals[:, 1] - c[1]) <= reach).any())
+    return bool((dnp.hypot(signals[:, 0] - c[0], signals[:, 1] - c[1]) <= reach).any())
 
 
 MAPPED_ARM_M = 30.0         # m from its junction a mapped give-way or stop node is that junction's, and within half the arm
@@ -423,7 +425,7 @@ def _mapped_priority(a, priority):
     if priority is None or not len(priority):
         return None
     v = priority[:, :2] - np.asarray(a[3][:2], np.float64)
-    along = v @ a[2]
+    along = dnp.matmul(v, a[2])
     reach = min(MAPPED_ARM_M, a[5] / 2) if len(a) > 5 else MAPPED_ARM_M
     hit = (along > 0.0) & (along <= reach) & (np.abs(v[:, 0] * a[2][1] - v[:, 1] * a[2][0]) <= a[1].width / 2 + 1.0)
     if not hit.any():
@@ -472,7 +474,7 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     if len(arms) == 3:
         # the stem: the arm least in line with another
         def straightest(a):
-            return max(-float(a[2] @ b[2]) for b in arms if b is not a)
+            return max(-float(dnp.matmul(a[2], b[2])) for b in arms if b is not a)
         incoming = [a for a in arms if not _outbound(a)]
         stem = min(incoming, key=straightest) if incoming else None
         return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and stem is not None else []
@@ -530,7 +532,7 @@ def _seg_dist_min(p, line):
     d = b - a
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / L2, 0, 1)
-    return float(np.hypot(*(a + t[:, None] * d - p).T).min())
+    return float(dnp.hypot(*(a + t[:, None] * d - p).T).min())
 
 
 def approach_pose(u, what, left_hand=False):
@@ -835,8 +837,8 @@ def _box_distance2(a, b, low, high):
     """Squared distance of each 2D segment a..b to the closed axis-aligned rectangle low..high."""
     d = b - a
     d2 = np.maximum((d * d).sum(1), 1e-20)
-    best = np.minimum((np.maximum(np.maximum(low - a, a - high), 0.0) ** 2).sum(1),
-                      (np.maximum(np.maximum(low - b, b - high), 0.0) ** 2).sum(1))
+    best = np.minimum((dnp.sq(np.maximum(np.maximum(low - a, a - high), 0.0))).sum(1),
+                      (dnp.sq(np.maximum(np.maximum(low - b, b - high), 0.0))).sum(1))
     enter, leave = np.zeros(len(a)), np.ones(len(a))
     for axis in (0, 1):
         parallel = np.abs(d[:, axis]) < 1e-12
@@ -849,7 +851,7 @@ def _box_distance2(a, b, low, high):
     for corner in ((low[0], low[1]), (low[0], high[1]), (high[0], low[1]), (high[0], high[1])):
         v = np.asarray(corner) - a
         t = np.clip((v * d).sum(1) / d2, 0.0, 1.0)
-        best = np.minimum(best, ((v - t[:, None] * d) ** 2).sum(1))
+        best = np.minimum(best, (dnp.sq(v - t[:, None] * d)).sum(1))
     return best
 
 
@@ -949,13 +951,13 @@ class RoadClearance:
         headroom = roads.MIN_BRIDGE_HEADROOM_M + roads.BRIDGE_HEADROOM_MARGIN_M
         scale = max(0.3, min(2.5, float(row[6]) / shape[0]))  # trees.lua:M.pick (row[5] is unused)
         yaw = math.radians(float(row[4]))
-        c, s = math.cos(yaw), math.sin(yaw)
+        c, s = dmath.cos(yaw), dmath.sin(yaw)
         rotation = np.array([[c, -s], [s, c]])
         origin = np.asarray(row[1:3], np.float64)
         for box in shape[1]:
             low, high = np.asarray(box[:3]) * scale, np.asarray(box[3:]) * scale
-            corners = np.array([[low[0], low[1]], [low[0], high[1]],
-                                [high[0], low[1]], [high[0], high[1]]]) @ rotation.T + origin
+            corners = dnp.matmul(np.array([[low[0], low[1]], [low[0], high[1]],
+                                [high[0], low[1]], [high[0], high[1]]]), rotation.T) + origin
             reach = self.max_half + margin
             pick = self.candidates(corners.min(0) - reach, corners.max(0) + reach)
             if not len(pick):
@@ -977,10 +979,10 @@ class RoadClearance:
             if not valid.any():
                 continue
             delta = b[:, :2] - a[:, :2]
-            p = (a[:, :2] + enter[:, None] * delta - origin) @ rotation
-            q = (a[:, :2] + leave[:, None] * delta - origin) @ rotation
+            p = dnp.matmul(a[:, :2] + enter[:, None] * delta - origin, rotation)
+            q = dnp.matmul(a[:, :2] + leave[:, None] * delta - origin, rotation)
             distance2 = _box_distance2(p[valid], q[valid], low[:2], high[:2])
-            if (distance2 < (self.half[pick[valid]] + margin) ** 2).any():
+            if (distance2 < dnp.sq(self.half[pick[valid]] + margin)).any():
                 return False
         return True
 
@@ -998,7 +1000,7 @@ def lamp_lenses(rows):
                 continue
             heads = (head,)
         a = math.radians(r[4])
-        c, s_ = math.cos(a), math.sin(a)
+        c, s_ = dmath.cos(a), dmath.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
         group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
                  else G_LENS)

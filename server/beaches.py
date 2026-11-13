@@ -9,6 +9,7 @@ A sample is sand when it is bare, or grassland with bare land within GRASS_BARE_
 OPEN_WATER_M across: a stream's bank keeps its grass) lies within SHORE_M. Pure functions of the land cover, numpy only.
 """
 import numpy as np
+import dnp
 
 BARE, GRASS, WATER = 60, 30, 80
 SHORE_M = 60.0          # m from open water a beach's sand reaches (Cottesloe's: ~60 m to the promenade)
@@ -27,7 +28,7 @@ def sand_points(classes, sample):
     if not len(cand):
         return out
     ang = np.arange(DIRECTIONS) * (2 * np.pi / DIRECTIONS)
-    dirs = np.c_[np.cos(ang), np.sin(ang)]
+    dirs = np.c_[dnp.cos(ang), dnp.sin(ang)]
     shore = np.zeros(len(cand), bool)
     for ux, uy in dirs:
         for d in SHORE_STEPS:
@@ -70,7 +71,7 @@ def sand_grid(classes, square):
     if not water.any():
         return np.zeros(classes.shape, bool)
     r_open = max(1, int(round(OPEN_WATER_M / 2 / square)))
-    n_open = (2 * r_open + 1) ** 2
+    n_open = dnp.sq(2 * r_open + 1)
     core = _box_sum(water, r_open, edge=True) >= n_open     # water OPEN_WATER_M across round it (the sea
     # running on past the grid's edge)
     shore = _box_sum(core, max(1, int(round((SHORE_M + OPEN_WATER_M / 2) / square)))) > 0

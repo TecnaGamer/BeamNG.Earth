@@ -6,6 +6,8 @@ on dark faces. Mixed case uses D-DIN, not an official L4 file. No photo textures
 import math
 import re
 import numpy as np
+import dmath
+import dnp
 import signmesh as sm
 
 
@@ -13,7 +15,7 @@ def _outline(w,h,z,r):
     out=[]
     for x,zz,start in ((w/2-r,z-h/2+r,-90),(w/2-r,z+h/2-r,0),(-w/2+r,z+h/2-r,90),(-w/2+r,z-h/2+r,180)):
         for a in np.linspace(start,start+90,5):
-            a=math.radians(a);out.append((x+r*math.cos(a),zz+r*math.sin(a)))
+            a=math.radians(a);out.append((x+r*dmath.cos(a),zz+r*dmath.sin(a)))
     return out
 
 
@@ -46,7 +48,7 @@ def cartouche(mesh,ref,z,x=0.):
     ref=sm.clean(ref)
     if not re.fullmatch(r'[ADNME]\s*\d{1,4}[A-Z]?',ref):return 0.
     bg=route_colour(ref);w=max(.55,sm.measure(ref,'l1')[0]*.15+.14)
-    anchor=mesh.offset.copy();mesh.offset=anchor+np.array([x,0,0])@mesh.axes
+    anchor=mesh.offset.copy();mesh.offset=anchor+dnp.matmul(np.array([x,0,0]), mesh.axes)
     board(mesh,w,.25,z,bg,r=.02)
     lettering(mesh,ref,z,.15,w-.12,white=bg in (sm.RED,sm.GREEN,sm.BLUE))
     mesh.offset=anchor
@@ -61,7 +63,7 @@ def motorway_marker(mesh, position, travel, route, pr, bottom, width):
 
     def outline(r, low):
         return [(-r, low), (r, low)] + [
-            (r * math.cos(a), seam + r * math.sin(a)) for a in angles
+            (r * dmath.cos(a), seam + r * dmath.sin(a)) for a in angles
         ]
 
     outer = outline(radius, bottom)
@@ -93,7 +95,7 @@ def arrow(mesh,x,z,height=.65,exit=False,side=1):
     points=[(-.075,0),(.075,0),(.075,height*.58),(-.075,height*.58)]
     head=[(-.24,height*.52),(.24,height*.52),(0,height)]
     for polygon in (points,head):
-        pp=[(x+xx*math.cos(a)+zz*math.sin(a),y,z-xx*math.sin(a)+zz*math.cos(a))for xx,zz in polygon]
+        pp=[(x+xx*dmath.cos(a)+zz*dmath.sin(a),y,z-xx*dmath.sin(a)+zz*dmath.cos(a))for xx,zz in polygon]
         mesh.face(sm.WHITE,pp)
 
 
@@ -235,12 +237,12 @@ def roundabout(mesh, position, travel, layout):
 
     def stroke(a, b, half):
         n = b - a
-        n = np.array([-n[1], n[0]]) * (half / max(np.linalg.norm(n), .001))
+        n = np.array([-n[1], n[0]]) * (half / max(dnp.norm(n), .001))
         ink([a - n, b - n, b + n, a + n])
 
     radius = .34
     radians = np.deg2rad(np.linspace(-90., 203., 36))
-    circle = np.c_[np.cos(radians), np.sin(radians)]
+    circle = np.c_[dnp.cos(radians), dnp.sin(radians)]
     for a, b in zip(circle, circle[1:]):
         ink([ring + a*radius, ring + b*radius, ring + b*.237, ring + a*.237])
     stroke(np.array([cx, bottom + .043]), ring + np.array([0., -.27]), .042)
@@ -250,7 +252,7 @@ def roundabout(mesh, position, travel, layout):
             # Preserve the side of the real exit, with enough space for the label block.
             dy = .24 if abs(panel.get('angle', 90.)) < 75. else .05
             ray = np.array([horizontal, dy])
-            ray /= np.linalg.norm(ray)
+            ray /= dnp.norm(ray)
             end = ring + ray * .69
             label_x = horizontal * (w/2 - .68)
             label_z = bottom + 1.16
@@ -370,7 +372,7 @@ def build_highways(exits,overheads,origin):
         for panel,w in zip(panels,widths):
             h=max(2.45,1.65+.62*min(3,len(panel['label'].get('names',()))))
             maxh=max(maxh,h);x=cursor+w/2;cursor+=w+.25
-            mesh.offset=anchor+np.array([x,0,0])@mesh.axes
+            mesh.offset=anchor+dnp.matmul(np.array([x,0,0]), mesh.axes)
             guide_panel(mesh,panel['label'],w,h,bottom+h/2,panel['exit'],sign.get('distance','')if panel['exit']else'',sign.get('side',1))
         mesh.offset=anchor
         # Columns retain the generated assembly's off-carriageway positions.

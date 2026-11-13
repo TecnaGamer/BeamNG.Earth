@@ -11,6 +11,7 @@ All pure given the ground function: no randomness.
 import math
 
 import numpy as np
+import dnp
 
 import busstationmesh as bm
 import busstations as bs
@@ -36,7 +37,7 @@ STEEL = bm.STEEL
 
 
 def _arc(xy):
-    return np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
+    return np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))))
 
 
 def resample(xy, step=STEP_M):
@@ -54,7 +55,7 @@ def _normals(line):
     t[1:-1] = line[2:] - line[:-2]
     t[0] = line[1] - line[0]
     t[-1] = line[-1] - line[-2]
-    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    t /= np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
     return t, np.c_[-t[:, 1], t[:, 0]]
 
 
@@ -144,7 +145,7 @@ def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False, z_end=None,
         s = _arc(pts)
         if s[-1] < need - 0.2:              # a mapped flight shorter than its steps need: carried on along its last leg
             d = pts[-1] - pts[-2]
-            dl = float(np.hypot(*d))
+            dl = float(dnp.hypot(*d))
             if dl > 1e-6:
                 pts = np.vstack((pts, pts[-1] + d / dl * (need - s[-1])))
                 if z_end is not None:
@@ -168,7 +169,7 @@ def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False, z_end=None,
         pb = np.array([np.interp(b, sl, line[:, 0]), np.interp(b, sl, line[:, 1])])
         pm = (pa + pb) / 2.0
         d = pb - pa
-        dl = float(np.hypot(*d))
+        dl = float(dnp.hypot(*d))
         if dl < 1e-6:
             continue
         u = d / dl
@@ -206,7 +207,7 @@ def _piers(mesh, frame, elev, st, path, z_deck, w, s_from, s_to):
     for a, p in placed:
         i = min(int(np.searchsorted(s, a)), len(path) - 1)
         d = path[min(len(path) - 1, i)] - path[max(0, i - 1)]
-        dl = float(np.hypot(*d))
+        dl = float(dnp.hypot(*d))
         u = d / dl if dl > 1e-6 else np.array([1.0, 0.0])
         nn = np.array([-u[1], u[0]])
         hw, hl = (w * 0.45), PIER_W_M / 2.0
@@ -225,7 +226,7 @@ def _end_flights(link, path):
     for stp in link.steps:
         stp = np.asarray(stp, float)
         for e, p in ends.items():
-            d0, d1 = float(np.hypot(*(stp[0] - p))), float(np.hypot(*(stp[-1] - p)))
+            d0, d1 = float(dnp.hypot(*(stp[0] - p))), float(dnp.hypot(*(stp[-1] - p)))
             if min(d0, d1) <= END_JOIN_M and e not in out:
                 out[e] = stp if d0 <= d1 else stp[::-1]
                 break
@@ -234,7 +235,7 @@ def _end_flights(link, path):
             continue
         q = path[1] if e == 0 else path[-2]
         d = p - q
-        dl = float(np.hypot(*d))
+        dl = float(dnp.hypot(*d))
         if dl > 1e-6:
             out[e] = np.array([p, p + d / dl * 3.0])
     return out
@@ -255,7 +256,7 @@ def add(mesh, frame, elev, st, link, collide=False):
         arcs = [a for _k, a in link.crosses]
         _piers(mesh, frame, elev, st, path, z, w, max(0.0, min(arcs) - 4.0), min(float(s[-1]), max(arcs) + 4.0))
     for e, fl in _end_flights(link, path).items():
-        pts = np.vstack((path[0 if e == 0 else -1][None], fl[1:])) if np.hypot(*(fl[0] - path[0 if e == 0 else -1])) > 0.05 else fl
+        pts = np.vstack((path[0 if e == 0 else -1][None], fl[1:])) if dnp.hypot(*(fl[0] - path[0 if e == 0 else -1])) > 0.05 else fl
         got = _stair(mesh, frame, elev, pts[0], pts, z, w, collide)
         if got is not None and not collide:
             tread_line = resample(got, 1.0)

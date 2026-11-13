@@ -16,6 +16,7 @@ import math
 import numpy as np
 
 import fast     # the texel loop is the Rust kernel earthfast.rock
+import dmath
 
 STEEP_DEG = (38.0, 58.0)    # rock from the first slope, fully at the second
 OCTAVES = ((28.0, 0.55), (9.0, 0.3), (3.0, 0.15))  # (m, weight) of the noise
@@ -28,7 +29,7 @@ DARKEN = 0.82
 
 def steepness(slope):
     """0 .. 1 from the slope (rise / run)."""
-    a, b = (math.tan(math.radians(d)) for d in STEEP_DEG)
+    a, b = (dmath.tan(math.radians(d)) for d in STEEP_DEG)
     t = np.clip((slope - a) / (b - a), 0.0, 1.0)
     return t * t * (3 - 2 * t)
 
@@ -46,9 +47,9 @@ def rock(rgb, frame, x0, y0, size, U, ux0, uy0, usp):
         if steepness(gmax) <= 0.01:
             return rgb
     fast.require(0, "rockface.rock")
-    a, b = (math.tan(math.radians(d)) for d in STEEP_DEG)
+    a, b = (dmath.tan(math.radians(d)) for d in STEEP_DEG)
     got = fast._ef.rock(np.ascontiguousarray(rgb, np.uint8), np.ascontiguousarray(U), float(x0), float(y0),
                         float(size), float(ux0), float(uy0), float(usp), frame.lat0, frame.lon0, 111320.0,
-                        111320.0 * math.cos(math.radians(frame.lat0)), a, b, np.array(OCTAVES, np.float64),
+                        111320.0 * dmath.cos(math.radians(frame.lat0)), a, b, np.array(OCTAVES, np.float64),
                         STRATA_M, STRATA_W, tuple(float(v) for v in ROCK_TINT), DESAT, DARKEN)
     return rgb if got is None else got

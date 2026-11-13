@@ -24,6 +24,8 @@ import time
 import numpy as np
 
 import fast
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.reach")
 
@@ -83,7 +85,7 @@ def horizon_s(speed):
 
 def priority(eta, p):
     """A place's priority key (s): its ETA, a less likely branch's later (eta / p ** GAMMA)."""
-    return eta / max(p, P_MIN) ** GAMMA
+    return eta / dnp.power(max(p, P_MIN), GAMMA)
 
 
 def side_speed(speed):
@@ -218,7 +220,7 @@ class Tree:
                 out.append((float(m[j, 0]), float(m[j, 1])))
             else:
                 d = m[-1, :2] - m[-2, :2]
-                n = float(np.hypot(*d)) or 1.0
+                n = float(dnp.hypot(*d)) or 1.0
                 k = (t - m[-1, 2]) * self.speed
                 out.append((float(m[-1, 0] + d[0] / n * k), float(m[-1, 1] + d[1] / n * k)))
         return out
@@ -274,12 +276,12 @@ class Reach:
         lla = geotiles.world_to_geodetic(self.frame, np.array([[float(x), float(y), 0.0]]))
         la, lo = float(lla[0][0]), float(lla[1][0])
         dla = r / 111320.0
-        dlo = r / (111320.0 * max(0.05, math.cos(math.radians(la))))
+        dlo = r / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
         keys = mapcells.cells_for_bbox(la - dla, lo - dlo, la + dla, lo + dlo)
         out = []
         for k in keys:
             cla, clo = k.center()
-            d = math.hypot((cla - la) * 111320.0, (clo - lo) * 111320.0 * math.cos(math.radians(la)))
+            d = math.hypot((cla - la) * 111320.0, (clo - lo) * 111320.0 * dmath.cos(math.radians(la)))
             out.append((d, k))
         out.sort(key=lambda t: t[0])
         return [k for d, k in out if d <= r + 2500.0], r

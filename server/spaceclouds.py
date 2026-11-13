@@ -18,6 +18,8 @@ import time
 import numpy as np
 
 import fast
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.spaceclouds")
 
@@ -54,7 +56,7 @@ def merc(lat, lon, z):
     lat = np.clip(np.asarray(lat, np.float64), -MERC_LAT, MERC_LAT)
     n = 256.0 * 2 ** z
     x = (np.asarray(lon, np.float64) / 360.0 + 0.5) * n
-    y = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * n
+    y = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * n
     return x, y
 
 
@@ -62,7 +64,7 @@ def pick_zoom(lat0, lon0, radius):
     """(zoom, x0, y0, x1, y1): the finest zoom whose tile box over the disc (its lat / lon box) holds at most MAX_TILES
     tiles, and that box in global pixels (x unwrapped)."""
     dlat = math.degrees(radius / R_EARTH)
-    dlon = min(180.0, dlat / max(0.05, math.cos(math.radians(lat0))))
+    dlon = min(180.0, dlat / max(0.05, dmath.cos(math.radians(lat0))))
     lats = [max(-MERC_LAT, lat0 - dlat), min(MERC_LAT, lat0 + dlat)]
     for z in range(MAX_ZOOM, -1, -1):
         x0, y1 = merc(lats[0], lon0 - dlon, z)
@@ -79,10 +81,10 @@ def subsolar(t=None):
     t = time.time() if t is None else float(t)
     tm = time.gmtime(t)
     g = 2 * math.pi / 365.0 * (tm.tm_yday - 1 + (tm.tm_hour - 12) / 24.0)
-    decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
-            + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
-    eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g) - 0.014615 * math.cos(2 * g)
-                    - 0.040849 * math.sin(2 * g))
+    decl = (0.006918 - 0.399912 * dmath.cos(g) + 0.070257 * dmath.sin(g) - 0.006758 * dmath.cos(2 * g)
+            + 0.000907 * dmath.sin(2 * g) - 0.002697 * dmath.cos(3 * g) + 0.00148 * dmath.sin(3 * g))
+    eqt = 229.18 * (0.000075 + 0.001868 * dmath.cos(g) - 0.032077 * dmath.sin(g) - 0.014615 * dmath.cos(2 * g)
+                    - 0.040849 * dmath.sin(2 * g))
     minutes = tm.tm_hour * 60 + tm.tm_min + tm.tm_sec / 60.0
     lon = -(minutes + eqt - 720.0) / 4.0
     return math.degrees(decl), (lon + 540.0) % 360.0 - 180.0
@@ -94,15 +96,15 @@ def subsolar_from(lat0, lon0, az_deg, el_deg):
     clock)."""
     d = math.radians(90.0 - float(el_deg))
     p1, l1, th = math.radians(lat0), math.radians(lon0), math.radians(float(az_deg))
-    p2 = math.asin(max(-1.0, min(1.0, math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(th))))
-    l2 = l1 + math.atan2(math.sin(th) * math.sin(d) * math.cos(p1), math.cos(d) - math.sin(p1) * math.sin(p2))
+    p2 = dmath.asin(max(-1.0, min(1.0, dmath.sin(p1) * dmath.cos(d) + dmath.cos(p1) * dmath.sin(d) * dmath.cos(th))))
+    l2 = l1 + dmath.atan2(dmath.sin(th) * dmath.sin(d) * dmath.cos(p1), dmath.cos(d) - dmath.sin(p1) * dmath.sin(p2))
     return math.degrees(p2), (math.degrees(l2) + 540.0) % 360.0 - 180.0
 
 
 def merc_lat(y, z):
     """Latitudes (deg) of global pixel rows y at zoom z."""
     n = 256.0 * 2 ** z
-    return np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(y, np.float64) / n))))
+    return np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * np.asarray(y, np.float64) / n))))
 
 
 def mosaic(fetcher, z, x0, y0, x1, y1, url=TILE_URL, px=TEX_PX, kind="demand"):

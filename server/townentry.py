@@ -44,6 +44,8 @@ from collections import OrderedDict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import dmath
+import dnp
 
 import furniture
 import polygon
@@ -437,7 +439,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         pts = np.array([box[:2], box[2:]], np.float64)
     dlat = AGGLO_CELL_M / M_PER_DEG
     # (the commune's own longitude step, its latitude rounded: the same grid whichever cell or frame asks)
-    dlon = AGGLO_CELL_M / (M_PER_DEG * max(math.cos(math.radians(round(lat_c, 1))), 0.01))
+    dlon = AGGLO_CELL_M / (M_PER_DEG * max(dmath.cos(math.radians(round(lat_c, 1))), 0.01))
     mlat, mlon = AGGLO_MARGIN_M / AGGLO_CELL_M * dlat, AGGLO_MARGIN_M / AGGLO_CELL_M * dlon
     i0 = math.floor((float(pts[:, 1].min()) - mlat) / dlat)
     i1 = math.ceil((float(pts[:, 1].max()) + mlat) / dlat)
@@ -460,7 +462,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         if opened.any():                # (all of it that thin: a village of a few houses along a lane, kept whole)
             area = opened
     lab, sizes = _pieces(area)
-    keep = sizes >= MIN_AGGLO_M2 / AGGLO_CELL_M ** 2
+    keep = sizes >= MIN_AGGLO_M2 / (AGGLO_CELL_M * AGGLO_CELL_M)
     keep[0] = False
     if not keep.any():
         keep[int(np.argmax(sizes[1:])) + 1] = True  # (no piece that large: the largest, the village's bourg)
@@ -714,8 +716,8 @@ def nearest_site(sites, lat, lon):
     """Per point (lat, lon arrays): the index of the nearest of sites ((k, 2) lon/lat; distances on the plane of the
     sites' mean latitude). Pure."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    c = math.cos(math.radians(float(np.mean(sites[:, 1]))))
-    d = ((lon[..., None] - sites[:, 0]) * c) ** 2 + (lat[..., None] - sites[:, 1]) ** 2
+    c = dmath.cos(math.radians(float(np.mean(sites[:, 1]))))
+    d = dnp.sq((lon[..., None] - sites[:, 0]) * c) + dnp.sq(lat[..., None] - sites[:, 1])
     return np.argmin(d, axis=-1)
 
 
@@ -902,7 +904,7 @@ VILLAGE_COUNTRIES.update({**{cc: "region" for cc in ("IM", "JE", "GL", "BM", "KY
 def _km2(lonlat_parts):
     """The area of a polygon's outer rings, km2 (on the plane of their mean latitude). Pure."""
     lat = float(np.mean(np.concatenate([r[:, 1] for rings in lonlat_parts for r in rings[:1]])))
-    return _area(lonlat_parts) * (M_PER_DEG / 1000.0) ** 2 * math.cos(math.radians(lat))
+    return _area(lonlat_parts) * dnp.sq(M_PER_DEG / 1000.0) * dmath.cos(math.radians(lat))
 
 
 def kreisfreie(county, lonlat_parts=None):
@@ -926,7 +928,7 @@ def _area(lonlat_parts):
     s = 0.0
     for rings in lonlat_parts:
         r = rings[0]
-        s += abs(float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
+        s += abs(float(dnp.dot(r[:, 0], np.roll(r[:, 1], -1)) - dnp.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
     return s
 
 
@@ -1053,7 +1055,7 @@ def next_place(lat, lon, heading, points, name):
     counter-clockwise from east), among points [(name, lon, lat)], its own name (name) left out; None if none is
     within NEXT_CONE_DEG and NEXT_MIN_M .. NEXT_MAX_M. The nearest, an angle off the heading counting as distance (a
     village straight ahead before one as near to the side). Pure."""
-    c = math.cos(math.radians(lat))
+    c = dmath.cos(math.radians(lat))
     h = math.radians(heading)
     best = None
     for n, plon, plat in points:
@@ -1063,7 +1065,7 @@ def next_place(lat, lon, heading, points, name):
         d = math.hypot(dx, dy)
         if not NEXT_MIN_M <= d <= NEXT_MAX_M:
             continue
-        off = abs((math.degrees(math.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
+        off = abs((math.degrees(dmath.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
         if off > NEXT_CONE_DEG:
             continue
         score = (d * (1.0 + off / 45.0), n)
@@ -1098,7 +1100,7 @@ def commune_agglomeration(c, urban_fn):
     lon0, lat0 = pts.min(axis=0)
     lon1, lat1 = pts.max(axis=0)
     dlat = VILLAGE_PROBE_M / M_PER_DEG
-    dlon = dlat / max(math.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
+    dlon = dlat / max(dmath.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
     p = c.sites[c.site]
     # (the probes within VILLAGE_REACH_M of its point: a Swedish kommun's village alone in it, Kiruna's 20,000 km2;
     # on the commune's own lattice, the same probes as the whole box's there)
@@ -1119,7 +1121,7 @@ def commune_agglomeration(c, urban_fn):
     box = (max(box[0], p[0] - rlon), max(box[1], p[1] - rlat), min(box[2], p[0] + rlon), min(box[3], p[1] + rlat))
     # the fine grid over the probes' built-up land only, when the part is large (a Greek dimos' villages each on a
     # grid of their whole part kept the road tiles minutes, Trikala 2026-10-30); none of it there: no village
-    if (box[2] - box[0]) * (box[3] - box[1]) > (VILLAGE_FINE_M / M_PER_DEG) ** 2 / math.cos(math.radians(p[1])):
+    if (box[2] - box[0]) * (box[3] - box[1]) > dnp.sq(VILLAGE_FINE_M / M_PER_DEG) / dmath.cos(math.radians(p[1])):
         built = np.zeros(len(la), bool)
         built[mine] = np.asarray(urban_fn(la[mine], lo[mine]), bool)
         if not built.any():
@@ -1330,7 +1332,7 @@ def _sign(commune, line, s, travel, width, left_hand, main=False):
     q = p[0][:2] + side * (width / 2 + SIGN_OFF_M)
     yaw = furniture._yaw(side[0], side[1])
     at = [round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[0][2]), 2)]
-    tail = [commune.name, commune.local, commune.country, round(math.degrees(math.atan2(-f[1], -f[0])), 1),
+    tail = [commune.name, commune.local, commune.country, round(math.degrees(dmath.atan2(-f[1], -f[0])), 1),
             commune.sub, bool(main)]
     return [[G_ENTRY] + at + [round(yaw, 1), 1.0, SIGN_H, 0.0] + tail,
             [G_EXIT] + at + [round((yaw + 180.0) % 360.0, 1), 1.0, SIGN_H, 0.0] + tail]
@@ -1527,7 +1529,7 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
                 travel = 1.0 if plus else -1.0
             else:               # (its town on both sides or neither: toward its town's point)
                 site = _site_xy(communes[c], frame)
-                travel = 1.0 if np.hypot(*(probe[1, :2] - site)) < np.hypot(*(probe[0, :2] - site)) else -1.0
+                travel = 1.0 if dnp.hypot(*(probe[1, :2] - site)) < dnp.hypot(*(probe[0, :2] - site)) else -1.0
             signs.append((li, float(s), communes[c], travel))
         if not towns and parts and first < 0:       # (a village the places do not have)
             at, _ = furniture._at(line, np.array([s]))
@@ -1537,10 +1539,10 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
             low = parts[0].lower()
             own_xy = np.array([(x, y) for x, y, n in mapped
                                if (_name_parts(n) or [""])[0].lower() == low
-                               and np.hypot(x - at[0, 0], y - at[0, 1]) <= MAPPED_VILLAGE_M]).reshape(-1, 2)
+                               and dnp.hypot(x - at[0, 0], y - at[0, 1]) <= MAPPED_VILLAGE_M]).reshape(-1, 2)
             mid = own_xy.mean(axis=0) if len(own_xy) >= 2 else None
-            if mid is not None and np.hypot(*(mid - at[0, :2])) > MAPPED_PROBE_M:
-                side = 1 if np.hypot(*(probe[1, :2] - mid)) < np.hypot(*(probe[0, :2] - mid)) else -1
+            if mid is not None and dnp.hypot(*(mid - at[0, :2])) > MAPPED_PROBE_M:
+                side = 1 if dnp.hypot(*(probe[1, :2] - mid)) < dnp.hypot(*(probe[0, :2] - mid)) else -1
             else:
                 side = _built_side(line, float(s), frame, urban)
             if side:
@@ -1820,7 +1822,7 @@ def _draw_marks(d, x, y, letters, marks, font, size, fill, paper):
                 d.line([(cx - .14 * s, top - .07 * s), (cx, top - .25 * s), (cx + .14 * s, top - .07 * s)], fill=fill,
                        width=lw, joint="curve")
             elif m == "tilde":
-                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * math.sin(t / 8 * 2 * math.pi))
+                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * dmath.sin(t / 8 * 2 * math.pi))
                        for t in range(9)]
                 d.line(pts, fill=fill, width=lw, joint="curve")
             elif m == "diaeresis":
@@ -2816,7 +2818,7 @@ def clear_around(props, signs):
     at = np.array([(s[1], s[2]) for s in signs], np.float64)
     out = []
     for r in props:
-        if r[0] in CLEAR_GROUPS and np.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
+        if r[0] in CLEAR_GROUPS and dnp.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
             continue
         out.append(r)
     return out
@@ -2951,7 +2953,7 @@ class Towns:
         pts = np.concatenate([r for rings in c.lonlat for r in rings[:1]])
         mid = c.sites[c.site] if c.sites is not None else (pts.min(axis=0) + pts.max(axis=0)) / 2
         rlat = min(LANDCOVER_REACH_M, AGGLO_MARGIN_M + VILLAGE_REACH_M) / M_PER_DEG
-        rlon = rlat / max(math.cos(math.radians(float(mid[1]))), 0.01)
+        rlon = rlat / max(dmath.cos(math.radians(float(mid[1]))), 0.01)
         m = AGGLO_MARGIN_M / M_PER_DEG
         lon0, lat0 = np.maximum(pts.min(axis=0) - m, (mid[0] - rlon, mid[1] - rlat))
         lon1, lat1 = np.minimum(pts.max(axis=0) + m, (mid[0] + rlon, mid[1] + rlat))
@@ -2980,7 +2982,7 @@ class Towns:
         (lon0, lat0), (lon1, lat1) = pts.min(axis=0), pts.max(axis=0)
         if near is not None:
             rlat = POINTS_REACH_M / M_PER_DEG
-            rlon = rlat / max(math.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
+            rlon = rlat / max(dmath.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
             lon0, lat0 = max(lon0, near[0] - rlon), max(lat0, near[1] - rlat)
             lon1, lat1 = min(lon1, near[2] + rlon), min(lat1, near[3] + rlat)
             if lon0 > lon1 or lat0 > lat1:
@@ -3084,11 +3086,11 @@ class Towns:
         NEXT_MAX_M from (lat, lon) along heading (next_place's points; the same cells for the same sign); [] when not
         all are cached yet (_points: the tile is built again)."""
         import mapcells
-        c = math.cos(math.radians(lat))
+        c = dmath.cos(math.radians(lat))
         h = math.radians(heading)
         s = np.arange(500.0, NEXT_MAX_M + 1.0, 1000.0)
-        la = lat + s * math.sin(h) / M_PER_DEG
-        lo = lon + s * math.cos(h) / (M_PER_DEG * c)
+        la = lat + s * dmath.sin(h) / M_PER_DEG
+        lo = lon + s * dmath.cos(h) / (M_PER_DEG * c)
         pad = 1500.0 / M_PER_DEG
         seen, out = set(), []
         for feats in self._points(mapcells.cells_near_points(la, lo, pad, pad / c)) or ():

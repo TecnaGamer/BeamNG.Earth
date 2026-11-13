@@ -20,6 +20,7 @@
 //! Apply: at a point within a corrected deck's corridor (from foot to foot, `blend` m of fade past the feet and `end`
 //! m past the deck's ends), the ground is lowered toward the line between the feet (never raised), by that weight;
 //! of several decks, the deepest lowering (order independent).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -158,7 +159,7 @@ impl Probe {
             }
         }
         for &phi in &self.dirs {
-            let (cs, sn) = (phi.cos(), phi.sin());
+            let (cs, sn) = (phi.dcos(), phi.dsin());
             let u = [cs * nrm[0] + sn * t[0], cs * nrm[1] + sn * t[1]];
             for &f in &self.fix {
                 let r = (line.half + f) / cs.max(0.05);
@@ -265,7 +266,7 @@ pub fn fit_deck(line: &Line, probe: &Probe, fit: &Fit, z: &[f64], masks: &[&Line
                 // (each side's nearest sample not inside another deck, nor past the deck's ends on a turned line)
                 let pick = |side: usize| (0..nf).map(|f| 1 + 2 * k + 2 * (d * nf + f) + side).find(|&j| {
                     ok[j] && (phi == 0.0 || {
-                        let shift = (line.half + probe.fix[(j - 1 - 2 * k) / 2 % nf]) * phi.tan().abs();
+                        let shift = (line.half + probe.fix[(j - 1 - 2 * k) / 2 % nf]) * phi.dtan().abs();
                         s - shift >= 0.0 && s + shift <= l
                     })
                 });
@@ -614,7 +615,7 @@ mod tests {
         let (pr, ft, l) = (probe(), fit(), deck());
         for ang in [90f64, 60.0, 40.0] {
             let a = ang.to_radians();
-            let (ux, uy) = (a.cos(), a.sin());
+            let (ux, uy) = (a.dcos(), a.dsin());
             let bank = move |x: f64, y: f64| {
                 let d = (x * uy - y * ux).abs();      // distance from the embankment's axis through (0, 0)
                 3.0 + 8.0 * ((15.0 - d) / 8.0).max(0.0).min(1.0)

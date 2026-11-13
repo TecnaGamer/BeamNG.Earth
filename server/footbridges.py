@@ -11,6 +11,7 @@ need those climbs, and a slab at the street's level would block it: those are le
 Walkway tunnels stay as they are (the walkway is not drawn on the ground either).
 """
 import numpy as np
+import dnp
 
 WALK_CLASSES = ("footway", "path", "pedestrian", "cycleway", "bridleway", "steps")   # (grading.WALK_SPAN_CLASSES)
 STEP_M = 2.0                # m between cross-sections (railways.STEP_M)
@@ -101,7 +102,7 @@ def _over_roads(xy, crossers):
         d = b - a
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((xy[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
+        dist = dnp.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
         on |= dist <= hw
     return on
 
@@ -188,5 +189,5 @@ def _piers(s, xy, u, z, zg, i, j):
     import railways
     cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
     ux, uy = np.interp(ss, s, u[:, 0]), np.interp(ss, s, u[:, 1])
-    un = np.c_[ux, uy] / np.maximum(np.hypot(ux, uy), 1e-9)[:, None]
+    un = np.c_[ux, uy] / np.maximum(dnp.hypot(ux, uy), 1e-9)[:, None]
     return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zgs - railways.PIER_FOOT_M, zt

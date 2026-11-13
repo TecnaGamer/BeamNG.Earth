@@ -8,6 +8,8 @@ across joins. This avoids a tile's changing neighbours shifting whole rows.
 """
 import math
 import numpy as np
+import dmath
+import dnp
 from geotiles import box_owns
 import delineatorprofiles as profiles
 import europeinfra
@@ -20,7 +22,7 @@ def curvature(line, stations):
     b, _ = f._at(line, stations + 15.)
     u, v = p[:, :2] - a[:, :2], b[:, :2] - p[:, :2]
     cross = u[:, 0]*v[:, 1] - u[:, 1]*v[:, 0]
-    lengths = np.linalg.norm(u, axis=1)*np.linalg.norm(v, axis=1)*np.linalg.norm(u+v, axis=1)
+    lengths = dnp.norm(u, axis=1)*dnp.norm(v, axis=1)*dnp.norm(u+v, axis=1)
     radii = np.full(len(stations), np.inf)
     ok = (np.abs(cross) > 1e-8) & (lengths > 1e-8)
     radii[ok] = lengths[ok] / (2*np.abs(cross[ok]))
@@ -83,7 +85,7 @@ def place(roads, box, country_at, clearance_roads, lighting=None):
             if not others.clear(q, None, .65):
                 continue
             leading = side*(1 if code in europeinfra.LEFT_HAND else -1)
-            yaw = math.degrees(math.atan2(-tangent[0], tangent[1])) + (180 if leading < 0 else 0)
+            yaw = math.degrees(dmath.atan2(-tangent[0], tangent[1])) + (180 if leading < 0 else 0)
             rows.append(['eu_marker_'+europeinfra.KITS[code].marker,
                          round(float(q[0]), 2), round(float(q[1]), 2), round(float(q[2]), 2),
                          round(yaw % 360, 1), 1., 1.15, 0.])
@@ -123,6 +125,6 @@ def motorway_verges(roads, box, country_at, guardrails, decks=()):
                     or not clearance.clear(q, None, .65) or not deck_clearance.clear(q, None, 2.)
                     or euguardrails._near_barrier(q[:2], barriers, reach=4.5)):
                 continue
-            yaw = math.degrees(math.atan2(-travel[0], travel[1])) % 360
+            yaw = math.degrees(dmath.atan2(-travel[0], travel[1])) % 360
             rows.append(['eu_marker_it_motorway', *map(float, q), yaw, 1., 1.15, 0.])
     return rows

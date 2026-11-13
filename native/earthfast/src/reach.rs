@@ -12,6 +12,7 @@
 //! junction: by the time the turn would cost and by the road class, a GPS route's way strongly preferred). Where the
 //! loaded cells end the tree goes on straight (the frontier: the next map data to fetch). The most probable path (at
 //! each junction the likeliest way) is returned too (the terrain blocks and data downloads ahead follow it).
+use crate::dm::Dm;
 
 use numpy::{ndarray::Array2, IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -208,7 +209,7 @@ impl Route {
                     if l2 < 1e-9 { continue; }
                     let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
                     let q = [a[0] + d[0] * t, a[1] + d[1] * t];
-                    if (q[0] - p[0]).hypot(q[1] - p[1]) <= r {
+                    if (q[0] - p[0]).dhypot(q[1] - p[1]) <= r {
                         let u = norm(d);
                         if u[0] * dir[0] + u[1] * dir[1] >= 0.7 {
                             return true;
@@ -284,7 +285,7 @@ impl RoadReach {
 
     fn grow_impl(&mut self, x: f64, y: f64, vx: f64, vy: f64, pr: &Params, route: Option<&Route>)
                      -> Option<(Vec<[f64; 4]>, Vec<[f64; 3]>, Vec<[f64; 4]>, usize)> {
-        let s = vx.hypot(vy);
+        let s = vx.dhypot(vy);
         if s < 0.5 || !(x.is_finite() && y.is_finite()) {
             return None;
         }
@@ -305,7 +306,7 @@ impl RoadReach {
                         if l2 < 1e-9 { continue; }
                         let t = (((x - a[0]) * d[0] + (y - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
                         let q = [a[0] + d[0] * t, a[1] + d[1] * t];
-                        let dist = (q[0] - x).hypot(q[1] - y);
+                        let dist = (q[0] - x).dhypot(q[1] - y);
                         if dist > pr.snap_m { continue; }
                         let tl = l2.sqrt();
                         let cf = (d[0] * u[0] + d[1] * u[1]) / tl;
@@ -336,7 +337,7 @@ impl RoadReach {
         // road, a ramp) less likely)
         let rank_of = |de: u32| (self.edges[(de / 2) as usize].rank & 0x7f) as i32;
         let top = roots.iter().map(|r| rank_of(r.0)).max().unwrap_or(0);
-        let mut ws: Vec<f64> = roots.iter().map(|r| (-(r.1 - best) / 3.0).exp()
+        let mut ws: Vec<f64> = roots.iter().map(|r| (-(r.1 - best) / 3.0).dexp()
             * pr.class_k.powi((top - rank_of(r.0)).clamp(0, 4))).collect();
         if let Some(r) = route {
             // (on a GPS route: the edge along it the likeliest)
@@ -434,12 +435,12 @@ impl RoadReach {
                 // first metres show)
                 let t_on = o.dir_at(ofwd, TURN_M);
                 let c2 = (t_in[0] * t_on[0] + t_in[1] * t_on[1]).clamp(-1.0, 1.0);
-                let theta = c.acos().max(c2.acos());
+                let theta = c.dacos().max(c2.dacos());
                 if theta > 2.6 {
                     continue;           // (~150 deg: a U-turn)
                 }
                 let delay = Self::turn_delay(theta, s, pr);
-                let mut w = (-delay / pr.t_p).exp();
+                let mut w = (-delay / pr.t_p).dexp();
                 let (ri, ro) = (rank_in & 0x7f, o.rank & 0x7f);
                 if ro < ri {
                     w *= pr.class_k.powi((ri - ro).min(4) as i32);
@@ -520,21 +521,21 @@ pub fn reach_tile_keys<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lo
             }
             let fx = (lo[i] + 180.0) / 360.0 * nt;
             let lr = la[i].to_radians();
-            let fy = (1.0 - (lr.tan() + 1.0 / lr.cos()).ln() / std::f64::consts::PI) / 2.0 * nt;
-            let m_tile = 40075016.686 * lr.cos() / nt;
+            let fy = (1.0 - (lr.dtan() + 1.0 / lr.dcos()).dln() / std::f64::consts::PI) / 2.0 * nt;
+            let m_tile = 40075016.686 * lr.dcos() / nt;
             if !(m_tile > 0.0) {
                 continue;
             }
             let reach = (corridor_m / m_tile).ceil() as i64;
             let (tx0, ty0) = (fx.floor() as i64, fy.floor() as i64);
-            let pri = et[i] / ch[i].max(p_min).powf(gamma);
+            let pri = et[i] / ch[i].max(p_min).dpowf(gamma);
             let want = ch[i] >= p_want;
             for dx in -reach..=reach {
                 for dy in -reach..=reach {
                     let (gx, gy) = (tx0 + dx, ty0 + dy);
                     let ex = ((gx as f64 - fx).max(fx - (gx + 1) as f64)).max(0.0);
                     let ey = ((gy as f64 - fy).max(fy - (gy + 1) as f64)).max(0.0);
-                    let gap = ex.hypot(ey) * m_tile;
+                    let gap = ex.dhypot(ey) * m_tile;
                     if gap > corridor_m {
                         continue;
                     }
@@ -761,7 +762,7 @@ impl RoadReach {
         self.rebuild();
         let mut out = Vec::new();
         for (i, e) in self.edges.iter().enumerate() {
-            if !e.alive || !e.pts.iter().any(|p| (p[0] - x).hypot(p[1] - y) <= r) {
+            if !e.alive || !e.pts.iter().any(|p| (p[0] - x).dhypot(p[1] - y) <= r) {
                 continue;
             }
             out.push((i, e.a, e.b, e.len, e.rank, e.dir, self.adj[e.a as usize].len(), self.adj[e.b as usize].len(),

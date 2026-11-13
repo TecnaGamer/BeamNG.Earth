@@ -4,6 +4,7 @@
 //! with the same expression, numpy's distance to a polyline (squares summed, np.maximum, np.clip, libm hypot, the
 //! first minimum or NaN), the track crossings' parameters and arc lengths (hypot per segment, summed in order) sorted
 //! stably by arc.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -92,7 +93,7 @@ fn clip01(x: f64) -> f64 {
 fn dist(px: &[f64], py_: &[f64], x: f64, y: f64) -> f64 {
     let n = px.len();
     if n == 1 {
-        return (px[0] - x).hypot(py_[0] - y);
+        return (px[0] - x).dhypot(py_[0] - y);
     }
     let mut best = f64::NAN;
     for k in 0..n - 1 {
@@ -101,7 +102,7 @@ fn dist(px: &[f64], py_: &[f64], x: f64, y: f64) -> f64 {
         let s2 = abx * abx + aby * aby;
         let ab2 = if s2.is_nan() || s2 > 1e-9 { s2 } else { 1e-9 };     // (np.maximum: NaN through)
         let t = clip01(((x - ax) * abx + (y - ay) * aby) / ab2);
-        let d = (ax + t * abx - x).hypot(ay + t * aby - y);
+        let d = (ax + t * abx - x).dhypot(ay + t * aby - y);
         if k == 0 || d.is_nan() || d < best {
             best = d;
             if d.is_nan() {
@@ -142,7 +143,7 @@ pub fn station_crossings(path: PyReadonlyArray2<'_, f64>, tracks: PyReadonlyArra
     let mut s0 = 0.0f64;
     for i in 0..p.nrows().saturating_sub(1) {
         let (a0x, a0y, a1x, a1y) = (p[[i, 0]], p[[i, 1]], p[[i + 1, 0]], p[[i + 1, 1]]);
-        let seglen = (a1x - a0x).hypot(a1y - a0y);
+        let seglen = (a1x - a0x).dhypot(a1y - a0y);
         let (rx, ry) = (a1x - a0x, a1y - a0y);
         for k in 0..nt {
             let (j0, j1) = (o[k] as usize, o[k + 1] as usize);

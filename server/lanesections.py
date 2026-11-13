@@ -18,6 +18,8 @@ import re
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import geodesy
 import mapgeom
 import railtags
@@ -172,8 +174,8 @@ def _joint_specs(f):
                     continue
                 e = raw[end]
                 tangent = raw[1] - raw[0] if end == 0 else raw[-1] - raw[-2]
-                tangent = tangent * np.array([math.cos(math.radians(e[1])), 1.])
-                tangent = tangent / max(np.linalg.norm(tangent), 1e-12)
+                tangent = tangent * np.array([dmath.cos(math.radians(e[1])), 1.])
+                tangent = tangent / max(dnp.norm(tangent), 1e-12)
                 # (the lanes stand off the pavement's centre by roads.driving_offset: a motorway's wider shoulder on
                 # the right of travel)
                 target = off + side * direction * (n - turning) * lane_m / 2. + _grid(str(f.attrs["class"][i]), n,
@@ -246,11 +248,11 @@ def _ramp_mouths(f, jobs, context=None):
                     main_tail == ((end == 0) == (direction > 0))):
                 continue
             line, stations = _sample(raw, 0., 1.)
-            sc = np.array([111320. * math.cos(math.radians(raw[end, 1])), 110540.])
+            sc = np.array([111320. * dmath.cos(math.radians(raw[end, 1])), 110540.])
             xy = (line - raw[end]) * sc
             dr = (raw[1] - raw[0]) * sc if end == 0 else (raw[-1] - raw[-2]) * sc
-            dr = dr / max(np.linalg.norm(dr), 1e-12)
-            dot = float(np.dot(dr, tangent))
+            dr = dr / max(dnp.norm(dr), 1e-12)
+            dot = float(dnp.dot(dr, tangent))
             if abs(dot) < .85:
                 continue
             lateral = tangent[0] * xy[:, 1] - tangent[1] * xy[:, 0]
@@ -444,7 +446,7 @@ def growth(prof, lon, lat):
     at = fast._ef.polyline_project(line, np.ascontiguousarray(np.c_[np.ravel(pe), np.ravel(pn)], np.float64))[0]
     # (the line's own metres to its source stations: geodesic, the same within millimetres)
     s = np.asarray(prof["stations"], np.float64)
-    arc = np.r_[0., np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+    arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     at = np.interp(at, arc, s)
     return _ease(at, prof["length"], prof["reach"], prof["ends"]).reshape(np.shape(lon))
 

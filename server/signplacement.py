@@ -6,6 +6,7 @@ facades never become wall mounts. All coordinates are in the tile's ENU frame.
 
 from dataclasses import dataclass
 import numpy as np
+import dnp
 
 
 def ring_of(points):
@@ -16,7 +17,7 @@ def ring_of(points):
     if not np.isfinite(p).all():
         return None
     if len(p) > 1:
-        p = p[np.linalg.norm(p - np.roll(p, 1, axis=0), axis=1) > 1e-6]
+        p = p[dnp.norm(p - np.roll(p, 1, axis=0), axis=1) > 1e-6]
     if len(p) < 3:
         return None
     area = float(np.sum(p[:, 0] * np.roll(p[:, 1], -1) - p[:, 1] * np.roll(p[:, 0], -1)))
@@ -38,7 +39,7 @@ def distance(p, ring):
     a = ring
     d = np.roll(ring, -1, axis=0) - a
     t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0, 1)
-    return float(np.linalg.norm(p - a - t[:, None] * d, axis=1).min())
+    return float(dnp.norm(p - a - t[:, None] * d, axis=1).min())
 
 
 def cross(a, b):
@@ -109,8 +110,8 @@ class Context:
             if (active & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)).any():
                 return False
             # Includes collinear grazing and very close wall edges.
-            along = np.clip(((r - a) * v).sum(1) / max(float(v @ v), 1e-12), 0, 1)
-            edge_to_ray = float(np.linalg.norm(r - a - along[:, None] * v, axis=1).min())
+            along = np.clip(((r - a) * v).sum(1) / max(float(dnp.matmul(v, v)), 1e-12), 0, 1)
+            edge_to_ray = float(dnp.norm(r - a - along[:, None] * v, axis=1).min())
             if min(distance(a, r), distance(b, r), edge_to_ray) < pad:
                 return False
         return True
@@ -147,15 +148,15 @@ class Context:
                 continue
             for i, a in enumerate(wall.ring):
                 e = wall.ring[(i + 1) % len(wall.ring)] - a
-                length = np.linalg.norm(e)
+                length = dnp.norm(e)
                 if length < width + 0.8:
                     continue
                 d = e / length
                 out = np.array([d[1], -d[0]])
                 for s in (width / 2 + 0.40, length - width / 2 - 0.40):
                     p = a + d * s + out * 0.034
-                    along = float((p - c) @ u)
-                    if not -3.0 < along < 24.0 or np.linalg.norm(p - c) > 25.0:
+                    along = float(dnp.matmul(p - c, u))
+                    if not -3.0 < along < 24.0 or dnp.norm(p - c) > 25.0:
                         continue
                     if line is not None:
                         station = float(f._project(line, p[None, :])[0])
@@ -169,7 +170,7 @@ class Context:
                         road = c + u * max(3.0, along)
                         eyes = [road, road + u * 9, road - u * 9]
                     view = eyes[0] - p
-                    if float(view @ out) < 0.8:
+                    if float(dnp.matmul(view, out)) < 0.8:
                         continue
                     probes = [p + d * v for v in (-width / 2, 0.0, width / 2)]
                     if not self.visible(probes[0], probes[-1], 0.025):
@@ -178,7 +179,7 @@ class Context:
                     seen = [all(self.visible(eye, q, 0.02) for q in probes) for eye in eyes]
                     if not seen[0] or sum(seen) < 2:
                         continue
-                    found.append((float(np.linalg.norm(p - c)), wall.key, i, s, np.r_[p, z], out))
+                    found.append((float(dnp.norm(p - c)), wall.key, i, s, np.r_[p, z], out))
         return sorted(found, key=lambda v: v[:4])
 
 
@@ -202,11 +203,11 @@ def arm_line(lines, arm):
     fid, _, u, c, start, *_ = arm
     for p in lines.get(fid, ()):
         line = p if start else p[::-1]
-        if np.linalg.norm(line[0, :2] - c[:2]) > 1e-5:
+        if dnp.norm(line[0, :2] - c[:2]) > 1e-5:
             continue
         d = line[1, :2] - line[0, :2]
-        norm = np.linalg.norm(d)
-        if norm > 1e-5 and float(d @ u) / norm > 0.999:
+        norm = dnp.norm(d)
+        if norm > 1e-5 and float(dnp.matmul(d, u)) / norm > 0.999:
             return line
     return None
 

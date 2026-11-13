@@ -38,6 +38,11 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # and the tiles' JSON-string properties (serde_json, MIT / Apache-2.0); both were in the lock file already (png, clarabel)
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde_json = "1"
+# Deterministic maths (dm.rs): sin / cos / atan2 / hypot / exp / pow ... in pure Rust, the same bits on every platform
+# (the C library's differ between glibc versions, mingw and the UCRT: GitHub #1169). rust-lang's port of musl's libm,
+# MIT; already in the lock file (num-traits); pinned. Reviewed 2026-11-12: no network, no file or process access, no
+# unsafe beyond unchecked indexing and the x86 sqrt / fma instructions; build.rs only sets cfgs from cargo's env.
+libm = "=0.2.16"
 
 [profile.release]
 opt-level = 3

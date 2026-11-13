@@ -24,6 +24,7 @@ from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dnp
 
 import geodesy
 import mapcells
@@ -426,12 +427,12 @@ class RoadWidths:
         with self.lock:
             keys = self.near.get(nk) if nk is not None else None
         if keys is None:
-            seg = np.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * np.cos(np.radians(ll[:-1, 1])))
+            seg = dnp.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * dnp.cos(np.radians(ll[:-1, 1])))
             s = np.r_[0.0, np.cumsum(seg)]
             t = np.r_[np.arange(0.0, s[-1], NEAR_STEP_M), s[-1]] if s[-1] > 0 else np.zeros(1)
             lat, lon = np.interp(t, s, ll[:, 1]), np.interp(t, s, ll[:, 0])
             dlat = (NEAR_M + NEAR_STEP_M / 2) / 111320.0
-            dlon = dlat / max(0.05, float(np.cos(np.radians(np.mean(lat)))))
+            dlon = dlat / max(0.05, float(dnp.cos(np.radians(np.mean(lat)))))
             keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)
             if nk is not None:
                 with self.lock:
@@ -519,8 +520,8 @@ class RoadWidths:
 
     def frontage(self, lonlat, width):
         """Side-specific frontage, within a village street's normal range."""
-        scale = np.array([111320. * np.cos(np.radians(lonlat[len(lonlat) // 2, 1])), 111320.])
-        if np.linalg.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
+        scale = np.array([111320. * dnp.cos(np.radians(lonlat[len(lonlat) // 2, 1])), 111320.])
+        if dnp.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
             return None
         frame, walls = self._near_walls(lonlat)
         xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]

@@ -5,6 +5,7 @@
 //!   trees), shown beyond the near ring in their place (trees.lua CLUMP_M), and its trees are flagged.
 //! - field_lattice: the points of a lattice along a field's axis inside its rings (orchards' trees, vineyards' rows,
 //!   hay bales), i-major (numpy's meshgrid 'ij' order, the orchard rows' Python before it).
+use crate::dm::Dm;
 
 use std::collections::BTreeMap;
 
@@ -208,11 +209,11 @@ pub(crate) fn edge_axis_core(r: &[[f64; 2]], window_deg: f64) -> (f64, f64) {
     for i in 0..k {
         let j = (i + 1) % k;
         let (dx, dy) = (r[j][0] - r[i][0], r[j][1] - r[i][1]);
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         if !(l > 0.0) || !l.is_finite() {
             continue;
         }
-        let a = dy.atan2(dx).to_degrees().rem_euclid(180.0);
+        let a = dy.datan2(dx).to_degrees().rem_euclid(180.0);
         edges.push((a, l));
         bins[(a as usize).min(179)] += l;
     }
@@ -234,12 +235,12 @@ pub(crate) fn edge_axis_core(r: &[[f64; 2]], window_deg: f64) -> (f64, f64) {
         let d = (a - centre + 90.0).rem_euclid(180.0) - 90.0;      // signed difference mod 180
         if d.abs() <= w as f64 + 0.5 {
             let t = (2.0 * (centre + d)).to_radians();              // doubled: a direction, not a heading
-            sx += l * t.cos();
-            sy += l * t.sin();
+            sx += l * t.dcos();
+            sy += l * t.dsin();
         }
     }
-    let a = if sx == 0.0 && sy == 0.0 { centre.to_radians() } else { 0.5 * sy.atan2(sx) };
-    let (mut ux, mut uy) = (a.cos(), a.sin());
+    let a = if sx == 0.0 && sy == 0.0 { centre.to_radians() } else { 0.5 * sy.datan2(sx) };
+    let (mut ux, mut uy) = (a.dcos(), a.dsin());
     if ux < -1e-9 || (ux.abs() <= 1e-9 && uy < 0.0) {
         ux = -ux;
         uy = -uy;

@@ -20,6 +20,7 @@ with capped ends, or a short descent to the ground at the free ends of European 
 The mod shows it as a TSStatic that collides with its visible mesh. Pure functions; deterministic.
 """
 import numpy as np
+import dnp
 
 import cdae
 
@@ -59,7 +60,7 @@ V_SLAB_IN, V_SLAB_OUT = 1.0 - 0.195, 1.0 - 0.005
 def _normals_2d(xy):
     """Unit left normals at each point of a polyline (mitred like roads.offset_polyline, clamped)."""
     d = np.diff(xy, axis=0)
-    L = np.hypot(d[:, 0], d[:, 1])
+    L = dnp.hypot(d[:, 0], d[:, 1])
     L[L == 0] = 1.0
     t = d / L[:, None]
     nseg = np.stack([-t[:, 1], t[:, 0]], axis=1)
@@ -67,19 +68,19 @@ def _normals_2d(xy):
     n[0], n[-1] = nseg[0], nseg[-1]
     if len(xy) > 2:
         m = nseg[:-1] + nseg[1:]
-        ml = np.hypot(m[:, 0], m[:, 1])
+        ml = dnp.hypot(m[:, 0], m[:, 1])
         ml[ml < 1e-9] = 1.0
         m = m / ml[:, None]
         cos = np.clip((m * nseg[1:]).sum(1), 0.5, 1.0)          # miter at most 2x
         n[1:-1] = m / cos[:, None]
-    if len(xy) > 3 and float(np.hypot(*(xy[0] - xy[-1]))) < 1e-6:
+    if len(xy) > 3 and float(dnp.hypot(*(xy[0] - xy[-1]))) < 1e-6:
         # a closed loop (an island's curb band): its ends are one vertex, mitred across the seam like any other, else the two
         # one-sided ends leave a wedge between them (a segment's turn wide at a wide band: the roundabout's apron, 2026-11-10)
         m = nseg[-1] + nseg[0]
-        ml = float(np.hypot(*m))
+        ml = float(dnp.hypot(*m))
         if ml > 1e-9:
             m = m / ml
-            n[0] = n[-1] = m / max(float(np.dot(m, nseg[0])), 0.5)
+            n[0] = n[-1] = m / max(float(dnp.dot(m, nseg[0])), 0.5)
     return n
 
 
@@ -150,9 +151,9 @@ def simplify(pts, tol=LEAN_TOL_M):
             continue
         seg = pts[b] - pts[a]
         rel = pts[a + 1:b] - pts[a]
-        L2 = float(seg @ seg)
+        L2 = float(dnp.matmul(seg, seg))
         if L2 > 0:
-            t = np.clip(rel @ seg / L2, 0.0, 1.0)
+            t = np.clip(dnp.matmul(rel, seg) / L2, 0.0, 1.0)
             d = rel - t[:, None] * seg
         else:
             d = rel
@@ -171,7 +172,7 @@ def _soft_parts(p):
     kind, curb, out, _, ramps, w, h, caps, slab, europe, mat, surface, taper = p
     if not taper or not any(caps):
         return p, []
-    stations = np.r_[0., np.cumsum(np.hypot(*np.diff(curb[:, :2], axis=0).T))]
+    stations = np.r_[0., np.cumsum(dnp.hypot(*np.diff(curb[:, :2], axis=0).T))]
     length = stations[-1]
     reach = min(END_TAPER_M, length * .4)
     lo = min(reach, min((a - RAMP_FLARE for a, _ in ramps), default=reach)) if caps[0] else 0.
@@ -204,7 +205,7 @@ def _soft_parts(p):
             [direction[:, None, :] * pr[None, :, :1], np.broadcast_to(pr[None, :, 1:], (len(s), len(pr), 1))],
             axis=2)
         t = (s - a) / width if start else (b - s) / width
-        weight = t ** 2 * (3 - 2 * t)
+        weight = (t * t) * (3 - 2 * t)
         tips.append((points, weight, s - lo, direction, pr, slab))
     return centre, tips
 
@@ -478,7 +479,7 @@ def _cut_slab(walk, edges, coverage):
 
     pts = np.asarray(walk["pts"], np.float64)
     step = np.diff(pts[:, :2], axis=0)
-    distance = np.hypot(*step.T)
+    distance = dnp.hypot(*step.T)
     arc = np.r_[0., np.cumsum(distance)]
     blocked = []
     for i, quad in enumerate(_slab_quads(*edges)):
@@ -487,11 +488,11 @@ def _cut_slab(walk, edges, coverage):
         direction = step[i] / distance[i]
         # At a mitre the cross section is oblique. Include its reach along
         # the centreline so a trimmed end cannot poke back into the slab.
-        skew = max(abs((quad[0] - pts[i, :2]) @ direction), abs((quad[1] - pts[i + 1, :2]) @ direction))
+        skew = max(abs(dnp.matmul(quad[0] - pts[i, :2], direction)), abs(dnp.matmul(quad[1] - pts[i + 1, :2], direction)))
         for hit in coverage.overlaps(quad):
             if _area2(hit) < .025:
                 continue
-            s = (hit - pts[i, :2]) @ direction + arc[i]
+            s = dnp.matmul(hit - pts[i, :2], direction) + arc[i]
             blocked.append((max(0., float(s.min()) - skew - .04), min(arc[-1], float(s.max()) + skew + .04)))
     if not blocked:
         return [walk]

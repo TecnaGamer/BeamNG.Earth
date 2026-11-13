@@ -5,6 +5,7 @@
 //!   16-tile I-83 Baltimore probe's CPU, 2026-11-12. The test is inside_blockers' (the same box, the same distances).
 //! * deck_floor: roads._deck_floor, its numpy round per deck chunk (~1.5 % of the same probe), the same numbers
 //!   (operation order, numpy's first minimum).
+use crate::dm::Dm;
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -76,7 +77,7 @@ pub fn inside_road_cuts<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, s
                 let (dx, dy) = (sg[[k, 2]] - ax, sg[[k, 3]] - ay);
                 let l2 = (dx * dx + dy * dy).max(1e-12);
                 let t = (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0);
-                if (x - (ax + t * dx)).hypot(y - (ay + t * dy)) < h[b] {
+                if (x - (ax + t * dx)).dhypot(y - (ay + t * dy)) < h[b] {
                     out[i] = true;
                     break 'blk;
                 }
@@ -130,7 +131,7 @@ pub fn deck_floor<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyRea
             let (mut best, mut bd, mut bt) = (usize::MAX, f64::INFINITY, 0.0);
             for (j, s) in segs.iter().enumerate() {
                 let t = clip01(((x - s[0]) * s[3] + (y - s[1]) * s[4]) / s[5]);
-                let d = (s[0] + t * s[3] - x).hypot(s[1] + t * s[4] - y);
+                let d = (s[0] + t * s[3] - x).dhypot(s[1] + t * s[4] - y);
                 if d.is_nan() {             // (numpy's argmin: the first NaN)
                     best = j;
                     bd = d;
@@ -168,7 +169,7 @@ pub fn offset_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, d:
     // (the unit left normal of each segment: t / max(|t|, 1e-9) turned left)
     let nrm: Vec<(f64, f64)> = (0..k - 1).map(|i| {
         let (tx, ty) = (p[[i + 1, 0]] - p[[i, 0]], p[[i + 1, 1]] - p[[i, 1]]);
-        let mut l = tx.hypot(ty);
+        let mut l = tx.dhypot(ty);
         if l < 1e-9 {
             l = 1e-9;
         }
@@ -184,7 +185,7 @@ pub fn offset_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, d:
         } else {
             let (a, b) = (nrm[i - 1], nrm[i]);
             let (mut mx, mut my) = (a.0 + b.0, a.1 + b.1);
-            let mut ml = mx.hypot(my);
+            let mut ml = mx.dhypot(my);
             if ml < 1e-9 {
                 ml = 1e-9;
             }
@@ -272,7 +273,7 @@ pub fn nearest_segments<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, a
         for j in 0..s {
             let t = clip(((x - a[[j, 0]]) * d[[j, 0]] + (y - a[[j, 1]]) * d[[j, 1]]) / l2[j], 0.0, 1.0);
             let (qx, qy) = (a[[j, 0]] + t * d[[j, 0]], a[[j, 1]] + t * d[[j, 1]]);
-            let dist = (qx - x).hypot(qy - y);
+            let dist = (qx - x).dhypot(qy - y);
             if dist.is_nan() {
                 best = j;
                 bd = dist;

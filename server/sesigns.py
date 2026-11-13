@@ -31,6 +31,8 @@ import math
 from collections import namedtuple
 
 import numpy as np
+import dmath
+import dnp
 
 import guardrails
 import motesfri
@@ -93,7 +95,7 @@ def _row(group, p, facing, frame, elev):
     la, lo, _ = frame.enu_to_geodetic(np.array([x]), np.array([y]), np.zeros(1))
     z = float(np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]).ravel()[0])
     return [guardrails.GROUPS.index(group), round(x, 3), round(y, 3), round(z, 3),
-            round(math.degrees(math.atan2(fy, fx)), 2), 0.0, HEIGHTS[group], 0.0, fx, fy, 0.0, -fy, fx, 0.0, 0.0, 0.0, 1.0]
+            round(math.degrees(dmath.atan2(fy, fx)), 2), 0.0, HEIGHTS[group], 0.0, fx, fy, 0.0, -fy, fx, 0.0, 0.0, 0.0, 1.0]
 
 
 Sign = namedtuple("Sign", "group p facing")
@@ -111,7 +113,7 @@ def _forward(w):
 
 def _point(xy, s):
     """(the point s m along polyline xy, the unit tangent there)."""
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     k = min(max(int(np.searchsorted(cum, s, side="right")) - 1, 0), len(seg) - 1)
     t = (xy[k + 1] - xy[k]) / max(float(seg[k]), 1e-9)
@@ -136,7 +138,7 @@ def _behind(way, at, travel, d, ways):
             for j, sense in ((0, -1), (-1, 1)):                 # its end at our start: drawn the way we go
                 if _touches(start, w.xy[j, :2]) and (not w.spec.oneway or _travel(w) == sense):
                     o = w.xy[:, :2] if sense > 0 else w.xy[::-1, :2]
-                    if float(np.dot(_point(o, _length(o) - 1e-6)[1], heading)) > motesfri.STRAIGHT_COS:
+                    if float(dnp.dot(_point(o, _length(o) - 1e-6)[1], heading)) > motesfri.STRAIGHT_COS:
                         way, travel, at = w, sense, _length(o) if sense > 0 else 0.0
                         break
             else:
@@ -199,7 +201,7 @@ def _spans(ways):
             b = parts.get(k + 1)
             if b is None or len(a.xy) < 2 or len(b.xy) < 2:
                 continue
-            gap = float(np.hypot(*(b.xy[0, :2] - a.xy[-1, :2])))
+            gap = float(dnp.hypot(*(b.xy[0, :2] - a.xy[-1, :2])))
             if motesfri.JOIN_M < gap <= SPAN_MAX_M:
                 out.append(motesfri.Way(f"{feat}:{k}+", a.spec, a.tags, np.vstack([a.xy[-1, :2], b.xy[0, :2]]), a.key))
     return out
@@ -281,7 +283,7 @@ def _in_median(p, t, w, ways, own):
             continue
         at, _, _ = motesfri._project(p[None], x.xy[:, :2])
         _, u = _point(x.xy[:, :2], float(at[0]))
-        if float(np.dot(u, t)) * _travel(x) > -motesfri.STRAIGHT_COS:
+        if float(dnp.dot(u, t)) * _travel(x) > -motesfri.STRAIGHT_COS:
             continue                                    # (not the oncoming traffic's)
         best = (d, x)
     if best is None:
@@ -376,7 +378,7 @@ def spanish(ways):
 
     def nearest(q):
         t = np.clip(((q - a) * ab).sum(1) / l2, 0.0, 1.0)
-        d = np.hypot(*(a + t[:, None] * ab - q).T)
+        d = dnp.hypot(*(a + t[:, None] * ab - q).T)
         k = int(d.argmin())
         return float(d[k]), k, float(t[k])
     out = []
@@ -389,12 +391,12 @@ def spanish(ways):
             continue
         main = mains[int(own[k])]
         first = int(np.flatnonzero(own == own[k])[0])
-        at = float(np.hypot(*ab[first:k].T).sum() + t * math.sqrt(l2[k]))
+        at = float(dnp.hypot(*ab[first:k].T).sum() + t * math.sqrt(l2[k]))
         u = ab[k] / math.sqrt(l2[k])
         left = np.array([-u[1], u[0]])
         mid = _point(xy, _length(xy) / 2)[0]
         travel = 1
-        if float(np.dot(mid - a[k], left)) > 0:             # it leaves to the left of the geometry: the other way's road
+        if float(dnp.dot(mid - a[k], left)) > 0:             # it leaves to the left of the geometry: the other way's road
             if main.spec.oneway:
                 continue
             travel, u, left = -1, -u, -left
@@ -403,8 +405,8 @@ def spanish(ways):
             if travel < 0:
                 continue                                    # (on its right against the traffic)
         h = xy[-1] - _point(xy, max(_length(xy) - TAIL_M, 0.0))[0]
-        h = h / max(float(np.hypot(*h)), 1e-9)
-        back, along = float(np.dot(h, left)), float(np.dot(h, u))
+        h = h / max(float(dnp.hypot(*h)), 1e-9)
+        back, along = float(dnp.dot(h, left)), float(dnp.dot(h, u))
         end = nearest(xy[-1])[0]
         if (end < NEAR_MAIN_M and back > LINK_BACK) or (SIDE_ROAD_M[0] < end < SIDE_ROAD_M[1]
                                                         and (back >= LINK_ACROSS or (abs(back) < LINK_ACROSS
@@ -483,7 +485,7 @@ class _Lines:
         if not len(self.a):
             return False
         t = np.clip(((p - self.a) * self.d).sum(1) / self.l2, 0.0, 1.0)
-        return float(np.hypot(*(self.a + t[:, None] * self.d - p).T).min()) < motesfri.JOIN_M
+        return float(dnp.hypot(*(self.a + t[:, None] * self.d - p).T).min()) < motesfri.JOIN_M
 
 
 def ramp_signs(ways, skip=()):
@@ -549,7 +551,7 @@ def zebra_signs(near_roads, zebras):
         _, fid, s, xy = best
         at, _, _ = motesfri._project(q, xy)
         c, t = _point(xy, float(at[0]))
-        if any(f == fid and float(np.hypot(*(c - e))) < ONE_ZEBRA_M for f, e in taken):
+        if any(f == fid and float(dnp.hypot(*(c - e))) < ONE_ZEBRA_M for f, e in taken):
             continue
         taken.append((fid, c))
         reach = s.width / 2 + PLAIN_SIDE_M

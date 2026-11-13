@@ -20,6 +20,8 @@ from threading import Lock
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import junctions
 
@@ -123,7 +125,7 @@ def find(rows, bounds=None, rings=(), ground=False):
         if roads.has_sidewalks(a) or roads.has_sidewalks(b):
             continue                            # (a curb return's: roads.build_tile)
         ua, ub = c["edge_cuts"][0][1], c["edge_cuts"][1][1]
-        if a.oneway and b.oneway and float(np.dot(ua, ub)) > math.cos(math.radians(MERGE_DEG)):
+        if a.oneway and b.oneway and float(dnp.dot(ua, ub)) > dmath.cos(math.radians(MERGE_DEG)):
             continue                            # a ramp's gore, a divided road's split: no asphalt fan between them
         if ground:
             out.append(c)
@@ -298,8 +300,8 @@ def curb_corners(entry):
             p = np.asarray(c["arc"], np.float64)[len(c["arc"]) // 2]
             if isl and islands.in_island(isl, p[:2]):
                 continue
-            if any(float(np.hypot(*(p[:2] - f["poly"].mean(0))))
-                   < float(np.max(np.hypot(*(f["poly"] - f["poly"].mean(0)).T))) + islands.ENTRY_CLEAR_M
+            if any(float(dnp.hypot(*(p[:2] - f["poly"].mean(0))))
+                   < float(np.max(dnp.hypot(*(f["poly"] - f["poly"].mean(0)).T))) + islands.ENTRY_CLEAR_M
                    for f in isl if f.get("round")):
                 continue
             out.append(c)
@@ -348,7 +350,7 @@ def _decal_line(c):
     d = np.diff(line[:, :2], axis=0)
     k = len(d) // 2
     right = np.array([d[k, 1], -d[k, 0]])
-    if float(right @ -c["inward"][k]) < 0:          # the pavement must be on its right
+    if float(dnp.matmul(right, -c["inward"][k])) < 0:          # the pavement must be on its right
         line = line[::-1].copy()
     return line
 
@@ -458,9 +460,9 @@ def _z_on(xy, z, pts):
     a, b = xy[:-1], xy[1:]
     d = b - a
     L2 = np.maximum(np.sum(d * d, axis=1), 1e-12)
-    t = np.clip(np.einsum("mkj,kj->mk", pts[:, None, :] - a[None], d) / L2[None], 0.0, 1.0)
+    t = np.clip(dnp.vecdot(pts[:, None, :] - a[None], d) / L2[None], 0.0, 1.0)
     q = a[None] + t[..., None] * d[None]
-    k = np.argmin(np.hypot(pts[:, None, 0] - q[..., 0], pts[:, None, 1] - q[..., 1]), axis=1)
+    k = np.argmin(dnp.hypot(pts[:, None, 0] - q[..., 0], pts[:, None, 1] - q[..., 1]), axis=1)
     i = np.arange(len(pts))
     return z[k] + t[i, k] * (z[k + 1] - z[k])
 
@@ -495,8 +497,8 @@ def grade_rows(parts, plans, frame, rings=()):
 def _edge_dists(c, specs, pts):
     """m of points pts (m, 2) of a corner's fan beyond each of its two roads' carriageway edges: (d_i, d_j)."""
     (Pi, ui, _), (Pj, uj, _) = c["edge_cuts"]
-    di = (pts - Pi) @ np.array([-ui[1], ui[0]]) - specs[0].width / 2
-    dj = -((pts - Pj) @ np.array([-uj[1], uj[0]])) - specs[1].width / 2
+    di = dnp.matmul(pts - Pi, np.array([-ui[1], ui[0]])) - specs[0].width / 2
+    dj = -(dnp.matmul(pts - Pj, np.array([-uj[1], uj[0]]))) - specs[1].width / 2
     return di, dj
 
 
@@ -527,7 +529,7 @@ def grade(rows, rings=(), bounds=None, heights=None):
             for (f, _), at in zip(c["road_sides"], (0, -1)):
                 q = arc[at:at + 1 if at == 0 else None, :2]
                 best = min(heights.get(f, ()), default=None,
-                           key=lambda h, q=q: float(np.min(np.hypot(*(h[0] - q[0]).T))))
+                           key=lambda h, q=q: float(np.min(dnp.hypot(*(h[0] - q[0]).T))))
                 ends.append(arc[at, 2] if best is None else float(_z_on(best[0], best[1], q)[0]))
             arc[:, 2] = np.linspace(ends[0], ends[1], len(arc))
         flat = np.array([grading.shoulder(sp) for sp in specs])

@@ -74,6 +74,8 @@ import numpy as np
 import mercator
 
 import fast
+import dmath
+import dnp
 import pacer
 import staging
 from PIL import Image
@@ -105,7 +107,7 @@ SIGMA_S_M = 300.0                   # local step: cut blur of the ratio
 SIGMA_F_M = 1500.0                  # fade of the half-steps with the distance to the seam
 FADE_CUTS = 4.0                     # the fade is tapered to 0 at FADE_CUTS sigma_f (at most one region)
 SPLIT = 0.5                         # each side moves half way
-CLAMP = math.log(2.0)
+CLAMP = dmath.log(2.0)
 # Detection
 DET_F = 2                           # detection grid: 2 cells (15 m)
 SEG_M, NSEG, DEPTH_M = 240.0, 5, 45.0   # tested line: 5 segments of 240 m, 45 m bands each side
@@ -163,7 +165,7 @@ def dt_blur(X, sigma, cut=None, iters=3):
     for i in range(iters):
         pacer.pace()
         s = sigma * math.sqrt(3) * 2 ** (iters - i - 1) / math.sqrt(4 ** iters - 1)
-        a = math.exp(-math.sqrt(2) / s)
+        a = dmath.exp(-math.sqrt(2) / s)
         _rf_pass(X, cut_h, a)
         Xt = np.ascontiguousarray(X.transpose(1, 0, 2))
         _rf_pass(Xt, cut_v, a)
@@ -236,19 +238,19 @@ def smooth_ratio(U, S, w0, sigma, cut=None, robust=2, tau=0.25, usgs=False):
     """(Lsm, w): log ratio USGS / S2 of edge-aware weighted blurs, with IRLS outlier rejection
     (residuals against the blur, tau in log units). usgs: also the log of the weighted USGS blur
     alone, (Lsm, w, Lu) (the weight blurred as one more channel: the others are unchanged)."""
-    L = np.log(U + EPS) - np.log(S + EPS)
+    L = dnp.log(U + EPS) - dnp.log(S + EPS)
     w = w0.copy()
     for it in range(robust + 1):
         pacer.pace()
         last = usgs and it == robust
         X = np.concatenate([U * w[..., None], S * w[..., None]] + ([w[..., None]] if last else []), -1)
         B = dt_blur(X, sigma, cut)
-        Lsm = np.log(B[..., :3] + EPS * 0.25) - np.log(B[..., 3:6] + EPS * 0.25)
+        Lsm = dnp.log(B[..., :3] + EPS * 0.25) - dnp.log(B[..., 3:6] + EPS * 0.25)
         if it < robust:
-            r = np.sqrt(((L - Lsm) ** 2).mean(-1))
-            w = w0 * np.exp(-0.5 * (r / tau) ** 2)
+            r = np.sqrt((dnp.sq(L - Lsm)).mean(-1))
+            w = w0 * dnp.exp(-0.5 * dnp.sq(r / tau))
     if usgs:
-        return Lsm, w, np.log(B[..., :3] / np.maximum(B[..., 6:], 1e-6) + EPS)
+        return Lsm, w, dnp.log(B[..., :3] / np.maximum(B[..., 6:], 1e-6) + EPS)
     return Lsm, w
 
 
@@ -267,7 +269,7 @@ def _unrot(a, deg, shape):
 
 def normals(ang):
     """Unit normal (nx, ny) in image coordinates of the step filter rotated by ang (rad)."""
-    return -np.sin(ang), np.cos(ang)
+    return -dnp.sin(ang), dnp.cos(ang)
 
 
 def _seam_pass(arrs, half, depth, offs, nseg, gate):
@@ -404,7 +406,7 @@ def _drop_small(mask, min_cells, score, min_score, D, max_incons):
         ms = float(score[ys[m], xs[m]].mean())
         Dc = D[ys[m], xs[m]]
         md = np.median(Dc, 0)
-        inc = float(np.median(np.linalg.norm(Dc - md, axis=1)) / max(float(np.linalg.norm(md)), 1e-6))
+        inc = float(np.median(dnp.norm(Dc - md, axis=1)) / max(float(dnp.norm(md)), 1e-6))
         if ms >= min_score and inc <= max_incons:
             keep[k] = True
             stats.append(dict(cells=int(m.sum()), extent=int(ext), score=round(ms, 3), incons=round(inc, 2),
@@ -439,7 +441,7 @@ def seam_lines(ys, xs, ang, D, fine, F=LINE_F, along=LINE_ALONG, across=LINE_ACR
         P = fine(py, px).mean(2)                            # [cells, k, 3] profile across the seam
         good = np.isfinite(P).all((1, 2))
         d = D[s]
-        dn = d / np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-6)
+        dn = d / np.maximum(dnp.norm(d, axis=-1, keepdims=True), 1e-6)
         proj = np.where(good[:, None], (np.nan_to_num(P) * dn[:, None, :]).sum(-1), 0.0)
         c = np.concatenate([np.zeros((len(s), 1)), np.cumsum(proj, 1)], 1)
         bs, bo = np.full(len(s), -1e9), np.zeros(len(s))
@@ -493,7 +495,7 @@ def detect_region(U, S, valid, cell_m, core, fine=None):
     _, w = smooth_ratio(U, S, w0, 4.0, None, robust=1, tau=DET_TAU)
     f = DET_F
     dc = cell_m * f
-    sm, an, Dd, _, stats = detect_seams(np.log(down(U, f) + EPS), np.log(down(S, f) + EPS), down(w, f),
+    sm, an, Dd, _, stats = detect_seams(dnp.log(down(U, f) + EPS), dnp.log(down(S, f) + EPS), down(w, f),
                                         seg=max(4, int(round(SEG_M / dc))), depth=max(2, int(round(DEPTH_M / dc))),
                                         min_len=int(round(MIN_LEN_M / dc)))
     out = dict(y=np.zeros(0, np.int64), x=np.zeros(0, np.int64), ang=np.zeros(0, np.float32),
@@ -536,7 +538,7 @@ def detect_region(U, S, valid, cell_m, core, fine=None):
         m = (lab == k) & ok
         if m.any():
             md = np.median(step[m], 0)
-            share = float(np.median(ustep[m], 0) @ md) / max(float(md @ md), 1e-12)
+            share = float(dnp.matmul(np.median(ustep[m], 0), md)) / max(float(dnp.matmul(md, md)), 1e-12)
             st = dict(st, share=round(share, 2))
             if share < MIN_SHARE:
                 keep &= lab != k
@@ -577,8 +579,8 @@ def seam_distance(seam):
     Y = np.arange(h, dtype=np.float32)[:, None, None]
     X = np.arange(w, dtype=np.float32)[None, :, None]
     for i in range(0, len(ys), 128):
-        dy2 = (Y - ys[None, None, i:i + 128].astype(np.float32)) ** 2      # [h, 1, k]
-        dx2 = (X - xs[None, None, i:i + 128].astype(np.float32)) ** 2      # [1, w, k]
+        dy2 = dnp.sq(Y - ys[None, None, i:i + 128].astype(np.float32))      # [h, 1, k]
+        dx2 = dnp.sq(X - xs[None, None, i:i + 128].astype(np.float32))      # [1, w, k]
         best = np.minimum(best, (dy2 + dx2).min(-1))
     return np.sqrt(best)
 
@@ -616,7 +618,7 @@ def feather_field(seams, origin, shape_c, cell_m, cut_m):
     a = np.clip(Es[..., 3:] / 1e-3, 0, 1)
     E = a * Es[..., :3] / np.maximum(Es[..., 3:], 1e-9) + (1 - a) * El[..., :3] / np.maximum(El[..., 3:], 1e-9)
     dist = seam_distance(seam_c) * cs                         # m
-    fade = np.exp(-0.5 * (dist / SIGMA_F_M) ** 2)
+    fade = dnp.exp(-0.5 * dnp.sq(dist / SIGMA_F_M))
     t = np.clip((cut_m - dist) / (0.25 * cut_m), 0, 1)        # smooth taper to 0 at cut_m
     fade *= t * t * (3 - 2 * t)
     C = np.clip(-E * fade[..., None], -CLAMP, CLAMP).astype(np.float32)
@@ -727,7 +729,7 @@ class Field:
     def __init__(self, n_cells, C, sid=None, line=None, cA=None, cB=None, meta=None):
         self.n = n_cells
         self.C = np.asarray(C, np.float16).astype(np.float32)      # as stored: the same bytes either way
-        self.gain = np.exp(self.C)
+        self.gain = dnp.exp(self.C)
         self.noop = np.abs(self.C).max(-1) < NOOP
         self.pb = PADC * COARSE                     # band map margin (cells)
         self.sid = sid
@@ -736,7 +738,7 @@ class Field:
             self.line = np.asarray(line, np.float32)    # qy, qx (cells, core corner at 0), ny, nx
             self.cA = np.asarray(cA, np.float32)
             self.cB = np.asarray(cB, np.float32)
-            self.gA, self.gB = np.exp(self.cA), np.exp(self.cB)
+            self.gA, self.gB = dnp.exp(self.cA), dnp.exp(self.cB)
         self.meta = meta or {}
 
     def arrays(self):
@@ -796,7 +798,7 @@ class Field:
             s = np.repeat(s, Fi * Fi)
             d16 = (((py + 0.5) / F + cy0 - L[s, 0]) * L[s, 2] + ((px + 0.5) / F + cx0 - L[s, 1]) * L[s, 3]) * LINE_F
             a = np.clip(0.5 + d16 / (2 * RAMP), 0, 1)[:, None]
-            G[py, px] = np.exp(a * self.cA[s] + (1 - a) * self.cB[s])
+            G[py, px] = dnp.exp(a * self.cA[s] + (1 - a) * self.cB[s])
             if z >= INPAINT_Z:
                 st = np.abs(d16) <= STRIP
                 if st.any():
@@ -806,7 +808,7 @@ class Field:
         B = int(round(1 / F))
         d16 = ((by + 0.5 + cy0 - L[s, 0]) * L[s, 2] + (bx + 0.5 + cx0 - L[s, 1]) * L[s, 3]) * LINE_F
         a = np.clip(0.5 + d16 / (2 * RAMP), 0, 1)[:, None]
-        gc = np.exp(a * self.cA[s] + (1 - a) * self.cB[s])
+        gc = dnp.exp(a * self.cA[s] + (1 - a) * self.cB[s])
         py, px = by // B, bx // B
         acc = np.zeros(G.shape, np.float32)
         cnt = np.zeros(G.shape[:2], np.float32)
@@ -878,7 +880,7 @@ class TileSampler:
             key = np.clip(yy >> 8, 0, n - 1) * n + ((xx >> 8) % n)
             j = np.minimum(np.searchsorted(ids, key), len(keys) - 1)
             j = np.where(ids[j] == key, j, len(keys))
-            v = np.log(SRGB2LIN[stack[j, np.clip(yy, 0, None) & 255, xx & 255]] + EPS)
+            v = dnp.log(SRGB2LIN[stack[j, np.clip(yy, 0, None) & 255, xx & 255]] + EPS)
             v[~have[j]] = np.nan
             vals.append(v)
         return (vals[0] * (1 - fx) + vals[1] * fx) * (1 - fy) + (vals[2] * (1 - fx) + vals[3] * fx) * fy
@@ -966,7 +968,7 @@ class ColorMatch:
 
     def cell_m(self, rk):
         """Cell size (m) of the region's grid at its centre."""
-        return EARTH_CIRC * math.cos(math.radians(self._center_of(rk)[0])) / (TILE * 2 ** GRID_Z)
+        return EARTH_CIRC * dmath.cos(math.radians(self._center_of(rk)[0])) / (TILE * 2 ** GRID_Z)
 
     def _distance(self, rk):
         if self._center is None:
@@ -974,7 +976,7 @@ class ColorMatch:
         lat, lon = self._center_of(rk)
         la0, lo0 = self._center
         dlon = (lon - lo0 + 180.0) % 360.0 - 180.0
-        return math.hypot((lat - la0) * 111320.0, dlon * 111320.0 * math.cos(math.radians(la0)))
+        return math.hypot((lat - la0) * 111320.0, dlon * 111320.0 * dmath.cos(math.radians(la0)))
 
     # --- files ---------------------------------------------------------------------------------
     def _paths(self, rk, kind):
@@ -1085,8 +1087,8 @@ class ColorMatch:
         if abs(lat) >= mercator.MAX_LAT:        # no Web-Mercator imagery to match (the poles)
             return
         x = (lon / 360.0 + 0.5) * n * TILE
-        y = (0.5 - math.asinh(math.tan(math.radians(lat))) / (2 * math.pi)) * n * TILE
-        rpx = radius / (EARTH_CIRC * math.cos(math.radians(lat)) / (TILE * n))
+        y = (0.5 - dmath.asinh(dmath.tan(math.radians(lat))) / (2 * math.pi)) * n * TILE
+        rpx = radius / (EARTH_CIRC * dmath.cos(math.radians(lat)) / (TILE * n))
         for ry in range(max(0, int((y - rpx) // TILE)), min(n - 1, int((y + rpx) // TILE)) + 1):
             for rx in mercator.columns(x, rpx, TILE, n):
                 rk = (rx % n, ry)
@@ -1292,7 +1294,7 @@ class ColorMatch:
         if not F.has_band and F.noop.all():
             return EMPTY, info
         info.update(seams=sum(len(p["stats"]) for p in parts), km=round(len(seams["y"]) / DET_F * cm / 1000, 2),
-                    step_pct=[round(100 * (math.exp(abs(float(v))) - 1)) for v in np.median(seams["D"], 0)])
+                    step_pct=[round(100 * (dmath.exp(abs(float(v))) - 1)) for v in np.median(seams["D"], 0)])
         return F, info
 
     def _seams_of(self, rk):

@@ -9,6 +9,8 @@ which draws it on the map and steers the stock route arrows along it on its loca
 """
 import json
 import math
+import dmath
+import dnp
 
 import netfetch
 
@@ -37,7 +39,7 @@ def url(lat0, lon0, lat1, lon1, bearing=None, via=()):
 
 def _xy(lat, lon, lat_ref):
     m = 111320.0
-    return lon * m * math.cos(math.radians(lat_ref)), lat * m
+    return lon * m * dmath.cos(math.radians(lat_ref)), lat * m
 
 
 def _unwrap(points):
@@ -81,7 +83,7 @@ def simplify(points, tol_m=SIMPLIFY_M):
                 qx, qy = ax + t * dx, ay + t * dy
             else:
                 qx, qy = ax, ay
-            d = (px - qx) ** 2 + (py - qy) ** 2
+            d = dnp.sq(px - qx) + dnp.sq(py - qy)
             if d > best:
                 best, bi = d, i
         if bi > 0 and best > tol_m * tol_m:

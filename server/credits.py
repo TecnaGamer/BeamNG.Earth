@@ -35,6 +35,8 @@ import os
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import colormatch as colormatchmod
 import dem as demmod
@@ -239,7 +241,7 @@ def feature_ids(conn):
         and veg.sent
     if md is not None and hasattr(md, "layer_provenance"):
         dlat = FEATURE_NEAR_M / 110540.0
-        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
         for key in mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
             layers = (("roads", "buildings", "water") if roads_on else ()) \
                 + (("landcover",) if getattr(s, "surface", None) is not None else ()) \
@@ -340,7 +342,7 @@ def dem_keys(frame, bbox, zoom):
     n = 2 ** zoom
     fx = (lon / 360.0 + 0.5) * n
     fx = fx - n * np.round((fx - fx[0]) / n)                # unwrap across the antimeridian
-    fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * n
+    fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * n
     tx0, tx1 = int(math.floor(fx.min())), int(math.floor(fx.max()))
     ty0, ty1 = max(0, int(math.floor(fy.min()))), min(n - 1, int(math.floor(fy.max())))
     if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_DEM_KEYS:

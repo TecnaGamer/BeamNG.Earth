@@ -20,6 +20,7 @@
 //! under_deck_reach: a deck's height over a crossing as the dips under it see it: the straight line between its
 //! raised ends, or, higher, the most it reaches climbing `grade` from each end after `flat` m (the abutment lifts are
 //! asked so: grading.bridge_lifts), the lowest over the crossing's corridor.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -39,7 +40,7 @@ pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, ot
     }
     let mut s = vec![0.0f64; n];
     for i in 1..n {
-        s[i] = s[i - 1] + (xy[i][0] - xy[i - 1][0]).hypot(xy[i][1] - xy[i - 1][1]);
+        s[i] = s[i - 1] + (xy[i][0] - xy[i - 1][0]).dhypot(xy[i][1] - xy[i - 1][1]);
     }
     let total = s[n - 1];
     let g = grade.unwrap_or(base_grade);
@@ -48,7 +49,7 @@ pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, ot
     let mut add: Vec<f64> = (0..n).map(|i| {
         let d = if at_end { total - s[i] } else { s[i] };
         let u = (d / run).clamp(0.0, 1.0);
-        lift * 0.5 * (1.0 + (std::f64::consts::PI * u).cos())
+        lift * 0.5 * (1.0 + (std::f64::consts::PI * u).dcos())
     }).collect();
     let on: Vec<usize> = (0..n).filter(|&i| add[i] > 1e-3).collect();
     if on.is_empty() {
@@ -85,7 +86,7 @@ pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, ot
                 let ab = [b[0] - a[0], b[1] - a[1]];
                 let l2 = (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12);
                 let t = (((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1]) / l2).clamp(0.0, 1.0);
-                dist = dist.min((q[0] - (a[0] + t * ab[0])).hypot(q[1] - (a[1] + t * ab[1])));
+                dist = dist.min((q[0] - (a[0] + t * ab[0])).dhypot(q[1] - (a[1] + t * ab[1])));
             }
             let cap = ((dist - half - oh - gap) / sr).max(0.0);
             add[i] = add[i].min(cap);
@@ -117,7 +118,7 @@ pub fn approach_add_core(xy: &[[f64; 2]], at_end: bool, lift: f64, half: f64, ot
                 }
                 // (the vertices' own spacing as their weight: an uneven plan line is no lopsided average)
                 let span = 0.5 * (s[(j + 1).min(n - 1)] - s[j.saturating_sub(1)]).max(1e-3);
-                let w = (-0.5 * (ds / sig) * (ds / sig)).exp() * span;
+                let w = (-0.5 * (ds / sig) * (ds / sig)).dexp() * span;
                 s0 += w;
                 s1 += w * ds;
                 s2 += w * ds * ds;
@@ -172,7 +173,7 @@ pub fn junction_arm_raise_core(lift: &[f64], stub: &[f64], z_b: &[f64], z_far: &
     let mut best: Option<(f64, usize)> = None;
     for i in 0..lift.len() {
         let run = (lift[i] * std::f64::consts::PI / (2.0 * grade)).clamp(min_run, max_run);
-        let v = lift[i] * 0.5 * (1.0 + (std::f64::consts::PI * (stub[i] / run).min(1.0)).cos())
+        let v = lift[i] * 0.5 * (1.0 + (std::f64::consts::PI * (stub[i] / run).min(1.0)).dcos())
             - (z_far[i] - z_b[i]).max(0.0) + (z_far[i] - z_e).min(0.0);
         if v >= min_lift && best.map_or(true, |(b, _)| v > b) {
             best = Some((v, i));

@@ -13,6 +13,8 @@ import logging
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import mapgeom
@@ -123,7 +125,7 @@ def _at(line, arc, distance):
     span = max(float(arc[k + 1] - arc[k]), 1e-9)
     t = float(np.clip((distance - arc[k]) / span, 0.0, 1.0))
     d = line[k + 1] - line[k]
-    length = max(float(np.hypot(d[0], d[1])), 1e-9)
+    length = max(float(dnp.hypot(d[0], d[1])), 1e-9)
     return line[k] + t * d, d / length
 
 
@@ -167,7 +169,7 @@ def _surface_info(frame, points, elev, decks, deck_preference=None):
         v = points[:, None, :] - a[None, :, :]
         t = np.clip(np.sum(v * d[None, :, :], axis=2) / l2[None, :], 0.0, 1.0)
         near = a[None, :, :] + t[:, :, None] * d[None, :, :]
-        dist = np.hypot(points[:, None, 0] - near[:, :, 0],
+        dist = dnp.hypot(points[:, None, 0] - near[:, :, 0],
                         points[:, None, 1] - near[:, :, 1])
         k = np.argmin(dist, axis=1)
         row = np.arange(len(points))
@@ -258,7 +260,7 @@ def _parapet_deck_lines(decks):
     z1 = np.concatenate([ln[1:, 2] for ln in parts])
     v = b - a
     l2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
-    length = np.maximum(np.linalg.norm(v, axis=1), 1e-9)
+    length = np.maximum(dnp.norm(v, axis=1), 1e-9)
     return a, v, l2, v / length[:, None], z0, z1
 
 
@@ -272,9 +274,9 @@ def _deck_is_outward_of_parapet(mid, tangent, outward, z, decks, segs=None):
     t = np.clip(np.sum((mid - a) * v, axis=1) / l2, 0.0, 1.0)
     near = a + t[:, None] * v
     delta = near - mid
-    signed = delta @ outward
-    dist = np.hypot(delta[:, 0], delta[:, 1])
-    parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
+    signed = dnp.matmul(delta, outward)
+    dist = dnp.hypot(delta[:, 0], delta[:, 1])
+    parallel = np.abs(dnp.matmul(unit, tangent)) >= PARAPET_PARALLEL_DOT
     deck_z = z0 + t * (z1 - z0)
     level_ok = np.abs(deck_z - z) <= PARAPET_LEVEL_TOLERANCE_M
     return bool(np.any(parallel & level_ok & (signed >= 1.0) &
@@ -305,19 +307,19 @@ def _parapet_segments(parapets, decks=()):
             out = np.zeros_like(line)
         a, b = line[:-1], line[1:]
         d = b - a
-        length = np.hypot(d[:, 0], d[:, 1])
+        length = dnp.hypot(d[:, 0], d[:, 1])
         keep = length > 1e-6
         if not keep.any():
             continue
         unit = d[keep] / length[keep, None]
         mids = (a[keep] + b[keep]) * 0.5
         normals = out[:-1][keep] + out[1:][keep]
-        nl = np.linalg.norm(normals, axis=1)
+        nl = dnp.norm(normals, axis=1)
         normals[nl > 1e-9] /= nl[nl > 1e-9, None]
         is_outer = []
         segment_z = (z[:-1][keep] + z[1:][keep]) * 0.5
         for mid, tangent, outward, level in zip(mids, unit, normals, segment_z):
-            if np.linalg.norm(outward) < 1e-9 or not np.isfinite(level):
+            if dnp.norm(outward) < 1e-9 or not np.isfinite(level):
                 is_outer.append(False)
                 continue
             inner = deck_segs is not None and _deck_is_outward_of_parapet(mid, tangent, outward, float(level), decks,
@@ -332,7 +334,7 @@ def _parapet_segments(parapets, decks=()):
         return None
     a, b = np.concatenate(starts), np.concatenate(ends)
     d = b - a
-    length = np.hypot(d[:, 0], d[:, 1])
+    length = dnp.hypot(d[:, 0], d[:, 1])
     return {
         "a": a,
         "b": b,
@@ -352,7 +354,7 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
         return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
-    length = float(np.hypot(d[0], d[1]))
+    length = float(dnp.hypot(d[0], d[1]))
     if length < 1e-6:
         return False
     tangent = d / length
@@ -373,9 +375,9 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
     on_segment = (t_raw >= -1e-4) & (t_raw <= 1.0 + 1e-4)
     t = np.clip(t_raw, 0.0, 1.0)
     nearest = pa[None, :, :] + t[:, :, None] * v[None, :, :]
-    dist = np.hypot(samples[:, None, 0] - nearest[:, :, 0],
+    dist = dnp.hypot(samples[:, None, 0] - nearest[:, :, 0],
                     samples[:, None, 1] - nearest[:, :, 1])
-    parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
+    parallel = np.abs(dnp.matmul(unit, tangent)) >= PARAPET_PARALLEL_DOT
     matches = (dist <= distance_limit) & parallel[None, :] & on_segment
     if level is not None:
         parapet_z = segments["za"][box][None, :] + t * (segments["zb"][box] - segments["za"][box])[None, :]
@@ -393,7 +395,7 @@ def _overlaps_bridge_approach(a, b, run):
     line = np.asarray(run.get("line", ()), np.float64).reshape(-1, 2)
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
-    length = float(np.hypot(d[0], d[1]))
+    length = float(dnp.hypot(d[0], d[1]))
     if len(line) < 2 or length < 1e-6:
         return False
     tangent = d / length
@@ -401,14 +403,14 @@ def _overlaps_bridge_approach(a, b, run):
     for at, inside in ((0, 1), (-1, -2)):
         edge = line[at]
         outward = edge - line[inside]
-        edge_length = float(np.hypot(outward[0], outward[1]))
+        edge_length = float(dnp.hypot(outward[0], outward[1]))
         if edge_length < 1e-6:
             continue
         outward /= edge_length
-        if abs(float(np.dot(tangent, outward))) < PARAPET_PARALLEL_DOT:
+        if abs(float(dnp.dot(tangent, outward))) < PARAPET_PARALLEL_DOT:
             continue
         delta = samples - edge
-        along = delta @ outward
+        along = dnp.matmul(delta, outward)
         lateral = np.abs(delta[:, 0] * outward[1] - delta[:, 1] * outward[0])
         near = ((along >= -SPAN_TOL_M) & (along <= JOIN_LENGTH_M) &
                 (lateral <= JOIN_LATERAL_M))
@@ -447,7 +449,7 @@ def _deck_segments(decks):
             continue
         a, b = line[:-1, :2], line[1:, :2]
         d = b - a
-        length = np.hypot(d[:, 0], d[:, 1])
+        length = dnp.hypot(d[:, 0], d[:, 1])
         keep = length > 1e-6
         if not keep.any():
             continue
@@ -488,7 +490,7 @@ def _road_segments(roads):
         if spec is None or line.ndim != 2 or len(line) < 2:
             continue
         a, d = line[:-1, :2], np.diff(line[:, :2], axis=0)
-        length = np.hypot(d[:, 0], d[:, 1])
+        length = dnp.hypot(d[:, 0], d[:, 1])
         keep = length > 1e-6
         if not keep.any():
             continue
@@ -508,17 +510,17 @@ def _across_road(a, b, rsegs):
         return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     direction = b - a
-    tangent_len = float(np.hypot(direction[0], direction[1]))
+    tangent_len = float(dnp.hypot(direction[0], direction[1]))
     if tangent_len < 1e-6:
         return False
-    across = np.abs(rsegs["unit"] @ (direction / tangent_len)) < PARAPET_PARALLEL_DOT
+    across = np.abs(dnp.matmul(rsegs["unit"], direction / tangent_len)) < PARAPET_PARALLEL_DOT
     if not across.any():
         return False
     sa, su, sl, sh = rsegs["a"][across], rsegs["unit"][across], rsegs["len"][across], rsegs["half"][across]
     pts = a + np.linspace(0.0, 1.0, CROSS_SAMPLES)[:, None] * direction           # (s, 2)
     v = pts[:, None, :] - sa[None]                                              # (s, m, 2)
     along = np.clip(np.sum(v * su[None], axis=2), 0.0, sl[None])               # (on the segment: round its ends)
-    d = np.hypot(*(v - along[..., None] * su[None]).transpose(2, 0, 1))
+    d = dnp.hypot(*(v - along[..., None] * su[None]).transpose(2, 0, 1))
     return bool(np.any(d < sh[None] + RAIL_CLEAR_M))
 
 
@@ -534,12 +536,12 @@ def _along_road(a, b, rsegs):
         return None
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     direction = b - a
-    tangent_len = float(np.hypot(direction[0], direction[1]))
+    tangent_len = float(dnp.hypot(direction[0], direction[1]))
     if tangent_len < 1e-6:
         return None
     tangent = direction / tangent_len
     mid = 0.5 * (a + b)
-    dots = np.abs(rsegs["unit"] @ tangent)
+    dots = np.abs(dnp.matmul(rsegs["unit"], tangent))
     aligned = dots >= PARAPET_PARALLEL_DOT
     if not aligned.any():
         return None
@@ -561,12 +563,12 @@ def _along_road(a, b, rsegs):
         a2, u2, l2 = rsegs["a"][other], rsegs["unit"][other], rsegs["len"][other]
         t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
         n2 = a2 + t2[:, None] * u2
-        d2 = np.hypot(*(mid - n2).T) - rsegs["half"][other]
+        d2 = dnp.hypot(*(mid - n2).T) - rsegs["half"][other]
         j = int(np.argmin(d2))
         if float(d2[j]) <= MEDIAN_REACH_M:
             t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
             n1 = rsegs["a"][k] + t1 * unit
-            median = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+            median = float(dnp.dot(mid - n1, mid - n2[j])) < 0.0
             if median:
                 # (the gap between the two carriageways' edges, from this one's line toward the other: its middle,
                 # or the middle of their overlap; a mapped median barrier inside either goes there, _shift_to_edge)
@@ -634,18 +636,18 @@ def _relate(mid, segs, direction=None):
     aligned = np.ones(len(segs["unit"]), bool)
     if direction is not None:
         tangent = np.asarray(direction, np.float64)
-        tangent_len = float(np.hypot(tangent[0], tangent[1]))
+        tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
         if tangent_len < 1e-6:
             return None
         tangent = tangent / tangent_len
-        aligned = np.abs(segs["unit"] @ tangent) >= PARAPET_PARALLEL_DOT
+        aligned = np.abs(dnp.matmul(segs["unit"], tangent)) >= PARAPET_PARALLEL_DOT
     near = span & aligned & (past <= BRIDGE_SIDE_CLEARANCE_M + ALONGSIDE_REACH_M)
     if not near.any():
         return None
     cand = np.flatnonzero(near)
     k = int(cand[np.argmin(past[cand])])
     deck = int(segs["idx"][k])
-    dot = 1.0 if tangent is None else float(abs(segs["unit"][k] @ tangent))
+    dot = 1.0 if tangent is None else float(abs(dnp.matmul(segs["unit"][k], tangent)))
     rel = {"past": float(past[k]), "lat": float(abs(lateral[k])), "half": float(segs["half"][k]),
            "deck": deck, "median": False, "dot": dot, "gap": None,
            "slat": float(lateral[k]), "origin": np.asarray(segs["a"][k], np.float64),
@@ -655,12 +657,12 @@ def _relate(mid, segs, direction=None):
         a2, u2, l2 = segs["a"][other], segs["unit"][other], segs["len"][other]
         t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
         n2 = a2 + t2[:, None] * u2
-        d2 = np.hypot(*(mid - n2).T) - segs["half"][other]
+        d2 = dnp.hypot(*(mid - n2).T) - segs["half"][other]
         j = int(np.argmin(d2))
         if d2[j] <= MEDIAN_REACH_M:
             t1 = float(np.clip(along[k], 0.0, segs["len"][k]))
             n1 = segs["a"][k] + t1 * segs["unit"][k]
-            rel["median"] = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+            rel["median"] = float(dnp.dot(mid - n1, mid - n2[j])) < 0.0
             if rel["median"]:               # (the gap between the decks' edges: _to_gap)
                 v2 = n2[j] - n1
                 u = segs["unit"][k]
@@ -683,7 +685,7 @@ def _deck_ends(decks):
         line = np.asarray(deck.get("n", ()), np.float64)
         if line.ndim != 2 or len(line) < 2 or line.shape[1] < 3:
             continue
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if arc[-1] < 3.0:
             continue
         width = float(deck.get("w", 0.0))
@@ -692,11 +694,11 @@ def _deck_ends(decks):
             pts = line if at_start else line[::-1]
             dist = arc if at_start else arc[-1] - arc[::-1]
             e = pts[0]
-            if any(j != k and float(np.hypot(*(e[:2] - q))) < END_JOIN_SKIP_M for j, q in all_points):
+            if any(j != k and float(dnp.hypot(*(e[:2] - q))) < END_JOIN_SKIP_M for j, q in all_points):
                 continue
             i = min(int(np.searchsorted(dist, 3.0)), len(pts) - 1)
             inward = pts[i, :2] - e[:2]
-            length = float(np.hypot(*inward))
+            length = float(dnp.hypot(*inward))
             if length < 1e-6:
                 continue
             t = -inward / length
@@ -733,10 +735,10 @@ def _join_module(sa, sb, ends, direction=None):
     zone = (s >= 0.0) & (s <= JOIN_LENGTH_M) & (np.abs(lat) <= ends["half"] + BRIDGE_SIDE_CLEARANCE_M + JOIN_LATERAL_M)
     if direction is not None:
         tangent = np.asarray(direction, np.float64)
-        tangent_len = float(np.hypot(tangent[0], tangent[1]))
+        tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
         if tangent_len < 1e-6:
             return None
-        aligned = np.abs(ends["t"] @ (tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
+        aligned = np.abs(dnp.matmul(ends["t"], tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
         zone &= aligned
     if not zone.any():
         return None
@@ -748,8 +750,8 @@ def _join_module(sa, sb, ends, direction=None):
     out = []
     for q in (sa, sb, mid):
         dq = q - ends["e"][k]
-        sq = float(np.dot(dq, ends["t"][k]))
-        lq = float(np.dot(dq, ends["n"][k]))
+        sq = float(dnp.dot(dq, ends["t"][k]))
+        lq = float(dnp.dot(dq, ends["n"][k]))
         w = float(_smooth_weight(max(sq, 0.0)))
         shift = ends["n"][k] * ((target - lq) * w) if edge_type else np.zeros(2, np.float64)
         ze = float(ends["z"][k] + ends["g"][k] * max(sq, 0.0))
@@ -773,7 +775,7 @@ def _close_gap_to_deck(line, ends):
     for at_start in (True, False):
         p, q = (line[0], line[1]) if at_start else (line[-1], line[-2])
         v = p - q
-        vl = float(np.hypot(*v))
+        vl = float(dnp.hypot(*v))
         if vl < 1e-6:
             continue
         v = v / vl
@@ -783,7 +785,7 @@ def _close_gap_to_deck(line, ends):
         sign = np.where(lat >= 0.0, 1.0, -1.0)
         target = sign * (ends["half"] + BRIDGE_EDGE_OFFSET_M)
         ok = ((s > 0.5) & (s <= GAP_CLOSE_M) & (np.abs(lat) >= ends["half"])
-              & (np.abs(lat - target) <= GAP_LATERAL_M) & (-(ends["t"] @ v) >= PARAPET_PARALLEL_DOT))
+              & (np.abs(lat - target) <= GAP_LATERAL_M) & (-(dnp.matmul(ends["t"], v)) >= PARAPET_PARALLEL_DOT))
         if not ok.any():
             continue
         k = int(np.flatnonzero(ok)[np.argmin(s[ok])])
@@ -912,14 +914,14 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                     continue
                 e, n = mapgeom.enu_xy(feats, frame, lonlat)
                 line = np.column_stack((e, n))
-                seglen = np.hypot(*np.diff(line, axis=0).T)
+                seglen = dnp.hypot(*np.diff(line, axis=0).T)
                 line = line[np.r_[True, seglen > 1e-4]]
                 if len(line) < 2:
                     continue
                 closed_a = closed_b = False         # (an end run on to a deck: it joins the bridge's rail, no cap)
                 if rail and deck_hint is not False:
                     line, closed_a, closed_b = _close_gap_to_deck(line, ends)
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+                arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
                 total = float(arc[-1])
                 if total < 1.0:
                     continue
@@ -936,7 +938,7 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                     sb = sa + MODULE_LENGTH_M
                     a, _ = _at(line, arc, float(sa))
                     b, _ = _at(line, arc, float(sb))
-                    if float(np.hypot(*(b - a))) < 0.05:
+                    if float(dnp.hypot(*(b - a))) < 0.05:
                         continue
                     p = 0.5 * (a + b)
                     rank_bytes = hashlib.blake2b(f"{fid}:{part_no}:{k}".encode("utf-8"), digest_size=4).digest()
@@ -1064,7 +1066,7 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
             # The model's visible side is opposite its back axis. Keep the backs toward the centre
             # gap and the visible faces outward on both sides.
             tangent = b - a
-            tangent_len = float(np.hypot(tangent[0], tangent[1]))
+            tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
             if tangent_len >= 1e-6:
                 normal = np.array([-tangent[1], tangent[0]], np.float64) / tangent_len
                 side = 1.0 if pl["reverse"] else -1.0
@@ -1132,24 +1134,24 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
             continue
         p, a, b = pl["p"], pl["ma"], pl["mb"]
         forward = np.array([float(b[0] - a[0]), float(b[1] - a[1]), zb - za], np.float64)
-        length = float(np.linalg.norm(forward))
+        length = float(dnp.norm(forward))
         if length < 1e-6:
             continue
         forward /= length
         up = np.array([0.0, 0.0, 1.0], np.float64) - forward[2] * forward
-        up_len = float(np.linalg.norm(up))
+        up_len = float(dnp.norm(up))
         if up_len < 1e-6:
             up = np.array([0.0, 1.0, 0.0], np.float64)
         else:
             up /= up_len
         back = np.cross(up, forward)
-        back_len = float(np.linalg.norm(back))
+        back_len = float(dnp.norm(back))
         if back_len < 1e-6:
             continue
         back /= back_len
         if pl["reverse"]:
             forward, back = -forward, -back
-        yaw = math.degrees(math.atan2(float(forward[1]), float(forward[0])))
+        yaw = math.degrees(dmath.atan2(float(forward[1]), float(forward[0])))
         c0, c1 = forward, back
         if pl["group"] in (G_JERSEY, G_JERSEY_END):     # (the jersey model runs along its y axis)
             c0, c1 = -back, forward
@@ -1188,7 +1190,7 @@ def bridge_rows(parapets, frame=None):
         out = np.asarray(run.get("out", ()), np.float64).reshape(-1, 2)
         if len(line) < 2 or len(z) != len(line) or len(out) != len(line) or not np.isfinite(z).all():
             continue
-        keep = np.r_[True, np.hypot(*np.diff(line, axis=0).T) > 1e-4]
+        keep = np.r_[True, dnp.hypot(*np.diff(line, axis=0).T) > 1e-4]
         line, z, out = line[keep], z[keep], out[keep]
         if len(line) < 2:
             continue
@@ -1196,7 +1198,7 @@ def bridge_rows(parapets, frame=None):
         left = np.column_stack((-tang[:, 1], tang[:, 0]))
         if float(np.sum(left * (out[:-1] + out[1:]) * 0.5)) < 0.0:
             line, z, out = line[::-1], z[::-1], out[::-1]
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
         total = float(arc[-1])
         if total < 1.0:
             continue
@@ -1212,7 +1214,7 @@ def bridge_rows(parapets, frame=None):
             sb = sa + length
             a, _ = _at(line, arc, sa)
             b, _ = _at(line, arc, sb)
-            if float(np.hypot(*(b - a))) < 0.05:
+            if float(dnp.hypot(*(b - a))) < 0.05:
                 continue
             za, zb = float(np.interp(sa, arc, z)), float(np.interp(sb, arc, z))
             p = 0.5 * (a + b)
@@ -1224,21 +1226,21 @@ def bridge_rows(parapets, frame=None):
                 key = f"bridge:{p[0]:.1f}:{p[1]:.1f}"
             rank = int.from_bytes(hashlib.blake2b(key.encode("utf-8"), digest_size=4).digest(), "big") / 4294967296.0
             forward = np.array([float(b[0] - a[0]), float(b[1] - a[1]), zb - za], np.float64)
-            norm = float(np.linalg.norm(forward))
+            norm = float(dnp.norm(forward))
             if norm < 1e-6:
                 continue
             forward /= norm
             up = np.array([0.0, 0.0, 1.0], np.float64) - forward[2] * forward
-            up_len = float(np.linalg.norm(up))
+            up_len = float(dnp.norm(up))
             if up_len < 1e-6:
                 continue
             up /= up_len
             back = np.cross(up, forward)
-            back_len = float(np.linalg.norm(back))
+            back_len = float(dnp.norm(back))
             if back_len < 1e-6:
                 continue
             back /= back_len
-            yaw = math.degrees(math.atan2(float(forward[1]), float(forward[0])))
+            yaw = math.degrees(dmath.atan2(float(forward[1]), float(forward[0])))
             rows.append([0, float(p[0]), float(p[1]), zp, yaw, 0.0, MODULE_HEIGHT_M, rank,
                          float(forward[0]), float(forward[1]), float(forward[2]),
                          float(back[0]), float(back[1]), float(back[2]),

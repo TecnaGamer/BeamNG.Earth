@@ -19,6 +19,7 @@ import logging
 import os
 import struct
 import threading
+import dmath
 
 log = logging.getLogger("earthd.bakepack")
 
@@ -208,7 +209,7 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
         index = json.load(open(ip, encoding="utf-8"))
         for e in index.get("packs", []):
             s, w, n, east = e["bbox"]
-            k = 111320.0 * math.cos(math.radians(lat))
+            k = 111320.0 * dmath.cos(math.radians(lat))
             dy = max(s - lat, 0.0, lat - n) * 110540.0
             dx = max(w - lon, 0.0, lon - east) * k
             if math.hypot(dx, dy) > NEAR_M or not _matches(_Meta(e.get("meta") or {}), expect):

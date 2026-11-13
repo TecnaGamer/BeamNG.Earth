@@ -15,6 +15,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import mapgeom
@@ -113,7 +115,7 @@ def kind_of(feats, i, tags=None):
 
 def _yaw(dx, dy):
     """Degrees that turn a Forest item's local +x toward (dx, dy)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    return math.degrees(dmath.atan2(dy, dx)) % 360.0
 
 
 def _centres(line, length):
@@ -122,7 +124,7 @@ def _centres(line, length):
     if len(line) < 2:
         return
     step = np.diff(line, axis=0)
-    seglen = np.hypot(step[:, 0], step[:, 1])
+    seglen = dnp.hypot(step[:, 0], step[:, 1])
     total = float(seglen.sum())
     if total < length * 0.5:
         return
@@ -160,7 +162,7 @@ def _in_outlines(rings, pts):
         l2 = np.maximum(np.sum(d * d, axis=1), 1e-12)
         t = np.clip(np.sum((pts[:, None, :] - a[None]) * d[None], axis=2) / l2[None], 0.0, 1.0)
         near = a[None] + t[:, :, None] * d[None]
-        m |= np.hypot(pts[:, None, 0] - near[:, :, 0], pts[:, None, 1] - near[:, :, 1]).min(axis=1) <= OUTLINE_PAD_M
+        m |= dnp.hypot(pts[:, None, 0] - near[:, :, 0], pts[:, None, 1] - near[:, :, 1]).min(axis=1) <= OUTLINE_PAD_M
     return m
 
 
@@ -182,7 +184,7 @@ def _on_road(points, z, roads):
         v = points[:, None, :] - a[None, :, :]
         t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
         q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-        dm = np.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
+        dm = dnp.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
         k = np.argmin(dm, axis=1)
         rr = np.arange(len(points))
         zq = pts[k, 2] + t[rr, k] * (pts[k + 1, 2] - pts[k, 2])
@@ -205,7 +207,7 @@ def _along_deck(points, tangents, decks):
         v = points[:, None, :] - a[None, :, :]
         t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
         q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-        dm = np.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
+        dm = dnp.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
         k = np.argmin(dm, axis=1)
         rr = np.arange(n)
         dk = dm[rr, k]
@@ -259,7 +261,7 @@ def _panels(line, spacing=PANEL_M):
     line = roads.simplify(np.c_[line, np.zeros(len(line))], .08)[:, :2]
     for a, b in zip(line[:-1], line[1:]):
         d = b - a
-        length = float(np.linalg.norm(d))
+        length = float(dnp.norm(d))
         if length < .66:
             continue
         count = math.ceil(length / spacing)
@@ -271,7 +273,7 @@ def _french_panel_row(style, centre, direction, length):
     if style == "hedge":
         # The stock East Coast shrub has a broad crown. Use its height for a planted row and
         # overlap the foliage, so a mapped hedge reads continuously along bends and slopes.
-        return G_HEDGE, *centre, _yaw(*direction), 1.8 + .18 * math.sin(float(centre.sum()) * .7), 0.
+        return G_HEDGE, *centre, _yaw(*direction), 1.8 + .18 * dmath.sin(float(centre.sum()) * .7), 0.
     return ("fr_fence_" + style, *centre, _yaw(*direction),
             FR_HEIGHTS[style] * length / PANEL_M, 0.)
 
@@ -307,7 +309,7 @@ def _clear_hedges(rows, carriageways):
     if not len(segments):
         return rows
     a, b = segments[:, :2], segments[:, 2:]
-    span = np.hypot(*(b - a).T)
+    span = dnp.hypot(*(b - a).T)
     half = np.repeat(half, np.diff(starts))
     keep = span > 1e-6
     a, b, half = a[keep], b[keep], half[keep]
@@ -327,7 +329,7 @@ def _clear_hedges(rows, carriageways):
         def distances(q):
             along = np.clip(np.sum((q - u) * d, axis=1), 0., s)
             delta = q - (u + along[:, None] * d)
-            return delta, np.hypot(*delta.T)
+            return delta, dnp.hypot(*delta.T)
 
         radius = height * HEDGE_CROWN_PER_M + HEDGE_ROAD_MARGIN_M
         delta, distance = distances(p)
@@ -335,9 +337,9 @@ def _clear_hedges(rows, carriageways):
         j = int(gaps.argmin())
         if gaps[j] >= radius:
             continue
-        tangent = np.array([math.cos(math.radians(yaw)), math.sin(math.radians(yaw))])
+        tangent = np.array([dmath.cos(math.radians(yaw)), dmath.sin(math.radians(yaw))])
         move = radius - gaps[j] + .06
-        if gaps[j] < -.45 or move > HEDGE_SHIFT_M or abs(d[j] @ tangent) < .65:
+        if gaps[j] < -.45 or move > HEDGE_SHIFT_M or abs(dnp.matmul(d[j], tangent)) < .65:
             adjusted[i] = None
             continue
         p = p + move * delta[j] / max(distance[j], 1e-6)
@@ -365,7 +367,7 @@ def _street_segments(carriageways):
         local.extend([spec.cls in {"residential", "living_street", "unclassified"}] * (len(line) - 1))
     a, b = np.asarray(starts).reshape(-1, 2), np.asarray(ends).reshape(-1, 2)
     delta = b - a
-    length = np.linalg.norm(delta, axis=1)
+    length = dnp.norm(delta, axis=1)
     keep = length > .01
     return a[keep], delta[keep] / length[keep, None], length[keep], np.asarray(widths)[keep], np.asarray(local)[keep]
 
@@ -378,17 +380,17 @@ def _street_front(ring, streets, door):
     ends = np.roll(ring, -1, axis=0)
     mid = (ring + ends) / 2
     edges = ends - ring
-    widths = np.linalg.norm(edges, axis=1)
+    widths = dnp.norm(edges, axis=1)
     along = edges / np.maximum(widths, 1e-9)[:, None]
     toward = np.c_[along[:, 1], -along[:, 0]] * (1 if _area2(ring) > 0 else -1)
     rel = mid[:, None, :] - start
     station = np.sum(rel * direction, axis=2)
     q = start + np.clip(station, 0., length)[..., None] * direction
     delta = mid[:, None, :] - q
-    gap = np.linalg.norm(delta, axis=2)
+    gap = dnp.norm(delta, axis=2)
     setback = gap - half
     faces = (np.sum(delta * toward[:, None, :], axis=2) <= -.57 * gap)
-    parallel = np.abs(along @ direction.T) >= .58
+    parallel = np.abs(dnp.matmul(along, direction.T)) >= .58
     # A parallel street ending well before the wall is not its frontage.
     abreast = (station >= -2.5) & (station <= length + 2.5)
     eligible = faces & parallel & abreast & (setback >= 1.7) & (setback <= 22.) & (widths[:, None] >= 3.8)
@@ -398,7 +400,7 @@ def _street_front(ring, streets, door):
     if door is not None and door[0] < len(ring):
         rank[door[0]] -= 1.1
     edge, road = np.unravel_index(rank.argmin(), rank.shape)
-    tangent = direction[road] * (1 if direction[road] @ along[edge] > 0 else -1)
+    tangent = direction[road] * (1 if dnp.matmul(direction[road], along[edge]) > 0 else -1)
     return (edge, mid[edge], along[edge], widths[edge], q[edge, road], delta[edge, road] / gap[edge, road],
             tangent, half[road], setback[edge, road], local[road])
 
@@ -461,7 +463,7 @@ def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, gr
         hidden = building_walls.ray(centre, out, depth - .45)
         if hidden is not None:
             continue
-        length = min(width * abs(along @ tangent) - .4, 20.)
+        length = min(width * abs(dnp.matmul(along, tangent)) - .4, 20.)
         ends = np.array([centre - tangent * length / 2, centre + tangent * length / 2])
         near_wall = np.array([a + .18 * (mid - a), b + .18 * (mid - b)]) - .22 * out
         yard = np.array([*ends, near_wall[1], near_wall[0]])[None]
@@ -498,7 +500,7 @@ def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, gr
         style = ("hedge" if garden and depth > 3. and furniture._h01("fr-yard-hedge", seed) < .20
                  else french_panel("fence", {}, region, seed))
         if door is not None and door[0] == edge:
-            entry = float((a + door[1] * along - centre) @ tangent)
+            entry = float(dnp.matmul(a + door[1] * along - centre, tangent))
         else:
             entry = length * (.32 if furniture._h01("fr-yard-entry", seed) < .5 else -.32)
         # An open gate stays wide enough for a car, with clearance for the shrub's crown.
@@ -611,7 +613,7 @@ def french_rows(frame, infra_fn, box, elev, carriageways=()):
         if row is None or (bad and style != "hedge"):
             continue
         clearance = (row[4] * HEDGE_CROWN_PER_M + .75) if style == "hedge" else 1.3 + length / 2
-        if any(np.linalg.norm(np.array(row[1:3]) - gate) < clearance for gate in gates):
+        if any(dnp.norm(np.array(row[1:3]) - gate) < clearance for gate in gates):
             continue
         pending.append(row)
     if not pending:
@@ -745,8 +747,8 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
             mid = np.array([[p[4], p[5]] for p in pending], np.float64)
             row = np.arange(len(pending))
             ang = np.radians([p[3] for p in pending])
-            wt = np.stack([-np.sin(ang), np.cos(ang)], axis=1)      # (wall tangent, local +y)
-            par_min = math.cos(math.radians(WALL_FIT_MAX_DEG))
+            wt = np.stack([-dnp.sin(ang), dnp.cos(ang)], axis=1)      # (wall tangent, local +y)
+            par_min = dmath.cos(math.radians(WALL_FIT_MAX_DEG))
             inside = _in_outlines(outlines, mid) if outlines else None   # (a wall on a mapped bridge's plan)
             # The wall's own level. One tagged on a bridge stands on its deck, not on the ground under it: a
             # carriageway at another level (a road passing under a rail viaduct) is not the one it runs along.
@@ -763,7 +765,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                     v = mid[:, None, :] - a[None, :, :]
                     t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
                     q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-                    dm = np.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
+                    dm = dnp.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
                     k = np.argmin(dm, axis=1)
                     dm = dm[row, k]
                     if line.shape[1] >= 3:
@@ -791,11 +793,11 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                     v = mid[:, None, :] - a[None, :, :]
                     t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
                     q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-                    dm = np.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
+                    dm = dnp.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
                     k = np.argmin(dm, axis=1)
                     dm = dm[row, k]
                     seg = d[k]
-                    seg = seg / np.maximum(np.hypot(seg[:, 0], seg[:, 1]), 1e-12)[:, None]
+                    seg = seg / np.maximum(dnp.hypot(seg[:, 0], seg[:, 1]), 1e-12)[:, None]
                     if line.shape[1] >= 3:
                         zq = line[k, 2] + t[row, k] * (line[k + 1, 2] - line[k, 2])
                     else:
@@ -821,11 +823,11 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                 v = mid[:, None, :] - a[None, :, :]
                 t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
                 q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-                dm = np.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
+                dm = dnp.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
                 k = np.argmin(dm, axis=1)
                 dm = dm[row, k]
                 seg = d[k]
-                seg = seg / np.maximum(np.hypot(seg[:, 0], seg[:, 1]), 1e-12)[:, None]
+                seg = seg / np.maximum(dnp.hypot(seg[:, 0], seg[:, 1]), 1e-12)[:, None]
                 if line.shape[1] >= 3:
                     zq = line[k, 2] + t[row, k] * (line[k + 1, 2] - line[k, 2])
                 else:
@@ -853,7 +855,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                     pz[take] = zq[take]
             near = walls & np.isfinite(pd) & (pd <= WALL_FIT_REACH_M)
             across = walls & np.isfinite(fd) & (fd <= WALL_FIT_REACH_M) & (fd <= fh + 1.0) \
-                & (np.abs((wt * ft).sum(1)) < math.cos(math.radians(WALL_ACROSS_DEG)))
+                & (np.abs((wt * ft).sum(1)) < dmath.cos(math.radians(WALL_ACROSS_DEG)))
             for i in np.flatnonzero(near).tolist():
                 p = pending[i]
                 T = pt[i]
@@ -890,7 +892,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
                         v = pt[:, None, :] - a[None, :, :]
                         t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
                         q = a[None, :, :] + t[:, :, None] * d[None, :, :]
-                        dm = np.hypot(q[:, :, 0] - pt[:, None, 0], q[:, :, 1] - pt[:, None, 1])
+                        dm = dnp.hypot(q[:, :, 0] - pt[:, None, 0], q[:, :, 1] - pt[:, None, 1])
                         k = np.argmin(dm, axis=1)
                         r = np.arange(len(pt))
                         lev = np.ones(len(pt), bool)
@@ -959,7 +961,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=(), french=False, carriagew
             idx = np.asarray(idx, np.int64)
             tang = np.array([[pending[i][10], pending[i][11]] for i in idx], np.float64)
             dist, half, cosa = _along_deck(mid[idx], tang, decks)
-            along = np.isfinite(dist) & (dist <= half + ALONG_EDGE_M) & (cosa >= math.cos(math.radians(ALONG_DEG))) \
+            along = np.isfinite(dist) & (dist <= half + ALONG_EDGE_M) & (cosa >= dmath.cos(math.radians(ALONG_DEG))) \
                 & np.isfinite(wide[idx])
             if along.sum() < max(2, ALONG_FRAC * len(idx)):
                 continue
@@ -1031,7 +1033,7 @@ def stone_height(feats, i):
 
 def _resample(line, step):
     """Points every ~step m along a polyline, its own end points kept."""
-    seg = np.hypot(*np.diff(line, axis=0).T)
+    seg = dnp.hypot(*np.diff(line, axis=0).T)
     arc = np.concatenate(([0.0], np.cumsum(seg)))
     if arc[-1] < 1e-6:
         return line[:1]
@@ -1055,7 +1057,7 @@ def _near_road(xy, roads):
         dd = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((xy[:, None, :] - a[None]) * d[None]).sum(2) / dd[None], 0.0, 1.0)
         foot = a[None] + t[..., None] * d[None]
-        dist = np.hypot(foot[..., 0] - xy[:, None, 0], foot[..., 1] - xy[:, None, 1]).min(1)
+        dist = dnp.hypot(foot[..., 0] - xy[:, None, 0], foot[..., 1] - xy[:, None, 1]).min(1)
         hit |= dist < reach
     return hit
 
@@ -1137,7 +1139,7 @@ def stone_walls(frame, infra_fn, box, elev, roads=()):
         zz = z[k:k + len(xy)]
         k += len(xy)
         d = np.gradient(xy, axis=0)
-        d /= np.maximum(np.hypot(*d.T), 1e-9)[:, None]
+        d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         nl = np.column_stack((-d[:, 1], d[:, 0]))
         top = zz + h
         out.append({"base": xy + nl * (STONE_THICK_M / 2), "toward": nl, "top": top, "back_top": top.copy(),

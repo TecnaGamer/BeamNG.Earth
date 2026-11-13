@@ -3,6 +3,7 @@
 //! .claude/work/road_semantics_rust_plan.md).
 //!
 //! Kinds: 1 bridge, 2 tunnel (so (start, end, kind) tuples sort as Python's ("bridge" < "tunnel")).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -146,9 +147,9 @@ pub(crate) fn feature_length(ll: &numpy::ndarray::ArrayView2<f64>, co: &[i64], r
                 continue;
             }
             let lat: Vec<f64> = (a..b).map(|k| ll[[k, 1]]).collect();
-            let c = (np_sum(&lat) / (b - a) as f64).to_radians().cos();
+            let c = (np_sum(&lat) / (b - a) as f64).to_radians().dcos();
             let seg: Vec<f64> = (a + 1..b)
-                .map(|k| ((ll[[k, 0]] - ll[[k - 1, 0]]) * c).hypot(ll[[k, 1]] - ll[[k - 1, 1]]))
+                .map(|k| ((ll[[k, 0]] - ll[[k - 1, 0]]) * c).dhypot(ll[[k, 1]] - ll[[k - 1, 1]]))
                 .collect();
             total += np_sum(&seg) * 111320.0;
         }

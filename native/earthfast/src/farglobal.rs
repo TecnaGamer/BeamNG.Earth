@@ -16,6 +16,7 @@
 //! - far_normal_err: a tile's geometric error along the surface's normal (normal_err; the screen-space LOD's metric);
 //! - far_clip_mesh: a node's mesh cut by a convex polygon (Sutherland-Hodgman per triangle, a cut vertex interpolated
 //!   on the triangle it cuts, so its height is that triangle's exactly), with skirts along the cut.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -164,7 +165,7 @@ fn edge_mean(q: &[[f64; 2]; 4]) -> f64 {
     let mut s = 0.0;
     for k in 0..4 {
         let (a, b) = (q[k], q[(k + 1) % 4]);
-        s += (b[0] - a[0]).hypot(b[1] - a[1]);
+        s += (b[0] - a[0]).dhypot(b[1] - a[1]);
     }
     s / 4.0
 }
@@ -180,9 +181,9 @@ fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
     let (x0, y0, x1, y1) = (b[0], b[1], b[2], b[3]);
     let (cx, cy, cz) = ((x0 + x1) / 2.0 - c[0], (y0 + y1) / 2.0 - c[1], c[7] - c[2]);
     let r = (cx * cx + cy * cy + cz * cz).sqrt();
-    let slack = ((x1 - x0).hypot(y1 - y0) * 0.5 / r.max(1.0)).min(1.0).asin();
-    let a = ((cx * c[3] + cy * c[4] + cz * c[5]) / r.max(1e-9)).clamp(-1.0, 1.0).acos();
-    if a - slack <= c[6].clamp(-1.0, 1.0).acos() { 1.0 } else { c[8].max(1.0) }
+    let slack = ((x1 - x0).dhypot(y1 - y0) * 0.5 / r.max(1.0)).min(1.0).dasin();
+    let a = ((cx * c[3] + cy * c[4] + cz * c[5]) / r.max(1e-9)).clamp(-1.0, 1.0).dacos();
+    if a - slack <= c[6].clamp(-1.0, 1.0).dacos() { 1.0 } else { c[8].max(1.0) }
 }
 
 /// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs).
@@ -214,7 +215,7 @@ impl Sse {
     /// The node's split pop on screen (px; its known error at most cap vertex spacings, from the camera), or None.
     fn pixels(&self, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64) -> Option<f64> {
         let e = (*self.errs.get(&node)?).min(self.cap * size / self.cells);
-        Some(e * self.ppr / quad_dist(q, self.cx, self.cy).hypot(self.dz).max(1.0))
+        Some(e * self.ppr / quad_dist(q, self.cx, self.cy).dhypot(self.dz).max(1.0))
     }
 
     /// Whether a node splits, from the distance rule's answer `split` (was: refined last time; d / d3 its horizontal /
@@ -540,7 +541,7 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
         let size = {
             let corner = |k: usize| p[k];
             let (sw, se, ne, nw) = (corner(0), corner(c), corner(c * nv + c), corner(c * nv));
-            let d = |a: [f64; 3], b: [f64; 3]| (b[0] - a[0]).hypot(b[1] - a[1]);
+            let d = |a: [f64; 3], b: [f64; 3]| (b[0] - a[0]).dhypot(b[1] - a[1]);
             (d(sw, se) + d(se, ne) + d(ne, nw) + d(nw, sw)) / 4.0
         };
         let sp = size / c as f64;
@@ -581,8 +582,8 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
                 nrm[j * nv + i] = n3;
                 // palette: height along u, slope along v (farfield.build_tile)
                 let (ex, ey) = (ev[j * nv + i1] - ev[j * nv + i0], ev[j1 * nv + i] - ev[j0 * nv + i]);
-                let (dx, dy) = (di[0].hypot(di[1]).max(1e-9), dj[0].hypot(dj[1]).max(1e-9));
-                let slope = ((ex / dx).hypot(ey / dy)).clamp(0.0, 1.0);
+                let (dx, dy) = (di[0].dhypot(di[1]).max(1e-9), dj[0].dhypot(dj[1]).max(1e-9));
+                let slope = ((ex / dx).dhypot(ey / dy)).clamp(0.0, 1.0);
                 let el = ev[j * nv + i];
                 let water = el <= 0.5 && slope < 0.02;
                 uv[j * nv + i] = [if water { WATER_U } else { 0.1 + 0.88 * (el / 5000.0).clamp(0.0, 1.0) }, 0.5 - 0.47 * slope];
@@ -738,7 +739,7 @@ pub fn far_clip_mesh<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>
         let on_edge = |v: &[f64; ATTR]| -> Option<usize> {
             (0..k).find(|&e| {
                 let (a, b) = (clip[e], clip[(e + 1) % k]);
-                let l = (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-12);
+                let l = (b[0] - a[0]).dhypot(b[1] - a[1]).max(1e-12);
                 (side(e, v) / l).abs() < 1e-6
             })
         };

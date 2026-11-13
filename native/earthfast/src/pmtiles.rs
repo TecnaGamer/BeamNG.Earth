@@ -15,6 +15,7 @@
 //! Coordinates: world units at the tile zoom (tile x * 4096 + tile pixel), y down, as f64; out as lon/lat (Web
 //! Mercator inverse). Ring orientation as the parquet cells have it: exteriors counter-clockwise in lon/lat, holes
 //! clockwise.
+use crate::dm::Dm;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
@@ -1318,7 +1319,7 @@ fn owner_point(kind: u8, parts: &[Vec<Vec<P>>], bb: (f64, f64, f64, f64), tz: u8
     let b = lonlat([bb.2, bb.1], tz);
     let (clon, clat) = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
     let wx = (clon + 180.0) / 360.0 * n;
-    let wy = (1.0 - clat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n;
+    let wy = (1.0 - clat.to_radians().dtan().dasinh() / std::f64::consts::PI) / 2.0 * n;
     let cs = EXT / (1u64 << (14 - tz.min(14))) as f64;
     let (cx, cy) = ((wx / cs).floor(), (wy / cs).floor());
     let bx = Box2 { x0: cx * cs, y0: cy * cs, x1: (cx + 1.0) * cs, y1: (cy + 1.0) * cs };
@@ -1346,7 +1347,7 @@ fn touches(kind: u8, parts: &[Vec<P>], bx: &Box2) -> bool {
 fn lonlat(p: P, z: u8) -> [f64; 2] {
     let n = (1u64 << z) as f64 * EXT;
     let lon = p[0] / n * 360.0 - 180.0;
-    let lat = (std::f64::consts::PI * (1.0 - 2.0 * p[1] / n)).sinh().atan().to_degrees();
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * p[1] / n)).dsinh().datan().to_degrees();
     [lon, lat]
 }
 

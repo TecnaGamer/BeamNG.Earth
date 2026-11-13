@@ -8,6 +8,8 @@ import math
 import numpy as np
 
 import fast     # the conversions are Rust kernels (earthfast): ~2x numpy, without the interpreter lock
+import dmath
+import dnp
 
 A = 6378137.0                    # semi-major axis
 F = 1 / 298.257223563            # flattening
@@ -66,7 +68,7 @@ class EnuFrame:
         self.lat0, self.lon0, self.h0 = float(lat0), float(lon0), float(h0)
         self.origin = np.array(geodetic_to_ecef(lat0, lon0, h0), np.float64)
         la, lo = np.radians(lat0), np.radians(lon0)
-        sla, cla, slo, clo = np.sin(la), np.cos(la), np.sin(lo), np.cos(lo)
+        sla, cla, slo, clo = dnp.sin(la), dnp.cos(la), dnp.sin(lo), dnp.cos(lo)
         # Rows are the E, N, U unit vectors expressed in ECEF.
         self.rot = np.array([
             [-slo, clo, 0.0],
@@ -109,5 +111,5 @@ def haversine_m(lat1, lon1, lat2, lon2):
     """Great-circle distance (m) on the WGS84 mean sphere between two points in degrees."""
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+    a = dnp.sq(dmath.sin(dp / 2)) + dmath.cos(p1) * dmath.cos(p2) * dnp.sq(dmath.sin(dl / 2))
+    return 2 * 6371008.8 * dmath.asin(min(1.0, math.sqrt(a)))

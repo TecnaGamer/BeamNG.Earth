@@ -18,6 +18,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import geotiles
 
@@ -81,7 +83,7 @@ def _clear(q, segs, margin):
         return np.ones(len(q), bool)
     v = q[:, None, :] - segs["a"][None]
     s = np.clip((v * segs["unit"][None]).sum(2), 0, segs["len"][None])
-    d = np.linalg.norm(v - s[..., None] * segs["unit"][None], axis=2)
+    d = dnp.norm(v - s[..., None] * segs["unit"][None], axis=2)
     return ~(d < segs["half"][None] + margin).any(1)
 
 
@@ -91,7 +93,7 @@ def _near(q, a, b, reach):
         return np.zeros(len(q), bool)
     d = b - a
     t = np.clip(((q[:, None, :] - a[None]) * d[None]).sum(2) / np.maximum((d * d).sum(1), 1e-9)[None], 0, 1)
-    return (np.linalg.norm(q[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2) < reach).any(1)
+    return (dnp.norm(q[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2) < reach).any(1)
 
 
 def _ground(frame, elev, xy):
@@ -103,12 +105,12 @@ def _ground(frame, elev, xy):
 
 def _row(group, p, a, b, za, zb, z, rank):
     forward = np.array([b[0] - a[0], b[1] - a[1], zb - za], np.float64)
-    forward /= max(float(np.linalg.norm(forward)), 1e-9)
+    forward /= max(float(dnp.norm(forward)), 1e-9)
     up = np.array([0.0, 0.0, 1.0]) - forward[2] * forward
-    up /= max(float(np.linalg.norm(up)), 1e-9)
+    up /= max(float(dnp.norm(up)), 1e-9)
     back = np.cross(up, forward)
-    back /= max(float(np.linalg.norm(back)), 1e-9)
-    yaw = math.degrees(math.atan2(float(forward[1]), float(forward[0])))
+    back /= max(float(dnp.norm(back)), 1e-9)
+    yaw = math.degrees(dmath.atan2(float(forward[1]), float(forward[0])))
     return [group, float(p[0]), float(p[1]), float(z), yaw, 0.0, MODULE_HEIGHT_M, rank,
             *map(float, forward), *map(float, back), *map(float, up)]
 
@@ -136,11 +138,11 @@ def tile_rows(frame, near_roads, box, elev, mapped=(), decks=()):
         if ident in seen:
             continue
         seen.add(ident)
-        seg = np.hypot(*np.diff(line[:, :2], axis=0).T)
+        seg = dnp.hypot(*np.diff(line[:, :2], axis=0).T)
         line = line[np.r_[True, seg > 1e-6]]
         if len(line) < 2:
             continue
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         s = np.arange(0.5 * MODULE_STEP_M, arc[-1], MODULE_STEP_M)
         if len(s) < MIN_STATIONS:
             continue
@@ -155,7 +157,7 @@ def tile_rows(frame, near_roads, box, elev, mapped=(), decks=()):
         ca = np.c_[np.interp(sa, arc, line[:, 0]), np.interp(sa, arc, line[:, 1])]
         cb = np.c_[np.interp(sb, arc, line[:, 0]), np.interp(sb, arc, line[:, 1])]
         t = cb - ca
-        t /= np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+        t /= np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
         left = np.c_[-t[:, 1], t[:, 0]]
         off = float(spec.width) / 2.0 + OUT_M
         for side in (1.0, -1.0):        # (+1: the left of the line's direction)
