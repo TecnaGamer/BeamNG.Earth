@@ -9345,6 +9345,8 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
                           np.asarray(z, np.float64).ravel(), getattr(tunnels, "mouths", None)).reshape(np.shape(z))
     except Exception as ex:         # no raise rather than no block (a network error quietly; a bug where it shows)
         (log.debug if isinstance(ex, OSError) else log.warning)("arch raise: %s: %s", type(ex).__name__, ex)
+        import revisit
+        revisit.fault()             # (ground built without its arches is not kept: blockcache.py)
         return z
 
 

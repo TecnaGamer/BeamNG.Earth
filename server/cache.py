@@ -16,6 +16,8 @@ Layout of the cache root (~/.cache/beamng-earth by default):
                       offline use; airports.py replaces it weekly and deletes the old generation itself)
   revisit/ seacarve/ peercache/ roadwidth/   MANAGED as well (since 2026-11-03), besides their own limits
                       (revisit's, seacarve.RAW_MB, peerwork.CACHE_BYTES, roadwidth.STORE_MB, cut back at server start)
+  blocks/             MANAGED too (blockcache.py: the graded terrain blocks' chunks and entries), besides its own
+                      limit (blockcache.budget_mb: a share of this cap, cut back at start and by the writers)
   mapdata-mirror/     counted and cleared (MIRRORED), not evicted file by file: pruned whole by mapdata (MIRROR_MB)
   netstats/ (and anything else)           not tracked: the daily request budgets must survive a clear
 
@@ -71,7 +73,7 @@ INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
-           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
 # Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
 # maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in

@@ -29,6 +29,7 @@ import dnp
 
 import secrossings
 import streetparking
+import blockcache
 import dem as demmod
 import development as developmentmod
 import farfield
@@ -349,6 +350,7 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
     _s = _State(cache_dir, offline, roads, grading, road_widths, surface, airports, sea, gas_stations)
     threading.Thread(target=_watch_parent, args=(os.getppid(),), daemon=True, name="parent-watch").start()
     if warm_q is not None:      # (only the block pools plan roads ahead: the far, road and far building pools pass None)
+        blockcache.warm()       # (and build blocks: their cache's code id now)
         threading.Thread(target=_read_warm, args=(warm_q,), daemon=True, name="warm-read").start()
         threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
 
@@ -606,6 +608,19 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
     keep = {}
     grade_s = [0.0]
     part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
+    bc = None
+    if not provisional and ter_name is not None:     # (the disk's copy of a graded block: blockcache.py)
+        t1 = time.perf_counter()
+        bc = blockcache.begin(_s.cache_dir, frame, hm_zoom, cx, cy, size, q,
+                              blockcache.settings(g is not None, getattr(_s, "md", None), _s.widths, _s.surface,
+                                                  getattr(_s, "sea", None), _s.airports, getattr(_s, "lids", None)),
+                              getattr(_s, "md", None), _s.surface, chunks)
+        got = bc.hit(out_dir, name, ter_name, tuple(ground_at), _s.surface is not None) if bc is not None else None
+        if got is not None:
+            got["stages"] = {"heights": 0.0, "anchor": anchor_s, "blockCache": time.perf_counter() - t1,
+                             "newShare": 0.0}
+            got["started"], got["finished"] = started, time.time()
+            return got
 
     def elev(la, lo):
         xproc.check_cancel()        # (a chunk of the block's grid at a time: given up once a teleport leaves aid)
@@ -645,7 +660,8 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
     l0_st = {}                  # (a provisional block's L0 roads: its painted roads' corridors flattened, l0roads.py)
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
                               chunks=chunks, ground_at=tuple(ground_at),
-                              post=l0roads.post_for(frame, _s.surface, cx, cy, size, l0_st) if provisional else None)
+                              post=l0roads.post_for(frame, _s.surface, cx, cy, size, l0_st) if provisional else None,
+                              disk=bc.disk if bc is not None else None)
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
               "newShare": float(keep.get("new_share", 1.0)), **l0_st}
     idx = None
@@ -699,12 +715,18 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         info["roadsComplete"] = roads_complete
     if ter_name is not None:
         t1 = time.perf_counter()
+        pre = None if idx is None else idx.copy()      # (the block cache's: before the holes)
         if not provisional:
             idx = _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g)
         info["ter"], mats = surfacemod.write_ter(out_dir, ter_name, keep["qgrid"], idx)
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
         stages["ter"] = time.perf_counter() - t1
+        if bc is not None:
+            t1 = time.perf_counter()
+            bc.finish(info, keep, pre, idx, g)
+            stages["blockCache"] = time.perf_counter() - t1
+            stages["chunksRead"] = float(bc.disk.read)
     info["stages"] = stages
     info["started"], info["finished"] = started, time.time()
     return info
@@ -2568,6 +2590,8 @@ def _open_tunnels(g, keep):
         return g.open_tunnels(keep["lat"], keep["lon"])
     except Exception:
         log.exception("open tunnel sections")
+        import revisit
+        revisit.fault()             # (a block painted without them is not kept: blockcache.py)
         return []
 
 
@@ -2583,6 +2607,8 @@ def _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g=None):
             frame, keep, cx, cy, heightmap.SQUARE, rail_parts=_rail_tunnel_parts(frame))
     except Exception:                   # no holes rather than no block
         log.exception("tunnel holes of block (%s, %s)", cx, cy)
+        import revisit
+        revisit.fault()                 # (one without them is not kept: blockcache.py)
         return idx
     import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
     under = railunderpass.holes(_s.md, frame, keep, cx, cy, heightmap.SQUARE, elev)
