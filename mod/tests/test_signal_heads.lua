@@ -7,7 +7,7 @@ local shape = require('beamngEarth/signalshape')
 N.MIN_GAP_S = 0
 table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
 local graph, current, made, refreshed = nil, { nodes = {} }, {}, {}
-local trees = { refresh = function(group) refreshed[group] = true end }
+local trees = { refresh = function(group) refreshed[group] = true end, setSignalFrame = function() end }
 package.loaded['beamngEarth/trees'] = trees
 package.loaded['beamngEarth/gps'] = {}
 readFile = function() return '{}' end
