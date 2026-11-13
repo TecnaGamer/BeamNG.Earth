@@ -1,0 +1,21 @@
+[Unit]
+Description=BeamNG.Earth shared decision-archive builder (popular places' road plans + cell facts, signed, to R2 dec/)
+Documentation=file://%h/bnge-builder/decisions/run.py
+# No [Install] section and no timer: started by hand after a release or a weekly data build
+# (systemctl --user start bnge-decisions-builder). hosting/README.md, docs/HOSTING.md.
+ConditionPathExists=%h/bnge-builder/r2.env
+ConditionPathExists=%h/bnge-builder/decisions-signing.key
+
+[Service]
+Type=oneshot
+# R2_* for the upload step only: run.py strips them from the build processes' environment
+EnvironmentFile=%h/bnge-builder/r2.env
+Environment=PATH=%h/bnge-builder/decisions/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=%h/bnge-builder/decisions
+ExecStart=%h/bnge-builder/decisions/venv/bin/python %h/bnge-builder/decisions/run.py all --places-file %h/bnge-builder/decisions/places.txt --procs 4 --min-free-gb 20 --cache-cap-gb 15
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=400%
+MemoryMax=12G
+TimeoutStartSec=infinity

@@ -11,6 +11,8 @@ practical part.
 | `systemd/bnge-aerial-builder.service` | the on-demand aerial builder's unit (holds the bucket credentials) |
 | `systemd/bnge-aerial-builder.path` | starts the builder once its credentials file exists |
 | `aerial-builder/run.py` | the builder's service wrapper: credentials, disk guard, crash recovery |
+| `systemd/bnge-decisions-builder.service` | the decision-archive builder's oneshot unit (no timer; started by hand) |
+| `decisions-builder/run.py`, `decisions-builder/places.txt` | its wrapper (credentials, disk guard, cache cap, upload, pruning) and place list |
 | `r2.env.example` | the credentials file's variable names, with placeholders only |
 
 Everything runs as **systemd user units** of one ordinary user: no root service, no container. `%h` in the units is
@@ -122,6 +124,28 @@ after the upload. A full cell is 64 + 21 packs, roughly 5 to 8 minutes at these 
 **Pause:** `systemctl --user stop bnge-aerial-builder.path bnge-aerial-builder.service` (stop the path unit too, or it
 starts the service again). **Off at boot:** `systemctl --user disable bnge-aerial-builder.path`.
 **Update:** copy the five files from a new commit, update `COMMIT`, `systemctl --user restart bnge-aerial-builder`.
+
+## The decision-archive builder
+
+It builds the signed decision archives (docs/HOSTING.md, "Signed decision archives") of the places in `places.txt`
+and uploads them. It holds the signing key, which never leaves the box.
+
+```sh
+# on the box, from a checkout of the release commit C:
+mkdir -p ~/bnge-builder/decisions && cd ~/bnge-builder/decisions
+mkdir -p src && git -C <repo> archive C server tools/build_decisions.py docs/PLACES.md | tar -x -C src
+echo C > COMMIT
+cp <repo>/hosting/decisions-builder/run.py <repo>/hosting/decisions-builder/places.txt .
+python3 -m venv venv && venv/bin/pip install -r src/server/requirements.txt awscli
+cp <repo>/hosting/systemd/bnge-decisions-builder.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+```
+
+**Run** after each release and after each weekly data build: `systemctl --user start bnge-decisions-builder`, then
+`journalctl --user -u bnge-decisions-builder -f` (it ends with `uploaded <vkey>: manifest of N blocks`). The unit has no
+`[Install]` section and there is no timer. Settings: `--procs 4`, `Nice=15`, idle IO priority, `CPUQuota=400%`,
+`MemoryMax=12G`; no place starts with less than 20 GB free or with the cache over 15 GB. **After a release:**
+`venv/bin/python run.py prune-out --keep <new vkey>` (through the unit's environment to remove retired files from the
+bucket too). **Off:** leave `decisions` out of the switch file; the builder only runs when started.
 
 ## Keep secrets off the repo
 

@@ -5,6 +5,7 @@ over HTTP, plans the same heights from them without reading any map data, keeps 
 own keys, and falls back to planning on every miss: another version, no archive (404), a block not built, a damaged or
 foreign-signed block. The version key follows the formats and the map data's versions, and no per-computer setting
 (the telemetry's folder) is a build switch."""
+import hashlib
 import http.server
 import io
 import json
@@ -70,17 +71,35 @@ def npz(arrays):
     return buf.getvalue()
 
 
-def publish(root, versions, items, seed=SEED, blocks=None):
-    """items {(z, x, y) cell: {key: (bytes, npz)}} into signed blocks and a manifest under root (as the builder)."""
+OFF = {"rails": None, "lanes": None}       # (both weekly datasets off: every slice the same)
+
+
+def publish(root, versions, items, seed=SEED, blocks=None, sources=None, ids=None):
+    """items {(z, x, y) cell: {base key: (bytes, npz)}} into signed blocks (each key with its ring's digest from
+    sources' shards and the cells' way ids, the ring's w/ items) and a manifest under root, as the builder lays them
+    out. Returns the vkey."""
+    sources = OFF if sources is None else sources
+    ids = ids or {}
     vk, vkb = decisions.vkey(versions)
     by = {}
     for cell, its in items.items():
-        by.setdefault(decisions.block_of(cell), {}).update(its)
+        for key, (data, is_npz) in its.items():
+            r = decisions.RING_PLANS if key.startswith("p/") else decisions.RING_FACTS
+            rc = decisions.ring(cell, r)
+            d = decisions.dep_digest([(c, decisions.slice_digest(sources, c, ids.get(c, []))) for c in rc])
+            b = by.setdefault(decisions.block_of(cell), {})
+            b[f"{key}@{d}"] = (data, is_npz)
+            for c in rc:
+                b[decisions.ways_key(c)] = (json.dumps(ids.get(c, [])).encode(), False)
+    names = {}
     for (bx, bby), its in by.items():
         body = fast._ef.dec_pack_block(decisions.BLOCK_Z, bx, bby, vkb, [(k, v[0], v[1]) for k, v in its.items()], seed)
-        decisions._write(os.path.join(root, f"d{decisions.FORMAT}", vk, "12", str(bx), f"{bby}.bngd"), body)
+        h = hashlib.sha256(body).hexdigest()[:decisions.HASH_HEX]
+        decisions._write(os.path.join(root, f"d{decisions.FORMAT}", vk, "12", str(bx), f"{bby}.{h}.bngd"), body)
+        names[(bx, bby)] = h
     man = {"format": decisions.FORMAT, "vkey": vk, "doc": decisions.vkey_doc(versions),
-           "blocks": sorted([list(b) for b in (blocks if blocks is not None else by)])}
+           "blocks": sorted([list(b) + [names.get(tuple(b), "0" * decisions.HASH_HEX)]
+                             for b in (blocks if blocks is not None else by)])}
     decisions._write(os.path.join(root, f"d{decisions.FORMAT}", vk, "manifest.bngm"),
                      fast._ef.dec_make_manifest(json.dumps(man).encode(), seed))
     return vk
@@ -134,7 +153,9 @@ class KeyTest(unittest.TestCase):
     def test_version_key(self):
         a = decisions.vkey(VERSIONS)
         self.assertEqual(a, decisions.vkey(json.dumps(VERSIONS, sort_keys=True)), "a cell id's JSON: the same")
-        self.assertIsNone(decisions.vkey(dict(VERSIONS, rails=None)), "a weekly build not known yet")
+        self.assertEqual(a, decisions.vkey(dict(VERSIONS, rails=None)), "a weekly build not known yet: the same")
+        self.assertEqual(a, decisions.vkey(dict(VERSIONS, lanes="l2", stations="s2")),
+                         "a weekly build is no part of it (each item's ring digest is)")
         self.assertNotEqual(a, decisions.vkey(dict(VERSIONS, overture="2026-other")))
         with mock.patch.object(plancache, "PLANS_FORMAT", plancache.PLANS_FORMAT + 1):
             self.assertNotEqual(a[0], decisions.vkey(VERSIONS)[0], "a plans format bump")
@@ -167,6 +188,86 @@ class KeyTest(unittest.TestCase):
         self.assertEqual(got, [True, False, False, True, True, False])
 
 
+
+class FakeShards:
+    """A weekly dataset's Shards stand-in: one shard for every cell."""
+
+    def __init__(self, shard, built="b1"):
+        self.sh, self.built = shard, built
+        self.lock = threading.Lock()
+        self.shards = {}
+
+    def known(self):
+        return self.built
+
+    def of_cell(self, key):
+        self.shards[(key.x >> (key.z - 7), key.y >> (key.z - 7))] = self.sh
+        return self.sh
+
+
+CELL = (14, 4706, 6245)             # (Fells Point)
+FAR = (14, 4712, 6245)              # (6 cells east: in no ring of CELL's)
+
+
+def lane_shard(lanes_101="2", node=True):
+    import mapcells
+    w, s_, e, n = mapcells.CellKey(*CELL).bounds()
+    return {"ways": {"101": {"lanes": lanes_101}, "102": {"lanes": "1"}, "999": {"lanes": "4"}},
+            "rules": {"priority_road": {"designated": [101]}},
+            "nodes": [[7, (w + e) / 2, (s_ + n) / 2, {"traffic_sign": "DE:306"}]] if node else []}
+
+
+@unittest.skipUnless(HAVE, f"earthfast {decisions.NATIVE} not built")
+class WeeklySliceTest(unittest.TestCase):
+    """A cell's slice of the weekly rail / lane shards (decisions.slice_digest): what its ways read of them."""
+
+    def digest(self, shard, ids=("101", "102"), cell=CELL):
+        return decisions.slice_digest({"rails": None, "lanes": FakeShards(shard)}, cell, list(ids))
+
+    def test_slice_follows_the_cells_ways_only(self):
+        import railtags
+        base = self.digest(lane_shard())
+        self.assertEqual(base, self.digest(lane_shard()), "the same tags, the same digest")
+        self.assertNotEqual(base, self.digest(lane_shard(lanes_101="3")), "a way of the cell retagged")
+        other = lane_shard()
+        other["ways"]["999"] = {"lanes": "5"}
+        self.assertEqual(base, self.digest(other), "a way the cell does not have retagged: the same")
+        self.assertNotEqual(base, self.digest(lane_shard(node=False)), "a sign node in the cell gone")
+        self.assertEqual(self.digest(lane_shard(node=False), cell=FAR), self.digest(lane_shard(), cell=FAR),
+                         "a node outside the cell: no part of its slice")
+        rules = lane_shard()
+        rules["rules"] = {"priority_road": {"designated": [102]}}
+        self.assertNotEqual(base, self.digest(rules), "a road rule moved to another of its ways")
+        packed = lane_shard()           # (a shard as railtags.Shards.shard keeps it: Ways, Rules; or read from its
+        packed["ways"] = railtags.Ways.of(packed["ways"])           # index file)
+        packed["rules"] = railtags.Rules(packed["rules"])
+        self.assertEqual(base, self.digest(packed))
+        self.assertIsNone(decisions.slice_digest({"rails": None, "lanes": FakeShards(None)}, CELL, ["101"]),
+                          "a shard not to be had: no digest")
+        self.assertNotEqual(decisions.slice_digest(OFF, CELL, ["101"]), base, "lanes off")
+
+    def test_ids_of_a_roads_layer(self):
+        class F:
+            def __len__(self):
+                return 3
+
+        class Table:
+            value = np.array(["w102@3", "w103@1", "n5@1"])
+
+            def __len__(self):
+                return 3
+        f = F()
+        f.attrs = {"src_record": np.array(["w101@2", "w102@3", "r9@1"])}
+        f.rules = {"src_ways": Table()}
+        self.assertEqual(decisions.ids_of(f), ["101", "102", "103"])
+        self.assertEqual(decisions.ids_of(None), [])
+
+    def test_ring(self):
+        self.assertEqual(len(decisions.ring(CELL, 2)), 25)
+        self.assertIn((14, 0, 5), decisions.ring((14, (1 << 14) - 1, 5), 1), "x wraps")
+        self.assertEqual(len(decisions.ring((14, 3, 0), 1)), 6, "no row past the pole")
+
+
 @unittest.skipUnless(HAVE, f"earthfast {decisions.NATIVE} not built")
 class SharedPlansTest(unittest.TestCase):
     """A builder's plans served over HTTP: a player's server reads them instead of planning."""
@@ -186,6 +287,9 @@ class SharedPlansTest(unittest.TestCase):
         self.addCleanup(p.stop)
         decisions._STORES.clear()
         self.addCleanup(decisions._STORES.clear)
+        w = mock.patch.object(decisions, "weekly_sources", lambda: OFF)
+        w.start()
+        self.addCleanup(w.stop)
         old = revisit.CACHE_DIR
         self.addCleanup(setattr, revisit, "CACHE_DIR", old)
         # (the photo's road-surface verdicts of this test's own folders only: none)
@@ -260,6 +364,47 @@ class SharedPlansTest(unittest.TestCase):
                 zb = g.apply(self.la, self.lo, np.zeros(50))
                 self.assertGreater(md.calls, 0, "planned here")
                 self.assertTrue(np.array_equal(za, zb))
+
+    def weekly_items(self):
+        """Facts of CELL and FAR published with lane_shard()'s tags (their rings' way ids: 101 and 102 in CELL)."""
+        data = json.dumps([{"kind": "x"}]).encode()
+        items = {c: {decisions.facts_key("roads", "specs", [True, False], f"{c[0]}/{c[1]}/{c[2]}"): (data, False)}
+                 for c in (CELL, FAR)}
+        ids = {CELL: ["101", "102"], FAR: ["555"]}
+        publish(Handler.root, VERSIONS, items, sources={"rails": None, "lanes": FakeShards(lane_shard())}, ids=ids)
+        return data
+
+    def facts_of(self, store, cell):
+        return store.item(VERSIONS, cell, decisions.facts_key("roads", "specs", [True, False],
+                                                               f"{cell[0]}/{cell[1]}/{cell[2]}"), decisions.RING_FACTS)
+
+    def test_a_weekly_build_misses_only_the_cells_it_changed(self):
+        data = self.weekly_items()
+        same = decisions.Store(os.path.join(self.dir, "same"),
+                               sources={"rails": None, "lanes": FakeShards(lane_shard(), built="b1")})
+        self.assertEqual((self.facts_of(same, CELL), self.facts_of(same, FAR)), (data, data))
+        later = decisions.Store(os.path.join(self.dir, "later"),       # (next week's build: way 101 retagged)
+                                sources={"rails": None, "lanes": FakeShards(lane_shard(lanes_101="3"), built="b2")})
+        self.assertIsNone(self.facts_of(later, CELL), "its own way's tags changed: planned here")
+        self.assertEqual(later.stats["stale"], 1)
+        self.assertEqual(self.facts_of(later, FAR), data, "a cell whose ring did not change: still from the archive")
+
+    def test_block_names_are_their_content(self):
+        self.weekly_items()
+        vk = decisions.vkey(VERSIONS)[0]
+        files = list(Path(Handler.root, f"d{decisions.FORMAT}", vk, "12").rglob("*.bngd"))
+        self.assertTrue(files)
+        for p in files:
+            self.assertEqual(p.name.split(".")[1], hashlib.sha256(p.read_bytes()).hexdigest()[:decisions.HASH_HEX])
+        # (another signed block under a listed name: rejected, as a cache serving a stale file under a new name)
+        bx, by = decisions.block_of(CELL)
+        p = [f for f in files if f.parent.name == str(bx) and f.name.startswith(f"{by}.")][0]
+        other = [f for f in files if f != p][0]
+        p.write_bytes(other.read_bytes())
+        st = decisions.Store(os.path.join(self.dir, "swapped"),
+                             sources={"rails": None, "lanes": FakeShards(lane_shard())})
+        self.assertIsNone(self.facts_of(st, CELL))
+        self.assertEqual(st.stats["bad"], 1)
 
     def test_damaged_block_rejected(self):
         za, items = self.build()

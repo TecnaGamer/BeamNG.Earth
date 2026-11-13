@@ -374,13 +374,20 @@ miss, version mismatch, bad signature or network error.
 **Layout** (under `BNGE_DECISIONS_URL`, by default `https://tiles.tgforever.net/dec`):
 
 ```
-d<FORMAT>/<vkey>/manifest.bngm      signed: the version key's document and the list of blocks
-d<FORMAT>/<vkey>/12/<x>/<y>.bngd    one zoom-12 block (4 x 4 cells, about 8 km across), signed
+d<FORMAT>/<vkey>/manifest.bngm          signed: the version key's document and the list of blocks with their names
+d<FORMAT>/<vkey>/12/<x>/<y>.<h>.bngd    one zoom-12 block (4 x 4 cells, about 8 km across), signed; <h> is the
+                                        start of the file's SHA-256, so a rebuilt block is a new file name
 ```
 
 `<vkey>` is a SHA-256 of everything that changes the output besides the place: the plan and fact formats, the build
 switches and the map data versions. Every release has a new `<vkey>`, so a player only ever matches archives built
 for exactly their version.
+
+The weekly datasets (OSM rail tags, lane tags and stations from the data repo) are **not** part of `<vkey>`.
+Instead, each item's key ends in a digest of what the cells round it read of the rail and lane tags. The block also
+holds those cells' OSM way ids, so the client works out the same digest from its own weekly files, without the map
+data. A new weekly build then misses only the cells whose tags changed, and building the places again replaces exactly
+those items.
 
 **Why signed.** These archives replace computation on the player's machine, so a client must be sure the project
 made them. Each block and manifest carries an ed25519 signature, checked whole before anything in it is used. Only
@@ -409,27 +416,34 @@ chmod 600 decisions-signing.key key.pem
 Then either set `BNGE_DECISIONS_PUBKEY=<public key hex>` on the clients (a comma-separated list; it **replaces** the
 compiled keys), or put your key into `TRUSTED` and build the native module yourself. Never commit or share the seed.
 
-**Build and upload:**
+**Build and upload.** [`hosting/decisions-builder/run.py`](../hosting/decisions-builder/run.py) wraps
+`tools/build_decisions.py` with the credentials mapping, a disk guard and a cache cap. The unit
+`hosting/systemd/bnge-decisions-builder.service` runs `run.py all`: it builds the place list, then uploads. It has no
+timer; start it after each release and after each weekly data build. By hand:
 
 ```sh
 python3 tools/build_decisions.py build --places "@top:200" --cache ~/bnge-builder/decisions-cache \
     --out ~/bnge-builder/dec-out --key ~/bnge-builder/decisions-signing.key --procs 4
-# upload the <vkey> folder: the blocks first, the manifest last
-aws s3 cp ~/bnge-builder/dec-out/d1/<vkey> s3://<bucket>/dec/d1/<vkey> --recursive --exclude manifest.bngm \
-    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream --cache-control "public, max-age=3600"
-aws s3 cp ~/bnge-builder/dec-out/d1/<vkey>/manifest.bngm s3://<bucket>/dec/d1/<vkey>/manifest.bngm \
+# upload the <vkey> folder: the new block files first (by name: sync uploads only new names), the manifest last
+aws s3 sync ~/bnge-builder/dec-out/d2/<vkey>/12 s3://<bucket>/dec/d2/<vkey>/12 --exclude "*" --include "*.bngd" \
+    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream \
+    --cache-control "public, max-age=31536000, immutable"
+aws s3 cp ~/bnge-builder/dec-out/d2/<vkey>/manifest.bngm s3://<bucket>/dec/d2/<vkey>/manifest.bngm \
     --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream --cache-control "no-cache"
 ```
 
 The builder needs a full server checkout at the release commit (with its native module), its own cache (10 to 15 GB)
-and many CPU hours: planning is 15 to 90 s per block, and `@top:200` at the default 6 km squares is about 7,200 km2.
-The output is about 60 to 200 KB per km2 (0.4 to 1.5 GB per version). Run it at low priority, like the aerial
-builder. It downloads map data from the same open sources a player would, so keep it within their rate limits.
+and many CPU hours: a block is 1 to 3.5 minutes at 4 processes once its area is cached (7 minutes cold), and
+`@top:200` at the default 6 km squares is about 7,200 km2. A dense city block is 1 to 6 MB. Run it at low priority,
+like the aerial builder. It downloads map data from the same open sources a player would, so keep it within their
+rate limits.
 
-**Cache headers.** A block may be rebuilt in place (merged with new places and signed again), and the client reads
-the manifest again every 10 minutes, so the manifest should not be edge-cached (`no-cache`) and blocks should have a
-short lifetime (for example one hour). Uploading is a manual step today. The collector does not yet have an endpoint
-for requesting missing blocks (TELEMETRY.md, section 8), so keep `"request": false` in the switch file.
+**Cache headers.** A block file never changes: a rebuild writes a new name, and the manifest names the current file of
+each block. So blocks are `immutable` with a long lifetime, and only the manifest is `no-cache`; no edge purge is ever
+needed. The builder keeps the names it replaced in `retired.json`. `run.py prune-out --keep <vkey>` removes them,
+here and in the bucket, after a grace period (7 days), so a client that still holds the previous manifest finds its
+blocks meanwhile. The collector does not yet have an endpoint for requesting missing blocks (TELEMETRY.md, section 8),
+so keep `"request": false` in the switch file.
 
 ## Client settings (environment variables)
 

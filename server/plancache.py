@@ -33,6 +33,7 @@ log = logging.getLogger("earthd.plancache")
 WAIT_S = 90.0
 LONG_WAIT_S = 20.0          # s: a wait for another process's plans this long is logged (claim)
 KEEP_S = 6 * 3600.0         # run folders untouched this long are removed (prune)
+VERSIONS_RECHECK_S = 2.0    # s between reads of the map data's versions for the revisit keys (PlanCache.persist)
 RUN_ENV = "BNGE_PLAN_RUN"
 
 
@@ -110,6 +111,11 @@ def for_grader(cache_dir, grader, widths, wet):
     pc.source_versions = getattr(md, "bundle_versions", None) or getattr(md, "versions", None)
     pc.persist = (cache_dir, (FRAMES, pc.signature,
                               md.versions() if md is not None and hasattr(md, "versions") else None))
+    if md is not None and hasattr(md, "versions"):
+        # (the versions followed, not taken once: a first run's weekly manifests come after its first anchor, and a
+        # pinned week-old build is refreshed during a session; taken once, every plan of the session was keyed
+        # without them / with the old build, and never found again, nor in a shared archive)
+        pc._versions_of = md.versions
     return pc
 
 
@@ -117,7 +123,9 @@ class PlanCache:
     def __init__(self, root, signature):
         self.dir = os.path.join(root, FRAMES, signature)
         self.signature = signature
-        self.persist = None     # (cache dir, key parts) of the revisit cache's copy (for_grader), or None
+        self._persist = None    # (cache dir, key parts) of the revisit cache's copy (for_grader), or None: persist
+        self._versions_of = None    # (for_grader: the map data's versions(), read again at most every VERSIONS_RECHECK_S)
+        self._persist_at = time.monotonic()
         self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._lock = threading.Lock()
@@ -235,6 +243,28 @@ class PlanCache:
             return revisit.where((s + n) / 2, (w + e) / 2, s, w, n, e, revisit.sig(plans=sig, md=versions))
         except Exception:
             return None
+
+    @property
+    def persist(self):
+        """(cache dir, (frames, signature, the map data's versions now)) or None: the revisit cache's key parts."""
+        p = self._persist
+        if p is None or self._versions_of is None:
+            return p
+        now = time.monotonic()
+        if now - self._persist_at >= VERSIONS_RECHECK_S:
+            self._persist_at = now
+            try:
+                v = self._versions_of()
+            except Exception:
+                v = None
+            if v is not None and v != p[1][2]:
+                p = self._persist = (p[0], (p[1][0], p[1][1], v))
+        return p
+
+    @persist.setter
+    def persist(self, value):
+        self._persist = value
+        self._versions_of = None
 
     def has(self, key):
         """Are cell key's plans on disk (this run's, or the revisit cache's copy)? A stat or two, nothing read."""
