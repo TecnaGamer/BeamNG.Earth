@@ -908,7 +908,8 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(mats[name]["mapTo"], name)                        # P2: mapTo overrides the shape's own
         self.assertEqual(mats[name]["class"], "Material")
         palette = mats[name]["Stages"][0]["baseColorMap"]
-        self.assertTrue((modsim.MOD_ROOT / palette.lstrip("/")).is_file(), palette)
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        self.assertTrue(_mt.is_shipped(modsim.MOD_ROOT / palette.lstrip("/")), palette)
         # the level loader picks up every *materials.json under the level folder, so the file must
         # live inside levels/beamng_earth
         self.assertTrue(vfs.startswith("/levels/beamng_earth/"))

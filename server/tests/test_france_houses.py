@@ -271,7 +271,7 @@ class HouseTest(unittest.TestCase):
             assets.build(td)
             # (the tool draws PNGs and names them; the mod ships them as DDS, tools/mod_textures_dds.py)
             names = {p.name for p in Path(td).iterdir()}
-            self.assertEqual({p.name for p in assets.OUT.iterdir()}, {mod_textures_dds.shipped(n) for n in names})
+            self.assertEqual(mod_textures_dds.shipped_names(assets.OUT), {mod_textures_dds.shipped(n) for n in names})
             for name in names:
                 with self.subTest(asset=name):
                     if name.endswith(".png"):

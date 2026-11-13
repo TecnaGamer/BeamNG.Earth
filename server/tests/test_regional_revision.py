@@ -122,7 +122,7 @@ class EuropeTest(unittest.TestCase):
                 continue
             texture=mat['Stages'][0]['baseColorMap']
             self.assertTrue(texture.endswith('.color.dds'))     # (shipped as DDS: tools/mod_textures_dds.py)
-            with Image.open(levels/texture.lstrip('/')) as im:
+            with mod_textures_dds.open_texture(levels/texture.lstrip('/')) as im:
                 pixels=np.asarray(im.convert('RGB'),float)
             means[name]=pixels.mean()
             self.assertGreater(pixels.std(),1.,'surface grain should survive')

@@ -47,6 +47,14 @@ libm = "=0.2.16"
 # dalek-cryptography, pure Rust, BSD-3-Clause; sha2 (RustCrypto, MIT / Apache-2.0) for the bodies' hashes. 2026-11-13.
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
 sha2 = { version = "0.10", default-features = false }
+# The mod's DDS textures made at install time from their lossless sources (texdds.rs): BC7 / BC5 / BC4 by texture-compressor
+# (pure Rust, MIT / Apache-2.0; deterministic: its SSE4.1 / AVX2 kernels give the scalar bytes). Pinned. Reviewed
+# 2026-11-13: no network, file or process access; unsafe only in its SIMD module (fixed-size array loads / stores and
+# the checked CPU-feature dispatch); build.rs only writes two lookup tables into OUT_DIR; its one dependency is libm.
+texture-compressor = "=0.2.4"
+# The texture sources (texdds.rs): lossless WebP, ~25 % under PNG; image-webp (image-rs), pure Rust, MIT / Apache-2.0,
+# forbid(unsafe_code), no file / network / process access, deps byteorder-lite and quick-error. Pinned. Reviewed 2026-11-13.
+image-webp = "=0.2.4"
 
 [profile.release]
 opt-level = 3

@@ -143,6 +143,24 @@ class Poles(unittest.TestCase):
         self.assertAlmostEqual(t[2, 9], mount)
         self.assertAlmostEqual(t[0, 9], mount + sizes["square"][1] + 0.1)
 
+    def test_a_yellow_field_takes_its_own_cells_of_the_one_atlas(self):
+        """vienna_y (PL) and vienna_w share one atlas (2026-11-13): a warning triangle in PL takes its yellow cell
+        (variant_cells), any other sign the shared cell; in CZ every sign its role's cell. The merged sheet's yellow
+        cells are the old yellow sheet's drawings (mod/texture_sources, tools/build_sign_atlas.py --check)."""
+        roles, systems, by_id = roadsigns.tables()
+        rule = lambda name: float(systems["rules"].index(name))        # noqa: E731
+        signs = np.array([[0, 0, 1, 0, rule("warn.signals"), 1, 0, 0, 0, 0, 0],
+                          [50, 0, 1, 0, rule("reg.no_entry"), 1, 50, 0, 0, 1, 0]], float)
+        yellow = roles["variant_cells"]["yellow"]
+        pl = roadsigns.table(signs, np.zeros(2), np.zeros(2), roadsigns.system("PL"))
+        cz = roadsigns.table(signs, np.zeros(2), np.zeros(2), roadsigns.system("CZ"))
+        self.assertEqual(int(pl[0, 6]), yellow["warn.signals"])
+        self.assertEqual(int(cz[0, 6]), by_id["warn.signals"][0])
+        self.assertEqual(int(pl[1, 6]), int(cz[1, 6]))
+        self.assertEqual(int(pl[1, 6]), by_id["reg.no_entry"][0])
+        self.assertTrue(all(len(roles["roles"]) <= c < roles["cols"] * roles["rows"] for c in yellow.values()))
+        self.assertEqual(len(set(yellow.values())), len(yellow))
+
     def test_a_tile_of_roads_gives_signs_with_pole_and_slot(self):
         import fast
         if not hasattr(fast._ef, "road_sign_place"):

@@ -532,8 +532,10 @@ class AssetsTest(unittest.TestCase):
     def test_mod_assets_match(self):
         """The palette and material shipped in the mod are what write_mod_assets() produces."""
         d = MOD.joinpath(*ff.MOD_SHAPES)
-        with Image.open(d / ff.MOD_PALETTE) as im:     # (a DDS: BC7, within its error)
-            self.assertEqual(ff.MOD_PALETTE.rsplit(".", 1)[1], "dds")
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import mod_textures_dds as mt   # (a DDS made at install from its lossless source: the same texels as drawn)
+        self.assertEqual(ff.MOD_PALETTE.rsplit(".", 1)[1], "dds")
+        with mt.open_texture(d / ff.MOD_PALETTE) as im:
             diff = np.abs(np.asarray(im.convert("RGB"), np.int16) - np.asarray(ff.palette_image(), np.int16))
             self.assertLessEqual(diff.max(), 6)
         import json

@@ -16,6 +16,7 @@ mod carriageway_solver;
 mod carriageways;
 mod spaceclouds;
 mod cdaez;
+mod texdds;
 mod clearance;
 mod f32z;
 mod blockstore;
@@ -6417,6 +6418,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 282 (on 281): the shared decision archives (decisions: BNGD blocks of road plans and
     // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
     decisions::register(m)?;
-    m.add("VERSION", 283)?;
+    // 285 (on 283; 284 is the governor branch's): the mod's textures encoded at install time from their lossless sources (texdds: texture_dds_files,
+    // texture_dds, TEXDDS_ID; modtextures.py, install.py, tools/package.py)
+    texdds::register(m)?;
+    m.add("VERSION", 285)?;
     Ok(())
 }

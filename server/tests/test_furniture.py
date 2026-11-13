@@ -481,7 +481,8 @@ class JunctionTest(unittest.TestCase):
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
         import build_median_props as props
         from PIL import Image
-        sheet = np.asarray(Image.open(Path(props.OUT) / "bne_se_signs.dds").convert("RGB")).astype(int)   # (shipped as DDS)
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        sheet = np.asarray(_mt.open_texture(Path(props.OUT) / "bne_se_signs.dds").convert("RGB")).astype(int)
         px = lambda x, z: sheet[int(props.B1_CELL[1] - z * props.B1_PX), int(props.B1_CELL[0] + x * props.B1_PX)]  # noqa: E731
         r, g, b = px(0.0, 0.05)
         self.assertTrue(r > 200 and g > 170 and b < 60, "the middle is yellow")
@@ -513,7 +514,8 @@ class SignAssetsTest(unittest.TestCase):
         self.assertIn("none", defaults)
         art = self.ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth"
         for n in [str(k) + "kph" for k in furniture.SIGN_KMH] + ["_none"]:
-            self.assertTrue((art / f"sign_speed{n}.dae").exists() and (art / f"sign_speed{n}.dds").exists(), n)
+            __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+            self.assertTrue((art / f"sign_speed{n}.dae").exists() and _mt.is_shipped(art / f"sign_speed{n}.dds"), n)
 
 
 class RoundaboutTest(unittest.TestCase):
