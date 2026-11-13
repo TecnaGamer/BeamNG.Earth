@@ -69,6 +69,7 @@ IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.item
 IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
 # (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
 IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
+IMAGERY["bngaer"] = "BeamNG.Earth aerial packs: USDA NAIP (public domain) and open national orthophotos"
 ELEVATION = {
     demmod.MAPTERHORN["name"]: "Mapterhorn (https://mapterhorn.com/attribution)",     # (z0-12 from the project's tile host: still Mapterhorn's)
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
