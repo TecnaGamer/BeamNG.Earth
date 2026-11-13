@@ -1168,13 +1168,30 @@ def abandoned(out_dir, aid):
         return False
     got = _abandoned_seen.get(p)
     if got is None or got[0] != m:
-        try:
-            with open(p, encoding="utf-8") as f:
-                ids = {int(v) for v in json.load(f)}
-        except (OSError, ValueError, TypeError):
-            return False
+        ids = _read_abandoned(p)
+        if ids is None:         # (unreadable now: the list last read, the file read again next time)
+            return got is not None and aid in got[1]
         got = _abandoned_seen[p] = (m, ids)
     return aid in got[1]
+
+
+ABANDONED_READ_TRIES = 5        # a read the server's rename holds off (Windows: PermissionError) tried this often ...
+ABANDONED_READ_WAIT_S = 0.002   # ... this long apart
+
+
+def _read_abandoned(p):
+    """The anchor ids in the file at p, or None: opened, read and closed at once (the server renames a new list over
+    it: a long-open reader holds that off on Windows); a sharing violation tried again a few times."""
+    for i in range(ABANDONED_READ_TRIES):
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+            return {int(v) for v in json.loads(data.decode("utf-8"))}
+        except PermissionError:
+            time.sleep(ABANDONED_READ_WAIT_S * (i + 1))
+        except (OSError, ValueError, TypeError):
+            return None
+    return None
 
 
 class _abandon_check:
