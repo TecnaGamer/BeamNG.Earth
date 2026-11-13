@@ -599,11 +599,14 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
           ground_at=(0.0, 0.0)):
     """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
     _BUILDING[0] += 1               # (the pool's one job thread: _warm_loop reads it)
+    import revisit
+    depth = revisit.depth()         # (the block cache's scope, blockcache.Build: closed if the build raised)
     try:
         with _abandon_check(out_dir, aid):
             return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
                           ground_at)
     finally:
+        revisit.unwind(depth)
         _BUILDING[0] -= 1
 
 

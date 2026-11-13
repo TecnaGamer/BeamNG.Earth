@@ -91,6 +91,7 @@ class ScopeTest(unittest.TestCase):
         self.assertFalse(b.complete)
 
     def test_end_pops_its_own_scope(self):
+        d = revisit.depth()
         a = revisit.begin()
         b = revisit.begin()
         revisit.end(a)
@@ -98,7 +99,11 @@ class ScopeTest(unittest.TestCase):
         revisit.end(b)
         self.assertTrue(a.complete)
         self.assertFalse(b.complete)
-        self.assertEqual(revisit._tl.stack, [])
+        self.assertEqual(revisit.depth(), d)
+        c = revisit.begin()                     # (a job that raised before it ended its scope: blockworker.build)
+        revisit.unwind(d)
+        self.assertEqual(revisit.depth(), d)
+        self.assertNotIn(c, revisit._tl.stack)
 
 
 class ShortPlansTest(unittest.TestCase):

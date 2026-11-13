@@ -109,6 +109,29 @@ def end(b):
     return b
 
 
+def depth():
+    """This thread's open scopes (unwind)."""
+    return len(_stack())
+
+
+def unwind(n):
+    """This thread's scopes past the first n closed (a job that raised before it ended its own: the next job of the
+    thread must not run in them)."""
+    st = _stack()
+    del st[n:]
+
+
+def scoped_call(fn, *a, **k):
+    """(fn(*a, **k), its Build): fn run in a scope of its own (work handed to another thread: its faults read back)."""
+    with scope() as b:
+        return fn(*a, **k), b
+
+
+def all_complete(builds):
+    """Every Build of builds (None: not checked) complete."""
+    return all(b is None or b.complete for b in builds)
+
+
 class scope:
     """with scope() as b: a build's scope (begin / end); b.complete after it."""
     __slots__ = ("b",)

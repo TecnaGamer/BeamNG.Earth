@@ -4126,13 +4126,16 @@ class Server:
             name = self._base_revisited(anchor, cx, cy, bk, photo)
             if name is not None:
                 return name, photo, time.perf_counter() - t1
-        f0 = revisitmod.faults()
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
-        if name is None:
-            with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+        f0 = revisitmod.begin()             # (this photo's own faults: revisit.scope)
+        try:
+            name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
+            if name is None:
+                with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
+                    name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
+        finally:
+            revisitmod.end(f0)
         if bk is not None and name is not None:
-            self._base_keep(anchor, cx, cy, bk, name, f0)
+            self._base_keep(anchor, cx, cy, bk, name, (f0,))
         return name, photo, time.perf_counter() - t1
 
     # A block's finished base photo kept in the revisit cache (kind "basephoto": the photo file and the game's packed
@@ -4200,7 +4203,7 @@ class Server:
     def _base_keep(self, anchor, cx, cy, bk, name, f0):
         """The block's photo just made kept in the revisit cache when it is final (see base_revisit_key)."""
         key = (anchor.id, cx, cy)
-        if self.base_pending.get(key) or key in self.base_stale or revisitmod.faults() != f0:
+        if self.base_pending.get(key) or key in self.base_stale or not revisitmod.all_complete(f0):
             return
         size = self.layout.block * heightmap.SQUARE
         if not self._photo_data_cached(anchor, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M, size):
@@ -9220,15 +9223,18 @@ class Connection:
                 pool = getattr(s, "photo_pool", None) or (s.block_pools[LANE_PREFETCH][0] if s.block_pools else None)
                 rev = next(s.base_rev)
                 name = None
-                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), revisitmod.faults()
+                # (each step's own faults, in the thread it runs in: revisit.scoped_call)
+                bk, f0 = s.base_revisit_key(anchor, key[1], key[2]), []
                 if pool is not None:
                     # (in the block process: from the finished tiles with the analyses on; they were all rendered
                     # here, 121 of a warm 8 min drive at 150 mph, beside the event loop, 2026-11-04)
-                    name = await self.loop.run_in_executor(s.hm_pool, s._base_elsewhere, anchor, key[1], key[2],
-                                                           pool, [], False, rev)
+                    name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s._base_elsewhere,
+                                                              anchor, key[1], key[2], pool, [], False, rev)
+                    f0.append(b)
                 if name is None:
-                    name = await self.loop.run_in_executor(s.hm_pool, s.write_base, anchor, key[1], key[2], pool,
-                                                           rev)
+                    name, b = await self.loop.run_in_executor(s.hm_pool, revisitmod.scoped_call, s.write_base, anchor,
+                                                              key[1], key[2], pool, rev)
+                    f0.append(b)
                 info = s.hm.get(key)
                 if name is None or info is None:
                     return

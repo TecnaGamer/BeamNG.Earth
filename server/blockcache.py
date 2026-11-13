@@ -258,7 +258,7 @@ class Build:
         self.frame, self.hm_zoom, self.cx, self.cy, self.size, self.q = frame, hm_zoom, cx, cy, size, q
         self.setting, self.md, self.surface, self.chunks = setting, md, surface, chunks
         self.cells = heightmap.block_chunks(cx, cy, size)
-        self.f0 = revisit.faults()
+        self.scope = revisit.begin()        # (this block's own faults: revisit.scope; ended by finish)
         self.base, self.pads = self._keys()
         self.disk = ChunkDisk(self)
         self.hit_info = None
@@ -345,6 +345,7 @@ class Build:
         """After the block was built and written: its chunks and entry written to the disk when the build was complete,
         else its new chunks marked dirty in the memory. idx_pre: the material index before the tunnel holes (None: no
         surface); idx_ter: the .ter's (holes in; None: none). Returns whether it was kept."""
+        revisit.end(self.scope)
         computed = self.disk.computed
         ks = [k for _, _, k in self.cells]
         why = self._short(info, keep, g, ks)
@@ -371,8 +372,8 @@ class Build:
 
     def _short(self, info, keep, g, ks):
         """Why the build may not be kept (None: it may)."""
-        if revisit.faults() != self.f0:
-            return "something it read failed or was missing"
+        if not self.scope.complete:
+            return "something it read failed or was missing" + (f" ({self.scope.why_not()})" if revisit.SITES else "")
         if info.get("surfaceComplete") is False or info.get("roadsComplete") is False:
             return "surface incomplete"
         if self.chunks is not None and self.chunks.any_dirty(ks):
