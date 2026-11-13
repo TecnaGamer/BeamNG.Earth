@@ -104,6 +104,10 @@ M.NEED_HARD_MIN_M = 30
 -- rest (on a Steam Deck at 80 mph in Phoenix the import queue grew to 140 behind ~20 ms imports, and an I-10 overpass's
 -- deck turned solid only as the car reached it, behind the sidewalks' and buildings' colliders of the same tiles)
 M.DRIVE_FIRST_M = 400
+-- A walk whose nextWalk key (m: distance, or along the path ahead when fast) is within this is a 'near' unit of the
+-- governor's lanes (always first); the rest of a place's meshes share with the far tiles while those wait (2026-11-13:
+-- a cached Fells Point's far field waited ~10 s behind every building and sidewalk of the place)
+M.NEAR_FIRST_M = 400
 -- ... and one the car reaches within URGENT_S (150 m at least) is made at once, whatever the governor's budget (its cost
 -- still charged: what follows waits), one every URGENT_EVERY_FRAMES at most: at ~20 ms an import on a Steam Deck, the
 -- 2-4 ms budget let ~3 a second through, fewer than a city's tiles bring at 80 mph
@@ -1642,7 +1646,7 @@ local function updateFar(gov)
     farCursor = key
     key, f = next(far, key)
   end
-  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
+  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk', 'mid') do
     local key = table.remove(farQ, 1)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
@@ -1659,7 +1663,7 @@ local function updateFar(gov)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
     elseif f and not f.geo and not f.id then
       local t0 = now()
@@ -1667,7 +1671,7 @@ local function updateFar(gov)
       local ok, id = pcall(createWalk, { shape = f.shape, pos = f.pos }, false)
       if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, 'mid')
       noteUnit('bldfar', ms, f.shape)
     end
   end
@@ -1939,8 +1943,14 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     forced = M.urgentWalk(walkQ)
   end
   sinceUrgent = sinceUrgent + 1
-  while #walkQ > 0 and (forced or gov:try('roadWalk')) do
-    local q = table.remove(walkQ, forced or M.nextWalk(walkQ))
+  while #walkQ > 0 do
+    -- (lanes, governor.lua: a mesh within NEAR_FIRST_M of the car, or a forced one, is 'near'; the rest 'mid', which
+    -- shares with the far tiles while they wait)
+    local idx, key = forced, nil
+    if not idx then idx, key = M.nextWalk(walkQ) end
+    local lane = (key and key > M.NEAR_FIRST_M) and 'mid' or 'near'     -- (no car: as before, unrestricted)
+    if not forced and not gov:try('roadWalk', lane) then break end
+    local q = table.remove(walkQ, idx)
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
     if t and q.tile and q.tile ~= t then t = nil end
@@ -1980,7 +1990,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge('roadWalk', ms, lane)
       noteUnit(tostring(q.what), ms, walk and walk.shape)
       sinceChange = stopwatch.new()
     end
@@ -2168,7 +2178,7 @@ function M.reloadLog() return reloadLog end
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
 -- mesh by its distance to the camera instead when that is nearer (viewAt: what is drawn follows the camera).
 function M.nextWalk(q)
-  if #q <= 1 then return 1 end
+  if #q == 0 then return 1 end
   local p, dir = playerNow()
   if not p then return 1 end
   local best, bestKey = 1, math.huge
@@ -2193,7 +2203,7 @@ function M.nextWalk(q)
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
-  return best
+  return best, bestKey
 end
 
 -- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
