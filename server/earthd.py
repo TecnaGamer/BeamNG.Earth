@@ -383,6 +383,7 @@ FAST_KEEP_S = 20.0              # ... and this long after it last was: a car the
                                 # hold, the edge guard) reports no speed, and its next block waited for its photo
                                 # again (5-10 s at 500 mph on a first visit, Indianapolis 2026-10-30: held half the time)
 TRASH_DIR = "trash"         # in the cache: folders of the game's user folder moved out to be deleted (_rmtree_outside)
+FAR_FIRST_HOLD_S = 120.0    # the least urgent far content waits at most this for a place's first far field
 PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
 ANCHOR_PROGRESS_S = 2.0     # first ground: phase heartbeat, independent of the worker's optional tile counts
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
@@ -9107,7 +9108,9 @@ class Connection:
                     self.view_at = None
                     self.boost_t0 = time.monotonic()
                     self.s.load_boost(True, "teleport")
+                    self.anchor_at = time.monotonic()   # (a new place's first far field: far_first_pending)
         else:
+            self.anchor_at = time.monotonic()           # (the session's first place: far_first_pending)
             self.shown = {k: bb for k, bb in self.shown.items() if k[0] in self.s.anchors}
             # No previous frame to map the player from (first anchor, or a resync after a server
             # restart, whose terrain is around the player): start at the anchor's first terrain.
@@ -9279,6 +9282,18 @@ class Connection:
                 del self.slot_holds[int(n)]
                 let_go.append(int(n))
         self.s.slots_let_go(let_go)
+
+    def far_first_pending(self):
+        """Is the far field of the place teleported to last (or the session's first) still to be done, for at most
+        FAR_FIRST_HOLD_S? (Not after a rebase: the geotiles are kept across anchors, and a driving far field is
+        rarely done.) The least urgent far content (the far building packs, the skyline, the far bridges) waits
+        meanwhile: on a cold first visit their map cells for 5 km round the car were fetched and built beside the far
+        field's own, which then took 160 s instead of 97 s at Fells Point (2026-11-13, expo O: with the packs the
+        far buildings' own tiles were done early, and the skyline and bridges they gated started at once)."""
+        at = getattr(self, "anchor_at", None)
+        if at is None:
+            return False
+        return getattr(self, "far_done_at", 0.0) <= at and time.monotonic() - at < FAR_FIRST_HOLD_S
 
     def far_loading(self):
         """Is the far field round the active anchor still being built or sent (far_done not owed yet)?"""
@@ -9494,16 +9509,20 @@ class Connection:
             self.bldfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                 self.build_far_geo("bldfar") if geo else self.s.build_far_bld_tile,
                                 view=self.view_at, frame=frame)
-            if self.bldpack is not None:    # (past the road geotiles' far tiles: buildings.PACK_*)
+            # (the packs, the skyline and the far bridges only once the place's own far field is done:
+            # far_first_pending)
+            later = not self.far_first_pending()
+            if self.bldpack is not None and later:     # (past the road geotiles' far tiles: buildings.PACK_*)
                 self.bldpack.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldpack"),
                                      view=self.view_at, frame=frame)
-            if self.bldsky is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1] and (
-                    self.bldpack is None or self.bldpack.progress()[0] >= self.bldpack.progress()[1]):
+            near_done = self.bldfar.progress()[0] >= self.bldfar.progress()[1] and (
+                self.bldpack is None or self.bldpack.progress()[0] >= self.bldpack.progress()[1])
+            if self.bldsky is not None and later and near_done:
                 # (only once the far buildings round the car are all there: the skyline is the least urgent)
                 self.bldsky.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                     self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
                                     view=self.view_at, frame=frame)
-            if self.brfar is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
+            if self.brfar is not None and later and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
                 self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                    self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
                                    view=self.view_at, frame=frame)

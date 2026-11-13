@@ -231,6 +231,25 @@ class TrackerTest(unittest.TestCase):
         c2.bldfar.close()
 
 
+class FarFirstTest(unittest.TestCase):
+    def test_least_urgent_wait_for_the_first_far_field(self):
+        """earthd.Connection.far_first_pending: after a teleport the packs, skyline and far bridges wait for the place's
+        far field (far_done after the commit), at most FAR_FIRST_HOLD_S; none before any teleport."""
+        import time
+        import types
+        import earthd
+        c = types.SimpleNamespace()
+        self.assertFalse(earthd.Connection.far_first_pending(c), "no teleport yet")
+        c.anchor_at = time.monotonic()
+        self.assertTrue(earthd.Connection.far_first_pending(c), "teleported, far field not done")
+        c.far_done_at = c.anchor_at - 1.0
+        self.assertTrue(earthd.Connection.far_first_pending(c), "a far_done of the place before")
+        c.far_done_at = c.anchor_at + 0.5
+        self.assertFalse(earthd.Connection.far_first_pending(c), "its far field done")
+        c.far_done_at, c.anchor_at = 0.0, time.monotonic() - earthd.FAR_FIRST_HOLD_S - 1
+        self.assertFalse(earthd.Connection.far_first_pending(c), "held at most FAR_FIRST_HOLD_S")
+
+
 class AgreementTest(unittest.TestCase):
     def test_constants(self):
         src = ROADS_LUA.read_text()
