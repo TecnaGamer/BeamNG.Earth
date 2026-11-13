@@ -1588,6 +1588,10 @@ end
 local function updateFarGeo(key, f)
   local shown = false
   for sub, p in pairs(f.parts) do
+    if not p.id and p.deferred and not M.farGeoHidden(f, sub) then
+      p.deferred = nil          -- (LAZY_FAR_PARTS: it would show now; made next, ahead of the other far parts)
+      table.insert(farQ, 1, key .. '#' .. sub)
+    end
     if p.id then
       local hide = M.farGeoHidden(f, sub)
       if hide ~= (p.hidden or false) then
@@ -1604,6 +1608,11 @@ end
 -- The far tiles' hide checks, round-robin: at most FAR_CHECKS_PER_FRAME a frame (all ~600 of them every frame cost
 -- ~0.85 ms of every frame while driving, 2026-10-29; a far building shown or hidden a few frames later is not seen)
 M.FAR_CHECKS_PER_FRAME = 80
+-- A far geotile's part (far buildings, skyline, far bridge piece) that would be hidden the moment it is made (its
+-- road geotile already shows its own buildings / deck, every far buildings tile under a skyline square came) is not
+-- made until it would show (2026-11-13: each a shape file of its own, ~5 ms and a first draw, for an object never seen
+-- while the car stays in town)
+M.LAZY_FAR_PARTS = true
 local farCursor = nil
 local function updateFarOne(key, f)
     if f.geo then
@@ -1651,7 +1660,10 @@ local function updateFar(gov)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
     local p = f and f.geo and sub and f.parts[sub]
-    if p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
+    if p and not p.id and anchorObj and M.LAZY_FAR_PARTS and M.farGeoHidden(f, sub) then
+      p.deferred = true         -- (hidden the moment it would be made: made once it would show, updateFarGeo)
+      M.geoStats.farDeferred = (M.geoStats.farDeferred or 0) + 1
+    elseif p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
       local t0 = now()
       loadMaterials()
       farPartPlace(f, p, anchorObj)
