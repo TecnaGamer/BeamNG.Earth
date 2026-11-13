@@ -6027,6 +6027,49 @@ def median_width(spec):
     return max(0.0, float(spec.median or 0.0) - spec.width) if spec.median else 0.0
 
 
+# A median's end at a junction is an island's nose, never a street corner: the junctions kernel joined each median
+# band's curb to the next branch's with a curb return, and the two returns of a divided road's median crossed into a
+# bow tie of slab in front of the crosswalk where the median is narrower than their radii (South Broadway at Bank
+# Street, Fells Point: the user's report 20, 2026-11-12, "Median end needs work"); where it is wide enough the two make
+# the nose's round end. Two corners whose curbs start or end within MEDIAN_RETURN_M of median bands' ends and cross
+# each other are one nose; where a return's radius (a quarter circle's: 2 / pi of its curb's length) is more than
+# MEDIAN_RETURN_OVER_M past half the nose's span (between the curbs' ends at the bands) they are left out (the bands
+# end square at the crosswalk).
+MEDIAN_RETURN_M = 1.5
+MEDIAN_RETURN_OVER_M = 1.5
+
+
+def _without_median_returns(walks):
+    """walks without the corner pieces (curb returns) of a median's nose that reach out past it (a bow tie). Pure."""
+    ends = [np.asarray(wk["pts"], np.float64)[k, :2] for wk in walks if wk.get("median") and "pts" in wk
+            and len(wk["pts"]) for k in (0, -1)]
+    if not ends:
+        return walks
+    E = np.asarray(ends)
+
+    def at_median(wk):
+        """The curb's end at a median band's end, or None."""
+        arc = np.asarray(wk["corner"]["arc"], np.float64)
+        if len(arc) < 2:
+            return None
+        d = [float(np.hypot(*(E - q[:2]).T).min()) for q in (arc[0], arc[-1])]
+        k = int(np.argmin(d))
+        return arc[0 if k == 0 else -1, :2] if d[k] < MEDIAN_RETURN_M else None
+    nose = [(n, at_median(wk)) for n, wk in enumerate(walks) if "corner" in wk]
+    nose = [(n, p) for n, p in nose if p is not None]
+    drop = set()
+    for i, (a, pa) in enumerate(nose):
+        for b, pb in nose[i + 1:]:
+            arc_a = np.asarray(walks[a]["corner"]["arc"], np.float64)[:, :2]
+            arc_b = np.asarray(walks[b]["corner"]["arc"], np.float64)[:, :2]
+            if not _crossings([arc_a], [arc_b]):
+                continue
+            r = max(2.0 / math.pi * float(np.hypot(*np.diff(c, axis=0).T).sum()) for c in (arc_a, arc_b))
+            if r > float(np.hypot(*(pa - pb))) / 2 + MEDIAN_RETURN_OVER_M:
+                drop.update((a, b))
+    return [wk for n, wk in enumerate(walks) if n not in drop] if drop else walks
+
+
 def sidewalk_stop(spec, fid, other, ofid):
     """How far from the centreline of a crossing road (other) the sidewalks of road spec stop. The corner
     square is one sidewalk's: when both roads have sidewalks the wider road's (then the smaller id) runs on
@@ -11684,6 +11727,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 points = np.asarray(wk['disc']['ring'] if 'disc' in wk else wk['corner']['arc'] if 'corner' in wk else wk['pts'])
                 if len(points):
                     wk['europe'] = wk.get('europe', False) or bool(european(*points[len(points)//2]))
+        walks[:] = _without_median_returns(walks)
         import sidewalks
         walks[:] = sidewalks.clear_overlaps(walks)
         drain_runs = [(wk, wk.pop("drain_ends")) for wk in walks if "drain_ends" in wk]
