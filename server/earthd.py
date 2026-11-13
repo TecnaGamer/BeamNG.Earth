@@ -2568,7 +2568,12 @@ class Server:
         t0 = time.perf_counter()
         got = self.far_bld_pool.submit(blockworker.far_geo, kind, gx, gy, gzoom, self.out_dir, self.vfs_dir,
                                        lamps).result()
-        log.debug("far geotile %s %s: %.2f s (queue + build)", kind, geotiles.key(gx, gy, z), time.perf_counter() - t0)
+        dt = time.perf_counter() - t0
+        st = self.__dict__.setdefault("_far_geo_time", {})      # kind -> [n, s] (far_geo_summary)
+        e = st.setdefault(kind, [0, 0.0])
+        e[0], e[1] = e[0] + 1, e[1] + dt
+        (log.info if kind == "bldpack" else log.debug)("far geotile %s %s: %.2f s (queue + build)", kind,
+                                                       geotiles.key(gx, gy, z), dt)
         if got is not None:
             if len(memo) > self.FAR_GEO_KEPT:
                 memo.clear()
@@ -10853,6 +10858,9 @@ class Connection:
                          1000 * bs[len(bs) // 2] if bs else 0.0)
                 log.info("tile build ms (geometry+write / texture) and KB (shape / texture) by level: %s",
                          self.s.level_summary())
+                fg = getattr(self.s, "_far_geo_time", None)
+                if fg:          # (the far geotiles so far this session: n, s of queue + build by kind)
+                    log.info("far geotiles: %s", {k: (v[0], round(v[1], 1)) for k, v in sorted(fg.items())})
                 if getattr(self.s.far_pool, "stats", None) is not None and self.batch[1] >= 50:   # (a full one)
                     g = getattr(self.s.far_pool, "group", None)
                     log.info("compute sharing: %s; group %s", self.s.far_pool.stats,
