@@ -343,7 +343,9 @@ NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_
                 "BNE_TELEMETRY",
                 # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
                 # plancache's stage_*)
-                "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE")
+                "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE",
+                # (an older version shown while this one is built: what is kept is this version's either way)
+                "BNE_STALE_REVISIT", "BNE_STALE_DAYS")
 
 
 def code_key():
@@ -372,14 +374,25 @@ def code_key():
             import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
             if heightmap.SQUARE != 1.0:
                 h.update(f"square={heightmap.SQUARE:g}".encode())
+            if SIM_BUMP:            # (tests, measurements: an update's new code without one)
+                h.update(f"sim={SIM_BUMP}".encode())
             _code.append(h.hexdigest()[:16])
         return _code[0]
 
 
+def _key(kind, code, parts):
+    return hashlib.sha1(repr((kind, code, parts)).encode()).hexdigest()
+
+
 def key(kind, *parts):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
-    the code."""
-    return hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+    the code. In a stale() scope the keys the item had under the older generations are remembered beside it (_alias):
+    load / has / locate fall back to them."""
+    k = _key(kind, code_key(), parts)
+    ctx = getattr(_tl, "stale", None)
+    if ctx is not None and kind in STALE_KINDS:
+        _alias(kind, k, parts, ctx[0])
+    return k
 
 
 # Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their
@@ -405,7 +418,7 @@ _switches = []
 
 def format_marker(kind, fmt):
     """What a format-keyed item's sidecar line holds in place of the code key ("fmt:<kind>:<n>:<switches>")."""
-    m = f"fmt:{kind}:{fmt}:{switches_key()}"
+    m = f"fmt:{kind}:{fmt}:{switches_key()}" + (f":sim{SIM_BUMP}" if SIM_BUMP else "")
     _formats[kind] = m
     return m
 
@@ -421,6 +434,243 @@ def current_codes():
     import plancache
     format_marker("plans", plancache.plans_format())
     return {code_key(), *_formats.values()}
+
+
+# ---- the older versions shown while the current one is built (2026-11-13) ---------------------------------------------
+# After an update (the code key) or a PLANS_FORMAT / FACTS_FORMAT bump every item's key is new, and a place visited
+# before was a first visit again (Fells Point's graded block 7 -> 37 s, Manhattan's 23 -> 49-86 s). A GENERATION is one
+# set of those key parts (generation()); the server's start writes its own into <cache>/revisit/generations.json
+# (register) and keeps the last few (used within STALE_DAYS, STALE_GENS at a time). In a stale(gens) scope (a job of an
+# anchor the server serves from an older generation: earthd's stale mode, StaleJob) key() remembers, beside the current
+# key, the key the same item had under each of gens (the same parts, that generation's code), and load / has / locate
+# fall back to it on a miss. Only FINISHED items are read so (STALE_KINDS; a block: blockcache.Build.stale_hit): the
+# road plans and the cell facts never are, so nothing is ever BUILT from an older generation's data, and an item shown
+# is whole, all of one generation. What may be shown together is earthd's to say (its stale mode: one generation an
+# anchor). An older item whose format this code or the mod cannot read is not found: READ_FORMAT per kind (bump a
+# kind's number when its kept blobs change shape) and the road tiles' JSON version are part of a generation.
+# BNE_STALE_REVISIT=off: none of it. BNGE_SIM_BUMP=<tag>: another code key and other format markers without a change
+# of code (tests, tools/staleprobe.py).
+STALE_ON = os.environ.get("BNE_STALE_REVISIT", "on").strip().lower() not in ("off", "0", "no", "false")
+SIM_BUMP = os.environ.get("BNGE_SIM_BUMP", "")
+STALE_GENS = 2              # older generations tried, newest first
+GENS_KEPT = 6               # generations kept in the file
+GENS_FILE = "generations.json"
+# (the kinds read so: a geotile's road content, an anchor's skin of it, a geotile's trees, an anchor's sign tile, a
+# block's photo, a terrain block. Not the far field's: nothing builds those behind a session yet)
+READ_FORMAT = {"roadsg": 1, "rskin": 1, "vegg": 1, "signs": 1, "basephoto": 1, "block": 1}
+STALE_KINDS = frozenset(READ_FORMAT) - {"block"}
+ALTS_KEPT = 50000
+_alts = {}                  # current key -> [(generation id, that generation's key)] (key() in a stale scope)
+_stale_stats = {"hits": 0, "misses": 0}
+
+
+def stale_days():
+    try:
+        return float(os.environ.get("BNE_STALE_DAYS", "") or 30.0)
+    except ValueError:
+        return 30.0
+
+
+class StaleMiss(Exception):
+    """An item asked for in a stale(only=True) scope is in neither the current nor an older generation."""
+
+
+class stale:
+    """with stale(gens, only=False): this thread's lookups fall back to the generations gens (older(): dicts), newest
+    first. only: gens alone are read, not the current generation, and a miss raises StaleMiss instead of letting the
+    caller build (the items shown together: one generation). gens empty: nothing changes."""
+    __slots__ = ("ctx", "prev")
+
+    def __init__(self, gens, only=False):
+        self.ctx = (tuple(gens), bool(only)) if gens else None
+
+    def __enter__(self):
+        self.prev = getattr(_tl, "stale", None)
+        _tl.stale = self.ctx
+        return self
+
+    def __exit__(self, *exc):
+        _tl.stale = self.prev
+        return False
+
+
+def stale_gens():
+    """The generations this thread's stale scope falls back to (() outside one)."""
+    ctx = getattr(_tl, "stale", None)
+    return ctx[0] if ctx is not None else ()
+
+
+def stale_only():
+    ctx = getattr(_tl, "stale", None)
+    return bool(ctx is not None and ctx[1])
+
+
+def _stale_alone(kind):
+    """Is this thread in a stale(only=True) scope that covers kind (the current generation's item is not read)?"""
+    ctx = getattr(_tl, "stale", None)
+    return ctx is not None and ctx[1] and kind in STALE_KINDS
+
+
+def stale_stats():
+    """This process's lookups answered from an older generation / found in neither."""
+    return dict(_stale_stats)
+
+
+def note_stale_hit(gid):
+    """A lookup of this thread was answered from generation gid (load; blockcache.Build.stale_hit)."""
+    _stale_stats["hits"] += 1
+    _tl.stale_hit = gid
+
+
+def take_stale_hit():
+    """The generation id of this thread's last stale hit since the last call (None: none): a job's result says so."""
+    gid = getattr(_tl, "stale_hit", None)
+    _tl.stale_hit = None
+    return gid
+
+
+def mod_version():
+    try:
+        import roads
+        return int(roads.VERSION)
+    except Exception:
+        return None
+
+
+def generation():
+    """This process's generation: the key parts an update or a format bump changes ("code": code_key, "block": the
+    terrain blocks' code id, "plans": the plans' and facts' formats), the build switches (items made with other
+    switches are other content, never a stand-in), what it takes to read its items ("read") and its id."""
+    import blockcache
+    import plancache
+    g = {"code": code_key(), "block": blockcache._code_id(), "plans": plancache.plans_format(),
+         "switches": switches_key(), "read": dict(READ_FORMAT, mod=mod_version())}
+    g["id"] = hashlib.sha1(repr((g["code"], g["block"], g["plans"])).encode()).hexdigest()[:16]
+    return g
+
+
+def readable(gen, kind):
+    """Can this code (and the mod) read generation gen's items of kind?"""
+    r = gen.get("read") or {}
+    return r.get(kind) == READ_FORMAT.get(kind) and r.get("mod") == mod_version()
+
+
+def _gens_path(cache_dir):
+    return os.path.join(cache_dir, SUBDIR, GENS_FILE)
+
+
+def _read_gens(cache_dir):
+    try:
+        with open(_gens_path(cache_dir), encoding="utf-8") as f:
+            got = json.load(f)
+        return [g for g in got if isinstance(g, dict)
+                and all(isinstance(g.get(n), str) for n in ("id", "code", "block", "plans", "switches"))
+                and isinstance(g.get("t"), (int, float)) and isinstance(g.get("read"), dict)]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def register(cache_dir, now=None):
+    """The server's start (one writer: its main process): this generation in the file, stamped now; the others kept
+    while they may still be used (STALE_DAYS), GENS_KEPT at most. Returns this generation. Never raises."""
+    now = time.time() if now is None else now
+    cur = generation()
+    try:
+        keep_s = stale_days() * 86400.0
+        gens = [g for g in _read_gens(cache_dir) if g["id"] != cur["id"] and now - g["t"] <= keep_s]
+        gens.sort(key=lambda g: -g["t"])
+        gens = [dict(cur, t=now)] + gens[:GENS_KEPT - 1]
+        os.makedirs(os.path.dirname(_gens_path(cache_dir)), exist_ok=True)
+        tmp = f"{_gens_path(cache_dir)}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(gens, f)
+        os.replace(tmp, _gens_path(cache_dir))
+    except Exception:
+        pass
+    return cur
+
+
+def older(cache_dir, now=None):
+    """The generations a stale scope may fall back to: those of the file that are not this one, were the server's own
+    within STALE_DAYS and had the same build switches, newest first, STALE_GENS at most. [] with the switch off, the
+    revisit cache off or a pinned world."""
+    if not (STALE_ON and ON) or os.environ.get("BNGE_WORLD_BUNDLE"):
+        return []
+    now = time.time() if now is None else now
+    cur = generation()
+    keep_s = stale_days() * 86400.0
+    gens = [g for g in _read_gens(cache_dir)
+            if g["id"] != cur["id"] and g["switches"] == cur["switches"] and now - g["t"] <= keep_s]
+    gens.sort(key=lambda g: -g["t"])
+    return gens[:STALE_GENS]
+
+
+def _mapped(parts, gid):
+    """parts with every key of ours in them (an item keyed by another's key: farrestore) replaced by that item's key
+    under generation gid."""
+    out = []
+    for p in parts:
+        if isinstance(p, str) and len(p) == 40:
+            for g, alt in _alts.get(p, ()):
+                if g == gid:
+                    p = alt
+                    break
+        elif isinstance(p, tuple):
+            p = _mapped(p, gid)
+        out.append(p)
+    return tuple(out)
+
+
+def _alias(kind, k, parts, gens):
+    alts = [(g["id"], _key(kind, g["code"], _mapped(parts, g["id"]))) for g in gens if readable(g, kind)]
+    with _lock:
+        _alts.pop(k, None)
+        _alts[k] = alts
+        while len(_alts) > ALTS_KEPT:
+            _alts.pop(next(iter(_alts)))
+
+
+def _stale_alts(kind, k):
+    """[(generation id, key)] to try for a miss of k in this thread's stale scope (none outside one)."""
+    ctx = getattr(_tl, "stale", None)
+    if ctx is None or kind not in STALE_KINDS:
+        return ()
+    ids = {g["id"] for g in ctx[0]}
+    return [a for a in _alts.get(k, ()) if a[0] in ids]
+
+
+class StaleJob:
+    """fn as a pool job run in a stale(gens, only) scope (picklable: fn by its name). A StaleMiss (only) is the job's
+    result None: "not at hand yet", as a tile whose map cells are missing; raises=True lets it through to the caller.
+    A dict result gets "stale": the generation id it was (partly) read from."""
+    __slots__ = ("fn", "gens", "only", "raises")
+
+    def __init__(self, fn, gens, only=False, raises=False):
+        self.fn, self.gens, self.only, self.raises = fn, tuple(gens), bool(only), bool(raises)
+
+    def __getstate__(self):
+        return (self.fn, self.gens, self.only, self.raises)
+
+    def __setstate__(self, st):
+        self.fn, self.gens, self.only, self.raises = st
+
+    @property
+    def __name__(self):
+        return getattr(self.fn, "__name__", "job")
+
+    def __call__(self, *a, **k):
+        take_stale_hit()
+        with stale(self.gens, self.only):
+            try:
+                res = self.fn(*a, **k)
+            except StaleMiss:
+                if self.raises:
+                    raise
+                return None
+        gid = take_stale_hit()
+        if gid is not None and isinstance(res, dict):
+            res["stale"] = gid
+        return res
 
 
 def _path(cache_dir, kind, k):
@@ -662,7 +912,14 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
 
 
 def has(cache_dir, kind, k):
-    """Is item k kept (in a pack, or a zip of before)? Nothing read."""
+    """Is item k kept (in a pack, or a zip of before)? Nothing read. In a stale() scope: or under an older generation's
+    key."""
+    if not _stale_alone(kind) and _has(cache_dir, kind, k):
+        return True
+    return any(_has(cache_dir, kind, alt) for _gid, alt in _stale_alts(kind, k))
+
+
+def _has(cache_dir, kind, k):
     try:
         if revisitpack.store_for(cache_dir).has(kind, k):
             return True
@@ -672,7 +929,30 @@ def has(cache_dir, kind, k):
 
 
 def load(cache_dir, kind, k):
-    """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
+    """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read). In a stale()
+    scope a miss falls back to the item an older generation kept in its place (its key then: _alias), newest first;
+    with only the current one is not read at all (what is shown together is all of one generation) and a miss raises
+    StaleMiss (nothing is to be built in that scope)."""
+    ctx = getattr(_tl, "stale", None)
+    if not _stale_alone(kind):
+        got = _load(cache_dir, kind, k)
+        if got is not None:
+            return got
+    if ctx is None or kind not in STALE_KINDS:
+        return None
+    for gid, alt in _stale_alts(kind, k):
+        got = _load(cache_dir, kind, alt)
+        if got is not None:
+            _stale_stats["hits"] += 1
+            _tl.stale_hit = gid
+            return got
+    _stale_stats["misses"] += 1
+    if ctx[1]:
+        raise StaleMiss(kind)
+    return None
+
+
+def _load(cache_dir, kind, k):
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     path = _path(cache_dir, kind, k)
@@ -708,7 +988,18 @@ def load(cache_dir, kind, k):
 def locate(cache_dir, kind, k):
     """(where item k's record lies (revisitpack.Store.locate), {side name: kept file}) of a pack item, or None (none
     kept, kept in a zip of before, or one of its side files gone): for a native reader of many items at once
-    (farrestore). The side files are touched, as a load does."""
+    (farrestore). The side files are touched, as a load does. In a stale() scope: an older generation's in its place."""
+    got = None if _stale_alone(kind) else _locate(cache_dir, kind, k)
+    if got is None:
+        for _gid, alt in _stale_alts(kind, k):
+            got = _locate(cache_dir, kind, alt)
+            if got is not None:
+                _stale_stats["hits"] += 1
+                break
+    return got
+
+
+def _locate(cache_dir, kind, k):
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     try:

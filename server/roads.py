@@ -12471,8 +12471,16 @@ class GeoTracker:
         self.car = set()
         self.empty = set()      # (anchor tiles' interface: progress)
         self.stats = {"content": 0, "skins": 0, "exact": 0, "exact_base": 0, "anchors": 0,
-                      "content_cpu": 0.0, "skin_cpu": 0.0}
+                      "content_cpu": 0.0, "skin_cpu": 0.0, "redo": 0, "redo_same": 0}
         self.closed = False
+        self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
+        self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+
+    def redo_all(self):
+        """Every geotile sent is asked for again, content and skin (earthd Connection.stale_run's swap: they were an
+        older version's): nearest first as any tile; the content or skin that comes back the same is not sent."""
+        self.redo = set(self.sent)
+        self.retry = {}
 
     def close(self):
         """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
@@ -12620,10 +12628,11 @@ class GeoTracker:
             self.wanted_at = {k: t for k, t in wa.items() if now - t <= 60.0}
         start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, SEND_M)} if ground_busy else wanted
         jobs = []
-        for k in start:
+        self.redo &= self.sent
+        for k in (set(start) | self.redo) if self.redo else start:
             if k in self.building or self.retry.get(k, 0.0) > now:
                 continue
-            if k not in self.sent:
+            if k not in self.sent or k in self.redo:
                 jobs.append((k, True, True, "auto"))
                 continue
             make = None
@@ -12702,6 +12711,8 @@ class GeoTracker:
         for k in [k for k in self.sent if k not in wanted and k not in self.building and far(k)]:
             self.sent.discard(k)
             self.skins.discard(k)
+            self.skin_h.pop(k, None)
+            self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
             self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
@@ -12754,6 +12765,15 @@ class GeoTracker:
         self.stats["skin_cpu"] += float(tm.get("skin_cpu", 0.0))
         c = res.get("content")
         ex = (res.get("exact") or {}) if aid == self.aid else {}
+        again = key in self.redo and not res.get("stale")
+        if again and c is not None:
+            self.redo.discard(key)
+            self.stats["redo"] += 1
+            h0 = (self.info.get(key) or {}).get("h")
+            if h0 is not None and h0 == (c[2] or {}).get("h") and key in self.sent:
+                # (the same content as the one the mod has: nothing sent, its exact variants stand)
+                self.stats["redo_same"] += 1
+                c, ex = None, {}
         if c is not None:
             path, n, info = c[0], c[1], c[2]
             self.sent.add(key)
@@ -12779,6 +12799,12 @@ class GeoTracker:
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
         sk = res.get("skin")
+        if skin and sk is not None:
+            h1 = (sk[1] or {}).get("h") if len(sk) > 1 else None
+            if again and h1 is not None and self.skin_h.get(key) == h1 and key in self.skins:
+                sk = None               # (the same skin as the one the mod has)
+            else:
+                self.skin_h[key] = h1
         if skin and sk is not None:
             self.skins.add(key)
             self.stats["skins"] += 1
