@@ -4,6 +4,8 @@
     python3 tools/build_bnwt.py --archive base --bbox -76.62,39.27,-76.56,39.30 --out OUT [--work WORK] [--jobs 4]
     python3 tools/build_bnwt.py --archive base --world --out OUT --work WORK --shard 3/40      (one job of a matrix)
     python3 tools/build_bnwt.py --archive base --world --out OUT --work WORK --assemble        (the archive from them)
+    python3 tools/build_bnwt.py --archive base --world --out OUT --shard 3/1024 --shard-parts  (a shard's own parts)
+    python3 tools/build_bnwt.py --archive base --world --out OUT --assemble --from-shards 1024 (the index from them)
 
 Each cell's tile holds, per layer of the archive (bnwt.ARCHIVES), exactly what the server's own source gives for the
 cell, encoded by the native codec (lossless; every tile is decoded again and compared before it is kept, unless
@@ -27,8 +29,17 @@ of tile ids; tiles of the same bytes (open sea) are kept once per part (consecut
     OUT/bnwt<FORMAT>/<release>/<archive>.c<CONTENT>.manifest.json  the index + sizes, sha256s, licence section
     OUT/bnwt<FORMAT>/<release>/ATTRIBUTION-<section>.txt            the attribution and licence of each section
 
-A matrix of jobs: each runs --shard I/N (its units' parts only), the parts folders are merged, one --assemble writes
-the archive (the same bytes as one job building everything).
+A matrix of jobs: each runs --shard I/N (its units' parts only: the I-th of N contiguous runs of the units in Hilbert
+order, so a shard reads one region's source files), the parts folders are merged, one --assemble writes the archive
+(the same bytes as one job building everything). Where no machine holds the whole archive (the planet: hundreds of GB;
+a CI runner has ~14 GB of disk), each shard writes its own parts too (--shard-parts):
+
+    OUT/bnwt<FORMAT>/<release>/<archive>.c<CONTENT>.s<N>-<IIII>.p<NNN>.pmtiles   the shard's parts
+    OUT/bnwt<FORMAT>/<release>/_build/<archive>.c<CONTENT>/<N>/<I>.json          its record (parts, sizes, sha256s; last)
+
+and --assemble --from-shards N writes the index, manifest and attribution from the N records alone (no tile data on
+hand): the archive's parts are the shards' parts in shard order, a contiguous range of tile ids each as before (parts
+end at shard boundaries too: the bytes depend on N, still deterministic for one N).
 
 Deterministic: the same inputs give the same bytes (tiles in tile-id order, zstd at a fixed level, no timestamps,
 JSON with sorted keys). Needs duckdb (server/requirements.txt) and the native module (fast.require(bnwt.NATIVE)).
@@ -291,6 +302,34 @@ def write_archive(units, parts, outdir, name, meta, rects, part_bytes):
     return pw.finish(), pw.tiles, pw.contents
 
 
+def shard_record(outdir, name, sn, si):
+    return os.path.join(outdir, "_build", name, str(sn), f"{si}.json")
+
+
+def shards_assembled(outdir, name, sn, plan, ap):
+    """(parts, tiles, contents) of the archive from its sn shards' records (--shard-parts), checked: every shard done,
+    by this plan, the parts' tile ids in order."""
+    recs, missing = [], []
+    for i in range(sn):
+        try:
+            with open(shard_record(outdir, name, sn, i), encoding="utf-8") as f:
+                recs.append(json.load(f))
+        except FileNotFoundError:
+            missing.append(i)
+    if missing:
+        ap.error(f"{len(missing)} of {sn} shards not done yet (first {missing[0]})")
+    plist, last = [], -1
+    for i, r in enumerate(recs):
+        if r.get("shard") != i or r.get("of") != sn or r.get("plan") != plan:
+            ap.error(f"shard {i}'s record is another build ({r.get('shard')}/{r.get('of')}, {r.get('plan')})")
+        for p in r["parts"]:
+            if int(p["first"]) <= last or int(p["last"]) < int(p["first"]):
+                ap.error(f"shard {i}: part {p['file']}'s tile ids are out of order")
+            last = int(p["last"])
+            plist.append(p)
+    return plist, sum(int(r["tiles"]) for r in recs), sum(int(r["contents"]) for r in recs)
+
+
 def attribution_text(archive):
     layers = bnwt.ARCHIVES[archive]["layers"]
     themes = sorted({overture.LAYERS[ly]["theme"] for ly in layers})
@@ -321,10 +360,21 @@ def main(argv=None):
     ap.add_argument("--no-verify", action="store_true")
     ap.add_argument("--check", type=int, default=0, help="K: every K-th cell of a parquet archive compared with "
                                                          "Reader.query (slow; for verifying the block path)")
-    ap.add_argument("--shard", help="I/N: build only every N-th unit from the I-th (parts only, no archive: one job of a "
-                                    "matrix; the parts folders are merged and --assemble writes the archive)")
+    ap.add_argument("--shard", help="I/N: build only the I-th of N contiguous runs of the units (parts only, no "
+                                    "archive: one job of a matrix; the parts folders are merged and --assemble writes "
+                                    "the archive)")
+    ap.add_argument("--shard-parts", action="store_true",
+                    help="with --shard: also write the shard's own archive parts and its record (_build/; a shard with "
+                         "a record is done)")
     ap.add_argument("--assemble", action="store_true", help="only write the archive from the parts (all must be done)")
+    ap.add_argument("--from-shards", type=int, metavar="N",
+                    help="with --assemble: the index and manifest from the N shards' records (--shard-parts), no parts "
+                         "needed on hand")
     a = ap.parse_args(argv)
+    if a.shard_parts and not a.shard:
+        ap.error("--shard-parts needs --shard")
+    if a.from_shards is not None and (not a.assemble or a.from_shards < 1):
+        ap.error("--from-shards N needs --assemble and N >= 1")
     fast.require(bnwt.NATIVE, "build_bnwt")
     raw_dir = os.path.join(a.cache_dir, "mapdata", "raw")
     work = os.path.join(a.work or os.path.join(a.out, ".work"), a.release, a.archive)
@@ -355,18 +405,35 @@ def main(argv=None):
         with open(pf, "w", encoding="utf-8") as f:
             json.dump(plan, f, sort_keys=True)
     units.sort(key=unit_range)
+    name = f"{a.archive}.c{bnwt.CONTENT[a.archive]}"
+    outdir = os.path.join(a.out, f"bnwt{bnwt.FORMAT}", a.release)
+    meta = {"format": "bnwt", "version": bnwt.FORMAT, "content": bnwt.CONTENT[a.archive], "release": a.release,
+            "archive": a.archive, "source": spec["source"], "layers": list(spec["layers"]),
+            "coverage": [list(r) for r in rects], "zoom": bnwt.ZOOM, "attribution": overture.ATTRIBUTION}
+    part_bytes = int(a.part_mb * 1e6)
     mine = units
+    si = sn = None
     if a.shard:
         si, sn = (int(v) for v in a.shard.split("/"))
-        mine = units[si::sn]
-    todo = [u for u in mine if not os.path.exists(os.path.join(parts, f"{u[0]}_{u[1]}_{u[2]}.idx"))]
-    if a.assemble:
-        if todo:
-            ap.error(f"{len(todo)} units not built yet (first {todo[0]})")
+        if not 0 <= si < sn:
+            ap.error(f"--shard {a.shard}: I must be 0 .. N-1")
+        mine = units[si * len(units) // sn:(si + 1) * len(units) // sn]
+        rec_path = shard_record(outdir, name, sn, si)
+        if a.shard_parts and os.path.exists(rec_path):
+            print(f"shard {a.shard}: done before ({rec_path})", file=sys.stderr)
+            return 0
+    if a.assemble and a.from_shards:
+        plist, n, contents = shards_assembled(outdir, name, a.from_shards, plan, ap)
         todo = []
+    else:
+        todo = [u for u in mine if not os.path.exists(os.path.join(parts, f"{u[0]}_{u[1]}_{u[2]}.idx"))]
+    if a.assemble and todo:
+        ap.error(f"{len(todo)} units not built yet (first {todo[0]})")
     print(f"{len(units)} units ({len(units) - len(todo)} done), {a.jobs} jobs", file=sys.stderr)
     t0 = time.perf_counter()
     done = tiles = nbytes = ncells = 0
+    tty = sys.stderr.isatty()
+    shown = 0.0
     jobs = [(u, rects, a.archive, a.release, raw_dir, parts, not a.no_verify, a.level, a.check) for u in todo]
     ctx = mp.get_context("spawn")
     for i in range(0, len(jobs), CHUNK_UNITS):
@@ -382,22 +449,38 @@ def main(argv=None):
             nbytes += nb
             ncells += nc
             el = time.perf_counter() - t0
-            print(f"\r{done}/{len(todo)} units, {ncells} cells, {tiles} tiles, {nbytes / 1e6:.1f} MB, {el:.0f} s",
-                  end="", file=sys.stderr)
+            if tty:
+                print(f"\r{done}/{len(todo)} units, {ncells} cells, {tiles} tiles, {nbytes / 1e6:.1f} MB, {el:.0f} s",
+                      end="", file=sys.stderr)
+            elif el - shown >= 60 or done == len(todo):     # (a CI log: a line a minute, not one endless line)
+                shown = el
+                print(f"{done}/{len(todo)} units, {ncells} cells, {tiles} tiles, {nbytes / 1e6:.1f} MB, {el:.0f} s",
+                      file=sys.stderr, flush=True)
         if a.jobs > 1:
             pool.close()
             pool.join()
-    print(file=sys.stderr)
+    if tty:
+        print(file=sys.stderr)
     if a.shard:
-        print(json.dumps({"shard": a.shard, "units": len(mine), "cells": ncells, "tiles": tiles, "bytes": nbytes,
-                          "seconds": round(time.perf_counter() - t0, 1)}))
+        out = {"shard": a.shard, "units": len(mine), "cells": ncells, "tiles": tiles, "bytes": nbytes,
+               "seconds": round(time.perf_counter() - t0, 1)}
+        if a.shard_parts:
+            plist, n, contents = write_archive(mine, parts, outdir, f"{name}.s{sn}-{si:04d}", dict(meta, shard=[si, sn]),
+                                               rects, part_bytes)
+            rec = {"shard": si, "of": sn, "plan": plan, "units": len(mine), "parts": plist, "tiles": n,
+                   "contents": contents}
+            os.makedirs(os.path.dirname(rec_path), exist_ok=True)
+            with open(rec_path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(rec, f, sort_keys=True, separators=(",", ":"))
+            os.replace(rec_path + ".tmp", rec_path)
+            out.update(record=rec_path, parts=len(plist), archive_tiles=n, archive_bytes=sum(p["bytes"] for p in plist))
+        print(json.dumps(out))
         return 0
-    name = f"{a.archive}.c{bnwt.CONTENT[a.archive]}"
-    outdir = os.path.join(a.out, f"bnwt{bnwt.FORMAT}", a.release)
-    meta = {"format": "bnwt", "version": bnwt.FORMAT, "content": bnwt.CONTENT[a.archive], "release": a.release,
-            "archive": a.archive, "source": spec["source"], "layers": list(spec["layers"]),
-            "coverage": [list(r) for r in rects], "zoom": bnwt.ZOOM, "attribution": overture.ATTRIBUTION}
-    plist, n, contents = write_archive(units, parts, outdir, name, meta, rects, int(a.part_mb * 1e6))
+    if not a.from_shards:
+        plist, n, contents = write_archive(units, parts, outdir, name, meta, rects, part_bytes)
+    else:
+        os.makedirs(outdir, exist_ok=True)
+        meta["shards"] = a.from_shards
     index = dict(meta, parts=[{k: p[k] for k in ("file", "first", "last")} for p in plist])
     with open(os.path.join(outdir, name + ".index.json"), "w", encoding="utf-8") as f:
         json.dump(index, f, sort_keys=True, separators=(",", ":"))

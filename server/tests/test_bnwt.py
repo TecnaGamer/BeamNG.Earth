@@ -288,6 +288,39 @@ class Archives(unittest.TestCase):
         self.assertGreater(len(list(d.glob("*.pmtiles"))), 2)
         self.check_reads(self.reader("file://" + out))
 
+    def test_shard_parts_assembled_from_records(self):
+        """Each shard (its own --work, as separate CI jobs) writes its parts and a record; the index comes from the
+        records alone; the shards are contiguous runs of the units (an empty shard: no parts, still a record)."""
+        import json
+        out = os.path.join(self.tmp, "sp")
+        common = ["--archive", "base", "--bbox", self.BBOX, "--out", out, "--jobs", "1", "--cache-dir", self.tmp,
+                  "--unit-zoom", "13", "--part-mb", "0.003"]
+        sn = 5                                  # (4 zoom-13 units: shard 0 gets none)
+        work = lambda i: ["--work", os.path.join(self.tmp, f"w{i}")]  # noqa: E731
+        for i in range(sn - 1):
+            build_bnwt.main(common + ["--shard", f"{i}/{sn}", "--shard-parts"] + work(i))
+        with self.assertRaises(SystemExit):     # (shard 4 not done)
+            build_bnwt.main(common + ["--assemble", "--from-shards", str(sn)] + work("a"))
+        build_bnwt.main(common + ["--shard", f"{sn - 1}/{sn}", "--shard-parts"] + work(sn - 1))
+        calls = self.fake.calls
+        build_bnwt.main(common + ["--shard", f"1/{sn}", "--shard-parts"] + work("z"))
+        self.assertEqual(self.fake.calls, calls)        # (a shard with a record: done)
+        for i in range(sn):                             # (no unit parts needed to assemble)
+            shutil.rmtree(os.path.join(self.tmp, f"w{i}"))
+        build_bnwt.main(common + ["--assemble", "--from-shards", str(sn)] + work("a"))
+        d = Path(out, f"bnwt{bnwt.FORMAT}", overture.RELEASE)
+        recs = [json.loads(Path(d, "_build", "base.c1", str(sn), f"{i}.json").read_text()) for i in range(sn)]
+        self.assertEqual([r["units"] for r in recs], [0, 1, 1, 1, 1])
+        self.assertEqual(recs[0]["parts"], [])
+        man = json.loads(Path(d, "base.c1.manifest.json").read_text())
+        self.assertEqual(man["shards"], sn)
+        self.assertEqual([p["file"] for p in man["parts"]], [p["file"] for r in recs for p in r["parts"]])
+        self.assertGreaterEqual(len(man["parts"]), 4)          # (a part or more per shard with tiles)
+        self.assertTrue(all(Path(d, p["file"]).exists() for p in man["parts"]))
+        self.check_reads(self.reader("file://" + out))
+        with self.assertRaises(SystemExit):     # (the records of another build)
+            build_bnwt.main(common + ["--level", "3", "--assemble", "--from-shards", str(sn)] + work("b"))
+
     def check_reads(self, rd):
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
