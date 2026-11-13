@@ -355,6 +355,26 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
         threading.Thread(target=_warm_loop, daemon=True, name="roads-ahead").start()
 
 
+LATE_RUN = "-late"
+
+
+def init_late(*initargs):
+    """init for the late pool's processes (latework.py: road content a session built short, built again once its lidar
+    is in): a plan run and lidar-decision run of their own (plancache.RUN_ENV, xproc.RUN_ENV + LATE_RUN), so they read
+    none of the session's rule decisions nor what was planned short on them (its run's plan files, cell facts and
+    carriageway regions); what they make complete is kept in the revisit cache, as any process's."""
+    late_env()
+    init(*initargs)
+
+
+def late_env():
+    """The late pool's own plan and lidar-decision runs in this process's environment (init_late)."""
+    import plancache
+    for env in (plancache.RUN_ENV, xproc.RUN_ENV):
+        if os.environ.get(env) and not os.environ[env].endswith(LATE_RUN):
+            os.environ[env] += LATE_RUN
+
+
 def _watch_parent(ppid):
     """Exit with the server: a killed server (SIGTERM) left its block processes running. Windows: os.getppid() keeps
     the parent's id after it is gone, so the poll never saw it go (from Madderose's PR #41: orphaned workers held the
