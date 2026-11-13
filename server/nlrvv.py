@@ -4,6 +4,8 @@ import math
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 import exitsigns
 import fast
@@ -62,8 +64,8 @@ class Source(railtags.Shards):
             return []
         if self.version() is None:
             return []
-        ax, ay = data.tile(min(54, north), max(3, west))
-        bx, by = data.tile(max(50, south), min(8, east))
+        ax, ay = data.tile(min(54, north), max(3, west), maths=dmath)
+        bx, by = data.tile(max(50, south), min(8, east), maths=dmath)
         if (bx - ax + 1) * (by - ay + 1) > 64:
             raise ValueError('NDW query exceeds tile neighbourhood')
         found = []
@@ -121,10 +123,10 @@ def place(records, frame, box, pavements, elev, decks=()):
             # Transform a short geodetic heading, rather than assume every anchor
             # has exactly the same north as the source's compass bearing.
             a = math.radians(bearing)
-            ahead = exitsigns._xy(frame, [[lon + math.sin(a) / (111320 * math.cos(math.radians(lat))),
-                                          lat + math.cos(a) / 111320]])[0]
+            ahead = exitsigns._xy(frame, [[lon + dmath.sin(a) / (111320 * dmath.cos(math.radians(lat))),
+                                          lat + dmath.cos(a) / 111320]])[0]
             travel = ahead - point
-            travel /= max(float(np.linalg.norm(travel)), 1e-9)
+            travel /= max(float(dnp.norm(travel)), 1e-9)
             z = exitsigns._ground_z(frame, elev, point)
             if not math.isfinite(z):
                 continue
@@ -199,8 +201,8 @@ def keep_inferred(signs, claims, speed=False):
         norm = math.hypot(dx, dy)
         meaning = row[4] if speed else rules[int(row[4])]
         duplicate = any(not c.get('plates') and (c.get('speed') == meaning if speed else c.get('role') == meaning)
-                        and float(np.linalg.norm(c['point'] - row[:2])) <= 8.
-                        and norm > 0 and float(c['travel'] @ (row[2:4] / norm)) >= math.cos(math.radians(5))
+                        and float(dnp.norm(c['point'] - row[:2])) <= 8.
+                        and norm > 0 and float(dnp.matmul(c['travel'], row[2:4] / norm)) >= dmath.cos(math.radians(5))
                         for c in claims)
         if not duplicate:
             keep.append(i)

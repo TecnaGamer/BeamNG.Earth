@@ -13,6 +13,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 import nlrvv
+import dmath
 import nlrvvdata as data
 import build_nl_rvv
 import signstream
@@ -44,7 +45,7 @@ class PublicData(unittest.TestCase):
         a=data.normalize(record())[0]
         b=dict(a,id='b',plates=[dict(kind='VOOR',text='100 m')])
         c=dict(a,id='c',plates=[dict(kind='VOOR',text='200 m')])
-        self.assertEqual(len(data.deduplicate([a,b,c])),3)
+        self.assertEqual(len(data.deduplicate([a,b,c], maths=dmath)),3)
 
     def test_additional_shared_atlas_roles(self):
         for code,role in [('C3','info.oneway'),('D3','mand.pass_either'),('F8','reg.end_restrictions'),
@@ -79,11 +80,11 @@ class PublicData(unittest.TestCase):
         b = dict(a, id='b', lon=a['lon'] + .000001)
         c = dict(b, id='c', bearing=270)
         d = dict(b, id='d', role='prio.stop')
-        got = data.deduplicate([d, b, c, a])
+        got = data.deduplicate([d, b, c, a], maths=dmath)
         self.assertEqual(len(got), 3)
         self.assertEqual(got[0]['source_ids'], ['a', 'b'])
         with self.assertRaises(ValueError):
-            data.deduplicate([a, a])
+            data.deduplicate([a, a], maths=dmath)
 
     def test_public_producer_can_run_without_private_store(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -96,7 +97,7 @@ class PublicData(unittest.TestCase):
             self.assertEqual(manifest['records'], 1)
             self.assertEqual(manifest['license'], 'CC0-1.0')
             self.assertEqual(len(manifest['source_sha256']), 64)
-            x, y = data.tile(52, 5)
+            x, y = data.tile(52, 5, maths=dmath)
             raw = gzip.decompress((target / str(x) / f'{y}.json.gz').read_bytes())
             self.assertNotIn(b'NEVER_EXPORT_THIS', raw)
             self.assertEqual(json.loads(raw)['records'][0]['id'], 'a')
@@ -112,7 +113,7 @@ class PublicData(unittest.TestCase):
 
     def test_published_public_tiles_use_normal_fetch_and_persistent_cache(self):
         row = data.normalize(record())[0]
-        x, y = data.tile(row['lat'], row['lon'])
+        x, y = data.tile(row['lat'], row['lon'], maths=dmath)
 
         class Fetcher:
             def __init__(self):

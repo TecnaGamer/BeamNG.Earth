@@ -88,9 +88,10 @@ def meaning(row):
             tuple((p['kind'], p['text']) for p in row.get('plates', ())))
 
 
-def tile(lat, lon):
+def tile(lat, lon, *, maths):
+    """Runtime passes dmath; the standalone offline producer passes stdlib math."""
     n = 1 << ZOOM
-    return int((lon + 180) / 360 * n), int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n)
+    return int((lon + 180) / 360 * n), int((1 - maths.asinh(maths.tan(math.radians(lat))) / math.pi) / 2 * n)
 
 
 def normalize(row):
@@ -128,7 +129,7 @@ def normalize(row):
             'role': role, 'speed': speed, 'plates': plates}, None
 
 
-def deduplicate(records):
+def deduplicate(records, *, maths):
     """Keep opposite faces/different meanings; collapse <=.5m / <=5 degree copies.
 
     Use a fixed representative, not transitive chaining, and preserve source IDs.
@@ -138,14 +139,14 @@ def deduplicate(records):
         if row['id'] in ids:
             raise ValueError('duplicate source id: ' + row['id'])
         ids.add(row['id'])
-        x = row['lon'] * 111320 * math.cos(math.radians(52))
+        x = row['lon'] * 111320 * maths.cos(math.radians(52))
         y = row['lat'] * 111320
         cx, cy = math.floor(x), math.floor(y)
         match = None
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 for other in grid.get((cx + dx, cy + dy), ()):
-                    distance = math.hypot((row['lon'] - other['lon']) * 111320 * math.cos(math.radians(row['lat'])),
+                    distance = math.hypot((row['lon'] - other['lon']) * 111320 * maths.cos(math.radians(row['lat'])),
                                           (row['lat'] - other['lat']) * 111320)
                     if (distance <= .5 and meaning(row) == meaning(other)
                             and abs((row['bearing'] - other['bearing'] + 180) % 360 - 180) <= 5):

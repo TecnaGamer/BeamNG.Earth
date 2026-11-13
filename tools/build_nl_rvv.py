@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -37,10 +38,10 @@ def build(source, target):
                 reasons[reason] += 1
             else:
                 accepted.append(row)
-    records = data.deduplicate(accepted)
+    records = data.deduplicate(accepted, maths=math)
     tiles = defaultdict(list)
     for row in records:
-        tiles[data.tile(row['lat'], row['lon'])].append(row)
+        tiles[data.tile(row['lat'], row['lon'], maths=math)].append(row)
     built = hashlib.sha256(f'{data.FORMAT}:{data.REVISION}:{digest}'.encode()).hexdigest()
     manifest = {'format': data.FORMAT, 'zoom': data.ZOOM, 'built': built, 'producer_revision': data.REVISION,
                 'source': data.SOURCE, 'source_sha256': digest, 'license': 'CC0-1.0', 'terms': data.TERMS,
