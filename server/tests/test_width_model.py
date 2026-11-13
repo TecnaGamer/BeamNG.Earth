@@ -47,6 +47,20 @@ class WidthTable(unittest.TestCase):
                     f = features([[(0, 0), (200, 0)]], [cls])
                     self.assertAlmostEqual(roads.road_specs(f, None)[0].width, row[2], places=3)
 
+    def test_australian_residential_streets(self):
+        """Sydney's residential streets measured 7.0-7.2 m kerb to kerb; Europe's town formula drew them 10.6 m."""
+        import test_roads
+        with mock.patch.object(test_roads, "LAT", -33.87), mock.patch.object(test_roads, "LON", 151.21):
+            f = features([[(0, 0), (200, 0)]], ["residential"])
+            self.assertEqual(roads._width_regions(f)[0], roads.WIDTH_REGIONS.index("AU"))
+            self.assertAlmostEqual(roads.road_specs(f, town)[0].width, table("AU", "residential")[0], places=3)
+            t = features([[(0, 0), (200, 0)]], ["tertiary"])        # its other classes: Europe's rows
+            self.assertEqual(table("AU", "tertiary"), table("other", "tertiary"))
+            self.assertEqual(roads._width_regions(t)[0], roads.WIDTH_REGIONS.index("AU"))
+        with mock.patch.object(test_roads, "LAT", -36.85), mock.patch.object(test_roads, "LON", 174.76):
+            f = features([[(0, 0), (200, 0)]], ["residential"])    # Auckland: not Australia's box
+            self.assertEqual(roads._width_regions(f)[0], roads.WIDTH_REGIONS.index("other"))
+
     def test_a_mapped_width_stands(self):
         f = features([[(0, 0), (200, 0)]], ["residential"], widths=[(0, 12.5)])
         self.assertAlmostEqual(roads.road_specs(f, town)[0].width, 12.5)
