@@ -1637,6 +1637,45 @@ def _portal_lift(frame, ring, x0, y0, tunnels_xy, elev):
     return max(0.0, float(np.nanmin(road)) + OVER_TUNNEL_CLEAR_M - float(np.nanmin(ground)))
 
 
+TWIN_SHARE = 0.85           # a ground footprint this much inside another one, and it inside this one: the same building
+TWIN_STEP_M = 1.0           # m between footprint_twins' samples
+
+
+def _twin_rank(at, mh):
+    """footprint_twins' rank of a footprint: a mapped height or floor count before one machine-learned from photos
+    (ML_HEIGHT_SOURCES: Berners Street's twin had Microsoft's 25.8 m, an office tower's glass, over a 5-storey stone
+    store mapped with its floors), then the taller."""
+    h, nf = at.get("height"), at.get("num_floors")
+    h = float(h) if h is not None and np.isfinite(h) and h > 0 else None
+    nf = float(nf) if nf is not None and np.isfinite(nf) and nf > 0 else None
+    ml = h is not None and str(at.get("height_src") or "") in ML_HEIGHT_SOURCES
+    mapped = (h is not None and not ml) or nf is not None
+    top = h if h is not None and not (ml and nf is not None) else (nf * FLOOR_M + mh if nf is not None else (h or 0.0))
+    return (1000.0 if mapped else 0.0) + top
+
+
+def _drop_twins(rings, attrs, looks, mins):
+    """tile_buildings' footprints without the lower ranked of two twins (earthfast.footprint_twins): the same ground
+    building mapped twice (two OSM multipolygons on the same outer ways, 75-76 Berners Street in London: two facades
+    in one plane, z-fighting, the user's report 2026-11-12). Only whole buildings on the ground (no parts, ships,
+    piers, landmarks or bridge structures)."""
+    idx = [k for k, (r, at, lk, mh) in enumerate(zip(rings, attrs, looks, mins))
+           if lk is None and mh <= 0.5 and len(r) >= 3 and not at.get("landmark")
+           and not any(at.get(k_) for k_ in ROAD_PASSAGE_SKIP_ATTRS)]
+    if len(idx) < 2:
+        return rings, attrs, looks, mins
+    fast.require(264, "footprint_twins")
+    rr = [np.asarray(rings[k], np.float64)[:, :2] for k in idx]
+    off = np.r_[0, np.cumsum([len(r) for r in rr])].astype(np.int64)
+    rank = np.array([_twin_rank(attrs[k], mins[k]) for k in idx], np.float64)
+    drop = fast._ef.footprint_twins(np.ascontiguousarray(np.concatenate(rr)), off, rank, TWIN_SHARE, TWIN_STEP_M)
+    gone = {k for k, d in zip(idx, drop) if d}
+    if not gone:
+        return rings, attrs, looks, mins
+    keep = [k for k in range(len(rings)) if k not in gone]
+    return [rings[k] for k in keep], [attrs[k] for k in keep], [looks[k] for k in keep], [mins[k] for k in keep]
+
+
 def _open_tunnels(frame, lines, x0, y0, elev):
     """Per tunnel line (tunnel_lines, tile-relative): is it open all along, the roads' own rule (roads.tunnel_sections,
     no part of it under TUNNEL_OPEN_COVER of ground over the line between its ends: the road tiles draw it on the
@@ -4880,6 +4919,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 looks, mins = [looks[k_] for k_ in keep], [mins[k_] for k_ in keep]
                 if not rings:
                     return []
+    if len(rings) > 1:                  # the same building mapped twice: one of them (footprint_twins)
+        rings, attrs, looks, mins = _drop_twins(rings, attrs, looks, mins)
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
         def ground_at(r, lowest=False):  # (a footprint's highest ground, base_z's (its lowest for a portal building))
             r = np.atleast_2d(np.asarray(r, np.float64))[:, :2]

@@ -574,6 +574,72 @@ pub fn footprint_clear<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off
     Ok((out.into_pyarray(py), offs, st, sh, dp, ov))
 }
 
+/// Twin footprints (buildings.footprint_twins): the same building mapped twice, one outline over the other (OSM's two
+/// multipolygons of 75-76 Berners Street on the same outer ways, London: two walls in one plane, their facades
+/// z-fighting, the user's report 2026-11-12). For each pair of rings whose bounding boxes meet, the share of each
+/// ring's grid samples (`step` m, coarser for a big one: grid) inside the other; a pair each at least `share` inside
+/// the other is a twin, and the lower ranked of the two is left out (rank: higher wins, then the lower index). Pairs
+/// over MAX_TWIN_RATIO apart in area are never twins (a building and the site round it).
+const MAX_TWIN_RATIO: f64 = 1.5;
+
+fn twins(rings: &[Vec<Pt>], rank: &[f64], share: f64, step: f64) -> Vec<u8> {
+    let n = rings.len();
+    let boxes: Vec<(Pt, Pt)> = rings.iter().map(|r| bbox(r)).collect();
+    let areas: Vec<f64> = rings.iter().map(|r| area2(r).abs() / 2.0).collect();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        boxes[a].0[0].partial_cmp(&boxes[b].0[0]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+    });
+    let mut grids: Vec<Option<Vec<Pt>>> = vec![None; n];
+    let mut drop = vec![0u8; n];
+    let inside_share = |x: usize, y: usize, grids: &mut Vec<Option<Vec<Pt>>>| -> f64 {
+        if grids[x].is_none() {
+            grids[x] = Some(grid(&rings[x], step).0);
+        }
+        let g = grids[x].as_ref().unwrap();
+        if g.is_empty() {
+            return 0.0;
+        }
+        let k = g.iter().filter(|q| inside(&rings[y], q[0], q[1])).count();
+        k as f64 / g.len() as f64
+    };
+    for (oi, &a) in order.iter().enumerate() {
+        for &b in &order[oi + 1..] {
+            if boxes[b].0[0] > boxes[a].1[0] {
+                break;
+            }
+            if boxes[b].0[1] > boxes[a].1[1] || boxes[b].1[1] < boxes[a].0[1] || drop[a] != 0 || drop[b] != 0 {
+                continue;
+            }
+            let (sa, sb) = (areas[a], areas[b]);
+            if sa < 1.0 || sb < 1.0 || sa.max(sb) > MAX_TWIN_RATIO * sa.min(sb) || rings[a].len() < 3
+                || rings[b].len() < 3 {
+                continue;
+            }
+            if inside_share(a, b, &mut grids) < share || inside_share(b, a, &mut grids) < share {
+                continue;
+            }
+            let lose = if rank[a] > rank[b] || (rank[a] == rank[b] && a < b) { b } else { a };
+            drop[lose] = 1;
+        }
+    }
+    drop
+}
+
+/// footprint_twins: per ring (rings as footprint_road_overlap's), 1 where it is the lower ranked twin of another
+/// (twins); rank (R,), share (0..1), step m.
+#[pyfunction]
+pub fn footprint_twins(py: Python<'_>, xy: PyReadonlyArray2<f64>, off: PyReadonlyArray1<i64>,
+                       rank: PyReadonlyArray1<f64>, share: f64, step: f64) -> PyResult<Vec<u8>> {
+    let rings = rings_of(&xy.as_array(), &off.as_array())?;
+    let rank: Vec<f64> = rank.as_array().to_vec();
+    if rank.len() != rings.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("bldclear: rank (R,)"));
+    }
+    let step = if step > 0.05 { step } else { 0.5 };
+    Ok(py.detach(|| twins(&rings, &rank, share, step)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,5 +719,20 @@ mod tests {
         let (st, ring, _, _, _) = clear_one(&rect(3.0, 3.0, 10.0, 10.0), false, &s, 0.3, 0.25, 0.4, 0.5);
         assert_eq!(st, TRIMMED);
         assert!(ring.iter().all(|p| p[0] >= 4.25 - 1e-9 && p[1] >= 4.25 - 1e-9));
+    }
+
+    #[test]
+    fn twin_footprints_one_kept() {
+        let a = rect(0.0, 0.0, 40.0, 60.0);
+        let b = vec![[0.2, 0.1], [40.1, 0.0], [40.0, 60.2], [0.0, 60.0]]; // the same outline again
+        let c = rect(10.0, 10.0, 10.0, 10.0); // a smaller one inside: not a twin
+        let d = rect(100.0, 0.0, 40.0, 60.0); // elsewhere
+        let rings = vec![a.clone(), b.clone(), c, d];
+        assert_eq!(twins(&rings, &[16.8, 25.8, 30.0, 10.0], 0.85, 0.5), vec![1, 0, 0, 0]);
+        // equal rank: the lower index stays
+        assert_eq!(twins(&[a.clone(), b], &[5.0, 5.0], 0.85, 0.5), vec![0, 1]);
+        // half over each other: two buildings
+        let e = rect(20.0, 0.0, 40.0, 60.0);
+        assert_eq!(twins(&[a, e], &[1.0, 2.0], 0.85, 0.5), vec![0, 0]);
     }
 }

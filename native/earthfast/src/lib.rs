@@ -6300,6 +6300,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bldclear::footprint_road_overlap, m)?)?;
     m.add_function(wrap_pyfunction!(bldclear::footprint_clear, m)?)?;
     m.add_function(wrap_pyfunction!(bldclear::footprint_pieces, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_twins, m)?)?;
     // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
     m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
@@ -6327,6 +6328,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193); roadz's
     // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180); junctions_find's left_hand (left-hand
     // traffic's stop lines on the incoming half, zolaski333's PR #1134)
-    m.add("VERSION", 261)?;
+    // 264: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
+    // reports 2026-11-12)
+    m.add("VERSION", 264)?;
     Ok(())
 }

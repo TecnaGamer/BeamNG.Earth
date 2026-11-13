@@ -186,6 +186,21 @@ class TunnelPassageTest(unittest.TestCase):
         self.assertTrue(out[0][0].portal)
 
 
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 264, "earthfast 264")
+class TwinFootprintTest(unittest.TestCase):
+    def test_the_same_building_mapped_twice_is_drawn_once(self):
+        # two OSM multipolygons on the same outer ways (75-76 Berners Street, London): z-fighting facades
+        rings = [ll(20, 20, 40, 60), ll(20.1, 20.1, 40, 60), ll(100, 20, 10, 10)]
+        f = Feats(["a", "b", "c"], rings, **{"class": ["commercial", "retail", "house"],
+                                              "height": [25.8, np.nan, 6.0], "num_floors": [np.nan, 5.0, np.nan],
+                                              "height_src": ["Microsoft ML Buildings", "", ""]})
+        out = bld.tile_buildings(FRAME, 0, 0, 256, 256, [f], flat)
+        self.assertEqual(len(out), 2)
+        big = [s for s, _a, _b in out if abs(bld._area2(np.asarray(s.ring)[:, :2])) / 2 > 1000]
+        self.assertEqual(len(big), 1)
+        self.assertEqual(big[0].floors, 5, "the mapped floors kept over the machine-learned height")
+
+
 class _Walls:
     def __init__(self, segs):
         self.w = roadwidth.Walls(np.asarray(segs, np.float64))
