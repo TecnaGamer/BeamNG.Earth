@@ -81,13 +81,11 @@ def _photo_reader(cache_dir, sources):
 
 def cached_photo(frame, box, cache_dir):
     """Sample only high-resolution regional imagery that the game has already fetched."""
+    import buildings
     import imagery
-    import imagery_regional
 
     x0, y0, x1, y1 = box
-    lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.)
-    sources = tuple(name for name, (_, _, (s, w, n, e), _, _) in imagery_regional.REGIONAL.items()
-                    if s <= lat <= n and w <= lon <= e)
+    sources = buildings._photo_sources(frame, x0, y0, x1, y1)     # (the roofs' photos: Maryland's md6in too)
     if not sources:
         return None
     pad = BUILT_FRONT_M + 2.

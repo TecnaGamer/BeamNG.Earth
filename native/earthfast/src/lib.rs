@@ -83,6 +83,7 @@ mod classgrid;
 mod frontage;
 mod furnstations;
 mod stationgeom;
+mod railpiers;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -6303,6 +6304,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bldclear::footprint_road_overlap, m)?)?;
     m.add_function(wrap_pyfunction!(bldclear::footprint_clear, m)?)?;
     m.add_function(wrap_pyfunction!(bldclear::footprint_pieces, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_twins, m)?)?;
     // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
     m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
     m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
@@ -6338,7 +6340,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
-    // 267: the in-game reports' privacy scrub, log tails and upload body (reportpack: report_scrub, report_scrub_json,
+    // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
+    // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
+    // and a rail / walkway bridge's piers kept off every road and footway under it
+    // (railpiers: rail_pier_sites; railways._sited counted only the roads the track crosses at grade)
+    m.add_function(wrap_pyfunction!(railpiers::rail_pier_sites, m)?)?;
+    // 267: 266 and the in-game reports' privacy scrub, log tails and upload body (reportpack: report_scrub, report_scrub_json,
     // report_log_tail, report_logs_pack, report_body, report_nearby; server/reportsend.py)
     m.add_function(wrap_pyfunction!(reportpack::report_scrub, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_scrub_json, m)?)?;

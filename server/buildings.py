@@ -387,12 +387,30 @@ class RoofPhotoFuture:
         return ph.colours(rings)
 
 
+# The high-resolution photos a roof or square is read from, in the terrain imagery's order (imagery.DEFAULT_CHAIN):
+# Maryland's own six-inch photo (md6in) first, then the regional ones. md6in was left out: Baltimore lies inside
+# Virginia's box (south of 39.47 N), so its tiles read Virginia's service, blank outside that state, and no roof or
+# square there was ever coloured (Fells Point's red-brick Broadway Square drawn grey pavers, the user's report 14,
+# 2026-11-12)
+PHOTO_EXTRA_SOURCES = ("md6in",)
+
+
 def _photo_sources(frame, x0, y0, x1, y1):
+    import imagery
     import imagery_regional
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
     lat, lon = float(np.asarray(lat).ravel()[0]), float(np.asarray(lon).ravel()[0])
-    return tuple(name for name, (_u, _c, (s_, w_, n_, e_), *_r) in imagery_regional.REGIONAL.items()
-                 if s_ <= lat <= n_ and w_ <= lon <= e_)
+    out = []
+    for name in imagery.DEFAULT_CHAIN:
+        if name in imagery_regional.REGIONAL:
+            s_, w_, n_, e_ = imagery_regional.REGIONAL[name][2]
+        elif name in PHOTO_EXTRA_SOURCES and name in imagery.SOURCES and imagery.SOURCES[name].bounds:
+            s_, w_, n_, e_ = imagery.SOURCES[name].bounds
+        else:
+            continue
+        if s_ <= lat <= n_ and w_ <= lon <= e_:
+            out.append(name)
+    return tuple(out)
 
 
 def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
@@ -410,7 +428,10 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
             return None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
-        px = int(px or ROOF_PHOTO_PX)
+        # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
+        # US squares' colour vote's sizes 7 times in 8: Broadway Square drawn grey pavers, the user's report 14)
+        cells = imagery.MESH_CELLS
+        px = int(-(-int(px or ROOF_PHOTO_PX) // cells) * cells)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
         if urgent and online:
@@ -1637,6 +1658,69 @@ def _portal_lift(frame, ring, x0, y0, tunnels_xy, elev):
     if not len(road) or not np.isfinite(road).any() or not np.isfinite(ground).any():
         return 0.0
     return max(0.0, float(np.nanmin(road)) + OVER_TUNNEL_CLEAR_M - float(np.nanmin(ground)))
+
+
+TWIN_SHARE = 0.85           # a ground footprint this much inside another one, and it inside this one: the same building
+TWIN_STEP_M = 1.0           # m between footprint_twins' samples
+
+
+def _twin_rank(at, mh):
+    """footprint_twins' rank of a footprint: a mapped height or floor count before one machine-learned from photos
+    (ML_HEIGHT_SOURCES: Berners Street's twin had Microsoft's 25.8 m, an office tower's glass, over a 5-storey stone
+    store mapped with its floors), then the taller."""
+    h, nf = at.get("height"), at.get("num_floors")
+    h = float(h) if h is not None and np.isfinite(h) and h > 0 else None
+    nf = float(nf) if nf is not None and np.isfinite(nf) and nf > 0 else None
+    ml = h is not None and str(at.get("height_src") or "") in ML_HEIGHT_SOURCES
+    mapped = (h is not None and not ml) or nf is not None
+    top = h if h is not None and not (ml and nf is not None) else (nf * FLOOR_M + mh if nf is not None else (h or 0.0))
+    return (1000.0 if mapped else 0.0) + top
+
+
+def _drop_twins(rings, attrs, looks, mins):
+    """tile_buildings' footprints without the lower ranked of two twins (earthfast.footprint_twins): the same ground
+    building mapped twice (two OSM multipolygons on the same outer ways, 75-76 Berners Street in London: two facades
+    in one plane, z-fighting, the user's report 2026-11-12). Only whole buildings on the ground (no parts, ships,
+    piers, landmarks or bridge structures)."""
+    idx = [k for k, (r, at, lk, mh) in enumerate(zip(rings, attrs, looks, mins))
+           if lk is None and mh <= 0.5 and len(r) >= 3 and not at.get("landmark")
+           and not any(at.get(k_) for k_ in ROAD_PASSAGE_SKIP_ATTRS)]
+    if len(idx) < 2:
+        return rings, attrs, looks, mins
+    fast.require(266, "footprint_twins")
+    rr = [np.asarray(rings[k], np.float64)[:, :2] for k in idx]
+    off = np.r_[0, np.cumsum([len(r) for r in rr])].astype(np.int64)
+    rank = np.array([_twin_rank(attrs[k], mins[k]) for k in idx], np.float64)
+    drop = fast._ef.footprint_twins(np.ascontiguousarray(np.concatenate(rr)), off, rank, TWIN_SHARE, TWIN_STEP_M)
+    gone = {k for k, d in zip(idx, drop) if d}
+    if not gone:
+        return rings, attrs, looks, mins
+    keep = [k for k in range(len(rings)) if k not in gone]
+    return [rings[k] for k in keep], [attrs[k] for k in keep], [looks[k] for k in keep], [mins[k] for k in keep]
+
+
+def _open_tunnels(frame, lines, x0, y0, elev):
+    """Per tunnel line (tunnel_lines, tile-relative): is it open all along, the roads' own rule (roads.tunnel_sections,
+    no part of it under TUNNEL_OPEN_COVER of ground over the line between its ends: the road tiles draw it on the
+    ground, an underpass in the open)? A building passage (OSM tunnel=building_passage: a mews arch, a road under a
+    block) is such a 'tunnel' on the street's level; the building over it stands on the ground beside its way."""
+    import roads as roadsmod
+    out = np.zeros(len(lines), bool)
+    for k, ln in enumerate(lines):
+        ln = np.asarray(ln, np.float64)
+        seg = dnp.hypot(*np.diff(ln, axis=0).T)
+        arc = np.r_[0.0, np.cumsum(seg)]
+        if arc[-1] < 0.5:
+            continue
+        s = np.unique(np.r_[np.arange(0.0, arc[-1], 2.0), arc[-1]])
+        p = np.stack([np.interp(s, arc, ln[:, 0]), np.interp(s, arc, ln[:, 1])], 1)
+        la, lo, _ = frame.enu_to_geodetic(p[:, 0] + x0, p[:, 1] + y0, np.zeros(len(p)))
+        g = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64)
+        if not np.isfinite(g).all():
+            continue
+        _floor, kinds = roadsmod.tunnel_sections(s, g)
+        out[k] = not np.asarray(kinds).any()
+    return out
 
 
 def base_z(spec, gmin, gmax):
@@ -3039,16 +3123,19 @@ THROUGH_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "res
 def tunnel_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
     """Polylines (k, 2) relative to (x0, y0) of the road tunnels near the tile (roads.tunnel_parts; for
     road_through: a building a tunnel runs into is its portal building, its floor over the tube), but those of
-    PORTAL_SKIP_CLASSES."""
+    PORTAL_SKIP_CLASSES. A RoadLines: their half widths in .half (an open one's passage, _open_tunnels). A road in two
+    cells is taken once."""
     import roads as roadsmod
-    out = []
+    out, seen = RoadLines(), set()
     for f in road_layers:
         if f is None or len(f.kind) == 0:
             continue
         ts = roadsmod.tunnel_specs(f)
         for i in range(len(f.kind)):
-            if ts[i] is None or ts[i].cls in PORTAL_SKIP_CLASSES:
+            if ts[i] is None or ts[i].cls in PORTAL_SKIP_CLASSES or str(f.ids[i]) in seen:
                 continue
+            seen.add(str(f.ids[i]))
+            w = float(ts[i].width) if ts[i].width is not None and np.isfinite(ts[i].width) else ROAD_PASSAGE_W
             for ring in roadsmod.tunnel_parts(f, i):
                 e, n = mapgeom.enu_xy(f, frame, ring)
                 xy = np.stack([e - x0, n - y0], 1)
@@ -3056,6 +3143,7 @@ def tunnel_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
                         or xy[:, 1].min() > size + margin:
                     continue
                 out.append(xy)
+                out.half.append(w / 2.0)
     return out
 
 
@@ -4125,7 +4213,7 @@ def _spec_copy(spec, **kw):
     return s
 
 
-def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None):
+def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None, passages=None):
     """items (tile_buildings') with every clearable footprint (_clearable) kept off the carriageways
     (carriageway_segments' (seg, half), tile-relative like the rings; the ground at new corners read again):
     - cut back to their edges where that takes at most ROAD_CLEAR_SHARE of it (ROAD_CLEAR_ML_SHARE of a machine-learned
@@ -4136,26 +4224,63 @@ def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None):
       and the whole of it goes on over the road from there, its roof as it was; a lower one keeps its pieces (flat
       roofs: a pitched roof's box would reach back over the road), and is left out when they are under
       ROAD_CLEAR_PIECES_MIN of it (a shed or kiosk on the road's line: the map has one of them wrong).
+    passages: (seg, half) of the open tunnels (_open_tunnels: a building passage on the street's level): a footprint
+    one runs into is a passage as above, never cut back or left out (the map says the road goes under it).
     stats: a dict that gets the counts per outcome."""
-    if not ROAD_CLEAR_ON or not items or carriageways is None:
+    if not items:
         return items
-    seg, half = carriageways
-    idx = [k for k, (spec, _g0, _g1) in enumerate(items) if _clearable(spec)]
-    if not idx:
-        return items
-    fast.require(243, "footprint_clear")
-    rings = [np.asarray(drawn_ring(items[k][0]), np.float64)[:, :2] for k in idx]
-    boxed = np.array([drawn_ring(items[k][0]) is not items[k][0].ring for k in idx], np.uint8)
-    off = np.r_[0, np.cumsum([len(r) for r in rings])].astype(np.int64)
-    out_xy, out_off, status, share, depth, _over = fast._ef.footprint_clear(
-        np.ascontiguousarray(np.concatenate(rings)), off, boxed, seg, half, ROAD_CLEAR_TOL_M, ROAD_CLEAR_MARGIN_M,
-        max(ROAD_CLEAR_SHARE, ROAD_CLEAR_ML_SHARE), ROAD_CLEAR_STEP_M)
-    drop, cut, split = set(), [], []
 
     def count(spec, name):
         if stats is not None:
             key = ("ml_" if spec.ml else "osm_") + name
             stats[key] = stats.get(key, 0) + 1
+    if passages is not None:        # (first: a ground road joining the passage's mouth must not cut its arch away)
+        items = _clear_passages(items, passages, frame, x0, y0, elev, count)
+    if ROAD_CLEAR_ON and carriageways is not None:
+        items = _clear_roads(items, carriageways, frame, x0, y0, elev, count)
+    return items
+
+
+def _clear_rings(items):
+    """(the clearable items' indices, their drawn rings, boxed flags, ring offsets) for footprint_clear / _pieces."""
+    idx = [k for k, (spec, _g0, _g1) in enumerate(items) if _clearable(spec)]
+    rings = [np.asarray(drawn_ring(items[k][0]), np.float64)[:, :2] for k in idx]
+    boxed = np.array([drawn_ring(items[k][0]) is not items[k][0].ring for k in idx], np.uint8)
+    off = np.r_[0, np.cumsum([len(r) for r in rings])].astype(np.int64)
+    return idx, rings, boxed, off
+
+
+def _clear_passages(items, passages, frame, x0, y0, elev, count):
+    """road_clearance over the open tunnels: every clearable footprint one reaches into split round its way."""
+    seg, half = passages
+    idx, rings, boxed, off = _clear_rings(items)
+    if not idx:
+        return items
+    fast.require(243, "footprint_clear")
+    _xy, _off, status, _share, _depth, _over = fast._ef.footprint_clear(
+        np.ascontiguousarray(np.concatenate(rings)), off, boxed, seg, half, ROAD_CLEAR_TOL_M, ROAD_CLEAR_MARGIN_M,
+        max(ROAD_CLEAR_SHARE, ROAD_CLEAR_ML_SHARE), ROAD_CLEAR_STEP_M)
+    split = [(k, rings[j], bool(boxed[j])) for j, k in enumerate(idx) if int(status[j])]
+    if not split:
+        return items
+    items, drop = list(items), set()
+    extra = _split_passages(items, split, seg, half, frame, x0, y0, elev, count, drop)
+    if drop:
+        items = [it for k, it in enumerate(items) if k not in drop]
+    return items + extra
+
+
+def _clear_roads(items, carriageways, frame, x0, y0, elev, count):
+    """road_clearance over the ground carriageways (its cut / left out / passage rules)."""
+    seg, half = carriageways
+    idx, rings, boxed, off = _clear_rings(items)
+    if not idx:
+        return items
+    fast.require(243, "footprint_clear")
+    out_xy, out_off, status, share, depth, _over = fast._ef.footprint_clear(
+        np.ascontiguousarray(np.concatenate(rings)), off, boxed, seg, half, ROAD_CLEAR_TOL_M, ROAD_CLEAR_MARGIN_M,
+        max(ROAD_CLEAR_SHARE, ROAD_CLEAR_ML_SHARE), ROAD_CLEAR_STEP_M)
+    drop, cut, split = set(), [], []
     for j, k in enumerate(idx):
         spec = items[k][0]
         st = int(status[j])
@@ -4184,6 +4309,15 @@ def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None):
                 spec.holes = [h for h in spec.holes if pth.contains_points(np.asarray(h)[:, :2]).all()] or None
             spec.gring = gr
             items[k] = (spec, float(gr.min()), float(gr.max()))
+    extra = _split_passages(items, split, seg, half, frame, x0, y0, elev, count, drop) if split else []
+    if drop:
+        items = [it for k, it in enumerate(items) if k not in drop]
+    return items + extra
+
+
+def _split_passages(items, split, seg, half, frame, x0, y0, elev, count, drop):
+    """The footprints split [(item index, drawn ring, boxed)] round the roads (seg, half): road_clearance's passage /
+    pieces rule; items updated in place, the indices left out added to drop; returns the new pieces' items."""
     extra = []
     if split:
         srings = [r for _, r, _b in split]
@@ -4235,9 +4369,7 @@ def road_clearance(items, carriageways, frame, x0, y0, elev, stats=None):
                 drop.add(k)
                 count(spec, "pieces")
             extra += body
-    if drop:
-        items = [it for k, it in enumerate(items) if k not in drop]
-    return items + extra
+    return extra
 
 
 CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulative sums: within ~1e-5 m of the exact mean)
@@ -4516,6 +4648,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     nyc_idx = nyc.index() if nyc is not None else None
     seen = set()
     turbines = None                             # (turbine_points, looked up at the first building)
+    # the decks' and the tunnels' floors at their heights (decks): a building such a floor runs through gets its way at
+    # that height (_passages), not the portal lift over a tunnel's line (a building passage at the street's level,
+    # mapped as a short tunnel, floated the whole building 7.5 m over the street: London's mews arches, 2026-11-12)
+    deck_lines = [d[0] for d in decks] if decks else []
+    tun_covered, tun_passages = None, ([], [])      # (the covered tunnels' lines; the open ones' (segments, half widths))
+    if tunnels_xy is not None and not hasattr(tunnels_xy, "half"):
+        tunnels_xy = RoadLines(tunnels_xy)          # (a plain list of lines: no widths, ROAD_PASSAGE_W)
     rings, attrs, looks, mins = [], [], [], []
     for f in layers:
         if f is None or len(f.kind) == 0:
@@ -4739,11 +4878,25 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     h = at.get("height")
                     if h is None or not np.isfinite(h) or h < mh + 3.0:
                         at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
-                if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M:
+                if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M \
+                        and not (deck_lines and road_through(ring, deck_lines) >= TUNNEL_THROUGH_M):
                     # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
                     # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
-                    # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17)
-                    lift = _portal_lift(frame, ring, x0, y0, tunnels_xy, elev)
+                    # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17). Over
+                    # the covered ones only: an open one (a building passage) is the street's, the building stands
+                    # beside its way (road_clearance's passages)
+                    if tun_covered is None:
+                        tun_open = _open_tunnels(frame, tunnels_xy, x0, y0, elev)
+                        tun_covered = [ln for ln, o in zip(tunnels_xy, tun_open) if not o]
+                        for ln, hf, o in zip(tunnels_xy, tunnels_xy.half or [ROAD_PASSAGE_W / 2] * len(tunnels_xy),
+                                             tun_open):
+                            if o and len(ln) >= 2:
+                                ln = np.asarray(ln, np.float64)
+                                tun_passages[0].append(np.concatenate([ln[:-1], ln[1:]], 1))
+                                tun_passages[1].append(np.full(len(ln) - 1, float(hf)))
+                    lift = 0.0
+                    if tun_covered and road_through(ring, tun_covered) >= TUNNEL_THROUGH_M:
+                        lift = _portal_lift(frame, ring, x0, y0, tun_covered, elev)
                     if lift > 0.5:
                         mh = lift
                         at = dict(at, portal=True)
@@ -4789,6 +4942,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 looks, mins = [looks[k_] for k_ in keep], [mins[k_] for k_ in keep]
                 if not rings:
                     return []
+    if len(rings) > 1:                  # the same building mapped twice: one of them (footprint_twins)
+        rings, attrs, looks, mins = _drop_twins(rings, attrs, looks, mins)
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
         def ground_at(r, lowest=False):  # (a footprint's highest ground, base_z's (its lowest for a portal building))
             r = np.atleast_2d(np.asarray(r, np.float64))[:, :2]
@@ -4930,8 +5085,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         isl = _toll_islands(frame, layers, parts_of, lines, x0, y0)
         if isl:
             out = _toll_mark(out, isl)
-    if carriageways is not None:
-        out = road_clearance(out, carriageways, frame, x0, y0, elev, clear_stats)
+    if carriageways is not None or tun_passages[0]:
+        passages = None
+        if tun_passages[0]:
+            passages = (np.ascontiguousarray(np.concatenate(tun_passages[0]), np.float64),
+                        np.ascontiguousarray(np.concatenate(tun_passages[1]), np.float64))
+        out = road_clearance(out, carriageways, frame, x0, y0, elev, clear_stats, passages=passages)
     return out
 
 
@@ -5172,6 +5331,9 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     rows = []
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
     for spec, gmin, gmax in items:
+        if (spec.min_h or 0.0) > 0.5:
+            continue            # (off the ground: a bridge's building over the street, a passage's part over its way; its
+                                # door stood alone in the road under it, London's Sherwood Street, 2026-11-12)
         no_door = False
         if spec.plain or spec.floors >= 7 or spec.band in (BAND_OFFICE, BAND_OFFICE2) or spec.wall:
             if not spec.wall or spec.plain or spec.floors >= 7:
@@ -6900,10 +7062,46 @@ def brick_walks(walks, items, lat, lon, tile=256.0):
     (Fells Point's historic streets): every run of a street the same."""
     if not walks or brick_share(lat, lon) < 0.7 or coverage(items, tile) < BRICK_WALK_COVERAGE:
         return
-    for wk in walks:
-        fid = wk.get("fid")
+    key = _median_keys(walks)
+    for n, wk in enumerate(walks):
+        fid = key.get(n, wk.get("fid"))
         if fid is not None and _hash01(str(fid), "brickwalk") < BRICK_WALK_SHARE:
             wk["brick"] = True
+
+
+MEDIAN_PAIR_M = 9.0         # m of ground at most between the two halves of one median (each carriageway's band)
+
+
+def _median_keys(walks):
+    """{walk index: key} for the median bands: the two carriageways' halves of one median (their runs within
+    MEDIAN_PAIR_M of each other, edge to edge) share the smaller fid, so the median is paved one way (one half red
+    brick and the other concrete: the user's report 20, Fells Point 2026-11-12). Pure."""
+    med = [(n, np.asarray(wk["pts"], np.float64)[:, :2], float(wk.get("w", 0.0)), str(wk.get("fid")))
+           for n, wk in enumerate(walks) if wk.get("median") and "pts" in wk and len(wk["pts"]) >= 2]
+    if len(med) < 2:
+        return {}
+    group = list(range(len(med)))
+
+    def root(a):
+        while group[a] != a:
+            group[a] = group[group[a]]
+            a = group[a]
+        return a
+    for a in range(len(med)):
+        for b in range(a + 1, len(med)):
+            if med[a][3] == med[b][3]:
+                continue
+            pa, pb = med[a][1], med[b][1]
+            reach = (med[a][2] + med[b][2]) / 2 + MEDIAN_PAIR_M
+            if (pa.min(0) - reach > pb.max(0)).any() or (pb.min(0) - reach > pa.max(0)).any():
+                continue
+            d = dnp.hypot(*(pa[::max(1, len(pa) // 8)][:, None, :] - pb[None, :, :]).transpose(2, 0, 1)).min(1)
+            if float(np.median(d)) <= reach:
+                group[root(a)] = root(b)
+    keys = {}
+    for k in range(len(med)):
+        keys.setdefault(root(k), []).append(med[k][3])
+    return {med[k][0]: min(keys[root(k)]) for k in range(len(med))}
 
 
 _cell_stats = {}                # map cell key -> (lon, lat, area m2) per footprint (district_coverage)

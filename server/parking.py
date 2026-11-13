@@ -56,8 +56,12 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
         spec, line = by_fid[fid]
-        if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:
+        if not spec.urban or spec.width < MIN_WIDTH_M:
             continue
+        if spec.cls not in PARK_CLASSES:
+            import roads
+            if roads.laned_parking(spec) <= 0.0:     # (a two-lane primary between its walls: its parking lanes)
+                continue
         street = getattr(spec, "street", None)
         if street is not None and (street.parking < SPOT_W_M or wk.get("detached") or wk.get("median")):
             continue

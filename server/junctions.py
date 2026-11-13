@@ -68,7 +68,7 @@ def _consts(curb_w):
 
 
 def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, pavement=False,
-         pavement_bounds=None, left_hand=False):
+         pavement_bounds=None, left_hand=False, single_lane=None):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -84,7 +84,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     curb's where both have sidewalks), no crosswalks or stop lines, and every corner also has road_sides ((fid, side),
     (fid, side)): the two road edges it joins (side +1 left / -1 right of the geometry), and edge_cuts: their cuts.
     pavement_bounds: (x0, y0, x1, y1) for pavement callers: the junctions provably outside it are skipped (every road
-    still groups and tests the others).
+    still groups and tests the others). single_lane(spec) -> bool: a two-way road of one lane (too narrow for a centre
+    line): its stop lines across the whole of it, like a one-way road's (spec.oneway / spec.dir: only on the arms its
+    traffic comes in by; the same half line on every arm stood across one-way exits, the user's London report
+    2026-11-12).
 
     The work is the Rust kernel's (earthfast junctions_find, native 214): this hands it the roads' points and each
     road's facts (its spec read once). How a junction is found and cornered:
@@ -112,9 +115,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     - a branch with corners on both sides (not a ring's): a crosswalk CW_GAP past the farther corner (none ending on
       another road's carriageway or crossing another road, none within 2 m of an earlier one: a CW_CELL_M grid of
       them), a stop line STOP_GAP before it on the incoming half (left_hand: traffic drives on the left, the incoming
-      half the branch's right as one looks out of the junction; zolaski333's PR #1134), curb ramps on both sidewalks
+      half the branch's right as one looks out of the junction; zolaski333's PR #1134; a one-way road's only where its
+      traffic comes in, across its whole driving width, a single lane's across all of it), curb ramps on both sidewalks
       (on a bulb: the corner piece's), the road's markings cut beyond it."""
-    fast.require(261, "junctions find (left_hand)")
+    fast.require(266, "junctions find (one-way stop lines)")
     from sidewalks import CURB_W
     n = len(roads)
     if n == 0:
@@ -142,6 +146,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if pavement:
                 fl |= (8 if has_sidewalks(sp) else 0) | (16 if sp.cls == "service" else 0) | \
                     (32 if sp.cls in PAVE_MAJOR else 0)
+            elif getattr(sp, "oneway", False):
+                fl |= 64 if (getattr(sp, "dir", None) or 1) > 0 else 128     # (along / against its points)
+            elif single_lane is not None and single_lane(sp):
+                fl |= 64 | 128
             w = getattr(sp, "walk", None)
             sides = []
             street = None if pavement else getattr(sp, "street", None)
