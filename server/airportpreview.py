@@ -11,6 +11,7 @@ import os
 import time
 
 import numpy as np
+import dmath
 from PIL import Image, ImageDraw, ImageFont
 
 import dem as demmod
@@ -47,7 +48,7 @@ def _hillshade(z, px):
     out = np.zeros_like(z)
     for az, wgt in ((315, 0.6), (270, 0.2), (0, 0.2)):          # a soft multi-directional light
         a = math.radians(az)
-        lx, ly, lz = math.sin(a) * math.cos(math.radians(45)), math.cos(a) * math.cos(math.radians(45)), math.sin(math.radians(45))
+        lx, ly, lz = dmath.sin(a) * dmath.cos(math.radians(45)), dmath.cos(a) * dmath.cos(math.radians(45)), dmath.sin(math.radians(45))
         # gradient rows run north -> south (row 0 north): flip gy for a north-up normal
         nx, ny, nz = -gx, gy, np.ones_like(z)
         out += wgt * np.clip((nx * lx + ny * ly + nz * lz) / np.sqrt(nx * nx + ny * ny + 1), 0, 1)

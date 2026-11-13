@@ -5,6 +5,7 @@
 //!   at another height;
 //! - keep_up_mask: roadmesh._keep_up's triangles facing the ribbon's way;
 //! - shared_points: roadmesh._shared's equal points (position and uv to 0.1 mm) made one.
+use crate::dm::Dm;
 
 use numpy::ndarray::Array1;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
@@ -70,7 +71,7 @@ pub fn deck_trim_overlaps<'py>(
     }
     // every ribbon's centre line and half width (numpy: (left + right) / 2, hypot(*(left - right).T) / 2)
     let mid: Vec<[f64; 2]> = (0..np_).map(|k| [(l[[k, 0]] + r[[k, 0]]) / 2.0, (l[[k, 1]] + r[[k, 1]]) / 2.0]).collect();
-    let hw: Vec<f64> = (0..np_).map(|k| (l[[k, 0]] - r[[k, 0]]).hypot(l[[k, 1]] - r[[k, 1]]) / 2.0).collect();
+    let hw: Vec<f64> = (0..np_).map(|k| (l[[k, 0]] - r[[k, 0]]).dhypot(l[[k, 1]] - r[[k, 1]]) / 2.0).collect();
     let span = |k: usize| (off[k] as usize, off[k + 1] as usize);
     // each ribbon's box (om.min(0), om.max(0))
     let boxes: Vec<[f64; 4]> = (0..nr)
@@ -128,7 +129,7 @@ pub fn deck_trim_overlaps<'py>(
                     for (s, &(a, d, l2)) in segs.iter().enumerate() {
                         let tt = nmin(nmax(((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2, 0.0), 1.0);
                         let q = [a[0] + tt * d[0], a[1] + tt * d[1]];
-                        let dist = (q[0] - p[0]).hypot(q[1] - p[1]);
+                        let dist = (q[0] - p[0]).dhypot(q[1] - p[1]);
                         if s == 0 || dist < best || (dist.is_nan() && !best.is_nan()) {
                             j = s;
                             best = dist;

@@ -19,6 +19,7 @@ Pure functions of the road centrelines in the tile frame; deterministic (sorted 
 import numpy as np
 
 import fast     # Rust kernels (earthfast)
+import dnp
 
 RADIUS = 5.0                    # m, curb return radius when the class is not listed in RADII
 # by the larger road's class (street-view study of Fells Point, 2026-10-11: city corners are tight)
@@ -67,7 +68,7 @@ def _consts(curb_w):
 
 
 def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, pavement=False,
-         pavement_bounds=None):
+         pavement_bounds=None, left_hand=False, single_lane=None):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -83,7 +84,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
     curb's where both have sidewalks), no crosswalks or stop lines, and every corner also has road_sides ((fid, side),
     (fid, side)): the two road edges it joins (side +1 left / -1 right of the geometry), and edge_cuts: their cuts.
     pavement_bounds: (x0, y0, x1, y1) for pavement callers: the junctions provably outside it are skipped (every road
-    still groups and tests the others).
+    still groups and tests the others). single_lane(spec) -> bool: a two-way road of one lane (too narrow for a centre
+    line): its stop lines across the whole of it, like a one-way road's (spec.oneway / spec.dir: only on the arms its
+    traffic comes in by; the same half line on every arm stood across one-way exits, the user's London report
+    2026-11-12).
 
     The work is the Rust kernel's (earthfast junctions_find, native 214): this hands it the roads' points and each
     road's facts (its spec read once). How a junction is found and cornered:
@@ -110,9 +114,11 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
       the parking curb over TAPER_M (off since GitHub #208: roads.build_tile passes no has_parking);
     - a branch with corners on both sides (not a ring's): a crosswalk CW_GAP past the farther corner (none ending on
       another road's carriageway or crossing another road, none within 2 m of an earlier one: a CW_CELL_M grid of
-      them), a stop line STOP_GAP before it on the incoming half, curb ramps on both sidewalks (on a bulb: the corner
-      piece's), the road's markings cut beyond it."""
-    fast.require(214, "junctions find")
+      them), a stop line STOP_GAP before it on the incoming half (left_hand: traffic drives on the left, the incoming
+      half the branch's right as one looks out of the junction; zolaski333's PR #1134; a one-way road's only where its
+      traffic comes in, across its whole driving width, a single lane's across all of it), curb ramps on both sidewalks
+      (on a bulb: the corner piece's), the road's markings cut beyond it."""
+    fast.require(266, "junctions find (one-way stop lines)")
     from sidewalks import CURB_W
     n = len(roads)
     if n == 0:
@@ -140,6 +146,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if pavement:
                 fl |= (8 if has_sidewalks(sp) else 0) | (16 if sp.cls == "service" else 0) | \
                     (32 if sp.cls in PAVE_MAJOR else 0)
+            elif getattr(sp, "oneway", False):
+                fl |= 64 if (getattr(sp, "dir", None) or 1) > 0 else 128     # (along / against its points)
+            elif single_lane is not None and single_lane(sp):
+                fl |= 64 | 128
             w = getattr(sp, "walk", None)
             sides = []
             street = None if pavement else getattr(sp, "street", None)
@@ -160,7 +170,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         allp, off, fids, np.array([rank[f] for f in fids], np.int64), width, rad, walk, flags, fw_state, fw_width,
         fw_rank, walks, None if walk_w is None else float(walk_w), float(parking_m), bool(pavement),
         None if pavement_bounds is None else tuple(float(v) for v in pavement_bounds), _consts(float(CURB_W)),
-        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]))
+        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]), bool(left_hand))
     return tuple(out)
 
 
@@ -173,7 +183,7 @@ def apply_cuts(line, cuts, near=40.0):
     if not cuts or len(pts) < 2:
         return [(pts, (False, False))]
     # densify to 0.5 m so a cut lands within the resolution, then exact ends
-    seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
     if s[-1] <= 0:
         return []
@@ -183,8 +193,8 @@ def apply_cuts(line, cuts, near=40.0):
     alongs = []
     for X, u, tc in cuts:
         rel = d[:, :2] - X
-        along = rel @ u
-        lateral = np.abs(rel @ _left(u))
+        along = dnp.matmul(rel, u)
+        lateral = np.abs(dnp.matmul(rel, _left(u)))
         inside = (along < tc) & (along > -1.0) & (lateral < near)
         keep &= ~inside
         alongs.append((along - tc, inside))
@@ -221,12 +231,12 @@ def ramp_ranges(run, ramps):
     """Arc-length ranges [(s0, s1)] along a sidewalk run (k, >=2) of its curb ramps. Pure."""
     if not ramps:
         return []
-    seg = np.hypot(*np.diff(run[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(run[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
     out = []
     for X, u, t0, t1 in ramps:
-        along = (run[:, :2] - X) @ u
-        lateral = np.abs((run[:, :2] - X) @ _left(u))
+        along = dnp.matmul(run[:, :2] - X, u)
+        lateral = np.abs(dnp.matmul(run[:, :2] - X, _left(u)))
         m = (lateral < 40.0)
         if not m.any():
             continue

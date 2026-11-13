@@ -691,6 +691,63 @@ class BuildTileTest(unittest.TestCase):
             back = (M == 0) & (n[:, 2] > 0.5) & (n[:, 2] < 0.95) & ((n[:, :2] @ out[1]) > 0.3)
             self.assertTrue(back.any(), "a sloped back face")
 
+    def test_junction_stop_lines_follow_the_incoming_driving_side(self):
+        import junctions
+        centre = np.array([120.0, 120.0])
+        arms = [[centre, (300, 120)], [centre, (120, 300)], [centre, (-60, 120)], [centre, (120, -60)]]
+        for left_hand in (False, True):
+            with self.subTest(left_hand=left_hand):
+                f = features(arms, ["residential"] * 4)
+                chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool),
+                                          walks=[], left_hand=left_hand)
+                stops = [c for c in chunks if c["m"] == junctions.STOP_LINE["m"]
+                         and c["w"] == junctions.STOP_LINE["w"]]
+                self.assertEqual(len(stops), 4)
+                for c in stops:
+                    away = np.array(c["n"])[:, :2].mean(0) - centre
+                    u = np.array(max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away))))
+                    right = np.array([-u[1], u[0]])
+                    self.assertGreater(float(away @ right) * (-1 if left_hand else 1), 0,
+                                       "stop line across incoming lanes, never the departing half")
+
+    def test_a_cycleway_with_its_sidewalks_mapped_is_a_street_closed_to_cars(self):
+        # London's Warren Street block between Fitzroy Street and Grafton Mews (highway=cycleway, motor_vehicle=no,
+        # sidewalk=both: bollards at both ends) was bare ground between the houses (the user's report 2026-11-12)
+        import navgraph
+        f = features([[(0, 0), (60, 0)], [(0, 20), (60, 20)], [(0, 40), (60, 40)]], ["cycleway"] * 3)
+        f.attrs["osm_sidewalk"] = np.array(["both", "", "no"], object)
+        sp = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))
+        self.assertIsNotNone(sp[0], "a street closed to cars: drawn")
+        self.assertTrue(roads.has_sidewalks(sp[0]), "with its pavements")
+        self.assertEqual(sp[0].kind, "paved")
+        self.assertIsNone(sp[1], "a cycle track: not a street")
+        self.assertIsNone(sp[2], "nor one without pavements")
+        self.assertNotIn("cycleway", navgraph.DRIVE, "no AI traffic on it")
+
+    def test_one_way_arms_stop_only_where_traffic_comes_in_across_all_of_it(self):
+        # four one-way streets (the user's London report 2026-11-12, Berwick Street / D'Arblay Street): the arm whose
+        # traffic leaves the junction gets no stop line, the one it comes in by one across its whole driving width
+        import junctions
+        centre = np.array([120.0, 120.0])
+        # east and north leave the junction along their points, west and south come in along theirs: 2 in, 2 out
+        arms = [[centre, (300, 120)], [centre, (120, 300)], [(-60, 120), centre], [(120, -60), centre]]
+        for left_hand in (False, True):
+            with self.subTest(left_hand=left_hand):
+                f = features(arms, ["residential"] * 4)
+                f.rules["oneway"] = rules([(i, 1.0) for i in range(4)], "float")
+                spec = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0]
+                chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool),
+                                          walks=[], left_hand=left_hand)
+                stops = [c for c in chunks if c["m"] == junctions.STOP_LINE["m"]
+                         and c["w"] == junctions.STOP_LINE["w"]]
+                self.assertEqual(len(stops), 2, "the two incoming arms only")
+                drive = spec.width - roads.parking_width(spec)
+                for c in stops:
+                    n = np.array(c["n"])[:, :2]
+                    mid = n.mean(0) - centre
+                    self.assertTrue(mid[0] < -1 or mid[1] < -1, "on the west or south arm (incoming)")
+                    self.assertGreater(np.hypot(*(n[-1] - n[0])), drive - 1.0, "across the whole driving width")
+
     def test_junction_corners_crosswalks_ramps(self):
         import tempfile
         import junctions

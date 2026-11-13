@@ -16,6 +16,7 @@ import os
 import numpy as np
 
 import fast
+import dnp
 
 ON = os.environ.get("BNE_PORTALS", "1") != "0"
 VERSION = 259               # earthfast's portal kernels
@@ -96,7 +97,7 @@ def _through(lines, p, reach):
         a, b = xy[:-1], xy[1:]
         d = b - a
         t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
-        if float(np.hypot(*(a + t[:, None] * d - p).T).min()) < reach:
+        if float(dnp.hypot(*(a + t[:, None] * d - p).T).min()) < reach:
             own.add(k)
     return own
 
@@ -117,7 +118,7 @@ def fit(roads, tunnels, cells, chunks, parts):
         hw = float(c["w"]) / 2 + roadmesh.TUNNEL_SHOULDER
         th = float(c.get("tunnel_h") or roadmesh.TUNNEL_H)
         d = np.gradient(xy, axis=0)
-        d /= np.maximum(np.hypot(*d.T), 1e-9)[:, None]
+        d /= np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
         left = np.c_[-d[:, 1], d[:, 0]]
         pts = [xy, xy + left * (hw + COVER_REACH), xy - left * (hw + COVER_REACH)]
         ends = []
@@ -126,7 +127,7 @@ def fit(roads, tunnels, cells, chunks, parts):
                 ends.append(None)
                 continue
             t = xy[1] - xy[0] if e == 0 else xy[-1] - xy[-2]
-            t = t / max(float(np.hypot(*t)), 1e-9)
+            t = t / max(float(dnp.hypot(*t)), 1e-9)
             ul = np.array([-t[1], t[0]])
             out = -t if e == 0 else t
             p = xy[at]

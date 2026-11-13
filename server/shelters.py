@@ -16,6 +16,8 @@ import math
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import mapgeom
@@ -112,7 +114,7 @@ def is_shelter(feats, i):
 
 def _yaw(dx, dy):
     """Degrees that turn a Forest item's local +x toward (dx, dy)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    return math.degrees(dmath.atan2(dy, dx)) % 360.0
 
 
 def _side(fid):
@@ -138,7 +140,7 @@ def _area(ring):
     if len(ring) < 3:
         return 0.0
     x, y = ring[:, 0], ring[:, 1]
-    return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
 
 
 def _spot(feats, frame, i):
@@ -173,11 +175,11 @@ def _closest(roads, x, y):
         half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
         a, b = pts[:-1, :2], pts[1:, :2]
         ab = b - a
-        ab2 = np.maximum(ab[:, 0] ** 2 + ab[:, 1] ** 2, 1e-9)
+        ab2 = np.maximum(ab[:, 0] * ab[:, 0] + ab[:, 1] * ab[:, 1], 1e-9)
         t = np.clip(((px - a[:, 0]) * ab[:, 0] + (py - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
         cx = a[:, 0] + t * ab[:, 0]
         cy = a[:, 1] + t * ab[:, 1]
-        d = np.hypot(cx - px, cy - py)
+        d = dnp.hypot(cx - px, cy - py)
         k = int(np.argmin(d))
         edge = float(d[k]) - half
         if best is None or edge < best[0]:
@@ -194,7 +196,7 @@ def _posts(ox, oy, yaw, d=None):
     """The (4, 2) corners of a shelter's footprint (d: its Shelter, East Coast's when None): its posts."""
     d = d or ECU
     rad = math.radians(yaw)
-    ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
+    ux, uy, vx, vy = dmath.cos(rad), dmath.sin(rad), -dmath.sin(rad), dmath.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
                      for sx in (-d.front, d.back) for sy in (-d.half, d.half)], np.float64)
 
@@ -203,7 +205,7 @@ def _body_points(ox, oy, yaw, d=None):
     """The (9, 2) points of a shelter's footprint: corners, edge middles and centre."""
     d = d or ECU
     rad = math.radians(yaw)
-    ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
+    ux, uy, vx, vy = dmath.cos(rad), dmath.sin(rad), -dmath.sin(rad), dmath.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
                      for sx in (-d.front, (d.back - d.front) / 2.0, d.back) for sy in (-d.half, 0.0, d.half)],
                     np.float64)
@@ -271,7 +273,7 @@ def _rail_short(ox, oy, yaw, rails, d=None):
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
         for p in _posts(ox, oy, yaw, d):
             t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            dist = float(np.hypot(*(p - (a + t[:, None] * ab)).T).min())
+            dist = float(dnp.hypot(*(p - (a + t[:, None] * ab)).T).min())
             worst = max(worst, float(item[1]) + POST_PAD_M - dist)
     return worst
 
@@ -283,7 +285,7 @@ def _clear_of_rails(ox, oy, yaw, roads, rails, d=None):
     if not rails or _rail_short(ox, oy, yaw, rails, d) <= 1e-3:
         return ox, oy
     rad = math.radians(yaw)
-    vx, vy = -math.sin(rad), math.cos(rad)             # local +y: along the curb
+    vx, vy = -dmath.sin(rad), dmath.cos(rad)             # local +y: along the curb
     for s in RAIL_SLIDES_M[1:]:
         cx, cy = _clear_of_roads(ox + s * vx, oy + s * vy, yaw, roads, d)
         if _rail_short(cx, cy, yaw, rails, d) <= 1e-3:
@@ -343,7 +345,7 @@ def _base_heights(frame, elev, xy, yaw, d=None):
     left the posts of a shelter on a bank hanging in the air; the lowest point sets the base on the ground and
     buries the uphill posts in the bank instead."""
     rad = np.radians(yaw)
-    ux, uy = np.cos(rad), np.sin(rad)           # local +x (away from the road)
+    ux, uy = dnp.cos(rad), dnp.sin(rad)           # local +x (away from the road)
     vx, vy = -uy, ux                            # local +y (along the curb)
     n = len(xy)
     px = [xy[:, 0]]

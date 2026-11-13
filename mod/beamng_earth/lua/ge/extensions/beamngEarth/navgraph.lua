@@ -410,7 +410,15 @@ local function makeHead(inst, a, junction, controller, sequence, visualOnly)
   seenHeads[inst.name]=true
   local p
   if M.dutchSignals then p=nlSignals.resolve(a,signalFrame,M.SIGNAL_SHAPE,graph,junction,heads,inst.name)
-  else p=nlSignals.plan(a,nil,M.SIGNAL_SHAPE,false)end
+  else
+    local stock=M.SIGNAL_SHAPE
+    if a[12]==1 then
+      local left=require('beamngEarth/signalshape').ensureLeft()
+      if not left then return end
+      stock=left..'.dae'
+    end
+    p=nlSignals.plan(a,nil,stock,false)
+  end
   if p.omit then
     if heads[inst.name]then signalScene.delete(heads[inst.name]);heads[inst.name]=nil end
     return
@@ -450,12 +458,13 @@ local function suppressHeads()
     grid[math.floor(x / 4) .. ',' .. math.floor(y / 4)] = true
   end
   trees.suppress = function(g, x, y)
-    if g ~= 'signal' then return false end
+    if g ~= 'signal' and g ~= 'signal_left' then return false end
     local cx, cy = math.floor(x / 4), math.floor(y / 4)
     for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
     return false
   end
   trees.refresh('signal')
+  trees.refresh('signal_left')
 end
 
 local function releaseHeads()
@@ -1583,6 +1592,10 @@ end
 
 -- How many times a graph went into the game's map (gps.lua: the map's node table stays the same table across them).
 function M.applies() return stats.applies end
+
+-- The server's last graph, unclipped ({anchor, serial, nodes, edges}; nil before one): the cars' navigation screens
+-- draw its roads (dashboard.lua). Read-only. (The accessor as in iambobab's PR #472.)
+function M.graph() return graph end
 
 function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,

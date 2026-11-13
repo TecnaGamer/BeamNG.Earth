@@ -21,6 +21,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import mapgeom
 
@@ -77,7 +79,7 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
     hla, hlo, _ = frame.enu_to_geodetic(np.array([hx]), np.array([hy]), np.zeros(1))
     hla, hlo = float(np.asarray(hla)[0]), float(np.asarray(hlo)[0])
     rla = 1.02 * radius / 110540.0 + 1e-7
-    rlo = 1.02 * radius / (111320.0 * max(math.cos(math.radians(min(abs(hla) + rla, 89.0))), 1e-3)) + 1e-7
+    rlo = 1.02 * radius / (111320.0 * max(dmath.cos(math.radians(min(abs(hla) + rla, 89.0))), 1e-3)) + 1e-7
     for name, cells in layers.items():
         for feats in cells:
             if feats is None or not len(feats):
@@ -88,52 +90,89 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
                                      & (b[:, 1] <= hla + rla) & (b[:, 3] >= hla - rla)).tolist()
             else:
                 idx = range(len(feats))
+            # (each feature's frame-free part, its lon / lat ring and attributes, made once and kept with its cell: a
+            # station group is laid out again in every road tile's frame, ~60k feature dicts for London's 4 groups in
+            # 4 tiles, 2026-11-12)
+            memo = _item_memo(feats)
             for i in idx:
                 fid = str(feats.ids[i])
                 if (name, fid) in seen:
                     continue
-                kind = KIND.get(int(feats.kind[i]))
-                parts = feats.parts(i)
-                if kind is None or not parts or not parts[0] or len(parts[0][0]) < 1:
+                got = memo.get(i, _MISSING)
+                if got is _MISSING:
+                    got = memo[i] = _item_base(feats, name, i, fid)
+                if got is None:
                     continue
-                ring = np.asarray(parts[0][0], np.float64)
+                ring, base = got
                 e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                 xy = np.column_stack((e, n)).astype(np.float64)
-                if float(np.hypot(xy[:, 0] - hx, xy[:, 1] - hy).min()) > radius:
+                if float(dnp.hypot(xy[:, 0] - hx, xy[:, 1] - hy).min()) > radius:
                     continue
                 seen.add((name, fid))
-                it = {"layer": name, "id": fid, "cls": (_attr(feats, "class", i) or "").lower(),
-                      "sub": (_attr(feats, "subtype", i) or "").lower(), "name": _attr(feats, "name", i) or "",
-                      "tags": tags_of(feats, i), "kind": kind, "xy": xy}
-                for k in ("height", "min_height", "num_floors", "roof_shape", "surface", "basic_category",
-                          "taxonomy", "subclass", "roof_color", "roof_material"):
-                    v = _attr(feats, k, i)
-                    if v is not None:
-                        it[k] = v
-                if name == "roads":     # a road's surface and level are range rules, not columns
-                    v = _rule(feats, "surface", i)
-                    if v and "surface" not in it:
-                        it["surface"] = v
-                    lv = _rule(feats, "level", i)
-                    try:
-                        it["level"] = float(lv) if lv else 0.0
-                    except ValueError:
-                        it["level"] = 0.0
-                    ow = _rule(feats, "oneway", i)
-                    try:
-                        it["oneway"] = float(ow) if ow else 0.0
-                    except ValueError:
-                        it["oneway"] = 0.0
-                    if "subclass" not in it:
-                        sc = _rule(feats, "subclass", i)
-                        if sc:
-                            it["subclass"] = sc
-                    if it["cls"] in WALK_SPAN_CLASSES:      # (railstations: a footbridge / an underpass is a span of the way)
-                        spans = _spans(feats, i)
-                        if spans:
-                            it["spans"] = spans
+                it = dict(base)
+                it["xy"] = xy
                 out.append(it)
     return out
+
+
+_MISSING = object()
+
+
+def _item_memo(feats):
+    """{feature row: _item_base} kept with the cell's Features, new when a column or rule table it reads was replaced
+    since (levelways.promote's class column, a join's): the columns themselves are its key, by identity."""
+    if not hasattr(feats, "__dict__"):
+        return {}
+    a = feats.attrs
+    sig = tuple(a.get(k) for k in ("class", "subtype", "name", "tags", "height", "min_height", "num_floors",
+                                   "roof_shape", "surface", "basic_category", "taxonomy", "subclass", "roof_color",
+                                   "roof_material")) + (feats.kind, feats.lonlat) \
+        + tuple(v for _k, v in sorted((getattr(feats, "rules", None) or {}).items()))
+    got = feats.__dict__.get("_bs_items")
+    if got is None or len(got[0]) != len(sig) or any(x is not y for x, y in zip(got[0], sig)):
+        got = feats.__dict__["_bs_items"] = (sig, {})
+    return got[1]
+
+
+def _item_base(feats, name, i, fid):
+    """(lon / lat ring, item without its metres: "xy" None in its place) of feature i of a layer's cell, or None
+    without a geometry: the part of an item that no frame changes (items_from_layers keeps it with the cell)."""
+    kind = KIND.get(int(feats.kind[i]))
+    parts = feats.parts(i)
+    if kind is None or not parts or not parts[0] or len(parts[0][0]) < 1:
+        return None
+    ring = np.asarray(parts[0][0], np.float64)
+    it = {"layer": name, "id": fid, "cls": (_attr(feats, "class", i) or "").lower(),
+          "sub": (_attr(feats, "subtype", i) or "").lower(), "name": _attr(feats, "name", i) or "",
+          "tags": tags_of(feats, i), "kind": kind, "xy": None}
+    for k in ("height", "min_height", "num_floors", "roof_shape", "surface", "basic_category",
+              "taxonomy", "subclass", "roof_color", "roof_material"):
+        v = _attr(feats, k, i)
+        if v is not None:
+            it[k] = v
+    if name == "roads":     # a road's surface and level are range rules, not columns
+        v = _rule(feats, "surface", i)
+        if v and "surface" not in it:
+            it["surface"] = v
+        lv = _rule(feats, "level", i)
+        try:
+            it["level"] = float(lv) if lv else 0.0
+        except ValueError:
+            it["level"] = 0.0
+        ow = _rule(feats, "oneway", i)
+        try:
+            it["oneway"] = float(ow) if ow else 0.0
+        except ValueError:
+            it["oneway"] = 0.0
+        if "subclass" not in it:
+            sc = _rule(feats, "subclass", i)
+            if sc:
+                it["subclass"] = sc
+        if it["cls"] in WALK_SPAN_CLASSES:      # (railstations: a footbridge / an underpass is a span of the way)
+            spans = _spans(feats, i)
+            if spans:
+                it["spans"] = spans
+    return ring, it
 
 
 WALK_SPAN_CLASSES = ("footway", "steps", "path", "pedestrian", "corridor", "cycleway")
@@ -178,7 +217,7 @@ def area(ring):
     if len(ring) < 3:
         return 0.0
     x, y = ring[:, 0], ring[:, 1]
-    return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
 
 
 def centroid(xy):
@@ -393,7 +432,7 @@ def _cluster(seeds):
         return i
     for i in range(len(seeds)):
         for j in range(i + 1, len(seeds)):
-            if float(np.hypot(*(cs[i] - cs[j]))) <= CLUSTER_M:
+            if float(dnp.hypot(*(cs[i] - cs[j]))) <= CLUSTER_M:
                 group[find_root(i)] = find_root(j)
     out = {}
     for i in range(len(seeds)):
@@ -416,7 +455,7 @@ def find(items):
         if not _real_seed(g):
             continue
         cs = [_centre(s) for s in g]
-        near = [p for p in places if min(float(np.hypot(*(_centre(p) - c))) for c in cs) <= CLUSTER_M]
+        near = [p for p in places if min(float(dnp.hypot(*(_centre(p) - c))) for c in cs) <= CLUSTER_M]
         out.append(assemble(items, g + near))
     return out
 
@@ -449,7 +488,7 @@ def assemble(items, seeds):
     def in_region(p, pad=BOUNDARY_PAD_M):
         if st.boundary is not None:
             return contains(st.boundary, p) or dist_to_path(st.boundary, p, True) <= pad
-        return float(np.hypot(*(np.asarray(p) - st.hub))) <= POINT_REGION_M
+        return float(dnp.hypot(*(np.asarray(p) - st.hub))) <= POINT_REGION_M
 
     taken = {id(s) for s in seeds}
     for it in items:                                    # platforms and canopies
@@ -473,7 +512,7 @@ def assemble(items, seeds):
     # bays: bus_stop points, counted by the boundary, the station's name, or a cluster of them
     stops = [it for it in items if it["layer"] == "infrastructure" and it["cls"] == "bus_stop"
              and it["kind"] == "point" and in_region(it["xy"][0], BOUNDARY_PAD_M + 25.0)]
-    near = [s for s in stops if float(np.hypot(*(s["xy"][0] - st.hub))) <= POINT_REGION_M]
+    near = [s for s in stops if float(dnp.hypot(*(s["xy"][0] - st.hub))) <= POINT_REGION_M]
     cluster_ok = len(near) >= BAY_CLUSTER_MIN
     for s in stops:
         inside = st.boundary is not None and in_region(s["xy"][0], 2.0)
@@ -489,7 +528,7 @@ def assemble(items, seeds):
             continue
         a = item_area(it)
         c = _centre(it)
-        d = float(np.hypot(*(c - st.hub)))
+        d = float(dnp.hypot(*(c - st.hub)))
         own = it["cls"] == "transportation" or it["sub"] == "transportation" or it["tags"].get("amenity") == "bus_station"
         plain = it["sub"] not in ("residential", "garage") and it["cls"] not in ("garage", "garages", "house",
                                                                                  "apartments", "residential")
@@ -501,7 +540,7 @@ def assemble(items, seeds):
     # building): a roof on columns over the platforms, not a closed box
     halls = [it for it in items if it["layer"] == "buildings" and it["kind"] == "polygon" and item_area(it) >= 200.0
              and it["cls"] not in ROOF_CLASSES and it["id"] not in st.claimed
-             and float(np.hypot(*(_centre(it) - st.hub))) <= HALL_M
+             and float(dnp.hypot(*(_centre(it) - st.hub))) <= HALL_M
              and (sum(contains(it["xy"], s["xy"]) for s in st.bays) >= 2
                   or (any(contains(it["xy"], s["xy"]) for s in st.bays)
                       and any(contains(it["xy"], _centre(p)) for p in st.platforms)))]
@@ -532,14 +571,14 @@ def assemble(items, seeds):
         + [c for p in st.platforms for c in p["xy"]]
     st.obstacles = [_open(it["xy"]) for it in items if it["layer"] == "buildings" and it["kind"] == "polygon"
                     and it["cls"] not in ROOF_CLASSES and it["id"] not in st.claimed and item_area(it) >= 15.0
-                    and float(np.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M]
+                    and float(dnp.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M]
     st.greens = [_open(it["xy"]) for it in items if it["layer"] == "land_use" and it["kind"] == "polygon"
-                 and it["cls"] in GREEN_CLASSES and float(np.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M + 60.0]
+                 and it["cls"] in GREEN_CLASSES and float(dnp.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M + 60.0]
     st.canopies = _dedupe_canopies(st.canopies)
     if st.boundary is not None:
         st.region = st.boundary
     else:                               # the yard: the members' hull, apron-wide round them (bays on the street too far
-        near_bays = [b["xy"] for b in st.bays if float(np.hypot(*(b["xy"] - st.hub))) <= YARD_BAY_M]  # are not in it)
+        near_bays = [b["xy"] for b in st.bays if float(dnp.hypot(*(b["xy"] - st.hub))) <= YARD_BAY_M]  # are not in it)
         pts = [st.hub] + near_bays + [c for b in st.buildings for c in _open(b["xy"])] \
             + [c for p in st.platforms for c in p["xy"]]
         st.region = pad_ring(hull(np.asarray(pts)), YARD_APRON_M)
@@ -564,10 +603,10 @@ def pad_ring(ring, pad):
     for i in range(n):
         a, p, b = ring[i - 1], ring[i], ring[(i + 1) % n]
         e1, e2 = p - a, b - p
-        n1 = np.array([e1[1], -e1[0]]) / max(float(np.hypot(*e1)), 1e-9)
-        n2 = np.array([e2[1], -e2[0]]) / max(float(np.hypot(*e2)), 1e-9)
+        n1 = np.array([e1[1], -e1[0]]) / max(float(dnp.hypot(*e1)), 1e-9)
+        n2 = np.array([e2[1], -e2[0]]) / max(float(dnp.hypot(*e2)), 1e-9)
         v = n1 + n2
-        norm = float(np.hypot(*v))
+        norm = float(dnp.hypot(*v))
         out.append(p + v / norm * pad / max(norm / 2.0, 0.35) if norm > 1e-9 else p + n1 * pad)
     return np.asarray(out)
 
@@ -624,7 +663,7 @@ def _board_spot(st):
         return None
     _d, x, y = best
     u = np.array([x, y]) - centroid(hall)
-    ln = float(np.hypot(*u))
+    ln = float(dnp.hypot(*u))
     u = u / ln if ln > 1e-6 else np.array([1.0, 0.0])
     return float(x), float(y), float(u[0]), float(u[1])
 
@@ -648,10 +687,10 @@ def _facade_spot(st):
     if len(hall) < 3:
         return None
     yard = busstationkeep.Keepout(busyard.yard_polys(st))
-    ccw = float(np.dot(hall[:, 0], np.roll(hall[:, 1], -1)) - np.dot(np.roll(hall[:, 0], -1), hall[:, 1])) >= 0
+    ccw = float(dnp.dot(hall[:, 0], np.roll(hall[:, 1], -1)) - dnp.dot(np.roll(hall[:, 0], -1), hall[:, 1])) >= 0
     best = None
     for a, b in zip(hall, np.roll(hall, -1, axis=0)):
-        ln = float(np.hypot(*(b - a)))
+        ln = float(dnp.hypot(*(b - a)))
         if ln < 6.0:
             continue
         t = (b - a) / ln
@@ -709,10 +748,10 @@ def _sign_spot(st):
                 continue
             a, b = path[:-1], path[1:]
             ab = b - a
-            t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / np.maximum((ab ** 2).sum(1), 1e-9),
+            t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / np.maximum((ab * ab).sum(1), 1e-9),
                         0, 1)
             q = a + ab * t[:, None]
-            d = np.hypot(*(q - p).T)
+            d = dnp.hypot(*(q - p).T)
             k = int(np.argmin(d))
             if near is None or d[k] < near[0]:
                 near = (float(d[k]), q[k])
@@ -776,10 +815,10 @@ def path_dist(path, pts):
     pts = np.asarray(pts, float).reshape(-1, 2)
     path = np.asarray(path, float)
     if len(path) == 1:
-        return np.hypot(*(pts - path[0]).T)
+        return dnp.hypot(*(pts - path[0]).T)
     a, b = path[:-1], path[1:]
     ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    ab2 = np.maximum((ab * ab).sum(1), 1e-9)
     out = np.empty(len(pts))
     step = max(1, 400000 // max(len(a), 1))
     for k in range(0, len(pts), step):
@@ -788,7 +827,7 @@ def path_dist(path, pts):
                     / ab2[None, :], 0.0, 1.0)
         qx = a[None, :, 0] + t * ab[None, :, 0]
         qy = a[None, :, 1] + t * ab[None, :, 1]
-        out[k:k + step] = np.hypot(qx - q[:, None, 0], qy - q[:, None, 1]).min(1)
+        out[k:k + step] = dnp.hypot(qx - q[:, None, 0], qy - q[:, None, 1]).min(1)
     return out
 
 
@@ -800,7 +839,7 @@ def lane_blocked(st, pts, pad=0.0, core=False, mouths=True):
     for ln in st.lanes:
         out |= path_dist(ln["xy"], pts) < (ln["core"] if core else ln["half"]) + pad
     for mx, my in (st.mouths if mouths else ()):
-        out |= np.hypot(pts[:, 0] - mx, pts[:, 1] - my) < MOUTH_R_M + pad
+        out |= dnp.hypot(pts[:, 0] - mx, pts[:, 1] - my) < MOUTH_R_M + pad
     return out
 
 
@@ -809,7 +848,7 @@ def _dedupe_canopies(canopies):
     out = []
     for c in sorted(canopies, key=lambda c: -c["area"]):
         ctr = centroid(c["ring"])
-        if any((contains(o["ring"], ctr) or float(np.hypot(*(ctr - centroid(o["ring"])))) < 3.0)
+        if any((contains(o["ring"], ctr) or float(dnp.hypot(*(ctr - centroid(o["ring"])))) < 3.0)
                and c["area"] >= 0.6 * o["area"] for o in out):         # (a concave roof's centroid may lie outside)
             continue
         out.append(c)

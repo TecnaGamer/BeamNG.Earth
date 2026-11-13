@@ -31,6 +31,8 @@ import math
 import re
 
 import numpy as np
+import dmath
+import dnp
 
 MIN_L = 25.0                # m: a hull at least this long ...
 SLENDER = (3.0, 10.0)       # ... this many times as long as wide (real hulls 5-9; a pontoon walkway is thinner)
@@ -138,7 +140,7 @@ def end_widths(r, c, u, hl):
     v = np.array([-u[1], u[0]])
     t = np.linspace(0, 1, 6)[:, None, None]
     pts = (r[None] + (np.roll(r, -1, 0) - r)[None] * t).reshape(-1, 2) - c
-    s, d = pts @ u, pts @ v
+    s, d = dnp.matmul(pts, u), dnp.matmul(pts, v)
     out = []
     for sgn in (-1, 1):
         k = (sgn * s) >= hl * (1 - 2 * END_L)
@@ -220,7 +222,7 @@ def on_hull(ring, hull):
 def _ring_points(r, step=2.0):
     out = []
     for a, b in zip(r, np.roll(r, -1, 0)):
-        k = max(1, int(math.ceil(float(np.hypot(*(b - a))) / step)))
+        k = max(1, int(math.ceil(float(dnp.hypot(*(b - a))) / step)))
         out.append(a + (b - a) * (np.arange(k)[:, None] / k))
     return np.concatenate(out)
 
@@ -238,17 +240,17 @@ def pier_alongside(ring, hull):
     B = _B()
     c, u, hl, hw = B.oriented_box(ring)
     hc, hu, hhl, hhw = B.oriented_box(hull)
-    if hl < PIER_SLENDER * hw or abs(float(u @ hu)) < math.cos(math.radians(PIER_DEG)):
+    if hl < PIER_SLENDER * hw or abs(float(dnp.matmul(u, hu))) < dmath.cos(math.radians(PIER_DEG)):
         return False
     hv = np.array([-hu[1], hu[0]])
-    along = (ring - hc) @ hu
+    along = dnp.matmul(ring - hc, hu)
     if along.min() < -hhl - PIER_GAP_M or along.max() > hhl + PIER_GAP_M \
-            or abs(float((c - hc) @ hv)) > hhw + hw + PIER_GAP_M:
+            or abs(float(dnp.matmul(c - hc, hv))) > hhw + hw + PIER_GAP_M:
         return False
     pts = _ring_points(ring)
     a, ab = hull, np.roll(hull, -1, 0) - hull
     t = np.clip(((pts[:, None] - a[None]) * ab[None]).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-9)[None], 0, 1)
-    d = np.hypot(*(pts[:, None] - (a[None] + ab[None] * t[..., None])).transpose(2, 0, 1)).min()
+    d = dnp.hypot(*(pts[:, None] - (a[None] + ab[None] * t[..., None])).transpose(2, 0, 1)).min()
     return float(d) <= PIER_TOUCH_M
 
 
@@ -288,7 +290,7 @@ _UV0 = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))
 def _quad_out(m, a, b, c, d, hint, mat):
     """A quad facing hint (its corners reordered when they face away)."""
     n = np.cross(np.subtract(b, a), np.subtract(c, a))
-    if float(np.dot(n, hint)) < 0:
+    if float(dnp.dot(n, hint)) < 0:
         a, b, c, d = a, d, c, b
     m.quad(a, b, c, d, *_UV0, mat)
 
@@ -297,7 +299,7 @@ def _cylinder(m, c, u, rx, ry, z0, z1, mat, segs=12, top=True):
     """An upright elliptic cylinder (rx along u, ry across) from z0 to z1."""
     v = np.array([-u[1], u[0]])
     t = np.linspace(0, 2 * math.pi, segs, endpoint=False)
-    r = np.array([c + u * rx * math.cos(a) + v * ry * math.sin(a) for a in t])
+    r = np.array([c + u * rx * dmath.cos(a) + v * ry * dmath.sin(a) for a in t])
     if _B()._area2(r) < 0:
         r = r[::-1]
     for i in range(len(r)):
@@ -327,7 +329,7 @@ def _widths(r, c, ub, hl, xs):
     """(centre offset, half width) across the ship at stations xs (0 the bow, 1 the stern)."""
     v = np.array([-ub[1], ub[0]])
     a, b = r - c, np.roll(r, -1, 0) - c
-    sa, sb, ta, tb = a @ ub, b @ ub, a @ v, b @ v
+    sa, sb, ta, tb = dnp.matmul(a, ub), dnp.matmul(b, ub), dnp.matmul(a, v), dnp.matmul(b, v)
     out = []
     for x in xs:
         sx = hl * (1 - 2 * float(np.clip(x, 0.003, 0.997)))
@@ -345,7 +347,7 @@ def hull_sections(spec, zw, n):
     prof = spec.ship["profile"]
     r = np.asarray(spec.ring, np.float64)
     c, ub, hl, hw = axis(r)
-    xs = 0.5 - 0.5 * np.cos(np.linspace(0, math.pi, n + 1))       # (closer at the ends)
+    xs = 0.5 - 0.5 * dnp.cos(np.linspace(0, math.pi, n + 1))       # (closer at the ends)
     tw = _widths(r, c, ub, hl, xs)
     rake, wl = prof.get("rake", 0.03), prof.get("waterline", 0.93)
     xq = xs - rake * np.clip(1 - xs / 0.15, 0, 1) + 0.012 * np.clip(1 - (1 - xs) / 0.1, 0, 1)
@@ -365,8 +367,8 @@ def _freeboard(spec, hl):
 def _deck_z(x, fb, zw):
     x = float(np.clip(x, 0.0, 1.0))
     if x < 0.5:
-        return zw + fb[1] + (fb[0] - fb[1]) * ((0.5 - x) / 0.5) ** 2
-    return zw + fb[1] + (fb[2] - fb[1]) * ((x - 0.5) / 0.5) ** 2
+        return zw + fb[1] + (fb[0] - fb[1]) * dnp.sq((0.5 - x) / 0.5)
+    return zw + fb[1] + (fb[2] - fb[1]) * dnp.sq((x - 0.5) / 0.5)
 
 
 def draw(m, spec, gmin, gmax, mat_idx, lite=False):
@@ -460,7 +462,7 @@ def draw(m, spec, gmin, gmax, mat_idx, lite=False):
         pc, _, phl, _ = B.oriented_box(pr)
         if lite and 2 * phl < PART_LITE_M:
             continue
-        x = float(np.clip((1 - ((pc - c) @ ub) / hl) / 2, 0, 1))
+        x = float(np.clip((1 - (dnp.matmul(pc - c, ub)) / hl) / 2, 0, 1))
         _extrude(m, pr, max(zw + pmh, zd(x) - 0.3), zw + pmh + ph, upper)
     if mapped:                                  # the map is the model: no generic funnels or masts as well
         return

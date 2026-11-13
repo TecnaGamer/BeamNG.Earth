@@ -5,6 +5,7 @@ import json
 import os
 
 import numpy as np
+import dnp
 
 import mapgeom
 import polygon
@@ -80,13 +81,11 @@ def _photo_reader(cache_dir, sources):
 
 def cached_photo(frame, box, cache_dir):
     """Sample only high-resolution regional imagery that the game has already fetched."""
+    import buildings
     import imagery
-    import imagery_regional
 
     x0, y0, x1, y1 = box
-    lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.)
-    sources = tuple(name for name, (_, _, (s, w, n, e), _, _) in imagery_regional.REGIONAL.items()
-                    if s <= lat <= n and w <= lon <= e)
+    sources = buildings._photo_sources(frame, x0, y0, x1, y1)     # (the roofs' photos: Maryland's md6in too)
     if not sources:
         return None
     pad = BUILT_FRONT_M + 2.
@@ -191,7 +190,7 @@ def _green_overlap(quads, rings, walls, lines=()):
     ends = np.roll(quads, -1, axis=1)
     start = quads.reshape(-1, 2)
     delta = ends.reshape(-1, 2) - start
-    length = np.linalg.norm(delta, axis=1)
+    length = dnp.norm(delta, axis=1)
     directions = delta / np.maximum(length, 1e-9)[:, None]
     hit = walls.rays(start, directions, max(float(length.max()), .01))
     overlap = ((hit <= length + .001) | _inside(start, rings)).reshape(quads.shape[:2]).any(axis=1)
@@ -225,7 +224,7 @@ def _access_chunks(walks, paved, green, carriageways):
         inside = _inside(line[:, :2], paved) & ~_inside(line[:, :2], green)
         start_lot = int(np.flatnonzero(inside)[0])
         access = line[:start_lot + 1]
-        length = np.linalg.norm(np.diff(access[:, :2], axis=0), axis=1).sum()
+        length = dnp.norm(np.diff(access[:, :2], axis=0), axis=1).sum()
         if not (1. <= length <= 16.):
             continue
         # The service way must actually reach a sidewalk at this end. A
@@ -289,7 +288,7 @@ def _outside_side(line, carriageways):
             continue
         p, d = furniture._at(road, furniture._project(road, middle[None]))
         delta = middle - p[0, :2]
-        distance = np.linalg.norm(delta)
+        distance = dnp.norm(delta)
         if not spec.width / 2 - .3 <= distance <= spec.width / 2 + 7.:
             continue
         if closest is None or distance < closest[0]:
@@ -297,7 +296,7 @@ def _outside_side(line, carriageways):
     if closest is None:
         return None
     dx, dy = line[-1, :2] - line[0, :2]
-    return 1 if np.dot([-dy, dx], closest[1]) > 0 else -1
+    return 1 if dnp.dot([-dy, dx], closest[1]) > 0 else -1
 
 
 def widen_walks(walks, photo, buildings, excluded, barriers, carriageways):
@@ -316,12 +315,12 @@ def widen_walks(walks, photo, buildings, excluded, barriers, carriageways):
                 or walk.get("mapped") or walk.get("bay_shifted") or walk["w"] >= 3.):
             continue
         line = roads.densify(np.asarray(walk["pts"], np.float64), 1.5)
-        if np.linalg.norm(np.diff(line[:, :2], axis=0), axis=1).sum() < 8.:
+        if dnp.norm(np.diff(line[:, :2], axis=0), axis=1).sum() < 8.:
             continue
         width = walk["w"]
         curb, out = sidewalks.run_geometry(line, walk["side"], width)
         back = curb[:, :2] + out * width
-        norm = out / np.maximum(1e-9, np.linalg.norm(out, axis=1))[:, None]
+        norm = out / np.maximum(1e-9, dnp.norm(out, axis=1))[:, None]
         reach = frontage.rays(back, norm, BUILT_FRONT_M)
         if np.isfinite(reach).mean() < .8:
             continue
@@ -367,7 +366,7 @@ def _street_edge_distance(points, carriageways):
         near = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
         if len(near):
             p, _ = furniture._at(road, furniture._project(road, points[near]))
-            gap = np.abs(np.linalg.norm(p[:, :2] - points[near], axis=1) - spec.width / 2)
+            gap = np.abs(dnp.norm(p[:, :2] - points[near], axis=1) - spec.width / 2)
             distance[near] = np.minimum(distance[near], gap)
     return distance
 
@@ -418,7 +417,7 @@ def _connected_depths(back, depth):
     known = np.flatnonzero(np.isfinite(depth))
     if not len(known):
         return depth
-    arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(back, axis=0), axis=1))]
+    arc = np.r_[0., np.cumsum(dnp.norm(np.diff(back, axis=0), axis=1))]
     unknown = np.flatnonzero(~np.isfinite(depth))
     j = np.searchsorted(known, unknown)
     left, right = known[np.maximum(j - 1, 0)], known[np.minimum(j, len(known) - 1)]
@@ -449,7 +448,7 @@ def _back_edge(walk, carriageways):
     back = back[sidewalks.simplify(back, .025)]
     back = roads.densify(np.c_[back, np.zeros(len(back))], STEP_M)[:, :2]
     normal = sidewalks._normals_2d(back) * side
-    normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-9)[:, None]
+    normal /= np.maximum(dnp.norm(normal, axis=1), 1e-9)[:, None]
     return back, normal
 
 
@@ -594,12 +593,12 @@ def widen_city_walks(walks, targets, rings, excluded, barriers, carriageways):
                 or walk.get("bay_shifted") or walk["w"] >= CITY_WALK_MAX):
             continue
         line = roads.densify(np.asarray(walk["pts"], np.float64), 1.5)
-        if np.linalg.norm(np.diff(line[:, :2], axis=0), axis=1).sum() < 8.:
+        if dnp.norm(np.diff(line[:, :2], axis=0), axis=1).sum() < 8.:
             continue
         width = walk["w"]
         curb, out = sidewalks.run_geometry(line, walk["side"], width)
         back = curb[:, :2] + out * width
-        norm = out / np.maximum(1e-9, np.linalg.norm(out, axis=1))[:, None]
+        norm = out / np.maximum(1e-9, dnp.norm(out, axis=1))[:, None]
         reach = frontage.rays(back, norm, CITY_FRONT_M)
         hit = np.isfinite(reach) & (reach >= .18)
         if hit.mean() < CITY_HIT:

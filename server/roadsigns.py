@@ -14,6 +14,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import mapcells
 import mapgeom
 import islands
@@ -168,7 +169,7 @@ def tunnel_portals(feats, own):
         if not row[5] or row[5] == [(0.0, 1.0)]:
             continue
         pts = row[1]
-        s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+        s = np.concatenate([[0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))])
         if s[-1] < TUNNEL_MIN_M:
             continue
         if ids is None:
@@ -183,7 +184,7 @@ def tunnel_portals(feats, own):
             for f, sgn in ((a, 1.0), (b, -1.0)):
                 m = f * s[-1]
                 tx, ty = at(m + 3.0, 0) - at(m - 3.0, 0), at(m + 3.0, 1) - at(m - 3.0, 1)
-                l = float(np.hypot(tx, ty))
+                l = float(dnp.hypot(tx, ty))
                 if l > 1e-6:
                     out.append((at(m, 0), at(m, 1), POI_TUNNEL, sgn * tx / l, sgn * ty / l))
     return np.array(out, np.float64).reshape(-1, 5)

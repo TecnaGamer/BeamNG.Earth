@@ -32,6 +32,7 @@ import zipfile
 import numpy as np
 
 import fast
+import dnp
 
 log = logging.getLogger("earthd.nycmassing")
 
@@ -411,7 +412,7 @@ def credited_near(cache_dir, lat, lon, near_m):
     if not ON or not in_box(lat, lon):
         return False
     dlat = near_m / 110540.0
-    dlon = near_m / (111320.0 * max(0.05, float(np.cos(np.radians(lat)))))
+    dlon = near_m / (111320.0 * max(0.05, float(dnp.cos(np.radians(lat)))))
     local = local_dir()
     for key in cells_over(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
         p = os.path.join(local, str(key.z), str(key.x), f"{key.y}.npz") if local else \

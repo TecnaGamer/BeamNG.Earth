@@ -22,6 +22,8 @@ under the first platform. Its paint, "Eiffel Tower brown", is drawn from vertex 
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 LANDMARK = "landmark"           # the Spec class of a landmark (its name in Spec.facade)
 
@@ -76,8 +78,8 @@ def _half(z):
     pts = ((0.0, EIFFEL_BASE_M / 2), (EIFFEL_P1_Z, EIFFEL_P1_M / 2 + 2.0), (EIFFEL_P2_Z, EIFFEL_P2_M / 2 + 1.0),
            (200.0, 12.5), (EIFFEL_P3_Z, EIFFEL_P3_M / 2), (EIFFEL_TOP_Z, 4.0))
     zs = np.array([p[0] for p in pts])
-    ws = np.log([p[1] for p in pts])
-    return float(np.exp(np.interp(z, zs, ws)))
+    ws = dnp.log([p[1] for p in pts])
+    return float(dnp.exp(np.interp(z, zs, ws)))
 
 
 def _leg(z):
@@ -93,14 +95,14 @@ def beam(m, p, q, w, mat, up=(0.0, 0.0, 1.0)):
     """A square bar of side w from p to q (3D points): its four sides as quads (no end caps: the bars meet others)."""
     p, q = np.asarray(p, np.float64), np.asarray(q, np.float64)
     d = q - p
-    L = float(np.linalg.norm(d))
+    L = float(dnp.norm(d))
     if L < 1e-6:
         return
     d /= L
     a = np.cross(d, up)
-    if np.linalg.norm(a) < 1e-6:                    # (a vertical bar)
+    if dnp.norm(a) < 1e-6:                    # (a vertical bar)
         a = np.cross(d, (1.0, 0.0, 0.0))
-    a /= np.linalg.norm(a)
+    a /= dnp.norm(a)
     b = np.cross(d, a)
     h = w / 2
     c = [a * h + b * h, -a * h + b * h, -a * h - b * h, a * h - b * h]
@@ -254,7 +256,7 @@ def _eiffel_lamps(m, c, u, v, gmin, mat, lite, bars=()):
         for t in LAMP_BRACES:
             p = a + (b - a) * t
             w = p[:2] - c
-            x, y = float(w @ u), float(w @ v)
+            x, y = float(dnp.matmul(w, u)), float(dnp.matmul(w, v))
             d = math.hypot(x, y) or 1.0
             q = (BRACE_M / 2 + r) / d
             lamp(m, (c[0] + u[0] * x * (1 + q) + v[0] * y * (1 + q), c[1] + u[1] * x * (1 + q) + v[1] * y * (1 + q),
@@ -323,7 +325,7 @@ def _arch_half(z, top, width):
         return r
     if z >= top:
         return 0.0
-    return math.sqrt(max(0.0, r * r - (z - spring) ** 2))
+    return math.sqrt(max(0.0, r * r - dnp.sq(z - spring)))
 
 
 def arc(m, spec, gmin, mat, lite=False, tokens=None):
@@ -404,7 +406,7 @@ def bigben(m, spec, gmin, mat, lite=False, tokens=None):
         ring = []
         for k in range(n):
             t = 2 * math.pi * k / n
-            s_, z_ = BB_DIAL_R * math.cos(t), BB_DIAL_R * math.sin(t)
+            s_, z_ = BB_DIAL_R * dmath.cos(t), BB_DIAL_R * dmath.sin(t)
             x, y = (sgn * d, -sgn * s_) if ax == 0 else (sgn * s_, sgn * d)
             ring.append((*P(x, y), zc + z_))
         uv = (0.0, 0.0)
@@ -458,7 +460,7 @@ COL_COLOUR = (206, 192, 166, 255)
 
 
 def _ellipse(t, a, b):
-    return a * math.cos(t), b * math.sin(t)
+    return a * dmath.cos(t), b * dmath.sin(t)
 
 
 COL_LAMP_R = 0.6                # a lamp in the top of each arch (the arcades lit from inside at night) ...
@@ -526,7 +528,7 @@ def colosseum(m, spec, gmin, mat, lite=False, tokens=None):
     def standing(t):                        # the outer ring stands where it faces north
         x, y = _ellipse(t, A, B)
         w = np.asarray(P(x, y)) - c
-        return float(np.dot(w / max(np.linalg.norm(w), 1e-9), north)) > -0.15
+        return float(dnp.dot(w / max(dnp.norm(w), 1e-9), north)) > -0.15
 
     ts = np.linspace(0.0, 2 * math.pi, n + 1)
     runs, cur = [], None                    # the angle runs where the outer ring stands
@@ -580,7 +582,7 @@ SOL_FORT_H = 9.5
 SOL_PED = ((9.5, 16.0, 29.0), (16.0, 20.5, 25.0), (20.5, 41.0, 19.4), (41.0, 43.0, 21.6), (43.0, 47.0, 17.0))
 SOL_BASE_Z = 47.0               # the statue's base (the pedestal's top)
 SOL_TORCH_Z = 93.0
-SOL_FACING = (math.sin(math.radians(135.0)), math.cos(math.radians(135.0)))     # (east, north): south-east
+SOL_FACING = (dmath.sin(math.radians(135.0)), dmath.cos(math.radians(135.0)))     # (east, north): south-east
 SOL_GRANITE = (178, 170, 160, 255)
 SOL_COPPER = (104, 158, 136, 255)
 SOL_FLAME = (226, 176, 70, 255)
@@ -605,7 +607,7 @@ def _loft(m, P, sections, z0, mat, n=12):
     """A closed tube through elliptic sections [(z, half width, half depth)] (x across, y front-back), its top capped."""
     rings = []
     for z, hx, hy in sections:
-        rings.append([(*P(hx * math.cos(2 * math.pi * k / n), hy * math.sin(2 * math.pi * k / n)), z0 + z)
+        rings.append([(*P(hx * dmath.cos(2 * math.pi * k / n), hy * dmath.sin(2 * math.pi * k / n)), z0 + z)
                       for k in range(n)])
     uv = (0.0, 0.0)
     for r0, r1 in zip(rings[:-1], rings[1:]):
@@ -649,8 +651,8 @@ def liberty(m, spec, gmin, mat, lite=False, tokens=None):
     rays = 7
     for k in range(rays):                           # the crown's seven rays, fanned over her brow
         t = math.radians(-75 + 150 * k / (rays - 1))
-        base = (1.9 * math.sin(t), 2.1 * math.cos(t))
-        tip = (4.6 * math.sin(t), 4.6 * math.cos(t))
+        base = (1.9 * dmath.sin(t), 2.1 * dmath.cos(t))
+        tip = (4.6 * dmath.sin(t), 4.6 * dmath.cos(t))
         beam(m, (*P(*base), zb + 33.0), (*P(*tip), zb + 34.6), 0.35 if not lite else 0.8, copper)
     sh = (3.4, 0.4, zb + 27.5)                      # her right shoulder (x right, y front)
     elbow = (4.2, 0.9, zb + 34.5)
@@ -671,10 +673,10 @@ def liberty(m, spec, gmin, mat, lite=False, tokens=None):
     # its lights: the crown's windows (a row of 25 in front of her brow), the fort's walls and the balcony's edge
     for k in range(25):
         t = math.radians(-60 + 120 * k / 24)
-        lamp(m, (*P(2.15 * math.sin(t), 2.35 * math.cos(t)), zb + 32.4), 0.18, lamp_mat)
+        lamp(m, (*P(2.15 * dmath.sin(t), 2.35 * dmath.cos(t)), zb + 32.4), 0.18, lamp_mat)
     for i in range(nr):
         a, b = r[i], r[(i + 1) % nr]
-        L = float(np.hypot(*(b - a)))
+        L = float(dnp.hypot(*(b - a)))
         k = max(1, int(L / SOL_LAMP_EDGE_M))
         out = np.array([b[1] - a[1], a[0] - b[0]]) / max(L, 1e-9) * 0.5     # (outward of a counter-clockwise ring)
         for t in (np.arange(k) + 0.5) / k:

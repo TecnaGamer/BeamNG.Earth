@@ -53,7 +53,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
 - High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
   (on wooden poles where the line's voltage is low or its mapped supports are poles).
-- The satellite map on cars' own navigation screens.
+- The satellite map with the real roads drawn over it on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
   and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
@@ -73,7 +73,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
   barriers down divided highways (concrete walls, cable barriers or steel rails by the median's width and the
   country's practice, open at crossovers and ramps); street lights, utility poles with wires, traffic signals,
-  stop signs, traffic lights and sidewalks where OpenStreetMap maps them;
+  stop signs, traffic lights and sidewalks where OpenStreetMap maps them (where traffic drives on the left, the
+  signal poles stand on the left kerb with their arm over the road and the stop lines across the incoming lanes);
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
@@ -83,7 +84,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
   A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
   smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
-  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  track at grade lies flush with it; a road under a short rail bridge dips to clear it (to the height limit its sign
+  gives, `maxheight`, when the map has one), and the bridges of a long rail line stand where the map puts them.
+  Railway stations are built from the map: platforms at the country's height
   beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
@@ -125,6 +128,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
   Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
   OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
+  Where a town boundary runs through a fork, one pair stands on the road all its branches share; between two towns
+  grown together only the through roads carry them.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
   Autobahn signs above), with each way's road numbers (national
@@ -379,7 +384,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
-  keep working).
+  keep working). Older copies the updater downloaded itself are removed at start, except the previous version and
+  the one your shortcut starts; a copy you downloaded by hand is never touched.
 - **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
   Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
@@ -610,6 +616,31 @@ data, network load); how the boxes start depends on your computer's time zone (n
 other places). Change it any time in BeamNG.Earth's settings page, Interface (from the next report on), or set the
 environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in offline mode
 (`--offline`). Every field, why we want it and what happens to it: [TELEMETRY.md](TELEMETRY.md).
+
+## Sending a report to the developers
+
+The in-game reporter (Ctrl+Shift+E; Ctrl+Shift+Y records a 30 s performance profile) saves each report in your BeamNG
+user folder (`beamngEarth/reports/`). After saving, **Send to the developers** opens a window that lists exactly what
+would be sent, with the files to read, and nothing is sent until you click **Send** there:
+
+- your title and description, the kind of report, and the screenshot (a box leaves it out);
+- the location: exact, or rounded to about 1 km with a box (the map ids, street names and the roads and buildings near
+  the spot are then left out too; the screenshot can still show where you are);
+- the view: camera, heading, the point and object under the screen's centre, the car's position and speed;
+- game and PC: game and mod versions, graphics settings, CPU / GPU / memory, BeamNG.Earth's settings, the names of
+  enabled mods, the last 60 s of frame times, weather and time of day;
+- the world server's state: its version and settings (`BNE_*` / `BNGE_*` overrides; secret ones only as "set"),
+  memory, loading backlog, the data sources and the map features at the spot;
+- logs (a box leaves them out): the world server's last 300 lines and the game's warnings and errors of the last 10
+  minutes.
+
+User names, home folders, e-mail and IP addresses are removed from all of it, also from the copy kept on your
+computer. Reports are sent **privately** to the BeamNG.Earth developers (the project's own server,
+`earth.tgforever.net`) and are **not published**; they are kept 90 days. A random install id (no name or account)
+goes with each report so reports from one computer can be told apart. Sending is your choice each time, so it works
+with the usage statistics off too. The send runs in the background, is retried, and a report not sent yet goes at the
+next start; the window then shows a short report id (like `K7QD-3M9X`) to quote on Discord or GitHub. **Open GitHub
+issue page** still opens a ready-to-post public issue if you prefer that. Details: [TELEMETRY.md](TELEMETRY.md#reports-you-send).
 
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.

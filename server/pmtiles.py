@@ -51,7 +51,7 @@ import staging
 
 log = logging.getLogger("earthd.mapdata")
 
-FORMAT = 1          # the cells' content from the tiles: bump on any change of what pmt_layer gives (the cells' folder
+FORMAT = 2          # the cells' content from the tiles: bump on any change of what pmt_layer gives (the cells' folder
                     # and MapData.versions() carry it: plans and cell facts keyed by it)
 NATIVE = 206
 MIRRORS = ("https://tiles.overturemaps.org/{release}/{theme}.pmtiles",

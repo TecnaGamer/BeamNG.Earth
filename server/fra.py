@@ -12,6 +12,7 @@ import logging
 import threading
 
 import numpy as np
+import dnp
 
 import railtags
 
@@ -69,7 +70,7 @@ class Crossings:
         kit = [r[2] for r in pts]
 
         def look(p, _cls):
-            d = np.hypot(*(xy - np.asarray(p)[:2]).T)
+            d = dnp.hypot(*(xy - np.asarray(p)[:2]).T)
             j = int(np.argmin(d))
             return kit[j] if d[j] <= MATCH_M else None
         return look

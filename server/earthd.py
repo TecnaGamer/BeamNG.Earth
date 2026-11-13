@@ -81,6 +81,8 @@ from runtimeprofiler import ThreadPoolExecutor  # noqa: E402
 from dataclasses import dataclass, field, replace  # noqa: E402
 
 import numpy as np  # noqa: E402
+import dmath
+import dnp
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
@@ -899,7 +901,7 @@ def predict_request(px, py, vx, vy, cx, cy, rule=FOLLOW_RULES[2048.0], at=None):
     follow table; in its fast mode the box test is on the point v * fast_ahead ahead."""
     lead, reach, ahead = rule.mode(vx, vy)
     v2 = vx * vx + vy * vy
-    if (rule.min_lead > 0 and rule.min_lead_v ** 2 < v2 and v2 * lead * lead < rule.min_lead ** 2
+    if (rule.min_lead > 0 and rule.min_lead_v * rule.min_lead_v < v2 and v2 * lead * lead < rule.min_lead * rule.min_lead
             and (cx - px) * vx + (cy - py) * vy > 0
             and max(abs(px - cx), abs(py - cy)) <= rule.min_lead + rule.grid):
         # (follow.lua centreAhead: the centre just committed is ahead; the next request once the player is past it)
@@ -959,7 +961,7 @@ def predict_route_chain(xy, px, py, vx, vy, cx, cy, rule, n, at=None):
     ln2 = np.maximum((d * d).sum(1), 1e-9)
     t = np.clip(((px - a[:, 0]) * d[:, 0] + (py - a[:, 1]) * d[:, 1]) / ln2, 0.0, 1.0)
     q = a + d * t[:, None]
-    dist = np.hypot(q[:, 0] - px, q[:, 1] - py)
+    dist = dnp.hypot(q[:, 0] - px, q[:, 1] - py)
     j = int(np.argmin(dist))
     seg = float(np.sqrt(ln2[j]))
     if dist[j] > ROUTE_NEAR_M or ((d[j, 0] * vx + d[j, 1] * vy) / (seg * sp)) < ROUTE_ALIGN:
@@ -2760,7 +2762,8 @@ class Server:
                 wrows, mapped_lamps = [], None
             # (on the graded ground, as blockworker.roads_tile)
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
-                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
+                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty)
+                                                 + blockworker._tile_decks(anchor.tunnels, cells, tx, ty), skip=skip,
                                                  cache_dir=os.path.dirname(self.out_dir), urban_fn=urban,
                                                  widths=self.road_widths, left_hand=self.left_hand(anchor))
             _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
@@ -3453,7 +3456,7 @@ class Server:
             la, lo, _ = anchor.frame.enu_to_geodetic(px, py, 0.0)
             la, lo = float(la), float(lo)
             dlat = r / 111320.0
-            dlon = r / (111320.0 * max(0.05, math.cos(math.radians(la))))
+            dlon = r / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
             for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                 if k not in keys:
                     keys.append(k)
@@ -3524,7 +3527,7 @@ class Server:
                 jobs = []
                 for la, lo in pts if layers else ():
                     dlat = reach / 111320.0
-                    dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
+                    dlon = reach / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
                     for key in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
                         todo = tuple(ly for ly in layers if not self.mapdata.has(key, ly))
                         if todo and all(key != j[0] for j in jobs):
@@ -4577,7 +4580,7 @@ class Server:
             with (self.deshadow.no_wait() if self.deshadow is not None else contextlib.nullcontext()):
                 rgb, used = self.imagery.render(anchor.frame, x0, y0, size, BASE_RENDER_PX, pending)
             log.debug("base photo %s r%d: %s", (anchor.id, cx, cy), rev,
-                      {k: round(v / BASE_RENDER_PX ** 2, 3) for k, v in used.items()})
+                      {k: round(v / (BASE_RENDER_PX * BASE_RENDER_PX), 3) for k, v in used.items()})
         except Exception as e:      # an imagery failure must not cost the terrain
             log.info("base photo %s: %s", (anchor.id, cx, cy), e)
             return None
@@ -4889,14 +4892,14 @@ class Server:
         if d < s:
             return px                       # (under the camera)
         n = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
-        tv = math.tan(math.radians(fov) / 2)
-        half = math.atan(math.hypot(tv, tv * farfield.ASPECT))
-        slack = math.asin(min(1.0, s * 0.7071 / d))
-        ang = math.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
+        tv = dmath.tan(math.radians(fov) / 2)
+        half = dmath.atan(math.hypot(tv, tv * farfield.ASPECT))
+        slack = dmath.asin(min(1.0, s * 0.7071 / d))
+        ang = dmath.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
         if ang - slack > half:
             return min(px, MAP_TEX_OFF_PX)
         on_screen = s * (MAP_SCREEN_H / (2 * tv)) / d
-        want = 2 ** math.ceil(math.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
+        want = 2 ** math.ceil(dmath.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
         return int(max(MAP_TEX_MIN_PX, min(px, want)))
 
     @property
@@ -5715,7 +5718,7 @@ class Server:
                 continue
             for x in range(n):
                 la, lo = farfield.global_frame_ll(z, x, y)
-                d = math.hypot((la - lat0), (((lo - lon0 + 180.0) % 360.0) - 180.0) * math.cos(math.radians(lat0)))
+                d = math.hypot((la - lat0), (((lo - lon0 + 180.0) % 360.0) - 180.0) * dmath.cos(math.radians(lat0)))
                 cands.append((d, x, y))
         cands.sort()
         level = farfield.GLOBAL_MIN_LEVEL + int(anchor.zf) - z
@@ -6572,8 +6575,8 @@ class Connection:
         # each fetched their own tile before the route reached the map; a 220 px chart needs no more)
         step = pts[-1][2] / max(len(pts) - 1, 1) if len(pts) > 1 else 0.0
         if step > 0:
-            tile_m = 40075016.7 * max(math.cos(math.radians(float(np.mean(lats)))), 0.05)
-            zoom = int(min(zoom, max(8, math.floor(math.log2(tile_m / (4 * step))))))
+            tile_m = 40075016.7 * max(dmath.cos(math.radians(float(np.mean(lats)))), 0.05)
+            zoom = int(min(zoom, max(8, math.floor(dmath.log2(tile_m / (4 * step))))))
         elev = route_profile_smooth(self.s.dem.sample(lats, lons, zoom))
         return [[round(p[2], 1), round(float(e), 1)] for p, e in zip(pts, elev)]
 
@@ -6900,6 +6903,29 @@ class Connection:
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
         self.send(out)
 
+    async def report_context(self, msg):
+        """report_context: reportsend.context in a thread; report_context_done {folder, ok} tells the mod."""
+        import reportsend
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await loop.run_in_executor(None, reportsend.context, self.s, self, msg,
+                                            updatesmod.local_version() or SERVER_VERSION, SERVER_VERSION)
+        except Exception as e:          # (a report without the server's part; never a reason for the server to fail)
+            log.warning("report context: %s: %s", type(e).__name__, e)
+            ok = False
+        self.send({"type": "report_context_done", "folder": msg.get("folder"), "ok": bool(ok)})
+
+    async def report_saved(self, msg):
+        import reportsend
+        path = reportsend.folder(self.s.user_dir, msg.get("folder"))
+        if path is None:
+            return
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, reportsend.scrub_saved, path,
+                                                             reportsend.user_names())
+        except Exception as e:
+            log.warning("report scrub: %s: %s", type(e).__name__, e)
+
     async def where(self, msg):
         """The status bar's location {"id", "lat", "lon", "online"} -> where_result {"id", "street", "place", "region",
         "country"}: the street from the cached map cells (never waits for a download), the town, state and country from
@@ -7019,14 +7045,32 @@ class Connection:
     def _place_rows(self, req, fetch):
         """places.py's rows for an API request (worker thread): (places keyed, buildings, complete). Without fetch only
         the cells on disk; complete is False when some were missing (fetch=True then asks for them as background jobs,
-        as _map_label_rows does)."""
+        as _map_label_rows does). A cachedOnly request never fetches, whatever it is asked for, and starts incomplete
+        where its reach was cut back to placesmod.CACHED_CELLS_MAX cells (the cells past it were not read either)."""
         md = self.s.mapdata
         lat, lon = req["lat"], req["lon"]
-        complete = True
+        fetch = fetch and not req["cached_only"]
+        complete = not req["truncated"]
         layers = (("places", req["radius"]),)
         if req["buildings"]:
             layers += (("buildings", min(req["radius"], placesmod.BUILDINGS_RADIUS_MAX_M)),)
         got = {}
+        state = {"complete": True}         # (the unkept reads' own: set as place_rows walks them)
+        if req["cached_only"]:
+            # (up to CACHED_CELLS_MAX cells: each read when place_rows comes to it and dropped after, none kept in
+            # mapdata's MEM_MB, so a wide search neither holds every layer at once nor pushes the road tiles' layers
+            # out: MapData.layer_unkept)
+            def unkept(keys):
+                for k in keys:
+                    if not md.has(k, "places"):
+                        state["complete"] = False
+                        continue
+                    try:
+                        yield md.layer_unkept(k, "places")
+                    except mapdatamod.DEFERRED:
+                        state["complete"] = False
+            got["places"] = unkept(placesmod.near_cells(lat, lon, req["radius"]))
+            layers = layers[1:]
         for layer, r in layers:
             cells = []
             for k in placesmod.near_cells(lat, lon, r):
@@ -7041,17 +7085,19 @@ class Connection:
         keyed = placesmod.place_rows(got["places"], lat, lon, req["radius"], placesmod.matcher(req["categories"]),
                                      req["min_conf"])
         blds = placesmod.building_rows(got["buildings"], lat, lon, req["radius"]) if req["buildings"] else None
-        return keyed, blds, complete
+        return keyed, blds, complete and state["complete"]
 
     async def places(self, msg):
         """The modding API's places {"id", "lat", "lon", "radius", "categories", "limit", "cursor", "buildings",
-        "minConfidence"} -> places_result {"id", "places", "buildings", "complete", "pending", "next", "error"}
+        "minConfidence", "cachedOnly"} -> places_result {"id", "places", "buildings", "complete", "pending", "next",
+        "truncated", "error"}
         (places.py; api.places in the mod). The cells on disk answer at once; when some are missing they are fetched
         as background jobs (never ahead of the world's own downloads) and one more answer follows once they came
         (or after PLACES_TRIES, still incomplete); "pending" says whether another answer is still to come. Its own
         count of follow-ups, never _map_labels_seq (an add-on's request must not cancel the map's labels, nor the
         other way round), and no request cancels another's (two add-ons may ask at once); at most PLACES_FOLLOWUPS
-        at a time, past them an incomplete answer is the last."""
+        at a time, past them an incomplete answer is the last. A cachedOnly request has none of that: one answer from
+        the cells on disk, complete or not, nothing fetched for it and nothing pending."""
         rid = msg.get("id")
         req, why = placesmod.request(msg)
         if req is None:
@@ -7072,6 +7118,8 @@ class Connection:
                 out["buildings"] = blds
             if nxt is not None:
                 out["next"] = nxt
+            if req["truncated"]:
+                out["truncated"] = True
             if error:
                 out["error"] = error
             self.send(out)
@@ -7084,7 +7132,8 @@ class Connection:
                        "error": f"{type(e).__name__}"})
             return
         busy = getattr(self, "_places_followups", 0)
-        follow = not complete and busy < PLACES_FOLLOWUPS
+        # (a cachedOnly answer is the last one either way: nothing is fetched for it, so nothing would come)
+        follow = not complete and not req["cached_only"] and busy < PLACES_FOLLOWUPS
         answer(keyed, blds, complete, follow)
         if not follow:
             return
@@ -7759,6 +7808,17 @@ class Connection:
             probe = msg.get("probe")
             if msg.get("enabled") is True and type(probe) is int and 0 <= probe <= 2147483647:
                 self.send({"type": "runtime_profiler_pong", "probe": probe})
+        elif kind == "report_context":          # the reporter's moment (report.lua): the server's state and logs into the
+            self.spawn(self.report_context(msg))    # report folder (reportsend.py)
+        elif kind == "report_saved":            # ... the mod's own files written: scrubbed in place
+            self.spawn(self.report_saved(msg))
+        elif kind == "report_send":             # ... "Send to the developers" clicked (the player's choice; reportsend.py)
+            rs = getattr(self.s, "reports", None)
+            if rs is not None:
+                self.spawn(rs.send(msg.get("folder")))
+            else:
+                self.send({"type": "report_status", "folder": msg.get("folder"), "state": "failed",
+                           "text": "this server cannot send reports"})
         elif kind == "perf_log":                # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
             # minute lines and the machine, into this log beside the blocks' own timings (the file players send)
             lines = msg.get("lines")
@@ -9800,9 +9860,9 @@ class Connection:
             h, fov = float(c.get("h") or 0.0), float(c.get("fovDeg") or 60.0)
         except (TypeError, ValueError):
             h, fov = 0.0, 60.0
-        ppr = h / (2 * math.tan(math.radians(fov) / 2)) if h > 0 and 1.0 < fov < 170.0 else 0.0
+        ppr = h / (2 * dmath.tan(math.radians(fov) / 2)) if h > 0 and 1.0 < fov < 170.0 else 0.0
         ppr = max(ppr, farpvsmod.PPR_MIN)
-        return 2.0 ** (math.ceil(math.log2(ppr) * 2) / 2)
+        return 2.0 ** (math.ceil(dmath.log2(ppr) * 2) / 2)
 
     def _pvs_drop(self):
         if self.pvs is not None:
@@ -9886,8 +9946,8 @@ class Connection:
         """The pixels per radian the screen-space LOD goes by: this pose's (h / (2 tan(vfov / 2))), at most
         LOD_PPR_ZOOM times a LOD_BASE_FOV_DEG camera's, the most of the last LOD_PPR_WINDOW_S seconds."""
         now = time.monotonic() if now is None else now
-        ppr = h / (2 * math.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
-        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * math.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
+        ppr = h / (2 * dmath.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
+        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * dmath.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
         hist = self.__dict__.setdefault("ppr_hist", deque())     # (a sliding maximum: decreasing pprs)
         while hist and hist[-1][1] <= ppr:
             hist.pop()
@@ -10608,7 +10668,9 @@ async def main_async(args):
                 snap = tracemalloc.take_snapshot()
                 top = snap.statistics("lineno")[:TRACE_TOP]
                 total = sum(st.size for st in snap.statistics("filename"))
-                log.info("memory: rss %.0f MB, %.0f MB traced; top: %s", blockworker._rss_mb(), total / 1e6, "; ".join(
+                log.info("memory: rss %.0f MB, held %.0f MB (%.0f the tracer's), %.0f MB traced; top: %s",
+                         blockworker._rss_mb(), blockworker._held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6,
+                         total / 1e6, "; ".join(
                     f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} {st.size / 1e6:.0f} MB"
                     for st in top))
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()
@@ -10645,6 +10707,17 @@ async def main_async(args):
         logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
         log.info("telemetry: on, as the player chose on the welcome page (TELEMETRY.md; nothing before the choice; "
                  "BNE_TELEMETRY=off turns it off)")
+    # the in-game reports' sends (reportsend.py): only what the player clicked "Send to the developers" for, so not
+    # under the telemetry switches; reports a stopped server left queued are sent now
+    try:
+        import reportsend
+        server.reports = reportsend.Sender(
+            args.user_dir, args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
+            reportsend.install_id(args.cache_dir, keep=not privacyregionmod.region()[1]),
+            lambda m: [c.send(m) for c in list(server.connections)], offline=bool(args.offline))
+        asyncio.create_task(server.reports.resume())
+    except Exception as e:
+        log.warning("reports: sends off: %s: %s", type(e).__name__, e)
     feed_srv = None
     if getattr(args, "companion_feed", "off") != "off":
         # the player's position for programs beside the game (companionfeed.py; docs/ADDONS.md), read-only

@@ -15,6 +15,7 @@
 //! Coordinates: world units at the tile zoom (tile x * 4096 + tile pixel), y down, as f64; out as lon/lat (Web
 //! Mercator inverse). Ring orientation as the parquet cells have it: exteriors counter-clockwise in lon/lat, holes
 //! clockwise.
+use crate::dm::Dm;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
@@ -870,10 +871,107 @@ fn between(v: &J) -> Option<(f64, f64)> {
     Some((b[0].as_f64().unwrap_or(0.0), b[1].as_f64().unwrap_or(1.0)))
 }
 
+/// Where a cut line's rule ranges lie. Overture's `between` fractions (levels, flags, widths, speeds, ways, connectors)
+/// are fractions of the whole segment, which for a rail line can be 20 km and more; a line is followed only CAP rings of
+/// tiles round the cell, so it often arrives shorter, and the fractions of a shorter line put every bridge and tunnel
+/// of it hundreds of metres off (a rail bridge over a road at 50.5407,16.1974 stood 880 m away; the Gotthard's tunnels).
+/// The segment's connectors (each with its `at` and a point in the connector layer) are on the line, so they tie `at`
+/// to the arc along the line we have. `at` -> fraction of OUR line, linear between the connectors and past the ends of
+/// them by their overall scale.
+#[derive(Clone, Debug)]
+struct Anchors {
+    at: Vec<f64>,
+    fr: Vec<f64>,
+}
+
+/// m the anchors may differ from the identity (`at` = fraction of our line) by before they are used: a whole line
+/// agrees with them to a metre or two (Web Mercator's scale along a long line), a cut one by hundreds
+const ANCHOR_MIN_DEV_M: f64 = 5.0;
+
+impl Anchors {
+    fn map(&self, at: f64) -> f64 {
+        let n = self.at.len();
+        let slope = (self.fr[n - 1] - self.fr[0]) / (self.at[n - 1] - self.at[0]);
+        if at <= self.at[0] {
+            return self.fr[0] + (at - self.at[0]) * slope;
+        }
+        if at >= self.at[n - 1] {
+            return self.fr[n - 1] + (at - self.at[n - 1]) * slope;
+        }
+        let k = self.at.partition_point(|&a| a <= at).clamp(1, n - 1);
+        let (a0, a1, f0, f1) = (self.at[k - 1], self.at[k], self.fr[k - 1], self.fr[k]);
+        f0 + (at - a0) / (a1 - a0) * (f1 - f0)
+    }
+}
+
+/// The range b (None: the whole line) as fractions of our line: Some(range) to keep (clamped to the line), None to drop
+/// (outside the line we have). Without anchors, as it is.
+fn remap(a: &Option<Anchors>, b: Option<(f64, f64)>) -> Option<Option<(f64, f64)>> {
+    let a = match a {
+        Some(a) => a,
+        None => return Some(b),
+    };
+    let (s, e) = match b {
+        Some(b) => b,
+        None => return Some(None),
+    };
+    let (ms, me) = (a.map(s), a.map(e));
+    const EPS: f64 = 1e-6;
+    if me < -EPS || ms > 1.0 + EPS {
+        return None;
+    }
+    let (cs, ce) = (ms.clamp(0.0, 1.0), me.clamp(0.0, 1.0));
+    if e > s && ce - cs < 1e-7 {
+        return None;
+    }
+    Some(Some((cs, ce)))
+}
+
 /// DuckDB's CAST(DOUBLE AS VARCHAR) for the values a route's "between" holds (shortest round trip, "0.0", "1.0").
 fn duck_double(v: f64) -> String {
     let s = format!("{v:?}");
     s
+}
+
+/// m: the height an access restriction x denies vehicles over (no heading, time, use or recognised-as condition: a
+/// "maxheight" sign), None for any other (overture.height_limit_m's rule).
+fn height_limit(x: &J) -> Option<f64> {
+    if x.get("access_type").and_then(|v| v.as_str()) != Some("denied") {
+        return None;
+    }
+    let w = x.get("when")?;
+    let heading = w.get("heading").and_then(|v| v.as_str()).unwrap_or("");
+    if !heading.is_empty() || truthy(w.get("during")) || truthy(w.get("using")) || truthy(w.get("recognized")) {
+        return None;
+    }
+    for v in w.get("vehicle")?.as_array()? {
+        if v.get("dimension").and_then(|d| d.as_str()) != Some("height") {
+            continue;
+        }
+        if !matches!(v.get("comparison").and_then(|d| d.as_str()), Some("greater_than" | "greater_than_equal")) {
+            continue;
+        }
+        let val = match v.get("value").and_then(|d| d.as_f64()) {
+            Some(val) => val,
+            None => continue,
+        };
+        let unit = v.get("unit").and_then(|d| d.as_str()).unwrap_or("m").to_lowercase();
+        let k = match unit.as_str() {
+            "m" => 1.0,
+            "km" => 1000.0,
+            "cm" => 0.01,
+            "ft" => 0.3048,
+            "in" => 0.0254,
+            "yd" => 0.9144,
+            "mi" => 1609.344,
+            _ => continue,
+        };
+        let h = val * k;
+        if (1.0..=8.0).contains(&h) {
+            return Some(h);
+        }
+    }
+    None
 }
 
 fn truthy(v: Option<&J>) -> bool {
@@ -999,6 +1097,7 @@ struct Built {
     tile: usize,
     feat: usize,
     rep: Option<P>, // cx / cy in place of the bbox centre (world units): see owner_point
+    anchors: Option<Anchors>, // a cut line's `at` -> fraction of its geometry (line_anchors)
 }
 
 fn sorted_tiles(tiles: Vec<(u8, i64, i64, Vec<u8>)>, layer: &str, center: (i64, i64), conn: bool, ckey: &str)
@@ -1043,6 +1142,16 @@ fn polygons(rings: Vec<Vec<P>>) -> Vec<Vec<Vec<P>>> {
 struct Need {
     want: BTreeSet<(i64, i64)>,
     have: BTreeSet<(i64, i64)>,
+}
+
+/// BNE_PMT_ANCHOR=off: the rule ranges of a cut line as the tiles give them (fractions of the whole segment)
+fn anchors_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("BNE_PMT_ANCHOR")
+            .map(|v| !matches!(v.trim().to_lowercase().as_str(), "off" | "0" | "false"))
+            .unwrap_or(true)
+    })
 }
 
 const LOOKAHEAD: i64 = 1; // tiles past an unfetched neighbour asked in the same round, straight on (long roads, rails)
@@ -1308,6 +1417,69 @@ fn junction_vertices(lines: &mut [Vec<Vec<P>>], p: &Props, conns: &HashMap<Strin
     }
 }
 
+/// The anchors (Anchors) of a line made of lines[..][0] in order: its connectors with 0 <= at <= 1 that are vertices of
+/// it (junction_vertices put the mid-line ones in), in `at` order, each at its arc along the line. None where there
+/// are fewer than two, or where they agree with the identity to ANCHOR_MIN_DEV_M (a line that came whole).
+fn line_anchors(lines: &[Vec<Vec<P>>], p: &Props, conns: &HashMap<String, P>, tz: u8) -> Option<Anchors> {
+    let js = p.json("connectors");
+    let mut cs: Vec<(f64, P)> = vec![];
+    for x in js.as_array()? {
+        let at = match x.get("at").and_then(|v| v.as_f64()) {
+            Some(a) => a,
+            None => continue,
+        };
+        if !(0.0..=1.0).contains(&at) {
+            continue;
+        }
+        if let Some(q) = x.get("connector_id").and_then(|v| v.as_str()).and_then(|c| conns.get(c)) {
+            cs.push((at, *q));
+        }
+    }
+    if cs.len() < 2 {
+        return None;
+    }
+    cs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let pts: Vec<P> = lines.iter().filter_map(|l| l.first()).flat_map(|r| r.iter().copied()).collect();
+    if pts.len() < 2 {
+        return None;
+    }
+    let mut cum = vec![0.0f64];
+    for w in pts.windows(2) {
+        cum.push(cum.last().unwrap() + ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt());
+    }
+    let total = *cum.last().unwrap();
+    if total <= 0.0 {
+        return None;
+    }
+    let (mut at, mut fr): (Vec<f64>, Vec<f64>) = (vec![], vec![]);
+    let mut from = 0usize;
+    for (a, q) in cs {
+        let j = match (from..pts.len()).find(|&j| pts[j][0] == q[0] && pts[j][1] == q[1]) {
+            Some(j) => j,
+            None => continue,
+        };
+        from = j;
+        let f = cum[j] / total;
+        if at.last().map_or(false, |&l| a <= l) || fr.last().map_or(false, |&l| f < l) {
+            continue;
+        }
+        at.push(a);
+        fr.push(f);
+    }
+    let n = at.len();
+    if n < 2 || at[n - 1] - at[0] <= 0.0 || fr[n - 1] - fr[0] <= 0.0 {
+        return None;
+    }
+    // metres per world unit at the line's first vertex (Web Mercator)
+    let lat = lonlat(pts[0], tz)[1].to_radians();
+    let m_unit = 2.0 * std::f64::consts::PI * 6378137.0 * lat.dcos() / ((1u64 << tz) as f64 * EXT);
+    let dev = (0..n).map(|k| (fr[k] - at[k]).abs()).fold(0.0, f64::max) * total * m_unit;
+    if dev < ANCHOR_MIN_DEV_M {
+        return None;
+    }
+    Some(Anchors { at, fr })
+}
+
 /// Where a whole feature is owned (mapdata: the cell holding its cx / cy, the bbox centre): the bbox centre, unless
 /// the feature does not reach that z14 cell (a road bent round a cell's corner: no cell lists it there, so none would
 /// build it); then its first vertex (every cell that lists it has the same whole geometry and picks the same one).
@@ -1318,7 +1490,7 @@ fn owner_point(kind: u8, parts: &[Vec<Vec<P>>], bb: (f64, f64, f64, f64), tz: u8
     let b = lonlat([bb.2, bb.1], tz);
     let (clon, clat) = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0);
     let wx = (clon + 180.0) / 360.0 * n;
-    let wy = (1.0 - clat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n;
+    let wy = (1.0 - clat.to_radians().dtan().dasinh() / std::f64::consts::PI) / 2.0 * n;
     let cs = EXT / (1u64 << (14 - tz.min(14))) as f64;
     let (cx, cy) = ((wx / cs).floor(), (wy / cs).floor());
     let bx = Box2 { x0: cx * cs, y0: cy * cs, x1: (cx + 1.0) * cs, y1: (cy + 1.0) * cs };
@@ -1346,7 +1518,7 @@ fn touches(kind: u8, parts: &[Vec<P>], bx: &Box2) -> bool {
 fn lonlat(p: P, z: u8) -> [f64; 2] {
     let n = (1u64 << z) as f64 * EXT;
     let lon = p[0] / n * 360.0 - 180.0;
-    let lat = (std::f64::consts::PI * (1.0 - 2.0 * p[1] / n)).sinh().atan().to_degrees();
+    let lat = (std::f64::consts::PI * (1.0 - 2.0 * p[1] / n)).dsinh().datan().to_degrees();
     [lon, lat]
 }
 
@@ -1414,6 +1586,7 @@ fn build(tiles: &[Tile], cell: (u8, i64, i64), tz: u8, spec: &Spec, cap: i64) ->
         let f0 = &tiles[ti0].lay().unwrap().feats[fi0];
         let kind = f0.gtype;
         let before = need.want.len();
+        let mut anchors: Option<Anchors> = None;
         let (parts, clipped) = match kind {
             POINT => {
                 // the point from the tile whose own square holds it (else the centre tile's)
@@ -1436,6 +1609,9 @@ fn build(tiles: &[Tile], cell: (u8, i64, i64), tz: u8, spec: &Spec, cap: i64) ->
                     let lay = tiles[ti0].lay().unwrap();
                     let p = Props { lay, tags: &f0.tags };
                     junction_vertices(&mut l, &p, cp);
+                    if spec.road_rules && anchors_on() {
+                        anchors = line_anchors(&l, &p, cp, tz);
+                    }
                 }
                 (l, false)
             }
@@ -1478,7 +1654,7 @@ fn build(tiles: &[Tile], cell: (u8, i64, i64), tz: u8, spec: &Spec, cap: i64) ->
         } else {
             owner_point(kind, &parts, (x0, y0, x1, y1), tz)
         };
-        feats.push(Built { id: id.clone(), kind, parts, clipped, tile: ti0, feat: fi0, rep });
+        feats.push(Built { id: id.clone(), kind, parts, clipped, tile: ti0, feat: fi0, rep, anchors });
     }
     let have: BTreeSet<(i64, i64)> = tiles.iter().map(|t| (t.x, t.y)).collect();
     let n = 1i64 << tz;
@@ -1635,7 +1811,7 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
     let mut bln: Vec<Vec<bool>> = vec![Vec::with_capacity(n); spec.boolean.len()];
     let mut sources: BTreeMap<(String, String), i64> = BTreeMap::new();
     let rule_names = ["surface", "width", "level", "subclass", "flags", "max_speed_kmh", "connectors", "oneway",
-                      "src_ways"];
+                      "src_ways", "max_height_m"];
     let mut rules: Vec<Rule> = rule_names.iter()
         .map(|r| Rule::new(matches!(*r, "surface" | "subclass" | "flags" | "connectors" | "src_ways")))
         .collect();
@@ -1675,15 +1851,20 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
         if !spec.road_rules {
             continue;
         }
+        let anch = &feats[i].anchors;
         for (r, (col, fieldn)) in [("road_surface", "value"), ("width_rules", "value"), ("level_rules", "value"),
                                    ("subclass_rules", "value")].iter().enumerate() {
             if let Some(a) = p.json(col).as_array() {
                 for x in a {
+                    let b = match remap(anch, between(x)) {
+                        Some(b) => b,
+                        None => continue,
+                    };
                     let v = x.get(*fieldn).unwrap_or(&J::Null);
                     if rules[r].is_text {
-                        rules[r].push_t(i, jstr(v), between(x));
+                        rules[r].push_t(i, jstr(v), b);
                     } else {
-                        rules[r].push_f(i, jf(v), between(x));
+                        rules[r].push_f(i, jf(v), b);
                     }
                 }
             }
@@ -1691,9 +1872,13 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
         for col in ["road_flags", "rail_flags"] {
             if let Some(a) = p.json(col).as_array() {
                 for x in a {
+                    let b = match remap(anch, between(x)) {
+                        Some(b) => b,
+                        None => continue,
+                    };
                     if let Some(vals) = x.get("values").and_then(|v| v.as_array()) {
                         for f in vals {
-                            rules[4].push_t(i, jstr(f), between(x));
+                            rules[4].push_t(i, jstr(f), b);
                         }
                     }
                 }
@@ -1706,7 +1891,9 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
                 let u = ms.and_then(|m| m.get("unit")).and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
                 let uncond = matches!(x.get("when"), None | Some(J::Null));
                 if let (Some(v), true) = (v, uncond) {
-                    rules[5].push_f(i, Some(v * if u == "mph" { MPH } else { 1.0 }), between(x));
+                    if let Some(b) = remap(anch, between(x)) {
+                        rules[5].push_f(i, Some(v * if u == "mph" { MPH } else { 1.0 }), b);
+                    }
                 }
             }
         }
@@ -1714,7 +1901,10 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
             for x in a {
                 let at = x.get("at").and_then(|v| v.as_f64());
                 let cid = x.get("connector_id").and_then(jstr);
-                let b = at.map(|a| (a, a));
+                let b = match remap(anch, at.map(|a| (a, a))) {
+                    Some(b) => b,
+                    None => continue,
+                };
                 rules[6].feat.push(i as i32);
                 rules[6].text.push(cid.unwrap_or_default());
                 let (s, e) = b.unwrap_or((0.0, 1.0));
@@ -1725,6 +1915,12 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
         if let Some(a) = p.json("access_restrictions").as_array() {
             for x in a {
                 if x.get("access_type").and_then(|v| v.as_str()) != Some("denied") {
+                    continue;
+                }
+                if let Some(h) = height_limit(x) {
+                    if let Some(b) = remap(anch, between(x)) {
+                        rules[9].push_f(i, Some(h), b);
+                    }
                     continue;
                 }
                 let w = x.get("when");
@@ -1741,7 +1937,9 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
                         continue;
                     }
                 }
-                rules[7].push_f(i, Some(if heading == "backward" { 1.0 } else { -1.0 }), between(x));
+                if let Some(b) = remap(anch, between(x)) {
+                    rules[7].push_f(i, Some(if heading == "backward" { 1.0 } else { -1.0 }), b);
+                }
             }
         }
         // the OpenStreetMap ways of the segment (overture.way_sources) and the one covering most of it
@@ -1751,7 +1949,9 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
                 let rec = s.get("record_id").and_then(jstr).unwrap_or_default();
                 let prop = s.get("property").and_then(|v| v.as_str()).unwrap_or("");
                 if rec.starts_with('w') && prop.is_empty() {
-                    ways.push((rec, between(s)));
+                    if let Some(b) = remap(anch, between(s)) {
+                        ways.push((rec, b));
+                    }
                 }
             }
         }
@@ -1778,7 +1978,7 @@ fn columns(py: Python<'_>, d: &Bound<'_, PyDict>, tiles: &[Tile], feats: &[Built
         let sel: Vec<usize> = (0..n).filter(|&i| keep[i]).collect();
         let sub: Vec<Built> = sel.iter().map(|&i| Built { id: feats[i].id.clone(), kind: feats[i].kind,
             parts: feats[i].parts.clone(), clipped: feats[i].clipped, tile: feats[i].tile, feat: feats[i].feat,
-            rep: feats[i].rep }).collect();
+            rep: feats[i].rep, anchors: feats[i].anchors.clone() }).collect();
         return columns(py, d, tiles, &sub, tz, spec);
     }
     let td = PyDict::new(py);

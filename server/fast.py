@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 260 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 268 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -31,6 +31,28 @@ def require(version, what):
         raise NativeMissing(f"{what} needs the server's native module (earthfast) version {version} or newer, "
                             f"{'none was loaded' if have is None else f'version {have} was'}: rebuild it with "
                             "python3 tools/build_native.py, or use a release build")
+
+
+class _Missing:
+    """In place of the module when it is missing or too old: every function raises NativeMissing when called (so that
+    importing a module that binds kernels at import time still works, e.g. in the launcher)."""
+
+    def __init__(self, version, what):
+        self.version, self.what = version, what
+
+    def __getattr__(self, name):
+        def missing(*_a, **_k):
+            require(self.version, f"{self.what} ({name})")
+        return missing
+
+
+def native(version, what):
+    """The native module when it is loaded at VERSION >= version, else a stand-in whose functions raise NativeMissing."""
+    try:
+        require(version, what)
+        return _ef
+    except NativeMissing:
+        return _Missing(version, what)
 
 
 def segments(lines_hw):

@@ -21,6 +21,7 @@ import struct
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+import dnp
 
 import geodesy
 
@@ -300,7 +301,7 @@ def drop_huge(f, max_m2):
         nxt[ends] = a                               # (the ring's last point to its first)
         ll = np.asarray(f.lonlat, np.float64)
         lat_mean = np.add.reduceat(ll[idx, 1], first) / ln
-        k = np.repeat(np.cos(np.radians(lat_mean)) * 111320.0, ln)
+        k = np.repeat(dnp.cos(np.radians(lat_mean)) * 111320.0, ln)
         x, y = ll[idx, 0] * k, ll[idx, 1] * 110540.0
         xn, yn = ll[nxt, 0] * k, ll[nxt, 1] * 110540.0
         area = 0.5 * np.abs(np.add.reduceat(x * yn - y * xn, first))
@@ -573,7 +574,7 @@ def simplify_ring(ring, tol):
     if k <= 4:
         return p
     keep = np.zeros(k, bool)
-    far = int(np.argmax(((p - p[0]) ** 2).sum(1)))      # (a closed ring's ends are one point: split it at the far one)
+    far = int(np.argmax((dnp.sq(p - p[0])).sum(1)))      # (a closed ring's ends are one point: split it at the far one)
     keep[[0, far, k - 1]] = True
     stack = [(0, far), (far, k - 1)]
     while stack:
@@ -581,8 +582,8 @@ def simplify_ring(ring, tol):
         if b - a < 2:
             continue
         seg, rel = p[b] - p[a], p[a + 1:b] - p[a]
-        L2 = float(seg @ seg)
-        d = rel - np.clip(rel @ seg / L2, 0.0, 1.0)[:, None] * seg if L2 > 0 else rel
+        L2 = float(dnp.matmul(seg, seg))
+        d = rel - np.clip(dnp.matmul(rel, seg) / L2, 0.0, 1.0)[:, None] * seg if L2 > 0 else rel
         d2 = (d * d).sum(1)
         i = int(np.argmax(d2))
         if d2[i] > tol * tol:

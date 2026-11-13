@@ -44,6 +44,8 @@ from collections import OrderedDict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import dmath
+import dnp
 
 import furniture
 import polygon
@@ -437,7 +439,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         pts = np.array([box[:2], box[2:]], np.float64)
     dlat = AGGLO_CELL_M / M_PER_DEG
     # (the commune's own longitude step, its latitude rounded: the same grid whichever cell or frame asks)
-    dlon = AGGLO_CELL_M / (M_PER_DEG * max(math.cos(math.radians(round(lat_c, 1))), 0.01))
+    dlon = AGGLO_CELL_M / (M_PER_DEG * max(dmath.cos(math.radians(round(lat_c, 1))), 0.01))
     mlat, mlon = AGGLO_MARGIN_M / AGGLO_CELL_M * dlat, AGGLO_MARGIN_M / AGGLO_CELL_M * dlon
     i0 = math.floor((float(pts[:, 1].min()) - mlat) / dlat)
     i1 = math.ceil((float(pts[:, 1].max()) + mlat) / dlat)
@@ -460,7 +462,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         if opened.any():                # (all of it that thin: a village of a few houses along a lane, kept whole)
             area = opened
     lab, sizes = _pieces(area)
-    keep = sizes >= MIN_AGGLO_M2 / AGGLO_CELL_M ** 2
+    keep = sizes >= MIN_AGGLO_M2 / (AGGLO_CELL_M * AGGLO_CELL_M)
     keep[0] = False
     if not keep.any():
         keep[int(np.argmax(sizes[1:])) + 1] = True  # (no piece that large: the largest, the village's bourg)
@@ -714,8 +716,8 @@ def nearest_site(sites, lat, lon):
     """Per point (lat, lon arrays): the index of the nearest of sites ((k, 2) lon/lat; distances on the plane of the
     sites' mean latitude). Pure."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    c = math.cos(math.radians(float(np.mean(sites[:, 1]))))
-    d = ((lon[..., None] - sites[:, 0]) * c) ** 2 + (lat[..., None] - sites[:, 1]) ** 2
+    c = dmath.cos(math.radians(float(np.mean(sites[:, 1]))))
+    d = dnp.sq((lon[..., None] - sites[:, 0]) * c) + dnp.sq(lat[..., None] - sites[:, 1])
     return np.argmin(d, axis=-1)
 
 
@@ -902,7 +904,7 @@ VILLAGE_COUNTRIES.update({**{cc: "region" for cc in ("IM", "JE", "GL", "BM", "KY
 def _km2(lonlat_parts):
     """The area of a polygon's outer rings, km2 (on the plane of their mean latitude). Pure."""
     lat = float(np.mean(np.concatenate([r[:, 1] for rings in lonlat_parts for r in rings[:1]])))
-    return _area(lonlat_parts) * (M_PER_DEG / 1000.0) ** 2 * math.cos(math.radians(lat))
+    return _area(lonlat_parts) * dnp.sq(M_PER_DEG / 1000.0) * dmath.cos(math.radians(lat))
 
 
 def kreisfreie(county, lonlat_parts=None):
@@ -926,7 +928,7 @@ def _area(lonlat_parts):
     s = 0.0
     for rings in lonlat_parts:
         r = rings[0]
-        s += abs(float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
+        s += abs(float(dnp.dot(r[:, 0], np.roll(r[:, 1], -1)) - dnp.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
     return s
 
 
@@ -1053,7 +1055,7 @@ def next_place(lat, lon, heading, points, name):
     counter-clockwise from east), among points [(name, lon, lat)], its own name (name) left out; None if none is
     within NEXT_CONE_DEG and NEXT_MIN_M .. NEXT_MAX_M. The nearest, an angle off the heading counting as distance (a
     village straight ahead before one as near to the side). Pure."""
-    c = math.cos(math.radians(lat))
+    c = dmath.cos(math.radians(lat))
     h = math.radians(heading)
     best = None
     for n, plon, plat in points:
@@ -1063,7 +1065,7 @@ def next_place(lat, lon, heading, points, name):
         d = math.hypot(dx, dy)
         if not NEXT_MIN_M <= d <= NEXT_MAX_M:
             continue
-        off = abs((math.degrees(math.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
+        off = abs((math.degrees(dmath.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
         if off > NEXT_CONE_DEG:
             continue
         score = (d * (1.0 + off / 45.0), n)
@@ -1098,7 +1100,7 @@ def commune_agglomeration(c, urban_fn):
     lon0, lat0 = pts.min(axis=0)
     lon1, lat1 = pts.max(axis=0)
     dlat = VILLAGE_PROBE_M / M_PER_DEG
-    dlon = dlat / max(math.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
+    dlon = dlat / max(dmath.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
     p = c.sites[c.site]
     # (the probes within VILLAGE_REACH_M of its point: a Swedish kommun's village alone in it, Kiruna's 20,000 km2;
     # on the commune's own lattice, the same probes as the whole box's there)
@@ -1119,7 +1121,7 @@ def commune_agglomeration(c, urban_fn):
     box = (max(box[0], p[0] - rlon), max(box[1], p[1] - rlat), min(box[2], p[0] + rlon), min(box[3], p[1] + rlat))
     # the fine grid over the probes' built-up land only, when the part is large (a Greek dimos' villages each on a
     # grid of their whole part kept the road tiles minutes, Trikala 2026-10-30); none of it there: no village
-    if (box[2] - box[0]) * (box[3] - box[1]) > (VILLAGE_FINE_M / M_PER_DEG) ** 2 / math.cos(math.radians(p[1])):
+    if (box[2] - box[0]) * (box[3] - box[1]) > dnp.sq(VILLAGE_FINE_M / M_PER_DEG) / dmath.cos(math.radians(p[1])):
         built = np.zeros(len(la), bool)
         built[mine] = np.asarray(urban_fn(la[mine], lo[mine]), bool)
         if not built.any():
@@ -1330,10 +1332,139 @@ def _sign(commune, line, s, travel, width, left_hand, main=False):
     q = p[0][:2] + side * (width / 2 + SIGN_OFF_M)
     yaw = furniture._yaw(side[0], side[1])
     at = [round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[0][2]), 2)]
-    tail = [commune.name, commune.local, commune.country, round(math.degrees(math.atan2(-f[1], -f[0])), 1),
+    tail = [commune.name, commune.local, commune.country, round(math.degrees(dmath.atan2(-f[1], -f[0])), 1),
             commune.sub, bool(main)]
     return [[G_ENTRY] + at + [round(yaw, 1), 1.0, SIGN_H, 0.0] + tail,
             [G_EXIT] + at + [round((yaw + 180.0) % 360.0, 1), 1.0, SIGN_H, 0.0] + tail]
+
+
+# A commune boundary that runs through a fork has a change on every road that leaves the node (Broumov / Hejtmanko-
+# vice, 2026-11-11: two roads, four posts within 10 m). The changes of one node that are the same step between the same two
+# communes (the node side's, the far side's) are one: _sign's pair (an entry face each way, its exit face on its back)
+# stands on the road that carries the node's own side, JUNCTION_STEM_M before the node, for all the branches.
+JUNCTION_MERGE_M = 30.0         # m: the farthest from its node a change is taken into the node's
+JUNCTION_STEM_M = 8.0           # m before the node the merged pair stands on the stem (a shorter stem: 1 m before its end)
+JUNCTION_NODE_M = 1.5           # m: two road ends this close are one node
+JUNCTION_STEM_MIN_M = 3.0       # m: the stem's least length
+JUNCTION_HOPS = 3               # segments a stem short of JUNCTION_STEM_M is lengthened by
+# A boundary between two towns grown together (a change from one commune to the next, no open land between) has its
+# signs on the through roads only: the boundary cuts every residential street of the built-up land (Broumov /
+# Hejtmankovice, 2026-11-11: three pairs a few metres apart on streets between the houses).
+INTERTOWN_CLASSES = {"primary", "secondary", "tertiary", "unclassified"}
+CLASS_ORDER = {"primary": 4, "secondary": 3, "tertiary": 2, "unclassified": 1, "residential": 0}
+
+
+def _length(line):
+    return float(furniture._arclen(line)[-1])
+
+
+def merge_junctions(lines, changes, communes, frame, judged=None):
+    """(lines, changes) with the changes of one fork made one. lines: [(spec, centreline)], changes [(line index, s, a,
+    b)] as _changes' (the traffic along the line leaves commune a and enters b). Changes within JUNCTION_MERGE_M of
+    the same node (road ends within JUNCTION_NODE_M) with the same commune on the node's side and the same on the far
+    side are one change on the node's stem: a road (or a few of them, joined in one line) at the node with no change
+    of its own and the node side's commune a few metres from the node, the sign JUNCTION_STEM_M before it. With no such
+    stem the road of the highest class (then the longest) keeps its change and the others lose theirs. Pure; lines
+    gets the stems' joined lines at its end. judged (a dict, optional): {a stem line's index: the class of the highest
+    road its merged changes were on}, by which town_signs judges the merged change between two towns grown together
+    (not by the stem's own class: a residential stem would drop a secondary branch's pair, a secondary stem keep
+    residential branches' ones)."""
+    if len(changes) < 2:
+        return lines, changes
+    lengths = {}
+
+    def length(i):
+        if i not in lengths:
+            lengths[i] = _length(lines[i][1])
+        return lengths[i]
+    clusters = []                   # [node xy, node side, far side, [change indices]]
+    for k, (li, s, a, b) in enumerate(changes):
+        line, total = lines[li][1], length(li)
+        at_start = s <= total - s
+        if (s if at_start else total - s) > JUNCTION_MERGE_M:
+            continue
+        node = np.asarray(line[0 if at_start else -1][:2], np.float64)
+        side, far = (a, b) if at_start else (b, a)
+        for c in clusters:
+            if c[1] == side and c[2] == far and dnp.hypot(*(c[0] - node)) <= JUNCTION_NODE_M:
+                c[3].append(k)
+                break
+        else:
+            clusters.append([node, side, far, [k]])
+    clusters = [c for c in clusters if len(c[3]) > 1]
+    if not clusters:
+        return lines, changes
+    changed = {li for li, *_ in changes}
+    lines = list(lines)
+    drop, extra = set(), []
+    for node, side, far, ks in clusters:
+        stem = _stem(lines, changed, node, length)
+        placed = None
+        if stem is not None:
+            poly, spec = stem
+            total = _length(poly)
+            at = total - min(JUNCTION_STEM_M, total - 1.0)
+            q, _ = furniture._at(poly, np.array([at]))
+            if int(state(q[:, :2], communes, frame)[0]) == side:
+                placed = (spec, poly, at)
+        if placed is not None:
+            drop.update(ks)
+            lines.append((placed[0], placed[1]))
+            extra.append((len(lines) - 1, placed[2], side, far))
+            if judged is not None:
+                judged[len(lines) - 1] = max((lines[changes[k][0]][0].cls for k in ks),
+                                             key=lambda c: CLASS_ORDER.get(c, -1))
+            continue
+        keep = max(ks, key=lambda k: (CLASS_ORDER.get(lines[changes[k][0]][0].cls, -1), length(changes[k][0])))
+        drop.update(k for k in ks if k != keep)
+    return lines, [c for k, c in enumerate(changes) if k not in drop] + extra
+
+
+def _stem(lines, changed, node, length):
+    """(centreline running toward node, spec) of the node's stem, or None: a two-way road ending at node with no change
+    on it (changed: the line indices that have one), lengthened up to JUNCTION_HOPS segments at its far end while it is
+    shorter than JUNCTION_STEM_M + 1 and exactly one other such road continues it. Of several the highest class, then
+    the longest."""
+    def ends(i):
+        line = lines[i][1]
+        return np.asarray(line[0][:2]), np.asarray(line[-1][:2])
+
+    def usable(i):
+        return i not in changed and not lines[i][0].oneway and length(i) >= 0.5
+
+    def touching(point, skip):
+        out = []
+        for i in range(len(lines)):
+            if i in skip or not usable(i):
+                continue
+            first, last = ends(i)
+            if dnp.hypot(*(first - point)) <= JUNCTION_NODE_M:
+                out.append((i, False))          # (runs away from the point)
+            elif dnp.hypot(*(last - point)) <= JUNCTION_NODE_M:
+                out.append((i, True))           # (runs toward it)
+        return out
+    best = None
+    for i, toward in touching(node, ()):
+        line = np.asarray(lines[i][1], np.float64)
+        line = line if toward else line[::-1]
+        used = {i}
+        for _ in range(JUNCTION_HOPS):
+            if _length(line) >= JUNCTION_STEM_M + 1.0:
+                break
+            more = touching(line[0][:2], used)
+            if len(more) != 1:
+                break
+            j, toward_j = more[0]
+            used.add(j)
+            piece = np.asarray(lines[j][1], np.float64)
+            line = np.vstack([piece if toward_j else piece[::-1], line[1:]])
+        total = _length(line)
+        if total < JUNCTION_STEM_MIN_M:
+            continue
+        rank = (CLASS_ORDER.get(lines[i][0].cls, -1), total)
+        if best is None or rank > best[0]:
+            best = (rank, line, lines[i][0])
+    return None if best is None else (best[1], best[2])
 
 
 def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=None, urban=None):
@@ -1367,8 +1498,12 @@ def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=No
     signs = []
     if mapped:
         changes, signs = mapped_signs(lines, changes, communes, frame, mapped, urban, mlines)
+    judged = {}
+    lines, changes = merge_junctions(lines, changes, communes, frame, judged)
     for li, s, a, b in changes:
         spec, line = lines[li]
+        if a >= 0 and b >= 0 and judged.get(li, spec.cls) not in INTERTOWN_CLASSES:
+            continue
         ways = (1.0, -1.0)
         if spec.oneway:
             ways = (-1.0,) if (spec.dir or 1) < 0 else (1.0,)
@@ -1527,7 +1662,7 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
                 travel = 1.0 if plus else -1.0
             else:               # (its town on both sides or neither: toward its town's point)
                 site = _site_xy(communes[c], frame)
-                travel = 1.0 if np.hypot(*(probe[1, :2] - site)) < np.hypot(*(probe[0, :2] - site)) else -1.0
+                travel = 1.0 if dnp.hypot(*(probe[1, :2] - site)) < dnp.hypot(*(probe[0, :2] - site)) else -1.0
             signs.append((li, float(s), communes[c], travel))
         if not towns and parts and first < 0:       # (a village the places do not have)
             at, _ = furniture._at(line, np.array([s]))
@@ -1537,10 +1672,10 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
             low = parts[0].lower()
             own_xy = np.array([(x, y) for x, y, n in mapped
                                if (_name_parts(n) or [""])[0].lower() == low
-                               and np.hypot(x - at[0, 0], y - at[0, 1]) <= MAPPED_VILLAGE_M]).reshape(-1, 2)
+                               and dnp.hypot(x - at[0, 0], y - at[0, 1]) <= MAPPED_VILLAGE_M]).reshape(-1, 2)
             mid = own_xy.mean(axis=0) if len(own_xy) >= 2 else None
-            if mid is not None and np.hypot(*(mid - at[0, :2])) > MAPPED_PROBE_M:
-                side = 1 if np.hypot(*(probe[1, :2] - mid)) < np.hypot(*(probe[0, :2] - mid)) else -1
+            if mid is not None and dnp.hypot(*(mid - at[0, :2])) > MAPPED_PROBE_M:
+                side = 1 if dnp.hypot(*(probe[1, :2] - mid)) < dnp.hypot(*(probe[0, :2] - mid)) else -1
             else:
                 side = _built_side(line, float(s), frame, urban)
             if side:
@@ -1820,7 +1955,7 @@ def _draw_marks(d, x, y, letters, marks, font, size, fill, paper):
                 d.line([(cx - .14 * s, top - .07 * s), (cx, top - .25 * s), (cx + .14 * s, top - .07 * s)], fill=fill,
                        width=lw, joint="curve")
             elif m == "tilde":
-                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * math.sin(t / 8 * 2 * math.pi))
+                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * dmath.sin(t / 8 * 2 * math.pi))
                        for t in range(9)]
                 d.line(pts, fill=fill, width=lw, joint="curve")
             elif m == "diaeresis":
@@ -2816,7 +2951,7 @@ def clear_around(props, signs):
     at = np.array([(s[1], s[2]) for s in signs], np.float64)
     out = []
     for r in props:
-        if r[0] in CLEAR_GROUPS and np.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
+        if r[0] in CLEAR_GROUPS and dnp.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
             continue
         out.append(r)
     return out
@@ -2951,7 +3086,7 @@ class Towns:
         pts = np.concatenate([r for rings in c.lonlat for r in rings[:1]])
         mid = c.sites[c.site] if c.sites is not None else (pts.min(axis=0) + pts.max(axis=0)) / 2
         rlat = min(LANDCOVER_REACH_M, AGGLO_MARGIN_M + VILLAGE_REACH_M) / M_PER_DEG
-        rlon = rlat / max(math.cos(math.radians(float(mid[1]))), 0.01)
+        rlon = rlat / max(dmath.cos(math.radians(float(mid[1]))), 0.01)
         m = AGGLO_MARGIN_M / M_PER_DEG
         lon0, lat0 = np.maximum(pts.min(axis=0) - m, (mid[0] - rlon, mid[1] - rlat))
         lon1, lat1 = np.minimum(pts.max(axis=0) + m, (mid[0] + rlon, mid[1] + rlat))
@@ -2980,7 +3115,7 @@ class Towns:
         (lon0, lat0), (lon1, lat1) = pts.min(axis=0), pts.max(axis=0)
         if near is not None:
             rlat = POINTS_REACH_M / M_PER_DEG
-            rlon = rlat / max(math.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
+            rlon = rlat / max(dmath.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
             lon0, lat0 = max(lon0, near[0] - rlon), max(lat0, near[1] - rlat)
             lon1, lat1 = min(lon1, near[2] + rlon), min(lat1, near[3] + rlat)
             if lon0 > lon1 or lat0 > lat1:
@@ -3084,11 +3219,11 @@ class Towns:
         NEXT_MAX_M from (lat, lon) along heading (next_place's points; the same cells for the same sign); [] when not
         all are cached yet (_points: the tile is built again)."""
         import mapcells
-        c = math.cos(math.radians(lat))
+        c = dmath.cos(math.radians(lat))
         h = math.radians(heading)
         s = np.arange(500.0, NEXT_MAX_M + 1.0, 1000.0)
-        la = lat + s * math.sin(h) / M_PER_DEG
-        lo = lon + s * math.cos(h) / (M_PER_DEG * c)
+        la = lat + s * dmath.sin(h) / M_PER_DEG
+        lo = lon + s * dmath.cos(h) / (M_PER_DEG * c)
         pad = 1500.0 / M_PER_DEG
         seen, out = set(), []
         for feats in self._points(mapcells.cells_near_points(la, lo, pad, pad / c)) or ():

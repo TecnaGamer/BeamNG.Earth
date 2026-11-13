@@ -10,6 +10,7 @@ import numpy as np
 
 import carriageways
 import fast
+import dnp
 
 log = logging.getLogger("earthd.roads")
 GRADE = .08                # maximum modeled grade; an engineering bound, not a survey
@@ -42,7 +43,7 @@ def _profiles(owner, comp, pool):
         pieces, offset = [], 0.
         for index, reverse in seq:
             key, xy = parts[index]
-            ss = np.r_[0., np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            ss = np.r_[0., np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             if len(xy) < 2 or ss[-1] <= 0:
                 return None
             locations[key] = (len(chains), offset + (ss[-1] - ss if reverse else ss))
@@ -50,7 +51,7 @@ def _profiles(owner, comp, pool):
             pieces.append(q if not pieces else q[1:])
             offset += ss[-1]
         xy = np.concatenate(pieces)
-        arc = np.r_[0., np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
         if arc[-1] <= 0 or node(xy[0]) == node(xy[-1]):
             log.warning("subsea chain has no identifiable portals")
             return None

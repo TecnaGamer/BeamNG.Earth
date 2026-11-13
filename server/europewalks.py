@@ -6,6 +6,7 @@ import os
 from typing import NamedTuple
 
 import numpy as np
+import dmath
 
 VERSION = "european-street-edges-v3"
 STREETS = {"primary", "secondary", "tertiary", "unclassified", "residential", "living_street"}
@@ -71,13 +72,13 @@ def _places(x, y):
     import townsigns
 
     lon, lat = x / 20., y / 20.
-    pad_lon = .075 / max(.17, math.cos(math.radians(lat)))
+    pad_lon = .075 / max(.17, dmath.cos(math.radians(lat)))
     return tuple(townsigns.bundled_europe().nearby(
         (lon - pad_lon, lat - .075, lon + .05 + pad_lon, lat + .125), places=True))
 
 
 def _locality(country, lon, lat):
-    scale = 111_195. * math.cos(math.radians(lat))
+    scale = 111_195. * dmath.cos(math.radians(lat))
     candidates = []
     for place in _places(math.floor(lon * 20), math.floor(lat * 20)):
         kind = place.get("place")

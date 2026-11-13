@@ -514,6 +514,27 @@ do
   trees.suppress, trees.ROWS_PER_FRAME = nil, cap
   trees.clear()
 end
+-- a road geotile's static signal (its own frame) hidden by a switchable head where its placement puts it in the
+-- anchor's world (both stood side by side: the user's report 21, Fells Point 2026-11-12)
+do
+  local gd, gt = require('beamngEarth/geodesy'), require('beamngEarth/geotile')
+  local LAT, LON = 39.2834, -76.5934
+  local x, y = gt.tileOf(LAT, LON)
+  local tf = gt.frameOf({ key = gt.key(x, y) })
+  local a = gd.newAnchor(LAT, LON + 300 / (111320 * math.cos(math.rad(LAT))))
+  trees.onGeoRows('psig', gt.key(x, y), { { 0, 10, 10, 2, 0, 1, 9, 0.0 } }, { 'signal' }, nil, tf, 0, a)
+  local pl = gt.placement(tf, a, 0, 0, 0)
+  local hx, hy = gt.apply(pl, 10, 10, 2)
+  T.check(math.abs(hx - 10) > 100, 'the anchor 300 m away: placed far from its frame coordinates')
+  trees.update(15, { x = hx, y = hy })
+  T.check(count() == 1, 'the static signal made')
+  trees.suppress = function(g, sx, sy) return g == 'signal' and math.abs(sx - hx) < 4 and math.abs(sy - hy) < 4 end
+  trees.refresh('signal')
+  for _ = 1, 3 do trees.update(15, { x = hx, y = hy }) end
+  T.check(count() == 0, 'hidden where the head stands in the world')
+  trees.suppress = nil
+  trees.clear()
+end
 -- a group turned off (settings: Rocks, GitHub #5): its items go, back when on again
 do
   files['/t/rocks'] = '{ groups = { "rock", "deciduous" }, items = { {0, 10, 10, 0, 0, 1, 2, 0.0}, {1, 20, 10, 0, 0, 1, 12, 0.0} } }'
@@ -538,6 +559,18 @@ do -- GitHub #415: the static boom's copy has its lamps' material renamed (unlit
   local m = trees.staticSignalMaterial()[trees.STATIC_SIGNAL_MAT]
   T.check(m and m.mapTo == trees.STATIC_SIGNAL_MAT and not m.Stages[1].instanceEmissive and not m.Stages[1].emissive,
     'its material does not glow')
+end
+do -- Left-kerb static signals use the unlit reflected asset, at the stock model's scale.
+  local savedWrite = writeFile
+  writeFile = function(p, text) files[p] = text end
+  files['/t/signal_left'] = '{ groups = { "signal_left" }, items = { {0, 10, 10, 0, 0, 1, 9.4, 0} } }'
+  trees.onTile({ anchorId = 14, key = '0_0', path = '/t/signal_left', n = 1 }, 14)
+  trees.update(14, { x = 10, y = 10 })
+  local it = next(items)
+  T.check(count() == 1 and it.d.fields.shapeFile == trees.STATIC_SIGNAL_LEFT .. '.dae', 'unlit reflected forest signal')
+  T.check(it and math.abs(it.sc - 1) < 1e-9 and trees.ONE_SPELLING.signal_left, 'stock scale, one cached shape spelling')
+  trees.clear()
+  writeFile = savedWrite
 end
 do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1, never thinned like trees
   for _, g in ipairs({ 'jersey', 'jersey_end', 'cable' }) do

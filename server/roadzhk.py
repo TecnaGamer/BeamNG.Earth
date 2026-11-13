@@ -10,10 +10,13 @@ from typing import NamedTuple
 import numpy as np
 
 import fast
+import dnp
 
 STEP_M = 4.0                # m between a line's stations, deck_lidar's too (roadz.LIDAR_STEP_M)
 PIX_M = 0.5                 # m, the DSM's pixel
 DECK_HALF_M = 4.0           # m either side of a deck's line its DSM pixels count
+CORRIDOR_NATIVE = 261       # earthfast.VERSION of pixel_corridor (the PIX_M pixel centres within DECK_HALF_M of a
+                            # line, each once)
 # earthfast.deck_lidar's settings over those pixels (taken as class 2): roadz's call has the same points, gap and
 # smoothing, and a grade of 0.10 (LIDAR_MAX_GRADE). Over the median of 15 reads across a deck, at Tai Wai and Lai Chi
 # Kok: bridge parts with measured heights 39 -> 63 % and 64 -> 74 % of their length, 2026-11-11
@@ -75,7 +78,7 @@ def stations(lines, inside):
     out = []
     for i, ln in enumerate(lines):
         d = np.diff(ln.xy, axis=0)
-        seg = np.hypot(d[:, 0], d[:, 1])
+        seg = dnp.hypot(d[:, 0], d[:, 1])
         n = np.maximum(1, np.ceil(seg / STEP_M - 1e-9).astype(np.int64))
         j = np.repeat(np.arange(len(seg)), n)
         t = (np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)) / np.repeat(n, n)
@@ -113,31 +116,17 @@ def _near(p, a, b, reach):
         A, B, P = a[js], b[js], p[idx]
         ab = B - A
         t = np.clip(((P[:, None] - A[None]) * ab[None]).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12)[None], 0.0, 1.0)
-        dist = np.hypot(*(P[:, None] - (A[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+        dist = dnp.hypot(*(P[:, None] - (A[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
         out[idx] = (dist <= reach).any(1)
     return out
 
 
-def _corridor(xy, h):
-    """(m, 2) the pixel centres (PIX_M grid) within h of the polyline xy (k, 2), each once."""
-    d = np.diff(xy, axis=0)
-    seg = np.hypot(d[:, 0], d[:, 1])
-    arc = np.r_[0.0, np.cumsum(seg)]
-    t = np.arange(0.0, arc[-1] + 1e-9, PIX_M / 2)
-    j = np.clip(np.searchsorted(arc, t, side="right") - 1, 0, len(seg) - 1)
-    u = d[j] / np.maximum(seg[j], 1e-9)[:, None]
-    c = xy[j] + u * (t - arc[j])[:, None]
-    o = np.arange(-h, h + 1e-9, PIX_M / 2)
-    px = (c[:, None, 0] - u[:, None, 1] * o[None]).ravel()
-    py = (c[:, None, 1] + u[:, None, 0] * o[None]).ravel()
-    cell = np.unique(np.floor(np.c_[px, py] / PIX_M).astype(np.int64), axis=0)
-    return (cell + 0.5) * PIX_M
-
-
 def _deck_heights(xy_runs, dsm):
     """[(n,) height] per run of xy_runs ((n, 2) each): fast._ef.deck_lidar of the run's line on the DSM pixels in its
-    corridor, one batched dsm() read for all runs; NaN where it found no surface."""
-    cors = [_corridor(x, DECK_HALF_M) for x in xy_runs]
+    corridor (earthfast.pixel_corridor), one batched dsm() read for all runs; NaN where it found no surface."""
+    fast.require(CORRIDOR_NATIVE, "Hong Kong deck pixels")
+    cors = [np.asarray(fast._ef.pixel_corridor(np.ascontiguousarray(x, np.float64), DECK_HALF_M, PIX_M))
+            for x in xy_runs]
     allp = np.vstack(cors)
     zz = np.asarray(dsm(np.ascontiguousarray(allp[:, 0]), np.ascontiguousarray(allp[:, 1])), np.float64)
     out = []
@@ -150,7 +139,7 @@ def _deck_heights(xy_runs, dsm):
                                               STEP_M, DECK_MAX_GRADE, DECK_MIN_PTS, DECK_GAP_M, DECK_SIGMA_M)
             f = np.isfinite(zl)
             if f.any():
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(x, axis=0).T))]
+                arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(x, axis=0).T))]
                 res = np.interp(arc, s[f], zl[f])
                 sf = s[f]
                 i = np.clip(np.searchsorted(sf, arc), 1, max(len(sf) - 1, 1))

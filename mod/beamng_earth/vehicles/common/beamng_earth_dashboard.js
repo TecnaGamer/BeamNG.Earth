@@ -3,7 +3,21 @@
 
   const canvas = document.getElementById('map');
   const ctx = canvas.getContext('2d', { alpha: false });
-  const view = { pixelX: null, pixelY: null, zoom: null, heading: 0, attribution: '', status: '' };
+  const view = { pixelX: null, pixelY: null, zoom: null, heading: 0, attribution: '', status: '',
+    x: null, y: null, north: 0, mpp: null, anchor: null };
+  // The roads (the server's road graph, dashboard.lua's roadsText): drawn over the photo as lines, like the stock car
+  // navigators draw a level's roads (the user, 2026-11-12: "Nav screeb blurry mess": the photo alone at 1 m a pixel
+  // is a blur of 10 m Sentinel-2 imagery in most of the world, no road to follow on it). n: x, y pairs in metres from
+  // (ox, oy) in the world frame of anchor; e: (node a, node b, class, half width in dm) quads.
+  let roads = null;
+  // stock-like look (vehicles' navi pages: grey roads with a darker edge on a grey map, navigator-class.js roadColors):
+  // class 0 track, 1 service / living street, 2 town street, 3 main road
+  const ROAD_FILL = ['#967864', '#a6a678', '#d8d8d8', '#f4f4f4'];
+  const ROAD_MIN_PX = [1.2, 1.6, 2.2, 3.0];
+  const ROAD_MAX_PX = 16;
+  const CASING = 'rgba(24, 24, 24, 0.85)';
+  const PHOTO_DIM = 0.5;          // the photo under the roads darkened this much (the roads read on any ground)
+  const CAR_Y = 0.62;             // the car this far down the map (more road ahead; the stock pages' offsetY)
   // The tiles of the last few zoom levels (zoom -> tiles), each drawn scaled to the zoom shown: a speed change's new
   // level appears over the old one as its tiles load, and the zoom shown eases to the new level (ZOOM_TAU_S) instead
   // of jumping. Before (2026-11-08) only the newest level's tiles were kept, drawn at their own scale: the screen went
@@ -72,10 +86,16 @@
       view.pixelY = data.pixelY;
       view.zoom = data.zoom;
       view.heading = Number.isFinite(data.heading) ? data.heading : 0;
+      view.x = Number.isFinite(data.x) ? data.x : null;
+      view.y = Number.isFinite(data.y) ? data.y : null;
+      view.north = Number.isFinite(data.north) ? data.north : 0;
+      view.mpp = Number.isFinite(data.mpp) && data.mpp > 0 ? data.mpp : null;
+      view.anchor = data.anchor === undefined ? null : data.anchor;
     } else {
       view.pixelX = null;
       view.pixelY = null;
       view.zoom = null;
+      view.x = view.y = view.mpp = null;
     }
     view.attribution = typeof data.attribution === 'string' ? data.attribution : '';
     view.status = typeof data.status === 'string' ? data.status : '';
@@ -132,21 +152,100 @@
     return drawn;
   }
 
+  function setRoads(data) {
+    if (!data || typeof data !== 'object' || !Array.isArray(data.n) || !Array.isArray(data.e)) {
+      roads = null;
+    } else {
+      roads = { key: data.key, anchor: data.anchor, ox: +data.ox || 0, oy: +data.oy || 0,
+        n: Float64Array.from(data.n), e: Int32Array.from(data.e) };
+    }
+    render();
+  }
+
+  // The roads round the car, in the photo's pixels at the zoom shown: world metres from the car turned to true
+  // east / north (view.north: true north's angle in the world frame at the car), then over the metres a pixel.
+  function drawRoads(centerX, centerY, mapHeight, width) {
+    if (!roads || view.x === null || view.mpp === null || shownZoom === null || roads.anchor !== view.anchor) return 0;
+    const k = Math.pow(2, shownZoom - view.zoom) / view.mpp;       // pixels a metre
+    const c = Math.cos(view.north), s = Math.sin(view.north);
+    const n = roads.n, e = roads.e;
+    const count = n.length >> 1;
+    const px = new Float32Array(count), py = new Float32Array(count);
+    const dx0 = roads.ox - view.x, dy0 = roads.oy - view.y;
+    for (let i = 0; i < count; i++) {
+      const dx = dx0 + n[2 * i], dy = dy0 + n[2 * i + 1];
+      px[i] = (dx * c - dy * s) * k;
+      py[i] = -(dx * s + dy * c) * k;
+    }
+    const R = Math.hypot(Math.max(centerX, width - centerX), Math.max(centerY, mapHeight - centerY)) + ROAD_MAX_PX;
+    // the edges by class and width (one path each: a few strokes a frame, not one a road)
+    const groups = new Map();
+    for (let j = 0; j + 3 < e.length; j += 4) {
+      const a = e[j], b = e[j + 1];
+      const ax = px[a], ay = py[a], bx = px[b], by = py[b];
+      if ((ax < -R && bx < -R) || (ax > R && bx > R) || (ay < -R && by < -R) || (ay > R && by > R)) continue;
+      const cls = Math.max(0, Math.min(3, e[j + 2]));
+      const w = Math.round(2 * Math.min(ROAD_MAX_PX, Math.max(ROAD_MIN_PX[cls], 0.2 * e[j + 3] * k))) / 2;
+      const key = cls * 1000 + w * 10;
+      let g = groups.get(key);
+      if (!g) { g = { cls: cls, w: w, list: [] }; groups.set(key, g); }
+      g.list.push(ax, ay, bx, by);
+    }
+    if (!groups.size) return 0;
+    const order = Array.from(groups.values()).sort((A, B) => A.cls - B.cls || A.w - B.w);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, width, mapHeight);
+    ctx.clip();
+    ctx.translate(centerX, centerY);
+    ctx.rotate(-view.heading * Math.PI / 180);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const stroke = (g, colour, extra) => {
+      ctx.beginPath();
+      const L = g.list;
+      for (let i = 0; i < L.length; i += 4) { ctx.moveTo(L[i], L[i + 1]); ctx.lineTo(L[i + 2], L[i + 3]); }
+      ctx.lineWidth = g.w + extra;
+      ctx.strokeStyle = colour;
+      ctx.stroke();
+    };
+    for (const g of order) stroke(g, CASING, 2);          // every edge first: junctions meet without dark seams
+    for (const g of order) stroke(g, ROAD_FILL[g.cls], 0);
+    ctx.restore();
+    return order.length;
+  }
+
   function drawPlayer(centerX, centerY) {
     ctx.save();
     ctx.translate(centerX, centerY);
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(4.5, 4.5);
-    ctx.lineTo(0, 2.5);
-    ctx.lineTo(-4.5, 4.5);
-    ctx.closePath();
-    ctx.fill();
+    // (the stock navi pages' marker: a blue arrow with a dark shadow, ~30 px on a 512 x 256 screen)
+    const arrow = (dy, colour) => {
+      ctx.beginPath();
+      ctx.moveTo(0, -11 + dy);
+      ctx.lineTo(8, 9 + dy);
+      ctx.lineTo(0, 5 + dy);
+      ctx.lineTo(-8, 9 + dy);
+      ctx.closePath();
+      ctx.fillStyle = colour;
+      ctx.fill();
+    };
+    arrow(2, '#282828');
+    arrow(0, '#3570c4');
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.stroke();
     ctx.restore();
+  }
+
+  // text cut to maxWidth with an ellipsis
+  function fit(text, maxWidth) {
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    let lo = 0, hi = text.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(text.slice(0, mid) + '…').width <= maxWidth) lo = mid; else hi = mid - 1;
+    }
+    return text.slice(0, lo).trimEnd() + '…';
   }
 
   function render(t) {
@@ -158,26 +257,26 @@
       window.requestAnimationFrame(frame);
     }
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    ctx.fillStyle = '#111';
+    ctx.fillStyle = '#3a3a3a';
     ctx.fillRect(0, 0, width, height);
 
-    ctx.font = '6px sans-serif';
+    // sizes for the vehicles' screen textures (512 x 256 on most cars: the old 4 px font was a grey smear, 2026-11-12)
+    const fontPx = Math.max(8, Math.round(height / 26));
+    ctx.font = fontPx + 'px sans-serif';
     const centerX = width / 2;
     let status = view.status || (view.pixelX === null ? 'Waiting for satellite map' : '');
-    let statusHeight = status ? 10 : 0;
-    let mapHeight = Math.max(1, height - statusHeight);
-    let centerY = mapHeight / 2;
-    let drawn = drawTiles(centerX, centerY, mapHeight);
-    if (drawn && /loading/i.test(status)) {
-      // (a zoom step's new tiles still loading while the last level's show: no status bar flashing over them)
-      status = '';
-      statusHeight = 0;
-      mapHeight = height;
-      centerY = mapHeight / 2;
-      ctx.fillStyle = '#111';
-      ctx.fillRect(0, 0, width, height);
-      drawn = drawTiles(centerX, centerY, mapHeight);
+    const haveRoads = !!(roads && roads.anchor === view.anchor && view.x !== null);
+    // (a zoom step's new tiles still loading while the last level's or the roads show: no status bar flashing over them)
+    if (/loading/i.test(status) && (haveRoads || layers.size > 1)) status = '';
+    const statusHeight = status ? fontPx + 4 : 0;
+    const mapHeight = height;
+    const centerY = Math.round(mapHeight * CAR_Y);
+    const drawn = drawTiles(centerX, centerY, mapHeight);
+    if (drawn && haveRoads) {
+      ctx.fillStyle = 'rgba(0, 0, 0, ' + PHOTO_DIM + ')';
+      ctx.fillRect(0, 0, width, mapHeight);
     }
+    const roadGroups = drawRoads(centerX, centerY, mapHeight, width);
     if (view.pixelX !== null) drawPlayer(centerX, centerY);
 
     if (status) {
@@ -186,30 +285,32 @@
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(status, centerX, statusHeight / 2, width - 6);
-    } else if (!drawn) {
+      ctx.fillText(fit(status, width - 8), centerX, statusHeight / 2);
+    } else if (!drawn && !roadGroups) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-      ctx.fillRect(2, mapHeight - 11, width - 4, 9);
+      ctx.fillRect(0, 0, width, fontPx + 4);
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('Satellite tiles loading', centerX, mapHeight - 6.5, width - 8);
+      ctx.fillText('Satellite tiles loading', centerX, (fontPx + 4) / 2);
     }
 
-    if (view.attribution) {
-      const fontSize = 4;
-      const lineHeight = 5;
-      const pad = 2;
-      ctx.font = fontSize + 'px sans-serif';
-      const lines = wrapText(view.attribution, Math.max(1, width - 2 * pad));
-      const footerHeight = Math.min(height, lines.length * lineHeight + pad * 2);
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.76)';
+    // the imagery credit: one or two readable lines at the bottom (the licences ask for it on screen)
+    if (view.attribution && drawn) {
+      const small = Math.max(7, fontPx - 2);
+      const lineHeight = small + 2;
+      const pad = Math.max(6, Math.round(width * 0.05));     // (the screens' bezels hide ~4 % of a side: vivace)
+      ctx.font = small + 'px sans-serif';
+      let lines = wrapText(view.attribution, Math.max(1, width - 2 * pad));
+      if (lines.length > 2) lines = [lines[0], fit(lines.slice(1).join(' '), width - 2 * pad)];
+      const footerHeight = lines.length * lineHeight + 2;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
       ctx.fillRect(0, height - footerHeight, width, footerHeight);
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = '#e8e8e8';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       lines.forEach((line, index) => {
-        ctx.fillText(line, pad, height - footerHeight + pad + index * lineHeight);
+        ctx.fillText(line, pad, height - footerHeight + 1 + index * lineHeight);
       });
     }
   }
@@ -229,7 +330,7 @@
     updateData: function () {},
     setBootscreenImage: function () {}
   };
-  window.beamngEarthDashboard = { setTiles: setTiles, setView: setView, restore: restore };
+  window.beamngEarthDashboard = { setTiles: setTiles, setView: setView, setRoads: setRoads, restore: restore };
   window.addEventListener('resize', resize);
   resize();
   const params = new URLSearchParams(window.location.search);

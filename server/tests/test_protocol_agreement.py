@@ -146,6 +146,12 @@ MOD_TO_SERVER = {
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
+    # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
+    # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
+    # player's "Send to the developers" (only the folder's name: never a path)
+    "report_context": {"folder": F(str), "camera": F(dict, OPT), "aim": F(dict, OPT), "player": F(dict, OPT)},
+    "report_saved": {"folder": F(str)},
+    "report_send": {"folder": F(str)},
     # 2026-10-25: the settings page's cache folder / BeamMP launcher (apppaths.py): chosen in a window or typed
     "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
@@ -208,7 +214,8 @@ MOD_TO_SERVER = {
     "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
     # the modding API's places round a point (api.lua places / buildings; places.py)
     "places": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "categories": F(list, OPT),
-               "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT)},
+               "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT),
+               "cachedOnly": F(bool)},      # only the cells on disk, a wide radius then allowed (places.py)
     # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
     "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
     "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
@@ -287,7 +294,8 @@ SERVER_TO_MOD = {
     "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows
     # ... the modding API's places (places.py rows; buildings asked only, next while more pages follow)
     "places_result": {"id": F(int), "places": F(list), "complete": F(bool), "pending": F(bool),
-                      "buildings": F(list, OPT), "next": F(str, OPT), "error": F(str, OPT)},
+                      "buildings": F(list, OPT), "next": F(str, OPT), "truncated": F(bool, OPT),
+                      "error": F(str, OPT)},
     "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
               "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
@@ -434,6 +442,11 @@ SERVER_TO_MOD = {
                      # ... and the night side's city lights over the ground (none: none could be had)
                      "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
+    # the in-game reports (reportsend.py): a send's state (queued / sending / retry / sent / failed, the collector's
+    # report id once sent) and the server's part of a report written
+    "report_status": {"folder": F(str), "state": F(str), "id": F(str, OPT), "text": F(str, OPT), "tries": F(int, OPT),
+                      "next": F(NUM, OPT)},
+    "report_context_done": {"folder": F(str), "ok": F(bool)},
     # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
     "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
                "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
@@ -464,6 +477,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
+                       "report_status", "report_context_done",       # the reporter's Send window: a player's click (test_reportsend)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "navgraph",                                   # --traffic on: needs map data
@@ -537,7 +551,8 @@ def mod_sends():
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
                               "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
-                           (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
+                           (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
+                           (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
         for m in re.finditer(pattern, text):
             t = lua_tables(text, m.end() - 1)
@@ -551,7 +566,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua"):
+                 "addons.lua", "api.lua", "reportsend.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

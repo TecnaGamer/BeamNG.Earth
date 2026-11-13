@@ -330,6 +330,13 @@ local function noteUnit(kind, ms, shape)
   if not u then u = { n = 0, ms = 0, max = 0 }; unitStats[kind] = u end
   u.n, u.ms = u.n + 1, u.ms + ms
   if ms > u.max then u.max = ms end
+  -- the last big unit, for a hitch's context (core.perfContext: the perf log's "roads 168 ms" frame of a London drive
+  -- was one be:reloadCollision of 165 ms, the engine's own "collision reloaded" line said, 2026-11-12)
+  if ms >= M.BIG_UNIT_MS then
+    local b = M.lastBig or {}
+    b.kind, b.ms, b.at = kind, ms, os.clock()
+    M.lastBig = b
+  end
   -- (one slow unit in the game's log: players' logs named "roads 80-220 ms" hitches but not what, 2026-11-04)
   if ms >= M.SLOW_UNIT_MS then
     log('I', 'beamngEarth', string.format('roads: slow unit %s %.0f ms%s', tostring(kind), ms,
@@ -337,6 +344,7 @@ local function noteUnit(kind, ms, shape)
   end
 end
 M.SLOW_UNIT_MS = 60
+M.BIG_UNIT_MS = 20          -- (M.lastBig: { kind, ms, at = os.clock() } of the last unit this slow or slower)
 
 local function dropTile(key)
   local t = tiles[key]

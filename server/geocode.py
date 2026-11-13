@@ -18,6 +18,8 @@ import difflib
 import json
 import locale
 import math
+import dmath
+import dnp
 import re
 import threading
 import time
@@ -329,7 +331,7 @@ def match(q, name, detail=""):
     # part of the text: by the letters found, so "Ganterbrücke Simplon" prefers the bridge to the pass
     got = sum(len(w) for w in words if any(h.startswith(w) or (len(h) > 3 and w.startswith(h)) for h in hay))
     part = 0.75 * got / max(1, sum(len(w) for w in words))
-    return max(part, 0.85 * difflib.SequenceMatcher(None, cq, cn).ratio() ** 2)
+    return max(part, 0.85 * dnp.sq(difflib.SequenceMatcher(None, cq, cn).ratio()))
 
 
 def fits(q, r):
@@ -343,7 +345,7 @@ def street_like(q):
 
 
 def km(lat1, lon1, lat2, lon2):
-    x = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    x = (lon2 - lon1) * dmath.cos(math.radians((lat1 + lat2) / 2))
     return 111.2 * math.hypot(x, lat2 - lat1)
 
 
@@ -358,7 +360,7 @@ def score(q, r, lat=None, lon=None):
     s += 1.5 * max(0.0, float(r.get("importance") or 0.0) - 0.4)    # a landmark among like addresses (Washington, D.C.)
     if lat is not None and lon is not None:
         wide = r.get("kind") in WIKI_KINDS      # (of many streets of one name, the nearest)
-        s += (0.06 if wide else 0.15) * math.exp(-km(lat, lon, r["lat"], r["lon"]) / (300.0 if wide else 100.0))
+        s += (0.06 if wide else 0.15) * dmath.exp(-km(lat, lon, r["lat"], r["lon"]) / (300.0 if wide else 100.0))
     if any(c.isdigit() for c in q) and any(c.isdigit() for c in r["name"] + r.get("detail", "")):
         s += 0.1                # a house number was asked for and this has one
     return s
@@ -611,7 +613,7 @@ def nearest_street(roads_layers, lat, lon, max_m=STREET_M, routes=None):
     import math
 
     import numpy as np
-    mx = 111320.0 * math.cos(math.radians(lat))
+    mx = 111320.0 * dmath.cos(math.radians(lat))
     best, bd = "", max_m
     routes = routes or {}
     for f in roads_layers:
@@ -640,7 +642,7 @@ def nearest_street(roads_layers, lat, lon, max_m=STREET_M, routes=None):
             d = q - p
             L2 = np.maximum((d * d).sum(1), 1e-9)
             t = np.clip(-(p * d).sum(1) / L2, 0.0, 1.0)
-            dist = float(np.min(np.hypot(*(p + d * t[:, None]).T)))
+            dist = float(np.min(dnp.hypot(*(p + d * t[:, None]).T)))
             if dist < bd:
                 best, bd = label, dist
     return best

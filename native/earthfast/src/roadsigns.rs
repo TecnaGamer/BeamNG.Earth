@@ -27,6 +27,7 @@
 //!
 //! How (road_sign_mesh): the sign's outline (outline(), the atlas cell's: tools/build_sign_atlas.py) cut as geometry, a
 //! metal back, a round pole.
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -400,7 +401,7 @@ fn bends(net: &Net, e: usize, window: f64, min_turn: f64) -> Vec<Bend> {
     if steps < w + 2 { return Vec::new(); }
     let head: Vec<f64> = (0..steps).map(|k| {
         let d = travel(net, e, k as f64 * BEND_STEP_M, (k + 1) as f64 * BEND_STEP_M);
-        d[1].atan2(d[0])
+        d[1].datan2(d[0])
     }).collect();
     let tau = std::f64::consts::TAU;
     let dh: Vec<f64> = head.windows(2).map(|h| (h[1] - h[0] + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI).collect();
@@ -784,18 +785,18 @@ fn round_poly(verts: &[[f64; 2]], r: f64) -> Vec<[f64; 2]> {
         let (vx, vy) = (b[0] - a[0], b[1] - a[1]);
         let (lu, lv) = ((ux * ux + uy * uy).sqrt(), (vx * vx + vy * vy).sqrt());
         let (ux, uy, vx, vy) = (ux / lu, uy / lu, vx / lv, vy / lv);
-        let half = (ux * vx + uy * vy).clamp(-1.0, 1.0).acos() / 2.0;
-        let d = r / half.tan();
+        let half = (ux * vx + uy * vy).clamp(-1.0, 1.0).dacos() / 2.0;
+        let d = r / half.dtan();
         let (bx, by) = (ux + vx, uy + vy);
         let lb = (bx * bx + by * by).sqrt();
-        let c = [a[0] + bx / lb * r / half.sin(), a[1] + by / lb * r / half.sin()];
-        let a0 = (a[1] + uy * d - c[1]).atan2(a[0] + ux * d - c[0]);
-        let a1 = (a[1] + vy * d - c[1]).atan2(a[0] + vx * d - c[0]);
+        let c = [a[0] + bx / lb * r / half.dsin(), a[1] + by / lb * r / half.dsin()];
+        let a0 = (a[1] + uy * d - c[1]).datan2(a[0] + ux * d - c[0]);
+        let a1 = (a[1] + vy * d - c[1]).datan2(a[0] + vx * d - c[0]);
         let tau = std::f64::consts::TAU;
         let da = (a1 - a0 + std::f64::consts::PI).rem_euclid(tau) - std::f64::consts::PI;
         for k in 0..=STEPS {
             let t = a0 + da * k as f64 / STEPS as f64;
-            out.push([c[0] + r * t.cos(), c[1] + r * t.sin()]);
+            out.push([c[0] + r * t.dcos(), c[1] + r * t.dsin()]);
         }
     }
     out
@@ -809,14 +810,14 @@ pub fn outline(shape: i64) -> Vec<[f64; 2]> {
         2 => round_poly(&[[0.0, -TRI_TOP], [1.0, -TRI_BOTTOM], [-1.0, -TRI_BOTTOM]], CORNER),
         3 => round_poly(&[[0.0, 0.98], [-0.98, 0.0], [0.0, -0.98], [0.98, 0.0]], CORNER),
         4 => {
-            let t = 0.98 * (std::f64::consts::PI / 8.0).tan();
+            let t = 0.98 * (std::f64::consts::PI / 8.0).dtan();
             vec![[t, 0.98], [-t, 0.98], [-0.98, t], [-0.98, -t], [-t, -0.98], [t, -0.98], [0.98, -t], [0.98, t]]
         }
         5 => round_poly(&[[0.97, 0.97], [-0.97, 0.97], [-0.97, -0.97], [0.97, -0.97]], 0.10),
         6 => round_poly(&[[0.97, 0.25], [-0.97, 0.25], [-0.97, -0.25], [0.97, -0.25]], 0.04),     // a long board, four times as wide as high
         _ => (0..32).map(|k| {
             let a = k as f64 * std::f64::consts::TAU / 32.0;
-            [0.99 * a.cos(), 0.99 * a.sin()]
+            [0.99 * a.dcos(), 0.99 * a.dsin()]
         }).collect(),
     }
 }
@@ -1060,7 +1061,7 @@ mod tests {
         let n = ((a1 - a0).abs() / 5.0).ceil().max(2.0) as usize;
         (0..=n).map(|k| {
             let a = (a0 + (a1 - a0) * k as f64 / n as f64).to_radians();
-            [cx + r * a.cos(), cy + r * a.sin()]
+            [cx + r * a.dcos(), cy + r * a.dsin()]
         }).collect()
     }
 

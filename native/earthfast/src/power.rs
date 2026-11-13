@@ -2,6 +2,7 @@
 //! we've been placing them almost everywhere" / "start with 1"): OpenStreetMap's power=line ways (Overture class
 //! power_line) as lattice towers at their vertices (the mapped towers) with the conductors hung between them, ending
 //! at gantries inside the substations they reach; the substations' yards filled with switchgear and fenced.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -28,7 +29,7 @@ fn road_margin(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> f64 {
         let t = s.t(p);
         let x = (p[0] - s.a[0]) - t * s.d[0];
         let y = (p[1] - s.a[1]) - t * s.d[1];
-        best = best.min((x.hypot(y) - s.half) - clear);
+        best = best.min((x.dhypot(y) - s.half) - clear);
     }
     best
 }
@@ -45,7 +46,7 @@ fn road_candidate(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> [f64; 2] {
         let t = s.t(p);
         let foot = [s.a[0] + t * s.d[0], s.a[1] + t * s.d[1]];
         let away = [p[0] - foot[0], p[1] - foot[1]];
-        let distance = away[0].hypot(away[1]);
+        let distance = away[0].dhypot(away[1]);
         if distance < nearest {
             nearest = distance;
             near_foot = foot;
@@ -57,7 +58,7 @@ fn road_candidate(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> [f64; 2] {
                 let direction = if nearest > 1e-6 {
                     [(p[0] - near_foot[0]) / nearest, (p[1] - near_foot[1]) / nearest]
                 } else {
-                    let norm = near_direction[0].hypot(near_direction[1]).max(1e-9);
+                    let norm = near_direction[0].dhypot(near_direction[1]).max(1e-9);
                     [-near_direction[1] / norm, near_direction[0] / norm]
                 };
                 out = [near_foot[0] + direction[0] * (s.half + clear),
@@ -166,7 +167,7 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         for i in off[l] as usize..off[l + 1] as usize {
             let p = [pts[[i, 0]], pts[[i, 1]], pts[[i, 2]]];
             if let Some(q) = v.last() {
-                if (p[0] - q[0]).hypot(p[1] - q[1]) < min_span {
+                if (p[0] - q[0]).dhypot(p[1] - q[1]) < min_span {
                     continue;
                 }
             }
@@ -179,14 +180,14 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
         let n = v.len();
         let unit = |a: [f64; 3], b: [f64; 3]| {
             let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            let d = dx.hypot(dy).max(1e-9);
+            let d = dx.dhypot(dy).max(1e-9);
             (dx / d, dy / d)
         };
         let yaw: Vec<f64> = (0..n).map(|i| {
             let (mut dx, mut dy) = (0.0, 0.0);
             if i > 0 { let (a, b) = unit(v[i - 1], v[i]); dx += a; dy += b; }
             if i + 1 < n { let (a, b) = unit(v[i], v[i + 1]); dx += a; dy += b; }
-            dy.atan2(dx)
+            dy.datan2(dx)
         }).collect();
         for i in 0..n {
             if !st[i] && claim(&mut taken, v[i][0], v[i][1]) && inside(v[i][0], v[i][1]) {
@@ -198,15 +199,15 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
                 continue;
             }
             let (a, b) = (v[i], v[i + 1]);
-            let span = (b[0] - a[0]).hypot(b[1] - a[1]);
+            let span = (b[0] - a[0]).dhypot(b[1] - a[1]);
             if span > max_span {
                 continue;
             }
-            let head = (b[1] - a[1]).atan2(b[0] - a[0]);
+            let head = (b[1] - a[1]).datan2(b[0] - a[0]);
             // the span's line end (heading into the substation), a nearby earlier one if any
             let end = if st[i] { Some((a, head + std::f64::consts::PI)) } else if st[i + 1] { Some((b, head)) } else { None };
             let end = end.map(|(p, w)| {
-                match ends.iter().find(|e| (e[0] - p[0]).hypot(e[1] - p[1]) < end_merge_m) {
+                match ends.iter().find(|e| (e[0] - p[0]).dhypot(e[1] - p[1]) < end_merge_m) {
                     Some(e) => *e,
                     None => {
                         ends.push([p[0], p[1], p[2], w]);
@@ -219,13 +220,13 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
             }
             let k = ((span / seg_m).ceil() as usize).max(2);
             for r in 0..arms.nrows() {
-                let tower = |p: [f64; 3], w: f64| [p[0] - w.sin() * arms[[r, 0]], p[1] + w.cos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
+                let tower = |p: [f64; 3], w: f64| [p[0] - w.dsin() * arms[[r, 0]], p[1] + w.dcos() * arms[[r, 0]], p[2] + arms[[r, 1]]];
                 // at the end: its lateral axis, mirrored when it points against the span's (sides kept in the world)
                 let gantry = |e: [f64; 4]| {
                     let w = e[3];
-                    let sign = if (-w.sin()) * (-head.sin()) + w.cos() * head.cos() >= 0.0 { 1.0 } else { -1.0 };
+                    let sign = if (-w.dsin()) * (-head.dsin()) + w.dcos() * head.dcos() >= 0.0 { 1.0 } else { -1.0 };
                     let lat = arms[[r, 2]] * sign;
-                    [e[0] - w.sin() * lat - w.cos() * gantry_front, e[1] + w.cos() * lat - w.sin() * gantry_front,
+                    [e[0] - w.dsin() * lat - w.dcos() * gantry_front, e[1] + w.dcos() * lat - w.dsin() * gantry_front,
                      e[2] + arms[[r, 3]]]
                 };
                 let p0 = match (st[i], end) { (true, Some(e)) => gantry(e), _ => tower(a, yaw[i]) };
@@ -274,7 +275,7 @@ pub(crate) fn min_box(r: &[(f64, f64)]) -> Option<((f64, f64), (f64, f64), (f64,
     let mut best: Option<(f64, ((f64, f64), (f64, f64), (f64, f64), (f64, f64)))> = None;
     for i in 0..n {
         let (ex, ey) = (r[(i + 1) % n].0 - r[i].0, r[(i + 1) % n].1 - r[i].1);
-        let l = ex.hypot(ey);
+        let l = ex.dhypot(ey);
         if l < 1e-6 {
             continue;
         }
@@ -330,7 +331,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
         .collect();
     let (mut out, mut fence): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
     let mut place = |k: usize, cx: f64, cy: f64, kx: (f64, f64), out: &mut Vec<f64>| {
-        let yaw = kx.1.atan2(kx.0).to_degrees().rem_euclid(360.0);
+        let yaw = kx.1.datan2(kx.0).to_degrees().rem_euclid(360.0);
         for p in 0..parts.nrows() {
             if parts[[p, 0]] as usize != k {
                 continue;
@@ -348,7 +349,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
         let (w, h) = (kits[[anchor_kit, 0]], kits[[anchor_kit, 1]]);
         for e in 0..an.nrows() {
             let hd = an[[e, 2]];
-            let ky = (-hd.cos(), -hd.sin());
+            let ky = (-hd.dcos(), -hd.dsin());
             let kx = (ky.1, -ky.0);
             let (cx, cy) = (an[[e, 0]] - anchor_at[0] * kx.0 - anchor_at[1] * ky.0,
                             an[[e, 1]] - anchor_at[0] * kx.1 - anchor_at[1] * ky.1);
@@ -386,7 +387,7 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
                         let b = bc + (j as f64 - (nb - 1) as f64 / 2.0) * (sb + gap);
                         let (cx, cy) = world(a, b);
                         if clear(cx, cy, kx, w, h) {
-                            got.push(((a - ac).hypot(b - bc), cx, cy, kx));
+                            got.push(((a - ac).dhypot(b - bc), cx, cy, kx));
                         }
                     }
                 }
@@ -409,12 +410,12 @@ pub fn substation_yard<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ri
             let n = r.len();
             for i in 0..n {
                 let (p, q) = (r[i], r[(i + 1) % n]);
-                let l = (q.0 - p.0).hypot(q.1 - p.1);
+                let l = (q.0 - p.0).dhypot(q.1 - p.1);
                 if l < 1e-6 {
                     continue;
                 }
                 let (dx, dy) = ((q.0 - p.0) / l, (q.1 - p.1) / l);
-                let yaw = dy.atan2(dx).to_degrees().rem_euclid(360.0);
+                let yaw = dy.datan2(dx).to_degrees().rem_euclid(360.0);
                 let m = (l / fence_len).ceil() as usize;
                 for s in 1..=m {
                     let t = (s as f64 * fence_len).min(l.max(fence_len));

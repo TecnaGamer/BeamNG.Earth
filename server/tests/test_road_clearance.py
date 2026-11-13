@@ -134,6 +134,73 @@ class RoadClearanceTest(unittest.TestCase):
         self.assertAlmostEqual(float(half[0]), roads.road_specs(f)[0].width / 2, places=6)
 
 
+def tunnel(points, width=5.5):
+    """A residential street's 'tunnel' along points (tile-relative), as tunnel_lines gives it (a RoadLines)."""
+    t = bld.RoadLines([np.asarray(points, np.float64)])
+    t.half.append(width / 2)
+    return t
+
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 243, "earthfast 243")
+class TunnelPassageTest(unittest.TestCase):
+    """A building a mapped tunnel runs through: an open one (a building passage on the street's level, OSM
+    tunnel=building_passage: London's mews arches floated whole buildings 7.5 m over the street, 2026-11-12) leaves it
+    on the ground with an arch over the way; a covered one (into rising ground) still lifts its portal building."""
+
+    def build(self, elev, height=15.0, line=((30, 70), (30, 130))):
+        f = Feats(["b0"], [ll(20, 80, 20, 40)], **{"class": ["apartments"], "height": [height], "roof_shape": ["flat"]})
+        stats = {}
+        out = bld.tile_buildings(FRAME, 0, 0, 256, 256, [f], elev, tunnels_xy=tunnel(line),
+                                 carriageways=None, clear_stats=stats)
+        return out, stats
+
+    def test_an_open_tunnel_is_an_arch_through_a_building_on_the_ground(self):
+        out, stats = self.build(flat)
+        self.assertEqual(stats, {"osm_passage": 1})
+        over = [s for s, _a, _b in out if s.min_h > 0.5]
+        ground = [s for s, _a, _b in out if s.min_h <= 0.5]
+        self.assertEqual(len(over), 1)
+        self.assertAlmostEqual(over[0].min_h, bld.ROAD_CLEAR_PASSAGE_H)
+        self.assertAlmostEqual(over[0].min_h + over[0].height, 15.0, delta=0.01, msg="its top kept")
+        self.assertEqual(len(ground), 2, "its ground floor either side of the way")
+        xs = sorted(float(np.asarray(s.ring)[:, 0].mean()) for s in ground)
+        self.assertLess(xs[0], 30 - 2.75)
+        self.assertGreater(xs[1], 30 + 2.75)
+        self.assertFalse(any(s.portal for s in over))
+
+    def test_a_low_building_over_an_open_tunnel_keeps_its_pieces(self):
+        out, stats = self.build(flat, height=5.0)
+        self.assertEqual(stats, {"osm_pieces": 1})
+        self.assertTrue(all(s.min_h <= 0.5 for s, _a, _b in out))
+
+    def test_a_covered_tunnel_still_lifts_its_portal_building(self):
+        def hill(la, lo):           # a 20 m hill north of the building's middle: the tube goes through it
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                           np.zeros(np.shape(la)))
+            n = np.asarray(n)
+            return np.clip(np.minimum(n - 100.0, 230.0 - n) * 0.8, 0.0, 20.0)
+        out, stats = self.build(hill, line=[(30, 70), (30, 250)])
+        self.assertEqual(stats, {})
+        self.assertEqual(len(out), 1)
+        self.assertGreater(out[0][0].min_h, 5.0)
+        self.assertTrue(out[0][0].portal)
+
+
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 266, "earthfast 266")
+class TwinFootprintTest(unittest.TestCase):
+    def test_the_same_building_mapped_twice_is_drawn_once(self):
+        # two OSM multipolygons on the same outer ways (75-76 Berners Street, London): z-fighting facades
+        rings = [ll(20, 20, 40, 60), ll(20.1, 20.1, 40, 60), ll(100, 20, 10, 10)]
+        f = Feats(["a", "b", "c"], rings, **{"class": ["commercial", "retail", "house"],
+                                              "height": [25.8, np.nan, 6.0], "num_floors": [np.nan, 5.0, np.nan],
+                                              "height_src": ["Microsoft ML Buildings", "", ""]})
+        out = bld.tile_buildings(FRAME, 0, 0, 256, 256, [f], flat)
+        self.assertEqual(len(out), 2)
+        big = [s for s, _a, _b in out if abs(bld._area2(np.asarray(s.ring)[:, :2])) / 2 > 1000]
+        self.assertEqual(len(big), 1)
+        self.assertEqual(big[0].floors, 5, "the mapped floors kept over the machine-learned height")
+
+
 class _Walls:
     def __init__(self, segs):
         self.w = roadwidth.Walls(np.asarray(segs, np.float64))

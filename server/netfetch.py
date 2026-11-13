@@ -376,6 +376,12 @@ POLICIES.update(_regional_policies())
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
                                  offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
+# Our prebaked input tiles (bnwt.py, BNGE_BNWT_URL: off when unset): range reads of a few archives on a CDN, like the
+# project's tile host (which they will likely share); a host of its own gets the same policy
+_BNWT_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip()
+_BNWT_HOST = (urlsplit(_BNWT_URL).hostname or "") if _BNWT_URL.startswith(("http://", "https://")) else ""
+if _BNWT_HOST and _BNWT_HOST not in POLICIES:
+    POLICIES[_BNWT_HOST] = replace(POLICIES[_CDN_HOST])
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
@@ -399,6 +405,8 @@ ROLES = {
     _CDN_HOST: "satellite photos of the distant land, road tags and the weekly railway, lane and sign data (the "
                "project's own tile host); the other photo sources, Pages' copy of the data meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
+    **({_BNWT_HOST: "water, land use and infrastructure, prebaked (our own tiles); Overture's files meanwhile"}
+       if _BNWT_HOST and _BNWT_HOST != _CDN_HOST else {}),
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
     "tiles.maps.eox.at": "worldwide satellite photos; new ground outside the detailed-photo regions may stay plain",

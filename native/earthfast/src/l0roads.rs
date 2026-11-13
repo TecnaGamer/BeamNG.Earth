@@ -11,6 +11,7 @@
 //! Order-independent and local: a sample's value depends only on the roads within T_MAX of it and their heights within
 //! 3 sigma (plus a junction's taper) along them, so two overlapping blocks agree except within that reach of their
 //! edges.
+use crate::dm::Dm;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2};
 use pyo3::prelude::*;
@@ -94,7 +95,7 @@ fn profile(u: &numpy::ndarray::ArrayView2<f64>, pts: &[[f64; 2]], x0: f64, y0: f
             let v = med[q];
             if !v.is_finite() { continue; }
             let d = s[q] - s[k];
-            let w = (-d * d * inv).exp();
+            let w = (-d * d * inv).dexp();
             s0 += w;
             s1 += w * d;
             s2 += w * d * d;
@@ -387,7 +388,7 @@ pub fn l0_flatten(py: Python<'_>, mut u: PyReadwriteArray2<'_, f64>, x0: f64, y0
                                 1.0 - smoothstep(e)
                             };
                             if sw[idx] == 0.0 { touched.push(idx); }
-                            let w = (a * a / (1.0 + (d / blend_r).powf(blend_pow))).max(1e-12);
+                            let w = (a * a / (1.0 + (d / blend_r).dpowf(blend_pow))).max(1e-12);
                             sw[idx] += w;
                             swh[idx] += w * h;
                             if a as f32 > amax[idx] { amax[idx] = a as f32; }

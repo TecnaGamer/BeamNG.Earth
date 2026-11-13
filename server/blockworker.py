@@ -24,8 +24,11 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import secrossings
+import streetparking
 import dem as demmod
 import development as developmentmod
 import farfield
@@ -180,11 +183,15 @@ def load_airports(cache_dir, dem):
 
 
 def _rss_mb():
-    try:
-        with open("/proc/self/statm") as f:
-            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e6
-    except (OSError, ValueError):
-        return 0.0
+    """This process's memory in RAM, in MB (budget.resident_mb: Windows too, where this read 0)."""
+    import budget
+    return budget.resident_mb() or 0.0
+
+
+def _held_mb():
+    """... and what the memory ceiling counts (budget.memory_mb: resident + swapped; Windows: private bytes)."""
+    import budget
+    return budget.memory_mb() or 0.0
 
 
 def _trace_memory(every_s=60.0, top=10):
@@ -217,7 +224,9 @@ def _trace_memory(every_s=60.0, top=10):
             else:
                 top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
                              for st in snap.statistics("lineno")[:top]]
-            log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
+            # (held: what the memory ceiling counts, budget.memory_mb; the tracer's own tables are part of it)
+            log.info("memory pid %d: rss %.0f MB, held %.0f MB (%.0f the tracer's), traced %.0f MB; top: %s",
+                     os.getpid(), _rss_mb(), _held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6, total / 1e6,
                      "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
@@ -1099,7 +1108,7 @@ def _dem_warm(frame, box, zoom):
             return int(math.floor((x / 360.0 + 0.5) * n))
 
         def row(y):
-            return int(math.floor((0.5 - math.asinh(math.tan(math.radians(y))) / (2 * math.pi)) * n))
+            return int(math.floor((0.5 - dmath.asinh(dmath.tan(math.radians(y))) / (2 * math.pi)) * n))
         r0, r1 = max(0, row(float(la.max()))), min(n - 1, row(float(la.min())))
         keys = [(int(zoom), c % n, r) for r in range(r0, r1 + 1) for c in range(col(float(lo.min())), col(float(lo.max())) + 1)]
     except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
@@ -1263,7 +1272,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
              if towns_on and props is not None and out_dir is not None else None)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
-                                 walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
+                                 # (the stations' made-up driveways: no sidewalk across them; nor along a square's
+                                 # street-side parking rows, streetparking.plaza_bay_cuts)
+                                 walk_cuts=fuel_cuts + (streetparking.plaza_bay_cuts(frame, tx, ty, _s.md)
+                                                        if walks is not None and _s.md is not None else []),
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
                                  structures=buildingsmod.centres(items, tx, ty) if items else (),
@@ -1979,8 +1991,8 @@ def _map_walks(src, dst, walks):
             c = dict(wk["corner"])
             c["arc"] = mp(c["arc"])
             c["outer"] = [tuple(v) for v in mp(np.asarray(c["outer"], np.float64).reshape(-1, 3))]
-            inw = np.asarray(c["inward"], np.float64).reshape(-1, 2) @ r2.T
-            c["inward"] = inw / np.maximum(np.hypot(*inw.T), 1e-12)[:, None]
+            inw = dnp.matmul(np.asarray(c["inward"], np.float64).reshape(-1, 2), r2.T)
+            c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
             wk["pts"] = mp(wk["pts"])
@@ -2137,7 +2149,7 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
             continue
         piv = float(info.get("pivot", e.get("pivot", 0.0)))
         r, _t, c = geotiles.placement(tile.frame, frame, (0.0, 0.0, piv))
-        s = r.T @ c
+        s = dnp.matmul(r.T, c)
         with open(src, "rb") as f:
             blob = fast._ef.cdae_shear(f.read(), float(e["pos"][2]), float(s[0]), float(s[1]), float(s[2]), piv)
         name = f"rx_{aid}_{tile.key}_{what}.cdae"
@@ -2156,7 +2168,7 @@ def _geo_near(gx, gy, lat, lon):
         import geotiles
         la, lo = geotiles.centre(gx, gy)
         dy = (float(la) - float(lat)) * 111320.0
-        dx = (float(lo) - float(lon)) * 111320.0 * math.cos(math.radians(float(lat)))
+        dx = (float(lo) - float(lon)) * 111320.0 * dmath.cos(math.radians(float(lat)))
         return math.hypot(dx, dy) <= URGENT_PHOTO_M
     except Exception:           # (no urgency rather than no tile)
         return False

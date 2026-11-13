@@ -14,10 +14,14 @@
 //! Each server's "location" is the country its address is in (as BeamMP's own list has it, for the flag): DB-IP's
 //! IP to Country Lite table (CC BY 4.0, https://db-ip.com), downloaded next to the binary and fetched again weekly.
 //!
+//! Player reports from the game's reporter: reports.rs (POST /report; private GET /reports/list and
+//! /reports/<id>/<file> with the token).
+//!
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
 
 mod perf;
+mod reports;
 mod telemetry;
 mod uniques;
 
@@ -344,14 +348,52 @@ fn main() {
             std::thread::sleep(Duration::from_secs(5));
         });
     }
+    // player reports (reports.rs): their files next to the binary unless BNGE_REPORTS_DIR; the disk cap in GB
+    let rep_dir = std::env::var("BNGE_REPORTS_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("reports"))).unwrap_or_else(|| PathBuf::from("reports"))
+    });
+    let mut lim = reports::Limits::default();
+    if let Some(gb) = std::env::var("BNGE_REPORTS_MAX_GB").ok().and_then(|v| v.parse::<f64>().ok()).filter(|g| *g > 0.0) {
+        lim.disk_cap = (gb * (1u64 << 30) as f64) as u64;
+    }
+    let reps = Arc::new(Mutex::new(reports::Reports::new(rep_dir.clone(), lim)));
+    {
+        let r = reps.lock().unwrap();
+        eprintln!("reports: {} kept in {} ({} MB)", r.count(), rep_dir.display(), r.used() >> 20);
+    }
+    {
+        // (the hourly retention sweep)
+        let r = reps.clone();
+        std::thread::spawn(move || loop {
+            let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let gone = r.lock().unwrap_or_else(|e| e.into_inner()).sweep(unix_now);
+            if gone > 0 {
+                eprintln!("reports: {gone} day(s) past the retention removed");
+            }
+            std::thread::sleep(Duration::from_secs(3600));
+        });
+    }
+    let slots = Arc::new(Slots::default());
     let mut workers = Vec::new();
     for _ in 0..WORKERS {
         let (server, st, geo, token) = (server.clone(), state.clone(), geo.clone(), token.clone());
+        let (reps, slots) = (reps.clone(), slots.clone());
         workers.push(std::thread::spawn(move || loop {
             let mut req = match server.recv() {
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            let path = req.url().split('?').next().unwrap_or("").to_string();
+            if *req.method() == Method::Post && path == "/report" {
+                // (its own thread: a big body read slowly must not hold a request thread)
+                upload(req, reps.clone(), slots.clone(), geo.clone());
+                continue;
+            }
+            if path == "/reports/list" || path.starts_with("/reports/") {
+                let resp = private_reports(&req, &path, &reps, &token);
+                let _ = req.respond(resp);
+                continue;
+            }
             let mut body = Vec::new();
             let read = if *req.method() == Method::Post {
                 req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body)
@@ -369,6 +411,163 @@ fn main() {
     }
     for w in workers {
         let _ = w.join();
+    }
+}
+
+/// The upload threads reading report bodies: at most reports::UPLOADS within their first UPLOAD_S, at most
+/// STUCK_MAX in all (a read blocked by a client that stopped sending cannot be cut off: tiny_http gives no socket
+/// timeout; such a thread stops counting against the fresh slots after UPLOAD_S).
+#[derive(Default)]
+struct Slots {
+    live: Mutex<HashMap<u64, Instant>>,
+    next: std::sync::atomic::AtomicU64,
+}
+
+struct Slot(Arc<Slots>, u64);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.live.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+    }
+}
+
+fn take_slot(slots: &Arc<Slots>) -> Option<Slot> {
+    let mut live = slots.live.lock().unwrap_or_else(|e| e.into_inner());
+    let fresh = live.values().filter(|t| t.elapsed() < Duration::from_secs(reports::UPLOAD_S)).count();
+    if fresh >= reports::UPLOADS || live.len() >= reports::STUCK_MAX {
+        return None;
+    }
+    let id = slots.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    live.insert(id, Instant::now());
+    Some(Slot(slots.clone(), id))
+}
+
+/// POST /report in a thread of its own: the body read within UPLOAD_S, checked (reports::parse), admitted (rate limits,
+/// disk), written outside the lock.
+fn upload(req: Request, reps: Arc<Mutex<reports::Reports>>, slots: Arc<Slots>, geo: Arc<Mutex<Arc<Geo>>>) {
+    // (the slot taken before the thread: a flood of uploads is refused here, not one thread each)
+    let Some(slot) = take_slot(&slots) else {
+        let _ = req.respond(json(503, "{\"error\":\"busy, try again later\"}".into()));
+        return;
+    };
+    std::thread::spawn(move || {
+        let mut req = req;
+        let unix_now = || SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let err = |code: u16, why: &str| json(code, format!("{{\"error\":\"{why}\"}}"));
+        let Some(ip) = client_ip(&req) else {
+            let _ = req.respond(err(400, "bad request"));
+            return;
+        };
+        let max_body = reps.lock().unwrap_or_else(|e| e.into_inner()).lim.max_body;
+        if let Err((code, why)) = reps.lock().unwrap_or_else(|e| e.into_inner()).attempt(ip, unix_now()) {
+            let _ = req.respond(err(code, why));
+            return;
+        }
+        if req.body_length().is_some_and(|n| n > max_body) {
+            let _ = req.respond(err(413, "too big"));
+            return;
+        }
+        let t0 = Instant::now();
+        let mut body = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        let mut failed = None;
+        {
+            let mut r = req.as_reader().take(max_body as u64 + 1);
+            loop {
+                if t0.elapsed() > Duration::from_secs(reports::UPLOAD_S) {
+                    failed = Some((408, "too slow"));
+                    break;
+                }
+                match r.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => body.extend_from_slice(&buf[..n]),
+                    Err(_) => {
+                        failed = Some((400, "bad request"));
+                        break;
+                    }
+                }
+            }
+        }
+        drop(slot);
+        if failed.is_none() && body.len() > max_body {
+            failed = Some((413, "too big"));
+        }
+        if let Some((code, why)) = failed {
+            let _ = req.respond(err(code, why));
+            return;
+        }
+        let parsed = {
+            let r = reps.lock().unwrap_or_else(|e| e.into_inner());
+            reports::parse(&body, &r.lim)
+        };
+        drop(body);
+        let p = match parsed {
+            Ok(p) => p,
+            Err((code, why)) => {
+                let _ = req.respond(err(code, why));
+                return;
+            }
+        };
+        let now = unix_now();
+        let admitted = {
+            let mut r = reps.lock().unwrap_or_else(|e| e.into_inner());
+            r.admit(&p, ip, now).map(|t| {
+                let f = r.path_of(&t);
+                (t, f)
+            })
+        };
+        let (ticket, folder) = match admitted {
+            Ok(x) => x,
+            Err((code, why)) => {
+                let _ = req.respond(err(code, why));
+                return;
+            }
+        };
+        let table = geo.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let meta = reports::Reports::meta(&p, &ticket, now, &table.country(ip)); // (the address itself is not kept)
+        let wrote = reports::Reports::write(&folder, &p, &meta);
+        let id = reports::show_id(&ticket.id);
+        let ok = wrote.is_ok();
+        if let Err(e) = &wrote {
+            eprintln!("reports: writing {}: {e}", folder.display());
+        }
+        reps.lock().unwrap_or_else(|e| e.into_inner()).finish(ticket, ok.then_some(meta));
+        let _ = req.respond(if ok {
+            eprintln!("reports: {id} received ({} {}, {} bytes)", p.kind, p.v, p.files.iter().map(|f| f.1.len()).sum::<usize>());
+            json(200, format!("{{\"ok\":true,\"id\":\"{id}\"}}"))
+        } else {
+            err(500, "could not store the report")
+        });
+    });
+}
+
+/// GET /reports/list and /reports/<id>/<file>: the token only (404 without one configured, 401 with a wrong one).
+fn private_reports(req: &Request, path: &str, reps: &Arc<Mutex<reports::Reports>>, token: &Option<String>)
+                   -> Response<std::io::Cursor<Vec<u8>>> {
+    let nf = || json(404, "{\"error\":\"not found\"}".into());
+    if token.is_none() {
+        return nf();
+    }
+    let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+    if !reports::authorized(token, auth.as_deref()) {
+        return json(401, "{\"error\":\"token\"}".into());
+    }
+    if *req.method() != Method::Get {
+        return json(405, "{\"error\":\"method\"}".into());
+    }
+    let r = reps.lock().unwrap_or_else(|e| e.into_inner());
+    if path == "/reports/list" {
+        return json(200, r.list(&reports::query(req.url())).to_string());
+    }
+    let mut parts = path.trim_start_matches("/reports/").splitn(2, '/');
+    let (Some(id), Some(name)) = (parts.next(), parts.next()) else { return nf() };
+    let Some((p, ctype)) = r.file(id, name) else { return nf() };
+    drop(r);
+    match std::fs::read(&p) {
+        Ok(bytes) => Response::from_data(bytes)
+            .with_header(Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).unwrap())
+            .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap()),
+        Err(_) => nf(),
     }
 }
 

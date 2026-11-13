@@ -9,6 +9,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+import dnp
 
 
 class Marker(NamedTuple):
@@ -73,8 +74,8 @@ def marker(state):
         return None
     if state in ('KS','KY'):
         angle=np.linspace(0.,2*math.pi,97 if state=='KS' else 49)[:-1]
-        radius=.465+.025*np.cos(16*angle) if state=='KS' else np.full(len(angle),.49)
-        contour=np.c_[radius*np.cos(angle),.5+radius*np.sin(angle)]
+        radius=.465+.025*dnp.cos(16*angle) if state=='KS' else np.full(len(angle),.49)
+        contour=np.c_[radius*dnp.cos(angle),.5+radius*dnp.sin(angle)]
     else:
         contour=np.asarray(OUTLINES[state],float)
     area=np.sum(contour[:,0]*np.roll(contour[:,1],-1)-contour[:,1]*np.roll(contour[:,0],-1))

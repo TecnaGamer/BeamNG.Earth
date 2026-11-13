@@ -8,6 +8,7 @@
 //! rounded keep their coordinates bit for bit.
 //!
 //! The tunables come from roadsmooth.py (`PARAMS`), so the numbers live in one place.
+use crate::dm::Dm;
 
 use numpy::ndarray::{Array1, Array2};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -49,7 +50,7 @@ impl Params {
 type Pt = [f64; 2];
 
 fn dist(a: Pt, b: Pt) -> f64 {
-    (a[0] - b[0]).hypot(a[1] - b[1])
+    (a[0] - b[0]).dhypot(a[1] - b[1])
 }
 
 /// The points of the arc replacing vertex v where the unit direction u turns to w by delta (signed) with radius r,
@@ -59,14 +60,14 @@ fn arc(v: Pt, u: Pt, w: Pt, delta: f64, r: f64, t: f64, p: &Params) -> Vec<Pt> {
     let sgn = if delta > 0.0 { 1.0 } else { -1.0 };
     let n = [-u[1] * sgn, u[0] * sgn]; // towards the centre (left of the line for a left turn)
     let c = [a[0] + n[0] * r, a[1] + n[1] * r];
-    let a0 = (a[1] - c[1]).atan2(a[0] - c[0]);
+    let a0 = (a[1] - c[1]).datan2(a[0] - c[0]);
     let mag = delta.abs();
     let steps = (r * mag / p.arc_step_m).max(mag / p.arc_step).ceil().max(1.0) as usize;
     let mut pts = Vec::with_capacity(steps + 1);
     pts.push(a);
     for k in 1..steps {
         let ang = a0 + sgn * mag * k as f64 / steps as f64;
-        pts.push([c[0] + r * ang.cos(), c[1] + r * ang.sin()]);
+        pts.push([c[0] + r * ang.dcos(), c[1] + r * ang.dsin()]);
     }
     pts.push([v[0] + w[0] * t, v[1] + w[1] * t]);
     pts
@@ -84,7 +85,7 @@ pub fn smooth_core(xy: &[Pt], radius: f64, p: &Params) -> Option<(Vec<Pt>, Vec<f
     for i in 0..k - 1 {
         let dx = xy[i + 1][0] - xy[i][0];
         let dy = xy[i + 1][1] - xy[i][1];
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         // (a NaN piece is as unusable as a duplicate one)
         if !(l >= p.min_piece) {
             return None;
@@ -102,7 +103,7 @@ pub fn smooth_core(xy: &[Pt], radius: f64, p: &Params) -> Option<(Vec<Pt>, Vec<f
     for j in 0..n {
         let cross = u[j][0] * u[j + 1][1] - u[j][1] * u[j + 1][0];
         let dot = u[j][0] * u[j + 1][0] + u[j][1] * u[j + 1][1];
-        delta[j] = cross.atan2(dot);
+        delta[j] = cross.datan2(dot);
         let m = delta[j].abs();
         rounded[j] = m >= p.min_deflect && m <= p.max_deflect;
     }
@@ -120,10 +121,10 @@ pub fn smooth_core(xy: &[Pt], radius: f64, p: &Params) -> Option<(Vec<Pt>, Vec<f
         let w_next = if j + 1 < n && rounded[j + 1] { 0.5 } else { p.free_share };
         let share = (w_prev * len[j]).min(w_next * len[j + 1]);
         let mag = delta[j].abs();
-        let half = (mag / 2.0).tan();
+        let half = (mag / 2.0).dtan();
         // the class's radius, or a larger one when it fills the pieces and moves the line less than max_shift (a
         // corner's distance to its arc is r * (1 / cos(delta / 2) - 1))
-        let r_fill = (share / half).min(p.max_shift / (1.0 / (mag / 2.0).cos() - 1.0));
+        let r_fill = (share / half).min(p.max_shift / (1.0 / (mag / 2.0).dcos() - 1.0));
         let r_fill = if r_fill.is_finite() { r_fill } else { 0.0 };
         tang[j] = (radius.max(r_fill) * half).min(share);
     }
@@ -149,7 +150,7 @@ pub fn smooth_core(xy: &[Pt], radius: f64, p: &Params) -> Option<(Vec<Pt>, Vec<f
             continue;
         }
         let dj = delta[j - 1];
-        let r = t / (dj.abs() / 2.0).tan();
+        let r = t / (dj.abs() / 2.0).dtan();
         let mut pts = arc(v, u[j - 1], u[j], dj, r, t, p);
         s_new += dist(pts[0], last);
         old_s.push(s_old[j] - t);
@@ -374,7 +375,7 @@ fn g2_pass(pts: &[Pt], anchors: &[usize], window_m: f64, g: &G2) -> Option<(Vec<
     for i in 1..m - 1 {
         let a = [pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]];
         let b = [pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]];
-        let d = (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]);
+        let d = (a[0] * b[1] - a[1] * b[0]).datan2(a[0] * b[0] + a[1] * b[1]);
         if d.abs() < 1e-12 {
             continue;
         }
@@ -403,13 +404,13 @@ fn g2_pass(pts: &[Pt], anchors: &[usize], window_m: f64, g: &G2) -> Option<(Vec<
         }
     }
     // headings integrated back to points
-    let h0 = (pts[1][1] - pts[0][1]).atan2(pts[1][0] - pts[0][0]);
+    let h0 = (pts[1][1] - pts[0][1]).datan2(pts[1][0] - pts[0][0]);
     let mut q = vec![pts[0]; nn];
     let mut th = h0;
     for k in 0..last {
         th += tau[k];
         let ds = sig[k + 1] - sig[k];
-        q[k + 1] = [q[k][0] + ds * th.cos(), q[k][1] + ds * th.sin()];
+        q[k + 1] = [q[k][0] + ds * th.dcos(), q[k][1] + ds * th.dsin()];
     }
     // the line moved by its anchors' misses: a cubic spline of them along it, curvature continuous through the anchors
     // and with no slope at the line's ends (their headings stay; the misses are millimetres to decimetres)
@@ -633,7 +634,7 @@ fn cum_len(xy: &[Pt]) -> Vec<f64> {
     let mut s = Vec::with_capacity(xy.len());
     s.push(0.0f64);
     for k in 1..xy.len() {
-        let d = (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        let d = (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
         s.push(s[k - 1] + d);
     }
     s
@@ -901,7 +902,7 @@ mod tests {
             .map(|i| {
                 let a = [pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]];
                 let b = [pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]];
-                (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).abs().to_degrees()
+                (a[0] * b[1] - a[1] * b[0]).datan2(a[0] * b[0] + a[1] * b[1]).abs().to_degrees()
             })
             .collect()
     }
@@ -942,7 +943,7 @@ mod tests {
         let mut ang = 0.0f64;
         for _ in 0..10 {
             let l = *line.last().unwrap();
-            line.push([l[0] + 16.0 * ang.cos(), l[1] + 16.0 * ang.sin()]);
+            line.push([l[0] + 16.0 * ang.dcos(), l[1] + 16.0 * ang.dsin()]);
             ang += 6.0f64.to_radians();
         }
         let (pts, _, _) = smooth_core(&line, 25.0, &params()).unwrap();
@@ -979,7 +980,7 @@ mod tests {
             .map(|i| {
                 let a = [pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]];
                 let b = [pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]];
-                let d = (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]);
+                let d = (a[0] * b[1] - a[1] * b[0]).datan2(a[0] * b[0] + a[1] * b[1]);
                 d / (0.5 * (dist(pts[i - 1], pts[i]) + dist(pts[i], pts[i + 1])))
             })
             .collect()
@@ -1000,7 +1001,7 @@ mod tests {
             while j + 2 < s.len() && s[j + 1] <= t {
                 j += 1;
             }
-            h.push((pts[j + 1][1] - pts[j][1]).atan2(pts[j + 1][0] - pts[j][0]));
+            h.push((pts[j + 1][1] - pts[j][1]).datan2(pts[j + 1][0] - pts[j][0]));
             t += 1.0;
         }
         let k: Vec<f64> = (0..h.len().saturating_sub(10)).map(|i| {
@@ -1031,10 +1032,10 @@ mod tests {
             ang += (*t as f64).to_radians();
             let l = *line.last().unwrap();
             let len = if i % 2 == 0 { 19.0 } else { 17.5 };
-            line.push([l[0] + len * ang.cos(), l[1] + len * ang.sin()]);
+            line.push([l[0] + len * ang.dcos(), l[1] + len * ang.dsin()]);
         }
         let l = *line.last().unwrap();
-        line.push([l[0] + 300.0 * ang.cos(), l[1] + 300.0 * ang.sin()]);
+        line.push([l[0] + 300.0 * ang.dcos(), l[1] + 300.0 * ang.dsin()]);
         line
     }
 
@@ -1064,7 +1065,7 @@ mod tests {
 
     #[test]
     fn g2_straights_stay_straight_and_sparse() {
-        let line = [[0.0, 0.0], [400.0, 0.0], [400.0 + 400.0 * 0.5f64.cos(), 400.0 * 0.5f64.sin()]];
+        let line = [[0.0, 0.0], [400.0, 0.0], [400.0 + 400.0 * 0.5f64.dcos(), 400.0 * 0.5f64.dsin()]];
         let (pts, _, _) = smooth_g2(&line, 300.0, &[], 40.0, &params(), &g2()).unwrap();
         // the first straight: one piece up to where the spiral begins, on y = 0
         assert!(pts[1][1].abs() < 0.02, "{:?}", pts[1]);  // (the closing shear: mm)
@@ -1108,7 +1109,7 @@ mod tests {
     fn g2_a_ring_is_rounded_but_its_ends_stay() {
         let mut ring: Vec<Pt> = (0..12).map(|i| {
             let a = i as f64 * std::f64::consts::TAU / 12.0;
-            [20.0 * a.cos(), 20.0 * a.sin()]
+            [20.0 * a.dcos(), 20.0 * a.dsin()]
         }).collect();
         ring.push(ring[0]);
         let (pts, _, _) = smooth_g2(&ring, 12.0, &[], 10.0, &params(), &g2()).unwrap();

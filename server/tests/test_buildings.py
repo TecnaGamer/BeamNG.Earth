@@ -676,6 +676,15 @@ class DoorTest(unittest.TestCase):
         self.assertAlmostEqual(y, -bld.DOOR_OUT_M, places=2)            # on the south wall (its panel just out of it)
         self.assertAlmostEqual(yaw, 0.0)                               # the wall runs +x
 
+    def test_no_door_under_a_building_off_the_ground(self):
+        # a building over the street (OSM min_level 1, a passage's part over its way): its door stood alone in the road
+        # under it (London's Sherwood Street, 2026-11-12)
+        spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})
+        spec.min_h = 4.5
+        road = (np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)
+        self.assertEqual(bld.doors([(spec, 0.0, 0.0)], [road], 0.0, 0.0), [])
+        self.assertIsNone(spec.door)
+
     def test_main_street_shopfronts(self):
         shops = signed = 0
         for k in range(20):

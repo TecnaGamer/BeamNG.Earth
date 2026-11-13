@@ -10,6 +10,7 @@
 //!   clustered into surfaces, the deck's surface chosen by a Viterbi pass (grades, a "nothing seen" state);
 //! - `deck_blend`: a profile eased onto given end heights (the graded road it meets) within a grade-change budget.
 //! All pure functions of their inputs (deterministic: no hashing, no threads that change results).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -172,7 +173,7 @@ fn on_seg(s: &[f64; 4], x: f64, y: f64) -> (f64, f64) {
     let (abx, aby) = (s[2] - s[0], s[3] - s[1]);
     let l2 = abx * abx + aby * aby;
     let t = if l2 > 1e-12 { (((x - s[0]) * abx + (y - s[1]) * aby) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    (t, (x - (s[0] + t * abx)).hypot(y - (s[1] + t * aby)))
+    (t, (x - (s[0] + t * abx)).dhypot(y - (s[1] + t * aby)))
 }
 
 /// Heights along a map road from a source's 3D lines. q (n, 2): the road's stations; qdir (n, 2): its unit direction
@@ -205,7 +206,7 @@ pub fn roadz_match<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qdir: Py
                 }
                 let s = &segs[k];
                 let (sx, sy) = (s[2] - s[0], s[3] - s[1]);
-                let sl = sx.hypot(sy);
+                let sl = sx.dhypot(sy);
                 if sl < 1e-6 || ((sx * ux + sy * uy) / sl).abs() < min_cos {
                     continue;
                 }
@@ -325,20 +326,20 @@ pub fn clean(s: &[f64], z: &[f64], max_grade: f64, spike_m: f64, win_m: f64, max
             let (mut acc, mut wsum) = (0.0, 0.0);
             for j in a..=b {
                 let d = s[j] - s[i];
-                let w = (-0.5 * (d / sigma_m) * (d / sigma_m)).exp();
+                let w = (-0.5 * (d / sigma_m) * (d / sigma_m)).dexp();
                 acc += w * src[j];
                 wsum += w;
                 let mirror_lo = 2.0 * s[a] - s[j];
                 if j > a && s[i] - mirror_lo <= reach {
                     let dm = mirror_lo - s[i];
-                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).exp();
+                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).dexp();
                     acc += wm * (2.0 * src[a] - src[j]);
                     wsum += wm;
                 }
                 let mirror_hi = 2.0 * s[b] - s[j];
                 if j < b && mirror_hi - s[i] <= reach {
                     let dm = mirror_hi - s[i];
-                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).exp();
+                    let wm = (-0.5 * (dm / sigma_m) * (dm / sigma_m)).dexp();
                     acc += wm * (2.0 * src[b] - src[j]);
                     wsum += wm;
                 }
@@ -357,6 +358,96 @@ pub fn profile_clean<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, z: PyR
                           -> Bound<'py, PyArray1<f64>> {
     let (s, z) = (s.as_array().to_vec(), z.as_array().to_vec());
     clean(&s, &z, max_grade, spike_m, win_m, max_gap_m, sigma_m).into_pyarray(py)
+}
+
+/// Where a road's stations matched a deck that only crosses it (server roadz.observed, glki6's PR #1171): tier (n,)
+/// the tier of the source line each station matched (NaN: none), s (n,) the stations' arc lengths. True on every run
+/// of one tier at most max_m long with one other, equal tier both before and after it (stations without a match
+/// skipped). A road that changes tier has a different tier on each side of the change, and stays.
+pub fn crossing_runs_core(s: &[f64], tier: &[f64], max_m: f64) -> Vec<bool> {
+    let mut out = vec![false; tier.len()];
+    let idx: Vec<usize> = (0..tier.len()).filter(|&i| tier[i].is_finite()).collect();
+    let t: Vec<f64> = idx.iter().map(|&i| tier[i]).collect();
+    // each run's first matched station (a), one past its last (b)
+    let mut a: Vec<usize> = vec![0];
+    for k in 1..t.len() {
+        if t[k] != t[k - 1] {
+            a.push(k);
+        }
+    }
+    let mut b: Vec<usize> = a[1..].to_vec();
+    b.push(t.len());
+    for j in 1..a.len().saturating_sub(1) {
+        if t[a[j] - 1] == t[b[j]] && s[idx[b[j] - 1]] - s[idx[a[j]]] <= max_m {
+            for &i in &idx[a[j]..b[j]] {
+                out[i] = true;
+            }
+        }
+    }
+    out
+}
+
+/// crossing_runs_core for Python: (n,) bool.
+#[pyfunction]
+pub fn tier_crossing_runs<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, tier: PyReadonlyArray1<'py, f64>,
+                               max_m: f64) -> Bound<'py, PyArray1<bool>> {
+    let (s, tier) = (s.as_array().to_vec(), tier.as_array().to_vec());
+    assert_eq!(s.len(), tier.len(), "tier_crossing_runs: s and tier differ in length");
+    crossing_runs_core(&s, &tier, max_m).into_pyarray(py)
+}
+
+/// The pixel centres (a pix grid) within h of the polyline xy (k, 2), each once, sorted by (x, y) cell (server
+/// roadzhk: the DSM pixels round a Hong Kong deck's line that deck_lidar reads, glki6's PR #1180): the line sampled
+/// every pix / 2, at each sample offsets -h..h every pix / 2 across it, each landing point's cell.
+pub fn pixel_corridor_core(xy: &[[f64; 2]], h: f64, pix: f64) -> Vec<[f64; 2]> {
+    let k = xy.len();
+    if k < 2 {
+        return Vec::new();
+    }
+    let step = pix / 2.0;
+    let d: Vec<[f64; 2]> = (0..k - 1).map(|i| [xy[i + 1][0] - xy[i][0], xy[i + 1][1] - xy[i][1]]).collect();
+    let seg: Vec<f64> = d.iter().map(|v| v[0].dhypot(v[1])).collect();
+    let mut arc = vec![0.0f64; k];
+    for i in 0..k - 1 {
+        arc[i + 1] = arc[i] + seg[i];
+    }
+    // (numpy's arange: start + i * (the second value less the first), ceil((stop - start) / step) values)
+    let arange = |start: f64, stop: f64| -> Vec<f64> {
+        let n = ((stop - start) / step).ceil();
+        let n = if n.is_finite() && n > 0.0 { n as usize } else { 0 };
+        let delta = (start + step) - start;
+        (0..n).map(|i| start + i as f64 * delta).collect()
+    };
+    let ts = arange(0.0, arc[k - 1] + 1e-9);
+    let os = arange(-h, h + 1e-9);
+    let mut cells: Vec<(i64, i64)> = Vec::with_capacity(ts.len() * os.len());
+    for &t in &ts {
+        // searchsorted(arc, t, "right") - 1, clipped to a segment
+        let j = arc.partition_point(|&a| a <= t).saturating_sub(1).min(k - 2);
+        let l = seg[j].max(1e-9);
+        let u = [d[j][0] / l, d[j][1] / l];
+        let c = [xy[j][0] + u[0] * (t - arc[j]), xy[j][1] + u[1] * (t - arc[j])];
+        for &o in &os {
+            let px = c[0] - u[1] * o;
+            let py = c[1] + u[0] * o;
+            cells.push(((px / pix).floor() as i64, (py / pix).floor() as i64));
+        }
+    }
+    cells.sort_unstable();
+    cells.dedup();
+    cells.iter().map(|&(cx, cy)| [(cx as f64 + 0.5) * pix, (cy as f64 + 0.5) * pix]).collect()
+}
+
+/// pixel_corridor_core for Python: (m, 2) float64.
+#[pyfunction]
+pub fn pixel_corridor<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, h: f64, pix: f64)
+                           -> Bound<'py, PyArray2<f64>> {
+    let a = xy.as_array();
+    let pts: Vec<[f64; 2]> = (0..a.nrows()).map(|i| [a[[i, 0]], a[[i, 1]]]).collect();
+    let n = pts.len();
+    let out = crate::release(py, n * 64 + 1, || pixel_corridor_core(&pts, h, pix));
+    let flat: Vec<f64> = out.iter().flat_map(|p| [p[0], p[1]]).collect();
+    numpy::ndarray::Array2::from_shape_vec((out.len(), 2), flat).unwrap().into_pyarray(py)
 }
 
 /// Lidar classes never a road surface: low / high noise (7, 18), water (9), wire (13-14), tower (15).
@@ -393,7 +484,7 @@ pub fn deck_lidar<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, pts: P
         }
         let mut arc = vec![0.0; k];
         for i in 1..k {
-            arc[i] = arc[i - 1] + (lv[i][0] - lv[i - 1][0]).hypot(lv[i][1] - lv[i - 1][1]);
+            arc[i] = arc[i - 1] + (lv[i][0] - lv[i - 1][0]).dhypot(lv[i][1] - lv[i - 1][1]);
         }
         let len = arc[k - 1];
         let m = ((len / step.max(0.5)).ceil() as usize).max(1) + 1;

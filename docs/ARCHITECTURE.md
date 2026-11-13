@@ -1282,6 +1282,20 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   (`BNGE_PMT_BASE=1` reads it anyway). Cells from the tiles live in their own folder (`overture-pmt<FORMAT>`) and
   `versions()["mapsrc"]` keys every plan, cell fact and tile built from them; when the tiles fail, the layer is built
   from parquet, kept with the parquet cells and marked a revisit fault.
+- **Our prebaked input tiles, BNWT** (`server/bnwt.py` + earthfast `bnwt.rs`, `tools/build_bnwt.py`, 2026-11-13; off
+  unless `BNGE_BNWT_URL` names where the archives are: http(s), `file://` or a folder): the base theme (water, land
+  use, infrastructure) per z14 cell, as the parquet path gives it, from `<base>/bnwt<FORMAT>/<release>/base.c<CONTENT>
+  .pmtiles` (PMTiles v3, clustered Hilbert order: every quadtree square is one contiguous byte range). The builder runs
+  `overture.Reader.query` itself for every cell and stores the result through a lossless codec (ids, 1e-7 degree grid
+  coordinates with the off-grid doubles kept exactly, every column's dtype and bytes, rule tables, the sources'
+  counts; one zstd frame a tile), checking each tile decodes back to the same arrays; so a cell from a tile is the
+  parquet cell bit for bit: same file, same cache keys, no plan or facts format bump. A cell not on disk comes with its
+  aligned 4x4 block (z12) in one range read (3x3 cells round Fells Point: 3.3 MB in 5 requests instead of 72 MB in 51).
+  Anything it cannot answer (no archive, another format / content / release in its metadata, a cell outside its
+  coverage, a damaged tile) is read from the parquet files; an archive that failed is asked again after 10 min.
+  `bnwt.py region --bbox ...` downloads a region (resumable). `CONTENT` is bumped with any change of the parquet
+  path's output for these layers (the archives are then rebuilt). Builds are deterministic (same inputs, same bytes),
+  resumable (units of 16x16 cells, parts kept in the work folder) and bounded in memory (one cell per worker).
 - **Rasters**: COG range reads with `cog.py` (classic/BigTIFF, Deflate/PackBits/none, predictor
   2, sparse tiles; no GDAL, no tifffile). A missing file (open ocean for WorldCover, no CHM
   coverage) is a 404 remembered by a marker; the cell gets class 0 / no canopy layer. (Checked

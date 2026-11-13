@@ -19,6 +19,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import busstations as bs
 
@@ -43,6 +45,7 @@ SYNTH_WIDTH_M = 4.0
 BUILDING_NEAR_M = 160.0
 ROOF_NEAR_M = 6.0           # a roof this near a platform (or overlapping it) covers it
 LINK_JOIN_M = 2.5           # ways whose ends are this near are one link
+JOIN_CLASSES = ("steps", "footway", "corridor", "pedestrian", "path")    # (off level 0: they join a link)
 LINK_PLATFORM_M = 6.0       # a link's end this near a platform ends on it
 MIN_CONFIDENCE = 4
 CANOPY_LEN_M = 110.0        # a canopy worked out for a platform without a mapped roof: this long at most ...
@@ -79,7 +82,7 @@ def canopy_look(colour=None, material=None):
         import buildings
         rgb = buildings.parse_color(str(colour))
     if rgb is not None:
-        return min(CANOPY_PALETTE, key=lambda k: sum((a - b) ** 2 for a, b in zip(CANOPY_PALETTE[k], rgb)))
+        return min(CANOPY_PALETTE, key=lambda k: sum(dnp.sq(a - b) for a, b in zip(CANOPY_PALETTE[k], rgb)))
     m = str(material or "").strip().lower()
     return ROOF_MATERIAL_LOOK.get(m, CANOPY_DEFAULT)
 
@@ -184,28 +187,19 @@ class RailStation:
 def _ccw(ring):
     ring = bs._open(ring)
     x, y = ring[:, 0], ring[:, 1]
-    return ring if float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) >= 0 else ring[::-1]
-
-
-def _resample_ring(ring, step):
-    ring = bs._open(ring)
-    pts = []
-    for a, b in zip(ring, np.roll(ring, -1, axis=0)):
-        n = max(1, int(math.ceil(float(np.hypot(*(b - a))) / step)))
-        pts.extend(a + (b - a) * (k / n) for k in range(n))
-    return np.asarray(pts, np.float64)
+    return ring if float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1))) >= 0 else ring[::-1]
 
 
 def _foot(path, p):
     """(distance, foot point, unit tangent) of p on the polyline path."""
     a, b = path[:-1], path[1:]
     ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    ab2 = np.maximum((ab * ab).sum(1), 1e-9)
     t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
     f = a + ab * t[:, None]
-    d = np.hypot(f[:, 0] - p[0], f[:, 1] - p[1])
+    d = dnp.hypot(f[:, 0] - p[0], f[:, 1] - p[1])
     k = int(np.argmin(d))
-    tan = ab[k] / max(float(np.hypot(*ab[k])), 1e-9)
+    tan = ab[k] / max(float(dnp.hypot(*ab[k])), 1e-9)
     return float(d[k]), f[k], tan
 
 
@@ -226,79 +220,29 @@ def tracks_beside(ring, tracks, margin=SNAP_REACH_M + 2.0):
                                       or t[1][:, 1].max() < lo[1] or t[1][:, 1].min() > hi[1])]
 
 
-class _Segments:
-    """The segments of the tracks within a box (the platform's, grown), for the nearest-track question of every boundary
-    point in one numpy pass: nearest(p) -> (distance, foot point, unit tangent, track index)."""
+SNAP_NATIVE = 263          # earthfast.VERSION of station_snap_edges / station_link_chains (stationgeom.rs)
 
-    def __init__(self, tracks, lo, hi):
-        a, b, k = [], [], []
-        for n, (_tid, xy) in enumerate(tracks):
-            p0, p1 = xy[:-1], xy[1:]
-            ok = ~((np.maximum(p0[:, 0], p1[:, 0]) < lo[0]) | (np.minimum(p0[:, 0], p1[:, 0]) > hi[0])
-                   | (np.maximum(p0[:, 1], p1[:, 1]) < lo[1]) | (np.minimum(p0[:, 1], p1[:, 1]) > hi[1]))
-            a.append(p0[ok])
-            b.append(p1[ok])
-            k.append(np.full(int(ok.sum()), n))
-        self.a = np.concatenate(a) if a else np.zeros((0, 2))
-        self.b = np.concatenate(b) if b else np.zeros((0, 2))
-        self.k = np.concatenate(k) if k else np.zeros(0, np.int64)
-        self.ab = self.b - self.a
-        self.ab2 = np.maximum((self.ab ** 2).sum(1), 1e-9)
 
-    def nearest(self, p):
-        if not len(self.a):
-            return 1e9, None, None, -1
-        t = np.clip(((p[0] - self.a[:, 0]) * self.ab[:, 0] + (p[1] - self.a[:, 1]) * self.ab[:, 1]) / self.ab2, 0.0, 1.0)
-        f = self.a + self.ab * t[:, None]
-        d = np.hypot(f[:, 0] - p[0], f[:, 1] - p[1])
-        j = int(np.argmin(d))
-        return float(d[j]), f[j], self.ab[j] / max(float(np.hypot(*self.ab[j])), 1e-9), int(self.k[j])
+def _track_rows(tracks):
+    """(rows (m, 2), off (k + 1)): the tracks' (id, xy) points one after another, track k's rows off[k]..off[k + 1]."""
+    rows = [np.asarray(xy, np.float64).reshape(-1, 2) for _tid, xy in tracks]
+    off = np.zeros(len(rows) + 1, np.int64)
+    off[1:] = np.cumsum([len(r) for r in rows])
+    return (np.concatenate(rows) if rows else np.zeros((0, 2))), off
 
 
 def snap_edges(ring, tracks, edge_m):
-    """(ring', snapped, tidx): the boundary of a platform with every point that runs beside a track (within SNAP_REACH_M,
-    parallel within SNAP_ANGLE_DEG) put exactly edge_m from that track's axis, on its own side. A platform mapped to the
-    rail's axis, or a metre off it, ends on the standard distance, and a platform beside a curve follows the curve."""
-    pts = _resample_ring(ring, RESAMPLE_M)
-    n = len(pts)
-    out, snapped, tidx = pts.copy(), np.zeros(n, bool), np.full(n, -1, np.int64)
-    cos_min = math.cos(math.radians(SNAP_ANGLE_DEG))
-    seg = _Segments(tracks, pts.min(0) - SNAP_REACH_M - 1.0, pts.max(0) + SNAP_REACH_M + 1.0)
-    for i in range(n):
-        d, f, tan, k = seg.nearest(pts[i])
-        if k < 0 or d > SNAP_REACH_M:
-            continue
-        t = pts[(i + 1) % n] - pts[i - 1]
-        tl = float(np.hypot(*t))
-        if tl < 1e-6 or abs(float(np.dot(t / tl, tan))) < cos_min:
-            continue
-        v = pts[i] - f
-        side = 1.0 if (tan[0] * v[1] - tan[1] * v[0]) >= 0 else -1.0     # (left of the track's direction: +1)
-        nrm = np.array([-tan[1], tan[0]]) * side
-        out[i] = f + nrm * edge_m
-        snapped[i], tidx[i] = True, k
-    for _ in range(2):          # the corner after a run of snapped points, beside the same track, goes to its edge too
-        done = snapped.copy()
-        for i in range(n):
-            if done[i]:
-                continue
-            for j in ((i - 1) % n, (i + 1) % n):
-                if not done[j]:
-                    continue
-                d, f, tan, k = _nearest_track(pts[i], [tracks[int(tidx[j])]])
-                if d > SNAP_REACH_M:
-                    continue
-                v = pts[i] - f
-                side = 1.0 if (tan[0] * v[1] - tan[1] * v[0]) >= 0 else -1.0
-                out[i] = f + np.array([-tan[1], tan[0]]) * side * edge_m
-                snapped[i], tidx[i] = True, tidx[j]
-                break
-    keep = np.ones(n, bool)
-    for i in range(n):         # (points the snap brought together are one)
-        j = (i + 1) % n
-        if keep[i] and float(np.hypot(*(out[i] - out[j]))) < 0.25:
-            keep[j if j != 0 else i] = False
-    return out[keep], snapped[keep], tidx[keep]
+    """(ring', snapped, tidx): the boundary of a platform (resampled every RESAMPLE_M) with every point that runs beside
+    a track (within SNAP_REACH_M, parallel within SNAP_ANGLE_DEG) put exactly edge_m from that track's axis, on its own
+    side; the corner after a run of snapped points beside the same track too, and points the snap brought within
+    0.25 m of the next one dropped. A platform mapped to the rail's axis, or a metre off it, ends on the standard
+    distance, and a platform beside a curve follows the curve (earthfast.station_snap_edges: the tracks' segments in a
+    grid; the per-point numpy pass over every segment of the box was most of a King's Cross / Euston road tile)."""
+    import fast
+    fast.require(SNAP_NATIVE, "station platform edges")
+    rows, off = _track_rows(tracks)
+    return fast._ef.station_snap_edges(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), rows, off,
+                                       float(edge_m), SNAP_REACH_M, dmath.cos(math.radians(SNAP_ANGLE_DEG)), RESAMPLE_M)
 
 
 def _strip(line, tracks, width_tag):
@@ -309,7 +253,7 @@ def _strip(line, tracks, width_tag):
         return None
     mid = line[len(line) // 2]
     seg = line[min(len(line) - 1, len(line) // 2 + 1)] - line[max(0, len(line) // 2 - 1)]
-    sl = float(np.hypot(*seg))
+    sl = float(dnp.hypot(*seg))
     if sl < 1e-6:
         return None
     t = seg / sl
@@ -319,7 +263,7 @@ def _strip(line, tracks, width_tag):
         for _tid, xy in tracks:
             d, f, tan = _foot(xy, mid + nrm * side * 0.01)
             v = f - mid
-            if float(np.dot(v, nrm)) * side > 0 and abs(float(np.dot(tan, t))) > 0.8 and d < ISLAND_MAX_M:
+            if float(dnp.dot(v, nrm)) * side > 0 and abs(float(dnp.dot(tan, t))) > 0.8 and d < ISLAND_MAX_M:
                 gaps[side] = d if gaps[side] is None else min(gaps[side], d)
     w = width_tag if width_tag else LINE_WIDTH_M
     if gaps[1] is not None and gaps[-1] is not None:
@@ -342,7 +286,7 @@ def _normals(line):
     t[1:-1] = line[2:] - line[:-2]
     t[0] = line[1] - line[0]
     t[-1] = line[-1] - line[-2]
-    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    t /= np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
     return np.c_[-t[:, 1], t[:, 0]]
 
 
@@ -386,13 +330,13 @@ def find(items):
     seeds = [it for it in items if _seed(it)]
     points = [it for it in seeds if it["layer"] == "infrastructure"]
     halls = [it for it in seeds if it["layer"] == "buildings"
-             and not any(float(np.hypot(*(_centre(it) - _centre(p)))) < CLUSTER_M for p in points)]
+             and not any(float(dnp.hypot(*(_centre(it) - _centre(p)))) < CLUSTER_M for p in points)]
     seeds = sorted(points + halls, key=lambda it: it["id"])
     groups = []
     for it in seeds:
         c = _centre(it)
         for g in groups:
-            if any(float(np.hypot(*(c - _centre(m)))) < CLUSTER_M for m in g):
+            if any(float(dnp.hypot(*(c - _centre(m)))) < CLUSTER_M for m in g):
                 g.append(it)
                 break
         else:
@@ -428,10 +372,8 @@ def _crossings(path, tracks):
     fast.require(bs.GEOM_NATIVE, "station geometry")
     if not tracks:
         return []
-    rows = [np.asarray(xy, np.float64).reshape(-1, 2) for _tid, xy in tracks]
-    off = np.zeros(len(rows) + 1, np.int64)
-    off[1:] = np.cumsum([len(r) for r in rows])
-    return fast._ef.station_crossings(np.asarray(path, np.float64).reshape(-1, 2), np.concatenate(rows), off)
+    rows, off = _track_rows(tracks)
+    return fast._ef.station_crossings(np.asarray(path, np.float64).reshape(-1, 2), rows, off)
 
 
 def _links(items, tracks, platforms, hub):
@@ -439,54 +381,32 @@ def _links(items, tracks, platforms, hub):
     footways that cross the tracks at the rails' level."""
     ways = [it for it in items if it["layer"] == "roads" and it["cls"] in LINK_CLASSES and len(it["xy"]) >= 2
             and it.get("subclass") not in SKIP_SUBCLASS
-            and float(np.hypot(*(np.asarray(it["xy"]).mean(0) - hub))) < REACH_M + 60.0]
+            and float(dnp.hypot(*(np.asarray(it["xy"]).mean(0) - hub))) < REACH_M + 60.0]
     ways.sort(key=lambda it: it["id"])
     lv = [float(w.get("level") or 0.0) for w in ways]
     marked = [i for i, w in enumerate(ways) if lv[i] != 0.0 and w["cls"] != "steps" or _bridge_or_tunnel(w)]
-    group = {}                                  # way index -> group number (union by touching ends)
-    for i in marked:
-        group[i] = len(group)
-    changed = True
-    while changed:
-        changed = False
-        for j, w in enumerate(ways):
-            if j in group:
-                continue
-            ends = np.asarray([w["xy"][0], w["xy"][-1]])
-            for i in list(group):
-                o = ways[i]
-                oe = np.asarray([o["xy"][0], o["xy"][-1]])
-                if w["cls"] in ("steps", "footway", "corridor", "pedestrian", "path") and \
-                        float(np.min(np.hypot(ends[:, None, 0] - oe[None, :, 0], ends[:, None, 1] - oe[None, :, 1]))) <= LINK_JOIN_M \
-                        and (w["cls"] == "steps" or lv[j] != 0.0):
-                    group[j] = group[i]
-                    changed = True
-                    break
-    # merge the groups of ways that touch each other
-    root = {i: i for i in group}
-
-    def find_root(i):
-        while root[i] != i:
-            root[i] = root[root[i]]
-            i = root[i]
-        return i
-    idx = sorted(group)
-    for a in range(len(idx)):
-        for b in range(a + 1, len(idx)):
-            ea = np.asarray([ways[idx[a]]["xy"][0], ways[idx[a]]["xy"][-1]])
-            eb = np.asarray([ways[idx[b]]["xy"][0], ways[idx[b]]["xy"][-1]])
-            if float(np.min(np.hypot(ea[:, None, 0] - eb[None, :, 0], ea[:, None, 1] - eb[None, :, 1]))) <= LINK_JOIN_M:
-                root[find_root(idx[a])] = find_root(idx[b])
+    # the chains: the marked ways and the steps / footways off level 0 joined to them end to end (LINK_JOIN_M), again
+    # and again, in groups of touching ends (earthfast.station_link_chains: the pairwise numpy loops were ~70 % of a
+    # central London group's layout); numbered by their first way
+    import fast
+    fast.require(SNAP_NATIVE, "station link chains")
+    ends = np.asarray([(w["xy"][0][0], w["xy"][0][1], w["xy"][-1][0], w["xy"][-1][1]) for w in ways],
+                      np.float64).reshape(-1, 4)
+    eligible = np.asarray([w["cls"] in JOIN_CLASSES and (w["cls"] == "steps" or lv[i] != 0.0)
+                           for i, w in enumerate(ways)], bool)
+    is_marked = np.zeros(len(ways), bool)
+    is_marked[marked] = True
+    chain = fast._ef.station_link_chains(ends, eligible, is_marked, LINK_JOIN_M)
     chains = {}
-    for i in idx:
-        chains.setdefault(find_root(i), []).append(i)
+    for i in np.flatnonzero(chain >= 0):
+        chains.setdefault(int(chain[i]), []).append(int(i))
     links = []
     for r in sorted(chains, key=lambda r: min(ways[i]["id"] for i in chains[r])):
         members = [ways[i] for i in chains[r]]
         mains = [w for w in members if w["cls"] != "steps"]
         if not mains:
             continue
-        main = max(mains, key=lambda w: float(np.hypot(*np.diff(np.asarray(w["xy"]), axis=0).T).sum()))
+        main = max(mains, key=lambda w: float(dnp.hypot(*np.diff(np.asarray(w["xy"]), axis=0).T).sum()))
         path = np.asarray(main["xy"], np.float64)
         level = max((float(w.get("level") or 0.0) for w in members), key=abs, default=0.0)
         sk = span_kind(main)
@@ -550,7 +470,7 @@ def _covered(w):
 
 def _inside_any(path, platforms, crosses):
     """Is every crossing of the path on a platform (a footway along a platform's end is not a crossing)?"""
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(path, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(path, axis=0).T))))
     for _k, arc in crosses:
         p = np.array([np.interp(arc, s, path[:, 0]), np.interp(arc, s, path[:, 1])])
         if not any(bs.contains(pl.ring, p) for pl in platforms):
@@ -577,7 +497,7 @@ def _canopy_ring(pl, run, centre_arc, length):
     length along the run), from CANOPY_IN_M in from the edge to the platform's far edge (CANOPY_BACK_M short of it), at most
     CANOPY_MAX_W_M wide; None where the platform is narrower than CANOPY_MIN_W_M there."""
     pts = pl.ring[run]
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
     lo, hi = max(0.0, centre_arc - length / 2.0), min(float(s[-1]), centre_arc + length / 2.0)
     if hi - lo < 20.0:
         return None
@@ -586,7 +506,7 @@ def _canopy_ring(pl, run, centre_arc, length):
     t = np.zeros_like(line)
     t[1:-1] = line[2:] - line[:-2]
     t[0], t[-1] = line[1] - line[0], line[-1] - line[-2]
-    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    t /= np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
     nrm = np.c_[-t[:, 1], t[:, 0]]                  # (the platform is to the left of its counter-clockwise ring)
     width = []
     for p, n in zip(line, nrm):
@@ -619,17 +539,17 @@ def synth_canopies(st):
         runs = []
         for run in _runs_of(pl):
             pts = pl.ring[run]
-            ln = float(np.hypot(*np.diff(pts, axis=0).T).sum())
+            ln = float(dnp.hypot(*np.diff(pts, axis=0).T).sum())
             if ln >= CANOPY_MIN_RUN_M:
                 runs.append((ln, run))
         if not runs:
             continue
         ln, run = max(runs, key=lambda r: r[0])
         pts = pl.ring[run]
-        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+        s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
         arc = ln / 2.0
         if hall is not None:
-            arc = float(s[int(np.argmin(np.hypot(*(pts - hall).T)))])
+            arc = float(s[int(np.argmin(dnp.hypot(*(pts - hall).T)))])
         length = min(CANOPY_LEN_M, CANOPY_SHARE * ln)
         arc = min(max(arc, length / 2.0), ln - length / 2.0)
         ring = _canopy_ring(pl, run, arc, length)
@@ -679,9 +599,9 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
 
     def mine(it):
         c = _centre(it)
-        d = float(np.hypot(*(c - st.hub)))
-        return all(float(np.hypot(*(c - h))) >= d for h in others)
-    near = [it for it in items if float(np.hypot(*(_centre(it) - st.hub))) < REACH_M + 80.0
+        d = float(dnp.hypot(*(c - st.hub)))
+        return all(float(dnp.hypot(*(c - h))) >= d for h in others)
+    near = [it for it in items if float(dnp.hypot(*(_centre(it) - st.hub))) < REACH_M + 80.0
             and (not others or it["layer"] == "roads" and it["sub"] == "rail" or mine(it))]
     all_tracks = _tracks_of(near)
     edge_m, _h = norm(country)
@@ -690,7 +610,7 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
     plats = []
     for it in sorted((i for i in near if is_train_platform(i)), key=lambda i: i["id"]):
         c = _centre(it)
-        if float(np.hypot(*(c - st.hub))) > REACH_M:
+        if float(dnp.hypot(*(c - st.hub))) > REACH_M:
             continue
         xy = np.asarray(it["xy"], np.float64)
         local = [t for t in all_tracks if bs.dist_to_path(t[1], c) < 90.0 or bs.min_dist_to_path(t[1], xy) < 60.0]
@@ -720,7 +640,7 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
     # the hall(s), and the roofs over the platforms
     st.buildings = [(it["id"], bs._open(it["xy"]), float(it.get("height") or 0.0)) for it in near
                     if it["layer"] == "buildings" and it["cls"] in BUILDING_CLASSES and it["kind"] == "polygon"
-                    and float(np.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.item_area(it) > 60.0]
+                    and float(dnp.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.item_area(it) > 60.0]
     for it in sorted((i for i in near if i["layer"] == "buildings" and i["cls"] in ROOF_CLASSES and i["kind"] == "polygon"),
                      key=lambda i: i["id"]):
         ring = bs._open(it["xy"])
@@ -756,10 +676,10 @@ def _synth(st, near, tracks, edge_m):
     cand = [t for t in tracks if bs.dist_to_path(t[1], st.hub) < 60.0]
     if not cand:
         return None
-    tid, xy = max(cand, key=lambda t: float(np.hypot(*np.diff(t[1], axis=0).T).sum()))
+    tid, xy = max(cand, key=lambda t: float(dnp.hypot(*np.diff(t[1], axis=0).T).sum()))
     d, f, tan, _k = _nearest_track(st.hub, [(tid, xy)])
     length = SYNTH_LEN_M[st.kind]
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))))
     arc = _arc_of(xy, s, f)
     lo, hi = max(0.0, arc - length / 2), min(float(s[-1]), arc + length / 2)
     if hi - lo < 30.0:
@@ -769,8 +689,8 @@ def _synth(st, near, tracks, edge_m):
     line = np.c_[cx, cy]
     nrm = _normals(line)
     if st.buildings:
-        bc = bs.centroid(min(st.buildings, key=lambda b: float(np.hypot(*(bs.centroid(b[1]) - st.hub))))[1])
-        side = 1.0 if float(np.dot(bc - line[len(line) // 2], nrm[len(line) // 2])) >= 0 else -1.0
+        bc = bs.centroid(min(st.buildings, key=lambda b: float(dnp.hypot(*(bs.centroid(b[1]) - st.hub))))[1])
+        side = 1.0 if float(dnp.dot(bc - line[len(line) // 2], nrm[len(line) // 2])) >= 0 else -1.0
     else:
         side = 1.0
     inner, outer = line + nrm * side * edge_m, line + nrm * side * (edge_m + SYNTH_WIDTH_M)
@@ -791,10 +711,10 @@ def _arc_of(xy, s, p):
     for k in range(len(xy) - 1):
         a, b = xy[k], xy[k + 1]
         ab = b - a
-        t = float(np.clip(np.dot(p - a, ab) / max(float(np.dot(ab, ab)), 1e-9), 0.0, 1.0))
-        d = float(np.hypot(*(a + ab * t - p)))
+        t = float(np.clip(dnp.dot(p - a, ab) / max(float(dnp.dot(ab, ab)), 1e-9), 0.0, 1.0))
+        d = float(dnp.hypot(*(a + ab * t - p)))
         if d < best:
-            best, arc = d, float(s[k]) + t * float(np.hypot(*ab))
+            best, arc = d, float(s[k]) + t * float(dnp.hypot(*ab))
     return arc
 
 

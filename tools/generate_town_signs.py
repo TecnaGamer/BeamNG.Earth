@@ -21,7 +21,9 @@ import generate_kmh_speed_signs as kmh  # noqa: E402
 BODY_NAME = 'sign_town_body'
 PLATE_W, PLATE_H, PLATE_Z0 = 1.3, 0.6, 1.4     # the plate (m): server townsigns.PLATE_W, PLATE_H, PLATE_Z0
 SIGN_H = 2.1                                    # the posts' tops: server townsigns.SIGN_H
-PLATE_Y_FRONT, PLATE_Y_BACK = -0.006, 0.006     # the plate's thickness (the face is in front of it, at -0.012)
+PLATE_Y_FRONT, PLATE_Y_BACK = -0.006, 0.006     # the plate's thickness (the entry face is in front of it, at -0.012; the
+                                                # exit face, the same model turned round, is behind it, at +0.012)
+CLAMP_Y0 = 0.014                                # the clamps begin behind the exit face (they crossed it from 0.006)
 POST_X = 0.45                                   # the posts' centres either side of the plate's middle
 POST_R = 0.03
 POST_GAP = 0.02                                 # clear space between the plate's back and the posts
@@ -69,14 +71,29 @@ PLATES = {'be': (1.0, 0.33), 'lu': (1.74, 0.6), 'de': (0.9, 0.3), 'ch': (0.84, 0
           'ki': (1.4, 0.48)}
 
 
+def drop_back_facing(m: kmh.Mesh, kind: str, start: int) -> None:
+    """Remove the triangles of m.tri[kind] from index `start` on that face away from the viewer of the entry face
+    (+Y). The exit face is that face's twin 12 mm behind the plate's back, so the back's metal, 6 mm under it, was
+    never seen and only competed with it in the depth buffer: the crossed-out boards were washed out in game
+    (Broumov, 2026-11-11), the entry boards, with no metal behind their face, were not."""
+    ids = m.tri[kind]
+    kept = ids[:start]
+    for i in range(start, len(ids), 3):
+        tri = ids[i:i + 3]
+        if sum(m._n(v)[1] for v in tri) / 3 < 0.5:
+            kept.extend(tri)
+    m.tri[kind] = kept
+
+
 def build_town_body(lod: kmh.SignLod, plate_w: float = PLATE_W, post_x: float = POST_X) -> kmh.Mesh:
-    """The body, Z up, the face's side toward -Y: the plate's back and edges (no front: the face is it) and two
-    capped posts behind it."""
+    """The body, Z up, the face's side toward -Y: the plate's edges (neither its front nor its back: the entry face is
+    in front of it, the exit face behind it) and two capped posts behind that."""
     m = kmh.Mesh(lod.segments)
     x, z0, z1 = plate_w / 2, PLATE_Z0, PLATE_Z0 + PLATE_H
     start = len(m.tri['metal'])
     m.box('metal', -x, x, PLATE_Y_FRONT, PLATE_Y_BACK, z0, z1)
     kmh.drop_front_facing(m, 'metal', start)
+    drop_back_facing(m, 'metal', start)
     post_y = PLATE_Y_BACK + POST_GAP + POST_R
     for px in (-post_x, post_x):
         m.cylinder('metal', (px, post_y), POST_R, 0.0, SIGN_H, 'z')
@@ -85,7 +102,7 @@ def build_town_body(lod: kmh.SignLod, plate_w: float = PLATE_W, post_x: float = 
         if lod.brackets:            # a clamp across each post at the plate's top and foot
             for zc in (z0 + 0.08, z1 - 0.08):
                 start = len(m.tri['metal'])
-                m.box('metal', px - POST_R - 0.004, px + POST_R + 0.004, PLATE_Y_BACK, post_y + POST_R + 0.006,
+                m.box('metal', px - POST_R - 0.004, px + POST_R + 0.004, CLAMP_Y0, post_y + POST_R + 0.006,
                       zc - 0.02, zc + 0.02)
                 kmh.drop_front_facing(m, 'metal', start)
     return m

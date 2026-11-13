@@ -142,6 +142,33 @@ only numbers (and in section 2 short model names and settings values), so no pos
 - **Your install id**: the file `telemetry_id` in the BeamNG.Earth cache folder. Delete it and you get a new id; with
   the main switch off, no id is sent at all.
 
+## Reports you send
+
+Separate from the statistics above: the in-game reporter's **Send to the developers** (after Ctrl+Shift+E or a
+performance profile) sends one report, and only when you click **Send** in its window. It is an action you take each
+time, so it works whatever the usage-statistics switches say (also with them off), but never in offline mode.
+
+- **What**: the window lists every part and lets you read the files before sending: your title and description; the
+  screenshot (optional); the location, exact or rounded to about 1 km (optional; rounded also drops the map ids,
+  street names and nearby roads and buildings); the camera and the object under the screen's centre; game, PC and
+  graphics details, BeamNG.Earth's settings and the names of enabled mods; the last 60 s of frame times; weather and
+  time of day; the world server's version, settings, memory and loading state; the logs (optional: the world server's
+  last 300 lines, the game's warnings and errors of the last 10 minutes).
+- **Removed first**: user names, home folders (`C:\Users\<name>`, `/home/<name>`), the computer's name, e-mail and IP
+  addresses, also in the copy kept on your computer.
+- **Private**: sent to the BeamNG.Earth developers only (the project's server, earth.tgforever.net, `POST /report`).
+  Reports are **not published** and are never listed publicly; only the developers can read them, with a private
+  key.
+- **Stored**: each report as sent, with the time it arrived, the app version, the random install id (to group
+  reports from one computer) and the country it was sent from (looked up from the connection's address, like the
+  statistics above; the address itself is used only for rate limits in memory and is not stored).
+  **Kept 90 days**, then deleted.
+- **Limits**: at most 2 MB per report, 30 reports an hour and 100 a day per install.
+- The report id the window shows (like `K7QD-3M9X`) lets you point us to your report on Discord or GitHub.
+
+The code: `mod/beamng_earth/lua/ge/extensions/beamngEarth/reportsend.lua` (the window), `server/reportsend.py` and
+`native/earthfast/src/reportpack.rs` (the scrub and the send), `native/serverlist/src/reports.rs` (the collector).
+
 ## Who runs it
 
 BeamNG.Earth is an open-source project by TecnaGamer (github.com/TecnaGamer/BeamNG.Earth). The code that builds and

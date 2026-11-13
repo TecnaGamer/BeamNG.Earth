@@ -3,6 +3,7 @@ shape, timber posts and lettering after the Forest Service family; the agency ba
 for forests and grasslands, peaks for parks), not the Forest Service shield or the NPS arrowhead (protected insignia).
 """
 import numpy as np
+import dnp
 
 
 def _ccw(points):
@@ -18,7 +19,7 @@ def outline(width, bottom, height):
         a = p + (corners[i-1] - p) * .10
         b = p + (corners[(i+1) % 4] - p) * .10
         for t in np.linspace(0, 1, 9):
-            result.append((1-t)**2*a + 2*t*(1-t)*p + t*t*b)
+            result.append(dnp.sq(1-t)*a + 2*t*(1-t)*p + t*t*b)
     return _ccw(np.asarray(result) * [width, height] + [0, bottom])
 
 

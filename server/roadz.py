@@ -54,6 +54,8 @@ from collections import OrderedDict
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import hkdtm
 import hklidar
 import mapcells
@@ -122,6 +124,9 @@ CLEAN_GAP_M = 30.0
 CLEAN_SIGMA_M = 3.0
 TIER_CROSS_M = 60.0         # m: a run on another deck tier this short, the same tier before and after, is a deck
                             # crossing over or under the road (a road's own change of tier and back is two ramps)
+TIER_NATIVE = 261           # earthfast.VERSION of tier_crossing_runs (a run of stations on another tier only a
+                            # deck crossing: True on every run of one tier at most TIER_CROSS_M long with one
+                            # other, equal tier before and after it)
 MIN_COVER = 0.6             # share of a part's stations with a height, or the part keeps the inference
 DATUM_NEAR_M = 300.0        # m round a part's ends its source's ground roads give the datum offset
 DATUM_NEAR_MIN = 5
@@ -290,7 +295,7 @@ def hk_credited_near(cache_dir, lat, lon, near_m):
     if not (ON and HK_ON and cache_dir and _in(HK_BOUNDS, lat, lon)):
         return False
     d = near_m / 111320.0
-    k = max(0.05, math.cos(math.radians(lat)))
+    k = max(0.05, dmath.cos(math.radians(lat)))
     for key in mapcells.cells_for_bbox(lat - d, lon - d / k, lat + d, lon + d / k):
         p = os.path.join(cache_dir, "roadz", f"v{VERSION}", HK_CELLS, str(key) + ".npz")
         try:
@@ -485,11 +490,11 @@ def parse_nvdb(objects):
 def merc_xy(lat, lon):
     lat = np.clip(np.asarray(lat, np.float64), -85.0, 85.0)
     return (np.radians(np.asarray(lon, np.float64)) * EPT_R,
-            np.log(np.tan(np.pi / 4 + np.radians(lat) / 2)) * EPT_R)
+            dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2)) * EPT_R)
 
 
 def merc_ll(x, y):
-    return (np.degrees(2 * np.arctan(np.exp(np.asarray(y, np.float64) / EPT_R)) - np.pi / 2),
+    return (np.degrees(2 * dnp.arctan(dnp.exp(np.asarray(y, np.float64) / EPT_R)) - np.pi / 2),
             np.degrees(np.asarray(x, np.float64) / EPT_R))
 
 
@@ -528,7 +533,7 @@ def lidar_datasets(lat, lon):
 def resample_line(xy, step):
     """(points (m, 2), arc (m,)) every ~step m along polyline xy, ending on both ends."""
     xy = np.asarray(xy, np.float64)[:, :2]
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     if len(xy) < 2 or s[-1] <= 0:
         return xy[:1], np.zeros(min(1, len(xy)))
     m = max(1, int(math.ceil(s[-1] / step - 1e-9))) + 1
@@ -848,7 +853,7 @@ class RoadZ:
 
     def _hk(self, key):
         lon0, lat0, lon1, lat1 = key.bounds()
-        k = 1.0 / max(0.05, math.cos(math.radians((lat0 + lat1) / 2)))
+        k = 1.0 / max(0.05, dmath.cos(math.radians((lat0 + lat1) / 2)))
         plat = CLIP_PAD_M / 111320.0
         plon = plat * k
         # (the lines a little further out too: a higher deck there hides a lower one in the box)
@@ -936,7 +941,7 @@ class RoadZ:
             return []
         lon0, lat0, lon1, lat1 = key.bounds()
         pad_lat = CLIP_PAD_M / 111320.0
-        pad_lon = pad_lat / max(0.05, math.cos(math.radians((lat0 + lat1) / 2)))
+        pad_lon = pad_lat / max(0.05, dmath.cos(math.radians((lat0 + lat1) / 2)))
         out = []
         # (the rule's ranges: roads.level_ranges asks this provider for the lidar's stretches, gap_answers)
         for i, rr in sorted(roads.rule_level_ranges_near(feats).items()):
@@ -1001,7 +1006,7 @@ class RoadZ:
             pts_, _ = resample_line(xy, BOX_STEP_M)
             la_, lo_, _ = frame.enu_to_geodetic(pts_[:, 0], pts_[:, 1], 0.0)
             x, y = merc_xy(la_, lo_)
-            k = 1.0 / math.cos(math.radians(float(ring[0, 1])))         # (Mercator metres are longer)
+            k = 1.0 / dmath.cos(math.radians(float(ring[0, 1])))         # (Mercator metres are longer)
             pad = (half + LIDAR_PAD_M + 2.0) * k
             for j in range(max(1, len(x) - 1)):
                 xs, ys = x[j:j + 2], y[j:j + 2]
@@ -1195,7 +1200,7 @@ class RoadZ:
         s, z = np.asarray(s, np.float64), np.asarray(z, np.float64)
         if len(s) < 2 or not np.isfinite(z).any():
             return None
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
         sx, sy = np.interp(s, arc, xy[:, 0]), np.interp(s, arc, xy[:, 1])
         sla, slo, _ = frame.enu_to_geodetic(sx, sy, 0.0)
         return s, z, sx, sy, np.asarray(sla, np.float64), np.asarray(slo, np.float64), arc
@@ -1220,7 +1225,7 @@ class RoadZ:
         if not ends:
             return np.nan
         de = np.asarray(ends, np.float64)
-        d = np.hypot(de[:, 0] - p[0], de[:, 1] - p[1])
+        d = dnp.hypot(de[:, 0] - p[0], de[:, 1] - p[1])
         k = int(np.argmin(d))
         return float(de[k, 2]) if d[k] <= 2.0 * LIDAR_STEP_M else np.nan
 
@@ -1460,11 +1465,11 @@ class RoadZ:
         if not srcs:
             return None
         pad = (half + MATCH_REACH_M) / 111320.0
-        keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, math.cos(math.radians(la[mid]))))),
+        keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, dmath.cos(math.radians(la[mid]))))),
                       key=str)
         fast.require(NATIVE, "roadz matching")
         d = np.gradient(xy, axis=0)
-        qdir = np.ascontiguousarray(d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
+        qdir = np.ascontiguousarray(d / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
             segs, segz, oks, lvs, cells = [], [], [], [], []
             if src in DEFERRED and self._lidar_skipped(keys, src):
@@ -1493,14 +1498,16 @@ class RoadZ:
             q, seg, ok = np.ascontiguousarray(xy), np.ascontiguousarray(np.vstack(segs)), np.concatenate(oks)
             z, dist = fast._ef.roadz_match(q, qdir, seg, np.ascontiguousarray(np.vstack(segz)), ok, float(reach),
                                            MATCH_COS)
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             tiers = np.concatenate(lvs)[ok > 0]
             if level > 0 and len(tiers) and tiers.min() > 0 and tiers.max() > tiers.min():
                 # decks of several tiers (Hong Kong's ELEVATION 1, 2, ...): the same match again, for each station's
                 # tier (the tier as the segments' "height"), and never another tier's deck where it only crosses
                 tier, _ = fast._ef.roadz_match(q, qdir, seg, np.repeat(np.concatenate(lvs)[:, None], 2, 1).astype(
                     np.float64), ok, float(reach), MATCH_COS)
-                z = np.where(crossing_runs(s, tier, TIER_CROSS_M), np.nan, z)
+                fast.require(TIER_NATIVE, "roadz tier crossings")
+                z = np.where(fast._ef.tier_crossing_runs(s, np.ascontiguousarray(tier, np.float64),
+                                                         TIER_CROSS_M), np.nan, z)
             if not np.isfinite(z).any():
                 continue
             off = 0.0
@@ -1540,7 +1547,7 @@ class RoadZ:
         zs, lls = [], []
         for k, ln, vxy in cells:
             ground = np.repeat(ln.level == 0, np.diff(ln.off)) & np.isfinite(ln.z)
-            near = ground & (np.minimum(np.hypot(*(vxy - ends[0]).T), np.hypot(*(vxy - ends[1]).T)) <= DATUM_NEAR_M)
+            near = ground & (np.minimum(dnp.hypot(*(vxy - ends[0]).T), dnp.hypot(*(vxy - ends[1]).T)) <= DATUM_NEAR_M)
             gi = np.flatnonzero(near)
             zs.append(ln.z[gi])
             lls.append(ln.lonlat[gi])
@@ -1557,22 +1564,6 @@ class RoadZ:
         offs = [self._cell_offset(src, k, ln) for k, ln, _ in cells]
         offs = [o for o in offs if o is not None]
         return float(np.median(offs)) if offs else None
-
-
-def crossing_runs(s, tier, max_m):
-    """Where a road's stations (arc lengths s) matched a deck that only crosses it. tier (n,): the tier of the source
-    line each station matched (NaN: none). True on every run of one tier at most max_m long with one other tier
-    both before and after it (stations without a match skipped). A road that changes tier has a different tier on
-    each side of the change, and stays."""
-    out = np.zeros(len(tier), bool)
-    idx = np.flatnonzero(np.isfinite(tier))
-    t = np.asarray(tier)[idx]
-    a = np.r_[0, np.flatnonzero(np.diff(t) != 0) + 1]       # each run's first matched station, and (b) one past it
-    b = np.r_[a[1:], len(t)]
-    for j in range(1, len(a) - 1):
-        if t[a[j] - 1] == t[b[j]] and s[idx[b[j] - 1]] - s[idx[a[j]]] <= max_m:
-            out[idx[a[j]:b[j]]] = True
-    return out
 
 
 def install(cache_dir, fetcher, md):

@@ -16,6 +16,7 @@
 //!
 //! Local frame of a mouth: x to the left of the travel out of the tube, s out of the tube along its axis, h over the
 //! floor at the mouth. Everything is one-sided, facing out of its solid. Pure.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -174,7 +175,7 @@ fn outline(sec: &[[f64; 2]], th: f64) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
         let a = o[if i == 0 { 0 } else { i - 1 }];
         let b = o[if i + 1 == n { n - 1 } else { i + 1 }];
         let (tx, th_) = (b[0] - a[0], b[1] - a[1]);
-        let l = tx.hypot(th_).max(1e-9);
+        let l = tx.dhypot(th_).max(1e-9);
         let mut v = [th_ / l, -tx / l];
         // away from the opening's middle
         if v[0] * (o[i][0]) + v[1] * (o[i][1] - th / 2.0) < 0.0 { v = [-v[0], -v[1]]; }
@@ -230,7 +231,7 @@ pub fn portal(f: &Frame, prm: &Prm, sec: &[[f64; 2]], face_x: &[f64], face_g: &[
         let st: Vec<f64> = o.iter().map(|q| prm.collar_out + prm.rake * (1.0 - (q[1] / prm.th).clamp(0.0, 1.0))).collect();
         let r: Vec<[f64; 2]> = (0..n).map(|i| [o[i][0] + nrm[i][0] * prm.collar_t, o[i][1] + nrm[i][1] * prm.collar_t]).collect();
         let mut arc = vec![0.0; n];
-        for i in 1..n { arc[i] = arc[i - 1] + (o[i][0] - o[i - 1][0]).hypot(o[i][1] - o[i - 1][1]); }
+        for i in 1..n { arc[i] = arc[i - 1] + (o[i][0] - o[i - 1][0]).dhypot(o[i][1] - o[i - 1][1]); }
         for i in 0..n - 1 {
             let j = i + 1;
             let axis = f.w(0.0, (st[i] + st[j]) / 4.0, prm.th / 2.0);
@@ -318,7 +319,7 @@ pub fn cover(mid: &[[f64; 2]], left: &[[f64; 2]], z: &[f64], ground: &[f64], hw:
         }
     }
     let mut s = vec![0.0; k];
-    for i in 1..k { s[i] = s[i - 1] + (mid[i][0] - mid[i - 1][0]).hypot(mid[i][1] - mid[i - 1][1]); }
+    for i in 1..k { s[i] = s[i - 1] + (mid[i][0] - mid[i - 1][0]).dhypot(mid[i][1] - mid[i - 1][1]); }
     let pt = |i: usize, x: f64, h: f64| -> [f64; 3] { [mid[i][0] + left[i][0] * x, mid[i][1] + left[i][1] * x, z[i] + h] };
     let top = th + over;
     let mut i = 0;
@@ -447,7 +448,7 @@ mod tests {
         let mut v = vec![[hw - 1.2, 0.0], [hw, 0.0]];
         for i in 0..9 {
             let a = std::f64::consts::PI * i as f64 / 8.0;
-            v.push([a.cos() * hw, wall + a.sin() * (th - wall)]);
+            v.push([a.dcos() * hw, wall + a.dsin() * (th - wall)]);
         }
         v.push([-hw, 0.0]);
         v.push([-hw + 1.2, 0.0]);
