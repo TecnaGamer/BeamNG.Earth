@@ -333,9 +333,14 @@ def source_id(here):
     return h.hexdigest()
 
 
-# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches
+# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches.
+# BNE_NETSTATS_PROC: earthd sets it (the telemetry's download counts, a folder under the player's own cache) before
+# its workers start, so every worker's keys held the cache folder's path and whether telemetry was on; the telemetry
+# switch itself; the lidar's wait (a complete item is the same however long it waited). None may keep two computers'
+# keys apart (decisions.py: items built on the project's machine are found under the player's own keys).
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
-                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M")
+                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
+                "BNE_TELEMETRY")
 
 
 def code_key():

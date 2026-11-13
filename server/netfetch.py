@@ -399,6 +399,12 @@ if _BNWT_HOST:
     # a host that does not answer is given up quickly: 2 s to connect, 2 tries)
     POLICIES[_BNWT_HOST + "#bnwt"] = replace(POLICIES.get(_BNWT_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
                                              timeout=10.0, max_attempts=2, base_delay=0.25)
+# The shared decision archives (decisions.py: the CDN's dec/, or BNGE_DECISIONS_URL): a lane of their own, given up
+# quickly like the BNWT archives' (the server plans the cell itself when they do not answer)
+_DEC_URL = (os.environ.get("BNGE_DECISIONS_URL") or "").strip()
+_DEC_HOST = (urlsplit(_DEC_URL).hostname or "") if _DEC_URL.startswith(("http://", "https://")) else _CDN_HOST
+POLICIES[_DEC_HOST + "#dec"] = replace(POLICIES.get(_DEC_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                       timeout=15.0, max_attempts=2, base_delay=0.25)
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)

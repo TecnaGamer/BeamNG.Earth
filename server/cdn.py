@@ -20,6 +20,9 @@ their coverage files list packs; elsewhere the live sources as before, and the m
 ("request": false: never asked). Left out when this build's Pillow cannot decode AVIF. BNGE_AERIAL=off / on overrides
 the switch (tests).
 
+"decisions" ({"decisions": {"enabled": true}}): the shared decision archives (decisions.py: road plans and cell facts
+built and signed by the project's builder for each release); BNGE_DECISIONS=on / off overrides the switch.
+
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
@@ -122,3 +125,14 @@ def dem_release(fetcher, cache_dir):
         return None
     log.info("cdn: Mapterhorn packs %s on (%s)", rel, CDN_BASE)
     return rel
+
+
+def decisions_on(fetcher, cache_dir):
+    """Does the switch turn the shared decision archives on ({"decisions": {"enabled": true}}: decisions.py)?"""
+    on = switch(fetcher, cache_dir).get("decisions") or {}
+    got = isinstance(on, dict) and bool(on.get("enabled"))
+    if got:
+        log.info("cdn: shared decision archives on")
+        if on.get("request") is True and "BNGE_DECISIONS_REQUEST" not in os.environ:
+            os.environ["BNGE_DECISIONS_REQUEST"] = "on"     # (the builder asked for unbuilt blocks: decisions.ask_build)
+    return got

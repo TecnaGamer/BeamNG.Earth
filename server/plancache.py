@@ -248,8 +248,14 @@ class PlanCache:
         import roadsurf
         if roadsurf.cell_tags(key):
             return False
+        import roadz
+        if roadz.hk_cell(key):
+            return False
         k = bakepack.plans_key(self.signature, key)
-        return any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0]))
+        if any(k in p.items and bakepack._matches(p, self._bake_expect()) for p in bakepack.packs(self.persist[0])):
+            return True
+        import decisions        # (a shared archive's block already downloaded: nothing fetched or unpacked here)
+        return decisions.enabled() and decisions.has_plans(self.persist[0], self.signature, key, self.persist[1][2])
 
     def _bake_expect(self):
         import bakepack
@@ -267,10 +273,27 @@ class PlanCache:
         import bakepack
         got = bakepack.find(self.persist[0], bakepack.plans_key(self.signature, key), self._bake_expect())
         if got is None:
-            return None
+            got = self._decided(key)
+            if got is None:
+                return None
         with self._lock:
             self.stats["baked"] = self.stats.get("baked", 0) + 1
         return io.BytesIO(got)
+
+    def _decided(self, key):
+        """The shared decision archives' plans of cell key for this version (decisions.py: built by the project's
+        builder, signed, checked when downloaded), kept in the revisit cache under this server's own key; or None."""
+        import decisions
+        if not decisions.enabled():
+            return None
+        got = decisions.plans(self.persist[0], self.signature, key, self.persist[1][2])
+        if got is not None:
+            import revisit
+            revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": got},
+                          where=self._where(key), code=revisit.format_marker("plans", plans_format()))
+            with self._lock:
+                self.stats["decided"] = self.stats.get("decided", 0) + 1
+        return got
 
     def _kept(self, key):
         """The revisit cache's copy of cell key's plans (a file-like npz), or None."""

@@ -132,6 +132,14 @@ the app may ask it to build one, so the next visit (yours or anyone's) loads fas
 the server keeps the square to build it, not who asked (your address is used only in memory, for rate limits).
 With the main switch off, nothing is asked and the photos come from their usual sources.
 
+## 8. Requests for prebuilt road decisions (main switch)
+
+Where the project's server has no prebuilt road plans for an area of your version (when that feature is turned on),
+the app may ask it to build them, the same way as the aerial packs above: the request names only the ~8 km map square
+and the version, at most once per square every 6 hours, only with the main switch on, and the server keeps the square
+to build it, not who asked. Prebuilt plans are only ever made by the project's own machine and signed; nothing your
+computer makes is uploaded.
+
 ## What happens to the data
 
 - **Sole purpose**: counting players, protecting the free map services BeamNG.Earth relies on, and finding what to

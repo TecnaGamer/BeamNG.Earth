@@ -117,6 +117,7 @@ mod tilecuts;
 mod bldclear;
 mod bnwt;
 mod aerialcov;
+mod decisions;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6412,6 +6413,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 281: a cell's roads measured between the building walls in two calls without the interpreter lock (roadwalls:
     // road_near_cells, road_walls; roadwidth.RoadWidths.measure_many), measure_row / clearance_row's loops shared
     // with them (measure_core, clearance_core)
-    m.add("VERSION", 281)?;
+    // 282 (on 281): the shared decision archives (decisions: BNGD blocks of road plans and
+    // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
+    decisions::register(m)?;
+    m.add("VERSION", 282)?;
     Ok(())
 }

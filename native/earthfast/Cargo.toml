@@ -43,6 +43,10 @@ serde_json = "1"
 # MIT; already in the lock file (num-traits); pinned. Reviewed 2026-11-12: no network, no file or process access, no
 # unsafe beyond unchecked indexing and the x86 sqrt / fma instructions; build.rs only sets cfgs from cargo's env.
 libm = "=0.2.16"
+# The shared decision archives' signatures (decisions.rs: the builder signs, players verify before use): ed25519 by
+# dalek-cryptography, pure Rust, BSD-3-Clause; sha2 (RustCrypto, MIT / Apache-2.0) for the bodies' hashes. 2026-11-13.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
+sha2 = { version = "0.10", default-features = false }
 
 [profile.release]
 opt-level = 3
