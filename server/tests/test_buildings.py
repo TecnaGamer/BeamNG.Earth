@@ -59,7 +59,10 @@ class RegionStyleTest(unittest.TestCase):
         self.assertEqual(bld.region_style(40.42, -3.70).name, "mediterranean")
         self.assertEqual(bld.region_style(19.43, -99.13).name, "latin_america")
         self.assertEqual(bld.region_style(35.66, 139.70).name, "east_asia")
-        self.assertEqual(bld.region_style(-33.87, 151.21).name, "oceania")
+        self.assertEqual(bld.region_style(-33.87, 151.21).name, "australia")      # Sydney
+        self.assertEqual(bld.region_style(-31.95, 115.86).name, "australia")      # Perth
+        self.assertEqual(bld.region_style(-42.88, 147.33).name, "australia")      # Hobart
+        self.assertEqual(bld.region_style(-36.85, 174.76).name, "oceania")        # Auckland: as before
         self.assertEqual(bld.region_style(30.9, 75.8).name, "south_asia")
         self.assertEqual(bld.region_style(0.0, 25.0).name, "warm")
         self.assertEqual(bld.region_style(19.7, 96.1).name, "warm", "Myanmar: not South Asia's style")
@@ -73,6 +76,25 @@ class RegionStyleTest(unittest.TestCase):
         flat = [h for h in hs if h.roof == "flat"]
         self.assertGreater(len(flat), 0.85 * len(hs), "overwhelmingly flat terrace roofs")
         self.assertTrue(all(not str(h.wall).startswith(bld.SIDING) for h in hs), "no wooden clapboard siding")
+
+    def test_australian_houses(self):
+        """Australia's suburbs: mostly single-storey brick under tile; semis keep a pitched roof (they were 70 %
+        two-storey, ~19 % brick, half under metal, and every semi-detached pair flat)."""
+        hs = self.houses(-37.81, 145.0)                 # Melbourne's inner east
+        one = sum(1 for h in hs if h.floors == 1)
+        self.assertGreater(one, 0.6 * len(hs))
+        self.assertLess(one, 0.8 * len(hs), "some two-storey houses still")
+        brick = sum(1 for h in hs if h.band == bld.BAND_BRICK)
+        self.assertGreater(brick, 0.55 * len(hs))
+        pitched = [h for h in hs if h.roof != "flat"]
+        self.assertGreater(len(pitched), 0.95 * len(hs))
+        tiled = sum(1 for h in pitched if h.roof_mat.startswith(bld.ROOF_TILES + "|"))
+        self.assertGreater(tiled, 0.65 * len(pitched))
+        self.assertLess(sum(1 for h in hs if h.porch), 0.1 * len(hs), "few American porches")
+        semis = [bld.plan(rect(9 * k, 0, 9, 14), {"class": "semidetached_house"}, 1, -33.9, 151.1) for k in range(40)]
+        self.assertGreater(sum(1 for h in semis if h.roof != "flat"), 0.7 * len(semis), "semis: pitched roofs")
+        nz = self.houses(-36.85, 174.76)                # New Zealand keeps oceania's
+        self.assertLess(sum(1 for h in nz if h.floors == 1), 0.45 * len(nz))
 
     def test_alpine_houses(self):
         hs = self.houses(46.59, 7.91)
