@@ -440,7 +440,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             seg = dnp.hypot(*np.diff(p, axis=0).T)
             s = np.concatenate([[0.0], np.cumsum(seg)])
             L = float(s[-1])
-            if L < 1.0:
+            if L < 1e-6:
                 continue
             if rspecs[i] is not None:
                 tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
@@ -507,6 +507,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         sk = round(at * L, 2)
                         if 0 < at < 1 and not any(abs(sk - m) < 0.01 for m in marks):
                             marks[sk] = f"s{fid}_v{int(round(at * 1e6))}"
+            # Even a sub-metre source road can join distinct connectors. Only
+            # discard it when the marks collapse at the graph's centimetre precision.
+            if len(marks) < 2:
+                continue
             order = sorted(marks)
             full = []
             for a, b in zip(order[:-1], order[1:]):
