@@ -10630,7 +10630,9 @@ async def main_async(args):
                 snap = tracemalloc.take_snapshot()
                 top = snap.statistics("lineno")[:TRACE_TOP]
                 total = sum(st.size for st in snap.statistics("filename"))
-                log.info("memory: rss %.0f MB, %.0f MB traced; top: %s", blockworker._rss_mb(), total / 1e6, "; ".join(
+                log.info("memory: rss %.0f MB, held %.0f MB (%.0f the tracer's), %.0f MB traced; top: %s",
+                         blockworker._rss_mb(), blockworker._held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6,
+                         total / 1e6, "; ".join(
                     f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} {st.size / 1e6:.0f} MB"
                     for st in top))
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()

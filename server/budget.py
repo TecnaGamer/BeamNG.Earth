@@ -512,31 +512,51 @@ def memory_mb(private=False):
         return (rss + swap) / 1024.0
     except (OSError, ValueError):
         pass
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            from ctypes import wintypes
+    win = _win_memory()
+    return win[1] / 2 ** 20 if win else None
 
-            class PMC(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
-                    (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
-                                                   "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
-                                                   "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
-                                                   "PrivateUsage")]
-            c = PMC()
-            c.cb = ctypes.sizeof(c)
-            k32 = ctypes.WinDLL("kernel32")
-            k32.GetCurrentProcess.restype = wintypes.HANDLE
-            # (argtypes: without them ctypes passed the pseudo handle (2**64 - 1 as HANDLE) as a C int, OverflowError,
-            # and this returned None on every Windows machine: the worker memory ceiling never ran there, 2026-11-11 -
-            # 16 GB test PC: eight workers at 0.9-3.6 GB private each, 33 of 36.8 GB committed after 30 minutes)
-            k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
-            k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
-            if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
-                return c.PrivateUsage / 2 ** 20
-        except Exception:
-            pass
+
+def _win_memory():
+    """(working set, private bytes) of this process in bytes (Windows), or None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                               "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                               "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                               "PrivateUsage")]
+        c = PMC()
+        c.cb = ctypes.sizeof(c)
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        # (argtypes: without them ctypes passed the pseudo handle (2**64 - 1 as HANDLE) as a C int, OverflowError,
+        # and memory_mb returned None on every Windows machine: the worker memory ceiling never ran there, 2026-11-11 -
+        # 16 GB test PC: eight workers at 0.9-3.6 GB private each, 33 of 36.8 GB committed after 30 minutes)
+        k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
+        k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+        if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            return c.WorkingSetSize, c.PrivateUsage
+    except Exception:
+        pass
     return None
+
+
+def resident_mb():
+    """This process's memory in RAM now, in MB (Linux: its resident set; Windows: its working set, the mapped cache
+    files' pages in use included), or None: the memory log's "rss" (BNGE_TRACEMALLOC), which read 0 on Windows (from
+    josh-abrams' PR #1216)."""
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+    except (OSError, ValueError, AttributeError):
+        pass
+    win = _win_memory()
+    return win[0] / 2 ** 20 if win else None
 
 
 def process_mb(pid):
@@ -951,7 +971,14 @@ def tree_publisher():
 
 
 def _malloc_small():
-    """Linux (glibc): at most ARENA_MAX malloc arenas, and the freed memory given back every TRIM_S (a thread)."""
+    """Linux (glibc): at most ARENA_MAX malloc arenas, and the freed memory given back every TRIM_S (a thread).
+
+    Nothing like it on Windows, measured there (josh-abrams' PR #1216; a 32-thread PC, four teleports round
+    Manhattan, the server's 17 processes two minutes after the last): its heaps keep little freed memory (7.0 GB in
+    use of the 7.8 GB committed, Python's own small-object arenas 1.77 of 1.83 GB), having no arena per thread.
+    HeapOptimizeResources and HeapCompact on every heap every 30 s left the processes' private bytes where they were
+    (12.60 GB for 12.65) and took up to 39 ms a call; ucrt's _heapmin gave nothing back in a test of 48 threads' mixed
+    allocations. (trim()'s HeapCompact runs only at a shed, after its caches are dropped.)"""
     global _trimming
     if not sys.platform.startswith("linux") or _trimming:
         return

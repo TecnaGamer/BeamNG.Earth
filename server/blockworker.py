@@ -180,11 +180,15 @@ def load_airports(cache_dir, dem):
 
 
 def _rss_mb():
-    try:
-        with open("/proc/self/statm") as f:
-            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1e6
-    except (OSError, ValueError):
-        return 0.0
+    """This process's memory in RAM, in MB (budget.resident_mb: Windows too, where this read 0)."""
+    import budget
+    return budget.resident_mb() or 0.0
+
+
+def _held_mb():
+    """... and what the memory ceiling counts (budget.memory_mb: resident + swapped; Windows: private bytes)."""
+    import budget
+    return budget.memory_mb() or 0.0
 
 
 def _trace_memory(every_s=60.0, top=10):
@@ -217,7 +221,9 @@ def _trace_memory(every_s=60.0, top=10):
             else:
                 top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
                              for st in snap.statistics("lineno")[:top]]
-            log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
+            # (held: what the memory ceiling counts, budget.memory_mb; the tracer's own tables are part of it)
+            log.info("memory pid %d: rss %.0f MB, held %.0f MB (%.0f the tracer's), traced %.0f MB; top: %s",
+                     os.getpid(), _rss_mb(), _held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6, total / 1e6,
                      "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
