@@ -865,4 +865,25 @@ do -- the switch: COUNT_ITEMS false counts them again (the old way)
   trees.COUNT_ITEMS = true
 end
 
+do -- the keep-up recorder's view (keepup.lua): rows that should stand near a spot and are not made, and the hooks
+  T.check(#trees.keepupMissing(50, 10, 20) == 0, 'keepupMissing: nothing missing round a made tile')
+  local made, tiles_ = {}, {}
+  trees.onKeepupItem = function(t, i, g, x, y) made[#made + 1] = { t.id, i, g, x, y } end
+  trees.onKeepupTile = function(key) tiles_[#tiles_ + 1] = key end
+  local r2 = {}
+  for i = 0, 9 do r2[#r2 + 1] = string.format('{0, %d, 300, 5, 0, 1, 12, %.2f}', i, i / 10) end
+  files['/t/k.json'] = '{ groups = {}, items = { ' .. table.concat(r2, ', ') .. ' } }'
+  trees.onTile({ anchorId = 1, key = '0_1', path = '/t/k.json', n = 10 }, 1)
+  local miss = trees.keepupMissing(5, 300, 20)
+  T.check(#miss == 10 and miss[1].key == '1:0_1' and miss[1].group == '?' and tiles_[1] == '1:0_1',
+    'keepupMissing: a tile not made yet near the spot: its rows (' .. #miss .. ' ' .. tostring(miss[1] and miss[1].key)
+    .. ' ' .. tostring(miss[1] and miss[1].group) .. ' ' .. tostring(tiles_[1]) .. ')')
+  T.check(#trees.keepupMissing(5, 300, 3) == 7, 'keepupMissing: only the rows within r')
+  trees.update(1, { x = 5, y = 300 })
+  T.check(#trees.keepupMissing(5, 300, 20) == 0 and #made == 10 and made[1][1] == '1:0_1' and made[1][5] == 300,
+    'keepup hooks: each item made reported with its tile, row and spot')
+  trees.onKeepupItem, trees.onKeepupTile = nil, nil
+  trees.onDrop({ anchorId = 1, key = '0_1' })
+  trees.update(1, { x = 50, y = 50 })
+end
 T.done('test_trees')

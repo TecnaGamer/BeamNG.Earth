@@ -1029,6 +1029,7 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
     if pair then it = pair else M.errors = M.errors + 1 end
   end
   M.made = M.made + 1
+  if M.onKeepupItem then M.onKeepupItem(t, i, group, itemPos.x, itemPos.y) end   -- (keepup.lua, debug)
   pop[shape] = (pop[shape] or 0) + 1
   local b = spellBase[shape] or shape
   basePop[b] = (basePop[b] or 0) + 1
@@ -1099,8 +1100,10 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
     t.moved = old and old.moved or nil
     M.placeGeo(t)
   end
+  t.id = key
   setTile(key, t)
   dirty = true
+  if M.onKeepupTile then M.onKeepupTile(key, t) end       -- (keepup.lua: a debug recorder, off unless a tool starts it)
 end
 
 -- Pure-ish: a geotile's centre and half size in the current placement (t.pl), for the distances.
@@ -1833,6 +1836,64 @@ function M.countItems()
   local items = 0
   for _, t in pairs(tiles) do for _ in pairs(t.made) do items = items + 1 end end
   return items
+end
+
+-- keepup.lua (a debug recorder): the rows within r of (px, py) a tree pass should show there now and are not made
+-- ({ key, i, group, x, y, reason }; reason: 'flush' a moved geotile being made again, 'pending' its pass not done,
+-- '' otherwise). The pass's own rules for a row (M.update), the car's distance for the tile's (no camera).
+function M.keepupMissing(px, py, r)
+  local out = {}
+  for li = 1, #tileList do
+    local key = tileList[li]
+    local t = tiles[key]
+    local h = t.half or 128
+    local bx = math.max(math.abs(px - t.cx) - h, 0)
+    local by = math.max(math.abs(py - t.cy) - h, 0)
+    local dist = math.sqrt(bx * bx + by * by)
+    if dist <= r and not t.drop and (t.geo or not t.ghost) then
+      local want = tileThreshold(dist, t)
+      local f, s, names = t.f, t.s, t.groups or GROUPS
+      local pl = t.geo and t.pl
+      local lx, ly, ax, ay = px, py, 1, 0
+      if pl then                      -- (the car in the tile's frame, for a quick test of each row)
+        local ox, oy = geotile.apply(pl, 0, 0, pl.pz)
+        local ex, ey = geotile.apply(pl, 1, 0, pl.pz)
+        ax, ay = ex - ox, ey - oy
+        lx = (px - ox) * ax + (py - oy) * ay
+        ly = -(px - ox) * ay + (py - oy) * ax
+      end
+      local r2 = (r + 5) * (r + 5)
+      for i = 1, t.n do
+        local b = (i - 1) * s
+        local x, y = f[b + F_X], f[b + F_Y]
+        if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
+          local g = names[f[b + F_GROUP] + 1]
+          local rk = f[b + F_RANK]
+          local cap = g and M.GROUP_MAX_M[g]
+          if M.isBarrier(g) then
+            local rowCap
+            for _, lim in ipairs(M.TILE_CAP) do if dist <= lim[1] then rowCap = lim[2]; break end end
+            if cap and dist > cap then rk = 2 elseif not rowCap or t.n <= rowCap then rk = 0 end
+          elseif cap and dist > cap then rk = 2 end
+          if g and M.FAR_ONLY[g] then
+            if dist <= M.CLUMP_M then rk = 2 end
+          elseif f[b + F_SCALE] < 0 and dist > M.CLUMP_M then rk = 2 end
+          if g and (M.groupOff[g] or not M.CATALOG[g]) then rk = 2 end
+          if rk < want and g and (M.suppress or next(M.hiders)) and hidden(g, x, y, t.anchor, t, f[b + F_Z]) then rk = 2 end
+          if rk < want then
+            local wx, wy = x, y
+            if pl then wx, wy = geotile.apply(pl, x, y, f[b + F_Z]) end
+            local ddx, ddy = wx - px, wy - py
+            if ddx * ddx + ddy * ddy <= r * r then
+              out[#out + 1] = { key = key, i = i, group = g or '?', x = wx, y = wy,
+                reason = t.flush and 'flush' or (t.moved and 'moved') or (t.pending and 'pending') or '' }
+            end
+          end
+        end
+      end
+    end
+  end
+  return out
 end
 
 function M.status()
