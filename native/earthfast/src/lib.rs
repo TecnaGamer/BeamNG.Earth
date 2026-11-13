@@ -6328,6 +6328,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193); roadz's
     // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180); junctions_find's left_hand (left-hand
     // traffic's stop lines on the incoming half, zolaski333's PR #1134)
+    // 263: railway stations' platform edges and link chains with their tracks / ends in grids (stationgeom:
+    // station_snap_edges, station_link_chains: railstations.snap_edges / _links' chains, King's Cross / Euston tiles)
+    m.add_function(wrap_pyfunction!(stationgeom::station_snap_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_link_chains, m)?)?;
     // 264: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
     // reports 2026-11-12)
     m.add("VERSION", 264)?;

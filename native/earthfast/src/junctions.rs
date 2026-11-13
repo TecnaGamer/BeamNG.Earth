@@ -211,6 +211,10 @@ const ROUNDABOUT: u8 = 4;
 const SIDEWALKS: u8 = 8;
 const SERVICE: u8 = 16;
 const MAJOR: u8 = 32;
+// one-way along its points (64), against them (128); both: a single lane both ways (too narrow for a centre line):
+// the stop line where traffic comes in only, across the whole driving width (earthfast 264)
+const ONEWAY_FWD: u8 = 64;
+const ONEWAY_BACK: u8 = 128;
 
 /// a road side's sidewalk (spec.street.side(...)): no street record, a side without a curbside walk (the corner
 /// skipped), or a walk (width, its (width, surface) rank: footway's max)
@@ -962,12 +966,27 @@ fn find_core(k: &K, net: &Net, walk_w: Option<f64>, parking_m: f64, pavement: bo
                 cw_half = hl;
             }
             let ts = t + k.cw_w / 2.0 + k.stop_gap + k.stop_w / 2.0;
-            if branch_len(pts, vi, si) > ts + 2.0 {
+            // (a one-way road: a line only where its traffic comes in, the branch running against its direction, and
+            // then across all of it; a single lane both ways likewise across all of it: the same half line on every
+            // arm stood across a one-way street's exit and on half of a one-way approach, the user's London report
+            // 2026-11-12 at Berwick Street / D'Arblay Street, four one-way arms)
+            let (fwd, back) = (net.has(ri, ONEWAY_FWD), net.has(ri, ONEWAY_BACK));
+            let (incoming, whole) = match (fwd, back) {
+                (true, false) => (si < 0, true),
+                (false, true) => (si > 0, true),
+                (true, true) => (true, true),
+                _ => (true, false),
+            };
+            if incoming && branch_len(pts, vi, si) > ts + 2.0 {
                 let cs = add(pi, mul(ui, ts));
                 let zs = z_along(pts, vi, si, ts);
                 // (right-hand traffic coming in along -ui drives on ui's left: nl; left-hand on its right)
                 let inc = if k.left_hand { mul(nl, -1.0) } else { nl };
-                let (sa, sb) = (add(cs, mul(inc, 0.2)), add(cs, mul(inc, dw - 0.3)));
+                let (sa, sb) = if whole {
+                    (sub(cs, mul(inc, dw - 0.3)), add(cs, mul(inc, dw - 0.3)))
+                } else {
+                    (add(cs, mul(inc, 0.2)), add(cs, mul(inc, dw - 0.3)))
+                };
                 out.stops.push(([sa[0], sa[1], zs], [sb[0], sb[1], zs]));
             }
             let (t0, t1) = (t - k.cw_w / 2.0, t + k.cw_w / 2.0);
@@ -1010,8 +1029,9 @@ fn rows2<'py>(py: Python<'py>, v: &[P2]) -> Bound<'py, PyAny> {
 /// width (spec.walk), flags (1 has_walk, 2 has_parking, 4 roundabout, 8 has_sidewalks, 16 service, 32 a major
 /// class), its two sides' walks (fw_state 0 no street record / 1 none or set back / 2 a walk; fw_width, fw_rank:
 /// (width, surface) order; walks: the 2 n objects); consts in junctions._consts' order; left_hand: traffic drives
-/// on the left (the stop lines across the incoming half on the branch's right; zolaski333's PR #1134). Returns find's
-/// 6-tuple.
+/// on the left (the stop lines across the incoming half on the branch's right; zolaski333's PR #1134). Flags 64 / 128:
+/// one-way along / against its points, both: a single lane both ways (the stop line where traffic comes in only,
+/// across the whole driving width; earthfast 264). Returns find's 6-tuple.
 #[pyfunction]
 #[pyo3(signature = (pts, off, fids, fid_rank, width, rad, walk, flags, fw_state, fw_width, fw_rank, walks, walk_w,
                     parking_m, pavement, bounds, consts, radius_tries, cw_w, stop_w, left_hand=false))]

@@ -63,6 +63,9 @@ def parts(frame, cells, box, reach=REACH_M):
         hit = np.isin(cls, WALK_CLASSES)
         if sub is not None:
             hit &= np.asarray(sub).astype(str) == "road"
+        if hit.any():                   # (a street closed to cars is a road, its bridge the roads': roads.cycle_streets)
+            import roads
+            hit &= ~roads.cycle_streets(feats)
         fb = None
         for i in np.flatnonzero(hit):
             c = str(cls[i])
