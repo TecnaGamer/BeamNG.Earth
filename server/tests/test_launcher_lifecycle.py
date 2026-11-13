@@ -314,3 +314,192 @@ class MemoryNoticeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeSteamLog:
+    """SteamLog stand-in: lines that appear at given times (clock.now)."""
+
+    def __init__(self, clock, timed):
+        self.clock, self.timed = clock, sorted(timed)
+
+    def read(self):
+        out = [line for t, line in self.timed if t <= self.clock.now]
+        self.timed = [(t, line) for t, line in self.timed if t > self.clock.now]
+        return out
+
+
+def steam_line(text):
+    return "[2026-11-12 16:34:25] GameAction [AppID 284160, ActionID 3] : " + text
+
+
+class SteamHandoffTest(unittest.TestCase):
+    """The Windows start through Steam is watched (a player's dev 401 start stopped at "starting through Steam" with no
+    game, four times, Discord 2026-11-12): Steam silent -> asked again -> the game started directly; Steam working on the
+    start -> never overtaken."""
+
+    def handoff(self, alive_at=None, lines=(), steam_up=True, direct_proc="proc"):
+        clock = Clock()
+        calls, said = [], []
+        result = launcher.steam_handoff(
+            ask=lambda: calls.append(("ask", clock.now)), retry=lambda: calls.append(("retry", clock.now)),
+            direct=lambda: calls.append(("direct", clock.now)) or direct_proc,
+            alive=lambda: alive_at is not None and clock.now >= alive_at,
+            steam_log=FakeSteamLog(clock, lines), steam_up=lambda: steam_up,
+            clock=lambda: clock.now, sleep=clock.sleep, report=said.append)
+        return result, calls, said, clock.now
+
+    def test_game_appears(self):
+        (how, proc), calls, said, _ = self.handoff(alive_at=4)
+        self.assertEqual((how, proc), ("started", None))
+        self.assertEqual([c[0] for c in calls], ["ask"])
+        self.assertEqual(said, [])
+
+    def test_silent_steam_is_asked_again_then_the_game_starts_directly(self):
+        with mock.patch.object(launcher, "say"):
+            (how, proc), calls, said, now = self.handoff()
+        self.assertEqual((how, proc), ("direct", "proc"))
+        self.assertEqual([c[0] for c in calls], ["ask", "retry", "direct"])
+        self.assertAlmostEqual(calls[1][1], launcher.STEAM_RETRY_S, delta=0.6)
+        self.assertAlmostEqual(calls[2][1], launcher.STEAM_DIRECT_S, delta=0.6)
+        self.assertTrue(any("directly" in s for s in said))
+
+    def test_the_retry_works(self):
+        (how, _), calls, _, _ = self.handoff(alive_at=launcher.STEAM_RETRY_S + 3)
+        self.assertEqual(how, "started")
+        self.assertEqual([c[0] for c in calls], ["ask", "retry"])
+
+    def test_steam_starting_itself_gets_longer(self):
+        with mock.patch.object(launcher, "say"):
+            (how, _), calls, _, _ = self.handoff(steam_up=False)
+        self.assertEqual(how, "direct")
+        self.assertGreaterEqual(calls[1][1], launcher.STEAM_RETRY_S + launcher.STEAM_COLD_S - 0.6)
+
+    def test_steam_working_on_it_is_not_overtaken(self):
+        lines = [(1, steam_line('LaunchApp changed task to SynchronizingCloud with ""')),
+                 (2, steam_line('LaunchApp waiting for user response to ShowEula ""'))]
+        (how, proc), calls, said, now = self.handoff(lines=lines)
+        self.assertEqual((how, proc), ("steam", None))
+        self.assertEqual([c[0] for c in calls], ["ask"])
+        self.assertTrue(any("Steam's window (ShowEula)" in s for s in said))
+        self.assertLess(now, launcher.STEAM_RETRY_S)
+
+    def test_quick_answers_are_not_said(self):
+        lines = [(1, steam_line('LaunchApp waiting for user response to CreatingProcess ""')),
+                 (1, steam_line('LaunchApp continues with user response "CreatingProcess"')),
+                 (2, "[2026-11-12 16:34:26] Game process added : AppID 284160 \"C:\\BeamNG.drive.exe\", ProcID 1")]
+        (how, _), calls, said, _ = self.handoff(lines=lines)
+        self.assertEqual(how, "started")
+        self.assertEqual(said, [])
+
+    def test_no_game_folder(self):
+        with mock.patch.object(launcher, "say"):
+            (how, proc), _, _, _ = self.handoff(direct_proc=None)
+        self.assertEqual((how, proc), ("none", None))
+
+    def test_news_and_words(self):
+        news = launcher.steam_news([
+            '[2026-11-12 00:22:00] ExecuteSteamURL: "steam://rungameid/284160"',
+            steam_line('LaunchApp changed task to UpdatingApp with ""'),
+            '[2026-11-12 00:22:01] Game process added : AppID 284160 "x", ProcID 8228, IP 0.0.0.0:0',
+            '[2026-11-12 00:22:01] GameAction [AppID 999, ActionID 1] : LaunchApp changed task to Completed with ""'])
+        self.assertEqual([k for k, _ in news], ["asked", "step", "started"])
+        self.assertIn("updating", launcher.steam_step_text(news[1][1]))
+        self.assertIsNone(launcher.steam_step_text('LaunchApp changed task to Completed with ""'))
+
+    def test_steam_log_reads_only_new_complete_lines(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "console_log.txt")
+            Path(path).write_bytes(b"old line\n")
+            log = launcher.SteamLog(path)
+            with open(path, "ab") as f:
+                f.write(b"new one\nhalf")
+            self.assertEqual(log.read(), ["new one"])
+            with open(path, "ab") as f:
+                f.write(b" done\n")
+            self.assertEqual(log.read(), ["half done"])
+            self.assertEqual(launcher.SteamLog(None).read(), [])
+
+
+class WindowsListeningTest(unittest.TestCase):
+    def table(self, ports):
+        import socket
+        import struct
+        rows = b"".join(struct.pack("<6I", 2, 0x0100007F, socket.htons(p), 0, 0, 1234) for p in ports)
+        return struct.pack("<I", len(ports)) + rows
+
+    def test_port_in_the_table(self):
+        self.assertTrue(bmplaunch.windows_listening(47613, table=self.table([135, 47613])))
+        self.assertFalse(bmplaunch.windows_listening(4444, table=self.table([135, 47613])))
+        self.assertFalse(bmplaunch.windows_listening(4444, table=self.table([])))
+        self.assertIsNone(bmplaunch.windows_listening(4444, table=b"\x05\x00\x00\x00"))
+
+    def test_not_windows_asks_by_connecting(self):
+        self.assertIsNone(bmplaunch.windows_listening(4444) if not bmplaunch.IS_WIN else None)
+        with mock.patch.object(bmplaunch.socket, "create_connection", side_effect=OSError):
+            self.assertFalse(bmplaunch.listening(4444))
+
+
+class StartOrderTest(unittest.TestCase):
+    """The game starts before the world server is waited for (a ten-second Windows start, Discord 2026-11-12); BeamMP
+    before the game; a game already running waits for the server first."""
+
+    def run_launcher(self, running=False, server_ok=True, game_first=True, watched=False):
+        order = []
+        args = argparse.Namespace(user_dir="/u", build="native", keep_mod=True, game_dir=None, no_game=False, extra=[],
+                                  cache_dir=None, clear_cache=False, no_gcpatch=True, gfx="", gpu="off",
+                                  no_update_check=True, no_beammp=False)
+        server = mock.Mock()
+        server.poll.return_value = None
+        with ExitStack() as st:
+            p = lambda name, **kw: st.enter_context(mock.patch.object(launcher, name, **kw))
+            p("IS_WIN", new=False)
+            p("GAME_FIRST", new=game_first)
+            for name in ("title", "support_notice", "memory_notice", "row", "say", "watch_game_log",
+                         "clear_level_flag", "problem"):
+                p(name)
+            p("update_at_start", return_value=False)
+            p("under_wine", return_value=False)
+            p("steam_compat_tool", return_value=None)
+            p("steam_launch_options", return_value="")
+            p("gpu_plan", return_value=({}, None))
+            p("game_still_running", return_value=running)
+            p("linux_game_exe", return_value="/g/BinLinux/BeamNG.drive.x64")
+            p("cache_dir_arg", return_value=None)
+            p("server_port_busy", return_value=False)
+            p("data_dir", return_value="/d")
+            p("start_server", side_effect=lambda *a, **k: order.append("server spawned") or server)
+            p("wait_server_ready", side_effect=lambda *a, **k: order.append("server waited") or server_ok)
+            p("beammp_up", side_effect=lambda *a, **k: order.append("beammp") or None)
+            def start_game(*a, meanwhile=None, **k):
+                order.append("game")
+                if watched and meanwhile:       # (the start watched: the server followed meanwhile, once)
+                    meanwhile()
+                    order.append("watching")
+            p("start_game", side_effect=start_game)
+            p("wait_for_game", side_effect=lambda *a, **k: order.append("follow") or True)
+            p("stop_server")
+            st.enter_context(mock.patch("install.clear_reload_files"))
+            st.enter_context(mock.patch("install.reload_running_game", return_value=True))
+            if server_ok:
+                launcher.run(args)
+            else:
+                with self.assertRaises(SystemExit):
+                    launcher.run(args)
+        return order
+
+    def test_game_first(self):
+        self.assertEqual(self.run_launcher(), ["server spawned", "beammp", "game", "server waited", "follow"])
+
+    def test_server_followed_while_the_start_is_watched(self):
+        self.assertEqual(self.run_launcher(watched=True),
+                         ["server spawned", "beammp", "game", "server waited", "watching", "follow"])
+
+    def test_off_waits_for_the_server_first(self):
+        self.assertEqual(self.run_launcher(game_first=False),
+                         ["server spawned", "server waited", "beammp", "game", "follow"])
+
+    def test_game_already_running(self):
+        self.assertEqual(self.run_launcher(running=True), ["server spawned", "server waited", "beammp", "follow"])
+
+    def test_server_failing_after_the_game_started(self):
+        self.assertEqual(self.run_launcher(server_ok=False), ["server spawned", "beammp", "game", "server waited"])
