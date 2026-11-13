@@ -402,6 +402,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - The **mod** (`mod/beamng_earth/`) loads the tiles as meshes, keeps an invisible physics terrain
   under the car, moves the world origin as you drive (floating origin), and blends level-of-detail
   changes so nothing pops.
+- The project's CDN, data builds and backend services, and how to run your own: [docs/HOSTING.md](docs/HOSTING.md).
 - Design and measurements: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/V1_4_SPEC.md](docs/V1_4_SPEC.md), research notes in [docs/research/](docs/research/).
 
