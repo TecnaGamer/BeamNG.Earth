@@ -721,7 +721,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
     preferred[a] = preferred[a] or {}; preferred[b] = preferred[b] or {}
     preferred[a][b], preferred[b][a] = true, true
   end
-  local best, bd, kept, kd = nil, math.huge, nil, math.huge
+  local best, bd, kept, kd, surface, sd = nil, math.huge, nil, math.huge, nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
     if not (a and b) or not drivable(e, from) then return end
@@ -743,6 +743,9 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
       local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
       local distanceSq = d * d + dz * dz
       if (d < reach or (tolerance and d == reach)) and distanceSq < bd then best, bd = { from, to }, distanceSq end
+      -- The fallback tolerance must not select a nearby narrow road over the lane actually occupied.
+      if not tolerance and along >= 0 and along <= 1 and d < ra + t * (rb - ra)
+        and math.abs(dz) <= 2 and distanceSq < sd then surface, sd = { from, to }, distanceSq end
       if preferred[from] and preferred[from][to] and along >= 0 and along <= 1 and d < ra + t * (rb - ra)
         and math.abs(dz) <= 2 and distanceSq < kd then kept, kd = { from, to }, distanceSq end
     end
@@ -753,7 +756,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
       try(other, id, e)
     end
   end
-  best = kept or best
+  best = kept or surface or best
   if best then return best[1], best[2] end
 end
 
@@ -824,7 +827,23 @@ function M.vehicleHasGraph(veh)
   return vehGraph[veh:getId()] == serial
 end
 
-local function driveArrowsPath(gm, nodes)
+-- Exact pins for the projections already accepted by routeTarget. Position-based planner legs can snap
+-- independently to overlapping roads; pinning their graph endpoints keeps the confirmed connection.
+function M.targetNodes(a, b, target)
+  if not a or not b or not target then return end
+  local ids = { a, b }
+  local function add(point)
+    local s = point and point.segment
+    if not s then return false end
+    local id = (s[3] - s[1]) * point.dx + (s[4] - s[2]) * point.dy >= 0 and s.b or s.a
+    if id ~= ids[#ids] then ids[#ids + 1] = id end
+    return true
+  end
+  for _, via in ipairs(target.via or {}) do if not add(via.projection) then return end end
+  if add(target.projection) then return ids end
+end
+
+local function driveArrowsPath(gm, nodes, target)
   local veh = playerVeh()
   if not veh or not gm.routePlanner then return end
   if not M.vehicleHasGraph(veh) then
@@ -855,11 +874,30 @@ local function driveArrowsPath(gm, nodes)
   -- disabled the AI's Lua (ai.lua getEdgeLaneConfig, Lauterbrunnen 2026-10-15). The valid part is driven and the
   -- route planned again at the next check
   local valid = M.validFrom(ids, 1, { nodes })
+  local joined = M.connectedStart(valid, a, b, nodes)
+  if #valid < #ids or not joined then
+    local pins = M.targetNodes(a, b, target)
+    if pins then
+      local ok, planner = pcall(require, '/lua/ge/extensions/gameplay/route/route')
+      if ok then
+        planner = planner()
+        planner:setupPathMultiWaypoints(pins)
+        local replacement = M.pathNodes(planner.path, nodes, a, b)
+        local nextPin = 1
+        for _, id in ipairs(replacement) do if id == pins[nextPin] then nextPin = nextPin + 1 end end
+        local connected = M.connectedStart(replacement, a, b, nodes)
+        if nextPin > #pins and connected and #M.validFrom(connected, 1, { nodes }) == #connected then
+          ids, valid, joined = connected, connected, connected
+          M.nodePlans = (M.nodePlans or 0) + 1
+        end
+      end
+    end
+  end
   if #valid < #ids then
     ids, routedTo = valid, nil
     M.pathCuts = (M.pathCuts or 0) + 1
   end
-  ids = M.connectedStart(ids, a, b, nodes)
+  ids = joined
   if not ids or #ids == 0 then holdAutodrive(veh); return end
   if #ids == 1 and ids[1] == autoFinished then
     local n = nodes[ids[1]]
@@ -988,7 +1026,7 @@ end
 
 local arrowsSerial = nil
 -- target: a vec3, or a list of them (waypoints along the route, then the target)
-local function setArrows(key, target, tail, nodes)
+local function setArrows(key, target, tail, nodes, projections)
   local serial = graphSerial()
   if key == routedTo and serial == arrowsSerial then return end
   local gm = rawget(_G, 'core_groundMarkers')
@@ -1011,7 +1049,7 @@ local function setArrows(key, target, tail, nodes)
   if pcall(gm.setPath, target, { clearPathOnReachingTarget = false }) then
     routedTo, arrowsSerial = key, serial
     -- (not before the route is in: the AI would set off on its own way toward the destination)
-    if auto and route ~= nil and not paused then pcall(driveArrowsPath, gm, nodes) end    -- before the tail: the AI drives the graph part only
+    if auto and route ~= nil and not paused then pcall(driveArrowsPath, gm, nodes, projections) end    -- before the tail: the AI drives the graph part only
     if tail then pcall(appendTail, gm, tail.e, tail.s, tail.z) end
     return true
   end
@@ -1265,7 +1303,7 @@ function M.update(anchor, player)
       local wps = {}
       for _, w in ipairs(tg.via or {}) do wps[#wps + 1] = vec3(w.x, w.y, w.z) end
       wps[#wps + 1] = vec3(tg.x, tg.y, tg.z)
-      if setArrows(key, wps, not tg.final and { e = e, s = tg.s, z = tg.z } or nil, nodes) then targetS = tg.s end
+      if setArrows(key, wps, not tg.final and { e = e, s = tg.s, z = tg.z } or nil, nodes, tg) then targetS = tg.s end
       if not ahead and tg.final then approach(remaining) end
       return
     end
