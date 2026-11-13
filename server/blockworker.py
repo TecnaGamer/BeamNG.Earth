@@ -322,12 +322,16 @@ def _memattr_loop(every_s, extra_roots=None, exclude=()):
 
 
 def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_level=logging.INFO, airports=False,
-         sea=False, nice=0, roads_in_ground=None, gas_stations=False):
+         sea=False, nice=0, roads_in_ground=None, gas_stations=False, gpu=True):
     """nice: this worker's niceness on top of the server's (earthd NICE_*): the terrain blocks' workers keep the
     server's own, the road tiles' and the far field's run below them, so the ground under the car wins the server's
     few cores (2026-10-19: at 180 mph the next block waited 6 s behind the road tiles ahead and a ball fell off the
-    block's edge)."""
+    block's edge). gpu False: this process makes no GPU device, its kernels run on the CPU (fast.gpu_off: the
+    far-tile processes, earthd FAR_GPU)."""
     global _s
+    if not gpu:
+        import fast
+        fast.gpu_off()
     # A helper may serve clients with different choices. Never use its own launcher
     # preference for a client's job, or mix painted and mesh roads within one world.
     if roads_in_ground is not None:

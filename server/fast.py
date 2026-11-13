@@ -124,6 +124,15 @@ def gpu():
     return _GPU or None
 
 
+def gpu_off():
+    """This process keeps to the CPU paths: no device is made (gpu() None from now on, as with BNGE_GPU=0). A process
+    with a device holds ~260 MB for it on Windows (NVIDIA, Vulkan, 2026-11-12: 62 MB private bytes when it is made,
+    168 more at the first kernel: a 128 MiB block of mapped memory, gpu.rs' MemoryHints::Performance, and the
+    pipeline), whatever it then does with it: blockworker.init(gpu=False) for the processes where that buys little."""
+    global _GPU
+    _GPU = ""
+
+
 def perf_clean(v, strings=False, allowed=None):
     """v as an anonymous report may carry it, or None (native perfclean.rs: numbers, lists of numbers, small tables
     under plain names; strings only with strings=True; allowed: {name: None | [name, ...]}, the names it may have;
