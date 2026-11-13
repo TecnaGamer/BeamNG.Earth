@@ -7,6 +7,8 @@
 #   bench.sh NAME [--split]      --split: one server per place, NB_JOBS at once (each place from a cold cache)
 #
 #   NB_BASE_REF   the base commit (default ab-dev-baseline), checked out detached in build/netbench/base
+#   NB_AFTER_REF  the after commit, checked out detached in build/netbench/after (default: this checkout as it is, so
+#                 edits made while a run goes reach the servers started after them)
 #   NB_JOBS       servers at once with --split (default 6): each takes ~10 GB of memory, and a server drops its caches
 #                 once the machine has under 3 GB free (downloads again what it dropped: noise in the counts)
 #   NB_LINK       MBIT:RTT_MS: a player's line (netprobe --link): the times are load times on it. Use a low NB_JOBS (2):
@@ -36,12 +38,20 @@ PROBE_ARGS=(${NB_LINK:+--link "$NB_LINK"} ${NB_UNTIL:+--until "$NB_UNTIL"})
 log() { echo "$(date +%H:%M:%S) $*"; }
 rev() { echo "$(git -C "$1" rev-parse --short HEAD)$(git -C "$1" diff --quiet HEAD -- . ':!build' || echo +dirty)"; }
 place() { for p in "${PLACES[@]}"; do [ "${p%%=*}" = "$1" ] && echo "$p"; done; }
+checkout() {   # dir ref: a detached worktree of ref, the checkout's .venv in it
+  if [ ! -d "$1" ]; then
+    git -C "$REPO" worktree add --detach "$1" "$2"
+    ln -s "$REPO/.venv" "$1/.venv"
+  else
+    git -C "$1" checkout -q --detach "$2"
+  fi
+}
 
-if [ ! -d "$BASE" ]; then
-  git -C "$REPO" worktree add --detach "$BASE" "${NB_BASE_REF:-ab-dev-baseline}"
-  ln -s "$REPO/.venv" "$BASE/.venv"
-else
-  git -C "$BASE" checkout -q --detach "${NB_BASE_REF:-ab-dev-baseline}"
+checkout "$BASE" "${NB_BASE_REF:-ab-dev-baseline}"
+AFTER=$REPO
+if [ -n "${NB_AFTER_REF:-}" ]; then
+  AFTER=$DATA/after
+  checkout "$AFTER" "$NB_AFTER_REF"
 fi
 KEY=$(git -C "$BASE" rev-parse --short HEAD)-$(m=${SPLIT#--}; echo "${m:-session}")-$( (cat "$HERE/netprobe.py" \
       "$HERE/sitepatch/sitecustomize.py" "$HERE/cacheproxy.py" "$HERE/link.py"; echo "${PLACES[*]} ${PROBE_ARGS[*]}") \
@@ -49,7 +59,7 @@ KEY=$(git -C "$BASE" rev-parse --short HEAD)-$(m=${SPLIT#--}; echo "${m:-session
 BASE_RUN=$DATA/base-runs/$KEY
 [ "${NB_FRESH_BASE:-}" = 1 ] && rm -rf "$BASE_RUN"
 [ -f "$BASE_RUN/complete" ] || rm -rf "$BASE_RUN"
-declare -A ROOT=([before]=$BASE [after]=$REPO) DEST=([before]=$BASE_RUN [after]=$OUT/after)
+declare -A ROOT=([before]=$BASE [after]=$AFTER) DEST=([before]=$BASE_RUN [after]=$OUT/after)
 SIDES=(after)
 [ -d "$BASE_RUN" ] || SIDES=(before after)
 mkdir -p "$OUT"
@@ -64,7 +74,7 @@ probe() {   # root out places...
   env $PROXY_ENV python3 "$HERE/netprobe.py" --root "$1" --out "$2" "${PROBE_ARGS[@]}" --places "${@:3}" > "$2.out" 2>&1
 }
 
-log "$NAME: before = $(rev "$BASE") ($([ ${#SIDES[@]} = 1 ] && echo "reused: $KEY" || echo measured)), after = $(rev "$REPO")"
+log "$NAME: before = $(rev "$BASE") ($([ ${#SIDES[@]} = 1 ] && echo "reused: $KEY" || echo measured)), after = $(rev "$AFTER")"
 fail=0
 if [ "$SPLIT" = "--split" ]; then
   for label in "${SLOWEST_FIRST[@]}"; do     # (both builds of a place together: the same load for the pair)
