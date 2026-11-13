@@ -446,6 +446,10 @@ class PinnedPlanCache:
     def claim(self, key):
         return self.load(key), False
 
+    def is_short(self, key):
+        """A pinned bundle's plans are final (bundles are built from complete plans): never short."""
+        return False
+
     def store(self, *args, **kwargs):
         raise BundleError("Pinned plan bundles are immutable")
 
