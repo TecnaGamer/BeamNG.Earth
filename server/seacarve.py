@@ -50,6 +50,11 @@ BATHY_URL = ("https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_glo
 BATHY_DOWN = 4              # ~7.5 m pixels
 BATHY_MIN, BATHY_MAX = 1.0, 80.0    # m: a sea floor this deep at least / at most
 BATHY_RETRY_S = 120.0       # s: a cell built without bathymetry is built again after this (in memory)
+# NOAA's answers kept on disk as they came (seacarve/bathy/, outside the version folders: the mosaic does not change
+# with our code) and asked by one process at a time (xproc.once): the block, road and main processes each asked for the
+# same cells, 43 % of a coastal first visit's NOAA requests twice or more at NOAA's 1/s (expo baseline, 2026-11-12)
+BATHY_DIR = "bathy"
+BATHY_WAIT_S = 70.0         # s a process waits for another's request of the same cell (NOAA's timeout 60 s + some)
 SHORE_SLOPE = 0.3           # m/m: with bathymetry, the floor reaches its depth from the shore this steeply
 RAW_MB = 1536               # the uncompressed rasters (memory-mapped; up to ~9.5 MB a cell) kept at most (earthd's start-up
                             # prune: they grew to 13.7 GB on a Steam Deck beside 0.15 GB of the compressed ones they repeat)
@@ -319,6 +324,15 @@ def _near_sea(level, i0, j0):
         return bool(np.any([np.abs(v - SEA_E) < LAKE_NOT_SEA_M / 2 for v in q]))
 
 
+def _short(hit):
+    """A raster() entry's raster; one without its bathymetry (the generic floor, built again later) makes what reads it
+    short (revisit.fault, the reader's builds alone: it may have been built by a prefetch thread)."""
+    if not hit[1]:
+        import revisit
+        revisit.fault(here=True)
+    return hit[0]
+
+
 class SeaCarver:
     """The water of the map-data cells near the player: the sea (level SEA_E) and lakes (each at its own
     level, measured from the DEM), with their floors carved from the shore."""
@@ -327,6 +341,8 @@ class SeaCarver:
         self.md = md
         self.dem = dem                  # dem.Dem for the lakes' levels (None: no lakes)
         self.dir = os.path.join(cache_dir, "seacarve", f"v{VERSION}") if cache_dir else None
+        self.bathy_dir = os.path.join(cache_dir, "seacarve", BATHY_DIR) if cache_dir else None
+        self._bathy_locks = {}
         self._mem = OrderedDict()       # (x, y) -> ((depth, level) or None, complete, built at)
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -362,14 +378,16 @@ class SeaCarver:
             hit = self._mem.get(k)
             if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
                 self._mem.move_to_end(k)
-                return hit[0]
+                return _short(hit)
             lock = self._cell_locks.setdefault(k, threading.Lock())
         with lock:
             with self._lock:
                 hit = self._mem.get(k)
                 if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
-                    return hit[0]
+                    return _short(hit)
             r, complete = self._load(x, y)
+            if not complete:
+                _short((r, False))
             with self._lock:
                 self._mem[k] = (r, complete, time.monotonic())
                 self._mem.move_to_end(k)
@@ -391,7 +409,7 @@ class SeaCarver:
             hit = self._mem.get(k)
             if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
                 self._mem.move_to_end(k)
-                return hit[0], True
+                return hit[0], bool(hit[1])     # (without its bathymetry: not full, water() asks raster() by the sea)
             got = self._land.get(k)
             if got is not None:
                 self._land.move_to_end(k)
@@ -406,7 +424,7 @@ class SeaCarver:
             with self._lock:
                 hit = self._mem.get(k)
                 if hit is not None and (hit[1] or time.monotonic() - hit[2] < BATHY_RETRY_S):
-                    return hit[0], True
+                    return hit[0], bool(hit[1])
                 got = self._land.get(k)
                 if got is not None:
                     return got, False
@@ -444,6 +462,17 @@ class SeaCarver:
         for x, y in new:
             self._prefetch_ex.submit(self._full_bg, x, y)
         return len(new)
+
+    def prefetch_points(self, lat, lon):
+        """prefetch_full of the cells holding the points (a terrain block's grid, blockworker.sea_ahead): their sea
+        floors (NOAA's bathymetry, 1-22 s a request) built while the block's roads are planned, not one cell after
+        another as its grading reaches each (the coastal first block's "sea" stage came after its grading: 11-17 s,
+        expo baseline 2026-11-12). Returns how many were queued."""
+        mx, my = _merc(lat, lon)
+        cx = np.floor(np.asarray(mx) / CELL_PX).astype(np.int64)
+        cy = np.floor(np.asarray(my) / CELL_PX).astype(np.int64)
+        keys = [(int(kx), int(ky)) for kx, ky in _cells_of(cx.ravel(), cy.ravel())]
+        return self.prefetch_full([k for k in keys if not self.ready(*k)])
 
     def _full_bg(self, x, y):
         try:
@@ -648,26 +677,71 @@ class SeaCarver:
 
     def _bathy(self, ox, oy, n):
         """NOAA's elevations (m, negative below the sea) on the n x n raster at z16 pixel (ox, oy), or None
-        when it can't be had now."""
+        when it can't be had now. Its answer kept on disk (BATHY_DIR), asked by one process at a time."""
         fetcher = getattr(self.md, "fetcher", None)
-        if fetcher is None:
-            return None
         res = 2 * math.pi * 6378137.0 / (256 << PX_ZOOM)
         half = math.pi * 6378137.0
         x0, x1 = ox * res - half, (ox + n) * res - half
         y1, y0 = half - oy * res, half - (oy + n) * res
         m = n // BATHY_DOWN
         url = BATHY_URL.format(x0=round(x0, 2), y0=round(y0, 2), x1=round(x1, 2), y1=round(y1, 2), n=m)
+        p = os.path.join(self.bathy_dir, f"{ox}_{oy}_{m}.tif") if self.bathy_dir else None
+        if p is None:
+            return self._bathy_at(p, url, fetcher, m, n, ox, oy)
+        with self._lock:                # (one request a cell in this process too: xproc's lock is the process's)
+            lock = self._bathy_locks.setdefault(p, threading.Lock())
+        with lock:
+            return self._bathy_at(p, url, fetcher, m, n, ox, oy)
+
+    def _bathy_at(self, p, url, fetcher, m, n, ox, oy):
+        body, mine, fresh = None, False, False
+        if p is not None:
+            import xproc
+
+            def kept():
+                try:
+                    with open(p, "rb") as fh:
+                        got = fh.read()
+                except OSError:
+                    return None
+                if got:
+                    cachemod.touch_once(p)
+                return got or None
+            body, mine = xproc.once(p + ".lock", kept, BATHY_WAIT_S)
         try:
-            body = fetcher.get(url).body
+            if body is None:
+                if fetcher is None:
+                    return None
+                body = fetcher.get(url).body
+                fresh = True
+            else:
+                fresh = False
             from PIL import Image
             im = Image.open(io.BytesIO(body))
             if im.mode != "F" or im.size != (m, m):
                 raise ValueError(f"unexpected bathymetry image {im.mode} {im.size}")
             a = np.array(im.resize((n, n), Image.BILINEAR), np.float32)
+            if fresh and p is not None:     # (a good answer alone kept: a bad one is asked again later)
+                try:
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
+                    tmp = staging.tmp_for(p)
+                    with open(tmp, "wb") as fh:
+                        fh.write(body)
+                    staging.replace_cached(tmp, p)
+                except OSError as e:
+                    log.debug("sea: bathymetry %s not kept: %s", p, e)
         except Exception as e:          # netfetch.FetchError, a bad image: later
             log.info("sea: no bathymetry for the cell at %d,%d (%s)", ox, oy, e)
+            if body is not None and not fresh and p is not None:
+                try:
+                    os.remove(p)        # (a damaged kept answer: asked again next time)
+                except OSError:
+                    pass
             return None
+        finally:
+            if mine:
+                import xproc
+                xproc.release(p + ".lock")
         a[(a < -11000) | (a > 9000)] = np.nan     # nodata
         return a
 

@@ -534,7 +534,7 @@ def _raw_all(feats):
 # Per-cell facts shared by the server's processes and kept for the next run (the revisit cache: one file per cell and
 # kind, keyed by the cell, its map data versions and the code): a cell's road specs and level ranges, which every
 # process that draws or grades its roads made for itself (~0.2 s a city cell each; the terrain blocks', the road
-# tiles' and the AI graph's processes, 2026-10-25). Kept only when complete (revisit.faults unchanged).
+# tiles' and the AI graph's processes, 2026-10-25). Kept only when complete (no fault of this thread's: thread_faults).
 _FACTS_LOCK = threading.Lock()
 # A cell's facts made in this process, by its id (_bnge_cell: the cell, the layer, the map data's versions), beyond the
 # layer object they were made for: the map data's memory cache drops and reloads a city's big layers all the time,
@@ -4164,6 +4164,9 @@ def _cell_memo(feats, name, make):
     st = feats.__dict__
     got = st.get(name)
     if got is not None:
+        if st.get(name + "@rule"):
+            import revisit              # (made on the lidar rule: whatever reads it is not kept either)
+            revisit.fault(lidar=True)
         return got
     mk = _ranges_mem_key(st)
     mk = None if mk is None else mk[:1] + (name,) + mk[2:]
@@ -4174,9 +4177,11 @@ def _cell_memo(feats, name, make):
             st[name] = got
             return got
     import revisit
-    f0 = revisit.thread_faults()
+    f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
     got = st[name] = make()
-    if mk is not None and revisit.thread_faults() == f0:
+    if revisit.thread_lidar_faults() != l0:
+        st[name + "@rule"] = True       # (on the lidar rule: not shared with another copy, read as short: above)
+    elif mk is not None and revisit.thread_faults() == f0:
         with _FACTS_LOCK:
             _FACTS_MEM[mk] = got
             while len(_FACTS_MEM) > FACTS_MEM_KEPT:

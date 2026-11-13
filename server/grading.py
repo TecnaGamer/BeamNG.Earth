@@ -2157,6 +2157,10 @@ class _Planner:
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
         self.dgcells = {}       # cell key -> the corrected decks within reach of it (_cell_deck_patches)
+        # (cell keys whose plans / road stage were made short of something, this session's: whatever reads them is not
+        # kept either, _short_read; their own plans not kept for later visits)
+        self.short = set()
+        self.stage_short = set()
         self._dg_local = threading.local()  # (stack: the corrected decks of the cells this thread is planning)
 
     # the store's settings (set on the anchors' Graders after they are made): shared: plancache.PlanCache (the cells'
@@ -2194,6 +2198,9 @@ class _Planner:
         with src.lock:
             if key not in src.cells:            # (its fetch failed: asked again later)
                 return []
+            if key in src.short:
+                with self.lock:
+                    self.short.add(key)
             keeps, covers, opens = src.keeps.get(key, []), src.covers.get(key, []), src.opens.get(key, [])
             dg = src.dgcells.get(key, [])
         import geotiles
@@ -2211,11 +2218,21 @@ class _Planner:
             self.dgcells.setdefault(key, got[4])
             return self.cells[key]
 
+    def _short_read(self, keys):
+        """Plans (or road stages: stages) of cells keys read: those made short of something make the build reading them
+        short too (revisit.fault, in this thread: its own builds alone)."""
+        with self.lock:
+            short = any(k in self.short or k in self.stage_short for k in keys)
+        if short:
+            import revisit
+            revisit.fault(here=True)
+
     def _cell_plans(self, key):
         with self.lock:
             got = self.cells.get(key)
             kl = self.key_locks.setdefault(key, threading.Lock())
         if got is not None:
+            self._short_read((key,))
             return got
         src = self._foreign(key)
         if src is not None:
@@ -2229,6 +2246,7 @@ class _Planner:
             got = self.cells.get(key)
             failed = self.failed.get(key)
         if got is not None:
+            self._short_read((key,))
             return got
         if failed is not None and time.monotonic() - failed < RETRY_S:
             _note_plans(key, False)
@@ -2247,11 +2265,13 @@ class _Planner:
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
         try:
             import revisit
-            # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
-            # kept this one's complete plans from later visits and baked packs: 2026-11-02)
-            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
+            # (this cell's own faults, its scope's: the planning threads of a process plan cells side by side, and
+            # another's fault kept this one's complete plans from later visits and baked packs: 2026-11-02)
+            b = revisit.begin()
             if shared is not None:
                 got = shared
+                if self.shared.is_short(key):      # (another process's, made short of something: read so)
+                    revisit.fault(here=True)
             else:
                 import stackdump    # (a slow plan holds every process waiting for it: say where it waits)
                 watch = stackdump.watch(PLAN_SLOW_S, f"cell {key}'s plans still being made after {PLAN_SLOW_S:.0f} s")
@@ -2269,18 +2289,27 @@ class _Planner:
                         got = tuple(got) + (dg,)
                 finally:
                     watch.cancel()
+            revisit.end(b)
+            whole = b.n == 0 and b.lidar == 0
             if got is None:
                 _note_plans(key, False)
                 return []
             if shared is not None:      # (another process's: complete when the cache says so)
                 known = getattr(self.shared, "known_complete", None)
-                _note_plans(key, known is not None and known(key))
+                _note_plans(key, whole and known is not None and known(key))
             else:
-                _note_plans(key, revisit.thread_faults() == f0 and revisit.thread_lidar_faults() == l0)
+                _note_plans(key, whole)
+            with self.lock:
+                if whole:
+                    self.stage_short.discard(key)       # (its plans hold its roads' now: _road_stages dropped below)
+                else:
+                    self.short.add(key)
+            if not whole and revisit.SITES:
+                log.info("revisit: cell %s's plans made short: %s", key, b.why_not())
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
-                self.shared.store(key, *got, persist=revisit.thread_faults() == f0
-                                  and revisit.thread_lidar_faults() == l0)
+                self.shared.store(key, *got, persist=whole)
         finally:
+            revisit.end(b)
             if mine:
                 self.shared.release(key)
         plans, keeps, covers, opens = got[:4]
@@ -2331,25 +2360,41 @@ class _Planner:
             got = memo.get(key)
             kl = self.__dict__.setdefault("_road_stage_locks", {}).setdefault(key, threading.Lock())
         if got is not None:
+            self._stage_read(key)
             return got
         with kl:
             with self.lock:
                 got = memo.get(key)
             if got is not None:
+                self._stage_read(key)
                 return got
             dg = self._cell_deck_patches(key)
             stack = self._dg_local.__dict__.setdefault("stack", [])
             stack.append(self._stack_entry(key, dg))
+            import revisit
             try:
-                got = self._make_cell_roads(key)
+                with revisit.scope() as b:
+                    got = self._make_cell_roads(key)
             finally:
                 stack.pop()
             if got is not None:
                 with self.lock:
+                    if b.n or b.lidar:
+                        self.stage_short.add(key)
+                    else:
+                        self.stage_short.discard(key)
                     memo[key] = got
                     while len(memo) > self.ROAD_STAGES_KEPT:
                         memo.popitem(last=False)
             return got
+
+    def _stage_read(self, key):
+        """Cell key's road stage read from memory: made short of something, the reader is short too (_short_read)."""
+        with self.lock:
+            short = key in self.stage_short
+        if short:
+            import revisit
+            revisit.fault(here=True)
 
     def _cell_road_plans(self, key):
         """[(fid, Plan)] of cell key's roads alone, without its tunnels' plans (TUNNEL_TAG): the cell's plans' when they
@@ -2371,6 +2416,7 @@ class _Planner:
                 read = self.__dict__.setdefault("_road_kept", OrderedDict())
                 got = read.get(key)
             if got is not None:
+                self._short_read((key,))
                 return got
             if staged is None and failed is not None and time.monotonic() - failed < RETRY_S:
                 return []
@@ -2382,6 +2428,11 @@ class _Planner:
                     kept = None
                 if kept is not None:        # (read once: the cell's own planning takes them in later, _plan_cell)
                     got = [(fid, p) for fid, p in kept[0] if TUNNEL_TAG not in fid]
+                    if self.shared.is_short(key):  # (another process's, made short of something)
+                        with self.lock:
+                            self.short.add(key)
+                        import revisit
+                        revisit.fault(here=True)
                     with self.lock:
                         read[key] = got
                         while len(read) > self.ROAD_STAGES_KEPT:
@@ -2389,6 +2440,7 @@ class _Planner:
                     return got
             staged = self._road_stage(key)
             return [] if staged is None else staged[1]
+        self._short_read((key,))
         return [(fid, p) for fid, p in got if TUNNEL_TAG not in fid]
 
     def _make_cell_roads(self, key):
@@ -5905,6 +5957,7 @@ class _Planner:
         with self.lock:
             hit = memo.get(mk)
         if hit is not None:
+            self._short_read(keys)
             return hit
         got = {}
         for key in keys:

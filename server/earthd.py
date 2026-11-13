@@ -5573,26 +5573,29 @@ class Server:
                     revisitmod.place(blobs["tex.dds"], os.path.join(self.out_dir, texture))
                     tex_bytes, used = int(extra["tex_bytes"]), extra["used"]
                 else:
-                    f0 = revisitmod.faults()
-                    if quick and not is_global and not later:
-                        frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                        later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
-                                                         gutter=True)
-                    if later:
-                        pending = set(pending or ()) | set(later)
-                        with self.imagery.quick():
+                    f0 = revisitmod.begin()         # (this render's faults alone: revisit.scope)
+                    try:
+                        if quick and not is_global and not later:
+                            frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
+                            later = self.imagery.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px),
+                                                             px, gutter=True)
+                        if later:
+                            pending = set(pending or ()) | set(later)
+                            with self.imagery.quick():
+                                rgb, used = self.render_tile(anchor, tile, px, pending)
+                        else:
                             rgb, used = self.render_tile(anchor, tile, px, pending)
-                    else:
-                        rgb, used = self.render_tile(anchor, tile, px, pending)
-                    if geo is not None:
-                        w0 = time.perf_counter()
-                        built, geo = geo.result(), None
-                        geo_wait = time.perf_counter() - w0
-                    rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
-                    if not is_global:
-                        rgb = self.road_faces(anchor, node, px, rgb)
-                        self.write_road_mask(anchor, node, px, texture)
-                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                        if geo is not None:
+                            w0 = time.perf_counter()
+                            built, geo = geo.result(), None
+                            geo_wait = time.perf_counter() - w0
+                        rgb = self.rock_faces(anchor, tile, px, rgb, built.grid)
+                        if not is_global:
+                            rgb = self.road_faces(anchor, node, px, rgb)
+                            self.write_road_mask(anchor, node, px, texture)
+                        tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), rgb)
+                    finally:
+                        revisitmod.end(f0)
                     self.keep_texture(tk, texture, tex_bytes, used, pending, f0)
                 material = self.matslots.take(ck)
                 self.degraded.discard(ck)
@@ -5663,9 +5666,9 @@ class Server:
 
     def keep_texture(self, tk, texture, tex_bytes, used, pending, f0):
         """A far texture rendered here kept in the revisit cache when it is final: no colour-match or de-shadow region
-        still to come (pending), nothing it read failed meanwhile (f0: revisit.faults() before; None: not checked, a
+        still to come (pending), nothing it read failed (f0: its revisit.Build, the render's scope; None: not checked, a
         render again for a region that came)."""
-        if not revisitmod.ON or pending or (f0 is not None and revisitmod.faults() != f0):
+        if not revisitmod.ON or pending or (f0 is not None and not f0.complete):
             return
         try:
             blobs = {"tex.dds": revisitmod.Side(os.path.join(self.out_dir, texture))}     # (linked in, not copied)
@@ -10522,6 +10525,8 @@ async def main_async(args):
     try:
         mapdata = (mapdatamod.MapData(args.cache_dir, fetcher=net)
                    if "on" in (args.surface, args.roads, args.sea, args.trees) else None)
+        if mapdata is not None:
+            mapdata.warm_manifests()    # (versions()' weekly builds pinned before the first builds are keyed on them)
         if os.environ.get("BNGE_WORLD_BUNDLE"):
             from worldbundle import PinnedPlanCache
             PinnedPlanCache(os.environ["BNGE_WORLD_BUNDLE"],

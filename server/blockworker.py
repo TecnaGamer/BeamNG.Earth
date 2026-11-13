@@ -506,6 +506,21 @@ def _level_yards_of(holder, z, la, lo):
     return grader.apply(la, lo, z)
 
 
+def sea_ahead(frame, cx, cy, half):
+    """The sea floors of the block's cells built in the background (seacarve.SeaCarver.prefetch_points) beside its road
+    plans (plan_ahead), so its heights wait for the slower of the two, not the sum."""
+    sea = getattr(_s, "sea", None)
+    if sea is None or not hasattr(sea, "prefetch_points"):
+        return
+    try:
+        xs = cx + np.linspace(-half, half, 9)
+        X, Y = np.meshgrid(xs, cy + np.linspace(-half, half, 9))
+        la, lo, _ = frame.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        sea.prefetch_points(np.asarray(la), np.asarray(lo))
+    except Exception as e:      # (the carve builds them itself then)
+        log.debug("sea ahead of block (%s, %s): %s: %s", cx, cy, type(e).__name__, e)
+
+
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
     the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
@@ -642,6 +657,8 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
     import roads as roadsmod
     t1 = time.perf_counter()
     plan_ahead(g, frame, cx, cy, size * heightmap.SQUARE / 2)
+    if not provisional:
+        sea_ahead(frame, cx, cy, size * heightmap.SQUARE / 2)
     plan_s = time.perf_counter() - t1
     gen = elev
     if ter_name is not None and getattr(_s, "md", None) is not None and not provisional:
@@ -977,7 +994,7 @@ def _where_enu(lat, lon, x0, y0, x1, y1, **settings):
 
 def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of, result_of, where=None):
     """A tile written to out_dir as name (a JSON pointing to its shapes in vfs_dir) from the revisit cache (key k), or
-    built (build() -> its result) and kept there when complete (revisit.faults unchanged). extra_of(result): JSON data
+    built (build() -> its result) and kept there when complete (its revisit.scope clean). extra_of(result): JSON data
     kept with it; result_of(vfs path of name, that data): the result again on a hit. The session's names (vfs_dir, the
     anchor id) are taken out of the kept files and put back."""
     import revisit
@@ -991,9 +1008,9 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
                 data = revisit.swap(data.decode("utf-8"), back).encode("utf-8")
             _write_bytes(os.path.join(out_dir, revisit.swap(g, back)), data)
         return result_of(f"{vfs_dir}/{name}", extra or {})
-    f0 = revisit.faults()
-    res = build()
-    if res is not None and revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        res = build()
+    if res is not None and revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
         try:
             with open(os.path.join(out_dir, name), encoding="utf-8") as f:
                 text = f.read()
@@ -1868,19 +1885,21 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
         return (f"{vfs_dir}/{names['json']}", int(extra.get("n", 0)), extra.get("info") or {},
                 [(sid, [(np.asarray(la), np.asarray(lo)) for la, lo in rs]) for sid, rs in extra.get("pads", [])])
     _stages, mark = _stage_clock()
-    f0 = revisit.faults()
-    g = _frame_grader(tile.frame)
-    walks_raw = []
-    P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
-                    country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
-                    pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir, vfs_dir=vfs_dir,
-                    de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    P.walks_raw = walks_raw
-    path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        g = _frame_grader(tile.frame)
+        walks_raw = []
+        P = _tile_parts(mark, tile.frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region,
+                        country, None, ("g", tile.key), geotiles.centre(gx, gy), GEO_SKIN_MARGIN_M, walks_raw,
+                        pole_profile=pole_profile, cache_dir=os.path.dirname(out_dir), out_dir=out_dir,
+                        vfs_dir=vfs_dir, de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+        P.walks_raw = walks_raw
+        path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
     info = dict(info or {}, fuel_tried=[list(t) for t in getattr(P, "fuel_tried", ())])     # (the station finder)
     mark("write")
     _geo_stats["content_built"] += 1
-    if revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    if revisit.ON and not f0.complete and revisit.SITES:
+        log.info("revisit: road geotile %s not kept: %s", tile.key, f0.why_not())
+    if revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
         try:
             blobs = {}
             for what, name in names.items():
@@ -2907,8 +2926,8 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
         _far_geo_stats["hits"] += 1
         return (f"{vfs_dir}/{names['json']}", int(extra.get("n", 0)), frame_ll, float(extra.get("pivot", 0.0)),
                 dict(extra.get("shapes") or {}))
-    f0 = revisit.faults()
-    res = _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region)
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        res = _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region)
     if res is None:
         return None
     data, shapes, n = res
@@ -2918,7 +2937,7 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
     _far_geo_stats["built"] += 1
     pivot = float(data.get("pivot", 0.0))
-    if revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
+    if revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
         try:
             blobs = {names["json"]: text.replace(f"{vfs_dir}/", "@V@/").encode("utf-8")}
             for fname in shapes.values():
@@ -2954,9 +2973,9 @@ def far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
-    f0 = revisit.faults()
-    built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
-    if revisit.ON and revisit.faults() == f0:
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)
+    if revisit.ON and f0.complete:
         blob, meta = _built_blob(built)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta,
                       where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions()))
@@ -2971,12 +2990,12 @@ def far_global_geometry(z, x, y, zoom, ref_zoom, layout):
     got = revisit.load(_s.cache_dir, "fargeo", k)
     if got is not None:
         return _built_from(got[0]["built.npz"], got[1])
-    f0 = revisit.faults()
-    base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
-    if _s.sea is not None:
-        base = seacarvemod.SeaDem(base, None)       # (carving stops at seacarve.CARVE_MAX_LEVEL < the global levels)
-    built = farfield.build_global(base, z, x, y, zoom, ref_zoom, layout)
-    if revisit.ON and revisit.faults() == f0:
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
+        if _s.sea is not None:
+            base = seacarvemod.SeaDem(base, None)       # (carving stops at seacarve.CARVE_MAX_LEVEL < the global levels)
+        built = farfield.build_global(base, z, x, y, zoom, ref_zoom, layout)
+    if revisit.ON and f0.complete:
         blob, meta = _built_blob(built)
         la, lo = farfield.global_frame_ll(z, x, y)
         revisit.store(_s.cache_dir, "fargeo", k, {"built.npz": blob}, meta,
@@ -3211,9 +3230,9 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
             revisit.place(blobs["mask.dds"], mask[0])       # (a kept file: hard-linked, nothing written)
         revisit.place(blobs["tex.dds"], tex["path"])
         return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
-    f0 = revisit.faults()
-    built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
-    if got is not None and revisit.ON and revisit.faults() == f0 and not quick:
+    with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
+        built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    if got is not None and revisit.ON and f0.complete and not quick:
         try:
             blob, meta = _built_blob(built)
             blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
