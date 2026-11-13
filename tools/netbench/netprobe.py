@@ -9,7 +9,7 @@ Per place: prepare_anchor (purpose teleport) -> anchor_ready -> commit_anchor + 
 (the mod's sendCommits), then a pose every POSE_S with a chase camera looking north, and one 'where' (the status
 bar). Far tiles' pooled slots are let go as the mod does (pose.slotsGone). A place ends once it has loaded and the
 server is idle (Settle), or after --cap s, or once --until is reached. marks: s from the teleport to anchor_ready (the
-car on its ground), graded_s (the graded first block in: terrain_refresh), far_done, each load_progress part done for
+car on its ground), graded_s (the graded first block in: the server's log says when), far_done, each load_progress part done for
 good (ground_s: the graded first block with its final photo, roads_s, trees_s, far_s; loaded_s: all of them, the
 mod's loading line ends) and settled_s. hello and graphics are the mod's own with the player's settings (normal
 terrain, trees and buildings, 2048 px ground photos, horizon view).
@@ -24,6 +24,7 @@ import collections
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -159,6 +160,14 @@ class Server:
         from netclient import Client
         return Client(self.port)
 
+    def graded(self, aid):
+        """s from the request to anchor aid's graded first block, as the server logged it (refine_first; its
+        terrain_refresh looks like the provisional block's sent again with its roads), or None."""
+        pat = re.compile(rf"anchor {int(aid)}: graded first block in ([0-9.]+) s")
+        with open(os.path.join(self.out, "server.log"), errors="replace") as f:
+            got = [m.group(1) for m in map(pat.search, f) if m]
+        return round(float(got[-1]), 1) if got else None
+
     def netlog_lines(self):
         with open(self.netlog, "rb") as f:
             return sum(1 for _ in f)
@@ -269,6 +278,9 @@ class Visit:
                     marks.update({f"{k}_s": round(v, 1) for k, v in self.done_at.items()})
                     if self.reached("loaded"):
                         marks["loaded_s"] = round(max(self.done_at.values()), 1)
+                    graded = self.srv.graded(aid)
+                    if graded is not None:
+                        marks["graded_s"] = graded
                     marks["progress"] = self.progress
                     return marks
             try:
@@ -295,8 +307,6 @@ class Visit:
             for k in (m.get("remove", []) if typ == "far_swap" else [m["key"]]):
                 if k in self.slots:
                     self.gone.append(list(self.slots.pop(k)))
-        elif typ == "terrain_refresh" and "graded_s" not in marks:     # (the graded first block: refine_first)
-            marks["graded_s"] = round(time.monotonic() - t0, 1)
         elif typ == "far_done" and "far_done" not in marks:
             marks["far_done"] = round(time.monotonic() - t0, 1)
         elif typ == "load_progress":
