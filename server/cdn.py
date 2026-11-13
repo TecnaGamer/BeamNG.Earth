@@ -11,6 +11,15 @@ spending cap), read at the server's start and every SWITCH_TTL_S; unreachable or
 max_view_zoom, in this process and the block workers it spawns): the far rings of that zoom take its packs instead
 of EOX's tiles. Read once at the server's start, so a change reaches a player at their next start.
 
+"max_lat" (a number: for max_zoom; or {"14": 50, ...} per zoom): the packs of that zoom end at that latitude (the z14
+packs are built to 50 degrees: tiles.yml max_lat); farther out bngs2's finest zoom is the next coarser one
+(imagery.zoom_caps), as before the switch raised it there.
+
+"bngaer" ({"imagery": {"bngaer": {"enabled": true}}}): the 1 m aerial packs (aerialpacks.py) first in the chain, where
+their coverage files list packs; elsewhere the live sources as before, and the mini PC asked to build the place's cell
+("request": false: never asked). Left out when this build's Pillow cannot decode AVIF. BNGE_AERIAL=off / on overrides
+the switch (tests).
+
 "dem" / "bngmt": Mapterhorn's z0-12 elevation tiles repacked (dem.MT_CDN_*, the data repo's dem workflow), the release
 the packs were built from; the server's BNGE_DEM_CDN (a release, or "off") overrides it.
 """
@@ -19,6 +28,7 @@ import logging
 import os
 import time
 
+import aerialpacks as aerialpacksmod
 import imagery as imagerymod
 
 log = logging.getLogger("earthd.cdn")
@@ -61,16 +71,46 @@ def switch(fetcher, cache_dir):
             return {}
 
 
+AER = "bngaer"
+
+
+def _max_lat(on, max_zoom):
+    """The switch's "max_lat" as {zoom: degrees}; None when absent or unreadable."""
+    v = on.get("max_lat")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return {int(max_zoom): float(v)}
+    if isinstance(v, dict):
+        try:
+            return {int(k): float(x) for k, x in v.items()}
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def chain(names, fetcher, cache_dir):
     """The imagery chain (source names) with the CDN's sources the switch turns on, each where it belongs."""
-    names = [n for n in names if n != S2.name]
-    on = (switch(fetcher, cache_dir).get("imagery") or {}).get(S2.name) or {}
+    names = [n for n in names if n not in (S2.name, AER)]
+    imagery = switch(fetcher, cache_dir).get("imagery") or {}
+    aer = imagery.get(AER) or {}
+    env = os.environ.get("BNGE_AERIAL", "").strip().lower()
+    if env == "on" or (env != "off" and isinstance(aer, dict) and aer.get("enabled")):
+        if not aerialpacksmod.avif_ok():
+            log.info("cdn: %s left out (this build's Pillow does not decode AVIF)", AER)
+        else:
+            if isinstance(aer, dict) and aer.get("request") is False:
+                os.environ["BNGE_AERIAL_REQUEST_URL"] = "off"      # (this process and the block workers it spawns)
+                aerialpacksmod.REQUEST_URL = "off"
+            log.info("cdn: %s on (%s)", AER, imagerymod.AERIAL_BASE)
+            names = [AER] + names
+    on = imagery.get(S2.name) or {}
     if not isinstance(on, dict) or not on.get("enabled") or BEFORE not in names:
         return tuple(names)
     i = names.index(BEFORE)
     # (no "max_zoom": as the environment says, BNGE_S2_MAX_ZOOM, else 12: a test of the next zoom before the switch)
-    src = imagerymod.set_s2_max_zoom(on["max_zoom"]) if "max_zoom" in on else imagerymod.SOURCES[S2.name]
-    log.info("cdn: %s on (%s, to zoom %d)", S2.name, CDN_BASE, src.max_zoom)
+    src = (imagerymod.set_s2_max_zoom(on["max_zoom"], _max_lat(on, on["max_zoom"])) if "max_zoom" in on
+           else imagerymod.SOURCES[S2.name])
+    log.info("cdn: %s on (%s, to zoom %d%s)", S2.name, CDN_BASE, src.max_zoom,
+             "".join(f", z{z} to {lim:g} deg" for z, lim in src.zoom_max_lat))
     return tuple(names[:i] + [S2.name] + names[i:])
 
 

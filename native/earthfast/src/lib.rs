@@ -113,6 +113,7 @@ mod shelterfit;
 mod tilecuts;
 mod bldclear;
 mod bnwt;
+mod aerialcov;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6357,6 +6358,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
     // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
     bnwt::register(m)?;
-    m.add("VERSION", 268)?;
+    // 271: 268 and the 1 m aerial packs' coverage files (aerialcov: aerial_cov_table, aerial_pack_where,
+    // aerial_pack_state; server/aerialpacks.py)
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
+    m.add("VERSION", 271)?;
     Ok(())
 }

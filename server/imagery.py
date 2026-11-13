@@ -140,6 +140,12 @@ class Source:
     # Never used for a view finer than this zoom (not enlarged: the next source's sharper tiles there), unlike
     # max_zoom, which a finer view uses enlarged
     max_view_zoom: int = 99
+    # A pack source whose packs a coverage file lists (aerialpacks.py: the 1 m aerial packs, "bngaer"): a pack it does
+    # not list is never asked for (missing here: the next source draws it); url takes {g}, the cell's generation
+    coverage: bool = False
+    # ((zoom, |latitude| limit), ...): that zoom's tiles exist only within the limit (the Sentinel-2 z14 packs to 50
+    # degrees: cdn.json "max_lat"); farther out the source's finest zoom is the next coarser one (zoom_caps)
+    zoom_max_lat: tuple = ()
 
 
 SOURCES = {
@@ -186,6 +192,7 @@ BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # t
 import bcortho as bcorthomod  # noqa: E402
 import imagery_regional
 import tilepack as tilepackmod  # noqa: E402
+import aerialpacks as aerialpacksmod  # noqa: E402
 # The project's own tile host (cdn.py: its switch puts this in the chain): Sentinel-2 photos of the whole land, ESA
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
 # (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
@@ -193,7 +200,20 @@ CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip
 # Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
 # once the whole land is built); kept in the environment so the block workers (spawned) read the same
 S2_MAX_ZOOM_ENV = "BNGE_S2_MAX_ZOOM"
+S2_MAX_LAT_ENV = "BNGE_S2_MAX_LAT"      # ... and its per-zoom latitude limits ("14:50")
 S2_ZOOMS = (12, 14)                     # (the zooms a switch may set: built ones only)
+
+
+def _s2_max_lat(text):
+    """((zoom, limit), ...) from "14:50,13:80" (S2_MAX_LAT_ENV); () when unset or unreadable."""
+    out = []
+    for part in str(text or "").split(","):
+        try:
+            zs, ls = part.split(":")
+            out.append((int(zs), max(0.0, min(90.0, float(ls)))))
+        except ValueError:
+            continue
+    return tuple(sorted(out))
 
 
 def _s2_zoom(z):
@@ -206,17 +226,35 @@ def _s2_zoom(z):
 SOURCES["bngs2"] = Source(
     "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
-    pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)))
+    pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)), zoom_max_lat=_s2_max_lat(os.environ.get(S2_MAX_LAT_ENV)))
 
 
-def set_s2_max_zoom(z):
-    """bngs2's finest zoom (its max_zoom and max_view_zoom) from now on, in this process and the ones it spawns later
+def set_s2_max_zoom(z, max_lat=None):
+    """bngs2's finest zoom (its max_zoom and max_view_zoom) from now on, and per zoom the latitude its packs end at
+    (max_lat {zoom: degrees}: the z14 packs were built to 50 degrees), in this process and the ones it spawns later
     (call before any Imagery is made: an Imagery keeps the Source it was given)."""
     z = _s2_zoom(z)
     os.environ[S2_MAX_ZOOM_ENV] = str(z)
-    if SOURCES["bngs2"].max_zoom != z:
-        SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z)
+    lim = SOURCES["bngs2"].zoom_max_lat
+    if max_lat is not None:
+        lim = _s2_max_lat(",".join(f"{k}:{v}" for k, v in dict(max_lat).items()))
+        os.environ[S2_MAX_LAT_ENV] = ",".join(f"{k}:{v}" for k, v in lim)
+    if SOURCES["bngs2"].max_zoom != z or SOURCES["bngs2"].zoom_max_lat != lim:
+        SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z, zoom_max_lat=lim)
     return SOURCES["bngs2"]
+# The 1 m aerial packs (aerialpacks.py, tools/build_aerial_packs.py; the user, 2026-11-13: prebaked for metro areas and
+# main road corridors, built on demand elsewhere): AVIF 4:4:4 tiles of zooms 14-17 from openly licensed photos (NAIP,
+# the open European agencies) in packs of 8 x 8, where the coverage files list them. cdn.chain puts it first in the
+# chain when the switch file turns it on and this build's Pillow decodes AVIF; one request per ~2 km instead of the live
+# services' exports (1.6-10 s each) and USGS / EOX's tiles for the nearer far rings.
+AERIAL_BASE = os.environ.get("BNGE_AERIAL_BASE", CDN_BASE + "/aerial/v1").rstrip("/")
+SOURCES["bngaer"] = Source(
+    "bngaer", AERIAL_BASE + "/g{g}/{z}/{px}/{py}.bngp", 17,
+    "BeamNG.Earth aerial packs: USDA NAIP (public domain) and open national orthophotos (SOURCES.md)",
+    min_zoom=14, pack=3, coverage=True)
+_AERIAL_HOST = netfetch.host_of(AERIAL_BASE)
+if _AERIAL_HOST not in netfetch.POLICIES:          # (BNGE_AERIAL_BASE: a test server, the CDN's own policy)
+    netfetch.POLICIES[_AERIAL_HOST] = netfetch.POLICIES[netfetch.host_of(CDN_BASE)]
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
@@ -355,6 +393,19 @@ def match_colours(rgb, ref, sigma_px):
                          for c in range(3)], -1)
     out = rgb.astype(np.float32) * gain
     return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+
+
+def zoom_caps(src, lat):
+    """(max_zoom, max_view_zoom) of src at latitude lat: each zoom whose zoom_max_lat limit lat is beyond is dropped
+    (a coarser one stands in, as at a source's own max_zoom)."""
+    mz, mv = src.max_zoom, src.max_view_zoom
+    if src.zoom_max_lat:
+        a = abs(float(lat))
+        lim = dict(src.zoom_max_lat)
+        while mz in lim and a > lim[mz]:
+            mz -= 1
+        mv = min(mv, mz) if mv >= src.max_zoom else mv
+    return mz, mv
 
 
 def in_bounds(src, z, x, y):
@@ -601,6 +652,28 @@ class Imagery:
             return ATTRIBUTION
         return "Imagery: " + "; ".join(s.attribution for s in list(self.chain) + extra)
 
+    def aerial(self):
+        """The process's coverage of the 1 m aerial packs (aerialpacks.Coverage; their files kept under this cache): the
+        chain's coverage source's base (its url up to /g{g}/)."""
+        src = next((s for s in self.chain if s.coverage), SOURCES["bngaer"])
+        return aerialpacksmod.coverage(self.fetcher, src.url.split("/g{g}/", 1)[0],
+                                       os.path.join(self.cache_dir, src.name, "_cov"))
+
+    def _pack_covers(self, z, x, y, wait=0.0):
+        """Does a coverage source of the chain hold tile (z, x, y) (its zoom capped at the source's)? Only what is known
+        now unless `wait` (s: a background thread): the lazy sources' exports are not fetched where its packs draw the
+        place."""
+        for src in self.chain:
+            if not src.coverage:
+                continue
+            zz = min(z, src.max_zoom)
+            if zz < src.min_zoom:
+                continue
+            st = self.aerial().tile_state(zz, x >> (z - zz), y >> (z - zz), wait)
+            if st is not None and st[0] == 1:
+                return True
+        return False
+
     def credits_by_area(self):
         """[[attribution, w, s, e, n] or [attribution]] per source in use (a box: the source covers only that
         area), for the world map to credit what its view shows (2026-10-15: the map listed 31 regional services
@@ -700,7 +773,16 @@ class Imagery:
             if data is not None:
                 self._count(src.name + ":disk")
                 return data
-            url = src.url.format(z=pz, px=px, py=py)
+            if src.coverage:                    # (not listed: nothing to ask; its cell asked to be built)
+                st = self.aerial().state(pz, px, py, wait=aerialpacksmod.COV_WAIT_S)
+                if st is None or st[0] != 1:
+                    if st is not None and st[0] == 0:
+                        self.aerial().ask_build(pz, px, py)
+                    self._count(src.name + (":unknown" if st is None else ":uncovered"))
+                    return None
+                url = src.url.format(g=st[1], z=pz, px=px, py=py)
+            else:
+                url = src.url.format(z=pz, px=px, py=py)
             if self.fetcher.miss_alive(miss, url):
                 return None
             kind = getattr(self._local, "kind", "demand")
@@ -873,10 +955,12 @@ class Imagery:
         fetches them while driving) are in: a render uses their tiles once they are on disk; one request of an export
         source writes 4 ** export tiles (raw: _download_export). The caller fetches a source's tiles and stops at the
         first that had any."""
+        plat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (py + 0.5) / 2 ** pz))))
         for src in self.chain:
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, plat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             p = self.fetcher.policy(netfetch.host_of(src.url))
             if z < src.min_zoom:
                 continue
@@ -921,7 +1005,7 @@ class Imagery:
             for src in self.chain:
                 if src.lazy and not FAR_LAZY:
                     continue
-                z = min(src.max_zoom, src.max_view_zoom)
+                z = min(zoom_caps(src, lat))
                 if z < src.min_zoom or (best is not None and z <= best):
                     continue
                 if reach is not None and src.min_zoom > reach and src.bounds:
@@ -1008,6 +1092,9 @@ class Imagery:
         src, z, x, y = key
         if not in_bounds(*key):
             return "outside"                # (never ask a source about a place outside its area)
+        if src.coverage:                    # (its coverage file: fetched in the background while unknown)
+            st = self.aerial().tile_state(z, x, y) if src.min_zoom <= z <= src.max_zoom else (3, 0)
+            return "unknown" if st is None else "covered" if st[0] == 1 else "outside"
         psrc = SOURCES[src.probe_source] if src.probe_source else src
         for pz in sorted(p for p in src.probe_zooms if p < z):
             p = (psrc, pz, x >> (z - pz), y >> (z - pz))
@@ -1136,10 +1223,12 @@ class Imagery:
             return
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)
         zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
+        clat = float(lat[cells // 2, cells // 2])
         for k, src in enumerate(self.chain):
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, clat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
                 continue
             n = 2 ** z
@@ -1320,6 +1409,7 @@ class Imagery:
         `radius` m of the points (lat, lon arrays, in order: nearest first along a path), each once. Pure on the
         chain (warm; the route download, Connection.route_download)."""
         lazy = [s for s in self.chain if s.lazy]
+        cov = any(s.coverage for s in self.chain)
         lat, lon = np.atleast_1d(np.asarray(lat, float)), np.atleast_1d(np.asarray(lon, float))
         if not lazy or not len(lat) or np.abs(lat).max() > MAX_LAT:
             return []
@@ -1343,7 +1433,7 @@ class Imagery:
                 for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
                     for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
                         key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
-                        if key not in seen and in_bounds(*key):
+                        if key not in seen and in_bounds(*key) and not (cov and self._pack_covers(*key[1:])):
                             seen.add(key)
                             want.append(key)
         return want
@@ -1397,6 +1487,7 @@ class Imagery:
         lazy = [s_ for s_ in self.chain if s_.lazy]
         if not lazy:
             return []
+        cov = any(s_.coverage for s_ in self.chain)
         xs = np.array([x0, x0 + size, x0, x0 + size], float)
         ys = np.array([y0, y0, y0 + size, y0 + size], float)
         lat, lon, _ = frame.enu_to_geodetic(xs, ys, np.zeros(4))
@@ -1419,7 +1510,7 @@ class Imagery:
             for ty in range(int(fy.min() // TILE) >> k << k, int(fy.max() // TILE) + 1, 1 << k):
                 for tx in range(int(fx.min() // TILE) >> k << k, int(fx.max() // TILE) + 1, 1 << k):
                     key = (src, z, tx, ty)
-                    if in_bounds(*key):
+                    if in_bounds(*key) and not (cov and self._pack_covers(z, tx, ty)):
                         want.append(key)
         return want
 
@@ -1482,6 +1573,10 @@ class Imagery:
                 continue
             src, z, x, y = key
             last = (1 << src.export) - 1
+            if any(s_.coverage for s_ in self.chain) and self._pack_covers(z, x, y, wait=aerialpacksmod.COV_WAIT_S):
+                with self._warm_cv:         # (the aerial packs draw it: its coverage came in after warm() listed it)
+                    done.add(key)
+                continue
             share = getattr(self.fetcher, "budget_share", None)
             if far is not None and share is not None and share(src.url) >= FAR_BUDGET_SHARE:
                 got = self._far_keys.get(far[0])      # (the rest of today's budget for the photos round the car)
@@ -1535,6 +1630,7 @@ class Imagery:
         lazy = [s for s in self.chain if s.lazy]
         if not lazy:
             return True
+        cov = any(s.coverage for s in self.chain)
         c = np.array([0.0, 0.5, 1.0]) * size
         E, N = np.meshgrid(x0 + c, y0 + c)
         lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
@@ -1549,6 +1645,8 @@ class Imagery:
                                                            or lon.max() < s_.bounds[1] or lon.min() > s_.bounds[3])]
         for ty in range(int(math.floor(fy.min() - 1)) // TILE, int(math.floor(fy.max() + 1)) // TILE + 1):
             for tx in range(int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE + 1):
+                if cov and self._pack_covers(z, tx, ty):
+                    continue                # (the aerial packs draw it: no lazy tile to wait for)
                 for src in lazy:            # the first with data decides; a missing one passes to the next
                     if not in_bounds(src, z, tx, ty):
                         continue
@@ -1914,11 +2012,13 @@ class Imagery:
         used, error, relit, full = {}, None, 0, False
         g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)     # (the gutter: on hand or clamped)
         fast.require(108, "imagery tile_warp")
+        clat = float(lat[cells // 2, cells // 2])
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, clat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
             if src.bounds:                  # a regional source elsewhere: not even its mosaic's keys
