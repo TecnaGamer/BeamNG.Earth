@@ -776,7 +776,7 @@ SESSION_ORPHAN_S = 600.0
 # geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
 GEO_FILES_GRACE_S = 120.0
 GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within this share one listing of the folder
-GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar"}  # kind -> Connection attr
+GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar", "bldpack": "bldpack"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
 LEASE_GRACE_S = 900.0       # a disconnected game's stream lease (PR #817) kept this long for it to reconnect
@@ -6938,7 +6938,8 @@ class Connection:
         self.gpolys = {}                        # (anchorId, key) -> a shown global tile's quad in that anchor's world
         self.ppolys = {}                        # piece key -> its polygon (pieces sent / shown under the active anchor)
         self.building_scale = 1.0
-        self.bldfar = self.bldsky = self.brfar = None
+        self.bldfar = self.bldsky = self.brfar = self.bldpack = None
+        self.far_pack = False                   # far building packs past PACK_INNER_M (hello.farPack, buildings.PACK_*)
         self.make_far_trackers(False)
         self.turbine_geo = False               # separate capability; no road/building radius increase
         self.turbines = vegetationmod.Tracker(TURBINE_SEND_M, TURBINE_DROP_M, TURBINE_PER_POSE, "turbines",
@@ -7928,7 +7929,8 @@ class Connection:
             if not self.s.stream_leases.detach(self):
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
-            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "turbines", None), self.nav,
+            for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None),
+                       getattr(self, "turbines", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -7954,9 +7956,10 @@ class Connection:
         geotiles (geo: far buildings in the road geotiles' grid sent as whole skyline squares, the skyline's and far
         bridges' squares at geotiles.SKY_Z / BRIDGE_Z), each at the building scale's reach (set_graphics)."""
         import geotiles
-        for tr in (self.bldfar, self.bldsky, self.brfar):
+        for tr in (self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None)):
             if tr is not None:
                 tr.close()
+        self.bldpack = None
         self.far_geo = bool(geo)
         bld = self.building_scale
         far_m = buildingsmod.FAR_SEND_M * bld
@@ -7975,8 +7978,16 @@ class Connection:
         sky = buildingsmod.SKY_SEND_M > buildingsmod.FAR_SEND_M
         bridges = buildingsmod.BRIDGE_FAR_SEND_M > roadsmod.SEND_M
         if geo:
-            self.bldfar = vegetationmod.Tracker(far_m, far_drop, buildingsmod.FAR_PER_POSE, "bldfar", geo=True,
-                                                z=geotiles.FAR_Z, group_z=geotiles.SKY_Z if sky else None)
+            # (packs: the road geotiles' far tiles only within PACK_INNER_M, whole squares; past it a pack a square,
+            # dropped only beyond far_drop: the mod hides a pack while its square's far tiles show)
+            pack = getattr(self, "far_pack", False) and sky
+            inner_m = min(far_m, buildingsmod.PACK_INNER_M) if pack else far_m
+            self.bldfar = vegetationmod.Tracker(inner_m, inner_m + (far_drop - far_m), buildingsmod.FAR_PER_POSE,
+                                                "bldfar", geo=True, z=geotiles.FAR_Z,
+                                                group_z=geotiles.SKY_Z if sky else None)
+            if pack:
+                self.bldpack = vegetationmod.Tracker(far_m, far_drop, buildingsmod.PACK_PER_POSE, "bldpack", geo=True,
+                                                     z=geotiles.SKY_Z, inner=(inner_m, 1))
             self.bldsky = (vegetationmod.Tracker(sky_m, sky_drop, buildingsmod.SKY_PER_POSE, "bldsky", geo=True,
                                                  z=geotiles.SKY_Z, inner=(far_m, buildingsmod.SKY_UNIT))
                            if sky else None)
@@ -8004,7 +8015,7 @@ class Connection:
         self.roads = road_tracker(self)
         self.signs.close()
         self.signs = signstream.Tracker()
-        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "turbines", None),
+        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "turbines", None),
                    self.distant_traffic, self.distant_traffic_far):
             if tr is not None:
                 tr.forget()
@@ -8187,10 +8198,14 @@ class Connection:
             # ... and the far buildings, skyline and far bridges when it places those too (hello.farGeo: roads.lua's
             # FAR_GEO; a far tile and the road geotile of the same key hold the same buildings: one shows them)
             far_geo = road_geo and msg.get("farGeo") == buildingsmod.FAR_GEO and self.s.far_geo_ok()
-            if far_geo != self.far_geo:
+            far_pack = bool(far_geo and msg.get("farPack") == buildingsmod.FAR_PACK and buildingsmod.PACK_ON)
+            if far_geo != self.far_geo or far_pack != self.far_pack:
+                self.far_pack = far_pack
                 self.make_far_trackers(far_geo)
             if far_geo:
                 m["farGeo"] = buildingsmod.FAR_GEO
+            if far_pack:
+                m["farPack"] = buildingsmod.FAR_PACK
             self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
             if self.turbine_geo:
                 m["turbineGeo"] = TURBINE_GEO
@@ -8418,12 +8433,11 @@ class Connection:
             self.veg.drop_m = self.veg.send_m + (vegetationmod.DROP_M - vegetationmod.SEND_M)
         if bld != self.building_scale:
             self.building_scale = bld
-            self.bldfar.send_m = buildingsmod.FAR_SEND_M * bld
-            self.bldfar.drop_m = self.bldfar.send_m + (buildingsmod.FAR_DROP_M - buildingsmod.FAR_SEND_M)
+            self.set_far_reach(buildingsmod.FAR_SEND_M * bld)
             if self.bldsky is not None:
                 self.bldsky.send_m = buildingsmod.SKY_SEND_M * bld
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
-                self.bldsky.inner = (self.bldfar.send_m, buildingsmod.SKY_UNIT)
+                self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
             if self.brfar is not None:
                 self.brfar.send_m = buildingsmod.BRIDGE_FAR_SEND_M * bld
                 self.brfar.drop_m = self.brfar.send_m + (buildingsmod.BRIDGE_FAR_DROP_M - buildingsmod.BRIDGE_FAR_SEND_M)
@@ -9475,7 +9489,11 @@ class Connection:
             self.bldfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                 self.build_far_geo("bldfar") if geo else self.s.build_far_bld_tile,
                                 view=self.view_at, frame=frame)
-            if self.bldsky is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
+            if self.bldpack is not None:    # (past the road geotiles' far tiles: buildings.PACK_*)
+                self.bldpack.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldpack"),
+                                     view=self.view_at, frame=frame)
+            if self.bldsky is not None and self.bldfar.progress()[0] >= self.bldfar.progress()[1] and (
+                    self.bldpack is None or self.bldpack.progress()[0] >= self.bldpack.progress()[1]):
                 # (only once the far buildings round the car are all there: the skyline is the least urgent)
                 self.bldsky.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                     self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
@@ -10252,14 +10270,27 @@ class Connection:
             e = self.eye_clearance()
             far = max(far, min(e * MAP_BLD_FAR_EYE, MAP_BLD_FAR_MAX_M))
             sky = max(sky, min(e * MAP_BLD_SKY_EYE, MAP_BLD_SKY_MAX_M))
-        if abs(self.bldfar.send_m - far) > 50.0:
-            self.bldfar.send_m = far
-            self.bldfar.drop_m = far + (buildingsmod.FAR_DROP_M - buildingsmod.FAR_SEND_M)
+        if abs(self.far_reach() - far) > 50.0:
+            self.set_far_reach(far)
         if self.bldsky is not None and abs(self.bldsky.send_m - sky) > 50.0:
             self.bldsky.send_m = sky
             self.bldsky.drop_m = sky + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
         if self.bldsky is not None:
-            self.bldsky.inner = (self.bldfar.send_m, buildingsmod.SKY_UNIT)
+            self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
+
+    def far_reach(self):
+        """The far buildings' send distance (the packs' with packs on: buildings.PACK_*)."""
+        return (self.bldpack or self.bldfar).send_m
+
+    def set_far_reach(self, far):
+        """The far buildings out to far m: the road geotiles' own far tiles within PACK_INNER_M (all of it without
+        packs), the packs past it."""
+        extra = buildingsmod.FAR_DROP_M - buildingsmod.FAR_SEND_M
+        inner = min(far, buildingsmod.PACK_INNER_M) if self.bldpack is not None else far
+        self.bldfar.send_m, self.bldfar.drop_m = inner, inner + extra
+        if self.bldpack is not None:
+            self.bldpack.send_m, self.bldpack.drop_m = far, far + extra
+            self.bldpack.inner = (inner, 1)
 
     def map_cone(self, aid):
         """The 3D map's view cone for the selection (farfield.out_of_view: off-screen nodes MAP_OUT_OF_VIEW_K times as

@@ -188,10 +188,54 @@ class TrackerTest(unittest.TestCase):
               f"anchor tiles {old[0]} / after {old[1]} ({kinds})")
 
 
+    def test_packs_past_the_inner_reach(self):
+        """hello.farPack (buildings.PACK_*): the road geotiles' far tiles only in squares within PACK_INNER_M (whole),
+        a pack per square past it out to the far reach, none of a square with far tiles; the inner reach past the road
+        tiles' drop distance (a pack's square never holds a road geotile showing its own buildings)."""
+        import types
+        import earthd
+        import roads as roadsmod
+        self.assertGreater(buildings.PACK_INNER_M, roadsmod.DROP_M)
+        builds, lock = [], threading.Lock()
+
+        def geo(kind):
+            def mk(_aid):
+                def build(gx, gy):
+                    with lock:
+                        builds.append((kind, gx, gy))
+                    z = {"bldfar": geotiles.FAR_Z, "bldpack": geotiles.SKY_Z, "bldsky": geotiles.SKY_Z}[kind]
+                    return f"/x/{kind}.json", 1, geotiles.centre(gx, gy, z), 0.0, {}
+                return build
+            return mk
+        c = types.SimpleNamespace(bldfar=None, bldsky=None, brfar=None, bldpack=None, building_scale=1.0, far_pack=True)
+        earthd.Connection.make_far_trackers(c, True)
+        self.assertIsNotNone(c.bldpack)
+        self.assertEqual(c.bldfar.send_m, min(buildings.FAR_SEND_M, buildings.PACK_INNER_M))
+        self.assertEqual(c.bldpack.send_m, buildings.FAR_SEND_M)
+        trs = [(k, getattr(c, k), geo(k)) for k in ("bldfar", "bldpack")]
+        _n, msgs = self.drive(trs, [(1, geodesy.EnuFrame(LAT, LON))], builds)
+        far = {tuple(map(int, m["key"][4:].split("_"))) for m in msgs if m["type"] == "bldfar_tile"}
+        packs = {tuple(map(int, m["key"][4:].split("_"))) for m in msgs if m["type"] == "bldpack_tile"}
+        squares = {geotiles.parent(x, y, geotiles.FAR_Z, geotiles.SKY_Z) for x, y in far}
+        self.assertTrue(packs and squares, "both far tiles and packs")
+        self.assertFalse(packs & squares, "no pack over a square with far tiles")
+        for sq in squares:
+            self.assertLessEqual(set(geotiles.children(*sq, geotiles.SKY_Z, geotiles.FAR_Z)), far, "whole squares")
+        print(f"\npacks: {len(far)} far tiles in {len(squares)} squares + {len(packs)} packs "
+              f"(without packs: about {len(far) + 16 * len(packs)} far tiles)")
+        # off (no hello.farPack): no pack tracker, the far tiles out to the far reach
+        c2 = types.SimpleNamespace(bldfar=None, bldsky=None, brfar=None, bldpack=None, building_scale=1.0)
+        earthd.Connection.make_far_trackers(c2, True)
+        self.assertIsNone(c2.bldpack)
+        self.assertEqual(c2.bldfar.send_m, buildings.FAR_SEND_M)
+        c2.bldfar.close()
+
+
 class AgreementTest(unittest.TestCase):
     def test_constants(self):
         src = ROADS_LUA.read_text()
         self.assertEqual(int(re.search(r"^M\.FAR_GEO = (\d+)", src, re.M).group(1)), buildings.FAR_GEO)
+        self.assertEqual(int(re.search(r"^M\.FAR_PACK = (\d+)", src, re.M).group(1)), buildings.FAR_PACK)
         self.assertEqual(int(re.search(r"^M\.SKY_UNIT = (\d+)", src, re.M).group(1)), buildings.SKY_UNIT)
         self.assertEqual(2 ** (geotiles.FAR_Z - geotiles.SKY_Z), buildings.SKY_UNIT)
         self.assertEqual(geotiles.FAR_Z, geotiles.Z, "far buildings in the road geotiles' own grid")

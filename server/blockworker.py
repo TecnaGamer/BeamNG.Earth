@@ -2787,14 +2787,14 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
 # cached without an anchor in its key (revisit kinds "bldfar" / "bldsky" / "brfar", the key's first part "g"); the mod
 # keeps it across rebases and places it rigidly at its pivot (render-only: no skin, no exact variant).
 
-FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb"}       # kind -> its files' prefix (<prefix>_<key>[_<sub>])
+FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb", "bldpack": "bp"}   # kind -> files' prefix (<prefix>_<key>[_<sub>])
 FAR_LAMP_ROUND = 1          # decimals of the lamps' coordinates
 
 
 def far_geo_zoom(kind):
     """The geotile zoom of a far kind."""
     import geotiles
-    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z}[kind]
+    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z, "bldpack": geotiles.SKY_Z}[kind]
 
 
 def far_geo_names(kind, key):
@@ -2882,7 +2882,7 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     data = {"v": 1, "key": tile.key, "frame": [float(frame.lat0), float(frame.lon0)]}
     names = far_geo_names(kind, tile.key)
     shapes = {}
-    if kind == "bldfar":
+    if kind in ("bldfar", "bldpack"):  # (a pack: the far buildings of a whole skyline square, buildings.PACK_*)
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)

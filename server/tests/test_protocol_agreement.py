@@ -108,6 +108,7 @@ MOD_TO_SERVER = {
               "roadGeo": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
+              "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
               # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
               "turbineGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
@@ -318,6 +319,7 @@ SERVER_TO_MOD = {
               "trafficVisuals": F(int, OPT),    # visual roads, independent of the AI graph's physics window
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
+              "farPack": F(int, OPT),           # ... and the far buildings past PACK_INNER_M as packs (hello.farPack)
               "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
               "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
@@ -428,6 +430,10 @@ SERVER_TO_MOD = {
                    "slots": F(dict, OPT),      # (a geotile's: {road geotile key: [pooled shape path, serial]})
                    "frame": F(list, OPT), "pivot": F(NUM, OPT)},
     "brfar_drop": {"anchorId": F(int), "key": F(str)},
+    # the far buildings of a whole skyline square past buildings.PACK_INNER_M as one shape (hello.farPack, key "g15_x_y")
+    "bldpack_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                     "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
+    "bldpack_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
     "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
                  "serial": F(int)},
@@ -481,6 +487,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "report_status", "report_context_done",       # the reporter's Send window: a player's click (test_reportsend)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
+                       "bldpack_tile", "bldpack_drop",               # hello.farPack: needs map data
                        "navgraph",                                   # --traffic on: needs map data
                        "traffic_tile", "traffic_drop",                # visual traffic: negotiated, needs map data
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream

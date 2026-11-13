@@ -1343,7 +1343,15 @@ end
 -- Server message `bldfar_drop` {anchorId, key} (`bldsky_drop` with sky).
 function M.onFarDrop(msg, kind)
   if kind == true then kind = 'S' end
-  if geotile.isKey(msg.key) then return M.dropFarGeo(M.farGeoKey(kind or 'F', msg.key)) end
+  if geotile.isKey(msg.key) then
+    local key = M.farGeoKey(kind or 'F', msg.key)
+    local f = far[key]
+    if f and f.geo and f.kind == 'F' and M.packPending(f) then
+      f.dropWait = f.dropWait or now()   -- (its square's pack not made yet: it stays until it is, updateFarGeo)
+      return true
+    end
+    return M.dropFarGeo(key)
+  end
   local key = tileKey(msg.anchorId, (kind or '') .. msg.key)
   if not kind then farSeen[key] = nil end
   local f = far[key]
@@ -1398,6 +1406,14 @@ end
 -- and road mesh are made; a skyline tile while all 16 far buildings tiles of its square are here. Their street lamps
 -- are trees.lua geotiles (one per road geotile key, placed and moved with the trees'), shown while their tile shows.
 M.FAR_GEO = 1
+-- Far building packs (hello.farPack, server buildings.PACK_*): past the road geotiles' own far tiles the far buildings
+-- of a whole skyline square (geotile.Z - 2) come as one shape, kind 'P' (a third of a town's shape files were far
+-- buildings tiles, 2026-11-13). A pack shows until its square's 16 far tiles are all here and made (or waiting hidden);
+-- a far tile dropped while its square's pack is not made yet stays until it is (PACK_HANDOVER_S at most), and a
+-- skyline square hides under its shown pack.
+M.FAR_PACK = 1
+M.PACK_HANDOVER_S = 15
+function M.debugFar() return far end       -- (tests)
 M.farGeo = false
 function M.setFarGeo(on) M.farGeo = on and true or false end
 local function farGeoKey(kind, gkey) return tostring(kind) .. ':' .. tostring(gkey) end
@@ -1499,7 +1515,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   local h = data.h
   if old and old.geo and h ~= nil and old.h == h and not filesGone(old.parts) then
     release()
-    old.orphan, old.anchor = nil, currentAnchor
+    old.orphan, old.anchor, old.dropWait = nil, currentAnchor, nil
     M.geoStats.farKept = (M.geoStats.farKept or 0) + 1
     return true
   end
@@ -1511,7 +1527,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
     lamps = M.flatLamps(data.lamps) }
-  if k == 'S' then
+  if k == 'S' or k == 'P' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
   end
@@ -1563,9 +1579,46 @@ function M.nearShowsDeck(gkey, tk)
   return t.skin ~= nil and t.skin.road == nil and (t.skin.pending or 0) <= 0
 end
 
+-- The pack (kind 'P') of far buildings tile f's skyline square, or nil.
+local function packOf(f)
+  local z, x, y = geotile.parse(f.gkey)
+  if not z then return nil end
+  local n = M.SKY_UNIT
+  return far[farGeoKey('P', geotile.key(math.floor(x / n), math.floor(y / n), z - 2))]
+end
+-- Is far tile f's square's pack here but its shape not made yet (f's drop waits for it)?
+function M.packPending(f)
+  local pk = packOf(f)
+  if not pk then return false end
+  for _, p in pairs(pk.parts) do if not p.id then return true end end
+  return false
+end
+-- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
+function M.packCovered(f)
+  if not f.packKeys then
+    local z, x, y = f.sky[1], f.sky[2], f.sky[3]
+    if not z then return false end
+    local n = 2 ^ (geotile.Z - z)
+    f.packKeys = {}
+    for j = 0, n - 1 do
+      for i = 0, n - 1 do f.packKeys[#f.packKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+    end
+  end
+  for _, k in ipairs(f.packKeys) do
+    local ff = far[k]
+    if not ff or ff.dropWait then return false end
+    for _, p in pairs(ff.parts) do if not p.id and not p.deferred then return false end end
+  end
+  return true
+end
+
 -- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
 function M.farGeoHidden(f, sub)
+  if f.kind == 'P' then return M.packCovered(f) end
   if f.kind == 'S' then
+    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
+    local pp = pk and pk.parts.shape
+    if pp and pp.id and not pp.hidden then return true end
     if not f.skyKeys then           -- (its square's far buildings tiles' keys, once)
       local z, x, y = f.sky[1], f.sky[2], f.sky[3]
       if not z then return false end
@@ -1599,6 +1652,9 @@ function M.farGeoWaits(f, sub)
 end
 
 local function updateFarGeo(key, f)
+  if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
+    if not M.packPending(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+  end
   local shown = false
   for sub, p in pairs(f.parts) do
     local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
