@@ -996,7 +996,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `highway_signs` {on}: no sign tiles are built while it is off.
   `direction_signs` {on}: the sign tiles carry the direction boards (server/dirsigns.py) only while it is on (on by default since 2026-11-05).
   `road_signs` {on}: the sign tiles carry the ordinary road signs (server/roadsigns.py, native roadsigns.rs) only while it is on and the server has BNE_ROADSIGNS=on.
-  Street-name signs (server/streetsigns.py, shape `streets`): a blade on the mast arm of each traffic signal the road
+  Street-name signs (server/streetsigns.py, native streetsigns.rs; shape `streets`): a blade on the mast arm of each traffic signal the road
   tiles already placed (their `signal` props, read from the written road tile files), naming the cross street; each
   sign's country picks its style in server/data/street_sign_styles.json (only the US so far; `BNE_SIGNS_WORLD=1`: the
   US style where a country has none), and its `mount` the placement (streetsigns.MOUNTS). `BNE_STREETSIGNS=off`: none.

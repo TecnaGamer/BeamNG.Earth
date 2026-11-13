@@ -46,6 +46,7 @@ mod deautobahn;
 mod speedsigns;
 mod roadsigns;
 mod townsigns_de;
+mod streetsigns;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -5940,6 +5941,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
-    m.add("VERSION", 222)?;
+    // 223: street-name signs (streetsigns.rs)
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_signals, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_cross, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_abbrev, m)?)?;
+    m.add_function(wrap_pyfunction!(streetsigns::street_sign_mesh, m)?)?;
+    m.add("VERSION", 223)?;
     Ok(())
 }

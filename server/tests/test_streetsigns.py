@@ -17,7 +17,7 @@ import signstream  # noqa: E402
 
 
 class _Feats:
-    """A roads layer of one map cell, straight in frame metres (mapgeom.Features' calls Roads makes)."""
+    """A roads layer of one map cell, straight in frame metres (mapgeom.Features' calls road_lines makes)."""
 
     def __init__(self, lines, names, classes=None, ranges=None):
         self.lines = [np.asarray(line, np.float64) for line in lines]
@@ -40,7 +40,11 @@ class _Feats:
 
 
 def _roads(lines, names, box=None, **kw):
-    return streetsigns.Roads(None, [_Feats(lines, names, **kw)], box)
+    return streetsigns.road_lines(None, [_Feats(lines, names, **kw)], box)
+
+
+def _cross(roads, x, y, yaw):
+    return streetsigns.cross_streets(roads, [(x, y, 0.0, yaw)])[0]
 
 
 # North Main Street along x = 0, Elm Street along y = 20
@@ -51,17 +55,17 @@ ROADS = _roads([[(0, -200), (0, 200)], [(-200, 20), (200, 20)]], ["North Main St
 class CrossStreetTest(unittest.TestCase):
     def test_the_blade_names_the_street_crossed(self):
         # northbound on Main (travel +y): the pole on the drivers' right, the model's +x east: yaw 0
-        self.assertEqual(streetsigns.cross_street(ROADS, 8, 8, 0.0), "Elm Street")
+        self.assertEqual(_cross(ROADS, 8, 8, 0.0), "Elm Street")
         # eastbound on Elm (travel +x): the drivers' right is south, yaw 270
-        self.assertEqual(streetsigns.cross_street(ROADS, -10, 12, 270.0), "North Main Street")
+        self.assertEqual(_cross(ROADS, -10, 12, 270.0), "North Main Street")
 
     def test_no_blade_without_a_named_cross_street(self):
         roads = _roads([[(0, -200), (0, 200)], [(-200, 20), (200, 20)]], ["North Main Street", ""])
-        self.assertEqual(streetsigns.cross_street(roads, 8, 8, 0.0), "")
+        self.assertEqual(_cross(roads, 8, 8, 0.0), "")
 
     def test_no_blade_naming_the_approachs_own_street(self):
         roads = _roads([[(0, -200), (0, 200)], [(-200, 20), (200, 20)]], ["Main Street", "Main Street"])
-        self.assertEqual(streetsigns.cross_street(roads, 8, 8, 0.0), "")
+        self.assertEqual(_cross(roads, 8, 8, 0.0), "")
 
 
 class RoadsTest(unittest.TestCase):
@@ -71,47 +75,36 @@ class RoadsTest(unittest.TestCase):
         """Its first point 5 km away: only its bounding box meets the tile's."""
         roads = _roads([[(-5000, 20), (5000, 20)], [(3000, 3000), (3100, 3000)]], ["Elm Street", "Far Street"],
                        box=self.BOX)
-        self.assertEqual(roads.names, ["Elm Street"])
+        self.assertEqual(roads[4], ["Elm Street"])
 
     def test_paths_are_no_cross_street(self):
         roads = _roads([[(0, -200), (0, 200)], [(-200, 20), (200, 20)]], ["Main Street", "Elm Path"],
                        classes=["residential", "footway"])
-        self.assertEqual(roads.names, ["Main Street"])
+        self.assertEqual(roads[4], ["Main Street"])
 
     def test_the_freeway_over_the_junction_is_no_cross_street(self):
         """A ramp's signals under a freeway bridge (the ramp unnamed): no blade naming the freeway."""
         roads = _roads([[(0, -200), (0, 200)], [(-200, 20), (-60, 20), (60, 20), (200, 20)]],
                        ["Main Street", "Interstate 95"], ranges=[[], [(0.35, 0.65, "bridge")]])     # (a 120 m deck)
-        self.assertEqual(streetsigns.cross_street(roads, 8, 8, 0.0), "")
-        self.assertEqual(len(roads.A), 3)                 # (Main Street, and the freeway's ground ends)
+        self.assertEqual(_cross(roads, 8, 8, 0.0), "")
+        self.assertEqual(roads[3].tolist(), [[1, 0.35, 0.65]])
 
 
 class BladeTest(unittest.TestCase):
     def test_the_blade_hangs_on_the_arm_over_the_lanes_facing_the_drivers(self):
-        m = signmesh.Mesh((0, 0, 0))
-        w = streetsigns.blade(m, 8.0, 8.0, 100.0, 0.0, "ELM ST", US)
-        p = np.asarray(m.p)
-        # the arm reaches west (local -x) over the road from the pole at x = 8
-        self.assertAlmostEqual(p[:, 0].max(), 8.0 - streetsigns.ARM_REACH, delta=0.05)
-        self.assertAlmostEqual(p[:, 0].min(), 8.0 - streetsigns.ARM_REACH - w, delta=0.05)
+        p, t, uv, mi = streetsigns.blades([(8.0, 8.0, 100.0, 0.0)], ["ELM ST"], [US], (0, 0, 0))
+        # the arm reaches west (local -x) over the road from the pole at x = 8, the blade 0.8 m out
+        self.assertAlmostEqual(p[:, 0].max(), 8.0 - 0.8, delta=0.05)
         # in front of the arm, toward the drivers coming north (-y)
         self.assertLess(p[:, 1].max(), 8.01)
-        self.assertGreater(p[:, 1].min(), 8.0 - streetsigns.ARM_FRONT - 0.1)
-        # level, its middle at the rising arm's height over the pole's base
-        face = p[p[:, 1] < 8.0 - streetsigns.ARM_FRONT + 0.01]
-        mid = (face[:, 2].min() + face[:, 2].max()) / 2
-        self.assertAlmostEqual(mid, 100.0 + streetsigns.arm_z(streetsigns.ARM_REACH + w / 2), delta=0.05)
-
-    def test_the_arm_rises_from_the_pole_then_runs_level(self):
-        self.assertAlmostEqual(streetsigns.arm_z(0.0), 4.8)
-        self.assertAlmostEqual(streetsigns.arm_z(3.7), 6.07)
-        self.assertAlmostEqual(streetsigns.arm_z(5.0), streetsigns.arm_z(4.3))
-        self.assertLess(streetsigns.arm_z(1.0), streetsigns.arm_z(2.0))
+        self.assertGreater(p[:, 1].min(), 8.0 - 0.25)
+        # level, its lettering's middle on the rising arm (4.8 m at the pole, 6.07 m 3.7 m out)
+        ink = p[t[mi == signmesh.GLYPH_WHITE].ravel()]
+        self.assertTrue(104.8 < (ink[:, 2].min() + ink[:, 2].max()) / 2 < 106.1)
 
     def test_a_long_name_is_capped(self):
-        m = signmesh.Mesh((0, 0, 0))
-        w = streetsigns.blade(m, 0, 0, 0, 0, "MARTIN LUTHER KING JUNIOR MEMORIAL BOULEVARD", US)
-        self.assertLessEqual(w, US["width_m"][1])
+        p = streetsigns.blades([(0, 0, 0, 0.0)], ["MARTIN LUTHER KING JUNIOR MEMORIAL BOULEVARD"], [US], (0, 0, 0))[0]
+        self.assertLessEqual(np.ptp(p[:, 0]), 0.8 + US["width_m"][1] + 0.05)
 
 
 class StyleTest(unittest.TestCase):
@@ -164,25 +157,18 @@ class MountTest(unittest.TestCase):
     class _Tile:
         box = (0, 0, 100, 100)
         roads = ROADS
+        signals = np.array([(8.0, 8.0, 0.0, 0.0)])
 
-        def __init__(self, signals, styles):
-            self.signals, self._styles = signals, styles
+        def __init__(self, styles):
+            self._styles = styles
 
         def styles_at(self, xy):
             return self._styles[:len(xy)]
 
     def test_a_blade_only_where_the_country_has_a_style(self):
-        m = signmesh.Mesh((0, 0, 0))
-        streetsigns.signal_arm_signs(m, self._Tile([(8, 8, 0, 0.0)], [US]))
-        self.assertTrue(m.t)
-        m = signmesh.Mesh((0, 0, 0))
-        streetsigns.signal_arm_signs(m, self._Tile([(8, 8, 0, 0.0)], [None]))
-        self.assertFalse(m.t)
-
-    def test_only_the_signals_inside_the_tile(self):
-        m = signmesh.Mesh((0, 0, 0))
-        streetsigns.signal_arm_signs(m, self._Tile([(-8, 8, 0, 0.0)], [US]))
-        self.assertFalse(m.t)
+        self.assertTrue(len(streetsigns.signal_arm_signs(self._Tile([US]))[1]))
+        self.assertFalse(len(streetsigns.signal_arm_signs(self._Tile([None]))[1]))
+        self.assertFalse(len(streetsigns.signal_arm_signs(self._Tile([dict(US, mount="wall_plate")]))[1]))
 
 
 class SignalsTest(unittest.TestCase):
@@ -202,6 +188,12 @@ class SignalsTest(unittest.TestCase):
             self._write(os.path.join(out, "roads_1_1_0.json"), [(12.51, 40.0, 0.0, 0.1)])
             got = streetsigns.signals_near(out, 1, self.FRAME, 0, 0, roadsmod.tile_bbox(0, 0))
         self.assertEqual(sorted(round(r[3]) for r in got), [90, 360])
+
+    def test_only_the_signals_inside_the_tile(self):
+        with tempfile.TemporaryDirectory() as out:
+            self._write(os.path.join(out, "roads_1_0_0.json"), [(-8.0, 40.0, 0.0, 0.0), (8.0, 40.0, 0.0, 0.0)])
+            got = streetsigns.signals_near(out, 1, self.FRAME, 0, 0, (0.0, 0.0, 100.0, 100.0))
+        self.assertEqual(got[:, 0].tolist(), [8.0])
 
     def test_a_geotiles_signals_come_into_the_tiles_frame(self):
         """A geotile's rows are in its own frame: 0.001 deg north of the anchor's is ~111 m north, facing as before."""
@@ -232,7 +224,7 @@ class SignTileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out, \
                 mock.patch.object(roadsmod, "tile_bbox", lambda tx, ty: (-100.0, -100.0, 100.0, 100.0)), \
                 mock.patch.object(streetsigns, "styles_at", lambda frame, xy, world=False: [US] * len(xy)), \
-                mock.patch.object(streetsigns, "signals_near", lambda *a: [(8.0, 8.0, 0.0, 0.0)]), \
+                mock.patch.object(streetsigns, "signals_near", lambda *a: np.array([(8.0, 8.0, 0.0, 0.0)])), \
                 mock.patch.object(streetsigns.Tile, "roads", ROADS):
             mesh = streetsigns.build_tile(None, 1, 0, 0, None, out)
             self.assertEqual(len(mesh), 5)
