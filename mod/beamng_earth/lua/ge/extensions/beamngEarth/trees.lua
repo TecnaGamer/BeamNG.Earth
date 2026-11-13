@@ -1225,8 +1225,15 @@ M.suppress = nil
 -- trees in front of a town sign), each under its own name; M.refreshNear re-runs the rows of the tiles near a spot
 -- that changed.
 M.hiders = {}
-local function hidden(g, x, y, anchor)
-  if M.suppress and M.suppress(g, x, y) then return true end
+local function hidden(g, x, y, anchor, t, z)
+  -- (M.suppress takes the anchor's world: navgraph's switchable heads. A geotile's items are in its own frame: placed
+  -- first, else its static boom never matched the head that stands for it and both stood side by side, the user's
+  -- report 21 at Fells Point, 2026-11-12, "Double traffic light")
+  if M.suppress then
+    local sx, sy = x, y
+    if t and t.geo and t.pl then sx, sy = geotile.apply(t.pl, x, y, z or 0) end
+    if M.suppress(g, sx, sy) then return true end
+  end
   for _, fn in pairs(M.hiders) do
     if fn(g, x, y, anchor) then return true end
   end
@@ -1623,7 +1630,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
-        if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor) then r = 2 end
+        if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)

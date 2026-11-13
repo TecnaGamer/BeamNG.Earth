@@ -387,12 +387,30 @@ class RoofPhotoFuture:
         return ph.colours(rings)
 
 
+# The high-resolution photos a roof or square is read from, in the terrain imagery's order (imagery.DEFAULT_CHAIN):
+# Maryland's own six-inch photo (md6in) first, then the regional ones. md6in was left out: Baltimore lies inside
+# Virginia's box (south of 39.47 N), so its tiles read Virginia's service, blank outside that state, and no roof or
+# square there was ever coloured (Fells Point's red-brick Broadway Square drawn grey pavers, the user's report 14,
+# 2026-11-12)
+PHOTO_EXTRA_SOURCES = ("md6in",)
+
+
 def _photo_sources(frame, x0, y0, x1, y1):
+    import imagery
     import imagery_regional
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
     lat, lon = float(np.asarray(lat).ravel()[0]), float(np.asarray(lon).ravel()[0])
-    return tuple(name for name, (_u, _c, (s_, w_, n_, e_), *_r) in imagery_regional.REGIONAL.items()
-                 if s_ <= lat <= n_ and w_ <= lon <= e_)
+    out = []
+    for name in imagery.DEFAULT_CHAIN:
+        if name in imagery_regional.REGIONAL:
+            s_, w_, n_, e_ = imagery_regional.REGIONAL[name][2]
+        elif name in PHOTO_EXTRA_SOURCES and name in imagery.SOURCES and imagery.SOURCES[name].bounds:
+            s_, w_, n_, e_ = imagery.SOURCES[name].bounds
+        else:
+            continue
+        if s_ <= lat <= n_ and w_ <= lon <= e_:
+            out.append(name)
+    return tuple(out)
 
 
 def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
@@ -410,7 +428,10 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
             return None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
-        px = int(px or ROOF_PHOTO_PX)
+        # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
+        # US squares' colour vote's sizes 7 times in 8: Broadway Square drawn grey pavers, the user's report 14)
+        cells = imagery.MESH_CELLS
+        px = int(-(-int(px or ROOF_PHOTO_PX) // cells) * cells)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
         if urgent and online:
@@ -7041,10 +7062,46 @@ def brick_walks(walks, items, lat, lon, tile=256.0):
     (Fells Point's historic streets): every run of a street the same."""
     if not walks or brick_share(lat, lon) < 0.7 or coverage(items, tile) < BRICK_WALK_COVERAGE:
         return
-    for wk in walks:
-        fid = wk.get("fid")
+    key = _median_keys(walks)
+    for n, wk in enumerate(walks):
+        fid = key.get(n, wk.get("fid"))
         if fid is not None and _hash01(str(fid), "brickwalk") < BRICK_WALK_SHARE:
             wk["brick"] = True
+
+
+MEDIAN_PAIR_M = 9.0         # m of ground at most between the two halves of one median (each carriageway's band)
+
+
+def _median_keys(walks):
+    """{walk index: key} for the median bands: the two carriageways' halves of one median (their runs within
+    MEDIAN_PAIR_M of each other, edge to edge) share the smaller fid, so the median is paved one way (one half red
+    brick and the other concrete: the user's report 20, Fells Point 2026-11-12). Pure."""
+    med = [(n, np.asarray(wk["pts"], np.float64)[:, :2], float(wk.get("w", 0.0)), str(wk.get("fid")))
+           for n, wk in enumerate(walks) if wk.get("median") and "pts" in wk and len(wk["pts"]) >= 2]
+    if len(med) < 2:
+        return {}
+    group = list(range(len(med)))
+
+    def root(a):
+        while group[a] != a:
+            group[a] = group[group[a]]
+            a = group[a]
+        return a
+    for a in range(len(med)):
+        for b in range(a + 1, len(med)):
+            if med[a][3] == med[b][3]:
+                continue
+            pa, pb = med[a][1], med[b][1]
+            reach = (med[a][2] + med[b][2]) / 2 + MEDIAN_PAIR_M
+            if (pa.min(0) - reach > pb.max(0)).any() or (pb.min(0) - reach > pa.max(0)).any():
+                continue
+            d = dnp.hypot(*(pa[::max(1, len(pa) // 8)][:, None, :] - pb[None, :, :]).transpose(2, 0, 1)).min(1)
+            if float(np.median(d)) <= reach:
+                group[root(a)] = root(b)
+    keys = {}
+    for k in range(len(med)):
+        keys.setdefault(root(k), []).append(med[k][3])
+    return {med[k][0]: min(keys[root(k)]) for k in range(len(med))}
 
 
 _cell_stats = {}                # map cell key -> (lon, lat, area m2) per footprint (district_coverage)

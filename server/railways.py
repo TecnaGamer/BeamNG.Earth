@@ -1781,7 +1781,7 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
                                       lon=float(frame.lon0 if hasattr(frame, "lon0") else 0.0), left_hand=left_hand,
                                       owns=lambda x, y: roadsmod.box_owns(box, x, y))
     osm_kit = _osm_kits(frame, cells)
-    rows, done = [], set()
+    rows, done, street = [], set(), {}
     for (rfid, sp, line), crs in zip(roads, roadsmod._crossings_by([xy for _f, xy, _c in rails],
                                                                      [ln for *_, ln in roads])):
         for ri, _arc_r, pt in crs:
@@ -1794,6 +1794,8 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
             if w >= 2 or key in done:
                 continue
             done.add(key)
+            if w and _street_crossing(rxy, pt, street, ri, roads):
+                continue                # (an old street track: no crossbucks at its side streets)
             kit = kits(pt, sp.cls) if kits is not None else None
             kit = kit or osm_kit(pt)
             if kit is None and rcls in CROSSING_DATA_ONLY:
@@ -1803,6 +1805,33 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
                 kit = "cross"
             rows += _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground)
     return rows
+
+
+# A worn line's crossing where its track runs down a street (street_along: STREET_INSET_M inside a carriageway for
+# STREET_ALONG_M or more) within STREET_KIT_M of it, along the track, is an old street track's, at a side street or where
+# it wanders across its own street's centre line: no devices (Fells Point's disused trolley tracks had crossbucks at
+# every corner of Thames Street and South Broadway, the user's report 15, 2026-11-12, "These signs and ectra props
+# shoudnt spawn")
+STREET_KIT_M = 12.0
+
+
+def _street_crossing(rxy, pt, memo, key, roads_):
+    """Does the track rxy ((k, 2), every STEP_M) run down a street of roads_ ([(fid, spec, xy)]) within STREET_KIT_M of its
+    point nearest pt? memo: {key: the track's street mask}, filled here. Pure."""
+    rxy = np.asarray(rxy, np.float64)
+    if len(rxy) < 2:
+        return False
+    m = memo.get(key)
+    if m is None:
+        cr = [(np.asarray(ln, np.float64)[:, :2], float(sp.width) / 2) for _f, sp, ln in roads_]
+        m = np.zeros(len(rxy), bool)
+        for got in street_along([rxy], cr):
+            if got is not None:
+                m |= got
+        memo[key] = m
+    i = int(np.argmin(dnp.hypot(*(rxy - np.asarray(pt, np.float64)[:2]).T)))
+    k = int(round(STREET_KIT_M / STEP_M))
+    return bool(m[max(0, i - k):i + k + 1].any())
 
 
 NODE_WAY_M = 10.0           # m: a footway, path or pedestrian way passing this near an OSM level crossing node is its road
@@ -1930,17 +1959,72 @@ TRUE_CROSSERS_ON = os.environ.get("BNE_RAIL_TRUE_CROSSINGS", "on") != "off"   # 
 
 def true_crossers(rail_lines, cr):
     """cr ([(xy, half width)]) without the roads that only touch the track or run beside it (a service road ending at the
-    rail, a street along it): a carriageway cuts the track where its centre line crosses the track's. rail_lines: the
-    track parts' xy. Pure."""
+    rail, a street along it): a carriageway cuts the track where its centre line crosses the track's, or where the track
+    runs down the street inside it (street_along). rail_lines: the track parts' xy (every STEP_M). Pure."""
     if not cr or not rail_lines:
         return cr
     out = []
-    for line, hw in cr:
+    along = None
+    for k, (line, hw) in enumerate(cr):
         if len(line) < 2:
             continue
         if roads._crossings(rail_lines, [line]):
             out.append((line, hw))
+            continue
+        if along is None:
+            along = street_along(rail_lines, cr)
+        if along[k] is not None:
+            out.append((line, hw))
     return out
+
+
+# Street running: a track lying STREET_INSET_M or more inside a carriageway, along it for STREET_ALONG_M or more, runs
+# down the street (Baltimore's old trolley tracks in Fells Point's Thames Street, embedded in its setts: the user's
+# report 16, 2026-11-12, "Street track turned into full track"). That road cuts the 3D track like a crossing one
+# (true_crossers: a street whose centre line the track never crossed left a ballasted track down the middle of the
+# cobbles) and rails.py draws its street track there (street_windows). A service road ending at the track holds a chord
+# of it at most 2 x (its half width - STREET_INSET_M) long: under STREET_ALONG_M for any road up to 14 m wide.
+STREET_ALONG_M = 12.0
+STREET_INSET_M = 1.0
+
+
+def street_along(rail_lines, cr, step=STEP_M):
+    """Per road of cr ([(xy, half width)]): the mask over the concatenated track points (rail_lines, every step m) that lie
+    STREET_INSET_M or more inside its carriageway when STREET_ALONG_M or more of track does, else None. Pure."""
+    out = [None] * len(cr)
+    lines = [np.asarray(xy, np.float64)[:, :2] for xy in rail_lines if len(xy)]
+    if not lines or not cr:
+        return out
+    pts = np.concatenate(lines)
+    lo, hi = pts.min(0), pts.max(0)
+    for k, (line, hw) in enumerate(cr):
+        line = np.asarray(line, np.float64)
+        if len(line) < 2 or hw <= STREET_INSET_M:
+            continue
+        llo, lhi = line[:, :2].min(0) - hw, line[:, :2].max(0) + hw
+        if (llo > hi).any() or (lhi < lo).any():
+            continue
+        m = roads._on_carriageways(pts, {0: (line[:, :2], float(hw))}, -STREET_INSET_M)
+        if m.sum() * step >= STREET_ALONG_M:
+            out[k] = m
+    return out
+
+
+def street_spans(xy, cr, pad=4.0):
+    """The arc ranges [(a, b)] (m along track xy (k, 2), any spacing) where it runs down a street of cr ([(centreline,
+    half width)]: street_along, the track resampled every STEP_M), each padded by pad m. Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 2 or not cr:
+        return []
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    ss = np.arange(0.0, float(s[-1]) + 1e-9, STEP_M)
+    pts = np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])]
+    hit = np.zeros(len(pts), bool)
+    for m in street_along([pts], cr):
+        if m is not None:
+            hit |= m
+    return [(max(0.0, float(ss[i]) - pad), min(float(s[-1]), float(ss[j]) + pad))
+            for i, j in _runs(~hit)]
 
 
 def walk_ways(frame, cells, box, reach=60.0):
@@ -2149,10 +2233,11 @@ def walk_sign_rows(crossings, ground, finals=None, rails=None, streets=()):
             for (q, side), zz in zip(pts, z)]
 
 
-def dead_ends(rails, finals, worn, near):
+def dead_ends(rails, finals, worn, near, carriage=None):
     """The true ends of the tracks: [(end point (2,), unit direction of travel into it (2,), rail head height)]. A true end
     is the end of a ground part no other part joins and none passes within BUFFER_JOIN_M, well inside the window's reach
-    (a clipped end is not one); abandoned lines (worn 2) and trams have none. Pure."""
+    (a clipped end is not one); abandoned lines (worn 2) and trams have none, nor an end on a carriageway of carriage
+    ([(centreline, half width)]: a street track's end in the street, the user's report 15). Pure."""
     if not rails:
         return []
     nodes, edges, _adj = roads._chain_graph([xy for *_x, xy in rails])
@@ -2174,6 +2259,10 @@ def dead_ends(rails, finals, worn, near):
             if any(float(np.min(dnp.hypot(*(oxy - p).T))) < BUFFER_JOIN_M
                    for o, (*_x, oxy) in enumerate(rails) if o != n_part and oxy is not xy):
                 continue                        # (a track starting on another one's line: a switch, not an end)
+            if carriage and roads._on_carriageways(p[None], {n: (np.asarray(ln, np.float64)[:, :2], float(hw))
+                                                             for n, (ln, hw) in enumerate(carriage) if len(ln) >= 2},
+                                                   0.0).any():
+                continue                        # (a street track ending in the street: no buffer stop on the road)
             d = xy[i] - xy[j]
             out.append((p, d / max(float(dnp.hypot(*d)), 1e-9), float(zb[i]) + RAIL_TOP_M))
     return out
@@ -2439,7 +2528,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             rows += [r for r in walk_sign_rows(crossings_, ground, finals, rails, levels)
                      if roads.box_owns(box, r[1], r[2])]
             rows += [r for r in buffer_rows(dead_ends(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
-                                                                                 box[2] + REACH_M, box[3] + REACH_M)))
+                                                                                 box[2] + REACH_M, box[3] + REACH_M),
+                                                      all_cr))
                           if roads.box_owns(box, r[1], r[2])]
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
