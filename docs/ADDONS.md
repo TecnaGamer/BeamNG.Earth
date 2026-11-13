@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 7) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7) |
+| `version()` | `major, minor` (1, 8) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -239,14 +239,15 @@ end
 
 | field | |
 |---|---|
-| `radius` | metres, default 1000, at most 3000 |
+| `radius` | metres, default 1000, at most 3000 (at most 25000 with `cachedOnly`) |
 | `categories` | Overture `basic_category` values (`'gas_station'`, `'car_dealer'`), prefixes ending in `*` (`'car_*'`), or the 3D map's icon groups (`'group:food'`, `food` / `shop` / `lodging` / `culture` / `park` / `transit` / `education` / `health` / `fuel`); none: every kind. A place's taxonomy value counts as well as its category |
 | `limit` | rows a page, default 50, at most 200 |
 | `cursor` | a result's `next`: the following page |
 | `minConfidence` | 0..1: only places Overture is at least this sure of (the 3D map shows 0.75 and up) |
 | `buildings` | true: the footprints too (as `buildings()`) |
+| `cachedOnly` | 1.8: only the map cells the app already has, so `radius` may go to 25000. It asks for no cell it does not already have on disk and no second answer comes; a radius over 3000 must name `categories`. See "A wide search over what is cached" below |
 
-The callback gets a result for each answer: `{places, buildings, complete, pending, next, error}`.
+The callback gets a result for each answer: `{places, buildings, complete, pending, next, truncated, error}`.
 
 - `places`: `{id, name, category, lat, lon, confidence, open}` each, nearest first; named places only. `id` is
   Overture's GERS id; `open` is Overture's `operating_status`
@@ -257,11 +258,50 @@ The callback gets a result for each answer: `{places, buildings, complete, pendi
 - `complete`: every map cell round the point was read. The first answer comes at once from the cells on disk; when
   some were missing, the app fetches them in the background and answers once more (`pending` true until then, at
   most about 2 minutes). The second answer is the asked page built again over every cell, the first answer's rows
-  included: replace them with it rather than appending.
+  included: replace them with it rather than appending. With `cachedOnly` there is no second answer and no download
+  is asked for, so a false `complete` is the final word.
 - `next`: the next page's cursor, nil on the last. Pages follow the order (distance, id), so asking for the next
   page after more cells came neither repeats nor skips a row of the pages before (a nearer place come since is not
   in them).
-- `error`: why there are none (`'bad coordinates'`, no map data, `'timed out'`: no answer in 150 s).
+- `truncated` (1.8): true when the box of map cells round the point held more than the app's cell cap (2048), so
+  the reach was shortened to one that fits and cells inside the `radius` you asked for were left unread. `complete`
+  is false with it. A radius whose box fits is never shortened and never reports this, however close to the cap it
+  comes — the app counts the box rather than estimating it. The wire leaves the field out when it is false and
+  `api.lua` fills in `false`, so an add-on always sees a boolean. Far north a map cell covers less ground, so the
+  cap bites at a shorter reach: 25 km fits whole up to about 62 degrees, and 4.5 km is left at the Web-Mercator
+  limit.
+- `error`: why there are none (`'bad coordinates'`, no map data, `'timed out'`: no answer in 150 s, `'a radius over
+  3000 m needs categories'`).
+
+### A wide search over what is cached (1.8)
+
+`cachedOnly = true` reads the map cells the app has on disk and asks for no others: it queues no background job of
+its own, there is no second answer and `pending` is always false. Because it costs only what is already there,
+`radius` may go to 25000 m, which is far past the 3000 m an ordinary request is held to. It finds only places the
+player has already been near, so it suits an add-on that wants the few sparse places of a whole region (a career's
+car dealers, a mission's truck stops) rather than one that needs every place round a point.
+
+It is not a promise that nothing is downloaded. The app asks for no cell it does not already have, but a cell whose
+stored layer turns out to be damaged is a miss like any other and is rebuilt from its sources, which may download.
+
+```lua
+if api.has('cachedPlaces') then
+  api.places(lat, lon, { radius = 25000, cachedOnly = true, categories = { 'car_dealer' } }, function(r)
+    -- r.pending is always false; r.complete says every cell in reach was on disk, r.truncated that the reach was cut
+    for _, p in ipairs(r.places) do print(p.name, p.lat, p.lon) end
+  end)
+end
+```
+
+- A radius over 3000 m must name `categories`: a wide search is for sparse kinds, not for a region's places of every
+  kind (`error` `'a radius over 3000 m needs categories'`). It holds down the rows the answer builds, not the cells
+  the app reads: every cell in reach is read whatever the categories are, so a narrow list is the courteous thing
+  rather than a cheaper one.
+- `complete` false is the final answer here, not a promise of a better one: the missing cells are not asked for.
+- The cell cap is 2048 map cells. The app counts the box first: a radius whose box fits is read whole, and only a
+  box over the cap has its reach cut back to fit, with `truncated` saying so. The cut is concentric round the point
+  and the same on every page, so paging by `next` stays right across it.
+- `buildings` keeps its own 500 m reach and count of 100 whatever `radius` and `cachedOnly` say.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and
