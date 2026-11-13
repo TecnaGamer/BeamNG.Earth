@@ -539,6 +539,18 @@ do -- GitHub #415: the static boom's copy has its lamps' material renamed (unlit
   T.check(m and m.mapTo == trees.STATIC_SIGNAL_MAT and not m.Stages[1].instanceEmissive and not m.Stages[1].emissive,
     'its material does not glow')
 end
+do -- Left-kerb static signals use the unlit reflected asset, at the stock model's scale.
+  local savedWrite = writeFile
+  writeFile = function(p, text) files[p] = text end
+  files['/t/signal_left'] = '{ groups = { "signal_left" }, items = { {0, 10, 10, 0, 0, 1, 9.4, 0} } }'
+  trees.onTile({ anchorId = 14, key = '0_0', path = '/t/signal_left', n = 1 }, 14)
+  trees.update(14, { x = 10, y = 10 })
+  local it = next(items)
+  T.check(count() == 1 and it.d.fields.shapeFile == trees.STATIC_SIGNAL_LEFT .. '.dae', 'unlit reflected forest signal')
+  T.check(it and math.abs(it.sc - 1) < 1e-9 and trees.ONE_SPELLING.signal_left, 'stock scale, one cached shape spelling')
+  trees.clear()
+  writeFile = savedWrite
+end
 do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1, never thinned like trees
   for _, g in ipairs({ 'jersey', 'jersey_end', 'cable' }) do
     local shape, sc = trees.pick(g, g == 'cable' and 1.0 or 0.88, 0.3)

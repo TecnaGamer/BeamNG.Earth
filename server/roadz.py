@@ -124,6 +124,9 @@ CLEAN_GAP_M = 30.0
 CLEAN_SIGMA_M = 3.0
 TIER_CROSS_M = 60.0         # m: a run on another deck tier this short, the same tier before and after, is a deck
                             # crossing over or under the road (a road's own change of tier and back is two ramps)
+TIER_NATIVE = 261           # earthfast.VERSION of tier_crossing_runs (a run of stations on another tier only a
+                            # deck crossing: True on every run of one tier at most TIER_CROSS_M long with one
+                            # other, equal tier before and after it)
 MIN_COVER = 0.6             # share of a part's stations with a height, or the part keeps the inference
 DATUM_NEAR_M = 300.0        # m round a part's ends its source's ground roads give the datum offset
 DATUM_NEAR_MIN = 5
@@ -1502,7 +1505,9 @@ class RoadZ:
                 # tier (the tier as the segments' "height"), and never another tier's deck where it only crosses
                 tier, _ = fast._ef.roadz_match(q, qdir, seg, np.repeat(np.concatenate(lvs)[:, None], 2, 1).astype(
                     np.float64), ok, float(reach), MATCH_COS)
-                z = np.where(crossing_runs(s, tier, TIER_CROSS_M), np.nan, z)
+                fast.require(TIER_NATIVE, "roadz tier crossings")
+                z = np.where(fast._ef.tier_crossing_runs(s, np.ascontiguousarray(tier, np.float64),
+                                                         TIER_CROSS_M), np.nan, z)
             if not np.isfinite(z).any():
                 continue
             off = 0.0
@@ -1559,22 +1564,6 @@ class RoadZ:
         offs = [self._cell_offset(src, k, ln) for k, ln, _ in cells]
         offs = [o for o in offs if o is not None]
         return float(np.median(offs)) if offs else None
-
-
-def crossing_runs(s, tier, max_m):
-    """Where a road's stations (arc lengths s) matched a deck that only crosses it. tier (n,): the tier of the source
-    line each station matched (NaN: none). True on every run of one tier at most max_m long with one other tier
-    both before and after it (stations without a match skipped). A road that changes tier has a different tier on
-    each side of the change, and stays."""
-    out = np.zeros(len(tier), bool)
-    idx = np.flatnonzero(np.isfinite(tier))
-    t = np.asarray(tier)[idx]
-    a = np.r_[0, np.flatnonzero(np.diff(t) != 0) + 1]       # each run's first matched station, and (b) one past it
-    b = np.r_[a[1:], len(t)]
-    for j in range(1, len(a) - 1):
-        if t[a[j] - 1] == t[b[j]] and s[idx[b[j] - 1]] - s[idx[a[j]]] <= max_m:
-            out[idx[a[j]:b[j]]] = True
-    return out
 
 
 def install(cache_dir, fetcher, md):

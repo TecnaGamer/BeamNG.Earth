@@ -68,7 +68,7 @@ def _consts(curb_w):
 
 
 def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, pavement=False,
-         pavement_bounds=None):
+         pavement_bounds=None, left_hand=False):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -111,9 +111,10 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
       the parking curb over TAPER_M (off since GitHub #208: roads.build_tile passes no has_parking);
     - a branch with corners on both sides (not a ring's): a crosswalk CW_GAP past the farther corner (none ending on
       another road's carriageway or crossing another road, none within 2 m of an earlier one: a CW_CELL_M grid of
-      them), a stop line STOP_GAP before it on the incoming half, curb ramps on both sidewalks (on a bulb: the corner
-      piece's), the road's markings cut beyond it."""
-    fast.require(214, "junctions find")
+      them), a stop line STOP_GAP before it on the incoming half (left_hand: traffic drives on the left, the incoming
+      half the branch's right as one looks out of the junction; zolaski333's PR #1134), curb ramps on both sidewalks
+      (on a bulb: the corner piece's), the road's markings cut beyond it."""
+    fast.require(261, "junctions find (left_hand)")
     from sidewalks import CURB_W
     n = len(roads)
     if n == 0:
@@ -161,7 +162,7 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
         allp, off, fids, np.array([rank[f] for f in fids], np.int64), width, rad, walk, flags, fw_state, fw_width,
         fw_rank, walks, None if walk_w is None else float(walk_w), float(parking_m), bool(pavement),
         None if pavement_bounds is None else tuple(float(v) for v in pavement_bounds), _consts(float(CURB_W)),
-        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]))
+        [float(v) for v in RADIUS_TRIES], float(CROSSWALK["w"]), float(STOP_LINE["w"]), bool(left_hand))
     return tuple(out)
 
 

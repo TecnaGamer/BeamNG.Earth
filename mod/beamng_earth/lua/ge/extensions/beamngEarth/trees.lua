@@ -43,7 +43,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
-  stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
+  stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
@@ -94,7 +94,7 @@ M.SHAPE_VARIANTS = 4
 -- 2026-11-03: a new door / hydrant / sign / signal spelling nearly every tree frame). Vegetation, rocks, barriers,
 -- fences and lamps keep their variants (their populations reach thousands).
 M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshelter = true, billboard = true,
-  barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
+  barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true, signal_left = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
   rrgate_eu_l = true, rrgate_l = true, rrbuffer = true, rrwalk = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
@@ -189,6 +189,7 @@ M.CATALOG = {
     { '/art/shapes/common/building_architect_modules/doors/R_HS_B_DR_03_100x210', 2.2 },
   },
   signal = { { '/art/shapes/objects/s_trafficlight_boom_sn', 9.4 } },      -- (setup: M.STATIC_SIGNAL)
+  signal_left = { { '/temp/beamngEarth/shapes/s_trafficlight_boom_left_v1', 9.4 } },
   stop = { { '/levels/east_coast_usa/art/shapes/signs_usa/sign_stop', 3.0 } },
   giveway = { { '/art/shapes/garage_and_dealership/Clutter/italy_traf_sign_give_way', 3.0 } },
   -- a low wooden yard fence, 5.4 m along its x (server buildings._front_fence)
@@ -743,6 +744,7 @@ end
 -- file, its lamp material renamed (STATIC_SIGNAL_MAT, unlit).
 M.SIGNAL_STOCK = '/art/shapes/objects/s_trafficlight_boom_sn'
 M.STATIC_SIGNAL = '/temp/beamngEarth/shapes/s_trafficlight_boom_static_v1'
+M.STATIC_SIGNAL_LEFT = '/temp/beamngEarth/shapes/s_trafficlight_boom_left_static_v1'
 M.STATIC_SIGNAL_MAT = 'bne_trafficlight_static'
 function M.staticSignalDae(dae)      -- pure: the stock dae's text with its lamp material renamed (nil: not found)
   if type(dae) ~= 'string' or not dae:find('instanced_trafficlight', 1, true) then return nil end
@@ -764,6 +766,16 @@ local function staticSignal()
   if not FS:fileExists(mat) then writeFile(mat, jsonEncode(M.staticSignalMaterial())) end
   loadJsonMaterialsFile(mat)
   return FS:fileExists(dae)
+end
+local leftSignalReady = nil
+local function staticLeftSignal()
+  local left = require('beamngEarth/signalshape').ensureLeft()
+  if not left then return false end
+  local path = M.STATIC_SIGNAL_LEFT .. '.dae'
+  if not FS:fileExists(path) then writeFile(path, M.staticSignalDae(readFile(left .. '.dae'))) end
+  if not FS:fileExists(path) then return false end
+  M.CATALOG.signal_left[1][1] = M.STATIC_SIGNAL_LEFT
+  return true
 end
 
 -- Groups out of season off, in season on (SEASON); month: 1-12 (default the date's).
@@ -936,6 +948,11 @@ local function shapeOf(t, i)
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
   local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
+  if g == 'signal_left' and leftSignalReady == nil then
+    local ok, made = pcall(staticLeftSignal)
+    leftSignalReady = ok and made or false
+    if not leftSignalReady then log('W', 'beamngEarth.trees', 'left signal shape: ' .. tostring(made)) end
+  end
   s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
   s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or t.variant)
   t.shapes[i], t.scales[i] = s, sc

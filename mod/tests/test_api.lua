@@ -4,7 +4,8 @@
 -- also off the origin where the frame's north turns; the place names; teleport / GPS through places.lua and gps.lua;
 -- notify; the events as game hooks and listeners (worldReady after loading, teleported after a teleport only,
 -- routeArrived from gps.lua), a failing listener contained; places / buildings (1.4): the request sent, each answer
--- to its own callback (a pending one kept for the next), paging, a timeout heard once.
+-- to its own callback (a pending one kept for the next), paging, a timeout heard once; cachedOnly (1.8): the flag
+-- sent and result.truncated surfaced.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 dofile(dir .. '/stubs.lua')
@@ -53,7 +54,8 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 7, 'version 1.7 (routeSteps, rebase)')
+T.check(api.version() == 1 and select(2, api.version()) == 8,
+  'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -239,6 +241,21 @@ T.check(api.buildings(39.2847, -76.5925, function(r) bl = r end) and sent[#sent]
 api._onPlaces({ id = sent[#sent].id, places = {}, complete = true, buildings = { { id = 'b1', lat = 39.28, lon = -76.59,
   height = 12, outline = { { 39.28, -76.59 }, { 39.281, -76.59 }, { 39.281, -76.591 } } } } })
 T.check(bl and bl.buildings[1].height == 12 and #bl.buildings[1].outline == 3, 'buildings: footprints in the result')
+-- 1.8: a wide search over only the cells the app has (cachedOnly), and the truncated it can answer with
+T.check(api.has('cachedPlaces') and select(2, api.version()) >= 8, 'cachedPlaces: has()')
+T.check(sent[#sent].cachedOnly == false, 'places: cachedOnly false unless asked')
+local cut = nil
+local wide = api.places(69.6492, 18.9553, { radius = 25000, cachedOnly = true, categories = { 'car_dealer' } },
+  function(r) cut = r end)
+T.check(wide and sent[#sent].cachedOnly == true and sent[#sent].radius == 25000,
+  'places: cachedOnly sent with the reach')
+api._onPlaces({ id = wide, places = {}, complete = false, pending = false, truncated = true })
+T.check(cut and cut.truncated == true and cut.pending == false and cut.complete == false,
+  'places: truncated surfaced, the answer final')
+local plain = api.places(1, 2, { cachedOnly = true }, function(r) cut = r end)
+api._onPlaces({ id = plain, places = {}, complete = true, pending = false })
+T.check(cut.truncated == false and cut.complete, 'places: truncated false where the app does not say it')
+
 local n0, why = api.places(91, 0, {}, print)
 T.check(n0 == nil and why == 'bad coordinates', 'places: bad coordinates refused')
 T.check(api.places(1, 2, {}) == nil, 'places: no callback refused')

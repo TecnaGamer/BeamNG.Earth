@@ -398,20 +398,27 @@ end
 -- the instance's name, which stays the same: setupSignals finds it again), so a new graph costs only the new ones.
 local function makeHead(inst, a)
   if not a[8] or not inst.createSignalObject then return end
+  local shape = M.SIGNAL_SHAPE
+  if a[12] == 1 then
+    local left = require('beamngEarth/signalshape').ensureLeft()
+    if not left then return end
+    shape = left .. '.dae'
+  end
   seenHeads[inst.name] = true
   local h = heads[inst.name]
-  if h and math.abs(h.x - a[8]) < 0.05 and math.abs(h.y - a[9]) < 0.05 and scenetree.findObjectById(h.id) then return end
+  if h and h.shape == shape and math.abs(h.x - a[8]) < 0.05 and math.abs(h.y - a[9]) < 0.05
+    and scenetree.findObjectById(h.id) then return end
   if h then
     local old = scenetree.findObjectById(h.id)
     if old then old:delete() end
   end
-  local o = inst:createSignalObject(M.SIGNAL_SHAPE, vec3(a[8], a[9], a[10]), quat(0, 0, 0, 1))
+  local o = inst:createSignalObject(shape, vec3(a[8], a[9], a[10]), quat(0, 0, 0, 1))
   if not o then return end
   local m = MatrixF(true)
   m:setFromEuler(vec3(0, 0, -math.rad(a[11] or 0)))     -- as trees.lua turns the static boom (negated: clockwise)
   m:setPosition(vec3(a[8], a[9], a[10]))
   o:setTransform(m)
-  heads[inst.name] = { id = o:getID(), x = a[8], y = a[9] }
+  heads[inst.name] = { id = o:getID(), x = a[8], y = a[9], shape = shape }
 end
 
 local function signalData(nodes)
@@ -594,13 +601,14 @@ local function applySignals(nodes)
     local grid = {}
     for _, h in pairs(heads) do grid[math.floor(h.x / 4) .. ',' .. math.floor(h.y / 4)] = true end
     trees.suppress = function(g, x, y)
-      if g ~= 'signal' then return false end
+      if g ~= 'signal' and g ~= 'signal_left' then return false end
       local cx, cy = math.floor(x / 4), math.floor(y / 4)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
     local t5 = wall()
     trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
+    trees.refresh('signal_left')
     stats.sigTreesMs = wall() - t5
   end)
   stats.signalsMs = wall() - t1

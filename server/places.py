@@ -7,23 +7,37 @@ labels read, maplabels.near_cells); a request never adds a source or a download 
 answers from the cells on disk at once and, when some were missing, once more after they came (the same way as
 map_labels), each answer saying whether it was complete.
 
-Request {type="places", id, lat, lon, radius, categories, limit, cursor, buildings, minConfidence} -> places_result
-{id, places, buildings, complete, pending, next, error}:
+Request {type="places", id, lat, lon, radius, categories, limit, cursor, buildings, minConfidence, cachedOnly} ->
+places_result {id, places, buildings, complete, pending, next, truncated, error}:
   places     [{id, name, category, lat, lon, confidence, open}, ...]   nearest first; `open` is Overture's
              operating_status ("open", "temporarily_closed", "permanently_closed", "" not known)
   buildings  [{id, lat, lon, height, levels, name, class, outline}, ...] with buildings=true only; outline the
              footprint's outer ring [[lat, lon], ...]
   next       the cursor of the next page (absent on the last)
 Rows are sorted by (distance, id), and a cursor is the key of a page's last row, so a page asked again after more
-cells came neither repeats nor skips the rows of the pages before it (a nearer place come since is not in them)."""
+cells came neither repeats nor skips the rows of the pages before it (a nearer place come since is not in them).
+
+cachedOnly asks for no cell it does not already have on disk, and for no second answer: it queues no background job
+of its own, so a radius well past RADIUS_MAX_M costs only what is already there (an add-on looking for the few car
+dealers of a whole region). It is not a promise that nothing is downloaded: a cell whose stored layer is damaged is
+a miss like any other and mapdata rebuilds it from its sources (test_corrupt_layer_files_are_rebuilt). Such a
+wide search must name categories and reads at most CACHED_CELLS_MAX cells; truncated says the box round the point
+held more than that, so the reach was shortened and cells inside the radius asked for were left unread (a radius
+whose box fits is never shortened, however close to the cap it comes). Buildings keep BUILDINGS_RADIUS_MAX_M either
+way."""
 import math
 
 import numpy as np
+import dmath
 
+import mapcells
 import maplabels
 
 RADIUS_DEFAULT_M = 1000.0
 RADIUS_MAX_M = 3000.0           # (up to ~16 z14 cells round the point at mid latitudes: read in well under a second)
+# cachedOnly only, which fetches nothing: the reach then costs no more than the cells of it already on disk
+RADIUS_WIDE_MAX_M = 25000.0     # (484 z14 cells at the equator, 784 round Baltimore, 1024 round Munich, 1764 at 60 N)
+CACHED_CELLS_MAX = 2048         # (half mapcells.cells_for_bbox's own 4096-cell box limit, so it is never asked for more)
 LIMIT_DEFAULT, LIMIT_MAX = 50, 200
 CATEGORIES_MAX = 32
 # footprints are bigger than places (~20 vertices each) and fill a town's centre quickly: a smaller reach and count
@@ -44,8 +58,30 @@ def _num(msg, name, default):
     return v if math.isfinite(v) else None
 
 
+def cached_reach(lat, lon, radius_m):
+    """(the reach a cachedOnly request reads, whether cells inside radius_m were left out of it): radius_m itself
+    where the box round the point holds at most CACHED_CELLS_MAX cells, else a shorter reach whose box does.
+    The box is counted, not estimated, so a radius that fits is never cut back by a metre and never reports
+    truncated; truncated means the box really held more cells than the cap, so cells inside the radius really
+    were left unread. The fall-back reach comes from the cell size instead: a z14 cell is
+    EARTH_CIRC / 2**14 * cos(lat) metres a side, so the box holds about (2 * reach / that)**2 cells, and
+    side * (sqrt(CACHED_CELLS_MAX) - 2) / 2 is inside the cap at every latitude (its worst box is 1980 cells)
+    and always past RADIUS_MAX_M (4564 m at the Web-Mercator limit, where a cell is 211 m).
+    Cutting the reach back rather than dropping cells out of the box keeps the answer concentric: it is then every
+    place out to the shorter reach, which is what the (distance, id) order and its cursors need, and it is the same
+    cut on every page, which a cut by what is on disk would not be."""
+    try:
+        if len(maplabels.near_cells(lat, lon, radius_m)) <= CACHED_CELLS_MAX:
+            return radius_m, False
+    except ValueError:      # (mapcells.cells_for_bbox refuses a box past its own 4096, far past the cap)
+        pass
+    side_m = mapcells.EARTH_CIRC / (1 << mapcells.ZOOM) * max(0.05, dmath.cos(math.radians(lat)))
+    return min(radius_m, side_m * (math.sqrt(CACHED_CELLS_MAX) - 2.0) / 2.0), True
+
+
 def request(msg):
-    """The checked request as a dict, or (None, why) for one that cannot be answered."""
+    """The checked request as a dict, or (None, why) for one that cannot be answered. "radius" is the reach to read,
+    which a cachedOnly request's cell cap can cut back ("truncated")."""
     lat, lon = _num(msg, "lat", None), _num(msg, "lon", None)
     if lat is None or lon is None or not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return None, "bad coordinates"
@@ -62,8 +98,16 @@ def request(msg):
     cursor = msg.get("cursor")
     if cursor is not None and (not isinstance(cursor, str) or len(cursor) > CURSOR_MAX_LEN or _cursor_key(cursor) is None):
         return None, "bad cursor"
-    return {"lat": lat, "lon": lon, "radius": max(1.0, min(radius, RADIUS_MAX_M)),
-            "limit": int(max(1, min(limit, LIMIT_MAX))), "categories": [c.strip().lower() for c in cats if c.strip()],
+    cached = msg.get("cachedOnly") is True
+    cats = [c.strip().lower() for c in cats if c.strip()]
+    radius = max(1.0, min(radius, RADIUS_WIDE_MAX_M if cached else RADIUS_MAX_M))
+    # (only a cachedOnly radius gets past RADIUS_MAX_M, and a reach that wide is for sparse kinds. It holds down the
+    # rows kept in memory, not the cells read: every cell in reach is read and matcher() filters its rows after)
+    if radius > RADIUS_MAX_M and not cats:
+        return None, f"a radius over {RADIUS_MAX_M:.0f} m needs categories"
+    reach, cut = cached_reach(lat, lon, radius) if cached else (radius, False)
+    return {"lat": lat, "lon": lon, "radius": reach, "truncated": cut,
+            "limit": int(max(1, min(limit, LIMIT_MAX))), "categories": cats, "cached_only": cached,
             "cursor": cursor, "buildings": msg.get("buildings") is True, "min_conf": max(0.0, min(min_conf, 1.0))}, None
 
 

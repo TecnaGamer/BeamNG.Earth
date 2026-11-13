@@ -1338,6 +1338,135 @@ def _sign(commune, line, s, travel, width, left_hand, main=False):
             [G_EXIT] + at + [round((yaw + 180.0) % 360.0, 1), 1.0, SIGN_H, 0.0] + tail]
 
 
+# A commune boundary that runs through a fork has a change on every road that leaves the node (Broumov / Hejtmanko-
+# vice, 2026-11-11: two roads, four posts within 10 m). The changes of one node that are the same step between the same two
+# communes (the node side's, the far side's) are one: _sign's pair (an entry face each way, its exit face on its back)
+# stands on the road that carries the node's own side, JUNCTION_STEM_M before the node, for all the branches.
+JUNCTION_MERGE_M = 30.0         # m: the farthest from its node a change is taken into the node's
+JUNCTION_STEM_M = 8.0           # m before the node the merged pair stands on the stem (a shorter stem: 1 m before its end)
+JUNCTION_NODE_M = 1.5           # m: two road ends this close are one node
+JUNCTION_STEM_MIN_M = 3.0       # m: the stem's least length
+JUNCTION_HOPS = 3               # segments a stem short of JUNCTION_STEM_M is lengthened by
+# A boundary between two towns grown together (a change from one commune to the next, no open land between) has its
+# signs on the through roads only: the boundary cuts every residential street of the built-up land (Broumov /
+# Hejtmankovice, 2026-11-11: three pairs a few metres apart on streets between the houses).
+INTERTOWN_CLASSES = {"primary", "secondary", "tertiary", "unclassified"}
+CLASS_ORDER = {"primary": 4, "secondary": 3, "tertiary": 2, "unclassified": 1, "residential": 0}
+
+
+def _length(line):
+    return float(furniture._arclen(line)[-1])
+
+
+def merge_junctions(lines, changes, communes, frame, judged=None):
+    """(lines, changes) with the changes of one fork made one. lines: [(spec, centreline)], changes [(line index, s, a,
+    b)] as _changes' (the traffic along the line leaves commune a and enters b). Changes within JUNCTION_MERGE_M of
+    the same node (road ends within JUNCTION_NODE_M) with the same commune on the node's side and the same on the far
+    side are one change on the node's stem: a road (or a few of them, joined in one line) at the node with no change
+    of its own and the node side's commune a few metres from the node, the sign JUNCTION_STEM_M before it. With no such
+    stem the road of the highest class (then the longest) keeps its change and the others lose theirs. Pure; lines
+    gets the stems' joined lines at its end. judged (a dict, optional): {a stem line's index: the class of the highest
+    road its merged changes were on}, by which town_signs judges the merged change between two towns grown together
+    (not by the stem's own class: a residential stem would drop a secondary branch's pair, a secondary stem keep
+    residential branches' ones)."""
+    if len(changes) < 2:
+        return lines, changes
+    lengths = {}
+
+    def length(i):
+        if i not in lengths:
+            lengths[i] = _length(lines[i][1])
+        return lengths[i]
+    clusters = []                   # [node xy, node side, far side, [change indices]]
+    for k, (li, s, a, b) in enumerate(changes):
+        line, total = lines[li][1], length(li)
+        at_start = s <= total - s
+        if (s if at_start else total - s) > JUNCTION_MERGE_M:
+            continue
+        node = np.asarray(line[0 if at_start else -1][:2], np.float64)
+        side, far = (a, b) if at_start else (b, a)
+        for c in clusters:
+            if c[1] == side and c[2] == far and dnp.hypot(*(c[0] - node)) <= JUNCTION_NODE_M:
+                c[3].append(k)
+                break
+        else:
+            clusters.append([node, side, far, [k]])
+    clusters = [c for c in clusters if len(c[3]) > 1]
+    if not clusters:
+        return lines, changes
+    changed = {li for li, *_ in changes}
+    lines = list(lines)
+    drop, extra = set(), []
+    for node, side, far, ks in clusters:
+        stem = _stem(lines, changed, node, length)
+        placed = None
+        if stem is not None:
+            poly, spec = stem
+            total = _length(poly)
+            at = total - min(JUNCTION_STEM_M, total - 1.0)
+            q, _ = furniture._at(poly, np.array([at]))
+            if int(state(q[:, :2], communes, frame)[0]) == side:
+                placed = (spec, poly, at)
+        if placed is not None:
+            drop.update(ks)
+            lines.append((placed[0], placed[1]))
+            extra.append((len(lines) - 1, placed[2], side, far))
+            if judged is not None:
+                judged[len(lines) - 1] = max((lines[changes[k][0]][0].cls for k in ks),
+                                             key=lambda c: CLASS_ORDER.get(c, -1))
+            continue
+        keep = max(ks, key=lambda k: (CLASS_ORDER.get(lines[changes[k][0]][0].cls, -1), length(changes[k][0])))
+        drop.update(k for k in ks if k != keep)
+    return lines, [c for k, c in enumerate(changes) if k not in drop] + extra
+
+
+def _stem(lines, changed, node, length):
+    """(centreline running toward node, spec) of the node's stem, or None: a two-way road ending at node with no change
+    on it (changed: the line indices that have one), lengthened up to JUNCTION_HOPS segments at its far end while it is
+    shorter than JUNCTION_STEM_M + 1 and exactly one other such road continues it. Of several the highest class, then
+    the longest."""
+    def ends(i):
+        line = lines[i][1]
+        return np.asarray(line[0][:2]), np.asarray(line[-1][:2])
+
+    def usable(i):
+        return i not in changed and not lines[i][0].oneway and length(i) >= 0.5
+
+    def touching(point, skip):
+        out = []
+        for i in range(len(lines)):
+            if i in skip or not usable(i):
+                continue
+            first, last = ends(i)
+            if dnp.hypot(*(first - point)) <= JUNCTION_NODE_M:
+                out.append((i, False))          # (runs away from the point)
+            elif dnp.hypot(*(last - point)) <= JUNCTION_NODE_M:
+                out.append((i, True))           # (runs toward it)
+        return out
+    best = None
+    for i, toward in touching(node, ()):
+        line = np.asarray(lines[i][1], np.float64)
+        line = line if toward else line[::-1]
+        used = {i}
+        for _ in range(JUNCTION_HOPS):
+            if _length(line) >= JUNCTION_STEM_M + 1.0:
+                break
+            more = touching(line[0][:2], used)
+            if len(more) != 1:
+                break
+            j, toward_j = more[0]
+            used.add(j)
+            piece = np.asarray(lines[j][1], np.float64)
+            line = np.vstack([piece if toward_j else piece[::-1], line[1:]])
+        total = _length(line)
+        if total < JUNCTION_STEM_MIN_M:
+            continue
+        rank = (CLASS_ORDER.get(lines[i][0].cls, -1), total)
+        if best is None or rank > best[0]:
+            best = (rank, line, lines[i][0])
+    return None if best is None else (best[1], best[2])
+
+
 def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=None, urban=None):
     """Sign rows [group, x, y, z, yaw, scale, height, rank, name, local, country, ...] (furniture's prop rows, the
     commune's name, its regional name and its country, then _sign's) of a tile box (x0, y0, x1, y1): on the roads of
@@ -1369,8 +1498,12 @@ def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=No
     signs = []
     if mapped:
         changes, signs = mapped_signs(lines, changes, communes, frame, mapped, urban, mlines)
+    judged = {}
+    lines, changes = merge_junctions(lines, changes, communes, frame, judged)
     for li, s, a, b in changes:
         spec, line = lines[li]
+        if a >= 0 and b >= 0 and judged.get(li, spec.cls) not in INTERTOWN_CLASSES:
+            continue
         ways = (1.0, -1.0)
         if spec.oneway:
             ways = (-1.0,) if (spec.dir or 1) < 0 else (1.0,)

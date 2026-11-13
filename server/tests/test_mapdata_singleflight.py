@@ -115,6 +115,18 @@ class SingleFlightTest(unittest.TestCase):
         for layer in ("roads", "buildings"):
             self.assertIs(a.layers[layer], b.layers[layer])
 
+    def test_unkept_layer_is_not_remembered_and_a_kept_one_is_reused(self):
+        # MapData.layer_unkept (the modding API's wide cachedOnly places): decoded for the call, not into MEM_MB; one
+        # already in memory is handed back without decoding again
+        with patch.object(self.md, "layer_arrays", side_effect=lambda key, layer, kind: self.arrays(layer)) as io:
+            f = self.md.layer_unkept(KEY, "places")
+            self.assertIsNotNone(f)
+            self.assertEqual((self.md._mem, self.md._mem_bytes, io.call_count), ({}, 0, 1))
+            kept = self.md.cell(KEY, ("places",)).layers["places"]
+            self.assertIs(self.md.layer_unkept(KEY, "places"), kept)
+            self.assertEqual(io.call_count, 2)
+        self.assertEqual(self.md._loading, {})
+
     def test_eviction_does_not_make_waiters_decode_again(self):
         release = threading.Event()
         def load(key, layer, kind):

@@ -490,6 +490,27 @@ def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
     return bool(float(np.max(z[-2:])) < float(np.median(z[:-2])) + LEVEL_BRIDGE_SEP_M)
 
 
+LIMIT_NEAR_M = 4.0      # m: a road's height limit holds at a crossing the road passes under a bridge within this
+
+
+def height_limits(frame, cells):
+    """[(xy (k, 2) ENU, limit m)] of the height limits (roads.height_limit_lines) of the cells' roads."""
+    out = []
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        for ring, h in roads.height_limit_lines(feats):
+            e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+            out.append((np.column_stack((np.asarray(e, np.float64), np.asarray(n, np.float64))), h))
+    return out
+
+
+def limit_near(limits, pt):
+    """Does a height limit [(xy, m)] pass within LIMIT_NEAR_M of the point pt (x, y)?"""
+    p = np.asarray(pt, np.float64)[None, :2]
+    return any(len(xy) >= 2 and float(roads._seg_dist(p, xy[:-1], xy[1:]).min()) <= LIMIT_NEAR_M for xy, _h in limits)
+
+
 def level_bridges(frame, cells, rails, reach_box):
     """rails with each short bridge part over a road on level ground (level_bridge) made a ground part: the road then
     crosses it at grade (a level crossing) instead of being dug under it."""
@@ -498,13 +519,15 @@ def level_bridges(frame, cells, rails, reach_box):
     ways = [ln for ln, _hw in crossings(frame, cells, reach_box, reach=0.0)]
     if not ways:
         return rails
+    limits = height_limits(frame, cells)        # (a road with a height limit under it is under a bridge: never a crossing)
     out = []
     for fid, c, kind, xy in rails:
         if kind == "bridge" and c != "tram" and float(_arc(xy)[-1]) <= LEVEL_BRIDGE_MAX_M:
             # (every way's crossings in one kernel call, as _crossings gives them way by way: a call per way per short
             # bridge per window was 1.6 million calls, ~30 s of a 16-tile probe at Brno)
             for line, hits in zip(ways, roads._crossings_by([xy], ways)):
-                if hits and level_bridge(frame, xy, line, float(np.clip(_seg_arc(line, hits[0][2]), 0.0, 1e9))):
+                if hits and level_bridge(frame, xy, line, float(np.clip(_seg_arc(line, hits[0][2]), 0.0, 1e9))) \
+                        and not limit_near(limits, hits[0][2]):
                     kind = "ground"
                     break
         out.append((fid, c, kind, xy))
@@ -849,15 +872,21 @@ def _pieces(feats, i):
     return [(kind, list(rings)) for kind, rings in got]
 
 
+MIN_PART_M = 1.0          # m: a piece of a rail line shorter than this is a rounding sliver, whatever the line's length
+
+
 def _pieces_of(feats, i, rngs):
     L = roads._feature_length_m(feats, i)
+    # (roads.MIN_PART is a share of the segment: 1e-3 of a 19 km rail segment is 19 m, and its 11 m bridges over the
+    # roads were dropped, the track lying across them; at most MIN_PART_M, as for a short feature)
+    min_part = min(roads.MIN_PART, MIN_PART_M / max(L, 1.0))
     off = [(a, b, k) for a, b, k in rngs if not (k == "tunnel" and (b - a) * L < SHORT_TUNNEL_M)]
     ground, at = [], 0.0
     for a, b, _k in off:
-        if a - at > roads.MIN_PART:
+        if a - at > min_part:
             ground.append((at, a))
         at = max(at, b)
-    if 1.0 - at > roads.MIN_PART:
+    if 1.0 - at > min_part:
         ground.append((at, 1.0))
     out = {"ground": [], "bridge": [], "tunnel": []}
     for part in feats.parts(i):
@@ -867,7 +896,7 @@ def _pieces_of(feats, i, rngs):
             for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"]),
                                 ("tunnel", [(a, b) for a, b, k in off if k == "tunnel"] if TUNNELS_ON else [])):
                 for a, b in spans:
-                    if b - a > roads.MIN_PART:
+                    if b - a > min_part:
                         r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
                         if len(r) >= 2:
                             out[kind].append(r)

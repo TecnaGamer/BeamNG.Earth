@@ -20,8 +20,6 @@ import fast
 
 _ef = fast.native(262, "dnp")
 
-_OPS = dict(sin=0, cos=1, tan=2, arcsin=3, arccos=4, arctan=5, sinh=6, cosh=7, tanh=8, arcsinh=9, arctanh=10, exp=11,
-            log=12, log2=13, log10=14, cbrt=15, expm1=16, log1p=17, arccosh=18)
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
 

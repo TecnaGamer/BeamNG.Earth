@@ -7021,14 +7021,32 @@ class Connection:
     def _place_rows(self, req, fetch):
         """places.py's rows for an API request (worker thread): (places keyed, buildings, complete). Without fetch only
         the cells on disk; complete is False when some were missing (fetch=True then asks for them as background jobs,
-        as _map_label_rows does)."""
+        as _map_label_rows does). A cachedOnly request never fetches, whatever it is asked for, and starts incomplete
+        where its reach was cut back to placesmod.CACHED_CELLS_MAX cells (the cells past it were not read either)."""
         md = self.s.mapdata
         lat, lon = req["lat"], req["lon"]
-        complete = True
+        fetch = fetch and not req["cached_only"]
+        complete = not req["truncated"]
         layers = (("places", req["radius"]),)
         if req["buildings"]:
             layers += (("buildings", min(req["radius"], placesmod.BUILDINGS_RADIUS_MAX_M)),)
         got = {}
+        state = {"complete": True}         # (the unkept reads' own: set as place_rows walks them)
+        if req["cached_only"]:
+            # (up to CACHED_CELLS_MAX cells: each read when place_rows comes to it and dropped after, none kept in
+            # mapdata's MEM_MB, so a wide search neither holds every layer at once nor pushes the road tiles' layers
+            # out: MapData.layer_unkept)
+            def unkept(keys):
+                for k in keys:
+                    if not md.has(k, "places"):
+                        state["complete"] = False
+                        continue
+                    try:
+                        yield md.layer_unkept(k, "places")
+                    except mapdatamod.DEFERRED:
+                        state["complete"] = False
+            got["places"] = unkept(placesmod.near_cells(lat, lon, req["radius"]))
+            layers = layers[1:]
         for layer, r in layers:
             cells = []
             for k in placesmod.near_cells(lat, lon, r):
@@ -7043,17 +7061,19 @@ class Connection:
         keyed = placesmod.place_rows(got["places"], lat, lon, req["radius"], placesmod.matcher(req["categories"]),
                                      req["min_conf"])
         blds = placesmod.building_rows(got["buildings"], lat, lon, req["radius"]) if req["buildings"] else None
-        return keyed, blds, complete
+        return keyed, blds, complete and state["complete"]
 
     async def places(self, msg):
         """The modding API's places {"id", "lat", "lon", "radius", "categories", "limit", "cursor", "buildings",
-        "minConfidence"} -> places_result {"id", "places", "buildings", "complete", "pending", "next", "error"}
+        "minConfidence", "cachedOnly"} -> places_result {"id", "places", "buildings", "complete", "pending", "next",
+        "truncated", "error"}
         (places.py; api.places in the mod). The cells on disk answer at once; when some are missing they are fetched
         as background jobs (never ahead of the world's own downloads) and one more answer follows once they came
         (or after PLACES_TRIES, still incomplete); "pending" says whether another answer is still to come. Its own
         count of follow-ups, never _map_labels_seq (an add-on's request must not cancel the map's labels, nor the
         other way round), and no request cancels another's (two add-ons may ask at once); at most PLACES_FOLLOWUPS
-        at a time, past them an incomplete answer is the last."""
+        at a time, past them an incomplete answer is the last. A cachedOnly request has none of that: one answer from
+        the cells on disk, complete or not, nothing fetched for it and nothing pending."""
         rid = msg.get("id")
         req, why = placesmod.request(msg)
         if req is None:
@@ -7074,6 +7094,8 @@ class Connection:
                 out["buildings"] = blds
             if nxt is not None:
                 out["next"] = nxt
+            if req["truncated"]:
+                out["truncated"] = True
             if error:
                 out["error"] = error
             self.send(out)
@@ -7086,7 +7108,8 @@ class Connection:
                        "error": f"{type(e).__name__}"})
             return
         busy = getattr(self, "_places_followups", 0)
-        follow = not complete and busy < PLACES_FOLLOWUPS
+        # (a cachedOnly answer is the last one either way: nothing is fetched for it, so nothing would come)
+        follow = not complete and not req["cached_only"] and busy < PLACES_FOLLOWUPS
         answer(keyed, blds, complete, follow)
         if not follow:
             return
@@ -10609,7 +10632,9 @@ async def main_async(args):
                 snap = tracemalloc.take_snapshot()
                 top = snap.statistics("lineno")[:TRACE_TOP]
                 total = sum(st.size for st in snap.statistics("filename"))
-                log.info("memory: rss %.0f MB, %.0f MB traced; top: %s", blockworker._rss_mb(), total / 1e6, "; ".join(
+                log.info("memory: rss %.0f MB, held %.0f MB (%.0f the tracer's), %.0f MB traced; top: %s",
+                         blockworker._rss_mb(), blockworker._held_mb(), tracemalloc.get_tracemalloc_memory() / 1e6,
+                         total / 1e6, "; ".join(
                     f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} {st.size / 1e6:.0f} MB"
                     for st in top))
         threading.Thread(target=trace_mem, daemon=True, name="trace-mem").start()
