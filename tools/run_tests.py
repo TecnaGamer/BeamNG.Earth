@@ -178,6 +178,15 @@ class Runner:
         bad = [(m, r) for m, r, _ in res if r != "OK"]
         self.say(f"done: {len(res) - len(bad)} OK, {len(bad)} not OK"
                  + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else ""))
+        # Keep the actionable traceback in CI's ordinary log as well as in the
+        # downloadable artifact. A failed module must be diagnosable when the
+        # artifact download is unavailable (especially Windows cleanup errors).
+        for m, r in bad:
+            with open(os.path.join(self.logs, m + '.log'), encoding='utf-8') as fh:
+                tail = fh.readlines()[-100:]
+            self.say(f"--- {m} ({r}): last {len(tail)} log lines ---")
+            for line in tail:
+                self.say(line.rstrip())
         return 1 if bad else 0
 
 
