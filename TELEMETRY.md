@@ -124,6 +124,14 @@ only numbers (and in section 2 short model names and settings values), so no pos
 |---|---|---|
 | requests per map service | `basemap.nationalmap.gov`: 88 requests, 2.8 MB, 0 errors, 0 rate-limited | BeamNG.Earth downloads from free public services (map data, elevation, photos). These counts show us whether we are putting too much load on any of them, so we can cache or slow down before a service blocks everyone. |
 
+## 7. Requests for aerial photo packs (main switch)
+
+Where the project's server has no prebuilt 1 m aerial photo pack for an area you drive in (US and open-data countries),
+the app may ask it to build one, so the next visit (yours or anyone's) loads faster. The request names only the
+~15 km map square, nothing else; it is sent at most once per square every 6 hours, only with the main switch on, and
+the server keeps the square to build it, not who asked (your address is used only in memory, for rate limits).
+With the main switch off, nothing is asked and the photos come from their usual sources.
+
 ## What happens to the data
 
 - **Sole purpose**: counting players, protecting the free map services BeamNG.Earth relies on, and finding what to
