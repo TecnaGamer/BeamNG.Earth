@@ -7,10 +7,32 @@ local x, y = dashboard.project(0, 0, 3)
 T.near(x, 4, 1e-12, 'equator and prime meridian project to the center tile')
 T.near(y, 4, 1e-12, 'equator projects to the vertical world center')
 
-local layout = dashboard.tileLayout(0, 0, 3)
-T.check(layout and #layout.requests == 9 and #layout.tiles == 9, 'normal view requests a 3-by-3 tile neighborhood')
-T.check(layout.requests[1][1] == 3 and layout.requests[1][2] == 4 and layout.requests[1][3] == 4
-  and layout.requests[1][4] == 'sat', 'center satellite tile is requested first')
+local layout = dashboard.tileLayout(0.3, 0.3, 3)
+T.check(layout and #layout.requests >= 9 and #layout.requests <= 16 and #layout.tiles == #layout.requests,
+  'the tiles within the view radius of the car (' .. #layout.requests .. ')')
+T.check(layout.requests[1][1] == 3 and layout.requests[1][2] == 4 and layout.requests[1][3] == 3
+  and layout.requests[1][4] == 'sat', "the car's own tile is requested first")
+-- every screen corner of a 512 x 256 screen with the car 62 % down is on a tile, wherever the car is in its tile
+do
+  local covered = true
+  for _, f in ipairs({ { 0.01, 0.01 }, { 0.99, 0.01 }, { 0.5, 0.5 }, { 0.01, 0.99 }, { 0.99, 0.99 } }) do
+    local z = 17
+    local n = 2 ^ z
+    local lon = (64000 + f[1]) / n * 360 - 180
+    local yt = 40000 + f[2]
+    local s = math.pi * (1 - 2 * yt / n)
+    local lat = math.deg(math.atan(0.5 * (math.exp(s) - math.exp(-s))))
+    local L = dashboard.tileLayout(lat, lon, z)
+    local have = {}
+    for _, t in ipairs(L.tiles) do have[t.x .. ',' .. t.y] = true end
+    for a = 0, 359, 5 do      -- (the map turns with the car: the corners sweep a circle of ~300 px)
+      local px = L.pixelX + 300 * math.cos(math.rad(a))
+      local py = L.pixelY + 300 * math.sin(math.rad(a))
+      if not have[math.floor(px / 256) .. ',' .. math.floor(py / 256)] then covered = false end
+    end
+  end
+  T.check(covered, 'no bare screen corner: every point 300 px from the car is on a requested tile')
+end
 local seen = {}
 for _, request in ipairs(layout.requests) do
   local key = request[2] .. '/' .. request[3]
@@ -26,9 +48,86 @@ end
 T.check(wrapped, 'the neighborhood wraps satellite tile x across the antimeridian')
 
 local pole = dashboard.tileLayout(90, 0, 3)
-T.check(pole and #pole.requests == 6, 'north-pole view omits tile rows outside the Mercator world')
+local inside = true
+for _, r in ipairs(pole.requests) do if r[3] < 0 or r[3] >= 8 then inside = false end end
+T.check(pole and #pole.requests > 0 and inside, 'north-pole view omits tile rows outside the Mercator world')
+
+-- the roads over the photo
+T.check(dashboard.roadClass(1.0) == 3 and dashboard.roadClass(0.9) == 3, 'main and tertiary roads: class 3')
+T.check(dashboard.roadClass(0.8) == 2, 'town streets: class 2')
+T.check(dashboard.roadClass(0.4) == 1 and dashboard.roadClass(0.5) == 1, 'service roads and living streets: class 1')
+T.check(dashboard.roadClass(0.2) == 0, 'tracks and busways: class 0')
+do
+  local g = { anchor = 3, serial = 1,
+    nodes = { a = { 100.04, -20.0, 5, 3 }, b = { 120.0, 7.55, 5, 3 }, c = { 101, -19, 0, 2 }, bad = { 0 / 0, 1, 0, 1 } },
+    edges = { { 'a', 'b', 0, 1, 1, 11, 0.8, 3.0 }, { 'b', 'a', 0, 1, 1, 11, 0.8, 3.0 }, { 'b', 'missing', 0, 1, 1, 11, 1, 2 },
+              { 'c', 'c', 0, 1, 1, 5, 1, 1 }, { 'b', 'c', 1, 1, 0, 5, 0.4 }, { 'a', 'bad', 0, 1, 1, 5, 1 } } }
+  local text, roads = dashboard.roadsText(g, 'k1')
+  T.check(roads == 2, 'each road once (a reverse duplicate, a missing node, a loop and a NaN node left out)')
+  text = text:gsub('(%d)%.0([,%]}])', '%1%2')
+  T.check(text == '{"key":"k1","anchor":3,"ox":100,"oy":-20,"n":[0,0,20,27.6,1,1],"e":[0,1,2,30,1,2,1,30]}',
+    'nodes from the first node (0.1 m), roads as node, node, class, half width (dm): ' .. text)
+  local co = coroutine.create(function() return dashboard.roadsText(g, 'k1', 1) end)
+  local resumes, ok, t2 = 0, true, nil
+  repeat ok, t2 = coroutine.resume(co); resumes = resumes + 1 until coroutine.status(co) == 'dead'
+  T.check(ok and t2:gsub('(%d)%.0([,%]}])', '%1%2') == text and resumes > 2,
+    'the conversion pauses between roads and gives the same text')
+  local _, none = dashboard.roadsText({ nodes = {}, edges = {} }, 'e')
+  T.check(none == 0, 'no roads: none')
+end
+T.near(dashboard.metresPerPixel(0, 17), 1.1943, 1e-3, 'metres a pixel at z17 on the equator')
+T.near(dashboard.metresPerPixel(60, 17), 0.5972, 1e-3, '... half that at 60 degrees')
 T.check(dashboard.zoomFor(0) == dashboard.ZOOM_CITY and dashboard.zoomFor(60) == dashboard.ZOOM_FAST,
   'the live speed selects an appropriate dashboard zoom')
+
+-- the player's screen gets the roads once per graph, again after its page reloaded, and the view carries their frame
+do
+  local js = {}
+  local veh = { queueJSUITexture = function(_, tag, code) js[#js + 1] = code end }
+  local nav = { requestVehicleDashboardMap = function() return true end }
+  local saved = { scenetree = rawget(_G, 'scenetree'), be = rawget(_G, 'be'), extensions = rawget(_G, 'extensions'),
+    jsonEncode = rawget(_G, 'jsonEncode') }
+  scenetree = { findObjectById = function(id) return id == 5 and veh or nil end }
+  be = { getPlayerVehicleID = function() return 5 end }
+  jsonEncode = function(v)
+    if type(v) ~= 'table' then return string.format('%q', tostring(v)) end
+    local out = {}
+    for k, x in pairs(v) do out[#out + 1] = string.format('%q', k) .. ':' .. tostring(x) end
+    return '{' .. table.concat(out, ',') .. '}'
+  end
+  local graph = { anchor = 2, serial = 1, nodes = { a = { 0, 0, 0, 3 }, b = { 50, 0, 0, 3 } },
+    edges = { { 'a', 'b', 0, 1, 1, 11, 1, 3 } } }
+  package.loaded['beamngEarth/navgraph'] = { graph = function() return graph end }
+  extensions = { ui_uinavi = nav, beamngEarth_core = { dashboardContext = function()
+    return { active = true, connected = true, mapPort = 1, anchorId = 2,
+      player = { lat = 51.5, lon = -0.13, speed = 0, heading = 10, x = 20, y = 5, north = 0.01 } } end } }
+  local clock, t = os.clock, 3000
+  os.clock = function() return t end
+  dashboard.onExtensionLoaded()
+  dashboard.onClientStartMission()
+  nav.requestVehicleDashboardMap('@vivace_gps_screen', nil, 5)
+  local function count(pat)
+    local c = 0
+    for _, code in ipairs(js) do if code:find(pat, 1, true) then c = c + 1 end end
+    return c
+  end
+  for _ = 1, 5 do t = t + 1; dashboard.onUpdate() end
+  T.check(count('setRoads({"key":') == 1, 'the roads go to the screen once (' .. count('setRoads(') .. ')')
+  local view
+  for _, code in ipairs(js) do if code:find('setView(', 1, true) then view = code end end
+  T.check(view and view:find('"anchor":2', 1, true) and view:find('"x":20', 1, true) and view:find('"mpp":', 1, true),
+    'the view carries the car in the world frame, its anchor and the metres a pixel')
+  graph = { anchor = 2, serial = 2, nodes = graph.nodes, edges = graph.edges }
+  for _ = 1, 3 do t = t + 1; dashboard.onUpdate() end
+  T.check(count('setRoads({"key":') == 2, 'a new graph: sent again')
+  dashboard.screenReady(5, '@vivace_gps_screen')
+  for _ = 1, 3 do t = t + 1; dashboard.onUpdate() end
+  T.check(count('setRoads({"key":') == 3, 'a page loaded again: the roads sent again')
+  os.clock = clock
+  dashboard.onClientEndMission()
+  package.loaded['beamngEarth/navgraph'] = nil
+  scenetree, be, extensions, jsonEncode = saved.scenetree, saved.be, saved.extensions, saved.jsonEncode
+end
 
 -- a vehicle replaced in place keeps its id, not its screens: no more calls to the old screen afterwards
 do

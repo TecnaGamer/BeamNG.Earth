@@ -1453,6 +1453,10 @@ end
 -- How many times a graph went into the game's map (gps.lua: the map's node table stays the same table across them).
 function M.applies() return stats.applies end
 
+-- The server's last graph, unclipped ({anchor, serial, nodes, edges}; nil before one): the cars' navigation screens
+-- draw its roads (dashboard.lua). Read-only. (The accessor as in iambobab's PR #472.)
+function M.graph() return graph end
+
 function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
