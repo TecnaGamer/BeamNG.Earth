@@ -87,3 +87,26 @@ static inline int bnge_mapped(const struct bnge_main *m, uintptr_t vaddr, size_t
         if (a >= m->seg[i].start && a + n <= m->seg[i].end && (m->seg[i].flags & flags) == flags) return 1;
     return 0;
 }
+
+// A page (read + write) within rel32 reach of `site` (both directions, 1 MB steps), or NULL.
+#include <sys/mman.h>
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+static inline unsigned char *bnge_near_page(uintptr_t site) {
+    long pagesz = sysconf(_SC_PAGESIZE);
+    const uintptr_t step = 1u << 20, reach = 0x7ff00000u;
+    for (uintptr_t d = step; d < reach; d += step) {
+        for (int dir = 0; dir < 2; dir++) {
+            uintptr_t a = dir ? site + d : site - d;
+            if (!dir && site < d + 0x10000) continue;
+            a &= ~(uintptr_t)(pagesz - 1);
+            void *p = mmap((void *)a, (size_t)pagesz, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+            if (p == MAP_FAILED) continue;
+            if ((uintptr_t)p != a) { munmap(p, (size_t)pagesz); continue; }   // (an old kernel took it as a hint)
+            return p;
+        }
+    }
+    return NULL;
+}
