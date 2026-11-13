@@ -28,8 +28,8 @@ PLACES=(lonepine=36.596718,-118.169991 hartford=41.7637,-72.6851 amsterdam=52.37
 SLOWEST_FIRST=(hartford amsterdam sanfrancisco lonepine lyon)     # --split's start order (the run ends sooner)
 if [ -n "${NB_PLACES:-}" ]; then
   keep=" $NB_PLACES "
-  PLACES=($(for p in "${PLACES[@]}"; do [[ $keep == *" ${p%%=*} "* ]] && echo "$p"; done))
-  SLOWEST_FIRST=($(for p in "${SLOWEST_FIRST[@]}"; do [[ $keep == *" $p "* ]] && echo "$p"; done))
+  PLACES=($(for p in "${PLACES[@]}"; do [[ $keep != *" ${p%%=*} "* ]] || echo "$p"; done))
+  SLOWEST_FIRST=($(for p in "${SLOWEST_FIRST[@]}"; do [[ $keep != *" $p "* ]] || echo "$p"; done))
 fi
 PROBE_ARGS=(${NB_LINK:+--link "$NB_LINK"} ${NB_UNTIL:+--until "$NB_UNTIL"})
 [ -e "$OUT" ] && { echo "$OUT exists: pick a new name"; exit 1; }
