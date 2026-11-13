@@ -1,13 +1,18 @@
 #!/bin/bash
 # Headless A/B network measurement behind the cache proxy (proxy.sh): a base server (before) and this checkout's server
 # (after, uncommitted changes included), each from an empty cache, through netprobe.py's places.
-# Writes build/netbench/runs/NAME/{before,after}/ and NAME/report.md (ab_bars.py, ab_changes.py, ab_hosts.py).
+# Writes build/netbench/runs/NAME/{before,after}/ and NAME/report.md (ab_milestones.py, ab_bars.py, ab_changes.py,
+# ab_hosts.py).
 #
 #   bench.sh NAME [--split]      --split: one server per place, NB_JOBS at once (each place from a cold cache)
 #
 #   NB_BASE_REF   the base commit (default ab-dev-baseline), checked out detached in build/netbench/base
 #   NB_JOBS       servers at once with --split (default 6): each takes ~10 GB of memory, and a server drops its caches
 #                 once the machine has under 3 GB free (downloads again what it dropped: noise in the counts)
+#   NB_LINK       MBIT:RTT_MS: a player's line (netprobe --link): the times are load times on it. Use a low NB_JOBS (2):
+#                 servers sharing the CPU are slower
+#   NB_UNTIL      a place ends once this part has loaded (netprobe --until: ground, roads, trees, far, loaded)
+#   NB_PLACES     the places measured, by label (default all five)
 #   NB_FRESH_BASE 1: measure the base again. Otherwise a base run is reused (build/netbench/base-runs/<key>) while its
 #                 commit, the mode and the netbench code that shapes a run (netprobe, sitepatch, cacheproxy) are the same
 set -eu
@@ -21,6 +26,12 @@ OUT=$DATA/runs/$NAME
 PLACES=(lonepine=36.596718,-118.169991 hartford=41.7637,-72.6851 amsterdam=52.3730,4.8924 lyon=45.7640,4.8357
         sanfrancisco=37.8080,-122.4177)
 SLOWEST_FIRST=(hartford amsterdam sanfrancisco lonepine lyon)     # --split's start order (the run ends sooner)
+if [ -n "${NB_PLACES:-}" ]; then
+  keep=" $NB_PLACES "
+  PLACES=($(for p in "${PLACES[@]}"; do [[ $keep == *" ${p%%=*} "* ]] && echo "$p"; done))
+  SLOWEST_FIRST=($(for p in "${SLOWEST_FIRST[@]}"; do [[ $keep == *" $p "* ]] && echo "$p"; done))
+fi
+PROBE_ARGS=(${NB_LINK:+--link "$NB_LINK"} ${NB_UNTIL:+--until "$NB_UNTIL"})
 [ -e "$OUT" ] && { echo "$OUT exists: pick a new name"; exit 1; }
 log() { echo "$(date +%H:%M:%S) $*"; }
 rev() { echo "$(git -C "$1" rev-parse --short HEAD)$(git -C "$1" diff --quiet HEAD -- . ':!build' || echo +dirty)"; }
@@ -32,8 +43,9 @@ if [ ! -d "$BASE" ]; then
 else
   git -C "$BASE" checkout -q --detach "${NB_BASE_REF:-ab-dev-baseline}"
 fi
-KEY=$(git -C "$BASE" rev-parse --short HEAD)-$(m=${SPLIT#--}; echo "${m:-session}")-$(cat "$HERE/netprobe.py" "$HERE/sitepatch/sitecustomize.py" \
-      "$HERE/cacheproxy.py" | sha256sum | cut -c1-10)
+KEY=$(git -C "$BASE" rev-parse --short HEAD)-$(m=${SPLIT#--}; echo "${m:-session}")-$( (cat "$HERE/netprobe.py" \
+      "$HERE/sitepatch/sitecustomize.py" "$HERE/cacheproxy.py" "$HERE/link.py"; echo "${PLACES[*]} ${PROBE_ARGS[*]}") \
+      | sha256sum | cut -c1-10)
 BASE_RUN=$DATA/base-runs/$KEY
 [ "${NB_FRESH_BASE:-}" = 1 ] && rm -rf "$BASE_RUN"
 [ -f "$BASE_RUN/complete" ] || rm -rf "$BASE_RUN"
@@ -49,7 +61,7 @@ MISSES0=$(wc -l < "$MISSES" 2>/dev/null || echo 0)
 
 probe() {   # root out places...
   mkdir -p "$(dirname "$2")"
-  env $PROXY_ENV python3 "$HERE/netprobe.py" --root "$1" --out "$2" --places "${@:3}" > "$2.out" 2>&1
+  env $PROXY_ENV python3 "$HERE/netprobe.py" --root "$1" --out "$2" "${PROBE_ARGS[@]}" --places "${@:3}" > "$2.out" 2>&1
 }
 
 log "$NAME: before = $(rev "$BASE") ($([ ${#SIDES[@]} = 1 ] && echo "reused: $KEY" || echo measured)), after = $(rev "$REPO")"
@@ -79,6 +91,8 @@ MISSES1=$(wc -l < "$MISSES" 2>/dev/null || echo 0)
 {
   echo "# $NAME"; echo; sed 's/^/    /' "$OUT/commits.txt"; echo "    base run: $BASE_RUN"; echo
   echo "Upstream requests during this run (proxy misses): $((MISSES1 - MISSES0))"; echo
+  echo "Line: ${NB_LINK:-none (network free)}; until: ${NB_UNTIL:-settled}"; echo
+  AB_ROOT=$OUT python3 "$HERE/ab_milestones.py"; echo
   for s in before after; do
     echo "## $s: places"; echo; echo '```'; cat "$OUT/$s/places.jsonl"; echo '```'; echo
   done

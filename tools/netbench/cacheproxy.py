@@ -11,6 +11,9 @@ requests (If-None-Match / If-Modified-Since) are sent upstream without their con
 a 304 when the stored ETag matches. Only clean answers are stored (2xx, 3xx redirects, 404, 410): a 429 or a 5xx passes
 through and is asked again next time. Concurrent misses for one key wait for the first one's answer.
 
+With a line (link.py: a server's proxy user names it, netprobe --link), answers reach the server at that line's speed
+and latency, so a run measures load times too.
+
 A range read that is not stored as such is put together from stored pieces of the same file (RangeIndex: 206s and
 whole 200s, unencoded, of one ETag) when they cover it: a server that batches its range reads by timing (pmtiles,
 parquet) asks other ranges each run, of bytes already fetched.
@@ -23,6 +26,8 @@ import re
 import time
 
 from mitmproxy import ctx, http
+
+import link
 
 STORE_STATUS = {200, 203, 204, 206, 301, 302, 303, 307, 308, 404, 410}
 CONDITIONAL = ("if-none-match", "if-modified-since")
@@ -246,6 +251,7 @@ class CacheProxy:
         self.gates = {}                 # host -> asyncio.Semaphore: UPSTREAM_CONC misses at once
         self.counts = {"hit": 0, "assembled": 0, "miss": 0}
         self.store = self.ranges = None
+        self.lines = link.Lines()
 
     def load(self, loader):
         loader.add_option("cache_dir", str, "", "the store's folder")
@@ -259,21 +265,30 @@ class CacheProxy:
         with open(os.path.join(self.store.root, name), "a") as f:
             f.write(f"{time.time():.3f} {req.method} {status} {n} {req.pretty_url} {req.headers.get('range', '-')}\n")
 
+    async def http_connect(self, flow):
+        line = self.lines.bind(flow)
+        if line is not None:
+            await line.connect()
+
+    def client_disconnected(self, client):
+        self.lines.forget(client)
+
     async def request(self, flow):
         req = flow.request
+        line = self.lines.bind(flow)
         key = _key(req)
         while True:
             got = self.store.get(key)
             if got is None and req.method == "HEAD":
                 got = self.store.get(_key(req, "GET"))
             if got is not None:
-                flow.response = _replay(req, *got, head=req.method == "HEAD")
+                await self._deliver(flow, _replay(req, *got, head=req.method == "HEAD"), line)
                 self.counts["hit"] += 1
                 return
             if not any(h in req.headers for h in CONDITIONAL):
                 resp = self.ranges.assemble(req)
                 if resp is not None:
-                    flow.response = resp
+                    await self._deliver(flow, resp, line)
                     self.counts["assembled"] += 1
                     return
             ev = self.inflight.get(key)
@@ -290,11 +305,20 @@ class CacheProxy:
         gate = self.gates.setdefault(req.host, asyncio.Semaphore(UPSTREAM_CONC))
         await gate.acquire()
         flow.metadata["cacheproxy_gate"] = gate
+        flow.metadata["cacheproxy_line"] = line
 
-    def response(self, flow):
+    @staticmethod
+    async def _deliver(flow, resp, line):
+        """resp as flow's answer, once the flow's line (if any) has carried it."""
+        if line is not None:
+            await line.answer(len(resp.raw_content or b""))
+        flow.response = resp
+
+    async def response(self, flow):
         key = flow.metadata.get("cacheproxy_key")
         if key is None:
             return
+        line = flow.metadata.pop("cacheproxy_line", None)
         req, resp = flow.request, flow.response
         self.counts["miss"] += 1
         self._log("misses.log", req, resp.status_code, len(resp.raw_content or b""))
@@ -307,6 +331,8 @@ class CacheProxy:
                 req.headers.update(cond)
                 flow.response = _replay(req, *self.store.get(key), head=req.method == "HEAD")
         self._release(flow, key)
+        if line is not None:            # (upstream's own time, then the line's: a miss is slower than live)
+            await line.answer(len(flow.response.raw_content or b""))
 
     def error(self, flow):
         key = flow.metadata.get("cacheproxy_key")

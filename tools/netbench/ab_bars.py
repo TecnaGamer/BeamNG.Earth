@@ -92,11 +92,13 @@ def main():
     print("|---|---:|---:|---:|---:|---:|---:|")
     t = [0, 0, 0, 0]
     for key, name in PLACES:
+        if key not in b or key not in a:
+            continue
         mb0, mb1 = sum(b[key][0].values()), sum(a[key][0].values())
         n0, n1 = b[key][1], a[key][1]
         t = [t[0] + mb0, t[1] + mb1, t[2] + n0, t[3] + n1]
         print(f"| {name} | {mb0 / 1e6:,.0f} | {mb1 / 1e6:,.0f} | {pct(mb0, mb1)} | {n0:,} | {n1:,} | {pct(n0, n1)} |")
-    print(f"| **All five** | **{t[0] / 1e6:,.0f}** | **{t[1] / 1e6:,.0f}** | **{pct(t[0], t[1])}** | **{t[2]:,}** | "
+    print(f"| **All** | **{t[0] / 1e6:,.0f}** | **{t[1] / 1e6:,.0f}** | **{pct(t[0], t[1])}** | **{t[2]:,}** | "
           f"**{t[3]:,}** | **{pct(t[2], t[3])}** |")
     print()
     print("| Kind | MB before | MB after | MB change | Requests before | Requests after | Requests change |")

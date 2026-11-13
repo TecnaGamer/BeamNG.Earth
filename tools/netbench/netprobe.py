@@ -8,10 +8,14 @@ drives it for a player who teleports from place to place and stands there. Every
 Per place: prepare_anchor (purpose teleport) -> anchor_ready -> commit_anchor + commit_terrain at the anchor's block
 (the mod's sendCommits), then a pose every POSE_S with a chase camera looking north, and one 'where' (the status
 bar). Far tiles' pooled slots are let go as the mod does (pose.slotsGone). A place ends once it has loaded and the
-server is idle (Settle), or after --cap s. hello and graphics are the mod's own with the player's settings (normal
+server is idle (Settle), or after --cap s, or once --until is reached. marks: s from the teleport to anchor_ready (the
+car on its ground), far_done, each load_progress part done for good (ground_s: the graded first block, roads_s,
+trees_s, far_s; loaded_s: all of them, the mod's loading line ends) and settled_s. hello and graphics are the mod's own with the player's settings (normal
 terrain, trees and buildings, 2048 px ground photos, horizon view).
 
 The server's environment is this process's: start it behind the cache proxy (proxy.sh env) to spare the hosts.
+--link MBIT:RTT has the proxy deliver at that line's speed (link.py) and keeps the server's own per-host request limits
+(no sitepatch), so the times are a player's on that line.
 """
 import argparse
 import collections
@@ -24,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 PLACES = ["lonepine=36.596718,-118.169991", "hartford=41.7637,-72.6851", "amsterdam=52.3730,4.8924",
           "lyon=45.7640,4.8357", "sanfrancisco=37.8080,-122.4177"]
@@ -34,6 +39,8 @@ RECOMMENDED = [("--deshadow", "full"), ("--near-visual", "detail"), ("--airports
 # cores to keep free (cpupin.py: every server pinned to the same last quarter of the cores, the rest idle)
 HEADLESS = [("--update-check", "off"), ("--telemetry", "off"), ("--companion-feed", "off"),
             ("--background-duty", "1"), ("--pin", "off")]
+PARTS = ("ground", "roads", "trees", "far")     # load_progress's counts (the mod's loading line)
+UNTIL = PARTS + ("loaded",)
 POSE_S = 0.5                # core.lua POSE_INTERVAL: every pose re-runs the server's far selection (~0.4 s of GIL)
 SITEPATCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sitepatch")
 USER_SETTINGS = os.path.expanduser("~/.local/share/BeamNG/BeamNG.drive/current/settings/beamngearth.json")
@@ -55,6 +62,10 @@ def main():
     ap.add_argument("--python", default=None, help="the server's Python (default ROOT/.venv/bin/python)")
     ap.add_argument("--quiet", type=float, default=15.0, help="s without a request a place needs to end (Settle)")
     ap.add_argument("--cap", type=float, default=1800.0, help="s a place may take at most")
+    ap.add_argument("--link", default=None, help="MBIT:RTT_MS: the proxy delivers at this line's speed and latency "
+                    "(link.py), the server keeps its own request limits")
+    ap.add_argument("--until", choices=UNTIL, default=None, help="a place ends once this part has loaded (quicker "
+                    "runs that time one milestone; bytes then stop there too)")
     ap.add_argument("--pyspy", default=None, help="record the server under py-spy into this file (folded stacks of the "
                     "threads holding the GIL, its worker processes too; py-spy from PATH, else uv tool run)")
     ap.add_argument("extra", nargs="*", help="more earthd arguments")
@@ -72,11 +83,12 @@ def main():
             label, ll = p.split("=")
             lat, lon = (float(v) for v in ll.split(","))
             start = srv.netlog_lines()
-            t0, cpu0 = time.monotonic(), srv.cpu()
+            t0, cpu0, epoch = time.monotonic(), srv.cpu(), time.time()
             marks = Visit(c, srv, n, lat, lon, a).run()
             marks["cpu_s"] = round(srv.cpu() - cpu0, 1)
             marks["wall_s"] = round(time.monotonic() - t0, 1)
-            rec = {"label": label, "latlon": ll, "start_line": start, "end_line": srv.netlog_lines(), "marks": marks}
+            rec = {"label": label, "latlon": ll, "start_line": start, "end_line": srv.netlog_lines(), "t0": round(epoch, 3),
+                   "link": a.link, "marks": marks}
             with open(os.path.join(a.out, "places.jsonl"), "a") as f:
                 f.write(json.dumps(rec) + "\n")
             print(json.dumps(rec), flush=True)
@@ -116,8 +128,10 @@ class Server:
         # servers at once a city's 30-110 MB, run to run, 2026-11-12); read whole it is the same every run
         env = dict(os.environ, BNE_TELEMETRY="off", BNGE_NETLOG=self.netlog, PYTHONUNBUFFERED="1",
                    BNE_NETSTATS_PROC=os.path.join(self.out, "proc"), BNE_LIDAR_GAPS_WAIT="900")
-        # sitepatch: netfetch's per-host limits lifted in every server process (the proxy keeps its own upstream)
-        env["PYTHONPATH"] = os.pathsep.join(p for p in (SITEPATCH, os.environ.get("PYTHONPATH")) if p)
+        if a.link:
+            env.update(line_env(env, a.link))
+        else:   # sitepatch: netfetch's per-host limits lifted in every server process (the proxy keeps its own upstream)
+            env["PYTHONPATH"] = os.pathsep.join(p for p in (SITEPATCH, os.environ.get("PYTHONPATH")) if p)
         self.log = open(os.path.join(self.out, "server.log"), "w", buffering=1)
         self.log.write(" ".join(cmd) + "\n")
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
@@ -201,6 +215,20 @@ class Server:
         return out
 
 
+def line_env(env, spec):
+    """The proxy variables of env with this server's line as their user (link.USER): link-MBIT-RTT-ID."""
+    mbit, rtt = spec.split(":")
+    user = f"link-{float(mbit):g}-{float(rtt):g}-{uuid.uuid4().hex[:8]}"
+    out = {}
+    for var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        if env.get(var):
+            scheme, rest = env[var].split("://", 1)
+            out[var] = f"{scheme}://{user}:x@{rest.rsplit('@', 1)[-1]}"
+    if not out:
+        raise SystemExit("--link needs the cache proxy (HTTPS_PROXY: proxy.sh env)")
+    return out
+
+
 class Visit:
     """One teleport and the stand that follows, until the place has loaded and the network is quiet."""
 
@@ -208,6 +236,7 @@ class Visit:
         self.c, self.srv, self.req, self.lat, self.lon, self.a = c, srv, req, lat, lon, a
         self.slots, self.gone = {}, []      # far tile key -> (slot, serial); slots let go since the last pose
         self.progress = {}                  # the last load_progress: {kind: [done, wanted]}
+        self.done_at = {}                   # part -> s after the teleport it has been done since
 
     def run(self):
         c, t0 = self.c, time.monotonic()
@@ -229,8 +258,13 @@ class Visit:
             if now - last_pose >= POSE_S:
                 last_pose = now
                 self.pose(aid, gz)
-                if settle.done(now, "far_done" in marks, self.progress) or now - t0 >= self.a.cap:
-                    marks["settled_s" if now - t0 < self.a.cap else "capped_s"] = round(now - t0, 1)
+                reached = self.a.until and self.reached(self.a.until)
+                if reached or settle.done(now, "far_done" in marks, self.progress) or now - t0 >= self.a.cap:
+                    end = "until_s" if reached else "settled_s" if now - t0 < self.a.cap else "capped_s"
+                    marks[end] = round(now - t0, 1)
+                    marks.update({f"{k}_s": round(v, 1) for k, v in self.done_at.items()})
+                    if self.reached("loaded"):
+                        marks["loaded_s"] = round(max(self.done_at.values()), 1)
                     marks["progress"] = self.progress
                     return marks
             try:
@@ -260,7 +294,18 @@ class Visit:
         elif typ == "far_done" and "far_done" not in marks:
             marks["far_done"] = round(time.monotonic() - t0, 1)
         elif typ == "load_progress":
-            self.progress = {k: m.get(k) for k in ("ground", "roads", "trees", "far")}
+            self.progress = {k: m.get(k) for k in PARTS}
+            for k, v in self.progress.items():
+                if v and v[1] and v[0] >= v[1]:
+                    self.done_at.setdefault(k, time.monotonic() - t0)
+                else:
+                    self.done_at.pop(k, None)
+
+    def reached(self, until):
+        """until's part done (loaded: every part with a count; one the server counts nothing for is not waited on)."""
+        if until != "loaded":
+            return until in self.done_at
+        return bool(self.done_at) and all(k in self.done_at or not (self.progress.get(k) or [0, 0])[1] for k in PARTS)
 
 
 class Settle:
