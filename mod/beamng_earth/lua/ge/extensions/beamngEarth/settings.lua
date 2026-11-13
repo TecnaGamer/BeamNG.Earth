@@ -962,9 +962,11 @@ end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
 -- The map's "Teleport here?" box opened (or a search result picked): load the place ahead (core.preloadPlace).
-function M.uiMapPreload(lat, lon)
+-- hover: a search result, saved or recent place the pointer rests on (the light part).
+function M.uiMapPreload(lat, lon, hover)
   local core = ext('beamngEarth_core')
-  return { ok = core ~= nil and core.preloadPlace ~= nil and core.preloadPlace(tonumber(lat), tonumber(lon)) or false }
+  return { ok = core ~= nil and core.preloadPlace ~= nil
+    and core.preloadPlace(tonumber(lat), tonumber(lon), hover == true) or false }
 end
 
 function M.uiMapTeleport(lat, lon, name)

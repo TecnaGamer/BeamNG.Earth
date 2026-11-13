@@ -286,6 +286,18 @@ GROUND_RESEND_M, GROUND_RESEND_S = 1.0, 1.5   # ground_ahead: sent on a change, 
                                                # follow.GROUND_STALE_S is 3 s)
 DETAIL_RING_M = 128.0           # detail mode: L-1 tiles this far beyond the block (forced())
 IMG_WARM_MARGIN = 200.0         # m beyond the block's half width that warm_imagery fetches ahead
+# Server.preload: a hover's map cells only for the road tiles within this of the place (the first block's middle) ...
+PRELOAD_HOVER_M = 256.0
+PRELOAD_CANCEL_M = 3000.0       # ... and a teleport farther than this from a preload's place stops it (preload_cancel)
+# The place the game's level start goes to (startplace.py) loaded while the game loads (Server.preload "start").
+# BNE_START_PRELOAD=off: not
+START_PRELOAD = os.environ.get("BNE_START_PRELOAD", "on") != "off"
+# The preload redesign (Server.preload: hover, the pick's decision archives, the level start's place and its plans) is
+# off until its races are gone (a review of bc332f34): BNE_PRELOAD=on turns it on; off, a pick's preload_place runs as
+# before (Connection.preload_place_dev) and a hover does nothing
+PRELOAD = os.environ.get("BNE_PRELOAD", "off") == "on"
+_ANCHOR_ID_LOCK = threading.Lock()      # (Server.alloc_anchor_id)
+_PRELOAD_LOCK = threading.Lock()        # (Server.preload's state: the preload thread, the event loop's teleports)
 # download_ahead: the raw data of the terrain blocks and road tiles ahead of a driving player, fetched into the
 # disk caches before anything there is built (a block in a new area waited ~0.5-2 s on its elevation tiles,
 # 2026-10-15). Points AHEAD_S s ahead on the straight path (at most AHEAD_MAX_M), at netfetch "prefetch"
@@ -620,7 +632,11 @@ HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is b
                             # not share its interpreter: far tiles one at a time behind them were most of a Steam
                             # Deck's far field time, blocks building nearly all the time while driving, 2026-10-20)
 WARM_STEPS_S = (0.0, 10.0, 20.0, 30.0)   # s ahead on the player's straight path whose road cells are planned early
-WARM_AROUND = 2000.0        # m: and every cell this close to the player (any heading)
+# ... and at least this far (m, each step's): at city speeds 30 s was 540 m, inside the cell the car was in, and the
+# next cell along its way came among the WARM_AROUND ones in the grid's order (2026-11-13)
+WARM_STEPS_MIN_M = (0.0, 400.0, 800.0, 1200.0)
+WARM_AROUND = 2000.0        # m: and every cell this close to the player (any heading), nearest first, behind later
+WARM_BEHIND_K = 2.0         # a cell behind the car counts this many times as far (warm_roads)
 PREFETCH_START = 200.0      # m (Chebyshev) from the block centre before prefetching
 # A fast player (FAST_BASE_V) gets the chain of its next PREFETCH_CHAIN blocks prefetched, PREFETCH_PARALLEL at once: at
 # 500 mph the next block was asked for ~1.3 s before it was needed and took 0.5-3 s, so the game held its car for its
@@ -887,6 +903,42 @@ class TileInfo:
     coarse: bool = False        # a coarse cover's texture (Server.coarse_texture: rendered again when sent after it)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
     err_n: float | None = None  # its error along the normal (farfield.Built.lod_err: the screen-space LOD's)
+
+
+def start_preload(server, user_dir):
+    """Server.preload "start" of the place the game's level start teleports to (startplace.start_point), if any."""
+    import startplace
+    try:
+        got = startplace.start_point(user_dir)
+    except Exception as e:      # (only the head start is lost)
+        log.info("level start place: %s: %s", type(e).__name__, e)
+        return None
+    if got is not None:
+        log.info("level start place %.5f, %.5f (%s): loaded while the game loads", *got)
+        server.preload(got[0], got[1], "start")
+    return got
+
+
+def preload_far(p, lat, lon):
+    """Is place p ((lat, lon, ...) or None) farther than PRELOAD_CANCEL_M from (lat, lon)? (None: no)"""
+    if p is None:
+        return False
+    dy = (p[0] - lat) * 111320.0
+    dx = (p[1] - lon) * 111320.0 * max(0.05, math.cos(math.radians(lat)))
+    return math.hypot(dx, dy) > PRELOAD_CANCEL_M
+
+
+def warm_cell_key(frame, key, x, y, vx, vy):
+    """warm_roads' order of the cells round the car (m): the distance to the cell's middle, WARM_BEHIND_K times as far
+    behind the car (moving)."""
+    cla, clo = key.center()
+    cx, cy, _ = frame.geodetic_to_enu(cla, clo, 0.0)
+    dx, dy = float(cx) - x, float(cy) - y
+    d = math.hypot(dx, dy)
+    v = math.hypot(vx, vy)
+    if v > 1.0 and dx * vx + dy * vy < 0:
+        d *= WARM_BEHIND_K
+    return d
 
 
 def ahead_points(x, y, vx, vy, tree=None):
@@ -1807,8 +1859,16 @@ class Server:
         """Nearest block centre coordinate on the layout's grid (256 m; M4 512²: 128 m)."""
         return heightmap.snap(v, self.layout.grid)
 
+    def alloc_anchor_id(self):
+        """A new anchor id, reserved at once under one lock (new_anchor, a preload's plans: preplan, a thread of its
+        own): the worker processes keep graders and frames by the id alone, so no two places may ever share one."""
+        with _ANCHOR_ID_LOCK:
+            aid = self._next_anchor
+            self._next_anchor = aid + 1
+        return aid
+
     def new_anchor(self, lat, lon):
-        a = Anchor(self._next_anchor, lat, lon, geodesy.EnuFrame(lat, lon))
+        a = Anchor(Server.alloc_anchor_id(self), lat, lon, geodesy.EnuFrame(lat, lon))
         a.hm_zoom = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)    # ~1 m pixels where the data exists (dem.FINE_ZOOM)
         a.zooms = {lvl: self.layout.dem_zoom(lat, lvl) for lvl in range(1, farfield.HORIZON_MAX_LEVEL + 1)}
         a.zooms[0] = a.hm_zoom                      # L0 shares the terrain's DEM (§1.4)
@@ -1817,7 +1877,6 @@ class Server:
             self.deshadow.prepare(lat, lon)         # the regions around it, in the background
         if self.colormatch is not None:
             self.colormatch.prepare(lat, lon)
-        self._next_anchor += 1
         return a
 
     def anchor_q(self, anchor):
@@ -2508,15 +2567,16 @@ class Server:
     WARM_ORDER = {"roads": 0, "infrastructure": 1, "town_areas": 1, "buildings": 2, "building_parts": 3, "water": 4}
     WARM_PLACE_LAYERS = ("roads", "infrastructure")
 
-    def warm_place(self, anchor, x, y):
-        """The roads and bridges (WARM_PLACE_LAYERS) of the road tiles the mod will want around (x, y) (roads.SEND_M),
-        fetched at once, nearest first: the first block's grading and the road tiles wait for them, and on a fresh place
-        they came one after another as each part of the work asked (GitHub #241). Returns how many were queued."""
+    def warm_place(self, anchor, x, y, radius=None, kind="demand"):
+        """The roads and bridges (WARM_PLACE_LAYERS) of the road tiles the mod will want around (x, y) (roads.SEND_M,
+        or radius), fetched at once, nearest first: the first block's grading and the road tiles wait for them, and on a
+        fresh place they came one after another as each part of the work asked (GitHub #241). kind: the fetches'
+        priority (netfetch; a hover's preload: "prefetch"). Returns how many were queued."""
         if self.mapdata is None:
             return 0
         water = 1 + seacarvemod.LINE_CELLS if self.sea is not None else 0
         needs = set()
-        for tx, ty in roadsmod.tiles_near(x, y, roadsmod.SEND_M):
+        for tx, ty in roadsmod.tiles_near(x, y, roadsmod.SEND_M if radius is None else radius):
             needs.update(roadsmod.tile_needs(anchor.frame, tx, ty, self.buildings, self.road_widths is not None, water))
 
         def where(k):
@@ -2532,7 +2592,9 @@ class Server:
                  for k in roadsmod.cells_of_tile(anchor.frame, tx, ty)}
         order = sorted([kl for kl in needs if kl[1] in self.WARM_PLACE_LAYERS] + sorted(towns, key=str),
                        key=lambda kl: (self.WARM_ORDER.get(kl[1], 9), where(kl[0]), str(kl[0]), kl[1]))
-        n = self.mapdata.warm(order)
+        n = self.mapdata.warm(order, kind)
+        if kind != "demand":            # (a hover's preload: the cells alone)
+            return n
         if getattr(self.sea, "prefetch_full", None) is not None:   # (the coast's sea floors: NOAA's slow requests
                                                                    # from now, not when a deck asks)
             own = {(k.x, k.y): where(k) for tx, ty in roadsmod.tiles_near(x, y, roadsmod.SEND_M)
@@ -2545,6 +2607,138 @@ class Server:
             roadz.PROVIDER.warm(sorted({kl[0] for kl in order if kl[1] == "roads"}, key=lambda k: (where(k), str(k))),
                                 near)
         return n
+
+    def preload(self, lat, lon, mode="pick"):
+        """A place the player is likely to go to, loaded ahead in the background (the fastest world generators load the
+        destination ahead; the user, 2026-11-11: "sub second world gen, even with clear cashe"): its first block's
+        signed decision archives (decisions_prefetch: road plans made by the project's builder), elevation tiles and
+        the road tiles' map cells (warm_place, in a frame at the place), then by mode:
+          hover  a search result, saved or recent place the pointer rests on (the map's PRELOAD_HOVER_MS): only that,
+                 and only the cells of the road tiles within PRELOAD_HOVER_M, at the prefetch priority;
+          pick   the map's "Teleport here?" box open, a search result picked: all of the cells (SEND_M) and the first
+                 block's photos (their aerial tiles and packs on disk when the teleport asks);
+          start  the place the game's level start will teleport to (startplace.py: where the player left off), at the
+                 server's start, while the game loads: as pick, and the first block's cells planned in the worker
+                 processes (plan_first's hand-out, on a machine that shares them: sharing_machine).
+        One at a time; a newer one replaces a waiting one, and the running one stops before its next part (a hover
+        that becomes a pick goes on with the pick's parts). preload_cancel stops it and drops its plans when the
+        player goes elsewhere. Never waits, never builds a block."""
+        with _PRELOAD_LOCK:
+            st = self.__dict__.setdefault("_preload", {"next": None, "busy": False, "last": None, "plans": [],
+                                                       "cancel": False})
+            st["next"] = (lat, lon, mode)
+            st["cancel"] = False
+            if st["busy"]:
+                return
+            st["busy"] = True
+        s = self
+        rank = {"hover": 0, "pick": 1, "start": 2}
+
+        def stop():
+            return st["next"] is not None or st["cancel"]
+
+        def run():
+            try:
+                while True:
+                    with _PRELOAD_LOCK:
+                        if st["next"] is None:
+                            st["busy"] = False
+                            return
+                        la, lo, md = st["next"]
+                        st["next"] = None
+                    last = st["last"]
+                    if last is not None and abs(last[0] - la) < 1e-3 and abs(last[1] - lo) < 1e-3 \
+                            and rank[md] <= rank[last[2]]:
+                        continue
+                    st["last"] = (la, lo, md)
+                    t0 = time.monotonic()
+                    dem_n = cells_n = photo = planned = 0
+                    if getattr(s, "decisions_prefetch", None) is not None:
+                        s.decisions_prefetch(la, lo)        # (signed plans: none of those planned here)
+                    if md == "start" and not stop():
+                        planned = Server.preplan(s, la, lo)
+                    if s.dem is not None and not stop():
+                        zoom = demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM)
+                        reach = s.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
+                        dem_n, _ = s.dem.prefetch(s.dem.keys_around(la, lo, reach, zoom))
+                    spot = SimpleNamespace(frame=geodesy.EnuFrame(la, lo))
+                    if s.mapdata is not None and not stop():
+                        cells_n = s.warm_place(spot, 0.0, 0.0, PRELOAD_HOVER_M, "prefetch") if md == "hover" \
+                            else s.warm_place(spot, 0.0, 0.0)
+                    if md != "hover" and s.imagery is not None and s.near_visual == "detail":
+                        # (the first block's photos: the stand-in's, then its own, so their aerial tiles are on disk
+                        # when the teleport asks: a cold Paducah block waited 2.7 s for its stand-in, 2026-11-11)
+                        size = s.layout.block * heightmap.SQUARE
+                        for px in (QUICK_BASE_PX, BASE_PX):
+                            if stop():
+                                break           # (a newer one: that one now)
+                            s.imagery.render(spot.frame, -size / 2, -size / 2, size, px, set())
+                            photo += 1
+                    log.info("preload (%s) %.5f, %.5f: %d elevation tiles, %d map cells queued, %d photos, %d cells "
+                             "planning (%.1f s)", md, la, lo, dem_n, cells_n, photo, planned, time.monotonic() - t0)
+            except Exception as e:          # (only the head start is lost)
+                log.info("preload: %s: %s", type(e).__name__, e)
+                with _PRELOAD_LOCK:
+                    st["busy"] = False
+        threading.Thread(target=run, name="preload-place", daemon=True).start()
+
+    def preplan(self, lat, lon):
+        """The first block's map cells at (lat, lon) planned in the worker processes before any anchor is there
+        (preload's start: plan_first's hand-out under an anchor id of its own, PRELOAD's plans then read from the run's
+        plan cache by the teleport's block and road tiles). The id is reserved (alloc_anchor_id) and published in the
+        preload's state before any job is handed out, so a teleport elsewhere (preload_cancel) abandons it whenever it
+        comes: before the hand-out (nothing is handed out), during it (the rest is not) or after. Returns how many were
+        handed out."""
+        st = self._preload
+        aid = Server.alloc_anchor_id(self)
+        with _PRELOAD_LOCK:
+            nxt = st["next"]
+            if st["cancel"] or (nxt is not None and preload_far((lat, lon), nxt[0], nxt[1])):
+                return 0                # (superseded already by another place)
+            st["plans"].append((aid, (lat, lon)))
+
+        def elsewhere():
+            """The place of the preload now asked for instead, when it is another (PRELOAD_CANCEL_M away), else None."""
+            nxt = st["next"]
+            return nxt if nxt is not None and preload_far((lat, lon), nxt[0], nxt[1]) else None
+
+        def stop():
+            return st["cancel"] or elsewhere() is not None
+        n = Server.plan_first(self, SimpleNamespace(id=aid, lat=lat, lon=lon), 0.0, 0.0, stop=stop)
+        nxt = elsewhere()
+        if nxt is not None:             # (superseded meanwhile by a preload of another place: these plans dropped)
+            Server._abandon_plans(self, lambda at: preload_far(at, nxt[0], nxt[1]))
+        return n
+
+    def _abandon_plans(self, which):
+        """The preload's plan anchors whose place which(at) picks abandoned (their workers' plan_first gives up)."""
+        with _PRELOAD_LOCK:
+            st = self.__dict__.get("_preload") or {}
+            gone = [(a, at) for a, at in st.get("plans", ()) if which(at)]
+            st["plans"] = [p for p in st.get("plans", ()) if p not in gone]
+        if not gone:
+            return
+        for aid, _at in gone:
+            self.abandoned.add(aid)
+        self.write_abandoned()
+        for _aid, at in gone:
+            log.info("preload: the plans for %.5f, %.5f dropped (the teleport goes elsewhere)", *at)
+
+    def preload_cancel(self, lat, lon):
+        """A teleport to (lat, lon): a preload of a place farther than PRELOAD_CANCEL_M stops before its next part, and
+        its plans not done yet are dropped (their anchors abandoned: blockworker's plan_first gives up)."""
+        st = self.__dict__.get("_preload")
+        if not st:
+            return
+
+        def far(p):
+            return preload_far(p, lat, lon)
+        with _PRELOAD_LOCK:
+            if far(st.get("next")) or (st["busy"] and far(st.get("last"))) \
+                    or any(far(at) for _aid, at in st.get("plans", ())):
+                st["next"], st["cancel"] = None, True
+                st["last"] = None       # (a later preload of that place does its parts again)
+        Server._abandon_plans(self, far)
 
     def roads_geo_ok(self):
         """Road tiles as geotiles (--geo-tiles on, road tiles in worker processes): content kept across rebases."""
@@ -3594,7 +3788,7 @@ class Server:
                                           (int(key[0]), int(key[1]), int(key[2])))
         return bool(fut.result(timeout=PLAN_ELSEWHERE_S))
 
-    def plan_first(self, anchor, cx, cy):
+    def plan_first(self, anchor, cx, cy, stop=None):
         """A teleport's first block's map cells planned from the request on, each in a worker process of its own
         (blockworker.plan_first): the prefetch lane's block processes first, then the road tiles' (idle until the
         anchor is committed, and their first tiles wait for these plans anyway). The graded block's process planned
@@ -3626,8 +3820,8 @@ class Server:
         n = 0
         for pool, procs in lanes:
             for _ in range(procs):
-                if n >= len(keys) or n >= room:
-                    break
+                if n >= len(keys) or n >= room or (stop is not None and stop()):
+                    break               # (stop: a preload superseded, Server.preplan)
                 k = keys[n]
                 n += 1
                 try:
@@ -3648,14 +3842,19 @@ class Server:
             return
         reach = self.layout.block * heightmap.SQUARE / 2 + gradingmod.T_MAX + 40.0
         keys = []
-        ahead = tree.points_at(WARM_STEPS_S) if tree is not None else \
-            [(x + vx * t, y + vy * t) for t in WARM_STEPS_S]
+        v = math.hypot(vx, vy)
+        steps = [max(t, m / v) if v > 1.0 else t for t, m in zip(WARM_STEPS_S, WARM_STEPS_MIN_M)]
+        ahead = tree.points_at(steps) if tree is not None else \
+            [(x + vx * t, y + vy * t) for t in steps]
         for (px, py), r in [(p, reach) for p in ahead] + [((x, y), WARM_AROUND)]:
             la, lo, _ = anchor.frame.enu_to_geodetic(px, py, 0.0)
             la, lo = float(la), float(lo)
             dlat = r / 111320.0
             dlon = r / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
-            for k in mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon):
+            near = mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon)
+            if r == WARM_AROUND:        # (the ring: nearest first, behind the car later; not the grid's order)
+                near = sorted(near, key=lambda k: warm_cell_key(anchor.frame, k, x, y, vx, vy))
+            for k in near:
                 if k not in keys:
                     keys.append(k)
         import roadz        # (their lidar read ahead, nearest the player first: no plan waits for it, roadz.prefetch)
@@ -8693,8 +8892,24 @@ class Connection:
         return out
 
     def preload_place(self, msg):
-        """A destination picked on the world map (its "Teleport here?" box, a search result; mod core.preloadPlace):
-        its first block's elevation tiles and the road tiles' map cells (Server.warm_place's, in a frame at the place)
+        """A destination picked or pointed at on the world map (mod core.preloadPlace): loaded before the teleport is
+        asked for (Server.preload). hover: a search result, saved or recent place the pointer rests on (the light
+        part only)."""
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90.0 <= lat <= 90.0):
+            return
+        if not PRELOAD:                 # (off: a pick as before, a hover nothing)
+            if msg.get("hover") is not True:
+                Connection.preload_place_dev(self, msg)
+            return
+        Server.preload(self.s, lat, (lon + 180.0) % 360.0 - 180.0, "hover" if msg.get("hover") is True else "pick")
+
+    def preload_place_dev(self, msg):
+        """(BNE_PRELOAD off: as before the preload redesign.) A destination picked on the world map (its "Teleport
+        here?" box, a search result; mod core.preloadPlace): its first block's elevation tiles and the road tiles' map cells (Server.warm_place's, in a frame at the place)
         fetched in the background before the teleport is asked for (the fastest world generators load the destination
         ahead; the user, 2026-11-11: "sub second world gen, even with clear cashe"). One at a time; a newer pick
         replaces a waiting one. Never waits, never builds."""
@@ -8851,6 +9066,8 @@ class Connection:
         # under TELEPORT_PAUSE_M away waited 26 s for a graded first block in Manhattan, 2026-10-25)
         declared = msg.get("purpose") == "teleport"
         teleport = old is None or declared
+        if teleport and PRELOAD:    # (a preload of another place stops: Server.preload_cancel)
+            Server.preload_cancel(self.s, lat, lon)
         if old is None and not self.s.boost_on:
             # (joining the world: full priority loading as after a teleport, when the player chose it; the user,
             # 2026-10-31: "setting should trigger on joining the world too")
@@ -9410,6 +9627,11 @@ class Connection:
             return
         self.vel = (vx, vy)
         now = time.monotonic()
+        it = self.__dict__.get("intent")
+        if it is None or getattr(self, "intent_aid", None) != self.active:
+            it = self.intent = reachmod.Intent()        # (a new frame: the velocities of the old one not compared)
+            self.intent_aid = self.active
+        it.feed(now, vx, vy)
         self.s.speed = math.hypot(vx, vy)
         if math.hypot(vx, vy) > FAST_BASE_V:
             self.s.fast_at = now
@@ -9574,7 +9796,7 @@ class Connection:
             self.veg.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                              self.build_veg_geo if self.veg.geo else self.build_veg_tile,
                              view=self.view_at, foci=[f for f in self.foci if f[3]],
-                             frame=anchor.frame if anchor is not None else None)
+                             frame=anchor.frame if anchor is not None else None, tree=tree)
         bld_on = not (self.map_view and self.eye_clearance() > MAP_BUILDINGS_EYE_M)
         if self.s.buildings and aid == self.active and bld_on:
             self.building_reach()
@@ -9648,8 +9870,10 @@ class Connection:
                 finally:
                     r.busy = False
             self.s.reach_pool.submit(run)
+        it = self.__dict__.get("intent")
         try:
-            return r.grow(*self.focus, *self.vel, route_xy=self.route_xy(aid))
+            return r.grow(*self.focus, *self.vel, route_xy=self.route_xy(aid),
+                          intent=it.value() if it is not None else None)
         except Exception:
             log.exception("reach: the time-to-reach tree")
             return None
@@ -11318,6 +11542,10 @@ async def main_async(args):
     # rate from ~52 to ~40 fps, nyc_speed.py 2026-11-02)
     server.catchup_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus, CATCHUP_LEND_SHARE)
                            if server.boost_cpus else None) or server.boost_cpus
+    if PRELOAD and START_PRELOAD and args.roads == "on":
+        # (the place the game's level start teleports to, loaded while the game loads: startplace.py; its files read
+        # on a thread of its own, never before the server listens)
+        threading.Thread(target=start_preload, args=(server, args.user_dir), name="start-place", daemon=True).start()
 
     async def net_log():
         while True:

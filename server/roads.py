@@ -68,6 +68,10 @@ LEAD_S = float(os.environ.get("BNE_ROADS_LEAD_S", "30"))         # s of driving 
 LEAD_MAX_M = float(os.environ.get("BNE_ROADS_LEAD_M", "5000"))
 CORRIDOR_M = 160.0      # m either side of the path
 SIDE_PENALTY = 4.0      # a tile off the path counts this many times its sideways distance (path_key)
+# Below FAST_MS with the car's time-to-reach tree (reach.MIN_V up: GeoTracker.on_pose) the tiles within SEND_M are built
+# in the tree's order, but the ones within INSURE_M of the car first, by their distance (a wrong guess at a junction,
+# a U-turn: the ground right round the car is never left to the tree's chances)
+INSURE_M = TILE / 2
 
 # class -> (width m, paved by default). Classes not here (footway, path, steps, cycleway, ...) are
 # left out for now.
@@ -12509,11 +12513,12 @@ class GeoTracker:
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-geo")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         s = math.hypot(vx, vy)
-        if s < FAST_MS:
+        import reach
+        if s < reach.MIN_V:     # (the tree from reach.MIN_V up: below FAST_MS it orders the tiles round the car)
             tree = None
         car = geo_wanted(frame, x, y, vx, vy, tree)
-        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=min(LEAD_MAX_M, s * LEAD_S) / s) \
-            if tree is not None else {}
+        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=max(min(LEAD_MAX_M, s * LEAD_S), reach.HORIZON_MIN_M)
+                                  / s) if tree is not None else {}
         self.tree_on = tree is not None
         self.car_at = (x, y)
         self.car = set(car)
@@ -12560,7 +12565,10 @@ class GeoTracker:
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
-                    import reach
+                    if s < FAST_MS:     # (a slow car: the tiles right round it first, INSURE_M)
+                        qd = geotiles.quad_dist(geotiles.quad(frame, *k), x, y)
+                        if qd <= INSURE_M:
+                            return (0, qd)
                     got = tkeys.get(k)
                     if got is not None:
                         return (0, reach.order_key(got[2], got[3], got[4], s, build_s) * s)

@@ -194,7 +194,8 @@ MOD_TO_SERVER = {
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     "stations": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "r_km": F(NUM), "kinds": F(list), "mode": F(str)},   # the station finder
-    "preload_place": {"lat": F(NUM), "lon": F(NUM)},     # a destination picked on the world map, loaded ahead
+    # a destination picked on the world map, loaded ahead; hover: one the pointer rests on (the light part)
+    "preload_place": {"lat": F(NUM), "lon": F(NUM), "hover": F(bool, OPT)},
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
     # imagery / mapdata (world: not asked by the map yet)
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),

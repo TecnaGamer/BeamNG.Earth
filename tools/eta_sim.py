@@ -61,6 +61,10 @@ ROUTES = {
     "nyc_uptown": ((40.7238, -73.9887), (40.7967, -73.9380)),
     # the FDR Drive up Manhattan's east side: a curving urban motorway with ramps every few hundred metres
     "nyc_fdr": ((40.7105, -73.9790), (40.7930, -73.9330)),
+    # through Midtown's towers: Chelsea to the Upper East Side (nyc_speed.py's "midtown": city speeds, reach.MIN_V)
+    "nyc_midtown": ((40.7426, -73.9928), (40.7740, -73.9560)),
+    # Fells Point, Baltimore: the waterfront's grid of small streets
+    "fells": ((39.2853, -76.6020), (39.2790, -76.5690)),
 }
 MPH = 0.44704
 POSE_S = 0.5                # the mod's pose interval (core.lua POSE_INTERVAL)
