@@ -175,5 +175,101 @@ class RespawnTest(unittest.TestCase):
             p.shutdown()
 
 
+
+class ElasticTest(unittest.TestCase):
+    """ElasticPool: the far-tile pool's processes for the 3D map and the loading boost end when they have no work (a
+    desktop kept all ten for the session: ~540 MB each, 2026-11-12), the ones of a drive stay."""
+
+    def test_extra_processes_come_with_the_work_and_go_without_it(self):
+        import time
+        p = pools.ElasticPool("test", 1, 2, idle_s=0.5, mp_context=SPAWN)
+        try:
+            kept = p.submit(os.getpid).result(timeout=60)
+            self.assertEqual(p.submit(os.getpid).result(timeout=60), kept, "one job at a time: the kept process")
+            self.assertFalse(p.extra_running())
+            self.assertEqual((p.workers, p.started, p.retired), (3, 0, 0))
+            with self.assertLogs("earthd.pools", "INFO") as logs:
+                busy = p.submit(time.sleep, 1.0)        # the kept process busy: the next job starts another
+                other = p.submit(os.getpid)
+                self.assertTrue(p.extra_running())
+                self.assertEqual(p.inflight, 2)
+                self.assertNotEqual(other.result(timeout=60), kept)
+                busy.result(timeout=60)
+                end = time.monotonic() + 60
+                while not any("ended after" in m for m in logs.output) and time.monotonic() < end:
+                    time.sleep(0.05)
+            self.assertTrue(any("ended after" in m for m in logs.output), logs.output)
+            self.assertFalse(p.extra_running(), "no work for idle_s: its extra processes ended")
+            self.assertEqual((p.started, p.retired, p.inflight), (1, 1, 0))
+            self.assertEqual(p.submit(os.getpid).result(timeout=60), kept, "the kept process stayed")
+            busy = p.submit(time.sleep, 1.0)            # ... and the work coming back makes them again
+            self.assertNotEqual(p.submit(os.getpid).result(timeout=60), kept)
+            self.assertEqual(p.started, 2)
+            busy.result(timeout=60)
+        finally:
+            p.shutdown()
+
+    def test_extra_processes_stay_while_they_work(self):
+        import time
+        p = pools.ElasticPool("test", 1, 1, idle_s=0.3, mp_context=SPAWN)
+        try:
+            busy = p.submit(time.sleep, 2.5)
+            long = p.submit(time.sleep, 1.5)            # in the extra process, longer than idle_s
+            self.assertTrue(p.extra_running())
+            time.sleep(1.0)
+            self.assertTrue(p.extra_running(), "its job still runs")
+            self.assertEqual(p.retired, 0)
+            long.result(timeout=60)
+            self.assertEqual(p.submit(abs, -2).result(timeout=60), 2)     # (the kept one busy: the extra again)
+            self.assertEqual((p.started, p.retired), (1, 0), "used again within idle_s: the same processes")
+            busy.result(timeout=60)
+        finally:
+            p.shutdown()
+
+    def test_no_extra_processes_is_the_plain_pool(self):
+        import time
+        p = pools.ElasticPool("test", 1, 0, idle_s=0.2, mp_context=SPAWN)
+        try:
+            busy = p.submit(time.sleep, 0.5)
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)     # (waits for the kept process)
+            busy.result(timeout=60)
+            self.assertFalse(p.extra_running())
+            self.assertEqual((p.workers, p.started, p.respawns), (1, 0, 0))
+        finally:
+            p.shutdown()
+
+    def test_idle_time_off_keeps_them(self):
+        import time
+        with unittest.mock.patch.dict(os.environ, {"BNGE_POOL_IDLE_S": "0"}):
+            p = pools.ElasticPool("test", 1, 1, mp_context=SPAWN)
+        try:
+            self.assertEqual(p.idle_s, 0.0)
+            busy = p.submit(time.sleep, 0.5)
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)
+            busy.result(timeout=60)
+            time.sleep(0.5)
+            self.assertTrue(p.extra_running(), "BNGE_POOL_IDLE_S=0: as before, they stay")
+        finally:
+            p.shutdown()
+
+    def test_a_full_pool_queues_where_it_is_shorter(self):
+        p = pools.ElasticPool("test", 1, 3, idle_s=0, mp_context=SPAWN)
+        try:
+            picks = []
+            for _ in range(8):          # (eight jobs that never end: the pick alone, nothing handed to a process)
+                with p._lock:
+                    pool = p._pick()
+                    if pool is p.base:
+                        p.base.inflight += 1
+                    else:
+                        p._extra_busy += 1
+                    picks.append("kept" if pool is p.base else "extra")
+            # 1 kept + 3 extra busy, then the waiting jobs 1 to 3 as the processes are
+            self.assertEqual(picks, ["kept", "extra", "extra", "extra", "kept", "extra", "extra", "extra"])
+        finally:
+            p.base.inflight = 0
+            p.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()

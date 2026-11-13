@@ -8492,8 +8492,11 @@ async def main_async(args):
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", None,
                           logging.getLogger().level, args.airports == "on", args.sea == "on", 0,
                           roadsmod.ROADS_IN_GROUND, args.gas_stations == "on" and args.roads == "on"))
-        far_pool = poolsmod.RespawningPool(
-            "far tile", max(args.workers, getattr(args, "far_max", args.workers)), mp_context=ctx, initializer=blockworker.init,
+        # the processes of a drive (Server.far_drive) stay; the ones beside them for the 3D map and the loading boost
+        # (far_max) are there while they have work and end after pools.EXTRA_IDLE_S without any
+        far_n = max(args.workers, getattr(args, "far_max", args.workers))
+        far_pool = poolsmod.ElasticPool(
+            "far tile", min(far_n, FAR_DRIVE), far_n - min(far_n, FAR_DRIVE), mp_context=ctx, initializer=blockworker.init,
             initargs=(args.cache_dir, args.offline, args.roads == "on",
                       args.grading == "on" and args.roads == "on",
                       args.road_widths == "on" and args.roads == "on", False, None,

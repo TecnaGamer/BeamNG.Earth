@@ -9,6 +9,7 @@ import collections
 import concurrent.futures
 import functools
 import logging
+import os
 import sys
 import runtimeprofiler
 import threading
@@ -20,6 +21,16 @@ log = logging.getLogger("earthd.pools")
 
 RESPAWN_S = 10.0
 QUEUED_POLL_S = 1.0
+# ElasticPool: its extra processes end after this long without a job of theirs. A desktop's far-tile pool grows from 3
+# processes to 10 for a teleport's loading boost and the 3D map (earthd FAR_MAX_DESKTOP), and all ten then stayed for
+# the rest of the session: the executor hands its jobs round every process it has, so the three jobs at once of a
+# drive kept ten processes' caches alive (Windows, 32 threads, 2026-11-12: seven of them at ~540 MB each two minutes
+# after the last of four teleports round Manhattan). Long enough that a second teleport or the map opened again
+# finds them still there. Measured there, the same drive with them kept and ended: the server's 18 processes 11
+# and its private bytes 10.4 -> 7.6 GB when they ended (12.35 -> 9.45 GB on a first visit); the next teleport's far
+# field, which starts them again, done in 10.9 s for 8.7 s (304 tiles, one run each; the teleport before it, the
+# processes there in both runs, 7.4 s and 9.5 s). BNGE_POOL_IDLE_S overrides it (A/B; 0: they stay for good, as before)
+EXTRA_IDLE_S = 120.0
 
 
 def result_running(fut, timeout, waited=None):
@@ -216,3 +227,120 @@ class RespawningPool:
         with self._lock:
             pool = self._pool
         return pool.shutdown(*args, **kwargs)
+
+
+def extra_idle_s():
+    """EXTRA_IDLE_S, or BNGE_POOL_IDLE_S's seconds (0: the extra processes never end)."""
+    try:
+        return float(os.environ["BNGE_POOL_IDLE_S"])
+    except (KeyError, ValueError):
+        return EXTRA_IDLE_S
+
+
+class ElasticPool:
+    """A pool of `keep` processes that stay and up to `extra` more beside them while the work asks for them
+    (EXTRA_IDLE_S). Two RespawningPools: a job goes to the kept processes while one of them is free, else to the
+    extra ones, whose pool is made at its first job (the executor starts a process per job at once, up to `extra`) and
+    shut down, its processes with their memory gone, when no job of its own ran for idle_s. With every process busy a
+    job waits where the queue is shorter for the processes behind it. submit / shutdown / inflight / workers /
+    respawns as RespawningPool's; extra 0 (or idle_s 0: the extra pool is never shut down) is the plain pool's
+    behaviour."""
+
+    def __init__(self, name, keep, extra=0, idle_s=None, **kwargs):
+        self.name, self.keep, self.extra = name, max(1, int(keep)), max(0, int(extra))
+        self.idle_s = extra_idle_s() if idle_s is None else float(idle_s)
+        self._kwargs = kwargs
+        self.base = RespawningPool(name, self.keep, **kwargs)
+        self.workers = self.keep + self.extra
+        self._lock = threading.Lock()
+        self._extra = None              # the extra processes' RespawningPool while they are wanted
+        self._extra_busy = 0            # its jobs submitted and not done
+        self._extra_used = 0.0          # monotonic time of its last job's submit or end
+        self._closed = False
+        self.started = self.retired = 0     # extra pools made / shut down for want of work
+        self._respawns = 0              # ... of the extra pools gone
+
+    @property
+    def inflight(self):
+        with self._lock:
+            return self.base.inflight + self._extra_busy
+
+    @property
+    def respawns(self):
+        with self._lock:
+            return self.base.respawns + self._respawns + (self._extra.respawns if self._extra is not None else 0)
+
+    def extra_running(self):
+        """Are the extra processes' pool there (made and not shut down yet)?"""
+        with self._lock:
+            return self._extra is not None
+
+    def submit(self, fn, *args, **kwargs):
+        with self._lock:
+            pool = self._pick()
+            if pool is not self.base:
+                self._extra_busy += 1
+                self._extra_used = time.monotonic()
+        if pool is self.base:
+            return pool.submit(fn, *args, **kwargs)
+        try:
+            fut = pool.submit(fn, *args, **kwargs)
+        except BaseException:
+            self._extra_done(None)
+            raise
+        fut.add_done_callback(self._extra_done)
+        return fut
+
+    def _pick(self):
+        """Under self._lock: the pool of the next job."""
+        if not self.extra or self._closed or self.base.inflight < self.keep:
+            return self.base
+        waiting, waiting_extra = self.base.inflight - self.keep, self._extra_busy - self.extra
+        if waiting_extra >= 0 and waiting * self.extra <= waiting_extra * self.keep:
+            return self.base            # (every process busy: the shorter queue for its processes)
+        if self._extra is None:
+            self._extra = RespawningPool(self.name, self.extra, **self._kwargs)
+            self.started += 1
+            log.info("%s: more processes for the work waiting (up to %d beside the %d kept)", self.name, self.extra,
+                     self.keep)
+            if self.idle_s > 0:
+                threading.Thread(target=self._retire_loop, args=(self._extra,), daemon=True,
+                                 name=f"{self.name}-idle").start()
+        return self._extra
+
+    def _extra_done(self, _fut):
+        with self._lock:
+            self._extra_busy = max(0, self._extra_busy - 1)
+            self._extra_used = time.monotonic()
+
+    def _retire_loop(self, pool):
+        """The extra pool's own thread: shut it down once no job of its own ran for idle_s (then a later job makes a
+        new one, with a thread of its own)."""
+        while True:
+            time.sleep(min(5.0, max(0.02, self.idle_s / 4.0)))
+            with self._lock:
+                if self._extra is not pool:
+                    return              # (shutdown)
+                if self._extra_busy or time.monotonic() - self._extra_used < self.idle_s:
+                    continue
+                self._extra = None
+                self._respawns += pool.respawns
+                self.retired += 1
+            n = len(getattr(getattr(pool, "_pool", None), "_processes", None) or ())
+            t0 = time.monotonic()
+            try:
+                pool.shutdown(wait=True)        # (no job of its own in flight: its processes end at once)
+            except Exception as e:
+                log.warning("%s: its extra processes' shutdown failed: %s: %s", self.name, type(e).__name__, e)
+                return
+            log.info("%s: %d extra processes ended after %.0f s without work (%.1f s; the %d kept go on)", self.name,
+                     n, self.idle_s, time.monotonic() - t0, self.keep)
+            return
+
+    def shutdown(self, *args, **kwargs):
+        with self._lock:
+            self._closed = True
+            extra, self._extra = self._extra, None
+        if extra is not None:
+            extra.shutdown(*args, **kwargs)
+        return self.base.shutdown(*args, **kwargs)
