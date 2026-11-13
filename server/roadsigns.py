@@ -295,7 +295,7 @@ def arrays(rows, box):
     con_at, con_id, con_off = [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for (line, pts, _m, cons, _lims, skips), mt, fl in rows:
+    for (line, pts, _m, cons, _lims, skips, *_zone), mt, fl in rows:      # (speedsigns rows: 7 fields since the zones)
         if (pts[:, 0].max() < x0 - m or pts[:, 0].min() > x1 + m or pts[:, 1].max() < y0 - m or pts[:, 1].min() > y1 + m):
             continue
         ll.append(line)
@@ -402,10 +402,12 @@ def table(signs, z_ground, z_road, sys_row):
     gap = float(systems["pole"]["gap_m"])
     width = np.zeros(len(signs))
     cells = []
+    # (a role whose drawing depends on the system's field colour has its own cell for that colour: variant_cells)
+    variants = roles.get("variant_cells", {}).get(roles["systems"].get(sys_row["atlas"]), {})
     for k, row in enumerate(signs):
         rule = systems["rules"][int(row[4])]
         cell, role = by_id[sys_row.get("roles", {}).get(rule, rule)]
-        cells.append((cell, role))
+        cells.append((variants.get(role["id"], cell), role))
         width[k] = sizes[role["shape"]][int(row[5])]
     out = np.zeros((len(signs), 10))
     for k, row in enumerate(signs):

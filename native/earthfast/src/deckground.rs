@@ -463,16 +463,20 @@ pub fn deck_ground_fit<'py>(py: Python<'py>, off: PyReadonlyArray1<'py, i64>, xy
     if counts.iter().sum::<usize>() != z.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("deck_ground_fit: z does not match the probe"));
     }
+    // (each deck on its own, side by side: a cell's decks were fitted one after another, 4 % of its planning)
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut at = 0;
+    for c in &counts {
+        starts.push(at);
+        at += c;
+    }
+    let (lines_, masks_, probe_, fit_, starts_, counts_) = (&lines, &masks, &probe, &fit, &starts, &counts);
     let got: Vec<Option<Patch>> = py.detach(|| {
-        let mut at = 0;
-        let mut out = Vec::with_capacity(lines.len());
-        for (i, line) in lines.iter().enumerate() {
-            let zs = &z[at..at + counts[i]];
-            at += counts[i];
-            let ms: Vec<&Line> = (mo[i] as usize..mo[i + 1] as usize).map(|j| &masks[mi[j] as usize]).collect();
-            out.push(fit_deck(line, &probe, &fit, zs, &ms));
-        }
-        out
+        crate::roadwalls::par_map(lines_.len(), 4, |i| {
+            let zs = &z[starts_[i]..starts_[i] + counts_[i]];
+            let ms: Vec<&Line> = (mo[i] as usize..mo[i + 1] as usize).map(|j| &masks_[mi[j] as usize]).collect();
+            fit_deck(&lines_[i], probe_, fit_, zs, &ms)
+        })
     });
     let active: Vec<bool> = got.iter().map(|g| g.is_some()).collect();
     let mut po = vec![0i64];

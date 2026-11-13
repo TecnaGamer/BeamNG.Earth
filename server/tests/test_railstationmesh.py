@@ -567,7 +567,8 @@ class LookTest(unittest.TestCase):
             self.assertIn(name, mats)
             for key in ("baseColorMap", "normalMap", "roughnessMap"):
                 p = mats[name]["Stages"][0][key]
-                self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), os.path.basename(p))), p)
+                __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+                self.assertTrue(_mt.is_shipped(os.path.join(os.path.dirname(path), os.path.basename(p))), p)
 
 
 class IslandFlatTest(unittest.TestCase):

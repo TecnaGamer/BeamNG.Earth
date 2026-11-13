@@ -29,8 +29,26 @@ RUN_ENV = "BNGE_ROADZ_SESSION"      # (earthd's; not BNE_: those are part of the
 RUN_KEEP_S = 86400.0
 
 
+_FAVOURED = [0]             # jobs of this process running as favoured() now
+
+
 def _rank(kind):
-    return KIND_RANK.get(kind, 1), int(PRIORITY)
+    return KIND_RANK.get(kind, 1), (0 if _FAVOURED[0] > 0 else int(PRIORITY))
+
+
+class favoured:
+    """While a job the player's first block waits for runs in this process (blockworker.plan_first: one of its cells
+    planned by a road tile's process): its claims are held, and other processes' waited for, at the terrain blocks'
+    own priority, so the block's process waits for its plans instead of making them again (once: "a process waits
+    only for a holder at least as urgent as itself"). The whole process's (its planning and layer threads take the
+    claims; a worker process runs one job at a time)."""
+
+    def __enter__(self):
+        _FAVOURED[0] += 1
+
+    def __exit__(self, *exc):
+        _FAVOURED[0] -= 1
+        return False
 
 
 def take(lock, kind="demand"):

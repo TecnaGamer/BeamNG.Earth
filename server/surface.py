@@ -2034,6 +2034,26 @@ class Surface:
     def frontage_pad_items(self, lat, lon):
         return self._pad_items(self._frontage_pads, lat, lon)
 
+    def pad_digest(self, la0, la1, lo0, lo1, bus_only=False):
+        """A hash of the kept pads whose boxes reach the box (degrees): the bus station yards (the ground's levelling,
+        busyard.YardGrader) and, unless bus_only, the fuel and frontage pads (paint_ground_pads), each in the order
+        kept (the painters draw them so), with the switches that select them. The disk block cache's keys
+        (blockcache.py): a block or chunk built before a road tile handed in a pad near it is another one."""
+        import hashlib
+        lat, lon = np.array([la0, la1], np.float64), np.array([lo0, lo1], np.float64)
+        h = hashlib.sha256(repr((bool(self.gas_pads), bool(self.bus_pads), bool(bus_only))).encode())
+        stores = [self._fuel_pads] if bus_only else [self._fuel_pads, self._frontage_pads]
+        for store in stores:
+            for sid, rings in self._pad_items(store, lat, lon):
+                if bus_only and not (self.bus_pads and str(sid).startswith("bus:")):
+                    continue
+                h.update(repr(sid).encode() + b"\0")
+                for la, lo in rings:
+                    h.update(np.ascontiguousarray(la, np.float64).tobytes() + b"|"
+                             + np.ascontiguousarray(lo, np.float64).tobytes() + b";")
+            h.update(b"#")
+        return h.digest()
+
     def paint_ground_pads(self, idx, lat, lon):
         idx = paint_pads(idx, lat, lon, self.fuel_pads(lat, lon))
         hard, grass = [], []

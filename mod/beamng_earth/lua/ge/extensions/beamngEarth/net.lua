@@ -32,7 +32,8 @@ local CONNECT_TIMEOUT_S = 2.0
 local RECV_CHUNK = 65536
 local MAX_RECV_PER_FRAME = 64 -- chunks; 4 MiB per frame is plenty for JSON control traffic
 -- JSON decoded a frame (bytes of payload), at least one message and 1/DECODE_DIV of those waiting (a lasting backlog
--- drains); update(dt, true) (core: the loading cover after a teleport) and 0 / nil: no limit. Every message of a frame
+-- drains); update(dt, n) n times as much (core: the loading cover after a teleport), update(dt, true) and 0 / nil: no
+-- limit. Every message of a frame
 -- was decoded in that frame: up to 4 MiB, inline tile JSON up to ~1 MB a message, the game's decoder ~250 MB/s and the
 -- collector stopped while it runs (research 2026-11-11). Rollback: net.DECODE_BYTES_PER_FRAME = 0.
 M.DECODE_BYTES_PER_FRAME, M.DECODE_DIV = 512 * 1024, 16
@@ -248,7 +249,8 @@ function M.update(dt, unlimited)
   local out = events
   events = {}
   local limit = M.DECODE_BYTES_PER_FRAME
-  if unlimited or not limit or limit <= 0 then limit = math.huge end
+  if not limit or limit <= 0 or unlimited == true then limit = math.huge
+  elseif type(unlimited) == 'number' then limit = limit * unlimited end    -- (core: the loading cover's larger share)
   -- what waits from earlier frames first, in order
   local spent = 0
   if rawH <= rawT then spent = decodeWaiting(out, limit, math.ceil((rawT - rawH + 1) / M.DECODE_DIV)) end

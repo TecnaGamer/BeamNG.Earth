@@ -233,6 +233,28 @@ class KnownPinnedTest(unittest.TestCase):
             finally:
                 railtags.ON = on
 
+    def test_a_pin_another_process_writes_later_is_seen(self):
+        """A process that looked before the manifest was pinned (another process fetched it a few seconds into a
+        first run) takes it once it is there: it kept None in its keys for the whole run before, and that run's plans,
+        cell facts and tiles were never found again (2026-11-13)."""
+        import json
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            on = railtags.ON
+            railtags.ON = True
+            try:
+                s = railtags.Shards(d, None, "rail")
+                self.assertIsNone(s.known())
+                os.makedirs(s.dir)
+                with open(os.path.join(s.dir, "manifest.json"), "w") as fh:
+                    json.dump({"built": "2026-11-12T18:20:31Z"}, fh)
+                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0):
+                    self.assertEqual(s.known(), "2026-11-12T18:20:31Z")
+            finally:
+                railtags.ON = on
+
+
 def _shard_xy(lat, lon):
     key = mapcells.cell_of(lat, lon)
     return key.x >> (key.z - 7), key.y >> (key.z - 7)

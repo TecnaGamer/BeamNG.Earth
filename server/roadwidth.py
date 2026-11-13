@@ -480,6 +480,79 @@ class RoadWidths:
                 self.combos.popitem(last=False)
         return got
 
+    def measure_many(self, asks):
+        """The widths (get) and clearances (cap) of many roads at once, into the memos get and cap answer from: asks
+        [(fid, lonlat (k, 2), want)], want 1 the width, 2 the clearance, 3 both. The same numbers as one get / cap per
+        road (earthfast.road_near_cells, road_walls: a cell's roads in two calls without the interpreter lock, a road
+        near a cell's edge against each cell's own walls instead of a joint index of them; the walls took 13 % of a
+        cell's planning, 2026-11-13). A road it leaves out (odd coordinates, walls of another kind) is measured by get /
+        cap as before."""
+        import fast
+        fast.require(281, "road_walls")
+        todo = []
+        with self.lock:
+            for fid, ll, want in asks:
+                ll = np.asarray(ll, np.float64)
+                if ll.ndim != 2 or ll.shape[1] != 2 or len(ll) < 1:
+                    continue
+                mk = _memo_key(fid, ll)
+                w = (want & 1 if mk not in self.memo else 0) | (want & 2 if mk not in self.caps else 0)
+                if w:
+                    todo.append((mk, ll, w))
+        if not todo:
+            return
+        off = np.zeros(len(todo) + 1, np.int64)
+        np.cumsum([len(t[1]) for t in todo], out=off[1:])
+        flat = np.ascontiguousarray(np.concatenate([t[1] for t in todo]))
+        cells, coff, ok = fast._ef.road_near_cells(flat, off, float(NEAR_STEP_M),
+                                                   (NEAR_M + NEAR_STEP_M / 2) / 111320.0, mapcells.ZOOM)
+        uniq, inv = np.unique(cells, axis=0, return_inverse=True) if len(cells) else (cells, np.zeros(0, np.int64))
+        keys = [mapcells.CellKey(mapcells.ZOOM, int(x), int(y)) for x, y in uniq.tolist()]
+        self.prefetch(keys)
+        packed, usable = [], np.ones(len(keys), bool)
+        for i, k in enumerate(keys):
+            frame, walls = self._walls(k)
+            rs = walls.__dict__.get("_rs")
+            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2:
+                usable[i] = False       # (walls of another kind: get / cap's own way)
+                packed.append(None)
+                continue
+            if rs is None:
+                rs = walls._rs = tuple(np.ascontiguousarray(a, t) for a, t in
+                                       ((walls.keys, np.int64), (walls.first, np.int64), (walls.counts, np.int64),
+                                        (walls.seg_of, np.int64), (walls.segs, np.float32)))
+            packed.append((np.ascontiguousarray(frame.origin, np.float64), np.ascontiguousarray(frame.rot, np.float64))
+                          + rs)
+        inv = np.asarray(inv, np.int64).ravel()
+        want = np.array([t[2] for t in todo], np.uint8)
+        for r in range(len(todo)):          # (left to get / cap: no cells, or a cell whose walls are of another kind)
+            a, b = int(coff[r]), int(coff[r + 1])
+            if not ok[r] or b <= a or not usable[inv[a:b]].all():
+                want[r] = 0
+        if not usable.all():                # (the road_walls cells: the usable ones, renumbered)
+            renum = np.cumsum(usable) - 1
+            inv = np.where(usable[inv], renum[inv], 0)
+            packed = [p for p in packed if p is not None]
+            if not packed:
+                return
+        row, near, w2w, has = fast._ef.road_walls(
+            flat, off, want, np.ascontiguousarray(inv, np.int64), np.ascontiguousarray(coff, np.int64), packed,
+            float(BUCKET), (STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE),
+            (CLEAR_STEP, CLEAR_END_SKIP, REACH, CLEAR_MIN_SAMPLES, CLEAR_Q, CLEAR_WALLED))
+        row, near, w2w, has = row.tolist(), near.tolist(), w2w.tolist(), has.tolist()
+        with self.lock:
+            if len(self.memo) >= MEMO_MAX:
+                self.memo.clear()
+            if len(self.caps) >= MEMO_MAX:
+                self.caps.clear()
+            for r, (mk, _ll, _w) in enumerate(todo):
+                w = int(want[r])
+                if w & 1:
+                    self.memo.setdefault(mk, split(row[r]) if row[r] == row[r] else None)
+                if w & 2:
+                    self.caps.setdefault(mk, (near[r] if near[r] == near[r] else None,
+                                              w2w[r] if w2w[r] == w2w[r] else None) if has[r] else None)
+
     def get(self, fid, lonlat):
         """(carriageway m, sidewalk m) of road fid (geometry lonlat (k, 2)), or None (defaults)."""
         ll = np.asarray(lonlat, np.float64)

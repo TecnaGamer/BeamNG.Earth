@@ -1,25 +1,30 @@
 """BNWT: our own prebaked z14 input tiles ("BeamNG.Earth world input tile"; research
-.claude/work/expo-input-tiles-2026-11-12.md), read in place of the Overture parquet files for the layers an archive
-holds (ARCHIVES: the base theme first: water, land use, infrastructure, which came from ~10 MB parquet row groups: a
-rural place fetched 33.8 MB of them for 37 KB of content).
+.claude/work/expo-input-tiles-2026-11-12.md), read in place of the sources' own reads for the layers an archive holds
+(ARCHIVES): the base theme (water, land use, infrastructure: ~10 MB parquet row groups, a rural place fetched 33.8 MB
+of them for 37 KB of content), transportation (roads, connectors, route numbers), buildings (and their parts), places.
 
-A tile holds, per layer, exactly what overture.Reader.query gives for the cell (built by tools/build_bnwt.py through
-that same code): the codec (earthfast bnwt.rs) is lossless, so a cell from a tile is the parquet cell bit for bit and
-shares its cache file, its cache keys and every plan and cell fact built from it. Only the transport changes: one
-range read for a whole region of cells instead of row groups.
+A tile holds, per layer, exactly what the runtime's own source gives for the cell, built by tools/build_bnwt.py through
+that same code: overture.Reader.query for the parquet layers (base), pmtiles.Reader.query for the layers Overture's
+tiles give (the others; their archive names the tiles' FORMAT it was built from). The codec (earthfast bnwt.rs) is
+lossless, so a cell from a tile is the source's cell bit for bit and shares its cache file, its cache keys and every
+plan and cell fact built from it; only the transport changes: one range read for a block of cells. (One decided
+exception: places' src_record is kept empty: no code reads it, it was 15 % of the places' bytes.)
 
-Off unless BNGE_BNWT_URL names where the archives are (an http(s) base URL, file:// or a folder): the archive of a
-release is <base>/bnwt<FORMAT>/<release>/<name>.c<CONTENT>.pmtiles, a PMTiles v3 container (Hilbert order, clustered:
-every quadtree square of cells is one contiguous byte range). The parquet path stays the fallback for everything this
-cannot answer: no archive (404, network), another format, release or content version in its metadata, a cell outside
-the archive's coverage, a layer it lacks, a damaged tile.
+Off unless BNGE_BNWT_URL names where the archives are (an http(s) base URL, file:// or a folder): an archive of a release
+is <base>/bnwt<FORMAT>/<release>/<name>.c<CONTENT>.index.json, its coverage and its parts (PMTiles v3 files of at most
+~400 MB, so a CDN caches each whole, each a contiguous range of Hilbert tile ids: every quadtree square of cells is one
+byte range of a part, or of two). A cell with no tile reads as its source's empty layer; tiles of the same content
+(open sea: the ocean's pieces cut to the cell, nothing else) are kept once and decoded with the asked cell's own edges.
+The source's own path stays the fallback for everything this cannot answer: no archive (404, network), another format,
+content, release or source in its index, a cell outside its coverage, a layer it lacks, a damaged tile.
 
-Cached under <raw>/bnwt/<release>/<name>/ as pmtiles.py does it (head.bin, leaf/, tiles/<z>/<x>/<y>.bnwt: as stored,
+Cached under <raw>/bnwt/<release>/<name>/ (index.json; parts/<part>/head.bin, leaf/; tiles/14/<x>/<y>.bnwt: as stored,
 b"" = no tile there). download_region() fetches a bbox's tiles as the few contiguous byte ranges they are (resumable:
-tiles already on disk are not fetched again); `python3 bnwt.py region --bbox ...` from the command line.
+tiles already on disk are not fetched again) and pins it (pins.json: never evicted by the cache cap);
+`python3 bnwt.py region --bbox ...` from the command line.
 """
 import argparse
-import gzip
+import bisect
 import json
 import logging
 import os
@@ -39,14 +44,23 @@ import pmtiles
 
 log = logging.getLogger("earthd.mapdata")
 
-NATIVE = 268
-FORMAT = 1              # the tile codec (earthfast bnwt.rs FORMAT): a reader reads only its own format's archives
-CONTENT = 1             # what the tiles hold: overture.Reader.query's output for their layers. Bump with any change of
-                        # that output (columns, clipping, ordering): the archives are rebuilt, the old ones not read
+NATIVE = 273
+FORMAT = 2              # the tile codec (earthfast bnwt.rs FORMAT): a reader reads only its own format's archives
 ZOOM = 14
-ARCHIVES = {"base": ("water", "land_use", "infrastructure")}
-LAYERS = tuple(ly for v in ARCHIVES.values() for ly in v)
-ARCHIVE_OF = {ly: name for name, v in ARCHIVES.items() for ly in v}
+PMT = f"pmtiles{pmtiles.FORMAT}"
+# name -> layers, the source they are the output of, the licence section (build_bnwt.SECTIONS), the columns kept empty
+ARCHIVES = {
+    "base": dict(layers=("water", "land_use", "infrastructure"), source="parquet", section="overture-odbl"),
+    "transportation": dict(layers=("roads", "connectors", "road_routes"), source=PMT, section="overture-odbl"),
+    "buildings": dict(layers=("buildings", "building_parts"), source=PMT, section="overture-odbl"),
+    "places": dict(layers=("places",), source=PMT, section="overture-places", blank={"places": ("src_record",)}),
+}
+# What the tiles hold: the source's output for their layers. Bump an archive's with any change of that output (the
+# columns, the query, the clipping, the tiles' decode: tests/test_bnwt.py ContentGuard): its archives are rebuilt, the
+# old ones not read
+CONTENT = {"base": 1, "transportation": 1, "buildings": 1, "places": 1}
+LAYERS = tuple(ly for v in ARCHIVES.values() for ly in v["layers"])
+ARCHIVE_OF = {ly: name for name, v in ARCHIVES.items() for ly in v["layers"]}
 BASE_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip().rstrip("/")
 LEVEL = 19              # zstd level of the tiles
 HEAD_BYTES = 16384
@@ -55,10 +69,12 @@ REGION_CHUNK = 8 << 20  # bytes a region download reads at once
 BLOCK_ZOOM = 12         # a cell not on disk comes with its aligned 4 x 4 block: one contiguous range of the archive
                         # (a first visit plans a cell's rings; the base theme's block is ~0.1 MB in the Alps, ~2.5 in
                         # Midtown)
+PINS = "pins.json"
+LANE = "bnwt"            # netfetch's lane of the archive host (its policy: a short connect timeout, 2 tries)
 
 
 class Unavailable(IOError):
-    """The archive cannot answer this cell (the caller reads the parquet files)."""
+    """The archive cannot answer this cell (the caller reads the source itself)."""
 
 
 _NOT_ITS_FAULT = (netfetch.Deferred, netfetch.PolicyDenied, netfetch.BudgetExceeded)
@@ -68,8 +84,13 @@ def enabled():
     return bool(BASE_URL)
 
 
-def archive_url(base, release, name):
-    return f"{base}/bnwt{FORMAT}/{release}/{name}.c{CONTENT}.pmtiles"
+def source_of(layer, pmt):
+    """The source the runtime reads layer from: PMT when Overture's tiles give it (pmt: mapdata's _pmt), else parquet."""
+    return PMT if pmt else "parquet"
+
+
+def index_url(base, release, name):
+    return f"{base}/bnwt{FORMAT}/{release}/{name}.c{CONTENT[name]}.index.json"
 
 
 # --- codec glue ---------------------------------------------------------------------------------
@@ -88,7 +109,7 @@ def _uncol(c):
 
 
 def section(layer, feats, sources):
-    """The codec's input for one layer of a cell (overture.Reader.query's (Features, sources))."""
+    """The codec's input for one layer of a cell (a source's (Features, sources))."""
     return {"name": layer, "ids": _col(feats.ids), "kind": np.asarray(feats.kind, np.int64),
             "part_off": np.asarray(feats.part_off, np.int64), "ring_off": np.asarray(feats.ring_off, np.int64),
             "coord_off": np.asarray(feats.coord_off, np.int64),
@@ -99,18 +120,42 @@ def section(layer, feats, sources):
             "sources": [(ds, lic, int(n)) for (ds, lic), n in sources.items()]}
 
 
+def empty(name, layer):
+    """What the archive's source gives a cell without features (a cell with no tile reads as this)."""
+    if ARCHIVES[name]["source"] == "parquet":
+        return overture.empty(layer), {}
+    spec = overture.LAYERS[layer]
+    tz = pmtiles.THEME_ZOOM[spec["theme"]]
+    r = fast._ef.pmt_layer(layer, spec["type"], [], (ZOOM, 0, 0), tz, text=list(spec.get("text", ())),
+                           float=list(spec.get("float", ())), boolean=list(spec.get("bool", ())),
+                           clip=bool(spec["clip"]), road_rules=layer == "roads",
+                           src_own=layer in ("roads", "road_routes"), cap=pmtiles.CAP[tz],
+                           fetch=lambda need: [b"" for _ in need], max_rounds=pmtiles.MAX_ROUNDS, cache_key="bnwt-empty")
+    return pmtiles.Reader._features(layer, spec, r)
+
+
+def blanked(name, layer, got):
+    """got (Features, sources) with the archive's blank columns emptied (places' src_record), as its tiles hold it."""
+    cols = ARCHIVES[name].get("blank", {}).get(layer, ())
+    f = got[0]
+    for c in cols:
+        if c in f.attrs:
+            f.attrs[c] = mg.text_column([""] * len(f))
+    return got
+
+
 def encode_tile(key, layers, level=LEVEL):
-    """A tile's bytes from {layer: (Features, sources)} of cell key (layers without features or sources left out:
-    a missing section reads as overture.empty)."""
+    """(bytes, independent) of cell key's tile from {layer: (Features, sources)} (each layer whole; independent: the
+    bytes hold nothing of the cell itself, the same in every cell with these features)."""
     fast.require(NATIVE, "bnwt")
-    secs = [section(ly, f, s) for ly, (f, s) in layers.items() if len(f) or s]
-    return fast._ef.bnwt_encode_tile(key.z, key.x, key.y, secs, level)
+    secs = [section(ly, f, s) for ly, (f, s) in layers.items()]
+    return fast._ef.bnwt_encode_tile(secs, tuple(key.bounds()), level)
 
 
-def decode_layer(tile, layer):
-    """(Features, sources) of one layer of a tile, or None when the tile has no such section."""
+def decode_layer(tile, layer, key):
+    """(Features, sources) of one layer of cell key's tile, or None when the tile has no such section."""
     fast.require(NATIVE, "bnwt")
-    d = fast._ef.bnwt_decode_layer(tile, layer)
+    d = fast._ef.bnwt_decode_layer(tile, layer, tuple(key.bounds()))
     if d is None:
         return None
     f = mg.Features(layer, _uncol(d["ids"]), np.asarray(d["kind"]).astype(np.uint8), d["part_off"], d["ring_off"],
@@ -154,122 +199,151 @@ def differences(a, b):
     return out
 
 
-# --- archive ------------------------------------------------------------------------------------
+# --- archives -----------------------------------------------------------------------------------
 def _local_path(url):
     if url.startswith("file://"):
         return url[len("file://"):]
     return None if "://" in url else url
 
 
-class Archive(pmtiles.Archive):
-    """One archive of a release (header, directories and tiles cached on disk; pmtiles.Archive's directory walk and
-    range-merged tile reads, our own source and checks)."""
+def _read_range(fetcher, url, start, end, kind, etag=None, short_ok=False):
+    """(bytes [start, end) of url, ETag): a file's own bytes, or one range request."""
+    path = _local_path(url)
+    if path is not None:
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                body = f.read(end - start)
+        except OSError as e:
+            raise Unavailable(f"{path}: {e}") from e
+        if len(body) != end - start and not (short_ok and len(body) >= 127):
+            raise pmtiles.PmtilesError(f"{path}: {len(body)} bytes for {start}-{end - 1}")
+        return body, ""
+    try:
+        res = fetcher.get(url, kind=kind, headers={"Range": f"bytes={start}-{end - 1}"}, lane=LANE)
+    except netfetch.NotFound as e:
+        raise Unavailable(f"{url}: not found") from e
+    n = len(res.body)
+    if res.status != 206 or not (n == end - start or (short_ok and 127 <= n < end - start)):
+        raise pmtiles.PmtilesError(f"{url}: HTTP {res.status}, {n} bytes for {start}-{end - 1}")
+    tag = (res.headers.get("etag") or "").strip()
+    if etag is not None and tag and tag != etag:
+        raise pmtiles.Changed(f"{url}: ETag {tag}, the cached directories are {etag}")
+    return res.body, tag
 
-    def __init__(self, reader, name):
-        super().__init__(reader, name)
-        self.name = name
-        self.url = archive_url(reader.base, reader.release, name)
-        self.dir = os.path.join(reader.root, reader.release, name)
-        self.meta = None
-        self._cover = []
-        self._down = None               # (monotonic time, reason): could not be read
-        self._open_lock = threading.Lock()
+
+class Part(pmtiles.Archive):
+    """One part file of an archive (its header and directories cached on disk; pmtiles.Archive's directory walk)."""
+
+    def __init__(self, arch, i, file):
+        super().__init__(arch.r, file)
+        self.arch, self.i = arch, i
+        self.url = f"{arch.dir_url}/{file}"
+        self.dir = os.path.join(arch.dir, "parts", file.rsplit(".", 1)[0])
 
     def _get(self, start, end, kind, etag=None, short_ok=False):
-        path = _local_path(self.url)
-        if path is not None:
-            try:
-                with open(path, "rb") as f:
-                    f.seek(start)
-                    body = f.read(end - start)
-            except OSError as e:
-                raise pmtiles.PmtilesError(f"{path}: {e}") from e
-            if len(body) != end - start and not (short_ok and len(body) >= 127):
-                raise pmtiles.PmtilesError(f"{path}: {len(body)} bytes for {start}-{end - 1}")
-            return body, ""
         try:
-            res = self.r.fetcher.get(self.url, kind=kind, headers={"Range": f"bytes={start}-{end - 1}"})
-        except netfetch.NotFound as e:
-            raise Unavailable(f"{self.url}: not found") from e
-        n = len(res.body)
-        if res.status != 206 or not (n == end - start or (short_ok and 127 <= n < end - start)):
-            raise pmtiles.PmtilesError(f"{self.url}: HTTP {res.status}, {n} bytes for {start}-{end - 1}")
-        tag = (res.headers.get("etag") or "").strip()
-        if etag is not None and tag and tag != etag:
+            return _read_range(self.r.fetcher, self.url, start, end, kind, etag, short_ok)
+        except pmtiles.Changed:
             self._reset()
-            raise pmtiles.Changed(f"{self.url}: ETag {tag}, the cached directories are {etag}")
-        return res.body, tag
-
-    def _tile_path(self, z, x, y):
-        return os.path.join(self.dir, "tiles", str(z), str(x), f"{y}.bnwt")
+            raise
 
     def head(self, kind):
         with self._lock:
             if self._head is not None:
                 return self._head
-        with self._open_lock:               # (one read of the head: the cell's layers ask at once)
-            with self._lock:
-                if self._head is not None:
-                    return self._head
-                down = self._down
-            if down is not None and time.monotonic() - down[0] < RETRY_S:
-                raise Unavailable(down[1])
-            return self._head_once(kind)
-
-    def _head_once(self, kind):
-        try:
-            got = self._open(kind)
-        except _NOT_ITS_FAULT:
-            raise                           # (a prefetch the host had no room for, a budget: not the archive's fault)
-        except (Unavailable, pmtiles.PmtilesError, netfetch.FetchError, ValueError, OSError) as e:
-            with self._lock:
-                self._down = (time.monotonic(), f"{self.url}: {type(e).__name__}: {e}")
-            log.info("bnwt: %s unavailable (%s: %s): the parquet files meanwhile", self.url, type(e).__name__, e)
-            raise Unavailable(str(e)) from e
-        with self._lock:
-            self._head = got
-            self._down = None
-        return got
-
-    def _open(self, kind):
         b = pmtiles._read(os.path.join(self.dir, "head.bin"))
-        meta = None
-        if b is not None:
-            try:
-                with open(os.path.join(self.dir, "head.json"), encoding="utf-8") as f:
-                    meta = json.load(f)
-            except (OSError, ValueError):
-                b = None
+        tag = None
         if b is None:
             b, tag = self._get(0, HEAD_BYTES, kind, short_ok=True)
-            h = fast._ef.pmt_header(b)
-            mo, ml = h["metadata_offset"], h["metadata_length"]
-            if mo + ml > len(b):                # (a long coverage list: read it with the head)
-                b = b + self._get(len(b), mo + ml, kind, tag or None)[0]
-            meta = {"etag": tag}
             pmtiles._write(os.path.join(self.dir, "head.bin"), b)
-            pmtiles._write(os.path.join(self.dir, "head.json"), json.dumps(meta).encode())
+            pmtiles._write(os.path.join(self.dir, "head.json"), json.dumps({"etag": tag}).encode())
+        else:
+            try:
+                with open(os.path.join(self.dir, "head.json"), encoding="utf-8") as f:
+                    tag = json.load(f).get("etag")
+            except (OSError, ValueError):
+                tag = None
         h = fast._ef.pmt_header(b)
         if h["internal_compression"] not in (1, 2) or h["tile_compression"] != 1 or h["tile_type"] != 0:
-            raise Unavailable(f"{self.url}: not a BNWT archive (compression {h['internal_compression']}/"
-                              f"{h['tile_compression']}, type {h['tile_type']})")
-        mo, ml = h["metadata_offset"], h["metadata_length"]
-        m = json.loads(gzip.decompress(b[mo:mo + ml]) if b[mo:mo + 2] == b"\x1f\x8b" else b[mo:mo + ml])
-        want = {"format": "bnwt", "version": FORMAT, "content": CONTENT, "release": self.r.release}
+            raise Unavailable(f"{self.url}: not a BNWT part")
+        ro, rl = h["root_offset"], h["root_length"]
+        root = b[ro:ro + rl] if ro + rl <= len(b) else self._get(ro, ro + rl, kind, tag or None)[0]
+        got = (h, root, tag or None)
+        with self._lock:
+            self._head = got
+        return got
+
+
+class Archive:
+    """One archive of a release: its index (coverage, parts by tile-id range), the parts, the tiles on disk."""
+
+    def __init__(self, reader, name):
+        self.r, self.name = reader, name
+        self.dir_url = f"{reader.base}/bnwt{FORMAT}/{reader.release}"
+        self.url = index_url(reader.base, reader.release, name)
+        self.dir = os.path.join(reader.root, reader.release, name)
+        self.meta = None
+        self._cover = []
+        self._parts = []                # [(first tile id, last tile id, Part)]
+        self._firsts = []
+        self._down = None               # (monotonic time, reason): could not be read
+        self._lock = threading.Lock()
+
+    def _tile_path(self, z, x, y):
+        return os.path.join(self.dir, "tiles", str(z), str(x), f"{y}.bnwt")
+
+    def open(self, kind):
+        """The index read and checked (once; again RETRY_S after a failure); Unavailable when it cannot be used."""
+        with self._lock:
+            if self.meta is not None:
+                return self
+            down = self._down
+            if down is not None and time.monotonic() - down[0] < RETRY_S:
+                raise Unavailable(down[1])
+            try:
+                self._open(kind)
+            except _NOT_ITS_FAULT:
+                raise                       # (a prefetch the host had no room for, a budget: not the archive's fault)
+            except (Unavailable, pmtiles.PmtilesError, netfetch.FetchError, ValueError, OSError, KeyError) as e:
+                self._down = (time.monotonic(), f"{self.url}: {type(e).__name__}: {e}")
+                log.info("bnwt: %s unavailable (%s: %s): the source meanwhile", self.url, type(e).__name__, e)
+                raise Unavailable(str(e)) from e
+            self._down = None
+            return self
+
+    def _open(self, kind):
+        path = os.path.join(self.dir, "index.json")
+        b = pmtiles._read(path)
+        if b is None:
+            lp = _local_path(self.url)
+            if lp is not None:
+                try:
+                    with open(lp, "rb") as f:
+                        b = f.read()
+                except OSError as e:
+                    raise Unavailable(f"{lp}: {e}") from e
+            else:
+                try:
+                    b = self.r.fetcher.get(self.url, kind=kind, lane=LANE).body
+                except netfetch.NotFound as e:
+                    raise Unavailable(f"{self.url}: not found") from e
+            m = json.loads(b)
+            self._check(m)
+            pmtiles._write(path, b)
+        m = json.loads(b)
+        self._check(m)
+        self._cover = [tuple(int(v) for v in r) for r in m["coverage"]]
+        self._parts = [(int(p["first"]), int(p["last"]), Part(self, i, p["file"])) for i, p in enumerate(m["parts"])]
+        self._firsts = [p[0] for p in self._parts]
+        self.meta = m
+
+    def _check(self, m):
+        want = {"format": "bnwt", "version": FORMAT, "content": CONTENT[self.name], "release": self.r.release,
+                "archive": self.name, "source": ARCHIVES[self.name]["source"]}
         bad = {k: m.get(k) for k, v in want.items() if m.get(k) != v}
         if bad:
-            self._reset()
             raise Unavailable(f"{self.url}: {bad}, {want} wanted")
-        self.meta = m
-        self._cover = [tuple(int(v) for v in r) for r in m.get("coverage", ())]
-        ro, rl = h["root_offset"], h["root_length"]
-        root = b[ro:ro + rl] if ro + rl <= len(b) else self._get(ro, ro + rl, kind, meta.get("etag"))[0]
-        return h, root, meta.get("etag") or None
-
-    def covers(self, key, kind):
-        self.head(kind)
-        sh = key.z - ZOOM
-        return self.covers_xy((ZOOM, key.x >> sh, key.y >> sh))
 
     def covers_xy(self, t):
         return any(x0 <= t[1] <= x1 and y0 <= t[2] <= y1 for x0, y0, x1, y1 in self._cover)
@@ -277,10 +351,21 @@ class Archive(pmtiles.Archive):
     def has_layer(self, layer):
         return self.meta is not None and layer in self.meta.get("layers", ())
 
+    def parts_in(self, a, b):
+        """The parts holding tile ids of [a, b)."""
+        i = max(0, bisect.bisect_right(self._firsts, a) - 1)
+        out = []
+        for first, last, part in self._parts[i:]:
+            if first >= b:
+                break
+            if last >= a:
+                out.append(part)
+        return out
+
 
 class Reader(pmtiles.Reader):
-    """The layers of ARCHIVES per cell from the BNWT archives under base (BASE_URL), as overture.Reader.query gives
-    them; Unavailable when an archive cannot answer."""
+    """The layers of ARCHIVES per cell from the BNWT archives under base (BASE_URL), as their sources give them;
+    Unavailable when an archive cannot answer."""
 
     def __init__(self, raw_dir, fetcher, release=overture.RELEASE, base=None):
         fast.require(NATIVE, "bnwt")
@@ -302,35 +387,31 @@ class Reader(pmtiles.Reader):
                 a = self._arch[name] = Archive(self, name)
             return a
 
-    def _tile_key(self, cell):
-        sh = cell.z - ZOOM
-        if sh < 0:
-            raise Unavailable(f"cell {cell} is coarser than the tiles")
-        return ZOOM, cell.x >> sh, cell.y >> sh
-
-    def query(self, layer, cell, kind="demand"):
-        """(Features, sources) of layer in cell, as overture.Reader.query; Unavailable when the archive cannot say."""
+    def query(self, layer, cell, kind="demand", source="parquet"):
+        """(Features, sources) of layer in cell as its source (source_of) gives it; Unavailable when the archive
+        cannot say."""
         name = ARCHIVE_OF.get(layer)
         if name is None or not self.base:
             raise Unavailable(f"{layer}: not in a BNWT archive")
-        arch = self.archive(name)
-        if not arch.covers(cell, kind):
+        if ARCHIVES[name]["source"] != source:
+            raise Unavailable(f"{layer}: the archive holds {ARCHIVES[name]['source']}'s cells, {source} asked")
+        if cell.z != ZOOM:
+            raise Unavailable(f"cell {cell}: the tiles are z{ZOOM}")
+        arch = self.archive(name).open(kind)
+        k = (ZOOM, cell.x, cell.y)
+        if not arch.covers_xy(k):
             raise Unavailable(f"{cell}: outside {arch.url}'s coverage")
         if not arch.has_layer(layer):
             raise Unavailable(f"{arch.url} has no {layer}")
-        if cell.z != ZOOM:
-            raise Unavailable(f"cell {cell}: the tiles are z{ZOOM}")
-        k = self._tile_key(cell)
         tile = self._tile(arch, k, kind)
         t0 = time.perf_counter()
-        if not tile:
-            got = None
-        else:
+        got = None
+        if tile:
             try:
-                got = decode_layer(tile, layer)
-            except ValueError as e:     # (a damaged tile file: dropped, the parquet files this time)
+                got = decode_layer(tile, layer, cell)
+            except ValueError as e:     # (a damaged tile file: dropped, the source this time)
                 with self._lock:
-                    old = self._mem.pop((arch.theme, k), None)
+                    old = self._mem.pop((name, k), None)
                     if old is not None:
                         self._mem_bytes -= len(old)
                 try:
@@ -338,58 +419,65 @@ class Reader(pmtiles.Reader):
                 except OSError:
                     pass
                 raise Unavailable(f"{cell} {layer}: {e}") from e
+        if got is None:
+            got = empty(name, layer)        # (a fresh one each time: callers may change what they get)
         self.stats["decode_s"] += time.perf_counter() - t0
         self.stats["cells"] += 1
-        return got if got is not None else (overture.empty(layer), {})
+        return got
 
     def _tile(self, arch, k, kind):
         """Tile k's bytes (b"": none there): memory, disk, else its block (BLOCK_ZOOM) from the archive."""
-        b = self.mem_get((arch.theme, k))
+        b = self.mem_get((arch.name, k))
         if b is None:
-            b = pmtiles._read(arch._tile_path(*k))
+            path = arch._tile_path(*k)
+            b = pmtiles._read(path)
+            for sq in (_block(k), k):       # (its block; the cell alone when another thread's read of it failed)
+                if b is not None:
+                    break
+                self.fetch_squares(arch, [sq], kind)
+                b = pmtiles._read(path)
             if b is None:
-                self.fetch_squares(arch, [_block(k)], kind)
-                b = pmtiles._read(arch._tile_path(*k))
-                if b is None:               # (its block's read failed in another thread: this one alone)
-                    b = arch.tiles([k], kind)[k]
-            self.mem_put((arch.theme, k), b)
+                raise Unavailable(f"{k}: not read")
+            self.mem_put((arch.name, k), b)
         return b
 
     def prefetch(self, needs, kind="prefetch"):
         """The blocks of the (cell, layer)s in needs not on disk fetched at once (blocks next to each other in the
-        archive in one range read). Returns the cells asked for; nothing when the archive is not there."""
+        archive in one range read). Returns the (cell, layer)s the archives cover (on disk now); none when they are not
+        there."""
         want = {}
         for cell, layer in needs:
             name = ARCHIVE_OF.get(layer)
             if name is None or not self.base or cell.z != ZOOM:
                 continue
-            want.setdefault(name, set()).add(self._tile_key(cell))
-        n = 0
-        for name, ks in want.items():
-            arch = self.archive(name)
+            want.setdefault(name, []).append((cell, layer))
+        done = set()
+        for name, items in want.items():
             try:
-                arch.head(kind)
+                arch = self.archive(name).open(kind)
             except Unavailable:
                 continue
-            ks = [k for k in ks if arch.covers_xy(k) and not os.path.exists(arch._tile_path(*k))]
-            if ks:
-                self.fetch_squares(arch, sorted({_block(k) for k in ks}), kind)
-                n += len(ks)
-        return n
+            items = [(c, ly) for c, ly in items if arch.covers_xy((ZOOM, c.x, c.y)) and arch.has_layer(ly)]
+            ks = {(ZOOM, c.x, c.y) for c, _ly in items}
+            new = [k for k in ks if not os.path.exists(arch._tile_path(*k))]
+            if new:
+                self.fetch_squares(arch, sorted({_block(k) for k in new}), kind)
+            done.update(items)
+        return done
 
     def fetch_squares(self, arch, squares, kind, stats=None, progress=None):
-        """Every tile of the quadtree squares [(z, x, y)] on disk: each square is one contiguous run of the archive,
-        runs next to each other are read together, REGION_CHUNK bytes at most a request; a cell of the coverage with
-        no tile gets an empty file (no directory walk for it later). Squares another thread is reading are waited
-        for. stats: {"tiles", "fetched", "bytes", "requests"} counted up."""
+        """Every tile of the quadtree squares [(z, x, y)] on disk: each square is one contiguous run of tile ids,
+        runs next to each other are read together, REGION_CHUNK bytes at most a request (a tile kept once for many
+        cells is read once); a cell of the coverage with no tile gets an empty file (no directory walk for it later).
+        Squares another thread is reading are waited for. stats: {"tiles", "fetched", "bytes", "requests"}."""
         stats = stats if stats is not None else dict(tiles=0, fetched=0, bytes=0, requests=0)
         mine, theirs = [], []
         with self._lock:
             for sq in sorted(set(squares)):
-                k = (arch.name, sq)
-                ev = self._inflight.get(k)
+                key = (arch.name, sq)
+                ev = self._inflight.get(key)
                 if ev is None:
-                    self._inflight[k] = threading.Event()
+                    self._inflight[key] = threading.Event()
                     mine.append(sq)
                 else:
                     theirs.append(ev)
@@ -405,7 +493,6 @@ class Reader(pmtiles.Reader):
         return stats
 
     def _read_squares(self, arch, squares, kind, stats, progress):
-        h, root, etag = arch.head(kind)
         runs = sorted(fast._ef.bnwt_square_range(z, x, y, ZOOM) for z, x, y in squares)
         merged = []
         for a, b in runs:
@@ -413,23 +500,35 @@ class Reader(pmtiles.Reader):
                 merged[-1][1] = max(merged[-1][1], b)
             else:
                 merged.append([a, b])
-        ents = [e for a, b in merged for e in self._entries(arch, h, root, etag, a, b, kind, 0)]
-        have = {e[0] for e in ents}
-        stats["tiles"] += len(ents)
-        todo = [e for e in ents if not os.path.exists(arch._tile_path(*_zxy(e[0])))]
+        by_content = {}                 # (part, offset, length) -> [tile ids]
+        have = set()
+        for a, b in merged:
+            for part in arch.parts_in(a, b):
+                h, root, etag = part.head(kind)
+                for t, off, ln in self._entries(part, h, root, etag, a, b, kind, 0):
+                    have.add(t)
+                    if not os.path.exists(arch._tile_path(*_zxy(t))):
+                        by_content.setdefault((part.i, off, ln), []).append(t)
+        stats["tiles"] += len(have)
+        parts = {p.i: p for _f, _l, p in arch._parts}
+        todo = sorted(by_content)
         i = 0
-        while i < len(todo):                # (chunks of tiles back to back in the archive)
+        while i < len(todo):                # (chunks of tiles near each other in one part)
             j = i + 1
-            while j < len(todo) and todo[j][1] - (todo[j - 1][1] + todo[j - 1][2]) <= pmtiles.MERGE_GAP \
+            while j < len(todo) and todo[j][0] == todo[i][0] \
+                    and todo[j][1] - (todo[j - 1][1] + todo[j - 1][2]) <= pmtiles.MERGE_GAP \
                     and todo[j][1] + todo[j][2] - todo[i][1] <= REGION_CHUNK:
                 j += 1
-            a, b = todo[i][1], todo[j - 1][1] + todo[j - 1][2]
-            body, _ = arch._get(a, b, kind, etag)
+            part = parts[todo[i][0]]
+            a, b = todo[i][1], max(o + n for _p, o, n in todo[i:j])
+            body, _ = part._get(a, b, kind, part.head(kind)[2])
             stats["requests"] += 1
             stats["bytes"] += len(body)
-            for t, off, ln in todo[i:j]:
-                pmtiles._write(arch._tile_path(*_zxy(t)), body[off - a:off - a + ln])
-                stats["fetched"] += 1
+            for c in todo[i:j]:
+                data = body[c[1] - a:c[1] - a + c[2]]
+                for t in by_content[c]:
+                    pmtiles._write(arch._tile_path(*_zxy(t)), data)
+                    stats["fetched"] += 1
             if progress is not None:
                 progress(stats)
             i = j
@@ -442,29 +541,91 @@ class Reader(pmtiles.Reader):
                             and not os.path.exists(arch._tile_path(*t)):
                         pmtiles._write(arch._tile_path(*t), b"")
 
-    # --- region packs -------------------------------------------------------------------------
-    def _entries(self, arch, h, d, etag, a, b, kind, depth):
-        """[(tile id, absolute offset, length)] of the tiles with ids in [a, b), from directory d and its leaves."""
+    def _entries(self, part, h, d, etag, a, b, kind, depth):
+        """[(tile id, absolute offset, length)] of the part's tiles with ids in [a, b), from directory d and its
+        leaves."""
         if depth > 4:
             raise pmtiles.PmtilesError("directories deeper than 4 levels")
         tiles, leaves = fast._ef.bnwt_dir_range(d, a, b)
         out = [(t, h["data_offset"] + off, ln) for t, off, ln in tiles if a <= t < b]
         for _t, off, ln in leaves:
-            out += self._entries(arch, h, arch._leaf(off, ln, kind, etag), etag, a, b, kind, depth + 1)
+            out += self._entries(part, h, part._leaf(off, ln, kind, etag), etag, a, b, kind, depth + 1)
         return sorted(out)
 
-    def download_region(self, bbox, kind="predownload", progress=None):
-        """Every tile of every archive in bbox (lon0, lat0, lon1, lat1) on disk: the quadtree squares covering it,
-        each one contiguous byte range (resumable: tiles already there are skipped). Returns {"tiles", "fetched",
-        "bytes", "requests"}."""
+    # --- region packs -------------------------------------------------------------------------
+    def download_region(self, bbox, kind="predownload", progress=None, names=None):
+        """Every tile of the archives (names: all) in bbox (lon0, lat0, lon1, lat1) on disk, pinned first (never
+        evicted by the cache cap): the quadtree squares covering it, each one contiguous byte range (resumable: tiles
+        already there are skipped). Returns {"tiles", "fetched", "bytes", "requests"}."""
         stats = dict(tiles=0, fetched=0, bytes=0, requests=0)
         lon0, lat0, lon1, lat1 = bbox
         nw, se = mapcells.cell_of(lat1, lon0, ZOOM), mapcells.cell_of(lat0, lon1, ZOOM)
-        for name in ARCHIVES:
-            self.fetch_squares(self.archive(name), _squares(nw.x, nw.y, se.x, se.y), kind, stats, progress)
+        pin(self.root, (nw.x, nw.y, se.x, se.y))
+        for name in names or ARCHIVES:
+            try:
+                arch = self.archive(name).open(kind)
+            except Unavailable as e:
+                log.info("bnwt: region: %s", e)
+                continue
+            self.fetch_squares(arch, _squares(nw.x, nw.y, se.x, se.y), kind, stats, progress)
         return stats
 
 
+# --- pinned regions (cache.Cache._unpinned asks pinned_keys) ------------------------------------
+def pin(root, rect):
+    """Pin the z14 cells of rect (x0, y0, x1, y1) of every archive under root (<raw>/bnwt)."""
+    path = os.path.join(root, PINS)
+    try:
+        with open(path, encoding="utf-8") as f:
+            rects = [tuple(r) for r in json.load(f)["rects"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        rects = []
+    if tuple(rect) not in rects:
+        rects.append(tuple(int(v) for v in rect))
+        pmtiles._write(path, json.dumps({"rects": rects}).encode())
+
+
+_PIN_MEMO = {}
+
+
+def pinned_keys(cache_root, keys):
+    """[bool] per cache key ("mapdata/raw/bnwt/..."): a tile of a pinned region, or an archive's index, head or
+    directory while any region is pinned. None when nothing is pinned (the caller then skips it)."""
+    path = os.path.join(cache_root, "mapdata", "raw", "bnwt", PINS)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    memo = _PIN_MEMO.get(path)
+    if memo is None or memo[0] != (st.st_mtime_ns, st.st_size):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rects = [tuple(int(v) for v in r) for r in json.load(f)["rects"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            rects = []
+        memo = _PIN_MEMO[path] = ((st.st_mtime_ns, st.st_size), rects)
+    rects = memo[1]
+    if not rects:
+        return None
+    out = []
+    for k in keys:
+        if not k.startswith("mapdata/raw/bnwt/"):
+            out.append(False)
+            continue
+        bits = k.split("/")
+        if len(bits) >= 9 and bits[5] == "tiles":
+            try:
+                x, y = int(bits[7]), int(bits[8].split(".", 1)[0])
+            except ValueError:
+                out.append(False)
+                continue
+            out.append(any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in rects))
+        else:
+            out.append(True)            # (index, heads, directories: the pinned tiles need them offline)
+    return out
+
+
+# --- Hilbert helpers ----------------------------------------------------------------------------
 def _block(k):
     sh = ZOOM - BLOCK_ZOOM
     return BLOCK_ZOOM, k[1] >> sh, k[2] >> sh
@@ -511,11 +672,12 @@ def _squares(x0, y0, x1, y1, z=0, x=0, y=0):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="BNWT archives: region download (resumable), archive info")
+    ap = argparse.ArgumentParser(description="BNWT archives: region download (resumable, pinned), archive info")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("region", help="fetch every tile of a bbox into the cache")
+    r = sub.add_parser("region", help="fetch every tile of a bbox into the cache (pinned)")
     r.add_argument("--bbox", required=True, help="lon0,lat0,lon1,lat1")
-    i = sub.add_parser("info", help="the archive's header and metadata")
+    r.add_argument("--archives", default="", help="comma-separated (default: all)")
+    i = sub.add_parser("info", help="the archives' indexes")
     for p in (r, i):
         p.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
         p.add_argument("--url", default=BASE_URL, help="base URL (default: BNGE_BNWT_URL)")
@@ -526,13 +688,14 @@ def main(argv=None):
     rd = Reader(os.path.join(a.cache_dir, "mapdata", "raw"), netfetch.Fetcher(), a.release, a.url)
     if a.cmd == "info":
         for name in ARCHIVES:
-            h, _root, _etag = rd.archive(name).head("demand")
-            print(json.dumps({"archive": name, "header": h, "metadata": rd.archive(name).meta}, indent=1,
-                             default=str))
+            try:
+                print(json.dumps({"archive": name, "index": rd.archive(name).open("demand").meta}, indent=1))
+            except Unavailable as e:
+                print(json.dumps({"archive": name, "unavailable": str(e)}))
         return 0
     bbox = tuple(float(v) for v in a.bbox.split(","))
     t0 = time.perf_counter()
-    s = rd.download_region(bbox, kind="predownload",
+    s = rd.download_region(bbox, kind="predownload", names=[n for n in a.archives.split(",") if n] or None,
                            progress=lambda s: print(f"\r{s['fetched']} tiles, {s['bytes'] / 1e6:.1f} MB",
                                                     end="", file=sys.stderr))
     print(file=sys.stderr)

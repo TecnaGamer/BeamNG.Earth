@@ -149,6 +149,7 @@ WALL_T_M = 0.8              # (roadmesh.retaining_walls) and the ground at its n
 WALL_FLAT_M = roadsmod.roadmesh.GRID_M  # ... after one terrain grid step (heightmap.SQUARE) at the road's level behind the wall: rising at the
                             # wall itself, the grid's triangles stood as dark wedges in front of its face; the wall's
                             # top (roadmesh.WALL_THICK_M) covers the strip
+OPEN_TUNNEL_EASE = os.environ.get("BNE_OPEN_TUNNEL_EASE", "on") != "off"    # (_make_cell: Plan.open_tunnel)
 TUNNEL_TAG = ":tun"          # in the fid of the tunnels' own plans (open sections, mouths): apply(roads_only) skips them
 MOUTH_PLAN_M = 4.0          # m into a tunnel from a portal its floor is a grading plan too (Grader._mouth_plans)
 TUNNEL_KEEP_IN_M = 3.0      # (roads.LOW_HOLE_M: a low arch's mouths, flat at its floor)
@@ -186,6 +187,24 @@ SEP_FULL_M = 4.0
 CORE_FADE_M = 2.0
 SIDE_FADE_M = 2.0           # m of (side - ahead) over which a segment counts as beside the point (ahead: its own road)
 RETRY_S = 60.0              # s before a cell whose road data failed is asked for again
+
+# Whether the plans this process holds for a cell were made complete (nothing they read failed or was missing:
+# Grader._plan_cell's persist rule), by cell key (z, x, y): True once known complete, False when made short, failed, or
+# read from another process's run file without its ".complete" marker. The disk block cache (blockcache.py) keeps a
+# block only when every cell whose plans can reach it is known complete: plans made short and kept in memory for the
+# session raise no fault when a later block reads them.
+_PLANS_COMPLETE = {}
+
+
+def _note_plans(key, complete):
+    _PLANS_COMPLETE[(int(key[0]), int(key[1]), int(key[2]))] = bool(complete)
+
+
+def plans_complete(keys):
+    """Are the plans of every cell of keys held by this process and known complete (_PLANS_COMPLETE)?"""
+    return all(_PLANS_COMPLETE.get((int(k[0]), int(k[1]), int(k[2]))) is True for k in keys)
+
+
 PLAN_SLOW_S = 60.0          # s: a cell's plans still being made this long: its process's stacks to the log (stackdump)
 
 # Junctions: a side road's end takes the height of the road it joins (snap_junctions; mpsteppe's PR #290)
@@ -757,7 +776,7 @@ class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
     __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
-                 "widen")
+                 "widen", "open_tunnel")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -770,6 +789,7 @@ class Plan:
         self.max_wall = WALL_MAX_H_M    # its cuttings' walls at most this tall (wall_max_h)
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
+        self.open_tunnel = False        # a tunnel part's open section: a lower road crossing it eases onto it (_plan_flags)
         self.widen = None               # (n,) m its core and carriageway are wider each side there (hairpin_cores) or None
         pad = half + T_MAX
         self.bbox = (xy[:, 0].min() - pad, xy[:, 1].min() - pad, xy[:, 0].max() + pad, xy[:, 1].max() + pad)
@@ -1469,6 +1489,7 @@ def _replan(p, xy, z, abut=None, cut=False):
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = bool(getattr(p, "steep", False))
+    q.open_tunnel = bool(getattr(p, "open_tunnel", False))
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -2139,6 +2160,10 @@ class _Planner:
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
         self.dgcells = {}       # cell key -> the corrected decks within reach of it (_cell_deck_patches)
+        # (cell keys whose plans / road stage were made short of something, this session's: whatever reads them is not
+        # kept either, _short_read; their own plans not kept for later visits)
+        self.short = set()
+        self.stage_short = set()
         self._dg_local = threading.local()  # (stack: the corrected decks of the cells this thread is planning)
 
     # the store's settings (set on the anchors' Graders after they are made): shared: plancache.PlanCache (the cells'
@@ -2176,6 +2201,9 @@ class _Planner:
         with src.lock:
             if key not in src.cells:            # (its fetch failed: asked again later)
                 return []
+            if key in src.short:
+                with self.lock:
+                    self.short.add(key)
             keeps, covers, opens = src.keeps.get(key, []), src.covers.get(key, []), src.opens.get(key, [])
             dg = src.dgcells.get(key, [])
         import geotiles
@@ -2193,11 +2221,21 @@ class _Planner:
             self.dgcells.setdefault(key, got[4])
             return self.cells[key]
 
+    def _short_read(self, keys):
+        """Plans (or road stages: stages) of cells keys read: those made short of something make the build reading them
+        short too (revisit.fault, in this thread: its own builds alone)."""
+        with self.lock:
+            short = any(k in self.short or k in self.stage_short for k in keys)
+        if short:
+            import revisit
+            revisit.fault(here=True)
+
     def _cell_plans(self, key):
         with self.lock:
             got = self.cells.get(key)
             kl = self.key_locks.setdefault(key, threading.Lock())
         if got is not None:
+            self._short_read((key,))
             return got
         src = self._foreign(key)
         if src is not None:
@@ -2211,8 +2249,10 @@ class _Planner:
             got = self.cells.get(key)
             failed = self.failed.get(key)
         if got is not None:
+            self._short_read((key,))
             return got
         if failed is not None and time.monotonic() - failed < RETRY_S:
+            _note_plans(key, False)
             return []               # offline: no block waits on the same failing fetch again
         import xproc
         xproc.check_cancel()        # (a block / road tile of a place a teleport left: not planned for it)
@@ -2228,11 +2268,13 @@ class _Planner:
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
         try:
             import revisit
-            # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
-            # kept this one's complete plans from later visits and baked packs: 2026-11-02)
-            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
+            # (this cell's own faults, its scope's: the planning threads of a process plan cells side by side, and
+            # another's fault kept this one's complete plans from later visits and baked packs: 2026-11-02)
+            b = revisit.begin()
             if shared is not None:
                 got = shared
+                if self.shared.is_short(key):      # (another process's, made short of something: read so)
+                    revisit.fault(here=True)
             else:
                 import stackdump    # (a slow plan holds every process waiting for it: say where it waits)
                 watch = stackdump.watch(PLAN_SLOW_S, f"cell {key}'s plans still being made after {PLAN_SLOW_S:.0f} s")
@@ -2250,12 +2292,27 @@ class _Planner:
                         got = tuple(got) + (dg,)
                 finally:
                     watch.cancel()
+            revisit.end(b)
+            whole = b.n == 0 and b.lidar == 0
             if got is None:
+                _note_plans(key, False)
                 return []
+            if shared is not None:      # (another process's: complete when the cache says so)
+                known = getattr(self.shared, "known_complete", None)
+                _note_plans(key, whole and known is not None and known(key))
+            else:
+                _note_plans(key, whole)
+            with self.lock:
+                if whole:
+                    self.stage_short.discard(key)       # (its plans hold its roads' now: _road_stages dropped below)
+                else:
+                    self.short.add(key)
+            if not whole and revisit.SITES:
+                log.info("revisit: cell %s's plans made short: %s", key, b.why_not())
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
-                self.shared.store(key, *got, persist=revisit.thread_faults() == f0
-                                  and revisit.thread_lidar_faults() == l0)
+                self.shared.store(key, *got, persist=whole)
         finally:
+            revisit.end(b)
             if mine:
                 self.shared.release(key)
         plans, keeps, covers, opens = got[:4]
@@ -2284,10 +2341,17 @@ class _Planner:
         if feats is not None and len(feats):
             portals = {}
             secs = self._tunnel_sections(feats, key, portals=portals)
+            covered = {f.rsplit("#", 1)[0] for f, _s, _xy, _z, k in secs if k}
             for fid, spec, xy, z, k in secs:
                 if k == 0:
                     p = Plan(xy, z, spec.width / 2 + shoulder(spec))
                     p.rank = grade_rank(spec)
+                    # (a tunnel part open all along, no cover anywhere over it: the map's underpass under a deck or lid
+                    # the elevation leaves out. A road crossing it is that deck, mapped on the ground over the tunnel:
+                    # it eases onto the held carriageway whatever its class, gradebins OPEN_TUNNEL (Kennedybruecke in
+                    # Vienna: a bus lane stepped 1.2 m down to it, GitHub #1169). An open stretch by a portal is a real
+                    # trench, the roads beside it on the cover: they keep their ground)
+                    p.open_tunnel = OPEN_TUNNEL_EASE and fid.rsplit("#", 1)[0] not in covered
                     plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
@@ -2306,25 +2370,100 @@ class _Planner:
             got = memo.get(key)
             kl = self.__dict__.setdefault("_road_stage_locks", {}).setdefault(key, threading.Lock())
         if got is not None:
+            self._stage_read(key)
             return got
         with kl:
             with self.lock:
                 got = memo.get(key)
             if got is not None:
+                self._stage_read(key)
                 return got
-            dg = self._cell_deck_patches(key)
-            stack = self._dg_local.__dict__.setdefault("stack", [])
-            stack.append(self._stack_entry(key, dg))
+            # (one process of the run makes a cell's road stage, the others wait for it and read it: the shared plan
+            # cache's stage_*, earthfast's stageshare. Each made its neighbours' stages again for its own cell's
+            # tunnels: a first block's cells planned side by side in four processes cost 13.5 CPU-s each where 6.5
+            # were its own, 2026-11-13)
+            claim = getattr(self.shared, "stage_claim", None) if self.shared is not None else None
+            shared, mine = (None, False)
+            # (its claim only when this process makes no other stage meanwhile, _STAGE_CROWD: a block's process plans
+            # its cells side by side on one interpreter lock, and a road tile's process waiting for one of those
+            # stages waited several times as long as making it itself; such a process still reads the others')
+            with _STAGE_CROWD_LOCK:
+                alone = _STAGE_CROWD[0] == 0
+                _STAGE_CROWD[0] += 1
+            if claim is not None:
+                try:
+                    shared, mine = claim(key, hold=alone)
+                except Exception as e:
+                    if type(e).__name__ == "Abandoned":
+                        with _STAGE_CROWD_LOCK:
+                            _STAGE_CROWD[0] -= 1
+                        raise
+                    log.debug("grading: road stage of %s not shared: %s: %s", key, type(e).__name__, e)
             try:
-                got = self._make_cell_roads(key)
+                if shared is not None:
+                    got = self._stage_adopt(key, *shared)
+                    if got is not None:
+                        return got
+                dg = self._cell_deck_patches(key)
+                stack = self._dg_local.__dict__.setdefault("stack", [])
+                stack.append(self._stack_entry(key, dg))
+                import revisit
+                try:
+                    with revisit.scope() as b:
+                        got = self._make_cell_roads(key)
+                finally:
+                    stack.pop()
+                if got is not None:
+                    with self.lock:
+                        if b.n or b.lidar:
+                            self.stage_short.add(key)
+                        else:
+                            self.stage_short.discard(key)
+                        memo[key] = got
+                        while len(memo) > self.ROAD_STAGES_KEPT:
+                            memo.popitem(last=False)
+                    if mine:
+                        try:
+                            self.shared.stage_store(key, got[1], got[2], bool(b.n or b.lidar))
+                        except Exception as e:      # (the others make it themselves)
+                            log.debug("grading: road stage of %s not kept for the run: %s: %s", key,
+                                      type(e).__name__, e)
             finally:
-                stack.pop()
-            if got is not None:
-                with self.lock:
-                    memo[key] = got
-                    while len(memo) > self.ROAD_STAGES_KEPT:
-                        memo.popitem(last=False)
+                with _STAGE_CROWD_LOCK:
+                    _STAGE_CROWD[0] -= 1
+                if mine:
+                    self.shared.stage_release(key)
             return got
+
+    def _stage_adopt(self, key, plans, keeps, short):
+        """Cell key's road stage as another process of the run made it (plans, keeps; short: made short of something,
+        read so) taken as this process's: (feats, plans, keeps) with the cell's roads as _make_cell_roads fetches them,
+        or None when they cannot be fetched (made here then: its failure handled there)."""
+        try:
+            feats = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+        except Exception as e:
+            log.debug("grading: roads of %s for its shared road stage: %s: %s", key, type(e).__name__, e)
+            return None
+        got = (feats, plans, keeps)
+        with self.lock:
+            memo = self.__dict__.setdefault("_road_stages", OrderedDict())
+            if short:
+                self.stage_short.add(key)
+            else:
+                self.stage_short.discard(key)
+            got = memo.setdefault(key, got)
+            while len(memo) > self.ROAD_STAGES_KEPT:
+                memo.popitem(last=False)
+        self._stage_read(key)
+        return got
+
+    def _stage_read(self, key):
+        """Cell key's road stage read from memory: made short of something, the reader is short too (_short_read)."""
+        with self.lock:
+            short = key in self.stage_short
+        if short:
+            import revisit
+            revisit.fault(here=True)
 
     def _cell_road_plans(self, key):
         """[(fid, Plan)] of cell key's roads alone, without its tunnels' plans (TUNNEL_TAG): the cell's plans' when they
@@ -2346,6 +2485,7 @@ class _Planner:
                 read = self.__dict__.setdefault("_road_kept", OrderedDict())
                 got = read.get(key)
             if got is not None:
+                self._short_read((key,))
                 return got
             if staged is None and failed is not None and time.monotonic() - failed < RETRY_S:
                 return []
@@ -2357,6 +2497,11 @@ class _Planner:
                     kept = None
                 if kept is not None:        # (read once: the cell's own planning takes them in later, _plan_cell)
                     got = [(fid, p) for fid, p in kept[0] if TUNNEL_TAG not in fid]
+                    if self.shared.is_short(key):  # (another process's, made short of something)
+                        with self.lock:
+                            self.short.add(key)
+                        import revisit
+                        revisit.fault(here=True)
                     with self.lock:
                         read[key] = got
                         while len(read) > self.ROAD_STAGES_KEPT:
@@ -2364,6 +2509,7 @@ class _Planner:
                     return got
             staged = self._road_stage(key)
             return [] if staged is None else staged[1]
+        self._short_read((key,))
         return [(fid, p) for fid, p in got if TUNNEL_TAG not in fid]
 
     def _make_cell_roads(self, key):
@@ -5838,8 +5984,15 @@ class _Planner:
                 with dem.urgent():
                     return self._cell_plans(k)
             return self._cell_plans(k)
-        with ThreadPoolExecutor(min(len(missing), PLAN_THREADS), thread_name_prefix="plans") as ex:
-            list(ex.map(one, missing))
+        n = min(len(missing), PLAN_THREADS)
+        with _STAGE_CROWD_LOCK:         # (their road stages made side by side: none of them claimed, _road_stage)
+            _STAGE_CROWD[0] += n
+        try:
+            with ThreadPoolExecutor(n, thread_name_prefix="plans") as ex:
+                list(ex.map(one, missing))
+        finally:
+            with _STAGE_CROWD_LOCK:
+                _STAGE_CROWD[0] -= n
 
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once); roads_only: not the tunnels' (TUNNEL_TAG)."""
@@ -5880,6 +6033,7 @@ class _Planner:
         with self.lock:
             hit = memo.get(mk)
         if hit is not None:
+            self._short_read(keys)
             return hit
         got = {}
         for key in keys:
@@ -6049,6 +6203,7 @@ def mapped_plan(p, fn):
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
     q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = getattr(p, "steep", False)
+    q.open_tunnel = getattr(p, "open_tunnel", False)
     set_widen(q, getattr(p, "widen", None))
     return q
 
@@ -6145,6 +6300,28 @@ def _deck_z_hook(frame, lines, fids=None):
 
 if CW_ON:
     roadsmod.DECK_Z_HOOK = _deck_z_hook
+
+
+def cells_of_points(lat, lon):
+    """The map cells Grader.prepare plans for the points (each planning region's _Planner._keys of its own points, in
+    its order), without a store: the server's own process asks which cells a first block will wait for
+    (earthd.Server.plan_first)."""
+    import geotiles
+    lat = np.asarray(lat, np.float64).ravel()
+    lon = np.asarray(lon, np.float64).ravel()
+    rx, ry = geotiles.region_of(lat, lon)
+    rx, ry = np.atleast_1d(rx), np.atleast_1d(ry)
+    out = []
+    for a, b in sorted({(int(a), int(b)) for a, b in zip(rx, ry)}):
+        m = (rx == a) & (ry == b)
+        for k in _Planner._keys(lat[m], lon[m]):
+            if k not in out:
+                out.append(k)
+    return out
+
+
+_STAGE_CROWD = [0]              # road stages being made, or cells planned side by side, in this process now
+_STAGE_CROWD_LOCK = threading.Lock()
 
 
 PLANNERS_KEPT = 6               # planning regions a PlanStore keeps in memory (~30 km each)
@@ -6341,6 +6518,7 @@ def trim_plan(p, box):
             q.rank = getattr(p, "rank", GRADE_RANK_NONE)
             q.bank = pb
             q.steep = getattr(p, "steep", False)
+            q.open_tunnel = getattr(p, "open_tunnel", False)
             set_widen(q, pw)
             out.append(q)
         i = j + 1
@@ -6453,7 +6631,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(217, "plan_merge")     # (217: the trimmed plans' banks / widens)
+    fast.require(283, "plan_merge")     # (217: the trimmed plans' banks / widens; 283: the plans' flags, _plan_flags)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -6463,8 +6641,7 @@ def merge_plan_set(plans):
         np.array([p.half for p in plans], f64), np.array([getattr(p, "road_half", p.half) for p in plans], f64),
         np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64), _plan_ranks(plans, None),
         np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
-        np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
-        np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+        _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
         *_per_plan([getattr(p, "cut", None) for p in plans], 6),
         np.array([float(np.max(w)) if w is not None and len(w) else 0.0 for w in wds], f64), bool(WELD_ON),
         bool(TRIM_SIDE_MOUTHS_ON), float(CHAIN_JOIN_M), float(WELD_MAX_STEP_M), float(WELD_TAPER_M),
@@ -6488,6 +6665,17 @@ def merge_plan_set(plans):
     pack = PlanPack.__new__(PlanPack)
     pack.__dict__.update(got["pack"])
     return pack
+
+
+PLAN_STEEP, PLAN_OPEN_TUNNEL = 1, 2     # (earthfast gradebins STEEP / OPEN_TUNNEL)
+
+
+def _plan_flags(plans):
+    """(plans,) uint8: each plan's flags as grade_points reads them (PlanPack's st): PLAN_STEEP a pass road's
+    (Plan.steep), PLAN_OPEN_TUNNEL a tunnel's open section (Plan.open_tunnel: a lower-ranked road crossing it takes the
+    side ease onto it, whatever the class gap)."""
+    return np.array([(PLAN_STEEP if getattr(p, "steep", False) else 0)
+                     | (PLAN_OPEN_TUNNEL if getattr(p, "open_tunnel", False) else 0) for p in plans], np.uint8)
 
 
 def _per_plan(vs, width=None):
@@ -6533,7 +6721,7 @@ class PlanPack:
 
     def __init__(self, plans):
         import fast
-        fast.require(211, "plan_pack")
+        fast.require(283, "plan_pack")     # (283: the plans' flags, _plan_flags)
         f64 = np.float64
         xy, off, z = _plan_lines(plans)
         rids = [getattr(p, "rid", -1) for p in plans]
@@ -6544,8 +6732,7 @@ class PlanPack:
             np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64),
             np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for p in plans], np.int64),
             np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
-            np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
-            np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+            _plan_flags(plans), np.array([p.bbox for p in plans], f64).reshape(-1, 4),
             *_per_plan([getattr(p, "cut", None) for p in plans], 6), float(DUPE_XY_M),
             -dmath.cos(math.radians(CONT_TURN_DEG)), float(CONT_JOIN_M), -dmath.cos(math.radians(LINK_TURN_DEG)),
             float(ABUT_NEAR_M), float(T_MAX), int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M),

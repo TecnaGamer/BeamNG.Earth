@@ -1654,6 +1654,12 @@ class Tracker:
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
+    def forget(self):
+        """The mod has none of the tiles sent (its level loaded again, earthd Connection.forget_world): every one is
+        wanted again (those building land as new ones)."""
+        self.sent = set()
+        self.aid = None
+
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
         car = getattr(self, "car", ())
@@ -1876,7 +1882,7 @@ class Tracker:
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if self.kind in ("bldfar", "bldsky", "brfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
+        if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:
                 m["slots"] = slots

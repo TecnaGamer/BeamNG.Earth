@@ -123,11 +123,13 @@ class ModelTest(unittest.TestCase):
         mats=json.loads((folder/'main.materials.json').read_text())
         glyph=mats['bne_sign_glyph'];self.assertTrue(glyph['alphaTest'])
         opacity=folder/Path(glyph['Stages'][0]['opacityMap']).name
-        self.assertEqual(opacity.suffix,'.dds')   # (the mod ships its textures as DDS: BC7 colour, BC4 opacity)
-        with Image.open(folder/'sign_font.dds') as colour,Image.open(opacity) as mask:
-            self.assertTrue(all(v<=4096 and v&(v-1)==0 for v in colour.size))
-            diff=np.abs(np.array(colour.getchannel('A'),dtype=np.int16)-np.array(mask,dtype=np.int16))
-            self.assertLess(diff.mean(),1.0)     # (the same alpha, within the two encoders' errors)
+        self.assertEqual(opacity.suffix,'.dds')   # (a DDS the game takes as it is: BC4, made at install from its source)
+        # the letters' colour is the material's (black / white): the shader reads a colour map's rgb only, never its alpha
+        self.assertNotIn('baseColorMap',glyph['Stages'][0]);self.assertEqual(glyph['Stages'][0]['baseColorFactor'],[0,0,0,1])
+        self.assertEqual(mats['bne_sign_glyph_white']['Stages'][0]['baseColorFactor'],[1,1,1,1])
+        import sys;sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'));import mod_textures_dds
+        with mod_textures_dds.open_texture(opacity) as mask:
+            self.assertTrue(all(v<=4096 and v&(v-1)==0 for v in mask.size))
         self.assertGreater(mats['bne_sign_white']['Stages'][0]['retroreflectivity'],0)
 
 

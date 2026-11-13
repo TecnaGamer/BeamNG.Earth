@@ -127,7 +127,8 @@ class AdvanceLayoutTest(unittest.TestCase):
         materials=json.loads((folder/'exit.materials.json').read_text())
         for name in ('bne_exit_letters','bne_guide_letters','bne_guide_letters_black'):
             self.assertTrue(materials[name]['alphaTest'])
-            self.assertTrue((folder/Path(materials[name]['Stages'][0]['opacityMap']).name).is_file())
+            __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+            self.assertTrue(_mt.is_shipped(folder/Path(materials[name]['Stages'][0]['opacityMap']).name))
         for lic in (folder/'Roadgeek-LICENSE.txt',root/'tools/fonts/Roadgeek-LICENSE.txt'):
             self.assertIn('Sammi De Guzman',lic.read_text())
 

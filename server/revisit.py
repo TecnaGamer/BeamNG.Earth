@@ -7,9 +7,14 @@ frame a record): its named blobs and its JSON data; the callers take the session
 zips of before (one a file, deflated) are still read, and a zip read is moved into a pack (and removed). Cut back at
 the server's start (prune: the oldest packs, zips and kept files first) like the other caches.
 
-Only a complete build is kept: one during which nothing it may have read failed or was not there yet (a download
-that failed, a map cell that could not be read, land cover or land use not cached yet: those builds leave things out
-and would be kept so). fault() marks that, process wide; a build is kept when faults() did not change during it.
+Only a complete build is kept: one during which nothing it read failed or was not there yet (a download that failed,
+a map cell that could not be read, land cover or land use not cached yet, the lidar rule for want of the lidar: those
+builds leave things out and would be kept so). fault() marks that for the builds that read it: each build runs in its
+own scope (scope() / begin(): the thread it runs in, the pool tasks it submits, the results of other tasks it takes:
+task()), and is kept when its scope has no fault (Build.complete). A fault in a thread no scope covers (a background
+thread of its own) is the process's: every build running then is not kept. Until 2026-11-13 every fault was the
+process's: on a first visit the lidar rule's (roads.level_ranges, 100k-500k a visit) and the worker processes' other
+threads' kept nearly nothing, and a place was warm only on its third visit.
 
 The key holds the server's code (code_key: a hash of its source files and native module), so any change to how things
 are built starts afresh.
@@ -39,7 +44,7 @@ SUBDIR = "revisit"
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
 
 WHERE_DIR = "where"
-WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
+WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "bldpack", "fargeo", "far")    # (cellfacts: per cell, no place)
 NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
 COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
 _START = int(time.time())
@@ -50,29 +55,220 @@ _lock = threading.Lock()
 
 
 _tl = threading.local()
+_orphans = [0]              # faults in threads no build scope covers (the process's: every build running is not kept)
+# BNGE_REVISIT_SITES=1 (debugging): where each build's faults came from (Build.sites, why_not) and the process's
+SITES = bool(os.environ.get("BNGE_REVISIT_SITES"))
+_orphan_sites = {}
 
 
-def fault(lidar=False):
-    """Something a build may read failed or was not there yet: builds running now are not kept. Counted for the process
-    (faults) and, unless lidar (roads.level_ranges' lidar rule: the cell's own, kept for the session), for this thread
-    (thread_faults)."""
+class Build:
+    """One build's faults (scope / begin): fault() in the thread it runs in and in the pool tasks it submitted or whose
+    results it took (task). complete: none, and no fault of the process's (an uncovered thread's) meanwhile."""
+    __slots__ = ("n", "lidar", "orphans0", "sites")
+
+    def __init__(self):
+        self.n = self.lidar = 0
+        self.orphans0 = _orphans[0]
+        self.sites = {} if SITES else None
+
+    @property
+    def complete(self):
+        return self.n == 0 and self.lidar == 0 and _orphans[0] == self.orphans0
+
+    def why_not(self):
+        """Why it is not complete (BNGE_REVISIT_SITES: the sites), or "" when it is."""
+        if self.complete:
+            return ""
+        parts = [f"{k} x{v}" for k, v in sorted((self.sites or {}).items(), key=lambda kv: -kv[1])[:6]]
+        if _orphans[0] != self.orphans0:
+            parts.append(f"process x{_orphans[0] - self.orphans0}")
+        return ", ".join(parts) or f"{self.n} faults, {self.lidar} lidar"
+
+
+def _stack():
+    st = getattr(_tl, "stack", None)
+    if st is None:
+        st = _tl.stack = []
+    return st
+
+
+def begin():
+    """A new build's scope in this thread (end it with end(b), in the same thread): its Build."""
+    b = Build()
+    _stack().append(b)
+    return b
+
+
+def end(b):
+    """b's scope ended (begin): b, its faults counted."""
+    st = _stack()
+    for k in range(len(st) - 1, -1, -1):
+        if st[k] is b:
+            del st[k]
+            break
+    return b
+
+
+def depth():
+    """This thread's open scopes (unwind)."""
+    return len(_stack())
+
+
+def unwind(n):
+    """This thread's scopes past the first n closed (a job that raised before it ended its own: the next job of the
+    thread must not run in them)."""
+    st = _stack()
+    del st[n:]
+
+
+def scoped_call(fn, *a, **k):
+    """(fn(*a, **k), its Build): fn run in a scope of its own (work handed to another thread: its faults read back)."""
+    with scope() as b:
+        return fn(*a, **k), b
+
+
+def all_complete(builds):
+    """Every Build of builds (None: not checked) complete."""
+    return all(b is None or b.complete for b in builds)
+
+
+class scope:
+    """with scope() as b: a build's scope (begin / end); b.complete after it."""
+    __slots__ = ("b",)
+
+    def __enter__(self):
+        self.b = begin()
+        return self.b
+
+    def __exit__(self, *exc):
+        end(self.b)
+        return False
+
+
+def _site():
+    import sys
+    f = sys._getframe(2)
+    out = []
+    while f is not None and len(out) < 2:
+        name = os.path.splitext(os.path.basename(f.f_code.co_filename))[0]
+        if name not in ("revisit", "netfetch"):
+            out.append(f"{name}.{f.f_code.co_name}")
+        f = f.f_back
+    return "<".join(out) or "?"
+
+
+def fault(lidar=False, here=False):
+    """Something a build read failed or was not there yet (lidar: built on the lidar rule for want of the lidar): the
+    builds whose scope this thread is in are not kept (and the thread's own count: thread_faults, thread_lidar_faults).
+    In a thread no scope covers: the process's (every build running now), unless lidar or here: said where the short
+    thing is read, in the reader's thread (the lidar rule in level_ranges, plans made short of something), so nothing
+    else read it."""
     _faults[0] += 1
     if not lidar:
         _tl.n = getattr(_tl, "n", 0) + 1
     else:
         _tl.lidar = getattr(_tl, "lidar", 0) + 1
+    st = getattr(_tl, "stack", None)
+    if st:
+        site = _site() if SITES else None
+        for b in st:
+            if lidar:
+                b.lidar += 1
+            else:
+                b.n += 1
+            if site is not None and b.sites is not None:
+                b.sites[site] = b.sites.get(site, 0) + 1
+    elif not (lidar or here):
+        _orphans[0] += 1
+        if SITES:
+            k = (threading.current_thread().name.split("_")[0], _site())
+            n = _orphan_sites[k] = _orphan_sites.get(k, 0) + 1
+            if n == 1 or n % 100 == 0:
+                import logging
+                logging.getLogger("earthd.revisit").info("revisit: the process's fault x%d in thread %s at %s", n, *k)
+
+
+class _Task:
+    """A pool task's own faults (task): handed to the threads that take its result."""
+    __slots__ = ("n", "lidar", "sites")
+
+    def __init__(self):
+        self.n = self.lidar = 0
+        self.sites = {} if SITES else None
+
+
+def task(fn):
+    """(fn wrapped, its faults) for a pool: fn runs in the submitting thread's scopes (a build's helper task) and its
+    own (_Task), whose faults go to every thread that takes its result (bind: a shared download's other waiters)."""
+    carried = tuple(getattr(_tl, "stack", None) or ())
+    own = _Task()
+
+    def run(*a, **k):
+        st = _stack()
+        saved = st[:]
+        st[:] = [*carried, own]
+        try:
+            return fn(*a, **k)
+        finally:
+            st[:] = saved
+    import functools
+    try:
+        functools.update_wrapper(run, fn)      # (its name for the runtime profiler's job list)
+    except (AttributeError, TypeError):
+        pass
+    return run, own
+
+
+def take(own):
+    """This thread took a result of a task with faults own (task): its scopes have them too."""
+    if not (own.n or own.lidar):
+        return
+    st = getattr(_tl, "stack", None)
+    if not st:
+        return
+    for b in st:
+        if b is own:
+            continue
+        b.n += own.n
+        b.lidar += own.lidar
+        if b.sites is not None and own.sites:
+            for k, v in own.sites.items():
+                b.sites[k] = b.sites.get(k, 0) + v
+
+
+def bind(fut, own):
+    """fut (a concurrent.futures.Future of task's fn) hands own's faults to whoever takes its result or exception."""
+    result, exception = fut.result, fut.exception
+
+    def res(timeout=None):
+        try:
+            return result(timeout)
+        finally:
+            take(own)
+
+    def exc(timeout=None):
+        try:
+            return exception(timeout)
+        finally:
+            take(own)
+    fut.result, fut.exception = res, exc
+    return fut
 
 
 def carry(n, lidar=0):
     """This thread takes the faults (thread_faults, thread_lidar_faults) a helper thread counted for work it did for it
-    (grading's cells' bridge tables made side by side): the process's count has them already."""
+    (grading's cells' bridge tables made side by side): its scopes too."""
     if n:
         _tl.n = getattr(_tl, "n", 0) + n
     if lidar:
         _tl.lidar = getattr(_tl, "lidar", 0) + lidar
+    for b in getattr(_tl, "stack", None) or ():
+        b.n += n
+        b.lidar += lidar
 
 
 def faults():
+    """Every fault of this process so far (tests, statistics; a build's own: scope / begin)."""
     return _faults[0]
 
 
@@ -137,9 +333,17 @@ def source_id(here):
     return h.hexdigest()
 
 
-# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches
+# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches.
+# BNE_NETSTATS_PROC: earthd sets it (the telemetry's download counts, a folder under the player's own cache) before
+# its workers start, so every worker's keys held the cache folder's path and whether telemetry was on; the telemetry
+# switch itself; the lidar's wait (a complete item is the same however long it waited). None may keep two computers'
+# keys apart (decisions.py: items built on the project's machine are found under the player's own keys).
 NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
-                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M")
+                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_NETSTATS_PROC", "BNE_LIDAR_GAPS_WAIT",
+                "BNE_TELEMETRY",
+                # (which process makes a cell's plans and road stage: the same plans, earthd.Server.plan_first,
+                # plancache's stage_*)
+                "BNE_FIRST_FANOUT", "BNE_STAGE_SHARE")
 
 
 def code_key():
@@ -336,8 +540,11 @@ def compact(cache_dir, before=None):
 # session folder (place) and keeping one hard-links the session's file in (Side on store), so neither writes its
 # bytes again: every warm visit unzipped and wrote each far texture, ~0.5 GB of a warm 8 min drive at 150 mph
 # (2026-11-04, Discord: "hard on the drive"). Zips of before keep them inside and still load.
-SIDE_KINDS = frozenset({"far", "fartex"})
-SIDE_NAMES = ("tex.dds", "mask.dds")
+# (and a block's base photo, earthd Server.base_revisit_key: its photo linked the same way, the game's packed copy of it
+# written as a file of its own both ways, for that one lives in the game's cache folder, which the game writes; and a
+# finished far tile, farfin: its texture and road mask linked beside it)
+SIDE_KINDS = frozenset({"far", "fartex", "basephoto", "farfin"})
+SIDE_NAMES = ("tex.dds", "mask.dds", "photo", "base.dds")
 SIDE_SUFFIXES = tuple("." + n for n in SIDE_NAMES)
 
 
@@ -496,6 +703,33 @@ def load(cache_dir, kind, k):
         except Exception:
             pass
     return got
+
+
+def locate(cache_dir, kind, k):
+    """(where item k's record lies (revisitpack.Store.locate), {side name: kept file}) of a pack item, or None (none
+    kept, kept in a zip of before, or one of its side files gone): for a native reader of many items at once
+    (farrestore). The side files are touched, as a load does."""
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+        return None
+    try:
+        loc = revisitpack.store_for(cache_dir).locate(kind, k)
+    except Exception:
+        return None
+    if loc is None:
+        return None
+    sides = {}
+    if kind in SIDE_KINDS:
+        path = _path(cache_dir, kind, k)
+        for n in SIDE_NAMES:
+            sp = _side(path, n)
+            try:
+                os.utime(sp, None)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+            sides[n] = sp
+    return loc, sides
 
 
 def _with_sides(path, blobs, meta):

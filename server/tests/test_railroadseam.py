@@ -75,6 +75,20 @@ class CoupleTest(unittest.TestCase):
         got = rs.couple(xy, zb, self.HALF, road)
         np.testing.assert_allclose(got, zb)
 
+    def test_a_move_run_out_along_the_track_keeps_to_a_crossing_roads_band(self):
+        # GitHub #1169, Kennedybruecke in Vienna: an old tram track lying in a bus lane 5 m lower than its bed for 60 m,
+        # then crossing a street at grade 40 m on. The bed is taken down to the bus lane there; run out along the track
+        # at its grade, that move carried 4 m on to the crossing and the bed lay under the street's lanes (the grading
+        # then pulled the street's edge down to it: a 2.65 m step). The vertex at the street keeps to its own band.
+        x = np.linspace(0.0, 200.0, 101)
+        xy = np.c_[x, np.zeros(101)]
+        zb = np.full(101, 100.0)
+        lane = (np.c_[np.linspace(0.0, 60.0, 7), np.zeros(7)], np.full(7, 95.0), 3.5)
+        street = (np.c_[np.full(11, 100.0), np.linspace(-50.0, 50.0, 11)], np.full(11, 100.0), 3.55)
+        got = rs.couple(xy, zb, self.HALF, [lane, street])
+        self.assertLessEqual(abs(float(got[50]) - 100.0), rs.SEAM_TOL_M + 1e-6, "at the street: its height")
+        self.assertLessEqual(abs(float(got[10]) - 95.0), rs.SEAM_TOL_M + 1e-6, "in the bus lane: the lane's height")
+
     def test_no_roads(self):
         zb = np.full(5, 3.0)
         self.assertIs(rs.couple(straight(5.0, 5), zb, self.HALF, []), zb)

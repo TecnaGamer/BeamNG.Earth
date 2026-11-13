@@ -89,6 +89,13 @@ M.POOL_SPARE_CALM = 32
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
 M.SHAPE_VARIANTS = 4
+-- ... but a spelling past the first only once the shape has SPLIT_ITEMS items in the level for each spelling before it
+-- (a tile's row keeps the spelling it got): every spelling is a load of its own in the engine's tick, 10-16 ms each on
+-- a Steam Deck (in-game probe 2026-11-13, a used shape spelled anew), and a city's populations never needed them
+-- (Fells Point: 137 spellings of 61 shapes for 5,404 items, none over 300 a shape): ~30 frames of 50-400 ms Ticking
+-- after each load (game perf report 2026-11-12, #1). A forest's big populations still split (2,000 items: ~1 ms of the
+-- tick a frame that touches them).
+M.SPLIT_ITEMS = 2000
 -- ... but a group whose items are few (props near the player only: GROUP_MAX_M) keeps one spelling: four spellings
 -- were four first loads of its shape, 40-130 ms each in the engine's tick on the Windows test PC (Manhattan,
 -- 2026-11-03: a new door / hydrant / sign / signal spelling nearly every tree frame). Vegetation, rocks, barriers,
@@ -593,6 +600,8 @@ local lastPass = nil    -- { anchor, x, y, vx, vy, clock } of the last full pass
 local ghostSince = nil               -- since the last rebase that left ghost tiles (M.transform)
 local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
+local basePop = {}      -- a shape's items in the level, all its spellings (M.SPLIT_ITEMS); spellBase: spelling -> shape
+local spellBase = {}
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
 -- The items standing (every tile's t.made entries), kept as they change: status() counted them with pairs once a
@@ -938,8 +947,16 @@ local function spelled(shape, v)
   local byV = spellings[shape]
   if not byV then byV = {}; spellings[shape] = byV end
   local s = byV[v]
-  if not s then s = M.variant(shape, v); byV[v] = s end
+  if not s then s = M.variant(shape, v); byV[v] = s; spellBase[s] = shape end
   return s
+end
+
+-- The spelling a row of a tile of variant v gets for shape (SPLIT_ITEMS): v, or the last one its population allows.
+local function spellingFor(shape, v)
+  if not v or v <= 0 then return 0 end
+  local split = M.SPLIT_ITEMS or 0
+  if split <= 0 then return v end
+  return math.min(v, math.floor((basePop[shape] or 0) / split))
 end
 
 -- The shape (the tile's variant) and scale of a tile's row i (cached: M.pick makes tables).
@@ -960,7 +977,7 @@ local function shapeOf(t, i)
     if not leftSignalReady then log('W', 'beamngEarth.trees', 'left signal shape: ' .. tostring(made)) end
   end
   s, sc = M.pick(g, f[b + F_HEIGHT], f[b + F_RANK])
-  s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or t.variant)
+  s = spelled(s, (M.ONE_SPELLING[g] or (g:sub(1, 5) == 'speed')) and 0 or spellingFor(s, t.variant))
   t.shapes[i], t.scales[i] = s, sc
   return s, sc
 end
@@ -1035,6 +1052,8 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   end
   M.made = M.made + 1
   pop[shape] = (pop[shape] or 0) + 1
+  local b = spellBase[shape] or shape
+  basePop[b] = (basePop[b] or 0) + 1
   return it
 end
 
@@ -1042,7 +1061,11 @@ local function removeItem(fd, it, shape)
   if getmetatable(it)==staticSignalRow then signalScene.delete(it)
   elseif not vienna.remove(fd, it) then pcall(function() fd:removeItem(it) end) end
   M.removed = M.removed + 1
-  if shape then pop[shape] = math.max((pop[shape] or 1) - 1, 0) end
+  if shape then
+    pop[shape] = math.max((pop[shape] or 1) - 1, 0)
+    local b = spellBase[shape] or shape
+    basePop[b] = math.max((basePop[b] or 1) - 1, 0)
+  end
 end
 
 -- This frame's shapes: may an item of this shape change now? (see SHAPE_ITEMS_PER_FRAME)
@@ -1055,6 +1078,9 @@ end
 -- sees every hitch: the far clump shapes' first loads landed several in single frames while slow (a Napa session,
 -- 2026-11-10: repeated 104-356 ms hitches, tree passes of +24 items; PR #1128 by SwimmingRemy).
 M.NEW_SHAPES_PER_FRAME = 1
+-- ... and NEW_SHAPES_FILL a pass in a fill (it was any number: the Steam Deck's warm level load had passes of 4-7 new
+-- shapes, 100-384 ms of the engine's tick each, 2026-11-13); the cover's warm-up shares it (WARM_PER_PASS)
+M.NEW_SHAPES_FILL = 3
 local touched, touchedItems, newShapes = {}, 0, 0
 local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
   { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 } }     -- the last two passes' (M.frameWork)
@@ -1064,6 +1090,7 @@ local workMade, workRemoved = 0, 0
 function M.frameWork() return frameWork end
 local newShapeCap = math.huge
 local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
+local everN = 0         -- (its count)
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
@@ -1071,7 +1098,7 @@ local function allow(shape)
   if next(touched) ~= nil and (touchedItems + n > M.SHAPE_ITEMS_PER_FRAME
       or (new and newShapes >= newShapeCap)) then return false end
   touched[shape], touchedItems = true, touchedItems + n
-  if new then everMade[shape], newShapes = true, newShapes + 1 end
+  if new then everMade[shape], newShapes, everN = true, newShapes + 1, everN + 1 end
   return true
 end
 
@@ -1461,6 +1488,106 @@ M.RECHECK_S = 1.0
 -- fill: the world is filling after a teleport or at the level's start (core): new shapes load without the
 -- NEW_SHAPES_PER_FRAME cap, as many first loads a frame as the pass meets. nil: the old rule (the loading frame budget
 -- lifts the cap), for callers that do not say.
+-- The loading cover's shape warm-up (fill passes): a tree pass that finished its near work loads the shapes the other
+-- tiles' rows will need, WARM_PER_PASS a pass, one item each in a Forest of its own far under the car (kept: the
+-- engine keeps a shape loaded while it has items). A shape's first items cost the engine's tick 10-200 ms on a Steam
+-- Deck (a species' first: its materials too, 60-90 ms), one new shape a frame outside the cover: the ~30 frames of
+-- 50-400 ms Ticking after every load and teleport, as the tiles farther out came in (game perf report 2026-11-12,
+-- #1). Warmed in the cover, the later tiles find their shapes loaded.
+M.WARM_PER_PASS = 3       -- (less the pass's own new shapes)
+M.WARM_DEPTH_M = 1500
+M.warmed = 0
+local warmForestId = nil
+local function warmItem(sh, player)
+  local f = warmForestId and scenetree.findObjectById(warmForestId)
+  if not f then
+    if newForests >= M.FORESTS_PER_FRAME then return false end
+    f = newForest()
+    warmForestId = f:getID()
+  end
+  if not everMade[sh] then everN = everN + 1 end
+  everMade[sh] = true
+  newShapes = newShapes + 1
+  local d = itemType(sh, false)
+  if not d then return true end
+  if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
+  itemVec:set(0, 0, 0)
+  itemMat:setFromEuler(itemVec)
+  itemPos:set(player.x or 0, player.y or 0, (player.z or 0) - M.WARM_DEPTH_M)
+  itemMat:setPosition(itemPos)
+  local fd = f:getData()
+  if fd and pcall(function() return fd:createNewItem(d, itemMat, 1) end) then M.warmed = M.warmed + 1 end
+  return true
+end
+-- (true: every tile's shapes are loaded or warmed)
+local function warmShapes(player, limit, elapsed)
+  local n = newShapes
+  for li = 1, #tileList do
+    local t = tiles[tileList[li]]
+    if not t.warmed and not t.drop then
+      local names, f, s = t.groups or GROUPS, t.f, t.s
+      for i = t.warmFrom or 1, t.n do
+        if i % CHECK_ROWS == 0 and elapsed() > limit then t.warmFrom = i; return false end
+        local g = names[f[(i - 1) * s + F_GROUP] + 1]
+        if g and M.CATALOG[g] and not M.groupOff[g] then
+          local sh = shapeOf(t, i)
+          if not everMade[sh] then
+            if n >= M.WARM_PER_PASS or not warmItem(sh, player) then t.warmFrom = i; return false end
+            n = n + 1
+          end
+        end
+      end
+      t.warmed, t.warmFrom = true, nil
+    end
+  end
+  return true
+end
+
+-- The shapes of the last session, warmed at the level's start (prewarmSaved: core's onLevelStart, under the game's
+-- loading screen): a level loaded again starts where it was left (places.lua), so its trees are mostly the last
+-- session's shapes, and their first loads (a species' first on a Steam Deck 50-80 ms of the tick each, materials and
+-- all: 51 shapes, ~28 frames of 100-450 ms in a warm Fells Point load's cover, 2026-11-13) come there instead.
+-- Saved (saveShapes) when the set grew, SHAPES_SAVE_S apart at most, and at the level's end; catalogue shapes only.
+M.SHAPES_FILE = '/settings/beamngEarth_treeshapes.json'
+M.SHAPES_MAX = 400
+M.SHAPES_SAVE_S = 60
+local savedN, saveClock = 0, nil
+function M.saveShapes(force)
+  if everN == savedN or not (writeFile and jsonEncode) then return false end
+  if not force and saveClock and saveClock() < M.SHAPES_SAVE_S * 1000 then return false end
+  local list = {}
+  for sh in pairs(everMade) do list[#list + 1] = sh end
+  table.sort(list)
+  while #list > M.SHAPES_MAX do list[#list] = nil end
+  savedN, saveClock = everN, stopwatch.new()
+  return (pcall(writeFile, M.SHAPES_FILE, jsonEncode({ v = 1, shapes = list })))
+end
+local catalogued = nil      -- shape (any spelling, unspelled) -> true for the CATALOG's
+local function inCatalog(sh)
+  if not catalogued then
+    catalogued = {}
+    for _, list in pairs(M.CATALOG) do for _, e in ipairs(list) do catalogued[e[1]] = true end end
+  end
+  return catalogued[(sh:gsub('/%./', '/'):gsub('/%./', '/'):gsub('/%./', '/'))] == true
+end
+-- Returns the shapes warmed.
+function M.prewarmSaved()
+  if not (readFile and jsonDecode) then return 0 end
+  local ok, d = pcall(function() return jsonDecode(readFile(M.SHAPES_FILE) or '') end)
+  if not ok or type(d) ~= 'table' or type(d.shapes) ~= 'table' or not setup() then return 0 end
+  newForests = 0
+  local n, at = 0, { x = 0, y = 0, z = 0 }
+  for i, sh in ipairs(d.shapes) do
+    if i > M.SHAPES_MAX then break end
+    if type(sh) == 'string' and not everMade[sh] and inCatalog(sh) then
+      if not warmItem(sh, at) then break end
+      n = n + 1
+    end
+  end
+  savedN = everN          -- (nothing new to save for these)
+  return n
+end
+
 -- Spare Forests wanted in the pool now: POOL_SPARE_CALM while calm (the loading frame budget), none while driving (a
 -- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
 function M.spareWanted(frameMs)
@@ -1503,7 +1630,7 @@ function M.update(anchorId, player, view, frameMs, fill)
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0
   if fill == nil then fill = frameMs ~= nil and frameMs >= M.LOADING_FRAME_MS end
-  newShapeCap = (frameMs ~= nil and not fill) and M.NEW_SHAPES_PER_FRAME or math.huge
+  newShapeCap = frameMs == nil and math.huge or (fill and M.NEW_SHAPES_FILL or M.NEW_SHAPES_PER_FRAME)
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
   for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
@@ -1706,6 +1833,9 @@ function M.update(anchorId, player, view, frameMs, fill)
     ::nexttile::
   end
   finish()
+  -- the loading cover: the other tiles' shapes loaded now (warmShapes); a pass left with work keeps the passes going
+  if fill and frameMs and M.WARM_PER_PASS > 0 and not warmShapes(player, limit, elapsed) then dirty = true end
+  if frameMs and everN ~= savedN then M.saveShapes(false) end
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
   if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.spareWanted(frameMs) then
     pool[#pool + 1] = newForest():getID()
@@ -1734,7 +1864,8 @@ function M.reset()
   end end
   signalFrame=nil
   tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
-  everMade = {}
+  basePop, warmForestId = {}, nil
+  everMade, everN, savedN = {}, 0, 0
   dirty, lastPass = true, nil
   liveItems = 0
 end

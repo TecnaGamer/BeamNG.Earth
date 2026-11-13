@@ -177,6 +177,9 @@ class Rules:
         return [values[idx[j]] if h else None for j, h in zip(i.tolist(), hit.tolist())]
 
 
+PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may have pinned meanwhile (Shards.known)
+
+
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
     <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
@@ -204,8 +207,12 @@ class Shards:
         if self.built is not None or not ON:
             return self.built
         got = getattr(self, "_pinned", False)
-        if got is False:
+        # (none pinned yet: looked for again, at most every PIN_RECHECK_S: another process pins it a few seconds into a
+        # first run, and a process that had looked once kept None in its keys for the whole run while the others had
+        # the build, the next run's keys: a first visit's plans, cell facts and tiles were never found again, 2026-11-13)
+        if got is False or (got is None and time.monotonic() - getattr(self, "_pin_at", 0.0) > PIN_RECHECK_S):
             got = None
+            self._pin_at = time.monotonic()
             pin = os.path.join(self.dir, "manifest.json") if self.dir else None
             if pin and os.path.exists(pin):
                 try:
@@ -284,9 +291,10 @@ class Shards:
                 built, data = j.get("built"), data_url(j)
                 if pin:
                     os.makedirs(self.dir, exist_ok=True)
-                    with open(pin + ".part", "wb") as fh:
+                    tmp = _part(pin)
+                    with open(tmp, "wb") as fh:
                         fh.write(body)
-                    os.replace(pin + ".part", pin)
+                    os.replace(tmp, pin)
             except Exception as e:      # (offline, not published yet: without it, or with the build pinned before)
                 log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
                 with self.lock:
@@ -355,9 +363,10 @@ class Shards:
                 return None
             if path:
                 os.makedirs(d, exist_ok=True)
-                with open(path + ".part", "wb") as fh:
+                tmp = _part(path)
+                with open(tmp, "wb") as fh:
                     fh.write(body if body is not None else gzip.compress(b"{}"))
-                os.replace(path + ".part", path)
+                os.replace(tmp, path)
         if isinstance(got, dict) and isinstance(got.get("ways"), dict):
             got["ways"] = Ways.of(got["ways"])
             if side and isinstance(got["ways"], Ways):
@@ -435,15 +444,23 @@ LANE_PARTS = "osm_lane_parts"
 IDX_SUFFIX = ".idx.npz"
 
 
+def _part(path):
+    """A temporary name of path's own for this thread (two threads of a process, or two processes, fetching the same
+    shard at once each wrote path + ".part": the second's rename found it gone, FileNotFoundError, and the cell's tags
+    were not joined; seen as a shared decision item planned locally, 2026-11-13)."""
+    return f"{path}.{os.getpid()}.{threading.get_ident()}.part"
+
+
 def _save_idx(path, shard):
     w = shard["ways"]
     rest = {k: v for k, v in shard.items() if k != "ways"}
     try:
-        with open(path + ".part", "wb") as fh:
+        tmp = _part(path)
+        with open(tmp, "wb") as fh:
             np.savez(fh, ids=w.ids, idx=w.idx,
                      tags=np.frombuffer(json.dumps(w.tags, separators=(",", ":")).encode("utf-8"), np.uint8),
                      rest=np.frombuffer(json.dumps(rest, separators=(",", ":")).encode("utf-8"), np.uint8))
-        os.replace(path + ".part", path)
+        os.replace(tmp, path)
     except OSError as e:
         log.debug("%s: %s", path, e)
 

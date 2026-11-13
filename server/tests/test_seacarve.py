@@ -381,11 +381,15 @@ class LandLookupTest(unittest.TestCase):
             md.fetcher.gate.set()
             ts.join(10)
             self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
-            ref = seacarve.SeaCarver(BathyMapData(), d2).water(*land)
+            rsc = seacarve.SeaCarver(BathyMapData(), d2)
+            ref = rsc.water(*land)
             for a, b in zip(out["r"], ref):
                 np.testing.assert_array_equal(a, b)
             self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
             self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+            for ex in (sc._full_ex, sc._prefetch_ex, rsc._full_ex, rsc._prefetch_ex):
+                if ex is not None:              # (the land cells' background builds still writing in d / d2)
+                    ex.shutdown(wait=True)
 
 
 class PrefetchTest(unittest.TestCase):
@@ -406,6 +410,65 @@ class PrefetchTest(unittest.TestCase):
             other = seacarve.SeaCarver(FakeMapData(fail=True), d)
             self.assertAlmostEqual(float(other.depth(np.array([south(100)]), np.array([LON0]))[0]), -FakeBathy.BATHY,
                                    places=1)
+
+
+class BathyKeptTest(unittest.TestCase):
+    """NOAA's answers kept on disk (seacarve.BATHY_DIR): another process (another SeaCarver on the same cache) and a
+    later visit read them, not NOAA again (43 % of a coastal first visit's NOAA requests were repeats, 2026-11-12); a
+    failed request keeps nothing; a raster without its bathymetry makes what reads it short (revisit.fault)."""
+
+    def test_one_request_per_cell_across_processes(self):
+        import glob
+        with tempfile.TemporaryDirectory() as d:
+            lat, lon = np.array([south(100)]), np.array([LON0])
+            a = seacarve.SeaCarver(BathyMapData(), d)
+            da = a.depth(lat, lon)
+            self.assertEqual(a.md.fetcher.calls, 1)
+            self.assertTrue(glob.glob(os.path.join(d, "seacarve", seacarve.BATHY_DIR, "*.tif")))
+            for p in glob.glob(os.path.join(d, "seacarve", f"v{seacarve.VERSION}", "**", "*.npz"), recursive=True):
+                os.remove(p)            # (the raster built again: only its bathymetry is kept)
+            b = seacarve.SeaCarver(BathyMapData(), d)
+            np.testing.assert_array_equal(b.depth(lat, lon), da)
+            self.assertEqual(b.md.fetcher.calls, 0, "NOAA's answer from the disk")
+
+    def test_a_failed_request_keeps_nothing_and_reads_short(self):
+        import glob
+        import revisit
+
+        class Down(FakeBathy):
+            def get(self, url, kind="demand"):
+                import netfetch
+                self.calls += 1
+                raise netfetch.FetchFailed("timed out")
+        with tempfile.TemporaryDirectory() as d:
+            md = BathyMapData()
+            md.fetcher = Down()
+            sc = seacarve.SeaCarver(md, d)
+            lat, lon = np.array([south(100)]), np.array([LON0])
+            with revisit.scope() as b:
+                sc.depth(lat, lon)
+            self.assertFalse(b.complete)
+            self.assertFalse(glob.glob(os.path.join(d, "seacarve", seacarve.BATHY_DIR, "*.tif")))
+            with revisit.scope() as b:  # (the generic floor from memory, BATHY_RETRY_S: still short)
+                sc.depth(lat, lon)
+            self.assertFalse(b.complete, "a raster without its bathymetry read again")
+            with revisit.scope() as b:  # (land in the same cell: the same answer with its bathymetry or without)
+                sc.depth(np.array([south(-200)]), lon)
+            self.assertTrue(b.complete, "land away from the sea read the raster")
+            ok = seacarve.SeaCarver(BathyMapData(), d)
+            with revisit.scope() as b:
+                ok.depth(lat, lon)
+            self.assertTrue(b.complete)
+
+    def test_prefetch_points_queues_the_cells(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            sc = seacarve.SeaCarver(BathyMapData(), d)
+            self.assertEqual(sc.prefetch_points(np.array([south(100), south(120)]), np.array([LON0, LON0])), 1)
+            t0 = time.monotonic()
+            while sc.md.fetcher.calls == 0 and time.monotonic() - t0 < 10:
+                time.sleep(0.05)
+            self.assertEqual(sc.md.fetcher.calls, 1, "fetched in the background")
 
 
 class LakeTest(unittest.TestCase):

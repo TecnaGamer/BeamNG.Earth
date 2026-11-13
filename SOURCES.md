@@ -65,6 +65,7 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 
 | Source | Address | Where | If it does not answer | Status line |
 |---|---|---|---|---|
+| BeamNG.Earth's own 1 m aerial photo packs (USDA NAIP, public domain; open national orthophotos) | `tiles.tgforever.net` | Metro areas and main road corridors (prebaked), and places other players drove before (built once by the project's server, then kept): ~1 m per pixel near you and the nearer distant land, one request per ~2 km. Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. A place not built yet asks the project's server (`earth.tgforever.net`) to build its ~15 km square: only the square's number is sent. | The live sources below, as before. | named |
 | Regional aerial photos (state and national mapping agencies) | see the list below | the regions below, mostly 10-30 cm per pixel | Coarser photos from the next source (US national photos or Sentinel-2). | optional |
 | Maryland six-inch photos (MD iMAP) | `mdgeodata.md.gov` | Maryland, 15 cm per pixel | Coarser photos meanwhile. | named |
 | USGS / USDA NAIP aerial photos (Map services and data available from U.S. Geological Survey, National Geospatial Program) | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |

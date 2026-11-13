@@ -16,8 +16,10 @@ mod carriageway_solver;
 mod carriageways;
 mod spaceclouds;
 mod cdaez;
+mod texdds;
 mod clearance;
 mod f32z;
+mod blockstore;
 mod packz;
 mod gpu;
 mod traffic;
@@ -73,12 +75,14 @@ mod perfclean;
 mod membudget;
 mod mdhtml;
 mod reportpack;
+mod farrestore;
 mod roadlanes;
 mod waytags;
 mod pmtiles;
 mod underdeck;
 mod deckground;
 mod railseam;
+mod stageshare;
 mod classgrid;
 mod frontage;
 mod furnstations;
@@ -96,6 +100,7 @@ mod corridor;
 mod approach;
 mod junctions;
 mod wallsindex;
+mod roadwalls;
 mod mappedlamps;
 mod vegclumps;
 mod roadwear;
@@ -103,6 +108,8 @@ mod roadtone;
 mod railbeds;
 mod osmtagshards;
 mod gradebins;
+mod par;
+mod bc1fast;
 mod l0roads;
 mod groundphoto;
 mod layerfold;
@@ -113,6 +120,8 @@ mod shelterfit;
 mod tilecuts;
 mod bldclear;
 mod bnwt;
+mod aerialcov;
+mod decisions;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -1381,7 +1390,8 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
     // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
+    // (the process's shared cap, par.rs: a thread per 2 k blocks at most)
+    let threads = par::threads_for(nby * nbx, 2048).min(nby.max(1));
     let rows_per = (nby + threads - 1) / threads.max(1);
     std::thread::scope(|sc| {
     for (bi, band) in out.chunks_mut((rows_per * nbx * 16).max(16)).enumerate() {
@@ -1587,6 +1597,23 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
     }
     let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
     let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else { return (None, None) };
+    let sg = segs.as_array();
+    clearance_core(&xs, &ys, step, end_skip, reach, min_samples, q, walled,
+                   |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// clearance_row's sections and quantiles over a centreline (xs, ys; k >= 2 points), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clearance_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, _reach: f64, min_samples: usize, q: f64, walled: f64,
+        ray: R) -> (Option<f64>, Option<f64>) {
+    let k = xs.len();
+    if k < 2 {
+        return (None, None);
+    }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
         s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
@@ -1597,9 +1624,6 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
     let step = step.min((total - 2.0 * end_skip) / 2.0).max(0.5);
     let stop = total - end_skip + 1e-9;
     let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
-    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
-                                                         seg_of.as_slice()) else { return (None, None) };
-    let sg = segs.as_array();
     let mut w = Vec::with_capacity(count);
     let mut rows = Vec::with_capacity(count);
     for i in 0..count {
@@ -1611,9 +1635,9 @@ fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
             continue;
         }
         let (nx, ny) = (-ty / len, tx / len);
-        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
-        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
-        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
         let near = match (a.is_nan(), b.is_nan()) {
             (true, true) => f64::INFINITY,
             (true, false) => b,
@@ -1668,6 +1692,23 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     }
     let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
     let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
+                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
+    let sg = segs.as_array();
+    measure_core(&xs, &ys, step, end_skip, min_samples, walled, agree,
+                 |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// measure_row's cross-sections, median and agreement over a centreline (xs, ys), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn measure_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, min_samples: usize, walled: f64, agree: f64, ray: R)
+        -> Option<f64> {
+    let k = xs.len();
+    if k < 2 {
+        return None;
+    }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
         s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
@@ -1679,9 +1720,6 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     // numpy.arange(end_skip, total - end_skip + 1e-9, step)
     let stop = total - end_skip + 1e-9;
     let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
-    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
-                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
-    let sg = segs.as_array();
     let mut w = Vec::with_capacity(count);
     let mut n = 0usize;
     for i in 0..count {
@@ -1696,9 +1734,9 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
         }
         n += 1;
         let (nx, ny) = (-ty / len, tx / len);
-        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
-        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
-        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
         let v = a + b;
         if !v.is_nan() {
             w.push(v);
@@ -1824,8 +1862,9 @@ macro_rules! grade_segs {
 /// grading.grade_points by the reference traversal (gradebins::bucketed: segments outer, the points in BUCKET m
 /// squares): the binned one's twin for the identity tests and BNE_GRADE_BINNED=off. cut (segments, 6): a cutting's
 /// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
-/// a banked curve, grading.bank); steep: a mountain pass road's (grading.Plan.steep: its sides fall to the natural
-/// ground at steep_run, from steep_t_min, between its retaining wall and its parapet); link: bit 0 the plan goes on
+/// a banked curve, grading.bank); steep: flags, gradebins::STEEP a mountain pass road's (grading.Plan.steep: its sides
+/// fall to the natural ground at steep_run, from steep_t_min, between its retaining wall and its parapet),
+/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel); link: bit 0 the plan goes on
 /// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
 /// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
 /// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
@@ -2572,25 +2611,8 @@ fn srgb_monotonic() -> bool {
 /// Rows of out (row_len values each) filled by f(row, its values) on up to 8 threads in bands (each value from its own
 /// inputs only: the same numbers as one thread).
 fn par_rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usize, f: F) {
-    let rows = if row_len == 0 { 0 } else { out.len() / row_len };
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(rows.max(1));
-    if threads <= 1 || rows * row_len < 1 << 16 {
-        for (y, r) in out.chunks_mut(row_len.max(1)).enumerate() {
-            f(y, r);
-        }
-        return;
-    }
-    let per = rows.div_ceil(threads);
-    std::thread::scope(|sc| {
-        for (bi, band) in out.chunks_mut(per * row_len).enumerate() {
-            let f = &f;
-            sc.spawn(move || {
-                for (k, r) in band.chunks_mut(row_len).enumerate() {
-                    f(bi * per + k, r);
-                }
-            });
-        }
-    });
+    // (the process's shared cap, par.rs: a thread per 64 k values at most)
+    par::rows(out, row_len, par::threads_for(out.len(), 1 << 16), f)
 }
 
 pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
@@ -6159,6 +6181,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(planends::plan_bridges_joined, m)?)?;
     m.add_function(wrap_pyfunction!(planends::plan_bridge_chain, m)?)?;
     m.add_function(wrap_pyfunction!(wallsindex::walls_index, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_near_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_walls, m)?)?;
     // 194: planends (grading's bridge-end queries a cell's plan ends at a time: _ends_near, bridge_chain, the joined
     // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
     // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
@@ -6357,6 +6381,46 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
     // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
     bnwt::register(m)?;
-    m.add("VERSION", 268)?;
+    // 273 (269-272 kept for other branches): bnwt FORMAT 2 (no cell in a tile, the cell's edges coded: open-sea tiles
+    // deduplicated, run-length directory entries), bnwt_assign (a block's rows to its cells, as the parquet bbox test)
+    // 274 (on 273; was 269 on its branch): the graded terrain blocks kept on disk (blockstore: blockstore_put_heights, blockstore_get_heights,
+    // blockstore_put_block, blockstore_get_block, blockstore_prune; server/blockcache.py)
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_prune, m)?)?;
+    // 275 (on 274; was 270 on its branch): a cached place's far field put back in one call (farrestore: far_restore, far_shape_stamp;
+    // server/farrestore.py; 269 was left for the block chunk cache)
+    m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
+    // 276 (on 275; was 271 on its branch): the 1 m aerial packs' coverage files (aerialcov: aerial_cov_table, aerial_pack_where,
+    // aerial_pack_state; server/aerialpacks.py)
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
+    // 281: a cell's roads measured between the building walls in two calls without the interpreter lock (roadwalls:
+    // road_near_cells, road_walls; roadwidth.RoadWidths.measure_many), measure_row / clearance_row's loops shared
+    // with them (measure_core, clearance_core)
+    // 282 (on 281): the shared decision archives (decisions: BNGD blocks of road plans and
+    // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
+    decisions::register(m)?;
+    // 285 (on 283; 284 is the governor branch's): the mod's textures encoded at install time from their lossless sources (texdds: texture_dds_files,
+    // texture_dds, TEXDDS_ID; modtextures.py, install.py, tools/package.py)
+    texdds::register(m)?;
+    // 287 (on 285; 286 is the stage-sharing branch's, 284 the governor branch's): the per-sample kernels on threads
+    // under one cap per process (par: set_native_threads, native_threads; grade_points_binned's bins, the mip levels,
+    // the CPU BC1 / BC7 encoders), the far textures' DDS on the CPU (bc1fast: dds_levels' integer mips and ISPC's BC1
+    // kernels; bc1_encode_fast, mip_levels_fast, bc1_ispc_linked)
+    m.add_function(wrap_pyfunction!(par::set_native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(par::native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_encode_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::mip_levels_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_ispc_linked, m)?)?;
+    // 290 (286 on its branch; 288 and 289 are other branches'): road stages shared by the server's processes (stageshare:
+    // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
+    // grading._Planner._road_stage)
+    stageshare::register(m)?;
+    m.add("VERSION", 290)?;
     Ok(())
 }

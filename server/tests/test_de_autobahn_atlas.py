@@ -24,7 +24,8 @@ SHARED_ATLAS_SHA = "1c79aa7a8c1c4db4802f69fa444a39e6e813721fdc2c5175ba2fdd8845a4
 
 class AtlasTest(unittest.TestCase):
     def test_atlas_size_and_uvs(self):
-        im = Image.open(MOD / "de_letters_o.data.dds")      # (shipped as DDS, BC4)
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        im = _mt.open_texture(MOD / "de_letters_o.data.dds")      # (a BC4 DDS made at install from its source)
         self.assertEqual((im.mode, im.size), ("L", (2048, 1024)))
         cps, glyphs, faces, params, kern = deautobahnfont.tables()
         inked = (glyphs[:, 3] > glyphs[:, 1]) & (glyphs[:, 4] > glyphs[:, 2])
@@ -87,7 +88,8 @@ class MaterialsTest(unittest.TestCase):
         for name in ("bne_de_letters_white", "bne_de_letters_black"):
             stage = mats[name]["Stages"][0]
             self.assertTrue(mats[name]["alphaTest"])
-            self.assertTrue((ROOT / "mod/beamng_earth" / stage["opacityMap"].lstrip("/")).exists())
+            __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+            self.assertTrue(_mt.is_shipped(ROOT / "mod/beamng_earth" / stage["opacityMap"].lstrip("/")))
         self.assertFalse(any(n.startswith(("bne_sign_", "bne_exit_")) for n in mats))
 
     def test_blue_as_on_the_photos(self):
@@ -110,7 +112,7 @@ class MaterialsTest(unittest.TestCase):
         self.assertIn("/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_autobahn.materials.json", lua)
 
     def test_packaging(self):
-        client = set(package.tree_files("mod/beamng_earth"))
+        client = set(package.client_files())
         for name in ("de_autobahn.materials.json", "de_letters_o.data.dds", "OFL.txt", "NOTICE.md"):
             self.assertIn(SCENERY + name, client)
 

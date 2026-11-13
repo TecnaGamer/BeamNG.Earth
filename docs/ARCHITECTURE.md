@@ -2,6 +2,7 @@
 
 Target: BeamNG.drive 0.39.4 (native Linux, Vulkan). Research date 2026-10-09.
 Raw research + adversarial verification: `docs/research/2026-10-09-research-raw.json`.
+Hosting (the tile CDN, the data workflows, the collector and builder services): [HOSTING.md](HOSTING.md).
 
 Game install: `~/.local/share/Steam/steamapps/common/BeamNG.drive`
 User folder (VFS root overlay): `~/.local/share/BeamNG/BeamNG.drive/current`
@@ -969,8 +970,15 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   which works with or without the library. Measured: a 3 km drive at 30 m/s, 10 block moves, zero
   blank-grass frames, no rebuild frame (each move only the import's ~25 ms frame), median 7.6 ms
   per frame versus 10.0 ms without it.
-- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until the
-  review's deadlock risk is fixed): it hooks the texture manager's
+- terfast (2026-11-13; tools/gcpatch/bngearth_terfast.c in the same library, enginepatch_terfast.py for the Windows
+  game): a .ter swap's TerrCell::init scanned every leaf cell's 65 x 65 samples three times with two divisions per
+  sample (bounds, layers, holes: ~80 % of the swap's main-thread time). Both functions are replaced and the hole
+  loop jumped over, the same results computed row by row (bit-identical; BNGEARTH_TERFAST_CHECK=1 runs both and
+  counts differences). Steam Deck: setFile's CPU 22.9 -> 1.9 ms a swap; Windows test PC: the swap call 53 -> 31 ms,
+  driving frames over 50 ms 10.9 -> 6.2 a minute. What remains of a swap is the frame after it (the material
+  texture rebuild: texkeep) and waits for the GPU device.
+- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until a
+  teleport soak: the review's deadlock paths went 2026-11-13): it hooks the texture manager's
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so
@@ -1282,20 +1290,29 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   (`BNGE_PMT_BASE=1` reads it anyway). Cells from the tiles live in their own folder (`overture-pmt<FORMAT>`) and
   `versions()["mapsrc"]` keys every plan, cell fact and tile built from them; when the tiles fail, the layer is built
   from parquet, kept with the parquet cells and marked a revisit fault.
-- **Our prebaked input tiles, BNWT** (`server/bnwt.py` + earthfast `bnwt.rs`, `tools/build_bnwt.py`, 2026-11-13; off
-  unless `BNGE_BNWT_URL` names where the archives are: http(s), `file://` or a folder): the base theme (water, land
-  use, infrastructure) per z14 cell, as the parquet path gives it, from `<base>/bnwt<FORMAT>/<release>/base.c<CONTENT>
-  .pmtiles` (PMTiles v3, clustered Hilbert order: every quadtree square is one contiguous byte range). The builder runs
-  `overture.Reader.query` itself for every cell and stores the result through a lossless codec (ids, 1e-7 degree grid
-  coordinates with the off-grid doubles kept exactly, every column's dtype and bytes, rule tables, the sources'
-  counts; one zstd frame a tile), checking each tile decodes back to the same arrays; so a cell from a tile is the
-  parquet cell bit for bit: same file, same cache keys, no plan or facts format bump. A cell not on disk comes with its
-  aligned 4x4 block (z12) in one range read (3x3 cells round Fells Point: 3.3 MB in 5 requests instead of 72 MB in 51).
-  Anything it cannot answer (no archive, another format / content / release in its metadata, a cell outside its
-  coverage, a damaged tile) is read from the parquet files; an archive that failed is asked again after 10 min.
-  `bnwt.py region --bbox ...` downloads a region (resumable). `CONTENT` is bumped with any change of the parquet
-  path's output for these layers (the archives are then rebuilt). Builds are deterministic (same inputs, same bytes),
-  resumable (units of 16x16 cells, parts kept in the work folder) and bounded in memory (one cell per worker).
+- **Our prebaked input tiles, BNWT** (`server/bnwt.py` + earthfast `bnwt.rs`, `tools/build_bnwt.py`, `bnwtunit.py`,
+  2026-11-13; off unless `BNGE_BNWT_URL` names where the archives are: http(s), `file://` or a folder): per z14 cell,
+  exactly what the runtime's own source gives, for four archives: `base` (water, land use, infrastructure: the parquet
+  path's cells), `transportation` (roads, connectors, route numbers), `buildings` (and parts), `places` (the last
+  three: Overture's tiles' cells, `pmtiles.Reader.query`, keyed by its FORMAT; places in their own licence section,
+  their unread `src_record` kept empty). An archive is `<base>/bnwt<FORMAT>/<release>/<name>.c<CONTENT>.index.json`
+  (coverage, source, layers) and its parts (PMTiles v3 files of at most 400 MB, so a CDN caches each whole; each a
+  contiguous range of Hilbert tile ids, so every quadtree square is one or two byte ranges). The codec is lossless (ids,
+  1e-7 degree grid coordinates with the off-grid doubles kept exactly, a clip's cut points coded as the cell's own
+  edges, every column's dtype and bytes, rule tables, the sources' counts; one zstd frame a tile, no cell in it), so a
+  cell from a tile is its source's cell bit for bit: same file, same cache keys, no plan or facts format bump. Tiles of
+  the same bytes are kept once per part (run-length directory entries): open sea (an ocean piece cut to the cell is the
+  cell's edges only) costs a few tiles per ocean piece. A cell with no tile is its source's empty layer. A cell not on
+  disk comes with its aligned 4x4 block (z12) in one range read. Anything it cannot answer (no archive, another format
+  / content / release / source in its index, a cell outside its coverage, a damaged tile) is read from the source
+  itself; an archive that failed is asked again after 10 min; its host has a netfetch lane of its own (2 s to connect,
+  2 tries: a host that does not answer costs ~4 s once). `bnwt.py region --bbox ...` downloads a region (resumable)
+  and pins it (`pins.json`: the cache cap never evicts its tiles). `CONTENT[name]` is bumped with any change of the
+  source's output for an archive's layers (tests/test_bnwt.py ContentGuard fingerprints that code). Builds: base per
+  unit of 16x16 cells, one query and the rows split to cells by the same steps as the cell query (the STAC file and
+  row-group tests in double, the rows' bbox test in the column's type: earthfast `bnwt_assign`; checked cell by cell
+  with `--check`), the others per cell through Overture's tiles; deterministic (same inputs, same bytes), resumable,
+  `--shard I/N` + `--assemble` for a job matrix.
 - **Rasters**: COG range reads with `cog.py` (classic/BigTIFF, Deflate/PackBits/none, predictor
   2, sparse tiles; no GDAL, no tifffile). A missing file (open ocean for WorldCover, no CHM
   coverage) is a 404 remembered by a marker; the cell gets class 0 / no canopy layer. (Checked

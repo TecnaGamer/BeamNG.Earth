@@ -285,7 +285,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_w.color.dds",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna.color.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },
@@ -302,7 +302,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_y.color.dds",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna.color.dds",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },

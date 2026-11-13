@@ -1,0 +1,20 @@
+# BeamNG.Earth collector (native/serverlist): server list, anonymous telemetry, player reports and the aerial
+# on-demand front door. A systemd USER unit: copy it to ~/.config/systemd/user/ (hosting/deploy_serverlist.sh does
+# that when the file is missing) and run `sudo loginctl enable-linger <user>` once, so it starts at boot without a
+# login. Settings live in drop-ins under bnge-serverlist.service.d/, which the deploy script rewrites on every run.
+[Unit]
+Description=BeamNG.Earth collector (server list, telemetry, reports, aerial requests)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bnge-serverlist
+ExecStart=%h/bnge-serverlist/bnge-serverlist
+# Loopback only: a reverse proxy with TLS in front of it serves the public host name (hosting/README.md).
+Environment=BNGE_LIST_ADDR=127.0.0.1:47640
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

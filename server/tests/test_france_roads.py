@@ -321,13 +321,13 @@ class AssetTest(unittest.TestCase):
             for material in set(mesh.tri):
                 stage = materials[material]["Stages"][0]
                 if "baseColorMap" in stage:
-                    self.assertTrue((assets.OUT / Path(stage["baseColorMap"]).name).is_file())
+                    self.assertTrue(mod_textures_dds.is_shipped(assets.OUT / Path(stage["baseColorMap"]).name))
 
     def test_mirrored_symbols_and_text_accent_are_shipped(self):
         from PIL import Image, ImageOps
         for a, b in (("fr_a1a", "fr_a1b"), ("fr_a1c", "fr_a1d")):
             np.testing.assert_array_equal(np.asarray(assets.texture(a)), np.asarray(ImageOps.mirror(assets.texture(b))))
-        panel = Image.open(assets.OUT / "m9c.color.dds")      # (the mod ships its textures as DDS)
+        panel = mod_textures_dds.open_texture(assets.OUT / "m9c.color.dds")      # (a DDS made at install from its source)
         self.assertEqual(panel.size, (512, 512))
         self.assertGreater(np.count_nonzero(np.asarray(panel)[60:200, :, 0] < 100), 1000)
 
@@ -350,7 +350,7 @@ class AssetTest(unittest.TestCase):
                 # (the tool draws PNGs; the mod ships them as DDS, tools/mod_textures_dds.py)
                 src = assets.OUT / mod_textures_dds.shipped(got.name)
                 with self.subTest(asset=got.name):
-                    self.assertTrue(src.is_file())
+                    self.assertTrue(mod_textures_dds.is_shipped(src))
                     if src.suffix == ".dae":
                         self.assert_collada_equal(src.read_text(encoding="utf-8"), got.read_text(encoding="utf-8"))
                     elif src.suffix == ".json":

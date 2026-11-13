@@ -1,12 +1,13 @@
-# gcpatch: engine patches for BeamNG.Earth (Linux preload library; Windows: `enginepatch.py`)
+# gcpatch: engine patches for BeamNG.Earth (Linux preload library; Windows: `enginepatch.py`, `enginepatch_terfast.py`)
 
-One preload library, `libbngearth_gcpatch.so`, with three independent patches. Each acts only on the BeamNG.Earth
+One preload library, `libbngearth_gcpatch.so`, with four independent patches. Each acts only on the BeamNG.Earth
 map, has its own off switch and its own status file in the game's user folder `temp/`:
 
 | patch | source | what it does | off switch | status file |
 |---|---|---|---|---|
 | grass | `bngearth_gcpatch.c` | keeps the grass when the physics block moves | `BNGEARTH_GCPATCH_OFF=1` | `beamngEarth_gcpatch.txt` |
 | texkeep (opt-in) | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | on with `BNGEARTH_TEXKEEP=1` | `beamngEarth_texkeep.txt` |
+| terfast | `bngearth_terfast.c` | a terrain block swap's cell scans without their per-sample divisions | `BNGEARTH_TERFAST_OFF=1` | `beamngEarth_terfast.txt` |
 | dtsmooth | `bngearth_dtsmooth.c` | steady game speed: no catch-up burst after a hitch, no drift between | `BNGEARTH_DTSMOOTH_OFF=1` | `beamngEarth_dtsmooth.txt` |
 
 ## Grass: keep the grass when the physics block moves
@@ -31,9 +32,63 @@ floating-origin rebases.
 - Unsupported by BeamNG. A wrong patch crashes the game, which a restart without the launch
   option fixes.
 
+## terfast: the block swap's cell scans without their divisions
+A `.ter` swap (`TerrainBlock::setFile`) rebuilds the block's cell tree on the main thread (`TerrCell::init`). For
+every 64 x 64 leaf cell the engine scans 65 x 65 samples three times: `TerrCell::_updateBounds` (the cell's box from
+the heights), `TerrCell::_updateMaterials` (which layers it holds) and a loop at the start of
+`TerrCell::_updateVertexBuffer` (does it hold a hole sample). Each loop computes every sample's index as
+`(y % size) * size + (x % size)` with two 32-bit divisions, and the bounds loop stores the box after every sample.
+perf on a Steam Deck (2026-11-13, a 45 mph Baltimore drive, 512² blocks at 2 m): of a swap's 23 ms in `setFile`,
+6.9 ms are the bounds loop, 5.6 ms the layer loop and 6.1 ms `_updateVertexBuffer`; the parse of the file itself is
+~1 ms. On Windows (1024² blocks at 1 m, Ryzen 5 3600) the swap call is 53 ms.
+
+terfast replaces the two functions and jumps over the third loop, computing the same results row by row (the wrap
+resolved once per column, the heights' minimum / maximum as integers, the engine's own float coordinate arithmetic
+for the hole scan): the same box, radius, layer mask and hole flag, bit for bit.
+
+- **Linux** (`bngearth_terfast.c`, BeamNG.drive 0.40.4, the 2026-11-06 executable): both functions and the engine
+  functions the replacements call are compared by hash at startup, the vertex-buffer function whole; any difference
+  and nothing is patched. The functions' entries get a 14-byte jump before the game's code runs (the displaced
+  instructions run from a trampoline when the stock function is wanted); the hole loop's first instruction gets a
+  5-byte jump to a stub near the game's code.
+- **Windows** (`enginepatch_terfast.py`, the launcher, as dtsmooth below): the three functions are found by their
+  whole code (call targets and rip-relative displacements masked, one match each, the constants they load checked);
+  the block holds `win/terfast_win.c` compiled to Win64 machine code (`win/build_terfast.sh` ->
+  `enginepatch_terfast_code.py`), a stub (`win/terfast_stub.asm`) and two trampolines. The game's threads are
+  suspended for the three writes and none may be inside the bytes replaced (GetThreadContext). The Windows build
+  keeps the height scale at another offset and reaches the TerrainFile through another field of the resource's
+  holder; the cell layout is the same.
+- The stock code runs outside the BeamNG.Earth level, and for any input the fast path does not expect.
+- `BNGEARTH_TERFAST_CHECK=1`: both run and the status file counts differences. Checked 2026-11-13: Steam Deck, a
+  Baltimore drive (1,696 leaf cells' bounds and holes, 4,304 layer scans) 0 differences; Windows test PC, 31 swaps of
+  1024² blocks (7,936 cells) 0 differences. `win/test_terfast.sh` runs the Windows code on Linux on stand-in cells
+  against the loops written out sample by sample; `server/tests/test_enginepatch_terfast.py` covers the search and
+  the block layout.
+- Measured (the same build, the patch switched by its environment variable / its state): 
+  - Steam Deck (512² blocks at 2 m, 30 fps cap, Fells Point -> Dundalk at 45 mph, alternating two real blocks for
+    the swap alone): `setFile`'s main-thread CPU 22.9 -> 1.9 ms a swap (perf); the swap call 18.4 -> 11.3 ms (what is
+    left is mostly the wait for the GPU device, ~4.5 ms, and the mod's own Lua); in the drive the swap's frame
+    62 -> 54 ms and the mod's `world` part 24.9 -> 18.8 ms. The drive's totals did not move (frames over 50 ms
+    60.5 -> 74.2 a minute, 1 % low 13.0 -> 12.9 fps: other hitches and run-to-run noise are larger).
+  - Windows test PC (1024² blocks at 1 m, Phoenix 8.5 km at 45 mph, one session, the patch switched off then on):
+    the swap call 53.0 -> 30.7 ms, its two frames 61 + 56 -> 41 + 37 ms (30 swaps standing still); in the drive the
+    swap's frame 65.7 -> 46.0 ms, `world` 54.0 -> 34.0 ms, the worst frame per swap 66 -> 51 ms (max 120 -> 68),
+    frames over 50 ms 10.9 -> 6.2 a minute, over 100 ms 3 -> 1, p99.9 61.6 -> 51.1 ms, 0.1 % low 13.0 -> 15.2 fps
+    (average fps 105.6 -> 93.2 with more of the world loaded in the second run; the 1 % low 26.9 -> 26.6).
+- Off: `BNGEARTH_TERFAST_OFF=1` (both), `BNGEARTH_TERFAST_WIN=0` (Windows only).
+
+What it does not touch: the rest of `setFile` (the vertex / index buffer set-up per cell, the height texture) and the
+frame after the swap, where the engine rebuilds the terrain's material textures (texkeep below).
+
 ## texkeep: terrain textures kept across block swaps
-**Opt-in for now (`BNGEARTH_TEXKEEP=1`):** a code review (2026-11-03) found a rare path to a permanent deadlock (the
-device mutex's owner read from glibc's layout) and a lock-order risk in `release_all`; on by default once fixed.
+**Opt-in (`BNGEARTH_TEXKEEP=1`).** Ported to the 2026-11-06 executable on 2026-11-13, with the 2026-11-03 review's
+deadlock paths removed: no probe of the device mutex's owner in glibc's layout (releases inside the pack loader's
+calls run under the engine's lock, as before; the kept textures of an ended level are let go by the watcher thread,
+2 s after the flag went, never from another caller of createTexture). Still open before it can be on by default: a
+teleport soak (a crash at a teleport's teardown was seen with it on, 2026-11-05, cause unknown).
+Steam Deck, 2026-11-13, the same drive with terfast on: 995 kept-pack hits to 51 loads; the frame after a swap
+50.5 -> 25.9 ms (its Render 35.6 -> 13.0 ms), the rebuild's main-thread CPU 23.6 -> 1.5 ms (perf), the swap's two
+frames over the ordinary frame 49 -> 20 ms, the worst frame per swap 67 -> 53 ms (max 221 -> 55).
 
 Every terrain block swap (a new `.ter`) and every base-photo refresh (`updateMaterial`) makes the engine rebuild the
 terrain's material data on the next frame. For each ground material it asks the texture manager again for six packed
@@ -129,8 +184,9 @@ The machine code is in `enginepatch_code.py`, generated by `win/build_blob.sh` (
 Linux filter). `server/tests/test_enginepatch.py` covers the signature search and the block layout.
 
 **On by default on Windows since the check on the Windows test PC (2026-11-11, below). Off: `BNGEARTH_DTSMOOTH_WIN=0`**
-(or the off switches above). Not ported: texkeep (a vtable hook with its own texture cache and the engine's locks; it needs the Windows
-texture manager reverse-engineered and a DLL, and on Linux it is opt-in and written for the 2026-10-29 build only).
+(or the off switches above). terfast is applied the same way by `enginepatch_terfast.py` (its section above). Not
+ported: texkeep (a vtable hook with its own texture cache and the engine's locks; it needs the Windows texture manager
+reverse-engineered and a DLL, and on Linux it is opt-in).
 
 **Checked on Windows (2026-11-11, the test PC: Ryzen 5 3600, RTX 3060, Windows 26300, BeamNG 0.40.5 Windows build
 of 2026-11-06, the dev app from source):** `--scan` found the call at VA 0x1407b2294 (the same exe as the PC's copy);
@@ -200,11 +256,11 @@ Then restart the game.
 ## Check
 After the game starts, look at
 `~/.local/share/BeamNG/BeamNG.drive/current/temp/beamngEarth_gcpatch.txt` (and `beamngEarth_texkeep.txt`,
-`beamngEarth_dtsmooth.txt`).
+`beamngEarth_terfast.txt`, `beamngEarth_dtsmooth.txt`).
 It contains one line, such as `applied: grass kept across terrain block moves (BeamNG.Earth level)`,
 `stock: another level`, or the reason it did nothing.
 
 ## Turn off
 Remove the launch option (all patches), or add `BNGEARTH_GCPATCH_OFF=1` / `BNGEARTH_TEXKEEP_OFF=1` /
-`BNGEARTH_DTSMOOTH_OFF=1` in front of it (one patch). `python3 launcher.py --no-gcpatch` starts the game without the
+`BNGEARTH_TERFAST_OFF=1` / `BNGEARTH_DTSMOOTH_OFF=1` in front of it (one patch). `python3 launcher.py --no-gcpatch` starts the game without the
 library.

@@ -1134,9 +1134,11 @@ def write_mod_assets(mod_dir):
     os.makedirs(d, exist_ok=True)
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
-    import mod_textures_dds as mt         # (a dev tool's step: BC7 needs the PyPI encoder etcpak, see that file)
-    with open(os.path.join(d, MOD_PALETTE), "wb") as f:
-        f.write(mt.encode_dds(np.asarray(palette_image()), "color", mt.DXGI_BC7))
+    import mod_textures_dds as mt         # (a dev tool's step: the DDS is made at install from its source)
+    png = os.path.join(d, MOD_PALETTE[:-4] + ".png")
+    palette_image().save(png)
+    if os.path.abspath(mod_dir) == os.path.abspath(mt.MOD):
+        mt.convert([png], quiet=True)     # (mod/texture_sources: the source and its manifest entry; the PNG removed)
     vfs = "/" + "/".join(MOD_SHAPES) + "/" + MOD_PALETTE
     with open(os.path.join(d, "main.materials.json"), "w") as f:
         json.dump(material_json(vfs), f, indent=2)
@@ -1381,6 +1383,15 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
                        material=material, normals=built.normals.ravel(),
                        uvs2=None if uvs2 is None else uvs2.ravel())
     return os.path.getsize(path)
+
+
+def built_shape(built, material, tex_px=None, packed=None):
+    """The .cdae bytes write_built writes for a textured tile (farrestore: a worker's kept shape, packed=False with a
+    placeholder name, the session's name stamped in when it is put back)."""
+    assert len(built.positions) <= VERTS_MAX
+    uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
+    return cdae.encode(built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=built.detail_uvs,
+                       material=material, tangent_uvs=built.planar, close=False, open_tris=None, packed=packed)
 
 
 def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", cancelled=None, layout=V131):

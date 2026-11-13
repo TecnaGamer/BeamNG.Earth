@@ -1034,7 +1034,10 @@ local function slotsGoneNow()
 end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
+-- In the loading cover coverMs a frame (and coverDecode times net's decode share): every message at once there made
+-- single 230-470 ms frames of tile imports at loads and teleports (Windows, game perf report 2026-11-12, #5).
 M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+  coverMs = 30.0, coverDecode = 4,
   -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
@@ -1063,7 +1066,9 @@ end
 -- MAX_S ends it for good (a stop later is no teleport). Telemetry (2026-11-11): ~3.7 freezes of 1 s+ a teleport, only
 -- 7 % inside the 3 s; the user: "im not to concered with performance during teliports if they dont last a long time".
 -- ON = false: the 3 s alone (the old rule). (st.loadingUntil keeps its meaning for the status / telemetry lines.)
-M._cover = { ON = true, MAX_S = 25, STILL_MPH = 5 }
+-- GOV (2026-11-13): the governor's cover budget, frame caps, lanes and the trees within the frame cap (governor.lua
+-- FRAME CAP; false: the 8 ms loading budget in the cover, as before). TREES_MIN_MS: the trees' least time a frame then.
+M._cover = { ON = true, MAX_S = 25, STILL_MPH = 5, GOV = true, TREES_MIN_MS = 2.0 }
 function M._loadCover()
   if st.placeFrames ~= nil or st.clock < st.loadingUntil then return true end
   local c, at = M._cover, st.teleportAt
@@ -1107,6 +1112,7 @@ local function onMessage(msg)
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
+      farPack = roads.FAR_PACK,        -- (and the far buildings past the road geotiles' as a pack a square: roads.lua)
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
@@ -1462,6 +1468,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'B')
   elseif t == 'brfar_drop' then
     roads.onFarDrop(msg, 'B')
+  elseif t == 'bldpack_tile' then
+    -- the far buildings of a whole skyline square past the road geotiles' far tiles (server buildings.PACK_*): roads.lua
+    roads.onFarTile(msg, st.anchorId, 'P')
+  elseif t == 'bldpack_drop' then
+    roads.onFarDrop(msg, 'P')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'map_labels_result' then       -- the 3D map's labels (map3d.lua; server maplabels.py)
@@ -2721,6 +2732,7 @@ local function onUpdate(dtReal, dtSim)
   local cover = M._loadCover()
   gov:setFarCap(governor.FAR_CAP_MS)    -- (PR #1128's far cap; FAR_CAP_MS 0: off, the old behaviour as a whole)
   gov:setLoading(cover or st.slowFor > SLOW_S)
+  gov:setCover(cover and M._cover.GOV)   -- (governor.lua: the cover's budget, frame cap and heavy slots)
   gov:beginFrame(farfield.hasWork() or roads.hasWork() or M._trafficvisuals.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
   -- The server's messages, in order, up to a budget a frame (NET_BUDGET_MS; NET_BUSY_MS while NET_BUSY_N or more wait;
@@ -2751,7 +2763,8 @@ local function onUpdate(dtReal, dtSim)
     M._alloc.roll(st.clock)
     M._alloc.frame()
     local kbD = collectgarbage('count')
-    local msgs = net.update(dtReal, cover)    -- (decoding spread over frames, net.lua; all at once in the cover)
+    -- (decoding spread over frames, net.lua; coverDecode times as much a frame in the cover)
+    local msgs = net.update(dtReal, cover and nq.coverDecode or nil)
     local dD = collectgarbage('count') - kbD
     local al = M._alloc
     if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
@@ -2760,7 +2773,7 @@ local function onUpdate(dtReal, dtSim)
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
     local waiting = #nq.q - nq.head + 1
-    local budget = cover and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local budget = cover and nq.coverMs or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
     -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
     local minN, done = math.ceil(waiting / nq.drainDiv), 0
     local n0 = hitchClock()
@@ -2779,7 +2792,11 @@ local function onUpdate(dtReal, dtSim)
       nq.q, nq.head = rest, 1
     end
   end
-  t = mark('net', t)
+  do
+    local t1 = mark('net', t)
+    gov:noteOther(t1 - t)       -- (the messages' time in the frame cap and the engine share's sums: governor.lua)
+    t = t1
+  end
   pcall(beammp.restoreTick, dtReal)  -- (our own copy back on after a BeamMP session, once it is over: also outside a level)
   if not scenetree.MissionGroup then return end -- no level loaded
   tickMotionBlur()
@@ -2828,6 +2845,9 @@ local function onUpdate(dtReal, dtSim)
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
+    -- (the meshes round the car always first; the rest of the place's meshes and the far tiles share what is left
+    -- while far tiles wait: governor.lua lanes, roads.lua NEAR_FIRST_M)
+    gov.farWait = farfield.importWaiting()
     roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor, dtSim or dtReal, dtReal)
     gasstations.update(gov)
     t = mark('roads', t)
@@ -2840,8 +2860,13 @@ local function onUpdate(dtReal, dtSim)
     -- (trees.lua NEW_SHAPES_PER_FRAME; PR #1128); with the far cap off, a stop fills as before
     do
       local m0, r0 = trees.made, trees.removed
-      trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
-        or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS), cover or (not gov.farCap and gov.loading))
+      -- (within what the governor's frame cap leaves, TREES_MIN_MS at least: governor.lua roomLeft)
+      local treeMs = (gov.blocked or gov:isHeavyFrame()) and 0
+        or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS)
+      if treeMs > 0 and M._cover.GOV then treeMs = math.min(treeMs, math.max(M._cover.TREES_MIN_MS, gov:roomLeft())) end
+      local tt0 = hitchClock()
+      trees.update(st.anchorId, st.player, M.viewAway(), treeMs, cover or (not gov.farCap and gov.loading))
+      gov:noteOther(hitchClock() - tt0)
       if trees.made ~= m0 or trees.removed ~= r0 then           -- (a slow frame's context: perfsummary.lua)
         M._psum.mod.note('trees')
         if trees.passNew and trees.passNew() > 0 then M._psum.mod.note('treeShapes') end
@@ -2982,6 +3007,12 @@ local function onLevelStart()
   activateWorld()
   -- the connected server's shape materials (its hello came at the main menu, before this level's objects)
   if lastHello and lastHello.prewarm then roads.prewarm(lastHello.prewarm) end
+  -- the last session's tree shapes loaded now, under the loading screen (trees.prewarmSaved)
+  do
+    local okW, nW = pcall(trees.prewarmSaved)
+    if not okW then log('W', 'beamngEarth', 'tree shapes prewarm: ' .. tostring(nW))
+    elseif nW > 0 then log('I', 'beamngEarth', 'tree shapes prewarmed: ' .. nW) end
+  end
   -- Something to stand on until the first anchor arrives (our level has no GroundPlane).
   local ok, err = terrain.loadFlat()
   if ok then
@@ -2992,6 +3023,10 @@ local function onLevelStart()
     setStatus('Flat terrain failed: ' .. tostring(err))
   end
   if net.isConnected() then
+    -- the level took every tile object: the server forgets what it sent this connection (its geotiles are kept as
+    -- sent across anchors), else after another level and back the roads and buildings stayed missing until a
+    -- teleport (game perf report 2026-11-12, #10; a no-op for the connection's first level)
+    net.send({ type = 'world_reset' })
     M._trafficvisuals.session(st.sessionId, lastHello and lastHello.trafficVisuals == M._trafficvisuals.PROTO)
     st.autoTeleportDone = true
     startTeleport()
@@ -3054,6 +3089,7 @@ local function onClientEndMission()
   groundcover.enginePatch(false)
   roads.reset()
   sea.reset()
+  if st.inOurLevel then pcall(trees.saveShapes, true) end    -- (the next level start warms them: prewarmSaved)
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
@@ -3642,7 +3678,7 @@ M.onVehicleSpawned = function() M._psum.mod.note('spawn') end
 M.onVehicleDestroyed = function() M._psum.mod.note('despawn') end
 M.onVehicleActiveChanged = function(_, active) M._psum.mod.note(active and 'spawn' or 'despawn') end
 M.onClientEndMission = onClientEndMission
-M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
+M.onExit = function() notePlayerPos(true); if st.inOurLevel then pcall(trees.saveShapes, true) end end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission
 M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded

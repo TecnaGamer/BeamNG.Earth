@@ -10,7 +10,9 @@
 //!   without the GIL. A point is paired with a segment only where the bucketed walk pairs them (its square inside the
 //!   segment's squares: the reference's visits, replayed as a test), so the pairs left out are the ones past every
 //!   effect (the squares' corners). A 2048² terrain block's grading 2.2-2.8x less CPU (2026-11-11: Roswell NM
-//!   2.6 -> 1.1 s, Fells Point 2.4 -> 1.0 s, the Stelvio 0.7 -> 0.35 s), a road tile's ~2x.
+//!   2.6 -> 1.1 s, Fells Point 2.4 -> 1.0 s, the Stelvio 0.7 -> 0.35 s), a road tile's ~2x. Since 287 the bins
+//!   in runs over par::threads() threads (a point's height comes from its own pairs only, met in the same order on
+//!   any thread: the same bits on any number of threads, tests/test_native_threads.py).
 //!
 //! The reference's squares make a pair's presence depend on the batch (a cutting whose top reaches past its box's
 //! reach is seen only by the points whose 32 m square its box touches); binned keeps that, for the same heights.
@@ -33,6 +35,16 @@ pub const RANK_SIDE_MAX_DIFF: i64 = 6;
 /// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
 /// smoothness there)
 pub const RANK_HOLD_MAX: i64 = 114;
+/// a segment's flags (grading.PlanPack's st): a mountain pass road's (Plan.steep: its whole core its carriageway, its
+/// sides falling at steep_run) ...
+pub const STEEP: u8 = 1;
+/// ... and a tunnel's open section (Plan.open_tunnel: the map's tunnel on the ground, where the elevation shows no
+/// cover over it). A lower-ranked road crossing it (60 degrees or more, fading out by 30) at a point it is the
+/// highest-ranked road of takes the side ease onto its ground, whatever the class gap (RANK_SIDE_MAX_DIFF is for a
+/// road's own junction approaches): such a road is mapped over the tunnel, not on its ground, and held to the old
+/// blend it stepped down to the section's held carriageway at its edge (Kennedybruecke in Vienna: a bus lane over the
+/// open "Unterfahrung" stepped 1.2 m, GitHub #1169).
+pub const OPEN_TUNNEL: u8 = 2;
 /// the steepest a segment's line is carried on past its end (extrap): steeper than any road's grade; a steeper
 /// segment (a step held in a plan over a few cm) is carried on at this
 pub const EXTRAP_MAX_GRADE: f64 = 0.35;
@@ -64,7 +76,7 @@ struct Seg {
     len: f64,       // l2.sqrt()
     ext: f64,       // extrap / len
     za: f64, zb: f64, h: f64, rh: f64, rid: i64, rk: i64,
-    abut: bool, steep: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
+    abut: bool, steep: bool, open: bool, link: u8, banked: bool, has_cut: bool, cut_reach: f64, ba: f64, bb: f64,
     cut: [f64; 6], da: f64, db: f64, far0: f64, far0_base: f64,
 }
 
@@ -85,7 +97,8 @@ fn prep(s: &Segs, i: usize, p: &Prm) -> Seg {
     let l2 = abx * abx + aby * aby;
     Seg {
         ax, ay, abx, aby, l2, lox: ax.min(bx), hix: ax.max(bx), loy: ay.min(by), hiy: ay.max(by), len: l2.sqrt(), ext: p.extrap / l2.sqrt(), za: s.za[i], zb: s.zb[i], h, rh, rid: s.rid[i], rk,
-        abut: s.abut[i] != 0, steep: s.steep[i] != 0, link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
+        abut: s.abut[i] != 0, steep: s.steep[i] & STEEP != 0, open: s.steep[i] & OPEN_TUNNEL != 0,
+        link: s.link[i], banked: s.ba[i] != 0.0 || s.bb[i] != 0.0,
         has_cut, cut_reach, ba: s.ba[i], bb: s.bb[i], cut, da: s.abut_d[[i, 0]], db: s.abut_d[[i, 1]], far0, far0_base,
     }
 }
@@ -124,6 +137,8 @@ pub struct Pt {
     // second-highest rank there (equal to hrank when another road of its rank is at the point, so its carriageway
     // is not held over that one's)
     hdeep: f64, hrank: i64, hrank2: i64, hid: i64, hz: f64, hyield: f64, hcar: bool, hdx: f64, hdy: f64,
+    // (rank) that road is a tunnel's open section (OPEN_TUNNEL)
+    hopen: bool,
 }
 
 impl Pt {
@@ -133,7 +148,7 @@ impl Pt {
             num: 0.0, den: 0.0, wmax: 0.0, top: f64::NEG_INFINITY, cmax: 0.0, csum: 0.0, cz: 0.0,
             raised: f64::NEG_INFINITY, bs: base, beff: base, cdeep: 0.0, carz: f64::NAN, carid: -1, bdeep: 0.0,
             bz: f64::NAN, bid: -1, hdeep: f64::INFINITY, hrank: i64::MIN, hrank2: i64::MIN, hid: -1, hz: f64::NAN,
-            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0,
+            hyield: 0.0, hcar: false, hdx: 0.0, hdy: 0.0, hopen: false,
         }
     }
 
@@ -350,6 +365,7 @@ fn pair0(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm) {
         let reach = shoulder + p.rank_fade;
         st.hyield = 1.0 - smooth(((d - g.rh) / reach).clamp(0.0, 1.0));
         st.hcar = d <= g.rh;
+        st.hopen = g.open;
         st.hdx = g.abx / g.len.max(1e-9);       // (its direction there: the side ease below)
         st.hdy = g.aby / g.len.max(1e-9);
     }
@@ -454,7 +470,8 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
     // (an abutment or bridge is not on the point's ground), and a road's own other stretches never give way: hairpins
     // as before)
     let mut tgt = target;
-    let side_ease = g.rk < RANK_BUILT || st.hrank - g.rk <= RANK_SIDE_MAX_DIFF;
+    let ranked = g.rk < RANK_BUILT || st.hrank - g.rk <= RANK_SIDE_MAX_DIFF;
+    let side_ease = ranked || st.hopen;
     if g.rk >= 0 && st.hrank > g.rk && side_ease && !g.abut && st.hid != g.rid {
         // (on the higher road's own carriageway its ground is held whole, whatever the height difference: a dirt path
         // 1-2 m lower beside the asphalt still left a dip in it. Past the painted edge the height fade decides: a road
@@ -472,7 +489,14 @@ fn pair1(st: &mut Pt, g: &Seg, q: &Pre, p: &Prm, far1: f64) {
             let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
             smooth((c - 0.5) / (0.866 - 0.5))
         };
-        let raise = st.hyield * rf * align;
+        // (a tunnel's open section only: a road crossing it, mapped over the tunnel, eases onto it whatever the class
+        // gap; one running beside it, a street along the top of its trench, keeps its own ground: a residential street
+        // over the A23's cover beside its portal stepped 1.2 m at the cover's edge, eased down to the open section)
+        let cross = if ranked { 1.0 } else {
+            let c = ((g.abx * st.hdx + g.aby * st.hdy) / g.len.max(1e-9)).abs();
+            1.0 - smooth((c - 0.5) / (0.866 - 0.5))
+        };
+        let raise = st.hyield * rf * align * cross;
         if st.hcar {
             yf = yf.max(raise);
         } else {
@@ -625,19 +649,20 @@ pub fn binned(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, s
             return unsafe { binned_avx2(px, py, base, s, p, keep, bin_m) };
         }
     }
-    binned_impl(px, py, base, s, p, keep, bin_m)
+    binned_impl(px, py, base, s, p, keep, bin_m, false)
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn binned_avx2(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, s: &Segs, p: &Prm,
                       keep: Option<&[bool]>, bin_m: f64) -> Vec<f64> {
-    binned_impl(px, py, base, s, p, keep, bin_m)
+    binned_impl(px, py, base, s, p, keep, bin_m, true)
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, s: &Segs, p: &Prm,
-               keep: Option<&[bool]>, bin_m: f64) -> Vec<f64> {
+               keep: Option<&[bool]>, bin_m: f64, avx2: bool) -> Vec<f64> {
     let n = px.len();
     let mut out: Vec<f64> = base.iter().copied().collect();
     if n == 0 {
@@ -722,13 +747,19 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
     // diagonal (and a margin for the rounding)
     let half_diag = fb * std::f64::consts::FRAC_1_SQRT_2;
     let mut lists: Vec<(Vec<u32>, Vec<u32>)> = Vec::with_capacity(2);
+    let threads = crate::par::threads_for(n, BIN_POINTS_PER_THREAD);
+    // (the segments in runs over the threads, each run's (bin, segment) pairs in segment order, the runs joined in
+    // their order: the serial loop's list)
+    let nparts = if threads > 1 { (threads * 4).min(ns.max(1)) } else { 1 };
     let mut found: Vec<(u32, u32)> = Vec::new();
+    let mut outs: Vec<Vec<(u32, u32)>> = (0..nparts).map(|_| Vec::new()).collect();
     for pass in 0..2 {
         found.clear();
-        for (si, g) in segs.iter().enumerate() {
+        let seg_bins = |si: usize, found: &mut Vec<(u32, u32)>| {
+            let g = &segs[si];
             let v = visits[pass][si];
             if !v.some() {
-                continue;
+                return;
             }
             let r = if pass == 0 { g.far0 } else { g.h + f1 };
             let (lo_x, hi_x, lo_y, hi_y) = seg_box(g, r + BIN_MARGIN_M);
@@ -738,14 +769,14 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
             let lo_y = lo_y.max(y0 + v.cy0 as f64 * bucket - BIN_MARGIN_M);
             let hi_y = hi_y.min(y0 + (v.cy1 + 1) as f64 * bucket + BIN_MARGIN_M);
             if !(lo_x <= hi_x && lo_y <= hi_y) {
-                continue;
+                return;
             }
             let bx0 = ((lo_x - x0) / fb).floor().max(0.0) as usize;
             let bx1 = (((hi_x - x0) / fb).floor().max(0.0) as usize).min(fnx - 1);
             let by0 = ((lo_y - y0) / fb).floor().max(0.0) as usize;
             let by1 = (((hi_y - y0) / fb).floor().max(0.0) as usize).min(fny - 1);
             if bx0 > bx1 || by0 > by1 {
-                continue;
+                return;
             }
             let lim = r + half_diag + BIN_MARGIN_M;
             for by in by0..=by1 {
@@ -760,6 +791,23 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
                         found.push((b as u32, si as u32));
                     }
                 }
+            }
+        };
+        if nparts <= 1 {
+            for si in 0..ns {
+                seg_bins(si, &mut found);
+            }
+        } else {
+            let per = ns.div_ceil(nparts);
+            let parts: Vec<(usize, &mut Vec<(u32, u32)>)> = outs.iter_mut().enumerate().collect();
+            crate::par::run_parts(parts, threads, |(k, out)| {
+                out.clear();
+                for si in (k * per).min(ns)..((k + 1) * per).min(ns) {
+                    seg_bins(si, out);
+                }
+            });
+            for o in outs.iter() {
+                found.extend_from_slice(o);
             }
         }
         // (by bin, stable: each bin's segments in their order)
@@ -779,24 +827,102 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
         lists.push((start, items));
     }
     drop(found);
+    drop(outs);
     // each bin's points against its lists, segment by segment (each point still meets its segments in their order,
     // the bin's points' state in a small buffer: the pairs of one segment and the bin's points are independent, so
-    // their divisions and roots overlap): pass 0, then pass 1
-    let (s0, i0) = (&lists[0].0, &lists[0].1);
-    let (s1, i1) = (&lists[1].0, &lists[1].1);
+    // their divisions and roots overlap): pass 0, then pass 1. The bins in runs over up to par::threads() threads
+    // (each point's height from its own pairs only, in the same order: the same bits on any number of threads), the
+    // heights in the points' bin order, then put in place
+    let c = BinCtx { segs: &segs, visits: &visits, lists: &lists, pstart: &pstart, porder: &porder, px, py,
+                     bxs: &bxs, bys: &bys, base: base.view(), p, sharp, f1 };
+    let mut res = vec![0f64; n];
+    if threads <= 1 {
+        bins_part(&c, 0, nb, &mut res, avx2);
+    } else {
+        // (runs of bins of about equal points, several per thread: the bins' costs differ with the roads near them)
+        let want = (threads * 8).min(nb);
+        let per = n.div_ceil(want).max(1);
+        let mut parts: Vec<(usize, usize, &mut [f64])> = Vec::with_capacity(want + 1);
+        let mut rest: &mut [f64] = &mut res;
+        let mut b0 = 0usize;
+        while b0 < nb {
+            let mut b1 = b0 + 1;
+            while b1 < nb && ((pstart[b1] - pstart[b0]) as usize) < per {
+                b1 += 1;
+            }
+            let len = (pstart[b1] - pstart[b0]) as usize;
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(len);
+            parts.push((b0, b1, head));
+            rest = tail;
+            b0 = b1;
+        }
+        crate::par::run_parts(parts, threads, |(b0, b1, r)| bins_part(&c, b0, b1, r, avx2));
+    }
+    for (k, &i) in porder.iter().enumerate() {
+        out[i as usize] = res[k];
+    }
+    out
+}
+
+/// grade_points_binned's points per thread at least (a road tile's few thousand on the calling thread; a block's 1 M
+/// over par::threads()).
+const BIN_POINTS_PER_THREAD: usize = 16384;
+
+/// What the bins' pairs read (binned_impl's tables).
+struct BinCtx<'a> {
+    segs: &'a [Seg],
+    visits: &'a [Vec<Visit>; 2],
+    lists: &'a [(Vec<u32>, Vec<u32>)],
+    pstart: &'a [u32],
+    porder: &'a [u32],
+    px: &'a [f64],
+    py: &'a [f64],
+    bxs: &'a [i64],
+    bys: &'a [i64],
+    base: ArrayView1<'a, f64>,
+    p: &'a Prm,
+    sharp: bool,
+    f1: f64,
+}
+
+/// The heights of the points of bins b0..b1 (res: theirs, in porder's order from pstart[b0]).
+fn bins_part(c: &BinCtx, b0: usize, b1: usize, res: &mut [f64], avx2: bool) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if avx2 {
+            return unsafe { bins_part_avx2(c, b0, b1, res) };
+        }
+    }
+    let _ = avx2;
+    bins_part_impl(c, b0, b1, res)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn bins_part_avx2(c: &BinCtx, b0: usize, b1: usize, res: &mut [f64]) {
+    bins_part_impl(c, b0, b1, res)
+}
+
+#[inline(always)]
+fn bins_part_impl(c: &BinCtx, b0: usize, b1: usize, res: &mut [f64]) {
+    let (segs, visits, pstart, porder, px, py, bxs, bys, base, p, sharp, f1) =
+        (c.segs, c.visits, c.pstart, c.porder, c.px, c.py, c.bxs, c.bys, &c.base, c.p, c.sharp, c.f1);
+    let (s0, i0) = (&c.lists[0].0, &c.lists[0].1);
+    let (s1, i1) = (&c.lists[1].0, &c.lists[1].1);
+    let r0 = pstart[b0] as usize;
     let (mut xs, mut ys, mut bxv, mut byv, mut idv) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut sts: Vec<Pt> = Vec::new();
     let mut ln = Lanes::default();
     let mut sel: Vec<usize> = Vec::new();
     let mut pr: Vec<Pre> = Vec::new();
-    for b in 0..nb {
+    for b in b0..b1 {
         let (pa, pz) = (pstart[b] as usize, pstart[b + 1] as usize);
         if pa == pz {
             continue;
         }
         xs.clear(); ys.clear(); bxv.clear(); byv.clear(); idv.clear(); sts.clear();
         let (mut qx0, mut qx1, mut qy0, mut qy1) = (i64::MAX, i64::MIN, i64::MAX, i64::MIN);
-        for &pi in &porder[pa..pz] {
+        for (k, &pi) in porder[pa..pz].iter().enumerate() {
             let i = pi as usize;
             let (x, y) = (px[i], py[i]);
             // (a NaN coordinate: no pair changes the reference's state, as no comparison holds; its bin's lists may
@@ -804,10 +930,10 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
             if !(x.is_finite() && y.is_finite()) {
                 let mut st = Pt::new(base[i]);
                 st.between(sharp);
-                out[i] = st.finish(p.lift);
+                res[pa + k - r0] = st.finish(p.lift);
                 continue;
             }
-            xs.push(x); ys.push(y); idv.push(i);
+            xs.push(x); ys.push(y); idv.push(pa + k - r0);
             bxv.push(bxs[i]); byv.push(bys[i]);
             qx0 = qx0.min(bxs[i]); qx1 = qx1.max(bxs[i]); qy0 = qy0.min(bys[i]); qy1 = qy1.max(bys[i]);
             sts.push(Pt::new(base[i]));
@@ -860,8 +986,7 @@ fn binned_impl(px: ArrayView1<f64>, py: ArrayView1<f64>, base: ArrayView1<f64>, 
             }
         }
         for j in 0..m {
-            out[idv[j]] = sts[j].finish(p.lift);
+            res[idv[j]] = sts[j].finish(p.lift);
         }
     }
-    out
 }

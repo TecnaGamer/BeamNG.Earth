@@ -534,7 +534,7 @@ def _raw_all(feats):
 # Per-cell facts shared by the server's processes and kept for the next run (the revisit cache: one file per cell and
 # kind, keyed by the cell, its map data versions and the code): a cell's road specs and level ranges, which every
 # process that draws or grades its roads made for itself (~0.2 s a city cell each; the terrain blocks', the road
-# tiles' and the AI graph's processes, 2026-10-25). Kept only when complete (revisit.faults unchanged).
+# tiles' and the AI graph's processes, 2026-10-25). Kept only when complete (no fault of this thread's: thread_faults).
 _FACTS_LOCK = threading.Lock()
 # A cell's facts made in this process, by its id (_bnge_cell: the cell, the layer, the map data's versions), beyond the
 # layer object they were made for: the map data's memory cache drops and reloads a city's big layers all the time,
@@ -597,8 +597,20 @@ def _facts_baked(feats, kind, extra):
         versions = json.loads(cid[2])
     except (ValueError, IndexError, TypeError):
         return None
-    return bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
-                         {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+    got = bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
+                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+    if got is None:
+        import decisions        # (the shared decision archives: built by the project's builder, signed, checked)
+        if decisions.enabled():
+            import roadz
+            if roadz.hk_cell(decisions._cell_tuple(cid[0])):
+                return None     # (Hong Kong's measured heights: never shared, roadz.hk_cell)
+            got = decisions.facts(revisit.CACHE_DIR, cid, kind, extra)
+            if got is not None:
+                k = _facts_key(feats, kind, extra)      # (kept under this server's own key: read from disk next time)
+                if k is not None:
+                    revisit.store(revisit.CACHE_DIR, "cellfacts", k, {"facts.json": got})
+    return got
 
 
 def _facts_store(feats, kind, extra, data):
@@ -3982,6 +3994,22 @@ def is_ring(feats, i):
 
 
 
+def _measure_many(feats, widths, asks):
+    """The roads asks [(feature, want)] of feats measured ahead in one pass (roadwidth.RoadWidths.measure_many: want 1
+    the width, 2 the wall clearance, 3 both) where widths is a RoadWidths' get; nothing otherwise (each road's own
+    call measures it)."""
+    many = getattr(getattr(widths, "__self__", None), "measure_many", None)
+    if many is None or len(asks) < 2:
+        return
+    part_off, ring_off, coord_off, ids, ll = feats.part_off, feats.ring_off, feats.coord_off, feats.ids, feats.lonlat
+    todo = []
+    for j, want in asks:
+        a, b = coord_off[ring_off[part_off[j]]], coord_off[ring_off[part_off[j + 1]]]
+        if b > a:
+            todo.append((str(ids[j]), ll[a:b], want))
+    many(todo)
+
+
 def _measured_widths(feats, specs, widths):
     """specs with the widths measured between the buildings (roadwidth.py: widths(id, lonlat) -> (carriageway m,
     sidewalk m) or None) where the map gives none. Pure given widths."""
@@ -3991,6 +4019,7 @@ def _measured_widths(feats, specs, widths):
     tags = feats.attrs.get("osm_sidewalk")
     frontage = getattr(getattr(widths, "__self__", None), "frontage", None)
     out = list(specs)
+    measured = []           # (feature, a laned street: _laned_walled's) of the roads measured between their walls
     for j, sp in enumerate(out):
         if sp is not None and sp.street is not None and sp.street.village:
             sidewalk = str(tags[j]).strip().lower() if tags is not None else ""
@@ -4015,19 +4044,29 @@ def _measured_widths(feats, specs, widths):
             continue        # and the median (each took all of it, one wide road over Boston Street's median)
         if is_ring(feats, j):
             continue        # (a roundabout: _rings' circulatory width; the buildings stand round the whole circle)
-        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
-        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
         import germanroads
         if _osm(feats, "width", j, *OSM_WIDTH_M) is not None:
             continue        # (OpenStreetMap's own width)
         if sp.lanes and not germanroads.gave_lanes(feats, j, sp):
-            got = _laned_walled(feats, j, sp, widths) if sp.street is None else None
-            if got is not None:
-                out[j] = got
+            if sp.street is None and _laned_measured(sp):
+                measured.append((j, True))
             continue        # (its lane count's width; Germany's surveyed lanes are no width)
         if sp.street is not None and (not sp.urban or not has_sidewalks(sp)
                                       or any(w.setback for _, w in sp.street.walks())):
             continue        # (the walls beyond verges are not the carriageway's limits)
+        measured.append((j, False))
+    # the measured roads' widths (and a laned street's clearance) in one pass over the cell (RoadWidths.measure_many:
+    # the same numbers as one widths() / cap() call a road, which the loop below then reads from its memos)
+    _measure_many(feats, widths, [(j, 3 if laned else 1) for j, laned in measured])
+    for j, laned in measured:
+        sp = out[j]
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
+        if laned:
+            got = _laned_walled(feats, j, sp, widths)
+            if got is not None:
+                out[j] = got
+            continue
         m = widths(str(feats.ids[j]), feats.lonlat[a:b]) if b > a else None
         import germanroads
         floor = germanroads.surveyed_width(feats, j, sp)
@@ -4055,14 +4094,19 @@ LANED_PARKING_CLASSES = {"primary"}
 LANED_MAX_LANES = 2         # lanes a direction at most (a wider arterial keeps no parking: Muenster's 4-lane secondary)
 
 
+def _laned_measured(sp):
+    """A street of a mapped lane count (sp) is one _laned_walled measures between its walls."""
+    if not sp.urban or not sp.parking or sp.median or sp.link or not has_sidewalks(sp):
+        return False
+    per_dir = float(sp.lanes) if sp.oneway else float(sp.lanes) / 2.0
+    return per_dir <= LANED_MAX_LANES
+
+
 def _laned_walled(feats, j, sp, widths):
     """The spec of feature j (a mapped lane count, sp) with its parking lanes and sidewalks from the walls' measured
     right of way (widths: roadwidth's (carriageway, sidewalk) or None), or None where they do not change it. Pure given
     widths."""
-    if not sp.urban or not sp.parking or sp.median or sp.link or not has_sidewalks(sp):
-        return None
-    per_dir = float(sp.lanes) if sp.oneway else float(sp.lanes) / 2.0
-    if per_dir > LANED_MAX_LANES:
+    if not _laned_measured(sp):
         return None
     a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
     b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
@@ -4117,6 +4161,7 @@ def _wall_capped(feats, specs, widths):
     import europewalks
     rules = feats.rules
     out = list(specs)
+    capped = []             # the features whose clearance is read
     for j, sp in enumerate(out):
         if sp is None or sp.link or sp.mountain:     # (a divided road's carriageway too: its nearer wall is its own side's)
             continue
@@ -4130,6 +4175,12 @@ def _wall_capped(feats, specs, widths):
         b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
         if b - a < 2:
             continue
+        capped.append(j)
+    _measure_many(feats, widths, [(j, 2) for j in capped])      # (their clearances in one pass: cap reads its memo)
+    for j in capped:
+        sp = out[j]
+        a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
+        b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
         near, row = cap(str(feats.ids[j]), feats.lonlat[a:b]) or (None, None)
         if near is None:
             continue
@@ -4164,6 +4215,9 @@ def _cell_memo(feats, name, make):
     st = feats.__dict__
     got = st.get(name)
     if got is not None:
+        if st.get(name + "@rule"):
+            import revisit              # (made on the lidar rule: whatever reads it is not kept either)
+            revisit.fault(lidar=True)
         return got
     mk = _ranges_mem_key(st)
     mk = None if mk is None else mk[:1] + (name,) + mk[2:]
@@ -4174,9 +4228,11 @@ def _cell_memo(feats, name, make):
             st[name] = got
             return got
     import revisit
-    f0 = revisit.thread_faults()
+    f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
     got = st[name] = make()
-    if mk is not None and revisit.thread_faults() == f0:
+    if revisit.thread_lidar_faults() != l0:
+        st[name + "@rule"] = True       # (on the lidar rule: not shared with another copy, read as short: above)
+    elif mk is not None and revisit.thread_faults() == f0:
         with _FACTS_LOCK:
             _FACTS_MEM[mk] = got
             while len(_FACTS_MEM) > FACTS_MEM_KEPT:
@@ -9345,6 +9401,8 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
                           np.asarray(z, np.float64).ravel(), getattr(tunnels, "mouths", None)).reshape(np.shape(z))
     except Exception as ex:         # no raise rather than no block (a network error quietly; a bug where it shows)
         (log.debug if isinstance(ex, OSError) else log.warning)("arch raise: %s: %s", type(ex).__name__, ex)
+        import revisit
+        revisit.fault()             # (ground built without its arches is not kept: blockcache.py)
         return z
 
 

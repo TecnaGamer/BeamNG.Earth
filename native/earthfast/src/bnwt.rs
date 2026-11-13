@@ -1,13 +1,13 @@
 //! BNWT ("BeamNG.Earth world input tile"): our own prebaked z14 input tiles (server/bnwt.py, tools/build_bnwt.py).
 //!
 //! A tile is one map cell (z14) and holds, per layer, exactly the Features the generator's own source path gives for
-//! that cell (overture.Reader.query: ids, geometry, attribute columns, rule tables, the sources' counts), LOSSLESS:
-//! the decoder hands back the same arrays bit for bit, so a cell read from a tile is the cell read from the parquet
-//! files (no plan or cell-facts format bump, no cache key of its own).
+//! that cell (overture.Reader.query or pmtiles.Reader.query: ids, geometry, attribute columns, rule tables, the
+//! sources' counts), LOSSLESS: the decoder hands back the same arrays bit for bit, so a cell read from a tile is the
+//! cell its source gives (no plan or cell-facts format bump, no cache key of its own).
 //!
 //! Tile bytes:
 //! ```text
-//! "BNWT" u16 FORMAT u8 z u32 x u32 y u16 nsec
+//! "BNWT" u16 FORMAT u16 nsec      (no cell in it: the same content in two cells is the same bytes)
 //! nsec x (u8 name length, name, u32 raw offset, u32 raw length)
 //! one zstd frame: the sections' raw bytes, concatenated
 //! ```
@@ -16,19 +16,23 @@
 //! u32 n; ids (text column); kind, parts a feature, rings a part, coords a ring (integer streams)
 //! i64 x0, i64 y0; x and y deltas (integer streams) of the coordinates on a 1e-7 degree grid (q = round(v * 1e7),
 //!   value = q / 1e7, which is the parquet double itself for OpenStreetMap's 1e-7 coordinates); the values that are
-//!   not (a clip's cut points on the cell edge, other sources' doubles): index deltas, a table of their repeated
-//!   values (the cell edges), a code each (0: its own exact f64 bits follow)
+//!   not (a clip's cut points on the cell edge, other sources' doubles): index deltas, a table of their other
+//!   repeated values, a code each (1-4: the cell's west / south / east / north edge, given at decoding; 5..: the
+//!   table; 0: its own exact f64 bits follow); their grid values repeat the one before (delta 0). A cell whose
+//!   coordinates are all its edges (open sea: the ocean pieces cut to the cell) is the same bytes in every cell
+//!   with the same features: the archive keeps it once (run-length directory entries)
 //! u8 has clipped [+ numeric column]
 //! u16 columns x (name, column); u16 rules x (name, 4 columns: feature, value, start, end)
 //! u16 sources x (u16 dataset, u16 licence, u64 count)
 //! ```
-//! Columns: 'T' text (u32 numpy width, then 'U' all values canonical UUIDs or empty: 16 bytes each; 'S' all distinct: the words alone; 'D' a
-//! dictionary in first-appearance order + codes), 'N' numeric (the numpy dtype string + the raw bytes, byte planes
+//! Columns: 'T' text (u32 numpy width, then 'U' all values canonical UUIDs or empty: 16 bytes each; 'S' all
+//! distinct: the words alone; 'D' a dictionary in first-appearance order + codes), 'N' numeric (the numpy dtype string + the raw bytes, byte planes
 //! split). Integer stream = u32 n, u8 width (1/2/4/8), zig-zag values at that width split into byte planes (the
 //! planes compress far better than interleaved bytes; no varints, so a decode is a few vector loops).
 //!
 //! The archive is a PMTiles v3 container of these tiles (tile type unknown, tile compression none: each tile is its own
-//! zstd frame), Hilbert-ordered and clustered, so every quadtree square is one contiguous byte range (region packs).
+//! zstd frame), Hilbert-ordered and clustered, so every quadtree square is one contiguous byte range (region packs;
+//! a deduplicated tile points back at its first copy).
 //! bnwt_pmtiles_head writes everything before the tile data (header, root directory, metadata, leaf directories).
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -39,7 +43,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
-pub const FORMAT: u16 = 1;
+pub const FORMAT: u16 = 2;
 const MAGIC: &[u8; 4] = b"BNWT";
 const Q: f64 = 1e7;
 
@@ -446,7 +450,7 @@ fn offsets(c: &[i64]) -> Vec<i64> {
     out
 }
 
-fn encode_section(s: &Section) -> Result<Vec<u8>, String> {
+fn encode_section(s: &Section, bounds: &[f64; 4]) -> Result<(Vec<u8>, bool), String> {
     let Col::Text(ids, _) = &s.ids else { return Err("ids must be text".into()) };
     let n = ids.len();
     if s.kind.len() != n || s.part_off.len() != n + 1 {
@@ -470,6 +474,7 @@ fn encode_section(s: &Section) -> Result<Vec<u8>, String> {
     put_ints(&mut w, &coords);
     // coordinates on the 1e-7 grid; the exceptions exactly
     let mut q = vec![0i64; 2 * nc];
+    let mut exc = vec![false; 2 * nc];
     let mut exc_idx: Vec<i64> = Vec::new();
     let mut exc_bits: Vec<u64> = Vec::new();
     let mut last = 0i64;
@@ -478,30 +483,47 @@ fn encode_section(s: &Section) -> Result<Vec<u8>, String> {
         let qi = if r.is_finite() && r.abs() < 4.0e18 { r as i64 } else { 0 };
         q[i] = qi;
         if ((qi as f64) / Q).to_bits() != v.to_bits() {
+            exc[i] = true;
             exc_idx.push(i as i64 - last);
             last = i as i64;
             exc_bits.push(v.to_bits());
         }
     }
-    // the exceptions' repeated values (a clip's cut points lie on the 4 cell edges: an all-sea cell's squares are
-    // nothing else) in a table, first appearance order; each exception a code (0: its own value follows)
+    // an exception's grid value is the one before it (delta 0): a cell whose coordinates are all its own edges (an
+    // open-sea cell's squares) has the same bytes wherever it is, and the archive keeps those bytes once
+    let first = |c: usize| (0..nc).map(|k| 2 * k + c).find(|&i| !exc[i]).map(|i| q[i]).unwrap_or(0);
+    let (x0, y0) = (first(0), first(1));
+    let mut prev = [x0, y0];
+    for i in 0..2 * nc {
+        if exc[i] {
+            q[i] = prev[i % 2];
+        } else {
+            prev[i % 2] = q[i];
+        }
+    }
+    // each exception a code: 1-4 the cell's edges (west, south, east, north: where a clip cuts), 5.. a table of the
+    // other repeated values (first appearance order), 0 its own value follows
+    let edge: Vec<u64> = bounds.iter().map(|v| v.to_bits()).collect();
     let mut count: HashMap<u64, u32> = HashMap::new();
     for &b in &exc_bits {
         *count.entry(b).or_insert(0) += 1;
     }
     let mut table: Vec<u64> = Vec::new();
     let mut slot: HashMap<u64, i64> = HashMap::new();
+    for (k, &b) in edge.iter().enumerate() {
+        slot.entry(b).or_insert(k as i64 + 1);
+    }
     for &b in &exc_bits {
         if count[&b] > 1 && !slot.contains_key(&b) && table.len() < 65535 {
             table.push(b);
-            slot.insert(b, table.len() as i64);
+            slot.insert(b, table.len() as i64 + 4);
         }
     }
     let codes: Vec<i64> = exc_bits.iter().map(|b| *slot.get(b).unwrap_or(&0)).collect();
+    let independent = !exc.contains(&false) && codes.iter().all(|&c| (1..=4).contains(&c));
     let tbytes: Vec<u8> = table.iter().flat_map(|b| b.to_le_bytes()).collect();
     let own: Vec<u8> = exc_bits.iter().zip(&codes).filter(|(_, &c)| c == 0).flat_map(|(b, _)| b.to_le_bytes())
         .collect();
-    let (x0, y0) = if nc > 0 { (q[0], q[1]) } else { (0, 0) };
     w.u64(x0 as u64);
     w.u64(y0 as u64);
     for c in 0..2 {
@@ -543,10 +565,10 @@ fn encode_section(s: &Section) -> Result<Vec<u8>, String> {
         w.str16(lic)?;
         w.u64(*k);
     }
-    Ok(w.0)
+    Ok((w.0, independent))
 }
 
-fn decode_section(b: &[u8]) -> Result<SectionOut, String> {
+fn decode_section(b: &[u8], bounds: &[f64; 4]) -> Result<SectionOut, String> {
     let mut r = R { b, i: 0 };
     let n = r.u32()? as usize;
     let ids = match get_col(&mut r)? {
@@ -586,7 +608,7 @@ fn decode_section(b: &[u8]) -> Result<SectionOut, String> {
     let codes = get_ints(&mut r)?;
     let (_, own) = get_raw(&mut r)?;
     let ntab = table.len() / 8;
-    if codes.len() != exc_idx.len() || codes.iter().any(|&c| c < 0 || c as usize > ntab)
+    if codes.len() != exc_idx.len() || codes.iter().any(|&c| c < 0 || c as usize > ntab + 4)
         || own.len() != 8 * codes.iter().filter(|&&c| c == 0).count() {
         return Err("coordinate exceptions do not match".into());
     }
@@ -597,11 +619,13 @@ fn decode_section(b: &[u8]) -> Result<SectionOut, String> {
         if at < 0 || at as usize >= lonlat.len() {
             return Err("coordinate exception out of range".into());
         }
-        lonlat[at as usize] = if codes[j] == 0 {
-            k += 1;
-            f(&own, k - 1)
-        } else {
-            f(&table, codes[j] as usize - 1)
+        lonlat[at as usize] = match codes[j] {
+            0 => {
+                k += 1;
+                f(&own, k - 1)
+            }
+            c @ 1..=4 => bounds[c as usize - 1],
+            c => f(&table, c as usize - 5),
         };
     }
     let clipped = if r.u8()? == 1 { Some(get_col(&mut r)?) } else { None };
@@ -687,22 +711,19 @@ fn section_from_py(d: &Bound<'_, PyDict>) -> PyResult<Section> {
 // ------------------------------------------------------------------------------------------------ tiles
 struct Head {
     format: u16,
-    z: u8,
-    x: u32,
-    y: u32,
     secs: Vec<(String, u32, u32)>,
     body: usize, // where the zstd frame starts
 }
 
 fn parse_head(t: &[u8]) -> Result<Head, String> {
-    if t.len() < 17 || &t[0..4] != MAGIC {
+    if t.len() < 8 || &t[0..4] != MAGIC {
         return Err("not a BNWT tile".into());
     }
     let mut r = R { b: t, i: 4 };
     let format = r.u16()?;
-    let z = r.u8()?;
-    let x = r.u32()?;
-    let y = r.u32()?;
+    if format != FORMAT {
+        return Err(format!("BNWT format {} ({} expected)", format, FORMAT));
+    }
     let ns = r.u16()? as usize;
     let mut secs = Vec::with_capacity(ns);
     for _ in 0..ns {
@@ -711,23 +732,22 @@ fn parse_head(t: &[u8]) -> Result<Head, String> {
         let len = r.u32()?;
         secs.push((name, off, len));
     }
-    Ok(Head { format, z, x, y, secs, body: r.i })
+    Ok(Head { format, secs, body: r.i })
 }
 
-fn encode_tile(z: u8, x: u32, y: u32, secs: &[Section], level: i32) -> Result<Vec<u8>, String> {
+fn encode_tile(secs: &[Section], bounds: &[f64; 4], level: i32) -> Result<(Vec<u8>, bool), String> {
     let mut raw = Vec::new();
     let mut dir = Vec::new();
+    let mut independent = true;
     for s in secs {
-        let b = encode_section(s)?;
+        let (b, ind) = encode_section(s, bounds)?;
+        independent &= ind;
         dir.push((s.name.clone(), raw.len() as u32, b.len() as u32));
         raw.extend_from_slice(&b);
     }
     let mut w = W(Vec::new());
     w.0.extend_from_slice(MAGIC);
     w.u16(FORMAT);
-    w.u8(z);
-    w.u32(x);
-    w.u32(y);
     w.u16(dir.len() as u16);
     for (name, off, len) in &dir {
         w.str8(name)?;
@@ -736,7 +756,7 @@ fn encode_tile(z: u8, x: u32, y: u32, secs: &[Section], level: i32) -> Result<Ve
     }
     let body = zstd::bulk::compress(&raw, level).map_err(|e| format!("zstd: {e}"))?;
     w.0.extend_from_slice(&body);
-    Ok(w.0)
+    Ok((w.0, independent))
 }
 
 /// The raw bytes of one section (the frame decoded only as far as that section's end).
@@ -758,39 +778,40 @@ fn section_bytes(t: &[u8], h: &Head, name: &str) -> Result<Option<Vec<u8>>, Stri
     Ok(Some(out))
 }
 
-/// One tile's bytes from its sections: [{"name", "ids": text column, "kind": int64, "part_off" / "ring_off" / "coord_off":
-/// int64, "lonlat": (n, 2) float64, "clipped": column or None, "attrs": [(name, column)], "rules": [(name, [4
-/// columns])], "sources": [(dataset, licence, count)]}]; a column is ("T", [str], numpy width) or ("N", dtype str,
-/// item size, bytes). level: zstd's.
+/// (bytes, independent) of one cell's tile from its sections: [{"name", "ids": text column, "kind": int64,
+/// "part_off" / "ring_off" / "coord_off": int64, "lonlat": (n, 2) float64, "clipped": column or None, "attrs": [(name,
+/// column)], "rules": [(name, [4 columns])], "sources": [(dataset, licence, count)]}]; a column is ("T", [str], numpy
+/// width) or ("N", dtype str, item size, bytes). bounds: the cell's (west, south, east, north), the values a clip cuts
+/// at. independent: every coordinate is one of them (the same bytes in every cell with these features: an open-sea
+/// cell). level: zstd's.
 #[pyfunction]
-#[pyo3(signature = (z, x, y, sections, level=19))]
-pub fn bnwt_encode_tile<'py>(py: Python<'py>, z: u8, x: u32, y: u32, sections: Vec<Bound<'py, PyDict>>, level: i32)
-                             -> PyResult<Bound<'py, PyBytes>> {
+#[pyo3(signature = (sections, bounds, level=19))]
+pub fn bnwt_encode_tile<'py>(py: Python<'py>, sections: Vec<Bound<'py, PyDict>>, bounds: [f64; 4], level: i32)
+                             -> PyResult<(Bound<'py, PyBytes>, bool)> {
     let secs: Vec<Section> = sections.iter().map(section_from_py).collect::<PyResult<_>>()?;
-    let out = py.detach(move || encode_tile(z, x, y, &secs, level)).map_err(PyValueError::new_err)?;
-    Ok(PyBytes::new(py, &out))
+    let (out, ind) = py.detach(move || encode_tile(&secs, &bounds, level)).map_err(PyValueError::new_err)?;
+    Ok((PyBytes::new(py, &out), ind))
 }
 
-/// (format, z, x, y, [(layer, raw length)]) of a tile.
+/// (format, [(layer, raw length)]) of a tile.
 #[pyfunction]
-pub fn bnwt_tile_info(tile: &[u8]) -> PyResult<(u16, u8, u32, u32, Vec<(String, u32)>)> {
+pub fn bnwt_tile_info(tile: &[u8]) -> PyResult<(u16, Vec<(String, u32)>)> {
     let h = parse_head(tile).map_err(PyValueError::new_err)?;
-    Ok((h.format, h.z, h.x, h.y, h.secs.iter().map(|s| (s.0.clone(), s.2)).collect()))
+    Ok((h.format, h.secs.iter().map(|s| (s.0.clone(), s.2)).collect()))
 }
 
-/// One layer of a tile, None when the tile has no such section: {"ids": ("T", width, ucs4 bytes), "kind",
-/// "part_off", "ring_off", "coord_off": int64 arrays, "lonlat": (n, 2) float64, "clipped": column or None, "attrs",
-/// "rules", "sources"}; a column out is ("T", width, ucs4 bytes) or ("N", dtype str, bytes).
+/// One layer of a cell's tile (bounds: the cell's, as at encoding), None when the tile has no such section: {"ids":
+/// ("T", width, ucs4 bytes), "kind", "part_off", "ring_off", "coord_off": int64 arrays, "lonlat": (n, 2) float64,
+/// "clipped": column or None, "attrs", "rules", "sources"}; a column out is ("T", width, ucs4 bytes) or ("N", dtype
+/// str, bytes).
 #[pyfunction]
-pub fn bnwt_decode_layer<'py>(py: Python<'py>, tile: Vec<u8>, layer: String) -> PyResult<Option<Bound<'py, PyDict>>> {
+pub fn bnwt_decode_layer<'py>(py: Python<'py>, tile: Vec<u8>, layer: String, bounds: [f64; 4])
+                              -> PyResult<Option<Bound<'py, PyDict>>> {
     let got = py.detach(move || -> Result<Option<SectionOut>, String> {
         let h = parse_head(&tile)?;
-        if h.format != FORMAT {
-            return Err(format!("BNWT format {} ({} expected)", h.format, FORMAT));
-        }
         match section_bytes(&tile, &h, &layer)? {
             None => Ok(None),
-            Some(b) => Ok(Some(decode_section(&b)?)),
+            Some(b) => Ok(Some(decode_section(&b, &bounds)?)),
         }
     }).map_err(PyValueError::new_err)?;
     let Some(s) = got else { return Ok(None) };
@@ -878,29 +899,43 @@ fn dir_bytes(e: &[(u64, u64, u64, u64)]) -> Result<Vec<u8>, String> {
 const ROOT_MAX: usize = 16384 - 127;
 
 /// Everything of a clustered PMTiles v3 archive before its tile data: header, root directory, metadata (gzip JSON),
-/// leaf directories. tile_ids ascending, lengths their tiles' byte counts (the tiles follow in that order, back to
-/// back). bounds: (min lon, min lat, max lon, max lat) in 1e-7 degrees; center: (zoom, lon e7, lat e7).
+/// leaf directories. tile_ids ascending; offsets / lengths: each tile's bytes in the data section (tiles with the same
+/// content share theirs: consecutive ids with the same bytes become one run-length entry); data_len: the data
+/// section's size. bounds: (min lon, min lat, max lon, max lat) in 1e-7 degrees; center: (zoom, lon e7, lat e7).
 #[pyfunction]
-pub fn bnwt_pmtiles_head<'py>(py: Python<'py>, tile_ids: PyReadonlyArray1<u64>, lengths: PyReadonlyArray1<u64>,
-                              metadata: &[u8], min_zoom: u8, max_zoom: u8, bounds: (i32, i32, i32, i32),
-                              center: (u8, i32, i32)) -> PyResult<Bound<'py, PyBytes>> {
+#[allow(clippy::too_many_arguments)]
+pub fn bnwt_pmtiles_head<'py>(py: Python<'py>, tile_ids: PyReadonlyArray1<u64>, offsets: PyReadonlyArray1<u64>,
+                              lengths: PyReadonlyArray1<u64>, data_len: u64, metadata: &[u8], min_zoom: u8,
+                              max_zoom: u8, bounds: (i32, i32, i32, i32), center: (u8, i32, i32))
+                              -> PyResult<Bound<'py, PyBytes>> {
     let ids = tile_ids.as_array().to_vec();
+    let offs = offsets.as_array().to_vec();
     let lens = lengths.as_array().to_vec();
     let meta = metadata.to_vec();
     let out = py.detach(move || -> Result<Vec<u8>, String> {
-        if ids.len() != lens.len() {
-            return Err("tile ids and lengths differ".into());
+        if ids.len() != lens.len() || ids.len() != offs.len() {
+            return Err("tile ids, offsets and lengths differ".into());
         }
         if ids.windows(2).any(|w| w[1] <= w[0]) {
             return Err("tile ids must ascend".into());
         }
-        let mut entries = Vec::with_capacity(ids.len());
-        let mut off = 0u64;
-        for (&t, &l) in ids.iter().zip(&lens) {
-            entries.push((t, off, l, 1u64));
-            off += l;
+        let mut entries: Vec<(u64, u64, u64, u64)> = Vec::with_capacity(ids.len());
+        let mut contents = std::collections::HashSet::new();
+        for k in 0..ids.len() {
+            if offs[k] + lens[k] > data_len {
+                return Err("a tile past the data section".into());
+            }
+            contents.insert(offs[k]);
+            if let Some(e) = entries.last_mut() {
+                if e.0 + e.3 == ids[k] && e.1 == offs[k] && e.2 == lens[k] {
+                    e.3 += 1;
+                    continue;
+                }
+            }
+            entries.push((ids[k], offs[k], lens[k], 1u64));
         }
-        let data_len = off;
+        let n_entries = entries.len() as u64;
+        let n_contents = contents.len() as u64;
         // root alone, else leaves of `leaf` entries (doubled until the root fits)
         let mut root = dir_bytes(&entries)?;
         let mut leaves: Vec<u8> = Vec::new();
@@ -932,7 +967,7 @@ pub fn bnwt_pmtiles_head<'py>(py: Python<'py>, tile_ids: PyReadonlyArray1<u64>, 
         h.0.extend_from_slice(b"PMTiles");
         h.u8(3);
         for v in [root_off, root.len() as u64, meta_off, meta_gz.len() as u64, leaf_off, leaves.len() as u64,
-                  data_off, data_len, ids.len() as u64, ids.len() as u64, ids.len() as u64] {
+                  data_off, data_len, ids.len() as u64, n_entries, n_contents] {
             h.u64(v);
         }
         h.u8(1); // clustered
@@ -956,8 +991,9 @@ pub fn bnwt_pmtiles_head<'py>(py: Python<'py>, tile_ids: PyReadonlyArray1<u64>, 
     Ok(PyBytes::new(py, &out))
 }
 
-/// The tile entries (tile id, offset, length) of a directory (gzip or plain) with tile ids in [start, end), and the
-/// leaf directories (first tile id, offset, length) that may hold some: a region's byte range from the directories.
+/// The tiles (tile id, offset, length) of a directory (gzip or plain) with ids in [start, end) (a run-length entry
+/// gives each of its ids), and the leaf directories (first tile id, offset, length) that may hold some: a region's
+/// byte ranges from the directories.
 #[pyfunction]
 pub fn bnwt_dir_range(py: Python<'_>, dir: &[u8], start: u64, end: u64)
                       -> PyResult<(Vec<(u64, u64, u64)>, Vec<(u64, u64, u64)>)> {
@@ -974,14 +1010,64 @@ pub fn bnwt_dir_range(py: Python<'_>, dir: &[u8], start: u64, end: u64)
                     leaves.push((x.tile_id, x.offset, x.length));
                 }
             } else if x.tile_id < end && x.tile_id + x.run > start {
-                tiles.push((x.tile_id, x.offset, x.length));
+                for t in x.tile_id.max(start)..(x.tile_id + x.run).min(end) {
+                    tiles.push((t, x.offset, x.length));
+                }
             }
         }
         Ok((tiles, leaves))
     }).map_err(PyValueError::new_err)
 }
 
+/// The rows each cell of a block of cells takes (the parquet path's bbox test, xmin <= east, xmax >= west, ymin <= north,
+/// ymax >= south, in the bbox columns' own type as DuckDB compares them: f32 casts both sides to float32, else double):
+/// x0 / x1 / y0 / y1 the rows' boxes; lon_edges the block's nx + 1 column edges west to east, lat_edges its ny + 1 row
+/// edges north to south (the cells' bounds() values). Returns (offsets, rows): cell (ix, iy) is index ix * ny + iy, its
+/// rows rows[offsets[i]:offsets[i + 1]], ascending.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn bnwt_assign<'py>(py: Python<'py>, x0: PyReadonlyArray1<f64>, x1: PyReadonlyArray1<f64>,
+                        y0: PyReadonlyArray1<f64>, y1: PyReadonlyArray1<f64>, lon_edges: Vec<f64>, lat_edges: Vec<f64>,
+                        f32: bool) -> PyResult<(Bound<'py, numpy::PyArray1<i64>>, Bound<'py, numpy::PyArray1<i64>>)> {
+    let (a, b, c, d) = (x0.as_array().to_vec(), x1.as_array().to_vec(), y0.as_array().to_vec(), y1.as_array().to_vec());
+    if a.len() != b.len() || a.len() != c.len() || a.len() != d.len() || lon_edges.len() < 2 || lat_edges.len() < 2 {
+        return Err(PyValueError::new_err("bnwt_assign: mismatched inputs"));
+    }
+    let (offs, rows) = py.detach(move || {
+        let q = |v: f64| if f32 { v as f32 as f64 } else { v };
+        let (a, b, c, d): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) =
+            (a.iter().map(|&v| q(v)).collect(), b.iter().map(|&v| q(v)).collect(),
+             c.iter().map(|&v| q(v)).collect(), d.iter().map(|&v| q(v)).collect());
+        let lon: Vec<f64> = lon_edges.iter().map(|&v| q(v)).collect();
+        let lat: Vec<f64> = lat_edges.iter().map(|&v| q(v)).collect();
+        let (nx, ny) = (lon.len() - 1, lat.len() - 1);
+        let mut per: Vec<Vec<i64>> = vec![Vec::new(); nx * ny];
+        for r in 0..a.len() {
+            for ix in 0..nx {
+                if !(a[r] <= lon[ix + 1] && b[r] >= lon[ix]) {
+                    continue;
+                }
+                for iy in 0..ny {
+                    if c[r] <= lat[iy] && d[r] >= lat[iy + 1] {
+                        per[ix * ny + iy].push(r as i64);
+                    }
+                }
+            }
+        }
+        let mut offs = Vec::with_capacity(per.len() + 1);
+        let mut rows = Vec::new();
+        offs.push(0i64);
+        for p in per {
+            rows.extend(p);
+            offs.push(rows.len() as i64);
+        }
+        (offs, rows)
+    });
+    Ok((offs.into_pyarray(py), rows.into_pyarray(py)))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(bnwt_assign, m)?)?;
     m.add_function(wrap_pyfunction!(bnwt_encode_tile, m)?)?;
     m.add_function(wrap_pyfunction!(bnwt_tile_info, m)?)?;
     m.add_function(wrap_pyfunction!(bnwt_decode_layer, m)?)?;
