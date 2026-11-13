@@ -88,52 +88,89 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
                                      & (b[:, 1] <= hla + rla) & (b[:, 3] >= hla - rla)).tolist()
             else:
                 idx = range(len(feats))
+            # (each feature's frame-free part, its lon / lat ring and attributes, made once and kept with its cell: a
+            # station group is laid out again in every road tile's frame, ~60k feature dicts for London's 4 groups in
+            # 4 tiles, 2026-11-12)
+            memo = _item_memo(feats)
             for i in idx:
                 fid = str(feats.ids[i])
                 if (name, fid) in seen:
                     continue
-                kind = KIND.get(int(feats.kind[i]))
-                parts = feats.parts(i)
-                if kind is None or not parts or not parts[0] or len(parts[0][0]) < 1:
+                got = memo.get(i, _MISSING)
+                if got is _MISSING:
+                    got = memo[i] = _item_base(feats, name, i, fid)
+                if got is None:
                     continue
-                ring = np.asarray(parts[0][0], np.float64)
+                ring, base = got
                 e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                 xy = np.column_stack((e, n)).astype(np.float64)
                 if float(np.hypot(xy[:, 0] - hx, xy[:, 1] - hy).min()) > radius:
                     continue
                 seen.add((name, fid))
-                it = {"layer": name, "id": fid, "cls": (_attr(feats, "class", i) or "").lower(),
-                      "sub": (_attr(feats, "subtype", i) or "").lower(), "name": _attr(feats, "name", i) or "",
-                      "tags": tags_of(feats, i), "kind": kind, "xy": xy}
-                for k in ("height", "min_height", "num_floors", "roof_shape", "surface", "basic_category",
-                          "taxonomy", "subclass", "roof_color", "roof_material"):
-                    v = _attr(feats, k, i)
-                    if v is not None:
-                        it[k] = v
-                if name == "roads":     # a road's surface and level are range rules, not columns
-                    v = _rule(feats, "surface", i)
-                    if v and "surface" not in it:
-                        it["surface"] = v
-                    lv = _rule(feats, "level", i)
-                    try:
-                        it["level"] = float(lv) if lv else 0.0
-                    except ValueError:
-                        it["level"] = 0.0
-                    ow = _rule(feats, "oneway", i)
-                    try:
-                        it["oneway"] = float(ow) if ow else 0.0
-                    except ValueError:
-                        it["oneway"] = 0.0
-                    if "subclass" not in it:
-                        sc = _rule(feats, "subclass", i)
-                        if sc:
-                            it["subclass"] = sc
-                    if it["cls"] in WALK_SPAN_CLASSES:      # (railstations: a footbridge / an underpass is a span of the way)
-                        spans = _spans(feats, i)
-                        if spans:
-                            it["spans"] = spans
+                it = dict(base)
+                it["xy"] = xy
                 out.append(it)
     return out
+
+
+_MISSING = object()
+
+
+def _item_memo(feats):
+    """{feature row: _item_base} kept with the cell's Features, new when a column or rule table it reads was replaced
+    since (levelways.promote's class column, a join's): the columns themselves are its key, by identity."""
+    if not hasattr(feats, "__dict__"):
+        return {}
+    a = feats.attrs
+    sig = tuple(a.get(k) for k in ("class", "subtype", "name", "tags", "height", "min_height", "num_floors",
+                                   "roof_shape", "surface", "basic_category", "taxonomy", "subclass", "roof_color",
+                                   "roof_material")) + (feats.kind, feats.lonlat) \
+        + tuple(v for _k, v in sorted((getattr(feats, "rules", None) or {}).items()))
+    got = feats.__dict__.get("_bs_items")
+    if got is None or len(got[0]) != len(sig) or any(x is not y for x, y in zip(got[0], sig)):
+        got = feats.__dict__["_bs_items"] = (sig, {})
+    return got[1]
+
+
+def _item_base(feats, name, i, fid):
+    """(lon / lat ring, item without its metres: "xy" None in its place) of feature i of a layer's cell, or None
+    without a geometry: the part of an item that no frame changes (items_from_layers keeps it with the cell)."""
+    kind = KIND.get(int(feats.kind[i]))
+    parts = feats.parts(i)
+    if kind is None or not parts or not parts[0] or len(parts[0][0]) < 1:
+        return None
+    ring = np.asarray(parts[0][0], np.float64)
+    it = {"layer": name, "id": fid, "cls": (_attr(feats, "class", i) or "").lower(),
+          "sub": (_attr(feats, "subtype", i) or "").lower(), "name": _attr(feats, "name", i) or "",
+          "tags": tags_of(feats, i), "kind": kind, "xy": None}
+    for k in ("height", "min_height", "num_floors", "roof_shape", "surface", "basic_category",
+              "taxonomy", "subclass", "roof_color", "roof_material"):
+        v = _attr(feats, k, i)
+        if v is not None:
+            it[k] = v
+    if name == "roads":     # a road's surface and level are range rules, not columns
+        v = _rule(feats, "surface", i)
+        if v and "surface" not in it:
+            it["surface"] = v
+        lv = _rule(feats, "level", i)
+        try:
+            it["level"] = float(lv) if lv else 0.0
+        except ValueError:
+            it["level"] = 0.0
+        ow = _rule(feats, "oneway", i)
+        try:
+            it["oneway"] = float(ow) if ow else 0.0
+        except ValueError:
+            it["oneway"] = 0.0
+        if "subclass" not in it:
+            sc = _rule(feats, "subclass", i)
+            if sc:
+                it["subclass"] = sc
+        if it["cls"] in WALK_SPAN_CLASSES:      # (railstations: a footbridge / an underpass is a span of the way)
+            spans = _spans(feats, i)
+            if spans:
+                it["spans"] = spans
+    return ring, it
 
 
 WALK_SPAN_CLASSES = ("footway", "steps", "path", "pedestrian", "corridor", "cycleway")

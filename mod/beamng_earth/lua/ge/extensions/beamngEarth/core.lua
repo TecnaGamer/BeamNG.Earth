@@ -2433,6 +2433,14 @@ local function perfContext()
     end
   end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
+  -- the single slow pieces of the last second (a "roads" or "net" frame is mostly one: a collision rebuild, a
+  -- building mesh's first load, a terrain commit message; London 2026-11-12)
+  local big = roads.lastBig
+  if big and os.clock() - big.at < 1.0 then d[#d + 1] = string.format('roads unit %s %.0f ms', big.kind, big.ms) end
+  local slowMsg = M._netq.lastSlow
+  if slowMsg and os.clock() - slowMsg.at < 1.0 then
+    d[#d + 1] = string.format('message %s %.0f ms', slowMsg.type, slowMsg.ms)
+  end
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
     st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '', M._alloc.text())
@@ -2730,6 +2738,11 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
+      if ms >= 20 then          -- (a hitch's context: perfContext names the message that made a "net" frame)
+        local s = nq.lastSlow or {}
+        s.type, s.ms, s.at = tostring(msg.type), ms, os.clock()
+        nq.lastSlow = s
+      end
     end
     M._alloc.roll(st.clock)
     M._alloc.frame()
