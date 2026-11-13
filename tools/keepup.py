@@ -204,8 +204,8 @@ def analyze(path, moving_ms=2.0):
             lay = np.array([PART_LAYER[r[1]] for r in P])
             for L in set(lay):
                 m = lay == L
-                # (a part's lead: the car's distance to its square; late: made with the car already in it)
-                add(L, a[m, 3], a[m, 4], a[m, 5], dpass[m], a[m, 3] < 1.0, a[m, 0])
+                # (a part's lead: the car's distance to its square; late: made with the car already in it, or past it)
+                add(L, a[m, 3], a[m, 4], a[m, 5], dpass[m], (a[m, 3] < 1.0) | (a[m, 0] > tpass[m]), a[m, 0])
     # parked cars: t, lat, lon, d, along, speed
     if rows["K"]:
         a = np.array([[float(v) for v in r] for r in rows["K"]])
