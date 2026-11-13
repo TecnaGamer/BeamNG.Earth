@@ -176,8 +176,22 @@ local function probe(st)
       end
     end
   end
+  -- ... and the tile under the car alone (a neighbour within PROBE_R may have no road tile at all: water, a park)
+  local cTile, cRoad, cWalk, cVeg = 0, 0, 0, 0
+  if R and R.geoKeyAt and R.keepupTile then
+    local k = R.geoKeyAt(car.x, car.y)
+    if k then
+      local s = R.keepupTile(k)
+      local tt = T and T.debugTiles and T.debugTiles() or {}
+      if not s.tile then cTile = 1 else
+        if not s.road then cRoad = 1 end
+        if s.walkWant and not s.walk then cWalk = 1 end
+      end
+      if not tt['g:' .. k] then cVeg = 1 end
+    end
+  end
   push(probes, { now, car.x, car.y, car.ai, car.sp, nTree, nProp, nRail, noTile, noSkin, noRoad, noWalk, noSigns,
-    noVeg, noProps })
+    noVeg, noProps, cTile, cRoad, cWalk, cVeg })
 end
 
 -- core.lua, each frame (after the world's updates): the car, the trace, the probe
@@ -290,8 +304,8 @@ function M.save(path)
   end
   for _, r in ipairs(probes) do
     local la, lo = ll(r[4], r[2], r[3])
-    out[#out + 1] = f('Q,%.3f,%.7f,%.7f,%.1f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d', r[1], la, lo, r[5], r[6], r[7], r[8], r[9],
-      r[10], r[11], r[12], r[13], r[14], r[15])
+    out[#out + 1] = f('Q,%.3f,%.7f,%.7f,%.1f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d', r[1], la, lo, r[5], r[6], r[7],
+      r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19])
   end
   for _, r in ipairs(misses) do
     local la, lo = ll(r[5], r[3], r[4])
