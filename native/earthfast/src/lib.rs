@@ -6357,6 +6357,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
     // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
     bnwt::register(m)?;
-    m.add("VERSION", 268)?;
+    // 273 (269-272 kept for other branches): bnwt FORMAT 2 (no cell in a tile, the cell's edges coded: open-sea tiles
+    // deduplicated, run-length directory entries), bnwt_assign (a block's rows to its cells, as the parquet bbox test)
+    m.add("VERSION", 273)?;
     Ok(())
 }

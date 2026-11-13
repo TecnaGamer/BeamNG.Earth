@@ -362,8 +362,8 @@ class MapData:
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
         # Overture's own vector tiles for the layers they hold whole (pmtiles.LAYERS), the parquet files the fallback
         self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
-        # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the parquet path's layers they hold: the same cell bit
-        # for bit (same file, same keys), one range read for many cells instead of the parquet row groups
+        # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
+        # bit (same file, same keys), one range read for a block of cells
         self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
@@ -796,7 +796,9 @@ class MapData:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats = fell = None
-            if self._pmt(layer):
+            if self._pmt(layer) and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, bnwt.PMT)
+            if self._pmt(layer) and feats is None:
                 try:
                     feats, sources = self.pmtiles.query(layer, key, kind)
                 except Exception as e:      # (any: the parquet files have the same layer, slower)
@@ -817,8 +819,9 @@ class MapData:
                         osm.cancel()
                     got["_fallback"] = np.array(True)
                     return got
-            if feats is None and fell is None and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
-                feats, sources = self._bnwt_query(layer, key, kind)
+            if feats is None and fell is None and not self._pmt(layer) and getattr(self, "bnwt", None) is not None \
+                    and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, "parquet")
             if feats is None:
                 feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
@@ -849,11 +852,11 @@ class MapData:
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         return arrays
 
-    def _bnwt_query(self, layer, key, kind):
-        """(Features, sources) of the layer from the prebaked tiles (bnwt.py), (None, None) when they cannot say (the
-        parquet files then: the same content, slower)."""
+    def _bnwt_query(self, layer, key, kind, source="parquet"):
+        """(Features, sources) of the layer from the prebaked tiles (bnwt.py) as source gives them (Overture's tiles:
+        bnwt.PMT, else "parquet"), (None, None) when they cannot say (the source itself then: the same content)."""
         try:
-            return self.bnwt.query(layer, key, kind)
+            return self.bnwt.query(layer, key, kind, source)
         except DEFERRED:
             if kind not in ("demand", "urgent"):
                 raise                       # (a prefetch the hosts had no room for: as the parquet path's)
@@ -1451,17 +1454,19 @@ class MapData:
         """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
         neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
         Returns the tiles asked for."""
-        n = 0
+        n, done = 0, set()
         if getattr(self, "bnwt", None) is not None:
-            todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not MapData._pmt(self, ly)
-                    and not self.has(_key(k), ly)]
+            todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not self.has(_key(k), ly)
+                    and bnwt.ARCHIVES[bnwt.ARCHIVE_OF[ly]]["source"] == bnwt.source_of(ly, MapData._pmt(self, ly))]
             try:
-                n += self.bnwt.prefetch(todo, kind) if todo else 0
-            except Exception as e:          # (the cells' own builds read the parquet files then)
+                done = self.bnwt.prefetch(todo, kind) if todo else set()
+                n += len(done)
+            except Exception as e:          # (the cells' own builds read their sources then)
                 log.debug("mapdata: prebaked tiles prefetch: %s: %s", type(e).__name__, e)
         if getattr(self, "pmtiles", None) is None:
             return n
-        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)]
+        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)
+                and (_key(k), ly) not in done]      # (Overture's tiles not fetched where the prebaked tiles answer)
         return n + (self.pmtiles.prefetch(todo, kind) if todo else 0)
 
     def side_prefetch(self, keys):

@@ -540,13 +540,22 @@ class Cache(NoCache):
     def _unpinned(self, items, key_of):
         """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""
         pinned = self.pinned
-        if pinned is None or not items:
+        if not items:
             return items
-        try:
-            mask = pinned([key_of(it) for it in items])
-        except Exception as e:      # (no pins rather than no eviction)
-            log.warning("cache: saved areas not checked: %s", e)
-            return items
+        keys = [key_of(it) for it in items]
+        mask = [False] * len(keys)
+        if pinned is not None:
+            try:
+                mask = list(pinned(keys))
+            except Exception as e:      # (no pins rather than no eviction)
+                log.warning("cache: saved areas not checked: %s", e)
+        try:                            # (and the prebaked input tiles' downloaded regions: bnwt.download_region)
+            import bnwt
+            got = bnwt.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded regions not checked: %s", e)
         return [it for it, p in zip(items, mask) if not p]
 
     def keys(self):

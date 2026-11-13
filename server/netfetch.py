@@ -173,6 +173,8 @@ class HostPolicy:
     breaker_max: float = 900.0              # ... up to this
     slow_ms: float | None = None            # a slower response counts as a failure (WMS / export hosts)
     timeout: float = 20.0                   # s per HTTP request
+    connect_timeout: float | None = None    # s to open a new connection (None: timeout): a source with a fallback
+                                            # gives up on a host that does not answer at once
     max_wait: float = 30.0                  # s a demand request may wait for a token
     redirect_limited: bool = False          # a 3xx means "rate limited" (tile hosts never redirect)
     binary: bool = False                    # a 200 with an HTML page is an error page
@@ -380,8 +382,11 @@ POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budg
 # project's tile host (which they will likely share); a host of its own gets the same policy
 _BNWT_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip()
 _BNWT_HOST = (urlsplit(_BNWT_URL).hostname or "") if _BNWT_URL.startswith(("http://", "https://")) else ""
-if _BNWT_HOST and _BNWT_HOST not in POLICIES:
-    POLICIES[_BNWT_HOST] = replace(POLICIES[_CDN_HOST])
+if _BNWT_HOST:
+    # (their own lane, "host#bnwt", whatever else the host serves: the server falls back to the sources themselves, so
+    # a host that does not answer is given up quickly: 2 s to connect, 2 tries)
+    POLICIES[_BNWT_HOST + "#bnwt"] = replace(POLICIES.get(_BNWT_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                             timeout=10.0, max_attempts=2, base_delay=0.25)
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
@@ -405,8 +410,8 @@ ROLES = {
     _CDN_HOST: "satellite photos of the distant land, road tags and the weekly railway, lane and sign data (the "
                "project's own tile host); the other photo sources, Pages' copy of the data meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
-    **({_BNWT_HOST: "water, land use and infrastructure, prebaked (our own tiles); Overture's files meanwhile"}
-       if _BNWT_HOST and _BNWT_HOST != _CDN_HOST else {}),
+    **({_BNWT_HOST: "map data prebaked (our own tiles: water, land use, roads, buildings, places); Overture's files "
+                    "meanwhile"} if _BNWT_HOST and _BNWT_HOST != _CDN_HOST else {}),
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
     "tiles.maps.eox.at": "worldwide satellite photos; new ground outside the detailed-photo regions may stay plain",
@@ -904,7 +909,9 @@ class HttpsTransport:
             return got
 
     def _request_once(self, url, headers, timeout, proxy):
-        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None). timeout: s, or (s to
+        connect, s for each read after)."""
+        connect_timeout, timeout = timeout if isinstance(timeout, tuple) else (timeout, timeout)
         u = urlsplit(url)
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         if proxy is None:
@@ -927,7 +934,7 @@ class HttpsTransport:
             else:
                 if proxy is not None and u.scheme == "https":
                     phost, pport, puser, ppass = proxy
-                    kwargs = {"timeout": timeout}
+                    kwargs = {"timeout": connect_timeout}
                     if self._tls_context is not None:
                         kwargs["context"] = self._tls_context
                     conn = http.client.HTTPSConnection(phost, pport, **kwargs)
@@ -939,19 +946,23 @@ class HttpsTransport:
                         conn.set_tunnel(u.hostname, u.port or 443)
                 elif proxy is not None:
                     phost, pport, puser, ppass = proxy
-                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    conn = http.client.HTTPConnection(phost, pport, timeout=connect_timeout)
                     if puser is not None:
                         creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
                         conn._proxy_auth = f"Basic {creds}"
                 else:
                     if u.scheme == "https":
-                        kwargs = {"timeout": timeout}
+                        kwargs = {"timeout": connect_timeout}
                         if self._tls_context is not None:
                             kwargs["context"] = self._tls_context
                         conn = http.client.HTTPSConnection(u.netloc, **kwargs)
                     else:
-                        conn = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                        conn = http.client.HTTPConnection(u.netloc, timeout=connect_timeout)
             try:
+                if not reused and connect_timeout != timeout:   # (connected within connect_timeout; reads: timeout)
+                    conn.connect()
+                    conn.timeout = timeout
+                    conn.sock.settimeout(timeout)
                 req_headers = dict(headers, Connection="keep-alive")
                 if proxy is not None and u.scheme == "http":
                     phost, pport, puser, ppass = proxy
@@ -1385,7 +1396,9 @@ class Fetcher:
                     netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = None
                     try:
-                        status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
+                        status, rh, body = ioprofiler.request(
+                            self.transport, url, hd,
+                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h)
