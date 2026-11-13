@@ -17,7 +17,8 @@ car passed within PASS_M (closest approach on its trace):
   lead_m     median / p10 distance from the car when they appeared (the item's own; a tile part's: its square)
   warn_s     ... that distance over the car's physics speed then: the seconds of warning the driver had
   <100m      share that first appeared within 100 m of the car, ahead of it (pop-in the driver sees)
-  late       share that appeared only after the car had passed its closest point
+  late       share that appeared only after the car had passed its closest point (data: of those, the share made
+             within 2 s of their tile's data arriving: the server's tile came late, not the mod's queue)
   road_s     median / p90 seconds after the road mesh of their road tile was made (tile_s: after their own data came)
   miss/km    distinct details that should have stood within 50 m of the car and did not (the probe), per km driven
 """
@@ -157,7 +158,8 @@ def analyze(path, moving_ms=2.0):
     per = {}
 
     def add(layer, d, ra, ta_, dpass, lates, tapp):
-        e = per.setdefault(layer, {"d": [], "w": [], "near": 0, "late": 0, "ra": [], "ta": [], "n": 0, "paused": 0})
+        e = per.setdefault(layer, {"d": [], "w": [], "near": 0, "late": 0, "lateRoad": 0, "ra": [], "ta": [], "n": 0,
+                                    "paused": 0})
         mv, v = interval(tapp)
         for i in range(len(d)):
             if not (ta - 1.0 <= tapp[i] <= tb) or dpass[i] > PASS_M:
@@ -169,6 +171,8 @@ def analyze(path, moving_ms=2.0):
             late = bool(lates[i])
             if late:
                 e["late"] += 1
+                if 0 <= ta_[i] <= 2.0:  # (made within 2 s of its tile's data: the data came late, not the mod)
+                    e["lateRoad"] += 1
             elif d[i] < NEAR_M:
                 e["near"] += 1
             if not late:
@@ -249,6 +253,7 @@ def analyze(path, moving_ms=2.0):
                             "warn_s_median": pct(e["w"], 50), "warn_s_p10": pct(e["w"], 10),
                             "near_share": round(e["near"] / n, 3) if n else None,
                             "late_share": round(e["late"] / n, 3) if n else None,
+                            "late_data_share": round(e["lateRoad"] / max(e["late"], 1), 3),
                             "road_s_median": pct(e["ra"], 50), "road_s_p90": pct(e["ra"], 90),
                             "tile_s_median": pct(e["ta"], 50), "tile_s_p90": pct(e["ta"], 90)}
     for L, s in miss.items():
@@ -272,7 +277,7 @@ def table(results):
         if r.get("parked_all"):
             lines.append(f"  parked cars moved in (all): {r['parked_all']}")
         lines.append(f"  {'layer':14} {'n':>6} {'paused':>6} {'lead_m med/p10':>15} {'warn_s med/p10':>15} {'<100m':>6} "
-                     f"{'late':>6} {'road_s med/p90':>15} {'tile_s med/p90':>15} {'miss/km':>8}")
+                     f"{'late':>6} {'data':>5} {'road_s med/p90':>15} {'tile_s med/p90':>15} {'miss/km':>8}")
         for L in LAYERS + sorted(set(r["layers"]) - set(LAYERS)):
             e = r["layers"].get(L)
             if not e:
@@ -282,6 +287,7 @@ def table(results):
                          f"{two(e.get('warn_s_median'), e.get('warn_s_p10')):>15} "
                          f"{'-' if e.get('near_share') is None else round(100 * e['near_share'])!s:>5}% "
                          f"{'-' if e.get('late_share') is None else round(100 * e['late_share'])!s:>5}% "
+                         f"{'-' if e.get('late_data_share') is None else round(100 * e['late_data_share'])!s:>4}% "
                          f"{two(e.get('road_s_median'), e.get('road_s_p90')):>15} "
                          f"{two(e.get('tile_s_median'), e.get('tile_s_p90')):>15} {e.get('miss_per_km', 0):>8}")
     return "\n".join(lines)
