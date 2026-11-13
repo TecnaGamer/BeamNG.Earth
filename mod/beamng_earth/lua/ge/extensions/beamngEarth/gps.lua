@@ -721,7 +721,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
     preferred[a] = preferred[a] or {}; preferred[b] = preferred[b] or {}
     preferred[a][b], preferred[b][a] = true, true
   end
-  local best, bd, kept, kd = nil, math.huge, nil, math.huge
+  local best, bd, kept, kd, surface, sd = nil, math.huge, nil, math.huge, nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
     if not (a and b) or not drivable(e, from) then return end
@@ -743,6 +743,9 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
       local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
       local distanceSq = d * d + dz * dz
       if (d < reach or (tolerance and d == reach)) and distanceSq < bd then best, bd = { from, to }, distanceSq end
+      -- The fallback tolerance must not select a nearby narrow road over the lane actually occupied.
+      if not tolerance and along >= 0 and along <= 1 and d < ra + t * (rb - ra)
+        and math.abs(dz) <= 2 and distanceSq < sd then surface, sd = { from, to }, distanceSq end
       if preferred[from] and preferred[from][to] and along >= 0 and along <= 1 and d < ra + t * (rb - ra)
         and math.abs(dz) <= 2 and distanceSq < kd then kept, kd = { from, to }, distanceSq end
     end
@@ -753,7 +756,7 @@ function M.edgeUnder(nodes, px, py, hx, hy, pz, tolerance, path)
       try(other, id, e)
     end
   end
-  best = kept or best
+  best = kept or surface or best
   if best then return best[1], best[2] end
 end
 
