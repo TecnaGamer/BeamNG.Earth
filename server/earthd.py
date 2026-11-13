@@ -3494,6 +3494,21 @@ class Server:
                 self.warm_thread.start()
             self.warm_cv.notify()
 
+    def decisions_prefetch(self, lat, lon):
+        """The shared decision archives' blocks round a new place (decisions.py: road plans and cell facts built and
+        signed by the project's builder for this version) downloaded while its first block starts."""
+        import decisions
+        if not decisions.enabled() or self.mapdata is None or not self.grading:
+            return
+        t0 = time.perf_counter()
+        try:
+            n = decisions.prefetch_near(self.cache_dir, self.mapdata.versions(), lat, lon)
+        except Exception as e:
+            log.info("decisions: prefetch: %s: %s", type(e).__name__, e)
+            return
+        if n:
+            log.info("decisions: %d blocks round %.4f, %.4f on hand in %.2f s", n, lat, lon, time.perf_counter() - t0)
+
     def bake_sync(self, anchor, x, y):
         """The data repo's baked packs near the player (bakepack.sync: road plans and cell facts made offline) fetched
         in a thread of their own, as the player moves (at most every bakepack.CHECK_S)."""
@@ -8670,6 +8685,8 @@ class Connection:
                 log.warning("anchor %d: coarse far field ahead: %s: %s", anchor.id, type(e).__name__, e)
         # (the map data the first block's grading and the road tiles will ask for, fetched meanwhile)
         asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.warm_place, anchor, cx, cy)
+        if teleport:        # (and the shared decision archives' blocks there: the planning reads them from the disk)
+            asyncio.get_running_loop().run_in_executor(self.s.ui_pool, self.s.decisions_prefetch, lat, lon)
         self.status(f"Building terrain at {lat:.5f}, {lon:.5f}...")
         t0 = time.perf_counter()
         # a teleport's first block without its road plans, the graded one sent when built (make_provisional)
@@ -10867,6 +10884,11 @@ async def main_async(args):
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
+    try:                                        # (other versions' shared decision blocks: decisions.py)
+        import decisions as decisionsmod
+        decisionsmod.prune(args.cache_dir)
+    except Exception as e:
+        log.info("decisions: prune: %s: %s", type(e).__name__, e)
     roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
     # (the compact layout: the lean tiers', and the small tier's (SMALL_COMPACT): a block process for both lanes, the far
@@ -11716,6 +11738,14 @@ def main():
             rel = None
         os.environ["BNGE_DEM_CDN"] = rel or "off"   # (the block workers read it at their import of dem)
         demmod.MT_CDN_RELEASE = rel
+    if "BNGE_DECISIONS" not in os.environ:   # (the shared decision archives where the switch says: decisions.py)
+        import cdn as cdnmod
+        try:
+            on = not args.offline and cdnmod.decisions_on(netfetch.Fetcher(offline=args.offline), args.cache_dir)
+        except Exception as e:
+            log.warning("cdn: %s: %s", type(e).__name__, e)
+            on = False
+        os.environ["BNGE_DECISIONS"] = "on" if on else "off"    # (before the workers start: they inherit it)
     if args.cells != 32 and args.near_visual not in MESH_LAYOUT:
         ap.error("--cells 64 needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     if args.block != TERRAIN_BLOCK and args.near_visual not in MESH_LAYOUT:

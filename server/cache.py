@@ -73,7 +73,7 @@ INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
-           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks")
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks", "decisions")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
 # Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
 # maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in
@@ -558,6 +558,13 @@ class Cache(NoCache):
                 mask = [a or b for a, b in zip(mask, got)]
         except Exception as e:
             log.warning("cache: downloaded regions not checked: %s", e)
+        try:                            # (the shared decision archives' downloaded regions: decisions.download_region)
+            import decisions
+            got = decisions.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded decision regions not checked: %s", e)
         return [it for it, p in zip(items, mask) if not p]
 
     def keys(self):

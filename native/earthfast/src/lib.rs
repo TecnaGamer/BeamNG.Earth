@@ -116,6 +116,7 @@ mod tilecuts;
 mod bldclear;
 mod bnwt;
 mod aerialcov;
+mod decisions;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6378,6 +6379,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
     m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
     m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
-    m.add("VERSION", 276)?;
+    // 282 (277-281 kept for other branches): the shared decision archives (decisions: BNGD blocks of road plans and
+    // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
+    decisions::register(m)?;
+    m.add("VERSION", 282)?;
     Ok(())
 }

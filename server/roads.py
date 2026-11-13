@@ -597,8 +597,20 @@ def _facts_baked(feats, kind, extra):
         versions = json.loads(cid[2])
     except (ValueError, IndexError, TypeError):
         return None
-    return bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
-                         {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+    got = bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
+                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+    if got is None:
+        import decisions        # (the shared decision archives: built by the project's builder, signed, checked)
+        if decisions.enabled():
+            import roadz
+            if roadz.hk_cell(decisions._cell_tuple(cid[0])):
+                return None     # (Hong Kong's measured heights: never shared, roadz.hk_cell)
+            got = decisions.facts(revisit.CACHE_DIR, cid, kind, extra)
+            if got is not None:
+                k = _facts_key(feats, kind, extra)      # (kept under this server's own key: read from disk next time)
+                if k is not None:
+                    revisit.store(revisit.CACHE_DIR, "cellfacts", k, {"facts.json": got})
+    return got
 
 
 def _facts_store(feats, kind, extra, data):
