@@ -15,6 +15,7 @@
 //! snapped after). The corrections asked are made smooth along the road: a smoothing spline (weights wreq where asked,
 //! w0 elsewhere, lam on the curvature: (lam / w0)^(1/4) ~ 47 m of easing), solved per plan (a banded LDL^T). All
 //! corrections come from the plans as given (no order dependence).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -114,7 +115,7 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
         let zp = &z[o..o + m];
         let mut s = vec![0.0f64; m];
         for k in 1..m {
-            s[k] = s[k - 1] + (p[k][0] - p[k - 1][0]).hypot(p[k][1] - p[k - 1][1]);
+            s[k] = s[k - 1] + (p[k][0] - p[k - 1][0]).dhypot(p[k][1] - p[k - 1][1]);
         }
         let last = s[m - 1];
         let mut up = vec![0.0f64; m];
@@ -132,7 +133,7 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
             // the direction (np.gradient: central, one-sided at the ends)
             let (a, b) = if i == 0 { (0, 1) } else if i == m - 1 { (m - 2, m - 1) } else { (i - 1, i + 1) };
             let (tx, ty) = (p[b][0] - p[a][0], p[b][1] - p[a][1]);
-            let tl = tx.hypot(ty);
+            let tl = tx.dhypot(ty);
             if tl < 1e-9 {
                 continue;
             }
@@ -157,7 +158,7 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
                         let (dx, dy) = (qb[0] - qa[0], qb[1] - qa[1]);
                         let ll = (dx * dx + dy * dy).max(1e-12);
                         let t = (((px - qa[0]) * dx + (py - qa[1]) * dy) / ll).clamp(0.0, 1.0);
-                        let d = (qa[0] + dx * t - px).hypot(qa[1] + dy * t - py);
+                        let d = (qa[0] + dx * t - px).dhypot(qa[1] + dy * t - py);
                         let slot = mark[sg.plan];
                         if slot == usize::MAX {
                             mark[sg.plan] = best.len();
@@ -183,7 +184,7 @@ pub fn corridor_core(xy: &[[f64; 2]], off: &[usize], z: &[f64], wall: &[bool], r
                     continue;   // (the other in a cutting there: Porte Maillot's ramps beside the walled trench)
                 }
                 let (dx, dy) = (q[si + 1][0] - q[si][0], q[si + 1][1] - q[si][1]);
-                let dl = dx.hypot(dy);
+                let dl = dx.dhypot(dy);
                 if dl < 1e-9 || ((tx * dx + ty * dy) / dl).abs() < cos_ang {
                     continue;
                 }
@@ -356,7 +357,7 @@ pub fn plan_share_corridors<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>
     let rhv: Vec<f64> = rh.iter().copied().collect();
     let keyv: Vec<i64> = key.iter().copied().collect();
     let abv: Vec<[bool; 2]> = (0..n).map(|j| [ab[[j, 0]], ab[[j, 1]]]).collect();
-    let cos_ang = ang_deg.to_radians().cos();
+    let cos_ang = ang_deg.to_radians().dcos();
     let (zo, ch) = py.detach(|| corridor_core(&xyv, &offv, &zv, &wv, &rhv, &keyv, &abv, cos_ang, bank_s, gap_m, max_diff,
                                               abut_hold, wreq, w0, lam, equal_hold));
     Ok((zo.into_pyarray(py), ch.into_pyarray(py)))
@@ -403,12 +404,12 @@ mod tests {
             let a = (5.0f64 * sgn).to_radians();
             for i in 0..60 {
                 let s = i as f64 * 2.0;
-                xy.push([s * a.cos(), s * a.sin()]);
+                xy.push([s * a.dcos(), s * a.dsin()]);
                 z.push(sgn * 0.03 * s);
             }
             off.push(xy.len());
         }
-        let (zo, ch) = corridor_core(&xy, &off, &z, &vec![false; xy.len()], &[7.0, 7.0], &[5, 5], &[[false, false]; 2], 45f64.to_radians().cos(),
+        let (zo, ch) = corridor_core(&xy, &off, &z, &vec![false; xy.len()], &[7.0, 7.0], &[5, 5], &[[false, false]; 2], 45f64.to_radians().dcos(),
                                      0.4, 6.0, 10.0, 25.0, 10.0, 0.01, 50000.0, i64::MAX);
         assert!(!ch[0] && ch[1], "only the lower branch rises: {ch:?}");
         // at 40 m along, the pavements still overlap (gap = 40 sin 10 - 14 < 0): most of the 2.4 m taken out

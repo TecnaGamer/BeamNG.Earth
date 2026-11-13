@@ -58,6 +58,8 @@ from PIL import Image, ImageFilter
 import cache as cachemod
 import dem as demmod
 import fast     # Rust kernels (earthfast): the warp, mips and BC1 blocks
+import dmath
+import dnp
 import netfetch
 import season
 import staging
@@ -273,7 +275,7 @@ def tone_lut(strength=1.0, lift=1.0):
     curve stays monotonic for strength <= 3. lift scales the shadow lift alone (de-shadowed
     texels, deshadow.FULL_TONE_LIFT)."""
     x = np.arange(256) / 255.0
-    y = x + strength * (lift * 0.06 * (1 - x) ** 3 - 0.10 * x ** 3)
+    y = x + strength * (lift * 0.06 * dnp.power(1 - x, 3) - 0.10 * dnp.power(x, 3))
     return np.clip(np.rint(y * 255), 0, 255).astype(np.uint8)
 
 
@@ -293,20 +295,20 @@ PREFETCH_STOP_REGIONAL = os.environ.get("BNGE_PREFETCH_PAST_REGIONAL") != "1"
 
 def ground_res(lat, z):
     """Web-Mercator ground resolution (m per 256 px tile pixel) at latitude lat and zoom z."""
-    return EARTH_CIRC * math.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
+    return EARTH_CIRC * dmath.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
 
 
 def zoom_for(lat, texel_m, max_zoom=19):
     """Zoom whose ground resolution is closest (in log2) to the texel size."""
-    c = EARTH_CIRC * max(math.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
-    return int(min(max_zoom, max(0, round(math.log2(c / (TILE * texel_m))))))
+    c = EARTH_CIRC * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
+    return int(min(max_zoom, max(0, round(dmath.log2(c / (TILE * texel_m))))))
 
 
 def mercator_px(lat, lon, z):
     """Global pixel coordinates (x right, y down; pixel centres at +0.5) of lat/lon at zoom z."""
     w = TILE * 2 ** z
     x = (np.asarray(lon, np.float64) / 360.0 + 0.5) * w
-    y = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * w
+    y = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w
     return x, y
 
 
@@ -362,8 +364,8 @@ def in_bounds(src, z, x, y):
     s, w, n, e = src.bounds
     k = 2 ** z
     lon0, lon1 = x / k * 360 - 180, (x + 1) / k * 360 - 180
-    lat1 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / k))))
-    lat0 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / k))))
+    lat1 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * y / k))))
+    lat0 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 1) / k))))
     return lon1 > w and lon0 < e and lat1 > s and lat0 < n
 
 
@@ -380,8 +382,8 @@ def range_in_bounds(src, z, tx0, tx1, ty0, ty1):
     s, w, n, e = src.bounds
     k = 2 ** z
     lon0, lon1 = tx0 / k * 360 - 180, (tx1 + 1) / k * 360 - 180
-    lat1 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ty0 / k))))
-    lat0 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty1 + 1) / k))))
+    lat1 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * ty0 / k))))
+    lat0 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (ty1 + 1) / k))))
     return lon1 > w and lon0 < e and lat1 > s and lat0 < n
 
 
@@ -400,7 +402,7 @@ def lat_lon_bbox(mb):
     tile's Mercator rows (a fraction of a pixel)."""
     x0, y0, x1, y1 = mb
     lon = lambda x: math.degrees(x / R_MERC)                                            # noqa: E731
-    lat = lambda y: math.degrees(2.0 * math.atan(math.exp(y / R_MERC)) - math.pi / 2)  # noqa: E731
+    lat = lambda y: math.degrees(2.0 * dmath.atan(dmath.exp(y / R_MERC)) - math.pi / 2)  # noqa: E731
     return f"{lat(y0):.7f},{lon(x0):.7f},{lat(y1):.7f},{lon(x1):.7f}"
 
 
@@ -706,7 +708,7 @@ class Imagery:
                 r = self.fetcher.get(url, kind=kind)
             except netfetch.NotFound:           # no pack there (open sea, outside it): every tile of it a miss
                 missindex.record([self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))[1]
-                                  for i in range((1 << src.pack) ** 2)], self.disk)
+                                  for i in range(dnp.sq(1 << src.pack))], self.disk)
                 self._count(src.name + ":404")
                 return None
             except netfetch.FetchError as e:
@@ -724,7 +726,7 @@ class Imagery:
                 del self.fetch_ms[:-2000]
             out = None
             misses = []
-            for i in range((1 << k) ** 2):
+            for i in range(dnp.sq(1 << k)):
                 tz, tx, ty = tilepackmod.tile_at(pz, px, py, k, i)
                 tp, mm = self._paths(src, tz, tx, ty)
                 b = tiles.get(i)
@@ -929,7 +931,7 @@ class Imagery:
                     continue
                 n = 2 ** z
                 x = int((lon / 360.0 + 0.5) * n) % n
-                y = int(min(n - 1, max(0, (0.5 - math.asinh(math.tan(math.radians(lat))) / (2 * math.pi)) * n)))
+                y = int(min(n - 1, max(0, (0.5 - dmath.asinh(dmath.tan(math.radians(lat))) / (2 * math.pi)) * n)))
                 st = self._probe_status((src, z, x, y))
                 if st == "covered":
                     best = z
@@ -2118,13 +2120,13 @@ class MercSquare:
         self.z, self.x, self.y = int(z), int(x), int(y)
         self.f0 = -g / (px - 2 * g)                     # the square in tile fractions: [f0, f1]
         self.f1 = 1.0 - self.f0
-        lat_c = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * (y + 0.5) / 2 ** z))))
-        self.size = EARTH_CIRC * math.cos(math.radians(lat_c)) / 2 ** z * (self.f1 - self.f0)
+        lat_c = math.degrees(dmath.atan(dmath.sinh(math.pi * (1.0 - 2.0 * (y + 0.5) / 2 ** z))))
+        self.size = EARTH_CIRC * dmath.cos(math.radians(lat_c)) / 2 ** z * (self.f1 - self.f0)
 
     def _ll(self, fx, fy):
         w = float(2 ** self.z)
         lon = (self.x + fx) / w * 360.0 - 180.0
-        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
+        lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
         return lat, lon
 
     def grid(self, n):
@@ -2182,7 +2184,7 @@ def dxt1_size(w, h):
 # grazing angle is drawn from the small levels): averaged in linear light (dark detail does not swallow light
 # detail) and each smaller level sharpened a little (MIP_SHARPEN, a 3 x 3 unsharp mask).
 MIP_SHARPEN = 0.35
-_TO_LIN = ((np.arange(256) / 255.0) ** 2.2).astype(np.float32)
+_TO_LIN = (dnp.power(np.arange(256) / 255.0, 2.2)).astype(np.float32)
 
 
 def mip_arrays(rgb):

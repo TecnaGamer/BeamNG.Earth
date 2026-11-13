@@ -26,6 +26,8 @@ import time
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 from polygon import Path
 
 import mapcells
@@ -208,13 +210,13 @@ def _merc(lat, lon, z=PX_ZOOM):
     lat = np.clip(np.asarray(lat, np.float64), -mapcells.MAX_LAT, mapcells.MAX_LAT)
     n = 256.0 * (1 << z)
     x = (np.asarray(lon, np.float64) + 180.0) / 360.0 * n
-    s = np.sin(np.radians(lat))
-    y = (0.5 - np.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
+    s = dnp.sin(np.radians(lat))
+    y = (0.5 - dnp.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
     return x, y
 
 
 def _px_m(lat):
-    return 2 * math.pi * 6378137.0 / (256 << PX_ZOOM) * math.cos(math.radians(lat))
+    return 2 * math.pi * 6378137.0 / (256 << PX_ZOOM) * dmath.cos(math.radians(lat))
 
 
 def shore_steps(water, kmax):
@@ -280,7 +282,7 @@ def _lonlat(mx, my, z=PX_ZOOM):
     """The inverse of _merc."""
     n = 256.0 * (1 << z)
     lon = np.asarray(mx, np.float64) / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(my, np.float64) / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * np.asarray(my, np.float64) / n))))
     return lat, lon
 
 
@@ -550,7 +552,7 @@ class SeaCarver:
                         m = np.zeros((n, n), bool)
                         self._rasterise(f, i, m, ox, oy)
                         lake[m] = lake_ids.index(gid)
-        lat_c = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / (1 << mapcells.ZOOM)))))
+        lat_c = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / (1 << mapcells.ZOOM)))))
         px = _px_m(lat_c)
         level = np.full((n, n), np.nan, np.float32)
         depth = np.zeros((n, n), np.float32)
@@ -752,7 +754,7 @@ class SeaCarver:
                         for ring in part:
                             mx, my = _merc(ring[:, 1], ring[:, 0])
                             q = np.stack([mx - ox, my - oy], -1)
-                            seg = np.hypot(*np.diff(q, axis=0).T)
+                            seg = dnp.hypot(*np.diff(q, axis=0).T)
                             t = np.r_[0.0, np.cumsum(seg)]
                             if t[-1] <= 0:
                                 continue
@@ -770,7 +772,7 @@ class SeaCarver:
         if (len(pts) < 2 or pts[:, 0].max() < -wmax or pts[:, 1].max() < -wmax or pts[:, 0].min() > n + wmax
                 or pts[:, 1].min() > n + wmax):
             return []
-        seg = np.hypot(*np.diff(pts, axis=0).T)
+        seg = dnp.hypot(*np.diff(pts, axis=0).T)
         s = np.r_[0.0, np.cumsum(seg)]
         if s[-1] <= 0:
             return []
@@ -805,8 +807,8 @@ class SeaCarver:
         # the level: the lowest DEM at the point and 8 around it at half the width (<= LINE_PROBE_MAX_M)
         r = np.clip(w / 2, 2.0, LINE_PROBE_MAX_M) / px
         ang = np.arange(8) * (np.pi / 4)
-        pxs = np.concatenate([q[:, 0]] + [q[:, 0] + r * math.cos(a) for a in ang])
-        pys = np.concatenate([q[:, 1]] + [q[:, 1] + r * math.sin(a) for a in ang])
+        pxs = np.concatenate([q[:, 0]] + [q[:, 0] + r * dmath.cos(a) for a in ang])
+        pys = np.concatenate([q[:, 1]] + [q[:, 1] + r * dmath.sin(a) for a in ang])
         la, lo = _lonlat(ox + pxs + 0.5, oy + pys + 0.5)
         return w, np.asarray(la, np.float64), np.asarray(lo, np.float64)
 
@@ -1158,9 +1160,9 @@ class SeaCarver:
         k = int(radius_m // step_m)
         o = np.arange(-k, k + 1) * step_m
         E, N = np.meshgrid(o, o)
-        inside = np.hypot(E, N) <= radius_m
+        inside = dnp.hypot(E, N) <= radius_m
         la = lat + N[inside] / 111320.0
-        lo = lon + E[inside] / (111320.0 * math.cos(math.radians(lat)))
+        lo = lon + E[inside] / (111320.0 * dmath.cos(math.radians(lat)))
         d, lv = self.water(la, lo)
         return bool(((d > 0) & (np.abs(lv - SEA_E) < 0.01)).any())
 
@@ -1213,7 +1215,7 @@ def cell_shores(carver, x, y):
     if not kind.any():
         return []
     lat_c = float(_lonlat((x + 0.5) * CELL_PX, (y + 0.5) * CELL_PX)[0])
-    min_px = int(SHORE_MIN_M2 / _px_m(lat_c) ** 2)
+    min_px = int(SHORE_MIN_M2 / dnp.sq(_px_m(lat_c)))
     fast.require(79, "shore_lines")
     pts, off, wpx, kinds = fast._ef.shore_lines(kind, min_px, SHORE_EPS_PX, SHORE_MIN_LEN_PX, 1, CELL_PX + 1, 1,
                                                 CELL_PX + 1)

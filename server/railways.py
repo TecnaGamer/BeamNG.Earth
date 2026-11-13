@@ -18,6 +18,8 @@ import re
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import footbridges
 import mapgeom
@@ -476,7 +478,7 @@ def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
     outs = []                       # (the track's own ground past each end: a mapped bridge's end may lie on the cut's
     for i, j in ((0, 1), (-1, -2)):  # slope, Nachod's road 14 under the Kladska line, 1.3 m over the road there)
         d = b[i] - b[j]
-        outs.append(b[i] + d / max(float(np.hypot(*d)), 1e-9) * LEVEL_BRIDGE_OUT_M)
+        outs.append(b[i] + d / max(float(dnp.hypot(*d)), 1e-9) * LEVEL_BRIDGE_OUT_M)
     pts = np.r_[road, np.asarray(outs)]
     la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
     try:
@@ -538,7 +540,7 @@ def _seg_arc(line, pt):
     s = _arc(line)
     ab = np.diff(line, axis=0)
     t = np.clip(((pt - line[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.linalg.norm(line[:-1] + t[:, None] * ab - pt, axis=1)))
+    j = int(np.argmin(dnp.norm(line[:-1] + t[:, None] * ab - pt, axis=1)))
     return float(s[j] + t[j] * (s[j + 1] - s[j]))
 
 
@@ -635,11 +637,11 @@ def _underpass_distance(xy, line):
     along = np.zeros(len(xy))
     for j, (a, b) in enumerate(zip(line[:-1], line[1:])):
         d = b - a
-        length = float(np.hypot(*d))
+        length = float(dnp.hypot(*d))
         if length < 1e-6:
             continue
-        t = np.clip((xy - a) @ d / (length * length), 0.0, 1.0)
-        dd = np.linalg.norm(xy - (a + t[:, None] * d), axis=1)
+        t = np.clip(dnp.matmul(xy - a, d) / (length * length), 0.0, 1.0)
+        dd = dnp.norm(xy - (a + t[:, None] * d), axis=1)
         take = dd < dist
         dist[take] = dd[take]
         along[take] = (s[j] + t[take] * length) / max(s[-1], 1e-6)
@@ -676,7 +678,7 @@ def _underpass_masks(rails, line, half, margin, boxes=None):
             continue
         tangent = np.gradient(xy, axis=0)
         cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
-        cross /= np.maximum(np.linalg.norm(tangent, axis=1) * np.linalg.norm(direction), 1e-9)
+        cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
         distance, _ = _underpass_distance(xy, line)
         covered = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
         candidates.append(covered)
@@ -968,7 +970,7 @@ def crosses(a, b, min_sin=WALK_MIN_SIN):
     with np.errstate(divide="ignore", invalid="ignore"):
         t = (qp[..., 0] * s[..., 1] - qp[..., 1] * s[..., 0]) / rxs
         u = (qp[..., 0] * r[..., 1] - qp[..., 1] * r[..., 0]) / rxs
-        sin = np.abs(rxs) / (np.hypot(r[..., 0], r[..., 1]) * np.hypot(s[..., 0], s[..., 1]))
+        sin = np.abs(rxs) / (dnp.hypot(r[..., 0], r[..., 1]) * dnp.hypot(s[..., 0], s[..., 1]))
     hit = (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1) & (sin >= min_sin)
     return bool(np.any(hit))
 
@@ -1016,8 +1018,8 @@ def _segment_at(line, p):
     """The direction (b - a) of line's segment nearest point p. Pure."""
     a, b = line[:-1], line[1:]
     d = b - a
-    t = np.clip(np.einsum("ij,ij->i", p - a, d) / np.maximum(np.einsum("ij,ij->i", d, d), 1e-9), 0.0, 1.0)
-    k = int(np.argmin(np.linalg.norm(p - (a + t[:, None] * d), axis=1)))
+    t = np.clip(dnp.vecdot(p - a, d) / np.maximum(dnp.vecdot(d, d), 1e-9), 0.0, 1.0)
+    k = int(np.argmin(dnp.norm(p - (a + t[:, None] * d), axis=1)))
     return d[k]
 
 
@@ -1044,7 +1046,7 @@ def _cut_worn_at_motorways(rails, wear_of, roads_xy):
                 j = int(np.clip(np.searchsorted(s, arc) - 1, 0, len(xy) - 2))
                 t = xy[j + 1] - xy[j]
                 r = _segment_at(line, p)        # (the road's direction at the crossing)
-                sin = abs(t[0] * r[1] - t[1] * r[0]) / max(np.linalg.norm(t) * np.linalg.norm(r), 1e-9)
+                sin = abs(t[0] * r[1] - t[1] * r[0]) / max(dnp.norm(t) * dnp.norm(r), 1e-9)
                 cut |= np.abs(s - arc) <= half / max(sin, WORN_CUT_MIN_SIN) + WORN_CUT_M
         if not cut.any():
             out.append((fid, cls, kind, xy))
@@ -1070,12 +1072,12 @@ def _resample(xy, step):
 
 
 def _arc(xy):
-    return np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
+    return np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))))
 
 
 def _left(xy):
     d = np.gradient(xy, axis=0)
-    d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     return np.c_[-d[:, 1], d[:, 0]]
 
 
@@ -1165,7 +1167,7 @@ def approach_levels_many(xys, ground, grades=None):
         xy = np.asarray(xy, np.float64).reshape(-1, 2)
         for end, nxt in (((xy[0], xy[1]), (xy[-1], xy[-2])) if len(xy) >= 2 else ()):
             u = end - nxt
-            n = float(np.hypot(*u))
+            n = float(dnp.hypot(*u))
             rays.append(end + (u / n)[None, :] * d[:, None] if n > 1e-6 else None)
         if len(xy) < 2:
             rays += [None, None]
@@ -1352,7 +1354,7 @@ def flush_to_plans(xy, zb, roads_):
     for n, p in enumerate(xy[blk]):
         best = None
         for ln, _h, z in crossers:
-            d = np.hypot(*(ln - p).T)
+            d = dnp.hypot(*(ln - p).T)
             k = int(np.argmin(d))
             if best is None or d[k] < best[0]:
                 best = (float(d[k]), float(z[k]))
@@ -1376,7 +1378,7 @@ def seam_crossers(xy, zb, roads_):
         r = lines[k]
         hits = roads._crossings([xy], [r])
         rzz = np.asarray(rz, np.float64)[:len(r)]
-        if hits and any(abs(float(rzz[int(np.argmin(np.hypot(*(r - pt).T)))])
+        if hits and any(abs(float(rzz[int(np.argmin(dnp.hypot(*(r - pt).T)))])
                             - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
             out.append((rxy, rz, rh))
     return out
@@ -1535,7 +1537,7 @@ def _sleepers(s, xy, u, top, i, j, gone=0.0):
         return None
     cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
     ux, uy = np.interp(ss, s, u[:, 0]), np.interp(ss, s, u[:, 1])
-    un = np.c_[ux, uy] / np.maximum(np.hypot(ux, uy), 1e-9)[:, None]
+    un = np.c_[ux, uy] / np.maximum(dnp.hypot(ux, uy), 1e-9)[:, None]
     zt = np.interp(ss, s, top) - SLEEPER_SINK
     return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zt, zt + SLEEPER_H
 
@@ -1587,7 +1589,7 @@ def pier_sites(s, xy, u, top, zg, i, j, obstacles, ground, every, under, min_h, 
     (earthfast.rail_pier_sites); each reaching PIER_FOOT_M under the lowest ground at its four corners (from the ground
     at the line's centre one hung in the air where the ground fell away to the road)."""
     import fast
-    fast.require(264, "rail_pier_sites")
+    fast.require(266, "rail_pier_sites")
     oa, ob, half = obstacles
     f64 = np.float64
     c, along, across, zg_c, z1 = fast._ef.rail_pier_sites(
@@ -1620,7 +1622,7 @@ def _vault():
     """The rail tunnel's section: [(x across from the axis, z over the ballast top)] from the floor on the left wall up,
     over the vault and down the right wall, as one line."""
     th = np.linspace(np.pi, 0.0, TUNNEL_SECTION_N)
-    arch = [(TUNNEL_HALF_M * math.cos(a), TUNNEL_WALL_H + TUNNEL_RISE_M * math.sin(a)) for a in th]
+    arch = [(TUNNEL_HALF_M * dmath.cos(a), TUNNEL_WALL_H + TUNNEL_RISE_M * dmath.sin(a)) for a in th]
     return [(-TUNNEL_HALF_M, -TUNNEL_FLOOR_M)] + arch + [(TUNNEL_HALF_M, -TUNNEL_FLOOR_M)]
 
 
@@ -1637,7 +1639,7 @@ def _tunnel(mesh, p, uu, t, v, ballast, concrete, start, end):
         inward = np.c_[-uu * mid[0], np.full(k, 2.0 - mid[1])]
         mesh.strip(rows[m], rows[m + 1], 0.0, 0.3, v, concrete, inward)
     d = np.gradient(p, axis=0)
-    d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
     for at, going, on in ((0, -1.0, start), (-1, 1.0, end)):
         if not on:
             continue
@@ -1840,12 +1842,12 @@ def _node_ways(frame, cells, near, roads_):
     pts = pts[(pts[:, 0] >= near[0]) & (pts[:, 0] <= near[2]) & (pts[:, 1] >= near[1]) & (pts[:, 1] <= near[3])]
     if not len(pts):
         return []
-    served = [p for p in pts if not any(float(np.min(np.hypot(*(roads.densify(ln, 2.0)[:, :2] - p).T))) < NODE_WAY_M
+    served = [p for p in pts if not any(float(np.min(dnp.hypot(*(roads.densify(ln, 2.0)[:, :2] - p).T))) < NODE_WAY_M
                                         for _f, _s, ln in roads_)]
     out = []
     for xy, w in walk_ways(frame, cells, (near[0] + 60, near[1] + 60, near[2] - 60, near[3] - 60), 60.0):
         dense = roads.densify(xy, 2.0)                  # (a way's few vertices: the distance is to its line)
-        if any(float(np.min(np.hypot(*(dense[:, :2] - p).T))) < NODE_WAY_M for p in served):
+        if any(float(np.min(dnp.hypot(*(dense[:, :2] - p).T))) < NODE_WAY_M for p in served):
             out.append(("node-way", types.SimpleNamespace(width=max(w, NODE_WAY_MIN_W), cls="service", oneway=False, dir=None),
                         xy))
     return out
@@ -1879,7 +1881,7 @@ def _osm_kits(frame, cells):
     kit = [osm_kit_of(t) for _lo, _la, t in pts]
 
     def look(p):
-        d = np.hypot(*(xy - np.asarray(p)[:2]).T)
+        d = dnp.hypot(*(xy - np.asarray(p)[:2]).T)
         j = int(np.argmin(d))
         return kit[j] if d[j] <= OSM_KIT_M else None
     return look
@@ -1890,8 +1892,8 @@ def _unit_at(line, pt):
     a, b = line[:-1], line[1:]
     d = b - a
     t = np.clip(((pt - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.hypot(*(a + t[:, None] * d - pt).T)))
-    return d[j] / max(float(np.hypot(*d[j])), 1e-9)
+    j = int(np.argmin(dnp.hypot(*(a + t[:, None] * d - pt).T)))
+    return d[j] / max(float(dnp.hypot(*d[j])), 1e-9)
 
 
 def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
@@ -1915,7 +1917,7 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     z = np.asarray(ground(np.array([q for q, _ in pts])), np.float64).ravel()
     for (q, side), zz in zip(pts, z):
         out.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
-                    round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, CROSSING_HEIGHT[kit], 0.0])
+                    round(math.degrees(dmath.atan2(side[1], side[0])) % 360.0, 1), 1.0, CROSSING_HEIGHT[kit], 0.0])
     return out
 
 
@@ -1994,13 +1996,13 @@ def _leaves_track(way, pt, track):
     s = _arc(way)
     ab = np.diff(way, axis=0)
     t = np.clip(((pt - way[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.linalg.norm(way[:-1] + t[:, None] * ab - pt, axis=1)))
+    j = int(np.argmin(dnp.norm(way[:-1] + t[:, None] * ab - pt, axis=1)))
     at = float(s[j] + t[j] * (s[j + 1] - s[j]))
     dense = roads.densify(track, 1.0)[:, :2]
     for sgn in (-1.0, 1.0):
         a = float(np.clip(at + sgn * WALK_LEAVE_M, 0.0, s[-1]))
         q = np.array([np.interp(a, s, way[:, 0]), np.interp(a, s, way[:, 1])])
-        if float(np.min(np.hypot(*(dense - q).T))) < WALK_LEAVE_OFF_M:
+        if float(np.min(dnp.hypot(*(dense - q).T))) < WALK_LEAVE_OFF_M:
             return False
     return True
 
@@ -2025,13 +2027,13 @@ def walk_crossings(rails, ways, nodes, carriage, ex):
                     continue
                 k = int(np.clip(np.searchsorted(s, arc), 1, len(xy) - 1))
                 t = xy[k] - xy[k - 1]
-                t = t / max(float(np.hypot(*t)), 1e-9)
-                d = np.hypot(*(way[1:] - way[:-1]).T)
-                j = int(np.argmin(np.hypot(*((way[:-1] + way[1:]) / 2 - pt).T)))
+                t = t / max(float(dnp.hypot(*t)), 1e-9)
+                d = dnp.hypot(*(way[1:] - way[:-1]).T)
+                j = int(np.argmin(dnp.hypot(*((way[:-1] + way[1:]) / 2 - pt).T)))
                 f = (way[j + 1] - way[j]) / max(float(d[j]), 1e-9)
                 if abs(t[0] * f[1] - t[1] * f[0]) < (WALK_STRICT_SIN if WALK_STRICT_ON else WALK_MIN_SIN):
                     continue
-                if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
+                if any(float(np.min(dnp.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
                     continue
                 if WALK_STRICT_ON and not _leaves_track(way, pt, xy):
                     continue                    # (a way that runs along the track: no crossing, plan 040)
@@ -2045,7 +2047,7 @@ def walk_crossings(rails, ways, nodes, carriage, ex):
         for n_part, (fid, cls, kind, xy) in enumerate(rails):
             if kind != "ground" or cls == "tram" or len(xy) < 2:
                 continue
-            dd = np.hypot(xy[:, 0] - x, xy[:, 1] - y)
+            dd = dnp.hypot(xy[:, 0] - x, xy[:, 1] - y)
             k = int(np.argmin(dd))
             if dd[k] < WALK_NODE_ON_M and (best is None or dd[k] < best[0]):
                 best = (float(dd[k]), n_part, k)
@@ -2055,9 +2057,9 @@ def walk_crossings(rails, ways, nodes, carriage, ex):
         xy = rails[n_part][3]
         s = _arc(xy)
         t = xy[min(k + 1, len(xy) - 1)] - xy[max(k - 1, 0)]
-        t = t / max(float(np.hypot(*t)), 1e-9)
+        t = t / max(float(dnp.hypot(*t)), 1e-9)
         pt = xy[k]
-        if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
+        if any(float(np.min(dnp.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
             continue
         out.append((np.asarray(pt, np.float64), float(s[k]), n_part, t, np.array([-t[1], t[0]]), WALK_NODE_W))
     return out
@@ -2071,8 +2073,8 @@ def walk_groups(crossings, rails):
                                                float(c[0][1]))):
         for g in groups:
             h = g[-1]
-            if abs(float(np.dot(h[4], c[4]))) > 0.97 and abs(h[5] - c[5]) < 0.01 and \
-                    min(float(np.hypot(*(q[0] - c[0]))) for q in g) < WALK_GROUP_M:
+            if abs(float(dnp.dot(h[4], c[4]))) > 0.97 and abs(h[5] - c[5]) < 0.01 and \
+                    min(float(dnp.hypot(*(q[0] - c[0]))) for q in g) < WALK_GROUP_M:
                 g.append(c)
                 break
         else:
@@ -2080,7 +2082,7 @@ def walk_groups(crossings, rails):
     out = []
     for g in groups:
         f = g[0][4]
-        out.append(sorted(g, key=lambda c: float(np.dot(c[0], f))))
+        out.append(sorted(g, key=lambda c: float(dnp.dot(c[0], f))))
     return out
 
 
@@ -2109,7 +2111,7 @@ def walk_panel_boxes(crossings, finals, rails=None):
                             hx, WALK_PANEL_OUT_M))
         for c0, c1 in zip(g, g[1:]):            # (the gap between two tracks' panels, along the way)
             f = c0[4]
-            d = float(np.dot(c1[0] - c0[0], f))
+            d = float(dnp.dot(c1[0] - c0[0], f))
             sin0 = max(abs(float(c0[3][0] * f[1] - c0[3][1] * f[0])), WALK_MIN_SIN)
             sin1 = max(abs(float(c1[3][0] * f[1] - c1[3][1] * f[0])), WALK_MIN_SIN)
             gap0, gap1 = edge / sin0, edge / sin1
@@ -2136,7 +2138,7 @@ def walk_sign_rows(crossings, ground, finals=None, rails=None, streets=()):
     pts, floors = [], []
     lines = [xy for _f, _c, _k, xy in (rails or [])]
     for g in walk_groups(crossings, rails):
-        if any(min(float(np.hypot(*(c[0] - q))) for c in g) < WALK_NODE_WAY_M for q in streets):
+        if any(min(float(dnp.hypot(*(c[0] - q))) for c in g) < WALK_NODE_WAY_M for q in streets):
             continue
         for sgn, (pt, arc, n_part, t, f, ww) in ((1.0, g[0]), (-1.0, g[-1])):
             sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
@@ -2149,7 +2151,7 @@ def walk_sign_rows(crossings, ground, finals=None, rails=None, streets=()):
             a = f * sgn                         # the way they walk, towards the crossing (from before its first track)
             side = np.array([a[1], -a[0]])      # its right
             q = pt - a * before + side * (ww / 2 + WALK_SIGN_OFF_M)
-            if any(len(ln) >= 2 and float(np.min(np.hypot(*(roads.densify(ln, 1.0)[:, :2] - q).T))) < WALK_SIGN_CLEAR_M
+            if any(len(ln) >= 2 and float(np.min(dnp.hypot(*(roads.densify(ln, 1.0)[:, :2] - q).T))) < WALK_SIGN_CLEAR_M
                    for ln in lines):
                 continue                        # (on a track's bed: no sign)
             pts.append((q, side))
@@ -2158,7 +2160,7 @@ def walk_sign_rows(crossings, ground, finals=None, rails=None, streets=()):
         return []
     z = np.maximum(np.asarray(ground(np.array([q for q, _ in pts])), np.float64).ravel(), np.asarray(floors))
     return [["rrwalk", round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
-             round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, WALK_SIGN_HEIGHT, 0.0]
+             round(math.degrees(dmath.atan2(side[1], side[0])) % 360.0, 1), 1.0, WALK_SIGN_HEIGHT, 0.0]
             for (q, side), zz in zip(pts, z)]
 
 
@@ -2184,11 +2186,11 @@ def dead_ends(rails, finals, worn, near):
             p = xy[i]
             if not (inner[0] <= p[0] <= inner[2] and inner[1] <= p[1] <= inner[3]):
                 continue
-            if any(float(np.min(np.hypot(*(oxy - p).T))) < BUFFER_JOIN_M
+            if any(float(np.min(dnp.hypot(*(oxy - p).T))) < BUFFER_JOIN_M
                    for o, (*_x, oxy) in enumerate(rails) if o != n_part and oxy is not xy):
                 continue                        # (a track starting on another one's line: a switch, not an end)
             d = xy[i] - xy[j]
-            out.append((p, d / max(float(np.hypot(*d)), 1e-9), float(zb[i]) + RAIL_TOP_M))
+            out.append((p, d / max(float(dnp.hypot(*d)), 1e-9), float(zb[i]) + RAIL_TOP_M))
     return out
 
 
@@ -2200,7 +2202,7 @@ def buffer_rows(ends):
         at = p - d * BUFFER_BACK_M
         side = np.array([d[1], -d[0]])
         out.append(["rrbuffer", round(float(at[0]), 2), round(float(at[1]), 2), round(z, 2),
-                    round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, BUFFER_HEIGHT, 0.0])
+                    round(math.degrees(dmath.atan2(side[1], side[0])) % 360.0, 1), 1.0, BUFFER_HEIGHT, 0.0])
     return out
 
 
@@ -2217,7 +2219,7 @@ def _switch_masks(rails):
     dirs = []
     for n, (_f, c, _k, xy) in enumerate(rails):
         d = np.gradient(xy, axis=0)
-        d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+        d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
         dirs.append(d)
         if c == "tram":
             continue
@@ -2272,7 +2274,7 @@ def _foot_limits(xy, side, foot, others, crossers):
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
         t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
         q = a[None] + t[:, :, None] * ab[None]
-        d = np.hypot(q[:, :, 0] - p[:, None, 0], q[:, :, 1] - p[:, None, 1])
+        d = dnp.hypot(q[:, :, 0] - p[:, None, 0], q[:, :, 1] - p[:, None, 1])
         k = np.argmin(d, axis=1)
         near = d[np.arange(len(p)), k]
         on = ((q[np.arange(len(p)), k] - p) * sd).sum(1) > 0.0
@@ -2445,7 +2447,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         nodes, levels = enu(nodes), enu(levels)
         ways = []
         for xy, w in walk_ways(frame, cells, box, 60.0):
-            if levels and any(float(np.min(np.hypot(*(roads.densify(xy, 2.0)[:, :2] - q).T))) < WALK_NODE_WAY_M
+            if levels and any(float(np.min(dnp.hypot(*(roads.densify(xy, 2.0)[:, :2] - q).T))) < WALK_NODE_WAY_M
                               for q in levels):
                 w = max(w, WALK_STREET_W)       # (a street mapped as a pedestrian way: Nachod's Kladska, gates and all)
             ways.append((xy, w))

@@ -10,6 +10,7 @@ from typing import NamedTuple
 import numpy as np
 
 import fast
+import dnp
 
 STEP_M = 4.0                # m between a line's stations, deck_lidar's too (roadz.LIDAR_STEP_M)
 PIX_M = 0.5                 # m, the DSM's pixel
@@ -77,7 +78,7 @@ def stations(lines, inside):
     out = []
     for i, ln in enumerate(lines):
         d = np.diff(ln.xy, axis=0)
-        seg = np.hypot(d[:, 0], d[:, 1])
+        seg = dnp.hypot(d[:, 0], d[:, 1])
         n = np.maximum(1, np.ceil(seg / STEP_M - 1e-9).astype(np.int64))
         j = np.repeat(np.arange(len(seg)), n)
         t = (np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)) / np.repeat(n, n)
@@ -115,7 +116,7 @@ def _near(p, a, b, reach):
         A, B, P = a[js], b[js], p[idx]
         ab = B - A
         t = np.clip(((P[:, None] - A[None]) * ab[None]).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12)[None], 0.0, 1.0)
-        dist = np.hypot(*(P[:, None] - (A[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+        dist = dnp.hypot(*(P[:, None] - (A[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
         out[idx] = (dist <= reach).any(1)
     return out
 
@@ -138,7 +139,7 @@ def _deck_heights(xy_runs, dsm):
                                               STEP_M, DECK_MAX_GRADE, DECK_MIN_PTS, DECK_GAP_M, DECK_SIGMA_M)
             f = np.isfinite(zl)
             if f.any():
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(x, axis=0).T))]
+                arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(x, axis=0).T))]
                 res = np.interp(arc, s[f], zl[f])
                 sf = s[f]
                 i = np.clip(np.searchsorted(sf, arc), 1, max(len(sf) - 1, 1))

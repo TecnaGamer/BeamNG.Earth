@@ -14,6 +14,7 @@ import os
 import types
 
 import numpy as np
+import dnp
 
 APRON_MIN_INNER_M = 4.2  # an island whose inner radius (ring edge) is smaller keeps the single curb band
 APRON_MAX_INNER_M = 24.0  # a larger island (a big roundabout, ~60 m across) has no apron: a plain curb
@@ -43,7 +44,7 @@ def enabled():
 
 def _area(xy):
     x, y = xy[:, 0], xy[:, 1]
-    return abs(0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+    return abs(0.5 * float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1))))
 
 
 def inner_radius(ring):
@@ -115,7 +116,7 @@ def _dist_to_line(points, line):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((points[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
     q = a[None] + t[:, :, None] * d[None]
-    return np.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1]).min(1)
+    return dnp.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1]).min(1)
 
 
 def outer_curbs(found, roads_list, offset, densify):
@@ -130,16 +131,16 @@ def outer_curbs(found, roads_list, offset, densify):
     if hw <= 0.0 or len(poly) < 6:
         return []
     c = poly.mean(0)
-    reach = float(np.max(np.hypot(*(poly - c).T))) + hw + OUTER_NEAR_M
+    reach = float(np.max(dnp.hypot(*(poly - c).T))) + hw + OUTER_NEAR_M
     others = []
     for fid, sp, pts, _l in roads_list:
         if fid in ring_ids or getattr(sp, "kind", "paved") != "paved":
             continue
         xy = np.asarray(pts, np.float64)[:, :2]
-        if len(xy) < 2 or float(np.min(np.hypot(*(xy - c).T))) > reach:
+        if len(xy) < 2 or float(np.min(dnp.hypot(*(xy - c).T))) > reach:
             continue
         # (from the ring out: the end nearer the loop's middle first)
-        xy = xy if np.hypot(*(xy[0] - c)) <= np.hypot(*(xy[-1] - c)) else xy[::-1]
+        xy = xy if dnp.hypot(*(xy[0] - c)) <= dnp.hypot(*(xy[-1] - c)) else xy[::-1]
         others.append((xy, sp.width / 2.0, bool(getattr(sp, "urban", False))))
     if not any(u for _, _, u in others):
         return []                               # no town round it: the asphalt meets the verge, as it does
@@ -174,7 +175,7 @@ def outer_curbs(found, roads_list, offset, densify):
         runs.append((np.array(cur), first, len(line) - 1))
     out = []
     for r, i0, i1 in runs:
-        if float(np.hypot(*np.diff(r, axis=0).T).sum()) < OUTER_MIN_RUN_M:
+        if float(dnp.hypot(*np.diff(r, axis=0).T).sum()) < OUTER_MIN_RUN_M:
             continue
         if blocked.any():
             ahead, behind = who[(i1 + 1) % len(line)], who[(i0 - 1) % len(line)]
@@ -196,15 +197,15 @@ def _corner(p, d, entry, ring_hw):
     edge line, to the edge OUTER_JOIN_M past the ring's edge. None where there is no such corner (parallel, behind, too far)."""
     xy, half, _u = entry
     d = np.asarray(d, np.float64)
-    d = d / max(float(np.hypot(*d)), 1e-9)
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    d = d / max(float(dnp.hypot(*d)), 1e-9)
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     sq = min(ring_hw + OUTER_JOIN_M, float(s[-1]))
     at = np.array([np.interp(sq, s, xy[:, 0]), np.interp(sq, s, xy[:, 1])])
     k = int(np.clip(np.searchsorted(s, sq) - 1, 0, len(xy) - 2))
     u = xy[k + 1] - xy[k]
-    u = u / max(float(np.hypot(*u)), 1e-9)
+    u = u / max(float(dnp.hypot(*u)), 1e-9)
     n = np.array([-u[1], u[0]])
-    side = 1.0 if float(np.dot(p - at, n)) >= 0 else -1.0
+    side = 1.0 if float(dnp.dot(p - at, n)) >= 0 else -1.0
     q = at + n * side * half
     den = d[0] * u[1] - d[1] * u[0]
     if abs(den) < 1e-6:
@@ -215,7 +216,7 @@ def _corner(p, d, entry, ring_hw):
         return None
     ctrl = p + d * t
     tau = np.linspace(0.0, 1.0, OUTER_BEZIER_N + 1)[1:, None]
-    return (1 - tau) ** 2 * p + 2 * tau * (1 - tau) * ctrl + tau ** 2 * q
+    return dnp.sq(1 - tau) * p + 2 * tau * (1 - tau) * ctrl + (tau * tau) * q
 
 
 def entry_arms(roads_list, signals=None, country=None, priority=None):
@@ -251,7 +252,7 @@ def entry_marks(roads_list, signals, country, priority, crosswalks, left_hand=Fa
 def _from(line, m):
     """The centreline line (k, 3) from m metres along it on (the line a second yield line stands one gap out on), None if shorter."""
     line = np.asarray(line, np.float64)
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
     if s[-1] <= m + 1.0:
         return None
     keep = s > m
@@ -292,7 +293,7 @@ def _loops(roads_list, ring):
     for g in groups.values():
         xy = np.concatenate(g)
         c = xy.mean(0)
-        out.append(xy[np.argsort(np.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]))])
+        out.append(xy[np.argsort(dnp.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0]))])
     return out
 
 
@@ -316,7 +317,7 @@ def drop_on_islands(signs, rows):
     keep = np.ones(len(signs), bool)
     for loop in _loops(roads_list, set(ring)):
         c = loop.mean(0)
-        if float(np.hypot(*(signs[:, :2] - c).T).min()) > float(np.hypot(*(loop - c).T).max()):
+        if float(dnp.hypot(*(signs[:, :2] - c).T).min()) > float(dnp.hypot(*(loop - c).T).max()):
             continue
         for i, sgn in enumerate(signs):
             if keep[i] and islands._inside(loop, sgn[:2]):
@@ -348,9 +349,9 @@ def plant_rows(fill, ground, owns):
     edge, apex, slot, lift, mound = fill
     xy = np.asarray(edge, np.float64)[:, :2]
     c = np.asarray(apex, np.float64)[:2]
-    rad = float(np.hypot(*(xy - c).T).mean())
+    rad = float(dnp.hypot(*(xy - c).T).mean())
     inner = c + (xy - c) * max(0.0, 1.0 - PLANT_EDGE_M / max(rad, 1e-6))
-    reach = float(np.hypot(*(xy - c).T).max())
+    reach = float(dnp.hypot(*(xy - c).T).max())
     out = []
     for kind, (group, spacing, (h0, h1), share) in enumerate(PLANTS[slot]):
         n = int(reach // spacing) + 1
@@ -369,7 +370,7 @@ def plant_rows(fill, ground, owns):
         pts = np.array(pts)
         z = np.asarray(ground(pts), np.float64).ravel()
         for p, zg, key in zip(pts, z, meta):
-            top = lift + mound * max(0.0, 1.0 - float(np.hypot(*(p - c))) / rad)
+            top = lift + mound * max(0.0, 1.0 - float(dnp.hypot(*(p - c))) / rad)
             out.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(zg + top - 0.03), 2),
                         round(360.0 * _h01("yaw", *key), 1), 1.0, round(h0 + (h1 - h0) * _h01("h", *key), 2),
                         round(_h01("rank", *key), 3)])
@@ -411,17 +412,17 @@ def splitters(roads_list, refuges):
             if fid not in app or sp.width < SPLIT_MIN_ROAD_M or len(pts) < 2:
                 continue
             xy = np.asarray(pts, np.float64)
-            e0 = float(np.min(np.hypot(*(ends - xy[0, :2]).T)))
-            e1 = float(np.min(np.hypot(*(ends - xy[-1, :2]).T)))
+            e0 = float(np.min(dnp.hypot(*(ends - xy[0, :2]).T)))
+            e1 = float(np.min(dnp.hypot(*(ends - xy[-1, :2]).T)))
             line = xy if e0 <= e1 else xy[::-1]           # (from the ring out)
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
             a, b = line[:-1, :2], line[1:, :2]
             d = b - a
             t = np.clip(((node - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
             q = a + d * t[:, None]
-            dist = np.hypot(*(q - node).T)
+            dist = dnp.hypot(*(q - node).T)
             k = int(np.argmin(dist))
-            at = float(s[k] + t[k] * np.hypot(*d[k]))
+            at = float(s[k] + t[k] * dnp.hypot(*d[k]))
             if dist[k] <= SPLIT_NODE_M and at <= SPLIT_REACH_M and (best is None or dist[k] < best[0]):
                 best = (float(dist[k]), fid, line, s, at)
         if best is None or best[1] in used:
@@ -435,14 +436,14 @@ def splitters(roads_list, refuges):
         st = np.linspace(near, far, 9)
         c = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
         u = np.gradient(c[:, :2], axis=0)
-        u /= np.maximum(np.hypot(*u.T), 1e-9)[:, None]
+        u /= np.maximum(dnp.hypot(*u.T), 1e-9)[:, None]
         nrm = np.stack([-u[:, 1], u[:, 0]], 1)
         hw = np.where(st <= sc, SPLIT_TIP_M + (SPLIT_HALF_M - SPLIT_TIP_M) * (st - near) / max(sc - near, 1e-6), SPLIT_HALF_M)
         left = c[:, :2] + nrm * hw[:, None]
         right = c[:, :2] - nrm * hw[:, None]
         outline = np.vstack([right, left[::-1]])
         poly = np.column_stack([outline, np.r_[c[:, 2], c[::-1, 2]]])
-        area = 0.5 * float(np.dot(outline[:, 0], np.roll(outline[:, 1], -1)) - np.dot(outline[:, 1], np.roll(outline[:, 0], -1)))
+        area = 0.5 * float(dnp.dot(outline[:, 0], np.roll(outline[:, 1], -1)) - dnp.dot(outline[:, 1], np.roll(outline[:, 0], -1)))
         if area < 0:
             poly = poly[::-1]
         out.append({"outline": poly, "fid": fid})

@@ -28,6 +28,7 @@ way."""
 import math
 
 import numpy as np
+import dmath
 
 import mapcells
 import maplabels
@@ -74,7 +75,7 @@ def cached_reach(lat, lon, radius_m):
             return radius_m, False
     except ValueError:      # (mapcells.cells_for_bbox refuses a box past its own 4096, far past the cap)
         pass
-    side_m = mapcells.EARTH_CIRC / (1 << mapcells.ZOOM) * max(0.05, math.cos(math.radians(lat)))
+    side_m = mapcells.EARTH_CIRC / (1 << mapcells.ZOOM) * max(0.05, dmath.cos(math.radians(lat)))
     return min(radius_m, side_m * (math.sqrt(CACHED_CELLS_MAX) - 2.0) / 2.0), True
 
 

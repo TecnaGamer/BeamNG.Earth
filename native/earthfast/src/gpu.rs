@@ -8,6 +8,7 @@
 //! CPU path (PIL's rotate with expand, bilinear, zero outside; the box and band sums; the lower medians), in float32:
 //! close to the CPU path's results, not bit-identical (the CPU path's sums are float64), and the same on one machine
 //! every time.
+use crate::dm::Dm;
 
 use std::sync::{Mutex, OnceLock};
 
@@ -289,7 +290,7 @@ fn seam_pipes(gpu: &Gpu) -> std::sync::MutexGuard<'_, Option<SeamPipes>> {
 fn pil_rotate(deg: f64, w: f64, h: f64) -> ([f64; 6], usize, usize) {
     let angle = -(deg % 360.0).to_radians();
     let r15 = |v: f64| (v * 1e15).round() / 1e15;
-    let mut m = [r15(angle.cos()), r15(angle.sin()), 0.0, r15(-angle.sin()), r15(angle.cos()), 0.0];
+    let mut m = [r15(angle.dcos()), r15(angle.dsin()), 0.0, r15(-angle.dsin()), r15(angle.dcos()), 0.0];
     let t = |m: &[f64; 6], x: f64, y: f64| (m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]);
     let (cx, cy) = (w / 2.0, h / 2.0);
     let (a, b) = t(&m, -cx, -cy);

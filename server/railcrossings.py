@@ -8,6 +8,7 @@ to the last + REACH_M); the same on every tile (the caller keeps the tile's own 
     add(mesh, frame, elev, st, link, collide)
 """
 import numpy as np
+import dnp
 
 import busstationmesh as bm
 import railbridges as rb
@@ -80,6 +81,6 @@ def add(mesh, frame, elev, st, link, collide=False):
                 for i in range(m - 1):
                     T += [[i, i + 1, m + i + 1], [i, m + i + 1, m + i]] if side > 0 else \
                         [[i, m + i + 1, i + 1], [i, m + i, m + i + 1]]
-                sa = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(line, axis=0).T))))
+                sa = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))))
                 UV = np.vstack((np.c_[sa, np.zeros(m)], np.c_[sa, np.ones(m)]))
                 mesh.add(STRIPE[0], P, UV, T)

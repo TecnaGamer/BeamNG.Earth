@@ -2,6 +2,7 @@
 for their Rust ports (native/earthfast/src/deckmerge.rs: deck_merge_round, deck_ground_pins): the ported functions
 must give the same heights and pins bit for bit (test_deckmerge.py)."""
 import numpy as np
+import dnp
 
 from roads import (DECK_MAX_GRADE, DUAL_DECK_M, MERGE_TOUCH_M, PIN_M, PIN_ROAD_M, DECK_SIGMA, _chain_graph,
                    _dijkstra, _ground_envelope, _pin, _smooth_pinned)
@@ -17,7 +18,7 @@ def _ground_pins(lines, ground_lines):
     keep = np.zeros(len(ends), bool)
     for r0 in range(0, len(ends), 512):
         blk = ends[r0:r0 + 512]
-        d = np.hypot(ends[None, :, 0] - blk[:, None, 0], ends[None, :, 1] - blk[:, None, 1])
+        d = dnp.hypot(ends[None, :, 0] - blk[:, None, 0], ends[None, :, 1] - blk[:, None, 1])
         keep[r0:r0 + 512] = (d < 0.5).sum(1) > 1
     shared = ends[keep]
     if not len(shared):
@@ -25,10 +26,10 @@ def _ground_pins(lines, ground_lines):
     out = []
     for gl in ground_lines:
         gl = np.asarray(gl, np.float64)[:, :2]
-        if len(gl) < 2 or float(np.hypot(*np.diff(gl, axis=0).T).sum()) < PIN_ROAD_M:
+        if len(gl) < 2 or float(dnp.hypot(*np.diff(gl, axis=0).T).sum()) < PIN_ROAD_M:
             continue
         for e in (gl[0], gl[-1]):
-            out.extend(shared[np.hypot(e[0] - shared[:, 0], e[1] - shared[:, 1]) < PIN_M])
+            out.extend(shared[dnp.hypot(e[0] - shared[:, 0], e[1] - shared[:, 1]) < PIN_M])
     return out
 
 
@@ -87,17 +88,17 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
             A, B = lines[i][:, :2], lines[j][:, :2]
             P, Q = B[:-1], B[1:]
             ab = Q - P
-            L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+            L2 = np.maximum(((ab * ab)).sum(1), 1e-12)
             t = np.clip(((A[:, None, :] - P[None]) * ab[None]).sum(2) / L2[None], 0, 1)
             near = P[None] + t[..., None] * ab[None]
-            d = np.hypot(*(A[:, None, :] - near).transpose(2, 0, 1))
+            d = dnp.hypot(*(A[:, None, :] - near).transpose(2, 0, 1))
             m = np.argmin(d, axis=1)
             dmin = d[np.arange(len(A)), m]
             tj = t[np.arange(len(A)), m]
             zj = zs[j][m] + tj * (zs[j][np.minimum(m + 1, len(zs[j]) - 1)] - zs[j][m])
             ta = np.gradient(A, axis=0)
             tb = ab[m]
-            cos = np.abs((ta * tb).sum(1)) / (np.hypot(*ta.T) * np.hypot(*tb.T) + 1e-12)
+            cos = np.abs((ta * tb).sum(1)) / (dnp.hypot(*ta.T) * dnp.hypot(*tb.T) + 1e-12)
             # soft: full weight 2 m into the overlap and when parallel, none at its edge (a hard mask
             # made 4 m steps mid-viaduct where a neighbour's footprint started)
             depth = np.clip(((widths[i] + widths[j]) / 2 + MERGE_TOUCH_M - dmin) / 2.0, 0.0, 1.0)
@@ -145,7 +146,7 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
         zs = new
     out = []
     for i, z in enumerate(zs):                  # re-smoothed, ends kept
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lines[i][:, :2], axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lines[i][:, :2], axis=0).T))]
         sm = _smooth_pinned(z, s[-1] / max(len(s) - 1, 1), DECK_SIGMA) if len(z) > 3 else z
         out.append(np.maximum(sm, floors[i]))
     return out

@@ -9,6 +9,7 @@
 //!
 //! road_photo_surface reads the tiles itself (std::fs, zune-jpeg), no GIL: the caller hands over the roads' lines and
 //! roles and gets each road's numbers and verdict.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -148,7 +149,7 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
             if b < a + 2 {
                 continue;
             }
-            let c = ll[[a, 1]].to_radians().cos().max(1e-6);
+            let c = ll[[a, 1]].to_radians().dcos().max(1e-6);
             let (kx, ky) = (111320.0 * c, 110540.0);
             let mut cum = vec![0f64; b - a];
             for i in a + 1..b {
@@ -181,7 +182,7 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
                     // (the normal: left of the direction, (-north, east))
                     let (plon, plat) = (lon + (-ny * o) / kx, lat + (ex * o) / ky);
                     let px = (plon + 180.0) / 360.0 * n;
-                    let py_ = (1.0 - plat.to_radians().tan().asinh() / std::f64::consts::PI) / 2.0 * n;
+                    let py_ = (1.0 - plat.to_radians().dtan().dasinh() / std::f64::consts::PI) / 2.0 * n;
                     if !px.is_finite() || !py_.is_finite() {
                         continue;
                     }
@@ -285,7 +286,7 @@ pub fn road_photo_surface<'py>(py: Python<'py>, root: String, zoom: u32, lonlat:
         let d2 = |f: &[f32; NF], mu: &[f32; NF], sd: &[f32; NF]| -> f32 {
             (0..NF).map(|c| ((f[c] - mu[c]) / sd[c]).powi(2)).sum::<f32>()
         };
-        let lnorm = |sd: &[f32; NF]| -> f32 { (0..NF).map(|c| 2.0 * sd[c].ln()).sum::<f32>() };
+        let lnorm = |sd: &[f32; NF]| -> f32 { (0..NF).map(|c| 2.0 * sd[c].dln()).sum::<f32>() };
         let (np_, nu_) = (lnorm(&sp), lnorm(&su));
         for i in 0..r {
             if rl[i] != 0 {

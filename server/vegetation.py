@@ -30,6 +30,8 @@ import numpy as np
 
 import beaches
 import fast
+import dmath
+import dnp
 
 import mapcells
 import pacer
@@ -295,12 +297,12 @@ class Vegetation:
     def _warm_cells(self, lat, lon, radius_m):
         """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
         d = radius_m / 111320.0
-        dl = d / max(math.cos(math.radians(lat)), 0.01)
+        dl = d / max(dmath.cos(math.radians(lat)), 0.01)
         try:
             keys = mapcells.cells_for_bbox(lat - d, lon - dl, lat + d, lon + dl, max_cells=64)
         except ValueError:
             return []
-        keys = sorted(keys, key=lambda k: (k.center()[0] - lat) ** 2 + ((k.center()[1] - lon) * math.cos(math.radians(lat))) ** 2)
+        keys = sorted(keys, key=lambda k: dnp.sq(k.center()[0] - lat) + dnp.sq((k.center()[1] - lon) * dmath.cos(math.radians(lat))))
         return [(int(k.x), int(k.y)) for k in keys if not self.ready(k)]
 
     def _warm_loop(self):
@@ -470,7 +472,7 @@ class Vegetation:
         # BARREN_NEAR_M and stays
         barren = np.flatnonzero((lcls == WC["bare"]) | (lcls == WC["snow"])) if lc is not None else []
         if len(barren):
-            k = max(0.05, float(np.cos(np.radians(tlat[barren[0]]))))
+            k = max(0.05, float(dnp.cos(np.radians(tlat[barren[0]]))))
             dm = BARREN_NEAR_M / k
             near = np.zeros(len(barren), bool)
             for ox, oy in ((dm, 0.0), (-dm, 0.0), (0.0, dm), (0.0, -dm)):
@@ -574,7 +576,7 @@ class Vegetation:
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
         in x and y; None when the DEM cannot say."""
-        k = np.cos(np.radians(_to4326(px[:1], py[:1])[1][0]))       # Web Mercator m per ground m (one cell)
+        k = dnp.cos(np.radians(_to4326(px[:1], py[:1])[1][0]))       # Web Mercator m per ground m (one cell)
         d = ROCK_SLOPE_D / max(k, 0.05)
         x = np.concatenate([px + d, px - d, px, px])
         y = np.concatenate([py, py, py + d, py - d])
@@ -585,7 +587,7 @@ class Vegetation:
             log.debug("vegetation: no slope: %s", e)
             self._tl.dem_failed = True
             return None
-        return np.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
+        return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
 
     def _scatter(self, cd, lc, blocked, chm, hs):
         """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
@@ -630,7 +632,7 @@ class Vegetation:
         # (only the points that would get one: a few % of them, the test samples ~70 points round each)
         sandy = np.flatnonzero(free & (u < pr + pb) & ((cls == WC["bare"]) | (cls == WC["grass"])))
         if len(sandy):
-            sec = 1.0 / np.cos(np.radians(lat[sandy]))      # (Web Mercator metres per ground metre)
+            sec = 1.0 / dnp.cos(np.radians(lat[sandy]))      # (Web Mercator metres per ground metre)
             pxs, pys = px[sandy], py[sandy]
 
             def at(idx, dx, dy):
@@ -648,7 +650,7 @@ class Vegetation:
         bush = free & ~rock & (u < pr + pb)
         sel = rock | bush
         n = int(sel.sum())
-        size = 0.4 + 1.6 * _hash01(GI[sel], GJ[sel], 14) ** 2
+        size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
         return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
                      np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
                      regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
@@ -687,13 +689,13 @@ R = 6378137.0
 def _to3857(lon, lat):
     lon = np.asarray(lon, np.float64)
     lat = np.clip(np.asarray(lat, np.float64), -85.0511287798066, 85.0511287798066)
-    return np.radians(lon) * R, np.log(np.tan(np.pi / 4 + np.radians(lat) / 2)) * R
+    return np.radians(lon) * R, dnp.log(dnp.tan(np.pi / 4 + np.radians(lat) / 2)) * R
 
 
 def _to4326(x, y):
     x = np.asarray(x, np.float64)
     y = np.asarray(y, np.float64)
-    return np.degrees(x / R), np.degrees(2 * np.arctan(np.exp(y / R)) - np.pi / 2)
+    return np.degrees(x / R), np.degrees(2 * dnp.arctan(dnp.exp(y / R)) - np.pi / 2)
 
 
 # Planted rows (Overture land_use class orchard). Spacing grows, by whole steps, on a huge orchard so one
@@ -731,7 +733,7 @@ def clump_cell(lat):
     about CLUMP_CELL_M on the ground."""
     import geotiles
     tile = 2.0 * math.pi * R / (1 << geotiles.Z)
-    k = max(1, int(round(tile * max(math.cos(math.radians(lat)), 0.05) / CLUMP_CELL_M)))
+    k = max(1, int(round(tile * max(dmath.cos(math.radians(lat)), 0.05) / CLUMP_CELL_M)))
     return tile / k
 
 
@@ -812,13 +814,13 @@ def orchard_items(feats, chm, blocked, bounds=None):
             ring = ring[:-1]
         x, y = _to3857(ring[:, 0], ring[:, 1])
         xy = np.column_stack([x, y])
-        area = abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+        area = abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
         if area < ORCHARD_MIN_M2:
             continue
         u = _orchard_axis(xy)
         v = np.array([-u[1], u[0]])
-        span_a = float((xy @ u).max() - (xy @ u).min())
-        span_b = float((xy @ v).max() - (xy @ v).min())
+        span_a = float((dnp.matmul(xy, u)).max() - (dnp.matmul(xy, u)).min())
+        span_b = float((dnp.matmul(xy, v)).max() - (dnp.matmul(xy, v)).min())
         along, across = ORCHARD_ALONG_M, ORCHARD_ACROSS_M
         factor = 1
         while factor < 16 and (area / (along * across) > ORCHARD_POLY_MAX or span_a / along > 300
@@ -855,7 +857,7 @@ def orchard_items(feats, chm, blocked, bounds=None):
             continue
         lon, lat = _to4326(pts[:, 0], pts[:, 1])
         uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 5)
-        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
         xs.append(lon)
         ys.append(lat)
         hs.append(4.2 + 2.3 * uh)
@@ -923,7 +925,7 @@ def _field_rings(feats, cls_name, min_m2):
         if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
             ring = ring[:-1]
         x, y = _to3857(ring[:, 0], ring[:, 1])
-        area = abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+        area = abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
         if area >= min_m2:
             yield fid, np.column_stack([x, y]), parts[0][1:], area
 
@@ -936,7 +938,7 @@ def vineyard_items(feats, chm, blocked, bounds=None):
     for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
         u = _edge_axis(xy)
         key = np.uint64(_fid_key(fid))
-        sec = 1.0 / max(math.cos(math.radians(float(_to4326(xy[:1, 0], xy[:1, 1])[1][0]))), 0.05)   # (merc m / m)
+        sec = 1.0 / max(dmath.cos(math.radians(float(_to4326(xy[:1, 0], xy[:1, 1])[1][0]))), 0.05)   # (merc m / m)
         along, across = VINE_ALONG_M * sec, VINE_ACROSS_M * sec
         phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 31)[0]) * along
         phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 31)[0]) * across
@@ -967,7 +969,7 @@ def vineyard_items(feats, chm, blocked, bounds=None):
         if len(pts) == 0:
             continue
         uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 32)
-        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
         xs.append(pts[:, 0])
         ys.append(pts[:, 1])
         yaws.append(yaw0 + 180.0 * (uh < 0.5))
@@ -1017,7 +1019,7 @@ def bale_items(feats, chm, blocked, bounds=None):
             lat = float(_to4326(xy[:1, 0], xy[:1, 1])[1][0])
             if abs(lat) < 23.5:
                 continue
-            sec = 1.0 / max(math.cos(math.radians(lat)), 0.05)
+            sec = 1.0 / max(dmath.cos(math.radians(lat)), 0.05)
             if area > BALE_FIELD_MAX_M2 * sec * sec:
                 continue                    # (many fields in one polygon: no field's edges to follow)
             key = np.uint64(_fid_key(fid))
@@ -1048,7 +1050,7 @@ def bale_items(feats, chm, blocked, bounds=None):
             if len(pts) == 0:
                 continue
             uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 45)
-            yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+            yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
             xs.append(pts[:, 0])
             ys.append(pts[:, 1])
             yaws.append(yaw0 + 90.0 + (uh - 0.5) * 50.0)
@@ -1096,15 +1098,15 @@ def farm_foliage(feats, chm, blocked, bounds=None):
         frame = geodesy.EnuFrame(float(np.mean(ring[:, 1])), float(np.mean(ring[:, 0])))
         e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], np.zeros(len(ring)))
         xy = np.column_stack([np.asarray(e, np.float64), np.asarray(n, np.float64)])
-        area = abs(float(np.dot(xy[:, 0], np.roll(xy[:, 1], -1)) - np.dot(xy[:, 1], np.roll(xy[:, 0], -1)))) * 0.5
+        area = abs(float(dnp.dot(xy[:, 0], np.roll(xy[:, 1], -1)) - dnp.dot(xy[:, 1], np.roll(xy[:, 0], -1)))) * 0.5
         if area < FARM_MIN_M2:
             continue
         c = xy.mean(axis=0)
         u = _orchard_axis(xy)
         v = np.array([-float(u[1]), float(u[0])])
         rel = xy - c
-        span_a = float((rel @ u).max() - (rel @ u).min())
-        span_b = float((rel @ v).max() - (rel @ v).min())
+        span_a = float((dnp.matmul(rel, u)).max() - (dnp.matmul(rel, u)).min())
+        span_b = float((dnp.matmul(rel, v)).max() - (dnp.matmul(rel, v)).min())
         along = FARM_BUSH_ALONG
         est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
         while est > FARM_BUSH_POLY and along < 24.0:
@@ -1112,8 +1114,8 @@ def farm_foliage(feats, chm, blocked, bounds=None):
             est = max(span_a, 1.0) / along * max(span_b, 1.0) / row
         phase = sf._field_phase(fid, xy)
         target = (phase + 0.5 * (sf.FARM_FURROW_M + row)) % row
-        amin, amax = float((rel @ u).min()), float((rel @ u).max())
-        bmin, bmax = float((rel @ v).min()), float((rel @ v).max())
+        amin, amax = float((dnp.matmul(rel, u)).min()), float((dnp.matmul(rel, u)).max())
+        bmin, bmax = float((dnp.matmul(rel, v)).min()), float((dnp.matmul(rel, v)).max())
         i0, i1 = math.floor(amin / along), math.ceil(amax / along)
         j0, j1 = math.floor((bmin - target) / row), math.ceil((bmax - target) / row)
         if i1 < i0 or j1 < j0 or i1 - i0 > 400 or j1 - j0 > 200:
@@ -1147,7 +1149,7 @@ def farm_foliage(feats, chm, blocked, bounds=None):
         if len(la) == 0:
             continue
         uh = _hash01(np.full(len(la), key), np.arange(len(la), dtype=np.uint64), 22)
-        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        yaw0 = math.degrees(dmath.atan2(float(u[1]), float(u[0])))
         xs.append(lo)
         ys.append(la)
         hs.append(1.3 + 0.7 * uh)
@@ -1186,7 +1188,7 @@ def _orchard_axis(xy):
     d = p - p.mean(axis=0)
     if len(d) < 2:
         return np.array([1.0, 0.0])
-    cov = d.T @ d
+    cov = dnp.matmul(d.T, d)
     tr = float(cov[0, 0] + cov[1, 1])
     det = float(cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[0, 1])
     lam = tr / 2.0 + math.sqrt(max(tr * tr / 4.0 - det, 0.0))
@@ -1274,7 +1276,7 @@ def _mask_decks(f, mask, chm, specs):
                 continue
             x, y = _to3857(ring[:, 0], ring[:, 1])
             c, r = (np.asarray(x) - chm.x0) / chm.dx, (chm.y0 - np.asarray(y)) / chm.dy
-            hw = half_m / (chm.dx * max(0.05, math.cos(math.radians(float(ring[:, 1].mean())))))
+            hw = half_m / (chm.dx * max(0.05, dmath.cos(math.radians(float(ring[:, 1].mean())))))
             if c.max() < -hw or r.max() < -hw or c.min() > n_c + hw or r.min() > n_r + hw:
                 continue
             segs.append(np.stack([c[:-1], r[:-1], c[1:], r[1:]], axis=1))
@@ -1545,7 +1547,7 @@ def _sink_rocks(frame, it, e, n, z, elev):
     la, lo, _ = frame.enu_to_geodetic(ex, ny, np.zeros(len(ex)))
     _, _, zz = frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))
     zz = np.asarray(zz, np.float64).reshape(4, len(k))
-    slope = np.hypot(zz[0] - zz[1], zz[2] - zz[3]) / (2 * d)
+    slope = dnp.hypot(zz[0] - zz[1], zz[2] - zz[3]) / (2 * d)
     z = z.copy()
     z[k] -= np.minimum(ROCK_SINK * slope, ROCK_SINK_MAX) * it.height[k]
     return z

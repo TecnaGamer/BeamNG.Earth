@@ -18,6 +18,8 @@ from collections import OrderedDict
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import geodesy
 
 Z = 17                  # content tiles (the mod's hello cap geoTiles = Z)
@@ -142,7 +144,7 @@ def tiles_near(anchor, x, y, r, z=Z, exact=False):
         la, lo, _ = world_to_geodetic(anchor, np.array([[float(x), float(y), 0.0]]))
         dla = NEAR_Q_M / 111320.0
         qla = round(float(la[0]) / dla) * dla
-        dlo = dla / max(0.05, math.cos(math.radians(qla)))
+        dlo = dla / max(0.05, dmath.cos(math.radians(qla)))
         qlo = round(float(lo[0]) / dlo) * dlo
         key = (lat0, lon0, z, qla, qlo, float(r), True)
     with _near_lock:
@@ -211,7 +213,7 @@ def place(src, dst, pivot, pts):
     """pts (n, 3) of src's world by placement (the mod's way: geotile.lua M.apply)."""
     r, t, c = placement(src, dst, pivot)
     p = _pts(pts)
-    return p @ r.T + t + np.outer(p[:, 2] - float(pivot[2]), c)
+    return dnp.matmul(p, r.T) + t + np.outer(p[:, 2] - float(pivot[2]), c)
 
 
 # --- planning regions ---------------------------------------------------------------------------------------------

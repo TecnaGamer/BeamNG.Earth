@@ -45,6 +45,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import interchanges  # noqa: E402
+import dmath  # noqa: E402
+import dnp  # noqa: E402
 import mapgeom  # noqa: E402
 
 BASELINE = Path(__file__).parent / "fixtures" / "drivability_baseline.json"
@@ -99,7 +101,7 @@ def _grade(z, cls):
 
 def _lift(z, cls):
     h = LIFT_HALF
-    return SPEED_MS[cls] ** 2 * np.abs(z[:-2 * h] - 2 * z[h:-h] + z[2 * h:]) / (h * h) / G, h
+    return (SPEED_MS[cls] * SPEED_MS[cls]) * np.abs(z[:-2 * h] - 2 * z[h:-h] + z[2 * h:]) / (h * h) / G, h
 
 
 # name: (limit, tolerance, f(z, class) -> (values, index of the first value's sample), on wheel tracks / centre only)
@@ -234,7 +236,7 @@ class Report:
 
 def _resample(xy):
     """Polyline xy every metre ((k, 2)), None when shorter than 3 m."""
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     if s[-1] < 3.0:
         return None
     ss = np.arange(0.0, s[-1], 1.0)
@@ -242,7 +244,7 @@ def _resample(xy):
 
 
 def _inside(xy):
-    return np.hypot(xy[:, 0], xy[:, 1]) <= RADIUS_M
+    return dnp.hypot(xy[:, 0], xy[:, 1]) <= RADIUS_M
 
 
 def _measure_ground(report, cells, frame, ground, roads):
@@ -259,11 +261,11 @@ def _measure_ground(report, cells, frame, ground, roads):
                 seen.add((fid, j))
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 centre = _resample(np.c_[e, n])
-                if centre is None or np.hypot(centre[:, 0], centre[:, 1]).min() > RADIUS_M + spec.width:
+                if centre is None or dnp.hypot(centre[:, 0], centre[:, 1]).min() > RADIUS_M + spec.width:
                     continue
                 inside = _inside(centre)
                 d = np.gradient(centre, axis=0)
-                normal = np.c_[-d[:, 1], d[:, 0]] / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+                normal = np.c_[-d[:, 1], d[:, 0]] / np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
                 side = max(spec.width / 2 - TRACK_IN_M, 0.0)
                 where = {"part": fid, "class": spec.cls, "surface": "ground"}
                 for off in (-side, 0.0, side) if side else (0.0,):
@@ -277,8 +279,8 @@ def _structure(surface, fid, spec, xy, z, ground):
     centre = _resample(xy)
     if centre is None:
         return None
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
-    arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(centre, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(centre, axis=0).T))]
     zz = np.interp(arc, s, z)
     if surface == "bridge":
         zz = np.maximum(zz, ground(centre))
@@ -295,7 +297,7 @@ def _lead(st, start, structures, ground):
     there and goes on outwards, else on the ground straight on."""
     end = st.xy[0] if start else st.xy[-1]
     d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
-    out = d / np.hypot(*d)                                  # (outwards from st's end)
+    out = d / dnp.hypot(*d)                                  # (outwards from st's end)
     feature = _feature(st.fid)
     best = None
     for other in structures:
@@ -303,8 +305,8 @@ def _lead(st, start, structures, ground):
             continue
         reach = JOIN_SAME_M if _feature(other.fid) == feature else JOIN_M
         for oxy, oz in ((other.xy, other.z), (other.xy[::-1], other.z[::-1])):     # (from its start, from its end)
-            gap = float(np.hypot(*(oxy[0] - end)))
-            ahead = (oxy - end) @ out > 0       # (not back over st: a fork's other deck, a deck past its map end)
+            gap = float(dnp.hypot(*(oxy[0] - end)))
+            ahead = dnp.matmul(oxy - end, out) > 0       # (not back over st: a fork's other deck, a deck past its map end)
             if gap <= reach and ahead.any() and (best is None or gap < best[0]):
                 best = (gap, oxy[ahead][:LEAD_M], oz[ahead][:LEAD_M])
     if best is not None:
@@ -318,7 +320,7 @@ def _lead(st, start, structures, ground):
 def _every_metre(xy, z):
     """xy and z again every metre along the path: a joined structure's end can be several metres from st's (the gap
     between them is a slope over its length, not a ledge over one metre)."""
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
     return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
 
@@ -332,7 +334,7 @@ def _measure_structure(report, st, structures, ground):
 
 def score(entry):
     """The module's docstring; entry: a measurement or a baseline entry."""
-    return sum(math.log2(part[m] / limit) for part in entry["parts"].values()
+    return sum(dmath.log2(part[m] / limit) for part in entry["parts"].values()
                for m, (limit, *_r) in METRICS.items() if part.get(m, 0.0) > limit)
 
 

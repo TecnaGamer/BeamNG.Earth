@@ -20,6 +20,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 import cdae
 import heightmap
@@ -85,20 +87,20 @@ def round_dirt_centerline(pts, half):
     if n < 3 or half <= 0.05:
         return P
     d = np.diff(P[:, :2], axis=0)
-    seg = np.hypot(d[:, 0], d[:, 1])
+    seg = dnp.hypot(d[:, 0], d[:, 1])
     lab, lbc = seg[:-1], seg[1:]                         # the arms of the corners 1 .. n-2
     ok = (lab >= 0.5) & (lbc >= 0.5)
     t0 = d[:-1] / np.maximum(lab, 1e-9)[:, None]
     t1 = d[1:] / np.maximum(lbc, 1e-9)[:, None]
-    delta = np.arctan2(t0[:, 0] * t1[:, 1] - t0[:, 1] * t1[:, 0], (t0 * t1).sum(1))
+    delta = dnp.arctan2(t0[:, 0] * t1[:, 1] - t0[:, 1] * t1[:, 0], (t0 * t1).sum(1))
     alpha = np.abs(delta) / 2.0
-    cos_a = np.cos(alpha)
+    cos_a = dnp.cos(alpha)
     bend = 1.0 - cos_a
     ok &= (np.abs(delta) > math.radians(DIRT_BEND_DEG)) & (cos_a >= 1e-3) & (bend >= 1e-8)
     if not ok.any():
         return P
     radius = np.minimum(DIRT_BEND_R, half + DIRT_EDGE_SLACK / np.where(ok, bend, 1.0))
-    want = np.where(ok, radius * np.tan(np.where(ok, alpha, 0.0)), 0.0)
+    want = np.where(ok, radius * dnp.tan(np.where(ok, alpha, 0.0)), 0.0)
     back = np.r_[0.0, want, 0.0]                         # per vertex: m of arm used before it ...
     fwd = back.copy()                                    # ... and after it
     budget = DIRT_BEND_SEG * seg                         # per segment: what its two corners may use between them
@@ -108,7 +110,7 @@ def round_dirt_centerline(pts, half):
     back[1:] *= scale
     dd = np.minimum(back, fwd)[1:-1]
     ok &= dd >= 0.3
-    r = np.where(ok, dd / np.tan(np.where(ok, alpha, 1.0)), 0.0)
+    r = np.where(ok, dd / dnp.tan(np.where(ok, alpha, 1.0)), 0.0)
     ok &= r >= half + DIRT_INNER_MIN
     if not ok.any():
         return P
@@ -121,14 +123,14 @@ def round_dirt_centerline(pts, half):
     z1 = b[:, 2] + (e[:, 2] - b[:, 2]) * (dc / lb)
     side = np.where(dl > 0.0, 1.0, -1.0)
     centre = T0 + (side * rc)[:, None] * np.stack([-tc0[:, 1], tc0[:, 0]], 1)
-    a0 = np.arctan2(T0[:, 1] - centre[:, 1], T0[:, 0] - centre[:, 0])
+    a0 = dnp.arctan2(T0[:, 1] - centre[:, 1], T0[:, 0] - centre[:, 0])
     steps = np.maximum(1, np.ceil(np.abs(dl) / math.radians(DIRT_BEND_STEP_DEG))).astype(np.int64)
     cnt = steps + 1
     which = np.repeat(np.arange(len(c)), cnt)
     kth = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)     # 0 .. steps along each arc
     f = kth / np.repeat(steps, cnt)
     ang = a0[which] + dl[which] * f
-    arcs = np.c_[centre[which, 0] + rc[which] * np.cos(ang), centre[which, 1] + rc[which] * np.sin(ang),
+    arcs = np.c_[centre[which, 0] + rc[which] * dnp.cos(ang), centre[which, 1] + rc[which] * dnp.sin(ang),
                  z0[which] + (z1[which] - z0[which]) * f]
     if P.shape[1] > 3:                                   # (extra columns: the corner's own)
         arcs = np.c_[arcs, P[c + 1][which, 3:]]
@@ -137,7 +139,7 @@ def round_dirt_centerline(pts, half):
     out = np.repeat(P, per, axis=0)
     start = np.cumsum(per) - per
     out[np.repeat(start[c + 1], cnt) + kth] = arcs
-    keep = np.r_[True, np.hypot(*np.diff(out[:, :2], axis=0).T) >= 1e-3]
+    keep = np.r_[True, dnp.hypot(*np.diff(out[:, :2], axis=0).T) >= 1e-3]
     out = out[keep]
     return out if len(out) >= 2 else P
 
@@ -166,7 +168,7 @@ def layer_of(chunk):
 
 def _resample(pts, step, keep_vertices=False, corner_half=0.0):
     """Points every `step` m along a polyline (k, 3), ends kept: (xy (m, 2), distance (m,), z (m,))."""
-    seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
     if s[-1] <= 1e-6:
         return pts[:1, :2], s[:1], pts[:1, 2]
@@ -198,7 +200,7 @@ def _resample(pts, step, keep_vertices=False, corner_half=0.0):
 
 def _normals(xy):
     d = np.diff(xy, axis=0)
-    L = np.hypot(d[:, 0], d[:, 1])
+    L = dnp.hypot(d[:, 0], d[:, 1])
     L[L < 1e-9] = 1e-9
     t = d / L[:, None]
     ns = np.stack([-t[:, 1], t[:, 0]], axis=1)
@@ -206,7 +208,7 @@ def _normals(xy):
     n[0], n[-1] = ns[0], ns[-1]
     if len(xy) > 2:
         m = ns[:-1] + ns[1:]
-        ml = np.hypot(m[:, 0], m[:, 1])
+        ml = dnp.hypot(m[:, 0], m[:, 1])
         ml[ml < 1e-9] = 1.0
         m = m / ml[:, None]
         cos = np.clip((m * ns[1:]).sum(1), 0.5, 1.0)
@@ -239,7 +241,7 @@ def ribbons(chunks, keep_none=False):
                 continue
             hw = float(c["w"]) / 2
             if c.get("ws") is not None and len(c["ws"]) == len(p):     # (tapering: roads.deck_width_fn)
-                s0 = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p[:, :2], axis=0).T))]
+                s0 = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(p[:, :2], axis=0).T))]
                 hw = (np.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
             out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
@@ -308,9 +310,9 @@ class _JunctionSurface:
         # choose the same triangulation. Entry order is canonical (fid), independent of tile/context ordering.
         first = entries[0][1]
         d = first[1, :2] - first[0, :2]
-        u = d / np.linalg.norm(d)
+        u = d / dnp.norm(d)
         self.basis = np.array([u, [-u[1], u[0]]])
-        self.lines = [(np.c_[(p[:, :2] - self.joint[:2]) @ self.basis.T, p[:, 2]], float(c['w']) / 2)
+        self.lines = [(np.c_[dnp.matmul(p[:, :2] - self.joint[:2], self.basis.T), p[:, 2]], float(c['w']) / 2)
                       for c, p in entries]
         allxy = np.concatenate([p[:, :2] for p, _w in self.lines])
         margin = max(w for _p, w in self.lines) + 4.0
@@ -344,7 +346,7 @@ class _JunctionSurface:
                                               np.ascontiguousarray(xy, np.float64), JUNCTION_PIN_R_M, 1))
 
     def local(self, xy):
-        return (np.asarray(xy, np.float64)[:, :2] - self.joint[:2]) @ self.basis.T
+        return dnp.matmul(np.asarray(xy, np.float64)[:, :2] - self.joint[:2], self.basis.T)
 
     def _grid_height(self, xy):
         return self._height(xy) + self._pin(xy)
@@ -372,7 +374,7 @@ class _JunctionSurface:
             a, d = p[:-1, :2], np.diff(p[:, :2], axis=0)
             raw_t = ((xy[:, None] - a) * d).sum(2) / np.maximum((d * d).sum(1), 1e-12)
             t = np.clip(raw_t, 0, 1)
-            dist2 = ((xy[:, None] - a - t[:, :, None] * d) ** 2).sum(2)
+            dist2 = (dnp.sq(xy[:, None] - a - t[:, :, None] * d)).sum(2)
             j = np.argmin(dist2, axis=1)
             at = np.arange(len(xy))
             ds = dist2[at, j]
@@ -381,12 +383,12 @@ class _JunctionSurface:
                          ((j == len(d) - 1) & (raw_t[at, j] > 1)), raw_t[at, j], t[at, j])
             heights.append(p[j, 2] + f * (p[j + 1, 2] - p[j, 2]))
             # Compact support: another branch cannot pull a free abutment up once its carriageway has parted.
-            weights.append(np.maximum(0.0, 1.0 - ds / (half + PARAPET_W) ** 2) ** 2)
+            weights.append(dnp.sq(np.maximum(0.0, 1.0 - ds / dnp.sq(half + PARAPET_W))))
             distances.append(ds)
         w, h, d = np.array(weights), np.array(heights), np.array(distances)
         total = w.sum(0)
         # The corner pad can extend beyond all carriageways; continue their nearby surfaces there smoothly.
-        fallback = 1.0 / np.maximum(d, 0.25) ** 2
+        fallback = 1.0 / dnp.sq(np.maximum(d, 0.25))
         w = np.where((total > 1e-12)[None], w, fallback)
         return (w * h).sum(0) / w.sum(0)
 
@@ -410,7 +412,7 @@ class _JunctionSurface:
                                                np.ascontiguousarray(t, np.int64), JUNCTION_CELL_M,
                                                self.grid, int(self.i0), int(self.j0), 0.001, 1e9, 0.0)
         v = np.asarray(v)
-        v[:, :2] = v[:, :2] @ self.basis + self.joint[:2]
+        v[:, :2] = dnp.matmul(v[:, :2], self.basis) + self.joint[:2]
         v[:, 2] += lift
         return v, np.asarray(uv), np.asarray(tris), np.asarray(src)
 
@@ -448,10 +450,10 @@ def _junction_surfaces(chunks, context=()):
             continue
         if not (0 < float(c['w']) <= 60.0):
             continue
-        p = p[np.r_[True, np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
+        p = p[np.r_[True, dnp.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
         if len(p) < 2:
             continue
-        length = float(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum())
+        length = float(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum())
         key = (length, tuple(p.ravel()))
         old = by_fid.get(c['fid'])
         if old is None or key > old[0]:
@@ -465,9 +467,9 @@ def _junction_surfaces(chunks, context=()):
     for c, p in kept:
         for q, r in ((p[0], p[1]), (p[-1], p[-2])):
             d = r[:2] - q[:2]
-            d = d / max(float(np.hypot(*d)), 1e-9)
+            d = d / max(float(dnp.hypot(*d)), 1e-9)
             ends.append([q[0], q[1], q[2], d[0], d[1]])
-        plen.append(float(np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
+        plen.append(float(dnp.norm(np.diff(p[:, :2], axis=0), axis=1).sum()))
         half.append(float(c['w']) / 2)
         skip.append(1 if c.get('jskip') else 0)
         bbox.append([*p[:, :2].min(0), *p[:, :2].max(0)])
@@ -509,10 +511,10 @@ class _PadSurface(_JunctionSurface):
                 continue
             mid = (left + right) / 2
             profile = np.asarray(c['jn'], np.float64)
-            if not any(np.linalg.norm(profile[at, :2] - self.centre[:2]) <= JUNCTION_JOIN_M and
+            if not any(dnp.norm(profile[at, :2] - self.centre[:2]) <= JUNCTION_JOIN_M and
                        abs(profile[at, 2] - centre[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1)):
                 continue
-            j = np.argmin(np.linalg.norm(mid - self.centre[:2], axis=1))
+            j = np.argmin(dnp.norm(mid - self.centre[:2], axis=1))
             if abs(z[j] - centre[2]) > JUNCTION_JOIN_Z_M:
                 continue
             self.ribbons.append((left, right, z, junctions.get(c.get('fid'))))
@@ -524,11 +526,11 @@ class _PadSurface(_JunctionSurface):
         i1, j1 = np.ceil((xy.max(0) + 2) / JUNCTION_CELL_M).astype(int)
         x, y = np.meshgrid(np.arange(self.i0, i1 + 1) * JUNCTION_CELL_M,
                            np.arange(self.j0, j1 + 1) * JUNCTION_CELL_M)
-        world = np.c_[x.ravel(), y.ravel()] @ self.basis + self.joint[:2]
+        world = dnp.matmul(np.c_[x.ravel(), y.ravel()], self.basis) + self.joint[:2]
         self.grid = np.ascontiguousarray(self._pad_height(world).reshape(x.shape))
 
     def _grid_height(self, xy):
-        return self._pad_height(xy @ self.basis + self.joint[:2])
+        return self._pad_height(dnp.matmul(xy, self.basis) + self.joint[:2])
 
     def _pad_height(self, xy):
         ring, c = self.ring, self.centre
@@ -551,7 +553,7 @@ class _PadSurface(_JunctionSurface):
             mid = (left + right) / 2
             a, d = mid[:-1], np.diff(mid, axis=0)
             t = np.clip(((xy[:, None] - a) * d).sum(2) / np.maximum((d * d).sum(1), 1e-12), 0, 1)
-            ds = np.linalg.norm(xy[:, None] - a - t[:, :, None] * d, axis=2)
+            ds = dnp.norm(xy[:, None] - a - t[:, :, None] * d, axis=2)
             j = np.argmin(ds, axis=1)
             idx = np.arange(len(xy))
             f = t[idx, j]
@@ -565,7 +567,7 @@ class _PadSurface(_JunctionSurface):
                 cross = e[:, 0] * delta[:, :, 1] - e[:, 1] * delta[:, :, 0]
                 inside = (cross >= -1e-8).all(1) | (cross <= 1e-8).all(1)
                 u = np.clip((delta * e).sum(2) / np.maximum((e * e).sum(1), 1e-12), 0, 1)
-                edge_dist = np.linalg.norm(delta - u[:, :, None] * e, axis=2).min(1)
+                edge_dist = dnp.norm(delta - u[:, :, None] * e, axis=2).min(1)
                 gap = np.minimum(gap, np.where(inside, 0, edge_dist))
             hit = gap < distance
             hh = field.at(xy) if field is not None else z[j] + f * (z[j + 1] - z[j])
@@ -585,7 +587,7 @@ def _pad_without_ground(p, t, uv, material, origin, ground, centre):
                 c.get('drive') or layer_of(c) != 'base' or float(c.get('w', 0)) < GROUND_COVER_MIN_W or
                 line.ndim != 2 or len(line) < 2 or line.shape[1] < 3):
             continue
-        if not any(np.linalg.norm(line[at, :2] - centre[:2]) < 1.0 and
+        if not any(dnp.norm(line[at, :2] - centre[:2]) < 1.0 and
                    abs(line[at, 2] - centre[2]) < JUNCTION_JOIN_Z_M for at in (0, -1)):
             continue
         xy = line[:, :2] - np.asarray(origin)[:2]
@@ -691,7 +693,7 @@ def trim_overlaps(rb, context=(), shared=None):
         if not (tl.any() or tr.any()):
             out.append(((left, right, v, m, layer, z), c))
             continue
-        hw = np.hypot(*(left - right).T) / 2
+        hw = dnp.hypot(*(left - right).T) / 2
         u = (left - right) / np.maximum(2 * hw, 1e-9)[:, None]       # unit left
         tl = np.minimum(tl, 0.9 * hw)           # (never past the centre line: at least a tenth of the deck stays)
         tr = np.minimum(tr, 0.9 * hw)
@@ -758,7 +760,7 @@ def _reach_past(c, box):
             ends.append(None)
             continue
         t = pts[at, :2] - pts[nb, :2]
-        L = float(np.hypot(*t))
+        L = float(dnp.hypot(*t))
         if L < 1e-6:
             ends.append(None)
             continue
@@ -956,7 +958,7 @@ def _frontage_mesh(poly, fan, mask):
     from buildings import _area2
 
     step = np.roll(poly, -1, axis=0) - poly
-    distance = np.hypot(*step.T)
+    distance = dnp.hypot(*step.T)
     good = distance > 1e-6
     if not good.all():
         return poly, fan
@@ -991,7 +993,7 @@ def _refine_frontage(P, T, UV, M, RI, material, mask, repeat):
     indexes = np.flatnonzero(M == material)
     xy = P[T[indexes], :2]
     side = np.roll(xy, -1, axis=1) - xy
-    span = np.hypot(side[:, :, 0], side[:, :, 1]).max(axis=1)
+    span = dnp.hypot(side[:, :, 0], side[:, :, 1]).max(axis=1)
     weights = _frontage_weight(xy.reshape(-1, 2), mask).reshape(-1, 3)
     large = span > 1.6
     mids = xy[large] + .5 * side[large]
@@ -1016,8 +1018,8 @@ def _refine_frontage(P, T, UV, M, RI, material, mask, repeat):
         vertices, tri = _frontage_mesh(pts[:, :2], fan, mask)
         if len(vertices) == 3:
             continue
-        gradient = np.linalg.solve(edge[:, :2], edge[:, 2])
-        xyz.append(np.c_[vertices, pts[0, 2] + (vertices - pts[0, :2]) @ gradient])
+        gradient = dnp.solve(edge[:, :2], edge[:, 2])
+        xyz.append(np.c_[vertices, pts[0, 2] + dnp.matmul(vertices - pts[0, :2], gradient)])
         uvs.append(vertices / repeat)
         tris.append(tri + n)
         n += len(vertices)
@@ -1088,7 +1090,7 @@ def _overlays_on_decks(rbc):
     for r, c in rbc:
         if r[5] is not None and r[4] == "base" and c.get("deck"):
             mid = (np.asarray(r[0]) + np.asarray(r[1])) * 0.5
-            hw = np.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
+            hw = dnp.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
             base.setdefault(c.get("fid"), []).append((np.c_[mid, np.asarray(r[5], np.float64)], hw))
     if not base:
         return rbc
@@ -1113,7 +1115,7 @@ def _overlays_on_decks(rbc):
             t = ((mid[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None]
             tc = np.clip(t, 0.0, 1.0)
             q = a[None] + tc[..., None] * ab[None]
-            d = np.hypot(*(mid[:, None, :] - q).transpose(2, 0, 1))
+            d = dnp.hypot(*(mid[:, None, :] - q).transpose(2, 0, 1))
             j = np.argmin(d, 1)
             k = np.arange(len(mid))
             # past an end: beyond the line's first or last segment by more than OVERLAY_DECK_END_M
@@ -1183,7 +1185,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             if len(l_d) >= 2:
                 for e in (0, -1):
                     deck_abuts.append(((l_d[e] + r_d[e]) * 0.5, l_d[e].copy(), r_d[e].copy(), r[4],
-                                       float(np.hypot(*(l_d[e] - r_d[e])))))
+                                       float(dnp.hypot(*(l_d[e] - r_d[e])))))
 
     ab_pts = np.array([a[0] for a in deck_abuts], np.float64) if deck_abuts else np.zeros((0, 2), np.float64)
     ab_layer = [a[3] for a in deck_abuts]
@@ -1204,19 +1206,19 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 left, right = left.copy(), right.copy()
                 mid0 = (left[0] + right[0]) * 0.5
                 mid1 = (left[-1] + right[-1]) * 0.5
-                d0 = np.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
-                d1 = np.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
-                hit0 = _abut(d0, layer, float(np.hypot(*(left[0] - right[0]))))
-                hit1 = _abut(d1, layer, float(np.hypot(*(left[-1] - right[-1]))))
+                d0 = dnp.hypot(ab_pts[:, 0] - mid0[0], ab_pts[:, 1] - mid0[1])
+                d1 = dnp.hypot(ab_pts[:, 0] - mid1[0], ab_pts[:, 1] - mid1[1])
+                hit0 = _abut(d0, layer, float(dnp.hypot(*(left[0] - right[0]))))
+                hit1 = _abut(d1, layer, float(dnp.hypot(*(left[-1] - right[-1]))))
                 if hit0 is not None:
                     _, l_ab, r_ab = deck_abuts[hit0][:3]
-                    if (np.hypot(*(left[0] - l_ab)) + np.hypot(*(right[0] - r_ab))) <= (np.hypot(*(left[0] - r_ab)) + np.hypot(*(right[0] - l_ab))):
+                    if (dnp.hypot(*(left[0] - l_ab)) + dnp.hypot(*(right[0] - r_ab))) <= (dnp.hypot(*(left[0] - r_ab)) + dnp.hypot(*(right[0] - l_ab))):
                         left[0], right[0] = l_ab, r_ab
                     else:
                         left[0], right[0] = r_ab, l_ab
                 if hit1 is not None:
                     _, l_ab, r_ab = deck_abuts[hit1][:3]
-                    if (np.hypot(*(left[-1] - l_ab)) + np.hypot(*(right[-1] - r_ab))) <= (np.hypot(*(left[-1] - r_ab)) + np.hypot(*(right[-1] - l_ab))):
+                    if (dnp.hypot(*(left[-1] - l_ab)) + dnp.hypot(*(right[-1] - r_ab))) <= (dnp.hypot(*(left[-1] - r_ab)) + dnp.hypot(*(right[-1] - l_ab))):
                         left[-1], right[-1] = l_ab, r_ab
                     else:
                         left[-1], right[-1] = r_ab, l_ab
@@ -1257,9 +1259,9 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             cur_lift = np.full(k, lift)
             if len(deck_abuts) and k >= 2:
                 mid = (left + right) * 0.5
-                s_from_start = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
-                d0 = np.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
-                d1 = np.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
+                s_from_start = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
+                d0 = dnp.hypot(ab_pts[:, 0] - mid[0, 0], ab_pts[:, 1] - mid[0, 1]).min()
+                d1 = dnp.hypot(ab_pts[:, 0] - mid[-1, 0], ab_pts[:, 1] - mid[-1, 1]).min()
                 if d0 <= 0.75:
                     w0 = np.clip(s_from_start / 4.0, 0.0, 1.0)
                     cur_lift = np.minimum(cur_lift, DECK_SKIN + (lift - DECK_SKIN) * w0)
@@ -1438,7 +1440,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if asphalt:
         used = np.unique(T[M == mats.index(FRONTAGE_ASPHALT)])
         weight = _frontage_weight(P[used, :2], frontage_mask)
-        blend = weight ** 2 * (3 - 2 * weight)
+        blend = (weight * weight) * (3 - 2 * weight)
         out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
         fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
     order = sorted(range(len(mats)), key=lambda j: (not (mats[j].startswith(FADE_PREFIX)
@@ -1568,7 +1570,7 @@ def parapet_heights(line, ends):
     h = np.full(len(line), JERSEY_H)
     if ends:
         a = np.asarray(ends, np.float64)
-        d = np.hypot(line[:, None, 0] - a[None, :, 0], line[:, None, 1] - a[None, :, 1]).min(1)
+        d = dnp.hypot(line[:, None, 0] - a[None, :, 0], line[:, None, 1] - a[None, :, 1]).min(1)
         h = END_H + (JERSEY_H - END_H) * np.clip(d / END_M, 0.0, 1.0)
     return h
 
@@ -1583,7 +1585,7 @@ def barrier_solid(edge, inward, z, h, v=None, section=JERSEY):
     edge, inward = np.asarray(edge, np.float64), np.asarray(inward, np.float64)
     z, h = np.asarray(z, np.float64), np.asarray(h, np.float64)
     k, n = len(edge), len(section)
-    inward = inward / np.maximum(np.hypot(inward[:, 0], inward[:, 1]), 1e-9)[:, None]
+    inward = inward / np.maximum(dnp.hypot(inward[:, 0], inward[:, 1]), 1e-9)[:, None]
     if section is JERSEY:                           # (m up per station: the section narrowing toward an end)
         secs = np.array([jersey_section(float(hh)) for hh in h], np.float64)        # (k, n, 2)
         off2, up2 = secs[:, :, 0], secs[:, :, 1]
@@ -1594,8 +1596,8 @@ def barrier_solid(edge, inward, z, h, v=None, section=JERSEY):
     xy = edge[:, None, :] + inward[:, None, :] * off2[:, :, None]
     zz = z[:, None] + up2
     R = np.concatenate([xy, zz[..., None]], axis=2)                # (k, n, 3): the section at each station
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(edge, axis=0).T))] if v is None else np.asarray(v, np.float64)
-    seg = np.linalg.norm(np.diff(np.concatenate([R, R[:, :1]], axis=1), axis=1), axis=2)    # (k, n) edge lengths
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(edge, axis=0).T))] if v is None else np.asarray(v, np.float64)
+    seg = dnp.norm(np.diff(np.concatenate([R, R[:, :1]], axis=1), axis=1), axis=2)    # (k, n) edge lengths
     per = np.concatenate([np.zeros((k, 1)), np.cumsum(seg, axis=1)], axis=1)               # (k, n + 1)
     # each face its own vertices (flat, not one normal smoothed over the barrier's corners: its top read as a soft
     # pillow) and world-scale uv: the sides along the barrier by the section's perimeter, the ends planar (their
@@ -1737,7 +1739,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         active_field = junctions.get(c.get('fid'))
         k = len(z)
         lat = left - right
-        u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]     # unit left
+        u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]     # unit left
         wide = 0.0 if c.get("tunnel") else PARAPET_W
         gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
         (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
@@ -1758,7 +1760,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         out_l = np.c_[u, np.zeros(k)]
         # (the top plain asphalt, under the road's own surface: where that does not cover it, between decks side by
         # side, a median, a gore, the slab showed as pale concrete wedges, US-101 over the Los Angeles River)
-        across = float(np.median(np.hypot(*(el - er).T))) / DECK_TOP_TILE_M
+        across = float(np.median(dnp.hypot(*(el - er).T))) / DECK_TOP_TILE_M
         i0, nv0 = len(P), nv
         quads(L, R, 0.0, across, v * DECK_TOP_V, v * DECK_TOP_V, top if not c.get("tunnel") else side,
               np.array([0.0, 0.0, 1.0]))
@@ -1774,7 +1776,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         if c.get("tunnel"):                     # a tunnel's floor: the slab alone
             continue
         # girders under the slab
-        half = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2
+        half = float(np.median(dnp.hypot(lat[:, 0], lat[:, 1]))) / 2
         ng = max(2, int(round(2 * half / GIRDER_EVERY)))
         for off in np.linspace(-(half - 0.6), half - 0.6, ng):
             mid = (left + right) / 2 + u * off
@@ -1810,7 +1812,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         ring, centre = pad[0], pad[1]
         joints = np.asarray(pad[3], np.float64) if len(pad) > 3 else np.asarray([centre], np.float64)
         incident = [(r, c) for r, c in rb if c.get('fid') in junctions and any(
-            np.linalg.norm(np.asarray(c['jn'])[at, :2] - q[:2]) <= JUNCTION_JOIN_M and
+            dnp.norm(np.asarray(c['jn'])[at, :2] - q[:2]) <= JUNCTION_JOIN_M and
             abs(c['jn'][at][2] - q[2]) <= JUNCTION_JOIN_Z_M for at in (0, -1) for q in joints)]
         field = _PadSurface(ring, centre, incident, junctions) if incident else None
         cl = {id(junctions[c['fid']]) for _r, c in incident}
@@ -1866,12 +1868,12 @@ def _beams(beams, origin, P, T, UV, M, mat):
     w = np.array([x[2] for x in b], np.float64)[:, None] / 2
     h = np.array([x[3] for x in b], np.float64)[:, None] / 2
     d = q - p
-    ln = np.maximum(np.linalg.norm(d, axis=1), 1e-9)
+    ln = np.maximum(dnp.norm(d, axis=1), 1e-9)
     d = d / ln[:, None]
     a = np.cross(d, [0.0, 0.0, 1.0])
-    vert = np.linalg.norm(a, axis=1) < 1e-3                 # a vertical post: its width along x
+    vert = dnp.norm(a, axis=1) < 1e-3                 # a vertical post: its width along x
     a[vert] = [1.0, 0.0, 0.0]
-    a /= np.linalg.norm(a, axis=1)[:, None]
+    a /= dnp.norm(a, axis=1)[:, None]
     c = np.cross(a, d)
     corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
     V = np.stack([e + a * (sa * w) + c * (sc * h) for e in (p, q) for sa, sc in corners], 1)    # (n, 8, 3)
@@ -1945,7 +1947,7 @@ def _piers_clear(piers, rb):
     the ground through the lower one, across its lanes (the user, 2026-10-17: "objects blocking the bridge road")."""
     if not piers or not rb:
         return list(piers)
-    lines = [(((l + r) / 2), float(np.median(np.hypot(*(l - r).T))) / 2 + PARAPET_W, z) for (l, r, v, m, layer, z), c in rb
+    lines = [(((l + r) / 2), float(np.median(dnp.hypot(*(l - r).T))) / 2 + PARAPET_W, z) for (l, r, v, m, layer, z), c in rb
              if not c.get("tunnel")]
     out = []
     for p in piers:
@@ -1954,7 +1956,7 @@ def _piers_clear(piers, rb):
         reach = float(np.clip(0.7 * width, 2.5, 14.0)) / 2 + PIER_T
         hit = False
         for mid, hw, z in lines:
-            d = np.hypot(*(mid - q).T)
+            d = dnp.hypot(*(mid - q).T)
             k = int(np.argmin(d))
             if d[k] < hw + reach and z[k] < zt - 1.0:       # a deck below the pier's top, across its footprint
                 hit = True
@@ -2029,7 +2031,7 @@ def _noses(g):
 def _travel_vec(left, right, tdir):
     """Per ribbon point its traffic's direction (k, 2): the line's tangent times tdir (+1 / -1; 0 two-way: zeros)."""
     lat = left - right
-    u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
+    u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
     return np.stack([u[:, 1], -u[:, 0]], 1) * float(tdir or 0)
 
 
@@ -2066,8 +2068,8 @@ def _median_gaps(rb, context=()):
             over = np.zeros(len(E), bool)
             own_hit = [None] * len(E)
             tan = np.gradient(E[:, :2], axis=0) if len(E) > 1 else np.zeros((len(E), 2))
-            tan = tan / np.maximum(np.hypot(tan[:, 0], tan[:, 1]), 1e-9)[:, None]
-            out_ = out_ / np.maximum(np.hypot(out_[:, 0], out_[:, 1]), 1e-9)[:, None]
+            tan = tan / np.maximum(dnp.hypot(tan[:, 0], tan[:, 1]), 1e-9)[:, None]
+            out_ = out_ / np.maximum(dnp.hypot(out_[:, 0], out_[:, 1]), 1e-9)[:, None]
             for owner, O, tv in edges:
                 if owner == own or not len(O):
                     continue
@@ -2076,7 +2078,7 @@ def _median_gaps(rb, context=()):
                         or O[:, 1].min() > E[:, 1].max() + MEDIAN_JOIN_M
                         or O[:, 1].max() < E[:, 1].min() - MEDIAN_JOIN_M):
                     continue
-                d = np.hypot(E[:, None, 0] - O[None, :, 0], E[:, None, 1] - O[None, :, 1])
+                d = dnp.hypot(E[:, None, 0] - O[None, :, 0], E[:, None, 1] - O[None, :, 1])
                 dz = np.abs(E[:, None, 2] - O[None, :, 2])
                 d = np.where(dz < PARAPET_COVER_DZ, d, np.inf)
                 j = d.argmin(1)
@@ -2143,7 +2145,7 @@ def _smooth_reach(ext, edge):
     ext = np.asarray(ext, np.float64).copy()
     if len(ext) < 2:
         return ext
-    ds = np.hypot(*np.diff(np.asarray(edge, np.float64)[:, :2], axis=0).T) * REACH_SLOPE
+    ds = dnp.hypot(*np.diff(np.asarray(edge, np.float64)[:, :2], axis=0).T) * REACH_SLOPE
     for k in range(1, len(ext)):
         ext[k] = max(ext[k], ext[k - 1] - ds[k - 1])
     for k in range(len(ext) - 2, -1, -1):
@@ -2199,9 +2201,9 @@ def _parapet_cover(rb, context=()):
         return e
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         lat = left - right
-        u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
+        u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = float(np.median(dnp.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
         oid = hash(c.get("fid", n)) & 0x3FFFFFFF
         for e in (left + u * PARAPET_W / 2, right - u * PARAPET_W / 2):
             pts.append(np.c_[e, z])
@@ -2214,7 +2216,7 @@ def _parapet_cover(rb, context=()):
     for (left, right, v, m, layer, z), c in context:     # the decks around the tile: surfaces only
         lat = left - right
         mid = (left + right) / 2
-        hw = float(np.median(np.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
+        hw = float(np.median(dnp.hypot(lat[:, 0], lat[:, 1]))) / 2 + PARAPET_W
         oid = hash(c.get("fid", "ctx")) & 0x3FFFFFFF
         A.append(np.c_[mid[:-1], z[:-1]])
         B.append(np.c_[mid[1:], z[1:]])
@@ -2266,7 +2268,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         if c.get("tunnel"):       # deck() draws the tunnel floor without parapets
             continue
         lat = left - right
-        u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
+        u = lat / np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         wide = 0.0 if c.get("tunnel") else PARAPET_W
         gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
         (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
@@ -2291,7 +2293,7 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
                 j = i
                 while j + 1 < k and not cov[j + 1]:
                     j += 1
-                run_len = float(np.hypot(*np.diff(edge[i:j + 1], axis=0).T).sum()) if j > i else 0.0
+                run_len = float(dnp.hypot(*np.diff(edge[i:j + 1], axis=0).T).sum()) if j > i else 0.0
                 if j > i and (run_len >= PARAPET_MIN_M or i == 0 or j == k - 1):
                     sl = slice(i, j + 1)
                     edge_run, inner_run = edge[sl], inner[sl]
@@ -2421,11 +2423,11 @@ def _tunnel_section(hw, th=TUNNEL_H, low=False, box=False):
         rise = LOW_RISE * th
         wall = th - rise
         r = (hw * hw + rise * rise) / (2 * rise)
-        a0 = math.asin(min(1.0, hw / r))
-        vault = [(r * math.sin(a), th - r + r * math.cos(a)) for a in np.linspace(a0, -a0, 9)]
+        a0 = dmath.asin(min(1.0, hw / r))
+        vault = [(r * dmath.sin(a), th - r + r * dmath.cos(a)) for a in np.linspace(a0, -a0, 9)]
     else:
         wall = TUNNEL_WALL_H * th / TUNNEL_H
-        vault = [(np.cos(a) * hw, wall + np.sin(a) * (th - wall))
+        vault = [(dnp.cos(a) * hw, wall + dnp.sin(a) * (th - wall))
                  for a in np.linspace(0.0, np.pi, 9)]
     return np.array([(hw - TUNNEL_SHOULDER, 0.0), (hw, 0.0)] + vault + [(-hw, 0.0), (-hw + TUNNEL_SHOULDER, 0.0)],
                     np.float64)
@@ -2443,7 +2445,7 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
         k = len(b)
         if k < 2:
             continue
-        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(b, axis=0).T))))
+        s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(b, axis=0).T))))
         thick = np.asarray(w.get("thick", np.full(k, WALL_THICK_M)), np.float64)    # (roads.retaining_walls)
         face_m, face_uv = (0, CONCRETE_UV_M) if w.get("concrete") else (2, STONE_UV_M)  # (a major road's: concrete)
         back = b - tw * thick[:, None]
@@ -2495,16 +2497,16 @@ def _retaining_walls(walls, origin, P, T, UV, M, nv):
             # the coping and the skirt), world-scale planar uv
             q = np.array([face_lo[at], face_hi[at], cop_hi[at], back_hi[at], back_lo[at]], np.float64)
             out = np.r_[b[at] - b[nb], 0.0]
-            out /= max(float(np.hypot(out[0], out[1])), 1e-9)
+            out /= max(float(dnp.hypot(out[0], out[1])), 1e-9)
             across = np.r_[-tw[at], 0.0]
             P.append(q)
-            UV.append(np.column_stack(((q @ across) / face_uv, q[:, 2] / face_uv)))
+            UV.append(np.column_stack(((dnp.matmul(q, across)) / face_uv, q[:, 2] / face_uv)))
             tri = np.array([[0, 1, 2], [0, 2, 3], [0, 3, 4]], np.int64)
             e1, e2 = q[tri[:, 1]] - q[tri[:, 0]], q[tri[:, 2]] - q[tri[:, 0]]
             nrm = np.cross(e1, e2)
-            keep = np.hypot(*nrm.T) > 1e-9              # (the coping at the back: no soil, a corner twice)
+            keep = dnp.hypot(*nrm.T) > 1e-9              # (the coping at the back: no soil, a corner twice)
             tri = tri[keep]
-            flip = (nrm[keep] @ out) < 0
+            flip = (dnp.matmul(nrm[keep], out)) < 0
             tri[flip] = tri[flip][:, ::-1]
             T.append(tri + nv)
             M.append(face_m)
@@ -2534,10 +2536,10 @@ def tunnel(chunks, origin, walls=()):
                 continue
             for arr in (left, right):
                 t = arr[at] - arr[nb]
-                arr[at] += t / max(float(np.hypot(*t)), 1e-9) * TUNNEL_OVERLAP
+                arr[at] += t / max(float(dnp.hypot(*t)), 1e-9) * TUNNEL_OVERLAP
         mid = (left + right) / 2
         lat = left - right
-        lw = np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)
+        lw = np.maximum(dnp.hypot(lat[:, 0], lat[:, 1]), 1e-9)
         u = lat / lw[:, None]                               # unit left
         hw = float(np.median(lw)) / 2 + TUNNEL_SHOULDER
         th = float(c.get("tunnel_h") or TUNNEL_H)
@@ -2560,9 +2562,9 @@ def tunnel(chunks, origin, walls=()):
             a, b = rows[j], rows[j + 1]
             P.append(np.concatenate([a, b]))
             if stone:                                       # the stone at its scale: around the section, along
-                sj = float(np.hypot(*(sec[min(j + 1, m - 1)] - sec[j])))
-                s0 = float(np.sum(np.hypot(*np.diff(sec[:j + 1], axis=0).T))) if j else 0.0
-                along = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(mid, axis=0).T))))
+                sj = float(dnp.hypot(*(sec[min(j + 1, m - 1)] - sec[j])))
+                s0 = float(np.sum(dnp.hypot(*np.diff(sec[:j + 1], axis=0).T))) if j else 0.0
+                along = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))))
                 UV.append(np.column_stack((np.concatenate((np.full(k, s0), np.full(k, s0 + sj))) / STONE_UV_M, np.concatenate((along, along)) / STONE_UV_M)))
             else:
                 UV.append(np.column_stack((np.concatenate((np.full(k, j / 4.0), np.full(k, (j + 1) / 4.0))), np.concatenate((v, v)))))
@@ -2588,8 +2590,8 @@ def tunnel(chunks, origin, walls=()):
             # the tube's outside where the ground does not cover it (portals.cover: a box, soil on its top); the
             # chunk's ground at the ribbon's rows, by the arc along it
             cn = np.asarray(c["n"], np.float64)[:, :2]
-            sc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(cn, axis=0).T))]
-            sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(mid, axis=0).T))]
+            sc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(cn, axis=0).T))]
+            sm = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))]
             gr = np.interp(sm * (sc[-1] / max(float(sm[-1]), 1e-9)), sc, np.asarray(c["ground"], np.float64))
             # (no cover under a hood: it is the tube's outside from its mouth back to the hill's face)
             for e_, f_ in enumerate(fits if c.get("portal") else ()):
@@ -2609,12 +2611,12 @@ def tunnel(chunks, origin, walls=()):
                 # the mouth's structure from the ground round it (portals.structure: collar, headwall, wing walls);
                 # in concrete (a park's low arch: stone)
                 tt = mid[1] - mid[0] if at == 0 else mid[-1] - mid[-2]
-                tt = tt / max(float(np.hypot(*tt)), 1e-9)
+                tt = tt / max(float(dnp.hypot(*tt)), 1e-9)
                 ul, outv = np.array([-tt[1], tt[0]]), (-tt if at == 0 else tt)
                 near = [False, False]
                 for si, sg in enumerate((1.0, -1.0)):
                     q = mid[at] + ul * sg * (hw + 3.0) + outv * 4.0
-                    near[si] = any(float(np.hypot(*(np.asarray(w["base"], np.float64)[:, :2] - q).T).min()) < 5.0
+                    near[si] = any(float(dnp.hypot(*(np.asarray(w["base"], np.float64)[:, :2] - q).T).min()) < 5.0
                                    for w in walls if len(w["base"]))
                 stone_p = stone if low else False     # (a full tube's mouth: concrete, its hood or box; stone only
                                                       # on a park's low arch)
@@ -2693,7 +2695,7 @@ def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=No
     its back down to just over the vault (th), each face one-sided, facing out. Appended to P, T, UV, M; returns the new vertex count."""
     nb = 1 if at == 0 else k - 2
     t = mid[nb] - mid[at]
-    t = t / max(float(np.hypot(*t)), 1e-9)              # into the tube
+    t = t / max(float(dnp.hypot(*t)), 1e-9)              # into the tube
     a = mid[at]
     b = a + t * (LOW_CAP_M if depth is None else depth)
     ua = u[at]
@@ -2713,13 +2715,13 @@ def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=No
     looks = [np.array([0.0, 0.0, 1.0]), np.r_[t, 0.0], np.r_[ua, 0.0], np.r_[-ua, 0.0]]
     for qi, q in enumerate(quads):
         P.append(q - origin)
-        w = float(np.hypot(*(q[1, :2] - q[0, :2]))) or float(abs(q[1, 2] - q[0, 2]))
-        h = float(np.hypot(*(q[2, :2] - q[1, :2]))) + float(abs(q[2, 2] - q[1, 2]))
+        w = float(dnp.hypot(*(q[1, :2] - q[0, :2]))) or float(abs(q[1, 2] - q[0, 2]))
+        h = float(dnp.hypot(*(q[2, :2] - q[1, :2]))) + float(abs(q[2, 2] - q[1, 2]))
         UV.append(np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float64) / (SOIL_UV_M if qi == 0 else STONE_UV_M))
         tri = np.array([[nv, nv + 1, nv + 2], [nv, nv + 2, nv + 3]], np.int64)
         e = q - q[0]
         nrm = np.cross(e[1], e[2]) + np.cross(e[2], e[3])
-        T.append(tri if float(nrm @ looks[qi]) >= 0.0 else tri[:, ::-1])
+        T.append(tri if float(dnp.matmul(nrm, looks[qi])) >= 0.0 else tri[:, ::-1])
         M.append(4 if qi == 0 else side_mat)            # its top grass, its sides stone (concrete: side_mat 0)
         nv += 4
     return nv
@@ -2733,13 +2735,13 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     k = len(mid)
     if k < 2:
         return nv
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(mid, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(mid, axis=0).T))))
     h = TUNNEL_WALL_H - TUNNEL_LAMP_DROP
     for sc in np.arange(TUNNEL_LAMP_EVERY / 2, s[-1] - TUNNEL_LAMP_L / 2, TUNNEL_LAMP_EVERY):
         j = min(int(np.searchsorted(s, sc)), k - 1)
         jj = max(j - 1, 0)
         t = mid[j] - mid[jj]
-        t = t / max(float(np.hypot(*t)), 1e-9)
+        t = t / max(float(dnp.hypot(*t)), 1e-9)
         p = np.array([np.interp(sc, s, mid[:, 0]), np.interp(sc, s, mid[:, 1])])
         zc = float(np.interp(sc, s, z))
         uu = u[j]
@@ -2752,7 +2754,7 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
             tri = np.array([[nv, nv + 2, nv + 3], [nv, nv + 3, nv + 1]], np.int64)
             nrm = np.cross(q[2] - q[0], q[1] - q[0])
             inward = -side * np.r_[uu, 0.0]
-            if float(nrm @ inward) < 0:     # faced into the tube
+            if float(dnp.matmul(nrm, inward)) < 0:     # faced into the tube
                 tri = tri[:, ::-1]
             T.append(tri)
             M.append(1)

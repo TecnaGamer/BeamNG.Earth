@@ -4,6 +4,7 @@
 //! numbers are furniture._project / _at / _arclen's numpy steps to the bit, in their order (np.hypot is libm's
 //! hypot, cumsum sequential, argmin the first minimum or the first NaN); one call per run instead of a numpy
 //! round per station (2026-11-10: _stations and the k projections were most of furniture.place's own Python).
+use crate::dm::Dm;
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -29,7 +30,7 @@ impl Line<'_> {
         s.push(0.0);
         let mut acc = 0.0;
         for i in 1..n {
-            let d = (self.at(i, 0) - self.at(i - 1, 0)).hypot(self.at(i, 1) - self.at(i - 1, 1));
+            let d = (self.at(i, 0) - self.at(i - 1, 0)).dhypot(self.at(i, 1) - self.at(i - 1, 1));
             acc = if i == 1 { d } else { acc + d };
             s.push(acc);
         }
@@ -65,7 +66,7 @@ fn project(line: &Line, ss: &[f64], qx: f64, qy: f64) -> f64 {
         let l2 = if s2.is_nan() || s2 > 1e-12 { s2 } else { 1e-12 };    // (np.maximum)
         let t = clip(((qx - ax) * dx + (qy - ay) * dy) / l2, 0., 1.);
         let (px, py) = (ax + t * dx, ay + t * dy);
-        let dist = (qx - px).hypot(qy - py);
+        let dist = (qx - px).dhypot(qy - py);
         if !have || dist.is_nan() || dist < best {
             best = dist;
             bk = k;

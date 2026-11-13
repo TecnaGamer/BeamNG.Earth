@@ -9,6 +9,8 @@ import math
 from pathlib import Path
 
 import numpy as np
+import dmath
+import dnp
 
 import franceroads
 import roads
@@ -83,7 +85,7 @@ def _network(pavements):
     out = []
     for fid, spec, line, width in pavements:
         xy = np.asarray(line)[:, :2]
-        lengths = np.hypot(*np.diff(xy, axis=0).T)
+        lengths = dnp.hypot(*np.diff(xy, axis=0).T)
         keep = lengths > 1e-5
         if keep.any():
             out.append(Road(fid, spec, xy[np.r_[True, keep]], np.r_[0., lengths[keep].cumsum()], float(width)))
@@ -108,9 +110,9 @@ def _project(road, point):
     a = road.xy[:-1]
     d = np.diff(road.xy, axis=0)
     length = np.diff(road.arc)
-    u = np.clip(((point - a) * d).sum(axis=1) / length ** 2, 0., 1.)
+    u = np.clip(((point - a) * d).sum(axis=1) / (length * length), 0., 1.)
     projected = a + u[:, None] * d
-    dist2 = ((point - projected) ** 2).sum(axis=1)
+    dist2 = (dnp.sq(point - projected)).sum(axis=1)
     i = int(dist2.argmin())
     return road.arc[i] + u[i] * length[i], d[i] / length[i], math.sqrt(dist2[i]), projected[i]
 
@@ -128,7 +130,7 @@ def _match(network, point, limit):
         s, tangent, distance, centre = _project(road, point)
         if distance > MATCH_M:
             continue
-        side = float((point - centre) @ _right(tangent))
+        side = float(dnp.matmul(point - centre, _right(tangent)))
         sense = (sp.dir or 1) if sp.oneway else (1 if side >= 0 else -1)
         # A surveyed point may be on the centreline. Near parallel roads,
         # prefer the matching limit and the traffic side nearest the cabinet.
@@ -162,7 +164,7 @@ def _upstream(network, road, s, sense, length):
                     continue
                 station = next_road.arc[-1] if sign > 0 else 0.
                 p, d = next_road.at(station)
-                gap, alignment = np.linalg.norm(p - endpoint), (d * sign) @ (old_direction * sense)
+                gap, alignment = dnp.norm(p - endpoint), dnp.matmul(d * sign, old_direction * sense)
                 if gap <= 3. and alignment >= .68:
                     score = gap + 5 * (1 - alignment) + (sp.cls != road.spec.cls)
                     incoming.append((score, str(next_road.fid), next_road, station, sign))
@@ -181,7 +183,7 @@ def _shoulder(network, centre, tangent, width, setback, margin):
 
 
 def _yaw(tangent):
-    return math.degrees(math.atan2(tangent[1], tangent[0])) % 360.
+    return math.degrees(dmath.atan2(tangent[1], tangent[0])) % 360.
 
 
 def place(frame, box, sites, pavements, elev):

@@ -6,6 +6,7 @@ engine converts and caches it as .cdae next to the source.
 import os
 
 import numpy as np
+import dmath
 import staging
 
 
@@ -95,6 +96,6 @@ def grid(n_cells, spacing, zfun=lambda x, y: 0.0, uv_repeat=8.0):
 if __name__ == "__main__":
     import math
     import sys
-    pos, uv, tri = grid(64, 2.0, lambda x, y: math.sin(x * 0.05) * 3)
+    pos, uv, tri = grid(64, 2.0, lambda x, y: dmath.sin(x * 0.05) * 3)
     write_grid_dae(sys.argv[1], pos, uv, tri, texture="probe_checker_v1.png")
     print("wrote", sys.argv[1], len(tri) // 3, "tris")

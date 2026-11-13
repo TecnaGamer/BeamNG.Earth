@@ -39,6 +39,8 @@ import time
 import zipfile
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.germanroads")
 
@@ -90,7 +92,7 @@ def _local():
 def tile_of(lat, lon, zoom=ZOOM):
     n = 1 << zoom
     r = math.radians(lat)
-    return int((lon + 180.0) / 360.0 * n), int((1.0 - math.asinh(math.tan(r)) / math.pi) / 2.0 * n)
+    return int((lon + 180.0) / 360.0 * n), int((1.0 - dmath.asinh(dmath.tan(r)) / math.pi) / 2.0 * n)
 
 
 def tiles_over(south, west, north, east):
@@ -182,7 +184,7 @@ class Axes:
 
     def __init__(self, shards, lat0, lon0, half=None):
         self.lat0, self.lon0 = lat0, lon0
-        self.kx, self.ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
+        self.kx, self.ky = 111320.0 * dmath.cos(math.radians(lat0)), 110540.0
         seg_a, seg_b, line, attrs = [], [], [], []
         base = 0
         for d in shards:
@@ -212,7 +214,7 @@ class Axes:
             if not len(self.a):
                 return
         d = self.b - self.a
-        self.len = np.hypot(d[:, 0], d[:, 1])
+        self.len = dnp.hypot(d[:, 0], d[:, 1])
         self.dir = d / np.maximum(self.len, 1e-9)[:, None]
         lo = np.floor(np.minimum(self.a, self.b) / CELL_M - REACH_MAX_M / CELL_M).astype(np.int64)
         hi = np.floor(np.maximum(self.a, self.b) / CELL_M + REACH_MAX_M / CELL_M).astype(np.int64)
@@ -242,7 +244,7 @@ class Axes:
         against the segments in their grid cells (one per sample was ~4x the specs' own time in Berlin)."""
         p = self.local(lonlat)
         seg = np.diff(p, axis=0)
-        L = np.hypot(seg[:, 0], seg[:, 1])
+        L = dnp.hypot(seg[:, 0], seg[:, 1])
         keep = L > 0
         if not keep.any():
             return np.zeros(0, np.int64), 0
@@ -266,10 +268,10 @@ class Axes:
                 return got, len(pts)
         a, d, ln = self.a[c], self.dir[c], self.len[c]
         rel = pts[:, None, :] - a[None, :, :]                       # (samples, candidates, 2)
-        along = np.clip(np.einsum("sck,ck->sc", rel, d), 0.0, ln[None, :])
+        along = np.clip(dnp.vecdot(rel, d), 0.0, ln[None, :])
         off = rel - along[:, :, None] * d[None, :, :]
-        dist = np.hypot(off[:, :, 0], off[:, :, 1])
-        dist[np.abs(dirs @ d.T) < math.cos(math.radians(MATCH_DEG))] = np.inf
+        dist = dnp.hypot(off[:, :, 0], off[:, :, 1])
+        dist[np.abs(dnp.matmul(dirs, d.T)) < dmath.cos(math.radians(MATCH_DEG))] = np.inf
         best = np.argmin(dist, axis=1)
         ok = dist[np.arange(len(pts)), best] <= reach
         got[ok] = self.line[c[best[ok]]]
@@ -314,7 +316,7 @@ def _axes_for(feats):
     if not got:
         return None
     lat0, lon0 = (s + n) / 2.0, (w + e) / 2.0
-    half = ((e - w) / 2.0 * 111320.0 * math.cos(math.radians(lat0)), (n - s) / 2.0 * 110540.0)
+    half = ((e - w) / 2.0 * 111320.0 * dmath.cos(math.radians(lat0)), (n - s) / 2.0 * 110540.0)
     ax = Axes(got, lat0, lon0, half)
     return ax if ax else None
 

@@ -25,6 +25,7 @@ from unittest import mock
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import dnp  # noqa: E402
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import mapgeom  # noqa: E402
@@ -91,7 +92,7 @@ def _keep_near(data, prefix, frame, keep_m):
         c0, c1 = coord_off[ring_off[part_off[i]]], coord_off[ring_off[part_off[i + 1]]]
         if c1 > c0:
             lo, hi = xy[c0:c1].min(axis=0), xy[c0:c1].max(axis=0)
-            if np.hypot(*np.maximum(np.maximum(lo, -hi), 0.0)) <= keep_m:
+            if dnp.hypot(*np.maximum(np.maximum(lo, -hi), 0.0)) <= keep_m:
                 keep.append(i)
     new_part, new_ring, new_coord, coords = [0], [0], [0], []
     for i in keep:
@@ -153,7 +154,7 @@ def load(name, prefix="interchange", keep_m=None):
 def _crossings(a, b):
     """[(t along a's arc m, point (2,))] where polylines a and b (k, 2) cross."""
     out = []
-    sa = np.r_[0.0, np.cumsum(np.hypot(*np.diff(a, axis=0).T))]
+    sa = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(a, axis=0).T))]
     for i in range(len(a) - 1):
         p, r = a[i], a[i + 1] - a[i]
         q, s = b[:-1], b[1:] - b[:-1]
@@ -164,7 +165,7 @@ def _crossings(a, b):
             t = (qp[:, 0] * s[:, 1] - qp[:, 1] * s[:, 0]) / rxs
             u = (qp[:, 0] * r[1] - qp[:, 1] * r[0]) / rxs
         for k in np.flatnonzero(ok & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)):
-            out.append((float(sa[i] + t[k] * np.hypot(*r)), p + t[k] * r))
+            out.append((float(sa[i] + t[k] * dnp.hypot(*r)), p + t[k] * r))
     return out
 
 
@@ -202,10 +203,10 @@ def measure(name):
         decks, grades, jumps, gaps, low = 0, [], [], [], []
         for fid, spec, xy, z, _lon in parts:
             xy = np.asarray(xy, np.float64)[:, :2]
-            if np.hypot(xy[:, 0], xy[:, 1]).min() > R:
+            if dnp.hypot(xy[:, 0], xy[:, 1]).min() > R:
                 continue
             decks += 1
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             if s[-1] > STEP_M:
                 ss = np.arange(0.0, s[-1], STEP_M)
                 zz = np.interp(ss, s, z)
@@ -233,12 +234,12 @@ def measure(name):
         for gid, gcls, gxy in ground:
             if gcls not in MAJOR:
                 continue
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(gxy, axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(gxy, axis=0).T))]
             if s[-1] < 3 * STEP_M:
                 continue
             ss = np.arange(0.0, s[-1], STEP_M)
             px, py = np.interp(ss, s, gxy[:, 0]), np.interp(ss, s, gxy[:, 1])
-            keep = np.hypot(px, py) <= R
+            keep = dnp.hypot(px, py) <= R
             if keep.sum() < 3:
                 continue
             la, lo, _ = site.frame.enu_to_geodetic(px, py, 0.0)
@@ -264,7 +265,7 @@ def _cell_near(k, site, m):
     lat, lon = site.origin
     dlat = max(la0 - lat, 0.0, lat - la1)
     dlon = max(lo0 - lon, 0.0, lon - lo1)
-    d = np.hypot(dlat * 111320.0, dlon * 111320.0 * np.cos(np.radians(lat)))
+    d = dnp.hypot(dlat * 111320.0, dlon * 111320.0 * dnp.cos(np.radians(lat)))
     return d <= m
 
 

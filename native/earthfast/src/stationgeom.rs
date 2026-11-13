@@ -4,6 +4,7 @@
 //! with the same expression, numpy's distance to a polyline (squares summed, np.maximum, np.clip, libm hypot, the
 //! first minimum or NaN), the track crossings' parameters and arc lengths (hypot per segment, summed in order) sorted
 //! stably by arc.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -92,7 +93,7 @@ fn clip01(x: f64) -> f64 {
 fn dist(px: &[f64], py_: &[f64], x: f64, y: f64) -> f64 {
     let n = px.len();
     if n == 1 {
-        return (px[0] - x).hypot(py_[0] - y);
+        return (px[0] - x).dhypot(py_[0] - y);
     }
     let mut best = f64::NAN;
     for k in 0..n - 1 {
@@ -101,7 +102,7 @@ fn dist(px: &[f64], py_: &[f64], x: f64, y: f64) -> f64 {
         let s2 = abx * abx + aby * aby;
         let ab2 = if s2.is_nan() || s2 > 1e-9 { s2 } else { 1e-9 };     // (np.maximum: NaN through)
         let t = clip01(((x - ax) * abx + (y - ay) * aby) / ab2);
-        let d = (ax + t * abx - x).hypot(ay + t * aby - y);
+        let d = (ax + t * abx - x).dhypot(ay + t * aby - y);
         if k == 0 || d.is_nan() || d < best {
             best = d;
             if d.is_nan() {
@@ -142,7 +143,7 @@ pub fn station_crossings(path: PyReadonlyArray2<'_, f64>, tracks: PyReadonlyArra
     let mut s0 = 0.0f64;
     for i in 0..p.nrows().saturating_sub(1) {
         let (a0x, a0y, a1x, a1y) = (p[[i, 0]], p[[i, 1]], p[[i + 1, 0]], p[[i + 1, 1]]);
-        let seglen = (a1x - a0x).hypot(a1y - a0y);
+        let seglen = (a1x - a0x).dhypot(a1y - a0y);
         let (rx, ry) = (a1x - a0x, a1y - a0y);
         for k in 0..nt {
             let (j0, j1) = (o[k] as usize, o[k + 1] as usize);
@@ -181,7 +182,7 @@ fn seg_foot(ax: f64, ay: f64, abx: f64, aby: f64, x: f64, y: f64) -> (f64, f64, 
     let ab2 = if s2.is_nan() || s2 > 1e-9 { s2 } else { 1e-9 };
     let t = clip01(((x - ax) * abx + (y - ay) * aby) / ab2);
     let (fx, fy) = (ax + abx * t, ay + aby * t);
-    ((fx - x).hypot(fy - y), fx, fy)
+    ((fx - x).dhypot(fy - y), fx, fy)
 }
 
 /// np.argmin's choice between the best so far (best_j usize::MAX: none) and segment j: the first NaN, else the first
@@ -317,7 +318,7 @@ impl SegGrid {
         }
         let s = best.3;
         let (abx, aby) = (self.bx[s] - self.ax[s], self.by[s] - self.ay[s]);
-        let h = max_eps(abx.hypot(aby));
+        let h = max_eps(abx.dhypot(aby));
         Some((best.0, best.1, best.2, abx / h, aby / h, self.track[s]))
     }
 }
@@ -339,7 +340,7 @@ fn track_foot(t: &numpy::ndarray::ArrayView2<f64>, j0: usize, j1: usize, x: f64,
     }
     let j = best.3;
     let (abx, aby) = (t[[j + 1, 0]] - t[[j, 0]], t[[j + 1, 1]] - t[[j, 1]]);
-    let h = max_eps(abx.hypot(aby));
+    let h = max_eps(abx.dhypot(aby));
     Some((best.0, best.1, best.2, abx / h, aby / h))
 }
 
@@ -371,7 +372,7 @@ pub fn station_snap_edges<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>
     for i in 0..rn {
         let (ax, ay) = (r[[i, 0]], r[[i, 1]]);
         let (dx, dy) = (r[[(i + 1) % rn, 0]] - ax, r[[(i + 1) % rn, 1]] - ay);
-        let q = (dx.hypot(dy) / step).ceil();
+        let q = (dx.dhypot(dy) / step).ceil();
         if !q.is_finite() {
             return Err(pyo3::exceptions::PyValueError::new_err("station_snap_edges: a ring without a length"));
         }
@@ -397,7 +398,7 @@ pub fn station_snap_edges<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>
         }
         let (nxt, prv) = ((i + 1) % n, (i + n - 1) % n);
         let (vx, vy) = (px[nxt] - px[prv], py_[nxt] - py_[prv]);
-        let tl = vx.hypot(vy);
+        let tl = vx.dhypot(vy);
         if tl < 1e-6 || ((vx / tl) * tx + (vy / tl) * ty).abs() < cos_min {
             continue;
         }
@@ -438,7 +439,7 @@ pub fn station_snap_edges<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>
     let mut keep = vec![true; n];
     for i in 0..n {
         let j = (i + 1) % n;
-        if keep[i] && (ox[i] - ox[j]).hypot(oy[i] - oy[j]) < 0.25 {
+        if keep[i] && (ox[i] - ox[j]).dhypot(oy[i] - oy[j]) < 0.25 {
             keep[if j != 0 { j } else { i }] = false;
         }
     }
@@ -472,7 +473,7 @@ pub fn station_link_chains<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64
     let touch = |a: usize, b: usize| -> bool {
         let mut m = f64::INFINITY;
         for (ia, ib) in [(0, 0), (0, 2), (2, 0), (2, 2)] {
-            let d = (e[[a, ia]] - e[[b, ib]]).hypot(e[[a, ia + 1]] - e[[b, ib + 1]]);
+            let d = (e[[a, ia]] - e[[b, ib]]).dhypot(e[[a, ia + 1]] - e[[b, ib + 1]]);
             if d.is_nan() {
                 return false;
             }

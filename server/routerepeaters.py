@@ -7,6 +7,8 @@ from collections import OrderedDict
 import math
 import threading
 import numpy as np
+import dmath
+import dnp
 import osmtags
 import routeindex
 import signstates
@@ -73,8 +75,8 @@ def candidates(ways):
         if not routes or tags.get('highway') not in routeindex.ROAD_CLASSES or not routeindex.ground(tags):
             continue
         path = np.asarray(line, float)
-        scale = np.array([111320.*math.cos(math.radians(float(path[0, 1]))), 111320.])
-        arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(path, axis=0)*scale, axis=1))]
+        scale = np.array([111320.*dmath.cos(math.radians(float(path[0, 1]))), 111320.])
+        arc = np.r_[0., np.cumsum(dnp.norm(np.diff(path, axis=0)*scale, axis=1))]
         length = float(arc[-1])
         if length < 10.:
             continue
@@ -90,7 +92,7 @@ def candidates(ways):
             for direction in ((one,) if one else (1, -1)):
                 approach = local if direction > 0 else local[::-1]
                 axis = (approach[-1]-approach[0])*scale
-                axis /= max(np.linalg.norm(axis), 1e-9)
+                axis /= max(dnp.norm(axis), 1e-9)
                 panels = [dict(kind='interstate' if r[0]=='I' else 'us', number=r[1],
                                direction=routeindex.posted_direction(tags, (), direction, r, axis)) for r in routes[:3]]
                 extra = dict(type='shield', routes=panels, main_id=wid, point=point.tolist(),
@@ -106,7 +108,7 @@ def keys(obj):
 
 
 def distance(a, b):
-    scale = math.cos(math.radians((a['lat']+b['lat'])/2))
+    scale = dmath.cos(math.radians((a['lat']+b['lat'])/2))
     return 111320.*math.hypot((a['lon']-b['lon'])*scale, a['lat']-b['lat'])
 
 
@@ -141,7 +143,7 @@ class Source:
             if key not in self.cache:
                 box = (x*CELL_DEG, y*CELL_DEG, (x+1)*CELL_DEG, (y+1)*CELL_DEG)
                 dy = HALO_M/110000.
-                dx = dy/max(.25, math.cos(math.radians(max(abs(box[1]), abs(box[3]))+dy)))
+                dx = dy/max(.25, dmath.cos(math.radians(max(abs(box[1]), abs(box[3]))+dy)))
                 area = (box[0]-dx, box[1]-dy, box[2]+dx, box[3]+dy)
                 try:
                     self.cache[key] = thin(candidates(read_routes(self.tags, remote, area)), box)

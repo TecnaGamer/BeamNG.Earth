@@ -11,6 +11,7 @@
 //!  - `field_pins`: the weights of a compactly supported correction (Wendland C2) that puts a field exactly on its pins,
 //!    and its value anywhere;
 //!  - `pad_links`: the junction pads of joints a short deck part links, merged.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -60,7 +61,7 @@ pub fn junction_groups_core(ends: &[[f64; 5]], plen: &[f64], half: &[f64], skip:
             let p = ends[e];
             let mut hit = None;
             for (g, mem) in groups.iter().enumerate() {
-                let near = mem.iter().all(|&q| (ends[q][0] - p[0]).hypot(ends[q][1] - p[1]) <= join_m);
+                let near = mem.iter().all(|&q| (ends[q][0] - p[0]).dhypot(ends[q][1] - p[1]) <= join_m);
                 if !near {
                     continue;
                 }
@@ -252,7 +253,7 @@ pub fn pin_weights_core(pins: &[[f64; 2]], resid: &[f64], radius: f64) -> Vec<f6
     let mut b = resid.to_vec();
     for i in 0..k {
         for j in 0..k {
-            a[i * k + j] = wendland((pins[i][0] - pins[j][0]).hypot(pins[i][1] - pins[j][1]), radius);
+            a[i * k + j] = wendland((pins[i][0] - pins[j][0]).dhypot(pins[i][1] - pins[j][1]), radius);
         }
         a[i * k + i] += 1e-9;
     }
@@ -297,7 +298,7 @@ pub fn pin_weights_core(pins: &[[f64; 2]], resid: &[f64], radius: f64) -> Vec<f6
 
 pub fn pin_eval_core(xy: &[[f64; 2]], pins: &[[f64; 2]], w: &[f64], radius: f64) -> Vec<f64> {
     xy.iter().map(|q| {
-        pins.iter().zip(w).map(|(p, &wk)| wk * wendland((q[0] - p[0]).hypot(q[1] - p[1]), radius)).sum()
+        pins.iter().zip(w).map(|(p, &wk)| wk * wendland((q[0] - p[0]).dhypot(q[1] - p[1]), radius)).sum()
     }).collect()
 }
 
@@ -376,7 +377,7 @@ mod tests {
 
     fn part(a: [f64; 3], b: [f64; 3]) -> ([f64; 5], [f64; 5]) {
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         ([a[0], a[1], a[2], dx / l, dy / l], [b[0], b[1], b[2], -dx / l, -dy / l])
     }
 

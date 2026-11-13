@@ -59,6 +59,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
+import dnp
 
 import geodesy
 import gradesep
@@ -1663,7 +1664,7 @@ def preview(cells, path, px_per_cell=1024):
     ty = y0 + (jj + 0.5) / scale
     n = 2.0 ** z
     lon = tx / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * ty / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * ty / n))))
     mx = (tx / n - 0.5) * 2 * maprasters.MERC_HALF
     my = (0.5 - ty / n) * 2 * maprasters.MERC_HALF
     lc_img = np.full((H, W, 3), 255, np.uint8)

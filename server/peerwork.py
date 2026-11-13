@@ -52,6 +52,7 @@ from concurrent.futures import Future
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dmath
 
 log = logging.getLogger("earthd.peerwork")
 
@@ -274,7 +275,7 @@ def owner_of(key, ids, weights=None):
     for i in ids:
         w = float((weights or {}).get(i, 1.0))
         u = (int(hashlib.sha256((key + "/" + i).encode()).hexdigest()[:13], 16) + 0.5) / float(1 << 52)
-        score = -w / math.log(u)
+        score = -w / dmath.log(u)
         if score > best_s:
             best, best_s = i, score
     return best

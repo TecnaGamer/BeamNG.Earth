@@ -5,6 +5,7 @@ an unambiguous current geometry match, or agreeing connected approaches. A
 nearby road's name alone is not evidence for a highway carriageway's count.
 """
 import numpy as np
+import dnp
 
 HIGHWAYS = {"motorway", "trunk"}
 MAX_LANES = 12
@@ -78,10 +79,10 @@ def invalidate(feats):
 
 def _project(line, points):
     delta = np.diff(line, axis=0)
-    length = np.maximum(np.linalg.norm(delta, axis=1), 1e-9)
-    t = np.clip(((points[:, None] - line[None, :-1]) * delta).sum(2) / length**2, 0., 1.)
+    length = np.maximum(dnp.norm(delta, axis=1), 1e-9)
+    t = np.clip(((points[:, None] - line[None, :-1]) * delta).sum(2) / (length * length), 0., 1.)
     q = line[None, :-1] + t[:, :, None] * delta
-    dist = np.linalg.norm(points[:, None] - q, axis=2)
+    dist = dnp.norm(points[:, None] - q, axis=2)
     k = dist.argmin(1)
     return dist[np.arange(len(points)), k], delta[k] / length[k, None]
 
@@ -115,14 +116,14 @@ def join(feats, tags, ids, geometry=None):
     matched = np.array([w or 0 for w in ids], dtype=np.int64)
     classes = feats.attrs.get("class", [""] * n)
     origin = feats.lonlat[0] if len(feats.lonlat) else np.zeros(2)
-    scale = np.array([111320. * np.cos(np.radians(origin[1])), 110574.])
+    scale = np.array([111320. * dnp.cos(np.radians(origin[1])), 110574.])
     candidates = []
     for wid, tag in tags.items():
         p, lanes, cls = tag.get("_coords"), count(tag.get("lanes")), (tag.get("lane_hw") or tag.get("_highway") or "")
         if lanes is None or p is None or len(p) < 2 or cls.removesuffix("_link") not in HIGHWAYS:
             continue
         p = (np.asarray(p) - origin) * scale
-        p = p[np.r_[True, np.linalg.norm(np.diff(p, axis=0), axis=1) > .01]]
+        p = p[np.r_[True, dnp.norm(np.diff(p, axis=0), axis=1) > .01]]
         if len(p) < 2:
             continue
         ow = str(tag.get("osm_oneway", ""))
@@ -142,10 +143,10 @@ def join(feats, tags, ids, geometry=None):
         line = (parts[0][0] - origin) * scale
         if len(line) < 2:
             continue
-        line = line[np.r_[True, np.linalg.norm(np.diff(line, axis=0), axis=1) > .01]]
+        line = line[np.r_[True, dnp.norm(np.diff(line, axis=0), axis=1) > .01]]
         if len(line) < 2:
             continue
-        s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line, axis=0), axis=1))]
+        s = np.r_[0., np.cumsum(dnp.norm(np.diff(line, axis=0), axis=1))]
         samples = np.column_stack([np.interp(np.linspace(0., s[-1], 9), s, line[:, d]) for d in (0, 1)])
         _, tangent = _project(line, samples)
         direction = rule(feats, "oneway", i)
@@ -235,7 +236,7 @@ def generated_counts(feats):
     else:
         con_f, con_s, con_v = np.zeros(0, np.int64), np.zeros(0), np.zeros((0, 1), np.uint32)
     origin = feats.lonlat[0] if len(feats.lonlat) else np.zeros(2)
-    scale = np.array([111320. * np.cos(np.radians(origin[1])), 110574.])
+    scale = np.array([111320. * dnp.cos(np.radians(origin[1])), 110574.])
     got = fast._ef.generated_lanes(
         a.get("lane_count", a.get("osm_lanes")), a.get("osm_lane_total"), a.get("osm_lanes_forward"),
         a.get("osm_lanes_backward"), a.get("osm_lanes_both_ways"), np.ascontiguousarray(dirs, np.float64),

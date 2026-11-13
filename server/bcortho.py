@@ -25,6 +25,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import bcproj
 import cog as cogmod
@@ -108,15 +110,15 @@ class BCOrtho:
         if not keys:
             return None, None
         x0, y0, x1, y1 = bbox
-        lat_n = math.degrees(math.atan(math.sinh(y1 / EARTH_R)))
-        lat_s = math.degrees(math.atan(math.sinh(y0 / EARTH_R)))
+        lat_n = math.degrees(dmath.atan(dmath.sinh(y1 / EARTH_R)))
+        lat_s = math.degrees(dmath.atan(dmath.sinh(y0 / EARTH_R)))
         lon_w, lon_e = math.degrees(x0 / EARTH_R), math.degrees(x1 / EARTH_R)
         if lat_s > ll[2] or lat_n < ll[0] or lon_w > ll[3] or lon_e < ll[1]:
             return None, None
         out = np.zeros((size, size, 3), np.uint8)
         ok = np.zeros((size, size), bool)
         px = (x1 - x0) / size                                   # the texel, in Mercator metres
-        ground = px * math.cos(math.radians((lat_n + lat_s) / 2))
+        ground = px * dmath.cos(math.radians((lat_n + lat_s) / 2))
         any_file = False
         for r0 in range(0, size, CHUNK):
             for c0 in range(0, size, CHUNK):
@@ -124,7 +126,7 @@ class BCOrtho:
                 mx = x0 + (c0 + np.arange(n_c) + 0.5) * px
                 my = y1 - (r0 + np.arange(n_r) + 0.5) * px
                 lon = np.broadcast_to(np.degrees(mx / EARTH_R)[None, :], (n_r, n_c))
-                lat = np.broadcast_to(np.degrees(np.arctan(np.sinh(my / EARTH_R)))[:, None], (n_r, n_c))
+                lat = np.broadcast_to(np.degrees(dnp.arctan(dnp.sinh(my / EARTH_R)))[:, None], (n_r, n_c))
                 rgb, good, used = self._chunk(lat, lon, ground, keys, epsg, box, year, res)
                 any_file |= used
                 out[r0:r0 + n_r, c0:c0 + n_c] = rgb
@@ -163,7 +165,7 @@ class BCOrtho:
             if not m.any():
                 continue
             # the overview whose pixels are at most half a texel (the 2020 files have them; others: level 0)
-            level = max(0, int(math.floor(math.log2(max(ground / 2.0 / res[j], 1.0)))))
+            level = max(0, int(math.floor(dmath.log2(max(ground / 2.0 / res[j], 1.0)))))
             c = None
             while level >= 0:
                 c = self._cog(keys[j], level)

@@ -45,6 +45,7 @@ import threading
 import time
 
 import fast
+import dmath
 import netfetch
 import pacer
 import roadz
@@ -155,7 +156,7 @@ def route_bounds(route):
     """(s, w, n, e) round a route's corridor."""
     lats, lons, half = route["lat"], route["lon"], route["half"]
     dlat = half / 111_195.0
-    dlon = half / (111_195.0 * max(0.01, math.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
+    dlon = half / (111_195.0 * max(0.01, dmath.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
     return (max(-85.0, min(lats) - dlat), max(-180.0, min(lons) - dlon), min(85.0, max(lats) + dlat),
             min(180.0, max(lons) + dlon))
 

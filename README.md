@@ -53,7 +53,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
 - High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
   (on wooden poles where the line's voltage is low or its mapped supports are poles).
-- The satellite map on cars' own navigation screens.
+- The satellite map with the real roads drawn over it on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
   and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the

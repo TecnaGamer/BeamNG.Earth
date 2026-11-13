@@ -8,6 +8,8 @@
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+use crate::dm::Dm;
+
 /// Shifts tried for a blocked site, as shares of a span (roads.pier_sites' order).
 const SHIFTS: [f64; 5] = [0.0, 0.25, -0.25, 0.4, -0.4];
 
@@ -36,7 +38,7 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let d = [b[0] - a[0], b[1] - a[1]];
     let l2 = (d[0] * d[0] + d[1] * d[1]).max(1e-12);
     let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
-    (p[0] - (a[0] + t * d[0])).hypot(p[1] - (a[1] + t * d[1]))
+    (p[0] - (a[0] + t * d[0])).dhypot(p[1] - (a[1] + t * d[1]))
 }
 
 /// Pier sites of one piece: [(arc, x, y, ux, uy, z_top, z_ground)] for the arcs inside [lo, hi].
@@ -139,7 +141,7 @@ pub fn rail_pier_sites<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, xy: 
     let mut zg_out = Vec::with_capacity(m);
     let mut zt_out = Vec::with_capacity(m);
     for (k, r) in got.iter().enumerate() {
-        let un = r[3].hypot(r[4]).max(1e-9);
+        let un = r[3].dhypot(r[4]).max(1e-9);
         let (ux, uy) = (r[3] / un, r[4] / un);
         c[[k, 0]] = r[1];
         c[[k, 1]] = r[2];

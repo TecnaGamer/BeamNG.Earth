@@ -1,6 +1,7 @@
 //! grading.underpass_offsets: the dips of ground roads under short overpasses, along the roads joined to them (after
 //! wyo-backroads' PR #374, whose Python ran a full-graph Dijkstra per crossing: ~15 s of downtown Los Angeles' 36 road
 //! tiles before it was limited to the edges a dip reaches).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -132,7 +133,7 @@ pub fn underpass_offsets<'py>(
     let len: Vec<f64> = (0..nl)
         .map(|l| {
             let r = rng(l);
-            (r.start + 1..r.end).map(|k| (xy[[k, 0]] - xy[[k - 1, 0]]).hypot(xy[[k, 1]] - xy[[k - 1, 1]])).sum()
+            (r.start + 1..r.end).map(|k| (xy[[k, 0]] - xy[[k - 1, 0]]).dhypot(xy[[k, 1]] - xy[[k - 1, 1]])).sum()
         })
         .collect();
     // the graph: nodes at the joined end points, an edge per line
@@ -250,7 +251,7 @@ pub fn underpass_offsets<'py>(
                     let d = s - sc;
                     let rr = if d < 0.0 { *r0 } else { *r1 };
                     let u = clip01((d.abs() - flat) / rr.max(1e-9));
-                    power += (depth * 0.5 * (1.0 + (PI * u).cos())).powi(8);
+                    power += (depth * 0.5 * (1.0 + (PI * u).dcos())).powi(8);
                 }
                 Req::Joined { part, sc, depth, run, dist } => {
                     let da = dist.get(&ea).copied().unwrap_or(f64::INFINITY);
@@ -260,15 +261,15 @@ pub fn underpass_offsets<'py>(
                         d = d.min((s - sc).abs());
                     }
                     let u = clip01((d - flat) / run.max(1e-9));
-                    let mut drop = depth * 0.5 * (1.0 + (PI * u).cos());
+                    let mut drop = depth * 0.5 * (1.0 + (PI * u).dcos());
                     let room = (terminal[ea] + s).min(terminal[eb] + ll - s);
                     let v = clip01(room / run.max(1e-9));
-                    drop = drop.min(depth * 0.5 * (1.0 - (PI * v).cos()));
+                    drop = drop.min(depth * 0.5 * (1.0 - (PI * v).dcos()));
                     power += drop.powi(8);
                 }
             }
         }
-        power.powf(1.0 / 8.0).min(max_drop)
+        power.dpowf(1.0 / 8.0).min(max_drop)
     };
     // the junctions' common drops (made when a query needs one)
     let mut common: HashMap<usize, f64> = HashMap::new();
@@ -322,7 +323,7 @@ pub fn underpass_offsets<'py>(
         let mut arc = Vec::with_capacity(r.len());
         arc.push(0.0);
         for k2 in r.start + 1..r.end {
-            arc.push(arc.last().unwrap() + (xy[[k2, 0]] - xy[[k2 - 1, 0]]).hypot(xy[[k2, 1]] - xy[[k2 - 1, 1]]));
+            arc.push(arc.last().unwrap() + (xy[[k2, 0]] - xy[[k2 - 1, 0]]).dhypot(xy[[k2, 1]] - xy[[k2 - 1, 1]]));
         }
         for &q in &order[k..e] {
             let (px, py_) = (qxy[[q, 0]], qxy[[q, 1]]);
