@@ -2,6 +2,7 @@
 
 Target: BeamNG.drive 0.39.4 (native Linux, Vulkan). Research date 2026-10-09.
 Raw research + adversarial verification: `docs/research/2026-10-09-research-raw.json`.
+Hosting (the tile CDN, the data workflows, the collector and builder services): [HOSTING.md](HOSTING.md).
 
 Game install: `~/.local/share/Steam/steamapps/common/BeamNG.drive`
 User folder (VFS root overlay): `~/.local/share/BeamNG/BeamNG.drive/current`
