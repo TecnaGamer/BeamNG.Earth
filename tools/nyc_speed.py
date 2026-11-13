@@ -319,6 +319,26 @@ def summarize(rows, lines, drive):
     return out
 
 
+USER_DIR = os.environ.get("BNGE_USER_DIR", os.path.expanduser("~/.local/share/BeamNG/BeamNG.drive/current"))
+
+
+def keepup_save(d):
+    """The keep-up recorder's record (keepup.lua) saved, stopped, and copied to <d>/keepup.csv; its table printed."""
+    import shutil
+    n = lua("local k = require('beamngEarth/keepup') local n = k.save('/temp/bne_keepup.csv') k.stop() "
+            "return n", timeout=120)
+    src = os.path.join(USER_DIR, "temp", "bne_keepup.csv")
+    for _ in range(20):
+        if os.path.exists(src):
+            break
+        time.sleep(0.5)
+    shutil.copy(src, os.path.join(d, "keepup.csv"))
+    os.remove(src)
+    import keepup
+    print(f"keepup: {n} lines", flush=True)
+    print(keepup.table([dict(keepup.analyze(os.path.join(d, "keepup.csv")), label=os.path.basename(d))]), flush=True)
+
+
 def session(label, cache_dir=None):
     """A fresh dev session (the game and server restarted), on cache_dir when given."""
     env = dict(os.environ)
@@ -328,7 +348,9 @@ def session(label, cache_dir=None):
         for pid in subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True).stdout.split():
             subprocess.run(["kill", pid])
     time.sleep(3)
-    subprocess.run(["sh", os.path.join(REPO, ".claude/devtools/session.sh"), label], env=env, timeout=900, check=True)
+    # (BNGE_SESSION_SH: the main checkout's helper, for a worktree without .claude/, with BNGE_SESSION_ROOT=<worktree>)
+    sh = os.environ.get("BNGE_SESSION_SH") or os.path.join(REPO, ".claude/devtools/session.sh")
+    subprocess.run(["sh", sh, label], env=env, timeout=900, check=True)
 
 
 def main():
@@ -342,11 +364,14 @@ def main():
     ap.add_argument("--km", type=float, default=None, help="cap each run's distance")
     ap.add_argument("--cold", action="store_true", help="restart the session on a new, empty cache folder first")
     ap.add_argument("--restart", action="store_true", help="restart the session (warm cache) first")
+    ap.add_argument("--cache-dir", default=None, help="with --restart: the server on this cache folder (a scratch one)")
     ap.add_argument("--warm-first", action="store_true", help="drive the route once at 40 mph first (untimed)")
     ap.add_argument("--label", default=None)
     ap.add_argument("--bake", action="append", help="with --cold: a baked pack (.bnge) put in the fresh cache first")
     ap.add_argument("--vehicle", default=os.environ.get("BNGE_DRIVE_VEHICLE", "ball"),
                     help="the driven vehicle: a jbeam model ('ball': a simple prop, the default) or 'car' (the session's)")
+    ap.add_argument("--lua-setup", default=None, help="Lua run in the game before each timed drive (A/B switches)")
+    ap.add_argument("--keepup", action="store_true", help="record the details' keep-up (tools/keepup.py) in each run")
     ap.add_argument("--accel", type=float, default=0.0, help="m/s^2: set off from a near standstill (0: at speed at once)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -358,8 +383,8 @@ def main():
             os.makedirs(os.path.join(cache, "bake"), exist_ok=True)
             shutil.copy(pk, os.path.join(cache, "bake", os.path.basename(pk)))
         session(a.label or "nyccold", cache)
-    elif a.restart:
-        session(a.label or "nycwarm")
+    elif a.restart:     # (--cache-dir: on that cache, e.g. a cold run's, now filled: a warm test that leaves the
+        session(a.label or "nycwarm", a.cache_dir)      # player's own cache alone)
     runs = []
     speeds = [float(x) for x in a.speeds.split(",") if x]
     if a.warm_first:
@@ -384,6 +409,10 @@ def main():
         pos = log_size()
         # (no vehicle-vehicle collisions during the run: traffic and parked cars on the route threw the car off)
         lua("be:setDynamicCollisionEnabled(false) return 1")
+        if a.lua_setup:     # (switches for an A/B, e.g. "require('beamngEarth/trees').PROP_LEAD_S = 4")
+            print(f"lua setup: {lua(a.lua_setup + ' return 1')}", flush=True)
+        if a.keepup:        # (the detail keep-up recorder: tools/keepup.py)
+            lua("return require('beamngEarth/keepup').start()")
         w = Watch(os.path.join(d, "watch.jsonl"))
         w.start()
         t0 = time.time()
@@ -393,6 +422,8 @@ def main():
         w.stop.set()
         w.join(5)
         lua("be:setDynamicCollisionEnabled(true) return 1")
+        if a.keepup:
+            keepup_save(d)
         lines = log_lines(pos)
         with open(os.path.join(d, "log.txt"), "w") as f:
             f.write("\n".join(lines))
