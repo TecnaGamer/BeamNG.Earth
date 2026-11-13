@@ -193,6 +193,8 @@ def _layer_rows(f):
                 st = roads.STYLE.get(c)
                 if st is not None:
                     sel = road & (clss == c)
+                    if c == "cycleway":         # (only a street closed to cars is a road: roads.cycle_streets)
+                        sel &= roads.cycle_streets(f)
                     kinds[sel], halves[sel] = 0, st[0] / 2.0
             for i in np.flatnonzero(subs == "rail").tolist():
                 if railways.drawn(f, i) is not None:

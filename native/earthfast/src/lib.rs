@@ -6331,6 +6331,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // station_snap_edges, station_link_chains: railstations.snap_edges / _links' chains, King's Cross / Euston tiles)
     m.add_function(wrap_pyfunction!(stationgeom::station_snap_edges, m)?)?;
     m.add_function(wrap_pyfunction!(stationgeom::station_link_chains, m)?)?;
-    m.add("VERSION", 263)?;
+    m.add("VERSION", 264)?;
     Ok(())
 }
