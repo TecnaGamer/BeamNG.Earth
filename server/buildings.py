@@ -426,7 +426,10 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
             return None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
-        px = int(px or ROOF_PHOTO_PX)
+        # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
+        # US squares' colour vote's sizes 7 times in 8: Broadway Square drawn grey pavers, the user's report 14)
+        cells = imagery.MESH_CELLS
+        px = int(-(-int(px or ROOF_PHOTO_PX) // cells) * cells)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
         if urgent and online:
