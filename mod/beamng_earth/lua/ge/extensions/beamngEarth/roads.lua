@@ -80,6 +80,26 @@ M.SIDE_PENALTY = 4          -- nextWalk at FAST_MS: m along the path a metre sid
 M.LEAD_MAX_M = 2000         -- ... and what every tile behind the car comes after
 M.URGENT_S = 6
 M.URGENT_GAP_S = 1
+-- Rebuild by deadline (NEED, 2026-11-13; game perf report: a 45 mph Steam Deck drive in Baltimore ran 70 rebuilds in
+-- 4.8 min, each a ~51 ms frame: the physics threads held ~8-17 ms and the physics finishing late by as much again;
+-- they outweighed the block swaps). The old rule rebuilt as soon as any collider made since the last rebuild had its
+-- tile's centre within URGENT_S of driving + the tile's half-diagonal: colliders made late (the import queue behind
+-- ~20 ms imports on a Deck, tiles arriving within reach) each forced a rebuild a second after the last one. Now a
+-- collider is due by the distance from the car to what it really covers (its pieces' boxes: sidewalks, decks; else
+-- the object's world box; else its tile's square), and the rebuild waits until the nearest pending one is within
+-- NEED_S of driving (NEED_MIN_M at least, NEED_PAD_M on top; URGENT_S at FAST_MS and over, as before), so the colliders
+-- of several tiles go solid in one rebuild. Every rebuild is global, so the car still meets nothing it could reach
+-- before the next one unsolid: the nearest pending collider decides.
+M.NEED = true
+M.NEED_S = 3
+M.NEED_MIN_M = 60
+M.NEED_PAD_M = 20
+-- ... and one inside that reach still waits up to NEED_GAP_S after the last rebuild while it is beyond the hard reach
+-- (NEED_HARD_S of driving, NEED_HARD_MIN_M at least, + NEED_PAD_M): a tile's building and sidewalk colliders, made a
+-- frame or more apart behind a Deck's import queue, went solid in two rebuilds a second apart (URGENT_GAP_S)
+M.NEED_GAP_S = 2.5
+M.NEED_HARD_S = 1.5
+M.NEED_HARD_MIN_M = 30
 -- What the car drives on comes first (nextWalk): a bridge deck's or a tunnel's collider counts this much nearer than the
 -- rest (on a Steam Deck at 80 mph in Phoenix the import queue grew to 140 behind ~20 ms imports, and an I-10 overpass's
 -- deck turned solid only as the car reached it, behind the sidewalks' and buildings' colliders of the same tiles)
@@ -119,7 +139,7 @@ local customMaterialsContent = customMaterialsNeverLoaded   -- three_dmr.materia
 local parked = {}          -- walkQ entries of colliders whose tile is not near enough yet
 local sinceCollideCheck = stopwatch.new()
 local held = {}            -- walkQ entries of colliding meshes held while the player is in their boxes
-local noteNewColliders, playerIn, releaseHeld
+local noteNewColliders, playerIn, releaseHeld, objectBox, logReload
 local tiles = {}            -- key "a:tx_ty" -> { anchor, objs = { DecalRoad ids }, queued = n, walk = TSStatic id,
                             --   road = TSStatic id }
 local walkQ = {}            -- { key, walk = {shape, pos}, what = 'walk' | 'road' } FIFO
@@ -142,6 +162,11 @@ local dirtyAt = {}          -- far spots where another module changed colliders 
                             -- square "gx_gy" (TILE_M, so far churn stays bounded) -> { solid once reloads reaches,
                             -- square centre x, y } (the centre, not the last spot: collideNear's TILE_M * 0.71
                             -- half-diagonal then covers the whole square, wherever in it the spots fell)
+local dirtySrc = {}         -- what set collisionDirty since the last rebuild: source -> count (M.reloadLog)
+local function markDirty(src)
+  collisionDirty = true
+  dirtySrc[src] = (dirtySrc[src] or 0) + 1
+end
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
 -- unloading the extensions, so nothing deletes the old objects: 2026-10-11, after a few reloads, 3,558
@@ -502,7 +527,7 @@ function M.setFoci(f) foci = f or {} end
 -- `reloads` reaches it) and is promoted when the player comes near (updateCollideRange, the COLLIDE_CHECK_S poll);
 -- any rebuild before that makes the collider solid anyway, be:reloadCollision being global.
 local function markTileCollider(t)
-  if not t or M.collideNear(t, M.TILE_M) then collisionDirty = true
+  if not t or M.collideNear(t, M.TILE_M) then markDirty('tile')
   else t.colDirty = reloads + 1 end
 end
 
@@ -528,12 +553,12 @@ local function updateCollideRange()
   end
   for sq, d in pairs(dirtyAt) do      -- other modules' deferred spots (markCollisionDirty with a position)
     if reloads >= d[1] then dirtyAt[sq] = nil
-    elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; collisionDirty = true end
+    elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; markDirty('spot') end
   end
   for key, t in pairs(tiles) do
     if t.colDirty then      -- deferred collider dirt (markTileCollider): solid after any rebuild, promoted near
       if reloads >= t.colDirty then t.colDirty = nil
-      elseif M.collideNear(t, M.TILE_M) then t.colDirty = nil; collisionDirty = true end
+      elseif M.collideNear(t, M.TILE_M) then t.colDirty = nil; markDirty('tileNear') end
     end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
@@ -1099,7 +1124,7 @@ function M.replace(a, aid)
     return out
   end
   walkQ, parked, held, createQ = keep(walkQ), keep(parked), keep(held), keep(createQ)
-  if n > 0 then collisionDirty = true; sinceChange = stopwatch.new() end
+  if n > 0 then markDirty('anchor'); sinceChange = stopwatch.new() end
   M.geoStats.replaced = M.geoStats.replaced + n
   return n
 end
@@ -1663,8 +1688,8 @@ end
 -- is promoted by updateCollideRange's poll when the player comes near, any rebuild in between having made the
 -- objects solid. Without a position: prompt, as before (rebases, level end, third-party callers).
 function M.markCollisionDirty(x, y)
-  if type(x) ~= 'number' or type(y) ~= 'number' then collisionDirty = true; return end
-  if M.collideNear({ cx = x, cy = y }, M.TILE_M) then collisionDirty = true; return end
+  if type(x) ~= 'number' or type(y) ~= 'number' then markDirty('mark'); return end
+  if M.collideNear({ cx = x, cy = y }, M.TILE_M) then markDirty('mark'); return end
   local gx, gy = math.floor(x / M.TILE_M), math.floor(y / M.TILE_M)
   local sq = gx .. '_' .. gy
   local d = dirtyAt[sq]
@@ -1737,7 +1762,7 @@ function M.transform(xf, geodesy)
     if f and not f.ghost then fq[#fq + 1] = k end
   end
   farQ = fq
-  if any then ghostSince = stopwatch.new(); sinceChange = stopwatch.new(); collisionDirty = true end
+  if any then ghostSince = stopwatch.new(); sinceChange = stopwatch.new(); markDirty('rebase') end
 end
 
 -- Is the square of side M.TILE_M around (cx, cy) covered by made tiles of the current anchor (every one of the new
@@ -1815,7 +1840,7 @@ local function releaseGhosts(player)
         -- a ghost dropped far from every island: its stale collision harms nobody out there, so it rides the lazy
         -- RELOAD_DELETES_S rebuild (its colliders' deletes classify themselves the same way, the deleteQ above)
         if not t.signOnly then
-          if M.collideNear(t, M.TILE_M) then collisionDirty = true else deletesDirty = true end
+          if M.collideNear(t, M.TILE_M) then markDirty('ghost') else deletesDirty = true end
         end
       else left = true end
     end
@@ -1879,7 +1904,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local o = scenetree.findObjectById(did)
     if o then
       if isCollider(o) then
-        if M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then collisionDirty = true else deletesDirty = true end
+        if M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then markDirty('delete') else deletesDirty = true end
       end
       o:delete()
     end
@@ -1950,7 +1975,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
-          t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q }
+          t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q, objectBox(id) }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
@@ -1971,6 +1996,9 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
   if due and not urgent and M.deferWhileRolling(lastSpeed, sinceReload()) then due = false end
+  -- (NEED: a fast car's pending colliders wait for their deadline, not for RELOAD_EVERY_S; what else set the flag
+  -- (trees, props, deletes near the car) keeps the timer)
+  if due and not urgent and M.NEED and lastSpeed >= M.FAST_MS and M.onlyColliderDirt(dirtySrc) then due = false end
   if due and not holdActive and reloadWaits < M.RELOAD_WAIT_FRAMES and gov.roomFor and not gov:roomFor(M.RELOAD_ROOM_MS) then
     reloadWaits = reloadWaits + 1
     due = false
@@ -1978,6 +2006,8 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   if due then
     reloadWaits = 0
     local t0 = now()
+    logReload(holdActive and 'hold' or urgent and 'urgent' or (collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000)
+      and 'due' or 'deletes')
     noteNewColliders()
     be:reloadCollision()
     require('beamngEarth/perfsummary').note('collision')
@@ -2109,6 +2139,30 @@ local function playerNow()
   return veh:getPosition(), lastDir
 end
 
+-- The last RELOAD_LOG collision rebuilds, why and what they made solid (M.reloadLog(); diagnostics):
+-- { at = os.clock() s, why = 'urgent' | 'due' | 'deletes' | 'hold' | 'commit', v = m/s, n = colliders made since the
+--   last one, kinds = { what = n }, gap = the nearest one's distance (m), reach = needReach, src = { dirty source = n },
+--   walkQ, parked }
+M.RELOAD_LOG = 300
+local reloadLog = {}
+logReload = function(why)
+  local kinds, gap = {}, math.huge
+  local p = playerNow()
+  for _, c in ipairs(newColliders) do
+    local w = c[2] and c[2].what or '?'
+    kinds[w] = (kinds[w] or 0) + 1
+    local ok, d = pcall(M.colliderGap, c, p)
+    if ok and d < gap then gap = d end
+  end
+  local e = { at = os.clock(), why = why, v = math.floor(lastSpeed * 10 + 0.5) / 10, n = #newColliders, kinds = kinds,
+    gap = gap < math.huge and math.floor(gap) or -1, reach = math.floor(M.needReach(lastSpeed)), src = dirtySrc,
+    walkQ = #walkQ, parked = #parked, held = #held }
+  dirtySrc = {}
+  reloadLog[#reloadLog + 1] = e
+  if #reloadLog > M.RELOAD_LOG then table.remove(reloadLog, 1) end
+end
+function M.reloadLog() return reloadLog end
+
 -- Which walkQ entry to make next (index): the road meshes and colliders before the render-only meshes (drawn
 -- buildings, wires), each by the distance to its tile's centre (behind a fast car counting three times): the tiles
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
@@ -2171,6 +2225,92 @@ function M.urgentWalk(q)
   return best
 end
 
+-- A made object's world box { x0, y0, z0, x1, y1, z1 } (nil: none)
+objectBox = function(id)
+  local o = scenetree.findObjectById(id)
+  if not o or not o.getWorldBox then return nil end
+  local ok, wb = pcall(o.getWorldBox, o)
+  if not ok or not wb or not wb.minExtents then return nil end
+  local lo, hi = wb.minExtents, wb.maxExtents
+  if not (lo.x <= hi.x and lo.y <= hi.y) or hi.x - lo.x > 1e5 then return nil end   -- (an empty / unset box)
+  return { lo.x, lo.y, lo.z, hi.x, hi.y, hi.z }
+end
+
+-- Pure: horizontal distance (m) from (x, y) to box b { x0, y0, _, x1, y1 }
+function M.boxGap2(b, x, y)
+  local dx = math.max(b[1] - x, 0, x - b[4])
+  local dy = math.max(b[2] - y, 0, y - b[5])
+  return math.sqrt(dx * dx + dy * dy)
+end
+
+-- Pure: did only made colliders (markTileCollider, their promotion near the car) set the flag? src: { source = n }
+function M.onlyColliderDirt(src)
+  for k in pairs(src or {}) do
+    if k ~= 'tile' and k ~= 'tileNear' then return false end
+  end
+  return true
+end
+
+-- The distance (m) within which a pending collider must be solid at speed v (m/s): NEED_S of driving (URGENT_S at
+-- FAST_MS and over), NEED_MIN_M at least, plus NEED_PAD_M.
+function M.needReach(v)
+  v = v or 0
+  return math.max(M.NEED_MIN_M, v * (v >= M.FAST_MS and M.URGENT_S or M.NEED_S)) + M.NEED_PAD_M
+end
+
+-- The distance (m) within which a pending collider is made solid even right after a rebuild (NEED_GAP_S)
+function M.hardReach(v)
+  v = v or 0
+  return math.max(M.NEED_HARD_MIN_M, v * M.NEED_HARD_S) + M.NEED_PAD_M
+end
+
+-- How far (m, horizontally) the player's car is from collider entry c { id, walkQ entry, world box }: its pieces' boxes
+-- (t.colliders: sidewalks, decks) where the tile lists them, else the object's world box, else the tile's square
+-- (centre less the half-diagonal). 0 without a car or a tile. Beyond `cutoff` (m) the answer may be any distance over
+-- it (the pieces' bounding box: a tile's sidewalks are hundreds of boxes).
+function M.colliderGap(c, p, cutoff)
+  p = p or playerNow()
+  local q = c[2]
+  local t = q and tiles[q.key]
+  if not p or not t then return 0 end
+  local boxes = t.colliders and t.colliders[q.what]
+  if type(boxes) == 'table' and #boxes > 0 then
+    local at = colliderPosition(p, t, q.what)
+    local all = c[4]
+    if not all or all.boxes ~= boxes then           -- (the pieces' bounding box, in their frame)
+      all = { math.huge, math.huge, 0, -math.huge, -math.huge, 0, boxes = boxes }
+      for _, b in ipairs(boxes) do
+        all[1], all[2] = math.min(all[1], b[1]), math.min(all[2], b[2])
+        all[4], all[5] = math.max(all[4], b[4]), math.max(all[5], b[5])
+      end
+      c[4] = all
+    end
+    local lower = M.boxGap2(all, at.x, at.y)
+    if cutoff and lower > cutoff then return lower end
+    local best = math.huge
+    for _, b in ipairs(boxes) do
+      local d = M.boxGap2(b, at.x, at.y)
+      if d < best then best = d end
+    end
+    return best
+  end
+  if c[3] then return M.boxGap2(c[3], p.x, p.y) end
+  if not t.cx then return 0 end
+  local dx, dy = t.cx - p.x, t.cy - p.y
+  return math.max(0, math.sqrt(dx * dx + dy * dy) - M.TILE_M * 0.71)
+end
+
+-- The nearest collider made since the last rebuild (m; math.huge: none; beyond cutoff: any distance over it)
+function M.needDistance(cutoff)
+  local p = playerNow()
+  local best = math.huge
+  for _, c in ipairs(newColliders) do
+    local d = M.colliderGap(c, p, cutoff)
+    if d < best then best = d end
+  end
+  return best
+end
+
 -- Is a collider made since the last rebuild one the car reaches soon (its tile within URGENT_S of driving, 150 m at
 -- least)? Then the rebuild runs now, not after RELOAD_EVERY_S.
 -- Pure: does a non-urgent collision rebuild wait (ROLL_MIN_MS, ROLL_DEFER_S above)? speed: the player's car's ground
@@ -2184,6 +2324,12 @@ function M.urgentColliders()
   if #newColliders == 0 then return false end
   local p = playerNow()
   if not p then return true end
+  if M.NEED then
+    local reach = M.needReach(lastSpeed)
+    local d = M.needDistance(reach)
+    if d > reach then return false end
+    return d <= M.hardReach(lastSpeed) or sinceReload() >= M.NEED_GAP_S * 1000
+  end
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   for _, c in ipairs(newColliders) do
     local t = tiles[c[2].key]
@@ -2240,7 +2386,7 @@ end
 
 -- Something else made colliding objects near the player (trees.lua's Forest items): rebuild collision at the
 -- next throttled slot.
-function M.requestCollision() collisionDirty = true end
+function M.requestCollision() markDirty('request') end
 
 -- Collision rebuilds so far (be:reloadCollision, ours or the terrain commit's): what was made before one collides from
 -- the frame after it (terrainpatch.groundReady).
@@ -2256,6 +2402,7 @@ function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ 
 -- Somebody else just ran be:reloadCollision() (the terrain commit): the sidewalks made so far collide.
 function M.collisionRebuilt()
   require('beamngEarth/perfsummary').note('collision')     -- (a slow frame's context in the anonymous summary)
+  logReload('commit')
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
@@ -2312,7 +2459,7 @@ function M.clear()
   for _, id in ipairs(deleteQ) do
     local o = scenetree.findObjectById(id)
     if o then
-      if isCollider(o) then collisionDirty = true end
+      if isCollider(o) then markDirty('clear') end
       o:delete()
     end
     slotObjGone(id)
@@ -2484,7 +2631,7 @@ function M.newSession()
   for _, q in ipairs(walkQ) do if tiles[q.key] and not q.skin then keep[#keep + 1] = q end end
   walkQ = keep
   orphanSince = any and stopwatch.new() or nil
-  collisionDirty = true
+  markDirty('orphan')
 end
 local function releaseOrphans(player)
   if not orphanSince then return end
@@ -2498,7 +2645,7 @@ local function releaseOrphans(player)
   for key, t in pairs(tiles) do
     if t.orphan then
       local far_ = player and t.cx and M.boxGap(player.x, player.y, t.cx, t.cy, M.TILE_M / 2) > M.ORPHAN_FAR_M
-      if all or far_ then dropTile(key); collisionDirty = true else left = true end
+      if all or far_ then dropTile(key); markDirty('orphan') else left = true end
     end
   end
   if not left then orphanSince = nil end
