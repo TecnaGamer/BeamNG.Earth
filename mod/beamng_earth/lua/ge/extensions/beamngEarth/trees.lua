@@ -1715,4 +1715,79 @@ function M.status()
     geoMoved = M.geoMoved, geoFlushed = M.geoFlushed }   -- (geotiles: placed again at a rebase, made again)
 end
 
+-- Other mods' shapes (a region's tree species, a country's street furniture; beamngEarth_api.registerShapes): an owner
+-- puts shapes in CATALOG for groups, with their draw distance (GROUP_MAX_M) and whether near items collide; the latest
+-- registration of a group wins, and unregistering puts back the one under it (another owner's, else the catalog's own).
+-- Tiles already shown keep the shapes they picked; tiles that arrive after take the registered ones (register before
+-- the world fills: the api's shapesCatalog event, at the module's load and after a codeswap reload).
+M.registered = {}       -- owner -> { seq, groups = { group -> { shapes, maxM, noCollide } } }
+local saved = {}        -- group -> { CATALOG, GROUP_MAX_M, NO_COLLIDE } before its first registration (false: none)
+local regSeq = 0
+
+local function shapeList(list)
+  if type(list) ~= 'table' or #list == 0 then return nil end
+  local out = {}
+  for i, v in ipairs(list) do
+    if type(v) ~= 'table' or type(v[1]) ~= 'string' or v[1] == '' or type(v[2]) ~= 'number' or not (v[2] > 0) then
+      return nil
+    end
+    out[i] = { v[1], v[2] }
+  end
+  return out
+end
+
+local function applyGroup(g)
+  local top, topSeq
+  for _, r in pairs(M.registered) do
+    if r.groups[g] and (not topSeq or r.seq > topSeq) then top, topSeq = r.groups[g], r.seq end
+  end
+  local b = saved[g]
+  if not b then return end
+  if top then
+    M.CATALOG[g] = top.shapes
+    M.GROUP_MAX_M[g] = top.maxM or (b[2] or nil)
+    if top.noCollide == nil then M.NO_COLLIDE[g] = b[3] or nil else M.NO_COLLIDE[g] = top.noCollide or nil end
+    M.unknownGroups[g] = nil
+  else
+    M.CATALOG[g], M.GROUP_MAX_M[g], M.NO_COLLIDE[g] = b[1] or nil, b[2] or nil, b[3] or nil
+    saved[g] = nil
+  end
+end
+
+-- groups: { group = { shapes = { { shape path, its height m }, ... }, maxM = draw distance m (optional),
+-- noCollide = true / false (optional: the group's own, else collides near the player) } }. Returns true, or false and
+-- why (nothing changes then). Registering again under the same owner replaces its earlier registration.
+function M.register(owner, groups)
+  if type(owner) ~= 'string' or owner == '' then return false, 'owner: a non-empty string' end
+  if type(groups) ~= 'table' or next(groups) == nil then return false, 'groups: a table of group -> entry' end
+  local ok = {}
+  for g, e in pairs(groups) do
+    local list = type(e) == 'table' and shapeList(e.shapes)
+    if type(g) ~= 'string' or g == '' or not list then
+      return false, 'group ' .. tostring(g) .. ': shapes = { { path, height }, ... }'
+    end
+    local maxM = e.maxM ~= nil and tonumber(e.maxM) or nil
+    if e.maxM ~= nil and not (maxM and maxM > 0) then return false, 'group ' .. g .. ': maxM > 0' end
+    local nc = nil
+    if e.noCollide ~= nil then nc = e.noCollide and true or false end
+    ok[g] = { shapes = list, maxM = maxM, noCollide = nc }
+  end
+  M.unregister(owner)
+  regSeq = regSeq + 1
+  M.registered[owner] = { seq = regSeq, groups = ok }
+  for g in pairs(ok) do
+    if saved[g] == nil then saved[g] = { M.CATALOG[g] or false, M.GROUP_MAX_M[g] or false, M.NO_COLLIDE[g] or false } end
+    applyGroup(g)
+  end
+  return true
+end
+
+function M.unregister(owner)
+  local r = M.registered[owner]
+  if not r then return false end
+  M.registered[owner] = nil
+  for g in pairs(r.groups) do applyGroup(g) end
+  return true
+end
+
 return M
