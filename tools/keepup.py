@@ -33,10 +33,13 @@ PASS_M = 40.0           # a detail counts as passed when the car came this close
 TILE_HALF = 120.0       # a zoom-17 geotile's half side (m, ~39 deg): a tile part's square
 NEAR_M = 100.0
 
+VEG = ("deciduous", "conifer", "shrub", "clump", "tuft", "fern", "rock", "palm", "oak", "tree", "bush", "cliff",
+       "eucalyptus", "mediterranean", "hedge_plant", "straw", "silage")
 LIGHTS = ("lamp", "light", "lantern", "polelamp", "lampglow", "high_mast", "streetlight")
-SIGNS = ("stop", "giveway", "speed", "signal", "sign", "wallsign", "town", "vienna", "yield", "exit", "mile", "route",
-         "dir", "kantstolpe", "se_", "de_", "fr_j", "rrcross", "rrflash")
-FENCES = ("fence", "hedge", "wall", "guardrail", "jersey", "cable", "barrier", "railing", "bollard")
+SIGNS = ("stop", "giveway", "speed", "signal", "sign", "town", "vienna", "yield", "exit", "mile", "route", "dir",
+         "kantstolpe", "se_", "de_", "fr_j", "rrcross", "rrflash")
+FENCES = ("fence", "hedge", "wall", "chainlink", "noise", "railing", "bollard")
+BARRIERS = ("guardrail", "jersey", "cable", "barrier")
 PART_LAYER = {"road": "road+markings", "walk": "sidewalks", "signs": "sign meshes", "bld": "buildings",
               "bld2": "buildings", "bld3": "buildings", "bld4": "buildings", "wire": "power lines"}
 LAYERS = ["road+markings", "sidewalks", "trees", "lights", "signs", "sign meshes", "fences", "guardrails", "furniture",
@@ -44,16 +47,21 @@ LAYERS = ["road+markings", "sidewalks", "trees", "lights", "signs", "sign meshes
 
 
 def item_layer(group, kind):
-    """trees.lua's group -> a layer (kind 1 vegetation tile, 2 street furniture rows, 3 guard rails)."""
+    """trees.lua's group -> a layer (kind 1 vegetation tile, 2 street furniture rows, 3 guard rails). By the group's
+    name first: the furniture rows carry street trees, the guard-rail rows jersey barriers."""
     g = group.lower()
-    if kind == 3:
-        return "guardrails"
-    if kind == 1 and not any(g.startswith(p) for p in ("fence", "sub_fence")):
+    if any(g.startswith(k) for k in VEG):
         return "trees"
-    if any(k in g for k in LIGHTS):
-        return "lights"
+    if kind == 3 or any(g.startswith(k) for k in BARRIERS):
+        return "guardrails"
+    if kind == 1 and not any(k in g for k in FENCES):
+        return "trees"
     if any(k in g for k in FENCES):
         return "fences"
+    if g.startswith("wallsign"):
+        return "signs"
+    if any(k in g for k in LIGHTS):
+        return "lights"
     if any(g.startswith(k) or k in g for k in SIGNS):
         return "signs"
     return "furniture"
