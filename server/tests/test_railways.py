@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock
 from unittest import mock
@@ -1032,3 +1033,39 @@ class SplitMeshTest(unittest.TestCase):
         for k in range(2, roads.RAIL_PARTS_MAX + 1):
             self.assertEqual(names[f"rail{k}"], f"rail_1_2_3_{k}.cdae")
             self.assertEqual(names[f"railcol{k}"], f"railcol_1_2_3_{k}.cdae")
+
+
+class StreetRunningTest(unittest.TestCase):
+    """A track down a street (Fells Point's disused trolley tracks in Thames Street, the user's reports 15 and 16)."""
+    TRACK = np.c_[np.arange(0.0, 101.0, railways.STEP_M), np.zeros(51)]
+
+    def test_a_street_the_track_runs_down_cuts_it(self):
+        street = (np.array([[-20.0, 1.5], [120.0, 1.5]]), 4.75)       # the track 1.5 m off its centre line
+        beside = (np.array([[-20.0, 9.0], [120.0, 9.0]]), 4.0)         # a road along the track, its edge 5 m off it
+        ending = (np.array([[50.0, 40.0], [50.0, 0.5]]), 4.0)          # a road ending at the track
+        crossing = (np.array([[70.0, -20.0], [70.0, 20.0]]), 3.0)
+        got = railways.true_crossers([self.TRACK], [street, beside, ending, crossing])
+        self.assertEqual([id(r[0]) for r in got], [id(street[0]), id(crossing[0])])
+
+    def test_street_spans_cover_the_stretch_in_the_street(self):
+        street = (np.array([[30.0, 1.0], [60.0, 1.0]]), 4.0)
+        spans = railways.street_spans(self.TRACK, [street], pad=4.0)
+        self.assertEqual(len(spans), 1)
+        a, b = spans[0]
+        self.assertTrue(20.0 <= a <= 30.0 and 60.0 <= b <= 70.0, spans)
+        self.assertEqual(railways.street_spans(self.TRACK, [(np.array([[30.0, 9.0], [60.0, 9.0]]), 4.0)]), [])
+
+    def test_no_crossbucks_on_a_street_track(self):
+        street = ("s", types.SimpleNamespace(width=9.5), np.array([[-20.0, 1.5], [120.0, 1.5]]))
+        side = ("x", types.SimpleNamespace(width=6.0), np.array([[50.0, -20.0], [50.0, 20.0]]))
+        self.assertTrue(railways._street_crossing(self.TRACK, np.array([50.0, 0.0]), {}, 0, [street, side]))
+        self.assertFalse(railways._street_crossing(self.TRACK, np.array([50.0, 0.0]), {}, 0, [side]))
+
+    def test_no_buffer_stop_in_the_street(self):
+        track = [("t", "standard_gauge", "ground", self.TRACK)]
+        finals = [np.zeros(len(self.TRACK))]
+        near = (-500.0, -500.0, 500.0, 500.0)
+        self.assertEqual(len(railways.dead_ends(track, finals, {"t": 1}, near)), 2)
+        street = (np.array([[90.0, -20.0], [90.0, 20.0]]), 12.0)       # the track's end at x = 100 on its carriageway
+        ends = railways.dead_ends(track, finals, {"t": 1}, near, [street])
+        self.assertEqual([round(float(p[0])) for p, _d, _z in ends], [0])

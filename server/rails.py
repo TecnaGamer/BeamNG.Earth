@@ -115,19 +115,20 @@ def _sleepers(xy, s, step, length, box, on_road):
 CROSS_WINDOW_M = 30.0           # m of track either side of where it crosses a carriageway's centre line (_crossing_windows)
 
 
-def _crossing_windows(xy, lines):
-    """The stretches of track xy (k, 2) within CROSS_WINDOW_M of where it crosses a carriageway centre line (lines),
-    overlapping ones joined: [(k, 2)]. Pure."""
+def _crossing_windows(xy, lines, extra=()):
+    """The stretches of track xy (k, 2) within CROSS_WINDOW_M of where it crosses a carriageway centre line (lines), and
+    the arc ranges extra [(a, b)] (railways.street_spans: where it runs down a street), overlapping ones joined:
+    [(k, 2)]. Pure."""
     import roads
     cr = roads._crossings([xy], lines) if lines else []
-    if not cr:
+    if not cr and not extra:
         return []
     s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
     spans = []
-    for arc in sorted(c[1] for c in cr):
-        a, b = max(0.0, arc - CROSS_WINDOW_M), min(float(s[-1]), arc + CROSS_WINDOW_M)
+    ranges = [(max(0.0, arc - CROSS_WINDOW_M), min(float(s[-1]), arc + CROSS_WINDOW_M)) for arc in (c[1] for c in cr)]
+    for a, b in sorted(ranges + [(float(a), float(b)) for a, b in extra]):
         if spans and a <= spans[-1][1]:
-            spans[-1][1] = b
+            spans[-1][1] = max(spans[-1][1], b)
         else:
             spans.append([a, b])
     out = []
@@ -235,7 +236,10 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
         if meshed and kind != "tram":
             # (a main line's only street track is where it crosses a road: just those stretches, every metre of every
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
-            todo += [(kind, w, meshed, eligible) for w in _crossing_windows(xy, cw_lines)]
+            # (and where it runs down a street: railways.street_along cuts its 3D track there, Fells Point's trolley
+            # tracks down Thames Street, the user's report 16)
+            todo += [(kind, w, meshed, eligible)
+                     for w in _crossing_windows(xy, cw_lines, railways.street_spans(xy, list(eligible.values())))]
         else:
             todo.append((kind, xy, meshed, eligible))
     for kind, xy, meshed, eligible in todo:
