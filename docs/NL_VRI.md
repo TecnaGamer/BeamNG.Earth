@@ -3,10 +3,16 @@
 Enable **Dutch Groenpol signals** in the Earth settings and restart. The setting
 defaults to false. BGT is outside this integration. No installed game files or
 user launchers are changed by this PR.
+The stock path does not load the Dutch planner, country outline, component
+catalogue or surface reader. Ground re-fit work and Dutch static-frame refreshes
+are gated by the setting. Unchanged suppression cells do not rescan signal tiles.
 
 Models and textures derive from Sven's confirmed `Groenpol.fbx`, SHA256
 `0c87eef5eea270f91807cabdaf9f37df3ebec64d115e6d99e6ecc28100effe77`.
 The component/source-object/triangle provenance is bundled with the assets.
+Model/texture author and licensor: Sven / svenegaming-glitch, **CC BY-SA 4.0**;
+see [the asset licence notice](GROENPOL_ASSET_LICENSE.md). Derived assets retain
+this licence independently of the project code and map-data licences.
 These are the contributor's supplied signal assets, not the rejected storefront
 sign faces. Signal heads reuse the engine's existing light controllers.
 
