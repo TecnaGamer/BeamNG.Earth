@@ -2233,16 +2233,52 @@ def skeleton_rise(ring, holes=()):
     return float(tri[:, 2].max()) if len(tri) else 0.0
 
 
+SKEL_EAVE_FORMS = {"hipped", "pyramidal"}     # (a gabled skeleton's gables stand on its walls: no overhang there)
+SKEL_EAVE_MIN_COS = -0.5                      # a corner sharper than this (120 deg turn) keeps the roof on its walls
+
+
+def eave_ring(ring, d):
+    """ring (k, 2), counter-clockwise, pushed out by d (m) with mitred corners: the eave line a roof overhanging its
+    walls by d has; None where a corner is too sharp or an edge would turn over (a short edge between two reflex
+    corners), the walls' own ring then. Pure."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    if len(r) < 3 or d <= 0:
+        return None
+    e = np.roll(r, -1, 0) - r                                   # edge i: r[i] -> r[i+1]
+    L = np.hypot(e[:, 0], e[:, 1])
+    if (L < 1e-6).any():
+        return None
+    n = np.stack([e[:, 1], -e[:, 0]], 1) / L[:, None]           # outward (right of a counter-clockwise ring)
+    n0 = np.roll(n, 1, 0)                                       # the edge before each vertex
+    c = (n0 * n).sum(1)
+    if (c < SKEL_EAVE_MIN_COS).any():
+        return None
+    out = r + d * (n0 + n) / (1.0 + c)[:, None]
+    e2 = np.roll(out, -1, 0) - out
+    if ((e2 * e).sum(1) <= 0.0).any() or _area2(out) <= _area2(r):
+        return None
+    return out
+
+
 def _skel_roof(m, spec, ring, z_eave, rm, fac):
     """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof). A
     gabled one's hip ends are gables (the skeleton's gable: each end's top moved onto its wall, the wall in the
-    facade's plain colour, as a box house's gable)."""
+    facade's plain colour, as a box house's gable). A hipped one overhangs its walls by EAVE_M as the box roofs do
+    (eave_ring: the slopes carried on down and out to an eave line EAVE_M outside the walls, the same top)."""
     fast.require(180, "skeleton_roof")
     k = dmath.tan(math.radians(roof_pitch(spec)))
-    tri, grad, gab = fast._ef.skeleton_roof(
-        np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
-        [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()], float(k), float(z_eave),
-        float(spec.skel_cap or 0.0), spec.roof == "gabled")
+    holes = [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()]
+    eave = eave_ring(ring, EAVE_M) if spec.roof in SKEL_EAVE_FORMS else None
+    tri = grad = gab = ()
+    if eave is not None:
+        drop = EAVE_M * k
+        tri, grad, gab = fast._ef.skeleton_roof(
+            np.ascontiguousarray(eave), holes, float(k), float(z_eave - drop),
+            float(spec.skel_cap + drop) if spec.skel_cap else 0.0, False)
+    if not len(grad):       # (no eaves, or the skeleton failed on the eave line: the roof on the walls, as before)
+        tri, grad, gab = fast._ef.skeleton_roof(
+            np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), holes, float(k), float(z_eave),
+            float(spec.skel_cap or 0.0), spec.roof == "gabled")
     if not len(grad):
         return False
     # (the gables, then the slopes, as blocks: the per-triangle loop with its texture coordinates in Python was ~3 % of

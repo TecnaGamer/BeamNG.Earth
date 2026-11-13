@@ -2728,7 +2728,32 @@ class SkeletonRoofTest(unittest.TestCase):
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(s.height, 6.0, delta=0.01)               # (walls to the eave)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)          # (the roof's top at the mapped height)
-        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)
+        # (its eaves: EAVE_M out past the walls, as low as the slope carried on down that far)
+        k = math.tan(math.radians(bld.roof_pitch(s)))
+        self.assertAlmostEqual(P[:, 2].min(), 6.0 - bld.EAVE_M * k, delta=1e-6)
+        self.assertAlmostEqual(P[:, 0].min(), -bld.EAVE_M, delta=1e-6)
+        self.assertAlmostEqual(P[:, 1].max(), 14.0 + bld.EAVE_M, delta=1e-6)
+
+    def test_an_l_houses_eaves_round_its_inside_corner(self):
+        """Hipped skeleton roofs overhang their walls by EAVE_M as the box roofs do (an L house's roof stopped at its
+        walls, the only pitched roof without eaves; 450-600 mm eaves are most of an Australian brick house's look)."""
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        e = bld.eave_ring(L, 0.35)
+        np.testing.assert_allclose(e, [[-.35, -.35], [12.35, -.35], [12.35, 8.35], [5.35, 8.35], [5.35, 14.35],
+                                       [-.35, 14.35]], atol=1e-9)
+        s = bld.plan(L, {"class": "house"}, 0, -33.7, 151.1)
+        self.assertTrue(s.skel)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertLess(P[:, 2].min(), s.height)                        # (the eave under the walls' top)
+        self.assertLessEqual(P[:, 2].max() - s.height, bld.SKEL_CAP_M + 1e-6)   # (the cap: the same top as before)
+
+    def test_no_eaves_where_they_cannot_be_drawn(self):
+        sliver = np.array([[0, 0], [10, 0], [0, 0.3]], float)         # a corner sharper than SKEL_EAVE_MIN_COS
+        self.assertIsNone(bld.eave_ring(sliver, 0.35))
+        notch = np.array([[0, 0], [10, 0], [10, 5], [5.2, 5], [5.2, 4.8], [4.8, 4.8], [4.8, 5], [0, 5]], float)
+        self.assertIsNone(bld.eave_ring(notch, 0.35))                   # (its 0.4 m edge would turn over)
 
     def test_a_pitched_block_keeps_its_yard(self):
         import geodesy
@@ -2762,6 +2787,7 @@ class SkeletonGableTest(unittest.TestCase):
         self.assertGreaterEqual(int((M == fac).sum()), 2)               # (two gable walls: the arms' ends)
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)
+        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)          # (gables stand on the walls: no eaves)
 
 
 class RoofPhotoTest(unittest.TestCase):
