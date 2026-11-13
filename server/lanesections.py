@@ -420,6 +420,35 @@ def profile(f, i):
     return col[i] if col is not None else None
 
 
+def replaced_roads(cells):
+    """Unsplit IDs fully covered by intact lane sections in these cells.
+
+    Neighbouring cells can have different lane-tag coverage. Keep the original if
+    only part of its replacement is available; otherwise it duplicates the sections.
+    """
+    intervals = {}
+    for f in cells:
+        if f is None or PROFILE not in f.attrs:
+            continue
+        for i, fid in enumerate(f.ids):
+            if not profile(f, i) or (f.clipped is not None and f.clipped[i]):
+                continue
+            match = re.fullmatch(r"(.+)~lanes(\d+)-(\d+)", str(fid))
+            if match:
+                parent, a, b = match.groups()
+                intervals.setdefault(parent, set()).add((int(a), int(b)))
+    covered = set()
+    for parent, spans in intervals.items():
+        end = 0
+        for a, b in sorted(spans):
+            if a > end:
+                break
+            end = max(end, b)
+        if end == 1000000000:
+            covered.add(parent)
+    return covered
+
+
 def end_shift(f, i, e):
     """m left of its geometry's raw line the lanes of section i stand at its end e (0 start, 1 end): its placement,
     in its line already (roads._end_shift); None for any other road."""
