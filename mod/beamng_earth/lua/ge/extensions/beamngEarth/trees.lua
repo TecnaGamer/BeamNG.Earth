@@ -961,14 +961,18 @@ end
 
 -- The shape (the tile's variant) and scale of a tile's row i (cached: M.pick makes tables).
 local signalFrame=nil
-local nlSignals=require('beamngEarth/nl_signals')
+local nlSignals
+local function dutchPlanner()
+  if not nlSignals then nlSignals=require('beamngEarth/nl_signals') end
+  return nlSignals
+end
 local function shapeOf(t, i)
   local s = t.shapes[i]
   if s then return s, t.scales[i] end
   local f, b, sc = t.f, (i - 1) * t.s, nil
   local g = (t.groups or GROUPS)[f[b + F_GROUP] + 1] or 'deciduous'
   if g=='signal' and M.dutchSignals then
-    s,sc=nlSignals.staticShape(t.geo and t.frame or t.anchorObj or signalFrame,f[b+F_X],f[b+F_Y],f[b+F_Z])
+    s,sc=dutchPlanner().staticShape(t.geo and t.frame or t.anchorObj or signalFrame,f[b+F_X],f[b+F_Y],f[b+F_Z])
     if s then t.shapes[i],t.scales[i]=s,sc;return s,sc end
   end
   if g == 'signal_left' and leftSignalReady == nil then
@@ -992,16 +996,21 @@ end
 -- before stays.
 local itemMat, itemVec, itemPos = nil, nil, nil
 local staticSignalRow={}
-local signalScene=require('beamngEarth/nl_signal_scene')
+local signalScene
+local function dutchScene()
+  if not signalScene then signalScene=require('beamngEarth/nl_signal_scene') end
+  return signalScene
+end
 local function makeItem(fd, t, i, shape, sc, solid, group, variant)
   if group=='signal' and M.dutchSignals then
     local b=(i-1)*t.s;local f=t.f
     local x,y,z=f[b+F_X],f[b+F_Y],f[b+F_Z];local yaw=f[b+F_YAW]
     local frame=t.geo and t.anchorObj or signalFrame
     if t.geo and t.madePl then x,y,z=geotile.apply(t.madePl,x,y,z);yaw=yaw+geotile.yawOf(t.madePl) end
-    local p=nlSignals.staticPlan(frame,x,y,z,yaw)
+    local p=dutchPlanner().staticPlan(frame,x,y,z,yaw)
     if p then
-      local h=signalScene.create(p,{createSignalObject=signalScene.visualObject})
+      local scene=dutchScene()
+      local h=scene.create(p,{createSignalObject=scene.visualObject})
       if h then
         M.made=M.made+1;pop[shape]=(pop[shape] or 0)+1
         return setmetatable(h,staticSignalRow)
@@ -1273,10 +1282,11 @@ M.tileThreshold = tileThreshold
 M.suppress = nil
 -- Legacy non-geotile rows have world coordinates; geotiles use their own immutable frame.
 function M.setSignalFrame(frame)
+  if not M.dutchSignals then return false end
   if signalFrame==frame then return false end
   signalFrame=frame
   for _,t in pairs(tiles)do
-    if M.tileHasGroup(t,'signal') then
+    if not t.geo and M.tileHasGroup(t,'signal') then
       for i=1,t.n do
         if (t.groups or GROUPS)[t.f[(i-1)*t.s+F_GROUP]+1]=='signal' then t.shapes[i],t.scales[i]=nil,nil end
       end

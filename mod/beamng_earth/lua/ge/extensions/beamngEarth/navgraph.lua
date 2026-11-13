@@ -381,9 +381,41 @@ M.SIGNAL_TYPE = 'lightsBasic'
 -- the switchable head (the stock boom, instanced_trafficlight material): one TSStatic per approach where the
 -- road tile's static boom stands (trees.lua's signal group is hidden while these exist)
 M.SIGNAL_SHAPE = '/art/shapes/objects/s_trafficlight_boom_sn.dae'
-local nlSignals = require('beamngEarth/nl_signals')
+local nlSignals
+local function dutchPlanner()
+  if not nlSignals then nlSignals=require('beamngEarth/nl_signals') end
+  return nlSignals
+end
 M.dutchSignals = false -- opt-in via settings; restart applies the selected mode consistently.
-local signalScene = require('beamngEarth/nl_signal_scene')
+local dutchScene
+local function getDutchScene()
+  if not dutchScene then dutchScene=require('beamngEarth/nl_signal_scene') end
+  return dutchScene
+end
+-- Keep stock heads independent of the optional Dutch catalogue/planner.
+local stockScene={syncVisual=function()end}
+function stockScene.alive(h)return scenetree.findObjectById(h.id)~=nil end
+function stockScene.delete(h)local o=scenetree.findObjectById(h.id);if o then o:delete()end end
+function stockScene.move(h)
+  local o=scenetree.findObjectById(h.id);if not o then return end
+  local m=MatrixF(true)
+  m:setFromEuler(vec3(0,0,-math.rad(h.yaw)));m:setPosition(vec3(h.x,h.y,h.z));o:setTransform(m)
+end
+function stockScene.create(p,inst)
+  local o=inst:createSignalObject(p.shape,vec3(p.x,p.y,p.z),quat(0,0,0,1))
+  if not o then return end
+  local h={id=o:getID(),model='stock',shape=p.shape,x=p.x,y=p.y,z=p.z,yaw=p.yaw,
+           parts={{id=o:getID(),role='head'}}}
+  stockScene.move(h);return h
+end
+local signalScene={visualObject=function(...)return getDutchScene().visualObject(...)end}
+for _,name in ipairs({'create','delete','alive','move','syncVisual'})do
+  local method=name
+  signalScene[method]=function(first,...)
+    local scene=first.model=='stock'and stockScene or getDutchScene()
+    return scene[method](first,...)
+  end
+end
 local signalFrame = nil -- current world anchor, supplied by core (no server/cache schema changes)
 local heads = {}        -- stable signal instance name -> owned head/support/hardware assembly
 local seenHeads = {}
@@ -391,6 +423,7 @@ local signalRequests={}
 local groundRevision,lastGroundRefresh=nil,0
 local groundQueue={}
 local groundWaited=0
+local suppressionGrid
 
 local function clearHeads(keep)
   for name in pairs(signalRequests)do if not(keep and keep[name])then signalRequests[name]=nil end end
@@ -409,7 +442,7 @@ local function makeHead(inst, a, junction, controller, sequence, visualOnly)
   signalRequests[inst.name]={inst=inst,a=a,junction=junction,controller=controller,sequence=sequence,visualOnly=visualOnly}
   seenHeads[inst.name]=true
   local p
-  if M.dutchSignals then p=nlSignals.resolve(a,signalFrame,M.SIGNAL_SHAPE,graph,junction,heads,inst.name)
+  if M.dutchSignals then p=dutchPlanner().resolve(a,signalFrame,M.SIGNAL_SHAPE,graph,junction,heads,inst.name)
   else
     local stock=M.SIGNAL_SHAPE
     if a[12]==1 then
@@ -417,7 +450,8 @@ local function makeHead(inst, a, junction, controller, sequence, visualOnly)
       if not left then return end
       stock=left..'.dae'
     end
-    p=nlSignals.plan(a,nil,stock,false)
+    p={shape=stock,model='stock',yaw=a[11]or 0,x=a[8],y=a[9],z=a[10],
+       stop={a[2],a[3],a[4]},dir={a[5],a[6]},approach_key=a[1],junction_key=junction}
   end
   if p.omit then
     if heads[inst.name]then signalScene.delete(heads[inst.name]);heads[inst.name]=nil end
@@ -457,6 +491,13 @@ local function suppressHeads()
     local x,y=h.sourcex or h.x,h.sourcey or h.y
     grid[math.floor(x / 4) .. ',' .. math.floor(y / 4)] = true
   end
+  if suppressionGrid then
+    local changed=false
+    for key in pairs(grid)do if not suppressionGrid[key]then changed=true;break end end
+    if not changed then for key in pairs(suppressionGrid)do if not grid[key]then changed=true;break end end end
+    if not changed then return end
+  end
+  suppressionGrid=grid
   trees.suppress = function(g, x, y)
     if g ~= 'signal' and g ~= 'signal_left' then return false end
     local cx, cy = math.floor(x / 4), math.floor(y / 4)
@@ -473,7 +514,8 @@ local function releaseHeads()
 end
 
 function M.signalAudit(frame)
-  local result=nlSignals.audit(graph or {}, frame or signalFrame, M.SIGNAL_SHAPE)
+  if not M.dutchSignals then return {disabled=true} end
+  local result=dutchPlanner().audit(graph or {}, frame or signalFrame, M.SIGNAL_SHAPE)
   result.osm=M.osmSignalReport
   result.surface_reader=require('beamngEarth/nl_signal_surfaces').stats
   local native,visual=0,0;for _,h in pairs(heads)do if h.visualOnly then visual=visual+1 else native=native+1 end end
@@ -486,7 +528,7 @@ local function signalData(nodes)
   local inst, ctrls, seqs = {}, {}, {}
   local stop = nil
   local ns = 0
-  local duplicate=M.dutchSignals and nlSignals.duplicates(graph,signalFrame)or{}
+  local duplicate=M.dutchSignals and dutchPlanner().duplicates(graph,signalFrame)or{}
   for _, j in ipairs(graph.signals or {}) do
     local jn = nodes[j.j]
     local sourceNode=graph.nodes[j.j]
@@ -1457,16 +1499,16 @@ local function overtakeScan(now)
 end
 
 function M.update(aid, b, gov, frame)
-  require('beamngEarth/nl_signal_surfaces').newFrame()
+  if M.dutchSignals then require('beamngEarth/nl_signal_surfaces').newFrame() end
   signalFrame = frame
-  require('beamngEarth/trees').setSignalFrame(frame)
+  if M.dutchSignals then require('beamngEarth/trees').setSignalFrame(frame) end
   for _,h in pairs(heads)do if h.visualOnly then signalScene.syncVisual(h) end end
   if not M.enabled or not graph then return end
   -- Road skins arrive after the graph. Refit visuals against their new surfaces
   -- without resetting the AI map or changing the native controller's phase.
-  local roads=package.loaded['beamngEarth/roads']
+  local roads=M.dutchSignals and package.loaded['beamngEarth/roads']
   local gs=roads and roads.geoStats
-  local revision=gs and tostring(gs.tiles)..':'..tostring(gs.skins)..':'..tostring(gs.exacts)
+  local revision=gs and tostring(gs.tiles)..':'..tostring(gs.skins)..':'..tostring(gs.exact)
   if revision and (revision~=groundRevision or os.clock()-lastGroundRefresh>3) and os.clock()-lastGroundRefresh>.75 then
     groundRevision=revision;lastGroundRefresh=os.clock()
     if #groundQueue==0 then
@@ -1481,8 +1523,8 @@ function M.update(aid, b, gov, frame)
   end
   local groundHeavy=gov and gov.isHeavyFrame and gov:isHeavyFrame()
   local groundRoom=not gov or not gov.roomFor or gov:roomFor(3)
-  if #groundQueue>0 and not pendingSignals and not groundHeavy then groundWaited=groundWaited+1 end
-  if #groundQueue>0 and not pendingSignals and not groundHeavy and (groundRoom or groundWaited>=60)then
+  if M.dutchSignals and #groundQueue>0 and not pendingSignals and not groundHeavy then groundWaited=groundWaited+1 end
+  if M.dutchSignals and #groundQueue>0 and not pendingSignals and not groundHeavy and (groundRoom or groundWaited>=60)then
     groundWaited=0
     local groundTimer=stopwatch.new()
     local request=table.remove(groundQueue)
@@ -1628,7 +1670,7 @@ function M.reset()
   end
   releaseHeads()        -- also safe when a level unload already deleted its objects
   signalFrame = nil
-  nlSignals.reset()
+  if nlSignals then nlSignals.reset() end
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
   adaptive = newAdaptive()
