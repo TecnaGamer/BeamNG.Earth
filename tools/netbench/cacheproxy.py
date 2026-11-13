@@ -12,7 +12,8 @@ a 304 when the stored ETag matches. Only clean answers are stored (2xx, 3xx redi
 through and is asked again next time. Concurrent misses for one key wait for the first one's answer.
 
 With a line (link.py: a server's proxy user names it, netprobe --link), answers reach the server at that line's speed
-and latency, so a run measures load times too.
+and latency, so a run measures load times too; http://netbench.link/off/ID (and /on/ID) through the proxy switches a
+line off meanwhile (link.py).
 
 A range read that is not stored as such is put together from stored pieces of the same file (RangeIndex: 206s and
 whole 200s, unencoded, of one ETag) when they cover it: a server that batches its range reads by timing (pmtiles,
@@ -275,6 +276,9 @@ class CacheProxy:
 
     async def request(self, flow):
         req = flow.request
+        if req.host == link.CONTROL_HOST:
+            flow.response = http.Response.make(200, self.lines.control(req.path).encode())
+            return
         line = self.lines.bind(flow)
         key = _key(req)
         while True:

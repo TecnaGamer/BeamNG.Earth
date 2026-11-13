@@ -7,6 +7,9 @@ flight (as TCP connections sharing a bottleneck roughly do), and each answer wai
 byte. A new connection (a CONNECT) waits two (TCP and TLS 1.3 handshakes).
 
 Not modelled: TCP slow start, a host's own speed and per-connection limits, distance to each host (one RTT for all).
+
+A line can be switched off and on while its server runs (answers at once meanwhile), e.g. while a run sets up a place it
+does not measure: curl -x http://127.0.0.1:8899 http://netbench.link/off/ID (and /on/ID).
 """
 import asyncio
 import base64
@@ -15,6 +18,8 @@ import re
 USER = re.compile(r"link-(?P<mbit>\d+(?:\.\d+)?)-(?P<rtt>\d+(?:\.\d+)?)-(?P<id>[\w.]+)")
 HEADER_BYTES = 400          # an answer's status line and headers, roughly
 HANDSHAKE_RTTS = 2          # a new HTTPS connection: TCP, then TLS 1.3
+CONTROL_HOST = "netbench.link"
+CONTROL = re.compile(r"/(?P<state>on|off)/(?P<id>[\w.]+)")
 
 
 def user_of(proxy_authorization):
@@ -36,12 +41,16 @@ class Line:
         self.active = {}            # future -> bytes still to come
         self.at = None              # loop time the remaining counts were last brought up to date
         self.timer = None
+        self.on = True              # off: answers pass at once
 
     async def connect(self):
-        await asyncio.sleep(HANDSHAKE_RTTS * self.rtt)
+        if self.on:
+            await asyncio.sleep(HANDSHAKE_RTTS * self.rtt)
 
     async def answer(self, n):
         """Waits as long as an answer of n body bytes takes on this line."""
+        if not self.on:
+            return
         await asyncio.sleep(self.rtt)
         loop = asyncio.get_running_loop()
         self._advance(loop.time())
@@ -82,12 +91,27 @@ class Lines:
     def __init__(self):
         self.lines = {}             # user name -> Line
         self.conns = {}             # client connection id -> Line
+        self.off = set()            # line ids switched off
 
     def line(self, user):
         if user not in self.lines:
             m = USER.fullmatch(user or "")
             self.lines[user] = Line(float(m["mbit"]), float(m["rtt"])) if m else None
+            if m:
+                self.lines[user].on = m["id"] not in self.off
         return self.lines[user]
+
+    def control(self, path):
+        """A control request's path (/on/ID, /off/ID): switches that id's line; returns the answer's text."""
+        m = CONTROL.fullmatch(path)
+        if not m:
+            return "unknown: use /on/ID or /off/ID\n"
+        (self.off.discard if m["state"] == "on" else self.off.add)(m["id"])
+        for user, line in self.lines.items():
+            u = USER.fullmatch(user or "")
+            if line is not None and u and u["id"] == m["id"]:
+                line.on = m["state"] == "on"
+        return f"line {m['id']} {m['state']}\n"
 
     def bind(self, flow):
         """The line of a flow: its own Proxy-Authorization (a CONNECT, a plain HTTP request), else its connection's."""
