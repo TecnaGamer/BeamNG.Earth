@@ -56,6 +56,20 @@ texture-compressor = "=0.2.4"
 # forbid(unsafe_code), no file / network / process access, deps byteorder-lite and quick-error. Pinned. Reviewed 2026-11-13.
 image-webp = "=0.2.4"
 
+# The far textures' BC1 on the CPU (bc1fast.rs): Intel's ISPC Texture Compressor kernels (MIT) through intel_tex_2
+# (Traverse Research, MIT / Apache-2.0), linked as the crate's prebuilt static libraries (no ISPC compiler: its "ispc"
+# feature stays off). Pinned with its runtime ispc_rt (MIT) and num_cpus. Reviewed 2026-11-13: build.rs only prints
+# link directives for src/ispc's libraries (no network, no file writes); the Rust is thin bindgen wrappers (unsafe only
+# around the kernels' calls) and ispc_rt's task system (ISPCLaunch / ISPCAlloc / ISPCSync, which the BC kernels never
+# call: their libraries' only outside symbols are memcpy / memset / abort / puts, and __chkstk / _fltused on Windows);
+# num_cpus reads /proc and the cgroup files. No file, network or process access anywhere. Windows: release.yml builds
+# for MSVC, which the crate's libraries are for; tools/build_native.py --windows (zig, windows-gnu) hands the same MSVC
+# kernel libraries to the linker under the gnu names (they are COFF archives either way).
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", windows)))'.dependencies]
+intel_tex_2 = "=0.5.0"
+ispc_rt = "=2.0.4"
+num_cpus = "=1.17.0"
+
 [profile.release]
 opt-level = 3
 lto = true

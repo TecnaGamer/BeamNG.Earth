@@ -1101,10 +1101,14 @@ class DdsTest(unittest.TestCase):
             self.assertTrue(caps & imagery.DDSCAPS_MIPMAP and caps & imagery.DDSCAPS_COMPLEX)
             with Image.open(path) as im:                                    # a standard reader accepts it
                 self.assertEqual(im.size, (n, n))
-            # level k is the BC1 encoding of mip_arrays' level k (linear light, sharpened) ...
+            # level k is the BC1 encoding (ISPC's, earthfast bc1fast.rs) of mip_arrays' level k (linear light,
+            # sharpened; in integers: within one sRGB step of it) ...
             off = imagery.DDS_HEADER
-            for k, (sz, lv) in enumerate(zip(sizes, imagery.mip_arrays(rgb))):
-                self.assertEqual(data[off:off + sz], imagery.fast._ef.bc1_encode(np.ascontiguousarray(lv)), k)
+            ef = imagery.fast._ef
+            ints = [rgb] + list(ef.mip_levels_fast(rgb, imagery._TO_LIN, float(imagery.MIP_SHARPEN)))
+            for k, (sz, lv, iv) in enumerate(zip(sizes, imagery.mip_arrays(rgb), ints)):
+                self.assertLessEqual(int(np.abs(lv.astype(int) - iv.astype(int)).max()), 1, k)
+                self.assertEqual(data[off:off + sz], ef.bc1_encode_fast(np.ascontiguousarray(iv)), k)
                 off += sz
             # ... and decodes to the image (row 0 first, as the source image)
             got = bc1_decode(data[imagery.DDS_HEADER:imagery.DDS_HEADER + sizes[0]], n, n)

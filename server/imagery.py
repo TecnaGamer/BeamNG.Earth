@@ -34,7 +34,7 @@ teleport back renders none of the corrections again. A tile made while a correct
 REQUEST_M) is kept with that region noted and made again once it is ready (_fresh).
 
 Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, each sharpened, and their BC1 blocks
-(earthfast.dds_levels: the GPU's encoder when there is one) under our own header (DDSD_MIPMAPCOUNT,
+(earthfast.dds_levels: integer mips and ISPC's BC1 kernels on the CPU) under our own header (DDSD_MIPMAPCOUNT,
 DDSCAPS_MIPMAP|COMPLEX).
 """
 from runtimeprofiler import step as profile_step
@@ -2304,22 +2304,15 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-_BC1_GPU_FAILED = False
-
-
 def encode_dds(rgb):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
-    with the full mip chain (mip_arrays' levels), in one Rust call (earthfast.dds_levels: the GPU's BC1 encoder when
-    there is one, ~1 block in 1000 differs from the CPU's; a 512 px texture's CPU time 9.3 -> 2.0 ms; the CPU's
-    encoder: endpoints on each block's principal axis, refined, nearest-colour indices)."""
-    global _BC1_GPU_FAILED
+    with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
+    (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
+    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287)."""
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
-    fast.require(108, "imagery dds_levels")
-    data, n, err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), not _BC1_GPU_FAILED and bool(fast.gpu()))
-    if err is not None and not _BC1_GPU_FAILED:
-        _BC1_GPU_FAILED = True          # (logged once; the CPU encoder from then on)
-        log.warning("imagery: GPU BC1 encoding failed (%s); the CPU from now on", err)
+    fast.require(287, "imagery dds_levels")
+    data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
     assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
     head = (DDS_MAGIC
