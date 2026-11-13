@@ -7992,6 +7992,8 @@ class BridgeProfiles:
         for key, feats, i in todo:
             with self.lock:
                 got = self.done.get(key)
+            if got is not None:
+                self._replay(key)       # (a solve made short: whoever builds on it now is short too)
             if got is None and not solved_only:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
@@ -8007,7 +8009,38 @@ class BridgeProfiles:
         with self.lock:
             got = self.done.get(key)
         if got is not None:
+            self._replay(key)
             return got
+        # (the solve in a revisit scope of its own: what it read short is noted with its parts, _note_short, and said
+        # again to every later build that takes them from `done`, _replay. The solves are kept for the session; one
+        # made short (an underwater bore unsolved, a cell that could not be read, the lidar rule) faulted only the
+        # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13)
+        import revisit
+        comp = []
+        with revisit.scope() as short:
+            got = self._chain_solve(key, ends, adopt, comp)
+        if comp and (short.n or short.lidar):
+            with self.lock:
+                for k in comp:
+                    self._note_short(k, short.n, short.lidar)
+        return got
+
+    def _note_short(self, k, n, lidar):
+        """Under self.lock: part k's solve read n things short (lidar: built on the lidar rule)."""
+        table = self.__dict__.setdefault("short", {})
+        old = table.get(k, (0, 0))
+        table[k] = (max(old[0], int(n)), max(old[1], int(lidar)))
+
+    def _replay(self, key):
+        """A solve of part key taken from `done` again: when it was made short, this thread's builds are short too
+        (revisit.carry: its scopes, its thread's counts)."""
+        got = self.__dict__.get("short", {}).get(key)
+        if got is not None:
+            import revisit
+            revisit.carry(got[0], got[1])
+
+    def _chain_solve(self, key, ends, adopt, comp_out):
+        """_chain_of's work (comp_out: the chain's parts, for its caller)."""
         pool, ground, loaded = {}, {}, set()
         for la_, lo_ in ends:
             ck = mapcells.cell_of(la_, lo_)
@@ -8017,9 +8050,12 @@ class BridgeProfiles:
         if key not in pool:
             return None
         comp = self._resolve(key, pool, ground, loaded)
+        comp_out.extend(comp)
         owner = self.owner_of(self, comp, pool) if (adopt and self.owner_of is not None) else None
         if owner is not None and owner is not self:
             try:
+                # (the owner's solve runs, or is replayed, in this thread: its faults are this scope's too, and are
+                # noted with the parts adopted here)
                 if self._adopt(owner, comp, pool):
                     with self.lock:
                         got = self.done.get(key)
