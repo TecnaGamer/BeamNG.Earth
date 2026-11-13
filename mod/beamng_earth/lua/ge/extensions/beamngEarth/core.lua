@@ -1537,6 +1537,10 @@ local function onMessage(msg)
       beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
+  elseif t == 'report_status' or t == 'report_context_done' then
+    -- the in-game reports' sends and the server's part of a report (report.lua, reportsend.lua; server reportsend.py)
+    local rep = rawget(_G, 'beamngEarth_report')
+    if rep and rep.onServerMessage then rep.onServerMessage(msg) end
   elseif t == 'memory' then
     -- the world server's memory and its limit (server memwatch.status): the settings page's line
     M._memoryInfo = { usedMB = tonumber(msg.usedMB) or 0, limitMB = tonumber(msg.limitMB) or 0,

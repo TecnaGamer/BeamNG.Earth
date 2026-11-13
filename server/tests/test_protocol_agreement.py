@@ -146,6 +146,12 @@ MOD_TO_SERVER = {
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
+    # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
+    # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
+    # player's "Send to the developers" (only the folder's name: never a path)
+    "report_context": {"folder": F(str), "camera": F(dict, OPT), "aim": F(dict, OPT), "player": F(dict, OPT)},
+    "report_saved": {"folder": F(str)},
+    "report_send": {"folder": F(str)},
     # 2026-10-25: the settings page's cache folder / BeamMP launcher (apppaths.py): chosen in a window or typed
     "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
@@ -436,6 +442,11 @@ SERVER_TO_MOD = {
                      # ... and the night side's city lights over the ground (none: none could be had)
                      "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
+    # the in-game reports (reportsend.py): a send's state (queued / sending / retry / sent / failed, the collector's
+    # report id once sent) and the server's part of a report written
+    "report_status": {"folder": F(str), "state": F(str), "id": F(str, OPT), "text": F(str, OPT), "tries": F(int, OPT),
+                      "next": F(NUM, OPT)},
+    "report_context_done": {"folder": F(str), "ok": F(bool)},
     # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
     "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
                "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
@@ -539,7 +550,8 @@ def mod_sends():
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
                               "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
-                           (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
+                           (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
+                           (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
         for m in re.finditer(pattern, text):
             t = lua_tables(text, m.end() - 1)
@@ -553,7 +565,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua", "api.lua"):
+                 "addons.lua", "api.lua", "reportsend.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

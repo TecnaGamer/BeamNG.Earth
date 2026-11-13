@@ -72,6 +72,7 @@ mod streetlabels;
 mod perfclean;
 mod membudget;
 mod mdhtml;
+mod reportpack;
 mod roadlanes;
 mod waytags;
 mod pmtiles;
@@ -6337,6 +6338,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
     dm::register(m)?;
         // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
-    m.add("VERSION", 264)?;
+    // 267: the in-game reports' privacy scrub, log tails and upload body (reportpack: report_scrub, report_scrub_json,
+    // report_log_tail, report_logs_pack, report_body, report_nearby; server/reportsend.py)
+    m.add_function(wrap_pyfunction!(reportpack::report_scrub, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_scrub_json, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_log_tail, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_logs_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_body, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_nearby, m)?)?;
+    m.add("VERSION", 267)?;
     Ok(())
 }

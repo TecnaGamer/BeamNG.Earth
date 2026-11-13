@@ -107,4 +107,41 @@ beamngEarth_core = nil
 report.onUpdate()
 T.check(#browserPages == 1 and browserPages[1] == pages[1], 'without core, the game browser is the fallback')
 
+-- 2026-11-12: no full path in report.json (the account name), the extra parts there, and the send window: nothing goes
+-- before its Send; the choices go to send.json, the server's report_status shows the id
+local rj = folder and files[folder .. 'report.json'] or ''
+T.check(not rj:find('/u/', 1, true), 'report.json holds no full path')
+T.check(rj:find('"frames60"', 1, true) and rj:find('"environment"', 1, true) and rj:find('"config"', 1, true),
+  'the extra parts in report.json')
+local netSent = {}
+package.loaded['beamngEarth/net'] = { send = function(m) netSent[#netSent + 1] = m; return true end }
+FS.fileExists = function(_, p) return files[p] ~= nil end
+FS.fileSize = function(_, p) return files[p] and #files[p] or -1 end
+jsonDecode = function() return { kind = 'map', title = 'Trees in the water', lat = 39.28, lon = -76.59 } end
+files[folder .. 'screenshot.jpg'] = '\255\216\255'
+local clicks = {}
+local im2 = ui_imgui
+
+im2.Begin = function() return true end
+im2.Button = function(name) return clicks[name] == true end
+im2.BoolPtr = function(v) return { [0] = v } end
+im2.Checkbox = function(label, p) if clicks[label] ~= nil then p[0] = clicks[label] end return false end
+im2.Separator = function() end
+im2.CollapsingHeader1 = function() return false end
+
+report.openSend(folder)
+report.onUpdate()
+T.check(report.status().sendOpen and #netSent == 0 and not files[folder .. 'send.json'], 'nothing is sent before Send')
+clicks['Exact location: 39.28000, -76.59000##bngeSendLoc'] = false
+clicks['Send##bngeSendGo'] = true
+report.onUpdate()
+clicks = {}
+local name = folder:match('([^/]+)/$')
+T.check(#netSent == 1 and netSent[1].type == 'report_send' and netSent[1].folder == name, 'Send: report_send')
+local sj = files[folder .. 'send.json'] or ''
+T.check(sj:find('"exactLocation":false', 1, true) and sj:find('"screenshot":true', 1, true), 'the choices in send.json: ' .. sj)
+report.onServerMessage({ type = 'report_status', folder = name, state = 'sent', id = 'ABCD-EFGH' })
+local st = require('beamngEarth/reportsend').status(name)
+T.check(st and st.state == 'sent' and st.id == 'ABCD-EFGH', 'the id from the server')
+
 T.done('test_report')

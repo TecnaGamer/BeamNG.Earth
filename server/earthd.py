@@ -6902,6 +6902,29 @@ class Connection:
                 log.info("random place: %s (%.5f, %.5f)", got[2], got[0], got[1])
         self.send(out)
 
+    async def report_context(self, msg):
+        """report_context: reportsend.context in a thread; report_context_done {folder, ok} tells the mod."""
+        import reportsend
+        loop = asyncio.get_running_loop()
+        try:
+            ok = await loop.run_in_executor(None, reportsend.context, self.s, self, msg,
+                                            updatesmod.local_version() or SERVER_VERSION, SERVER_VERSION)
+        except Exception as e:          # (a report without the server's part; never a reason for the server to fail)
+            log.warning("report context: %s: %s", type(e).__name__, e)
+            ok = False
+        self.send({"type": "report_context_done", "folder": msg.get("folder"), "ok": bool(ok)})
+
+    async def report_saved(self, msg):
+        import reportsend
+        path = reportsend.folder(self.s.user_dir, msg.get("folder"))
+        if path is None:
+            return
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, reportsend.scrub_saved, path,
+                                                             reportsend.user_names())
+        except Exception as e:
+            log.warning("report scrub: %s: %s", type(e).__name__, e)
+
     async def where(self, msg):
         """The status bar's location {"id", "lat", "lon", "online"} -> where_result {"id", "street", "place", "region",
         "country"}: the street from the cached map cells (never waits for a download), the town, state and country from
@@ -7784,6 +7807,17 @@ class Connection:
             probe = msg.get("probe")
             if msg.get("enabled") is True and type(probe) is int and 0 <= probe <= 2147483647:
                 self.send({"type": "runtime_profiler_pong", "probe": probe})
+        elif kind == "report_context":          # the reporter's moment (report.lua): the server's state and logs into the
+            self.spawn(self.report_context(msg))    # report folder (reportsend.py)
+        elif kind == "report_saved":            # ... the mod's own files written: scrubbed in place
+            self.spawn(self.report_saved(msg))
+        elif kind == "report_send":             # ... "Send to the developers" clicked (the player's choice; reportsend.py)
+            rs = getattr(self.s, "reports", None)
+            if rs is not None:
+                self.spawn(rs.send(msg.get("folder")))
+            else:
+                self.send({"type": "report_status", "folder": msg.get("folder"), "state": "failed",
+                           "text": "this server cannot send reports"})
         elif kind == "perf_log":                # the mod's performance log (perflog.lua): its hitches, frame-rate drops,
             # minute lines and the machine, into this log beside the blocks' own timings (the file players send)
             lines = msg.get("lines")
@@ -10671,6 +10705,17 @@ async def main_async(args):
         logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
         log.info("telemetry: on, as the player chose on the welcome page (TELEMETRY.md; nothing before the choice; "
                  "BNE_TELEMETRY=off turns it off)")
+    # the in-game reports' sends (reportsend.py): only what the player clicked "Send to the developers" for, so not
+    # under the telemetry switches; reports a stopped server left queued are sent now
+    try:
+        import reportsend
+        server.reports = reportsend.Sender(
+            args.user_dir, args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
+            reportsend.install_id(args.cache_dir, keep=not privacyregionmod.region()[1]),
+            lambda m: [c.send(m) for c in list(server.connections)], offline=bool(args.offline))
+        asyncio.create_task(server.reports.resume())
+    except Exception as e:
+        log.warning("reports: sends off: %s: %s", type(e).__name__, e)
     feed_srv = None
     if getattr(args, "companion_feed", "off") != "off":
         # the player's position for programs beside the game (companionfeed.py; docs/ADDONS.md), read-only

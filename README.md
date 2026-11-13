@@ -617,6 +617,31 @@ other places). Change it any time in BeamNG.Earth's settings page, Interface (fr
 environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in offline mode
 (`--offline`). Every field, why we want it and what happens to it: [TELEMETRY.md](TELEMETRY.md).
 
+## Sending a report to the developers
+
+The in-game reporter (Ctrl+Shift+E; Ctrl+Shift+Y records a 30 s performance profile) saves each report in your BeamNG
+user folder (`beamngEarth/reports/`). After saving, **Send to the developers** opens a window that lists exactly what
+would be sent, with the files to read, and nothing is sent until you click **Send** there:
+
+- your title and description, the kind of report, and the screenshot (a box leaves it out);
+- the location: exact, or rounded to about 1 km with a box (the map ids, street names and the roads and buildings near
+  the spot are then left out too; the screenshot can still show where you are);
+- the view: camera, heading, the point and object under the screen's centre, the car's position and speed;
+- game and PC: game and mod versions, graphics settings, CPU / GPU / memory, BeamNG.Earth's settings, the names of
+  enabled mods, the last 60 s of frame times, weather and time of day;
+- the world server's state: its version and settings (`BNE_*` / `BNGE_*` overrides; secret ones only as "set"),
+  memory, loading backlog, the data sources and the map features at the spot;
+- logs (a box leaves them out): the world server's last 300 lines and the game's warnings and errors of the last 10
+  minutes.
+
+User names, home folders, e-mail and IP addresses are removed from all of it, also from the copy kept on your
+computer. Reports are sent **privately** to the BeamNG.Earth developers (the project's own server,
+`earth.tgforever.net`) and are **not published**; they are kept 90 days. A random install id (no name or account)
+goes with each report so reports from one computer can be told apart. Sending is your choice each time, so it works
+with the usage statistics off too. The send runs in the background, is retried, and a report not sent yet goes at the
+next start; the window then shows a short report id (like `K7QD-3M9X`) to quote on Discord or GitHub. **Open GitHub
+issue page** still opens a ready-to-post public issue if you prefer that. Details: [TELEMETRY.md](TELEMETRY.md#reports-you-send).
+
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
