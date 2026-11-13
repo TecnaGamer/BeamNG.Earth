@@ -3,6 +3,7 @@
 //!   merged highway's per-source lane stretches are located in (their fractions along the feature);
 //! - lane_runs: the pieces of a lane separator where the growing carriageway has room for it (room >= 0), each with
 //!   the metres along the line before its start (its dashes' phase).
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -14,20 +15,20 @@ const R_MEAN: f64 = 6371008.8;
 /// Vincenty's inverse distance of one edge (radians); the mean sphere's haversine when it does not converge (near
 /// antipodal: no road edge).
 fn vincenty(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
-    let u1 = ((1.0 - F) * lat1.tan()).atan();
-    let u2 = ((1.0 - F) * lat2.tan()).atan();
-    let (s1, c1) = u1.sin_cos();
-    let (s2, c2) = u2.sin_cos();
+    let u1 = ((1.0 - F) * lat1.dtan()).datan();
+    let u2 = ((1.0 - F) * lat2.dtan()).datan();
+    let (s1, c1) = u1.dsin_cos();
+    let (s2, c2) = u2.dsin_cos();
     let pi = std::f64::consts::PI;
     let l = (lon2 - lon1 + pi).rem_euclid(2.0 * pi) - pi;
     let mut lam = l;
     let (mut ss, mut cs, mut sigma, mut ca2, mut mid) = (0.0, 1.0, 0.0, 1.0, 0.0);
     let mut converged = false;
     for _ in 0..200 {
-        let (sl, cl) = lam.sin_cos();
-        ss = (c2 * sl).hypot(c1 * s2 - s1 * c2 * cl);
+        let (sl, cl) = lam.dsin_cos();
+        ss = (c2 * sl).dhypot(c1 * s2 - s1 * c2 * cl);
         cs = s1 * s2 + c1 * c2 * cl;
-        sigma = ss.atan2(cs);
+        sigma = ss.datan2(cs);
         let sa = if ss > 1e-15 { c1 * c2 * sl / ss } else { 0.0 };
         ca2 = (1.0 - sa * sa).max(0.0);
         mid = if ca2 > 1e-15 { cs - 2.0 * s1 * s2 / ca2 } else { 0.0 };
@@ -41,8 +42,8 @@ fn vincenty(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
         }
     }
     if !converged {
-        let h = ((lat2 - lat1) / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (l / 2.0).sin().powi(2);
-        return 2.0 * R_MEAN * h.clamp(0.0, 1.0).sqrt().asin();
+        let h = ((lat2 - lat1) / 2.0).dsin().powi(2) + lat1.dcos() * lat2.dcos() * (l / 2.0).dsin().powi(2);
+        return 2.0 * R_MEAN * h.clamp(0.0, 1.0).sqrt().dasin();
     }
     let u2_ = ca2 * (A * A - B * B) / (B * B);
     let aa = 1.0 + u2_ / 16384.0 * (4096.0 + u2_ * (-768.0 + u2_ * (320.0 - 175.0 * u2_)));
@@ -81,7 +82,7 @@ pub fn runs(line: &[f64], c: usize, room: &[f64]) -> (Vec<f64>, Vec<(usize, usiz
     let mut dist = vec![0.0; k];
     for i in 1..k {
         let (a, b) = (p(i - 1), p(i));
-        dist[i] = dist[i - 1] + (b[0] - a[0]).hypot(b[1] - a[1]);
+        dist[i] = dist[i - 1] + (b[0] - a[0]).dhypot(b[1] - a[1]);
     }
     if room.iter().all(|r| *r >= -1e-6) {
         pts.extend_from_slice(&line[..k * c]);

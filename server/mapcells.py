@@ -27,6 +27,8 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+import dmath
+import dnp
 
 ZOOM = 14
 MAX_LAT = 85.0511287798066          # Web-Mercator latitude limit (y in [0, 2**z))
@@ -35,7 +37,7 @@ EARTH_CIRC = 40075016.686           # m, equatorial circumference (Web-Mercator 
 
 def _lat_of(yf, n):
     """Latitude of the fractional tile row yf (0 = north edge) at n tiles per axis."""
-    return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * yf / n))))
+    return math.degrees(dmath.atan(dmath.sinh(math.pi * (1.0 - 2.0 * yf / n))))
 
 
 def tile_xy(lat, lon, z=ZOOM):
@@ -43,7 +45,7 @@ def tile_xy(lat, lon, z=ZOOM):
     n = 2.0 ** z
     lat = np.clip(np.asarray(lat, np.float64), -MAX_LAT, MAX_LAT)
     x = (np.asarray(lon, np.float64) / 360.0 + 0.5) * n
-    y = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * n
+    y = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * n
     return x, y
 
 
@@ -89,7 +91,7 @@ class CellKey(NamedTuple):
     def size_m(self):
         """(width, height) in metres on the ground, at the cell's centre latitude."""
         lat, _ = self.center()
-        e = EARTH_CIRC / self.n * math.cos(math.radians(lat))
+        e = EARTH_CIRC / self.n * dmath.cos(math.radians(lat))
         return e, e
 
     def neighbours(self):

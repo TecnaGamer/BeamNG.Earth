@@ -186,7 +186,7 @@ class TunnelPassageTest(unittest.TestCase):
         self.assertTrue(out[0][0].portal)
 
 
-@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 264, "earthfast 264")
+@unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= 266, "earthfast 266")
 class TwinFootprintTest(unittest.TestCase):
     def test_the_same_building_mapped_twice_is_drawn_once(self):
         # two OSM multipolygons on the same outer ways (75-76 Berners Street, London): z-fighting facades

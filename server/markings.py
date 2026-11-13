@@ -11,6 +11,7 @@ from collections import namedtuple
 import numpy as np
 
 import fast
+import dnp
 
 # colour: the centre line's material; widths in m; patterns (dash, gap) in m. centre_rural / centre_urban: the centre
 # line of a two-way road (None: solid); lane_* the lines between lanes of one direction; edge: the edge line's width;
@@ -221,13 +222,13 @@ def _nearest(poly, p):
     L2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip(((p[:2] - a) * ab).sum(1) / L2, 0, 1)
     q = a + t[:, None] * ab
-    d = np.hypot(*(q - p[:2]).T)
+    d = dnp.hypot(*(q - p[:2]).T)
     k = int(np.argmin(d))
     return q[k], float(d[k])
 
 
 def _resample(pts, step):
-    seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     if s[-1] < step:
         return pts.copy(), s
@@ -262,7 +263,7 @@ def gores(roads_):
                 # A placement-aware slip lane starts outside the reference
                 # line. Choose the through continuation, not a section ending
                 # at the fork or the opposite carriageway across the median.
-                dz = abs(float(mp[np.argmin(np.linalg.norm(mp[:, :2] - e[:2], axis=1)), 2] - e[2]))
+                dz = abs(float(mp[np.argmin(dnp.norm(mp[:, :2] - e[:2], axis=1)), 2] - e[2]))
                 score = d + _nearest(mp, look)[1]
                 if d <= ms.width / 2 + 1.5 and dz < 2. and (hit is None or score < hit[2]):
                     hit = (ms, mp, score)
@@ -305,9 +306,9 @@ def gores(roads_):
                 b = np.r_[m + sides[k] * mw / 2, q[k][2]]
                 kk = min(k + 1, len(q) - 1)
                 t = q[kk][:2] - q[max(kk - 1, 0)][:2]
-                t = t / max(float(np.hypot(*t)), 1e-9)
+                t = t / max(float(dnp.hypot(*t)), 1e-9)
                 apex = 0.5 * (a + b)
-                apex[:2] += up * t * float(np.hypot(*(a - b)[:2])) / 2      # (45 degrees each arm)
+                apex[:2] += up * t * float(dnp.hypot(*(a - b)[:2])) / 2      # (45 degrees each arm)
                 out.append(("stripe", GORE_W, np.stack([a, apex])))
                 out.append(("stripe", GORE_W, np.stack([apex, b])))
     return out
@@ -334,7 +335,7 @@ def _way_in(line, s, at, spec, left_hand):
     centreline of the half of the road coming in) at m along an arm's centreline line (s: its stations)."""
     c = np.array([np.interp(at, s, line[:, k]) for k in range(3)])
     q = np.array([np.interp(at + 1.0, s, line[:, k]) for k in range(2)])
-    t = (c[:2] - q) / max(float(np.hypot(*(c[:2] - q))), 1e-6)
+    t = (c[:2] - q) / max(float(dnp.hypot(*(c[:2] - q))), 1e-6)
     n = np.array([t[1], -t[0]]) * (-1.0 if left_hand else 1.0)
     half = spec.width / 2
     return c, t, n, ((0.3 - half, half - 0.3) if spec.oneway else (0.2, half - 0.3))
@@ -347,7 +348,7 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
     for cw in crosswalks:
         if cw.get("stop"):
             continue
-        d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+        d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
         i = int(np.argmin(d))
         if d[i] < spec.width / 2 + 1.0 and float(st[i]) - cw["w"] / 2 - start < room:
             at = max(at, float(st[i]) + cw["w"] / 2 + gap)
@@ -363,14 +364,14 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
     import furniture
     out, cuts = [], {}
     for fid, spec, line, wide, what in arms:
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
         along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         if mapped is not None and len(mapped):      # (within half the arm: further up it is the next junction's)
-            d = np.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
+            d = dnp.hypot(along[:, None, 0] - mapped[:, 0], along[:, None, 1] - mapped[:, 1])
             on = d.min(0) < spec.width / 2
             near = st[d[:, on].argmin(0)] if on.any() else st[:0]
             near = near[near <= min(s[-1] / 2, wide + furniture.SIGNAL_NEAR_M)]
@@ -384,7 +385,7 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
         c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
         out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True})
         u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
-        cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(np.hypot(*u)), 1e-6), at))
+        cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(dnp.hypot(*u)), 1e-6), at))
     return out, cuts
 
 
@@ -402,7 +403,7 @@ def wait_lines(arms, crosswalks, left_hand=False):
     for ln in lines:
         a, b = np.asarray(ln["a"], np.float64), np.asarray(ln["b"], np.float64)
         d = b - a
-        span = float(np.hypot(*d[:2]))
+        span = float(dnp.hypot(*d[:2]))
         count = int((span + Z341_GAP) // pitch)
         if count < 1:
             continue
@@ -421,14 +422,14 @@ def give_way_lines(arms, crosswalks, left_hand=False):
     teeth, gone = [], set()
     pitch = M14_BASE + M14_GAP
     for _, spec, line, wide in arms:
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if s[-1] < 1.0:
             continue
         st = np.arange(0.0, min(s[-1], M14_LOOK_M), 1.0)
         along = np.stack([np.interp(st, s, line[:, k]) for k in range(3)], 1)
         at = wide + M14_KERB_M
         for j, cw in enumerate(crosswalks):
-            d = np.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
+            d = dnp.hypot(*(along[:, :2] - 0.5 * (cw["a"][:2] + cw["b"][:2])).T)
             i = int(np.argmin(d))
             if cw.get("stop") and d[i] < spec.width / 2 + 1.0:
                 gone.add(j)
@@ -487,7 +488,7 @@ def _arrow_kind(token):
 
 def _point_back(line, d):
     """(point (3,), unit direction (2,) of travel) d m before the end of line (k, 3), or None (shorter)."""
-    seg = np.hypot(*np.diff(line[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(line[:, :2], axis=0).T)
     s = np.r_[0.0, np.cumsum(seg)]
     at = s[-1] - d
     if at < 2.0:

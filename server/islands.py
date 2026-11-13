@@ -14,6 +14,7 @@ import math
 import numpy as np
 
 import fast
+import dnp
 
 JOIN_M = 1.5            # road ends this close are one graph node
 MAX_EDGES = 10          # roads in a loop (a ring split at every entry; matches RING_MAX_EDGES)
@@ -31,7 +32,7 @@ MIN_INSET_AREA_M2 = 6.0  # an inset loop smaller than this (a thin median): no i
 
 def _area(xy):
     x, y = xy[:, 0], xy[:, 1]
-    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    return 0.5 * float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))
 
 
 def _inside(xy, p):
@@ -40,7 +41,7 @@ def _inside(xy, p):
 
 
 def _length(pts):
-    return float(np.sum(np.hypot(*np.diff(pts[:, :2], axis=0).T)))
+    return float(np.sum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T)))
 
 
 def _offset(pts, d):
@@ -174,7 +175,7 @@ def ring_approaches(roads_list, ring=None):
         if fid in ring or len(pts) < 2:
             continue
         for p in (pts[0, :2], pts[-1, :2]):
-            if float(np.min(np.hypot(*(ends - p).T))) < JOIN_APPROACH_M:
+            if float(np.min(dnp.hypot(*(ends - p).T))) < JOIN_APPROACH_M:
                 out.add(fid)
                 break
     return out
@@ -274,7 +275,7 @@ def _seg_dist(pts, p):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
     q = a + d * t[:, None]
-    return float(np.min(np.hypot(*(q - p).T)))
+    return float(np.min(dnp.hypot(*(q - p).T)))
 
 
 def _island_ring(poly, roads_hw, z):
@@ -284,7 +285,7 @@ def _island_ring(poly, roads_hw, z):
     c = poly.mean(0)
     if not _inside(poly, c) or any(_seg_dist(pts, c) <= hw for pts, hw in roads_hw):
         return None
-    rmax = float(np.max(np.hypot(*(poly - c).T)))
+    rmax = float(np.max(dnp.hypot(*(poly - c).T)))
     import fast
     return _ring_finish(fast.island_ring_rays(poly, roads_hw, c, RAYS, RAY_STEP_M, rmax), z)
 
@@ -316,12 +317,12 @@ def _splitter_flow(point, into, lanes):
     for spec, line in lanes:
         q, tangent = furniture._at(line, furniture._project(line, point[None]))
         delta = q[0, :2] - point
-        gap = np.linalg.norm(delta) - spec.width / 2
-        across = float(delta @ left)
+        gap = dnp.norm(delta) - spec.width / 2
+        across = float(dnp.matmul(delta, left))
         if not .32 <= gap <= 7. or abs(across) <= .6:
             continue
         side = 1 if across > 0 else -1
-        forward = float(tangent[0] @ into)
+        forward = float(dnp.matmul(tangent[0], into))
         if (spec.oneway and -side * forward * (spec.dir or 1) >= .48
                 or not spec.oneway and abs(forward) >= .65):
             sides.add(side)
@@ -331,8 +332,9 @@ def _splitter_flow(point, into, lanes):
 def _splitter_noses(ring):
     """A point inside each end of the raised curb and its inward approach axis."""
     xy = ring[:, :2]
-    _, _, axes = np.linalg.svd(xy - xy.mean(axis=0), full_matrices=False)
-    along, across = (xy @ axes.T).T
+    d = xy - xy.mean(axis=0)
+    axes = dnp.eigh(dnp.matmul(d.T, d))[1][:, ::-1].T      # rows: the principal axis, then the other (no LAPACK SVD)
+    along, across = (dnp.matmul(xy, axes.T)).T
     if not 4. <= np.ptp(along) <= 115. or not .85 <= np.ptp(across) <= 16.:
         return
     for sign in (1, -1):
@@ -344,7 +346,7 @@ def _splitter_noses(ring):
             u = (level - signed[cross]) / (next_s[cross] - signed[cross])
             meets = across[cross] + u * (np.roll(across, -1)[cross] - across[cross])
             if len(meets) == 2 and np.ptp(meets) >= .82:
-                yield np.array([sign * level, meets.mean()]) @ axes, sign * axes[0]
+                yield dnp.matmul(np.array([sign * level, meets.mean()]), axes), sign * axes[0]
                 break
 
 
@@ -385,12 +387,12 @@ def splitter_heads(found, runs, roads_list, box):
         # Both raised bands must start at this physical opening, rather than at a split in the map data.
         for other in medians:
             if walk["fid"] == other["fid"] or not any(
-                    not is_open and np.linalg.norm(end[:2] - run[0, :2]) <= 5.
+                    not is_open and dnp.norm(end[:2] - run[0, :2]) <= 5.
                     for end, is_open in zip(other["pts"][[0, -1]], other["open"])):
                 continue
             q, _ = furniture._at(other["pts"], furniture._project(other["pts"], p[None]))
             q = q[0, :2]
-            if .35 <= np.linalg.norm(p - q) <= 5.:
+            if .35 <= dnp.norm(p - q) <= 5.:
                 middle = (p + q) / 2
                 if _splitter_flow(middle, into, [streets[walk["fid"]], streets[other["fid"]]]):
                     candidates.append((middle, into))
@@ -398,7 +400,7 @@ def splitter_heads(found, runs, roads_list, box):
     for point, into in candidates:
         if not geotiles.box_owns(box, *point):
             continue
-        if any(np.linalg.norm(point - q) < 3. and float(into @ d) > .5 for q, d in placed):
+        if any(dnp.norm(point - q) < 3. and float(dnp.matmul(into, d)) > .5 for q, d in placed):
             continue
         across = .29 * np.array([into[1], -into[0]])
         if not _road_overlap(np.array([[point - across, point + across]]), bounds)[0]:

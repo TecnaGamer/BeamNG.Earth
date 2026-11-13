@@ -3,6 +3,7 @@
 //! BNE_COARSE_EASE crossings, GitHub #414) a road running over a higher-ranked road's carriageway away from its ends
 //! takes that road's height there. Higher ranks first: a lower road meets its neighbour's already adjusted height.
 //! The numpy version's numbers (its pairwise sums, first minimum, operation order), bit for bit.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -44,7 +45,7 @@ pub(crate) fn np_sum(a: &[f64]) -> f64 {
 /// The eased weight of the change at u (0 at the end, 1 TAPER away): 0.5 (1 + cos(pi u)) below 1, else 0.
 fn ease(u: f64) -> f64 {
     if u < 1.0 {
-        0.5 * (1.0 + (std::f64::consts::PI * u.clamp(0.0, 1.0)).cos())
+        0.5 * (1.0 + (std::f64::consts::PI * u.clamp(0.0, 1.0)).dcos())
     } else {
         0.0
     }
@@ -62,7 +63,7 @@ fn nearest_on(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, f64) {
         let ll = (0.0 + dx * dx + dy * dy).max(1e-12);
         let t = (((x - a[0]) * dx + (y - a[1]) * dy) / ll).clamp(0.0, 1.0);
         let (qx, qy) = (a[0] + dx * t, a[1] + dy * t);
-        let d = (qx - x).hypot(qy - y);
+        let d = (qx - x).dhypot(qy - y);
         if d < bd || (i == 0 && d.is_nan()) {
             bi = i;
             bd = d;
@@ -123,7 +124,7 @@ pub fn snap_junctions<'py>(
         let p = &pts[o0..o1];
         let mut s = vec![0.0; len];
         for i in 1..len {
-            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).hypot(p[i][1] - p[i - 1][1]);
+            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).dhypot(p[i][1] - p[i - 1][1]);
         }
         let length = s[len - 1];
         let mut dz = vec![0.0; len];
@@ -192,7 +193,7 @@ pub fn snap_junctions<'py>(
                         let (dx, dy) = (bq[0] - a[0], bq[1] - a[1]);
                         let ll = (0.0 + dx * dx + dy * dy).max(1e-12);
                         let t = (((px - a[0]) * dx + (py - a[1]) * dy) / ll).clamp(0.0, 1.0);
-                        let d = (a[0] + t * dx - px).hypot(a[1] + t * dy - py);
+                        let d = (a[0] + t * dx - px).dhypot(a[1] + t * dy - py);
                         if d < sd || (g == 0 && d.is_nan()) {
                             sd = d;
                             ss = g;
@@ -235,7 +236,7 @@ fn nearest_on_line(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64) {
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
         let ll = (dx * dx + dy * dy).max(1e-12);
         let t = (((x - a[0]) * dx + (y - a[1]) * dy) / ll).clamp(0.0, 1.0);
-        let d = (a[0] + t * dx - x).hypot(a[1] + t * dy - y);
+        let d = (a[0] + t * dx - x).dhypot(a[1] + t * dy - y);
         if d.is_nan() {
             (bi, bd, bt) = (i, d, t);
             break;
@@ -302,7 +303,7 @@ pub fn hold_junction_corridors<'py>(
         let p = &pts[o0..o1];
         let mut s = vec![0.0; len];
         for i in 1..len {
-            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).hypot(p[i][1] - p[i - 1][1]);
+            s[i] = s[i - 1] + (p[i][0] - p[i - 1][0]).dhypot(p[i][1] - p[i - 1][1]);
         }
         let length = s[len - 1];
         let vi = |t: usize| if e == 0 { t } else { len - 1 - t }; // the road's vertices from this end

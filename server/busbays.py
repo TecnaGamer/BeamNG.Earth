@@ -8,6 +8,7 @@ the far side and the two ends are painted. Deterministic (no randomness).
 import math
 
 import numpy as np
+import dnp
 
 import busstations as bs
 
@@ -36,7 +37,7 @@ class Bay:
 
 def _unit(v):
     v = np.asarray(v, float)
-    n = float(np.hypot(*v))
+    n = float(dnp.hypot(*v))
     return v / n if n > 1e-9 else np.array([1.0, 0.0])
 
 
@@ -53,10 +54,10 @@ def _nearest(path, closed, p):
         pts = np.vstack((bs._open(pts), bs._open(pts)[:1]))
     a, b = pts[:-1], pts[1:]
     ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    ab2 = np.maximum((ab * ab).sum(1), 1e-9)
     t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
     q = a + ab * t[:, None]
-    d = np.hypot(q[:, 0] - p[0], q[:, 1] - p[1])
+    d = dnp.hypot(q[:, 0] - p[0], q[:, 1] - p[1])
     k = int(np.argmin(d))
     return float(d[k]), q[k], _unit(ab[k])
 
@@ -87,11 +88,11 @@ def _side(st, q, t, p=None):
         if best is None or d < best[0]:
             best = (d, rq)
     if best is not None and best[0] < 80.0:
-        s = float(np.dot(best[1] - q, left))
+        s = float(dnp.dot(best[1] - q, left))
         if abs(s) > 0.5:
             return left if s > 0 else -left
     if p is not None:
-        s = float(np.dot(np.asarray(p) - q, left))
+        s = float(dnp.dot(np.asarray(p) - q, left))
         if abs(s) > 0.5:
             return left if s > 0 else -left
     return left
@@ -118,11 +119,11 @@ def _sat_overlap(r1, r2):
         for i in range(len(r)):
             e = r[(i + 1) % len(r)] - r[i]
             n = np.array([-e[1], e[0]])
-            ln = float(np.hypot(*n))
+            ln = float(dnp.hypot(*n))
             if ln < 1e-9:
                 continue
             n /= ln
-            p1, p2 = r1 @ n, r2 @ n
+            p1, p2 = dnp.matmul(r1, n), dnp.matmul(r2, n)
             ov = min(p1.max(), p2.max()) - max(p1.min(), p2.min())
             if ov <= 0:
                 return 0.0
@@ -147,17 +148,17 @@ def _parallel_to_lanes(st, bay):
     """Is the bay along the lane it lies on (a bus pulls up to the kerb on the road itself)? Not in a mouth."""
     pts = _samples(bay)
     for mx, my in st.mouths:
-        if bool((np.hypot(pts[:, 0] - mx, pts[:, 1] - my) < bs.MOUTH_R_M).any()):
+        if bool((dnp.hypot(pts[:, 0] - mx, pts[:, 1] - my) < bs.MOUTH_R_M).any()):
             return False
     for ln in st.lanes:
         d = bs.path_dist(ln["xy"], pts)
         if not bool((d < ln["core"] - 0.2).any()):
             continue
         k = int(np.argmin(bs.path_dist(ln["xy"], bay.c[None]) if len(ln["xy"]) == 1 else
-                          np.hypot(*(np.asarray(ln["xy"][:-1], float) + np.asarray(ln["xy"][1:], float) - 2 * bay.c).T)))
+                          dnp.hypot(*(np.asarray(ln["xy"][:-1], float) + np.asarray(ln["xy"][1:], float) - 2 * bay.c).T)))
         seg = np.asarray(ln["xy"][k + 1], float) - np.asarray(ln["xy"][k], float)
-        ln_ = float(np.hypot(*seg))
-        if ln_ < 1e-6 or abs(float(np.dot(seg / ln_, bay.t))) < 0.9:
+        ln_ = float(dnp.hypot(*seg))
+        if ln_ < 1e-6 or abs(float(dnp.dot(seg / ln_, bay.t))) < 0.9:
             return False
     return True
 
@@ -273,8 +274,8 @@ def _road_bay(st, stop):
     left = np.array([-t[1], t[0]])
     v = q - np.asarray(stop["xy"], float)
     n = _unit(v) if d > 0.5 else left
-    n = left if float(np.dot(n, left)) >= 0 else -left          # square to the road
-    side = 1.0 if float(np.dot(v, left)) >= 0 else -1.0
+    n = left if float(dnp.dot(n, left)) >= 0 else -left          # square to the road
+    side = 1.0 if float(dnp.dot(v, left)) >= 0 else -1.0
     n = left * side if d > 0.5 else left
     return Bay(np.asarray(stop["xy"], float) + n * (KERB_GAP_M + BAY_WID_M / 2.0), _reading(t), n, stop["label"])
 
@@ -283,10 +284,10 @@ def _road_row(st):
     """Bays every SYNTH_SPACING_M along the biggest service road near the hub (both sides, where they fit)."""
     out = []
     roads = sorted((r for r in st.roads if bs.dist_to_path(r["xy"], st.hub) <= ROAD_ROW_M),
-                   key=lambda r: -float(np.hypot(*np.diff(np.asarray(r["xy"], float), axis=0).T).sum()))
+                   key=lambda r: -float(dnp.hypot(*np.diff(np.asarray(r["xy"], float), axis=0).T).sum()))
     for r in roads[:2]:
         pts = np.asarray(r["xy"], float)
-        seg = np.hypot(*np.diff(pts, axis=0).T)
+        seg = dnp.hypot(*np.diff(pts, axis=0).T)
         total = float(seg.sum())
         if total < SYNTH_EDGE_MIN_M:
             continue
@@ -297,7 +298,7 @@ def _road_row(st):
             j = min(int(np.searchsorted(cum, at, side="right")) - 1, len(seg) - 1)
             t = (pts[j + 1] - pts[j]) / max(float(seg[j]), 1e-9)
             q = pts[j] + t * (at - cum[j])
-            if float(np.hypot(*(q - st.hub))) > ROAD_ROW_M:
+            if float(dnp.hypot(*(q - st.hub))) > ROAD_ROW_M:
                 continue
             left = np.array([-t[1], t[0]])
             for n in (left, -left):
@@ -330,7 +331,7 @@ def _fill_edges(st, refs, bays, min_edge):
         segs = np.vstack((pts, pts[:1])) if closed else pts
         centre = pts.mean(0)
         for a, b in zip(segs[:-1], segs[1:]):
-            length = float(np.hypot(*(b - a)))
+            length = float(dnp.hypot(*(b - a)))
             if length < min_edge:
                 continue
             t = (b - a) / length
@@ -338,7 +339,7 @@ def _fill_edges(st, refs, bays, min_edge):
             sides = (left, -left)
             if closed:                                    # only the outside of a polygon
                 mid = (a + b) / 2.0
-                sides = (left,) if float(np.dot(left, mid - centre)) > 0 else (-left,)
+                sides = (left,) if float(dnp.dot(left, mid - centre)) > 0 else (-left,)
             k = max(1, int(length // SYNTH_SPACING_M))
             for i in range(k):
                 q = a + t * (length * (i + 0.5) / k)
@@ -349,7 +350,7 @@ def _fill_edges(st, refs, bays, min_edge):
                     bay = _place(st, bay, parallel_ok=False)
                     if bay is None:
                         continue
-                    if any(float(np.hypot(*(bay.c - o.c))) < SYNTH_EXCLUDE_M and not o.synth for o in bays):
+                    if any(float(dnp.hypot(*(bay.c - o.c))) < SYNTH_EXCLUDE_M and not o.synth for o in bays):
                         continue
                     if any(_sat_overlap(_rect(bay), _rect(o)) >= 0.5 for o in list(bays) + out):
                         continue
@@ -361,7 +362,7 @@ def _drop_overlaps(bays):
     """Bays that overlap a bay before them by more than 0.5 m go (mapped stops 4 m apart along one kerb: every third)."""
     out = []
     for b in bays:
-        if all(float(np.hypot(*(b.c - o.c))) > 3.0 and _sat_overlap(_rect(b), _rect(o)) < 0.5 for o in out):
+        if all(float(dnp.hypot(*(b.c - o.c))) > 3.0 and _sat_overlap(_rect(b), _rect(o)) < 0.5 for o in out):
             out.append(b)
     return out
 
@@ -374,12 +375,12 @@ def _synth_row(st, refs):
         pts = np.asarray(bs._open(path) if closed else path, float)
         segs = np.vstack((pts, pts[:1])) if closed else pts
         for a, b in zip(segs[:-1], segs[1:]):
-            length = float(np.hypot(*(b - a)))
+            length = float(dnp.hypot(*(b - a)))
             if length < 3.0:
                 continue
             t = (b - a) / length
             left = np.array([-t[1], t[0]])
-            along, lat = pts @ t, pts @ left
+            along, lat = dnp.matmul(pts, t), dnp.matmul(pts, left)
             extent = float(along.max() - along.min())
             width = float(lat.max() - lat.min())
             if best is None or extent * (1.0 + 0.001 * length) > best[0]:
@@ -403,7 +404,7 @@ def _synth_row(st, refs):
     out = []
     for i in range(count):
         along = mid_along - used / 2.0 + BAY_LEN_M / 2.0 + i * (BAY_LEN_M + BAY_GAP_M)
-        if float(np.dot(kt, t)) < 0:
+        if float(dnp.dot(kt, t)) < 0:
             along = 2 * mid_along - along
         c = t * along + left * (edge + sign * (hw + KERB_GAP_M + BAY_WID_M / 2.0))
         out.append(Bay(c, kt, n, str(i + 1), synth=True))

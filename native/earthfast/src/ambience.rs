@@ -4,6 +4,7 @@
 //! the mean size class of the items it took, how many); here a tile's items are binned into squares of the anchor
 //! frame, which gives the same kind of node without the greedy search. The ambience set (wind and room tone) is
 //! the stock maps' by climate: temperate (ConiferousDeciduous), Mediterranean, desert, tropical.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1};
 use pyo3::prelude::*;
@@ -120,16 +121,16 @@ pub fn sound_boxes<'py>(py: Python<'py>, pts: numpy::PyReadonlyArray2<'py, f64>,
         while i + 1 < b {
             // a run of segments from point i to point j
             let (x0, y0) = (pts[[i, 0]], pts[[i, 1]]);
-            let h0 = (pts[[i + 1, 1]] - y0).atan2(pts[[i + 1, 0]] - x0);
+            let h0 = (pts[[i + 1, 1]] - y0).datan2(pts[[i + 1, 0]] - x0);
             let (mut zlo, mut zhi) = (pts[[i, 2]].min(pts[[i + 1, 2]]), pts[[i, 2]].max(pts[[i + 1, 2]]));
             let mut j = i + 1;
             while j + 1 < b {
                 let (dx, dy) = (pts[[j + 1, 0]] - pts[[j, 0]], pts[[j + 1, 1]] - pts[[j, 1]]);
-                let mut turn = dy.atan2(dx) - h0;
+                let mut turn = dy.datan2(dx) - h0;
                 while turn > std::f64::consts::PI { turn -= 2.0 * std::f64::consts::PI; }
                 while turn < -std::f64::consts::PI { turn += 2.0 * std::f64::consts::PI; }
                 let z = pts[[j + 1, 2]];
-                let len = (pts[[j + 1, 0]] - x0).hypot(pts[[j + 1, 1]] - y0);
+                let len = (pts[[j + 1, 0]] - x0).dhypot(pts[[j + 1, 1]] - y0);
                 if turn.abs() > max_turn || len > max_len || zhi.max(z) - zlo.min(z) > max_dz {
                     break;
                 }
@@ -138,11 +139,11 @@ pub fn sound_boxes<'py>(py: Python<'py>, pts: numpy::PyReadonlyArray2<'py, f64>,
                 j += 1;
             }
             let (x1, y1) = (pts[[j, 0]], pts[[j, 1]]);
-            let len = (x1 - x0).hypot(y1 - y0);
+            let len = (x1 - x0).dhypot(y1 - y0);
             if len > 1e-6 {
                 let (z0, z1) = (zlo - below[l], zhi + above[l]);
                 out.extend_from_slice(&[kind[l], (x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0, len + 2.0 * extend,
-                                        width[l], z1 - z0, (y1 - y0).atan2(x1 - x0)]);
+                                        width[l], z1 - z0, (y1 - y0).datan2(x1 - x0)]);
             }
             i = j;
         }
@@ -254,7 +255,7 @@ pub fn shore_lines<'py>(py: Python<'py>, kind: numpy::PyReadonlyArray2<'py, u8>,
             continue;
         }
         let fl: Vec<(f64, f64)> = line.iter().map(|&(x, y)| (x as f64, y as f64)).collect();
-        let len: f64 = fl.windows(2).map(|s| (s[1].0 - s[0].0).hypot(s[1].1 - s[0].1)).sum();
+        let len: f64 = fl.windows(2).map(|s| (s[1].0 - s[0].0).dhypot(s[1].1 - s[0].1)).sum();
         if len < min_len {
             continue;
         }
@@ -289,10 +290,10 @@ fn douglas_peucker(line: &[(f64, f64)], eps: f64) -> Vec<(f64, f64)> {
         let (ax, ay) = line[a];
         let (bx, by) = line[b];
         let (dx, dy) = (bx - ax, by - ay);
-        let l = dx.hypot(dy);
+        let l = dx.dhypot(dy);
         let (mut best, mut bd) = (0usize, -1.0f64);
         for (k, &(x, y)) in line.iter().enumerate().take(b).skip(a + 1) {
-            let d = if l > 1e-12 { ((x - ax) * dy - (y - ay) * dx).abs() / l } else { (x - ax).hypot(y - ay) };
+            let d = if l > 1e-12 { ((x - ax) * dy - (y - ay) * dx).abs() / l } else { (x - ax).dhypot(y - ay) };
             if d > bd {
                 bd = d;
                 best = k;

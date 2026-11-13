@@ -29,6 +29,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import cog as cogmod
 import rangeread
@@ -55,26 +57,26 @@ _LAT1, _LAT2, _LAT0, _LON0 = map(math.radians, (49.0, 77.0, 49.0, -95.0))
 
 
 def _m(phi):
-    return math.cos(phi) / math.sqrt(1 - (_E * math.sin(phi)) ** 2)
+    return dmath.cos(phi) / math.sqrt(1 - dnp.sq(_E * dmath.sin(phi)))
 
 
 def _t(phi):
-    s = np.sin(phi)
-    return np.tan(np.pi / 4 - phi / 2) / ((1 - _E * s) / (1 + _E * s)) ** (_E / 2)
+    s = dnp.sin(phi)
+    return dnp.tan(np.pi / 4 - phi / 2) / dnp.power((1 - _E * s) / (1 + _E * s), _E / 2)
 
 
-_N = (math.log(_m(_LAT1)) - math.log(_m(_LAT2))) / (math.log(float(_t(_LAT1))) - math.log(float(_t(_LAT2))))
-_FF = _m(_LAT1) / (_N * float(_t(_LAT1)) ** _N)
-_R0 = _A * _FF * float(_t(_LAT0)) ** _N
+_N = (dmath.log(_m(_LAT1)) - dmath.log(_m(_LAT2))) / (dmath.log(float(_t(_LAT1))) - dmath.log(float(_t(_LAT2))))
+_FF = _m(_LAT1) / (_N * dnp.power(float(_t(_LAT1)), _N))
+_R0 = _A * _FF * dnp.power(float(_t(_LAT0)), _N)
 
 
 def lcc(lat, lon):
     """EPSG:3979 easting / northing (m) of WGS84 lat / lon (degrees; arrays)."""
     phi = np.radians(np.asarray(lat, np.float64))
     lam = np.radians(np.asarray(lon, np.float64))
-    r = _A * _FF * _t(phi) ** _N
+    r = _A * _FF * dnp.power(_t(phi), _N)
     th = _N * (lam - _LON0)
-    return r * np.sin(th), _R0 - r * np.cos(th)
+    return r * dnp.sin(th), _R0 - r * dnp.cos(th)
 
 
 def item_of(x, y):
@@ -87,14 +89,14 @@ def tile_lat_lon(z, x, y, size=TILE):
     n = 2 ** z
     i = (np.arange(size) + 0.5) / size
     lon = (x + i) / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * (y + i) / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * (y + i) / n))))
     return np.broadcast_to(lat[:, None], (size, size)), np.broadcast_to(lon[None, :], (size, size))
 
 
 def tile_bounds(z, x, y):
     """(south, west, north, east) of tile (z, x, y)."""
     n = 2 ** z
-    lat = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
+    lat = lambda yy: math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
     return lat(y + 1), x / n * 360.0 - 180.0, lat(y), (x + 1) / n * 360.0 - 180.0
 
 
@@ -147,8 +149,8 @@ class Hrdem:
         ex, ny = lcc(lat, lon)
         # the tile's ground pixel (m) at its centre: the mosaic level that is as fine as that or one finer
         clat = math.radians(float(lat[size // 2, 0]))
-        px = 40075016.686 * math.cos(clat) / 2 ** z / size
-        want = max(0, min(MAX_LEVEL, int(math.floor(math.log2(max(px, min_px, 1.0))))))
+        px = 40075016.686 * dmath.cos(clat) / 2 ** z / size
+        want = max(0, min(MAX_LEVEL, int(math.floor(dmath.log2(max(px, min_px, 1.0))))))
         out = np.zeros((size, size), np.float32)
         ok = np.zeros((size, size), bool)
         ix = np.floor(ex / ITEM_M).astype(np.int64)

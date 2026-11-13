@@ -1,5 +1,6 @@
 """Standalone Interstate/US shields in the existing optional sign stream."""
 import numpy as np
+import dnp
 import exitsigns as signs
 import signroads
 import roads
@@ -40,7 +41,7 @@ def place(frame, obj, pavements, box, elev, chunks=(), left_hand=False):
         if near is None or near[0] > 30:
             continue
         travel = near[7]*(sp.dir or 1) if sp.oneway else signs._travel(near, direction)
-        if travel@direction >= .8:
+        if dnp.matmul(travel, direction) >= .8:
             choices.append((near[0], str(fid), near, travel, width))
     if not choices:
         return None
@@ -50,7 +51,7 @@ def place(frame, obj, pavements, box, elev, chunks=(), left_hand=False):
     right = np.array([travel[1], -travel[0]])*(-1 if left_hand else 1)
     cross = signroads.cross(near[3])
     k, t = near[4:6]
-    edge = abs((cross[k]*(1-t)+cross[k+1]*t)@right)*width/2
+    edge = abs(dnp.matmul(cross[k]*(1-t)+cross[k+1]*t, right))*width/2
     w, h = dimensions(extra)
     centre = None
     # Entire panel and both supports beyond all generated paved surfaces.

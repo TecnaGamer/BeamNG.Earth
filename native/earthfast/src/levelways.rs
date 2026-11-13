@@ -3,6 +3,7 @@
 //! Python walked every road's rings and every walking way against the nodes and the road ends one by one (~0.6 CPU-s
 //! of a 16-tile I-83 Baltimore probe, every footway of a city cell, 2026-11-12). The same tests here, the numpy
 //! version's numbers (its pairwise sums, first minimum, operation order).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -29,7 +30,7 @@ fn seg_dist(p: Pt, ln: &[Pt]) -> f64 {
         let num = (p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1];
         let den = nmax(ab[0] * ab[0] + ab[1] * ab[1], 1e-12);
         let t = nmin(nmax(num / den, 0.0), 1.0);
-        let d = ((a[0] + t * ab[0]) - p[0]).hypot((a[1] + t * ab[1]) - p[1]);
+        let d = ((a[0] + t * ab[0]) - p[0]).dhypot((a[1] + t * ab[1]) - p[1]);
         best = nmin(best, d);
     }
     best
@@ -50,9 +51,9 @@ fn inside(p: Pt, b: &[f64; 4]) -> bool {
     p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]
 }
 
-/// The length of a line: np.hypot(*np.diff(ln, axis=0).T).sum() (pairwise).
+/// The length of a line: np.dhypot(*np.diff(ln, axis=0).T).sum() (pairwise).
 fn length(ln: &[Pt]) -> f64 {
-    let d: Vec<f64> = ln.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).collect();
+    let d: Vec<f64> = ln.windows(2).map(|w| (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1])).collect();
     np_sum(&d)
 }
 
@@ -162,7 +163,7 @@ pub fn level_ways_promote<'py>(
                 Some(v) if !(d < v) => Some(v),
                 _ => Some(d),
             }).unwrap();
-            let to_node = on.iter().map(|p| (end[0] - p[0]).hypot(end[1] - p[1])).fold(None, |m: Option<f64>, d| {
+            let to_node = on.iter().map(|p| (end[0] - p[0]).dhypot(end[1] - p[1])).fold(None, |m: Option<f64>, d| {
                 match m {
                     Some(v) if !(d < v) => Some(v),
                     _ => Some(d),

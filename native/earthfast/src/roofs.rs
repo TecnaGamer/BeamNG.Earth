@@ -6,6 +6,7 @@
 //! corners take different planes is cut along the line where two of them meet until each piece lies on one plane
 //! (a concave piecewise-planar surface is that plane on a convex piece whose corners all take it), and each edge of
 //! the outline is cut the same way for the wall up to the roof.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
 
@@ -195,13 +196,13 @@ pub fn slope_wall_floors_core(rows: &[[f64; 6]], e: f64, floor_h: f64, sheet_m: 
     let mut prev: Option<(f64, f64, f64, f64)> = None;    // (the last piece's end and direction)
     for r in rows {
         let [ax, ay, za, bx, by, zb] = *r;
-        let l = (bx - ax).hypot(by - ay);
+        let l = (bx - ax).dhypot(by - ay);
         if l < 1e-6 {
             continue;
         }
         let d = ((bx - ax) / l, (by - ay) / l);
         s0 = match prev {
-            Some((px, py_, dx, dy)) if (px - ax).hypot(py_ - ay) < 1e-6 && dx * d.0 + dy * d.1 > 0.9999 => s0,
+            Some((px, py_, dx, dy)) if (px - ax).dhypot(py_ - ay) < 1e-6 && dx * d.0 + dy * d.1 > 0.9999 => s0,
             _ => 0.0,
         };
         prev = Some((bx, by, d.0, d.1));
@@ -785,7 +786,7 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
         // the eave's corners are put back on the outline below)
         for (li, lp) in loops.iter_mut().enumerate() {
             for (i, q) in lp.iter_mut().enumerate() {
-                let h = ((li * 7919 + i * 104729) as f64 * 12.9898).sin() * 43758.5453;
+                let h = ((li * 7919 + i * 104729) as f64 * 12.9898).dsin() * 43758.5453;
                 let (a, b) = (h.fract(), (h * 1.618).fract());
                 q.0 += (a - 0.5) * 2e-4;
                 q.1 += (b - 0.5) * 2e-4;

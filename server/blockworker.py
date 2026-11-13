@@ -24,6 +24,8 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import secrossings
 import dem as demmod
@@ -1105,7 +1107,7 @@ def _dem_warm(frame, box, zoom):
             return int(math.floor((x / 360.0 + 0.5) * n))
 
         def row(y):
-            return int(math.floor((0.5 - math.asinh(math.tan(math.radians(y))) / (2 * math.pi)) * n))
+            return int(math.floor((0.5 - dmath.asinh(dmath.tan(math.radians(y))) / (2 * math.pi)) * n))
         r0, r1 = max(0, row(float(la.max()))), min(n - 1, row(float(la.min())))
         keys = [(int(zoom), c % n, r) for r in range(r0, r1 + 1) for c in range(col(float(lo.min())), col(float(lo.max())) + 1)]
     except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
@@ -1985,8 +1987,8 @@ def _map_walks(src, dst, walks):
             c = dict(wk["corner"])
             c["arc"] = mp(c["arc"])
             c["outer"] = [tuple(v) for v in mp(np.asarray(c["outer"], np.float64).reshape(-1, 3))]
-            inw = np.asarray(c["inward"], np.float64).reshape(-1, 2) @ r2.T
-            c["inward"] = inw / np.maximum(np.hypot(*inw.T), 1e-12)[:, None]
+            inw = dnp.matmul(np.asarray(c["inward"], np.float64).reshape(-1, 2), r2.T)
+            c["inward"] = inw / np.maximum(dnp.hypot(*inw.T), 1e-12)[:, None]
             wk["corner"] = c
         else:
             wk["pts"] = mp(wk["pts"])
@@ -2143,7 +2145,7 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
             continue
         piv = float(info.get("pivot", e.get("pivot", 0.0)))
         r, _t, c = geotiles.placement(tile.frame, frame, (0.0, 0.0, piv))
-        s = r.T @ c
+        s = dnp.matmul(r.T, c)
         with open(src, "rb") as f:
             blob = fast._ef.cdae_shear(f.read(), float(e["pos"][2]), float(s[0]), float(s[1]), float(s[2]), piv)
         name = f"rx_{aid}_{tile.key}_{what}.cdae"
@@ -2162,7 +2164,7 @@ def _geo_near(gx, gy, lat, lon):
         import geotiles
         la, lo = geotiles.centre(gx, gy)
         dy = (float(la) - float(lat)) * 111320.0
-        dx = (float(lo) - float(lon)) * 111320.0 * math.cos(math.radians(float(lat)))
+        dx = (float(lo) - float(lon)) * 111320.0 * dmath.cos(math.radians(float(lat)))
         return math.hypot(dx, dy) <= URGENT_PHOTO_M
     except Exception:           # (no urgency rather than no tile)
         return False

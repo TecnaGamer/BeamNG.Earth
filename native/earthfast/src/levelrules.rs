@@ -10,6 +10,7 @@
 //! features of 198 cells in 20 places and 2k synthetic ones (the commit's message).
 //!
 //! Kinds: 1 bridge, 2 tunnel (so ranges sort as Python's ("bridge" < "tunnel") tuples), 3 ground (level_extras' input).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -70,28 +71,28 @@ fn mean_lat(r: &[P]) -> f64 {
 /// ranges' fractions. At its first point instead, a 15 km motorway's crossing came 8.7 m along from where its deck was
 /// cut (the A4 at Glaireuse, #1020).
 fn ring_kx(r: &[P]) -> f64 {
-    111320.0 * mean_lat(r).to_radians().cos()
+    111320.0 * mean_lat(r).to_radians().dcos()
 }
 
-/// np.r_[0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))].
+/// np.r_[0, np.cumsum(np.dhypot(*np.diff(m, axis=0).T))].
 fn arcs(m: &[P]) -> Vec<f64> {
     let mut s = vec![0.0f64; m.len().max(1)];
     for k in 1..m.len() {
-        s[k] = s[k - 1] + (m[k][0] - m[k - 1][0]).hypot(m[k][1] - m[k - 1][1]);
+        s[k] = s[k - 1] + (m[k][0] - m[k - 1][0]).dhypot(m[k][1] - m[k - 1][1]);
     }
     s
 }
 
-/// float(np.hypot(*np.diff(m, axis=0).T).sum()).
+/// float(np.dhypot(*np.diff(m, axis=0).T).sum()).
 fn length_np(m: &[P]) -> f64 {
-    let seg: Vec<f64> = (1..m.len()).map(|k| (m[k][0] - m[k - 1][0]).hypot(m[k][1] - m[k - 1][1])).collect();
+    let seg: Vec<f64> = (1..m.len()).map(|k| (m[k][0] - m[k - 1][0]).dhypot(m[k][1] - m[k - 1][1])).collect();
     np_sum(&seg)
 }
 
-/// float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum()).
+/// float(np.dhypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum()).
 fn length_scaled(r: &[P], kx: f64, ky: f64) -> f64 {
     let seg: Vec<f64> = (1..r.len())
-        .map(|k| ((r[k][0] - r[k - 1][0]) * kx).hypot((r[k][1] - r[k - 1][1]) * ky)).collect();
+        .map(|k| ((r[k][0] - r[k - 1][0]) * kx).dhypot((r[k][1] - r[k - 1][1]) * ky)).collect();
     np_sum(&seg)
 }
 
@@ -110,10 +111,10 @@ fn cols(r: &[P]) -> (Vec<f64>, Vec<f64>) {
 
 /// roads.sub_polyline: the part of lon / lat polyline r (>= 2 points) between fractions a < b of its length.
 pub(crate) fn sub_polyline(r: &[P], a: f64, b: f64) -> Vec<P> {
-    let c = mean_lat(r).to_radians().cos();
+    let c = mean_lat(r).to_radians().dcos();
     let mut s = vec![0.0f64; r.len()];
     for v in 1..r.len() {
-        s[v] = s[v - 1] + ((r[v][0] - r[v - 1][0]) * c).hypot(r[v][1] - r[v - 1][1]);
+        s[v] = s[v - 1] + ((r[v][0] - r[v - 1][0]) * c).dhypot(r[v][1] - r[v - 1][1]);
     }
     let tot = s[r.len() - 1];
     if tot <= 0.0 {
@@ -171,7 +172,7 @@ fn seg_dist_min(p: &[P], g: &[P]) -> f64 {
             let l2 = nmax(ab[0] * ab[0] + ab[1] * ab[1], 1e-12);
             let t = ((q[0] - a[0]) * ab[0] + (q[1] - a[1]) * ab[1]) / l2;
             let t = if t.is_nan() { t } else { pmin(pmax(t, 0.0), 1.0) };
-            let d = (q[0] - (a[0] + t * ab[0])).hypot(q[1] - (a[1] + t * ab[1]));
+            let d = (q[0] - (a[0] + t * ab[0])).dhypot(q[1] - (a[1] + t * ab[1]));
             best = if first { d } else { nmin(best, d) };
             first = false;
         }
@@ -181,7 +182,7 @@ fn seg_dist_min(p: &[P], g: &[P]) -> f64 {
 
 /// roads._ring_fraction: the fraction of lon / lat polyline r's length (sub_polyline's metric) at its point nearest p.
 fn ring_fraction(r: &[P], p: P) -> f64 {
-    let c = mean_lat(r).to_radians().cos();
+    let c = mean_lat(r).to_radians().dcos();
     let q: Vec<P> = r.iter().map(|v| [v[0] * c, v[1] * 1.0]).collect();
     let pp = [p[0] * c, p[1] * 1.0];
     let n = q.len().saturating_sub(1);
@@ -192,7 +193,7 @@ fn ring_fraction(r: &[P], p: P) -> f64 {
         l2[k] = nmax(ab[0] * ab[0] + ab[1] * ab[1], 1e-30);
         let tk = ((pp[0] - a[0]) * ab[0] + (pp[1] - a[1]) * ab[1]) / l2[k];
         t[k] = if tk.is_nan() { tk } else { pmin(pmax(tk, 0.0), 1.0) };
-        d[k] = (a[0] + t[k] * ab[0] - pp[0]).hypot(a[1] + t[k] * ab[1] - pp[1]);
+        d[k] = (a[0] + t[k] * ab[0] - pp[0]).dhypot(a[1] + t[k] * ab[1] - pp[1]);
     }
     // (np.argmin: the first minimum, the first NaN if any)
     let mut k = 0usize;
@@ -392,7 +393,7 @@ fn near_ends(geo: &Geo, raw: &[Vec<R>]) -> Option<Vec<bool>> {
         return None;
     }
     let ty = 2.0 / 111320.0;
-    let tx = ty / pmax(pmin(lat + 0.1, 89.0).to_radians().cos(), 1e-3);
+    let tx = ty / pmax(pmin(lat + 0.1, 89.0).to_radians().dcos(), 1e-3);
     let pts: Vec<P> = ends.iter().flat_map(|e| [[e[0], e[1]], [e[2], e[3]]]).collect();
     let tgt: Vec<P> = bends.iter().flat_map(|e| [e[0], e[1]]).collect();
     let m = ends_near_core(&pts, &tgt, tx, ty);
@@ -583,7 +584,7 @@ impl<'a> Layer<'a> {
                     let mut first = true;
                     for pp in &ports {
                         for e in &ends {
-                            let d = (pp[0] - e[0]).hypot(pp[1] - e[1]);
+                            let d = (pp[0] - e[0]).dhypot(pp[1] - e[1]);
                             dmin = if first { d } else { nmin(dmin, d) };
                             first = false;
                         }
@@ -649,7 +650,7 @@ impl<'a> Layer<'a> {
             for r in 0..self.bidx.len() {
                 for e2 in 0..2 {
                     let q = self.bends[r][e2];
-                    let d = ((q[0] - p[0]) * kx).hypot((q[1] - p[1]) * ky);
+                    let d = ((q[0] - p[0]) * kx).dhypot((q[1] - p[1]) * ky);
                     let b = self.bidx[r];
                     if d < tol && b != i {
                         best = pmax(best, self.bridge_reach(b)?.over[e2]);
@@ -981,10 +982,10 @@ impl LevelLayer {
                     _ => return Err(format!("lidar_lines: no structure width for feature {i}")),
                 };
                 for r in cut_rings(&geo.rings(i), &ground_pieces(&rule[i], min_part), false) {
-                    let (kx, ky) = (111320.0 * r[0][1].to_radians().cos(), KY);
+                    let (kx, ky) = (111320.0 * r[0][1].to_radians().dcos(), KY);
                     for at in [0usize, r.len() - 1] {
                         let p = r[at];
-                        if !ends.iter().any(|e| ((e[0] - p[0]) * kx).hypot((e[1] - p[1]) * ky) < touch) {
+                        if !ends.iter().any(|e| ((e[0] - p[0]) * kx).dhypot((e[1] - p[1]) * ky) < touch) {
                             continue;
                         }
                         let mut line: Vec<P> = if at == 0 { r.clone() } else { r.iter().rev().copied().collect() };

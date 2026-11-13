@@ -29,6 +29,7 @@ import math
 import numpy as np
 
 import fast
+import dnp
 import markings
 import medians
 
@@ -118,7 +119,7 @@ def wanted(country, roads_near):
 
 
 def _length(xy):
-    return float(np.hypot(*np.diff(xy[:, :2], axis=0).T).sum())
+    return float(dnp.hypot(*np.diff(xy[:, :2], axis=0).T).sum())
 
 
 def _meets(xy, box):
@@ -128,7 +129,7 @@ def _meets(xy, box):
 
 
 def _touches(a, b):
-    return float(np.hypot(*(a - b))) <= JOIN_M
+    return float(dnp.hypot(*(a - b))) <= JOIN_M
 
 
 def centre_offset(way, left_hand=False):
@@ -145,7 +146,7 @@ def centre_offset(way, left_hand=False):
 def _leaving(xy, k):
     """Unit direction out of way xy at end k (0 or -1)."""
     d = xy[k, :2] - xy[1 if k == 0 else -2, :2]
-    return d / max(float(np.hypot(*d)), 1e-9)
+    return d / max(float(dnp.hypot(*d)), 1e-9)
 
 
 def _connectors(ways, run):
@@ -162,7 +163,7 @@ def _connectors(ways, run):
                     if n is cur or id(n) in path:
                         continue
                     for j in (0, -1):
-                        if not _touches(cur.xy[end, :2], n.xy[j, :2]) or float(np.dot(out, -_leaving(n.xy, j))) \
+                        if not _touches(cur.xy[end, :2], n.xy[j, :2]) or float(dnp.dot(out, -_leaving(n.xy, j))) \
                                 < STRAIGHT_COS:
                             continue
                         if id(n) in runs:
@@ -202,7 +203,7 @@ def _goes_plain(p, k, ways):
     w = on[0]
     if _overtaking(w) is not None or (_lanes(w.spec, w.tags) or 2) > 2:
         return False
-    return float(np.dot(_leaving(xy, 0 if k == 0 else len(xy) - 1), -_leaving(w.xy[:, :2], 0 if _touches(e, w.xy[0, :2])
+    return float(dnp.dot(_leaving(xy, 0 if k == 0 else len(xy) - 1), -_leaving(w.xy[:, :2], 0 if _touches(e, w.xy[0, :2])
                                                                              else len(w.xy) - 1))) > STRAIGHT_COS
 
 
@@ -266,9 +267,9 @@ def _stations(xy, offsets_of):
     """The barrier line of a way: (k, 2) points on its arc length grid, about medians.MODULE_M apart (never more: the
     models overlap by a hair rather than leave a gap), offsets_of(s, length) m left of it."""
     xy = np.asarray(xy, np.float64)[:, :2]
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     keep = np.r_[True, seg > 1e-6]
-    xy, seg = xy[keep], np.hypot(*np.diff(xy[keep], axis=0).T)
+    xy, seg = xy[keep], dnp.hypot(*np.diff(xy[keep], axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     length = float(cum[-1])
     n = max(1, int(math.ceil(length / medians.MODULE_M)))
@@ -276,10 +277,10 @@ def _stations(xy, offsets_of):
     u = np.diff(xy, axis=0) / seg[:, None]
     # vertices' directions, their two segments' mean, blended along each segment: no jump at a vertex (medians.rs)
     v = np.vstack([u[:1], u[:-1] + u[1:], u[-1:]])
-    v /= np.maximum(np.hypot(*v.T), 1e-9)[:, None]
+    v /= np.maximum(dnp.hypot(*v.T), 1e-9)[:, None]
     p = np.c_[np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]
     t = np.c_[np.interp(s, cum, v[:, 0]), np.interp(s, cum, v[:, 1])]
-    t /= np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+    t /= np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
     return p + np.c_[-t[:, 1], t[:, 0]] * np.asarray(offsets_of(s, length))[:, None]
 
 
@@ -289,7 +290,7 @@ def _distance(points, line):
     ab = b - a
     t = np.clip((((points[:, None] - a[None]) * ab[None]).sum(2)) / np.maximum((ab * ab).sum(1), 1e-12)[None], 0, 1)
     d = points[:, None] - (a[None] + t[..., None] * ab[None])
-    return np.hypot(d[..., 0], d[..., 1]).min(1)
+    return dnp.hypot(d[..., 0], d[..., 1]).min(1)
 
 
 def _keep_runs(ok, loose):
@@ -413,7 +414,7 @@ def _back_along(way, offset, travel, d):
     """The point d m before the end of way in its travel direction, offset m left of its geometry, and its direction of
     travel; None past the way's start, with the m left over."""
     xy = way.xy[:, :2] if travel > 0 else way.xy[::-1, :2]
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     cum = np.r_[0.0, np.cumsum(seg)]
     if d > cum[-1] or cum[-1] <= 0.0:
         return None, d - cum[-1]
@@ -562,7 +563,7 @@ def _project(points, line):
     l2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip(((points[:, None] - a[None]) * ab[None]).sum(2) / l2[None], 0.0, 1.0)
     d = points[:, None] - (a[None] + t[..., None] * ab[None])
-    dist = np.hypot(d[..., 0], d[..., 1])
+    dist = dnp.hypot(d[..., 0], d[..., 1])
     k = dist.argmin(1)
     i = np.arange(len(points))
     cum = np.r_[0.0, np.cumsum(np.sqrt(l2))]
@@ -676,7 +677,7 @@ def _dense(n, step=4.0):
     """Chunk polyline n (k, 3) with a point at least every step m: a bent line needs them."""
     out = [n[:1]]
     for a, b in zip(n[:-1], n[1:]):
-        k = max(1, int(math.ceil(float(np.hypot(*(b - a)[:2])) / step)))
+        k = max(1, int(math.ceil(float(dnp.hypot(*(b - a)[:2])) / step)))
         out.append(a + (b - a) * (np.arange(1, k + 1) / k)[:, None])
     return np.vstack(out)
 
@@ -693,7 +694,7 @@ def _bent(c, bend):
     along = n[-1, :2] - n[0, :2]
     k = min(int(np.argmin(dist)), len(bend.line) - 2)
     u = bend.line[k + 1] - bend.line[k]
-    if abs(float(np.dot(along, u))) < PARALLEL_COS * float(np.hypot(*along) * np.hypot(*u)):
+    if abs(float(dnp.dot(along, u))) < PARALLEL_COS * float(dnp.hypot(*along) * dnp.hypot(*u)):
         return None
     mid = float(np.median(left))
     if bend.moves is not None and bend.moves[0] <= mid <= bend.moves[1]:
@@ -702,9 +703,9 @@ def _bent(c, bend):
         here = (s >= bend.moves[2]) & (s <= bend.moves[3])
         if here.any():
             seg = np.diff(bend.line, axis=0)
-            cum = np.r_[0.0, np.cumsum(np.hypot(*seg.T))]
+            cum = np.r_[0.0, np.cumsum(dnp.hypot(*seg.T))]
             t = seg[np.clip(np.searchsorted(cum, s, side="right") - 1, 0, len(seg) - 1)]
-            t = t / np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+            t = t / np.maximum(dnp.hypot(*t.T), 1e-9)[:, None]
             n = n.copy()
             n[:, :2] += np.c_[-t[:, 1], t[:, 0]] * (np.asarray(bend.shift(s), np.float64) * here)[:, None]
             return [dict(c, n=[[round(float(v), 3) for v in q] for q in n])]

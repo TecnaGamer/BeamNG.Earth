@@ -20,6 +20,7 @@ import weakref
 import numpy as np
 
 import fast
+import dnp
 import mapcells
 import roads
 import railways
@@ -327,7 +328,7 @@ def _spans(md, key, feats):
     for ln, s0, s1, how in sp:
         ln = int(ln)
         i, a, b = oi_l[ln], oa_l[ln], ob_l[ln]
-        L = float(np.hypot(*np.diff(pts[starts[ln]:starts[ln + 1]], axis=0).T).sum())
+        L = float(dnp.hypot(*np.diff(pts[starts[ln]:starts[ln + 1]], axis=0).T).sum())
         if i < 0 or L <= 0 or s1 - s0 <= 0:
             continue
         got.append((i, a + (b - a) * float(s0) / L, a + (b - a) * float(s1) / L, int(how)))

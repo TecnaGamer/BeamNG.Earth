@@ -3,6 +3,7 @@
 //! server/areas.py is the glue. Saved routes (the user, 2026-10-29: "options on pre downloading/generating along a gps
 //! route"): a corridor (a polyline and a half width) instead of a box: its tiles at any zoom (corridor_tiles), its
 //! length and area, and the cache keys under it (keys_in_cover, from its tiles at a pin zoom).
+use crate::dm::Dm;
 
 use std::collections::{HashMap, HashSet};
 
@@ -44,13 +45,13 @@ pub fn area_km2(s: f64, w: f64, n: f64, e: f64) -> f64 {
     if !(n > s && e > w) {
         return 0.0;
     }
-    EARTH_R_KM * EARTH_R_KM * (e - w).to_radians() * (n.to_radians().sin() - s.to_radians().sin())
+    EARTH_R_KM * EARTH_R_KM * (e - w).to_radians() * (n.to_radians().dsin() - s.to_radians().dsin())
 }
 
 /// Normalised Web-Mercator x (0..1 east from -180) and y (0..1 south from the top) of lat / lon.
 fn norm(lat: f64, lon: f64) -> (f64, f64) {
     let lat = lat.clamp(-85.051_128_779_806_6, 85.051_128_779_806_6).to_radians();
-    ((lon + 180.0) / 360.0, (1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0)
+    ((lon + 180.0) / 360.0, (1.0 - lat.dtan().dasinh() / std::f64::consts::PI) / 2.0)
 }
 
 /// For each cache key: does its z/x/y tile ("<prefix>/z/x/y.ext") touch one of the boxes (degrees south, west,
@@ -81,7 +82,7 @@ fn m_per_deg() -> f64 {
 /// Latitude of a Web-Mercator tile row edge (y in tiles at zoom z).
 fn row_lat(y: f64, z: u8) -> f64 {
     let n = (1u64 << z) as f64;
-    (std::f64::consts::PI * (1.0 - 2.0 * y / n)).sinh().atan().to_degrees()
+    (std::f64::consts::PI * (1.0 - 2.0 * y / n)).dsinh().datan().to_degrees()
 }
 
 /// Distance from point p to the segment a..b (local metres), and the segment's parameter t of the nearest point.
@@ -155,7 +156,7 @@ fn corridor_map(lats: &[f64], lons: &[f64], half_m: f64, z: u8) -> Result<HashMa
         pts.windows(2).map(|w| (w[0], w[1])).collect()
     };
     for (pa, pb) in segs {
-        let mid = ((pa.0 + pb.0) / 2.0).to_radians().cos().max(1e-6);
+        let mid = ((pa.0 + pb.0) / 2.0).to_radians().dcos().max(1e-6);
         let seg_len = (((pb.0 - pa.0) * k).powi(2) + ((pb.1 - pa.1) * k * mid).powi(2)).sqrt();
         let pieces = ((seg_len / SUB_M.max(2.0 * half_m)).ceil() as usize).max(1);
         for i in 0..pieces {
@@ -163,7 +164,7 @@ fn corridor_map(lats: &[f64], lons: &[f64], half_m: f64, z: u8) -> Result<HashMa
             let a = (pa.0 + (pb.0 - pa.0) * f0, pa.1 + (pb.1 - pa.1) * f0);
             let b = (pa.0 + (pb.0 - pa.0) * f1, pa.1 + (pb.1 - pa.1) * f1);
             // local metres round a: x east, y north (equirectangular at the piece's latitude)
-            let c = ((a.0 + b.0) / 2.0).to_radians().cos().max(1e-6);
+            let c = ((a.0 + b.0) / 2.0).to_radians().dcos().max(1e-6);
             let to_m = |lat: f64, lon: f64| ((lon - a.1) * k * c, (lat - a.0) * k);
             let (am, bm) = (to_m(a.0, a.1), to_m(b.0, b.1));
             let plen = ((bm.0 - am.0).powi(2) + (bm.1 - am.1).powi(2)).sqrt();
@@ -244,7 +245,7 @@ pub fn corridor_size(lats: Vec<f64>, lons: Vec<f64>, half_m: f64) -> (f64, f64) 
     let k = m_per_deg();
     let mut len = 0.0;
     for i in 1..lats.len().min(lons.len()) {
-        let c = ((lats[i] + lats[i - 1]) / 2.0).to_radians().cos();
+        let c = ((lats[i] + lats[i - 1]) / 2.0).to_radians().dcos();
         len += (((lats[i] - lats[i - 1]) * k).powi(2) + ((lons[i] - lons[i - 1]) * k * c).powi(2)).sqrt();
     }
     let h = half_m.max(0.0);
@@ -290,7 +291,7 @@ mod tests {
     fn corridor() {
         // a 10 km route east along 39 N, 1 km each side, z14 (~1.9 km tiles there)
         let lats = vec![39.0, 39.0];
-        let lons = vec![-76.6, -76.6 + 10_000.0 / (m_per_deg() * 39f64.to_radians().cos())];
+        let lons = vec![-76.6, -76.6 + 10_000.0 / (m_per_deg() * 39f64.to_radians().dcos())];
         let m = corridor_map(&lats, &lons, 1000.0, 14).unwrap();
         assert!(m.len() >= 6 && m.len() <= 21, "{}", m.len());
         let (x0, y0) = tile_of(39.0, -76.6, 14);

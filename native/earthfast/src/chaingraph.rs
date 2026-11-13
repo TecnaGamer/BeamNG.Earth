@@ -1,6 +1,7 @@
 //! roads._chain_graph (version 242): the nodes and edges of a set of lines, their ends joined as roads._EndJoin does.
 //! The Python joiner (a dict lookup per grid cell for every end, a numpy hypot / cumsum per line) was ~3 % of a fresh
 //! cell's plans: the rails' stubs and underpasses, the bridge chains, the plans' ends ask for it per window.
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -78,7 +79,7 @@ pub fn chain_graph<'py>(py: Python<'py>, lines: Vec<PyReadonlyArray2<'py, f64>>,
         let mut acc = 0.0f64;
         s.push(0.0);
         for i in 1..k {
-            acc += (v[[i, 0]] - v[[i - 1, 0]]).hypot(v[[i, 1]] - v[[i - 1, 1]]);
+            acc += (v[[i, 0]] - v[[i - 1, 0]]).dhypot(v[[i, 1]] - v[[i - 1, 1]]);
             s.push(acc);
         }
         off.push(s.len() as i64);

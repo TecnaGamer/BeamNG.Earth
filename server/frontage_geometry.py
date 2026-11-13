@@ -3,6 +3,7 @@
 from collections import defaultdict
 
 import numpy as np
+import dnp
 
 from buildings import _area2, triangulate
 
@@ -44,12 +45,12 @@ def _split(poly, distances):
 
 
 def _subtract(poly, normals, offsets):
-    distances = poly @ normals.T - offsets
+    distances = dnp.matmul(poly, normals.T) - offsets
     if np.any(distances.max(axis=0) <= EPS):
         return (poly,)
     outside, inside = [], poly
     for j in np.flatnonzero(distances.min(axis=0) < -EPS):
-        d = inside @ normals[j] - offsets[j]
+        d = dnp.matmul(inside, normals[j]) - offsets[j]
         if d.max() <= EPS:
             return (poly,)  # the two shapes only touched or missed each other
         if d.min() < -EPS:
@@ -60,11 +61,11 @@ def _subtract(poly, normals, offsets):
 
 
 def _intersection(poly, normals, offsets):
-    distances = poly @ normals.T - offsets
+    distances = dnp.matmul(poly, normals.T) - offsets
     if np.any(distances.max(axis=0) <= EPS):
         return None
     for j in np.flatnonzero(distances.min(axis=0) < -EPS):
-        d = poly @ normals[j] - offsets[j]
+        d = dnp.matmul(poly, normals[j]) - offsets[j]
         if d.max() <= EPS:
             return None
         if d.min() < -EPS:
@@ -118,7 +119,7 @@ class _PyCoverage:
     def _reserve(self, piece):
         lo, hi = piece.min(axis=0), piece.max(axis=0)
         edges = np.roll(piece, -1, axis=0) - piece
-        length = np.linalg.norm(edges, axis=1)
+        length = dnp.norm(edges, axis=1)
         keep = length > EPS
         normals = np.c_[-edges[keep, 1], edges[keep, 0]] / length[keep, None]
         offsets = (piece[keep] * normals).sum(axis=1)

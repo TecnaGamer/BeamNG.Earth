@@ -11,6 +11,7 @@ import time
 from concurrent.futures import CancelledError
 
 import numpy as np
+import dnp
 import exitsigns
 import recreationrules
 import routeindex
@@ -93,27 +94,27 @@ def records(links, mains, ways, nodes):
         refs=way.get('nodes',());node=nodes.get(refs[-1] if exitsigns._direction(tags)<0 and refs else refs[0] if refs else None,{})
         label=exitsigns.labels(node.get('tags',{}),tags,backwards=exitsigns._direction(tags)<0)
         if not label or not label['ref'] or not any(recreationrules.destination(n) for n in label['names']):continue
-        point=path[0];scale=np.array([111320.*np.cos(np.radians(point[1])),111320.])
+        point=path[0];scale=np.array([111320.*dnp.cos(np.radians(point[1])),111320.])
         ramp_direction=(path[min(2,len(path)-1)]-point)*scale
-        ramp_direction/=max(np.linalg.norm(ramp_direction),1e-9)
+        ramp_direction/=max(dnp.norm(ramp_direction),1e-9)
         choices=[]
         for main in mains:
             sp=main['spec']
             if sp.cls not in ('motorway','trunk') or not sp.oneway:continue
             p=np.asarray(main['path'] if (sp.dir or 1)>0 else main['path'][::-1]);xy=(p-point)*scale
-            delta=np.diff(xy,axis=0);lengths=np.linalg.norm(delta,axis=1)
-            t=np.clip(-np.einsum('ij,ij->i',xy[:-1],delta)/np.maximum(lengths**2,1e-9),0,1)
-            distance=np.linalg.norm(xy[:-1]+t[:,None]*delta,axis=1);k=int(distance.argmin())
+            delta=np.diff(xy,axis=0);lengths=dnp.norm(delta,axis=1)
+            t=np.clip(-dnp.vecdot(xy[:-1],delta)/np.maximum(lengths * lengths,1e-9),0,1)
+            distance=dnp.norm(xy[:-1]+t[:,None]*delta,axis=1);k=int(distance.argmin())
             if distance[k]>6. or lengths[k]<1e-6:continue
             tangent=delta[k]/lengths[k]
-            if tangent@ramp_direction<.15:continue
+            if dnp.matmul(tangent, ramp_direction)<.15:continue
             station=float(lengths[:k].sum()+t[k]*lengths[k])
             if station<250:continue
             projected=p[k]+t[k]*(p[k+1]-p[k]);arc=np.r_[0.,np.cumsum(lengths)]
             start=max(0.,station-1800.)
             approach=np.vstack([[np.interp(start,arc,p[:,j]) for j in (0,1)],p[(arc>start)&(arc<station)],projected])
             right=np.array([tangent[1],-tangent[0]])
-            lateral=(path-point)*scale@right
+            lateral=dnp.matmul((path-point)*scale, right)
             side=next((1 if v>0 else -1 for v in lateral if abs(v)>1.),None)
             if side is None:continue
             choices.append((float(distance[k]),main['fid'],dict(label=label,approach=approach.tolist(),

@@ -23,6 +23,7 @@ import time
 import numpy as np
 
 import fast
+import dmath
 
 log = logging.getLogger("earthd.l0roads")
 
@@ -60,7 +61,7 @@ def corridors(frame, feats_list, urban_fn, lat, lon):
     la0, la1 = float(np.min(lat)), float(np.max(lat))
     lo0, lo1 = float(np.min(lon)), float(np.max(lon))
     m_lat = MARGIN_M / 111320.0
-    m_lon = m_lat / max(math.cos(math.radians((la0 + la1) / 2)), 1e-6)
+    m_lon = m_lat / max(dmath.cos(math.radians((la0 + la1) / 2)), 1e-6)
     la0, la1, lo0, lo1 = la0 - m_lat, la1 + m_lat, lo0 - m_lon, lo1 + m_lon
     rings, params = [], []
     seen = set()

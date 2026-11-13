@@ -12,6 +12,7 @@ import logging
 import numpy as np
 
 import fast
+import dnp
 
 log = logging.getLogger("earthd.powerlines")
 
@@ -185,7 +186,7 @@ def _off_roads(frame, md, e, n, ll, clear_m=None):
         return got
     ang = 2.0 * np.pi * np.arange(CLEAR_DIRS) / CLEAR_DIRS
     rings = np.arange(CLEAR_STEP_M, CLEAR_SEARCH_M + 1e-6, CLEAR_STEP_M)
-    around = (rings[:, None, None] * np.stack([np.cos(ang), np.sin(ang)], -1)[None]).reshape(-1, 2)
+    around = (rings[:, None, None] * np.stack([dnp.cos(ang), dnp.sin(ang)], -1)[None]).reshape(-1, 2)
     for i in range(len(e)):
         lines = gasstations.drive_lines(frame, roads_of(mapcells.cell_of(float(ll[i, 1]), float(ll[i, 0]))),
                                         float(e[i]), float(n[i]), 30.0 + CLEAR_SEARCH_M)

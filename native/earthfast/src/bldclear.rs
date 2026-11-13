@@ -15,6 +15,7 @@
 //! Outcomes per footprint (status): CLEAR (no deeper than tol), TRIMMED (the cut ring), DEEP (it would lose more
 //! than max_share or fall under MIN_AREA_M2), UNCLEAN (a cut not mostly road, or a box side not facing the road),
 //! THROUGH (the road's centre line runs through it, MIN_SIDE_SHARE of it on each side: a passage, not a trim).
+use crate::dm::Dm;
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -134,7 +135,7 @@ impl Segs {
             let d = [b[0] - a[0], b[1] - a[1]];
             let l2 = d[0] * d[0] + d[1] * d[1];
             let t = if l2 > 1e-12 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
-            let dist = (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1]);
+            let dist = (p[0] - a[0] - t * d[0]).dhypot(p[1] - a[1] - t * d[1]);
             let v = self.half[k] - dist;
             if v > best.0 {
                 best = (v, k);
@@ -206,7 +207,7 @@ fn outline(p: &[Pt], step: f64) -> Vec<Pt> {
     let mut out = Vec::new();
     for i in 0..n {
         let (a, b) = (p[i], p[(i + 1) % n]);
-        let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
         let k = ((l / step).ceil() as usize).max(1);
         for j in 0..k {
             let t = j as f64 / k as f64;
@@ -254,11 +255,11 @@ fn clip_half(p: &[Pt], o: Pt, n: Pt, c: f64) -> Vec<Pt> {
     // (consecutive duplicates out)
     let mut clean: Vec<Pt> = Vec::with_capacity(out.len());
     for q in out {
-        if clean.last().is_none_or(|l: &Pt| (l[0] - q[0]).hypot(l[1] - q[1]) > 1e-6) {
+        if clean.last().is_none_or(|l: &Pt| (l[0] - q[0]).dhypot(l[1] - q[1]) > 1e-6) {
             clean.push(q);
         }
     }
-    while clean.len() > 1 && (clean[0][0] - clean[clean.len() - 1][0]).hypot(clean[0][1] - clean[clean.len() - 1][1]) <= 1e-6 {
+    while clean.len() > 1 && (clean[0][0] - clean[clean.len() - 1][0]).dhypot(clean[0][1] - clean[clean.len() - 1][1]) <= 1e-6 {
         clean.pop();
     }
     clean
@@ -266,7 +267,7 @@ fn clip_half(p: &[Pt], o: Pt, n: Pt, c: f64) -> Vec<Pt> {
 
 /// m of segment a..b inside ring p (sampled every step m).
 fn inside_run(p: &[Pt], a: Pt, b: Pt, step: f64) -> f64 {
-    let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+    let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
     let k = ((l / step).ceil() as usize).max(1);
     (0..k).filter(|&j| {
         let t = (j as f64 + 0.5) / k as f64;
@@ -300,10 +301,10 @@ fn clear_one(ring: &[Pt], boxed: bool, s: &Segs, tol: f64, margin: f64, max_shar
         }
         cuts += 1;
         let (a, b) = (s.a[k], s.b[k]);
-        let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
         // the segment's normal (a degenerate one: away from the deepest point's foot)
         let n: Pt = if l > 1e-9 { [-(b[1] - a[1]) / l, (b[0] - a[0]) / l] } else {
-            let d = (q[0] - a[0]).hypot(q[1] - a[1]).max(1e-9);
+            let d = (q[0] - a[0]).dhypot(q[1] - a[1]).max(1e-9);
             [(q[0] - a[0]) / d, (q[1] - a[1]) / d]
         };
         // the footprint's side of the centre line: the one holding more of it; a road through it is a passage
@@ -320,7 +321,7 @@ fn clear_one(ring: &[Pt], boxed: bool, s: &Segs, tol: f64, margin: f64, max_shar
             let mut best = (0.0f64, usize::MAX);
             for i in 0..4 {
                 let (e0, e1) = (p[i], p[(i + 1) % 4]);
-                let el = (e1[0] - e0[0]).hypot(e1[1] - e0[1]).max(1e-9);
+                let el = (e1[0] - e0[0]).dhypot(e1[1] - e0[1]).max(1e-9);
                 let o = [(e1[1] - e0[1]) / el, -(e1[0] - e0[0]) / el];      // outward (counter-clockwise ring)
                 let dot = o[0] * kn[0] + o[1] * kn[1];
                 if dot < best.0 {
@@ -332,7 +333,7 @@ fn clear_one(ring: &[Pt], boxed: bool, s: &Segs, tol: f64, margin: f64, max_shar
             }
             let i = best.1;
             let (e0, e1) = (p[i], p[(i + 1) % 4]);
-            let el = (e1[0] - e0[0]).hypot(e1[1] - e0[1]);
+            let el = (e1[0] - e0[0]).dhypot(e1[1] - e0[1]);
             let o = [(e1[1] - e0[1]) / el, -(e1[0] - e0[0]) / el];
             let f = |x: &Pt| (x[0] - a[0]) * kn[0] + (x[1] - a[1]) * kn[1];
             let t = ((c - f(&e0)) / -best.0).max((c - f(&e1)) / -best.0).max(0.0);
@@ -427,7 +428,7 @@ fn pieces_one(ring: &[Pt], s: &Segs, tol: f64, margin: f64, step: f64) -> Option
             return None;
         }
         let (a, b) = (s.a[k], s.b[k]);
-        let l = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let l = (b[0] - a[0]).dhypot(b[1] - a[1]);
         let u: Pt = if l > 1e-9 { [(b[0] - a[0]) / l, (b[1] - a[1]) / l] } else { [1.0, 0.0] };
         let n: Pt = [-u[1], u[0]];
         let c = s.half[k] + margin;

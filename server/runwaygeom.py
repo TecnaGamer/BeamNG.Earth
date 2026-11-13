@@ -44,6 +44,7 @@ import math
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+import dnp
 
 import geodesy
 
@@ -83,7 +84,7 @@ PROTECT_M = 30.0            # m: a later runway fades out over this distance aro
 MAX_REACH = max(l.strip_half for l in LIMITS.values()) + B_MAX + 10.0   # m beyond the runway: footprints
 TARGET_TOL = (10.0, 0.03)   # data end elevations agree with the DEM: |difference| <= max(10 m, 3 % L)
 TARGET_BIAS = 60.0          # m: larger data-DEM offsets are a datum or data error: DEM ends
-LAMBDAS = 10.0 ** np.arange(18.0, -0.01, -0.25)     # tried from the stiffest down
+LAMBDAS = dnp.power(10.0, np.arange(18.0, -0.01, -0.25))     # tried from the stiffest down
 
 
 def runway_code(length_m):
@@ -198,9 +199,9 @@ def _smooth(r, ds, lam):
     d2[i, i], d2[i, i + 1], d2[i, i + 2] = 1.0, -2.0, 1.0
     d2 /= ds * ds
     di = d2[:, 1:-1]                    # x_0 = x_{n-1} = 0
-    a = np.eye(k) + lam * (di.T @ di)
+    a = np.eye(k) + lam * (dnp.matmul(di.T, di))
     x = np.zeros(n)
-    x[1:-1] = np.linalg.solve(a, r[1:-1])
+    x[1:-1] = dnp.solve(a, r[1:-1])
     return x
 
 
@@ -243,7 +244,7 @@ def _end_level(s, d, at_le, span):
     if len(x) < 2:
         return float(y.mean())
     xm, ym = x.mean(), y.mean()
-    vx = float(((x - xm) ** 2).sum())
+    vx = float((dnp.sq(x - xm)).sum())
     k = float(((x - xm) * (y - ym)).sum()) / vx if vx > 0 else 0.0
     return float(ym - k * xm)
 
@@ -264,7 +265,7 @@ def plan(rw, elev_fn, order=0, dem_res=None):
     lat, lon = g.latlon(np.repeat(s, len(ts)), np.tile(ts, n))
     # each cross-section sample gives the centreline height it implies with this runway's crown (the
     # DEM of a real, crowned runway is lower at the edges); the median of the 5 resists a stray pixel
-    crown_drop = (CROWN_PAVED if rw.paved else CROWN_UNPAVED) * (np.sqrt(ts * ts + CROWN_ROUND ** 2) - CROWN_ROUND)
+    crown_drop = (CROWN_PAVED if rw.paved else CROWN_UNPAVED) * (np.sqrt(ts * ts + CROWN_ROUND * CROWN_ROUND) - CROWN_ROUND)
     d = np.median(np.asarray(elev_fn(lat, lon), np.float64).reshape(n, len(ts)) + crown_drop, axis=1)
     span = max(ds, min(50.0, L / 10.0))
     dem_le, dem_he = _end_level(s, d, True, span), _end_level(s, d, False, span)
@@ -336,7 +337,7 @@ def plan(rw, elev_fn, order=0, dem_res=None):
              "overall_grade_pct": round(100 * overall, 3), "max_grade_pct": round(100 * float(np.abs(grade).max()), 3),
              "max_grade_quarters_pct": round(100 * float(max(np.abs(grade[:q]).max(), np.abs(grade[-q:]).max())), 3),
              "min_radius_m": round(1.0 / float(np.abs(curv).max()), 0) if np.abs(curv).max() > 0 else None,
-             "dem_rmse_m": round(float(np.sqrt(np.mean((z - d) ** 2))), 3),
+             "dem_rmse_m": round(float(np.sqrt(np.mean(dnp.sq(z - d)))), 3),
              "dem_max_dev_m": round(float(np.abs(z - d).max()), 3),
              "data_dem_le_m": None if rw.le.elev_source != "data" else round(rw.le.elev_m - dem_le, 2),
              "data_dem_he_m": None if rw.he.elev_source != "data" else round(rw.he.elev_m - dem_he, 2),
@@ -373,12 +374,12 @@ def _core(p, s, t):
     zc = p.profile(sc)
     a = CROWN_ROUND
     half = g.width / 2
-    run = zc - g.crown * (np.sqrt(np.minimum(tc, half) ** 2 + a * a) - a)
+    run = zc - g.crown * (np.sqrt(dnp.sq(np.minimum(tc, half)) + a * a) - a)
     return run - SHOULDER_SLOPE * np.maximum(tc - half, 0.0)
 
 
 def _paved_dist(g, s, t):
-    return np.hypot(np.maximum(np.abs(t) - g.paved_half, 0.0), np.maximum(np.maximum(-s, s - g.length), 0.0))
+    return dnp.hypot(np.maximum(np.abs(t) - g.paved_half, 0.0), np.maximum(np.maximum(-s, s - g.length), 0.0))
 
 
 def _strip(p, s, t, dem):
@@ -394,7 +395,7 @@ def _zone_weight(p, s, t):
     """(zone code, weight) at runway-local points."""
     g = p.geom
     a = np.abs(t)
-    b = np.hypot(np.maximum(a - g.strip_half, 0.0),
+    b = dnp.hypot(np.maximum(a - g.strip_half, 0.0),
                  np.maximum(np.maximum(-s - g.strip_end, s - g.length - g.strip_end), 0.0))
     x = np.clip(b / p.blend, 0.0, 1.0)
     w = 1.0 - x * x * (3.0 - 2.0 * x)

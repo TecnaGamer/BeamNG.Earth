@@ -2,6 +2,7 @@
 //! furniture's whole collider boxes kept clear of every carriageway segment at its level, and props / wires kept out
 //! of the decks over them. PR #629 wrote both in numpy; per call they were a few array ops on a handful of segments
 //! each, ~2.3 s more over 36 Los Angeles road tiles (tileprobe, 2026-11-04). The same rules here, a segment grid each.
+use crate::dm::Dm;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -142,7 +143,7 @@ impl Clearance {
     fn clear(&self, ox: f64, oy: f64, oz: f64, yaw: f64, boxes: PyReadonlyArray2<f64>, margin: f64, headroom: f64)
              -> bool {
         let boxes = boxes.as_array();
-        let (c, s) = (yaw.cos(), yaw.sin());
+        let (c, s) = (yaw.dcos(), yaw.dsin());
         let reach = self.max_half + margin;
         let mut guard = self.seen.lock().unwrap();
         let (seen, stamp) = &mut *guard;
@@ -232,7 +233,7 @@ impl DeckLevels {
             let l2 = (dx * dx + dy * dy).max(1e-12);
             let t = (((x - a[0]) * dx + (y - a[1]) * dy) / l2).clamp(0.0, 1.0);
             let (qx, qy) = (a[0] + t * dx, a[1] + t * dy);
-            if (qx - x).hypot(qy - y) < self.reach[i] {
+            if (qx - x).dhypot(qy - y) < self.reach[i] {
                 out.push(a[2] + t * (b[2] - a[2]));
             }
         }
