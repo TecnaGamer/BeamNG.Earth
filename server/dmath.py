@@ -16,7 +16,7 @@ import fast
 from math import (ceil, copysign, degrees, e, fabs, floor, fmod, hypot, inf, isclose, isfinite, isinf,  # noqa: F401
                   isnan, nan, pi, radians, sqrt, tau, trunc)
 
-_ef = fast.native(262, "dmath")
+_ef = fast.native(264, "dmath")
 sin, cos, tan = _ef.dm_sin, _ef.dm_cos, _ef.dm_tan
 asin, acos, atan, atan2 = _ef.dm_asin, _ef.dm_acos, _ef.dm_atan, _ef.dm_atan2
 sinh, cosh, tanh = _ef.dm_sinh, _ef.dm_cosh, _ef.dm_tanh

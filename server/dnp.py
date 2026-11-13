@@ -18,7 +18,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 import fast
 
-_ef = fast.native(262, "dnp")
+_ef = fast.native(264, "dnp")
 
 _ATAN2, _POW, _HYPOT = 32, 33, 34
 
