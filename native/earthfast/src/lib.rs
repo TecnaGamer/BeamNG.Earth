@@ -18,6 +18,7 @@ mod spaceclouds;
 mod cdaez;
 mod clearance;
 mod f32z;
+mod blockstore;
 mod packz;
 mod gpu;
 mod traffic;
@@ -6359,6 +6360,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     bnwt::register(m)?;
     // 273 (269-272 kept for other branches): bnwt FORMAT 2 (no cell in a tile, the cell's edges coded: open-sea tiles
     // deduplicated, run-length directory entries), bnwt_assign (a block's rows to its cells, as the parquet bbox test)
-    m.add("VERSION", 273)?;
+    // 274 (on 273; was 269 on its branch): the graded terrain blocks kept on disk (blockstore: blockstore_put_heights, blockstore_get_heights,
+    // blockstore_put_block, blockstore_get_block, blockstore_prune; server/blockcache.py)
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_prune, m)?)?;
+    m.add("VERSION", 274)?;
     Ok(())
 }

@@ -186,6 +186,24 @@ SEP_FULL_M = 4.0
 CORE_FADE_M = 2.0
 SIDE_FADE_M = 2.0           # m of (side - ahead) over which a segment counts as beside the point (ahead: its own road)
 RETRY_S = 60.0              # s before a cell whose road data failed is asked for again
+
+# Whether the plans this process holds for a cell were made complete (nothing they read failed or was missing:
+# Grader._plan_cell's persist rule), by cell key (z, x, y): True once known complete, False when made short, failed, or
+# read from another process's run file without its ".complete" marker. The disk block cache (blockcache.py) keeps a
+# block only when every cell whose plans can reach it is known complete: plans made short and kept in memory for the
+# session raise no fault when a later block reads them.
+_PLANS_COMPLETE = {}
+
+
+def _note_plans(key, complete):
+    _PLANS_COMPLETE[(int(key[0]), int(key[1]), int(key[2]))] = bool(complete)
+
+
+def plans_complete(keys):
+    """Are the plans of every cell of keys held by this process and known complete (_PLANS_COMPLETE)?"""
+    return all(_PLANS_COMPLETE.get((int(k[0]), int(k[1]), int(k[2]))) is True for k in keys)
+
+
 PLAN_SLOW_S = 60.0          # s: a cell's plans still being made this long: its process's stacks to the log (stackdump)
 
 # Junctions: a side road's end takes the height of the road it joins (snap_junctions; mpsteppe's PR #290)
@@ -2213,6 +2231,7 @@ class _Planner:
         if got is not None:
             return got
         if failed is not None and time.monotonic() - failed < RETRY_S:
+            _note_plans(key, False)
             return []               # offline: no block waits on the same failing fetch again
         import xproc
         xproc.check_cancel()        # (a block / road tile of a place a teleport left: not planned for it)
@@ -2251,7 +2270,13 @@ class _Planner:
                 finally:
                     watch.cancel()
             if got is None:
+                _note_plans(key, False)
                 return []
+            if shared is not None:      # (another process's: complete when the cache says so)
+                known = getattr(self.shared, "known_complete", None)
+                _note_plans(key, known is not None and known(key))
+            else:
+                _note_plans(key, revisit.thread_faults() == f0 and revisit.thread_lidar_faults() == l0)
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
                 self.shared.store(key, *got, persist=revisit.thread_faults() == f0
                                   and revisit.thread_lidar_faults() == l0)

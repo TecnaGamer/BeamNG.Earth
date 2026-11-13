@@ -172,6 +172,15 @@ class PlanCache:
             self.stats["read"] += 1
         return plans, keeps, covers, opens, decks
 
+    def known_complete(self, key):
+        """Were cell key's plans as load() reads them made complete? This run's file only with its ".complete" marker
+        (store: written after the file, and only for complete plans); the revisit cache's and the baked packs' copies
+        always (only complete plans are kept there). Unsure: False (grading._PLANS_COMPLETE, the disk block cache)."""
+        p = self._path(key)
+        if os.path.exists(p):
+            return os.path.exists(p + ".complete")
+        return True
+
     def _revisit_key(self, key):
         import revisit
         import roadz

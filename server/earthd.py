@@ -87,6 +87,7 @@ import dnp
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
+import blockcache as blockcachemod  # noqa: E402
 import terraintex as terraintexmod  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
@@ -3899,6 +3900,19 @@ class Server:
         keep = {}
         g = None if provisional else self.grader_for(anchor)
         c0 = time.thread_time()
+        bc = None
+        if not provisional:     # (the disk's copy of a graded block: blockcache.py)
+            t1 = time.perf_counter()
+            bc = blockcachemod.begin(self.cache_dir, anchor.frame, anchor.hm_zoom, cx, cy, self.layout.block, q,
+                                     blockcachemod.settings(g is not None, self.mapdata, self.road_widths, self.surface,
+                                                            self.sea, self.airports, getattr(self, "lids", None)),
+                                     self.mapdata, self.surface, anchor.chunks)
+            got = (bc.hit(self.out_dir, self.hm_name((anchor.id, cx, cy)), self.ter_name((anchor.id, cx, cy)),
+                          ground_at, self.surface is not None) if bc is not None else None)
+            if got is not None:
+                got["stages"] = {"heights": time.perf_counter() - t0, "blockCache": time.perf_counter() - t1,
+                                 "newShare": 0.0}
+                return self._finish_heightmap(anchor, cx, cy, got, t0, base, urgent=True, ground=ground)
 
         grade_s = [0.0, 0.0]            # wall, this thread's CPU (the rest: waiting for map data, the interpreter)
         part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
@@ -3940,7 +3954,7 @@ class Server:
                                   size=self.layout.block, keep=keep, chunks=None if provisional else anchor.chunks,
                                   ground_at=ground_at,
                                   post=l0roads.post_for(anchor.frame, self.surface, cx, cy, self.layout.block, l0_st)
-                                  if provisional else None)
+                                  if provisional else None, disk=bc.disk if bc is not None else None)
         stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], "gradingCpu": grade_s[1],
                   "heightsCpu": time.thread_time() - c0, **part_s, **l0_st}
         idx = None
@@ -3976,11 +3990,17 @@ class Server:
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
             info["surfaceComplete"] = complete
             info["roadsComplete"] = roads_complete
+        pre = None if idx is None else idx.copy()      # (the block cache's: before the holes)
         if not provisional:
             idx = self._tunnel_holes(anchor, elev, keep, cx, cy, idx, info)
         info["ter"], mats = surfacemod.write_ter(self.out_dir, self.ter_name((anchor.id, cx, cy)), keep["qgrid"], idx)
         if mats is not None:          # the .ter's own material list (MATERIALS indices)
             info["mats"] = mats
+        if bc is not None:
+            t1 = time.perf_counter()
+            bc.finish(info, keep, pre, idx, g)
+            stages["blockCache"] = time.perf_counter() - t1
+            stages["chunksRead"] = float(bc.disk.read)
         info["stages"] = stages
         return self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True,       # (a teleport's, a first block:
                                       ground=ground)                                    # waited for)
@@ -4059,6 +4079,7 @@ class Server:
                             if railways.TUNNELS_ON and getattr(self, "plan_store", None) is not None else None))
         except Exception:
             log.exception("tunnel holes of block (%s, %s)", cx, cy)
+            revisitmod.fault()          # (one without them is not kept: blockcache.py)
             return idx
         import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
         under = railunderpass.holes(self.mapdata, anchor.frame, keep, cx, cy, heightmap.SQUARE, elev)
@@ -10514,6 +10535,8 @@ async def main_async(args):
         raise
     log.info("startup: opening the download cache")
     disk = cachemod.Cache(args.cache_dir, args.cache_cap)
+    blockcachemod.configure(disk.cap)       # (the block cache's share of the cap, for the workers too: before they start)
+    blockcachemod.warm()
     threading.Thread(target=prune_own_caches, args=(args.cache_dir, time.time()), daemon=True,
                      name="cache-prune").start()
     pacer.DUTY = args.background_duty
@@ -10998,6 +11021,12 @@ def prune_own_caches(cache_dir, started=None):
                      merged, left / 1e9)
     except Exception as e:
         log.warning("cache: revisit not cut back: %s", e)
+    try:
+        n, left = blockcachemod.prune(cache_dir)     # (the terrain blocks kept on disk: BNGE_BLOCKCACHE_MB)
+        if n:
+            log.info("cache: %s cut back: %d files removed, %.2f GB left", blockcachemod.SUBDIR, n, left / 1e9)
+    except Exception as e:
+        log.warning("cache: %s not cut back: %s", blockcachemod.SUBDIR, e)
     for sub, version in (("vegetation", vegetationmod.VERSION), ("seacarve", seacarvemod.VERSION),
                          ("roadwidth", roadwidthmod.WALLS_VERSION)):
         try:
