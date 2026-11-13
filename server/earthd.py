@@ -383,7 +383,7 @@ FAST_KEEP_S = 20.0              # ... and this long after it last was: a car the
                                 # hold, the edge guard) reports no speed, and its next block waited for its photo
                                 # again (5-10 s at 500 mph on a first visit, Indianapolis 2026-10-30: held half the time)
 TRASH_DIR = "trash"         # in the cache: folders of the game's user folder moved out to be deleted (_rmtree_outside)
-FAR_FIRST_HOLD_S = 120.0    # the least urgent far content waits at most this for a place's first far field
+FAR_FIRST_HOLD_S = 240.0    # the least urgent far content waits at most this for a place's first far field
 PROGRESS_S = 0.5            # load_progress at most this often (Connection.send_progress)
 ANCHOR_PROGRESS_S = 2.0     # first ground: phase heartbeat, independent of the worker's optional tile counts
 GROUND_WAIT_S = 90.0        # a block's photo still to be drawn again counts as loading this long at most
