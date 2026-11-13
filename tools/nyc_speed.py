@@ -325,9 +325,9 @@ USER_DIR = os.environ.get("BNGE_USER_DIR", os.path.expanduser("~/.local/share/Be
 def keepup_save(d):
     """The keep-up recorder's record (keepup.lua) saved, stopped, and copied to <d>/keepup.csv; its table printed."""
     import shutil
-    n = lua("local k = require('beamngEarth/keepup') local n = k.save('/temp/beamngEarth_keepup.csv') k.stop() "
+    n = lua("local k = require('beamngEarth/keepup') local n = k.save('/temp/bne_keepup.csv') k.stop() "
             "return n", timeout=120)
-    src = os.path.join(USER_DIR, "temp", "beamngEarth_keepup.csv")
+    src = os.path.join(USER_DIR, "temp", "bne_keepup.csv")
     for _ in range(20):
         if os.path.exists(src):
             break
@@ -348,7 +348,9 @@ def session(label, cache_dir=None):
         for pid in subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True).stdout.split():
             subprocess.run(["kill", pid])
     time.sleep(3)
-    subprocess.run(["sh", os.path.join(REPO, ".claude/devtools/session.sh"), label], env=env, timeout=900, check=True)
+    # (BNGE_SESSION_SH: the main checkout's helper, for a worktree without .claude/, with BNGE_SESSION_ROOT=<worktree>)
+    sh = os.environ.get("BNGE_SESSION_SH") or os.path.join(REPO, ".claude/devtools/session.sh")
+    subprocess.run(["sh", sh, label], env=env, timeout=900, check=True)
 
 
 def main():

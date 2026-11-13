@@ -257,7 +257,7 @@ function M.counts()
 end
 
 -- The record as CSV lines (kind first), positions as lat / lon (each row's anchor), written to path (the game's user
--- folder, e.g. '/temp/beamngEarth_keepup.csv'). Returns the line count.
+-- folder, e.g. '/temp/bne_keepup.csv': lower case, the game's file system lowers a new file's name). Returns the line count.
 function M.save(path)
   local out = {}
   local function ll(a, x, y)
@@ -297,7 +297,7 @@ function M.save(path)
     local la, lo = ll(r[5], r[3], r[4])
     out[#out + 1] = f('M,%.3f,%d,%.7f,%.7f,%.1f,%.1f,%d,%s,%s', r[1], r[2], la, lo, r[6], r[7], r[8], r[9], r[10])
   end
-  writeFile(path or '/temp/beamngEarth_keepup.csv', table.concat(out, '\n') .. '\n')
+  writeFile(path or '/temp/bne_keepup.csv', table.concat(out, '\n') .. '\n')
   return #out
 end
 
