@@ -140,5 +140,50 @@ class GpuDefaultTest(unittest.TestCase):
                 self.assertEqual(fast.gpu(), "Test GPU (Vulkan)", plat)
 
 
+
+class GpuOffTest(unittest.TestCase):
+    """fast.gpu_off (blockworker.init(gpu=False): the far-tile processes, earthd FAR_GPU): the process makes no GPU
+    device (~260 MB of each on Windows, 2026-11-12) and its kernels run on the CPU."""
+
+    def test_no_device_is_made_and_the_cpu_encodes(self):
+        import fast
+        import imagery
+        made = []
+        rgb = (np.arange(64 * 64 * 3, dtype=np.uint32).reshape(64, 64, 3) * 7 % 251).astype(np.uint8)
+        with mock.patch.object(fast, "_GPU", None), \
+                mock.patch.object(fast._ef, "gpu_name", lambda: made.append(1) or "Test GPU (Vulkan)"), \
+                mock.patch.object(imagery, "_BC1_GPU_FAILED", False), \
+                mock.patch.dict(fast.os.environ, {}, clear=False):
+            fast.os.environ.pop("BNGE_GPU", None)
+            fast.gpu_off()
+            self.assertIsNone(fast.gpu())
+            flags = []
+            real = fast._ef.dds_levels
+            with mock.patch.object(fast._ef, "dds_levels", lambda *a: flags.append(a[3]) or real(*a)):
+                data = imagery.encode_dds(rgb)
+            self.assertEqual(flags, [False], "the CPU's encoder asked for")
+            self.assertEqual(made, [], "no device looked for")
+            self.assertEqual(data[:4], b"DDS ")
+            self.assertEqual(data[imagery.DDS_HEADER:], bytes(real(rgb, imagery._TO_LIN, float(imagery.MIP_SHARPEN),
+                                                                   False)[0]))
+
+    def test_a_worker_started_without_the_gpu(self):
+        """blockworker.init(gpu=False) in a process of its own (the initializer as the far-tile pool runs it)."""
+        import subprocess
+        import tempfile
+        code = "; ".join((
+            "import sys, os", "sys.path.insert(0, sys.argv[1])", "os.environ.pop('BNGE_GPU', None)",
+            "import blockworker, fast",
+            "blockworker.init(sys.argv[2], True, False, False, False, False, None, 30, False, False, 0, None, "
+            "False, sys.argv[3] == 'on')",
+            "print('GPU', repr(fast._GPU), flush=True)", "os._exit(0)"))
+        server = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with tempfile.TemporaryDirectory() as d:
+            for mode, want in (("off", "GPU ''"), ("on", "GPU None")):      # (on: not looked for yet, free to make one)
+                r = subprocess.run([sys.executable, "-c", code, server, d, mode], capture_output=True, text=True,
+                                   timeout=120)
+                self.assertIn(want, r.stdout, (mode, r.stdout[-300:], r.stderr[-600:]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -575,6 +575,15 @@ def lean_processes(tier):
 
 
 FAR_ELASTIC = os.environ.get("BNGE_FAR_ELASTIC", "on") != "off"     # ... those past FAR_DRIVE only while used (pools.py)
+# The far-tile processes encode their textures (BC1, imagery.encode_dds) on the CPU: no GPU device in them. A device
+# was ~260 MB of every far-tile process, the ones of a burst too (Windows, NVIDIA, 2026-11-12: a process that had
+# built nothing yet 345 MB, 81 of it Python and the server's modules; the three of a drive 520-590 MB against
+# 250-360 MB one to two minutes in), for 1.4 ms of a 256 px texture and 6 ms of a 512 px one (2.8 -> 4.2 ms,
+# 10.4 -> 16.7 ms a texture with its mips) in a tile that takes 400-580 ms: a far field of 304 tiles 185 and 139 s
+# with it, 208 and 125 s without (the spread between runs). The server's own process and the block and photo
+# processes keep theirs (the BC7 photos, the colour seams: 0.14 -> 0.05 s and ~10 s of CPU each).
+# BNGE_FAR_GPU=on: a device in the far-tile processes too, as before.
+FAR_GPU = os.environ.get("BNGE_FAR_GPU", "off").lower() in ("on", "1", "true", "yes")
 
 
 class DynGate:
@@ -10441,7 +10450,7 @@ async def main_async(args):
                                 args.grading == "on" and args.roads == "on",
                                 args.road_widths == "on" and args.roads == "on", False, None,
                                 logging.getLogger().level, args.airports == "on", args.sea == "on", NICE_FAR,
-                                roadsmod.ROADS_IN_GROUND))
+                                roadsmod.ROADS_IN_GROUND, False, FAR_GPU))
         # the processes beyond the driving ones (the 3D map, the loading boost: Server.far_limit) only while used
         # (pools.ElasticPool; BNGE_FAR_ELASTIC=off: all of them for the session, as from 1.9.0 to 1.9.1)
         far_pool = (poolsmod.ElasticPool("far tile", far_base, far_n - far_base, **far_kw)
