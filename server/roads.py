@@ -12496,8 +12496,8 @@ class GeoTracker:
         if not ok:
             return 0
         for conn, m in held:
-            conn.send(m)
-        return len(held)
+            conn.send(m() if callable(m) else m)
+        return sum(1 for _c, m in held if not callable(m))
 
     def close(self):
         """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
@@ -12783,6 +12783,7 @@ class GeoTracker:
         c = res.get("content")
         ex = (res.get("exact") or {}) if aid == self.aid else {}
         again = key in self.redo and not res.get("stale")
+        held_content = False
         if again and c is not None:
             self.redo.discard(key)
             self.stats["redo"] += 1
@@ -12814,25 +12815,24 @@ class GeoTracker:
                     m["slots"] = slots
             if self.swap is not None and again:
                 self.swap_held.append((conn, m))    # (a tile the mod has: its content after the swap's commit)
+                held_content = True
             else:
                 conn.send(m)
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
-        sk = res.get("skin")
+        sk = sk0 = res.get("skin")
         if skin and sk is not None:
             h1 = (sk[1] or {}).get("h") if len(sk) > 1 else None
             if again and h1 is not None and self.skin_h.get(key) == h1 and key in self.skins:
                 sk = None               # (the same skin as the one the mod has)
             else:
                 self.skin_h[key] = h1
-        if skin and sk is not None:
-            self.skins.add(key)
-            self.stats["skins"] += 1
-            m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": sk[0]}
-            if self.swap is not None:   # (staged by the mod, committed with the swap's terrain)
-                m["swap"] = self.swap
-                self.swap_staged += 1
-            data = staging.inline_json(out_dir, sk[0]) if out_dir else None
+
+        def skin_msg(path, token=None):
+            m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": path}
+            if token is not None:       # (staged by the mod, committed with the swap's terrain)
+                m["swap"] = token
+            data = staging.inline_json(out_dir, path) if out_dir else None
             if data is not None:
                 m["data"] = data
             if pool is not None:
@@ -12841,7 +12841,18 @@ class GeoTracker:
                 slots = pool(conn, {w: n_ for w, n_ in names.items() if w != "json"})
                 if slots:
                     m["slots"] = slots
-            conn.send(m)
+            return m
+        if skin and sk is not None:
+            self.skins.add(key)
+            self.stats["skins"] += 1
+            if self.swap is not None:
+                self.swap_staged += 1
+            conn.send(skin_msg(sk[0], self.swap))
+        if held_content and skin and sk0 is not None:
+            # (the mod makes a tile anew for new content, its skin gone with the old one, roads.lua onGeoTile: this
+            # version's skin again right after the held content; the same skin the swap committed, or the one the mod
+            # had)
+            self.swap_held.append((conn, lambda path=sk0[0]: skin_msg(path)))
         for w in ex:
             self.shown.setdefault(key, {})[w] = aid
         self.stats["exact"] += len(ex)

@@ -745,6 +745,59 @@ class SwapTest(unittest.TestCase):
         self.assertEqual(tr.stats["redo"], len(sent))
         self.assertEqual(tr.stats["redo_same"], len(sent) - 2)
 
+    def test_a_swap_stages_the_skins_and_holds_the_content_with_its_skin_after(self):
+        """roads.GeoTracker in a generation swap (swap_begin .. swap_end): between them only skins go out, tagged with
+        the swap's token; a changed tile's content waits for the commit and its skin follows it again (the mod makes
+        a tile anew for new content, its skin gone with the old one: found in the game, the roads vanished after
+        the commit)."""
+        f = geodesy.EnuFrame(39.2834, -76.5934)
+        version = {"n": 1}
+        changed = set()
+
+        def build(aid, gx, gy, content, skin, exact):
+            v = version["n"] if (gx, gy) in changed else 1
+            return {"content": (f"/s/rg_{gx}_{gy}.json", 1, {"h": f"c{gx}_{gy}_{v}", "parts": {}}, []) if content else None,
+                    "skin": (f"/s/rs_{aid}_{gx}_{gy}.json", {"lift": 0.0, "h": f"s{gx}_{gy}_{v}"}) if skin else None,
+                    "exact": {}, "time": {}}
+        tr = roads.GeoTracker()
+        loop, conn = _Loop(), _Conn()
+
+        def settle():
+            for _ in range(80):
+                tr.on_pose(conn, 1, 0.0, 0.0, loop, build, frame=f)
+                if not tr.building and not tr.redo and all(k in tr.sent and k in tr.skins for k in tr.car):
+                    return
+            self.fail("the tracker did not settle")
+        settle()
+        sent = set(tr.sent)
+        n0 = len(conn.msgs)
+        version["n"] = 2
+        changed.update(sorted(sent)[:2])
+        tr.swap_begin(5)
+        tr.redo_all()
+        settle()
+        during = conn.msgs[n0:]
+        self.assertEqual([(m["type"], m.get("swap")) for m in during], [("roads_skin", 5)] * 2,
+                         "only the changed skins, staged; no content before the commit")
+        self.assertEqual(tr.swap_staged, 2)
+        n1 = len(conn.msgs)
+        self.assertEqual(tr.swap_end(True), 2)
+        after = conn.msgs[n1:]
+        self.assertEqual([(m["type"], m.get("swap")) for m in after],
+                         [("roads_tile", None), ("roads_skin", None)] * 2, "each content, its skin right after")
+        for a_, b_ in zip(after[0::2], after[1::2]):
+            self.assertEqual(a_["key"], b_["key"])
+        self.assertIsNone(tr.swap)
+        # a swap given up: nothing of it is sent
+        version["n"] = 3
+        tr.swap_begin(6)
+        tr.redo_all()
+        settle()
+        n2 = len(conn.msgs)
+        self.assertEqual(tr.swap_end(False), 0)
+        self.assertEqual(conn.msgs[n2:], [])
+        tr.close()
+
     def test_trees_sent_again_only_where_their_file_changed(self):
         d = tempfile.mkdtemp(prefix="bnge_staleveg_")
         self.addCleanup(shutil.rmtree, d, True)
