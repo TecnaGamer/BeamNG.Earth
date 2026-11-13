@@ -87,10 +87,32 @@ def warm(path):
         pass
 
 
+GAME_WAITS = (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)  # s between the tries of replace into the game's folder (~1.9 s in all)
+
+
 def replace(tmp, path):
     """os.replace(tmp, path), making path's folder again if it was deleted under us (the game or the player
     clearing its temp folder) instead of failing every write after it. On Windows a file going into the game's folder
-    is read once at once (warm)."""
+    is read once at once (warm), and one held there for a moment (the game reading the copy it has, a virus scanner:
+    PermissionError, WinError 5) is tried again GAME_WAITS: a block's surface mask replaced over the one the game was
+    showing failed the whole block (a provisional block and a graded one, Windows 11, 2026-11-13). The last try's
+    PermissionError goes to the caller."""
+    if staging_dir(path) is None:
+        return _replace_once(tmp, path)
+    for n, wait in enumerate(GAME_WAITS + (None,)):
+        try:
+            _replace_once(tmp, path)
+            if n:
+                log.info("%s was held (Windows: the game or a virus scanner): replaced at try %d",
+                         os.path.basename(path), n + 1)
+            return
+        except PermissionError:
+            if wait is None:
+                raise
+            time.sleep(wait)
+
+
+def _replace_once(tmp, path):
     _replace(tmp, path)
     if WARM_READ and staging_dir(path) is not None:
         warm(path)
@@ -165,7 +187,7 @@ def replace_cached(tmp, path):
     copy already there was kept."""
     for wait in REPLACE_WAITS + (None,):
         try:
-            replace(tmp, path)
+            _replace_once(tmp, path)        # (its own tries: not replace's too)
             return True
         except PermissionError:
             if wait is None:
