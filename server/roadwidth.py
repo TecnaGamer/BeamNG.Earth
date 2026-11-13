@@ -338,10 +338,14 @@ class RoadWidths:
 
 
     def clear_memory(self):
-        """Drop the walls and widths kept in memory (budget.maybe_shed)."""
+        """Drop the walls and widths kept in memory (budget.maybe_shed). The reframed segments too: each entry is good
+        only for the Walls object it was made from (_near_walls: hit[0] is w), so with the walls gone none of them
+        could be used again, and they stayed, REFRAMED float64 arrays and the Walls (their files' mappings) they hold,
+        until as many new ones had pushed them out (a shed left "walls 0, combos 0, reframed 64", 2026-11-12)."""
         with self.lock:
             self.walls.clear()
             self.combos.clear()
+            self.reframed.clear()
             self.memo.clear()
             self.caps.clear()
             self.near.clear()
