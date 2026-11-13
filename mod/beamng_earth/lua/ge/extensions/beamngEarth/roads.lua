@@ -1585,11 +1585,26 @@ function M.farGeoHidden(f, sub)
   return M.nearShowsBuildings(p.near, p.nearKey)
 end
 
+-- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Hidden now, or its road geotile (far buildings, a bridge
+-- piece) is here and still being made: it shows its own soon (a teleport's town: the far parts of every road geotile
+-- of the place came first and were hidden a few seconds later). At most LAZY_WAIT_MAX_S for a road geotile that does
+-- not get made.
+M.LAZY_WAIT_MAX_S = 20
+function M.farGeoWaits(f, sub)
+  if M.farGeoHidden(f, sub) then return true end
+  local p = f.parts[sub]
+  if f.kind == 'S' or not p or not p.near then return false end
+  local t = tiles[p.nearKey or geoKey(p.near)]
+  return t ~= nil and t.geo and not t.ghost and true or false
+end
+
 local function updateFarGeo(key, f)
   local shown = false
   for sub, p in pairs(f.parts) do
-    if not p.id and p.deferred and not M.farGeoHidden(f, sub) then
+    local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
+    if not p.id and p.deferred and (not waits or now() - p.deferred > M.LAZY_WAIT_MAX_S * 1000) then
       p.deferred = nil          -- (LAZY_FAR_PARTS: it would show now; made next, ahead of the other far parts)
+      p.waitedOut = waits or nil      -- (waited too long for its road geotile: made, shown or hidden by the rule)
       table.insert(farQ, 1, key .. '#' .. sub)
     end
     if p.id then
@@ -1660,8 +1675,8 @@ local function updateFar(gov)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
     local p = f and f.geo and sub and f.parts[sub]
-    if p and not p.id and anchorObj and M.LAZY_FAR_PARTS and M.farGeoHidden(f, sub) then
-      p.deferred = true         -- (hidden the moment it would be made: made once it would show, updateFarGeo)
+    if p and not p.id and anchorObj and M.LAZY_FAR_PARTS and not p.waitedOut and M.farGeoWaits(f, sub) then
+      p.deferred = p.deferred or now()  -- (hidden the moment it would be made: made once it would show, updateFarGeo)
       M.geoStats.farDeferred = (M.geoStats.farDeferred or 0) + 1
     elseif p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
       local t0 = now()
