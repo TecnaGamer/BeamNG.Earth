@@ -2713,8 +2713,16 @@ class Server:
         import roadz
         self.late_pool = pool
         self.late = latework.LateWork(self.late_build, self.late_kept, Server.late_cells, roadz.PROVIDER,
-                                      getattr(pool, "workers", 1), self.late_scan)
+                                      getattr(pool, "workers", 1), self.late_scan, self.late_idle)
         self.late.start()
+
+    def late_idle(self):
+        """Room for the late work: no anchor's first block building, the road processes not all busy (a cold visit's
+        36 road tiles round the car took 129 -> 171 s with the late builds beside them, Manhattan 2026-11-13)."""
+        if self.anchors_preparing:
+            return False
+        rp = self.road_pool
+        return rp is None or getattr(rp, "inflight", 0) < getattr(rp, "workers", 1)
 
     @staticmethod
     def late_cells(item):

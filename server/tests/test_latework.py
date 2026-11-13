@@ -313,5 +313,38 @@ class LateWorkTest(unittest.TestCase):
         self.assertEqual(built, [("c", 14, 1, 2)], "planned again once, kept")
 
 
+class LateIdleTest(unittest.TestCase):
+    def test_waits_for_room(self):
+        built, room = [], {"ok": False}
+        lw = latework.LateWork(lambda k: built.append(k) or True, lambda k: False, lambda k: [], None,
+                               idle=lambda: room["ok"])
+        with mock.patch.object(latework, "LATE_POLL_S", 0.02):
+            lw.note(1, 1)
+            time.sleep(0.2)
+            self.assertEqual(built, [], "built while the live work had no room")
+            room["ok"] = True
+            LateWorkTest.run_until(self, lw, lambda: built)
+        self.assertEqual(built, [("g", 1, 1)])
+
+
+class ServerGlueTest(unittest.TestCase):
+    """earthd.Server's late glue: the run's short plan cells found, an item's cells round it."""
+
+    def test_scan_and_cells(self):
+        import types
+        import earthd
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {plancache.RUN_ENV: "r1"}):
+            sig = os.path.join(d, "plans", "r1", plancache.FRAMES, "w1s1")
+            os.makedirs(sig)
+            for name in ("14_1_2.npz", "14_1_2.npz.short", "14_3_4.npz", "14_3_4.npz.complete"):
+                open(os.path.join(sig, name), "wb").close()
+            self.assertEqual(earthd.Server.late_scan(types.SimpleNamespace(cache_dir=d)), [("c", 14, 1, 2)])
+        self.assertIn(CELL, earthd.Server.late_cells(("c", *CELL)))
+        la, lo = CELL.center()
+        import geotiles
+        gx, gy = geotiles.tile_of(la, lo)[:2]
+        self.assertIn(CELL, earthd.Server.late_cells(("g", gx, gy)))
+
+
 if __name__ == "__main__":
     unittest.main()

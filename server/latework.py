@@ -59,8 +59,9 @@ class LateWork:
     whose prefetch state says when they are in; scan() -> items to note (the run's plan cells made short), asked
     every LATE_SCAN_S."""
 
-    def __init__(self, build, kept, cells, lidar=None, workers=1, scan=None):
+    def __init__(self, build, kept, cells, lidar=None, workers=1, scan=None, idle=None):
         self.build, self.kept, self.cells, self.lidar, self.scan = build, kept, cells, lidar, scan
+        self.idle = idle            # () -> bool: the live work leaves room (no build started meanwhile otherwise)
         self.where = None           # item -> m from the player (the server's latest focus), or None
         self.q = {}                 # item -> [tries, not before (monotonic)]
         self.busy = set()           # items being looked at / built now
@@ -171,6 +172,14 @@ class LateWork:
     def _loop(self):
         while not self.stop:
             self._scan()
+            try:
+                room = self.idle is None or self.idle()
+            except Exception:
+                room = True
+            if not room:            # (the player's current needs first: the near ring, a teleport's first block)
+                with self.cv:
+                    self.cv.wait(LATE_POLL_S)
+                continue
             with self.cv:
                 k = self._pick()
                 if k is None:
