@@ -2760,7 +2760,8 @@ class Server:
                 wrows, mapped_lamps = [], None
             # (on the graded ground, as blockworker.roads_tile)
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
-                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
+                                                 decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty)
+                                                 + blockworker._tile_decks(anchor.tunnels, cells, tx, ty), skip=skip,
                                                  cache_dir=os.path.dirname(self.out_dir), urban_fn=urban,
                                                  widths=self.road_widths, left_hand=self.left_hand(anchor))
             _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
