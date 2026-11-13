@@ -3023,6 +3023,7 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
         t0, c0 = time.perf_counter(), time.process_time()
         _dem_t.v = 0.0
     built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, tex["px"], tex.get("keep_fin"))
     if _TRACE:
         log.info("fartrace worker global %s: geometry %.0f ms (cpu %.0f, dem %.0f)", (z, x, y),
                  1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _dem_t.v)
@@ -3169,14 +3170,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
     built in this anchor's place before (and its texture) comes from the revisit cache."""
     import revisit
     mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
-    import surface as surfacemod
-    surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
-    if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
-        surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
-    k = revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
-                    mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
-                    bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
-                    *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
+    k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex)
     got = revisit.load(_s.cache_dir, "far", k)
     quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:
@@ -3184,7 +3178,10 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         if mask and "mask.dds" in blobs:
             revisit.place(blobs["mask.dds"], mask[0])       # (a kept file: hard-linked, nothing written)
         revisit.place(blobs["tex.dds"], tex["path"])
-        return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
+        built, got = _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
+        if not quick:
+            _keep_fin(k, built, tex, mask, got)
+        return built, got
     f0 = revisit.faults()
     built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
     if got is not None and revisit.ON and revisit.faults() == f0 and not quick:
@@ -3198,9 +3195,91 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
                           where=_where_enu(lat, lon, *tile.bbox, layout=repr(layout), md=_md_versions(),
                                            chain=tuple(tex["chain"]), tone=tex["tone"], leaf_on=tex["leaf_on"],
                                            season_mode=tex["season_mode"]))
+            _keep_fin(k, built, tex, mask, got)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: far tile %s not kept: %s: %s", (tile.level, tile.i, tile.j), type(e).__name__, e)
     return built, got
+
+
+def _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
+    """far_tile's revisit key: what the tile and its texture are built from (farrestore's items are keyed on it)."""
+    import revisit
+    import surface as surfacemod
+    mask = tex.get("mask") if tex.get("mask") and tex["mask"][1] else None
+    surf = ()           # (a near far tile has the roads painted into its photo: the photo's road surfaces in its key)
+    if tile.size / max(int(tex["px"]), 1) <= surfacemod.PHOTO_ROADS_MAX_TEXEL:
+        surf = _surf_tags(geodesy.EnuFrame(lat, lon), *tile.bbox)
+    return revisit.key("far", *_far_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout), tex["px"],
+                       mask[1] if mask else 0, tuple(tex["chain"]), tex["tone"], tex["leaf_on"], tex["season_mode"],
+                       bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
+                       *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()), *surf)
+
+
+def _keep_fin(k, built, tex, mask, got):
+    """The far tile's finished shape kept for the bulk restore (farrestore.py) when the server asked for it
+    (tex["keep_fin"]: its pooled names' length, given only when the texture is final) and none is kept yet."""
+    n = tex.get("keep_fin")
+    if not n or got is None:
+        return
+    import farrestore
+    fk = farrestore.key(k, tex["px"], n)
+    if farrestore.has(_s.cache_dir, fk):
+        return
+    import revisit
+    sides = {"tex.dds": revisit.Side(tex["path"])}
+    if mask and os.path.exists(mask[0]):
+        sides["mask.dds"] = revisit.Side(mask[0])
+    farrestore.keep(_s.cache_dir, fk, built, tex["px"], n, sides,
+                    {"tex_bytes": int(got[0]), "used": {str(a): int(c) for a, c in (got[1] or {}).items()}})
+
+
+def _keep_fin_global(z, x, y, zoom, ref_zoom, layout, built, px, n):
+    """A global far tile's shape kept for the bulk restore (its texture is the server's "fartex"): when its geometry
+    is kept (complete) and the server asked (n: its pooled names' length)."""
+    if not n:
+        return
+    import farrestore
+    import revisit
+    kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
+    fk = farrestore.key(kg, px, n)
+    if farrestore.has(_s.cache_dir, fk) or not revisit.has(_s.cache_dir, "fargeo", kg):
+        return
+    farrestore.keep(_s.cache_dir, fk, built, px, n)
+
+
+def far_restore_find(aid, lat, lon, specs):
+    """The far tiles of specs that the revisit cache holds finished (farrestore.py): per spec (loc, {side: kept
+    file}, texture px) or None. A spec: ("tile", tile, zoom, q, ref_zoom, with_sink, layout, tex, pxs) (far_tile's
+    arguments; tex with keep_fin) or ("global", z, x, y, zoom, ref_zoom, layout, pxs, name_len); pxs: the texture
+    sizes to look for, the first found. Nothing is read but the packs' indexes."""
+    import farrestore
+    import revisit
+    out = []
+    for sp in specs:
+        got = None
+        try:
+            if sp[0] == "tile":
+                _, tile, zoom, q, ref_zoom, with_sink, layout, tex, pxs = sp
+                for px in pxs:
+                    t = dict(tex, px=px)
+                    k = _far_tile_key(lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, t)
+                    got = farrestore.locate(_s.cache_dir, farrestore.key(k, px, tex["keep_fin"]))
+                    if got is not None:
+                        got = got + (px,)
+                        break
+            else:
+                _, z, x, y, zoom, ref_zoom, layout, pxs, n = sp
+                kg = revisit.key("fargeo", *_far_global_key(z, x, y, zoom, ref_zoom, layout))
+                for px in pxs:
+                    got = farrestore.locate(_s.cache_dir, farrestore.key(kg, px, n))
+                    if got is not None:
+                        got = got + (px,)
+                        break
+        except Exception as e:      # (that tile the usual way)
+            log.debug("far restore: %s: %s: %s", sp[:2], type(e).__name__, e)
+            got = None
+        out.append(got)
+    return out
 
 
 def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):

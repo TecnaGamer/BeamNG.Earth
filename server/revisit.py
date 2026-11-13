@@ -336,7 +336,7 @@ def compact(cache_dir, before=None):
 # session folder (place) and keeping one hard-links the session's file in (Side on store), so neither writes its
 # bytes again: every warm visit unzipped and wrote each far texture, ~0.5 GB of a warm 8 min drive at 150 mph
 # (2026-11-04, Discord: "hard on the drive"). Zips of before keep them inside and still load.
-SIDE_KINDS = frozenset({"far", "fartex"})
+SIDE_KINDS = frozenset({"far", "fartex", "farfin"})
 SIDE_NAMES = ("tex.dds", "mask.dds")
 SIDE_SUFFIXES = tuple("." + n for n in SIDE_NAMES)
 
@@ -496,6 +496,33 @@ def load(cache_dir, kind, k):
         except Exception:
             pass
     return got
+
+
+def locate(cache_dir, kind, k):
+    """(where item k's record lies (revisitpack.Store.locate), {side name: kept file}) of a pack item, or None (none
+    kept, kept in a zip of before, or one of its side files gone): for a native reader of many items at once
+    (farrestore). The side files are touched, as a load does."""
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
+        return None
+    try:
+        loc = revisitpack.store_for(cache_dir).locate(kind, k)
+    except Exception:
+        return None
+    if loc is None:
+        return None
+    sides = {}
+    if kind in SIDE_KINDS:
+        path = _path(cache_dir, kind, k)
+        for n in SIDE_NAMES:
+            sp = _side(path, n)
+            try:
+                os.utime(sp, None)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+            sides[n] = sp
+    return loc, sides
 
 
 def _with_sides(path, blobs, meta):

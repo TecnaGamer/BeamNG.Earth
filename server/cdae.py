@@ -438,7 +438,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False, open_tris=None):
+           collisions=None, close=False, open_tris=None, packed=None):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -467,7 +467,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     close: every mesh (drawn, lods, collisions) closed into a solid first (shells.close: skirts and sunk bottoms
     under its open bottoms, caps on its other openings); "under": its bottoms only (a tunnel's tubes: their mouths are
     the way in); False: as given. open_tris (m,) bool: overlay triangles (the road mesh's markings) left as they are,
-    not closed themselves."""
+    not closed themselves. packed: the body compressed (PACKED when None; False: the plain file, farrestore's kept
+    shapes)."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -595,7 +596,7 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     header = packb({"info": INFO, "compression": False, "bodysize": len(out),
                     "objectNames": [object_name] + [f"Colmesh{k}" for k in range(len(cols))]})
     data = struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
-    if PACKED:
+    if PACKED if packed is None else packed:
         fast.require(PACK_NATIVE, "compressed shapes (cdae_pack)")
         data = fast._ef.cdae_pack(data)
     return data

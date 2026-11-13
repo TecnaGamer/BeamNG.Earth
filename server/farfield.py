@@ -1383,6 +1383,15 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
     return os.path.getsize(path)
 
 
+def built_shape(built, material, tex_px=None, packed=None):
+    """The .cdae bytes write_built writes for a textured tile (farrestore: a worker's kept shape, packed=False with a
+    placeholder name, the session's name stamped in when it is put back)."""
+    assert len(built.positions) <= VERTS_MAX
+    uvs = built.planar if tex_px is None else imagery.gutter_uv(built.planar, tex_px)
+    return cdae.encode(built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=built.detail_uvs,
+                       material=material, tangent_uvs=built.planar, close=False, open_tris=None, packed=packed)
+
+
 def write_tile(path, frame, dem, tile, zoom, q=None, ref_zoom=None, fmt="cdae", cancelled=None, layout=V131):
     """Build and write one tile; returns the Built record, or None if cancelled meanwhile."""
     if cancelled is not None and cancelled.is_set():

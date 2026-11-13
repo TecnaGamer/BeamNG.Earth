@@ -73,6 +73,7 @@ mod perfclean;
 mod membudget;
 mod mdhtml;
 mod reportpack;
+mod farrestore;
 mod roadlanes;
 mod waytags;
 mod pmtiles;
@@ -6357,6 +6358,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
     // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
     bnwt::register(m)?;
-    m.add("VERSION", 268)?;
+    // 270: 268 and a cached place's far field put back in one call (farrestore: far_restore, far_shape_stamp;
+    // server/farrestore.py; 269 was left for the block chunk cache)
+    m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
+    m.add("VERSION", 270)?;
     Ok(())
 }
