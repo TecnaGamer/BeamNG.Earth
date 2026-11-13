@@ -381,11 +381,15 @@ class LandLookupTest(unittest.TestCase):
             md.fetcher.gate.set()
             ts.join(10)
             self.assertAlmostEqual(float(outs["r"][0][0]), -FakeBathy.BATHY, places=1)
-            ref = seacarve.SeaCarver(BathyMapData(), d2).water(*land)
+            rsc = seacarve.SeaCarver(BathyMapData(), d2)
+            ref = rsc.water(*land)
             for a, b in zip(out["r"], ref):
                 np.testing.assert_array_equal(a, b)
             self.assertFalse(sc._land, "the whole raster replaced the one without bathymetry")
             self.assertEqual(md.calls, calls, "built with the bathymetry from the first build's state, not again")
+            for ex in (sc._full_ex, sc._prefetch_ex, rsc._full_ex, rsc._prefetch_ex):
+                if ex is not None:              # (the land cells' background builds still writing in d / d2)
+                    ex.shutdown(wait=True)
 
 
 class PrefetchTest(unittest.TestCase):
