@@ -10,7 +10,9 @@ both APIs (v1.4 adds `layout=`); regenerate it from a tree with
 
 Only do that from v1.3.1 code: the point of the file is that the current code reproduces it. Floats are
 rounded before hashing (1e-4 m for geometry, 1e-6 for err / skirt / deltas), so a last-bit change in
-numpy cannot fail the test, but any real change does. (The message level: test_server and
+numpy cannot fail the test, but any real change does. (The uvs at 1e-5: with the deterministic maths of
+GitHub #1169 one uv of tile 0_1_-2, 0.3739225 to 3e-10, sat on a 1e-6 rounding boundary; their digests were rewritten
+at 5 decimals from the tree that reproduced the 6-decimal ones, 2026-11-12.) (The message level: test_server and
 test_protocol_agreement check that a 32-cell hello and far_tile carry no v1.4 field; status.backlog
 is the one additive field of M0.)
 """
@@ -99,7 +101,7 @@ def compute(server_dir):
                 built[t.key] = (t, b)
                 rec = {"pos": [_r(v, 4) for v in b.pos], "err": _r(b.err), "skirt": _r(b.skirt), "sink": _r(b.sink),
                        "tris": _h(np.ascontiguousarray(b.tris, np.int64).tobytes()),
-                       "positions": _hr(b.positions, 4), "normals": _hr(b.normals, 4), "uvs": _hr(b.uvs, 6),
+                       "positions": _hr(b.positions, 4), "normals": _hr(b.normals, 4), "uvs": _hr(b.uvs, 5),
                        "planar": _hr(b.planar, 6), "grid": _hr(b.grid, 4)}
                 for name, kw in (("cdae_tex", dict(material="bngEarthSat_1_x", textured=True, tex_px=256)),
                                  ("cdae", {}), ("dae", {})):

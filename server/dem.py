@@ -39,6 +39,8 @@ from PIL import Image
 import cache as cachemod
 import dsmground
 import fast
+import dmath
+import dnp
 import hkdtm as hkdtmmod
 import hklidar
 import hrdem as hrdemmod
@@ -186,8 +188,8 @@ class DemUnavailable(IOError):
 
 def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
-    c = 40075016.686 * max(math.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
-    return int(min(max_zoom, max(0, math.ceil(math.log2(c / (TILE * pixel_m))))))
+    c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
+    return int(min(max_zoom, max(0, math.ceil(dmath.log2(c / (TILE * pixel_m))))))
 
 
 def decode_terrarium(data, size):
@@ -211,8 +213,8 @@ HOLE_FILL_MAX_PX = 24        # Rotterdam district read 67 % zeros at z9-z11, ~1 
 def hole_px(z, y):
     """fill_holes' rounds for tile row y at zoom z: HOLE_FILL_M in its pixels, 2 .. HOLE_FILL_MAX_PX."""
     n = 2 ** z
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-    px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+    lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+    px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
     return int(min(HOLE_FILL_MAX_PX, max(2, round(HOLE_FILL_M / px))))
 
 
@@ -236,14 +238,14 @@ def _tile_xy(lat, lon, z):
     """Web-Mercator tile (x, y) holding (lat, lon) at zoom z."""
     n = 2 ** z
     x = int((lon + 180.0) / 360.0 * n) % n
-    y = int((1.0 - math.asinh(math.tan(math.radians(max(-MAX_LAT, min(MAX_LAT, lat))))) / math.pi) / 2.0 * n)
+    y = int((1.0 - dmath.asinh(dmath.tan(math.radians(max(-MAX_LAT, min(MAX_LAT, lat))))) / math.pi) / 2.0 * n)
     return x, max(0, min(n - 1, y))
 
 
 def _gauss2(a, sigma):
     """A separable Gaussian blur of a small 2-D grid (edges held), pure numpy."""
     r = max(1, int(round(3 * sigma)))
-    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k = dnp.exp(-0.5 * dnp.sq(np.arange(-r, r + 1) / sigma))
     k /= k.sum()
     p = np.pad(a, ((r, r), (0, 0)), mode="edge")
     a = sum(k[i] * p[i:i + a.shape[0]] for i in range(2 * r + 1))
@@ -342,7 +344,7 @@ class Dem:
         if lb is None or z not in BIAS_ZOOMS:
             return a
         n = 2 ** z
-        lat_of = lambda yy: math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
+        lat_of = lambda yy: math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * yy / n))))     # noqa: E731
         box = (lat_of(y + 1), x / n * 360.0 - 180.0, lat_of(y), (x + 1) / n * 360.0 - 180.0)
         s_, w_, n_, e_ = lb._index()[4]
         if box[0] > n_ or box[2] < s_ or box[1] > e_ or box[3] < w_:
@@ -368,7 +370,7 @@ class Dem:
             return a
         # the tile's own heights at the lidar points (bilinear on its pixel grid)
         fx = ((plon + 180.0) / 360.0 * n - x) * TILE - 0.5
-        fy = ((1 - np.arcsinh(np.tan(np.radians(plat))) / math.pi) / 2 * n - y) * TILE - 0.5
+        fy = ((1 - dnp.arcsinh(dnp.tan(np.radians(plat))) / math.pi) / 2 * n - y) * TILE - 0.5
         x0_ = np.clip(np.floor(fx).astype(np.int64), 0, TILE - 2)
         y0_ = np.clip(np.floor(fy).astype(np.int64), 0, TILE - 2)
         u = np.clip(fx - x0_, 0, 1)
@@ -467,8 +469,8 @@ class Dem:
         if not ok.any():
             return a
         n = 2 ** z
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-        px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+        px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
         w = hrdemmod.feather(ok, min(HRDEM_FEATHER_MAX_PX, max(2, round(HRDEM_FEATHER_M / px))))
         return (a * (1.0 - w) + h * w).astype(np.float32)
 
@@ -543,7 +545,7 @@ class Dem:
         n = 2 ** COVERAGE_ZOOM
         lat = max(-MAX_LAT, min(MAX_LAT, float(lat)))
         x = int((float(lon) + 180.0) / 360.0 * n) % n
-        y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+        y = int((1.0 - dmath.asinh(dmath.tan(math.radians(lat))) / math.pi) / 2.0 * n)
         if idx.get((x, max(0, min(n - 1, y))), GLOBAL_ZOOM) > GLOBAL_ZOOM:
             return False
         if (self.lidarbc is not None or HRDEM_NEAR) and hrdemmod.covers(GLOBAL_ZOOM, *_tile_xy(lat, lon, GLOBAL_ZOOM)):
@@ -704,7 +706,7 @@ class Dem:
         def miss(tz, tx, ty):
             return (name, tz, tx, ty), os.path.join(self.cache_dir, name, str(tz), str(tx), f"{ty}.404")
         if not tilepack.index_has(idx, pz, px, py):     # open sea: none of its tiles exists
-            self._remember_miss([miss(*tilepack.tile_at(pz, px, py, k, i)) for i in range((1 << k) ** 2)])
+            self._remember_miss([miss(*tilepack.tile_at(pz, px, py, k, i)) for i in range(dnp.sq(1 << k))])
             self._count("bngmt:unlisted")
             return None
         with self._lock:
@@ -786,7 +788,7 @@ class Dem:
             return False
         out = None
         misses = []
-        for i in range((1 << k) ** 2):
+        for i in range(dnp.sq(1 << k)):
             tz, tx, ty = tilepack.tile_at(pz, px, py, k, i)
             b = tiles.get(i)
             if b is None:
@@ -872,14 +874,14 @@ class Dem:
         filter also their z12 parents (a z15 tile without lidar is made from z12 ground)."""
         import mapcells
         dlat = radius_m / 111320.0
-        dlon = radius_m / (111320.0 * max(0.05, math.cos(math.radians(lat))))
+        dlon = radius_m / (111320.0 * max(0.05, dmath.cos(math.radians(lat))))
         x0, y0 = mapcells.tile_xy(lat + dlat, lon - dlon, zoom)
         x1, y1 = mapcells.tile_xy(lat - dlat, lon + dlon, zoom)
         cx, cy = mapcells.tile_xy(lat, lon, zoom)
         n = 2 ** zoom
         keys = [(zoom, x % n, y) for y in range(max(0, int(y0)), min(n - 1, int(y1)) + 1)
                 for x in range(int(math.floor(x0)), int(math.floor(x1)) + 1)]
-        keys.sort(key=lambda k: (k[1] + 0.5 - cx) ** 2 + (k[2] + 0.5 - cy) ** 2)
+        keys.sort(key=lambda k: dnp.sq(k[1] + 0.5 - cx) + dnp.sq(k[2] + 0.5 - cy))
         if self.ground_filter and zoom > GLOBAL_ZOOM:
             sh = zoom - GLOBAL_ZOOM
             parents = list(dict.fromkeys((GLOBAL_ZOOM, x >> sh, y >> sh) for _, x, y in keys))
@@ -1192,8 +1194,8 @@ class Dem:
                     sc = slice(TILE - m, TILE) if dx < 0 else slice(0, m) if dx > 0 else slice(0, TILE)
                     big[r0:r1, c0:c1] = nb[sr, sc]
         n = 2 ** GLOBAL_ZOOM
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
-        px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
+        px = 40075016.686 * dmath.cos(math.radians(lat)) / n / TILE
         g = dsmground.ground(big, px)
         self._count("dem:ground12")
         return np.ascontiguousarray(g[m:m + TILE, m:m + TILE])
@@ -1323,7 +1325,7 @@ class Dem:
         out = np.zeros(lat.shape, np.float64)
         valid = np.abs(lat) < polardem.FROM_LAT
         if not valid.all():                 # the polar caps: the Copernicus DEM (polardem.py)
-            px = 40075016.686 * math.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
+            px = 40075016.686 * dmath.cos(math.radians(MAX_LAT)) / (TILE * 2 ** zoom)
             try:
                 out[~valid] = self.polar().sample(lat[~valid], lon[~valid], px)
             except (netfetch.FetchError, OSError, ValueError) as e:
@@ -1337,7 +1339,7 @@ class Dem:
         fx = (lon / 360.0 + 0.5) * w
         fx -= w * np.round((fx - fx[0]) / w)    # unwrap across the antimeridian
         fx -= 0.5
-        fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
+        fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w - 0.5
         tx0, tx1 = int(math.floor(fx.min())) // TILE, int(math.floor(fx.max()) + 1) // TILE
         ty0 = max(0, int(math.floor(fy.min())) // TILE)
         ty1 = min(n - 1, int(math.floor(fy.max()) + 1) // TILE)

@@ -7,6 +7,7 @@
 //! the same products, sums and comparisons in its order (elementwise), numpy's pairwise sums, np.interp's formula,
 //! np.argmin's first minimum (a NaN first), the C library's hypot and pow (np.hypot, t ** 3), np.maximum's NaN, and
 //! Python's round(x, 1) as the key of a point where plan ends meet.
+use crate::dm::Dm;
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -39,7 +40,7 @@ fn clip(x: f64, lo: f64, hi: f64) -> f64 {
 fn arc(xy: &[[f64; 2]]) -> Vec<f64> {
     let mut s = vec![0.0f64; xy.len()];
     for k in 1..xy.len() {
-        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
     }
     s
 }
@@ -55,7 +56,7 @@ fn nearest(xy: &[[f64; 2]], z: &[f64], x: f64, y: f64) -> (f64, f64, usize, f64)
         let ll = nmax(dx * dx + dy * dy, 1e-12);
         let t = clip(((x - a[0]) * dx + (y - a[1]) * dy) / ll, 0.0, 1.0);
         let (qx, qy) = (a[0] + dx * t, a[1] + dy * t);
-        let d = (qx - x).hypot(qy - y);
+        let d = (qx - x).dhypot(qy - y);
         if i == 0 || d < bd || d.is_nan() {
             bi = i;
             bd = d;
@@ -189,7 +190,7 @@ fn weld_core(p: &Plans, abut: &[[bool; 2]], rank: &[i64], join_m: f64, max_step:
                             if i == j || rank[j] != rank[i] {
                                 continue;
                             }
-                            if (q[0] - q2[0]).hypot(q[1] - q2[1]) > join_m || (z2 - ze).abs() > max_step {
+                            if (q[0] - q2[0]).dhypot(q[1] - q2[1]) > join_m || (z2 - ze).abs() > max_step {
                                 continue;
                             }
                             if z2 > hi {
@@ -476,7 +477,7 @@ fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], ran
                 let c = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
                 let z_edge = nearest(kxy, kz, c[0], c[1]).1;
                 let mut k0 = j;
-                if (qq[j][0] - c[0]).hypot(qq[j][1] - c[1]) < 0.05 {
+                if (qq[j][0] - c[0]).dhypot(qq[j][1] - c[1]) < 0.05 {
                     k0 += 1;
                 }
                 if k0 >= qq.len() {
@@ -500,7 +501,7 @@ fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], ran
                     for (kk, &s) in sr.iter().enumerate() {
                         if s <= ramp {
                             let t = clip(s / ramp, 0.0, 1.0);
-                            let (t2, t3) = (t * t, t.powf(3.0));
+                            let (t2, t3) = (t * t, t.dpowf(3.0));
                             let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
                             let h10 = t3 - 2.0 * t2 + t;
                             let h01 = -2.0 * t3 + 3.0 * t2;
@@ -746,7 +747,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
             if n < 2 {
                 continue;
             }
-            let seg_ok: Vec<bool> = q.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) > dupe_m)
+            let seg_ok: Vec<bool> = q.windows(2).map(|w| (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1]) > dupe_m)
                 .collect();
             if seg_ok.iter().all(|&v| v) {
                 rows.push(Row { k: j, xy: q.to_vec(), z: zz.to_vec(),
@@ -758,7 +759,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
             let mut keep = vec![0usize];
             for i in 1..n {
                 let l = *keep.last().unwrap();
-                if (q[i][0] - q[l][0]).hypot(q[i][1] - q[l][1]) > dupe_m {
+                if (q[i][0] - q[l][0]).dhypot(q[i][1] - q[l][1]) > dupe_m {
                     keep.push(i);
                 } else {
                     *keep.last_mut().unwrap() = i;
@@ -850,7 +851,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
             let m = row.xy.len();
             for (e, (q, nb)) in [(row.xy[0], row.xy[1]), (row.xy[m - 1], row.xy[m - 2])].into_iter().enumerate() {
                 let d = [q[0] - nb[0], q[1] - nb[1]];
-                let ln = d[0].hypot(d[1]);
+                let ln = d[0].dhypot(d[1]);
                 if ln > 1e-9 {
                     let zq = if e == 0 { row.z[0] } else { row.z[m - 1] };
                     items.push((q, (r, [d[0] / ln, d[1] / ln], zq, rk)));
@@ -929,7 +930,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
             let m = row.xy.len();
             for (e, (q, nb)) in [(row.xy[0], row.xy[1]), (row.xy[m - 1], row.xy[m - 2])].into_iter().enumerate() {
                 let d = [q[0] - nb[0], q[1] - nb[1]];
-                let ln = d[0].hypot(d[1]);
+                let ln = d[0].dhypot(d[1]);
                 if ln > 1e-9 {
                     items.push((q, (r, e, [d[0] / ln, d[1] / ln])));
                 }
@@ -974,7 +975,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
                         }
                         if !has_len[m] {
                             let hy: Vec<f64> = rows[m].xy.windows(2)
-                                .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).collect();
+                                .map(|w| (w[1][0] - w[0][0]).dhypot(w[1][1] - w[0][1])).collect();
                             lens[m] = np_sum(&hy);
                             has_len[m] = true;
                         }

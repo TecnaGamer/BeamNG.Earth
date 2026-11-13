@@ -34,6 +34,7 @@ import threading
 import time
 
 import numpy as np
+import dnp
 
 log = logging.getLogger("earthd.roadsurf")
 
@@ -274,7 +275,7 @@ def _tile_xy(lat, lon, z=ZOOM):
     n = 2.0 ** z
     lat = np.radians(np.asarray(lat, np.float64))
     x = (np.asarray(lon, np.float64) + 180.0) / 360.0 * n
-    y = (1.0 - np.arcsinh(np.tan(lat)) / math.pi) / 2.0 * n
+    y = (1.0 - dnp.arcsinh(dnp.tan(lat)) / math.pi) / 2.0 * n
     return np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
 
 

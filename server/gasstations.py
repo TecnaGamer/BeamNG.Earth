@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.gasstations")
 
@@ -211,8 +213,8 @@ def merge(ps, merge_m=MERGE_M):
     compatible with every pin of the other (an unbranded pin between a Shell and a Sunoco across a street joins one of
     them, not both: review I2)."""
     ps = sorted(ps, key=lambda p: p.id)
-    pairs = sorted(((a.x - b.x) ** 2 + (a.y - b.y) ** 2, i, j) for i, a in enumerate(ps) for j, b in enumerate(ps)
-                   if i < j and (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= merge_m ** 2)
+    pairs = sorted((dnp.sq(a.x - b.x) + dnp.sq(a.y - b.y), i, j) for i, a in enumerate(ps) for j, b in enumerate(ps)
+                   if i < j and dnp.sq(a.x - b.x) + dnp.sq(a.y - b.y) <= merge_m * merge_m)
     group = {i: [i] for i in range(len(ps))}
     of = list(range(len(ps)))
     for _, i, j in pairs:
@@ -301,7 +303,7 @@ ROAD_SLACK_M = 20.0         # a canopy may face any public road this much farthe
 
 def _area(ring):
     x, y = ring[:, 0], ring[:, 1]
-    return 0.5 * abs(float(np.dot(x[:-1], y[1:]) - np.dot(y[:-1], x[1:])))
+    return 0.5 * abs(float(dnp.dot(x[:-1], y[1:]) - dnp.dot(y[:-1], x[1:])))
 
 
 def _centre(ring):
@@ -323,7 +325,7 @@ def _nearest_on(lines, p):
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
         q = a + d * t[:, None]
-        dist = np.hypot(*(q - p).T)
+        dist = dnp.hypot(*(q - p).T)
         i = int(np.argmin(dist))
         if dist[i] < best[1]:
             best = (q[i], float(dist[i]), k)
@@ -351,7 +353,7 @@ def find_shop(st, blds):
     for b in blds:
         if b.cls in ROOF_CLASSES or b.cls in NOT_SHOP_CLASSES:
             continue
-        d = float(np.hypot(*(_centre(b.ring) - p)))
+        d = float(dnp.hypot(*(_centre(b.ring) - p)))
         if d <= SHOP_SEARCH_M:
             near.append((not _named(b, st), b.src in ML_SOURCES, d, b.id, b))
         elif (not near and _area(b.ring) >= TRAVEL_STORE_M2
@@ -444,7 +446,7 @@ def _home_shop(st, blds, roads):
         if b.cls not in HOME_CLASSES or (b.height is not None and np.isfinite(b.height)
                                          and b.height > CANOPY_MAX_H_M):
             continue
-        d = float(np.hypot(*(_centre(b.ring) - p)))
+        d = float(dnp.hypot(*(_centre(b.ring) - p)))
         if d <= SHOP_SEARCH_M and any(_gap(r.ring, b.ring) <= CANOPY_GAP_M
                                       and not _across(_centre(b.ring), _centre(r.ring), roads) for r in roofs):
             near.append((d, b.id, b))
@@ -532,7 +534,7 @@ def find_canopy(st, shop, blds, roads):
         if b.height is not None and np.isfinite(b.height) and b.height > CANOPY_MAX_H_M:
             continue
         c = _centre(b.ring)
-        if float(np.hypot(*(c - sc))) > CANOPY_SEARCH_M:
+        if float(dnp.hypot(*(c - sc))) > CANOPY_SEARCH_M:
             continue
         area = _area(b.ring)
         if not CANOPY_AREA_M2[0] <= area <= CANOPY_AREA_M2[1]:
@@ -545,7 +547,7 @@ def find_canopy(st, shop, blds, roads):
         v = c - sc
         for q, dist in fronts:
             axis = (q - sc) / dist
-            t = float(v @ axis) / dist
+            t = float(dnp.matmul(v, axis)) / dist
             lateral = abs(float(v[0] * axis[1] - v[1] * axis[0]))
             if 0.0 < t <= 1.1 and lateral <= shl + 10.0:
                 found.append(b)
@@ -604,7 +606,7 @@ class Site:
 
 
 def _yaw(u):
-    return float(np.degrees(np.arctan2(u[1], u[0])))
+    return float(np.degrees(dnp.arctan2(u[1], u[0])))
 
 
 def _pump(props, areas, kit, x, y, yaw, dz, shapes=None):
@@ -617,7 +619,7 @@ def _pump(props, areas, kit, x, y, yaw, dz, shapes=None):
 def _area_pts(x, y, yaw):
     """The corners and centre of a refuel area (AREA_HALF along / across its island) at (x, y), its yaw in degrees."""
     a = np.radians(yaw)
-    ex, ey = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+    ex, ey = np.array([dnp.cos(a), dnp.sin(a)]), np.array([-dnp.sin(a), dnp.cos(a)])
     return np.array([(x, y)] + [(x, y) + ex * (sx * AREA_HALF[0]) + ey * (sy * AREA_HALF[1])
                                 for sx in (-1, 1) for sy in (-1, 1)], np.float64)
 
@@ -628,7 +630,7 @@ def _seg_dist(pts, a, b):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((pts[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
     q = a[None] + d[None] * t[:, :, None]
-    return np.hypot(*(q - pts[:, None, :]).transpose(2, 0, 1)).min(1)
+    return dnp.hypot(*(q - pts[:, None, :]).transpose(2, 0, 1)).min(1)
 
 
 def _clear(pts, blds, roads):
@@ -662,12 +664,12 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
             return None
         front = (q0 - c0) / d0                  # the shop's front: toward its road
         _, su, shl, shw = _obox(shop.ring)
-        back = -float(abs(su @ front) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)   # its back wall
+        back = -float(abs(dnp.matmul(su, front)) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)   # its back wall
         site = _pair_site(st, None, blds, roads, kit)
         if site is None:
             return None
         for p in site.props:
-            if np.hypot(p["x"] - st.x, p["y"] - st.y) > PIN_NEAR_M or float((np.array([p["x"], p["y"]]) - c0) @ front) < back:
+            if dnp.hypot(p["x"] - st.x, p["y"] - st.y) > PIN_NEAR_M or float(dnp.matmul(np.array([p["x"], p["y"]]) - c0, front)) < back:
                 return None
         return site
     sc = _centre(shop.ring) if shop is not None else pin
@@ -678,7 +680,7 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
     r = np.array([-a[1], a[0]])                 # along the row
     if shop is not None:
         _, su, shl, shw = _obox(shop.ring)
-        reach = float(abs(su @ a) * shl + abs(su[0] * a[1] - su[1] * a[0]) * shw)    # its half depth toward the road
+        reach = float(abs(dnp.matmul(su, a)) * shl + abs(su[0] * a[1] - su[1] * a[0]) * shw)    # its half depth toward the road
     else:
         reach = -(PAIR_HALF[1] + BLD_CLEAR_M)   # (from the pin itself)
     kit = kit or PUMP_KIT
@@ -689,7 +691,7 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
         steps = sorted(np.arange(-30.0, dist, 1.0), key=abs)
     # only what a candidate can touch, once (the search's _clear calls were most of a city cell's pads: 0.35 of 0.48 s)
     R = max(abs(float(steps[0])) if len(steps) else 0.0, abs(float(steps[-1])) if len(steps) else 0.0, 30.0) \
-        + 8.0 + float(np.hypot(*PAIR_HALF))
+        + 8.0 + float(dnp.hypot(*PAIR_HALF))
     lo_, hi_ = sc - R - BLD_CLEAR_M, sc + R + BLD_CLEAR_M
     blds = [b for b in blds if (b.ring.max(0) >= lo_).all() and (b.ring.min(0) <= hi_).all()]
     roads = [(ln, h) for ln, h in roads
@@ -741,15 +743,15 @@ def _wide_pair_site(st, shop, blds, roads, kit=None):
     kit = kit or PUMP_KIT
     pin = np.array([st.x, st.y])
     sc = _centre(shop.ring) if shop is not None else pin
-    R = WIDE_REACH_M + float(np.hypot(*PAIR_HALF)) + BLD_CLEAR_M
+    R = WIDE_REACH_M + float(dnp.hypot(*PAIR_HALF)) + BLD_CLEAR_M
     blds = [b for b in blds if (b.ring.max(0) >= pin - R).all() and (b.ring.min(0) <= pin + R).all()]
     near_roads = [(ln, h) for ln, h in roads if _seg_dist(pin[None], ln[:-1], ln[1:])[0] <= R + h + ROAD_CLEAR_M + 60.0]
     if not near_roads:
         return None
     g = np.arange(-WIDE_REACH_M, WIDE_REACH_M + 1e-9, WIDE_STEP_M)
     cand = pin + np.stack(np.meshgrid(g, g), -1).reshape(-1, 2)
-    cand = cand[np.hypot(*(cand - pin).T) <= WIDE_REACH_M]
-    cand = cand[np.argsort(np.hypot(*(cand - sc).T), kind="stable")]
+    cand = cand[dnp.hypot(*(cand - pin).T) <= WIDE_REACH_M]
+    cand = cand[np.argsort(dnp.hypot(*(cand - sc).T), kind="stable")]
     # each candidate's nearest road point (all segments at once, in chunks)
     A = np.concatenate([ln[:-1] for ln, _ in near_roads]); B = np.concatenate([ln[1:] for ln, _ in near_roads])
     D = B - A
@@ -759,7 +761,7 @@ def _wide_pair_site(st, shop, blds, roads, kit=None):
         c = cand[i:i + 256]
         t = np.clip(((c[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0.0, 1.0)
         Q = A[None] + D[None] * t[:, :, None]
-        dist = np.hypot(*(Q - c[:, None, :]).transpose(2, 0, 1))
+        dist = dnp.hypot(*(Q - c[:, None, :]).transpose(2, 0, 1))
         k = dist.argmin(1)
         q[i:i + 256] = Q[np.arange(len(c)), k]; dq[i:i + 256] = dist[np.arange(len(c)), k]
     ok = dq >= 1.0
@@ -774,8 +776,8 @@ def _wide_pair_site(st, shop, blds, roads, kit=None):
         if q0 is not None and d0 >= 1.0:
             front = (q0 - sc) / d0
             _, su, shl, shw = _obox(shop.ring)
-            back = -float(abs(su @ front) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)
-            ok &= ((foot - sc) @ front).min(1) >= back
+            back = -float(abs(dnp.matmul(su, front)) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)
+            ok &= (dnp.matmul(foot - sc, front)).min(1) >= back
     blocked, o, res = _obstacle_raster(pin, R, blds, near_roads)
     ij = np.floor((foot - o) / res).astype(np.int64)
     inside = ((ij >= 0) & (ij < blocked.shape[0])).all(2)
@@ -837,7 +839,7 @@ def _walled(c, q, blds):
     """Whether a building stands on the straight way from c to its road's point q (pumps in a yard behind a block are
     no forecourt)."""
     import polygon
-    ts = np.linspace(0.0, 1.0, max(2, int(np.hypot(*(q - c)) / 1.0) + 1))
+    ts = np.linspace(0.0, 1.0, max(2, int(dnp.hypot(*(q - c)) / 1.0) + 1))
     pts = c[None] + (q - c)[None] * ts[:, None]
     lo, hi = pts.min(0), pts.max(0)
     return any(polygon.contains_points(b.ring, pts).any() for b in blds
@@ -893,7 +895,7 @@ def _italy_site(st, boxes, others, roads):
                         _pump(props, areas, ITA_KIT, float(p[0]), float(p[1]), yaw, 0.0,
                               shapes=(ITA_PUMPS[(j + i) % 2],))
         q, _, _ = _nearest_on(roads, c) if len(roads) else (None, 0.0, -1)
-        end = ul if q is None or float((q - c) @ ul) >= 0 else -ul
+        end = ul if q is None or float(dnp.matmul(q - c, ul)) >= 0 else -ul
         sign = c + end * (hl + 2.5)
         if _clear(np.array([sign]), others, roads):
             props.append(dict(shape=ITA_SIGN, x=float(sign[0]), y=float(sign[1]), dz=0.0, yaw=yaw % 360.0,
@@ -933,7 +935,7 @@ def _eca_site(st, lanes, others, roads):
     it is clear of roads and buildings. None without an area."""
     c, u = lanes.centre, lanes.u
     x = np.array([u[1], -u[0]])                 # the units' x: across the islands (their y along them, u)
-    sign = 1.0 if float(x @ lanes.n) >= 0 else -1.0
+    sign = 1.0 if float(dnp.matmul(x, lanes.n)) >= 0 else -1.0
     offs = lanes.offsets
     mids = [sign * (o0 + o1) / 2 for o0, o1 in zip(offs[:-1], offs[1:])]      # the islands along x
     if sign < 0:
@@ -1044,19 +1046,19 @@ def find_lanes(shop, lines):
     """The forecourt's drive lanes among service road polylines (anchor frame) near the shop, or None: the longest
     run of at least LANE_MIN short, straight, parallel ones LANE_GAP_M apart, overlapping along their length."""
     sc = _centre(shop.ring)
-    cos_max = np.cos(np.radians(LANE_ANGLE_DEG))
+    cos_max = dnp.cos(np.radians(LANE_ANGLE_DEG))
     segs = []
     for line in lines:
         line = np.asarray(line, np.float64)[:, :2]
         if len(line) < 2:
             continue
-        length = float(np.hypot(*np.diff(line, axis=0).T).sum())
+        length = float(dnp.hypot(*np.diff(line, axis=0).T).sum())
         d = line[-1] - line[0]
-        chord = float(np.hypot(*d))
+        chord = float(dnp.hypot(*d))
         if not LANE_LEN_M[0] <= length <= LANE_LEN_M[1] or chord < LANE_STRAIGHT * length:
             continue
         mid = (line[0] + line[-1]) / 2
-        if float(np.hypot(*(mid - sc))) > LANE_SEARCH_M:
+        if float(dnp.hypot(*(mid - sc))) > LANE_SEARCH_M:
             continue
         u = d / chord
         if u[0] < 0 or (u[0] == 0 and u[1] < 0):
@@ -1068,10 +1070,10 @@ def find_lanes(shop, lines):
         n = np.array([-u[1], u[0]])
         rows = []
         for m2, u2, p0, p1 in segs:
-            if abs(float(u2 @ u)) < cos_max:
+            if abs(float(dnp.matmul(u2, u))) < cos_max:
                 continue
-            a = sorted((float((p0 - mid) @ u), float((p1 - mid) @ u)))
-            rows.append((float((m2 - mid) @ n), a[0], a[1]))
+            a = sorted((float(dnp.matmul(p0 - mid, u)), float(dnp.matmul(p1 - mid, u))))
+            rows.append((float(dnp.matmul(m2 - mid, n)), a[0], a[1]))
         seed = next(r for r in rows if abs(r[0]) < 1e-9)
         rows = [r for r in rows if min(r[2], seed[2]) - max(r[1], seed[1])
                 >= 0.5 * min(r[2] - r[1], seed[2] - seed[1])]
@@ -1116,7 +1118,7 @@ def _lane_site(st, lanes, others, roads, kit):
     props, areas = [], []
     if length <= SHORT_ISLAND_M:
         q, _, _ = _nearest_on(roads, c) if len(roads) else (None, 0.0, -1)
-        back = -u if q is not None and float((q - c) @ u) > 0 else u          # away from the road
+        back = -u if q is not None and float(dnp.matmul(q - c, u)) > 0 else u          # away from the road
         for o0, o1 in zip(lanes.offsets[:-1], lanes.offsets[1:]):
             m = c + n * ((o0 + o1) / 2) + u * ((lanes.a0 + lanes.a1) / 2)
             if _clear(_area_pts(float(m[0]), float(m[1]), yaw), others, roads):
@@ -1180,7 +1182,7 @@ LANES_UNDER_M = 5.0             # mapped lanes beside a canopy: their centre thi
 def _under(p, canopy):
     c, ul, hl, hw = _obox(canopy.ring)
     d = p - c
-    return abs(float(d @ ul)) <= hl + LANES_UNDER_M and abs(float(d[0] * ul[1] - d[1] * ul[0])) <= hw + LANES_UNDER_M
+    return abs(float(dnp.matmul(d, ul))) <= hl + LANES_UNDER_M and abs(float(d[0] * ul[1] - d[1] * ul[0])) <= hw + LANES_UNDER_M
 
 
 def layout(st, blds, roads, service=(), style="default"):
@@ -1233,7 +1235,7 @@ def _dense(ring, step=1.0):
     ring = np.asarray(ring, np.float64)
     out = [ring[:1]]
     for a, b in zip(ring[:-1], ring[1:]):
-        n = max(1, int(math.ceil(float(np.hypot(*(b - a))) / step)))
+        n = max(1, int(math.ceil(float(dnp.hypot(*(b - a))) / step)))
         out.append(a + (b - a) * (np.arange(1, n + 1) / n)[:, None])
     return np.vstack(out)
 
@@ -1261,7 +1263,7 @@ def forecourt_pad(site, blds, roads, service=()):
     others = [b for b in blds if b is not shop and b not in canopies]
     margin = {(0, 1): PAD_MARGIN_M, (0, -1): PAD_MARGIN_M, (1, 1): PAD_MARGIN_M, (1, -1): PAD_MARGIN_M}
     half = (hl, hw)
-    reach = float(np.hypot(hl, hw)) + PAD_MARGIN_M + 2.0      # (only what can meet the box with its margins)
+    reach = float(dnp.hypot(hl, hw)) + PAD_MARGIN_M + 2.0      # (only what can meet the box with its margins)
     lo_, hi_ = c - reach, c + reach
     obstacles = [(_dense(b.ring), PAD_BLD_GAP_M) for b in others
                  if (b.ring.max(0) >= lo_).all() and (b.ring.min(0) <= hi_).all()]
@@ -1269,7 +1271,7 @@ def forecourt_pad(site, blds, roads, service=()):
                   if (line.max(0) >= lo_ - h).all() and (line.min(0) <= hi_ + h).all()]
     for q, gap in obstacles:
         d = q - c
-        a = np.stack([d @ u, d @ v], axis=1)
+        a = np.stack([dnp.matmul(d, u), dnp.matmul(d, v)], axis=1)
         for ax in (0, 1):
             other = 1 - ax
             for sg in (1, -1):
@@ -1298,7 +1300,7 @@ def _dir_at(line, p):
              for i in range(len(line) - 1)]
         k = int(np.argmin(d))
     t = line[k + 1] - line[k]
-    return t / max(float(np.hypot(*t)), 1e-9)
+    return t / max(float(dnp.hypot(*t)), 1e-9)
 
 
 def _driveways(pad, centre, others, roads, service):
@@ -1323,9 +1325,9 @@ def _driveways(pad, centre, others, roads, service):
         if float(gaps[k].min()) > DRIVEWAY_CORNER_M:
             break
         uk = _dir_at(roads[k][0], edge[int(np.argmin(gaps[k]))])
-        crossing = math.degrees(math.acos(min(1.0, abs(float(u0 @ uk)))))
+        crossing = math.degrees(dmath.acos(min(1.0, abs(float(dnp.matmul(u0, uk))))))
         if crossing >= DRIVEWAY_CORNER_DEG and all(
-                math.degrees(math.acos(min(1.0, abs(float(_dir_at(roads[j][0], edge[int(np.argmin(gaps[j]))]) @ uk)))))
+                math.degrees(dmath.acos(min(1.0, abs(float(dnp.matmul(_dir_at(roads[j][0], edge[int(np.argmin(gaps[j]))]), uk))))))
                 >= DRIVEWAY_CORNER_DEG for j in want):
             want.append(k)
             break                               # (one more: the corner)
@@ -1383,11 +1385,11 @@ def _drive_to(pad, centre, edge, gap, road, others, service):
         if near_pad and (_seg_dist(q, line_r[:-1], line_r[1:]) <= h + DRIVEWAY_MAPPED_M).any():
             return None
     cand = np.flatnonzero(gap <= dmin + 0.5)
-    p = edge[cand[int(np.argmin(np.hypot(*(edge[cand] - centre).T)))]]
+    p = edge[cand[int(np.argmin(dnp.hypot(*(edge[cand] - centre).T)))]]
     q, _, _ = _nearest_on([road], p)
-    dirn = (q - p) / max(float(np.hypot(*(q - p))), 1e-9)
+    dirn = (q - p) / max(float(dnp.hypot(*(q - p))), 1e-9)
     side = np.array([-dirn[1], dirn[0]]) * (DRIVEWAY_W_M / 2)
-    a, b = p - dirn * 1.0, p + dirn * (float(np.hypot(*(q - p))) - h + PAD_BLD_GAP_M)
+    a, b = p - dirn * 1.0, p + dirn * (float(dnp.hypot(*(q - p))) - h + PAD_BLD_GAP_M)
     strip = np.array([a - side, b - side, b + side, a + side])
     probe = _dense(np.vstack([strip, strip[:1]]), 0.5)
     core = a + (b - a) * np.linspace(0, 1, 9)[:, None]
@@ -1530,7 +1532,7 @@ def _one_building_site(st, blds, roads, service=(), style="default"):
     c = _centre(b.ring)
     shops = [(_gap(o.ring, b.ring), o.id, o) for o in others
              if o.cls not in ROOF_CLASSES and o.cls not in NOT_SHOP_CLASSES
-             and float(np.hypot(*(_centre(o.ring) - c))) <= SHOP_SEARCH_M]
+             and float(dnp.hypot(*(_centre(o.ring) - c))) <= SHOP_SEARCH_M]
     shops = [s for s in shops if s[0] <= PAD_SHOP_LINK_M and not _across(c, _centre(s[2].ring), roads)]
     shop = min(shops, key=lambda s: s[:2])[2] if shops else None
     if style == "europe":
@@ -1551,7 +1553,7 @@ def _station_shop(st, blds, roads):
     with the station's canopy mapped beside it (find_canopies): else a big city building near a pin-only station
     became its shop (Paris, Berlin in the 968-station comparison, 2026-10-27)."""
     shop = find_shop(st, blds)
-    if shop is not None and float(np.hypot(*(_centre(shop.ring) - np.array([st.x, st.y])))) > SHOP_SEARCH_M             and not find_canopies(st, shop, blds, roads):
+    if shop is not None and float(dnp.hypot(*(_centre(shop.ring) - np.array([st.x, st.y])))) > SHOP_SEARCH_M             and not find_canopies(st, shop, blds, roads):
         return None
     return shop
 
@@ -1649,13 +1651,13 @@ def buildings_near(frame, layers, x, y, r):
         a = f.attrs
         xy = f.xy_in(frame)
         cx, cy = f.outer_centres(frame)         # (vectorised: a city cell has tens of thousands, review I6)
-        near = np.flatnonzero((cx - x) ** 2 + (cy - y) ** 2 <= (r + 1.0) ** 2)
+        near = np.flatnonzero(dnp.sq(cx - x) + dnp.sq(cy - y) <= dnp.sq(r + 1.0))
         for i in near.tolist():
             fid = str(f.ids[i])
             if fid in seen or f.part_off[i + 1] == f.part_off[i]:
                 continue
             ring = np.asarray(_outer(f, i, xy), np.float64)
-            if len(ring) < 4 or np.hypot(*(ring[:-1].mean(0) - (x, y))) > r:
+            if len(ring) < 4 or dnp.hypot(*(ring[:-1].mean(0) - (x, y))) > r:
                 continue
             seen.add(fid)
 
@@ -1962,9 +1964,9 @@ def _beside_station(ch, sites):
     seg = b - a
     t = np.clip(((p - a) * seg).sum(1) / np.maximum((seg * seg).sum(1), 1e-12), 0.0, 1.0)
     q = a + seg * t[:, None]
-    q = q[int(np.argmin(np.hypot(*(q - p).T)))]
+    q = q[int(np.argmin(dnp.hypot(*(q - p).T)))]
     out = q - ring[:-1].mean(0)
-    out = out / max(float(np.hypot(*out)), 1e-9)
+    out = out / max(float(dnp.hypot(*out)), 1e-9)
     at = q + out * BESIDE_OUT_M
     pads = [Bld(f"pad:{site.station.id}:{k}", rg, "pad", "", "", None) for k, rg in enumerate(site.pad)]
     return dataclasses.replace(ch, x=float(at[0]), y=float(at[1])), pads
@@ -2013,7 +2015,7 @@ def _one_per_shop(sites):
             words = _tokens(site.station.name + " " + site.station.brand) - GENERIC_WORDS
             here = np.array([site.station.x, site.station.y])
             if any(polygon.contains_points(np.vstack([p, p[:1]]), pts).any() for p, _, _ in pads) or any(
-                    words & w and float(np.hypot(*(here - at))) <= PIN_SAME_M for _, w, at in pads):
+                    words & w and float(dnp.hypot(*(here - at))) <= PIN_SAME_M for _, w, at in pads):
                 continue
         shops.add(site.shop_id)
         canopies.update(site.drop_ids)
@@ -2036,4 +2038,4 @@ def clear_park(park, recs):
     pts += [(a["pos"][0], a["pos"][1], max(a["half"][0], a["half"][1]) + PARK_CLEAR_M) for r in recs for a in r["areas"]]
     if not pts or not park:
         return park
-    return [s for s in park if all((s[0] - x) ** 2 + (s[1] - y) ** 2 > d * d for x, y, d in pts)]
+    return [s for s in park if all(dnp.sq(s[0] - x) + dnp.sq(s[1] - y) > d * d for x, y, d in pts)]

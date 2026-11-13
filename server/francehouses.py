@@ -8,6 +8,7 @@ import math
 import os
 
 import numpy as np
+import dmath
 
 import house_regions
 
@@ -146,7 +147,7 @@ def adapt(spec, attrs, lat, lon):
     if b._area2(spec.ring) / (8 * hl * hw) < .86:
         roof = "flat"
         family = "render" if family in {"timber", "halfhip"} else family
-    rise = 0. if roof == "flat" else hw * math.tan(math.radians(pitch))
+    rise = 0. if roof == "flat" else hw * dmath.tan(math.radians(pitch))
     rh = _number(attrs.get("roof_height"))
     if rh is not None and rh > 8.:
         return spec                          # implausible/special geometry stays upstream
@@ -165,7 +166,7 @@ def adapt(spec, attrs, lat, lon):
     if roof != "flat":
         if rise < .10:
             return spec
-        pitch = math.degrees(math.atan2(rise, hw))
+        pitch = math.degrees(dmath.atan2(rise, hw))
     roof_kind = "canal" if region in {"basque", "mediterranean", "southwest", "toulouse"} else "slate" if region in {"brittany", "pyrenees"} else "tile"
     if region in {"loire", "normandy", "paris_basin", "alpine", "central"} and h("slate") < .65:
         roof_kind = "slate"

@@ -2,6 +2,7 @@
 //! its numpy passes, on the main interpreter's lock): the ground under a surface model, buildings and tree stands
 //! taken out by a morphological opening. The same maths as the numpy code, step by step in float32 (the box mean's
 //! summed-area table in float64, as numpy's cumsum), so the result is the same to the bit.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -166,7 +167,7 @@ pub fn dsm_ground<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f32>, px_m: f32
         let deep = dilate(&cut, rows, cols, w);
         let mut res = vec![0f32; rows * cols];
         for k in 0..rows * cols {
-            let rise = gx[k].hypot(gy[k]) * half;
+            let rise = gx[k].dhypot(gy[k]) * half;
             let thr = threshold_m + slope_k * rise;
             let mut kk = clip01((cut[k] - thr) / soft);
             let relief = dil[k] - ero[k];

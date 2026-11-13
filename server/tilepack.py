@@ -18,6 +18,7 @@ does not list is known to be empty without a request (open sea):
     bit & 7 (least significant first), each zoom's bitmap starting on a byte.
 """
 import struct
+import dnp
 
 MAGIC = b"BNGP"
 VERSION = 1
@@ -48,7 +49,7 @@ def path(z, px, py):
 
 def build(z, px, py, k, tiles):
     """A pack's bytes from tiles: {index: bytes} (missing indices: no tile)."""
-    n = (1 << k) ** 2
+    n = dnp.sq(1 << k)
     table, body, off = [], [], 0
     for i in range(n):
         b = tiles.get(i) or b""
@@ -66,7 +67,7 @@ def parse(data):
     magic, ver, k, z, _, px, py = HEAD.unpack_from(data, 0)
     if magic != MAGIC or ver != VERSION or k > 6:
         raise PackError("not a pack")
-    n = (1 << k) ** 2
+    n = dnp.sq(1 << k)
     base = HEAD.size + 8 * n
     if len(data) < base:
         raise PackError("short pack table")
@@ -124,6 +125,6 @@ def index_has(data, z, px, py):
     n = 1 << max(0, z - k)
     if not (0 <= px < n and 0 <= py < n):
         return False
-    off = INDEX_HEAD.size + sum(((1 << max(0, zz - k)) ** 2 + 7) // 8 for zz in range(z))
+    off = INDEX_HEAD.size + sum((dnp.sq(1 << max(0, zz - k)) + 7) // 8 for zz in range(z))
     i = py * n + px
     return bool(data[off + (i >> 3)] >> (i & 7) & 1)

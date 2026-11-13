@@ -1,5 +1,6 @@
 //! Bridge decks side by side (roads._deck_beside): which deck parts come within touching distance of each other in
 //! plan, the pair test that was a numpy pass per pair (2.4 s of 14 for 8 of Bratislava's road tiles, 2026-10-28).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -82,7 +83,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                     'blocks: for (b, r) in bx[bfirst[j]..bfirst[j + 1]].iter().enumerate() {
                         let gx = (r[0] - qx).max(qx - r[2]).max(0.0);
                         let gy = (r[1] - qy).max(qy - r[3]).max(0.0);
-                        if gx.hypot(gy) > reach + BESIDE_PRUNE_M {
+                        if gx.dhypot(gy) > reach + BESIDE_PRUNE_M {
                             continue;
                         }
                         let v0 = ja + b * BESIDE_BLOCK;
@@ -91,7 +92,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                             let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
                             let l2 = (abx * abx + aby * aby).max(1e-12);
                             let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
-                            d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                            d = d.min((qx - (px + t * abx)).dhypot(qy - (py_ + t * aby)));
                         }
                         if d < reach {
                             break 'blocks;
@@ -126,7 +127,7 @@ fn end_dir(pts: &numpy::ndarray::ArrayView2<f64>, a: usize, b: usize, at_end: bo
     for k in 1..b - a {
         let (px, py) = (pts[[idx(k - 1), 0]], pts[[idx(k - 1), 1]]);
         let (qx, qy) = (pts[[idx(k), 0]], pts[[idx(k), 1]]);
-        let seg = (qx - px).hypot(qy - py);
+        let seg = (qx - px).dhypot(qy - py);
         if run + seg >= look && seg > 0.0 {
             let t = (look - run) / seg;
             tx = px + t * (qx - px);
@@ -136,7 +137,7 @@ fn end_dir(pts: &numpy::ndarray::ArrayView2<f64>, a: usize, b: usize, at_end: bo
         run += seg;
     }
     let (dx, dy) = (tx - x0, ty - y0);
-    let l = dx.hypot(dy);
+    let l = dx.dhypot(dy);
     if l > 1e-9 { [dx / l, dy / l] } else { [0.0, 0.0] }
 }
 
@@ -174,7 +175,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
             ok[k] = true;
             let mut l = 0.0;
             for v in a..b - 1 {
-                l += (pts[[v + 1, 0]] - pts[[v, 0]]).hypot(pts[[v + 1, 1]] - pts[[v, 1]]);
+                l += (pts[[v + 1, 0]] - pts[[v, 0]]).dhypot(pts[[v + 1, 1]] - pts[[v, 1]]);
             }
             len[k] = l;
             pos[2 * k] = [pts[[a, 0]], pts[[a, 1]]];
@@ -183,7 +184,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
             dir[2 * k] = end_dir(&pts, a, b, false, look);
             dir[2 * k + 1] = end_dir(&pts, a, b, true, look);
         }
-        let d = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+        let d = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).dhypot(p[1] - q[1]);
         // a grid of the ends and of the ground roads' ends (cells of the widest reach): the near ones only
         // (twice the reach: a free end before this one may have moved up to snap_m from where it is filed)
         let cell = 2.0 * join_m.max(ground_m).max(snap_m).max(1.0);
@@ -270,7 +271,7 @@ pub fn fill_gaps(line: &[[f64; 2]], bridges: &[[f64; 2]], end_deck: [bool; 2], o
     let n = line.len();
     let mut s = vec![0.0f64; n];
     for v in 1..n {
-        s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).hypot(line[v][1] - line[v - 1][1]);
+        s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).dhypot(line[v][1] - line[v - 1][1]);
     }
     let total = if n > 0 { s[n - 1] } else { 0.0 };
     if n < 2 || total <= 0.0 {
@@ -297,7 +298,7 @@ pub fn fill_gaps(line: &[[f64; 2]], bridges: &[[f64; 2]], end_deck: [bool; 2], o
             let (abx, aby) = (w[1][0] - px, w[1][1] - py);
             let l2 = (abx * abx + aby * aby).max(1e-12);
             let t = (((p[0] - px) * abx + (p[1] - py) * aby) / l2).clamp(0.0, 1.0);
-            best = best.min((p[0] - (px + t * abx)).hypot(p[1] - (py + t * aby)));
+            best = best.min((p[0] - (px + t * abx)).dhypot(p[1] - (py + t * aby)));
         }
         best
     };
@@ -378,7 +379,7 @@ pub fn deck_end_on<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, poff: 
     let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         let p = |v: usize| [pts[[v, 0]], pts[[v, 1]]];
-        let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+        let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).dhypot(a[1] - b[1]);
         let mut ends: Vec<Option<[f64; 2]>> = vec![None; 2 * n];
         for k in 0..n {
             let (a, b) = span(k);
@@ -479,7 +480,7 @@ pub fn pad_hull(parts: &[(Vec<[f64; 2]>, Vec<f64>, f64)], reach: f64, step: f64)
         }
         let mut s = vec![0.0f64; n];
         for v in 1..n {
-            s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).hypot(line[v][1] - line[v - 1][1]);
+            s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).dhypot(line[v][1] - line[v - 1][1]);
         }
         let end = s[n - 1].min(reach);
         let mut t = 0.0;
@@ -552,7 +553,7 @@ pub fn rim_samples(ring: &[[f64; 3]], lines: &[(Vec<[f64; 2]>, f64)], step: f64,
     for i in 0..k {
         let (a, b) = (ring[i], ring[(i + 1) % k]);
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let len = dx.hypot(dy);
+        let len = dx.dhypot(dy);
         if len < 1e-9 {
             continue;
         }
@@ -566,7 +567,7 @@ pub fn rim_samples(ring: &[[f64; 3]], lines: &[(Vec<[f64; 2]>, f64)], step: f64,
                     let (sx, sy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
                     let l2 = (sx * sx + sy * sy).max(1e-12);
                     let t = (((p[0] - w[0][0]) * sx + (p[1] - w[0][1]) * sy) / l2).clamp(0.0, 1.0);
-                    (p[0] - (w[0][0] + t * sx)).hypot(p[1] - (w[0][1] + t * sy)) <= half + open_m
+                    (p[0] - (w[0][0] + t * sx)).dhypot(p[1] - (w[0][1] + t * sy)) <= half + open_m
                 })
             });
             out.push([p[0], p[1], p[2], nx, ny, if open { 1.0 } else { 0.0 }]);
@@ -697,7 +698,7 @@ pub(crate) fn deck_gaps_round(ring: &[[f64; 2]], ends: &[[f64; 4]], boxes: &[[f6
                 if a.abs() >= join_m || b.abs() >= join_m {
                     continue;
                 }
-                if a.hypot(b) < join_m {
+                if a.dhypot(b) < join_m {
                     count += 1;
                     found = Some((j, end));
                     if count > 1 {

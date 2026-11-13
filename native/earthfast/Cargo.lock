@@ -351,6 +351,7 @@ dependencies = [
  "flate2",
  "fontdue",
  "laz",
+ "libm",
  "numpy",
  "png",
  "pollster",

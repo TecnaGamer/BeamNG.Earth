@@ -29,6 +29,8 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import netfetch
 import overture
@@ -427,10 +429,10 @@ def is_outline(ring, others):
     ring = np.asarray(ring, np.float64)
     if len(ring) < 4:
         return False
-    kx = 111320.0 * np.cos(np.radians(float(ring[:, 1].mean())))
+    kx = 111320.0 * dnp.cos(np.radians(float(ring[:, 1].mean())))
     scale = np.array([kx, 110540.0])
     R = (ring - ring[0]) * scale
-    if np.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
+    if dnp.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
         return False
     poly = Path(R)
     enclosed = False
@@ -448,9 +450,9 @@ def _seg_dist(pts, line):
     """The least distance from points pts (k, 2) to polyline line (n, 2)."""
     a, b = line[:-1], line[1:]
     if not len(a):
-        return float(np.min(np.hypot(*(pts - line[0]).T)))
+        return float(np.min(dnp.hypot(*(pts - line[0]).T)))
     ab = b - a
-    t = np.clip(np.einsum("kij,ij->ki", pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
+    t = np.clip(dnp.vecdot(pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
     d = pts[:, None, :] - (a[None] + t[..., None] * ab[None])
     return float(np.sqrt((d * d).sum(-1)).min())
 _ROW_VAL = 4
@@ -511,7 +513,7 @@ def _lane_rows(rows, need):
             continue
         if need is not None:
             x0, y0, x1, y1 = (r[i] for i in box)
-            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
+            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(dnp.cos(np.radians((y0 + y1) / 2)))))
             dy = GEOMETRY_MARGIN_M / 110574.0
             if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
                        for a0, b0, a1, b1 in need):
@@ -642,7 +644,7 @@ def _named_way(feats, i, by_name):
         return None
     lon, lat = (float(v) for v in feats.lonlat[(a + b - 1) // 2][:2])
     my = NAME_MATCH_M / 111320.0
-    mx = my / max(math.cos(math.radians(lat)), 0.1)
+    mx = my / max(dmath.cos(math.radians(lat)), 0.1)
     best = None
     for w, x0, y0, x1, y1 in cands:
         if x0 - mx <= lon <= x1 + mx and y0 - my <= lat <= y1 + my:

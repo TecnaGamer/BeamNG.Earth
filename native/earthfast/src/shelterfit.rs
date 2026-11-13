@@ -2,6 +2,7 @@
 //! every post against every road of the tile was a numpy round each (~0.4 CPU-s of a 16-tile I-83 Baltimore probe,
 //! 2026-11-12). The roads come packed once (shelters._packed); the numbers are the numpy version's (operation order,
 //! first minimum, NaN where numpy has one, Python's max).
+use crate::dm::Dm;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -36,7 +37,7 @@ fn feet(p: Pt, line: &[Pt]) -> impl Iterator<Item = (Pt, f64)> + '_ {
         let ab2 = nmax(ab[0] * ab[0] + ab[1] * ab[1], 1e-9);
         let t = nmin(nmax(((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / ab2, 0.0), 1.0);
         let f = [a[0] + t * ab[0], a[1] + t * ab[1]];
-        (f, (p[0] - f[0]).hypot(p[1] - f[1]))
+        (f, (p[0] - f[0]).dhypot(p[1] - f[1]))
     })
 }
 
@@ -121,7 +122,7 @@ pub fn shelter_worst_post<'py>(
             let short = r.half[k] + pad - d;
             if short > 1e-3 && worst.map_or(true, |w| short > w.0) {
                 let n = [cx - foot[0], cy - foot[1]];
-                let h = n[0].hypot(n[1]);
+                let h = n[0].dhypot(n[1]);
                 let den = if 1e-6 > h { 1e-6 } else { h };
                 worst = Some((short, n[0] / den, n[1] / den));
             }
@@ -130,7 +131,7 @@ pub fn shelter_worst_post<'py>(
     Ok(worst)
 }
 
-/// roadcorners.tile's distance from a corner's node (x, y) to each road's points (np.min(np.hypot(*(p2[:, :2] - X).T)),
+/// roadcorners.tile's distance from a corner's node (x, y) to each road's points (np.min(np.dhypot(*(p2[:, :2] - X).T)),
 /// NaN if any is; inf for a road without points), the roads packed as above (xy, off).
 #[pyfunction]
 pub fn lines_point_min_dist<'py>(
@@ -152,7 +153,7 @@ pub fn lines_point_min_dist<'py>(
             return Err(pyo3::exceptions::PyValueError::new_err("lines_point_min_dist: bad off"));
         }
         out.push((off[k] as usize..off[k + 1] as usize)
-            .map(|i| (a[[i, 0]] - x).hypot(a[[i, 1]] - y))
+            .map(|i| (a[[i, 0]] - x).dhypot(a[[i, 1]] - y))
             .fold(f64::INFINITY, nmin));
     }
     Ok(out.into_pyarray(py))

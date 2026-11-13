@@ -26,6 +26,8 @@ import io
 import json
 import logging
 import math
+import dmath
+import dnp
 import os
 import re
 import threading
@@ -93,7 +95,7 @@ def owner(members, key):
         w = float(m.get("w") or 1.0)
         h = hashlib.sha1(f"{key}|{m['id']}".encode()).digest()
         u = (int.from_bytes(h[:8], "big") + 0.5) / 2.0 ** 64
-        s = -w / math.log(u)
+        s = -w / dmath.log(u)
         if s > best_s or (s == best_s and str(m["id"]) < str(best)):
             best, best_s = m["id"], s
     return best
@@ -309,10 +311,10 @@ class Hub:
             if r <= 0 or (ax == 0 and ay == 0 and cells):
                 continue
             cl = lat + ay / 111320.0
-            cg = lon + ax / (111320.0 * max(math.cos(math.radians(lat)), 0.01))
-            dl, dg = r / 111320.0, r / (111320.0 * max(math.cos(math.radians(cl)), 0.01))
+            cg = lon + ax / (111320.0 * max(dmath.cos(math.radians(lat)), 0.01))
+            dl, dg = r / 111320.0, r / (111320.0 * max(dmath.cos(math.radians(cl)), 0.01))
             for k in mapcells.cells_for_bbox(cl - dl, cg - dg, cl + dl, cg + dg, max_cells=400):
-                cells.append(((k.center()[0] - lat) ** 2 + ((k.center()[1] - lon) * math.cos(math.radians(lat))) ** 2,
+                cells.append((dnp.sq(k.center()[0] - lat) + dnp.sq((k.center()[1] - lon) * dmath.cos(math.radians(lat))),
                               (k.z, k.x, k.y)))
         items = []
         asked = {v[1] for v in self.wanted.values()}

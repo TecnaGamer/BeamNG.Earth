@@ -16,6 +16,8 @@ import os
 import re
 
 import numpy as np
+import dmath
+import dnp
 
 import franceroads
 import furniture
@@ -52,7 +54,7 @@ def _clear_spot(clearance, row):
     for r in SHIFT_M:
         for k in range(SHIFT_DIRS):
             a = 2.0 * math.pi * k / SHIFT_DIRS
-            moved = [row[0], round(row[1] + r * math.cos(a), 2), round(row[2] + r * math.sin(a), 2), *row[3:]]
+            moved = [row[0], round(row[1] + r * dmath.cos(a), 2), round(row[2] + r * dmath.sin(a), 2), *row[3:]]
             if clearance.clear(moved):
                 return moved
     return None
@@ -124,10 +126,10 @@ def _records(layers):
 def _project(points, line):
     """Closest distance and station on a line for each point (ENU metres)."""
     a, d = line[:-1], np.diff(line, axis=0)
-    lengths = np.linalg.norm(d, axis=1)
+    lengths = dnp.norm(d, axis=1)
     t = np.clip(np.sum((points[:, None] - a) * d, axis=2)
                 / np.maximum(lengths * lengths, 1e-12), 0., 1.)
-    distance = np.linalg.norm(points[:, None] - (a + t[:, :, None] * d), axis=2)
+    distance = dnp.norm(points[:, None] - (a + t[:, :, None] * d), axis=2)
     k = np.argmin(distance, axis=1)
     stations = np.r_[0., np.cumsum(lengths)]
     return distance[np.arange(len(points)), k], stations[k] + t[np.arange(len(points)), k] * lengths[k], k
@@ -233,7 +235,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     for key, node in sorted(nodes.items()):
         xy, lat, lon, *_ = node
         coordinate = (round(lat, 7), round(lon, 7))
-        if coordinate in occupied or (len(high) and np.min(np.linalg.norm(high - xy, axis=1)) <= MATCH_M):
+        if coordinate in occupied or (len(high) and np.min(dnp.norm(high - xy, axis=1)) <= MATCH_M):
             continue
         occupied.add(coordinate)
         unique[key] = node
@@ -249,7 +251,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
         matched = np.flatnonzero(dist <= MATCH_M)
         if everywhere and len(matched):
             # (on the line only at its way's vertices; a telecom pole only on a telecom line)
-            at_vertex = np.min(np.linalg.norm(points[matched][:, None, :] - line[None, :, :], axis=2), axis=1)
+            at_vertex = np.min(dnp.norm(points[matched][:, None, :] - line[None, :, :], axis=2), axis=1)
             matched = matched[(at_vertex <= VERTEX_M) & np.array(
                 [line_cls == "communication_line" or keys[j] not in telecom for j in matched], bool)]
         for j in matched:
@@ -257,14 +259,14 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             yaw.setdefault(keys[j], furniture._yaw(-d[1], d[0]) % 180.)
         matched = sorted(matched, key=lambda j: (station[j], keys[j]))
         for a, b in zip(matched[:-1], matched[1:]):
-            length = float(np.linalg.norm(points[b] - points[a]))
+            length = float(dnp.norm(points[b] - points[a]))
             if not 5. <= length <= max_span or station[b] - station[a] > max_span:
                 continue
             if np.any((all_dist <= MATCH_M) & (all_station > station[a] + .01)
                       & (all_station < station[b] - .01)):
                 continue                  # never jump over an excluded mapped support
             # A mapped bend without a mapped pole does not get a straight chord.
-            vertices = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line, axis=0), axis=1))]
+            vertices = np.r_[0., np.cumsum(dnp.norm(np.diff(line, axis=0), axis=1))]
             between = line[(vertices >= station[a]) & (vertices <= station[b])]
             if len(between) and np.max(_project(between, points[[a, b]])[0]) > MATCH_M:
                 continue
@@ -304,7 +306,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             continue
         def attachment(p, anchor):
             angle = math.radians(p[3])
-            c, s = math.cos(angle), math.sin(angle)
+            c, s = dmath.cos(angle), dmath.sin(angle)
             x, y, z = anchor
             return (p[0] + c * x - s * y, p[1] + s * x + c * y, p[2] + z, 0.)
         for ac, bc in zip(aa, ab):

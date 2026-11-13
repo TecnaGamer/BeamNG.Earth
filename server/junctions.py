@@ -19,6 +19,7 @@ Pure functions of the road centrelines in the tile frame; deterministic (sorted 
 import numpy as np
 
 import fast     # Rust kernels (earthfast)
+import dnp
 
 RADIUS = 5.0                    # m, curb return radius when the class is not listed in RADII
 # by the larger road's class (street-view study of Fells Point, 2026-10-11: city corners are tight)
@@ -174,7 +175,7 @@ def apply_cuts(line, cuts, near=40.0):
     if not cuts or len(pts) < 2:
         return [(pts, (False, False))]
     # densify to 0.5 m so a cut lands within the resolution, then exact ends
-    seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
     if s[-1] <= 0:
         return []
@@ -184,8 +185,8 @@ def apply_cuts(line, cuts, near=40.0):
     alongs = []
     for X, u, tc in cuts:
         rel = d[:, :2] - X
-        along = rel @ u
-        lateral = np.abs(rel @ _left(u))
+        along = dnp.matmul(rel, u)
+        lateral = np.abs(dnp.matmul(rel, _left(u)))
         inside = (along < tc) & (along > -1.0) & (lateral < near)
         keep &= ~inside
         alongs.append((along - tc, inside))
@@ -222,12 +223,12 @@ def ramp_ranges(run, ramps):
     """Arc-length ranges [(s0, s1)] along a sidewalk run (k, >=2) of its curb ramps. Pure."""
     if not ramps:
         return []
-    seg = np.hypot(*np.diff(run[:, :2], axis=0).T)
+    seg = dnp.hypot(*np.diff(run[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
     out = []
     for X, u, t0, t1 in ramps:
-        along = (run[:, :2] - X) @ u
-        lateral = np.abs((run[:, :2] - X) @ _left(u))
+        along = dnp.matmul(run[:, :2] - X, u)
+        lateral = np.abs(dnp.matmul(run[:, :2] - X, _left(u)))
         m = (lateral < 40.0)
         if not m.any():
             continue

@@ -12,6 +12,7 @@ from collections import namedtuple, OrderedDict
 import threading
 
 import numpy as np
+import dnp
 
 import mapcells
 import mapgeom
@@ -146,7 +147,7 @@ class Context(signcontext.Context):
         if not len(points):
             return Pavements()
         pad = margin / 110540.
-        lon_pad = pad / max(.01, float(np.cos(np.radians(points[:, 1])).min()))
+        lon_pad = pad / max(.01, float(dnp.cos(np.radians(points[:, 1])).min()))
         keys = tuple(mapcells.cells_near_points(points[:, 1], points[:, 0], pad, lon_pad))
         hood = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), keys)
         with self.lock:

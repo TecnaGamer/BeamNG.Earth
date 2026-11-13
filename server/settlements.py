@@ -13,6 +13,8 @@ import os
 import sys
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.settlements")
 ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,9 +63,9 @@ class SettlementIndex:
             return None
         dlat = self.lat - la
         dlon = self.lon - lo
-        h = np.sin(dlat / 2.0) ** 2 + math.cos(la) * np.cos(self.lat) * np.sin(dlon / 2.0) ** 2
+        h = dnp.sq(dnp.sin(dlat / 2.0)) + dmath.cos(la) * dnp.cos(self.lat) * dnp.sq(dnp.sin(dlon / 2.0))
         k = int(np.argmin(h))
-        distance = EARTH_R_M * 2.0 * math.asin(math.sqrt(float(np.clip(h[k], 0.0, 1.0))))
+        distance = EARTH_R_M * 2.0 * dmath.asin(math.sqrt(float(np.clip(h[k], 0.0, 1.0))))
         rank = int(self.rank[k])
         if rank <= 1:
             size = "metropolitan"

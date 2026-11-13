@@ -25,6 +25,7 @@ import zipfile
 from collections import namedtuple
 
 import numpy as np
+import dmath
 
 import netfetch
 import railtags
@@ -58,7 +59,7 @@ def tile_of(lat, lon, zoom=ZOOM):
     """(x, y) of the web-mercator tile at lat, lon."""
     n = 1 << zoom
     r = math.radians(lat)
-    return int((lon + 180.0) / 360.0 * n), int((1.0 - math.asinh(math.tan(r)) / math.pi) / 2.0 * n)
+    return int((lon + 180.0) / 360.0 * n), int((1.0 - dmath.asinh(dmath.tan(r)) / math.pi) / 2.0 * n)
 
 
 def tiles_over(south, west, north, east, box=BOX):
@@ -83,7 +84,7 @@ def credited_near(cache_dir, lat, lon, near_m, local=None):
     if not ON or not (cache_dir or local):
         return set()
     dlat = near_m / 110540.0
-    dlon = near_m / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+    dlon = near_m / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
     got = set()
     for c in SOURCES:
         for x, y in tiles_over(lat - dlat, lon - dlon, lat + dlat, lon + dlon, c.box):

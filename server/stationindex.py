@@ -15,6 +15,8 @@ prompt search rings of cells outward from the car and may download the few cells
 import json
 import logging
 import math
+import dmath
+import dnp
 import os
 import re
 import threading
@@ -38,13 +40,13 @@ EARTH_KM = 6371.0088
 
 def _km(la0, lo0, la1, lo1):
     p0, p1 = math.radians(la0), math.radians(la1)
-    a = math.sin((p1 - p0) / 2) ** 2 + math.cos(p0) * math.cos(p1) * math.sin(math.radians(lo1 - lo0) / 2) ** 2
-    return 2 * EARTH_KM * math.asin(min(1.0, math.sqrt(a)))
+    a = dnp.sq(dmath.sin((p1 - p0) / 2)) + dmath.cos(p0) * dmath.cos(p1) * dnp.sq(dmath.sin(math.radians(lo1 - lo0) / 2))
+    return 2 * EARTH_KM * dmath.asin(min(1.0, math.sqrt(a)))
 
 
 def _m(a, b):
     """Metres between two items (equirectangular: they are within a few hundred m)."""
-    k = math.cos(math.radians(a["lat"]))
+    k = dmath.cos(math.radians(a["lat"]))
     return math.hypot((a["lon"] - b["lon"]) * k, a["lat"] - b["lat"]) * 111320.0
 
 
@@ -242,7 +244,7 @@ class StationIndex:
 
     def _cells_by_distance(self, lat, lon, r_km):
         dlat = r_km / 111.32
-        dlon = r_km / (111.32 * max(math.cos(math.radians(lat)), 0.01))
+        dlon = r_km / (111.32 * max(dmath.cos(math.radians(lat)), 0.01))
         keys = mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon)
         return sorted(keys, key=lambda k: _km(lat, lon, *_centre(k)))
 

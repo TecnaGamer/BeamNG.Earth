@@ -16,6 +16,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 ENABLED = os.environ.get("BNE_CATENARY", "") not in ("", "0", "off", "false")
 
@@ -93,7 +95,7 @@ def electrified(cells):
 
 
 def _arc(xy):
-    return np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    return np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
 
 
 def _frame_at(xy, s, arc):
@@ -101,7 +103,7 @@ def _frame_at(xy, s, arc):
     s = float(np.clip(s, 0.0, arc[-1]))
     j = int(np.clip(np.searchsorted(arc, s) - 1, 0, len(xy) - 2))
     d = xy[j + 1] - xy[j]
-    n = max(float(np.hypot(*d)), 1e-9)
+    n = max(float(dnp.hypot(*d)), 1e-9)
     t = (s - arc[j]) / n
     return xy[j] + d * t, d / n
 
@@ -110,7 +112,7 @@ def _radius(xy, arc, s, win=20.0):
     """Radius of the line round arc s from its heading change over +-win m (inf on a straight)."""
     _, a = _frame_at(xy, s - win, arc)
     _, b = _frame_at(xy, s + win, arc)
-    ang = abs(math.atan2(a[0] * b[1] - a[1] * b[0], float(a @ b)))
+    ang = abs(dmath.atan2(a[0] * b[1] - a[1] * b[0], float(dnp.matmul(a, b))))
     return float("inf") if ang < 1e-4 else 2.0 * win / ang
 
 
@@ -139,7 +141,7 @@ def _dist_to_lines(p, lines):
         a, b = ln[:-1], ln[1:]
         d = b - a
         t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
-        best = min(best, float(np.hypot(*(a + t[:, None] * d - p).T).min()))
+        best = min(best, float(dnp.hypot(*(a + t[:, None] * d - p).T).min()))
     return best
 
 
@@ -161,7 +163,7 @@ def _project(xy, arc, p):
     seg = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / seg, 0.0, 1.0)
     q = a + t[:, None] * d
-    dist = np.hypot(*(q - p).T)
+    dist = dnp.hypot(*(q - p).T)
     j = int(np.argmin(dist))
     u = d[j] / math.sqrt(seg[j])
     lat = float(u[0] * (p[1] - q[j, 1]) - u[1] * (p[0] - q[j, 0]))
@@ -200,7 +202,7 @@ def near_ring(p, rings, m=BUILDING_CLEAR_M):
         a, b = r, np.roll(r, -1, axis=0)
         d = b - a
         t = np.clip(((p - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
-        if float(np.hypot(*(a + t[:, None] * d - p).T).min()) <= m:
+        if float(dnp.hypot(*(a + t[:, None] * d - p).T).min()) <= m:
             return True
         # (inside: an even number of the outline's edges cross a ray to +x)
         y0, y1 = a[:, 1], b[:, 1]
@@ -226,7 +228,7 @@ def _nearest(xy, arc, p):
     seg = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / seg, 0.0, 1.0)
     q = a + t[:, None] * d
-    dist = np.hypot(*(q - p).T)
+    dist = dnp.hypot(*(q - p).T)
     j = int(np.argmin(dist))
     return float(arc[j] + t[j] * math.sqrt(seg[j])), q[j], d[j] / math.sqrt(seg[j]), float(dist[j])
 
@@ -239,7 +241,7 @@ def corridor(parts, arcs, i, p, u):
         if j == i:
             continue
         s, q, uj, d = _nearest(xy, arcs[j], p)
-        if d <= PORTAL_BAND_M and abs(float(u @ uj)) >= PORTAL_COS and 0.0 < s < arcs[j][-1]:
+        if d <= PORTAL_BAND_M and abs(float(dnp.matmul(u, uj))) >= PORTAL_COS and 0.0 < s < arcs[j][-1]:
             out.append((j, s, q, uj))
     return out
 
@@ -250,7 +252,7 @@ def _overlaps(new, placed):
     c = (new["posts"][0][0] + new["posts"][1][0]) / 2.0
     for m in placed:
         c2 = (m["posts"][0][0] + m["posts"][1][0]) / 2.0
-        if float(np.hypot(*(c - c2))) < PORTAL_MERGE_M:
+        if float(dnp.hypot(*(c - c2))) < PORTAL_MERGE_M:
             return True
     return False
 
@@ -261,7 +263,7 @@ def _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground):
     buildings) or the corridor is wider than PORTAL_MAX_W_M."""
     n = np.array([-u0[1], u0[0]])
     members = [(pi, s0, p0, u0)] + list(mates)
-    lat = [float((q - p0) @ n) for _j, _s, q, _u in members]
+    lat = [float(dnp.matmul(q - p0, n)) for _j, _s, q, _u in members]
     lo, hi = min(lat) - PORTAL_POST_OFF_M, max(lat) + PORTAL_POST_OFF_M
     if hi - lo > PORTAL_MAX_W_M + 2 * PORTAL_POST_OFF_M:
         return []
@@ -356,7 +358,7 @@ def masts_of(frame, cells, box, ground, rings=()):
             zax = float(np.asarray(ground(np.array([p])), np.float64).ravel()[0])
             zq = float(np.asarray(ground(np.array([q])), np.float64).ravel()[0])
             z = float(np.clip(zq, zax + MAST_Z_BAND[0], zax + MAST_Z_BAND[1]))
-            toward = (p - q) / max(float(np.hypot(*(p - q))), 1e-9)
+            toward = (p - q) / max(float(dnp.hypot(*(p - q))), 1e-9)
             out.append({"fid": fid, "part": pi, "s": s, "q": q, "axis": p, "z": z, "zax": zax, "dir": toward,
                         "u": u, "pos": len(out)})
     out.extend(_joints(parts, arcs, out, ground))
@@ -390,7 +392,7 @@ def _joints(parts, arcs, masts, ground):
     for i, (pa, ea, ka, ma) in enumerate(ends):
         for j in range(i + 1, len(ends)):
             pb, eb, kb, mb = ends[j]
-            if pa != pb and float(np.hypot(*(ea - eb))) <= JOINT_M:
+            if pa != pb and float(dnp.hypot(*(ea - eb))) <= JOINT_M:
                 out.append({"link": (ma, mb)})
                 used.add(i)
                 used.add(j)
@@ -420,7 +422,7 @@ def portal_wires(pt):
     (a, za), (b, zb) = pt["posts"]
     zbot = pt["z"] + PORTAL_Z
     ztop = zbot + PORTAL_H
-    L = float(np.hypot(*(b - a)))
+    L = float(dnp.hypot(*(b - a)))
     n = max(2, int(round(L / PORTAL_VERT_M)))
     ts = np.linspace(0.0, 1.0, n + 1)
     xy = np.array([a + (b - a) * t for t in ts])
@@ -480,7 +482,7 @@ def span_wires(a, b):
         m1[2] = c1[2]           # rather than ending in the air a metre and a half over it)
     if a.get("end"):
         m0[2] = c0[2]
-    span = float(np.hypot(*(c1[:2] - c0[:2])))
+    span = float(dnp.hypot(*(c1[:2] - c0[:2])))
     n = max(2, int(math.ceil(span / 10.0)))
     ts = np.linspace(0.0, 1.0, n + 1)
     contact = np.array([c0 + (c1 - c0) * t for t in ts])
@@ -513,7 +515,7 @@ def rows_and_wires(masts, box_owns, style="su"):
             if box_owns(float(m["q"][0]), float(m["q"][1])):
                 wires.extend(portal_wires(m))
             d = m["posts"][1][0] - m["posts"][0][0]
-            yaw = round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1)
+            yaw = round(math.degrees(dmath.atan2(d[1], d[0])) % 360.0, 1)
             for q, z in m["posts"]:
                 if box_owns(float(q[0]), float(q[1])):
                     rows.append([g_post, round(float(q[0]), 2), round(float(q[1]), 2), round(z, 2), yaw, 1.0, POST_H,
@@ -526,7 +528,7 @@ def rows_and_wires(masts, box_owns, style="su"):
         ms.sort(key=lambda m: m["s"])
         for a, b in zip(ms[:-1], ms[1:]):
             L = b["s"] - a["s"]
-            span = float(np.hypot(*(b["axis"] - a["axis"])))
+            span = float(dnp.hypot(*(b["axis"] - a["axis"])))
             if not (MIN_SPAN_DRAWN_M <= span <= MAX_SPAN_DRAWN_M and L <= MAX_SPAN_DRAWN_M * 1.3):
                 continue
             if not box_owns(float(a["q"][0]), float(a["q"][1])):
@@ -534,14 +536,14 @@ def rows_and_wires(masts, box_owns, style="su"):
             wires.extend(span_wires(a, b))
     for lk in links:
         a, b = lk
-        span = float(np.hypot(*(_tip(b)[:2] - _tip(a)[:2])))
+        span = float(dnp.hypot(*(_tip(b)[:2] - _tip(a)[:2])))
         if span <= LINK_MAX_M and box_owns(float(a["q"][0]), float(a["q"][1])):
             wires.extend(span_wires(a, b))
     for m in masts:
         if m.get("portal") or m.get("virtual") or "link" in m:
             continue
         if box_owns(float(m["q"][0]), float(m["q"][1])):
-            yaw = math.degrees(math.atan2(m["dir"][1], m["dir"][0])) % 360.0
+            yaw = math.degrees(dmath.atan2(m["dir"][1], m["dir"][0])) % 360.0
             rows.append([g_mast, round(float(m["q"][0]), 2), round(float(m["q"][1]), 2), round(m["z"], 2),
                          round(yaw, 1), 1.0, MAST_H, 0.0])
     return rows, wires

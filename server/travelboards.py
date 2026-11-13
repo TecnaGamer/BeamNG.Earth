@@ -27,6 +27,7 @@ from pathlib import Path
 import shutil
 import threading
 import numpy as np
+import dnp
 import exitsigns
 import forestboards
 import recreationrules
@@ -86,8 +87,8 @@ def version():
     return 'travelboards-10-'+h.hexdigest()[:16]
 
 def at(path,distance):
-    path=np.asarray(path,float);scale=np.array([111320.*np.cos(np.radians(path[:,1].mean())),111320.])
-    arc=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(path,axis=0)*scale,axis=1))]
+    path=np.asarray(path,float);scale=np.array([111320.*dnp.cos(np.radians(path[:,1].mean())),111320.])
+    arc=np.r_[0.,np.cumsum(dnp.norm(np.diff(path,axis=0)*scale,axis=1))]
     distance=float(np.clip(distance,0,arc[-1]));i=min(len(path)-2,max(0,int(np.searchsorted(arc,distance,side='right')-1)))
     t=(distance-arc[i])/max(arc[i+1]-arc[i],1e-9)
     return path[i]*(1-t)+path[i+1]*t,i,arc,scale
@@ -183,8 +184,8 @@ def boundary_near(path):
 
 def record(kind,row,path,distance,key,**extra):
     point,i,arc,scale=at(path,distance);axis=(path[i+1]-path[i])*scale
-    if np.linalg.norm(axis)<1e-8:return None
-    axis/=np.linalg.norm(axis);a=max(0,distance-60);b=min(arc[-1],distance+60)
+    if dnp.norm(axis)<1e-8:return None
+    axis/=dnp.norm(axis);a=max(0,distance-60);b=min(arc[-1],distance+60)
     approach=np.vstack([at(path,a)[0],path[(arc>a)&(arc<b)],at(path,b)[0]])
     return dict(id=routeindex.uid(('travelboard-v1',kind,key)),lon=float(point[0]),lat=float(point[1]),ways=[],tags={},
                 travelboard=dict(kind=kind,feature_id=row['fid'],main_id=row['wid'],approach=approach.tolist(),axis=axis.tolist(),**extra))
@@ -201,11 +202,11 @@ def candidates(rows,areas=(),welcomes=True):
     # Source segments frequently end precisely on a state line.
     joined=list(paths) if welcomes else []
     for a,pa in paths if welcomes else []:
-        va=pa[-1]-pa[-2];va/=max(np.linalg.norm(va),1e-9)
+        va=pa[-1]-pa[-2];va/=max(dnp.norm(va),1e-9)
         for b,pb in starts.get(tuple(np.round(pa[-1],7)),[]):
-            if a['fid']==b['fid'] or a['spec'].cls!=b['spec'].cls or np.linalg.norm((pa[-1]-pb[0])*111320)>1.:continue
-            vb=pb[1]-pb[0];vb/=max(np.linalg.norm(vb),1e-9)
-            if va@vb>.9:joined.append((b,np.vstack([pa,pb[1:]])))
+            if a['fid']==b['fid'] or a['spec'].cls!=b['spec'].cls or dnp.norm((pa[-1]-pb[0])*111320)>1.:continue
+            vb=pb[1]-pb[0];vb/=max(dnp.norm(vb),1e-9)
+            if dnp.matmul(va, vb)>.9:joined.append((b,np.vstack([pa,pb[1:]])))
     result=[];classify=lambda p:signstates.states(p[:,1],p[:,0])
     for row,path in joined if welcomes else []:
         if row['spec'].cls not in ('motorway','trunk','primary','secondary') or not boundary_near(path):continue
@@ -223,7 +224,7 @@ def candidates(rows,areas=(),welcomes=True):
         for b,pb in starts.get(tuple(np.round(pa[-1],7)),[]):
             if a['fid']==b['fid'] or a['spec'].cls!=b['spec'].cls:continue
             va=pa[-1]-pa[-2];vb=pb[1]-pb[0]
-            if va@vb/max(np.linalg.norm(va)*np.linalg.norm(vb),1e-9)>.9:
+            if dnp.matmul(va, vb)/max(dnp.norm(va)*dnp.norm(vb),1e-9)>.9:
                 entries.append((a,np.vstack([pa,pb[1:]])))
     crossings={}            # (a two-way road's other direction: its transitions reversed, not searched again)
 
@@ -261,10 +262,10 @@ def candidates(rows,areas=(),welcomes=True):
     # Suppression is a duplicate rule, never an arbitrary repeat interval.
     found=[]
     for obj in sorted({o['id']:o for o in result}.values(),key=lambda o:o['id']):
-        e=obj['travelboard'];scale=np.array([111320.*np.cos(np.radians(obj['lat'])),111320.])
+        e=obj['travelboard'];scale=np.array([111320.*dnp.cos(np.radians(obj['lat'])),111320.])
         if any(old['travelboard'].get('state')==e.get('state') and old['travelboard'].get('name')==e.get('name') and
-               old['travelboard']['kind']==e['kind'] and np.dot(old['travelboard']['axis'],e['axis'])>.8 and
-               np.linalg.norm((np.array([old['lon'],old['lat']])-np.array([obj['lon'],obj['lat']]))*scale)<150 for old in found):continue
+               old['travelboard']['kind']==e['kind'] and dnp.dot(old['travelboard']['axis'],e['axis'])>.8 and
+               dnp.norm((np.array([old['lon'],old['lat']])-np.array([obj['lon'],obj['lat']]))*scale)<150 for old in found):continue
         found.append(obj)
     return found
 
@@ -292,10 +293,10 @@ def welcome_highway(row,point=None):
     fraction=None
     if point is not None:
         path=np.asarray(row.get('route_path',row['path']),float)
-        xy=(path-point)*[111320.*np.cos(np.radians(point[1])),111320.]
-        delta=np.diff(xy,axis=0);length=np.linalg.norm(delta,axis=1)
-        t=np.clip(-np.einsum('ij,ij->i',xy[:-1],delta)/np.maximum(length**2,1e-12),0,1)
-        k=int(np.linalg.norm(xy[:-1]+t[:,None]*delta,axis=1).argmin())
+        xy=(path-point)*[111320.*dnp.cos(np.radians(point[1])),111320.]
+        delta=np.diff(xy,axis=0);length=dnp.norm(delta,axis=1)
+        t=np.clip(-dnp.vecdot(xy[:-1],delta)/np.maximum(length * length,1e-12),0,1)
+        k=int(dnp.norm(xy[:-1]+t[:,None]*delta,axis=1).argmin())
         fraction=float((length[:k].sum()+t[k]*length[k])/max(length.sum(),1e-12))
     for network,ref,start,end in row.get('routes',()):
         bits=str(network).upper().split(':');ref=str(ref).strip()
@@ -326,19 +327,19 @@ def mapped_welcomes(nodes, rows):
         if not state or state not in registry()['states']:continue
         point=np.array([node['lon'],node['lat']],float)
         if not np.isfinite(point).all():continue
-        scale=np.array([111320.*np.cos(np.radians(point[1])),111320.]);choices=[]
+        scale=np.array([111320.*dnp.cos(np.radians(point[1])),111320.]);choices=[]
         for row in rows:
             sp=row['spec']
             if not border_road(row):continue
             path=np.asarray(row['path']);xy=(path-point)*scale;d=np.diff(xy,axis=0)
-            lengths=np.linalg.norm(d,axis=1);t=np.clip(-np.einsum('ij,ij->i',xy[:-1],d)/np.maximum(lengths**2,1e-9),0,1)
-            near=xy[:-1]+t[:,None]*d;dist=np.linalg.norm(near,axis=1);k=int(dist.argmin())
+            lengths=dnp.norm(d,axis=1);t=np.clip(-dnp.vecdot(xy[:-1],d)/np.maximum(lengths * lengths,1e-9),0,1)
+            near=xy[:-1]+t[:,None]*d;dist=dnp.norm(near,axis=1);k=int(dist.argmin())
             if dist[k]>100 or lengths[k]<1e-6:continue
             tangent=d[k]/lengths[k]
             for direction in ((sp.dir or 1,) if sp.oneway else (1,-1)):
                 axis=tangent*direction;right=np.array([axis[1],-axis[0]])
                 # Off-way boards normally stand to the approaching driver's right.
-                if -near[k]@right < sp.width/2:continue
+                if dnp.matmul(-near[k], right) < sp.width/2:continue
                 station=float(lengths[:k].sum()+t[k]*lengths[k]);distance=station if direction>0 else float(lengths.sum()-station)
                 obj=record('welcome',row,path if direction>0 else path[::-1],distance,
                            ('osm-node',int(node['id'])),state=state,mapped=True,osm_node_id=int(node['id']))
@@ -378,11 +379,11 @@ def border_welcomes(rows):
         path=initial.copy();owners=[row]*(len(path)-1);used={row['fid']};added=0.
         for _ in range(32):
             if added>=1800:break
-            tangent=path[-1]-path[-2];tangent/=max(np.linalg.norm(tangent),1e-12)
+            tangent=path[-1]-path[-2];tangent/=max(dnp.norm(tangent),1e-12)
             options=[]
             for other,line in starts.get(tuple(np.round(path[-1],6)),()):
                 if other['fid'] in used:continue
-                vector=line[1]-line[0];score=float(tangent@vector/max(np.linalg.norm(vector),1e-12))
+                vector=line[1]-line[0];score=float(dnp.matmul(tangent, vector)/max(dnp.norm(vector),1e-12))
                 if score>.7:options.append((score,other['fid'],other,line))
             if not options:break
             options.sort(key=lambda x:(-x[0],x[1]))
@@ -409,22 +410,22 @@ def border_welcomes(rows):
                     safe=False
                     for line in ground:
                         xy=(np.asarray(line)-point)*scale;delta=np.diff(xy,axis=0)
-                        t=np.clip(-np.einsum('ij,ij->i',xy[:-1],delta)/np.maximum((delta*delta).sum(1),1e-12),0,1)
-                        if np.any(np.linalg.norm(xy[:-1]+t[:,None]*delta,axis=1)<.5):safe=True;break
+                        t=np.clip(-dnp.vecdot(xy[:-1],delta)/np.maximum((delta*delta).sum(1),1e-12),0,1)
+                        if np.any(dnp.norm(xy[:-1]+t[:,None]*delta,axis=1)<.5):safe=True;break
                     if not safe:continue
                 # The first reassurance station may coincide with a driveway
                 # or crossroads. Try the next station before giving up on the
                 # entire crossing (placement rejects these intersections too).
                 tangent=(path[k+1]-path[k])*scale
-                tangent/=max(np.linalg.norm(tangent),1e-12)
+                tangent/=max(dnp.norm(tangent),1e-12)
                 near_junction=False
                 margin=30./scale
                 for fid,line,lower,upper in junctions:
                     if fid==owner['fid'] or np.any(point<lower-margin) or np.any(point>upper+margin):continue
-                    xy=(line-point)*scale;delta=np.diff(xy,axis=0);length2=np.einsum('ij,ij->i',delta,delta)
-                    t=np.clip(-np.einsum('ij,ij->i',xy[:-1],delta)/np.maximum(length2,1e-12),0,1)
-                    near=np.linalg.norm(xy[:-1]+t[:,None]*delta,axis=1)
-                    if np.any((near<30.) & (np.abs(delta@tangent)<.85*np.sqrt(length2))):
+                    xy=(line-point)*scale;delta=np.diff(xy,axis=0);length2=dnp.vecdot(delta,delta)
+                    t=np.clip(-dnp.vecdot(xy[:-1],delta)/np.maximum(length2,1e-12),0,1)
+                    near=dnp.norm(xy[:-1]+t[:,None]*delta,axis=1)
+                    if np.any((near<30.) & (np.abs(dnp.matmul(delta, tangent))<.85*np.sqrt(length2))):
                         near_junction=True;break
                 if near_junction:continue
                 obj=record('welcome',owner,path,station,
@@ -435,24 +436,24 @@ def border_welcomes(rows):
                 break
     result=[]
     for obj in sorted(found,key=lambda o:o['id']):
-        e=obj['travelboard'];scale=np.array([111320.*np.cos(np.radians(obj['lat'])),111320.])
-        if any(old['travelboard']['state']==e['state'] and np.dot(old['travelboard']['axis'],e['axis'])>.8 and
-               np.linalg.norm((np.array([old['lon'],old['lat']])-np.array([obj['lon'],obj['lat']]))*scale)<180 for old in result):continue
+        e=obj['travelboard'];scale=np.array([111320.*dnp.cos(np.radians(obj['lat'])),111320.])
+        if any(old['travelboard']['state']==e['state'] and dnp.dot(old['travelboard']['axis'],e['axis'])>.8 and
+               dnp.norm((np.array([old['lon'],old['lat']])-np.array([obj['lon'],obj['lat']]))*scale)<180 for old in result):continue
         result.append(obj)
     return result
 
 def welcome_preference(inferred,mapped):
     """Attach the matching mapped placement; rendering checks that it is safe."""
     for obj in inferred:
-        e=obj['travelboard'];scale=np.array([111320.*np.cos(np.radians(obj['lat'])),111320.]);axis=np.array(e['axis'])
+        e=obj['travelboard'];scale=np.array([111320.*dnp.cos(np.radians(obj['lat'])),111320.]);axis=np.array(e['axis'])
         choices=[]
         for candidate in mapped:
             m=candidate['travelboard']
-            if m['state']!=e['state'] or np.dot(m['axis'],axis)<.6:continue
+            if m['state']!=e['state'] or dnp.dot(m['axis'],axis)<.6:continue
             delta=(np.array([candidate['lon'],candidate['lat']])-np.array([obj['lon'],obj['lat']]))*scale
-            distance=np.linalg.norm(delta)
+            distance=dnp.norm(delta)
             if distance>1500:continue
-            if m['feature_id'] not in e.get('corridor_ids',()) and abs(delta@np.array([axis[1],-axis[0]]))>35:continue
+            if m['feature_id'] not in e.get('corridor_ids',()) and abs(dnp.matmul(delta, np.array([axis[1],-axis[0]])))>35:continue
             choices.append((distance,candidate['id'],candidate))
         if choices:e['mapped_alternative']=min(choices,key=lambda c:c[:2])[2]
     return inferred+mapped
@@ -471,7 +472,7 @@ def park_exit_boards(objects):
         if arc[-1]<250:continue
         station=max(80.,arc[-1]-650.)
         point,index,_,scale=at(path,station);axis=(path[index+1]-path[index])*scale
-        if np.linalg.norm(axis)<1e-8:continue
+        if dnp.norm(axis)<1e-8:continue
         state=str(signstates.states(point[1],point[0]).item())
         if not state:continue
         lines=[]
@@ -481,15 +482,15 @@ def park_exit_boards(objects):
         record_id=routeindex.uid(('park-exit-board-v1',source['id'],tuple(names)))
         obj=dict(id=record_id,lat=float(point[1]),lon=float(point[0]),tags={},ways=[],travelboard=dict(
             kind='recreation_exit',feature_id='',main_id=e.get('main_id'),main_ids=e.get('main_ids',()),
-            approach=path.tolist(),axis=(axis/np.linalg.norm(axis)).tolist(),name='; '.join(names),lines=lines,
+            approach=path.tolist(),axis=(axis/dnp.norm(axis)).tolist(),name='; '.join(names),lines=lines,
             exit=ref,instruction='NEXT RIGHT' if side==1 else 'NEXT LEFT',side=side,
             width_m=max(3.66,min(6.,max(exitsigns.guide_width(line,.42) for line in lines)+.6)),
             height_m=max(3.4,1.95+.62*len(lines)),source='OSM posted exit destination',allow_mainline_match=True))
         if not any(o.get('travelboard',{}).get('kind')=='recreation_exit' and
                    str(o['travelboard'].get('exit'))==ref and
                    obj['travelboard']['name'].casefold()==o['travelboard'].get('name','').casefold() and
-                   np.dot(o['travelboard']['axis'],obj['travelboard']['axis'])>.8 and
-                   np.linalg.norm((np.array([o['lon'],o['lat']])-point)*scale)<1200 for o in objects):result.append(obj)
+                   dnp.dot(o['travelboard']['axis'],obj['travelboard']['axis'])>.8 and
+                   dnp.norm((np.array([o['lon'],o['lat']])-point)*scale)<1200 for o in objects):result.append(obj)
     return list({o['id']:o for o in result}.values())
 
 RECREATION_CLASSES = ('park','national_park','nature_reserve','campground','camp_site','protected_area')
@@ -712,7 +713,7 @@ def render(signs,origin,out_dir,vfs,faces):
         elif timber:
             timber_name='bne_welcome_timber_v1';target=Path(out_dir)/(timber_name+'.dds')
             if not target.is_file():
-                grain=np.random.default_rng(17).normal(0,4,(64,1,1))+np.sin(np.arange(64)[None,:,None]*2.1)*5
+                grain=np.random.default_rng(17).normal(0,4,(64,1,1))+dnp.sin(np.arange(64)[None,:,None]*2.1)*5
                 pixels=np.clip(np.array([102,69,36])+grain,0,255).astype(np.uint8)
                 imagery.write_dds(str(target),pixels)
             faces[timber_name]=vfs+'/'+target.name
@@ -795,11 +796,11 @@ def place(frame,obj,context,box,elev,chunks=(),existing=(),obstacles=None):
         near=exitsigns._nearest(point,[row])
         if near is None or near[0]>(100 if e.get('mapped') else 25):continue
         travel=near[7]*(sp.dir or 1) if sp.oneway else exitsigns._travel(near,axis)
-        if travel@axis>.8:choices.append((near[0],str(fid),near,travel,width))
+        if dnp.matmul(travel, axis)>.8:choices.append((near[0],str(fid),near,travel,width))
     if not choices:return None
     _,fid,near,travel,width=min(choices,key=lambda p:p[:2])
     if exitsigns._on_deck(near[6],chunks,2):return None
-    if any((other:=exitsigns._nearest(near[6],[row])) is not None and other[0]<30 and abs(other[7]@travel)<.85 for row in pavement if str(row[0])!=fid):return None
+    if any((other:=exitsigns._nearest(near[6],[row])) is not None and other[0]<30 and abs(dnp.matmul(other[7], travel))<.85 for row in pavement if str(row[0])!=fid):return None
     right=np.array([travel[1],-travel[0]])*e.get('side',1);polygons=exitsigns._outlines(pavement)
     walks=[]
     for _,sp,line,road_width in pavement:

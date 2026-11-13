@@ -22,6 +22,7 @@ import os
 import numpy as np
 
 import fast
+import dnp
 
 VERSION = 5                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
 # On by default since 2026-11-12 (the user: "the road don't smoothly curve in some places ... most obvious with
@@ -135,10 +136,10 @@ def pinned_vertices(xy, ends):
     den = np.maximum((ab * ab).sum(1), 1e-12)
     pins = set()
     for p in ends:
-        if min(float(np.hypot(*(p - xy[0]))), float(np.hypot(*(p - xy[-1])))) < SWITCH_PIN_M:
+        if min(float(dnp.hypot(*(p - xy[0]))), float(dnp.hypot(*(p - xy[-1])))) < SWITCH_PIN_M:
             continue                # (a junction at the line's own end: a node, nothing to keep)
         t = np.clip(((p - a) * ab).sum(1) / den, 0.0, 1.0)
-        d = np.hypot(*(a + t[:, None] * ab - p).T)
+        d = dnp.hypot(*(a + t[:, None] * ab - p).T)
         for k in np.flatnonzero(d < SWITCH_PIN_M):
             pins.update(v for v in (int(k), int(k) + 1) if 0 < v < len(xy) - 1)
     return sorted(pins)
@@ -155,7 +156,7 @@ def smooth_pinned(xy, radius, pins):
         seg = np.asarray(xy[c0:c1 + 1], np.float64)
         got = smooth_line(seg, radius) if len(seg) >= 3 else None
         if got is None:
-            d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(seg, axis=0).T))]
+            d = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(seg, axis=0).T))]
             got = (seg, d, d)
         else:
             any_change = True

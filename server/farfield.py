@@ -69,6 +69,8 @@ import cdae
 import dae
 import dem as demmod
 import fast
+import dmath
+import dnp
 import heightmap
 import imagery
 
@@ -407,9 +409,9 @@ def out_of_view(cone, x0, y0, x1, y1, d):
         return 1.0
     cx, cy, cz = (x0 + x1) / 2 - cone[0], (y0 + y1) / 2 - cone[1], cone[7] - cone[2]
     r = math.sqrt(cx * cx + cy * cy + cz * cz)
-    slack = math.asin(min(1.0, math.hypot(x1 - x0, y1 - y0) * 0.5 / max(r, 1.0)))
-    a = math.acos(max(-1.0, min(1.0, (cx * cone[3] + cy * cone[4] + cz * cone[5]) / max(r, 1e-9))))
-    return 1.0 if a - slack <= math.acos(max(-1.0, min(1.0, cone[6]))) else max(1.0, cone[8])
+    slack = dmath.asin(min(1.0, math.hypot(x1 - x0, y1 - y0) * 0.5 / max(r, 1.0)))
+    a = dmath.acos(max(-1.0, min(1.0, (cx * cone[3] + cy * cone[4] + cz * cone[5]) / max(r, 1e-9))))
+    return 1.0 if a - slack <= dmath.acos(max(-1.0, min(1.0, cone[6]))) else max(1.0, cone[8])
 
 
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
@@ -525,9 +527,9 @@ def view_cone(cam):
         n = math.sqrt(fx * fx + fy * fy + fz * fz)
         if not (n > 0.5 and all(map(math.isfinite, (x, y, z, fx, fy, fz, fov, gz)))):
             return None
-        tv = math.tan(math.radians(fov) / 2)
-        half = math.degrees(math.atan(math.hypot(tv, tv * ASPECT))) + VIEW_MARGIN_3D_DEG
-        return x, y, z, fx / n, fy / n, fz / n, math.cos(math.radians(min(half, 89.0))), gz
+        tv = dmath.tan(math.radians(fov) / 2)
+        half = math.degrees(dmath.atan(math.hypot(tv, tv * ASPECT))) + VIEW_MARGIN_3D_DEG
+        return x, y, z, fx / n, fy / n, fz / n, dmath.cos(math.radians(min(half, 89.0))), gz
     try:
         x, y, fx, fy = float(cam["x"]), float(cam["y"]), float(cam["fx"]), float(cam["fy"])
         fov = float(cam.get("fovDeg") or 60)
@@ -536,8 +538,8 @@ def view_cone(cam):
     n = math.hypot(fx, fy)
     if not (n > 0.2 and all(map(math.isfinite, (x, y, fx, fy, fov)))):
         return None                     # looking straight down / up: every direction counts
-    half = math.degrees(math.atan(math.tan(math.radians(fov) / 2) * ASPECT)) + VIEW_MARGIN_DEG
-    return x, y, fx / n, fy / n, math.cos(math.radians(min(half, VIEW_MAX_DEG)))
+    half = math.degrees(dmath.atan(dmath.tan(math.radians(fov) / 2) * ASPECT)) + VIEW_MARGIN_DEG
+    return x, y, fx / n, fy / n, dmath.cos(math.radians(min(half, VIEW_MAX_DEG)))
 
 
 def view_distance(t, cone, x, y):
@@ -659,14 +661,14 @@ GLOBAL_PROTO = 1                # hello.globalFar: the mod places global far til
 
 def global_zoom(lat):
     """The Web-Mercator zoom of far level GLOBAL_MIN_LEVEL at a latitude: its tiles' edge within [0.7, 1.4) x 2048 m."""
-    c = 40075016.686 * max(math.cos(math.radians(min(abs(float(lat)), demmod.MAX_LAT))), 1e-6)
-    return int(math.floor(math.log2(c / (0.7 * level_size(GLOBAL_MIN_LEVEL)))))
+    c = 40075016.686 * max(dmath.cos(math.radians(min(abs(float(lat)), demmod.MAX_LAT))), 1e-6)
+    return int(math.floor(dmath.log2(c / (0.7 * level_size(GLOBAL_MIN_LEVEL)))))
 
 
 def global_dem_zoom(z, cells):
     """DEM zoom of a global tile of zoom z (Web-Mercator aligned: pixels half its vertex spacing at any latitude, so
     neighbours of one zoom sample the same DEM along their shared edge)."""
-    return max(0, min(FAR_MAX_ZOOM, int(z) - int(round(math.log2(demmod.TILE / (2 * cells))))))
+    return max(0, min(FAR_MAX_ZOOM, int(z) - int(round(dmath.log2(demmod.TILE / (2 * cells))))))
 
 
 def is_global_key(k):
@@ -880,7 +882,7 @@ def build_global(dem, z, x, y, zoom, ref_zoom, layout=V131):
         X, Y = np.meshgrid(x + f, (y + 1) - f)          # [j north, i east]
         w = float(2 ** z)
         lon = X / w * 360.0 - 180.0
-        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * Y / w))))
+        lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * Y / w))))
         return lat, lon
     lat, lon = ll(n)
     elev = np.ascontiguousarray(np.asarray(dem.sample(lat, lon, zoom), np.float64))
@@ -977,7 +979,7 @@ class HorizonGrid:
         e = self._edges
         dx = np.maximum(np.maximum(e - px, 0.0), px - (e + s))
         dy = np.maximum(np.maximum(e - py, 0.0), py - (e + s))
-        d = np.hypot(dx[None, :], dy[:, None])
+        d = dnp.hypot(dx[None, :], dy[:, None])
         reach = horizon_distance(h_eye)
         z = self.base
         vis = d <= reach + np.sqrt(2.0 * R_REFRACTED * np.maximum(z, 0.0))
@@ -1009,7 +1011,7 @@ def _merc(lat, lon, zoom):
     w = 2 ** zoom * demmod.TILE
     lat = np.clip(lat, -demmod.MAX_LAT, demmod.MAX_LAT)
     fx = (np.asarray(lon, np.float64) / 360.0 + 0.5) * w
-    fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * w
+    fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w
     return fx, fy
 
 
@@ -1024,7 +1026,7 @@ def dem_block_max(dem, zoom, x, y, block=HORIZON_BLOCK):
     f = (np.arange(2 * n) + 0.5) * (block / 2.0)
     fx, fy = np.meshgrid(x * demmod.TILE + f, y * demmod.TILE + f)
     lon = fx / w * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * fy / w))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * fy / w))))
     a = np.asarray(dem.sample(lat, lon, zoom), np.float64)
     return a.reshape(n, 2, n, 2).max(axis=(1, 3))
 
@@ -1080,7 +1082,7 @@ def horizon_grid(frame, dem, half, zoom=HORIZON_DEM_ZOOM, block=HORIZON_BLOCK, c
     for cj in range(n):
         for ci in range(n):
             base[cj, ci] = m[y0[cj, ci]:y1[cj, ci] + 1, x0[cj, ci]:x1[cj, ci] + 1].max()
-    merc = (zoom + int(round(math.log2(nb))), tx0 * nb, ty0 * nb, np.ascontiguousarray(m, np.float64))
+    merc = (zoom + int(round(dmath.log2(nb))), tx0 * nb, ty0 * nb, np.ascontiguousarray(m, np.float64))
     return HorizonGrid(half, base, zoom, merc)
 
 
@@ -1312,7 +1314,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     X, Y = np.meshgrid(xs, ys)          # [j, i], j = north
     # Colour: height along u, slope along v (mirrored palette, flat = 0.5).
     gy, gx = np.gradient(elev, ys, xs)
-    slope_t = np.clip(np.hypot(gx, gy) / 1.0, 0.0, 1.0)
+    slope_t = np.clip(dnp.hypot(gx, gy) / 1.0, 0.0, 1.0)
     water = (elev <= 0.5) & (slope_t < 0.02)
     uu = np.where(water, WATER_U, u_from_elev(elev))
     vv = 0.5 - 0.47 * slope_t
@@ -1322,7 +1324,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     di = np.gradient(Ps, axis=1)
     dj = np.gradient(Ps, axis=0)
     nrm = np.cross(di, dj)
-    nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
+    nrm /= dnp.norm(nrm, axis=-1, keepdims=True)
     P = np.stack([X, Y, U], -1)
 
     ny, nx = X.shape

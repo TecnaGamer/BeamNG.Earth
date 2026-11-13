@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import dnp
 
 import exitsigns
 import roadmesh
@@ -94,10 +95,10 @@ def corridor(frame, box):
 def project(points, line):
     """Vector point-to-polyline projection; return points, tangents and distances."""
     a, ab = line[:-1, :2], np.diff(line[:, :2], axis=0)
-    length = np.linalg.norm(ab, axis=1)
-    t = np.clip(((points[:, None, :]-a)*ab).sum(2)/np.maximum(length**2, 1e-12), 0., 1.)
+    length = dnp.norm(ab, axis=1)
+    t = np.clip(((points[:, None, :]-a)*ab).sum(2)/np.maximum(length * length, 1e-12), 0., 1.)
     projected = a+t[:, :, None]*ab
-    d2 = ((projected-points[:, None, :])**2).sum(2)
+    d2 = (dnp.sq(projected-points[:, None, :])).sum(2)
     k = d2.argmin(1)
     return projected[np.arange(len(points)), k], ab[k]/np.maximum(length[k, None], 1e-12), np.sqrt(d2[np.arange(len(points)), k])
 
@@ -111,7 +112,7 @@ def identify(frame, line, direction, corridors):
         if distance[k] > 25.:
             continue
         _, own, _ = project(q[k:k+1], line)
-        if abs(float(own[0]@tangent[k])) < .9:
+        if abs(float(dnp.matmul(own[0], tangent[k]))) < .9:
             continue
         if best is None or distance[k] < best[0]:
             best = (distance[k], route, q[k], own[0]*direction)
@@ -121,8 +122,8 @@ def identify(frame, line, direction, corridors):
     stations = direction_stations()
     stations = stations[stations[:, 0] == route]
     xy = exitsigns._xy(frame, stations[:, 2:4])
-    nearest = int(np.sum((xy-point)**2, axis=1).argmin())
-    return route, float(travel@stations[nearest, 4:6]) > 0.
+    nearest = int(np.sum(dnp.sq(xy-point), axis=1).argmin())
+    return route, float(dnp.matmul(travel, stations[nearest, 4:6])) > 0.
 
 
 def _heights(frame, elev, xy):
@@ -164,7 +165,7 @@ def runs(frame, pavements, box, elev):
         extension = (route == 65) & (la >= JERSEY_RESUME)
         limit = np.where(extension, 80., MAX_MEDIAN)
         travel = np.gradient(xy, axis=0)*(spec.dir or 1)
-        travel /= np.maximum(np.linalg.norm(travel, axis=1)[:, None], 1e-9)
+        travel /= np.maximum(dnp.norm(travel, axis=1)[:, None], 1e-9)
         left = np.c_[-travel[:, 1], travel[:, 0]]
         best = np.full(len(xy), np.inf)
         half_width = np.full(len(xy), BASE_WIDTH/2.)
@@ -214,8 +215,8 @@ def runs(frame, pavements, box, elev):
                 continue
             points = np.c_[centres[group], z[group], tops[group], roadmesh._normals(centres[group]), half_width[group]]
             for piece in roads.clip_polyline(points, *box):
-                piece = piece[np.r_[True, np.linalg.norm(np.diff(piece[:, :2], axis=0), axis=1) > 1e-6]]
-                if len(piece) >= 2 and np.linalg.norm(piece[-1, :2]-piece[0, :2]) > .05:
+                piece = piece[np.r_[True, dnp.norm(np.diff(piece[:, :2], axis=0), axis=1) > 1e-6]]
+                if len(piece) >= 2 and dnp.norm(piece[-1, :2]-piece[0, :2]) > .05:
                     out.append(dict(route=route, n=piece[:, :3].tolist(), top=piece[:, 3].tolist(),
                                     cross=piece[:, 4:6].tolist(),
                                     half_width=piece[:, 6].tolist(),
@@ -243,7 +244,7 @@ def build(chunks, origin):
         sections[:, :, :2] += normals[:, None, :]*offsets[:, :, None]
         sections[:, :, 2] += profile[None, :, 1]
         sections[:, 4:6, 2] = np.asarray(chunk['top'])[:, None]
-        station = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line[:, :2], axis=0), axis=1))]
+        station = np.r_[0., np.cumsum(dnp.norm(np.diff(line[:, :2], axis=0), axis=1))]
         for k in range(len(line)-1):
             for j in range(len(profile)):
                 nxt = (j+1)%len(profile)
@@ -279,17 +280,17 @@ def mount(frame, obj, pavements, elev):
             continue
         line = np.asarray(run['n'], float)
         nearest, travel, distance = project(q[None, :], line)
-        if distance[0] > 80. or abs(float((nearest[0]-q)@travel[0])) > 1.5:
+        if distance[0] > 80. or abs(float(dnp.matmul(nearest[0]-q, travel[0]))) > 1.5:
             continue
         # Interpolate height on the same segment used by the nearest projection.
         segments = np.diff(line[:, :2], axis=0)
         fractions = np.clip(((nearest[0]-line[:-1, :2])*segments).sum(1)/
-                            np.maximum((segments**2).sum(1), 1e-12), 0., 1.)
-        distances = np.linalg.norm(line[:-1, :2]+segments*fractions[:, None]-nearest[0], axis=1)
+                            np.maximum((segments * segments).sum(1), 1e-12), 0., 1.)
+        distances = dnp.norm(line[:-1, :2]+segments*fractions[:, None]-nearest[0], axis=1)
         k = int(distances.argmin())
         t = float(fractions[k])
         top = run['top'][k]*(1.-t)+run['top'][k+1]*t
-        direction = travel[0] if travel[0]@axis > 0 else -travel[0]
+        direction = travel[0] if dnp.matmul(travel[0], axis) > 0 else -travel[0]
         candidates.append((distance[0], np.r_[nearest[0], top], direction))
     return min(candidates, key=lambda c: c[0])[1:] if candidates else None
 
@@ -331,7 +332,7 @@ def collider_boxes(chunks):
         if len(pts) < 2:
             continue
         top = np.asarray(chunk.get('top', pts[:, 2] + HEIGHT), float)
-        dist = np.r_[0., np.cumsum(np.linalg.norm(np.diff(pts[:, :2], axis=0), axis=1))]
+        dist = np.r_[0., np.cumsum(dnp.norm(np.diff(pts[:, :2], axis=0), axis=1))]
         pieces = np.floor(dist / roads.COLLIDER_PIECE_M).astype(int)
         width = np.broadcast_to(np.asarray(chunk.get('half_width', float(chunk['w']) / 2)), len(pts))
         for piece in np.unique(pieces):
@@ -360,7 +361,7 @@ def overlapping(points, tangents, reach, chunks, heights=None):
                  (np.abs(((q-points)*along).sum(1)) <= 1.5))
         if heights is not None:
             # The module's nearest sample is sufficient for ground/deck separation.
-            k = ((points[:, None, :]-line[None, :, :2])**2).sum(2).argmin(1)
+            k = (dnp.sq(points[:, None, :]-line[None, :, :2])).sum(2).argmin(1)
             match &= np.abs(np.asarray(heights)-line[k, 2]) < 2.
         covered |= match
     return covered
@@ -372,7 +373,7 @@ def native_modules(mods, chunks):
         return mods
     import medians
     delta = mods[:, 4:6]-mods[:, 2:4]
-    tangent = delta/np.maximum(np.linalg.norm(delta, axis=1)[:, None], 1e-9)
+    tangent = delta/np.maximum(dnp.norm(delta, axis=1)[:, None], 1e-9)
     # A cable run can lie on the inner shoulder instead of the median centre.
     covered = overlapping((mods[:, 2:4]+mods[:, 4:6])/2., tangent, medians.MAX_GAP_M/2.+.75, chunks)
     return mods[~(covered & ~np.isfinite(mods[:, 9]) & ~np.isfinite(mods[:, 10]))]

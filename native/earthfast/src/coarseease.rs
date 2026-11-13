@@ -2,6 +2,7 @@
 //! #414, Perm's Solikamskaya Street on Copernicus' 30 m: service roads 7 m beside a primary stood 4-5 m above it, walls
 //! across every junction, where the street photos show it all at grade). A lower-ranked road near a higher-ranked one
 //! takes the higher one's height (equal ranks meet halfway), less what a real cross slope between their edges explains.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -102,7 +103,7 @@ pub fn ease_coarse<'py>(
                 let gap = (d - half[k] - half[j]).max(0.0);
                 let excess = (diff.abs() - max_slope * gap).max(0.0) * diff.signum();
                 let share = if rank[k] > rank[j] { 1.0 } else { 0.5 };
-                let w = share * (-(past / reach).powi(2)).exp();
+                let w = share * (-(past / reach).powi(2)).dexp();
                 if w > bw {
                     bw = w;
                     bdelta = excess * w;
@@ -130,7 +131,7 @@ pub fn ease_coarse<'py>(
                 if u.abs() > 3.0 {
                     continue;
                 }
-                let w = (-0.5 * u * u).exp();
+                let w = (-0.5 * u * u).dexp();
                 num += w * dz[k];
                 den += w;
             }

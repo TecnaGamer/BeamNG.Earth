@@ -21,6 +21,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import roads
 import signroads
 import signshards
@@ -162,12 +163,12 @@ def raw_fields(de):
 
 
 def _unit(v):
-    n = float(np.linalg.norm(v))
+    n = float(dnp.norm(v))
     return v / n if n > 1e-9 else np.array([1.0, 0.0])
 
 
 def _arc(path):
-    return np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))]
+    return np.r_[0.0, np.cumsum(dnp.norm(np.diff(path, axis=0), axis=1))]
 
 
 def _at(path, arc, s):
@@ -184,8 +185,8 @@ def _project(path, q):
     best = (math.inf, 0.0)
     for k in range(len(path) - 1):
         ab = path[k + 1] - path[k]
-        t = float(np.clip((q - path[k]) @ ab / max(ab @ ab, 1e-12), 0.0, 1.0))
-        d = float(np.linalg.norm(path[k] + t * ab - q))
+        t = float(np.clip(dnp.matmul(q - path[k], ab) / max(dnp.matmul(ab, ab), 1e-12), 0.0, 1.0))
+        d = float(dnp.norm(path[k] + t * ab - q))
         if d < best[0]:
             best = (d, arc[k] + t * (arc[k + 1] - arc[k]))
     return best[1]
@@ -207,7 +208,7 @@ def _at_many(path, arc, s):
     s = np.clip(np.asarray(s, float), 0.0, arc[-1])
     k = np.clip(np.searchsorted(arc, s) - 1, 0, len(path) - 2)
     seg = path[k + 1] - path[k]
-    n = np.maximum(np.linalg.norm(seg, axis=1), 1e-9)
+    n = np.maximum(dnp.norm(seg, axis=1), 1e-9)
     t = (s - arc[k]) / np.maximum(arc[k + 1] - arc[k], 1e-9)
     return path[k] + t[:, None] * seg, seg / n[:, None]
 
@@ -219,7 +220,7 @@ def _proj(q, line):
     l2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip((((q[:, None, :] - a[None]) * ab[None]).sum(-1)) / l2[None], 0.0, 1.0)
     p = a[None] + t[..., None] * ab[None]
-    d = np.linalg.norm(q[:, None, :] - p, axis=-1)
+    d = dnp.norm(q[:, None, :] - p, axis=-1)
     k = np.argmin(d, axis=1)
     idx = np.arange(len(q))
     tang = ab[k] / np.sqrt(l2[k])[:, None]
@@ -279,7 +280,7 @@ def fork_spot(p0, p1, w0, w1, need=FORK_BOARDS_W, clear=None):
     for s in np.arange(0.0, end + 0.1, 5.0):
         q0, _ = _at(p0, a0, s)
         q1, _ = _at(p1, a1, s)
-        if float(np.linalg.norm(q0 - q1)) - (w0 + w1) / 2 >= need + 2 * FORK_CLEAR_M:
+        if float(dnp.norm(q0 - q1)) - (w0 + w1) / 2 >= need + 2 * FORK_CLEAR_M:
             mid = (q0 + q1) / 2
             if clear is None or clear(mid):
                 return mid, float(s)
@@ -531,7 +532,7 @@ def follow_ups(recs, frame):
             dist, k, t, _pt, tang = _proj(pts[a["id"]][None], path)
             travel_b = -tang[0]
             at = arc[k[0]] + t[0] * (arc[k[0] + 1] - arc[k[0]])
-            if dist[0] <= FOLLOW_LATERAL_M and float(travel_b @ ha) >= FOLLOW_ALIGN and 1.0 < at < arc[-1]:
+            if dist[0] <= FOLLOW_LATERAL_M and float(dnp.matmul(travel_b, ha)) >= FOLLOW_ALIGN and 1.0 < at < arc[-1]:
                 out[b["id"]] = min(out.get(b["id"], math.inf), float(at))
     return out
 

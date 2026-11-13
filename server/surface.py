@@ -32,6 +32,8 @@ from PIL import Image, ImageDraw
 
 import beaches
 import fast
+import dmath
+import dnp
 import mapgeom
 import heightmap
 import mapcells
@@ -111,7 +113,7 @@ def lawns(lat, lon):
     """True where built-up land is a lawn (LAWN_* above). A pure function of the world position."""
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
-    xm = lon * M_PER_DEG * np.cos(np.radians(lat))
+    xm = lon * M_PER_DEG * dnp.cos(np.radians(lat))
     ym = lat * M_PER_DEG
     n = 0.65 * _value_noise(xm / LAWN_PATCH_M, ym / LAWN_PATCH_M, 5) \
         + 0.35 * _value_noise(xm / (LAWN_PATCH_M / 3), ym / (LAWN_PATCH_M / 3), 6)
@@ -142,7 +144,7 @@ def classify(classes, u, square, lat=None, lon=None):
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
     gy, gx = np.gradient(u, square)
-    steep = (gx * gx + gy * gy) > math.tan(math.radians(ROCK_SLOPE_DEG)) ** 2
+    steep = (gx * gx + gy * gy) > dnp.sq(dmath.tan(math.radians(ROCK_SLOPE_DEG)))
     return np.where(steep & (idx != SNOW), np.uint8(ROCK), idx).astype(np.uint8)
 
 
@@ -169,7 +171,7 @@ def warp(lat, lon):
     function of the world position (blocks agree along their shared samples). Pure."""
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
-    m_lon = M_PER_DEG * np.cos(np.radians(lat))
+    m_lon = M_PER_DEG * dnp.cos(np.radians(lat))
     xm = lon * m_lon                     # metres east of the lon 0 meridian (at this latitude)
     ym = lat * M_PER_DEG                 # metres north of the equator
     dx = np.zeros_like(lat)
@@ -198,12 +200,12 @@ def grid_affine(lat, lon):
     la, lo = lat[rr, cc].ravel(), lon[rr, cc].ravel()
     lo0, la0 = float(lo.mean()), float(la.mean())
     A = np.stack([lo - lo0, la - la0, np.ones_like(lo)], axis=1)
-    coef, *_ = np.linalg.lstsq(A, np.stack([cc.ravel(), rr.ravel()], axis=1).astype(np.float64), rcond=None)
+    coef, *_ = dnp.lstsq(A, np.stack([cc.ravel(), rr.ravel()], axis=1).astype(np.float64), rcond=None)
 
     def f(lon_, lat_):
         B = np.stack([np.asarray(lon_, np.float64) - lo0, np.asarray(lat_, np.float64) - la0,
                       np.ones(np.shape(lon_))], axis=-1)
-        cr = B @ coef
+        cr = dnp.matmul(B, coef)
         return cr[..., 0], cr[..., 1]
     return f
 
@@ -254,7 +256,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     grid = grid_affine(lat, lon)
     la_c, lo_c = float(np.mean(lat)), float(np.mean(lon))
     m_lat = 1.0 / 111320.0
-    m_lon = m_lat / max(math.cos(math.radians(la_c)), 1e-6)
+    m_lon = m_lat / max(dmath.cos(math.radians(la_c)), 1e-6)
     c0_, r0_ = grid(lo_c, la_c)
     c1_, r1_ = grid(lo_c + m_lon * square / 2, la_c + m_lat * square / 2)
     dc, dr = float(c1_ - c0_), float(r1_ - r0_)        # half a square east and north, in samples
@@ -306,7 +308,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             for side, walk in street.walks():
                 # Independent strips leave the setback to the original ground.
                 ll = np.c_[x, y]
-                scale = np.array([111320. * math.cos(math.radians(float(np.mean(y)))), 110540.])
+                scale = np.array([111320. * dmath.cos(math.radians(float(np.mean(y)))), 110540.])
                 offset = side * (width / 2 + walk.setback + walk.width / 2)
                 xy = roadsmod.offset_polyline(np.c_[(ll - ll[0]) * scale, np.zeros(len(ll))], offset)
                 wc, wr = to_px(*(xy[:, :2] / scale + ll[0]).T)
@@ -368,7 +370,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                      () if quick else roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
                     # the median's ground: lawn (report #48, Boston Street, 2026-10-17)
-                    sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
+                    sc = np.array([111320.0 * dmath.cos(math.radians(float(ring[0, 1]))), 110540.0])
                     xy = (ring[:, :2] - ring[0, :2]) * sc
                     off = roadsmod.offset_polyline(np.c_[xy, np.zeros(len(xy))],
                                                    ms * (specs[i].width / 2 + mw / 2))[:, :2] / sc + ring[0, :2]
@@ -688,7 +690,7 @@ def _outset_poly(xy, metres):
     """xy (k, 2) scaled out from its centroid by metres along each radius (a roundabout footprint)."""
     c = xy.mean(0)
     d = xy - c
-    r = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-3)
+    r = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-3)
     return c + d * ((r + metres) / r)[:, None]
 
 
@@ -1213,7 +1215,7 @@ def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
                     continue
                 if look == plazas.US_AMBIGUOUS or sv in ("paving_stones", ""):    # (its own tags first: tag_look)
                     look = plazas.tag_look(streetfront.tags_of(feats, i)) or look
-                area = 0.5 * abs(float(np.dot(c, np.roll(r, 1)) - np.dot(r, np.roll(c, 1))))
+                area = 0.5 * abs(float(dnp.dot(c, np.roll(r, 1)) - dnp.dot(r, np.roll(c, 1))))
                 items.append((area, ring, part[1:], look))
     if not items:
         return idx
@@ -1533,7 +1535,7 @@ def _long_axis(xy):
     if len(p) < 2:
         return np.array([1.0, 0.0])
     d = p - p.mean(axis=0)
-    cov = d.T @ d
+    cov = dnp.matmul(d.T, d)
     tr = float(cov[0, 0] + cov[1, 1])
     det = float(cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[0, 1])
     lam = tr / 2.0 + math.sqrt(max(tr * tr / 4.0 - det, 0.0))
@@ -1892,12 +1894,12 @@ class Surface:
         """Queue the land cover of the cells within radius_m (at most every PREFETCH_MOVE_M)."""
         if self._last is not None:
             dlat = (lat - self._last[0]) * 111320.0
-            dlon = (lon - self._last[1]) * 111320.0 * math.cos(math.radians(lat))
+            dlon = (lon - self._last[1]) * 111320.0 * dmath.cos(math.radians(lat))
             if dlat * dlat + dlon * dlon < PREFETCH_MOVE_M * PREFETCH_MOVE_M:
                 return
         self._last = (lat, lon)
         dlat = radius_m / 111320.0
-        dlon = radius_m / (111320.0 * max(0.05, math.cos(math.radians(lat))))
+        dlon = radius_m / (111320.0 * max(0.05, dmath.cos(math.radians(lat))))
         # a file test, not a load: this runs on the server's event loop at every pose, and reading each
         # cell's arrays there stalled it for seconds while driving (2026-10-12); an unreadable file is
         # rebuilt when a block reads it
@@ -1913,7 +1915,7 @@ class Surface:
         while the player stands still; Cluj's Piata Unirii stayed bare ground, its square not cached yet).
         Returns True if it all arrived. Worker threads only (it blocks)."""
         dlat = radius_m / 111320.0
-        dlon = radius_m / (111320.0 * max(0.05, math.cos(math.radians(lat))))
+        dlon = radius_m / (111320.0 * max(0.05, dmath.cos(math.radians(lat))))
         cells = mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon)
         keys = []
         for layer in ("landcover", "land_use", "infrastructure"):

@@ -16,6 +16,8 @@ import os
 import re
 
 import numpy as np
+import dmath
+import dnp
 
 import roads
 import staging
@@ -125,7 +127,7 @@ def _near_city(lat, lon):
     la, lo = _city_points()
     if not len(la):
         return False
-    d = np.hypot((la - lat) * 111.32, (lo - lon) * 111.32 * math.cos(math.radians(lat)))
+    d = dnp.hypot((la - lat) * 111.32, (lo - lon) * 111.32 * dmath.cos(math.radians(lat)))
     return bool(d.min() <= CITY_KM)
 
 
@@ -267,8 +269,8 @@ def _rdp(p, tol):
         L = math.hypot(*d)
         seg = p[a + 1:b] - p[a]
         # Distance to the finite chord: an infinite line discarded collinear reversals in hairpins.
-        t = np.clip((seg @ d) / (L * L), 0, 1) if L > 1e-9 else np.zeros(len(seg))
-        dist = np.hypot(*(seg - t[:, None] * d).T)
+        t = np.clip((dnp.matmul(seg, d)) / (L * L), 0, 1) if L > 1e-9 else np.zeros(len(seg))
+        dist = dnp.hypot(*(seg - t[:, None] * d).T)
         k = int(dist.argmax())
         if dist[k] > tol:
             keep[a + 1 + k] = True
@@ -281,18 +283,18 @@ def _speed_profile(xy, width, oneway, limit=math.inf, urban=True):
     No curve is invented between separate roads, and straight wide roads keep their original target."""
     target = min(limit, NARROW_MS) if urban and not oneway and width < NARROW_M else limit
     v2 = np.full(len(xy), target * target, np.float64)
-    lengths = np.hypot(*np.diff(xy, axis=0).T)
+    lengths = dnp.hypot(*np.diff(xy, axis=0).T)
     if len(xy) > 2:
         a, b = np.diff(xy, axis=0)[:-1], np.diff(xy, axis=0)[1:]
         la, lb = lengths[:-1], lengths[1:]
-        chord = np.hypot(*(a + b).T)
+        chord = dnp.hypot(*(a + b).T)
         cross = np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0])
         radius = np.full(len(a), np.inf)
         bend = cross > 1e-6
         radius[bend] = la[bend] * lb[bend] * chord[bend] / (2 * cross[bend])
         reversal = (~bend) & ((a * b).sum(1) < 0)
         radius[reversal] = 0.0
-        v2[1:-1] = np.minimum(v2[1:-1], np.maximum((10 / 3.6) ** 2, CURVE_ACCEL * radius))
+        v2[1:-1] = np.minimum(v2[1:-1], np.maximum(dnp.sq(10 / 3.6), CURVE_ACCEL * radius))
     for j in range(1, len(xy)):
         v2[j] = min(v2[j], v2[j - 1] + 2 * BRAKE_ACCEL * lengths[j - 1])
     for j in range(len(xy) - 2, -1, -1):
@@ -342,7 +344,7 @@ def _deck_z(decks, fid, x, y):
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((np.array([x, y]) - a) * d).sum(1) / L2, 0, 1)
         q = a + t[:, None] * d
-        dist = np.hypot(q[:, 0] - x, q[:, 1] - y)
+        dist = dnp.hypot(q[:, 0] - x, q[:, 1] - y)
         k = int(dist.argmin())
         if dist[k] < 1.5 and (best is None or dist[k] < best[0]):
             best = (float(dist[k]), float(z[k] + t[k] * (z[k + 1] - z[k])))
@@ -434,7 +436,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 continue
             if rspecs[i] is not None:
                 ring_cands.append((fid, rspecs[i], np.column_stack([p, np.zeros(len(p))]), None))
-            seg = np.hypot(*np.diff(p, axis=0).T)
+            seg = dnp.hypot(*np.diff(p, axis=0).T)
             s = np.concatenate([[0.0], np.cumsum(seg)])
             L = float(s[-1])
             if L < 1.0:
@@ -471,7 +473,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     end = 0 if at <= 0.001 else -1
                     j0, j1 = (0, 1) if end == 0 else (len(p) - 1, len(p) - 2)
                     dd = p[j1] - p[j0]
-                    dl = float(np.hypot(*dd))
+                    dl = float(dnp.hypot(*dd))
                     if dl > 1e-6:
                         prop_arms.setdefault("c" + str(con.value[r]), []).append(
                             (fid, rspecs[i], dd / dl, np.array([p[j0][0], p[j0][1], 0.0]), end, L))
@@ -774,12 +776,12 @@ def _traffic_profile(frame, lines, cx, cy):
             owner = np.repeat(np.arange(len(lines)), [len(xy) for xy, _ in lines])
             same = owner[1:] == owner[:-1]
             a, d, owner = pts[:-1][same] - (cx, cy), np.diff(pts, axis=0)[same], owner[:-1][same]
-            aa = np.einsum("ij,ij->i", d, d)
+            aa = dnp.vecdot(d, d)
             ok = aa > 1e-12
             aa_ = np.where(ok, aa, 1.0)
             # the length of each segment inside the circle (the chord's parameter range [lo, hi] clipped to [0, 1])
-            bb = 2.0 * np.einsum("ij,ij->i", a, d)
-            cc = np.einsum("ij,ij->i", a, a) - radius * radius
+            bb = 2.0 * dnp.vecdot(a, d)
+            cc = dnp.vecdot(a, a) - radius * radius
             disc = bb * bb - 4.0 * aa_ * cc
             root = np.sqrt(np.maximum(disc, 0.0))
             lo_ = np.maximum(0.0, (-bb - root) / (2.0 * aa_))
@@ -789,11 +791,11 @@ def _traffic_profile(frame, lines, cx, cy):
             flags = np.array([(bool(getattr(sp, "urban", False)), sp.cls in traffic.MAJOR_CLASSES,
                                sp.cls in traffic.LOCAL_CLASSES) for _, sp in lines], np.float64).reshape(-1, 3)
             total = float(per.sum())
-            urban, major, local = (float(v) for v in per @ flags)
+            urban, major, local = (float(v) for v in dnp.matmul(per, flags))
             # the segment nearest the centre (its closest point)
-            t = np.clip(-np.einsum("ij,ij->i", a, d) / aa_, 0.0, 1.0)
+            t = np.clip(-dnp.vecdot(a, d) / aa_, 0.0, 1.0)
             q = a + t[:, None] * d
-            dist = np.hypot(q[:, 0], q[:, 1])
+            dist = dnp.hypot(q[:, 0], q[:, 1])
             if len(dist):
                 j = int(np.argmin(dist))
                 near = (float(dist[j]), lines[int(owner[j])][1])
@@ -1093,7 +1095,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             inc = -u
             right = np.array([inc[1], -inc[0]]) * (-1 if left_hand else 1)     # the side traffic keeps to
             q = np.array([jx, jy]) + u * (wide + STOP_BACK_M) + right * (spec.width / 4)
-            phase = 0 if abs(float(u @ axis)) > 0.7 else 1
+            phase = 0 if abs(float(dnp.matmul(u, axis))) > 0.7 else 1
             def support(x, y):
                 return float(np.asarray(ground(x, y)).reshape(-1)[0]) + 0.15 if ground is not None else jz + 0.15
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none

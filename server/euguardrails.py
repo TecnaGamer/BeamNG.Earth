@@ -7,6 +7,8 @@ import hashlib
 import math
 import os
 import numpy as np
+import dmath
+import dnp
 import geotiles
 
 VERSION='eu-road-details-2026-11-v5-motorway-verges'
@@ -80,7 +82,7 @@ def _near_barrier(q,segments,reach=2.0):
     a,b=segments
     if not len(a):return False
     d=b-a;t=np.clip(((q-a)*d).sum(1)/np.maximum((d*d).sum(1),1e-9),0,1)
-    return bool((np.linalg.norm(q-a-t[:,None]*d,axis=1)<reach).any())
+    return bool((dnp.norm(q-a-t[:,None]*d,axis=1)<reach).any())
 
 
 def is_motorway_mainline(spec):
@@ -99,16 +101,16 @@ def _verge_evidence(rows):
         gaps, spans = [], []
         for i, (end, heading) in enumerate(terminals):
             d = ends[i+1:] - end
-            along = d[:, :2] @ heading
+            along = dnp.matmul(d[:, :2], heading)
             across = d[:, 0] * heading[1] - d[:, 1] * heading[0]
             match = ((along >= 4.) & (along <= 25.) & (np.abs(across) <= 1.5)
-                     & (np.abs(d[:, 2]) <= 1.8) & (outward[i+1:] @ heading < -.94))
+                     & (np.abs(d[:, 2]) <= 1.8) & (dnp.matmul(outward[i+1:], heading) < -.94))
             gaps.extend(end + .5 * d[match])
             spans.extend(d[match])
         if gaps:
             xyz = np.vstack((xyz, gaps))
             lines = np.vstack((lines, spans))
-    half = .5 * np.linalg.norm(lines[:, :2], axis=1)
+    half = .5 * dnp.norm(lines[:, :2], axis=1)
     return xyz, lines / np.maximum(2. * half[:, None], 1e-9), half
 
 
@@ -117,9 +119,9 @@ def _verge_covered(q, tangent, outward, evidence):
     delta = q - xyz
     along = np.clip((delta[:, :2] * axes[:, :2]).sum(1), -half, half)
     offset = delta - along[:, None] * axes
-    across = offset[:, :2] @ outward
-    return bool(((np.abs(axes[:, :2] @ tangent) > .85)
-                 & (np.abs(offset[:, :2] @ tangent) < 1.75)
+    across = dnp.matmul(offset[:, :2], outward)
+    return bool(((np.abs(dnp.matmul(axes[:, :2], tangent)) > .85)
+                 & (np.abs(dnp.matmul(offset[:, :2], tangent)) < 1.75)
                  & (np.abs(offset[:, 2]) < 2.)
                  & (across > -6.) & (across < 1.5)).any())
 
@@ -127,7 +129,7 @@ def _verge_covered(q, tangent, outward, evidence):
 def _clear(q,segments,margin=.55):
     if segments is None:return True
     v=q[:2]-segments['a'];s=np.clip((v*segments['unit']).sum(1),0,segments['len'])
-    return not (np.linalg.norm(v-s[:,None]*segments['unit'],axis=1)<segments['half']+margin).any()
+    return not (dnp.norm(v-s[:,None]*segments['unit'],axis=1)<segments['half']+margin).any()
 
 
 def sos_access(rows,phones,road_segments=None):
@@ -146,26 +148,26 @@ def sos_access(rows,phones,road_segments=None):
             local=int(r[0])-len(g.STOCK_GROUPS)
             if local%3:continue                         # an existing terminal
             q=np.asarray(r[1:4],float);delta=p[:2]-q[:2]
-            along=float(delta@t);across=float(delta@n)
+            along=float(dnp.matmul(delta, t));across=float(dnp.matmul(delta, n))
             if not 0.<across<5. or abs(along)>22 or abs(p[2]-q[2])>1.8:continue
             if abs(along)<6.:
                 removed.add(i);continue
-            amount=min(.85,max(0.,across-.6))*(1-abs(along)/22.)**2
+            amount=min(.85,max(0.,across-.6))*dnp.sq(1-abs(along)/22.)
             moved=q.copy();moved[:2]+=n*amount
             if not _clear(moved,road_segments):continue
             r[1:4]=list(map(float,moved))
             # Chords follow the shallow bend instead of keeping the old tangent.
             forward=np.array(r[8:11],float)
             slope=2*min(.85,max(0.,across-.6))*(1-abs(along)/22.)/22.*np.sign(along)
-            forward[:2]+=n*slope*float(forward[:2]@t)
-            forward/=max(np.linalg.norm(forward),1e-9)
-            back=np.cross([0.,0.,1.],forward);back/=max(np.linalg.norm(back),1e-9)
+            forward[:2]+=n*slope*float(dnp.matmul(forward[:2], t))
+            forward/=max(dnp.norm(forward),1e-9)
+            back=np.cross([0.,0.,1.],forward);back/=max(dnp.norm(back),1e-9)
             r[8:17]=list(forward)+list(back)+list(np.cross(forward,back))
             if abs(along)<8.79:
                 side=1 if along>0 else -1
                 if side not in sides or abs(along)<sides[side][0]:sides[side]=(abs(along),r)
         for _,r in sides.values():
-            cap=list(r);forward=np.array(r[8:11]);direction=1 if (p[:2]-r[1:3])@forward[:2]>0 else -1
+            cap=list(r);forward=np.array(r[8:11]);direction=1 if dnp.matmul(p[:2]-r[1:3], forward[:2])>0 else -1
             pos=np.array(r[1:4])+forward*direction*1.45
             cap[1:4]=list(map(float,pos));cap[0]=int(r[0])+(2 if direction>0 else 1)
             caps.append(cap)
@@ -212,13 +214,13 @@ def extend(frame,roads,box,elev,mapped,decks=(),*,context=None):
             if any(not _clear(q+np.r_[t*step,0.],rsegs)for step in (-1.5,0.,1.5)):continue
             if _verge_covered(q,t[:2],n,evidence):continue
             if deck_segments is not None and g._relate(q[:2],deck_segments,t[:2]) is not None:continue
-            forward=np.r_[t[:2],(b[2]-a[2])/3.];forward/=max(np.linalg.norm(forward),1e-9)
+            forward=np.r_[t[:2],(b[2]-a[2])/3.];forward/=max(dnp.norm(forward),1e-9)
             # The model's smooth side is -local Y; face it toward the road.
             if side<0:forward=-forward
-            back=np.cross([0,0,1],forward);back/=max(np.linalg.norm(back),1e-9)
+            back=np.cross([0,0,1],forward);back/=max(dnp.norm(back),1e-9)
             up=np.cross(forward,back)
             lat,lon,_=frame.enu_to_geodetic(q[0],q[1],q[2])
             q[2]=float(frame.geodetic_to_enu(lat,lon,float(np.asarray(elev(lat,lon))))[2])
-            row=[group_index(country,str(fid)),*map(float,q),math.degrees(math.atan2(forward[1],forward[0])),0.,.9,0.,*forward,*back,*up]
+            row=[group_index(country,str(fid)),*map(float,q),math.degrees(dmath.atan2(forward[1],forward[0])),0.,.9,0.,*forward,*back,*up]
             result.append(row)
     return sos_access(localize(frame,result),phones,rsegs)

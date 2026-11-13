@@ -63,6 +63,8 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+import dmath
+import dnp
 
 import geodesy
 import mapcells
@@ -283,14 +285,14 @@ def _bearing(lat0, lon0, lat1, lon1):
     """True bearing (deg) and distance (m) from point 0 to point 1 (in 0's tangent plane)."""
     f = geodesy.EnuFrame(lat0, lon0, 0.0)
     e, n, _ = f.geodetic_to_enu(lat1, lon1, 0.0)
-    return math.degrees(math.atan2(e, n)) % 360.0, math.hypot(e, n)
+    return math.degrees(dmath.atan2(e, n)) % 360.0, math.hypot(e, n)
 
 
 def _offset(lat, lon, heading, dist):
     """The point dist m from (lat, lon) along the true heading (tangent plane: mm-exact at runway lengths)."""
     f = geodesy.EnuFrame(lat, lon, 0.0)
     h = math.radians(heading)
-    la, lo, _ = f.enu_to_geodetic(dist * math.sin(h), dist * math.cos(h), 0.0)
+    la, lo, _ = f.enu_to_geodetic(dist * dmath.sin(h), dist * dmath.cos(h), 0.0)
     return float(la), float(lo)
 
 
@@ -461,8 +463,8 @@ def _hav(lat0, lon0, lat, lon):
     """Great-circle distance (m) from one point to arrays of points (spherical: a prefilter)."""
     p0, p = math.radians(lat0), np.radians(lat)
     dp, dl = p - p0, np.radians(lon) - math.radians(lon0)
-    a = np.sin(dp / 2) ** 2 + math.cos(p0) * np.cos(p) * np.sin(dl / 2) ** 2
-    return 2 * EARTH_R * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    a = dnp.sq(dnp.sin(dp / 2)) + dmath.cos(p0) * dnp.cos(p) * dnp.sq(dnp.sin(dl / 2))
+    return 2 * EARTH_R * dnp.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
 
 def _band(lat_sorted, order, lat, lon, lons, r_m):
@@ -473,7 +475,7 @@ def _band(lat_sorted, order, lat, lon, lons, r_m):
     dlat = math.degrees(r_m / EARTH_R) * 1.001 + 1e-9
     if abs(lat) + dlat >= 89.0:
         return None
-    dlon = dlat / math.cos(math.radians(abs(lat) + dlat))
+    dlon = dlat / dmath.cos(math.radians(abs(lat) + dlat))
     if abs(lon) + dlon >= 180.0:
         return None
     i0 = int(np.searchsorted(lat_sorted, lat - dlat, side="left"))
@@ -488,7 +490,7 @@ def _seg_dist(e0, n0, e1, n1):
     de, dn = e1 - e0, n1 - n0
     ll = de * de + dn * dn
     t = np.where(ll > 0, np.clip(-(e0 * de + n0 * dn) / np.where(ll > 0, ll, 1.0), 0.0, 1.0), 0.0)
-    return np.hypot(e0 + t * de, n0 + t * dn)
+    return dnp.hypot(e0 + t * de, n0 + t * dn)
 
 
 class AirportDB:
@@ -716,8 +718,8 @@ def _convex_overlap(a, b):
         for i in range(k):
             ex, ey = poly[(i + 1) % k] - poly[i]
             nx, ny = -ey, ex
-            pa = a @ np.array([nx, ny])
-            pb = b @ np.array([nx, ny])
+            pa = dnp.matmul(a, np.array([nx, ny]))
+            pb = dnp.matmul(b, np.array([nx, ny]))
             if pa.max() < pb.min() or pb.max() < pa.min():
                 return False
     return True

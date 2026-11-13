@@ -18,6 +18,8 @@ spots: either way in, no "street" tracking). Cars park along the curb facing the
 import math
 
 import numpy as np
+import dmath
+import dnp
 from polygon import Path
 
 import furniture
@@ -86,7 +88,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
             else:
                 h = np.array([-away[1], away[0]])
             out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                        round(math.degrees(math.atan2(h[1], h[0])) % 360.0, 1)])
+                        round(math.degrees(dmath.atan2(h[1], h[0])) % 360.0, 1)])
     return out
 
 
@@ -101,7 +103,7 @@ def clear_of(spots, props, drives):
         return spots
     b = np.array(block, np.float64)
     s = np.array([r[:2] for r in spots], np.float64)
-    dist = np.hypot(s[:, None, 0] - b[None, :, 0], s[:, None, 1] - b[None, :, 1])
+    dist = dnp.hypot(s[:, None, 0] - b[None, :, 0], s[:, None, 1] - b[None, :, 1])
     keep = (dist >= b[None, :, 2]).all(1)
     return [r for r, k in zip(spots, keep) if k]
 
@@ -175,7 +177,7 @@ def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
             ok = np.ones(len(centres), bool)
             for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
                 ok &= path.contains_points(centres + sx * hx + sy * hy)
-            heading = math.degrees(math.atan2(nose * v[1], nose * v[0])) % 360.0
+            heading = math.degrees(dmath.atan2(nose * v[1], nose * v[0])) % 360.0
             for q in centres[ok]:
                 if _owns(box, q[0], q[1]):
                     cand.append((float(q[0]), float(q[1]), heading))
@@ -321,7 +323,7 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
                 if h:
                     continue
                 out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                            round(math.degrees(math.atan2(nn[1], nn[0])) % 360.0, 1), 1])
+                            round(math.degrees(dmath.atan2(nn[1], nn[0])) % 360.0, 1), 1])
     return out
 
 

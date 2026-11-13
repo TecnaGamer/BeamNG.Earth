@@ -12,6 +12,7 @@ its track at the road's edge). Trams get all their ground track here; mapped tra
 import math
 
 import numpy as np
+import dnp
 
 import railxing
 
@@ -100,7 +101,7 @@ def _sleepers(xy, s, step, length, box, on_road):
         return []
     k = np.clip(np.searchsorted(s, at, side="right") - 1, 0, len(xy) - 2)
     d = xy[k + 1] - xy[k]
-    L = np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)
+    L = np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)
     t = d / L[:, None]
     c = xy[k] + t * (at - s[k])[:, None]
     inside = (c[:, 0] >= x0 - g) & (c[:, 0] <= x1 + g) & (c[:, 1] >= y0 - g) & (c[:, 1] <= y1 + g)
@@ -123,7 +124,7 @@ def _crossing_windows(xy, lines, extra=()):
     cr = roads._crossings([xy], lines) if lines else []
     if not cr and not extra:
         return []
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     spans = []
     ranges = [(max(0.0, arc - CROSS_WINDOW_M), min(float(s[-1]), arc + CROSS_WINDOW_M)) for arc in (c[1] for c in cr)]
     for a, b in sorted(ranges + [(float(a), float(b)) for a, b in extra]):
@@ -246,7 +247,7 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
         bw, sl, sw, step = TRACK[kind]
         off = GAUGE_M[kind] / 2 + HEAD_M / 2
         full = roads.densify(xy, SAMPLE_M)
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(full, axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(full, axis=0).T))]
         gap = (lambda q, e=eligible: no_sleeper(q, e)) if kind == "tram" else (lambda q, e=eligible: on_road(q, e))
         for a, b in (() if meshed else _sleepers(full, s, step, sl, box, gap)):
             sleepers.append(_chunk(SLEEPER, sw, (a, b)))

@@ -3,6 +3,8 @@
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import furniture
 import mapgeom
@@ -45,7 +47,7 @@ def _near_street(roads, point):
     best = None
     for _, spec, line, _ in roads:
         pos, tangent = furniture._at(line, furniture._project(line, point[None]))
-        gap = float(np.linalg.norm(point - pos[0, :2])) - spec.width / 2
+        gap = float(dnp.norm(point - pos[0, :2])) - spec.width / 2
         if best is None or gap < best[0]:
             best = gap, pos[0, :2], tangent[0], spec
     return best
@@ -53,7 +55,7 @@ def _near_street(roads, point):
 
 def _box(centre, heading, length, width):
     sideways = np.array([-heading[1], heading[0]])
-    return centre + FOOTPRINT @ np.stack((heading * length / 2, sideways * width / 2))
+    return centre + dnp.matmul(FOOTPRINT, np.stack((heading * length / 2, sideways * width / 2)))
 
 
 def _candidates(outline, holes, kind, tags, streets, left_hand):
@@ -74,36 +76,36 @@ def _candidates(outline, holes, kind, tags, streets, left_hand):
         direction = tangent if not spec.oneway or (spec.dir or 0) >= 0 else -tangent
         away = centre - pos
         sideways = np.array([-tangent[1], tangent[0]])
-        if np.dot(sideways, away) < 0:
+        if dnp.dot(sideways, away) < 0:
             sideways = -sideways
-        along = tangent if np.dot([tangent[1], -tangent[0]], sideways) > 0 else -tangent
+        along = tangent if dnp.dot([tangent[1], -tangent[0]], sideways) > 0 else -tangent
         if left_hand:
             along = -along
         if spec.oneway:
             along = direction
-        depth = float(np.ptp(outline @ sideways))
+        depth = float(np.ptp(dnp.matmul(outline, sideways)))
         orientation = tags.get("orientation") or tags.get("parking:orientation")
         if orientation is None:
             orientation = "perpendicular" if (kind == "street" and depth >= 4.8 and
-                                                (half_width >= 2.3 or abs(axis @ sideways) > .8)) else "parallel"
+                                                (half_width >= 2.3 or abs(dnp.matmul(axis, sideways)) > .8)) else "parallel"
         if orientation == "perpendicular":
             facing = sideways
         elif orientation == "diagonal":
             facing = (sideways + along) / math.sqrt(2)
         else:
-            facing = along if abs(axis @ tangent) < .65 else axis * (1. if axis @ along >= 0 else -1.)
+            facing = along if abs(dnp.matmul(axis, tangent)) < .65 else axis * (1. if dnp.matmul(axis, along) >= 0 else -1.)
         # Parking rows run along the street. A short curved bay can keep its own bearing.
-        if orientation != "parallel" and (abs(axis @ tangent) >= .75 or count == 1):
+        if orientation != "parallel" and (abs(dnp.matmul(axis, tangent)) >= .75 or count == 1):
             axis = tangent
-    elif kind == "private" and street is not None and np.dot(facing, centre - street[1]) < 0:
+    elif kind == "private" and street is not None and dnp.dot(facing, centre - street[1]) < 0:
         facing = -facing
     axes = np.array([axis, [-axis[1], axis[0]]])
-    limits = (outline - centre) @ axes.T
+    limits = dnp.matmul(outline - centre, axes.T)
     lo, hi = limits.min(axis=0), limits.max(axis=0)
     results = []
     usable = float(hi[0] - lo[0])
     for length, width in ((CAR_LENGTH, CAR_WIDTH), (MIN_LENGTH, MIN_WIDTH)):
-        dimensions = np.ptp(_box(np.zeros(2), facing, length, width) @ axes.T, axis=0)
+        dimensions = np.ptp(dnp.matmul(_box(np.zeros(2), facing, length, width), axes.T), axis=0)
         if (hi - lo < dimensions - .02).any():
             continue
         n = min(MAX_BAYS, max(1, int((usable + .02) / dimensions[0])), count or MAX_BAYS)
@@ -147,7 +149,7 @@ def _driveway_candidates(driveways, streets, homes, mapped):
             continue
         # The car needs a straight piece of driveway, clear of its mouth and terminal wall.
         p2, _ = furniture._at(line, np.array([station - 2.5, station + 2.5]))
-        if np.linalg.norm((p2[:, :2] - q) - np.array([[-2.5], [2.5]]) * h, axis=1).max() > .45:
+        if dnp.norm((p2[:, :2] - q) - np.array([[-2.5], [2.5]]) * h, axis=1).max() > .45:
             continue
         result.append((q, h, _box(q, h, CAR_LENGTH, CAR_WIDTH), "private", {}))
     return result
@@ -161,9 +163,9 @@ def _paint(rect, kind, tags, centre, streets):
     edges = list(zip(rect, np.roll(rect, -1, axis=0)))
     if kind == "street" and streets:
         _, pos, _, _ = _near_street(streets, centre)
-        near = min(range(4), key=lambda i: float(np.linalg.norm((edges[i][0] + edges[i][1]) / 2 - pos)))
+        near = min(range(4), key=lambda i: float(dnp.norm((edges[i][0] + edges[i][1]) / 2 - pos)))
         a, b = edges.pop(near)
-        if np.linalg.norm(b - a) >= MIN_LENGTH - .05:
+        if dnp.norm(b - a) >= MIN_LENGTH - .05:
             # A broken line on the traffic side of a parallel row.
             edges.extend((a + (b - a) * start, a + (b - a) * (start + .13)) for start in (0., .22, .44, .66, .87))
             edges.pop((near + 1) % 4 if near < 2 else near - 2)
@@ -251,10 +253,11 @@ def plaza_bay_cuts(frame, tx, ty, md):
         if not touch:
             continue
         c = ring.mean(0)
-        _, _, vt = np.linalg.svd(ring - c, full_matrices=False)
-        u = vt[0]
+        d = ring - c
+        _w, vec = dnp.eigh(dnp.matmul(d.T, d))      # (the bay's long axis: its points' principal direction)
+        u = np.asarray(vec[:, -1], np.float64)
         v = np.array([-u[1], u[0]])
-        a, b = (ring - c) @ u, (ring - c) @ v
+        a, b = dnp.matmul(d, u), dnp.matmul(d, v)
         out.append((np.array([c + u * a.min(), c + u * a.max()]), float(b.max() - b.min()) / 2 + PLAZA_CUT_PAD_M))
     return out
 
@@ -276,7 +279,7 @@ def adjust_walks(walks, bays, protected, barriers):
         original = np.asarray(wk["pts"], np.float64)
         line = roads.densify(original, .9)
         _, out = sidewalks.run_geometry(line, wk["side"], wk["w"])
-        norm = out / np.maximum(1e-9, np.linalg.norm(out, axis=1))[:, None]
+        norm = out / np.maximum(1e-9, dnp.norm(out, axis=1))[:, None]
         stations = np.arange(-wk["w"] / 2 + .12, wk["w"] / 2 + 4.8, .25)
         probes = line[:, None, :2] + stations[None, :, None] * norm[:, None, :]
         inside = streetfront._inside(probes.reshape(-1, 2), bays).reshape(probes.shape[:2])
@@ -337,14 +340,14 @@ def tile_layout(frame, box, features, carriageways, driveways, walks, buildings,
     ok &= np.isfinite(ground).all(axis=1) & (np.ptp(ground[:, :4], axis=1) < .65)
     rows, segs, occupied = [], set(), []
     for (q, h, rect, kind, tags), keep, zz in zip(candidates, ok, ground[:, -1]):
-        if not keep or any(np.linalg.norm(q - p) < 2. for p in occupied):
+        if not keep or any(dnp.norm(q - p) < 2. for p in occupied):
             continue
         occupied.append(q)
         if parking._owns(box, *q):
-            length = float(np.linalg.norm(rect[1] - rect[0]))
-            width = float(np.linalg.norm(rect[2] - rect[1]))
+            length = float(dnp.norm(rect[1] - rect[0]))
+            width = float(dnp.norm(rect[2] - rect[1]))
             rows.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
-                         round(math.degrees(math.atan2(h[1], h[0])) % 360., 1),
+                         round(math.degrees(dmath.atan2(h[1], h[0])) % 360., 1),
                          int(kind != "street"), round(width, 2), round(length, 2)])
         for a, b in _paint(rect, kind, tags, q, streets):
             a, b = tuple(round(v, 3) for v in a), tuple(round(v, 3) for v in b)

@@ -10,6 +10,7 @@
 //! back through callbacks only when a road needs them, as the Python did), the opt-in French and European passes, and
 //! the Spec namedtuples. The numbers are the Python's bit for bit: numpy's pairwise sums, linspace and interp, libm's
 //! cos / hypot, Python's min / max (the first of equals) and round (half to even).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -484,7 +485,7 @@ fn urban_samples(ll: &[P], step_m: f64) -> Vec<P> {
         if p[1] > mx || mx.is_nan() { mx = p[1] }
     }
     let lat = 0.5 * (mn + mx);
-    let sx = 111320.0 * lat.to_radians().cos();
+    let sx = 111320.0 * lat.to_radians().dcos();
     let mut dist = vec![0.0f64; ll.len()];
     for k in 1..ll.len() {
         let (dx, dy) = ((ll[k][0] - ll[k - 1][0]) * sx, (ll[k][1] - ll[k - 1][1]) * 110540.0);
@@ -513,7 +514,7 @@ fn beside(pts: &[P], counts: &[usize], ds: &[f64]) -> (Vec<P>, Vec<P>) {
         let p = &pts[k..k + c];
         if c >= 2 {
             let lat: Vec<f64> = p.iter().map(|q| q[1]).collect();
-            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().cos();
+            let mx = 111320.0 * (np_sum(&lat) / (c as f64)).to_radians().dcos();
             let m = [mx, 110540.0];
             let q: Vec<P> = p.iter().map(|v| [v[0] * m[0], v[1] * m[1]]).collect();
             for j in 0..c {
@@ -524,7 +525,7 @@ fn beside(pts: &[P], counts: &[usize], ds: &[f64]) -> (Vec<P>, Vec<P>) {
                 } else {
                     [(q[j + 1][0] - q[j - 1][0]) / 2.0, (q[j + 1][1] - q[j - 1][1]) / 2.0]
                 };
-                let h = t[0].hypot(t[1]);
+                let h = t[0].dhypot(t[1]);
                 let h = if h.is_nan() { h } else if h > 1e-9 { h } else { 1e-9 };
                 let t = [t[0] / h, t[1] / h];
                 let off = [(-t[1] * d) / m[0], (t[0] * d) / m[1]];
@@ -616,7 +617,7 @@ fn switchbacks(ll: &[P], span: f64, turn: f64) -> usize {
         return 0;
     }
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
     let mut flat = Vec::with_capacity(ll.len() * 2);
     for p in ll {
         flat.push((p[0] - ll[0][0]) * kx);
@@ -641,11 +642,11 @@ pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
         return (0.0, 0.0);
     }
     let lat: Vec<f64> = ll.iter().map(|p| p[1]).collect();
-    let kx = 111320.0 * (np_mean(&lat)).to_radians().cos();
+    let kx = 111320.0 * (np_mean(&lat)).to_radians().dcos();
     let xy: Vec<[f64; 2]> = ll.iter().map(|p| [(p[0] - ll[0][0]) * kx, (p[1] - ll[0][1]) * 110540.0]).collect();
     let mut s = vec![0.0f64; xy.len()];
     for k in 1..xy.len() {
-        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
     }
     let total = s[s.len() - 1];
     if total < 2.0 * step {
@@ -666,7 +667,7 @@ pub fn winding(ll: &[P], step: f64) -> (f64, f64) {
     let mut turn = 0.0f64;
     let mut prev: Option<f64> = None;
     for w in pts.windows(2) {
-        let h = (w[1][1] - w[0][1]).atan2(w[1][0] - w[0][0]);
+        let h = (w[1][1] - w[0][1]).datan2(w[1][0] - w[0][0]);
         if let Some(p) = prev {
             let mut d = h - p;
             if d > std::f64::consts::PI {
@@ -818,7 +819,7 @@ fn dual(l: &Layer, rules: &RoadRules, prm: &Prm, specs: &mut [Option<Sp>], europ
         let lines: Vec<(usize, usize)> = idx.iter().map(|&i| l.all_pts(i)).collect();
         let lat: Vec<f64> = lines.iter().flat_map(|&(a, b)| (a..b).map(|k| l.ll[[k, 1]])).collect();
         let lat0 = np_mean(&lat);
-        let m = [111320.0 * lat0.to_radians().cos(), 110540.0];
+        let m = [111320.0 * lat0.to_radians().dcos(), 110540.0];
         let r0 = l.pt(lines[0].0);
         let xy: Vec<Vec<f64>> = lines.iter().map(|&(a, b)| {
             let mut v = Vec::with_capacity(2 * (b - a));
@@ -1448,7 +1449,7 @@ fn rural_connectors(l: &Layer, rules: &RoadRules, prm: &Prm, out: &mut [Option<S
         return;
     }
     let lat: Vec<f64> = points.iter().map(|p| p[1]).collect();
-    let scale = [111320.0 * np_mean(&lat).to_radians().cos(), 110540.0];
+    let scale = [111320.0 * np_mean(&lat).to_radians().dcos(), 110540.0];
     for &i in &cand {
         let Some(e) = ends(i) else { continue };
         if l.lens[i] > 2.0 * prm.urban_beside {
