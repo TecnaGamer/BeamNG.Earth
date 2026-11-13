@@ -66,6 +66,7 @@ import gradesep
 import mapcells
 import mapgeom
 import maprasters
+import bnwt
 import netfetch
 import overture
 import pmtiles
@@ -361,6 +362,9 @@ class MapData:
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
         # Overture's own vector tiles for the layers they hold whole (pmtiles.LAYERS), the parquet files the fallback
         self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
+        # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the parquet path's layers they hold: the same cell bit
+        # for bit (same file, same keys), one range read for many cells instead of the parquet row groups
+        self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
@@ -408,6 +412,8 @@ class MapData:
         self.overture.close()
         if getattr(self, "pmtiles", None) is not None:
             self.pmtiles.close()
+        if getattr(self, "bnwt", None) is not None:
+            self.bnwt.close()
 
     def _rails(self, key, layer, feats, built=_ASK):
         """The roads layer's rail segments with OSM's railway tags (railtags.py), once per build of them."""
@@ -811,6 +817,8 @@ class MapData:
                         osm.cancel()
                     got["_fallback"] = np.array(True)
                     return got
+            if feats is None and fell is None and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind)
             if feats is None:
                 feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
@@ -840,6 +848,22 @@ class MapData:
                 prov = dict(LIDAR_CANOPY, files=r.files, also=CANOPY["id"])
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         return arrays
+
+    def _bnwt_query(self, layer, key, kind):
+        """(Features, sources) of the layer from the prebaked tiles (bnwt.py), (None, None) when they cannot say (the
+        parquet files then: the same content, slower)."""
+        try:
+            return self.bnwt.query(layer, key, kind)
+        except DEFERRED:
+            if kind not in ("demand", "urgent"):
+                raise                       # (a prefetch the hosts had no room for: as the parquet path's)
+        except bnwt.Unavailable as e:
+            log.debug("mapdata %s %s: no prebaked tile (%s): from the parquet files", key, layer, e)
+        except Exception as e:              # (any: the parquet files have the same layer)
+            log.warning("mapdata %s %s: prebaked tile failed (%s: %s): from the parquet files", key, layer,
+                        type(e).__name__, e)
+        self.bnwt.stats["fallbacks"] += 1
+        return None, None
 
     def _osm_pool(self):
         with self._lock:
@@ -1427,10 +1451,18 @@ class MapData:
         """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
         neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
         Returns the tiles asked for."""
+        n = 0
+        if getattr(self, "bnwt", None) is not None:
+            todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not MapData._pmt(self, ly)
+                    and not self.has(_key(k), ly)]
+            try:
+                n += self.bnwt.prefetch(todo, kind) if todo else 0
+            except Exception as e:          # (the cells' own builds read the parquet files then)
+                log.debug("mapdata: prebaked tiles prefetch: %s: %s", type(e).__name__, e)
         if getattr(self, "pmtiles", None) is None:
-            return 0
+            return n
         todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)]
-        return self.pmtiles.prefetch(todo, kind) if todo else 0
+        return n + (self.pmtiles.prefetch(todo, kind) if todo else 0)
 
     def side_prefetch(self, keys):
         """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's

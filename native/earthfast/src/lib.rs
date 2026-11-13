@@ -112,6 +112,7 @@ mod meshtrim;
 mod shelterfit;
 mod tilecuts;
 mod bldclear;
+mod bnwt;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6353,6 +6354,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reportpack::report_logs_pack, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_body, m)?)?;
     m.add_function(wrap_pyfunction!(reportpack::report_nearby, m)?)?;
-    m.add("VERSION", 267)?;
+    // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
+    // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
+    bnwt::register(m)?;
+    m.add("VERSION", 268)?;
     Ok(())
 }
