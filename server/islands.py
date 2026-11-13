@@ -307,6 +307,73 @@ def in_island(found, p):
     return any(_inside(f["poly"], p) for f in found)
 
 
+# Australia's roundabout centres: mown grass (surface.py fills the ground), with a small garden on it, a few low
+# shrubs among them and, on a bigger island, one small street tree (Brisbane's roundabouts: couch lawn, native shrubs and
+# a few small trees, no bare earth). Rows [group, x, y, z, yaw, scale, height, rank] like the street furniture's.
+GARDEN_MIN_RADIUS_M = 2.5       # an island this small (the nearest curb to its centre) keeps its grass bare
+GARDEN_TREE_RADIUS_M = 4.0      # ... and one this big has a small tree
+GARDEN_M2_PER_SHRUB = 18.0      # one shrub per this much island
+GARDEN_MAX_SHRUBS = 12
+GARDEN_SHRUB_H = (0.7, 1.4)     # m
+GARDEN_TREE_H = (4.0, 5.5)      # m (the stock "deciduous" group's nearest model, scaled)
+GARDEN_EDGE_M = 1.4             # m kept clear of the curb (the sight lines and the verge's mowing)
+GARDEN_APART_M = 1.7            # m between plants
+
+
+def _h01(*vals):
+    import hashlib
+    h = hashlib.blake2b(repr(vals).encode(), digest_size=8).digest()
+    return int.from_bytes(h, "little") / 2.0 ** 64
+
+
+def au_garden_rows(found, box, ground=None, own=None):
+    """Prop rows of the gardens of the roundabouts among found (find's result) whose points lie in box (the tile's
+    own: own(box, x, y) -> bool, else a half-open box test). ground(x (n,), y (n,)) -> z (n,): the drawn ground, else
+    each island's mean level. Deterministic: each island's plants are keyed on where its centre is (to the metre), so
+    every tile that finds the loop makes the same ones and the tile that owns a plant's point adds it. Pure."""
+    rows = []
+    for f in found:
+        ring = f.get("ring")
+        if not f.get("round") or ring is None or len(ring) < 8:
+            continue
+        xy = np.asarray(ring, np.float64)[:, :2]
+        c = xy.mean(0)
+        r_in = float(np.min(np.hypot(*(xy - c).T)))
+        if r_in < GARDEN_MIN_RADIUS_M:
+            continue
+        area = abs(_area(xy))
+        key = (round(float(c[0])), round(float(c[1])))
+        plants = []                         # (group, x, y, height)
+        tree = r_in >= GARDEN_TREE_RADIUS_M
+        if tree:
+            a, d = _h01(key, "tree a") * 2 * math.pi, _h01(key, "tree d") * 0.2 * r_in
+            plants.append(("deciduous", float(c[0] + d * math.cos(a)), float(c[1] + d * math.sin(a)),
+                           GARDEN_TREE_H[0] + (GARDEN_TREE_H[1] - GARDEN_TREE_H[0]) * _h01(key, "tree h")))
+        want = int(min(GARDEN_MAX_SHRUBS, max(3, area / GARDEN_M2_PER_SHRUB))) + (1 if tree else 0)
+        reach = r_in - GARDEN_EDGE_M
+        for k in range(want * 6):           # a hashed scatter inside the curb, thinned to a minimum spacing
+            if len(plants) >= want:
+                break
+            a = _h01(key, "a", k) * 2 * math.pi
+            d = reach * math.sqrt(_h01(key, "d", k))
+            x, y = float(c[0] + d * math.cos(a)), float(c[1] + d * math.sin(a))
+            if any(math.hypot(x - p[1], y - p[2]) < GARDEN_APART_M for p in plants):
+                continue
+            h = GARDEN_SHRUB_H[0] + (GARDEN_SHRUB_H[1] - GARDEN_SHRUB_H[0]) * _h01(key, "h", k)
+            plants.append(("shrub", x, y, h))
+        z0 = float(np.mean(np.asarray(ring, np.float64)[:, 2]))
+        for k, (group, x, y, h) in enumerate(plants):
+            if own is not None:
+                if not own(box, x, y):
+                    continue
+            elif not (box[0] <= x < box[2] and box[1] <= y < box[3]):
+                continue
+            z = float(ground(np.array([x]), np.array([y]))[0]) if ground is not None else z0
+            if not math.isfinite(z):
+                z = z0
+            rows.append([group, round(x, 2), round(y, 2), round(z, 2), round(_h01(key, "yaw", k) * 360.0, 1), 1.0,
+                         round(h, 2), round(_h01(key, "rank", k), 3)])
+    return rows
 def _splitter_flow(point, into, lanes):
     """A keep-right marker needs opposing traffic, with the incoming lane to its right."""
     import furniture

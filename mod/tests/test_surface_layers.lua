@@ -169,6 +169,121 @@ do
   T.check(unique, 'one object name per definition (a stock one on two layers gets its own name)')
 end
 
+-- groundcover's regional mix: the dry-grass share by climate / place / season, at a constant element total
+do
+  local gc = require('beamngEarth/groundcover')
+  local function near(a, b) return math.abs(a - b) < 1e-9 end
+  -- stock: no climate, outside Australia, or a humid class: nil (the mix as before)
+  T.check(gc.dryShare(nil, nil, nil) == nil and gc.dryShare(14, 39.3, -76.6) == nil and gc.dryShare(nil, 51.5, -0.1) == nil,
+    'no climate / Baltimore Cfa / London: the stock mix')
+  T.check(near(gc.STOCK_DRY, 0.05 / 0.47), 'stock dry share is the DEFS one')
+  local f1, f2 = gc.mixFactors(nil)
+  T.check(f1 == 1 and f2 == 1, 'no dry share: factors 1')
+  -- Australia: Brisbane (Cfa), Townsville (Aw), Longreach (BSh), Perth (Csa), the same without a class
+  T.check(near(gc.dryShare(14, -27.47, 153.03), 0.5), 'Brisbane: half dry')
+  T.check(near(gc.dryShare(3, -19.26, 146.82), 0.55), 'Townsville Aw')
+  T.check(near(gc.dryShare(6, -23.44, 144.25), 0.65), 'Longreach BSh')
+  T.check(gc.dryShare(nil, -33.0, 140.0) == nil, 'no class (the server sends one only for an Australian anchor): stock')
+  T.check(gc.dryShare(nil, -10.5, 124.0) == nil, 'East Timor, in the Australian box: stock')
+  T.check(gc.dryShare(1, -16.9, 145.77) == nil and gc.dryShare(15, -37.8, 144.96) == nil, 'Cairns Af / Melbourne Cfb: stock')
+  T.check(gc.dryShare(15, -43.0, 147.3) == nil and gc.dryShare(15, -34.0, 112.0) == nil, 'Tasmania inside, the box edge')
+  T.check(gc.dryShare(nil, -5.0, 130.0) == nil and gc.dryShare(nil, -40.0, 170.0) == nil, 'off the Australian box: stock')
+  -- arid and savanna classes elsewhere (Phoenix BWh, Serengeti Aw), nothing seasonal in the north
+  T.check(near(gc.dryShare(4, 33.45, -112.07), 0.7) and near(gc.dryShare(3, -2.5, 34.8), 0.55), 'Phoenix BWh, Serengeti Aw')
+  T.check(near(gc.dryShare(4, 33.45, -112.07, 100), 0.7), 'northern hemisphere: no season term')
+  -- the southern season: drier Jun-Sep, greener Dec-Mar
+  local winter, summer = gc.dryShare(14, -27.47, 153.03, 213), gc.dryShare(14, -27.47, 153.03, 30)
+  T.check(near(winter, 0.6) and near(summer, 0.4), 'Brisbane: 60 % dry in early August, 40 % in late January')
+  T.check(gc.dryShare(14, -27.47, 153.03, 244) > gc.dryShare(14, -27.47, 153.03, 350), 'Sep drier than mid Dec')
+  T.check(near(gc.dryShare(8, -31.95, 115.86, 213), 0.5) and near(gc.dryShare(8, -31.95, 115.86, 30), 0.5),
+    'Perth Csa: no seasonal swing (dry in summer already)')
+  -- the vegetation palette's month by month dry shares (anchor_ready.grassDry, server season.grass_dry_months): wet December to March
+  local months = { 0.12, 0.12, 0.302, 0.667, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.667, 0.302 }
+  T.check(near(gc.dryShare(6, -23.3, 150.6, 196, months), 0.85), 'palette months: mid July dry (the climate class no longer matters)')
+  T.check(near(gc.dryShare(14, -23.3, 150.6, 15, months), 0.15), 'palette months: mid January green')
+  T.check(near(gc.dryShare(nil, -23.3, 150.6, nil, months), 0.6), 'palette months, no season: their mean')
+  T.check(near(gc.dryShare(14, -27.47, 153.03, 213, { 1 }), 0.6), 'a malformed list is ignored')
+  local lg, ld = gc.longMix(0.5)
+  local lg9, ld9 = gc.longMix(0.9)
+  T.check(near(lg, 1) and near(ld, 1) and near(lg9 + ld9, 2) and lg9 < 0.3 and ld9 > 1.7, 'the long grass layer trades at a constant total')
+  T.check(near(select(2, gc.longMix(nil)), 2 * gc.AU_DRY), 'no dry share: the Australian default')
+  -- constant element total: green down by what dry goes up
+  local fg, fd = gc.mixFactors(0.6)
+  local g, d = 0, 0
+  for _, e in ipairs(gc.DEFS) do
+    if e.mix == 'green' then g = g + e.share elseif e.mix == 'dry' then d = d + e.share end
+  end
+  T.check(near(g + d, g * fg + d * fd), 'the grass layer keeps its total share')
+  T.check(near(d * fd / (g * fg + d * fd), 0.6) and fg < 1 and fd > 1, 'a 60 % dry mix')
+  -- built objects follow: the elements of the dry definition scale up, the green ones down; the season remakes them
+  _G.jsonNull = _G.jsonNull or setmetatable({}, { __tostring = function() return 'null' end })
+  local lines, byLine = {}, {}
+  for _, d2 in ipairs(gc.DEFS) do
+    local line = '{"class":"GroundCover","name":"' .. d2.src .. '"}'
+    lines[#lines + 1] = line
+    byLine[line] = { name = d2.src, class = 'GroundCover', material = 'm_' .. d2.src, maxElements = 100000,
+      Types = { { layer = 'Grass' } } }
+  end
+  local realDecode, realRead, realFlush = _G.jsonDecode, _G.readFile, _G.flushGroundCoverGrids
+  _G.jsonDecode = function(line) return byLine[line] end
+  _G.readFile = function(p)
+    for _, src in pairs(gc.SOURCES) do if p == src.items then return table.concat(lines, '\n') end end
+    return realRead and realRead(p)
+  end
+  local flushes = 0
+  _G.flushGroundCoverGrids = function() flushes = flushes + 1 end
+  local function elements(name) return tonumber(scenetree.findObject(gc.PREFIX .. name).fields.maxElements) end
+  gc.reset()
+  gc.setEnabled(true)
+  gc.setClimate(nil, 39.3, -76.6)
+  T.check(gc.ensure() and gc.status().dryShare == nil, 'built with the stock mix')
+  local green0, dry0 = elements('small_grass_close'), elements('grass_dry_1')
+  local total0 = green0 + elements('long_grass_distant') + dry0
+  T.check(near(green0, 25000) and near(dry0, 5000), 'stock elements 25000 / 5000')
+  gc.setClimate(14, -27.47, 153.03)                   -- a teleport to Brisbane: the commit sets it, core's rebuild builds it
+  T.check(gc.rebuild() and near(gc.status().dryShare, 0.5), 'Brisbane: built half dry')
+  local green1, dry1 = elements('small_grass_close'), elements('grass_dry_1')
+  T.check(green1 < green0 and dry1 > 4 * dry0, 'less green, much more dry grass (' .. green1 .. ' / ' .. dry1 .. ')')
+  gc.setClimate(nil, 39.3, -76.6)
+  gc.rebuild()
+  T.check(near(elements('small_grass_close') + elements('long_grass_distant') + elements('grass_dry_1'), total0),
+    'back to the stock mix at a humid place, the same element total')
+  gc.setClimate(14, -27.47, 153.03)
+  gc.rebuild()
+  local total1 = elements('small_grass_close') + elements('long_grass_distant') + elements('grass_dry_1')
+  T.check(math.abs(total1 - total0) <= 3, 'Brisbane: the same element total (' .. total0 .. ' / ' .. total1 .. ')')
+  -- the DRY_LONG layer's definitions keep their own total whatever the dry share, and are on their own layer
+  local function longTotal() return elements('grass_dry_1_long') + elements('weed1_long') + elements('long_grass_distant_long') end
+  local long1 = longTotal()
+  gc.setClimate(14, -23.3, 150.6, { 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12 })
+  gc.rebuild()
+  T.check(near(gc.status().dryShare, 0.1) and math.abs(longTotal() - long1) <= 3, 'wet months: the long grass total as before')
+  T.check(elements('long_grass_distant_long') > 3 * elements('grass_dry_1_long'), 'wet months: mostly green long grass')
+  gc.setClimate(14, -27.47, 153.03)
+  gc.rebuild()
+  -- the lawn and the shrub definitions are not mixed
+  T.check(elements('small_grass_close_lawn') == 10000 and elements('shrubs_near') == 15000, 'lawn and scrub shares untouched')
+  -- seasonal: only with hello.season auto, remade when the date moves the share a step
+  local day, realToday, realCheck = 213, gc.today, gc.CHECK_S
+  gc.today = function() return day end
+  gc.CHECK_S = 0
+  T.check(gc.update(true) == false, 'not seasonal: no remake')
+  gc.setSeasonal(true)
+  local fl = flushes
+  T.check(gc.update(true) == true and near(gc.status().dryShare, 0.6) and flushes == fl + 1, 'August: remade 60 % dry')
+  T.check(gc.update(true) == false, 'the same step: no remake')
+  day = 30
+  T.check(gc.update(true) == true and near(gc.status().dryShare, 0.4), 'late January: remade 40 % dry')
+  T.check(gc.update(false) == false, 'not in our level: nothing')
+  gc.setSeasonal(false)
+  T.check(gc.update(true) == false, 'season off again')
+  gc.setClimate(nil, nil, nil)
+  gc.setEnabled(false)
+  gc.setEnabled(true)
+  gc.reset()
+  gc.today, gc.CHECK_S = realToday, realCheck
+  _G.jsonDecode, _G.readFile, _G.flushGroundCoverGrids = realDecode, realRead, realFlush
+end
 -- the texture set's base slot is put back to the photos' size when the engine's own reload of the level's materials
 -- took it back (checkBaseSize at every block load; the game's log 2026-11-07: 24 repacks of one photo a swap)
 do

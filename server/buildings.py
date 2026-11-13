@@ -19,6 +19,7 @@ import math
 
 import numpy as np
 
+import climate      # Australia's fences (Spec.au)
 import fast
 import landmarks
 import mapgeom
@@ -133,10 +134,21 @@ LANDMARK_STONE = "bne_lm_stone"     # ... its stone (vertex colours), dark at ni
 LANDMARK_FLOODLIT = "bne_lm_floodlit"   # ... its floodlit stone, glowing at night (the Arc de Triomphe, Big Ben)
 LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosseum's arches): points of light at night
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
+# Queensland's roofs (the stock materials stay for every other region): Colorbond Trimdek-style ribbed sheet (satin,
+# painted: not the zinc cladding's glossy panels) and profiled terracotta / concrete tiles (not the slate shingles), each at
+# its real-world scale (ROOF_UV_M_OF)
+ROOF_COLORBOND = "bne_bld_roof_colorbond"
+ROOF_QTILE = "bne_bld_roof_qtile"
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
-                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER)
+                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER,
+                                                                  ROOF_COLORBOND, ROOF_QTILE)      # Queensland's roofs, last
+# the metres per repeat (along the ridge, up the slope) of the roof materials that are not at ROOF_UV_M (their
+# textures' own real size). Colorbond: the stock "wall corrugated" sheet, 5 ribs across 512 px, the ribs along V (down the
+# slope) at Trimdek's 190 mm pitch: 0.95 m each way. Tiles: the Italy barrel tile, 4 columns x 5 courses per repeat, a
+# Marseille-sized 0.33 m column and 0.42 m course: 1.32 m x 2.10 m.
+ROOF_UV_M_OF = {ROOF_COLORBOND: (0.95, 0.95), ROOF_QTILE: (1.32, 2.1)}
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -196,6 +208,73 @@ for _m, _cs in list(ROOF_TINTS.items()) + list(WALL_TINTS.items()):
 WOOD_TINTS = ((0.62, 0.44, 0.30), (0.46, 0.33, 0.24), (0.58, 0.52, 0.46))
 for _k, _c in enumerate(WOOD_TINTS):
     LOOKS[f"{SIDING}|w{_k}"] = (SIDING, _c)
+# Queensland (STYLES["queensland"]): Colorbond roofs, terracotta / concrete tiles, face brick and painted
+# weatherboards. Kept apart from the shared tint tuples (like WOOD_TINTS, looks "...|q<k>"): the other styles, sheds and
+# barns hash into those by their length, so appending to them would recolour the rest of the world. The tints are
+# multipliers on the base texture (vertex colours; MAT_MEAN is the texture's mean): each one is its APPROXIMATE sRGB
+# target / the mean, the whole colour scaled down just enough to stay within 1.0 (a pale roof cannot be brighter than its
+# texture's mean: Surfmist comes out a mid-light grey, hue kept). The tiles share one scale (they keep their order).
+# Colorbond (approximate sRGB): Monument (50,50,51), Surfmist (228,226,213), Shale Grey (189,191,186), Woodland Grey
+# (75,76,70), Basalt (109,108,110), Windspray (136,139,138), Dune (177,173,163), Classic Cream (233,220,184),
+# Paperbark (202,191,164), Jasper (108,97,83), Manor Red (94,29,14), Deep Ocean (54,65,82), Cottage Green (48,76,60)
+QLD_METAL = ((0.23, 0.23, 0.24), (1.0, 0.99, 0.93), (0.88, 0.89, 0.87), (0.35, 0.35, 0.33), (0.51, 0.50, 0.51),
+             (0.63, 0.65, 0.64), (0.82, 0.81, 0.76), (1.0, 0.94, 0.79), (0.94, 0.89, 0.76), (0.50, 0.45, 0.39),
+             (0.44, 0.14, 0.07), (0.25, 0.30, 0.38), (0.22, 0.35, 0.28))
+QLD_METAL_W = (3, 3, 2, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1)       # how common each is (by position above): Monument, Surfmist
+# terracotta (166,82,55), (148,70,48), (120,58,42) on the Italy tile sheet (mean (0.625, 0.465, 0.361): the first one's red
+# would need 1.04, so the three share a scale of 1/1.04); charcoal concrete tile (70,70,72), unscaled
+QLD_TILE = ((1.0, 0.66, 0.57), (0.89, 0.57, 0.50), (0.72, 0.47, 0.44), (0.44, 0.59, 0.78))
+QLD_TILE_W = (2, 2, 1, 2)
+# painted weatherboard (on the siding sheet, mean 0.82): white (240,238,230), cream (236,226,196), pale grey
+# (205,208,204), heritage green (110,130,105), pale blue (190,205,212)
+QLD_SIDING = ((1.0, 0.99, 0.96), (1.0, 0.96, 0.83), (0.98, 0.99, 0.97), (0.52, 0.62, 0.50), (0.90, 0.97, 1.0))
+QLD_SIDING_W = (4, 3, 2, 1, 1)
+# face brick on the sash-on-red-brick sheet (taken as red brick, BRICK_WALL's mean (0.72, 0.57, 0.51)): cream
+# (214,190,150), blond (196,170,128), red-brown (150,78,56), chocolate (98,62,48), salmon (190,120,95)
+QLD_BRICK = ((0.89, 1.0, 0.88), (0.91, 1.0, 0.84), (0.82, 0.54, 0.43), (0.54, 0.43, 0.37), (1.0, 0.80, 0.70))
+QLD_BRICK_W = (2, 2, 3, 1, 1)
+for _k, _c in enumerate(QLD_METAL):
+    LOOKS[f"{ROOF_COLORBOND}|q{_k}"] = (ROOF_COLORBOND, _c)
+for _k, _c in enumerate(QLD_TILE):
+    LOOKS[f"{ROOF_QTILE}|q{_k}"] = (ROOF_QTILE, _c)
+for _k, _c in enumerate(QLD_SIDING):
+    LOOKS[f"{SIDING}|q{_k}"] = (SIDING, _c)
+for _k, _c in enumerate(QLD_BRICK):
+    LOOKS[f"bne_bld_fac_qbrick{_k}"] = (FACADE, _c)
+    LOOKS[f"{BRICK_WALL}|q{_k}"] = (BRICK_WALL, _c)       # the same face brick on the plain brick texture: a gable end
+# a Queensland gable end continues the wall below it (plan() sets Spec.gable = (look, m per texture repeat)): the wall's
+# own plain material and tint at the wall's scale (SIDING_UV_M), or on a face-brick house (the window sheet has no
+# window-free brick to stretch over a triangle) plain brick of the same tint (QLD_GABLE_BRICK) or a light weatherboard
+# (QLD_GABLE_SIDING: white, cream, pale grey), the other very common brick-veneer gable
+QLD_GABLE_BRICK = 0.6       # of face-brick houses: brick gable ends
+QLD_GABLE_SIDING = (0, 1, 2)    # (indices into QLD_SIDING)
+GABLE_BRICK_UV_M = 2.0      # m per repeat of the stock red brick texture (a gable end's brick courses)
+# high-set and low-set Queensland houses (highset(), _hs_*): timber houses (weatherboard walls, fibro look too) stand
+# on stumps, face-brick and rendered ones get a masonry base, never stumps. The looks are on existing materials.
+HS_TIMBER, HS_BRICK, HS_RENDER = "timber", "brick", "render"
+HS_UNDER = "qhs_under"
+HS_BATTEN_DARK = "qhs_batten_dark"
+LOOKS["qhs_stump_conc"] = (CONCRETE, (0.60, 0.60, 0.58))        # concrete stumps
+LOOKS["qhs_stump_wood"] = (SIDING, (0.55, 0.46, 0.38))          # weathered hardwood stumps, stair and landing
+LOOKS[HS_UNDER] = (CONCRETE, (0.12, 0.12, 0.12))                # the shadowed underside of the floor
+LOOKS[HS_BATTEN_DARK] = (SIDING, (0.40, 0.34, 0.29))            # stained battens (the other battens match the wall)
+LOOKS["qhs_stair_conc"] = (CONCRETE, (0.78, 0.77, 0.75))        # a masonry house's entry steps
+HS_ROLLER = ((0.30, 0.30, 0.31), (0.55, 0.56, 0.57), (0.88, 0.88, 0.84), (0.70, 0.70, 0.68))   # roller doors
+for _k, _c in enumerate(HS_ROLLER):
+    LOOKS[f"qhs_roller|{_k}"] = (METALWALL, _c)
+# a raised house's front door is a leaf in the mesh (the stock door prop brings its own steps and rails: doors() leaves
+# it out there): timber brown, white, navy, green
+HS_DOOR = ((0.28, 0.17, 0.11), (0.95, 0.95, 0.92), (0.18, 0.26, 0.36), (0.30, 0.40, 0.30))
+HS_DOOR_W, HS_DOOR_H = 0.95, 2.05
+for _k, _c in enumerate(HS_DOOR):
+    LOOKS[f"qhs_door|{_k}"] = (FACADE, _c)
+
+
+def _weighted(names, weights):
+    """names repeated by their weights: a tint list to hash into (a common colour appears more often)."""
+    return tuple(n for n, w in zip(names, weights) for _ in range(w))
+
+
 # Shop signs (Bishop's and Moab's main streets: a painted sign band over every shopfront, each shop its own
 # colour): boxes over the ground floor of a shop's street wall, a colour per shop width (hashed).
 SIGN_TINTS = ((0.62, 0.16, 0.14), (0.16, 0.22, 0.42), (0.18, 0.36, 0.24), (0.95, 0.90, 0.75), (0.42, 0.30, 0.22),
@@ -646,7 +725,8 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml",
+                 "gable", "hs", "qld", "awn", "au")      # au: the footprint lies in Australia (climate.in_australia): its fence is Colorbond / paling
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -668,11 +748,15 @@ class Style:
     Coarse boxes by region until a facade-material map; the US ones keep their earlier behaviour."""
 
     def __init__(self, name, brick, walls, porch, flat, hipped, roofs, pitch=None, paint=0.3, wall_tints=None,
-                 wood=False, attached=0.0, barn_red=0.0, stone=0.0):
+                 wood=False, attached=0.0, barn_red=0.0, stone=0.0, looks=None, brick_tints=None, brick_house=0.35):
         self.name, self.brick, self.walls, self.porch, self.flat = name, brick, walls, porch, flat
         self.barn_red, self.stone = barn_red, stone
         self.hipped, self.roofs, self.pitch, self.paint, self.wall_tints = hipped, roofs, pitch, paint, wall_tints
         self.wood, self.attached = wood, attached
+        # looks: {wall kind: the region's own look suffixes} (Queensland's weatherboard colours); brick_tints: the
+        # region's face brick facades (None: BRICK_TINTS); brick_house: the share of brick on detached houses, as a
+        # fraction of brick (the default 0.35 is the older behaviour everywhere else)
+        self.looks, self.brick_tints, self.brick_house = looks, brick_tints, brick_house
 
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
@@ -681,6 +765,23 @@ _FISH = (ROOF_SLATE_ROUND, (0, 1, 2))
 _COURSES = (ROOF_SLATE_DARK, (0, 1, 2))
 _SHAKES = (ROOF_WOOD, (0, 1, 2, 3))
 _DARK = (ROOF_SLATE, (7, 8, 9))
+# Queensland's roofs: 13 of 20 entries Colorbond, 7 tile (the positions spread over 0..1: roofs are picked by the
+# seed, and so is gabled / hipped)
+_QLD_TILE_AT = (1, 4, 6, 9, 12, 14, 17)
+_QLD_ROOFS = tuple(
+    (ROOF_QTILE, _weighted([f"q{k}" for k in range(len(QLD_TILE))], QLD_TILE_W)) if i in _QLD_TILE_AT else
+    (ROOF_COLORBOND, _weighted([f"q{k}" for k in range(len(QLD_METAL))], QLD_METAL_W)) for i in range(20))
+
+
+def _au_style(name, brick):
+    """an Australian style (Colorbond and tile roofs, brick veneer, weatherboard, render); brick: the share of
+    brick facades, by state (AU_STATE_STYLE)."""
+    return Style(name, brick, ((SIDING, 0.64), (STUCCO, 0.36)), 0.3, 0.02, 0.65,
+                        _QLD_ROOFS, pitch=23.0, paint=0.1, wall_tints=(0, 1, 2, 3, 4), stone=0.02,
+                        looks={SIDING: _weighted([f"q{k}" for k in range(len(QLD_SIDING))], QLD_SIDING_W)},
+                        brick_tints=_weighted([f"bne_bld_fac_qbrick{k}" for k in range(len(QLD_BRICK))], QLD_BRICK_W),
+                        brick_house=1.0)
+
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_south": Style("us_south", 0.35, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -706,6 +807,12 @@ STYLES = {
                        wall_tints=(0, 1, 6, 5), attached=0.3),
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
+    # Queensland (south-east suburbs): pitched hipped and gabled roofs of Colorbond (65 %) or terracotta / concrete
+    # tile (35 %; interleaved so the gabled and the hipped both mix: the choice and the roof shape share the seed), face
+    # brick veneer on 45 % of the houses, painted weatherboard (35 %) and render (20 %), a few verandahs (the porch)
+    "australia": _au_style("australia", 0.45),     # QLD and the NT
+    "australia_south": _au_style("australia_south", 0.70),     # NSW, ACT, VIC, SA, TAS: mostly brick veneer
+    "australia_west": _au_style("australia_west", 0.88),       # WA: double brick almost everywhere
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
     # roofs, pastel and whitewashed walls, metal roofs on sheds (OmdevShastri, PR #146)
     "south_asia": Style("south_asia", 0.08, ((STUCCO, 0.92),), 0.0, 0.94, 0.2, (_CLAY, (ROOF_METAL, (0, 1, 3))),
@@ -716,6 +823,11 @@ STYLES = {
     "cool": Style("cool", 0.3, ((SIDING, 0.4),), 0.05, 0.1, 0.3, (_DARK, (ROOF_METAL, (0, 1, 2, 3))), pitch=30.0,
                   paint=0.3, barn_red=0.5),
 }
+# Australia by state (climate.au_state; others "australia_south"). The tropical north keeps the timber houses on
+# stumps on flat ground (HS_LOWSET_SHARE); the south raises them only on a slope (AU_LOWSET_SOUTH)
+AU_STATE_STYLE = {"QLD": "australia", "NT": "australia", "WA": "australia_west"}
+AU_STYLES = frozenset(("australia", "australia_south", "australia_west"))
+AU_LOWSET_SOUTH = 0.03
 
 
 def region_style(lat, lon):
@@ -740,6 +852,10 @@ def region_style(lat, lon):
         return STYLES["mediterranean"]
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
+    # Queensland (climate.au_state: the state's outline, so neither the NSW Northern Rivers nor Papua New Guinea)
+    st = climate.au_state(lat, lon)
+    if st is not None:
+        return STYLES[AU_STATE_STYLE.get(st, "australia_south")]
     if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
         return STYLES["oceania"]
     if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 92.5:              # South Asia (not Myanmar, east of 92.5)
@@ -824,7 +940,7 @@ def _landmark_token(spec):
 
 @profile_step('Building plan')
 def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, dense=False, west_town=False,
-         alpine=False):
+         alpine=False, rural=False):
     """The Spec of a footprint (local ring (n, 2) in metres, counter-clockwise) from its Overture attributes
     (dict: class, height, num_floors, min_height, roof_shape, roof_height; garage: a mapped multi-storey car park
     covers it, garage_rings) and the number of buildings
@@ -989,6 +1105,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         elif west_town and not industrial and cls != "apartments":
             # Bishop's and Moab's photos (2026-10-14): one-storey shops with false fronts, ranch houses
             nf = 1 if seed < WEST_TOWN_ONE_STOREY else 2
+        elif style.name in AU_STYLES and cls != "apartments" and (
+                cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)):
+            # a Queensland suburb's untagged detached houses are mostly single-storey low-set (regional Queensland,
+            # Brisbane's outer suburbs): QLD_ONE_STOREY of them one storey (hashed on the footprint's own seed), the rest two;
+            # a high-set house is one raised storey (Spec.hs, below), never counted as a second one
+            nf = 1 if _hash01(seed, "qstoreys") < QLD_ONE_STOREY else 2
         elif cls in HOUSE_CLASSES or (area < 220 and not shop):
             nf = 1 if seed < 0.3 else 2
         elif industrial:
@@ -1143,10 +1265,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             u_brick = _hash01(seed, "brick")
             detached = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
+            # (style.brick_house was 0.35)
+            brick = u_brick < brick_share(lat, lon) * (1.15 if row else style.brick_house if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
             if brick:
                 band = BAND_BRICK
-                facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
+                bricks = style.brick_tints or BRICK_TINTS
+                facade = bricks[int(seed * 7919) % len(bricks)]
             else:
                 tints = REGION_FACADE_TINTS.get(style.name, FACADE_TINTS)
                 facade = tints[int(seed * 7919) % len(tints)]
@@ -1173,7 +1297,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 break
         if kind is not None:
             tints = style.wall_tints
-            if style.wood and kind == SIDING:   # chalets: stained wood
+            if style.looks and kind in style.looks:     # the region's own paints (Queensland weatherboard)
+                own = style.looks[kind]
+                wall = f"{kind}|{own[int(_hash01(seed, 'wc') * len(own))]}"
+            elif style.wood and kind == SIDING:   # chalets: stained wood
                 wall = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
             elif tints is not None:
                 tints = [t for t in tints if t < len(WALL_TINTS[kind]) - (BARN_REDS if kind == SIDING else 0)] or [0]
@@ -1214,7 +1341,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         wall = f"{smat}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[smat]))}"
         facade, plain = wall, False
     elif fm == "brick" and not (barn or shed):
-        facade, band, plain, wall = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK, False, None
+        bricks = style.brick_tints or BRICK_TINTS
+        facade, band, plain, wall = bricks[int(seed * 7919) % len(bricks)], BAND_BRICK, False, None
     elif fm == "glass":
         facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
         band, plain, wall = BAND_OFFICE, False, None
@@ -1334,6 +1462,39 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             hm = float("nan")
         h = hm if math.isfinite(hm) and 2.0 <= hm <= 30.0 else CANOPY_H.get(cls, 3.0)
         nf, floor_h = 1, h
+    gable = None
+    if style.name in AU_STYLES and roof == "gabled":     # the gable end continues the wall (_roof)
+        if (wall is not None and facade == wall) or (plain and facade.startswith(SIDING)):
+            gable = (facade, SIDING_UV_M)                   # weatherboard, render, ...: the wall's own plain look
+        elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
+            k = int(facade[len("bne_bld_fac_qbrick"):])
+            if _hash01(seed, "gable") < QLD_GABLE_BRICK:
+                gable = (f"{BRICK_WALL}|q{k}", GABLE_BRICK_UV_M)
+            else:
+                gable = (f"{SIDING}|q{QLD_GABLE_SIDING[int(_hash01(seed, 'gable tint') * len(QLD_GABLE_SIDING))]}",
+                         SIDING_UV_M)
+    hs = None
+    if style.name in AU_STYLES and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
+        # a detached house on stumps (timber: SIDING walls) or on a masonry base (brick, render): see highset()
+        wk = wall.split("|")[0] if wall else None
+        if wk == SIDING:
+            hs = (HS_TIMBER, None, 0.0, HS_LOWSET_SHARE if style.name == "australia" else AU_LOWSET_SOUTH)
+        elif wk == STUCCO:
+            hs = (HS_RENDER, wall, SIDING_UV_M)
+        elif band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"):
+            hs = (HS_BRICK, f"{BRICK_WALL}|q{int(facade[len('bne_bld_fac_qbrick'):])}", GABLE_BRICK_UV_M)
+    qld = None
+    if style.name in AU_STYLES and house and nf <= 2 and roof != "flat" and not (shed or barn or church or garage):
+        # a detached pitched-roof house's details (_qld_extras): wider eaves with soffit, fascia, gutters and
+        # downpipes (all of them), solar panels, whirlybirds, window awnings (older brick / weatherboard houses);
+        # doors() adds the carport and the water tank (they need the neighbours and the road)
+        old = (wall is not None and wall.split("|")[0] == SIDING) or (
+            band is BAND_BRICK and facade.startswith("bne_bld_fac_qbrick"))
+        qld = {"eave": QLD_EAVE_M[0] + QLD_EAVE_M[1] * _hash01(seed, "qeave"),
+               "old": bool(old), "awn": bool(old) and _hash01(seed, "qawn") < QLD_AWNING,
+               "solar": _hash01(seed, "qsolar") < QLD_SOLAR,
+               "whirly": (1 + (_hash01(seed, "qwhirly2") < QLD_WHIRLY2)) if _hash01(seed, "qwhirly") < QLD_WHIRLY else 0,
+               "rural": bool(rural), "carport": None, "tank": False}
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS
@@ -1343,6 +1504,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
+                gable=gable, hs=hs, qld=qld,
+                # a Queensland building that may stand on a main street: doors() decides its footpath awning (Spec.awn)
+                awn={} if style.name in AU_STYLES and qld is None and roof == "flat" and not (
+                    shed or barn or church or garage or industrial or terminal or plain) else None,
+                au=bool(lat is not None and lon is not None and climate.in_australia(lat, lon)) or None,
                 across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
                 skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
     if skel:
@@ -1511,6 +1677,8 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         WIN_CELLS if spec.wall else [],
         [-1] if hole else [int(e) for e in (spec.street or ())],    # (a shop's ground floor on its street walls: doors())
         LOBBY_BAND if lobby else None)
+    if len(mid) and band is BAND_BRICK and not spec.wall and not spec.plain and spec.facade.startswith("bne_bld_fac_qbrick"):
+        _qld_brick_scale(spec, ring, P, UV, mid)        # one brick scale on every face
     if len(mid):
         m.quads(P, UV, mid, mats)
 
@@ -1537,6 +1705,71 @@ _SHEET_MI = (_FACADE_MI, MATERIALS.index(OFFICE))  # (the plaster sheet's band 0
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
+
+
+# a face-brick wall of the window sheet (BAND_BRICK, Queensland's qbrick facades) is laid by the Rust kernel a whole number of
+# bays (TILE_PX_M / bays per sheet, 2.4 m) along each wall, so a wall's bricks are stretched to its own length / round(length / 2.4):
+# a 3.5 m face took one 3.5 m bay and a 3.7 m face two 1.85 m ones (up to 2x, 1.5x between neighbours: a two-storey block on Anzac
+# Parade). _qld_brick_scale() gives every such wall the sheet's own scale (one repeat per TILE_PX_M, the same on every face
+# and storey; up to QLD_BRICK_SCALE_MAX off it only where no window of the sheet's pattern would otherwise be cut by a corner) and
+# places the pattern so its windows keep QLD_BRICK_MARGIN_M of brick to the corners. The plain-brick strips (a plinth, the door's) and
+# the walls the kernel splits round a flat-roofed house's door keep the kernel's UVs.
+QLD_BRICK_MARGIN_M = 0.4        # m of brick at least between a window's edge and a corner
+QLD_BRICK_WIN_M = 1.2           # m: a window of the sheet's bay (its 2.4 m)
+QLD_BRICK_SCALES = (1.0, 0.96, 1.04, 0.92, 1.08, 0.88, 1.12)    # wall metres per sheet metre tried, in order of preference
+
+
+def _qld_brick_fit(L, bay):
+    """(scale, o) for a wall of length L m: the sheet is laid at `scale` wall metres per sheet metre with a window's middle o m
+    along the wall (the next ones every bay * scale): the first scale (QLD_BRICK_SCALES) at which no window is cut by a
+    corner or stands closer than QLD_BRICK_MARGIN_M to one, the pattern placed as evenly as it can be."""
+    best = None
+    for sc in QLD_BRICK_SCALES:
+        step, hw = bay * sc, QLD_BRICK_WIN_M * sc / 2
+        o = np.arange(0.0, step, 0.05)
+        x = o[:, None] + step * np.arange(-1, int(L // step) + 3)[None, :]           # the window middles, one row per offset
+        gone = (x + hw <= 0.0) | (x - hw >= L)                                      # wholly off the wall
+        cut = ((x + hw > 0.0) & (x - hw < QLD_BRICK_MARGIN_M)) | ((x + hw > L - QLD_BRICK_MARGIN_M) & (x - hw < L))
+        bad = (cut & ~gone).sum(1) + 0.5 * ((~gone).sum(1) == 0) * (L >= 2.2)       # (a wall of 2.2 m and more has a window)
+        inside = ~gone
+        first = np.where(inside, x - hw, np.inf).min(1)
+        last = np.where(inside, L - (x + hw), np.inf).min(1)
+        lop = np.where(np.isfinite(first), np.abs(first - last), 0.0)                # how lopsided its margins are
+        k = int(np.lexsort((lop, bad))[0])
+        if best is None or bad[k] < best[0]:
+            best = (float(bad[k]), sc, float(o[k]))
+        if bad[k] == 0:
+            break
+    return best[1], best[2]
+
+
+def _qld_brick_scale(spec, ring, P, UV, mid):
+    """Rewrite the u of the window sheet's wall quads in place (P, UV: the kernel's flat lists, 12 and 8 numbers per quad)."""
+    bay = TILE_PX_M / spec.band[1]
+    pts = np.asarray(ring, np.float64)[:, :2]
+    E = np.roll(pts, -1, 0) - pts
+    EL = np.hypot(E[:, 0], E[:, 1])
+    skip = spec.door[0] if spec.door and spec.roof == "flat" else -1       # (the kernel's door strip splits that wall)
+    fits = {}
+    for q, k in enumerate(mid):
+        if k != 0 or UV[8 * q + 2] - UV[8 * q] < 0.1:   # (not the facade sheet's; a plain strip is 0.06 wide, a sliver wall less)
+            continue
+        x, y, x1, y1 = P[12 * q], P[12 * q + 1], P[12 * q + 3], P[12 * q + 4]
+        off = 0.0
+        for px, py in ((x, y), (x1, y1)):           # the wall both ends of the quad lie on (a corner is on two)
+            w = pts + E * np.clip(((px - pts[:, 0]) * E[:, 0] + (py - pts[:, 1]) * E[:, 1]) / np.maximum(EL * EL, 1e-12), 0.0, 1.0)[:, None]
+            off = off + np.hypot(w[:, 0] - px, w[:, 1] - py)
+        i = int(np.argmin(off))
+        if i == skip or EL[i] < 0.05:
+            continue
+        L = float(EL[i])
+        if i not in fits:
+            fits[i] = _qld_brick_fit(L, bay)
+        sc, o = fits[i]
+        a = float((x - pts[i, 0]) * E[i, 0] + (y - pts[i, 1]) * E[i, 1]) / L            # along the wall: the quad's start, its end
+        b = float((x1 - pts[i, 0]) * E[i, 0] + (y1 - pts[i, 1]) * E[i, 1]) / L
+        ua, ub = (a - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1], (b - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1]
+        UV[8 * q], UV[8 * q + 2], UV[8 * q + 4], UV[8 * q + 6] = ua, ub, ub, ua
 
 
 def _cornice(m, spec, ring, z_eave, mat_idx):
@@ -1729,7 +1962,349 @@ def drawn_ring(spec):
     return ring
 
 
-def _porch(m, spec, base, mat_idx):
+# High-set and low-set houses (Queensland: Spec.hs, set by plan() for detached houses of up to two storeys with a
+# pitched roof). Timber houses (SIDING walls: weatherboard, the fibro look) stand on stumps: on a sloping block (HS_DROP_M
+# of fall across the footprint) the floor at HS_FLOOR_M above the lowest ground, otherwise a share of them (older
+# houses) low-set on a short stump; the under-floor is open stumps or timber battens, with a front stair. Face-brick and
+# rendered houses never get stumps: on a slope their under-floor is a masonry lower level (brick of the house's tint,
+# or its own render), with a roller door when it is tall enough and a few small windows. Walls are drawn from the
+# floor up (the Rust kernel's quads, moved up: z_eave and z0), the rest is extra geometry (a stump is 16 vertices,
+# at most HS_STUMP_MAX of them, a stair ~100).
+HS_DROP_M = 1.2             # m of fall across the footprint: a house is high-set
+HS_BASE_DROP_M = 0.5        # a brick house from this fall has a brick base (its floor at the highest ground)
+HS_MAX_DROP_M = 5.0         # a steeper footprint is left as it was (a ground model's error, a cliff)
+HS_FLOOR_M = 2.3            # timber: the floor this far over the lowest ground, plus up to HS_FLOOR_SPAN_M (hashed)
+HS_FLOOR_SPAN_M = 0.7
+HS_MASONRY_FLOOR_M = (2.4, 0.4)     # brick / render: the lower level's height over the lowest ground (+ hashed part)
+HS_UPHILL_MIN_M = 0.45      # m the floor stands over the highest ground at least (a timber house's uphill stumps)
+HS_LOWSET_SHARE = 0.25      # of timber houses on a gentle slope or flat ground: low-set on stumps
+HS_LOWSET_M = (0.6, 0.4)    # their floor over the highest ground (+ hashed part)
+HS_BEARER_M = 0.2           # m the walls reach under the floor (the bearers and the floor edge)
+HS_POST_M = 0.17            # m: a stump's square side
+HS_STUMP_SPACING = 2.4      # m between stumps along the outline (wider when HS_STUMP_MAX would be passed)
+HS_STUMP_MAX = 12           # stumps of one house (16 vertices each)
+HS_BATTEN_SHARE = 0.6       # of timber houses that have a battened under-floor
+HS_BATTEN_UV_M = 1.2        # m per repeat of the weatherboard texture turned upright: the battens' spacing
+HS_BURY_M = 0.8             # m the stumps, battens and base reach under the ground at their foot
+HS_STAIR_W = 1.1
+HS_TREAD = 0.27
+HS_RISE = 0.19
+HS_MAX_STEPS = 20
+HS_LANDING_M = 1.0          # a stair's landing at the door when there is no verandah
+HS_LANDING_W = 1.5
+HS_GARAGE = (2.5, 4.8, 2.1)         # roller door: single width, double width, height
+HS_GARAGE_MIN_BASE_M = 2.2          # the base this tall (over the ground at the door): a roller door in it
+HS_GARAGE_LEVEL_M = 0.35            # the wall's ground may differ this much across the roller door (else no door there)
+HS_GARAGE_OUT_M = 0.02              # the roller door stands this far proud of the base wall's plane
+HS_STAIR_REACH_M = 3.5              # a stair reaches no further than this from the wall (the front yard, not the footpath)
+HS_STEEP = (0.22, 0.25)             # a steeper flight (rise, tread) when the standard one would not fit
+HS_BASE_WIN = (0.9, 0.55)           # m: a small window in the base
+
+
+def _hs_floor(spec, gmin, gmax):
+    """The floor (z) of a house standing on stumps or a base (Spec.hs), None when it stands on the ground as before
+    (the footprint's highest ground, gmax)."""
+    hs = getattr(spec, "hs", None)
+    if not hs or (spec.min_h or 0.0) > 0.5 or getattr(spec, "portal", False):
+        return None
+    drop = gmax - gmin
+    if drop > HS_MAX_DROP_M:
+        return None
+    seed = spec.seed
+    if hs[0] == HS_TIMBER:
+        if drop >= HS_DROP_M:
+            return max(gmin + HS_FLOOR_M + HS_FLOOR_SPAN_M * _hash01(seed, "hsfloor"), gmax + HS_UPHILL_MIN_M)
+        if _hash01(seed, "lowset") < (hs[3] if len(hs) > 3 else HS_LOWSET_SHARE):
+            return gmax + HS_LOWSET_M[0] + HS_LOWSET_M[1] * _hash01(seed, "lowsetm")
+        return None
+    if drop >= HS_DROP_M:
+        return max(gmin + HS_MASONRY_FLOOR_M[0] + HS_MASONRY_FLOOR_M[1] * _hash01(seed, "hsfloor"), gmax + 0.3)
+    if hs[0] == HS_BRICK and drop >= HS_BASE_DROP_M:
+        return gmax
+    return None
+
+
+class _HighSet:
+    """A house's raised floor and the ground under it: kind (HS_*), floor z, the footprint's ground plane (fitted to
+    its corners' ground; flat at the lowest when that is not known), the looks of its battens / stumps / base."""
+    __slots__ = ("kind", "floor", "gmin", "gmax", "c0", "coef", "battens", "skirt", "skirt_uv", "post")
+
+    def ground(self, x, y):
+        z = self.coef[0] + self.coef[1] * (x - self.c0[0]) + self.coef[2] * (y - self.c0[1])
+        return float(min(max(z, self.gmin - 1.5), self.gmax + 1.0))
+
+
+def highset(spec, gmin, gmax):
+    """The _HighSet of a house (see _hs_floor), None when it stands as before."""
+    floor = _hs_floor(spec, gmin, gmax)
+    if floor is None:
+        return None
+    hs = _HighSet()
+    hs.kind, hs.floor, hs.gmin, hs.gmax = spec.hs[0], float(floor), float(gmin), float(gmax)
+    r = np.asarray(spec.ring, np.float64)
+    g = getattr(spec, "gring", None)
+    hs.c0 = r.mean(0)
+    if g is not None and len(g) == len(r) and len(r) >= 3:
+        A = np.column_stack([np.ones(len(r)), r[:, 0] - hs.c0[0], r[:, 1] - hs.c0[1]])
+        hs.coef = np.linalg.lstsq(A, np.asarray(g, np.float64), rcond=None)[0]
+    else:
+        hs.coef = np.array([gmin, 0.0, 0.0])
+    seed = spec.seed
+    hs.battens = hs.kind == HS_TIMBER and _hash01(seed, "battens") < HS_BATTEN_SHARE
+    if hs.kind == HS_TIMBER:
+        hs.skirt = spec.wall if _hash01(seed, "battenc") < 0.55 else HS_BATTEN_DARK     # painted like the house, or stained
+        hs.skirt_uv = HS_BATTEN_UV_M
+        hs.post = "qhs_stump_conc" if _hash01(seed, "stump") < 0.5 else "qhs_stump_wood"
+    else:
+        hs.skirt, hs.skirt_uv = spec.hs[1], spec.hs[2]
+        hs.post = "qhs_stump_conc"
+    return hs
+
+
+def _hs_skirt(m, hs, p, q, z_top, mat_idx):
+    """A screen from p to q (counter-clockwise ring: the outside on the right) from the ground up to z_top: timber
+    battens (the weatherboard texture turned upright) or the base's masonry (brick of the house's tint, its render)."""
+    L = float(math.hypot(q[0] - p[0], q[1] - p[1]))
+    if L < 0.05:
+        return
+    zp = min(hs.ground(p[0], p[1]) - HS_BURY_M, z_top - 0.05)
+    zq = min(hs.ground(q[0], q[1]) - HS_BURY_M, z_top - 0.05)
+    su = hs.skirt_uv
+    if hs.kind == HS_TIMBER:
+        uv = ((zp / su, 0.0), (zq / su, L / su), (z_top / su, L / su), (z_top / su, 0.0))
+    else:
+        uv = ((0.0, zp / su), (L / su, zq / su), (L / su, z_top / su), (0.0, z_top / su))
+    m.quad((p[0], p[1], zp), (q[0], q[1], zq), (q[0], q[1], z_top), (p[0], p[1], z_top), *uv, mat_idx[hs.skirt])
+
+
+def _hs_post(m, hs, c, d, z_top, mat_idx):
+    """A square stump at c (axis d), from under the ground up to z_top: four sides (its top is under the floor)."""
+    z0 = hs.ground(c[0], c[1]) - HS_BURY_M
+    if z_top - z0 < 0.3:
+        return
+    h = HS_POST_M / 2
+    v = np.array([-d[1], d[0]])
+    k = [c + d * sx * h + v * sy * h for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    mat = mat_idx[hs.post]
+    for i in range(4):
+        a, b = k[i], k[(i + 1) % 4]
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z_top), (a[0], a[1], z_top),
+               (0.0, z0), (HS_POST_M, z0), (HS_POST_M, z_top), (0.0, z_top), mat)
+
+
+def _hs_draw(m, spec, hs, ring, mat_idx):
+    """What goes under a raised house (near mesh): a timber house's shadowed floor underside and its battens or
+    stumps; a brick house's base; both: the front stair; a masonry house's roller door and small windows."""
+    n = len(ring)
+    if hs.kind == HS_TIMBER:
+        zb = hs.floor - HS_BEARER_M
+        m.poly([(p[0], p[1], zb) for p in ring[::-1]], [(p[0] / 3.0, p[1] / 3.0) for p in ring[::-1]], mat_idx[HS_UNDER])
+        if hs.battens:
+            for i in range(n):
+                _hs_skirt(m, hs, ring[i], ring[(i + 1) % n], zb, mat_idx)
+        else:
+            lens = [float(math.hypot(*(ring[(i + 1) % n] - ring[i]))) for i in range(n)]
+            s = HS_STUMP_SPACING
+            while sum(max(1, math.ceil(L / s)) for L in lens) > HS_STUMP_MAX and s < 12.0:
+                s *= 1.1
+            for i in range(n):
+                a, L = ring[i], lens[i]
+                if L < 0.05:
+                    continue
+                d = (ring[(i + 1) % n] - a) / L
+                inward = np.array([-d[1], d[0]])
+                k = max(1, math.ceil(L / s))
+                for j in range(k):
+                    _hs_post(m, hs, a + d * (L * j / k + HS_POST_M / 2) + inward * HS_POST_M / 2, d, zb, mat_idx)
+    elif hs.kind == HS_BRICK:
+        for i in range(n):
+            _hs_skirt(m, hs, ring[i], ring[(i + 1) % n], hs.floor, mat_idx)
+    if hs.kind != HS_TIMBER:
+        _hs_openings(m, spec, hs, ring, mat_idx)
+    if spec.door:
+        _hs_stair(m, spec, hs, ring, mat_idx)
+        _hs_door(m, spec, hs, ring, mat_idx)
+
+
+def _hs_door(m, spec, hs, ring, mat_idx):
+    """The front door's leaf, a quad flat on the wall at the door (spec.door) from the floor (a verandah's deck) up."""
+    edge, sd = spec.door
+    if edge >= len(ring):
+        return
+    a, d, L, out = _hs_edge(ring, edge)
+    if L < 3.0:
+        return
+    z0 = hs.floor + (PORCH_DECK_M if spec.porch and L >= 4.0 else 0.0)
+    pa, pb = a + d * (sd - HS_DOOR_W / 2) + out * WIN_OUT_M, a + d * (sd + HS_DOOR_W / 2) + out * WIN_OUT_M
+    m.quad((pa[0], pa[1], z0), (pb[0], pb[1], z0), (pb[0], pb[1], z0 + HS_DOOR_H), (pa[0], pa[1], z0 + HS_DOOR_H),
+           (0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999),
+           mat_idx[f"qhs_door|{int(_hash01(spec.seed, 'hsdoor') * len(HS_DOOR))}"])
+
+
+def _hs_edge(ring, i):
+    """(start, unit direction, length, outward unit normal) of edge i of the counter-clockwise ring."""
+    a, b = ring[i], ring[(i + 1) % len(ring)]
+    L = float(math.hypot(*(b - a)))
+    d = (b - a) / max(L, 1e-9)
+    return a, d, L, np.array([d[1], -d[0]])
+
+
+def _hs_openings(m, spec, hs, ring, mat_idx):
+    """The masonry base's roller door (on the front wall if the base is tall enough there, else on the base's tallest
+    wall; a third are double) and small windows on its walls where it is tall enough."""
+    n = len(ring)
+    best, door_edge = None, spec.door[0] if spec.door else -1
+    for i in range(n):
+        a, d, L, out = _hs_edge(ring, i)
+        if L < 4.5:
+            continue
+        hm = hs.floor - hs.ground(*(a + d * L / 2))
+        if hm < HS_GARAGE_MIN_BASE_M:
+            continue
+        # the roller door's span on this wall (away from the front door), and the wall's ground along it
+        gw = HS_GARAGE[1] if (L >= 9.0 and _hash01(spec.seed, "garage2") < 0.33) else HS_GARAGE[0]
+        sd = spec.door[1] if spec.door and spec.door[0] == i else None
+        mid = L / 2 if sd is None else (sd + L) / 2 if sd < L / 2 else sd / 2      # (away from the front door)
+        mid = float(np.clip(mid, gw / 2 + 0.4, L - gw / 2 - 0.4))
+        ga, gb = hs.ground(*(a + d * (mid - gw / 2))), hs.ground(*(a + d * (mid + gw / 2)))
+        if abs(ga - gb) > HS_GARAGE_LEVEL_M or hs.floor - 0.2 - max(ga, gb) < HS_GARAGE[2] - 0.3:
+            continue            # a door on a wall that falls away along it would hang in the air / sink into the ground
+        rank = (i == door_edge, hm, L)
+        if best is None or rank > best[0]:
+            best = (rank, i, gw, mid, ga, gb)
+    garage = best[1] if best else -1
+    gw = 0.0
+    if garage >= 0:
+        _, _, gw, mid, ga, gb = best
+        a, d, L, out = _hs_edge(ring, garage)
+        # a vertical quad 0.02 m proud of the base wall's plane, its foot on the ground at each end, its top
+        # horizontal at the door's height (at most 0.2 m under the floor)
+        pa, pb = a + d * (mid - gw / 2) + out * HS_GARAGE_OUT_M, a + d * (mid + gw / 2) + out * HS_GARAGE_OUT_M
+        zt = min(max(ga, gb) + HS_GARAGE[2], hs.floor - 0.2)
+        su = 1.5
+        m.quad((pa[0], pa[1], ga), (pb[0], pb[1], gb), (pb[0], pb[1], zt), (pa[0], pa[1], zt),
+               (0.0, ga / su), (gw / su, gb / su), (gw / su, zt / su), (0.0, zt / su),
+               mat_idx[f"qhs_roller|{int(_hash01(spec.seed, 'roller') * len(HS_ROLLER))}"])
+        gmid = a + d * mid
+    white = mat_idx["bne_bld_fac_white"]
+    for i in range(n):
+        a, d, L, out = _hs_edge(ring, i)
+        if L < 3.0:
+            continue
+        for t in ((0.5,) if L < 7.0 else (0.3, 0.7)):
+            c = a + d * (L * t)
+            if i == garage and abs(float((c - gmid) @ d)) < gw / 2 + HS_BASE_WIN[0]:
+                continue
+            zs = hs.ground(*c) + 1.0
+            if hs.floor - 0.3 < zs + HS_BASE_WIN[1]:
+                continue
+            p, q = c - d * HS_BASE_WIN[0] / 2 + out * WIN_OUT_M, c + d * HS_BASE_WIN[0] / 2 + out * WIN_OUT_M
+            zt = zs + HS_BASE_WIN[1]
+            m.quad((p[0], p[1], zs), (q[0], q[1], zs), (q[0], q[1], zt), (p[0], p[1], zt),
+                   (WIN_UV[0], WIN_UV[2]), (WIN_UV[1], WIN_UV[2]), (WIN_UV[1], WIN_UV[3]), (WIN_UV[0], WIN_UV[3]), white)
+
+
+def _hs_porch_under(m, hs, c, d, out, w, D, z_top, mat_idx):
+    """Under a verandah deck (c: the middle of its back edge on the wall, w wide, D deep, its underside z_top): the
+    house's own screen on its front and sides, or a stump at each front corner."""
+    corners = [c - d * w / 2, c - d * w / 2 + out * D, c + d * w / 2 + out * D, c + d * w / 2]
+    if z_top - min(hs.ground(p[0], p[1]) for p in corners) < 0.25:
+        return
+    if hs.kind == HS_TIMBER and not hs.battens:
+        for t in (-1, 1):
+            _hs_post(m, hs, c + d * t * (w / 2 - 0.15) + out * (D - 0.15), d, z_top, mat_idx)
+        return
+    for p, q in ((corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[3])):
+        _hs_skirt(m, hs, p, q, z_top, mat_idx)
+
+
+def _hs_stair(m, spec, hs, ring, mat_idx):
+    """The front stair of a raised house, down from its door (spec.door) to the ground: a landing at the door (none
+    under a verandah: the stair starts at the deck, beside its middle post), risers and treads between two stringers."""
+    edge, sd = spec.door
+    if edge >= len(ring):
+        return
+    a, d, L, out = _hs_edge(ring, edge)
+    if L < 3.0:
+        return
+    porch = bool(spec.porch) and L >= 4.0
+    if porch:
+        w = min(L * 0.75, 7.5)
+        sd = float(np.clip(sd, w / 2, L - w / 2)) + w / 4
+    else:
+        sd = float(np.clip(sd, HS_LANDING_W / 2 + 0.3, L - HS_LANDING_W / 2 - 0.3))
+    c = a + d * sd
+    top = hs.floor + (PORCH_DECK_M if porch else 0.0)
+    s0 = PORCH_DEPTH_M if porch else HS_LANDING_M
+    timber = hs.kind == HS_TIMBER
+    mat = mat_idx["qhs_stump_wood" if timber else "qhs_stair_conc"]
+    if not porch:           # the landing at the door
+        ctr = c + out * s0 / 2
+        _box_tiled(m, ctr, d, HS_LANDING_W / 2, s0 / 2, top - 0.15 if timber else hs.ground(ctr[0], ctr[1]) - HS_BURY_M,
+                   top - 0.02, mat, 1.0)
+        if timber and top - hs.ground(*(c + out * s0)) > 0.5:
+            for t in (-1, 1):
+                _hs_post(m, hs, c + d * t * (HS_LANDING_W / 2 - 0.12) + out * (s0 - 0.12), d, top - 0.15, mat_idx)
+    w2 = HS_STAIR_W / 2
+
+    def flight(o, f2, s_start, rise_max, tread):
+        """(steps, ground at the foot) of a flight from o running along f2 from s_start, or None if it is not needed."""
+        g = hs.ground(*(o + f2 * (s_start + 2.0)))
+        k = int(np.clip(math.ceil((top - g) / rise_max), 1, HS_MAX_STEPS))
+        g = hs.ground(*(o + f2 * (s_start + (k - 1) * tread)))
+        k = int(np.clip(math.ceil((top - g) / rise_max), 1, HS_MAX_STEPS))
+        return k, g
+    # the flight must stay in the house's own yard (HS_STAIR_REACH_M from the wall: on a downhill street-facing door
+    # the straight run reached the footpath and the road): straight if it fits, else steeper, else turned 90 degrees to run
+    # along the front wall (side-on, from the landing / the verandah's front edge), else steeper side-on; else none
+    plans = []
+    for rise_max, tread in ((HS_RISE, HS_TREAD), HS_STEEP):
+        k, g = flight(c, out, s0, rise_max, tread)
+        if s0 + k * tread <= HS_STAIR_REACH_M and (top - g) / k <= rise_max + 1e-9:
+            plans.append((c, out, s0, k, g, tread))
+            break
+    else:
+        side = (1.0, -1.0) if sd < L / 2 else (-1.0, 1.0)
+        for rise_max, tread in ((HS_RISE, HS_TREAD), HS_STEEP):
+            for sg in side:
+                f2 = d * sg
+                s_c = (s0 + w2) if porch else w2                 # beside the landing / along the deck's front edge
+                o = c + out * s_c + f2 * (0.0 if porch else HS_LANDING_W / 2)
+                room = (L - sd if sg > 0 else sd) + 1.5 - (0.0 if porch else HS_LANDING_W / 2)
+                k, g = flight(o, f2, 0.0, rise_max, tread)
+                if k * tread <= room and s_c + w2 <= HS_STAIR_REACH_M and (top - g) / k <= rise_max + 1e-9:
+                    plans.append((o, f2, 0.0, k, g, tread))
+                    break
+            if plans:
+                break
+    if not plans:
+        return
+    o, f2, s0, k, g, tread = plans[0]
+    if top - g < 0.12:
+        return
+    rise = (top - g) / k
+    l2 = np.array([-f2[1], f2[0]])
+
+    def P(s, z, t):
+        p = o + f2 * s + l2 * t
+        return float(p[0]), float(p[1]), float(z)
+    for i in range(1, k + 1):
+        s = s0 + (i - 1) * tread
+        zh, zl = top - (i - 1) * rise, top - i * rise
+        m.quad(P(s, zl, -w2), P(s, zl, w2), P(s, zh, w2), P(s, zh, -w2),
+               (0.0, zl), (HS_STAIR_W, zl), (HS_STAIR_W, zh), (0.0, zh), mat)             # riser (faces out)
+        if i < k:
+            m.quad(P(s, zl, -w2), P(s + tread, zl, -w2), P(s + tread, zl, w2), P(s, zl, w2),
+                   (0.0, s), (tread, s), (tread, s + HS_STAIR_W), (0.0, s + HS_STAIR_W), mat)    # tread (faces up)
+    s1 = s0 + (k - 1) * tread
+    zf = g + rise                                       # the last nose
+    m.quad(P(s0, top - 0.3, w2), P(s0, top, w2), P(s1, zf, w2), P(s1, g, w2),
+           (0.0, 0.0), (0.0, 0.3), (tread * k, 0.3), (tread * k, 0.0), mat)            # stringer, +l2 side
+    m.quad(P(s0, top - 0.3, -w2), P(s1, g, -w2), P(s1, zf, -w2), P(s0, top, -w2),
+           (0.0, 0.0), (tread * k, 0.0), (tread * k, 0.3), (0.0, 0.3), mat)            # stringer, -l2 side
+
+
+def _porch(m, spec, base, mat_idx, hs=None):
     """A front porch on the front door's wall (spec.door: (edge, distance along it) of spec.ring): a deck, three
     posts and a shallow roof, the house's trim white and its roof's colour."""
     edge, sd = spec.door
@@ -1751,6 +2326,8 @@ def _porch(m, spec, base, mat_idx):
         _box(m, c + d * t + out * (D - 0.15), d, 0.08, 0.08, base + PORCH_DECK_M, top, white)
     roof = mat_idx[spec.roof_mat] if spec.roof_mat else white
     _box(m, c + out * (D / 2 + 0.1), d, w / 2 + 0.15, D / 2 + 0.1, top, top + 0.18, roof)          # roof
+    if hs is not None:      # a raised house's verandah deck on stumps / its screen / its base
+        _hs_porch_under(m, hs, c, d, out, w, D, base - 0.3, mat_idx)
 
 
 def door_ground(spec, edge, along, gmax):
@@ -2035,6 +2612,421 @@ def measured_tank_rows(items, x0, y0, tanks, covered):
     return rows
 
 
+# ------------------------------------------------------------------------- Queensland house details
+# A detached pitched-roof Queensland house (Spec.qld, set by plan()) gets: eaves (QLD_EAVE_M, hashed; rakes QLD_RAKE_M) with
+# a soffit, a fascia, gutters on the eaves and 1-2 downpipes; solar panels on ~35 % (the roof face closest to north, the
+# southern hemisphere's sun; local +y is north); whirlybirds on ~40 %; window awnings on ~30 % of the older brick and
+# weatherboard houses; doors() adds a carport on ~30 % of those with room beside them and a water tank on rural lots. All
+# are plain geometry on existing materials (a plain light texel of the facade sheet tinted for trim, the Colorbond sheet
+# for the carport, the tank and metal awnings, the corrugated metal wall for whirlybirds, the weatherboard sheet for canvas).
+QLD_EAVE_M = (0.45, 0.15)       # the eaves' overhang: 0.45 m + up to 0.15 (hashed)
+QLD_RAKE_M = 0.3                # a gable end's overhang
+QLD_SOLAR, QLD_WHIRLY, QLD_WHIRLY2 = 0.35, 0.40, 0.40   # shares: solar; whirlybirds; a second whirlybird among those
+QLD_ONE_STOREY = 0.80           # untagged detached houses that are single-storey (the rest two storeys)
+QLD_CARPORT, QLD_AWNING, QLD_TANK = 0.30, 0.30, 0.70    # carports (of houses with room); awnings (of older houses); tanks (rural)
+QLD_RURAL_COVER = 0.04          # a tile whose footprints cover less than this share is rural (tile_buildings -> plan)
+QLD_ISOLATED_M = 25.0           # ... and a rural house this far from any other building in the tile has a tank
+FASCIA_H = 0.2
+GUTTER_M = 0.12                 # the gutter box: this wide and tall
+PIPE_W = 0.09
+SOLAR_W, SOLAR_L, SOLAR_GAP, SOLAR_PROUD, SOLAR_SETBACK = 1.0, 1.7, 0.04, 0.04, 0.3     # m: a panel, the gap, standing off the roof, set back from its edges
+SOLAR_N = (6, 20)               # panels per array (by the face's area)
+SOLAR_NORTH_MIN = 0.3           # a face is a candidate if its normal's horizontal part points this far north (1 = due north)
+WHIRLY_R, WHIRLY_H, WHIRLY_SIDES = 0.15, 0.35, 8
+CARPORT_W, CARPORT_L, CARPORT_H, CARPORT_FALL, CARPORT_SIDE_M = 3.0, 6.0, 2.4, 0.2, 1.0
+AWN_OUT, AWN_DROP, AWN_Z, AWN_MAX = 0.5, 0.3, 2.65, 4       # projection, fall, the hood's top over the floor, most per house
+TANK_D, TANK_H, TANK_SIDES = (2.5, 3.5), 2.0, 12
+# footpath awnings (shop verandahs, Spec.awn, set by doors(), drawn by _qld_verandah): a Colorbond skillion over the footpath of a
+# Queensland shop on a street (country main streets), falling away from the shop to its outer edge QLD_AWN_CLEAR over the ground, as
+# deep as the footpath is (at most QLD_AWN_MAX_D, none under QLD_AWN_MIN_D) and never over the carriageway: its outer edge stays
+# QLD_AWN_KERB_M clear of every road's edge (the roads' half widths doors() has) and its rectangle clear of every other building
+QLD_AWN_SHARE = 0.85            # of the shops that have the room
+QLD_AWN_CLEAR, QLD_AWN_MAX_D, QLD_AWN_MIN_D, QLD_AWN_KERB_M = 3.0, 3.0, 1.5, 0.6     # m
+QLD_AWN_MIN_L, QLD_AWN_STREET_M = 3.0, 6.0      # m: the shortest awning; the farthest a frontage may stand from the carriageway's edge
+QLD_AWN_FALL, QLD_AWN_POST_M, QLD_AWN_POST_SHARE = 0.10, 3.6, 0.70      # fall per m of depth; post spacing; of awnings deep enough: on posts
+QLD_AWN_COLOURS = (0, 1, 2, 3, 7)       # Colorbond: Monument, Surfmist, Shale Grey, Woodland Grey, Classic Cream (QLD_METAL's indices)
+_TRIM_K = 0.841 / 0.93          # the Colorbond tints are target / the sheet's mean 0.841; the facade sheet's plain texel is ~0.93
+for _k, _c in enumerate(QLD_METAL):
+    LOOKS[f"qtrim|{_k}"] = (FACADE, tuple(min(1.0, v * _TRIM_K) for v in _c))      # fascia, gutters, pipes in a roof colour
+LOOKS["qsolar_cell"] = (FACADE, (0.085, 0.115, 0.20))
+LOOKS["qsolar_frame"] = (FACADE, (0.66, 0.68, 0.71))
+LOOKS["qwhirly"] = (METALWALL, (0.72, 0.74, 0.77))
+QLD_AWN = ((0.45, 0.62, 0.50), (0.62, 0.26, 0.24), (0.34, 0.42, 0.62))      # canvas awnings: green, maroon, blue (stripes)
+for _k, _c in enumerate(QLD_AWN):
+    LOOKS[f"qawn|{_k}"] = (SIDING, _c)
+_FLAT_UV = ((0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999))     # a plain texel (the porch's trim)
+
+
+def _eaves(spec):
+    """(overhang at the eaves, at the rakes) of a pitched roof: EAVE_M all round, Queensland houses' own."""
+    q = getattr(spec, "qld", None)
+    if not q:
+        return EAVE_M, EAVE_M
+    return q["eave"], (QLD_RAKE_M if spec.roof == "gabled" else q["eave"])
+
+
+def _oquad(m, pts, hint, uvs, mat):
+    """A quad facing the 3-vector hint (the corners reversed if they wind the other way)."""
+    p = [np.asarray(x, np.float64) for x in pts]
+    if float(np.dot(np.cross(p[2] - p[0], p[3] - p[1]), hint)) < 0:
+        pts, uvs = pts[::-1], uvs[::-1]
+    m.quad(*pts, *uvs, mat)
+
+
+def _otri(m, pts, hint, uvs, mat):
+    p = [np.asarray(x, np.float64) for x in pts]
+    if float(np.dot(np.cross(p[1] - p[0], p[2] - p[0]), hint)) < 0:
+        pts, uvs = pts[::-1], uvs[::-1]
+    m.tri(*pts, *uvs, mat)
+
+
+def _prism(m, c, u, hx, hy, z0, z1, mat):
+    """The four sides of a thin upright box (a post, a pipe)."""
+    v = np.array([-u[1], u[0]])
+    k = [c + u * sx * hx + v * sy * hy for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    for i in range(4):
+        a, b = k[i], k[(i + 1) % 4]
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), *_FLAT_UV, mat)
+
+
+def _qld_ground(spec, gmin, gmax, hs):
+    """ground(x, y) near a house: a raised house's fitted plane, else one fitted to its corners' ground (flat at the highest
+    ground where that is not known)."""
+    if hs is not None:
+        return hs.ground
+    r = np.asarray(spec.ring, np.float64)
+    g = getattr(spec, "gring", None)
+    if g is not None and len(g) == len(r) and len(r) >= 3:
+        c0 = r.mean(0)
+        coef = np.linalg.lstsq(np.column_stack([np.ones(len(r)), r[:, 0] - c0[0], r[:, 1] - c0[1]]),
+                               np.asarray(g, np.float64), rcond=None)[0]
+        return lambda x, y: float(min(max(coef[0] + coef[1] * (x - c0[0]) + coef[2] * (y - c0[1]), gmin - 1.5), gmax + 1.0))
+    return lambda x, y: float(gmax)
+
+
+class _Roofline:
+    """A pitched house's roof numbers: the box (c, u, v, hl, hw), the overhangs, the eave edge's height ze, the ridge's zr."""
+
+    def __init__(self, spec, ring, z_eave):
+        self.c, self.u, self.hl, self.hw = oriented_box(ring)
+        self.v = np.array([-self.u[1], self.u[0]])
+        self.ex, self.rk = _eaves(spec)
+        self.th = math.radians(roof_pitch(spec))
+        self.tn = math.tan(self.th)
+        self.hl2, self.hw2 = self.hl + self.rk, self.hw + self.ex
+        self.ze = z_eave - self.ex * self.tn
+        self.zr = self.ze + self.hw2 * self.tn
+        self.gabled = spec.roof == "gabled"
+
+    def at(self, s, t, z):
+        p = self.c + self.u * s + self.v * t
+        return (float(p[0]), float(p[1]), float(z))
+
+
+def _qld_trim(spec):
+    """(index of the Colorbond colour the trim takes, or None for a tile roof: fascia white / cream)."""
+    base, _, k = spec.roof_mat.partition("|")
+    return int(k[1:]) if base == ROOF_COLORBOND and k[:1] == "q" and k[1:].isdigit() else None
+
+
+def _qld_pipe_sites(spec, rl):
+    """(side of the long wall the downpipes run down: +1 / -1 along v, their positions along the wall)."""
+    q = spec.qld
+    front = {0: -1, 2: 1}.get(spec.door[0], 0) if spec.door else 0
+    sig = -front if front else 1
+    cp = q.get("carport")
+    if cp and cp.get("wall") == sig:        # a carport leans on that wall
+        sig = -sig
+    tau = 1.0 if _hash01(spec.seed, "qpipe") < 0.5 else -1.0
+    s = max(rl.hl - 0.3, 0.0)
+    return sig, ([tau * s, -tau * s] if _hash01(spec.seed, "qpipes") < 0.6 else [tau * s])
+
+
+def _qld_eaves(m, spec, rl, gnd, mat_idx):
+    """Soffit under the eaves, fascia on the eaves and the rakes, gutters on the eaves, the downpipes."""
+    seed = spec.seed
+    tk = _qld_trim(spec)
+    if tk is None:
+        gk = (1, 2, 7)[int(_hash01(seed, "qgut") * 3)]          # Surfmist, Shale Grey, Classic Cream
+        fascia = mat_idx[("bne_bld_fac_white", "bne_bld_fac_cream")[int(_hash01(seed, "qfas") * 2)]]
+        gutter = mat_idx[f"qtrim|{gk}"]
+    else:
+        fascia = gutter = mat_idx[f"qtrim|{tk}"]
+    soffit = mat_idx[("bne_bld_fac_white", "bne_bld_fac_cream", "bne_bld_fac_grey")[int(_hash01(seed, "qsoff") * 3)]]
+    hl, hw, hl2, hw2, ze, at = rl.hl, rl.hw, rl.hl2, rl.hw2, rl.ze, rl.at
+    zf = ze - FASCIA_H + 0.02                       # the fascia's foot, the soffit's height
+    O = [(-hl2, -hw2), (hl2, -hw2), (hl2, hw2), (-hl2, hw2)]
+    I = [(-hl, -hw), (hl, -hw), (hl, hw), (-hl, hw)]
+    N = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)]
+    eave_edges = (0, 2) if rl.gabled else (0, 1, 2, 3)
+    down, up = np.array([0.0, 0.0, -1.0]), np.array([0.0, 0.0, 1.0])
+    for i in eave_edges:
+        j = (i + 1) % 4
+        if rl.gabled:       # rectangles to the rake's end (the soffit runs under the corner)
+            i0, i1 = (O[i][0], I[i][1]), (O[j][0], I[j][1])
+        else:
+            i0, i1 = I[i], I[j]
+        _oquad(m, [at(*O[i], zf), at(*i0, zf), at(*i1, zf), at(*O[j], zf)], down, _FLAT_UV, soffit)
+        nrm = np.array([*(rl.u * N[i][0] + rl.v * N[i][1]), 0.0])
+        _oquad(m, [at(*O[i], zf), at(*O[j], zf), at(*O[j], ze + 0.02), at(*O[i], ze + 0.02)], nrm, _FLAT_UV, fascia)
+        n2 = (N[i][0] * GUTTER_M, N[i][1] * GUTTER_M)
+        Q0, Q1 = (O[i][0] + n2[0], O[i][1] + n2[1]), (O[j][0] + n2[0], O[j][1] + n2[1])
+        z0, z1 = ze - GUTTER_M, ze
+        _oquad(m, [at(*Q0, z0), at(*Q1, z0), at(*Q1, z1), at(*Q0, z1)], nrm, _FLAT_UV, gutter)
+        _oquad(m, [at(*O[i], z1), at(*Q0, z1), at(*Q1, z1), at(*O[j], z1)], up, _FLAT_UV, gutter)
+        _oquad(m, [at(*O[i], z0), at(*Q0, z0), at(*Q1, z0), at(*O[j], z0)], down, _FLAT_UV, gutter)
+    if rl.gabled:           # the rake boards, up each slope of both gable ends
+        for sg in (1.0, -1.0):
+            for t0, t1 in ((-hw2, 0.0), (0.0, hw2)):
+                zt0, zt1 = ze + (hw2 - abs(t0)) * rl.tn + 0.02, ze + (hw2 - abs(t1)) * rl.tn + 0.02
+                nrm = np.array([*(rl.u * sg), 0.0])
+                _oquad(m, [at(sg * hl2, t0, zt0 - FASCIA_H), at(sg * hl2, t1, zt1 - FASCIA_H), at(sg * hl2, t1, zt1),
+                           at(sg * hl2, t0, zt0)], nrm, _FLAT_UV, fascia)
+    sig, sites = _qld_pipe_sites(spec, rl)
+    for s in sites:
+        p = rl.c + rl.u * s + rl.v * sig * (hw + 0.065)
+        _prism(m, p, rl.u, PIPE_W / 2, PIPE_W / 2, gnd(p[0], p[1]) - 0.05, zf, gutter)
+        ta, tb = sig * hw, sig * (hw2 + 0.05)           # the offset under the soffit, wall to the gutter's outlet
+        zs = zf - PIPE_W
+        nv = np.array([*(rl.v * sig), 0.0])
+        _oquad(m, [at(s - PIPE_W / 2, ta, zs), at(s + PIPE_W / 2, ta, zs), at(s + PIPE_W / 2, tb, zs), at(s - PIPE_W / 2, tb, zs)],
+               down, _FLAT_UV, gutter)
+        for sx in (-1.0, 1.0):
+            _oquad(m, [at(s + sx * PIPE_W / 2, ta, zs), at(s + sx * PIPE_W / 2, tb, zs), at(s + sx * PIPE_W / 2, tb, zf),
+                       at(s + sx * PIPE_W / 2, ta, zf)], np.array([*(rl.u * sx), 0.0]), _FLAT_UV, gutter)
+
+
+def _qld_solar(m, spec, rl, mat_idx):
+    """A rectangular array of panels on the long roof face closest to north (never one facing south): returns the number."""
+    best = None
+    for sg in (1.0, -1.0):
+        ny = sg * float(rl.v[1])
+        if ny >= SOLAR_NORTH_MIN and (best is None or ny > best[0]):
+            best = (ny, sg)
+    if best is None:
+        return 0
+    sg = best[1]
+    cs, sn = math.cos(rl.th), math.sin(rl.th)
+    hl2, hw2 = rl.hl2, rl.hw2
+    Ls = hw2 / cs
+    area = (2 * hl2 if rl.gabled else hl2 + max(hl2 - hw2, 0.0)) * Ls
+    target = int(np.clip(round(area / 4.4 * (0.75 + 0.25 * _hash01(spec.seed, "qsolarn"))), *SOLAR_N))
+    rows, y = [], SOLAR_SETBACK
+    while y + SOLAR_L <= Ls - SOLAR_SETBACK + 1e-9:
+        y1 = y + SOLAR_L
+        half = (hl2 - SOLAR_SETBACK) if rl.gabled else (hl2 - y1 * cs - SOLAR_SETBACK * 1.42)     # (a hip's line limits the top row)
+        rows.append((y, y1, int((2 * half + SOLAR_GAP) // (SOLAR_W + SOLAR_GAP)) if half > 0 else 0))
+        y = y1 + SOLAR_GAP
+    pick = None
+    for R in range(1, len(rows) + 1):
+        C = min(min(r[2] for r in rows[:R]), SOLAR_N[1] // R, -(-target // R))
+        if C >= 1 and (pick is None or (abs(R * C - target), -C) < (abs(pick[0] * pick[1] - target), -pick[1])):
+            pick = (R, C)
+    if pick is None or pick[0] * pick[1] < SOLAR_N[0]:
+        return 0
+    R, C = pick
+    nrm = np.array([*(rl.v * sg * sn), cs])
+
+    def P(s, y, off):
+        t, z = sg * (hw2 - y * cs), rl.ze + y * sn
+        x0, y0, z0 = rl.at(s, t, z)
+        return (x0 + nrm[0] * off, y0 + nrm[1] * off, z0 + nrm[2] * off)
+    frame, cell = mat_idx["qsolar_frame"], mat_idx["qsolar_cell"]
+    ins = 0.04
+    for r in range(R):
+        y0, y1 = rows[r][0], rows[r][1]
+        for j in range(C):
+            s0 = (j - C / 2) * (SOLAR_W + SOLAR_GAP) + SOLAR_GAP / 2
+            s1 = s0 + SOLAR_W
+            _oquad(m, [P(s0, y0, SOLAR_PROUD), P(s1, y0, SOLAR_PROUD), P(s1, y1, SOLAR_PROUD), P(s0, y1, SOLAR_PROUD)],
+                   nrm, _FLAT_UV, frame)
+            _oquad(m, [P(s0 + ins, y0 + ins, SOLAR_PROUD + 0.005), P(s1 - ins, y0 + ins, SOLAR_PROUD + 0.005),
+                       P(s1 - ins, y1 - ins, SOLAR_PROUD + 0.005), P(s0 + ins, y1 - ins, SOLAR_PROUD + 0.005)],
+                   nrm, _FLAT_UV, cell)
+    return R * C
+
+
+def _qld_whirly(m, spec, rl, mat_idx):
+    """1-2 turbine vents on the ridge: an 8-sided silver cylinder and its lid (40 vertices each)."""
+    n = spec.qld["whirly"]
+    use = max((rl.hl2 if rl.gabled else max(rl.hl2 - rl.hw2, 0.0)) - 0.6, 0.0)
+    if n >= 2 and use >= 1.3:
+        pos = [-(0.4 + 0.2 * _hash01(spec.seed, "qw1")) * use, (0.4 + 0.2 * _hash01(spec.seed, "qw2")) * use]
+    else:
+        pos = [(_hash01(spec.seed, "qw1") - 0.5) * use]
+    mat = mat_idx["qwhirly"]
+    z0 = rl.zr - 0.07
+    z1 = z0 + WHIRLY_H
+    ang = [2 * math.pi * k / WHIRLY_SIDES for k in range(WHIRLY_SIDES + 1)]
+    arc = 2 * math.pi * WHIRLY_R / WHIRLY_SIDES
+    for s in pos:
+        pts = [(s + WHIRLY_R * math.cos(a), WHIRLY_R * math.sin(a)) for a in ang]
+        for k in range(WHIRLY_SIDES):
+            a, b = pts[k], pts[k + 1]
+            m.quad(rl.at(*a, z0), rl.at(*b, z0), rl.at(*b, z1), rl.at(*a, z1),
+                   (k * arc / 1.5, z0 / 1.5), ((k + 1) * arc / 1.5, z0 / 1.5), ((k + 1) * arc / 1.5, z1 / 1.5),
+                   (k * arc / 1.5, z1 / 1.5), mat)
+        m.poly([rl.at(*p, z1) for p in pts[:-1]], [(0.5 + p[1] / 0.3, 0.5 + (p[0] - s) / 0.3) for p in pts[:-1]], mat)
+
+
+def _qld_awnings(m, spec, ring, floor_z, mat_idx):
+    """Small skillion hoods over the front wall's ground-floor windows (the Rust kernel lays them: placed at its bay spacing,
+    HOUSE_BAY_M on a plain wall, the brick sheet's 2.4 m, clear of the door and the corners), metal or striped canvas."""
+    if spec.floor_h < 2.8:
+        return
+    edge = spec.door[0] if spec.door else 0
+    a, d, L, out = _hs_edge(ring, edge)
+    if L < 3.0 or (spec.porch and spec.door and L >= 4.0):      # (a verandah shades its windows)
+        return
+    bay = 2.4 if spec.band is BAND_BRICK else HOUSE_BAY_M
+    n = max(1, round(L / bay))
+    bw = L / n
+    door = spec.door[1] if spec.door else None
+    cs = [(i + 0.5) * bw for i in range(n)]
+    cs = [x for x in cs if 0.9 <= x <= L - 0.9 and (door is None or abs(x - door) >= DOOR_GAP_M + WIN_W / 2 + 0.2)][:AWN_MAX]
+    w = min(1.2 + 0.6 * _hash01(spec.seed, "qawnw"), bw - 0.4)
+    if not cs or w < 1.0:
+        return
+    tk = _qld_trim(spec)
+    if _hash01(spec.seed, "qawnk") < 0.5:
+        metal = True
+        mat = mat_idx[f"{ROOF_COLORBOND}|q{tk if tk is not None else (1, 2, 7)[int(_hash01(spec.seed, 'qgut') * 3)]}"]
+    else:
+        metal = False
+        mat = mat_idx[f"qawn|{int(_hash01(spec.seed, 'qawnc') * len(QLD_AWN))}"]
+    zt = floor_z + AWN_Z
+    zl = zt - AWN_DROP
+    sl = math.hypot(AWN_OUT, AWN_DROP)
+    ru, rv = ROOF_UV_M_OF[ROOF_COLORBOND]
+    for x in cs:
+        p = a + d * x + out * 0.02
+        W0, W1 = p - d * w / 2, p + d * w / 2
+        F0, F1 = W0 + out * AWN_OUT, W1 + out * AWN_OUT
+        up = np.array([out[0] * AWN_DROP, out[1] * AWN_DROP, AWN_OUT])
+        if metal:
+            uv = ((0.0, 0.0), (w / ru, 0.0), (w / ru, sl / rv), (0.0, sl / rv))
+        else:
+            uv = ((0.0, 0.0), (0.0, w / SIDING_UV_M), (sl / SIDING_UV_M, w / SIDING_UV_M), (sl / SIDING_UV_M, 0.0))
+        _oquad(m, [(W0[0], W0[1], zt), (W1[0], W1[1], zt), (F1[0], F1[1], zl), (F0[0], F0[1], zl)], up, uv, mat)
+        for W, F, sg in ((W0, F0, -1.0), (W1, F1, 1.0)):
+            _otri(m, [(W[0], W[1], zt), (W[0], W[1], zl), (F[0], F[1], zl)], np.array([*(d * sg), 0.0]),
+                  ((0.0, 0.0), (0.0, 0.3 / rv), (AWN_OUT / ru, 0.3 / rv)), mat)
+
+
+def _qld_carport(m, spec, rl, z_eave, gnd, mat_idx):
+    """A carport leaning on the house's side wall (doors() found the room): a Colorbond skillion roof, CARPORT_W x
+    CARPORT_L, 2.4 m clear, falling away from the house, on four thin posts (the two by the wall show two faces)."""
+    cp = spec.qld["carport"]
+    s, t = np.array(cp["s"]), np.array(cp["t"])
+    A = np.array(cp["p0"])
+    B, D = A + s * CARPORT_W, A + t * CARPORT_L
+    C = B + t * CARPORT_L
+    gz = [gnd(p[0], p[1]) for p in (A, B, C, D)]
+    zh = min(max(gz) + CARPORT_H, z_eave - 0.75)
+    if zh - max(gz) < 2.0:
+        return
+    tk = _qld_trim(spec)
+    roof = mat_idx[f"{ROOF_COLORBOND}|q{tk if tk is not None else (1, 2, 7)[int(_hash01(spec.seed, 'qgut') * 3)]}"]
+    ru, rv = ROOF_UV_M_OF[ROOF_COLORBOND]
+    zo = zh - CARPORT_FALL                          # the outer edge's underside; the slab is 0.1 m thick
+    sl = math.hypot(CARPORT_W, CARPORT_FALL)
+
+    def p3(p, z):
+        return (float(p[0]), float(p[1]), float(z))
+    uv = ((0.0, 0.0), (sl / rv, 0.0), (sl / rv, CARPORT_L / ru), (0.0, CARPORT_L / ru))
+    up, down = np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, -1.0])
+    _oquad(m, [p3(A, zh + 0.1), p3(B, zo + 0.1), p3(C, zo + 0.1), p3(D, zh + 0.1)], up, uv, roof)
+    _oquad(m, [p3(A, zh), p3(B, zo), p3(C, zo), p3(D, zh)], down, uv, roof)
+    _oquad(m, [p3(B, zo), p3(C, zo), p3(C, zo + 0.1), p3(B, zo + 0.1)], np.array([*s, 0.0]), uv, roof)
+    post = mat_idx["bne_bld_fac_white"]
+    for p, k in ((B - s * 0.12 + t * 0.12, 1), (C - s * 0.12 - t * 0.12, 1)):       # the outer posts: four sides
+        _prism(m, p, s, 0.05, 0.05, gnd(p[0], p[1]) - 0.1, zh - CARPORT_FALL, post)
+    for p, tn_ in ((A + s * 0.12 + t * 0.12, -t), (D + s * 0.12 - t * 0.12, t)):    # by the wall: the two faces seen
+        z0 = gnd(p[0], p[1]) - 0.1
+        for nrm in (s, tn_):
+            w = np.array([-nrm[1], nrm[0]])
+            q0, q1 = p + nrm * 0.05 - w * 0.05, p + nrm * 0.05 + w * 0.05
+            _oquad(m, [p3(q0, z0), p3(q1, z0), p3(q1, zh), p3(q0, zh)], np.array([*nrm, 0.0]), _FLAT_UV, post)
+
+
+def _qld_verandah(m, spec, gmin, gmax, z_eave, mat_idx):
+    """A shop's footpath awning (spec.awn, from doors()): a Colorbond skillion on the street wall, its outer edge QLD_AWN_CLEAR over
+    the footpath's ground and QLD_AWN_FALL per m lower than the wall's end, a deep fascia on that edge, on slim posts a little in
+    from it (or cantilevered). Not above the shop's own top: a low shop's awning stands lower (at least 2.6 m clear) or none."""
+    v = spec.awn
+    s, t, A, L, depth = np.array(v["s"]), np.array(v["t"]), np.array(v["p0"]), v["L"], v["D"]
+    gnd = _qld_ground(spec, gmin, gmax, None)
+    B, C, E = A + s * L, A + s * L + t * depth, A + t * depth
+    gz = max(gnd(p[0], p[1]) for p in (A, B, C, E))
+    fall = QLD_AWN_FALL * depth
+    zo = gz + QLD_AWN_CLEAR
+    if zo + fall + 0.1 > z_eave - 0.15:
+        zo = z_eave - 0.25 - fall - 0.1
+        if zo - gz < 2.6:
+            return
+    zw = zo + fall
+    mat = mat_idx[f"{ROOF_COLORBOND}|q{QLD_AWN_COLOURS[int(_hash01(spec.seed, 'qawnc2') * len(QLD_AWN_COLOURS))]}"]
+    ru, rv = ROOF_UV_M_OF[ROOF_COLORBOND]
+    sl = math.hypot(depth, fall)
+
+    def p3(p, z):
+        return (float(p[0]), float(p[1]), float(z))
+    uv = ((0.0, 0.0), (L / ru, 0.0), (L / ru, sl / rv), (0.0, sl / rv))
+    _oquad(m, [p3(A, zw + 0.1), p3(B, zw + 0.1), p3(C, zo + 0.1), p3(E, zo + 0.1)], np.array([0.0, 0.0, 1.0]), uv, mat)
+    _oquad(m, [p3(A, zw), p3(B, zw), p3(C, zo), p3(E, zo)], np.array([0.0, 0.0, -1.0]), uv, mat)
+    fv = ((0.0, 0.0), (L / ru, 0.0), (L / ru, 0.32 / rv), (0.0, 0.32 / rv))
+    _oquad(m, [p3(E, zo - 0.12), p3(C, zo - 0.12), p3(C, zo + 0.2), p3(E, zo + 0.2)], np.array([*t, 0.0]), fv, mat)
+    ev = ((0.0, 0.0), (depth / ru, 0.0), (depth / ru, 0.1 / rv), (0.0, 0.1 / rv))
+    for P0, P1, sg in ((A, E, -1.0), (B, C, 1.0)):          # the two ends of the slab
+        _oquad(m, [p3(P0, zw), p3(P1, zo), p3(P1, zo + 0.1), p3(P0, zw + 0.1)], np.array([*(s * sg), 0.0]), ev, mat)
+    if v["posts"]:
+        post = mat_idx["bne_bld_fac_white"]
+        n = max(2, math.ceil((L - 0.4) / QLD_AWN_POST_M) + 1)
+        for k in range(n):
+            p = A + s * (0.2 + (L - 0.4) * k / (n - 1)) + t * (depth - 0.2)
+            _prism(m, p, s, 0.04, 0.04, gnd(p[0], p[1]) - 0.1, zo, post)
+
+
+def _qld_tank(m, spec, rl, gnd, mat_idx):
+    """A round corrugated tank (Colorbond, ribs round it) beside the house, by the first downpipe."""
+    sig, sites = _qld_pipe_sites(spec, rl)
+    d = TANK_D[0] + (TANK_D[1] - TANK_D[0]) * _hash01(spec.seed, "qtankd")
+    R = d / 2
+    ctr = rl.c + rl.u * sites[0] + rl.v * sig * (rl.hw + 0.4 + R)
+    tk = _qld_trim(spec)
+    k = tk if tk is not None else (1, 2, 3, 12)[int(_hash01(spec.seed, "qtankc") * 4)]
+    mat = mat_idx[f"{ROOF_COLORBOND}|q{k}"]
+    ru, rv = ROOF_UV_M_OF[ROOF_COLORBOND]
+    z0 = gnd(ctr[0], ctr[1]) - 0.3
+    z1 = gnd(ctr[0], ctr[1]) + TANK_H
+    pts = [ctr + R * np.array([math.cos(2 * math.pi * i / TANK_SIDES), math.sin(2 * math.pi * i / TANK_SIDES)])
+           for i in range(TANK_SIDES)]
+    arc = 2 * math.pi * R / TANK_SIDES
+    for i in range(TANK_SIDES):
+        a, b = pts[i], pts[(i + 1) % TANK_SIDES]
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1),
+               (z0 / ru, i * arc / rv), (z0 / ru, (i + 1) * arc / rv), (z1 / ru, (i + 1) * arc / rv), (z1 / ru, i * arc / rv), mat)
+    m.poly([(p[0], p[1], z1) for p in pts], [(p[0] / ru, p[1] / rv) for p in pts], mat)
+
+
+def _qld_extras(m, spec, ring, z_eave, gmin, gmax, hs, mat_idx):
+    """What a Queensland house has besides its walls and roof (see above), in the near mesh."""
+    q = spec.qld
+    rl = _Roofline(spec, ring, z_eave)
+    gnd = _qld_ground(spec, gmin, gmax, hs)
+    _qld_eaves(m, spec, rl, gnd, mat_idx)
+    if q["solar"]:
+        _qld_solar(m, spec, rl, mat_idx)
+    if q["whirly"]:
+        _qld_whirly(m, spec, rl, mat_idx)
+    if q["awn"]:
+        _qld_awnings(m, spec, ring, z_eave - spec.height, mat_idx)
+    if q["carport"]:
+        _qld_carport(m, spec, rl, z_eave, gnd, mat_idx)
+    elif q["tank"]:
+        _qld_tank(m, spec, rl, gnd, mat_idx)
+
+
 def tank_rows(items, x0, y0):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's rooftank: Small Island's rooftop water tank,
     the stock model) of the items' water tanks (spec.tank: water_tank), on their roofs, in the frame (x0, y0: the
@@ -2167,7 +3159,11 @@ def _skel_roof(m, spec, ring, z_eave, rm, fac):
         m.tris(np.asarray(gab, np.float64)[:3 * ng, :3], np.tile(np.array([(0, 0.995), (0.02, 0.995), (0.01, 0.999)],
                                                                            np.float64), (ng, 1)), fac)
     tri = np.ascontiguousarray(np.asarray(tri, np.float64)[:3 * len(grad), :3])
-    m.tris(tri, fast._ef.skeleton_roof_uv(tri, np.ascontiguousarray(grad, np.float64), float(ROOF_UV_M)), rm)
+    uv = fast._ef.skeleton_roof_uv(tri, np.ascontiguousarray(grad, np.float64), float(ROOF_UV_M))
+    ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # AU roofs: their own repeat
+    if (ru, rv) != (ROOF_UV_M, ROOF_UV_M):
+        uv = np.asarray(uv, np.float64) * np.array([ROOF_UV_M / ru, ROOF_UV_M / rv])
+    m.tris(tri, uv, rm)
     return True
 
 
@@ -2242,7 +3238,8 @@ def _hf_roof(m, spec, ring, z_eave, rm, fac):
             d = (gx / gm, gy / gm)                  # (up the slope)
             a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
         pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
-        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
+        ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # AU roofs: their own repeat
+        uvs = [((p[0] * a[0] + p[1] * a[1]) / ru, (p[0] * d[0] + p[1] * d[1]) * f / rv) for p in pts]
         m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
     tall = _slope_floors(m, spec, walls, z_eave, fac)
     for ax, ay, za, bx, by, zb in walls.tolist():
@@ -2363,6 +3360,7 @@ def _chimney(m, spec, c, u, ridge_half, hw, zr, mat):
 
 def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
+    ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # m per repeat of U and V
     if spec.roof in DOME_ROOFS:
         _c, _u, _hl, hw = oriented_box(ring)
         _dome(m, ring, z_eave, hw * math.tan(math.radians(roof_pitch(spec))), rm, spec.roof, lite)
@@ -2372,7 +3370,7 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
             _holed_lid(m, ring, spec.holes, z_eave, rm)
             return
         pts = [(p[0], p[1], z_eave) for p in ring]
-        uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
+        uv = [(p[0] / ru, p[1] / rv) for p in ring]
         m.poly(pts, uv, rm)
         return
     if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade]):
@@ -2387,9 +3385,10 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     if getattr(spec, "across", False):              # (the ridge across the long axis: the box's frame turned)
         u, hl, hw = np.array([-u[1], u[0]]), hw, hl
     v = np.array([-u[1], u[0]])
-    hl2, hw2 = hl + EAVE_M, hw + EAVE_M
+    ex, rk = _eaves(spec)           # Queensland's wider eaves and narrower rakes (else EAVE_M both)
+    hl2, hw2 = hl + rk, hw + ex
     rise = hw2 * math.tan(math.radians(roof_pitch(spec)))
-    ze = z_eave - EAVE_M * math.tan(math.radians(roof_pitch(spec)))
+    ze = z_eave - ex * math.tan(math.radians(roof_pitch(spec)))
     zr = ze + rise
 
     def at(s, t, z):
@@ -2398,7 +3397,7 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     slope = math.hypot(hw2, rise)
 
     def uv(s, t):            # along the ridge, up the slope (m / ROOF_UV_M)
-        return (s / ROOF_UV_M, (hw2 - abs(t)) / hw2 * slope / ROOF_UV_M)
+        return (s / ru, (hw2 - abs(t)) / hw2 * slope / rv)
 
     def end_wall(sgn, outline):
         """The wall up to the roof at an end of the house: outline (t, z) left to right seen from outside, fanned; the
@@ -2505,10 +3504,17 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
                uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
         # the gable ends: wall triangles from the eave line up to the ridge, the facade's plain colour
         fac = mat_idx[spec.facade]
+        gk = getattr(spec, "gable", None)       # Queensland: the wall's look at the wall's scale (see plan())
+        if gk:
+            gmat, gu = mat_idx[gk[0]], gk[1]
         for sgn in (-1, 1):
             s = sgn * hl
             a, b, top = at(s, -sgn * hw, z_eave), at(s, sgn * hw, z_eave), at(s, 0, zr - EAVE_M * 0.2)
-            if sgn > 0:
+            if gk:
+                # u along the wall (a to b, counter-clockwise like the walls' own), v the height: the walls' z / scale,
+                # so weatherboards and brick courses run on across the corner
+                m.tri(a, b, top, (0.0, z_eave / gu), (2 * hw / gu, z_eave / gu), (hw / gu, top[2] / gu), gmat)
+            elif sgn > 0:
                 m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
             else:
                 m.tri(a, b, top, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
@@ -2519,9 +3525,9 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         m.quad(at(hl2, hw2, ze), at(-hl2, hw2, ze), at(-r, 0, zr), at(r, 0, zr),
                uv(hl2, hw2), uv(-hl2, hw2), uv(-r, 0), uv(r, 0), rm)
         m.tri(at(hl2, -hw2, ze), at(hl2, hw2, ze), at(r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+              (-hw2 / ru, 0), (hw2 / ru, 0), (0, slope / rv), rm)
         m.tri(at(-hl2, hw2, ze), at(-hl2, -hw2, ze), at(-r, 0, zr),
-              (-hw2 / ROOF_UV_M, 0), (hw2 / ROOF_UV_M, 0), (0, slope / ROOF_UV_M), rm)
+              (-hw2 / ru, 0), (hw2 / ru, 0), (0, slope / rv), rm)
 
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
@@ -2855,14 +3861,28 @@ def build(specs_and_ground, lite=False):
         mh = spec.min_h or 0.0
         if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
             continue
+        hs = highset(spec, gmin, gmax)      # a Queensland house on stumps / a masonry base: its floor raised
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z_eave = base_z(spec, gmin, gmax) + mh + spec.height
+        if hs is not None:
+            # the walls (the kernel's quads) start at the floor, the under-floor is drawn by _hs_draw (the far mesh keeps
+            # the solid skirt; a render house's wall runs down to the ground as its lower level)
+            if not lite and hs.kind != HS_RENDER:
+                z0 = hs.floor - (HS_BEARER_M if hs.kind == HS_TIMBER else 0.0)
+            z_eave = hs.floor + mh + spec.height
+        else:
+            z_eave = base_z(spec, gmin, gmax) + mh + spec.height
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
             _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
+        if hs is not None and not lite:
+            _hs_draw(m, spec, hs, ring, mat_idx)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
+        if spec.qld and spec.roof != "flat" and not lite:       # Queensland house details
+            _qld_extras(m, spec, ring, z_eave, gmin, gmax, hs, mat_idx)
+        if spec.awn and not lite:                               # a Queensland shop's footpath awning
+            _qld_verandah(m, spec, gmin, gmax, z_eave, mat_idx)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
@@ -2872,7 +3892,7 @@ def build(specs_and_ground, lite=False):
         if spec.stoop and not lite:
             _stoop(m, spec, ring, gmin, gmax, mat_idx)
         if spec.porch and spec.door and not lite:
-            _porch(m, spec, gmax, mat_idx)
+            _porch(m, spec, gmax if hs is None else hs.floor, mat_idx, hs)
         if spec.sign is not None and spec.roof == "flat" and not lite:
             if spec.windows is False:           # a big box: over its storefront band (_plain_wall_with_windows)
                 z_top = min(gmax + GROUND_FLOOR_SHOP_M + 1.15, z_eave)
@@ -2960,7 +3980,8 @@ def collision_mesh(specs_and_ground):
             ring = ring[::-1]
         mh = spec.min_h or 0.0
         z0 = gmin - FOUNDATION_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
-        z1 = base_z(spec, gmin, gmax) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
+        hf = _hs_floor(spec, gmin, gmax)        # a raised house: its walls as a solid box from the ground up
+        z1 = (base_z(spec, gmin, gmax) if hf is None else hf) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
         for loop in [ring] + list(spec.holes or ()):  # (a courtyard's walls too: its hole clockwise, facing the yard)
             for i in range(len(loop)):
                 a, b = loop[i], loop[(i + 1) % len(loop)]
@@ -4887,7 +5908,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
-        spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
+        spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine,
+                    cover < QLD_RURAL_COVER)
         spec.min_h = mh
         # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
         # building's storeys from its whole height; without, the setbacks took New York's tanks away)
@@ -5054,9 +6076,11 @@ def collider_boxes(items, x0, y0):
         if spec.cls in BRIDGE_CLASSES or spec.cls == landmarks.LANDMARK:   # a frame: driven through between its legs
             continue
         r = spec.ring
+        hf = _hs_floor(spec, gmin, gmax)        # a raised house
         out.append([round(float(r[:, 0].min() + x0), 2), round(float(r[:, 1].min() + y0), 2),
                     round(gmin - FOUNDATION_M, 2), round(float(r[:, 0].max() + x0), 2),
-                    round(float(r[:, 1].max() + y0), 2), round(gmax + spec.height + 6.0, 2)])
+                    round(float(r[:, 1].max() + y0), 2),
+                    round((gmax if hf is None else hf) + spec.height + 6.0, 2)])
     return out
 
 
@@ -5140,6 +6164,117 @@ DRIVEWAY_W = 3.2            # m
 DRIVEWAY = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 19}     # a road tile chunk's look (roads.LOOK)
 
 
+def _seg_cross(p, q, r, s):
+    """Do the segments pq and rs cross?"""
+    d1, d2 = q - p, s - r
+    den = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(den) < 1e-12:
+        return False
+    w = r - p
+    t = (w[0] * d2[1] - w[1] * d2[0]) / den
+    u = (w[0] * d1[1] - w[1] * d1[0]) / den
+    return 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0
+
+
+def _rect_hits(R, ring):
+    """Does the convex counter-clockwise quad R touch the polygon ring (overlap, contain, or be inside)?"""
+    ring = np.asarray(ring, np.float64)
+    for p in ring:
+        if all((R[(i + 1) % 4][0] - R[i][0]) * (p[1] - R[i][1]) - (R[(i + 1) % 4][1] - R[i][1]) * (p[0] - R[i][0]) >= 0
+               for i in range(4)):
+            return True
+    if any(_inside(ring, p) for p in R):
+        return True
+    n = len(ring)
+    return any(_seg_cross(R[i], R[(i + 1) % 4], ring[j], ring[(j + 1) % n]) for i in range(4) for j in range(n))
+
+
+def _qld_carport_site(spec, a, d, Le, out, f, edge, off, others, cents, segs):
+    """The carport of a Queensland house (QLD_CARPORT of those with room), or None: on the driveway side of the front wall
+    (the end wall nearest the far end of the front from the door), CARPORT_W x CARPORT_L from the front line back, flush with
+    the wall. It needs a plain box house, a side wall of nearly its length, CARPORT_SIDE_M clear of every other building
+    of the tile and of any road's edge. a, d, Le, out: the front wall (anchor frame); f: the door's place along it."""
+    if _hash01(spec.seed, "qcarport") >= QLD_CARPORT:
+        return None
+    ring = drawn_ring(spec)
+    n = len(ring)
+    _, _, hl, hw = oriented_box(spec.ring)
+    if _area2(spec.ring) / 2 < 0.85 * 4 * hl * hw:
+        return None
+    sgn = 1.0 if f <= 0.5 else -1.0                 # (the driveway side: doors() draws the drive at the far end from the door)
+    al = a - off
+    corner = al + d * Le if sgn > 0 else al
+    j = (edge + 1) % n if sgn > 0 else (edge - 1) % n
+    if float(math.hypot(*(ring[(j + 1) % n] - ring[j]))) < CARPORT_L - 1.0:
+        return None
+    s_dir, t_dir = d * sgn, -out
+
+    def rc(s0, s1, t0, t1):
+        R = np.array([corner + s_dir * s0 + t_dir * t0, corner + s_dir * s1 + t_dir * t0,
+                      corner + s_dir * s1 + t_dir * t1, corner + s_dir * s0 + t_dir * t1])
+        return R if _area2(R) > 0 else R[::-1]
+    R = rc(0.0, CARPORT_W + 0.05 + CARPORT_SIDE_M, -CARPORT_SIDE_M, CARPORT_L + CARPORT_SIDE_M)
+    for k in np.flatnonzero(np.hypot(*(cents - corner).T) < 40.0):
+        if others[k][0] is not spec and _rect_hits(R, others[k][1] - off):
+            return None
+    A, D, L2, SH = segs
+    pts = np.vstack([R, (R + np.roll(R, -1, 0)) / 2, R.mean(0)[None]]) + off
+    T = np.clip(((pts[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0, 1)
+    Q = A[None] + T[..., None] * D[None]
+    if float((np.hypot(*(Q - pts[:, None, :]).transpose(2, 0, 1)) - SH[None]).min()) < 1.0:
+        return None                                 # a road's edge too near (or under it)
+    return {"p0": corner + s_dir * 0.05, "s": s_dir, "t": t_dir, "wall": {0: -1, 2: 1}.get(j, 0)}
+
+
+def _qld_awning_site(spec, a, d, Le, out, off, others, cents, segs, kseg, minor):
+    """The footpath awning of a Queensland shop (spec.awn: QLD_AWN_SHARE of those with room) or None: the longest stretch of its
+    street wall (a, d, Le, out: the wall in the anchor frame) over which a QLD_AWN_MAX_D (down to QLD_AWN_MIN_D) deep awning keeps
+    its outer edge QLD_AWN_KERB_M clear of every road's carriageway, at least QLD_AWN_MIN_L long and clear of the other buildings.
+    The wall's nearest road (segment kseg) must be a street (not a back lane) with the wall within QLD_AWN_STREET_M of its edge."""
+    if spec.awn is None or spec.floors > 3 or spec.cls == "civic" or minor or _hash01(spec.seed, "qverandah") >= QLD_AWN_SHARE:
+        return None
+    A, D, L2, SH = segs
+    mid = a + d * (Le / 2)
+    t = float(np.clip(((mid - A[kseg]) * D[kseg]).sum() / L2[kseg], 0, 1))
+    if float(np.hypot(*(A[kseg] + t * D[kseg] - mid))) - SH[kseg] > QLD_AWN_STREET_M:
+        return None
+    ss = np.arange(0.3, Le - 0.3 + 1e-9, 0.5)
+    if len(ss) < 2:
+        return None
+    for depth in (QLD_AWN_MAX_D, 2.5, 2.0, QLD_AWN_MIN_D):
+        # the outer edge and the points between it and the wall, against every road's edge: the room each has
+        pts = np.concatenate([a + d * ss[:, None] + out * (depth * f) for f in (1.0, 0.5)])
+        T = np.clip(((pts[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0, 1)
+        Q = A[None] + T[..., None] * D[None]
+        room = (np.hypot(*(Q - pts[:, None, :]).transpose(2, 0, 1)) - SH[None]).min(1)
+        ok = (room >= QLD_AWN_KERB_M).reshape(2, -1).all(0)
+        best, i = None, 0
+        while i < len(ss):                          # the longest run of room
+            if not ok[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(ss) and ok[j + 1]:
+                j += 1
+            if best is None or ss[j] - ss[i] > best[1] - best[0]:
+                best = (ss[i], ss[j])
+            i = j + 1
+        if best is None or best[1] - best[0] < QLD_AWN_MIN_L:
+            continue
+        s0, s1 = float(best[0]), float(best[1])
+        p0 = a + d * s0
+        R = np.array([p0, p0 + d * (s1 - s0), p0 + d * (s1 - s0) + out * depth, p0 + out * depth])
+        R = R if _area2(R) > 0 else R[::-1]
+        for k in np.flatnonzero(np.hypot(*(cents - (mid - off)).T) < 40.0 + Le):
+            if others[k][0] is not spec and _rect_hits(R - off, others[k][1] - off):
+                break
+        else:
+            return {"p0": (float(p0[0] - off[0]), float(p0[1] - off[1])), "s": (float(d[0]), float(d[1])),
+                    "t": (float(out[0]), float(out[1])), "L": s1 - s0, "D": depth,
+                    "posts": depth >= 2.0 and _hash01(spec.seed, "qawnpost") < QLD_AWN_POST_SHARE}
+    return None
+
+
 def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     """Prop rows (trees.lua rows, group "door") of a front door per house: on the wall whose middle is
     nearest a road and faces it, a row house's to one side, others' in the middle. lines: [(centreline
@@ -5169,6 +6304,16 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     A, D = np.ascontiguousarray(A), np.ascontiguousarray(D)
     rows = []
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
+    off = np.array([x0, y0], np.float64)
+    cents = None
+    au_cents = None         # the footprints' centres, for Australia's side fences
+    if any(sp.qld or sp.awn is not None for sp, _, _ in items):     # Queensland's carports, tanks and awnings need the neighbours
+        cents = np.array([r.mean(0) for _, r in others]).reshape(-1, 2) - off
+        for sp, _, _ in items:
+            if sp.qld:
+                sp.qld["carport"], sp.qld["tank"] = None, False
+            if sp.awn is not None:
+                sp.awn.clear()
     for spec, gmin, gmax in items:
         no_door = False
         if spec.plain or spec.floors >= 7 or spec.band in (BAND_OFFICE, BAND_OFFICE2) or spec.wall:
@@ -5231,6 +6376,9 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         if spec.shop:
             if storefront and not spec.wall:
                 spec.sign = edge                # the sign band over the street wall's shopfront
+            if spec.awn is not None and storefront and not spec.wall:       # a Queensland shop's footpath awning
+                spec.awn.update(_qld_awning_site(spec, a, d, Le, out, off, others, cents, (A, D, L2, SHALF), kseg,
+                                                 bool(SMINOR[kseg])) or {})
             continue
         if no_door:
             continue
@@ -5239,10 +6387,15 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
             spec.shop = True                    # a main street's ground floor: a shopfront, no house door
             if not spec.plain:
                 spec.sign = edge
+            if spec.awn is not None and not spec.plain:                     # ... under a Queensland footpath awning
+                spec.awn.update(_qld_awning_site(spec, a, d, Le, out, off, others, cents, (A, D, L2, SHALF), kseg,
+                                                 bool(SMINOR[kseg])) or {})
             continue
         narrow = Le < 9.0
         f = (0.22 if _hash01(spec.seed, "door") < 0.5 else 0.78) if narrow else 0.5
         spec.door = (edge, Le * f)          # _walls leaves the ground floor's band plain there
+        if spec.qld and Le >= 6.0:          # a carport on the driveway side, if there is room
+            spec.qld["carport"] = _qld_carport_site(spec, a, d, Le, out, f, edge, off, others, cents, (A, D, L2, SHALF))
         # brick row houses (an eastern city's): white marble steps up to the door
         if narrow and spec.band == BAND_BRICK and spec.roof == "flat" and _hash01(spec.seed, "stoop") < STOOP_SHARE:
             spec.stoop = (edge, Le * f)
@@ -5260,7 +6413,16 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
                                "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
-        if infer_fences and spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
+        if infer_fences and spec.roof != "flat" and not narrow and getattr(spec, "au", None):
+            # Australia: usually no front fence (or a low one); the tall Colorbond / paling fences stand on the side
+            # and rear boundaries, from the front building line back
+            if _hash01(spec.seed, "fence") < AU_FRONT_SHARE:
+                rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
+                                         drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
+            if au_cents is None:
+                au_cents = np.array([r.mean(0) for _, r in others]).reshape(-1, 2)
+            rows.extend(_au_side_fences(spec, ring, a, d, Le, out, gmin, others, au_cents, (A, B, SHALF)))
+        elif infer_fences and spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
         p = a + d * (Le * f) + out * DOOR_OUT_M
@@ -5268,9 +6430,19 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         base = gd + (STOOP_H if spec.stoop else 0.0) + (PORCH_DECK_M if spec.porch else 0.0)   # (the deck / stoop)
         if spec.fr_house:
             continue                    # the regional model contains its own fitted front door
+        hf = _hs_floor(spec, gmin, gmax)
+        if hf is not None:      # a raised house: its door is a leaf in the mesh (_hs_door), beside its own stair;
+            continue            # the stock door prop brings a block of steps and rails of its own
         rows.append([G_DOOR, round(float(p[0]), 2), round(float(p[1]), 2), round(base, 2),
                      round(math.degrees(math.atan2(d[1], d[0])) % 360.0, 1), 1.0, 2.2,
                      round(_hash01(spec.seed, "dv"), 3)])
+    if cents is not None:       # a rural house far from every other building has a water tank (no carport there)
+        for sp, _, _ in items:
+            q = sp.qld
+            if q and q["rural"] and not q["carport"] and (sp.min_h or 0.0) <= 0.5 and _hash01(sp.seed, "qtank") < QLD_TANK:
+                dd = np.hypot(*(cents - sp.ring.mean(0)).T)
+                dd = dd[dd > 1e-6]
+                q["tank"] = bool(len(dd) == 0 or dd.min() >= QLD_ISOLATED_M)
     return rows
 
 
@@ -5329,6 +6501,7 @@ G_FENCE = "fence"           # trees.lua: East Coast USA's low wooden fence (eca_
 FENCE_SEG_M = 5.4
 FENCE_SHARE = 0.3           # detached houses with a fence along the front of their yard (hashed)
 FENCE_BACK_M = 3.2          # m from the road's edge (the back of the sidewalk)
+FENCE_BACK_AU_M = 4.1       # ... in Australia behind the verge and its footpath (roads.AU_CORRIDOR_M 3.9) on the property line
 FENCE_MIN_YARD_M = 2.5      # the front yard at least this deep between the fence and the house
 FENCE_CLEAR_M = 2.0         # m every piece keeps from any road's edge (a house on a bend or a corner: its fence ran
                             # along one road out across another, GitHub #105 Falcon Drive, Coquitlam)
@@ -5343,16 +6516,21 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     q = A + t * D
     v = mid - q
     dist = float(np.hypot(*v))
-    if dist - (half + FENCE_BACK_M) < FENCE_MIN_YARD_M:
+    au = getattr(spec, "au", None)       # Australia's fence (a test's spec may not carry it)
+    back = FENCE_BACK_AU_M if au else FENCE_BACK_M
+    if dist - (half + back) < FENCE_MIN_YARD_M:
         return []
     nv = v / dist
     dr = D / math.sqrt(L2)
-    centre = q + nv * (half + FENCE_BACK_M)
+    centre = q + nv * (half + back)
     yaw = round(math.degrees(math.atan2(dr[1], dr[0])) % 360.0, 1)
     gaps = [float((a + d * (Le * f) - centre) @ dr)]                          # the path to the door
     if driveway:
         gaps.append(float((a + d * (Le * (0.82 if f <= 0.5 else 0.18)) - centre) @ dr))
     n = max(1, int(math.ceil((Le + 3.0) / FENCE_SEG_M)))
+    group, height = G_FENCE, 1.3
+    if au:     # Australia: a Colorbond or timber paling boundary fence, one kind and colour a house; a low one in front
+        group, height = au_fence(spec.seed)[0], AU_FRONT_H
     rows = []
     for k in range(n):
         sk = (k - (n - 1) / 2) * FENCE_SEG_M
@@ -5366,8 +6544,82 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
                                                         np.ascontiguousarray(roads[1], np.float64),
                                                         np.asarray(roads[2], np.float64) + FENCE_CLEAR_M)).any():
                 continue
-        rows.append([G_FENCE, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, 1.3,
+        rows.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, height,
                      round(_hash01(spec.seed, "fr", k), 3)])
+    return rows
+
+
+# Australia's boundary fences (tools/build_au_streetscape.py: 5.4 m models along x, FENCE_SEG_M like the stock one, 1.8 m
+# high): ~60 % Colorbond (flat-ribbed steel sheet) in the muted colours of the range, ~40 % timber paling (weathered grey-brown pine or
+# silver-grey: never orange); one kind and colour per house (hashed on its seed), a quarter of them a lower 1.35 m fence (front fences
+# are often lower than the 1.8 m of the boundaries)
+AU_FENCE_COLORBOND = (("au_fence_monument", 3), ("au_fence_woodland", 3), ("au_fence_surfmist", 3),
+                      ("au_fence_basalt", 1), ("au_fence_shale", 1), ("au_fence_dune", 1))
+AU_FENCE_PALING = (("au_fence_paling_pine", 1), ("au_fence_paling_grey", 1))
+AU_FENCE_COLORBOND_SHARE = 0.6
+AU_FENCE_H = 1.8
+AU_FENCE_LOW_SHARE, AU_FENCE_LOW_H = 0.25, 1.35
+
+
+def au_fence(seed):
+    """(group, height m) of an Australian house's fence, from its seed (stable across runs and machines)."""
+    table = AU_FENCE_COLORBOND if _hash01(seed, "au fence kind") < AU_FENCE_COLORBOND_SHARE else AU_FENCE_PALING
+    u = _hash01(seed, "au fence colour") * sum(w for _, w in table)
+    group = table[-1][0]
+    for name, w in table:
+        if u < w:
+            group = name
+            break
+        u -= w
+    return group, (AU_FENCE_LOW_H if _hash01(seed, "au fence low") < AU_FENCE_LOW_SHARE else AU_FENCE_H)
+
+
+AU_FRONT_SHARE = 0.12       # houses with any fence along the front (a low one), of those that have the room
+AU_FRONT_H = 1.05           # ... its height
+AU_SIDE_GAP_M = 1.5         # the side boundary's distance from the house's walls (the lot's side setback, half of it)
+AU_REAR_M = 6.0             # the back boundary's distance behind the house
+AU_SIDE_MAX_M = 24.0        # no side fence runs further back than this from the front building line
+
+
+def _au_side_fences(spec, ring, a, d, Le, out, z, others, cents, roads):
+    """prop rows of Australia's boundary fences behind the front building line (the wall from a along d, out its
+    outward normal): one along each side of the house's footprint, AU_SIDE_GAP_M from it, from the front wall back past the
+    house, and one across the back, AU_REAR_M behind it, of the house's own kind, colour and 1.8 m (a lower fence along
+    the front is _front_fence's). A piece that would stand in a building (or this house) or within FENCE_CLEAR_M of a road's
+    edge is left out. others: [(spec, ring)] and cents their centres, roads (starts, ends, half widths), as _front_fence."""
+    rel = ring - a
+    along, back = rel @ d, -(rel @ out)
+    s0, s1 = float(along.min()) - AU_SIDE_GAP_M, float(along.max()) + AU_SIDE_GAP_M
+    depth = min(float(back.max()) + AU_REAR_M, AU_SIDE_MAX_M)
+    if depth < 4.0 or s1 - s0 < 3.0:
+        return []
+    group = au_fence(spec.seed)[0]
+    back_dir = -out
+    lines = [(a + d * s0, back_dir, depth), (a + d * s1, back_dir, depth),         # (the two sides, from the front back)
+             (a + d * s0 + back_dir * depth, d, s1 - s0)]                           # (the rear)
+    rows = []
+    for k, (start, dr, length) in enumerate(lines):
+        n = max(1, int(round(length / FENCE_SEG_M)))
+        step = length / n
+        yaw = round(math.degrees(math.atan2(dr[1], dr[0])) % 360.0, 1)
+        nr = np.array([-dr[1], dr[0]])
+        for j in range(n):
+            p = start + dr * (step * (j + 0.5))
+            half_l = max(step, FENCE_SEG_M) / 2
+            R = np.array([p - dr * half_l - nr * 0.15, p + dr * half_l - nr * 0.15,
+                          p + dr * half_l + nr * 0.15, p - dr * half_l + nr * 0.15])
+            near = np.flatnonzero(np.hypot(*(cents - p).T) < 40.0)
+            if any(_rect_hits(R, others[i][1]) for i in near):
+                continue
+            if len(roads[0]):
+                ends = np.array([p - dr * half_l, p, p + dr * half_l])
+                fast.require(0, "points_near_segments")
+                if np.asarray(fast._ef.points_near_segments(ends, np.ascontiguousarray(roads[0], np.float64),
+                                                            np.ascontiguousarray(roads[1], np.float64),
+                                                            np.asarray(roads[2], np.float64) + FENCE_CLEAR_M)).any():
+                    continue
+            rows.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, AU_FENCE_H,
+                         round(_hash01(spec.seed, "au fr", k, j), 3)])
     return rows
 
 
@@ -6549,7 +7801,9 @@ MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.6
             "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513),
             "bne_bld_roof_tiles": (0.625, 0.465, 0.361), "bne_bld_roof_slate_round": (0.473, 0.484, 0.522),
             "bne_bld_roof_slate_dark": (0.157, 0.155, 0.136), "bne_bld_roof_wood": (0.897, 0.889, 0.886),
-            "bne_bld_stone_rubble": (0.649, 0.608, 0.541), "bne_bld_cinder": (0.63, 0.627, 0.621)}
+            "bne_bld_stone_rubble": (0.649, 0.608, 0.541), "bne_bld_cinder": (0.63, 0.627, 0.621),
+            # (the same 64 x 64 resize of the new materials' base textures, 2026-11-07)
+            "bne_bld_roof_colorbond": (0.841, 0.841, 0.841), "bne_bld_roof_qtile": (0.625, 0.465, 0.361)}
 SKY_UV = (0.5, 0.5)
 # the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")

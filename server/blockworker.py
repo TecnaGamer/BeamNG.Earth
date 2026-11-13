@@ -689,6 +689,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
         idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots, _us_square_looks(frame)) if lots else idx
         if hasattr(_s.surface, "paint_ground_pads"):
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
+        idx = surfacemod.au_ground(idx, keep["lat"], keep["lon"])     # red soil in dry Australia
         stages["roadPaint"] = time.perf_counter() - t1
         idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
@@ -1391,6 +1392,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
+    guardrail_rows = guardrail_rows + _au_rail_rows(frame, near_roads, box, elev, country, guardrail_rows, deck_parts, tx, ty)
     guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
     guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
                                                  country, tx, ty, wide)
@@ -2260,6 +2262,18 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return []
 
 
+def _au_rail_rows(frame, near_roads, box, elev, country, mapped, decks, tx, ty):
+    """Australia's roadside crash barriers' Forest rows of a road tile (aurails.tile_rows), [] if they fail (logged)."""
+    if str(country or "").upper() != "AU":
+        return []
+    import aurails
+    try:
+        return aurails.tile_rows(frame, near_roads, box, elev, country, mapped, decks)
+    except Exception as ex:
+        log.warning("au roadside barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
 def _drop_rows(frame, near_roads, box, elev, mapped, tx, ty, decks=()):
     """The estimated rails on a drop's side of a rural road (droprails.tile_rows, BNE_DROP_RAILS), [] if off or they
     fail (logged)."""
@@ -2278,7 +2292,15 @@ def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
     """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
     import kantstolpar
     try:
-        return kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+        rows = kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
+        if str(country or "").upper() == "AU":      # Australia's curve warning signs (warnsigns.py)
+            import auroadsigns
+            import tboards
+            import warnsigns
+            rows = rows + warnsigns.tile_rows(frame, near_roads, box, elev, country, mapped)
+            rows = rows + tboards.tile_rows(frame, near_roads, box, elev, country)     # (the T-junction boards, tboards.py)
+            rows = rows + auroadsigns.tile_rows(frame, near_roads, box, elev, country)     # (chevrons, Wrong Way, gravel road: auroadsigns.py)
+        return rows
     except Exception as ex:
         log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []

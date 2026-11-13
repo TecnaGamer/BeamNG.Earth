@@ -560,6 +560,61 @@ do -- the median barriers' groups (server guardrails.GROUPS): shapes at scale 1,
   T.check(trees.isBarrier('guardrail_back_end') and not trees.isBarrier('deciduous') and not trees.isBarrier(nil),
     'guard rails are barriers, trees not')
 end
+do -- Australia's guide posts (server kantstolpar.py, tools/build_au_guideposts.py): 1.05 m models at 1:1, barriers
+  for _, g in ipairs({ 'au_guidepost_red', 'au_guidepost_white' }) do
+    local shape, sc = trees.pick(g, 1.05, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': never thinned, a draw distance')
+  end
+end
+do -- Australia's fences (server buildings.au_fence, tools/build_au_streetscape.py) and the concrete pole (furniture.pole_group)
+  for _, g in ipairs({ 'au_fence_monument', 'au_fence_woodland', 'au_fence_surfmist', 'au_fence_basalt', 'au_fence_shale',
+      'au_fence_dune', 'au_fence_paling_pine', 'au_fence_paling_grey' }) do
+    local shape, sc = trees.pick(g, 1.8, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1 at 1.8 m')
+    local _, low = trees.pick(g, 1.35, 0.3)
+    T.check(math.abs(low - 0.75) < 1e-9, g .. ': the lower 1.35 m fence is the model scaled')
+    T.check(trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': a draw distance')
+  end
+  local shape, sc = trees.pick('au_pole_conc', 9.2, 0.3)
+  T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc' and math.abs(sc - 1) < 1e-9,
+    'au_pole_conc: its model at 1:1')
+end
+do -- Australia's warning signs (server warnsigns.py, tools/build_au_warnsigns.py): 2.56 m models at 1:1, never thinned
+  for _, g in ipairs({ 'au_warn_curve_l', 'au_warn_curve_r', 'au_warn_turn_l', 'au_warn_turn_r' }) do
+    local shape, sc = trees.pick(g, 2.56, 0.3)
+    T.check(trees.CATALOG[g] and shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9,
+      g .. ': its model at 1:1')
+    T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0, g .. ': never thinned, a draw distance')
+  end
+  T.check(trees.isBarrier('au_guidepost_red') and not trees.isBarrier('au_warning') and not trees.isBarrier('deciduous'),
+    'the stock barrier rule still holds beside the signs')
+end
+do -- Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): its 1.7 m model at 1:1, never thinned
+  local shape, sc = trees.pick('au_tboard', 1.7, 0.3)
+  T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard' and math.abs(sc - 1) < 1e-9, 'au_tboard: its model at 1:1')
+  T.check(trees.isBarrier('au_tboard') and trees.GROUP_MAX_M.au_tboard > 0 and trees.ONE_SPELLING.au_tboard,
+    'au_tboard: never thinned, a draw distance, one spelling')
+end
+do -- Australia's chevron markers, Wrong Way and gravel road signs (server auroadsigns.py, tools/build_au_roadsigns.py)
+  for _, s in ipairs({ { 'au_chevron_l', 'chevron_l', 1.6 }, { 'au_chevron_r', 'chevron_r', 1.6 },
+    { 'au_wrongway', 'wrongway', 2.1 }, { 'au_gravel', 'gravel', 2.5 } }) do
+    local shape, sc = trees.pick(s[1], s[3], 0.3)
+    T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_' .. s[2] and math.abs(sc - 1) < 1e-9,
+      s[1] .. ': its model at 1:1')
+    T.check(trees.isBarrier(s[1]) and trees.GROUP_MAX_M[s[1]] > 0 and trees.ONE_SPELLING[s[1]],
+      s[1] .. ': never thinned, a draw distance, one spelling')
+  end
+end
+do -- Australia's Give Way and signals (server furniture.au_group, tools/build_au_traffic.py): their models at 1:1
+  for g, h in pairs({ au_giveway = 2.7, au_signal = 4.0, au_signal_mast = 7.0 }) do
+    local shape, sc = trees.pick(g, h, 0.3)
+    T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9, g .. ': its model at 1:1')
+    T.check(trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0 and trees.ONE_SPELLING[g], g .. ': a draw distance, one spelling')
+  end
+end
 do -- Germany's junction signs (server designs.GROUPS): each mesh at its true size, never thinned, one spelling
   for _, g in ipairs({ 'de_z205', 'de_z206_g1', 'de_z306_p4_g3', 'de_z307' }) do
     local c = trees.CATALOG[g] and trees.CATALOG[g][1] or {}
@@ -787,6 +842,24 @@ do -- the switch: COUNT_ITEMS false counts them again (the old way)
   trees.COUNT_ITEMS = false
   T.check(trees.status().items == trees.countItems(), 'COUNT_ITEMS off: counted')
   trees.COUNT_ITEMS = true
+end
+
+do -- the NVIS palettes' groups (server vegetation.GROUPS 12 .. 15), vanilla shapes, every entry usable by pick
+  local source = assert(io.open(dir .. '/../beamng_earth/lua/ge/extensions/beamngEarth/trees.lua')):read('*a')
+  for _, g in ipairs({ 'dry_rainforest', 'mallee', 'scrub', 'mangrove' }) do
+    local list = trees.CATALOG[g]
+    T.check(list and #list >= 3, g .. ': several shapes')
+    local ordered = true
+    for i, v in ipairs(list or {}) do
+      if type(v[1]) ~= 'string' or not v[1]:find('^/levels/') or v[2] <= 0 or (i > 1 and v[2] < list[i - 1][2]) then ordered = false end
+    end
+    T.check(ordered, g .. ': level shapes by height')
+    local shape, sc = trees.pick(g, 6.0, 0.4)
+    T.check(type(shape) == 'string' and sc >= 0.3 and sc <= 2.5, g .. ': pick gives a shape and a scale')
+    T.check(not trees.isBarrier(g), g .. ': not a barrier')
+  end
+  T.check(trees.NO_COLLIDE.scrub and trees.GROUP_MAX_M.scrub == 250 and trees.NO_COLLIDE.mallee == nil, 'scrub: a bush (no collision, near only)')
+  T.check(source:find("WCA .. 'trees/trees_shrub'", 1, true), 'scrub: its stock materials folder is preloaded')
 end
 
 T.done('test_trees')

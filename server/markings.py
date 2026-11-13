@@ -18,10 +18,12 @@ import fast
 # double_centre_urban: a town's two-way road gets a double solid centre line (the US practice on arterials) instead of
 # a broken one; double_gap: the space between the two lines of a double line; edge_pattern: a broken edge line (dash,
 # gap) off the main roads; warning: the broken line in place of a double solid one on a narrow road; w_urban: a line's
-# width in town (else w).
+# width in town (else w). double_barrier: a no-overtaking centre line (OpenStreetMap overtaking=no) is drawn as two
+# solid lines; double_multilane: so is the solid centre line of an undivided road of four lanes or more.
 Style = namedtuple("Style", "centre w w_motorway edge edge_motorway centre_rural centre_urban lane_rural lane_urban "
                             "lane_motorway left_edge double_centre_urban double_gap min_centre_m edge_classes ladder "
-                            "edge_pattern warning w_urban", defaults=(None, False, None, None, None))
+                            "edge_pattern warning w_urban double_barrier double_multilane",
+               defaults=(None, False, None, None, None, False, False))
 
 _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.05, 9.14), centre_urban=(3.05, 9.14), lane_rural=(3.05, 9.14), lane_urban=(3.05, 9.14),
@@ -29,12 +31,14 @@ _US = Style(centre="line_yellow", w=0.12, w_motorway=0.15, edge=0.12, edge_motor
             min_centre_m=4.9,
             # edge lines on arterials (MUTCD 3B.10: rural arterials 20 ft and wider); local and collector roads mostly
             # have none (PEMA 6-inch aerials, Lancaster County, 2026-10-28: tertiary roads with a centre line only)
-            edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True)
+            edge_classes=frozenset({"motorway", "trunk", "primary", "secondary"}), ladder=True,
+            double_barrier=True, double_multilane=True)     # (was hard-coded for yellow centres in roads.extras)
 _CA = _US._replace(centre_rural=(3.0, 6.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 6.0), lane_urban=(3.0, 6.0),
                    lane_motorway=(3.0, 6.0))
 _GB = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(3.0, 6.0), centre_urban=(2.0, 4.0), lane_rural=(2.0, 7.0), lane_urban=(1.0, 5.0),
-            lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5)
+            lane_motorway=(2.0, 7.0), left_edge=None, double_centre_urban=False, double_gap=0.175, min_centre_m=5.5,
+            double_barrier=True)                            # (was hard-coded for GB in roads.extras)
 _DE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.12, edge_motorway=0.30,
             centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(6.0, 12.0), lane_urban=(3.0, 6.0),
             lane_motorway=(6.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
@@ -48,7 +52,8 @@ _FR = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorw
 _SE = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.30,
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 3.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 3.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.15, min_centre_m=5.5,
-            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10)
+            edge_pattern=(1.0, 2.0), warning=(9.0, 3.0), w_urban=0.10,
+            double_barrier=True, double_multilane=True)     # (was hard-coded for SE in roads.extras)
 MIN_LANE_M = 2.75           # no line leaving a lane narrower than the least VGU 2024 allows (K233046; K233040: under 5.5 m none)
 WARNING_BELOW_M = 6.5       # a narrower road has a warning line, not a double solid one (TSFS 2010:171 2 kap. 7 §)
 # a 2+1 road (VGU 2024 table 12.5, K237686): no centre line, a solid left edge line each side of the barrier, its outer
@@ -58,18 +63,25 @@ _NL = _DE._replace(centre_rural=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_motorway
 _JP = Style(centre="line_white", w=0.15, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
             centre_rural=(5.0, 5.0), centre_urban=(5.0, 5.0), lane_rural=(6.0, 9.0), lane_urban=(5.0, 5.0),
             lane_motorway=(8.0, 12.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
-_AU = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
+# New Zealand keeps the line paint it had; Australia (_AU) has its own below
+_NZ = Style(centre="line_white", w=0.10, w_motorway=0.15, edge=0.12, edge_motorway=0.15,
             centre_rural=(3.0, 9.0), centre_urban=(3.0, 9.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
             lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
+# Australia, AS 1742.2 as TfNSW / IPWEA / TMR MRS45 draw it (docs/research/2026-10-28-road-markings-standards.md
+# 4.2): all white; separation and lane lines 0.10 m, 3 m / 9 m (kept: _NZ's); edge lines 0.15 m
+# (QLD's; 4.2 gives 0.12 general and 0.15 freeway; motorway stays 0.15); barrier lines (no overtaking, or an undivided
+# road of four lanes or more) two solid 0.10 m lines 0.10 m apart (BB / BS: "double solid ... about 0.08 m lines with
+# a 0.08 m gap"; MRS45 52127: two 100 mm lines)
+_AU = _NZ._replace(edge=0.15, double_gap=0.10, double_barrier=True, double_multilane=True)
 # the manuals' fallback: white centre lines 3 / 6 in towns and 6 / 12 out of them (or yellow where the country paints
 # them yellow), lanes 3 / 9
 _WHITE = Style(centre="line_white", w=0.12, w_motorway=0.15, edge=0.15, edge_motorway=0.20,
                centre_rural=(6.0, 12.0), centre_urban=(3.0, 6.0), lane_rural=(3.0, 9.0), lane_urban=(3.0, 9.0),
                lane_motorway=(3.0, 9.0), left_edge=None, double_centre_urban=False, double_gap=0.12, min_centre_m=5.5)
-_YELLOW = _WHITE._replace(centre="line_yellow")
+_YELLOW = _WHITE._replace(centre="line_yellow", double_barrier=True, double_multilane=True)   # (was hard-coded)
 
 STYLES = {"US": _US, "CA": _CA, "GB": _GB, "IE": _GB, "IM": _GB, "JE": _GB, "GG": _GB, "DE": _DE, "AT": _DE,
-          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _AU,
+          "CH": _DE, "LI": _DE, "LU": _DE, "FR": _FR, "MC": _FR, "BE": _FR, "NL": _NL, "JP": _JP, "AU": _AU, "NZ": _NZ,
           "SE": _SE}
 # where centre lines are yellow (outside the US and Canada): the Americas, Norway, Finland, South Korea, China, Taiwan,
 # Thailand (research table 4.4)

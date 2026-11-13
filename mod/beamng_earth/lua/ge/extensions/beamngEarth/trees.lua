@@ -40,7 +40,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, scrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -60,7 +60,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, scrub = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -157,6 +157,37 @@ M.CATALOG = {
     { WCA .. 'trees/trees_oak/oak_d', 7.1 }, { WCA .. 'trees/trees_oak/oak_b', 8.2 }, { WCA .. 'trees/trees_oak/oak_c', 8.4 },
     { WCA .. 'trees/trees_oak/oak_a', 9.6 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
+  },
+  -- entries above (eucalyptus_group, a clump of trunks: its height is an estimate, not yet measured)
+  -- the NVIS palettes' groups (server vegetation.py G_DRY_RAINFOREST .. G_MANGROVE, data/veg_palettes.json), vanilla
+  -- shapes. Heights are ESTIMATES by name and file size (the game files were not at
+  -- hand to measure; trees.pick scales an item to its height, so a wrong one only shifts the scale): to be measured in-game.
+  -- Dry rainforest and vine thicket: Jungle Rock Island's second tropical tree, its fillers and bushes, Italy's dense oaks
+  dry_rainforest = {
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 }, { IT .. 'trees/trees_italy/holm_oak_bush_huge', 4.5 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 6.5 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 13.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 14.0 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_03', 15.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_large', 17.0 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 18.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 22.0 },
+  },
+  -- mallee, acacia and brigalow, she-oaks: Italy's scraggly trees and cork oaks
+  mallee = {
+    { IT .. 'trees/trees_italy/scraggly_bush', 2.5 }, { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 },
+    { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 6.0 }, { IT .. 'trees/trees_italy/scraggly_2', 8.0 },
+    { IT .. 'trees/trees_italy/scraggly', 9.5 }, { IT .. 'trees/trees_italy/cork_oak_medium', 10.0 },
+  },
+  -- shrublands and heath: West Coast USA's shrubs
+  scrub = {
+    { WCA .. 'trees/trees_shrub/shrub_c', 0.6 }, { WCA .. 'trees/trees_shrub/shrub_e', 0.8 },
+    { WCA .. 'trees/trees_shrub/shrub_g', 0.9 }, { WCA .. 'trees/trees_shrub/shrub_f', 1.0 },
+    { WCA .. 'trees/trees_shrub/shrub_d', 1.1 }, { WCA .. 'trees/trees_shrub/shrub_b', 1.2 },
+    { WCA .. 'trees/trees_shrub/shrub_a', 1.4 }, { IT .. 'trees/trees_italy/holm_oak_bush', 2.5 },
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 },
+  },
+  -- mangroves: the dense low tropical bushes
+  mangrove = {
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 6.5 },
   },
   palm = {
     { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
@@ -328,6 +359,59 @@ M.GROUP_MAX_M.jersey_end = 4000
 M.GROUP_MAX_M.cable = 1500
 M.CATALOG.kantstolpe = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_kantstolpe', 1.05 } }   -- (Sweden's post)
 M.GROUP_MAX_M.kantstolpe = 800
+-- Australia's guide posts (server kantstolpar.py, tools/build_au_guideposts.py): 1.05 m, a red reflector on the face
+-- towards the traffic (local -X) and a white one on the back, or the white way round (a post on a driver's right).
+M.CATALOG.au_guidepost_red = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_red', 1.05 } }
+M.CATALOG.au_guidepost_white = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_white', 1.05 } }
+M.GROUP_MAX_M.au_guidepost_red = 800
+M.GROUP_MAX_M.au_guidepost_white = 800
+-- Australia's yellow diamond curve / turn warning signs (server warnsigns.py, tools/build_au_warnsigns.py): 2.56 m, the face
+-- to local -Y (the traffic it warns) on a post behind it, like Sweden's signs; few, so one spelling each and seen from 400 m
+local AU_WARN = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_warn_'
+M.CATALOG.au_warn_curve_l = { { AU_WARN .. 'curve_l', 2.56 } }
+M.CATALOG.au_warn_curve_r = { { AU_WARN .. 'curve_r', 2.56 } }
+M.CATALOG.au_warn_turn_l = { { AU_WARN .. 'turn_l', 2.56 } }
+M.CATALOG.au_warn_turn_r = { { AU_WARN .. 'turn_r', 2.56 } }
+for _, g in ipairs({ 'au_warn_curve_l', 'au_warn_curve_r', 'au_warn_turn_l', 'au_warn_turn_r' }) do
+  M.GROUP_MAX_M[g] = 400
+  M.ONE_SPELLING[g] = true
+end
+-- Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): 4.8 m x 0.9 m on five posts, 1.7 m
+-- high, the face to local -Y (the driver coming up the road that ends at the T); few, so one spelling, seen from 400 m
+M.CATALOG.au_tboard = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard', 1.7 } }
+M.GROUP_MAX_M.au_tboard = 400
+M.ONE_SPELLING.au_tboard = true
+-- Australia's chevron alignment markers, Wrong Way Go Back and gravel road signs (server auroadsigns.py,
+-- tools/build_au_roadsigns.py): each at 1:1 (its model's height), the face to local -Y (the traffic it faces), few, so one spelling
+for _, s in ipairs({ { 'au_chevron_l', 'chevron_l', 1.6, 300 }, { 'au_chevron_r', 'chevron_r', 1.6, 300 },
+  { 'au_wrongway', 'wrongway', 2.1, 400 }, { 'au_gravel', 'gravel', 2.5, 400 } }) do
+  M.CATALOG[s[1]] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_' .. s[2], s[3] } }
+  M.GROUP_MAX_M[s[1]] = s[4]
+  M.ONE_SPELLING[s[1]] = true
+end
+-- Australia's boundary fences (server buildings.au_fence, tools/build_au_streetscape.py): Colorbond sheet in six colours and
+-- timber paling in two, 5.4 m along x like the stock yard fence, 1.8 m high (a row's height scales it)
+for _, g in ipairs({ 'au_fence_monument', 'au_fence_woodland', 'au_fence_surfmist', 'au_fence_basalt', 'au_fence_shale',
+    'au_fence_dune', 'au_fence_paling_pine', 'au_fence_paling_grey' }) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, 1.8 } }
+  M.GROUP_MAX_M[g] = 150
+  M.ONE_SPELLING[g] = true
+end
+-- ... and the concrete pole of Australia's main roads' lines (server furniture.pole_group): 9.2 m, the cross-arm along x at
+-- the wires' height (furniture.WIRE_Z), like the stock pole it stands in for
+M.CATALOG.au_pole_conc = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc', 9.2 } }
+-- Australia's red Give Way (AS 1742.2 R1-2) and traffic signals (server furniture.au_group, tools/build_au_traffic.py): the sign
+-- 2.7 m on its galvanised post; the pole signal (one lantern, 4.0 m) and the mast arm over a wide road (7.0 m, the arm reaching
+-- +X over the road). The static items' lenses are dark; navgraph.lua's switchable heads (SIGNAL_SHAPES) hide them where they stand.
+M.CATALOG.au_giveway = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_giveway', 2.7 } }
+M.CATALOG.au_signal = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal', 4.0 } }
+M.CATALOG.au_signal_mast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_mast', 7.0 } }
+M.GROUP_MAX_M.au_giveway = 300
+M.GROUP_MAX_M.au_signal = 500
+M.GROUP_MAX_M.au_signal_mast = 500
+M.ONE_SPELLING.au_giveway = true
+M.ONE_SPELLING.au_signal = true
+M.ONE_SPELLING.au_signal_mast = true
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
@@ -499,7 +583,13 @@ M.SEASON = { straw_n = { 7, 8, 9 }, straw_s = { 1, 2, 3 }, silage_n = { 5, 6, 7,
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_' or g:sub(1, 12) == 'au_guidepost')      -- (a sign thinned away is a rule gone, not a tree fewer)
+end
+-- ... and Australia's warning signs are never thinned either
+local isBarrierStock = M.isBarrier
+function M.isBarrier(g)
+  return isBarrierStock(g) or (g ~= nil and (g:sub(1, 8) == 'au_warn_' or g == 'au_tboard'
+    or g:sub(1, 11) == 'au_chevron_' or g == 'au_wrongway' or g == 'au_gravel'))
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -540,7 +630,7 @@ local MATERIALS = {
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
-  WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm',
+  WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm', WCA .. 'trees/trees_shrub',
   WCA .. 'trees', UT .. 'trees/Juniper', UT .. 'trees', UT .. 'groundcover', UT .. 'rocks', JV .. 'groundcover',
   JV .. 'rocks', JV .. 'trees/deserttrees', JV .. 'trees', JRI .. 'trees/trees_palm', JRI .. 'trees/trees_tropical_1',
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
@@ -796,6 +886,12 @@ local function setup()
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
   end
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_guideposts.materials.json')
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_streetscape.materials.json')  -- fences, pole
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_warnsigns.materials.json')   -- warning signs
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_tboard.materials.json')      -- T-junction board
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_roadsigns.materials.json')   -- chevrons, Wrong Way, gravel road
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_traffic.materials.json')     -- Give Way, signals
   if FS and readFile and writeFile then
     local ok, made = pcall(staticSignal)
     if ok and made then M.CATALOG.signal[1][1] = M.STATIC_SIGNAL

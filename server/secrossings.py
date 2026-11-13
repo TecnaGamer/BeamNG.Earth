@@ -45,7 +45,7 @@ def wanted(country, de=False):
     always (its paint and signs are the map's), Germany's when its junction signs are on (de: the setting on and the
     junctions the tile decides, or the graph's window, reaching into Germany: designs.reads_here; the country code
     alone is the nearest airport's). Nowhere else: no read, the guesses as before."""
-    return str(country or "").upper() == "SE" or bool(de)
+    return str(country or "").upper() in ("SE", "AU") or bool(de)     # (Australia reads the map's give-way and stop signs too)
 
 
 def _marks(tags):

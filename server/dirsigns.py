@@ -9,6 +9,10 @@ say: the places (server/data/places_<release>.json.gz, tools/build_places.py), t
 road_routes, Overture's segment `routes`), and the styles by country (server/data/dirsigns_styles.json: colours, number
 plates, which route network is which plate).
 
+Queensland: on an Australian board an arm that is a motorway / trunk / primary link with posted text in
+OpenStreetMap (server/data/dests_au_<date>.json.gz, tools/build_dests_au.py) says its `destination`s (at most 3) and
+`destination:ref` markers; any other arm keeps the places and road numbers above.
+
 Built in the sign tiles (signstream.py, field "dirs"), render-only. The faces are PNGs in the session folder named by
 the hash of what they show (one Material a distinct board, made by the mod: dirsigns.lua).
 """
@@ -17,6 +21,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 
@@ -36,6 +41,20 @@ KERNEL = 163                    # earthfast VERSION with dirsign_place / dirsign
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
 PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
+# the snapshot above has no Australian places; this is tools/build_places_au.py's output (Overture AU localities,
+# populations filled from Wikidata, release 2026-10-21.0), its own checksum, so the upstream snapshot stays byte-identical;
+# optional: a missing file is skipped silently (the boards then have no Australian places, as upstream's)
+PLACES_EXTRA = ((os.path.join(DATA, "places_au_2026-10-21.0.json.gz"),
+                 "329af5a95766b5d3cc9e514b19f4ac2a70994e6f7d46cc0dbeb705830089e0bc"),)
+# the posted text of Australian link roads (OpenStreetMap destination / destination:ref / destination:street),
+# tools/build_dests_au.py's output (Queensland, ODbL), its own checksum: a board at a junction whose arm is such a link
+# says what the real board says (DESTS_FILE; a missing or wrong file is the place guess as before)
+DESTS_FILE = os.path.join(DATA, "dests_au_2026-11-07.json.gz")
+DESTS_SHA256 = "fa5292bc893a69c503ef0d91cdfd6cf55bc24e0af1caf6e37ade03a3eafe1edb"
+DESTS_NEAR_M = 40.0             # a link starts this near the kernel's junction point (the two come from other sources)
+DESTS_MAX_DIFF = 50.0           # deg: the arm's bearing and the link's differ by at most this much
+DESTS_STRAIGHT_DEG = 12.0       # a row this near the approach heading is the road going on: not a link's
+MAX_DESTS = 3                   # destinations on a row from the posted text, as real AU boards have
 STYLES_FILE = os.path.join(DATA, "dirsigns_styles.json")
 FONTS = (os.path.join(DATA, "fonts", "Overpass-Bold.ttf"), os.path.join(DATA, "fonts", "FiraSansCondensed-Medium.ttf"))
 FACE_VERSION = 1                # (in every face's hash: a changed drawing is another file)
@@ -63,11 +82,16 @@ class Places:
 
 @lru_cache(maxsize=1)
 def places():
-    with open(PLACES_FILE, "rb") as f:
-        raw = f.read()
-    if hashlib.sha256(raw).hexdigest() != PLACES_SHA256:
-        raise ValueError("place snapshot checksum mismatch")
-    return Places(json.loads(gzip.decompress(raw)))
+    rows = []
+    for path, sha in ((PLACES_FILE, PLACES_SHA256), *PLACES_EXTRA):      # + the extra snapshots
+        if path != PLACES_FILE and not os.path.exists(path):
+            continue
+        with open(path, "rb") as f:
+            raw = f.read()
+        if hashlib.sha256(raw).hexdigest() != sha:
+            raise ValueError("place snapshot checksum mismatch")
+        rows += json.loads(gzip.decompress(raw))["places"]
+    return Places({"places": rows})
 
 
 @lru_cache(maxsize=1)
@@ -78,6 +102,46 @@ def styles():
         for rule in c["networks"]:
             rule["_ref"] = re.compile(rule["ref"]) if rule.get("ref") else None
     return doc
+
+
+class Dests:
+    """the link roads' posted text by grid cell: rows [way, lat, lon, bearing 0, bearing 1, destinations, refs,
+    streets] (tools/build_dests_au.py; bearings in compass degrees)."""
+
+    def __init__(self, doc):
+        self.grid = float(doc["grid_deg"])
+        self.cells = {tuple(int(v) for v in k.split(",")): rows for k, rows in doc["cells"].items()}
+
+    def near(self, lon, lat, radius_m):
+        """The rows whose first node is within radius_m of (lon, lat), nearest first."""
+        cy, cx = math.floor(lat / self.grid), math.floor(lon / self.grid)
+        kx = math.cos(math.radians(lat))
+        out = []
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for r in self.cells.get((cy + dy, cx + dx), ()):
+                    d = 111320.0 * math.hypot((r[2] - lon) * kx, r[1] - lat)
+                    if d <= radius_m:
+                        out.append((d, r[0], r))
+        return [r for _, _, r in sorted(out)]
+
+
+_NO_DESTS = Dests({"grid_deg": 1.0, "cells": {}})
+
+
+@lru_cache(maxsize=1)
+def dests():
+    """the AU link-text shard, or an empty one (logged once) when the file is missing or is not the one that was
+    checked: the boards then keep the place guess."""
+    try:
+        with open(DESTS_FILE, "rb") as f:
+            raw = f.read()
+        if hashlib.sha256(raw).hexdigest() != DESTS_SHA256:
+            raise ValueError("checksum mismatch")
+        return Dests(json.loads(gzip.decompress(raw)))
+    except (OSError, ValueError) as error:
+        log.warning("AU link destinations unavailable (%s): boards keep the place names", error)
+        return _NO_DESTS
 
 
 def _set_fonts():
@@ -213,13 +277,59 @@ def best_plates(marks):
     return (own + [m for m in marks if m[1] == "e"])[:MAX_PLATES]
 
 
+def _signed(a, b):
+    """the signed difference of two angles in degrees, -180 to 180."""
+    return (a - b + 540.0) % 360.0 - 180.0
+
+
+def link_rows(shard, lon, lat, heading, rows):
+    """{row index: shard row} of the kernel rows (the arms of the junction at lon / lat, bearing in column 1: degrees
+    counter-clockwise from east) that are a link of the shard: one that starts at the junction and whose own bearing (the
+    first 30 m or the chord to its end) is within DESTS_MAX_DIFF of the arm's. The best pairs first, a link and an arm once;
+    the arm that goes straight on (the road's own) is a link's only when the link is straight on too (an exit ramp
+    leaves at an angle; where the arm of the ramp has no row, the road must not take its text). heading: the approach's
+    direction in the same angles."""
+    cands = shard.near(lon, lat, DESTS_NEAR_M)
+    pairs = []
+    for ci, c in enumerate(cands):
+        b0, b1 = (90.0 - c[3]) % 360.0, (90.0 - c[4]) % 360.0
+        straight_link = abs(_signed(b0, heading)) < DESTS_STRAIGHT_DEG and abs(_signed(b1, heading)) < DESTS_STRAIGHT_DEG
+        for ri, r in enumerate(rows):
+            rb = float(r[1])
+            if abs(_signed(rb, heading)) < DESTS_STRAIGHT_DEG and not straight_link:
+                continue
+            d = min(abs(_signed(b1, rb)), abs(_signed(b0, rb)))
+            if d <= DESTS_MAX_DIFF:
+                pairs.append((d, ci, ri))
+    out, used = {}, set()
+    for d, ci, ri in sorted(pairs):
+        if ri not in out and ci not in used:
+            out[ri] = cands[ci]
+            used.add(ci)
+    return out
+
+
+def posted_marks(style, refs):
+    """[(order, plate key, ref)] of the route refs a link's board says (destination:ref): M1, A3, B1 ... are the
+    alphanumeric routes, a bare number a State Route / Metroad (the National Route numbers are no longer posted)."""
+    out = []
+    for ref in refs:
+        network = "au:qld" if re.match(r"[MAB]\d", ref) else "au:qld:s" if ref.isdigit() else None
+        hit = plate_for(style, network, ref) if network else None
+        if hit is not None:
+            out.append((hit[0], hit[1], ref))
+    return out
+
+
 def is_town(board):
     """Is a dirsign_place row a town board (urban approach, size class 0)."""
     return board[6] > 0.5 and board[7] < 0.5
 
 
-def _row_content(style, row, table, pl, factor, rounding, show_en, plates=True):
-    """(turn, [(plate index, text)], [(local, English, km)]) of one kernel row, or None (nothing to say)."""
+def _row_content(style, row, table, pl, factor, rounding, show_en, plates=True, link=None):
+    """(turn, [(plate index, text)], [(local, English, km)]) of one kernel row, or None (nothing to say).
+    link is the shard row (Dests) of the link this arm is: its posted route refs and destinations (at most MAX_DESTS,
+    no distances: the real boards have none) are said instead of the road numbers and places the kernel found."""
     turn = int(row[0])
     marks = []
     for k in range(2, 5):
@@ -229,6 +339,13 @@ def _row_content(style, row, table, pl, factor, rounding, show_en, plates=True):
             if hit is not None:
                 marks.append((hit[0], hit[1], ref))
     marks = best_plates(sorted(set(marks))) if plates else []     # (a town board has no road number plates)
+    if link is not None:                                        # the posted text, else the guess
+        posted = posted_marks(style, link[6])
+        if posted:
+            marks = best_plates(sorted(set(posted)))
+        names = link[5] or link[7]
+        if names:
+            return turn, marks, [(n, "", "") for n in names[:MAX_DESTS]]
     dests = []
     for idx_col, d_col in ((5, 6), (7, 8)):
         i = int(row[idx_col])
@@ -355,9 +472,11 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         style = st["countries"].get(cc)
         if style is None:
             continue
+        # an AU board's arm that is a link with posted text says it (rows keyed by their index on the board)
+        links = link_rows(dests(), b[8], b[9], math.degrees(math.atan2(b[3], b[2])) % 360.0, mine) if cc == "AU" else {}
         town = is_town(b)       # (a small board: the local name only, no plates, on a pole or a stand of its own)
-        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en and not town, not town)
-                               for r in mine) if c]
+        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en and not town, not town, links.get(i))
+                               for i, r in enumerate(mine)) if c]
         if not content:
             continue
         plate_keys = sorted({k for _, marks, _ in content for _, k, _ in marks})

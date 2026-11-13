@@ -51,11 +51,28 @@ SPRING_PEAK_DOY_40N = 112           # ~Apr 22: the fresh flush
 SPRING_HALF_DAYS = 22.0
 
 
-def season_amounts(date, lat):
+# where the vegetation is evergreen there is no autumn colour, leaf-fall or flush to grade: the tropics, and Australia
+# (its native flora is evergreen: Brisbane has no autumn colour). Elsewhere nothing changes.
+EVERGREEN_LAT = 23.0
+
+
+def evergreen(lat, lon=None):
+    """Whether the vegetation at (lat, lon) is evergreen, so no season grade: |lat| < 23 (the tropics) or in
+    Australia (climate.in_australia). Without lon only the latitude rule applies. Pure."""
+    if abs(lat) < EVERGREEN_LAT:
+        return True
+    if lon is None:
+        return False
+    import climate
+    return bool(climate.in_australia(float(lat), float(lon)))
+
+
+def season_amounts(date, lat, lon=None):  # lon
     """{"fall", "winter", "spring": 0..1} at a date (datetime.date) and latitude: how far the leaves have turned,
-    how bare the deciduous canopy is, how fresh the spring flush is (0 in the tropics; the southern hemisphere half a
-    year later; 2.5 days earlier per degree north for fall, later for spring). Pure."""
-    if abs(lat) < 23.0:
+    how bare the deciduous canopy is, how fresh the spring flush is (0 where the vegetation is evergreen: the
+    tropics, Australia (evergreen(); needs lon for the latter); the southern hemisphere half a year
+    later; 2.5 days earlier per degree north for fall, later for spring). Pure."""
+    if evergreen(lat, lon):     # was abs(lat) < 23.0
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
     doy = date.timetuple().tm_yday
     if lat < 0:
@@ -70,12 +87,30 @@ def season_amounts(date, lat):
     return {"fall": float(fall), "winter": float(winter), "spring": float(spring)}
 
 
-def amounts_for(mode, lat, today=None):
+GRASS_DRY_SHARES = (0.85, 0.12)     # the share of dry grass in a dry month, in a wet one (groundcover.lua's mix)
+
+
+def grass_dry_months(lat, lon):
+    """The share (0..1) of dry grass in each month (January first) at a place: green in the wet months of its
+    vegetation palette (vegclass.wet_months: the tropics' December to March, the south's winter and spring), brown the
+    rest of the year, each change spread over a month either side. None where no palette covers the place (the
+    mod keeps its own mix). Sent with the anchor (anchor_ready.grassDry). Pure."""
+    import vegclass
+    wet = vegclass.wet_months(lat, lon)
+    if not wet:
+        return None
+    w = np.array([float(m in wet) for m in range(1, 13)])
+    s = (np.roll(w, 1) + 2.0 * w + np.roll(w, -1)) / 4.0
+    dry, green = GRASS_DRY_SHARES
+    return [round(float(dry + (green - dry) * x), 3) for x in s]
+
+
+def amounts_for(mode, lat, today=None, lon=None):  # lon
     """season_amounts for --season: "auto" (today's date), "off" (none), "fall" / "winter" / "spring" (full)."""
     if mode in ("fall", "winter", "spring"):
         return {"fall": 0.0, "winter": 0.0, "spring": 0.0, mode: 1.0}
     if mode == "auto":
-        return season_amounts(today or datetime.date.today(), lat)
+        return season_amounts(today or datetime.date.today(), lat, lon)  # lon
     return {"fall": 0.0, "winter": 0.0, "spring": 0.0}
 
 

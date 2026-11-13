@@ -381,6 +381,13 @@ M.SIGNAL_TYPE = 'lightsBasic'
 -- the switchable head (the stock boom, instanced_trafficlight material): one TSStatic per approach where the
 -- road tile's static boom stands (trees.lua's signal group is hidden while these exist)
 M.SIGNAL_SHAPE = '/art/shapes/objects/s_trafficlight_boom_sn.dae'
+-- Australia's heads (server navgraph._signals appends the group as an approach's 12th item): the same shapes as
+-- trees.lua's au_signal / au_signal_mast, with the stock lens material (tools/build_au_traffic.py)
+M.SIGNAL_SHAPES = {
+  au_signal = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_sw.dae',
+  au_signal_mast = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_mast_sw.dae',
+}
+M.SIGNAL_GROUPS = { 'signal', 'signal_left', 'au_signal', 'au_signal_mast' }      -- the trees.lua groups the switchable heads stand in for
 local heads = {}        -- instance name -> {id, x, y}: the heads in the scene (kept across applies)
 local seenHeads = {}
 
@@ -404,6 +411,7 @@ local function makeHead(inst, a)
     if not left then return end
     shape = left .. '.dae'
   end
+  if type(a[12]) == 'string' and M.SIGNAL_SHAPES[a[12]] then shape = M.SIGNAL_SHAPES[a[12]] end   -- Australia's heads
   seenHeads[inst.name] = true
   local h = heads[inst.name]
   if h and h.shape == shape and math.abs(h.x - a[8]) < 0.05 and math.abs(h.y - a[9]) < 0.05
@@ -601,14 +609,13 @@ local function applySignals(nodes)
     local grid = {}
     for _, h in pairs(heads) do grid[math.floor(h.x / 4) .. ',' .. math.floor(h.y / 4)] = true end
     trees.suppress = function(g, x, y)
-      if g ~= 'signal' and g ~= 'signal_left' then return false end
+      if g ~= 'signal' and g ~= 'signal_left' and g ~= 'au_signal' and g ~= 'au_signal_mast' then return false end
       local cx, cy = math.floor(x / 4), math.floor(y / 4)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
     local t5 = wall()
-    trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
-    trees.refresh('signal_left')
+    for _, g in ipairs(M.SIGNAL_GROUPS) do trees.refresh(g) end    -- (only the tiles with signal items: suppress hides nothing else; AU groups too)
     stats.sigTreesMs = wall() - t5
   end)
   stats.signalsMs = wall() - t1

@@ -41,6 +41,10 @@ KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
 # Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
 # (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
 SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
+# Australia's km/h where no sign is mapped: 50 in a built-up area and 100 outside it by default (Australian Road
+# Rules 25), the arterials as posted in practice: (town, rural) by class
+AU_KMH = {"motorway": (100, 110), "trunk": (80, 100), "primary": (60, 100), "secondary": (60, 100),
+          "tertiary": (60, 80), "unclassified": (50, 80), "residential": (50, 50)}
 MPH = 0.44704
 LANE_W_M = 3.3
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
@@ -230,6 +234,8 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if country == "AU" and spec.cls in AU_KMH:
+        return AU_KMH[spec.cls][0 if spec.urban else 1] / 1.609344
     if de_on:
         zone = feats.attrs.get("osm_zone_maxspeed")
         if zone is not None and isinstance(zone[i], str):
@@ -1040,6 +1046,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     Its roundabouts and signalised junctions as everywhere. priorities: the junctions road-class right of way decides
     (furniture.priority_controls) appended as (junction node, its arms), for _priority_way."""
     import furniture
+    au = str(country or "").upper() == "AU"
     out = []
     # furniture's arm tuples (fid, spec, u, point, at its start, length): the same decision as the road tiles' props
     farms = {name: [(x[0], x[1], x[2], x[3], x[4] == 0, x[5] if len(x) > 5 else math.inf) for x in a]
@@ -1099,16 +1106,19 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
             pp = None
+            shape = furniture.au_group(what, spec) if au else what      # Australia's pole / mast head
             if prop:
-                side, yaw = furniture.approach_pose(u, what, left_hand)
-                group = furniture.G_SIGNAL_LEFT if left_hand and what == furniture.G_SIGNAL else what
+                side, yaw = furniture.approach_pose(u, shape, left_hand)
+                group = shape if au else furniture.G_SIGNAL_LEFT if left_hand and what == furniture.G_SIGNAL else what
                 pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines, group=group,
                                            base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
             approach = [nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head
-            if left_hand and what == furniture.G_SIGNAL:
+            if au and what == furniture.G_SIGNAL:
+                approach.append(shape)  # app[12]: Australia's head shape (navgraph.lua SIGNAL_SHAPES)
+            elif left_hand and what == furniture.G_SIGNAL:
                 approach.append(1)       # optional app[12]: the reflected left-kerb signal shape
             app.append(approach)
         if app:

@@ -32,6 +32,7 @@ MARGIN_M = 900.0                # the roads this far round a tile: its junctions
 REPEAT_M = (1609.344, 3218.688)  # a reminder about every mile in town and every two out of it (PR #363's 2 miles)
 CELL_FRAMES = 4                 # anchors a cell keeps its rows for
 STYLE_MUTCD, STYLE_VIENNA, STYLE_CANADA, STYLE_SWEDEN = 0, 1, 2, 3     # (the kernels draw STYLE_SWEDEN as STYLE_VIENNA)
+STYLE_AU = 4                    # drawn here (au_mesh), as STYLE_SWEDEN; the kernels never see it
 # speed_sign_mesh's material indices: white, red, metal, lettering, black (exit.materials.json's)
 MATERIALS = ['bne_exit_white', 'bne_guide_red', 'bne_exit_metal', 'bne_guide_letters_black', 'bne_guide_black']
 # C31 (sweden_mesh): Transportstyrelsen's artwork of the sign, tools/build_swedish_signs.py's sheet of 4 x 4 cells of
@@ -47,6 +48,13 @@ C31_POLE_X = -0.05
 C31_D = (0.60, 0.60, 0.90, 0.90)
 # m from the road to the lower edge: the Vienna mesh's mount(), within 1.0-2.0 m (TSFS 2019:74 1 kap. 13 §)
 C31_MOUNT_RURAL, C31_MOUNT_TOWN, C31_MIN_GROUND = 1.52, 2.0, 1.2
+# Australia's R4-1 (au_mesh): tools/build_au_speedsigns.py's sheet, 4 x 4 cells of 256 px, a 3:4 plate in each;
+# the values the states post (AS 1742.4; 130 only in the NT)
+AU_VALUES = (40, 50, 60, 70, 80, 90, 100, 110, 130)
+AU_COLS, AU_CELL_W, AU_CELL_H, AU_SHEET_W, AU_SHEET_H = 4, 256.0, 256.0, 1024.0, 1024.0
+AU_PLATE_W, AU_PLATE_H = 180.0, 240.0
+MATERIALS_AU = ['bne_au_speed', 'bne_exit_metal']
+AU_W = (0.45, 0.60, 0.90, 1.20)  # m: the plate's width by size class (R4-1 sizes B to E: town, road, highway, motorway)
 _lock = threading.Lock()
 
 
@@ -58,6 +66,8 @@ def posted(mph_value, mph=True, face=STYLE_VIENNA):
     if mph_value is None or not np.isfinite(mph_value) or mph_value <= 0:
         return 0.0
     v = mph_value if mph else mph_value * 1.609344
+    if face == STYLE_AU:            # the nearest value the states post; slower (shared zones): no sign
+        return float(min(AU_VALUES, key=lambda a: (abs(a - round(v, 3)), a))) if v >= 35.0 else 0.0
     if face == STYLE_SWEDEN:
         return min(120.0, float(int(v / 10.0 + 0.5) * 10)) if v >= 25.0 else 0.0
     return float(max(5, int(v / 5.0 + 0.5) * 5))
@@ -67,7 +77,7 @@ def style(country, us):
     """The sign face: MUTCD where a US state is (signstates), Canada's Rb-1, Sweden's C31, else the Vienna's."""
     if us:
         return STYLE_MUTCD
-    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN}.get((country or "").upper(), STYLE_VIENNA)
+    return {"CA": STYLE_CANADA, "SE": STYLE_SWEDEN, "AU": STYLE_AU}.get((country or "").upper(), STYLE_VIENNA)
 
 
 def _limits(feats, i, spec, mph, face):
@@ -81,7 +91,7 @@ def _limits(feats, i, spec, mph, face):
                     cuts.add(round(f, 6))
     cuts = sorted(cuts) + [1.0]
     out = []
-    country = "SE" if face == STYLE_SWEDEN else None
+    country = {STYLE_SWEDEN: "SE", STYLE_AU: "AU"}.get(face)
     for a, b in zip(cuts[:-1], cuts[1:]):
         v = posted(navgraph.road_mph(feats, i, spec, mph, at=(a + b) / 2, country=country), mph, face)
         if not out or out[-1][1] != v:
@@ -125,9 +135,17 @@ def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([e, n])
         k = 0
+        ring = set()
+        if face == STYLE_AU:            # no speed signs on roundabout rings (islands.ring_fids)
+            import islands
+            ring = islands.ring_fids([(str(feats.ids[i]), sp, np.column_stack([xy[o:o + len(ln)], np.zeros(len(ln))]),
+                                       None) for (i, sp, _), ln, o in
+                                      zip(picked, lines, np.cumsum([0] + [len(ln) for ln in lines[:-1]]))])
         for (i, sp, bridge), line in zip(picked, lines):
             pts = xy[k:k + len(line)]
             k += len(line)
+            if str(feats.ids[i]) in ring:
+                continue
             cons = [(float(con.start[r]), str(con.value[r])) for r in con.rows(i)] if con is not None else []
             skips = [(0.0, 1.0)] if bridge else [(a, b) for a, b, _ in roads.level_ranges(feats, i)]
             meta = (sp.width / 2, (int(sp.dir) or 1) if sp.oneway else 0, RANK.get(sp.cls, 0),
@@ -224,7 +242,7 @@ def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
 
 
 def _kernel_style(face):
-    return STYLE_VIENNA if face == STYLE_SWEDEN else int(face)
+    return STYLE_VIENNA if face in (STYLE_SWEDEN, STYLE_AU) else int(face)
 
 
 @lru_cache(maxsize=1)
@@ -243,6 +261,68 @@ def c31_uv(value, cos, sin):
     u = ((k % 4) + 0.5) * C31_CELL + cos * C31_R
     v = ((k // 4) + 0.5) * C31_CELL - sin * C31_R
     return u / C31_SHEET, 1.0 - v / C31_SHEET
+
+
+def au_uv(value, y, z):
+    """where on the sheet a point of the R4-1 of value is, (y, z) in [-1, 1] across and up its plate."""
+    k = AU_VALUES.index(int(value))
+    cx = ((k % AU_COLS) + 0.5) * AU_CELL_W + y * AU_PLATE_W / 2
+    cy = ((k // AU_COLS) + 0.5) * AU_CELL_H - z * AU_PLATE_H / 2
+    return cx / AU_SHEET_W, 1.0 - cy / AU_SHEET_H
+
+
+def _pole(add, row, top):
+    a = np.arange(9) * np.pi / 4.0
+    around = np.column_stack([C31_POLE_X + C31_POLE * np.cos(a), C31_POLE * np.sin(a)])
+    pole = np.vstack([[(px, py, -0.3), (px, py, top)] for px, py in around])
+    add(pole, np.zeros((18, 2)), [t for k in range(8) for t in ((2 * k, 2 * k + 2, 2 * k + 3),
+                                                                (2 * k, 2 * k + 3, 2 * k + 1))], 1, row)
+
+
+def _adder(origin):
+    P, T, UV, M = [], [], [], []
+    n = [0]
+
+    def add(pts, uvs, tris, mat, row):
+        pts = np.asarray(pts, np.float64)
+        x, y, zg, tx, ty = row
+        world = np.column_stack([x - origin[0] - tx * pts[:, 0] + ty * pts[:, 1],
+                                 y - origin[1] - ty * pts[:, 0] - tx * pts[:, 1], zg - origin[2] + pts[:, 2]])
+        P.append(world)
+        UV.append(np.asarray(uvs, np.float64))
+        T.append(np.asarray(tris, np.int64) + n[0])
+        M.append(np.full(len(tris), mat, np.int64))
+        n[0] += len(pts)
+    return add, (P, T, UV, M, n)
+
+
+def au_mesh(table, origin):
+    """(positions, triangles, uvs, materials, material of each triangle) of R4-1 signs, or None; rows and frame
+    as sweden_mesh's."""
+    add, (P, T, UV, M, n) = _adder(origin)
+    for x, y, zg, zr, tx, ty, value, size, urban in table:
+        value = int(round(value))
+        if value not in AU_VALUES or not np.isfinite([x, y, zg, zr]).all():
+            continue
+        tl = max(np.hypot(tx, ty), 1e-9)
+        row = (x, y, zg, tx / tl, ty / tl)
+        size = int(np.clip(size, 0, 3))
+        w = AU_W[size]
+        h = w * 4.0 / 3.0
+        mount = C31_MOUNT_TOWN if urban or size >= 2 else C31_MOUNT_RURAL
+        zb = max(zr + mount, zg + C31_MIN_GROUND) - zg
+        corners = np.array([(0.0, -w / 2, zb), (0.0, w / 2, zb), (0.0, w / 2, zb + h), (0.0, -w / 2, zb + h)])
+        add(corners, np.column_stack(au_uv(value, np.array([-1.0, 1, 1, -1]), np.array([-1.0, -1, 1, 1]))),
+            [(0, 1, 2), (0, 2, 3)], 0, row)
+        back = corners + (-C31_DEPTH, 0.0, 0.0)
+        add(back, np.zeros((4, 2)), [(0, 2, 1), (0, 3, 2)], 1, row)
+        edge = np.vstack([(back[i], back[(i + 1) % 4], corners[(i + 1) % 4], corners[i]) for i in range(4)])
+        add(edge, np.zeros((16, 2)), [(4 * q + a, 4 * q + b, 4 * q + c) for q in range(4)
+                                      for a, b, c in ((0, 1, 2), (0, 2, 3))], 1, row)
+        _pole(add, row, zb + h - 0.05)
+    if not n[0]:
+        return None
+    return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_AU, np.concatenate(M)
 
 
 def sweden_mesh(table, origin):
@@ -345,6 +425,8 @@ def _speed_mesh(frame, box, elev, signs, decks, face):
     table = np.column_stack([signs[:, 0:2], z[:n], z[n:], signs[:, 2:4], signs[:, 4:6], signs[:, 8]])
     if face == STYLE_SWEDEN:
         return sweden_mesh(table, (float(box[0]), float(box[1]), 0.0))
+    if face == STYLE_AU:
+        return au_mesh(table, (float(box[0]), float(box[1]), 0.0))
     cp, glyph, cap = _glyphs()
     p, t, uv, mi = fast._ef.speed_sign_mesh(np.ascontiguousarray(table), _kernel_style(face), cp, glyph, cap,
                                             [float(box[0]), float(box[1]), 0.0])

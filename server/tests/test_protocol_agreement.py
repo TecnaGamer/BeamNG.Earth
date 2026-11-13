@@ -331,7 +331,10 @@ SERVER_TO_MOD = {
                      "anchorKey": F(str, OPT),             # phase 5 (lattice anchors): not sent yet
                      "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
-                     "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
+                     "fuelShapes": F(list, OPT),           # 2026-10-23: the region's gas station shapes (--gas-stations)
+                     "koppen": F(int, OPT),                # the anchor's Koppen-Geiger class (climate.py), the grass mix
+                     "grassDry": F(list, OPT),             # 12 monthly dry-grass shares (season.grass_dry_months), the grass mix
+                     "evergreen": F(bool, OPT)},           # season.evergreen at the anchor (seasonlook.setEvergreen)
     "anchor_progress": {"requestId": F(int, NULL), "stage": F(str), "elapsed": F(NUM)},
     "anchor_error": {"requestId": F(int, NULL), "error": F(str), "stage": F(str, OPT)},
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world

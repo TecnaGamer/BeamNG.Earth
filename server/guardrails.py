@@ -28,7 +28,11 @@ BBOX_PAD_M = 2.0
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
-          "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "se_b3", "se_e1", "se_e2", "se_a19",      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+          "au_guidepost_red", "au_guidepost_white",      # Australia's guide posts (kantstolpar.py)
+          "au_warn_curve_l", "au_warn_curve_r", "au_warn_turn_l", "au_warn_turn_r",      # its curve signs (warnsigns.py)
+          "au_tboard",      # its T-junction chevron board (tboards.py)
+          "au_chevron_l", "au_chevron_r", "au_wrongway", "au_gravel")      # its chevron markers, Wrong Way and gravel road signs (auroadsigns.py)
 STOCK_GROUPS = GROUPS
 import euguardrails
 ALL_GROUPS = GROUPS + euguardrails.GROUPS
