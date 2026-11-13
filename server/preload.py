@@ -24,6 +24,8 @@ import asyncio
 import concurrent.futures
 import logging
 import math
+
+import dmath
 import queue
 import threading
 import time
@@ -43,7 +45,7 @@ def far(a, b):
     if a is None or b is None:
         return False
     dy = (a[0] - b[0]) * 111320.0
-    dx = (a[1] - b[1]) * 111320.0 * max(0.05, math.cos(math.radians(b[0])))
+    dx = (a[1] - b[1]) * 111320.0 * max(0.05, dmath.cos(math.radians(b[0])))
     return math.hypot(dx, dy) > CANCEL_M
 
 

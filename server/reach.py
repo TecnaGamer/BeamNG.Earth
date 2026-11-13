@@ -158,7 +158,7 @@ class Intent:
         s0, s1 = math.hypot(vx0, vy0), math.hypot(vx1, vy1)
         turn = 0.0
         if min(s0, s1) >= INTENT_MIN_V:
-            yaw = math.atan2(vx0 * vy1 - vy0 * vx1, vx0 * vx1 + vy0 * vy1) / dt     # (+: to the left)
+            yaw = dmath.atan2(vx0 * vy1 - vy0 * vx1, vx0 * vx1 + vy0 * vy1) / dt     # (+: to the left)
             if abs(yaw) > YAW_MIN:
                 turn = math.copysign(min(1.0, (abs(yaw) - YAW_MIN) / (YAW_FULL - YAW_MIN)), yaw)
         decel = (s0 - s1) / dt
