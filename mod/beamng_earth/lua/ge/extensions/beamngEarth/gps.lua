@@ -1139,7 +1139,8 @@ function M.update(anchor, player)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
-  local physicsRunning = not be or not be.getPhysicsRunning or be:getPhysicsRunning()
+  local physicsRunning = not be or ((not be.getPhysicsRunning or be:getPhysicsRunning())
+    and (not be.getEnabled or be:getEnabled()))
   if not physicsRunning then
     -- Paused wall time is not a stall; resume with a fresh progress window.
     stillSince, progRemaining, progAt, stuckTries = nil, nil, nil, 0

@@ -689,9 +689,11 @@ for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_gro
 end
 -- Physics pause is not a stationary vehicle: the GPS may keep updating its route, but must not recover it.
 do
+ for _, pauseKind in ipairs({'physics', 'engine'}) do
   local oldBe, oldSpawn, oldQuat, oldLog = be, spawn, quatFromDir, log
   local running, recoveries = true, 0
-  be = { getPhysicsRunning = function() return running end }
+  be = { getPhysicsRunning = function() return pauseKind ~= 'physics' or running end,
+         getEnabled = function() return pauseKind ~= 'engine' or running end }
   spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
   quatFromDir = function(d) return d end
   log = function() end
@@ -716,6 +718,7 @@ do
   f:step(); f:step(f.gps.AUTO_NOPROGRESS_S + 1)
   T.check(recoveries == 1, 'normal recovery still works after the resumed vehicle remains stalled')
   be, spawn, quatFromDir, log = oldBe, oldSpawn, oldQuat, oldLog
+ end
 end
 
 
