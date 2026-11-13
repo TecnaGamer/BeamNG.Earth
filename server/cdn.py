@@ -133,4 +133,6 @@ def decisions_on(fetcher, cache_dir):
     got = isinstance(on, dict) and bool(on.get("enabled"))
     if got:
         log.info("cdn: shared decision archives on")
+        if on.get("request") is True and "BNGE_DECISIONS_REQUEST" not in os.environ:
+            os.environ["BNGE_DECISIONS_REQUEST"] = "on"     # (the builder asked for unbuilt blocks: decisions.ask_build)
     return got

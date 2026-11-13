@@ -23,8 +23,8 @@ Layout under BASE (the project's CDN, R2 bnge-tiles behind tiles.tgforever.net; 
     d<FORMAT>/<vkey>/manifest.bngm          signed: {"format", "vkey", "doc" (vkey_doc), "blocks": [[x, y], ...], ...}
     d<FORMAT>/<vkey>/12/<x>/<y>.bngd        one z12 block (4 x 4 cells): its items, signed (decisions.rs)
 Kept under <cache>/decisions/d<FORMAT>/<vkey>/ (manifest.bngm, 12/x/y.bngd: verified when downloaded). Region downloads
-(download_region) fetch a box's blocks and pin them (pins.json: never pruned); other versions' folders go at the
-server's start (prune).
+(a saved area's "dec" steps: region_block) fetch a box's blocks and pin them (pins.json: never pruned); other
+versions' folders go at the server's start (prune).
 
 Off unless the switch file says {"decisions": {"enabled": true}} (cdn.decisions_on, read at the server's start:
 earthd sets BNGE_DECISIONS for its processes) or BNGE_DECISIONS=on (tests). BNGE_DECISIONS_PUBKEY (hex, comma
@@ -256,6 +256,8 @@ class Store:
                 return None
         blocks = self.manifest(vk)
         if not blocks or (bx, by) not in blocks:
+            if blocks:                  # (this version is served, this block not built: the builder may be asked)
+                ask_build(self.cache_dir, vk, bx, by)
             return None
         with self._lock:
             ev = self._inflight.get(k)
@@ -344,33 +346,6 @@ class Store:
         except OSError:
             pass
 
-    # --- regions -------------------------------------------------------------------------------------------------
-    def download_region(self, versions, bbox, kind="predownload", progress=None):
-        """Every built block of bbox (lon0, lat0, lon1, lat1) on disk, pinned (never pruned). Returns {"blocks",
-        "fetched", "bytes"}; {} when nothing is built for these versions."""
-        import mapcells
-        vv = vkey(versions)
-        if vv is None:
-            return {}
-        blocks = self.manifest(vv[0]) or set()
-        lon0, lat0, lon1, lat1 = bbox
-        nw, se = mapcells.cell_of(lat1, lon0, BLOCK_Z), mapcells.cell_of(lat0, lon1, BLOCK_Z)
-        want = [(x, y) for x in range(nw.x, se.x + 1) for y in range(nw.y, se.y + 1) if (x, y) in blocks]
-        pin(self.cache_dir, vv[0], (nw.x, nw.y, se.x, se.y))
-        st = {"blocks": len(want), "fetched": 0, "bytes": 0}
-        for bx, by in want:
-            path = self.block_path(vv[0], bx, by)
-            if os.path.exists(path):
-                continue
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            got = self._fetch(vv[0], vv[1], bx, by, path, kind=kind)
-            if got is not None:
-                st["fetched"] += 1
-                st["bytes"] += len(got)
-            if progress is not None:
-                progress(st)
-        return st
-
     def prefetch(self, versions, cells):
         """The blocks of cells (z14 keys) downloaded now when built (a teleport's ring: before planning asks)."""
         vv = vkey(versions)
@@ -397,6 +372,58 @@ def _write(path, data):
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
+
+
+# --- on-demand builds ----------------------------------------------------------------------------------------------
+# A block of a served version that is not built yet: the project's collector service is told (POST {"v": 1, "vkey",
+# "block": [x, y]}: a ~60 km2 square, nothing about the player) so the builder adds it after the popular places, at
+# most once per block per REQUEST_GAP_S per machine and MAX_REQUESTS_PER_HOUR per process; only with the player's
+# anonymous statistics on (aerialpacks.consent: the welcome page's choice) and the switch's "request": true
+# (BNGE_DECISIONS_REQUEST=on; earthd sets it). The collector's endpoint is not deployed yet.
+REQUEST_URL = os.environ.get("BNGE_DECISIONS_REQUEST_URL", "https://earth.tgforever.net/decisions/request")
+REQUEST_GAP_S = 6 * 3600.0
+MAX_REQUESTS_PER_HOUR = 6
+_asked = []
+_ask_lock = threading.Lock()
+
+
+def ask_build(cache_dir, vk, bx, by):
+    """Ask for block (bx, by) of version vk to be built (in the background); True when a request was sent off."""
+    if os.environ.get("BNGE_DECISIONS_REQUEST", "").lower() != "on" or not REQUEST_URL or REQUEST_URL == "off":
+        return False
+    import aerialpacks
+    if not aerialpacks.consent():
+        return False
+    marker = os.path.join(cache_dir, SUBDIR, "asked", f"{vk}_{bx}_{by}")
+    now = time.time()
+    with _ask_lock:
+        try:
+            if now - os.path.getmtime(marker) < REQUEST_GAP_S:
+                return False
+        except OSError:
+            pass
+        _asked[:] = [t for t in _asked if now - t < 3600.0]
+        if len(_asked) >= MAX_REQUESTS_PER_HOUR:
+            return False
+        _asked.append(now)
+        try:
+            _write(marker, b"")
+        except OSError:
+            return False
+
+    def post():
+        import urllib.request
+        body = json.dumps({"v": 1, "vkey": vk, "block": [int(bx), int(by)]}, separators=(",", ":")).encode()
+        req = urllib.request.Request(REQUEST_URL, body, {"Content-Type": "application/json",
+                                                         "User-Agent": "BeamNG.Earth"})
+        try:
+            with urllib.request.urlopen(req, timeout=8.0) as r:
+                r.read(4096)
+            log.info("decisions: build of block %s/%s asked", bx, by)
+        except Exception as e:
+            log.info("decisions: build request for block %s/%s failed (%s: %s)", bx, by, type(e).__name__, e)
+    threading.Thread(target=post, name="decisions-ask", daemon=True).start()
+    return True
 
 
 _STORES = {}
