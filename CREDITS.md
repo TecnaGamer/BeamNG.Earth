@@ -229,6 +229,25 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
   visibility to structural similarity", IEEE Trans. Image Processing 13(4), 2004: the SSIM measure
   `tools/benchmark.py compare` uses (own NumPy implementation).
 
+## Dutch roadside data and models
+
+Dutch Groenpol vehicle signals: Sven's supplied and confirmed `Groenpol.fbx`
+and textures; derived components retain their source hash and object provenance.
+Groenpol model/texture author and licensor: **Sven / svenegaming-glitch**, licensed
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+The prepared assets are adapted (component separation, sizing, UV/material and
+mounting preparation); retain attribution, identify changes and share adaptations
+under the same licence. See `docs/GROENPOL_ASSET_LICENSE.md`; these assets retain
+their CC licence separately from the project's code licence.
+Netherlands country outline: **PDOK / Kadaster**, Bestuurlijke Gebieden,
+landgebied LND6030, retrieved 2026-11-06; source URL and SHA256 are retained in
+`mod/beamng_earth/lua/ge/extensions/beamngEarth/nl_country.lua`.
+Offline signal context: Rijkswaterstaat/NDW WKD built-up road sections and
+OpenStreetMap contributors. The derived context pack is **ODbL 1.0**. See `docs/NL_VRI.md` and the asset folder's
+`context_attribution.md` and `context_provenance.json`.
+The public Dutch road-sign tile producer uses NDW attribute data (CC0-1.0;
+source and terms in each manifest), excluding photographs and vendor images.
+
 ## User mods mentioned in the docs (not part of BeamNG.Earth)
 
 BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic Driver Camera,

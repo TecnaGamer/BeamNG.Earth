@@ -1,0 +1,1494 @@
+{
+  "format": 5,
+  "source_sha256": "0c87eef5eea270f91807cabdaf9f37df3ebec64d115e6d99e6ecc28100effe77",
+  "heads": {
+    "vehicle": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649852752685547,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927713394165039,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.14960002899169922,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741207122802734,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "vehicle_300": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    },
+    "vehicle_arrow_left": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_left_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649852752685547,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927713394165039,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_left_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.14960002899169922,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741207122802734,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "vehicle_arrow_right": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_right_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649757385253906,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927722930908203,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_right_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.1495990753173828,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741111755371094,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "pedestrian": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_pedestrian_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10699844360351562,
+          -0.14850139617919922,
+          -9.5367431640625e-07
+        ],
+        [
+          0.34612274169921875,
+          0.13850021362304688,
+          0.5379996299743652
+        ]
+      ],
+      "participant": "pedestrian",
+      "lens_diameter_mm": 200
+    },
+    "vehicle_arrow_straight": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_straight_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649757385253906,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927722930908203,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_straight_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.1495990753173828,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741111755371094,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "vehicle_arrow_slight_left": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_left_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649852752685547,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927713394165039,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_left_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.14960002899169922,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741207122802734,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "vehicle_arrow_slight_right": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_right_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.30649757385253906,
+          -0.16198086738586426
+        ],
+        [
+          0.34650230407714844,
+          0.2927722930908203,
+          0.9920198917388916
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 200,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_right_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.10662078857421875,
+          -0.1495990753173828,
+          -4.76837158203125e-07
+        ],
+        [
+          0.34650230407714844,
+          0.13741111755371094,
+          0.8150007724761963
+        ]
+      ]
+    },
+    "vehicle_300_arrow_left": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_left_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_left_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    },
+    "vehicle_300_arrow_right": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_right_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_right_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    },
+    "vehicle_300_arrow_straight": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_straight_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_straight_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    },
+    "vehicle_300_arrow_slight_left": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_left_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_left_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    },
+    "vehicle_300_arrow_slight_right": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_right_sven_v4.dae",
+      "socket": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "basis": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "interface": "pole_cap_145",
+      "bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.43886566162109375,
+          -0.2564547061920166
+        ],
+        [
+          0.35643959045410156,
+          0.4611358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "participant": "vehicle",
+      "lens_diameter_mm": 300,
+      "bare_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_right_bare_sven_v4.dae",
+      "bare_bounds_m": [
+        [
+          -0.09668350219726562,
+          -0.18686676025390625,
+          -4.76837158203125e-07
+        ],
+        [
+          0.35643959045410156,
+          0.19913482666015625,
+          1.1150007247924805
+        ]
+      ]
+    }
+  },
+  "supports": {
+    "straight": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_straight_sven_v4.dae",
+      "kind": "straight",
+      "max_heads": 1,
+      "feet": [
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.07249999046325684,
+          -0.07249999046325684,
+          -1.4901161193847656e-08
+        ],
+        [
+          0.07250022888183594,
+          0.07249999046325684,
+          2.579317629337311
+        ]
+      ],
+      "mounts": [
+        {
+          "id": "top",
+          "position": [
+            0,
+            0,
+            2.579317629337311
+          ],
+          "basis": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "interface": "pole_cap_145"
+        }
+      ]
+    },
+    "straight_tall": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_straight_tall_sven_v4.dae",
+      "kind": "straight",
+      "max_heads": 1,
+      "feet": [
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.07249999046325684,
+          -0.07249999046325684,
+          -1.4901161193847656e-08
+        ],
+        [
+          0.07250022888183594,
+          0.07249999046325684,
+          3.4943066239356995
+        ]
+      ],
+      "mounts": [
+        {
+          "id": "top",
+          "position": [
+            0,
+            0,
+            3.4943066239356995
+          ],
+          "basis": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "interface": "pole_cap_145"
+        }
+      ]
+    },
+    "cantilever_1": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_1_sven_v4.dae",
+      "kind": "cantilever",
+      "max_heads": 1,
+      "mounts": [
+        {
+          "id": "bay_1",
+          "position": [
+            0.2402352999447359,
+            -3.156387726465862,
+            5.409706683832219
+          ],
+          "basis": [
+            0.9961947844185971,
+            0.0,
+            0.08715475602160071,
+            0.0,
+            1.0,
+            0.0,
+            -0.08715475602160071,
+            0.0,
+            0.9961947844185972
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_1_1"
+        }
+      ],
+      "feet": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.15000009536743164,
+          -3.652202606201172,
+          -1.4901161193847656e-08
+        ],
+        [
+          0.15000009536743164,
+          0.14999961853027344,
+          6.000000044703484
+        ]
+      ],
+      "arm_length_m": 3.652202606201172,
+      "beam_start": [
+        -0.07500123977661133,
+        0.017068862915039062,
+        5.735266730189323
+      ],
+      "beam_end": [
+        0.07499933242797852,
+        -3.652202606201172,
+        5.885266825556755
+      ],
+      "construction": {
+        "leg_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_1_leg_sven_v4.dae",
+        "beam_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_1_beam_sven_v4.dae",
+        "leg_bounds_m": [
+          [
+            -0.15000009536743164,
+            -0.14999961853027344,
+            -1.4901161193847656e-08
+          ],
+          [
+            0.15000009536743164,
+            0.14999961853027344,
+            5.885266825556755
+          ]
+        ],
+        "beam_unit_m": 1,
+        "source_reach_m": 3.652202606201172,
+        "max_span_m": 12,
+        "beam_bounds_m": [
+          [
+            -0.07500123977661133,
+            -1.0,
+            5.735266730189323
+          ],
+          [
+            0.07499933242797852,
+            0.0,
+            5.885266825556755
+          ]
+        ]
+      }
+    },
+    "cantilever_2": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_2_sven_v4.dae",
+      "kind": "cantilever",
+      "max_heads": 2,
+      "mounts": [
+        {
+          "id": "bay_1",
+          "position": [
+            0.24023529994206427,
+            -3.156387408574423,
+            5.409706683835067
+          ],
+          "basis": [
+            0.9961947844166548,
+            0.0,
+            0.087154756043804,
+            0.0,
+            1.0000000000000002,
+            0.0,
+            -0.08715475604380399,
+            0.0,
+            0.9961947844166548
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_2_1"
+        },
+        {
+          "id": "bay_2",
+          "position": [
+            0.2402352999565327,
+            -6.1563873898539185,
+            5.409706207153423
+          ],
+          "basis": [
+            0.9961947844172289,
+            1.2502593038746699e-08,
+            0.08715475603723956,
+            0.0,
+            0.9999999999999897,
+            -1.434527914162763e-07,
+            -0.08715475603724043,
+            1.4290692261898707e-07,
+            0.9961947844172186
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_2_2"
+        }
+      ],
+      "feet": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.15000009536743164,
+          -6.7885332107543945,
+          -1.4901161193847656e-08
+        ],
+        [
+          0.15000009536743164,
+          0.14999961853027344,
+          6.000000044703484
+        ]
+      ],
+      "arm_length_m": 6.7885332107543945,
+      "beam_start": [
+        -0.07500123977661133,
+        0.017068862915039062,
+        5.735266730189323
+      ],
+      "beam_end": [
+        0.07499933242797852,
+        -6.7885332107543945,
+        5.885266825556755
+      ],
+      "construction": {
+        "leg_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_2_leg_sven_v4.dae",
+        "beam_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_2_beam_sven_v4.dae",
+        "leg_bounds_m": [
+          [
+            -0.15000009536743164,
+            -0.14999961853027344,
+            -1.4901161193847656e-08
+          ],
+          [
+            0.15000009536743164,
+            0.14999961853027344,
+            5.885266825556755
+          ]
+        ],
+        "beam_unit_m": 1,
+        "source_reach_m": 6.7885332107543945,
+        "max_span_m": 12,
+        "beam_bounds_m": [
+          [
+            -0.07500123977661133,
+            -1.0,
+            5.735266730189323
+          ],
+          [
+            0.07499933242797852,
+            0.0,
+            5.885266825556755
+          ]
+        ]
+      }
+    },
+    "cantilever_3": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_3_sven_v4.dae",
+      "kind": "cantilever",
+      "max_heads": 3,
+      "mounts": [
+        {
+          "id": "bay_1",
+          "position": [
+            0.2402352999334596,
+            -3.156387064986931,
+            5.409706683716038
+          ],
+          "basis": [
+            0.9961947844178574,
+            -9.37694491801461e-09,
+            0.08715475603005686,
+            0.0,
+            0.9999999999999943,
+            1.0758959516541759e-07,
+            -0.08715475603005736,
+            -1.0718019356141772e-07,
+            0.9961947844178516
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_3_1"
+        },
+        {
+          "id": "bay_2",
+          "position": [
+            0.24023529995000814,
+            -6.15638700184987,
+            5.40970620707491
+          ],
+          "basis": [
+            0.9961947844174572,
+            6.251296798640896e-09,
+            0.08715475603462977,
+            0.0,
+            0.9999999999999973,
+            -7.17263989145585e-08,
+            -0.08715475603463001,
+            7.145346450372914e-08,
+            0.9961947844174547
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_3_2"
+        },
+        {
+          "id": "bay_3",
+          "position": [
+            0.24023529989694659,
+            -9.156387553569045,
+            5.409706206447743
+          ],
+          "basis": [
+            0.9961947844186599,
+            -4.375907618630522e-08,
+            0.0871547560208724,
+            0.0,
+            0.999999999999874,
+            5.020847763697485e-07,
+            -0.08715475602088338,
+            -5.001742355555526e-07,
+            0.9961947844185344
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_cantilever_3_3"
+        }
+      ],
+      "feet": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.15000009536743164,
+          -9.668312072753906,
+          -1.4901161193847656e-08
+        ],
+        [
+          0.15000009536743164,
+          0.15000009536743164,
+          6.000000044703484
+        ]
+      ],
+      "arm_length_m": 9.668312072753906,
+      "beam_start": [
+        -0.07500123977661133,
+        0.017069339752197266,
+        5.735266730189323
+      ],
+      "beam_end": [
+        0.07499933242797852,
+        -9.668312072753906,
+        5.885266825556755
+      ],
+      "construction": {
+        "leg_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_3_leg_sven_v4.dae",
+        "beam_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_3_beam_sven_v4.dae",
+        "leg_bounds_m": [
+          [
+            -0.15000009536743164,
+            -0.15000009536743164,
+            -1.4901161193847656e-08
+          ],
+          [
+            0.15000009536743164,
+            0.15000009536743164,
+            5.885266825556755
+          ]
+        ],
+        "beam_unit_m": 1,
+        "source_reach_m": 9.668312072753906,
+        "max_span_m": 12,
+        "beam_bounds_m": [
+          [
+            -0.07500123977661133,
+            -1.0,
+            5.735266730189323
+          ],
+          [
+            0.07499933242797852,
+            -1.1102230246251565e-16,
+            5.885266825556755
+          ]
+        ]
+      }
+    },
+    "portal_5": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_portal_5_sven_v4.dae",
+      "kind": "portal",
+      "max_heads": 5,
+      "mounts": [
+        {
+          "id": "bay_1",
+          "position": [
+            0.29150668901749555,
+            -3.1682783859325383,
+            5.40970660827061
+          ],
+          "basis": [
+            0.9961947190176826,
+            5.952674655578132e-07,
+            0.08715550356073885,
+            -5.975414413200548e-07,
+            0.9999999999998215,
+            1.866543585238458e-12,
+            -0.08715550356072328,
+            -5.208088465752149e-08,
+            0.9961947190178605
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_portal_5_1"
+        },
+        {
+          "id": "bay_2",
+          "position": [
+            0.29150599303218705,
+            -6.181401008712285,
+            5.409707254614592
+          ],
+          "basis": [
+            0.9961946034043394,
+            4.789068373343533e-08,
+            0.08715682502287936,
+            -4.807363079393675e-08,
+            0.9999999999999989,
+            8.983274887195712e-14,
+            -0.08715682502287926,
+            -4.190034518221286e-09,
+            0.9961946034043404
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_portal_5_2"
+        },
+        {
+          "id": "bay_3",
+          "position": [
+            0.2915055772370865,
+            -9.167744392501348,
+            5.4097066703351615
+          ],
+          "basis": [
+            0.9961946767090697,
+            4.78906869581684e-08,
+            0.08715598715240325,
+            -4.807363433142283e-08,
+            0.9999999999999989,
+            1.3370112403010195e-13,
+            -0.08715598715240315,
+            -4.1900382485068484e-09,
+            0.9961946767090708
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_portal_5_3"
+        },
+        {
+          "id": "bay_4",
+          "position": [
+            0.29150510028775223,
+            -12.139426455005434,
+            5.409706669087332
+          ],
+          "basis": [
+            0.9961946767070754,
+            -5.21313751953276e-08,
+            0.08715598717519552,
+            -4.8073725680709365e-08,
+            0.9999999999993404,
+            1.1476224187195973e-06,
+            -0.08715598717519786,
+            -1.147445257417053e-06,
+            0.9961946767064157
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_portal_5_4"
+        },
+        {
+          "id": "bay_5",
+          "position": [
+            0.29150458398777346,
+            -15.183542100798448,
+            5.409706672214535
+          ],
+          "basis": [
+            0.9961946767070754,
+            1.9792029837093398e-07,
+            0.08715598717498639,
+            -4.8070000190498523e-08,
+            0.9999999999985172,
+            -1.7214333166846058e-06,
+            -0.08715598717519786,
+            1.7106931180673048e-06,
+            0.9961946767056077
+          ],
+          "interface": "pole_cap_145",
+          "hardware": "hanger_portal_5_5"
+        }
+      ],
+      "feet": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          5.9604644775390625e-06,
+          -18.31505012512207,
+          -7.450580596923828e-09
+        ]
+      ],
+      "bounds_m": [
+        [
+          -0.14999985694885254,
+          -18.52114486694336,
+          -5.21540641784668e-08
+        ],
+        [
+          0.15000605583190918,
+          0.1918792724609375,
+          5.913217656314373
+        ]
+      ],
+      "arm_length_m": null,
+      "beam_start": [
+        -0.10294508934020996,
+        0.1918792724609375,
+        5.70731507986784
+      ],
+      "beam_end": [
+        0.10296177864074707,
+        -18.52114486694336,
+        5.913217656314373
+      ],
+      "construction": {
+        "leg_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_portal_5_leg_sven_v4.dae",
+        "beam_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_portal_5_beam_sven_v4.dae",
+        "leg_bounds_m": [
+          [
+            -0.14999985694885254,
+            -0.15000152587890625,
+            -2.2351741790771484e-08
+          ],
+          [
+            0.15000033378601074,
+            0.15000152587890625,
+            5.913217656314373
+          ]
+        ],
+        "beam_unit_m": 1,
+        "source_reach_m": 18.52114486694336,
+        "max_span_m": 40,
+        "beam_bounds_m": [
+          [
+            -0.10294508934020996,
+            -1.0,
+            5.70731507986784
+          ],
+          [
+            0.10296177864074707,
+            0.0,
+            5.913217656314373
+          ]
+        ]
+      }
+    }
+  },
+  "hardware": {
+    "hanger_cantilever_1_1": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_1_1_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.2389932500866464,
+          -0.018142302831012813,
+          -0.036461050172505664
+        ],
+        [
+          -0.028993331286287494,
+          0.01595536867777625,
+          0.8514597895572205
+        ]
+      ]
+    },
+    "hanger_cantilever_2_1": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_2_1_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899325010271422,
+          -0.01814262072245221,
+          -0.036461050180436175
+        ],
+        [
+          -0.02899333130154264,
+          0.015954097112020452,
+          0.8514597895532963
+        ]
+      ]
+    },
+    "hanger_cantilever_2_2": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_2_2_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899325009796377,
+          -0.01814263944306168,
+          -0.03646095842268221
+        ],
+        [
+          -0.02899333129703244,
+          0.015954195305575958,
+          0.8514597895546766
+        ]
+      ]
+    },
+    "hanger_cantilever_3_1": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_1_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899325009276676,
+          -0.018142487472709926,
+          -0.03646105017542696
+        ],
+        [
+          -0.028993331292098298,
+          0.015954619513383225,
+          0.8514597895556147
+        ]
+      ]
+    },
+    "hanger_cantilever_3_2": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_2_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.2389932500960757,
+          -0.01814207377274115,
+          -0.03646095842223932
+        ],
+        [
+          -0.028993331295239885,
+          0.01595374884450029,
+          0.8514597895549895
+        ]
+      ]
+    },
+    "hanger_cantilever_3_3": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_3_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899325008612718,
+          -0.01814288492704273,
+          -0.036460958419526436
+        ],
+        [
+          -0.028993331285794503,
+          0.015954242107009516,
+          0.8514597895569772
+        ]
+      ]
+    },
+    "hanger_portal_5_1": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_1_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899313892183982,
+          -0.018146012245751384,
+          -0.03646135229061235
+        ],
+        [
+          -0.028993099455602477,
+          0.015957506790023054,
+          0.85145964407692
+        ]
+      ]
+    },
+    "hanger_portal_5_2": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_2_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899403590470517,
+          -0.01814581674172904,
+          -0.036461580645003155
+        ],
+        [
+          -0.02899314438505221,
+          0.015957586908210933,
+          0.8514592088904975
+        ]
+      ]
+    },
+    "hanger_portal_5_3": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_3_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.23899343150017613,
+          -0.01814581674173806,
+          -0.036461429100314156
+        ],
+        [
+          -0.02899321456007996,
+          0.01595758690820466,
+          0.8514599550344085
+        ]
+      ]
+    },
+    "hanger_portal_5_4": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_4_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.2389933899571997,
+          -0.0181443770486799,
+          -0.036461470660902204
+        ],
+        [
+          -0.028993689579837736,
+          0.01595233251914338,
+          0.851459479996932
+        ]
+      ]
+    },
+    "hanger_portal_5_5": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_5_sven_v4.dae",
+      "bounds_m": [
+        [
+          -0.2389933919313304,
+          -0.018140955124182734,
+          -0.03646099218614312
+        ],
+        [
+          -0.02899369155403191,
+          0.015956222098338944,
+          0.851459958492874
+        ]
+      ]
+    }
+  },
+  "default_head": "vehicle",
+  "default_support": "straight",
+  "policy": {
+    "max_cantilever_heads": 3,
+    "max_cantilever_length_m": 12.0
+  },
+  "low_repeat": {
+    "hardware_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hardware_loose_mount_sven_v4.dae",
+    "position": [
+      0.21293547749519348,
+      -4.363059997558594e-05,
+      2.579317629337311
+    ],
+    "basis": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "height_reference": "Authored loose Cylinder.052 foot, at original standing cap height",
+    "source_object": "Cylinder.052",
+    "allowed_relative_angles_degrees": [
+      90,
+      180,
+      270
+    ]
+  },
+  "static_shapes": {
+    "200": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/static_vehicle_sven_v4.dae",
+    "300": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/static_vehicle_300_sven_v4.dae"
+  },
+  "static_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/static_vehicle_sven_v4.dae",
+  "double_shields": {
+    "200": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/shield_double_200_sven_v4.dae",
+      "bounds_m": [
+        [
+          0.08525371551513672,
+          -0.48649852752685546,
+          -0.16198086738586426
+        ],
+        [
+          0.09027576446533203,
+          0.4727713394165039,
+          0.9920198917388916
+        ]
+      ],
+      "separation_m": 0.36
+    },
+    "300": {
+      "shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/shield_double_300_sven_v4.dae",
+      "bounds_m": [
+        [
+          0.09453296661376953,
+          -0.6688656616210937,
+          -0.2564547061920166
+        ],
+        [
+          0.09955596923828125,
+          0.6911358642578125,
+          1.3719451427459717
+        ]
+      ],
+      "separation_m": 0.46
+    }
+  },
+  "double_mount": {
+    "hardware_shape": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hardware_double_mount_sven_v4.dae",
+    "source_object": "Cylinder.053",
+    "sockets": [
+      [
+        4.3720006942749023e-05,
+        -0.21305787563323975,
+        2.579317629337311
+      ],
+      [
+        4.3720006942749023e-05,
+        0.2129354476928711,
+        2.579317629337311
+      ]
+    ],
+    "bar_centre": [
+      4.369020462036133e-05,
+      0.00015145540237426758,
+      2.297804892063141
+    ],
+    "stand_off_m": 0.21293547749519348,
+    "stand_off_drop_m": 0.2815127372741699,
+    "relative_angle_degrees": 180
+  }
+}

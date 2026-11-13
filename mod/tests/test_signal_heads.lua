@@ -7,7 +7,9 @@ local shape = require('beamngEarth/signalshape')
 N.MIN_GAP_S = 0
 table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
 local graph, current, made, refreshed = nil, { nodes = {} }, {}, {}
-local trees = { refresh = function(group) refreshed[group] = true end }
+local refreshCount=0
+local trees = { refresh = function(group) refreshed[group] = true;refreshCount=refreshCount+1 end,
+  setSignalFrame = function() error('stock mode must not re-fit Dutch signal frames') end }
 package.loaded['beamngEarth/trees'] = trees
 package.loaded['beamngEarth/gps'] = {}
 readFile = function() return '{}' end
@@ -62,4 +64,11 @@ T.check(not trees.suppress('stop', 8, -10) and not trees.suppress('signal_left',
 T.check(refreshed.signal and refreshed.signal_left, 'both static groups refreshed after graph apply')
 apply(true)
 T.check(#made == 2, 'reflected head reused too')
+for _,name in ipairs({'nl_signals','nl_signal_scene','nl_groenpol_catalog','nl_country','nl_signal_surfaces'})do
+  T.check(package.loaded['beamngEarth/'..name]==nil,'stock mode never loads '..name)
+end
+package.loaded['beamngEarth/roads']={geoStats={tiles=1,skins=1,exact=1}}
+local unchanged=refreshCount
+for i=1,8 do N.update(1,{-500,-500,500,500}) end
+T.check(refreshCount==unchanged,'stock update does not refill Dutch re-fit work or refresh signal tiles')
 T.done('test_signal_heads')

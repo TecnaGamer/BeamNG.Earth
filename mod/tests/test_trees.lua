@@ -44,6 +44,10 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+for _,name in ipairs({'nl_signals','nl_signal_scene','nl_groenpol_catalog','nl_country'})do
+  T.check(package.loaded['beamngEarth/'..name]==nil,'stock trees never load '..name)
+end
+T.check(trees.setSignalFrame({})==false,'stock frame changes do not rebuild Dutch static signals')
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE

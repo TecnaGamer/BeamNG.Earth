@@ -419,7 +419,7 @@ def table(signs, z_ground, z_road, sys_row):
     return np.ascontiguousarray(out)
 
 
-def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None):
+def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, country=None, ndw_claims=()):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s road signs, or None (none)."""
     sys_row = system(country)
     if sys_row is None:
@@ -427,6 +427,9 @@ def build_tile(md, frame, tx, ty, elev, context, decks=(), left_hand=False, mph=
     box = roads.tile_bbox(tx, ty)
     signs = place(md, frame, box, context, left_hand, mph, sys_row)
     signs = supported(signs, sys_row)
+    if ndw_claims:
+        import nlrvv
+        signs = nlrvv.keep_inferred(signs, ndw_claims)
     keep = [k for k in range(len(signs)) if not exitsigns._on_deck(signs[k, :2], decks, 1.5)]
     if not keep:
         return None

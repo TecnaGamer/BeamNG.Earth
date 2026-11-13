@@ -2844,4 +2844,36 @@ end
 local okSweep, swept = pcall(M.sweep)
 if okSweep and swept > 0 then log('W', 'beamngEarth', 'roads: deleted ' .. swept .. ' road objects left by a previous Lua state') end
 
+-- Snapshot only nearby surface shapes, in their actual drawn transforms. No server/cache changes.
+function M.signalSurfaceParts(x,y,radius)
+  local parts,coverage={},{}
+  for _,t in pairs(tiles)do if not t.ghost and t.cx and M.boxGap(x,y,t.cx,t.cy,M.TILE_M/2)<radius then
+    local footprint
+    if t.gkey and anchorObj then
+      local z,gx,gy=geotile.parse(t.gkey);footprint=geotile.quad(anchorObj,z,gx,gy)
+    end
+    if t.skin and t.skin.road and t.gkey and anchorObj then
+      coverage[#coverage+1]=footprint
+    end
+    for _,what in ipairs({'road','walk','deck'})do
+      local p,owner,r
+      if t.skin and t.skin[what]then p=t.skin[what];owner=t.skin
+        if t.skin.anchorObj and t.skin.anchorObj~=anchorObj then
+          local pv=t.skin.pivot;local xf=t.skin.anchorObj:worldTransformTo(anchorObj,pv[1],pv[2],pv[3])
+          local px,py,pz=xf:apply(p.pos[1],p.pos[2],p.pos[3]);r=xf.r
+          p={shape=p.shape,pos={px,py,pz+(t.skin.q or 0)/2+M.SKIN_LIFT_M}}
+        end
+      elseif t.geo and t.parts and t.parts[what]then
+        p=M.geoWalk(t,what);owner=t.parts[what];r=t.pls[what].xf.r
+      elseif t[what..'Walk']then p=t[what..'Walk'];owner=t end
+      if p and p.shape and p.pos then parts[#parts+1]={kind=what=='walk'and'walk'or'road',
+        shape=p.shape,pos=p.pos,r=r,owner=owner,footprint=footprint,pending=not t[what]}end
+    end
+  end end
+  return parts,function(px,py)
+    for _,quad in ipairs(coverage)do if geotile.quadDist(quad,px,py)<.001 then return true end end
+    return false
+  end
+end
+
 return M
