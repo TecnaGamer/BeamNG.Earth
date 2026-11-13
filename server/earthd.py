@@ -11943,6 +11943,11 @@ def main():
         try:
             server_cpus, game_cpus = cpupin.split(budget.SMALL_SERVER_SHARE if budget.small_machine()
                                                   else cpupin.SERVER_SHARE)
+            # (the native kernels' threads per call, earthfast par.rs: inherited by the worker processes; the CPU set
+            # caps them anyway, this only on a machine of few cores: before pin_self, which narrows what it counts)
+            cap = cpupin.native_threads(server_cpus if game_cpus else None)
+            if cap and not os.environ.get("BNGE_NATIVE_THREADS"):
+                os.environ["BNGE_NATIVE_THREADS"] = str(cap)
             cpupin.pin_self(server_cpus)
             if server_cpus:
                 log.info("cores: the server on CPUs %s, the game on %s (cpupin.py; --pin off)",
