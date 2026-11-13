@@ -1139,6 +1139,11 @@ function M.update(anchor, player)
   local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
+  local physicsRunning = not be or not be.getPhysicsRunning or be:getPhysicsRunning()
+  if not physicsRunning then
+    -- Paused wall time is not a stall; resume with a fresh progress window.
+    stillSince, progRemaining, progAt, stuckTries = nil, nil, nil, 0
+  end
   -- the planned route: asked once (and on re-routes), taken when it arrives
   if pendingId then
     local c = core()
@@ -1192,7 +1197,7 @@ function M.update(anchor, player)
   if not route and not ahead and dist < M.ARRIVE_M then arrive() return end
   local m = rawget(_G, 'map') and map.getMap and map.getMap()
   local nodes = m and m.nodes
-  autoKeep(nodes, now)
+  if physicsRunning then autoKeep(nodes, now) end
 
   if route then
     local e = toEnu(anchor)
@@ -1232,7 +1237,7 @@ function M.update(anchor, player)
         end
       end
     end
-    if auto and not paused then
+    if auto and not paused and physicsRunning then
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
