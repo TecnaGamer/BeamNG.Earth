@@ -648,8 +648,7 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
         return _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat)
     tkey = geotiles.key(gx, gy)
     name = f"veg_{tkey}.flat.json" if flat else f"veg_{tkey}.json"
-    k = revisit.key("vegg", str(tkey), int(zoom), bool(flat), _md_versions(), _s.sea is not None,
-                    _s.surface is not None, _s.widths is not None, bool(_s.grading))
+    k = revisit.key("vegg", str(tkey), int(zoom), bool(flat), _md_versions(), ("rules", _ground_rules()))
     got = revisit.load(_s.cache_dir, "vegg", k)
     if got is not None:
         blobs, extra = got
@@ -1066,7 +1065,7 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         sv = None
     k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
                     country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
-                    _s.surface is not None, _s.widths is not None, *_radar_key(), *de)
+                    ("rules", _ground_rules()), *_radar_key(), *de)
     return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
                          lambda: _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country,
                                              dirs, rsigns, dej, towns_on),
@@ -1157,7 +1156,7 @@ def _md_versions():
 
 def _ground_rules():
     """This process's ground rules fingerprint (blockcache.ground_rules: what changes the ground and the roads built
-    on it), in the key of every kept item that stands on that ground."""
+    on it), in the key of every item that stands on that ground."""
     return blockcache.ground_rules(bool(getattr(_s, "grading", False)), getattr(_s, "md", None),
                                    getattr(_s, "widths", None), getattr(_s, "surface", None),
                                    getattr(_s, "sea", None), getattr(_s, "airports", None),
@@ -2089,8 +2088,10 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
 def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
     """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
     import revisit
+    import heightmap as heightmapmod
     return revisit.key("rskin", ckey, round(float(lat), 7), round(float(lon), 7), int(zoom), bool(sidewalks),
-                       float(lift), None if q is None else float(q))
+                       float(lift), None if q is None else float(q), ("rules", _ground_rules()),
+                       float(heightmapmod.SQUARE))
 
 
 def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
