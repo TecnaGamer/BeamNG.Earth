@@ -514,6 +514,27 @@ do
   trees.suppress, trees.ROWS_PER_FRAME = nil, cap
   trees.clear()
 end
+-- a road geotile's static signal (its own frame) hidden by a switchable head where its placement puts it in the
+-- anchor's world (both stood side by side: the user's report 21, Fells Point 2026-11-12)
+do
+  local gd, gt = require('beamngEarth/geodesy'), require('beamngEarth/geotile')
+  local LAT, LON = 39.2834, -76.5934
+  local x, y = gt.tileOf(LAT, LON)
+  local tf = gt.frameOf({ key = gt.key(x, y) })
+  local a = gd.newAnchor(LAT, LON + 300 / (111320 * math.cos(math.rad(LAT))))
+  trees.onGeoRows('psig', gt.key(x, y), { { 0, 10, 10, 2, 0, 1, 9, 0.0 } }, { 'signal' }, nil, tf, 0, a)
+  local pl = gt.placement(tf, a, 0, 0, 0)
+  local hx, hy = gt.apply(pl, 10, 10, 2)
+  T.check(math.abs(hx - 10) > 100, 'the anchor 300 m away: placed far from its frame coordinates')
+  trees.update(15, { x = hx, y = hy })
+  T.check(count() == 1, 'the static signal made')
+  trees.suppress = function(g, sx, sy) return g == 'signal' and math.abs(sx - hx) < 4 and math.abs(sy - hy) < 4 end
+  trees.refresh('signal')
+  for _ = 1, 3 do trees.update(15, { x = hx, y = hy }) end
+  T.check(count() == 0, 'hidden where the head stands in the world')
+  trees.suppress = nil
+  trees.clear()
+end
 -- a group turned off (settings: Rocks, GitHub #5): its items go, back when on again
 do
   files['/t/rocks'] = '{ groups = { "rock", "deciduous" }, items = { {0, 10, 10, 0, 0, 1, 2, 0.0}, {1, 20, 10, 0, 0, 1, 12, 0.0} } }'
