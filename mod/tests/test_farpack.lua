@@ -143,6 +143,7 @@ local hdata = { v = 1, key = HK, frame = { hlat, hlon }, h = 'h1', parts = {
 T.check(roads.onFarTile(farMsg(HK, { hlat, hlon }, hdata), 1, 'H'), 'horizon tile accepted')
 for _ = 1, 3 do run(1, A) end
 local hf = roads.debugFar()[roads.farGeoKey('H', HK)]
+local function debugSky() return roads.debugFar()[roads.farGeoKey('S', SK)] end
 T.check(hf ~= nil and hf.parts[SK] ~= nil and hf.parts[OK] ~= nil, 'a piece per skyline square')
 T.check(roads.farGeoHidden(hf, SK) == false and roads.farGeoHidden(hf, OK) == false, 'nothing covers either square yet')
 T.check(#objsWith('bh_' .. HK .. '_' .. OK) == 1 and objsWith('bh_' .. HK .. '_' .. OK)[1].hidden == false,
@@ -168,6 +169,22 @@ T.check(roads.farGeoHidden(hf, SK) == true, 'all far buildings tiles under its s
 for _, k in ipairs(keys) do roads.onFarDrop({ anchorId = 1, key = k }) end
 run(1, A)
 T.check(roads.farGeoHidden(hf, SK) == false, 'the far tiles dropped: the piece shows again')
+-- handover: a made skyline tile stays while its square's far tiles arrive; one far mesh still to make
+roads.onFarTile(farMsg(SK, { slat, slon }, sdata), 1, true)
+for _ = 1, 3 do run(1, A) end
+T.check(roads.farGeoHidden(hf, SK) == true, 'the skyline tile back: the piece hides')
+for _, k in ipairs(keys) do
+  local d = { v = 1, key = k, frame = centreOf(k), h = 'e4' }
+  if k == K then d.shape, d.pos, d.pivot, d.h = '/s/bf_' .. K .. '.cdae', { -118, -118, 0 }, 25, 'f4' end
+  roads.onFarTile(farMsg(k, d.frame, d), 1)
+end
+T.check(roads.farGeoHidden(debugSky(), nil) == true, 'the skyline hands over: hidden once all 16 far tiles seen')
+T.check(roads.farGeoHidden(hf, SK) == false, 'a far mesh still to make: the piece stays though the skyline hides')
+for _ = 1, 3 do run(1, A) end
+T.check(roads.farGeoHidden(hf, SK) == true, 'all far meshes made: the piece hides')
+for _, k in ipairs(keys) do roads.onFarDrop({ anchorId = 1, key = k }) end
+roads.onFarDrop({ anchorId = 1, key = SK }, true)
+run(1, A)
 roads.onFarDrop({ anchorId = 1, key = HK }, 'H')
 run(1, A)
 T.check(roads.debugFar()[roads.farGeoKey('H', HK)] == nil and #objsWith('bh_' .. HK) == 0, 'the horizon tile dropped')

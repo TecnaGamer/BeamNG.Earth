@@ -1937,7 +1937,7 @@ local function partsMade(f)
 end
 function M.hzCovered(p, sq)
   local s = far[farGeoKey('S', sq)]
-  if s and partsMade(s) then return true end
+  if s and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
   local pk = far[farGeoKey('P', sq)]
   if pk and next(pk.parts) and partsMade(pk) then return true end
   if not p.hzKeys then
@@ -1954,7 +1954,10 @@ function M.hzCovered(p, sq)
   for _, k in ipairs(p.hzKeys) do
     if not farSeen[k] then return false end
     local f = far[k]
-    if f and not partsMade(f) then return false end
+    if f then
+      if f.dropWait then return false end
+      for _, q in pairs(f.parts) do if not q.id and not q.deferred then return false end end
+    end
   end
   return #p.hzKeys > 0
 end
