@@ -284,6 +284,14 @@ class PrefillTest(unittest.TestCase):
         r = self.run_prefill()
         self.assertEqual(len([k for k, w in r["skipped"] if "replaced" in w]), 2, r)   # + the macro pack (t_m_r)
         self.assertEqual(len(r["written"]), 2, r)
+        lvl = self.user / "levels" / "beamng_earth" / "art" / "terrains"      # a loose level height replacement:
+        lvl.mkdir(parents=True)                                               # both normal packs read it
+        (lvl / "bngEarth_flat_h_1024.png").write_bytes(_png(self.height))
+        for f in self.cache.glob("*.dds"):
+            f.unlink()
+        r = self.run_prefill()
+        self.assertEqual(len([k for k, w in r["skipped"] if "replaced" in w]), 3, r)   # detail colour + both packs
+        self.assertEqual(len(r["written"]), 1, r)                                       # the macro colour only
 
 
 if __name__ == "__main__":

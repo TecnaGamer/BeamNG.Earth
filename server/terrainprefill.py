@@ -226,7 +226,8 @@ class Sources:
         rel = vfs.lstrip("/")
         if rel.lower() in self._overlay_index():
             return True
-        if vfs.startswith("/assets/"):
+        if vfs.startswith(("/assets/", "/levels/")):  # (a loose user-folder file over the stock or the level's own; the
+            # /temp/ squares are the server's own files there: the source itself, not an overlay)
             return os.path.isfile(os.path.join(self.user_dir or "", rel.replace("/", os.sep)))
         return False
 
