@@ -77,14 +77,13 @@ class FakeTransport:
     def __init__(self, clock=None, script=None, real_latency=False):
         self.clock, self.real_latency = clock, real_latency
         self.script = dict(script or {})
-        self.calls, self.methods = [], []
+        self.calls = []
         self.inflight = self.max_inflight = 0
         self.lock = threading.Lock()
 
-    def request(self, url, headers, timeout, method="GET"):
+    def request(self, url, headers, timeout):
         with self.lock:
             self.calls.append((self.clock() if self.clock else time.monotonic(), url, dict(headers)))
-            self.methods.append(method)
             self.inflight += 1
             self.max_inflight = max(self.max_inflight, self.inflight)
             pat = next((p for p in self.script if re.search(p, url)), None)
@@ -149,6 +148,7 @@ class GzipTest(unittest.TestCase):
         f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
         r = f.get("https://api.example/w/api.php")
         self.assertEqual(r.body, self.JSON)
+        self.assertNotIn("content-encoding", r.headers)
         self.assertEqual(tr.calls[0][2].get("Accept-Encoding"), "gzip")
         self.assertEqual(f.host("api.example").total["bytes"], len(self.packed))
 
@@ -171,17 +171,10 @@ class GzipTest(unittest.TestCase):
             f.get("https://api.example/x")
         self.assertEqual(len(tr.calls), nf.HostPolicy().max_attempts)
 
-
-class HeadTest(unittest.TestCase):
-    def test_head_asks_without_a_body(self):
-        f, _, _, tr = fetcher({MT: [(200, {"content-type": "image/webp"}, b"", 0.0)]})
-        self.assertEqual(f.head(f"https://{MT}/13/1/1.webp").status, 200)
-        self.assertEqual(tr.methods, ["HEAD"])
-
-    def test_head_404_is_not_found(self):
-        f, _, _, _ = fetcher({MT: [(404, {}, b"", 0.0)]})
-        with self.assertRaises(nf.NotFound):
-            f.head(f"https://{MT}/13/0/0.webp")
+    def test_a_body_that_decodes_past_the_cap_is_a_failed_attempt(self):
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) - 1), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
 
 
 class TokenBucketTest(unittest.TestCase):

@@ -43,7 +43,6 @@ import collections
 import ioprofiler
 import netstate
 import email.utils
-import gzip
 import http.client
 import json
 import logging
@@ -912,8 +911,8 @@ class HttpsTransport:
         log.debug("net: proxy resolved for %s: %s:%d (user=%s)", host, phost, pport, user or "-")
         return phost, pport, user, passw
 
-    def request(self, url, headers, timeout, method="GET"):
-        """(status, {lower-case header: value}, body) of a GET (or a HEAD: no body). A public S3 source on an IPv6-only network (GitHub #763: its
+    def request(self, url, headers, timeout):
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
         hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
         to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
         on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
@@ -926,23 +925,23 @@ class HttpsTransport:
         if proxy is None and host in _DUALSTACK_HOSTS:
             dual = _dualstack(url, auth)
             if dual != url:
-                return self._request_once(dual, headers, timeout, proxy, method)
+                return self._request_once(dual, headers, timeout, proxy)
         try:
-            return self._request_once(url, headers, timeout, proxy, method)
+            return self._request_once(url, headers, timeout, proxy)
         except OSError as e:
             if proxy is not None or not _no_route(e):
                 raise
             dual = _dualstack(url, auth)
             if dual == url:
                 raise
-            got = self._request_once(dual, headers, timeout, proxy, method)
+            got = self._request_once(dual, headers, timeout, proxy)
             if host not in _DUALSTACK_HOSTS:
                 _DUALSTACK_HOSTS.add(host)
                 log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
                          urlsplit(dual).hostname)
             return got
 
-    def _request_once(self, url, headers, timeout, proxy, method="GET"):
+    def _request_once(self, url, headers, timeout, proxy):
         """request's one connection: url as given (proxy: _resolve_proxy's for it, or None). timeout: s, or (s to
         connect, s for each read after)."""
         connect_timeout, timeout = timeout if isinstance(timeout, tuple) else (timeout, timeout)
@@ -1004,9 +1003,9 @@ class HttpsTransport:
                         req_headers["Proxy-Authorization"] = conn._proxy_auth
                     # absolute URL for the proxy
                     full_url = url
-                    conn.request(method, full_url, headers=req_headers)
+                    conn.request("GET", full_url, headers=req_headers)
                 else:
-                    conn.request(method, path, headers=req_headers)
+                    conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
                 ioprofiler.headers_received()
                 rh = {k.lower(): v for k, v in r.getheaders()}
@@ -1034,15 +1033,27 @@ class HttpsTransport:
             return out
 
 
+GZIP_MAX_BYTES = 256 * 1024 * 1024    # a gzip answer decoded to more than this is a failed attempt (a gzip bomb)
+_ENCODED = ("content-encoding", "content-length")     # (describe the bytes on the wire, not the decoded body)
+
+
 def _gunzip(rh, body):
-    """body decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else as it
-    came; a broken stream raises OSError (a failed attempt, retried as one)."""
-    if not body or (rh or {}).get("content-encoding", "").strip().lower() != "gzip":
-        return body
+    """(headers, body) decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else
+    as they came. A broken or truncated stream, or one that decodes past GZIP_MAX_BYTES, raises OSError (a failed
+    attempt, retried as one)."""
+    rh = rh or {}
+    if not body or rh.get("content-encoding", "").strip().lower() != "gzip":
+        return rh, body
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
     try:
-        return gzip.decompress(body)
-    except (OSError, EOFError, zlib.error) as e:
+        out = d.decompress(body, GZIP_MAX_BYTES)
+    except zlib.error as e:
         raise OSError(f"bad gzip body: {e}") from None
+    if d.unconsumed_tail:
+        raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+    if not d.eof:
+        raise OSError("bad gzip body: truncated")
+    return {k: v for k, v in rh.items() if k.lower() not in _ENCODED}, out
 
 
 RANGE_IGNORED_MIN = 16 * 1024 * 1024    # bytes: a 200 this big (and 8x the range) for a range request is not read
@@ -1613,17 +1624,12 @@ class Fetcher:
         finally:
             _quiet.on = prev
 
-    def head(self, url, *, kind="demand", lane=None):
-        """HEAD url under its host's policy (a request like get's, no body): a Response, or NotFound and the other
-        errors. Whether a file exists without its bytes (dem's lidar test: Mapterhorn ignores Range)."""
-        return self._get(url, kind, None, lane, method="HEAD")
-
-    def _get(self, url, kind, headers, lane, method="GET"):
+    def _get(self, url, kind, headers, lane):
         h, probe = self._admit(url, kind, lane)
         p = h.policy
         attempts = 1 if probe else max(1, p.max_attempts)
         hd = self.headers(h.name, headers)
-        gz = p.gzip and method == "GET" and not any(k.lower() in ("range", "accept-encoding") for k in hd)
+        gz = p.gzip and not any(k.lower() in ("range", "accept-encoding") for k in hd)
         if gz:
             hd["Accept-Encoding"] = "gzip"
         err = None
@@ -1653,10 +1659,10 @@ class Fetcher:
                     try:
                         status, rh, body = ioprofiler.request(
                             self.transport, url, hd,
-                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout), method)
+                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
                         wire = body
                         if gz:
-                            body = _gunzip(rh, body)
+                            rh, body = _gunzip(rh, body)
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h, gate)
