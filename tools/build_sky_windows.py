@@ -7,7 +7,8 @@ one before; the skyline never goes dark: about three fifths of the evening's at 
 off (the user, 2026-10-27: "extend the street and window lights as far as the buildings render"): its windows are a
 pixel or less there, the map's mip levels their mean, a wall's soft speckled glow. Deterministic.
 
-    python3 tools/build_sky_windows.py
+    python3 tools/build_sky_windows.py          (the night maps)
+    python3 tools/build_sky_windows.py --day    (the day map, bne_sky_day_b: the far packs' sky style)
 """
 import os
 
@@ -28,6 +29,14 @@ LEVELS = ((0.45, 1.0), (0.3, 0.2), (0.25, 0.06))
 # the step each lit one goes dark at: (share, step; 0 lit all night)
 OUTS = ((0.68, 0), (0.16, 1), (0.16, 2))
 WARM, COOL = (255, 196, 128), (220, 228, 255)
+# The day map (bne_sky_day_b, material bne_bld_skywin: the far building packs drawn as the skyline's walls,
+# buildings.PACK_STYLE): the same cells, white wall (the vertex colour is the facade's) round each window's glass, its
+# own shade of dark blue-grey (some panes catching the sky). buildings.SKY_DAY_GAIN brightens the vertex colours by the
+# map's mean so a wall's mean colour stays its facade's.
+DAY_OUT = os.path.join(HERE, "..", "mod", "texture_sources", "levels", "beamng_earth", "art", "shapes", "beamngEarth",
+                       "bne_sky_day_b.webp")
+GLASS = (0.36, 0.40, 0.46)  # of white: the panes' mean
+GLASS_VAR = 0.25            # +- share of a pane's own shade
 
 
 def _draw(u, shares):
@@ -59,5 +68,25 @@ def main():
         print(OUT.format(suffix), img.shape, f"{(img.max(2) > 0).mean():.1%} of pixels lit")
 
 
+def day_map(seed=20261114):
+    """The day map (uint8 [FLOORS * CELL, BAYS * CELL, 3]), deterministic."""
+    rng = np.random.default_rng(seed)
+    img = np.full((FLOORS * CELL, BAYS * CELL, 3), 255, np.uint8)
+    for f in range(FLOORS):
+        for b in range(BAYS):
+            k = 1.0 + GLASS_VAR * (2.0 * rng.random() - 1.0)
+            c = np.clip(np.array(GLASS) * k * 255.0, 0, 255).astype(np.uint8)
+            y0, x0 = f * CELL, b * CELL
+            img[y0 + WIN[1]:y0 + WIN[3], x0 + WIN[0]:x0 + WIN[2]] = c
+    return img
+
+
+def main_day():
+    img = day_map()
+    Image.fromarray(img).save(DAY_OUT, lossless=True)
+    print(DAY_OUT, img.shape, f"mean {img.mean() / 255:.4f}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    main_day() if "--day" in sys.argv else main()

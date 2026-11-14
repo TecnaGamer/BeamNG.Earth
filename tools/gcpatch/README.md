@@ -6,7 +6,7 @@ map, has its own off switch and its own status file in the game's user folder `t
 | patch | source | what it does | off switch | status file |
 |---|---|---|---|---|
 | grass | `bngearth_gcpatch.c` | keeps the grass when the physics block moves | `BNGEARTH_GCPATCH_OFF=1` | `beamngEarth_gcpatch.txt` |
-| texkeep (opt-in) | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | on with `BNGEARTH_TEXKEEP=1` | `beamngEarth_texkeep.txt` |
+| texkeep | `bngearth_texkeep.c` | keeps the terrain's packed textures across material rebuilds | `BNGEARTH_TEXKEEP_OFF=1` | `beamngEarth_texkeep.txt` |
 | terfast | `bngearth_terfast.c` | a terrain block swap's cell scans without their per-sample divisions | `BNGEARTH_TERFAST_OFF=1` | `beamngEarth_terfast.txt` |
 | dtsmooth | `bngearth_dtsmooth.c` | steady game speed: no catch-up burst after a hitch, no drift between | `BNGEARTH_DTSMOOTH_OFF=1` | `beamngEarth_dtsmooth.txt` |
 
@@ -81,11 +81,24 @@ What it does not touch: the rest of `setFile` (the vertex / index buffer set-up 
 frame after the swap, where the engine rebuilds the terrain's material textures (texkeep below).
 
 ## texkeep: terrain textures kept across block swaps
-**Opt-in (`BNGEARTH_TEXKEEP=1`).** Ported to the 2026-11-06 executable on 2026-11-13, with the 2026-11-03 review's
-deadlock paths removed: no probe of the device mutex's owner in glibc's layout (releases inside the pack loader's
-calls run under the engine's lock, as before; the kept textures of an ended level are let go by the watcher thread,
-2 s after the flag went, never from another caller of createTexture). Still open before it can be on by default: a
-teleport soak (a crash at a teleport's teardown was seen with it on, 2026-11-05, cause unknown).
+**On by default (Linux) since 2026-11-14; off: `BNGEARTH_TEXKEEP_OFF=1` (or `BNGEARTH_TEXKEEP=0`).** Ported to the
+2026-11-06 executable on 2026-11-13, with the 2026-11-03 review's deadlock paths removed: no probe of the device
+mutex's owner in glibc's layout (releases inside the pack loader's calls run under the engine's lock, as before; the
+kept textures of an ended level are let go by the watcher thread, 2 s after the flag went, never from another caller
+of createTexture).
+
+Teleport soaks (PC, 2026-11-14, Vulkan, terfast and dtsmooth on, `-- --cache-dir` scratch caches): a fixed list of 115
+steps (32 long jumps across the world: cities, rural, coast, mountains, Svalbard / Alert / McMurdo / Utqiagvik, both
+sides of the antimeridian at Fiji, Taveuni, Chukotka, Adak, Samoa and Tonga; 73 hops of 2.5-20 km; 10 returns to an
+earlier place; eight 1.6 km drives at 45 mph; three level reloads), with the game's crash reporter, MCP, RSS / VRAM,
+the kernel log (amdgpu), `beamng.log` and this status file checked after every step. texkeep on: 115 steps (5,265
+kept-pack hits, 887 misses, 0 dropped) plus 38 more in an earlier run, no crash, GPU fault, failed terrain-pack reload
+or memory growth (game RSS 0.7-1.9 GB, VRAM 8.3-10.0 GB; off: 0.5-1.7 / 9.1-9.9 GB); off: the same 115 steps, also
+clean. That earlier run ended at a level reload in a hang that is not texkeep's (the same hang with texkeep off: the
+mod's `trees.prewarmSaved`, 211 saved shapes warmed at one spot). The 2026-11-05 Genoa teleport crash once blamed on
+texkeep ran without it: its dump has only the grass patch's watcher thread (texkeep's own watcher was not running),
+and texkeep was opt-in then.
+
 Steam Deck, 2026-11-13, the same drive with terfast on: 995 kept-pack hits to 51 loads; the frame after a swap
 50.5 -> 25.9 ms (its Render 35.6 -> 13.0 ms), the rebuild's main-thread CPU 23.6 -> 1.5 ms (perf), the swap's two
 frames over the ordinary frame 49 -> 20 ms, the worst frame per swap 67 -> 53 ms (max 221 -> 55).
@@ -97,7 +110,7 @@ upload), although only the block's photo pack changed. texkeep replaces the text
 virtual table: for the terrain pack loader's call (after the engine has checked that the cache file is up to date) it
 returns the texture it kept from the last rebuild of the same file, else it calls the stock function and keeps the
 result. A texture not asked for in the last two rebuilds goes (an old block's photo), and so do the least recently used
-beyond 96 textures / ~160 MB; all go when the level ends.
+beyond 96 textures / ~160 MB; all go after the level ends (above).
 
 - **Written for BeamNG.drive 0.40 Linux (the 2026-10-29 executable).** It compares the code and data it relies on
   byte for byte at startup (the vtable slots, `createTexture`, both pack-loader call sites, the texture release path).
@@ -106,6 +119,11 @@ beyond 96 textures / ~160 MB; all go when the level ends.
   block swap 60.8 -> 51.8 ms median (n 74 / 68), its Render time 21.6 -> 13.0 ms; a base-photo refresh
   (`terrain.setBase`, 8 slots) 83 -> 58 ms, its Render time ~31 -> ~7 ms. The Lua part (the `.ter` parse, ~30 ms; the
   synchronous `updateMaterial`, ~45 ms) is unchanged.
+- Measured again (PC, 2026-11-14, Des Moines at 45 mph, 6.6 km, warm cache, terfast and dtsmooth on, two drives
+  each, swaps from the mod's commit ring): on this machine the rebuild lands in the swap's own frame. The swap frame
+  42.1 -> 33.1 ms median (p90 75.9 -> 49.8, max 191 -> 70; over 50 ms 12 of 35 -> 1 of 30), its Render 13.5 -> 7.7 ms;
+  the frame after it unchanged (12.6 / 12.0 ms). The soaks' eight 1.6 km drives at 45 mph (different places): swap frame
+  41.5 -> 30.6 ms median (p90 79 -> 46).
 - `BNGEARTH_TEXKEEP_DRY=1`: installed but never hands back a kept texture (counts and times the stock calls);
   `BNGEARTH_TEXKEEP_LOG=1`: one line per terrain texture request in `temp/beamngEarth_texkeep.log`.
 - A kept texture whose file goes (the server prunes an evicted block's photo pack) makes the engine log
@@ -186,7 +204,7 @@ Linux filter). `server/tests/test_enginepatch.py` covers the signature search an
 **On by default on Windows since the check on the Windows test PC (2026-11-11, below). Off: `BNGEARTH_DTSMOOTH_WIN=0`**
 (or the off switches above). terfast is applied the same way by `enginepatch_terfast.py` (its section above). Not
 ported: texkeep (a vtable hook with its own texture cache and the engine's locks; it needs the Windows texture manager
-reverse-engineered and a DLL, and on Linux it is opt-in).
+reverse-engineered and a DLL; on Linux it is on by default since 2026-11-14).
 
 **Checked on Windows (2026-11-11, the test PC: Ryzen 5 3600, RTX 3060, Windows 26300, BeamNG 0.40.5 Windows build
 of 2026-11-06, the dev app from source):** `--scan` found the call at VA 0x1407b2294 (the same exe as the PC's copy);

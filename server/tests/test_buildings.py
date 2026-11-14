@@ -448,10 +448,12 @@ class FarIndexLimitTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
                     mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
-                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)):
+                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)), \
+                    mock.patch.object(bld, "PACK_STYLE", "lite"):      # (the lite mesh: past the 16-bit indices)
                 data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
                 self.assertEqual(n, len(items))
                 self.check(os.path.join(d, shapes["shape"]), items)
+        self.assertEqual(bld.PACK_STYLE, "sky", "the packs as the skyline's walls by default")
 
     def test_skyline_meshes_cut_between_buildings(self):
         items = _dense_items(120, corners=200)     # (~1k skyline vertices each)
@@ -498,6 +500,102 @@ class FarIndexLimitTest(unittest.TestCase):
         with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
             self.assertEqual(bld.build_parts(items, lite=True), [])
             self.assertEqual(bld.over_limit["buildings"], 3)
+
+
+class PackStyleTest(unittest.TestCase):
+    """BNE_FARPACK_STYLE (2026-11-14): the far packs as the skyline's walls with day windows; the engine's shape load
+    grows with the vertices (Midtown's pack 728k lite: 86.5 ms on Windows DX11, 35k sky: 6.4 ms)."""
+
+    def items(self):
+        tall = [(bld.plan(rect((i % 6) * 40.0, (i // 6) * 40.0, 24, 18), {"class": "office", "height": 120,
+                                                                         "num_floors": 30}), 0.0, 0.0)
+                for i in range(12)]
+        low = [(bld.plan(rect(300.0 + i * 12.0, 0.0, 10, 8), {"class": "house", "height": 7, "num_floors": 2}),
+                0.0, 0.0) for i in range(6)]
+        return tall + low
+
+    def verts(self, meshes):
+        return sum(len(m[0]) for m in meshes)
+
+    def test_lite_is_build_parts(self):
+        items = self.items()
+        a, b = bld.pack_meshes(items, "lite"), bld.build_parts(items, lite=True)
+        self.assertEqual(len(a), len(b))
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x[0], y[0])
+
+    def test_sky_fewer_vertices_day_windows(self):
+        items = self.items()
+        floors = [int(s.floors or 0) for s, _a, _b in items]
+        lite = self.verts(bld.pack_meshes(items, "lite"))
+        sky = bld.pack_meshes(items, "sky")
+        self.assertLess(self.verts(sky), lite / 3)
+        day = bld.MATERIALS.index(bld.SKY_WALL_DAY)
+        self.assertTrue(any((np.asarray(m[3]) == day).any() for m in sky), "walls in the day-window material")
+        self.assertEqual([int(s.floors or 0) for s, _a, _b in items], floors, "the items' specs not changed")
+        tall = bld.pack_meshes(items, "tall")
+        self.assertLessEqual(self.verts(sky), self.verts(tall))     # (sloped houses lite in both)
+        self.assertLess(self.verts(tall), lite)
+
+    def test_a_mapped_dome_keeps_its_dome_and_height(self):
+        """A domed building in a sky pack keeps the lite mesh: its dome and its whole height (the skyline's simplify
+        flattens the roof, and plan() took the dome's rise off the height: 40 m came out 20 m, Codex 2026-11-14)."""
+        dome = [(bld.plan(rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "dome",
+                                                   "roof_height": 20}), 0.0, 0.0)]
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        lite, sky = bld.pack_meshes(dome, "lite"), bld.pack_meshes(dome, "sky")
+        self.assertAlmostEqual(top(sky), top(lite), places=3)
+        self.assertGreater(top(sky), 39.0)
+
+    def test_sky_top_matches_lite_for_every_roof(self):
+        """Only flat roofs without a steeple take the sky style: every sloped, domed or steepled building keeps the
+        lite mesh, so its top is the same in both (the review rounds' cases, 2026-11-14)."""
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        L = np.array([(0, 0), (20, 0), (20, 6), (6, 6), (6, 20), (0, 20)], float)
+        cases = [
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "hipped", "roof_height": 20}),
+            (L, {"class": "house", "height": 20, "roof_shape": "hipped"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 20, "roof_shape": "gabled",
+                                      "roof_orientation": "across"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "mansard", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "round", "roof_height": 20}),
+            (L, {"class": "house", "height": 40, "roof_shape": "pyramidal", "roof_height": 10}),
+            (np.array([(0, 0), (10, 0), (10, 8), (0, 8)], float), {"class": "greenhouse", "height": 4,
+                                                                    "roof_shape": "gabled"}),
+            (rect(0.0, 0.0, 30, 15), {"class": "church", "height": 18}),
+            (rect(0.0, 0.0, 30, 20), {"class": "house", "height": 15, "roof_shape": "skillion", "roof_height": 7,
+                                      "roof_direction": 45}),
+            (rect(0.0, 0.0, 40, 30), {"class": "office", "height": 60}),          # (flat: sky, the same top)
+        ]
+        for ring, attrs in cases:
+            b = [(bld.plan(ring, attrs), 0.0, 0.0)]
+            self.assertAlmostEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")), delta=0.05,
+                                   msg=str(attrs))
+
+    def test_revisit_key_lite_unchanged(self):
+        import blockworker
+        import geotiles
+        import revisit
+        seen = []
+        with mock.patch.object(revisit, "load", side_effect=lambda _c, kind, k: seen.append((kind, k)) or None), \
+                mock.patch.object(blockworker, "_far_geo_build", return_value=None), \
+                mock.patch.object(blockworker, "_s", mock.Mock(cache_dir="/nonexistent", md=None)), \
+                mock.patch.object(blockworker, "_md_versions", return_value="v"), \
+                mock.patch.object(blockworker, "_nyc_key", return_value=None):
+            gx, gy = geotiles.tile_of(40.758, -73.985, geotiles.SKY_Z)
+            for style in ("lite", "sky", "tall"):
+                with mock.patch.object(bld, "PACK_STYLE", style):
+                    blockworker.far_geo("bldpack", gx, gy, 15, "/tmp/x", "/x")
+                    blockworker.far_geo("bldfar", gx * 4, gy * 4, 15, "/tmp/x", "/x")
+        packs = [k for kind, k in seen if kind == "bldpack"]
+        fars = [k for kind, k in seen if kind == "bldfar"]
+        self.assertEqual(len(set(packs)), 3, "a pack's key changes with the style")
+        self.assertEqual(len(set(fars)), 1, "the far tiles' keys do not")
+        with mock.patch.object(bld, "PACK_STYLE", "lite"):
+            self.assertEqual(packs[0], revisit.key("bldpack", "g", geotiles.key(gx, gy, geotiles.SKY_Z), 15, "v", None,
+                                                   None), "the lite key as before")
 
 
 class MeshTest(unittest.TestCase):
@@ -2226,6 +2324,9 @@ class RealTagsTest(unittest.TestCase):
         self.assertEqual(bld.parse_color("copper"), (0.55, 0.75, 0.65))
         self.assertEqual(bld.parse_color("steel-blue"), (0.28, 0.45, 0.60))
         self.assertEqual(bld.parse_color("Dark Green"), (0.10, 0.35, 0.12))
+        self.assertEqual(bld.parse_color("DarkGreen"), (0.10, 0.35, 0.12))
+        self.assertEqual(bld.parse_color("light_gray"), bld.COLOR_NAMES["lightgray"])     # (OSM spellings)
+        self.assertEqual(bld.parse_color("dark-grey"), bld.COLOR_NAMES["darkgrey"])
         self.assertIsNone(bld.parse_color("invalid_color_xyz"))
         self.assertIsNone(bld.parse_color(None))
         self.assertIsNone(bld.parse_color(""))

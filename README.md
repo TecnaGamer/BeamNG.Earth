@@ -63,8 +63,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
   mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
-  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; bridges show out to about 3
-  miles too.
+  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; the tallest towers (200 ft and
+  up) go on to about 12 miles (22 at Far, the horizon at Max); bridges show out to about 3 miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
   give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
@@ -348,7 +348,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     small bumps and road edges; from the next start of BeamNG.Earth.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
-    and 3 miles).
+    and 3 miles), and the tallest towers past them (none at Near, 12 miles at Normal, 22 at Far, the horizon at Max).
   - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
   - **Distant traffic lights**: moving headlights and taillights on distant roads (needs Roads and nighttime).
     **Distant lights without traffic** keeps them on even when game traffic is off; otherwise they follow traffic.
@@ -425,9 +425,9 @@ connection (the map is downloaded while you play).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
-     steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), texkeep
-     opt-in for testing) already applied, no Steam launch options needed. On Windows the launcher applies dtsmooth
-     and terfast to the running game.
+     steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
+     frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
+     On Windows the launcher applies dtsmooth and terfast to the running game.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).

@@ -986,6 +986,25 @@ class GroundMemoTest(unittest.TestCase):
         self.assertEqual(float(a(q)[0]), float(b(p)[0]))
         self.assertEqual(float(a(p)[0]), float(railways.point_ground(FRAME, slope)(np.array([[12.34, -4.56]]))[0]))
 
+    def test_a_short_reads_heights_are_not_kept(self):
+        """A height read short (revisit.fault: a lidar sheet not there yet) is asked again, not served from the memo with
+        no fault: the rebuild on the full DEM would otherwise be kept with the short heights (review of #1248)."""
+        import revisit
+        short = [True]
+
+        def elev(la, lo):
+            if short[0]:
+                revisit.fault()
+                return np.zeros(np.shape(la))
+            return np.full(np.shape(la), 7.0)
+        g = railways.point_ground(FRAME, elev, ("test-short",))
+        p = np.array([[1.0, 2.0]])
+        self.assertAlmostEqual(float(g(p)[0]), 0.0, places=3)
+        short[0] = False
+        with revisit.scope() as b:
+            self.assertAlmostEqual(float(g(p)[0]), 7.0, places=3)
+        self.assertTrue(b.complete)
+
 
 if __name__ == "__main__":
     unittest.main()

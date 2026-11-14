@@ -85,6 +85,26 @@ local function fixture(path, y, radius, configure)
   return f
 end
 
+-- A shortest local route can bypass a sharp bend between the regular 250 m pins.
+do
+  local f = fixture({ 'a', 'out', 'end' }, 2, 6, function(f)
+    local function n(x, y, links) return { pos = { x=x,y=y,z=0 },radius=6,links=links } end
+    f.nodes = { w=n(0,0,{a={}}), a=n(200,0,{j={},out={}}),
+      j=n(300,0,{out={}}), out=n(200,-80,{['end']={}}), ['end']=n(100,-80,{}) }
+    f.map.nodes = f.nodes
+    f.route = { points={{0,0},{0,.03},{-.008,.02},{-.008,.01}},dist=528,dur=60 }
+  end)
+  local function beforeBend()
+    for _, wp in ipairs(f.target) do
+      if type(wp)=='table' and wp.x>270 and math.abs(wp.y)<1 then return true end
+    end
+    return false
+  end
+  T.check(beforeBend(), 'the local planner must reach the planned bend instead of taking the shorter connector')
+  f.serial=2;f.map.buildSerial=2;f:mapArrives();f:step()
+  T.check(beforeBend(), 'a graph replacement keeps guidance through the sharp bend')
+end
+
 -- A nearby service road is not a continuation of a highway whose loaded graph ends first.
 local function diversionRoads(f)
   local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links, radius = 6 } end
@@ -684,8 +704,90 @@ do
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
 end
 
+-- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
+-- Autodrive on its confirmed graph chain instead of reducing every refresh to the reached first waypoint.
+do
+  local module = '/lua/ge/extensions/gameplay/route/route'
+  local original, pins = package.loaded[module], nil
+  local nativePath = { 'w', 'j', 's', 't' }
+  package.loaded[module] = function()
+    return { path = {}, setupPathMultiWaypoints = function(self, ids)
+      pins = ids
+      for _, id in ipairs(nativePath) do
+        self.path[#self.path + 1] = { wp = id, pos = map.getMap().nodes[id].pos }
+      end
+    end }
+  end
+  local function roads(f)
+    local function n(x, links) return { pos = { x = x, y = 0, z = 0 }, radius = 6, links = links } end
+    f.nodes = { w = n(0, { j = {} }), j = n(100, { s = {} }), s = n(500, { t = {} }), t = n(1000, {}),
+      u = n(200, { v = {} }), v = n(300, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+  end
+  local f = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(f.drives[#f.drives] and table.concat(f.drives[#f.drives], ',') == 'j,s,t',
+    'an overlapping marker chain is replanned through exact nodes rather than driven as one short waypoint')
+  T.check(pins and pins[1] == 'w' and pins[2] == 'j' and pins[#pins] == 't',
+    'node planning retains the occupied directed edge and the confirmed route target')
+  pins = nil
+  local tail = fixture({ 'j', { pos = { x=500,y=0,z=0 }, linkCount=3 },
+    { pos = { x=900,y=0,z=0 }, linkCount=2 } }, 2, 6, function(f)
+    roads(f)
+    f.route = { points={{0,0},{0,.09}},dist=900,dur=60 }
+  end)
+  T.check(tail.drives[1] and table.concat(tail.drives[1], ',') == 'j,s,t',
+    'a valid prefix must retain the position-only turn and projected final edge')
+  T.check(pins and pins[#pins] == 't', 'a truncated connected prefix uses the confirmed target pins')
+  pins = nil
+  fixture({ 'j', 's', 't' }, 2, 6, roads)
+  T.check(not pins, 'a complete connected marker path needs no replacement plan')
+  nativePath = { 'w', 'j' }
+  local partial = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(not partial.gps.nodePlans, 'a native planner that omits an unreachable pin is not accepted as a continuation')
+  local point = { segment = { 1000, 0, 500, 0, a = 't', b = 's' }, dx = 1, dy = 0 }
+  local exact = f.gps.targetNodes('w', 'j', { via = { { projection = point } }, projection = point })
+  T.check(table.concat(exact, ',') == 'w,j,t', 'pins follow travel direction, not edge storage order, without duplicate endpoints')
+  package.loaded[module] = original
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
+-- Physics pause is not a stationary vehicle: the GPS may keep updating its route, but must not recover it.
+do
+ for _, pauseKind in ipairs({'physics', 'engine'}) do
+  local oldBe, oldSpawn, oldQuat, oldLog = be, spawn, quatFromDir, log
+  local running, recoveries = true, 0
+  be = { getPhysicsRunning = function() return pauseKind ~= 'physics' or running end,
+         getEnabled = function() return pauseKind ~= 'engine' or running end }
+  spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local f = fixture(nil, 0, 6)
+  f.speed = 0
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1) -- one genuine retry before pausing
+  local retries = f.gps.noProgressReplans
+  running = false
+  for _ = 1, 6 do f:step(f.gps.AUTO_NOPROGRESS_S + 1) end
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'a paused simulation never replans for stalled progress or teleports the vehicle')
+  T.check(f.gps.status().remaining ~= nil and f.gps.autodrive(),
+    'the GPS remains available and Autodrive stays enabled while physics is paused')
+  running = true
+  f:step()
+  f:step(f.gps.AUTO_NOPROGRESS_S - 1)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'resuming grants a full progress interval instead of counting paused time')
+  f:step(2)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries + 1,
+    'the first genuine stall after resume retries instead of inheriting a recovery attempt')
+  f:step(); f:step(f.gps.AUTO_NOPROGRESS_S + 1)
+  T.check(recoveries == 1, 'normal recovery still works after the resumed vehicle remains stalled')
+  be, spawn, quatFromDir, log = oldBe, oldSpawn, oldQuat, oldLog
+ end
+end
+
+
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')

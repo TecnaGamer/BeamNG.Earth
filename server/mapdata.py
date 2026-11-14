@@ -430,8 +430,8 @@ class MapData:
         if built is None or feats.__dict__.get("_rails_built") == built:
             return
         try:
-            rt.join(feats, key)
-            feats.__dict__["_rails_built"] = built
+            if rt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_rails_built"] = built
         except Exception as e:      # (Overture's classes alone)
             log.debug("railtags join %s: %s: %s", key, type(e).__name__, e)
 
@@ -445,8 +445,8 @@ class MapData:
         if built is None or feats.__dict__.get("_lanes_built") == built:
             return
         try:
-            lt.join(feats, key)
-            feats.__dict__["_lanes_built"] = built
+            if lt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_lanes_built"] = built
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
@@ -613,7 +613,14 @@ class MapData:
             revisit.fault()
         return ok
 
-    def versions(self):
+    def versions(self, buildings=False):
+        """The map data's identity for cache keys; buildings: for a tile that draws buildings, with the OSM building
+        years' and colours' builds too ("osmyears": osmyears.identity, "osmcolours": osmcolours.identity, each frozen
+        per process; "off" / "none" without one)."""
+        if buildings:
+            import osmcolours
+            import osmyears
+            return dict(self.versions(), osmyears=osmyears.identity(self), osmcolours=osmcolours.identity(self))
         import europewalks
 
         rails = getattr(self, "rail_tags", None)
@@ -649,8 +656,22 @@ class MapData:
         server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
         ask, and none of those was found again by the next run (versions)."""
         def run():
+            import osmcolours
+            import osmyears
+            got = []
+            for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
+                try:
+                    got.append(mod.shards(self))
+                except Exception:
+                    got.append(None)
+            try:
+                import bldhz            # (the horizon ring's tall buildings, the same way)
+                tall = bldhz.source(self)
+                got.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
+            except Exception:
+                got.append(None)
             for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
-                        getattr(self, "station_tags", None)):
+                        getattr(self, "station_tags", None), *got):
                 if src is None:
                     continue
                 try:
@@ -926,7 +947,8 @@ class MapData:
         shards = self._osm_shards()
         got = shards.manifest() if shards is not None else None
         if got is not None:
-            shards.head(got[0], got[1], kind)
+            for part in got[1].get("_parts", ()):      # (each archive part's head: head() takes a part, not the
+                shards.head(got[0], part, kind)        # manifest, which failed with KeyError: 3 at every start)
 
     def _osm_geometry(self, key, kind, need):
         """{way id: lon/lat line} of the cell's tagged motorways and trunks (roadlanes.join's callback): from the tag

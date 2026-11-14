@@ -20,7 +20,7 @@
 // Exact build only (BeamNG.drive 0.40.4 Linux, the 2026-11-06 executable; ported from the 2026-10-29 one on 2026-11-13): the code and data it relies on are compared
 // byte for byte at startup (the vtable slots' relocated values, createTexture's prologue, both call sites,
 // requestDeleteTexture's and destroySelf's code); on any difference it does nothing and says why in
-// <user>/temp/beamngEarth_texkeep.txt. Opt-in: BNGEARTH_TEXKEEP=1 (BNGEARTH_TEXKEEP_OFF=1 wins). BNGEARTH_TEXKEEP_DRY=1: installed but
+// <user>/temp/beamngEarth_texkeep.txt. On by default; off: BNGEARTH_TEXKEEP_OFF=1 or BNGEARTH_TEXKEEP=0. BNGEARTH_TEXKEEP_DRY=1: installed but
 // never hands back a kept texture (counts and times the stock calls only: an A/B baseline with the same overhead).
 // BNGEARTH_TEXKEEP_LOG=1: one line per terrain pack call in <user>/temp/beamngEarth_texkeep.log.
 //
@@ -386,17 +386,12 @@ static int same(const struct bnge_main *m, uintptr_t vaddr, const unsigned char 
 
 __attribute__((constructor)) static void bngearth_texkeep(void) {
     if (!bnge_is_main_game()) return;
-    // (opt-in, BNGEARTH_TEXKEEP=1. The 2026-11-03 review's deadlock paths are gone since 2026-11-13: no mutex-owner
-    // probe (the pack loader's calls release under the engine's lock, the watcher thread without it) and nothing is
-    // released from other callers of createTexture. Still to do before it is on by default: a teleport soak (a crash
-    // at a teleport's teardown was seen with it on, 2026-11-05, cause unknown))
+    // (on by default since the 2026-11-14 teleport soaks, README.md; off: BNGEARTH_TEXKEEP_OFF=1 or BNGEARTH_TEXKEEP=0.
+    // The 2026-11-05 Genoa teleport crash once blamed on it ran without it: that dump has no texkeep watcher thread)
     const char *on_ = getenv("BNGEARTH_TEXKEEP");
-    if (!on_ || !*on_ || !strcmp(on_, "0")) {
-        bnge_report(TAG, STATUS_FILE, "off (opt-in: BNGEARTH_TEXKEEP=1)");
-        return;
-    }
-    if (getenv("BNGEARTH_TEXKEEP_OFF") && *getenv("BNGEARTH_TEXKEEP_OFF") && strcmp(getenv("BNGEARTH_TEXKEEP_OFF"), "0")) {
-        bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_TEXKEEP_OFF set)");
+    const char *off_ = getenv("BNGEARTH_TEXKEEP_OFF");
+    if ((off_ && *off_ && strcmp(off_, "0")) || (on_ && !strcmp(on_, "0"))) {
+        bnge_report(TAG, STATUS_FILE, "off (BNGEARTH_TEXKEEP_OFF / BNGEARTH_TEXKEEP=0)");
         return;
     }
     struct bnge_main m;

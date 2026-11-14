@@ -1183,7 +1183,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
         de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
-                    _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
+                    _md_versions(bool(buildings)), float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
@@ -1205,8 +1205,17 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                                                for sid, rs in extra.get("pads", [])]), wh)
 
 
-def _md_versions():
-    return _s.md.versions() if _s.md is not None else None
+def _md_versions(buildings=False):
+    """The map data's versions (revisit keys); buildings: with the OSM building years' and colours' identities too (the
+    tiles that draw buildings: osmyears.identity, osmcolours.identity, MapData.versions(buildings=True))."""
+    md = _s.md
+    if md is None:
+        return None
+    if not buildings:
+        return md.versions()
+    import osmcolours
+    import osmyears
+    return dict(md.versions(), osmyears=osmyears.identity(md), osmcolours=osmcolours.identity(md))
 
 
 def _nyc_key(frame, box, cache_dir=None):
@@ -2118,7 +2127,8 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
         import designs
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
-                       _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
+                       _md_versions(bool(buildings)) if md is None else md, float(buried), lamp_region, country,
+                       GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
@@ -3089,8 +3099,7 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
-                    _s.md.versions() if _s.md is not None else None, lamp_region, bool(left_hand),
-                    _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
+                    _md_versions(True), lamp_region, bool(left_hand), _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
@@ -3108,7 +3117,7 @@ def skyline_tile(aid, lat, lon, zoom, ux, uy, out_dir, vfs_dir, lamp_region=None
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldsky", round(float(lat), 7), round(float(lon), 7), zoom, ux, uy,
-                    _s.md.versions() if _s.md is not None else None, lamp_region)
+                    _md_versions(True), lamp_region)
     u = buildingsmod.SKY_UNIT
     sx0, sy0, _, _ = roadsmod_tile_bbox(ux * u, uy * u)
     _, _, sx1, sy1 = roadsmod_tile_bbox(ux * u + u - 1, uy * u + u - 1)
@@ -3152,14 +3161,15 @@ def far_bridge_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir):
 # cached without an anchor in its key (revisit kinds "bldfar" / "bldsky" / "brfar", the key's first part "g"); the mod
 # keeps it across rebases and places it rigidly at its pivot (render-only: no skin, no exact variant).
 
-FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb", "bldpack": "bp"}   # kind -> files' prefix (<prefix>_<key>[_<sub>])
+FAR_GEO = {"bldfar": "bf", "bldsky": "bs", "brfar": "bb", "bldpack": "bp", "bldhz": "bh"}   # kind -> files' prefix (<prefix>_<key>[_<sub>])
 FAR_LAMP_ROUND = 1          # decimals of the lamps' coordinates
 
 
 def far_geo_zoom(kind):
     """The geotile zoom of a far kind."""
     import geotiles
-    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z, "bldpack": geotiles.SKY_Z}[kind]
+    return {"bldfar": geotiles.FAR_Z, "bldsky": geotiles.SKY_Z, "brfar": geotiles.BRIDGE_Z, "bldpack": geotiles.SKY_Z,
+            "bldhz": 12}[kind]
 
 
 def far_geo_names(kind, key):
@@ -3169,8 +3179,8 @@ def far_geo_names(kind, key):
     return {"json": f"{pre}_{key}.json", "shape": f"{pre}_{key}.cdae"}
 
 
-def far_geo_piece(key, sub):
-    return f"{FAR_GEO['brfar']}_{key}_{sub}.cdae"
+def far_geo_piece(key, sub, kind="brfar"):
+    return f"{FAR_GEO[kind]}_{key}_{sub}.cdae"
 
 
 def _lamps_by_geotile(frame, lamps):
@@ -3251,7 +3261,9 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
-        mesh = buildingsmod.build_parts(items, lite=True) or None   # (meshes under the 16-bit indices, one shape)
+        # (meshes under the 16-bit indices, one shape; a pack's in buildings.PACK_STYLE)
+        mesh = (buildingsmod.pack_meshes(items) if kind == "bldpack" else buildingsmod.build_parts(items, lite=True)) \
+            or None
         n = len(items)
     elif kind == "bldsky":
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
@@ -3264,6 +3276,30 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         n = len(picked) if mesh is not None else 0
         if mesh is None:
             lamps = []
+    elif kind == "bldhz":               # the horizon ring: the tall buildings' index, a piece per skyline square (bldhz)
+        import bldhz
+        pieces, n = {}, 0
+        hz_zoom = min(int(gzoom), bldhz.DEM_ZOOM)
+
+        def hz_ground(la, lo):          # (a coarser DEM: the buildings' feet 5-120 km off, no fine tiles fetched there)
+            return ground(None, la, lo, _s.dem.sample(la, lo, hz_zoom))
+        sq = bldhz.squares(tile, hz_ground, _s.md)
+        if sq is None:                  # (its index tile not had now: asked again later)
+            return None
+        for sub, picked in sq.items():
+            m = buildingsmod._sky_mesh(picked) if picked else None
+            if not m:
+                continue
+            fname = far_geo_piece(tile.key, sub, "bldhz")
+            buildingsmod.write(os.path.join(out_dir, fname), m)
+            e = {"shape": f"{vfs_dir}/{fname}", "pos": [x0, y0, 0.0]}
+            e.update(_shape_info(os.path.join(out_dir, fname), e["pos"], "bldhz"))
+            pieces[sub] = e
+            shapes[sub] = fname
+            n += len(picked)
+        if pieces:
+            data["parts"] = pieces
+        return data, shapes, n
     else:                               # brfar: the slabs in a piece per road geotile under it
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
         if not _far_cells_ready((kind, tile.key), keys, ("roads",)):
@@ -3299,6 +3335,14 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     return data, shapes, n
 
 
+def _bldhz_key(gx, gy):
+    """A horizon tile's inputs for its revisit key: the index's format and its source's identity (bldhz sig: the data
+    site's frozen build, or the local tile's SHA-1)."""
+    import bldhz
+    src = bldhz.source(_s.md)
+    return (f"hz={bldhz.FORMAT}",) + (tuple(src.sig(gx, gy)) if src is not None else ("none",))
+
+
 def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=False):
     """Visual traffic routes, independent of the AI graph and of the far buildings (distanttraffic.py)."""
     import distanttraffic
@@ -3319,13 +3363,17 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
     file name}) or None when its cells are not at hand yet."""
     import json
+    import buildings as buildingsmod
     import geotiles
     import revisit
     z = far_geo_zoom(kind)
     tile = geotiles.geobox(gx, gy, z)
     names = far_geo_names(kind, tile.key)
-    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(), lamp_region,
-                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None)
+    style = buildingsmod.PACK_STYLE if kind == "bldpack" else "lite"
+    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(kind != "brfar"), lamp_region,
+                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None,
+                    *((f"style={style}",) if style != "lite" else ()),     # (the lite packs' keys as before)
+                    *(_bldhz_key(gx, gy) if kind == "bldhz" else ()))
     frame_ll = (float(tile.frame.lat0), float(tile.frame.lon0))
     got = revisit.load(_s.cache_dir, kind, k)
     if got is not None:

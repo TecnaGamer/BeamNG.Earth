@@ -350,8 +350,14 @@ POLICIES = {
                                        max_attempts=3, base_delay=2.0, optional=True),
     # Mapterhorn's list of where detailed heights exist (dem.py, ~160 KB of JSON, about once a week): the default row
     "download.mapterhorn.com": HostPolicy(gzip=True),
-    # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
-    "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
+    # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
+    "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                   cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
+                                   interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    "query.wikidata.org": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                     cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,
+                                     interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    # Never at runtime (OSMF vector tiles, Protomaps builds).
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
@@ -484,6 +490,8 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
+    "overpass-api.de": "nearby category search on Enter",
+    "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
@@ -672,10 +680,6 @@ class TokenBucket:
                 return True
             return False
 
-    def give_back(self):
-        with self.lock:
-            self.tokens = min(self.burst, self.tokens + 1.0)
-
     def pause(self, until):
         """No tokens until `until` (clock time); the bucket is emptied."""
         with self.lock:
@@ -721,6 +725,17 @@ class CircuitBreaker:
                 return False, False, 1.0
             self.probing = True
             return True, True, 0.0
+
+    def may_try(self):
+        """Would a request be let through now (allow()): closed, or its open time over with no probe out. An open
+        breaker closes only through a request's probe, so a caller waiting for is_open() to clear would wait for
+        ever when nothing else asks the host."""
+        with self.lock:
+            if self.state == "closed":
+                return True
+            if self.state == "open" and self.clock() < self.open_until:
+                return False
+            return not self.probing
 
     def is_open(self):
         """Not closed: open, or half-open and not yet proven."""
@@ -1399,6 +1414,7 @@ class Fetcher:
         self.policies = dict(POLICIES if policies is None else policies)
         self.default_policy = default_policy
         self.offline_flag = bool(offline)
+        self.on_circuit_closed = None
         self._hosts = {}
         self._chains = {}               # name -> hosts of a failover chain (imagery, dem)
         self._lock = threading.Lock()
@@ -1444,6 +1460,11 @@ class Fetcher:
         with self._lock:
             self._chains[name] = hosts
 
+    def chain_hosts(self, name):
+        """The host names registered for failover chain `name`."""
+        with self._lock:
+            return self._chains.get(name, ())
+
     @property
     def offline(self):
         """--offline, or every host of the registered chains has its breaker open."""
@@ -1462,6 +1483,10 @@ class Fetcher:
 
     def available(self, host):
         return not self.offline_flag and not self.host(host).breaker.is_open()
+
+    def may_try(self, host):
+        """Could a request to host go out now (closed, or its breaker due a probe)? CircuitBreaker.may_try."""
+        return not self.offline_flag and self.host(host).breaker.may_try()
 
     def miss_alive(self, path, url):
         """A 404 remembered for url at marker path (missindex.py) is valid: within the host's miss_ttl, or the host
@@ -1793,6 +1818,12 @@ class Fetcher:
     def _succeeded(self, h):
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
+            cb = getattr(self, "on_circuit_closed", None)
+            if cb is not None:
+                try:
+                    cb(h.name)
+                except Exception:
+                    log.exception("on_circuit_closed callback failed")
 
     @ioprofiler.session_request
     @contextmanager

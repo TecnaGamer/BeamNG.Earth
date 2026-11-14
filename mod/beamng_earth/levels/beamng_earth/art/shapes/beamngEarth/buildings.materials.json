@@ -950,5 +950,36 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_bld_skywin": {
+    "name": "bne_bld_skywin",
+    "mapTo": "bne_bld_skywin",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6c0b1f4e-2d7a-5b8e-9f31-0a4c7e2d9b15",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_sky_day_b.dds",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.dds",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }

@@ -141,7 +141,11 @@ Physics geometry always comes from open data:
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
-  holds itself. Never query the public Overpass API at runtime.
+  holds itself. Never query the public Overpass API for world data at runtime. The one
+  exception (the owner's OK, 2026-11-14): the map's category search ("race tracks",
+  "forests" ...) sends one small, cached Overpass query per Enter, never while typing
+  (`server/geocode.py`, netfetch policy `overpass-api.de`: interactive only, rate 0.1/s,
+  50 a day, named places only, the player's position rounded to 0.01°).
 - **Land cover and vegetation:** ESA WorldCover and Meta canopy height.
 - Both are read per global cell by the map-data pipeline (`server/mapdata.py`, "Map data" below).
 - **Gravity:** WGS84 normal gravity (Somigliana + free air) plus the EGM2008 anomalies (NGA,
@@ -978,8 +982,8 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   counts differences). Steam Deck: setFile's CPU 22.9 -> 1.9 ms a swap; Windows test PC: the swap call 53 -> 31 ms,
   driving frames over 50 ms 10.9 -> 6.2 a minute. What remains of a swap is the frame after it (the material
   texture rebuild: texkeep) and waits for the GPU device.
-- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until a
-  teleport soak: the review's deadlock paths went 2026-11-13): it hooks the texture manager's
+- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; on by default on Linux since the
+  2026-11-14 teleport soaks, off with BNGEARTH_TEXKEEP_OFF=1): it hooks the texture manager's
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so

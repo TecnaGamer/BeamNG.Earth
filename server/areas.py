@@ -55,7 +55,6 @@ log = logging.getLogger("earthd.areas")
 SUBDIR = "areas"
 STORE = "areas.json"
 STORE_VERSION = 1
-MAX_AREAS = 10
 MAX_KM2 = 2500.0            # (965 square miles) an area at most
 MIN_KM2 = 0.05
 PIN_SHARE = 0.9             # saved areas may pin at most this share of the cache's cap
@@ -594,9 +593,10 @@ class Areas:
     def _add(self, box, route, est, name, mode=DEFAULT_MODE):
         if not est.get("ok"):
             return False, est.get("error") or "no estimate"
+        short = self._disk_room(est.get("diskBytes", 0))
+        if short:
+            return False, short
         with self.lock:
-            if len(self.areas) >= MAX_AREAS:
-                return False, f"at most {MAX_AREAS} saved areas: delete one first"
             cap = self.s.cache.cap if self.s.cache is not None else 0
             pinned = self.pinned_bytes or sum(a["diskBytes"] for a in self.areas)
             if cap and pinned + est.get("diskBytes", 0) > PIN_SHARE * cap:
@@ -615,6 +615,25 @@ class Areas:
         self.wake.set()
         self._changed(force=True)
         return True, aid
+
+    def _disk_room(self, need):
+        """None, or why an area needing `need` bytes is refused for the disk: with no cache cap ("0: no limit") nothing
+        else bounds the saved areas, whose files the cache never evicts, so the area must fit in the disk's free space
+        less the cache's own free reserve (cache.DISK_RESERVE_*: players' disks filled up, ~19k ENOSPC errors in the
+        first week's telemetry). Areas no longer have a count limit (PR #1264)."""
+        c = self.s.cache
+        if c is None or c.cap or not need:
+            return None
+        import cache as cachemod
+        try:
+            du = c.disk_usage(c.root)
+        except (OSError, AttributeError):
+            return None
+        reserve = min(cachemod.DISK_RESERVE_MAX, max(cachemod.DISK_RESERVE_MIN, du.total * cachemod.DISK_RESERVE_SHARE))
+        if need > du.free - reserve:
+            return (f"not enough room: the area needs {need / 1e9:.1f} GB and the disk has "
+                    f"{max(0.0, du.free - reserve) / 1e9:.1f} GB to spare (free some space or pick a smaller area)")
+        return None
 
     def command(self, aid, op):
         """pause / resume / delete an area (delete: it stops, its data stays in the cache, unpinned). True if done."""
