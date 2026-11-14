@@ -537,6 +537,16 @@ class PackStyleTest(unittest.TestCase):
         self.assertLess(self.verts(sky), self.verts(tall))
         self.assertLess(self.verts(tall), lite)
 
+    def test_a_mapped_dome_keeps_its_dome_and_height(self):
+        """A domed building in a sky pack keeps the lite mesh: its dome and its whole height (the skyline's simplify
+        flattens the roof, and plan() took the dome's rise off the height: 40 m came out 20 m, Codex 2026-11-14)."""
+        dome = [(bld.plan(rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "dome",
+                                                   "roof_height": 20}), 0.0, 0.0)]
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        lite, sky = bld.pack_meshes(dome, "lite"), bld.pack_meshes(dome, "sky")
+        self.assertAlmostEqual(top(sky), top(lite), places=3)
+        self.assertGreater(top(sky), 39.0)
+
     def test_revisit_key_lite_unchanged(self):
         import blockworker
         import geotiles
