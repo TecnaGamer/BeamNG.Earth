@@ -9,6 +9,7 @@ Scheduling is tested on a server with fake connections and a fake texture render
 run the in-process server (synthetic DEM and imagery, mesh mode, 64 cells) with a fake colour match
 whose regions turn ready on demand, and check the files and messages the mod gets (no network)."""
 import asyncio
+import concurrent.futures
 import os
 import sys
 import tempfile
@@ -271,6 +272,24 @@ class SchedulerTest(unittest.TestCase):
         self.assertNotIn(ck, s.degraded)
         self.assertEqual(s.tiles[ck].rev, 1)
         self.assertFalse(s.tiles[ck].stale)
+
+    def test_degraded_tile_recovering_stale_counts_from_zero(self):
+        """A degraded tile past RETEX_REPEAT failures that gets a new, still-stale texture (a region pending) leaves
+        degraded with its stale re-render count started over, not the old count + 1 (which dropped its next
+        re-render: _retex_pick skips a non-degraded tile at RETEX_REPEAT)."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        before = s.tiles[ck]
+        before.retex_repeat = earthd.RETEX_REPEAT + 2
+        fut = concurrent.futures.Future()
+        fut.set_result(replace(before, texture=s.texture_name(1, "0_1_0", 1), rev=1, stale=True))
+
+        async def body():
+            s._tile_done(ck, fut)
+        self.run_loop(body, settle=0.2)
+        self.assertNotIn(ck, s.degraded)
+        self.assertEqual(s.tiles[ck].retex_repeat, 1)
 
     def test_degraded_tile_waits_while_imagery_hosts_unavailable(self):
         """When imagery chain hosts are open/unavailable, retex_degraded does not start retexture.

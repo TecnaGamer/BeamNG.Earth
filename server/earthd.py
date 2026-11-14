@@ -6840,7 +6840,9 @@ class Server:
         before = self.tiles.get(ck)
         info = self.tiles[ck] = fut.result()
         self.note_lod_err(ck, info)
+        recovered = False                   # (a degraded tile's new texture: its stale re-render count starts over)
         if before is not None and info.texture != before.texture:
+            recovered = ck in self.degraded
             self._send_retex(ck, info)      # a re-rendered texture: the mods showing the tile switch to it
             self.degraded.discard(ck)
             self.degraded_fails.pop(ck, None)
@@ -6858,7 +6860,7 @@ class Server:
             else:                           # ready meanwhile (while the texture was being rendered)
                 self._cm_settle(ck, rk, st, pump=False)
         if before is not None and info is not before:     # a re-render: stale at once again, or not
-            info.retex_repeat = before.retex_repeat + 1 if info.stale else 0
+            info.retex_repeat = (0 if recovered else before.retex_repeat) + 1 if info.stale else 0
         if info.stale:
             self._retex_pump()
         if self.matslots.short():
