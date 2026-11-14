@@ -343,4 +343,25 @@ do
   roads.reset()
 end
 
+-- a geotile's pending colliders due for another player's car (roads.focusDue): its focus carries no z (far cars'), the
+-- pieces' boxes are in the tile's frame (a 3D inverse transform): measured, not an error (Codex review, 2026-11-14)
+do
+  local cx, cy = A:geodeticToWorld(clat, clon, 0)
+  local every = roads.RELOAD_EVERY_S
+  roads.RELOAD_EVERY_S = 1e9                 -- (no timed rebuild: what is made stays pending)
+  car.x, car.y = cx + 300, cy                -- (near enough to make them, beyond needReach)
+  T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
+    'the geotile again')
+  for _ = 1, 40 do roads.update(gov, 1, car, nil, A) end
+  roads.setFoci({ { x = cx, y = cy, r = 320, trees = true, kind = 'player' } })
+  local ok, due = pcall(roads.focusDue, roads.needDistance)
+  T.check(ok, 'focusDue with a focus without z: ' .. tostring(due))
+  local n = roads.needDistance(1e9, { x = cx, y = cy, z = 0 })
+  T.check(n < 200, 'its colliders pending, measured from the focus (' .. tostring(n) .. ' m)')
+  T.check(due == true, 'due for the other player\'s car at the tile')
+  roads.setFoci({})
+  roads.RELOAD_EVERY_S = every
+  roads.reset()
+end
+
 T.done('test_roadgeo')
