@@ -176,6 +176,15 @@ class GzipTest(unittest.TestCase):
         with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) - 1), self.assertRaises(nf.FetchFailed):
             f.get("https://api.example/x")
 
+    def test_every_member_of_a_multi_member_stream(self):
+        """RFC 1952: members one after another; the cap counts them all."""
+        import gzip
+        two = self.packed + gzip.compress(b"tail")
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, two, 0.0)] * 2}, self.pol)
+        self.assertEqual(f.get("https://api.example/x").body, self.JSON + b"tail")
+        with mock.patch.object(nf, "GZIP_MAX_BYTES", len(self.JSON) + 2), self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/y")
+
 
 class TokenBucketTest(unittest.TestCase):
     def test_burst_then_rate(self):

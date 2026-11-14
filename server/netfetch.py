@@ -1039,21 +1039,29 @@ _ENCODED = ("content-encoding", "content-length")     # (describe the bytes on t
 
 def _gunzip(rh, body):
     """(headers, body) decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else
-    as they came. A broken or truncated stream, or one that decodes past GZIP_MAX_BYTES, raises OSError (a failed
-    attempt, retried as one)."""
+    as they came. Every member of a multi-member stream (RFC 1952) is decoded. A broken or truncated stream, or one that
+    decodes past GZIP_MAX_BYTES in all, raises OSError (a failed attempt, retried as one)."""
     rh = rh or {}
     if not body or rh.get("content-encoding", "").strip().lower() != "gzip":
         return rh, body
-    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-    try:
-        out = d.decompress(body, GZIP_MAX_BYTES)
-    except zlib.error as e:
-        raise OSError(f"bad gzip body: {e}") from None
-    if d.unconsumed_tail:
-        raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
-    if not d.eof:
-        raise OSError("bad gzip body: truncated")
-    return {k: v for k, v in rh.items() if k.lower() not in _ENCODED}, out
+    out, rest = [], body
+    room = GZIP_MAX_BYTES
+    while rest:
+        if room <= 0:       # (max_length 0 would mean no limit)
+            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            part = d.decompress(rest, room)
+        except zlib.error as e:
+            raise OSError(f"bad gzip body: {e}") from None
+        if d.unconsumed_tail:
+            raise OSError(f"gzip body decodes past {GZIP_MAX_BYTES >> 20} MB")
+        if not d.eof:
+            raise OSError("bad gzip body: truncated")
+        out.append(part)
+        room -= len(part)
+        rest = d.unused_data
+    return {k: v for k, v in rh.items() if k.lower() not in _ENCODED}, b"".join(out)
 
 
 RANGE_IGNORED_MIN = 16 * 1024 * 1024    # bytes: a 200 this big (and 8x the range) for a range request is not read

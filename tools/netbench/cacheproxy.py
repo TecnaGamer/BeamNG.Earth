@@ -57,14 +57,18 @@ class Upstream:
 
     async def acquire(self):
         await self.slots.acquire()
-        while True:
-            now = time.monotonic()
-            self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
-            self.t = now
-            if self.tokens >= 1.0:
-                self.tokens -= 1.0
-                return
-            await asyncio.sleep((1.0 - self.tokens) / self.rate)
+        try:
+            while True:
+                now = time.monotonic()
+                self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
+                self.t = now
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                await asyncio.sleep((1.0 - self.tokens) / self.rate)
+        except BaseException:           # (cancelled while waiting for a token: the slot back)
+            self.slots.release()
+            raise
 
     def release(self):
         self.slots.release()
@@ -189,7 +193,9 @@ class RangeIndex:
                         self.add(m["key"].split("\n")[1], m, name[:-5])
 
     def assemble(self, req):
-        """A 206 for req's single Range from stored pieces of one ETag that cover it, or None."""
+        """A 206 for req's single Range from stored pieces of one ETag that cover it, or None. Pieces without an ETag
+        are never joined (two versions of a file would pass as one); with If-Match, only that ETag's pieces. The most
+        recently stored version first."""
         m = re.fullmatch(r"bytes=(\d*)-(\d*)", req.headers.get("range", "").strip())
         if req.method != "GET" or not m or not (m[1] or m[2]):
             return None
@@ -198,7 +204,10 @@ class RangeIndex:
                 pieces = [json.loads(line) for line in f]
         except (OSError, ValueError):
             return None
-        for etag in {p[3] for p in pieces}:
+        wanted = {t.strip() for t in req.headers.get("if-match", "").split(",")} - {"", "*"}
+        for etag in dict.fromkeys(p[3] for p in reversed(pieces)):
+            if etag is None or (wanted and etag not in wanted):
+                continue
             same = [p for p in pieces if p[3] == etag]
             total = next((p[2] for p in same if p[2] is not None), None)
             span = _span(m[1], m[2], total)
@@ -252,6 +261,9 @@ def _span(first, last, total):
 
 
 def _replay(req, m, body, head=False):
+    """The stored answer m (body: its stored bytes) for req. A HEAD keeps the stored Content-Length (a stored HEAD's
+    body is empty)."""
+    stored_length = next((v for k, v in m["headers"] if k.lower() == "content-length"), None)
     hdrs = http.Headers([(k.encode(), v.encode()) for k, v in m["headers"]
                          if k.lower() not in DROP_ON_REPLAY and k.lower() != "content-length"])
     resp = http.Response.make(m["status"], b"", hdrs)
@@ -263,7 +275,8 @@ def _replay(req, m, body, head=False):
     elif m["status"] in (200, 206) and not inm and req.headers.get("if-modified-since") \
             and req.headers.get("if-modified-since") == resp.headers.get("last-modified"):
         resp.status_code, resp.reason, body = 304, "Not Modified", b""
-    resp.headers["content-length"] = str(len(body))
+    keep = head and resp.status_code != 304 and stored_length
+    resp.headers["content-length"] = stored_length if keep else str(len(body))
     resp.raw_content = b"" if head else body
     return resp
 
@@ -335,7 +348,7 @@ class CacheProxy:
             if ev is None:
                 break
             await ev.wait()
-        self.inflight[key] = asyncio.Event()
+        self.inflight[key] = flow.metadata["cacheproxy_event"] = asyncio.Event()
         if canonical(req.pretty_url) != req.pretty_url:
             req.url = canonical(req.pretty_url)     # (a mirror's miss is fetched from the first mirror)
         flow.metadata["cacheproxy_key"] = key
@@ -343,7 +356,11 @@ class CacheProxy:
         for h in CONDITIONAL:           # (the full answer upstream, so it can be stored; the condition is answered here)
             req.headers.pop(h, None)
         gate = self._upstream(req.host)
-        await gate.acquire()
+        try:
+            await gate.acquire()
+        except BaseException:           # (cancelled: the requests waiting on this key ask again)
+            self._release(flow, key)
+            raise
         flow.metadata["cacheproxy_gate"] = gate
         flow.metadata["cacheproxy_line"] = line
 
@@ -359,33 +376,46 @@ class CacheProxy:
         if key is None:
             return
         line = flow.metadata.pop("cacheproxy_line", None)
+        try:
+            self._keep(flow, key)
+        finally:                        # (whatever happened storing it: the key and the host's slot are free again)
+            self._release(flow, key)
+        if line is not None:            # (upstream's own time, then the line's: a miss is slower than live)
+            await line.answer(len(flow.response.raw_content or b""))
+
+    def _keep(self, flow, key):
+        """A miss's answer logged and, when clean, stored (and the client's condition answered from it)."""
         req, resp = flow.request, flow.response
         self.counts["miss"] += 1
         self._log("misses.log", req, resp.status_code, len(resp.raw_content or b""))
-        if resp.status_code in STORE_STATUS and not _bad(resp):
-            self.store.put(key, resp)
-            if req.method == "GET":
-                self.ranges.add(canonical(req.pretty_url), self.store.meta(_sha(key)), _sha(key))
-            cond = flow.metadata.get("cacheproxy_cond") or {}
-            if cond:                    # (the client asked conditionally: answer its condition from what was stored)
-                req.headers.update(cond)
-                flow.response = _replay(req, *self.store.get(key), head=req.method == "HEAD")
-        self._release(flow, key)
-        if line is not None:            # (upstream's own time, then the line's: a miss is slower than live)
-            await line.answer(len(flow.response.raw_content or b""))
+        if resp.status_code not in STORE_STATUS or _bad(resp):
+            return
+        self.store.put(key, resp)
+        if req.method == "GET":
+            self.ranges.add(canonical(req.pretty_url), self.store.meta(_sha(key)), _sha(key))
+        cond = flow.metadata.get("cacheproxy_cond") or {}
+        stored = self.store.get(key)
+        if cond and stored:             # (the client asked conditionally: answer its condition from what was stored)
+            req.headers.update(cond)
+            flow.response = _replay(req, *stored, head=req.method == "HEAD")
 
     def error(self, flow):
         key = flow.metadata.get("cacheproxy_key")
         if key is not None:
-            self._log("errors.log", flow.request, "ERR", 0)
-            self._release(flow, key)
+            try:
+                self._log("errors.log", flow.request, "ERR", 0)
+            finally:
+                self._release(flow, key)
 
     def _release(self, flow, key):
+        """flow's host slot and its key's event (once: a second call for the flow does nothing)."""
         gate = flow.metadata.pop("cacheproxy_gate", None)
         if gate is not None:
             gate.release()
-        ev = self.inflight.pop(key, None)
+        ev = flow.metadata.pop("cacheproxy_event", None)
         if ev is not None:
+            if self.inflight.get(key) is ev:
+                del self.inflight[key]
             ev.set()
 
     def done(self):
