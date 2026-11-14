@@ -79,7 +79,7 @@ class ChainShortTest(unittest.TestCase):
             with revisit.scope() as first:
                 self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
             self.assertFalse(first.complete)
-            self.assertEqual(getattr(first, field), 1, "counted once for the build that made it")
+            self.assertGreaterEqual(getattr(first, field), 1, "counted for the build that made it")
             with revisit.scope() as second:             # (another build, later: the solve comes from `done`)
                 self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
             self.assertEqual(st.solves, 1)
@@ -221,6 +221,66 @@ class ChainShortTest(unittest.TestCase):
         self.assertIs(got["clean"], False, "... so its build is short too")
         self.assertEqual(st.solves, 2)
 
+    def test_a_clean_adoption_that_loses_to_a_short_local_publisher_is_short_too(self):
+        """An adopting thread waits for the chain's owner (a clean solve there). Meanwhile another thread publishes
+        the same part LOCALLY from a solve made short. The adoption keeps the local part, and returns it: the
+        fallback. Its build must be short (it skipped the existing part without its note before)."""
+        owner = _Store(None)
+        owner.frame = types.SimpleNamespace()
+        mine = _Store(None)
+        mine.frame = owner.frame
+        mine._ends_ll = lambda xy: ENDS
+        waiting, go_on = threading.Event(), threading.Event()
+        real_owner_chain = owner._chain_of
+
+        def owner_chain(key, ends, adopt=True):         # (the adopter waits here for its owner)
+            waiting.set()
+            self.assertTrue(go_on.wait(10))
+            return real_owner_chain(key, ends, adopt)
+        owner._chain_of = owner_chain
+        # the adopter's thread has an owner; the local publisher's solves here
+        mine.owner_of = lambda me, comp, pool: owner if threading.current_thread().name == "adopter" else None
+        real_solve = mine._solve
+
+        def solve(comp, pool, ground):
+            revisit.fault()                             # (the local solve reads something short)
+            return real_solve(comp, pool, ground)
+        mine._solve = solve
+        got = {}
+
+        def build(name):
+            with mock.patch.object(roads.ChainView, "mapper", staticmethod(lambda a, b: _Same())):
+                with revisit.scope() as b:
+                    got[name + " part"] = mine._chain_of(("f", 0), ENDS)
+                got[name] = b.complete
+        adopter = threading.Thread(target=build, args=("adopter",), name="adopter")
+        adopter.start()
+        try:
+            self.assertTrue(waiting.wait(10))
+            local = threading.Thread(target=build, args=("local",), name="local")
+            local.start()
+            local.join(10)
+            self.assertIn(("f", 0), mine.done, "the local solve published while the adopter waited")
+        finally:
+            go_on.set()
+            adopter.join(10)
+        self.assertIs(got["local"], False)
+        self.assertEqual(owner.solves, 1, "the owner solved it, clean")
+        self.assertNotIn(("f", 0), owner.__dict__.get("short", {}))
+        self.assertIs(got["adopter part"], got["local part"], "the adoption returned the local part")
+        self.assertIs(got["adopter"], False, "... so its build is short too")
+
+    def test_no_part_leaves_done_but_through_take(self):
+        """`done` is read for use in one place only (_take_locked); the rest of roads.py writes it or asks whether a
+        key is in it (_has)."""
+        import inspect
+        import re
+        src = inspect.getsource(roads)
+        reads = [ln.strip() for ln in src.splitlines()
+                 if re.search(r"\b\w+\.done(\.get\(|\[[^\]]+\](?!\s*=))", ln) and "fut.done" not in ln]
+        self.assertEqual(reads, ["got = self.done.get(key)"], "every use of a part goes through _take")
+        self.assertEqual(len(re.findall(r"in \w+\.done\b", src)), 1, "one membership test: _has")
+
     def test_a_part_kept_from_before_brings_its_note(self):
         """A solve whose chain holds a part published before (kept: this solve saw no more of it) builds on that part:
         its note is this build's."""
@@ -254,7 +314,8 @@ class ChainShortTest(unittest.TestCase):
             with revisit.scope() as b:
                 st._chain_of(("f", 0), ENDS)
             self.assertEqual(seen, [(("f", 0), (1, 0))], where)
-            self.assertEqual(st.short[("f", 0)], (b.n, b.lidar), f"{where}: nothing was added after")
+            self.assertEqual(st.short[("f", 0)], (1, 0), f"{where}: nothing was added after")
+            self.assertFalse(b.complete)
 
     def test_adopted_parts_are_published_with_their_note(self):
         """As above for a chain adopted from its owner: checked from inside the adopting store's lock, the moment

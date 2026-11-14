@@ -7990,10 +7990,7 @@ class BridgeProfiles:
         solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
-            with self.lock:
-                got = self.done.get(key)
-            if got is not None:
-                self._replay(key)       # (a solve made short: whoever builds on it now is short too)
+            got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
@@ -8006,13 +8003,11 @@ class BridgeProfiles:
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
         Returns done[key] or None. A chain another store owns (owner_of) is solved there and its result taken in, its
         geometry mapped into this frame (one deck profile per chain, whichever store a tile asks)."""
-        with self.lock:
-            got = self.done.get(key)
+        got = self._take(key)
         if got is not None:
-            self._replay(key)
             return got
         # (the solve in a revisit scope of its own: what it read short is noted with its parts, _note_short, and said
-        # again to every later build that takes them from `done`, _replay. The solves are kept for the session; one
+        # again to every later build that takes them from `done`, _take. The solves are kept for the session; one
         # made short (an underwater bore unsolved, a cell that could not be read, the lidar rule) faulted only the
         # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13.
         # A chain is published only when everything it depends on is read, its parts, piers and structure TOGETHER
@@ -8029,13 +8024,29 @@ class BridgeProfiles:
         old = table.get(k, (0, 0))
         table[k] = (max(old[0], int(n)), max(old[1], int(lidar)))
 
-    def _replay(self, key):
-        """A solve of part key taken from `done` again: when it was made short, this thread's builds are short too
-        (revisit.carry: its scopes, its thread's counts)."""
-        got = self.__dict__.get("short", {}).get(key)
+    def _take(self, key):
+        """Part key from `done` (or None) WITH its note: when its solve was made short, the calling thread's builds
+        are short too (revisit.carry: its scopes, its thread's counts). The ONE way a part leaves `done` for use: a
+        direct read, parts_todo, a solve that keeps or loses to a published part, an adoption that takes the owner's
+        part or loses to a local one. Every path that read `done` itself was a path that could forget the note (four
+        were found one after the other, 2026-11-13)."""
+        with self.lock:
+            return self._take_locked(key)
+
+    def _take_locked(self, key):
+        """_take under self.lock (held by the caller)."""
+        got = self.done.get(key)
         if got is not None:
-            import revisit
-            revisit.carry(got[0], got[1])
+            note = self.__dict__.get("short", {}).get(key)
+            if note is not None:
+                import revisit
+                revisit.carry(note[0], note[1])
+        return got
+
+    def _has(self, key):
+        """Is part key published (nothing taken: no use of it)?"""
+        with self.lock:
+            return key in self.done
 
     def _chain_solve(self, key, ends, adopt, comp_out, short):
         """_chain_of's work (comp_out: the chain's parts, for its caller; short: the solve's revisit scope, whose
@@ -8056,8 +8067,7 @@ class BridgeProfiles:
                 # (the owner's solve runs, or is replayed, in this thread: its faults are this scope's too, and are
                 # noted with the parts adopted here)
                 if self._adopt(owner, comp, pool, short):
-                    with self.lock:
-                        got = self.done.get(key)
+                    got = self._take(key)
                     if got is not None:
                         return got
             except Exception as ex:         # (solved here rather than not at all)
@@ -8073,7 +8083,7 @@ class BridgeProfiles:
         # 2026-11-13). Nothing of the chain is in `done`, `piers` or `trusses` until then; then all of it with its
         # final notes, in one hold of the lock.
         with self.lock:
-            before = {k: self.done.get(k) for k in comp}
+            before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
             ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
         # the first solve of a part is kept, and what goes with it, unless this one saw more of it
@@ -8088,15 +8098,13 @@ class BridgeProfiles:
             publish = []
             for k in comp:
                 v = keep.get(k)
-                old = self.done.get(k)
+                # (taken: a part this solve does not publish but its build uses, one kept from before or one another
+                # thread published while this solve was staged, the winner's, perhaps made short, brings its note
+                # into this build before the final counts: a clean solve that lost to a short publisher returned
+                # the fallback and stayed complete, review 2026-11-13)
+                old = self._take_locked(k)
                 if v is not None and (old is None or len(v[1]) > len(old[1])):
                     publish.append(k)
-                elif old is not None:
-                    # a part this solve does not publish but its build takes: one kept from before, or one another
-                    # thread published while this solve was staged (the winner's, perhaps made short): its note is
-                    # this build's too, before the final counts (a clean solve that lost to a short publisher
-                    # returned the fallback and stayed complete: review, 2026-11-13)
-                    self._replay(k)
             n_short, n_lidar = short.n, short.lidar     # (final: nothing of this chain is read after this)
             for k in publish:
                 if n_short or n_lidar:                  # (before the part itself: never a part without its note)
@@ -8106,8 +8114,7 @@ class BridgeProfiles:
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
-            got = self.done.get(key)
-        return got
+            return self._take_locked(key)
 
     def _ends_ll(self, xy):
         """(lat, lon) of a deck line's two ends (this frame's world)."""
@@ -8123,10 +8130,10 @@ class BridgeProfiles:
             return False
         import geotiles
         with owner.lock:
-            mine = [k for k in comp if k in owner.done]
+            done = {k: owner._take_locked(k) for k in comp}     # (the owner's parts, with their notes)
+            mine = [k for k in comp if done[k] is not None]
             if len(mine) != len(comp):
                 return False
-            done = {k: owner.done[k] for k in mine}
             piers = {k: owner.piers.get(k, []) for k in mine}
             ck = min(comp)
             beams = owner.trusses.get(ck)
@@ -8138,7 +8145,10 @@ class BridgeProfiles:
         with self.lock:
             mine_n, mine_l = (short.n, short.lidar) if short is not None else (0, 0)
             for k, (spec, xy, z, lon) in done.items():
-                if k in self.done:
+                # (a part another thread published here meanwhile is kept, and TAKEN: its note, perhaps a short local
+                # solve's, is the adopting build's: a clean adoption that lost to a short local publisher returned
+                # the local fallback and stayed complete, review 2026-11-13)
+                if self._take_locked(k) is not None:
                     continue
                 xyz = mp.pts(np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)])
                 n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
@@ -9226,7 +9236,7 @@ class ChainView:
             if self.prefer is not None:
                 pst = self.prefer.store(st.region)
                 with pst.lock:
-                    solved = [t for t in todo if t[0] in pst.done]
+                    solved = [t for t in todo if pst._has(t[0])]
                 out += self._map(pst, pst.parts_todo(solved, solved_only=True, **kw))
                 todo = [t for t in todo if t not in solved]
             out += self._map(st, st.parts_todo(todo, **kw))
