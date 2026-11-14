@@ -103,6 +103,12 @@ CORRIDOR_MIN_RH = 2.4       # m: a carriageway at least this wide (half): no pat
 CORRIDOR_WREQ = 10.0        # the spline's weight where a correction is asked ...
 CORRIDOR_W0 = 0.01          # ... and elsewhere (pulling back to the plan as made) ...
 CORRIDOR_LAM = 50000.0      # ... against its curvature: eased over ~(LAM / W0) ** 0.25 ~ 47 m
+# A road where it passes under a deck is on another level than a road beside it there (the ramp up to that deck, a
+# road on its embankment): one corridors would raise more than this under a deck keeps its own heights (the Bowker
+# Overpass, Boston: a Storrow Drive ramp under it was raised 3.1 m to the ramp beside it once the deck's abutments rose
+# less for its maxheight signs, its 3.35 m sign left with no headroom, 2026-11-13). BNE_CORRIDOR_UNDER=off: as before.
+CORRIDOR_UNDER_ON = os.environ.get("BNE_CORRIDOR_UNDER", "on") != "off"
+CORRIDOR_UNDER_RAISE_M = 1.0
 CORRIDOR_THROUGH = 1000     # added to a through road's key (not a slip road): two through roads side by side
                             # (a dual carriageway's halves on a hillside, BR-381's) each keep their own height
 DIP_HOLDS = os.environ.get("BNE_DIP_HOLDS", "off") == "on"   # (a dipped road held over every other: _corridor_key)
@@ -2796,7 +2802,7 @@ class _Planner:
                     log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
             if CORRIDOR_ON and plans:
                 try:            # roads side by side at one height (before the welds and snaps that join them again)
-                    share_corridors(plans, pspecs)
+                    share_corridors(plans, pspecs, self._decks_near(key) if CORRIDOR_UNDER_ON else ())
                 except Exception as e:      # each on its own rather than no grading
                     _caught(e)
                     log.debug("grading: corridors of %s: %s: %s", key, type(e).__name__, e)
@@ -3933,7 +3939,8 @@ class _Planner:
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
                 b, L, fixed, rail = spans[bi]
-                sign = _limit_at(limits, pt) if rail and limits else None
+                sign = (_limit_at(limits, pt) if RAIL_SIGNED_ON else None) if rail and limits else None
+                road_sign = None if rail else roadsmod.road_sign_at(limits, pt)
                 mc = RAIL_MIN_CROSS_M if sign is not None else APPROACH_MIN_CROSS_M
                 if L < 2 * mc:
                     continue                    # (a short rail deck: a span only over a road with a height limit)
@@ -3977,6 +3984,8 @@ class _Planner:
                 if sign is not None:            # (a rail deck over a road with a height limit: that, not the guess)
                     clear = depth + sign + RAIL_SIGN_MARGIN_M + ROAD_LIFT
                     signed.add(len(cands))
+                elif road_sign is not None:     # (a road deck over one: the same, roads.signed_road_clear)
+                    clear = float(roadsmod.signed_road_clear(road_sign, depth)) + ROAD_LIFT
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
                 cand_xs.append((bi, pt))
@@ -5047,8 +5056,9 @@ class _Planner:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
         limits = []
-        if f is not None and len(f) and ground and RAIL_SIGNED_ON:
-            hl = roadsmod.height_limit_lines(f)
+        if f is not None and len(f) and ground and (RAIL_SIGNED_ON or roadsmod.ROAD_SIGNED_ON):
+            # (not a bridge's own limit, with the road signs on: a road under is not cleared by it; off: as before)
+            hl = roadsmod.height_limit_lines(f, on_bridges=not roadsmod.ROAD_SIGNED_ON)
             if hl:
                 allh = np.concatenate([r for r, _h in hl])
                 he, hn, _ = self.frame.geodetic_to_enu(allh[:, 1], allh[:, 0], 0.0)
@@ -5974,6 +5984,8 @@ class _Planner:
         # (the tracks near it: crossed under like a road, never an approach or a road beside the ramp)
         rails = [c["rail_ground"][n_] for c in cs for n_ in
                  np.flatnonzero(_boxes_meet(c["rail_ground_box"], lo_b, hi_b)).tolist()]
+        # (the height limits of the roads under it: a road deck honours a maxheight sign, roads.road_sign_at)
+        limits = [x for c in cs for x in c.get("height_limits", ())] if roadsmod.ROAD_SIGNED_ON else []
 
         def z_at(p):
             la_, lo_, _ = self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
@@ -6016,7 +6028,8 @@ class _Planner:
             bi = hc["end_of"][int(hit[0])]
             half_b = float((hc.get("bridge_half") or [JR_TRUSTED_HALF_M] * len(hc["bridges"]))[bi])
             lt = [lf for end, lf in bridge_lifts(bridge, bridges, ground, z_at, chain, rails,
-                                                 under_z=self._under_trusted(ground, half_b, z_at))
+                                                 under_z=self._under_trusted(ground, half_b, z_at),
+                                                 limits=limits)
                   if dnp.hypot(*(end - xy)) <= APPROACH_TOUCH_M]
             jr_here = bool(lt) and float(lt[0]) >= JUNCTION_MIN_LIFT
             if not jr_here:
@@ -6065,7 +6078,8 @@ class _Planner:
             bi = hc["end_of"][int(hit[0])]
             hs = hc.get("bridge_half") or ()
             bhalf = float(hs[bi]) if bi < len(hs) and hs[bi] > 0 else 4.0
-        for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails, half=bhalf):
+        for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails, half=bhalf,
+                                      limits=limits):
             if dnp.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
                 best = lift
                 break
@@ -7268,7 +7282,8 @@ def ground_under_deck(deck, half, crossings, z_at):
     return np.minimum(out, z[:, mid])
 
 
-def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(), under_z=None, half=None):
+def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(), under_z=None, half=None,
+                 limits=()):
     """[(end xy (2,), lift m)] of a bridge part (line (k, 2) ENU m): at each of its ends that no other bridge part
     continues from (an abutment), how far the ground there must be raised for the deck to clear every road crossing
     under it (roads.DECK_ROAD_CLEAR + APPROACH_MARGIN_M over the road, full height within APPROACH_FLAT_M of the end,
@@ -7277,7 +7292,9 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     never meets a road deck at grade: the deck ended 3 m past one at Vitebsk, GitHub #324). z_at(xy (n, 2)) -> ground
     m; under_z(xy (n, 2)) -> m, when given: the heights of the roads under at their crossings instead of z_at there
     (_Planner._under_trusted). half: the deck's half width, the road under's ground then read beside the deck
-    (ground_under_deck) where under_z is not given; None: on the crossing itself. Pure given z_at and under_z."""
+    (ground_under_deck) where under_z is not given; None: on the crossing itself. limits: the height limits [(xy (k, 2),
+    m)] of the roads (roads.road_sign_at): a road under with one asks its limit under the girders (roads.signed_road_clear)
+    instead. Pure given z_at and under_z."""
     zu_at = z_at if under_z is None else under_z
     line = np.asarray(line, np.float64)[:, :2]
     if len(line) < 2:
@@ -7381,8 +7398,14 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         if not far.any():
             continue
         d, zu_e = d[far], zu[far]
-        need = zu_e + roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ()))))             + APPROACH_MARGIN_M \
-            - roadsmod.DECK_GRADE * np.maximum(d - APPROACH_FLAT_M, 0.0)
+        depth = roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ())))
+        clear = np.full(len(zu_e), roadsmod.deck_road_clear(depth))
+        if limits:
+            for n, (p, r) in enumerate(zip(pts[far], rail[far])):
+                h = None if r else roadsmod.road_sign_at(limits, p)
+                if h is not None:
+                    clear[n] = float(roadsmod.signed_road_clear(h, depth))
+        need = zu_e + clear + APPROACH_MARGIN_M - roadsmod.DECK_GRADE * np.maximum(d - APPROACH_FLAT_M, 0.0)
         lift = float(need.max() - z_at(end[None])[0])
         if lift >= APPROACH_MIN_LIFT:
             out.append((np.asarray(end, np.float64), min(lift, APPROACH_MAX_LIFT)))
@@ -7468,14 +7491,8 @@ def fill_abutment(z, at_end, step=PROFILE_STEP):
 
 def _limit_at(limits, pt):
     """m: the lowest height limit [(xy (k, 2), m)] holding at pt (a limit's polyline passing within LIMIT_NEAR_M), or
-    None."""
-    best = None
-    pt = np.asarray(pt, np.float64)[None, :2]
-    for xy, h in limits:
-        if len(xy) >= 2 and (best is None or h < best) and \
-                float(roadsmod._seg_dist(pt, xy[:-1, :2], xy[1:, :2]).min()) <= LIMIT_NEAR_M:
-            best = h
-    return best
+    None (roads.limit_at)."""
+    return roadsmod.limit_at(limits, pt, LIMIT_NEAR_M)
 
 
 def underpass_offsets(lines, requirements, queries=None):
@@ -7821,7 +7838,7 @@ def _wall_vertices(p):
     return out
 
 
-def share_corridors(plans, specs):
+def share_corridors(plans, specs, decks=()):
     """Roads whose carriageways touch or overlap side by side agree in height there: the difference left between two is
     what their gap holds at CORRIDOR_BANK, none where the pavements overlap. A through road holds over a slip road (a
     dipped one's dip carried onto the ramp beside it; DIP_HOLDS: a dipped road over every other), a higher grade_rank
@@ -7830,7 +7847,9 @@ def share_corridors(plans, specs):
     spline, its ends and its bridge ends held (native/earthfast corridor.rs). Two branches leaving a fork at a few degrees each
     climbed or fell on their own while their pavements still overlapped, and the blend gave the overlap to one: a
     0.4-0.8 m ramp across the lanes within 3 m (GitHub #1043 Wesley Chapel, #1045 Findlay's diverging diamond). plans
-    [(fid, Plan)] in place; specs: their Specs. Returns how many changed."""
+    [(fid, Plan)] in place; specs: their Specs; decks [(line (k, 2), half width)]: a plan the corridors would raise
+    more than CORRIDOR_UNDER_RAISE_M where it passes under one keeps its heights (CORRIDOR_UNDER_ON). Returns how many
+    changed."""
     if not plans:
         return 0
     import fast
@@ -7849,9 +7868,29 @@ def share_corridors(plans, specs):
                                                 float(CORRIDOR_WREQ), float(CORRIDOR_W0), float(CORRIDOR_LAM),
                                                 CORRIDOR_THROUGH)
     idx = np.flatnonzero(changed).tolist()
+    if CORRIDOR_UNDER_ON and decks and idx:
+        idx = [i for i in idx if not _raised_under(ps[i].xy, zn[off[i]:off[i + 1]] - ps[i].z, decks)]
     for i in idx:
         plans[i] = (plans[i][0], _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True))
     return len(idx)
+
+
+def _raised_under(xy, dz, decks):
+    """Is a plan (vertices xy (n, 2)) raised by dz (n,) more than CORRIDOR_UNDER_RAISE_M at a vertex inside a deck's
+    footprint (its line, half width)? Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    up = np.asarray(dz, np.float64) > CORRIDOR_UNDER_RAISE_M
+    if not up.any():
+        return False
+    pts = xy[up]
+    lo, hi = pts.min(0), pts.max(0)
+    for line, half in decks:
+        b = np.asarray(line, np.float64)[:, :2]
+        if len(b) < 2 or half <= 0 or (b.max(0) < lo - half).any() or (b.min(0) > hi + half).any():
+            continue
+        if float(roadsmod._seg_dist(pts, b[:-1], b[1:]).min()) <= float(half):
+            return True
+    return False
 
 
 def weld_continuations(plans, specs=None):

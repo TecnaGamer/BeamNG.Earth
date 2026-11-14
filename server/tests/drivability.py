@@ -69,6 +69,8 @@ SITES = {       # name: (fixture prefix, what was reported)
     "paris_maillot_1083": ("drive", "GitHub #1083, Paris: Avenue de Neuilly over the Périphérique at Porte Maillot"),
     "paris_maillot_ax_1083": ("drive", "GitHub #1083, Paris: Rue du Général Anselin over Voie AX at Porte Maillot"),
     "dc_capitol_crossing_1083": ("drive", "GitHub #1083, Washington DC: F Street over I-395 at Capitol Crossing"),
+    "boston_bowker": ("drive", "Boston: the Bowker Overpass over Storrow Drive under its 3.2-3.35 m height limits"),
+    "boston_storrow_massave": ("drive", "Boston: Storrow and Memorial Drives under Mass Ave, 2.74-3.66 m height limits"),
     **{name: ("interchange", what) for name, (_issue, what) in interchanges.SITES.items()},
 }
 RADIUS_M = 200.0
