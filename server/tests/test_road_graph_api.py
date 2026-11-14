@@ -31,6 +31,7 @@ import dem  # noqa: E402
 import gradesep  # noqa: E402
 import mapcells  # noqa: E402
 import navgraph  # noqa: E402
+import revisit  # noqa: E402
 from test_roads import FRAME, LAT, LON, features, rules  # noqa: E402
 
 AID = 3
@@ -89,8 +90,9 @@ class FakeDem:
     source a tile comes from. `fetched` is what a cached-only build must leave empty, and `lanes` says which lanes
     each sample was taken in: a sample outside them is one the real DEM would have downloaded for."""
 
-    def __init__(self, on_disk=True):
+    def __init__(self, on_disk=True, fault=False):
         self.on_disk = on_disk
+        self.fault = fault      # (stands in for anything the build reads short: gradesep's refused neighbour)
         self.fetched = []       # the samples that went off disk (a download, in the real Dem)
         self.lanes = []         # (dem lane, gradesep lane) at each sample
         self.cached = False
@@ -106,6 +108,8 @@ class FakeDem:
 
     def sample(self, la, lo, zoom, progress=None):
         self.lanes.append((self.cached, getattr(gradesep._local, "cached", False)))
+        if self.fault:
+            revisit.fault()
         if not self.on_disk:
             if self.cached:
                 raise dem.NotOnDisk(f"DEM tile of {zoom} is not in the disk cache")
@@ -254,6 +258,24 @@ class RoadGraphDataTest(unittest.TestCase):
         self.assertIn("rules", graph, "and still a graph the add-on can read")
         self.assertEqual(d.fetched, [], "nothing fetched for the ground it did not have")
         self.assertEqual(md.fetched, [], "nor for its cells")
+
+    def test_what_the_build_read_short_makes_the_window_incomplete_and_stays_in_it(self):
+        """A build reads more than the window's own cells -- the cells round them (gradesep), the land cover a
+        road's surface rule asks for -- and a read that could not have what it needed records a revisit fault. The
+        window is incomplete for those too, not only for a cell that was missing. And the faults stay inside this
+        build: in a thread with no scope of its own a fault is the process's, so an add-on's request would
+        otherwise stop every build the server had running meanwhile from being kept in the revisit cache."""
+        import earthd
+        keys = self.keys(300.0)
+        road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
+        md = FakeMapData({"roads": {k: (road if k == keys[0] else roads_cell([])) for k in keys}},
+                         on_disk=[(k, "roads") for k in keys])
+        orphans = revisit._orphans[0]
+        graph, not_read = earthd.Server.road_graph_data(fake_server(md, ".", dem_=FakeDem(fault=True)), AID,
+                                                        0.0, 0.0, window=300.0, cached_only=True)
+        self.assertGreater(len(graph["nodes"]), 0, "the roads it did read are in it, with their heights")
+        self.assertEqual(not_read, 1, "every cell of the window was there, and something else was not")
+        self.assertEqual(revisit._orphans[0], orphans, "and the faults stayed in this build, not the process's")
 
     def test_the_players_own_graph_is_left_as_it_was(self):
         """cached_only false (build_navgraph, the graph the AI drives): the cells at "demand" and the DEM free to
