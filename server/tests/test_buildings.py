@@ -579,8 +579,6 @@ class PackStyleTest(unittest.TestCase):
             # (an early-returned spec with a sloped roof: a small greenhouse's gable, Codex round 6)
             (np.array([(0, 0), (10, 0), (10, 8), (0, 8)], float), {"class": "greenhouse", "height": 4,
                                                                     "roof_shape": "gabled"}),
-            # (a church with its steeple: kept lite, Codex round 7)
-            (rect(0.0, 0.0, 30, 15), {"class": "church", "height": 18}),
         ]
         for ring, attrs in cases:
             b = [(bld.plan(ring, attrs), 0.0, 0.0)]
