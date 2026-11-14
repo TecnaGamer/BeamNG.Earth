@@ -159,7 +159,8 @@ Works with BeamNG.drive 0.40.5.
   shade by day, underpasses in a cutting (PR #1008, chateau86; PR #927, maartenvd).
 - **Railways**: rail beds from a lattice of node profiles, the same in every tile; switches and crossovers without steps;
   rails collide again (PR #957, zolaski333); trains' buffer stops; rail trails draw no track; roads dip under rail bridges
-  to the sign's height limit (PR #1193, Robitnik).
+  to the sign's height limit (PR #1193, Robitnik), and road bridges keep a road's posted height limit
+  underneath them (PR #1267, S-moreo).
 - **Germany's surveyed roads** (ATKIS Basis-DLM: width, lanes, surface; PR #1036, Henner4746) and one-way carriageways
   where OpenStreetMap places their lanes (PR #1014, Yukuhu).
 - **Traffic**: rough mapped roads slow traffic (PR #1122, ProxyFirewall202), speeding traffic where it is common (US), regional
@@ -167,7 +168,8 @@ Works with BeamNG.drive 0.40.5.
   (PR #1102, SwimmingRemy), traffic signals in the Netherlands go from red straight to green (PR #1214, svenegaming-glitch).
 - **Autodrive**: Autodrive no longer spins out after streamed-map updates (PR #1120, Madlykeanu); stops caused by disconnected
   local paths, duplicate roads in the AI graph and recovery while the game is paused were reduced (PR #1233, #1234, #1235,
-  Madlykeanu); it keeps to the planned road through forks and brakes at the destination.
+  Madlykeanu); it keeps to the planned road through forks and brakes at the destination, and no longer stops at sharp
+  bends or where its projected path ends (PR #1274, Madlykeanu).
 - **GPS**: route arrows at speed follow the route's line, a route across the date line is sampled the short way, and a
   failed re-plan keeps the route. **Car navigation screens** draw the road graph over the satellite photo (PR #472,
   iambobab).
@@ -202,6 +204,8 @@ Works with BeamNG.drive 0.40.5.
 - **Traffic U-turns at the graph's edge**: reduced the chance of cars turning around where the world ends.
 - **Memory**: a cache shed also drops the street widths' reframed wall segments (PR #1223, josh-abrams).
 - **Damaged cache files** in more places are rebuilt instead of failing tiles.
+- **Far scenery after a connection drop**: far tiles built without photos during an outage now get their photos once
+  the imagery services are back, without a teleport (PR #1260, OmdevShastri).
 - **Server stalls** moved off the main loop on slow or external disks (GitHub #1054).
 - **Reduced the chance of slow world building** on some machines: the "what will the car reach first" planning ran
   on the server's main loop and could hold up everything else (a player's log); it now runs on its own thread.
