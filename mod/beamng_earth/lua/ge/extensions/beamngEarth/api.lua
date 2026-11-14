@@ -31,12 +31,16 @@
 -- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
+-- The road network round a point (has('roadGraph')): api.roadGraph(lat, lon, opts, callback) asks the app to build one
+-- window of the road graph there out of the map cells it already has, and hands back the file it wrote (the add-on
+-- reads it itself). It is not the AI's graph and no map cell is downloaded for it; see docs/ADDONS.md.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 8
+M.MAJOR, M.MINOR = 1, 10
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true,
+  roadGraph = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
@@ -394,8 +398,7 @@ function M._onPlaces(msg)
   placesCall(r, result)
 end
 
-local function placesTimeouts(dt)
-  clock = clock + (tonumber(dt) or 0)
+local function placesTimeouts()
   local late = {}
   for id, r in pairs(placeReqs) do
     if clock - r.t > M.PLACES_TIMEOUT_S then late[#late + 1] = id end
@@ -406,6 +409,81 @@ local function placesTimeouts(dt)
     local r = placeReqs[id]
     placeReqs[id] = nil
     placesCall(r, { places = {}, complete = false, pending = false, error = 'timed out' })
+  end
+end
+
+------------------------------------------------------------------------------------------
+-- the road graph round a point (has('roadGraph'))
+
+-- (its own wait, shorter than PLACES_TIMEOUT_S: no map cell is fetched for a road graph, so unlike a places request
+-- it never waits on a download, and PLACES_TIMEOUT_S is 150 s because the app's own wait for missing cells is 2 min.
+-- What is left to wait for is the build itself and the requests queued ahead of it on the one thread the app answers
+-- API requests on: a road-graph window is a wider read than a places query and the app assembles nodes, lanes,
+-- speeds and bridge decks from it, which is seconds, so 90 s is well past several of them in a row)
+M.ROAD_GRAPH_TIMEOUT_S = 90
+local graphReqs, graphReqId = {}, 0
+
+-- One window of the road network round lat, lon (has('roadGraph')), built by the app out of the map cells it already
+-- has and written to a file the add-on reads itself. opts (all optional):
+--   radius (m, half the side of the square around the point: default 1100, at most 2000).
+-- callback(result) once: { path (the file, a game VFS path such as '/temp/beamngEarth/<session>/roadgraph_3_1.json'),
+-- anchorId, serial, complete (every map cell of the window was on disk), error (why there is no graph: no map data,
+-- the app started without roads, no world yet, bad coordinates, timed out) }. Returns the request's id, or nil and why.
+-- The file is { nodes = { [name] = { x, y, z, radius } }, edges = { { in, out, oneway, lanesOut, lanesIn, speed m/s,
+-- drivability, radius, ... } }, ... } in the current anchor's frame (api.toGeo turns x, y back into lat, lon).
+-- What it does not promise:
+--   * No map cell is downloaded for it. The app reads the window's layers only where it has them on disk; a window
+--     over ground the player has never been near comes back with few roads and complete = false, which is the honest
+--     answer rather than a slow one. There is deliberately no fetching form of the request.
+--   * It is not the AI's graph. The file is the add-on's own copy and never reaches the game's map, so writing to it
+--     or ignoring it moves no car and no traffic.
+--   * There is no bridge flag. A node on a bridge takes the deck's height, which is the right height, but nothing in
+--     nodes or edges says that stretch is a bridge, and the heights alone cannot be read as one.
+--   * It depends on the app having roads at all: one started with roads off answers with error and no path, and
+--     has('roadGraph') cannot see that (it is this mod's version, not the app's state).
+-- Read the file soon: the app keeps only the last couple of graphs of an anchor and deletes the older ones.
+function M.roadGraph(lat, lon, opts, callback)
+  if type(opts) == 'function' and callback == nil then opts, callback = nil, opts end
+  lat, lon = tonumber(lat), tonumber(lon)
+  if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then return nil, 'bad coordinates' end
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  opts = type(opts) == 'table' and opts or {}
+  graphReqId = graphReqId + 1
+  graphReqs[graphReqId] = { fn = callback, t = clock }
+  net.send({ type = 'road_graph', id = graphReqId, lat = lat, lon = lon, radius = tonumber(opts.radius),
+    cachedOnly = true })
+  return graphReqId
+end
+
+local function roadGraphCall(r, result)
+  local ok, err = pcall(r.fn, result)
+  if not ok and log then log('W', 'beamngEarth', 'api: a roadGraph callback failed: ' .. tostring(err)) end
+end
+
+-- (ours: core.lua hands the app's road_graph_result here)
+function M._onRoadGraph(msg)
+  local r = type(msg) == 'table' and graphReqs[msg.id]
+  if not r then return end
+  graphReqs[msg.id] = nil                 -- (one answer a request: nothing follows it)
+  roadGraphCall(r, { path = type(msg.path) == 'string' and msg.path or nil, anchorId = tonumber(msg.anchorId),
+    serial = tonumber(msg.serial), complete = msg.complete == true,
+    error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+local function roadGraphTimeouts()
+  local late = {}
+  for id, r in pairs(graphReqs) do
+    if clock - r.t > M.ROAD_GRAPH_TIMEOUT_S then late[#late + 1] = id end
+  end
+  -- (called after the walk, as placesTimeouts is: a callback may ask again, and a key added during pairs() is
+  --  undefined in Lua)
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = graphReqs[id]
+    graphReqs[id] = nil
+    roadGraphCall(r, { complete = false, error = 'timed out' })
   end
 end
 
@@ -446,7 +524,11 @@ end
 local wasReady, teleporting = false, false
 
 function M.onUpdate(dtReal)
-  if next(placeReqs) then placesTimeouts(dtReal) end
+  -- (the one clock both request kinds date themselves by: carried forward only while something is in flight, so a
+  --  request made after a long quiet spell is not already late)
+  if next(placeReqs) or next(graphReqs) then clock = clock + (tonumber(dtReal) or 0) end
+  if next(placeReqs) then placesTimeouts() end
+  if next(graphReqs) then roadGraphTimeouts() end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
   if st.pending and st.pending.purpose == 'teleport' then teleporting = true end
@@ -460,6 +542,9 @@ function M.onUpdate(dtReal)
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
+function M._reset()
+  listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0
+  graphReqs = {}
+end
 
 return M

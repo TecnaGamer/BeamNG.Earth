@@ -219,6 +219,9 @@ MOD_TO_SERVER = {
     "places": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "categories": F(list, OPT),
                "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT),
                "cachedOnly": F(bool)},      # only the cells on disk, a wide radius then allowed (places.py)
+    # the modding API's road graph round a point (api.lua roadGraph; navgraph.py, earthd ROAD_GRAPH_RADIUS_MAX_M).
+    # cachedOnly is always true: there is no fetching form of this request
+    "road_graph": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "cachedOnly": F(bool)},
     # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
     "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
     "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
@@ -299,6 +302,9 @@ SERVER_TO_MOD = {
     "places_result": {"id": F(int), "places": F(list), "complete": F(bool), "pending": F(bool),
                       "buildings": F(list, OPT), "next": F(str, OPT), "truncated": F(bool, OPT),
                       "error": F(str, OPT)},
+    # ... its road graph: the file the add-on reads (navgraph.write prefix "roadgraph"), or error and no path
+    "road_graph_result": {"id": F(int), "complete": F(bool), "path": F(str, OPT), "anchorId": F(int, OPT),
+                          "serial": F(int, OPT), "error": F(str, OPT)},
     "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
               "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
@@ -477,6 +483,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
                        "places_result",                              # the modding API's places (test_places_api)
+                       "road_graph_result",                          # ... its road graph (test_road_graph_api)
                        "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)

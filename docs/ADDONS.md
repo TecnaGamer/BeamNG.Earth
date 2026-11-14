@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 8) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
+| `version()` | `major, minor` (1, 10) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'roadGraph'` (1.10) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -173,6 +173,7 @@ end
 | `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
+| `roadGraph(lat, lon, opts, callback)` | 1.10: one window of the road network round a point, out of the map cells the app already has, as a file the add-on reads (see "The road graph round a point" below). Returns the request's id, or `nil, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -302,6 +303,89 @@ end
   box over the cap has its reach cut back to fit, with `truncated` saying so. The cut is concentric round the point
   and the same on every page, so paging by `next` stays right across it.
 - `buildings` keeps its own 500 m reach and count of 100 whatever `radius` and `cachedOnly` say.
+
+### The road graph round a point (1.10)
+
+For add-ons that need to know where the roads *are* rather than where the player is: a route painter, a trail tool, a
+stage matcher. `api.roadGraph(lat, lon, opts, callback)` asks the app to build one window of the road network round
+that point out of the map cells it already has, and hands back the file it wrote; the add-on reads the file itself.
+
+```lua
+if api.has('roadGraph') then
+  api.roadGraph(lat, lon, { radius = 1500 }, function(r)
+    if not r.path then print('no road graph: ' .. tostring(r.error)) return end
+    local ok, g = pcall(jsonDecode, readFile(r.path) or '')     -- as the mod reads the session's own graph
+    if not (ok and type(g) == 'table') then return end
+    for name, n in pairs(g.nodes) do
+      local la, lo = api.toGeo(n[1], n[2])        -- the graph's x, y are in the anchor frame r.anchorId names
+      print(name, la, lo, n[3], n[4])
+    end
+    for _, e in ipairs(g.edges) do print(e[1], e[2], e[6], e[7]) end
+  end)
+end
+```
+
+`opts` (all optional):
+
+| field | |
+|---|---|
+| `radius` | metres: half the side of the square around the point the graph covers, default 1100 (the session's own window), at most 2000. The build's cost grows with the square of it |
+
+The callback gets one result, once: `{path, anchorId, serial, complete, error}`.
+
+- `path`: the graph's file as a game VFS path (`'/temp/beamngEarth/<session>/roadgraph_<anchorId>_<serial>.json'`),
+  nil when there is none. Read it soon: the app keeps only the last two road graphs of an anchor and deletes the
+  older ones, so a path held across several requests can be gone.
+- `anchorId`, `serial`: the anchor whose frame the graph's coordinates are in, and the request's number within the
+  session. The anchor is the one the world is built round now, the one `pose()` and `toGame` / `toGeo` use; a rebase
+  (`onBeamNGEarthRebased`) makes an older graph's `x, y` stale, so ask again rather than convert them.
+- `complete`: every map cell of the window was on disk. False means some were not, and they were not asked for:
+  the graph is the roads of the cells that were there.
+- `error`: why there is no graph: `'bad coordinates'`, no map data, the app started without roads, no world yet,
+  `'timed out'` (no answer in 90 s).
+
+#### The graph's own fields
+
+The file is the same shape the session's own navigation graph has (`server/navgraph.py`), in the anchor's frame —
+metres east and north of the origin `pose()` reports as `anchorLat` / `anchorLon`, which is what `api.toGame` and
+`api.toGeo` convert.
+
+- `nodes`: `{ [name] = { x, y, z, radius } }`. `name` is a short stable id (the same junction keeps the same name in
+  every graph of the session). `x, y` metres in the anchor frame, `z` the drivable surface's height there (not the
+  terrain's: a node on a bridge takes the deck's height), `radius` the road's half width in metres at that node.
+- `edges`: `{ { in, out, oneway, lanesOut, lanesIn, speed, drivability, radius, ... } }`. `in` and `out` are node
+  names; `oneway` 1 for a one-way from `in` to `out` and 0 for both ways; `lanesOut` / `lanesIn` the lane counts
+  each way; `speed` metres per second; `drivability` 0..1, how readily the AI uses it (a motorway is near 1, a
+  service road low); `radius` the half width again, for the edge. Fields past the eighth are optional and may be
+  added later: read by index up to the eighth and ignore the rest.
+- `lines`: stretches that are on the map but not drivable in game (a mapped tunnel the app did not build), as
+  `{ x1, y1, x2, y2, drivability, speed }` — the in-game map draws them. There are no nodes for them.
+- `rules`: the country's road rules at the window's centre (`rightHandDrive`, `mph`, ...).
+
+The file carries the session graph's other fields too (`signals`, `trafficProfile`, ...). They are the game's, not
+part of this call's promise: read `nodes`, `edges`, `lines` and `rules`, and expect the rest to change.
+
+#### What a cached-only road graph is and is not good for
+
+- **Nothing is downloaded for it.** The app reads the roads, signals, crossings and route layers of the window only
+  where it has them on disk, at no download priority at all. A window over ground the player has never been near
+  comes back with few roads and `complete = false`, which is the honest answer rather than a slow one. (The ground
+  heights under the nodes come from the app's elevation data, which it reads as it does everywhere else.) There is
+  deliberately no fetching form of this request: an add-on that wants a region's roads should ask for the region to
+  be downloaded (the map's area download) and then ask for the graph.
+- **It is not the AI's graph.** The file is the add-on's own copy and never reaches the game's map, so it moves no
+  car and no traffic, and the player's own graph (`navgraph_*.json`, rebuilt every 400 m as they drive) is never
+  touched by a request. Equally, an add-on cannot steer the AI by asking for a graph.
+- **There is no bridge flag.** A node on a bridge takes the deck's height, which is the right height, but nothing in
+  `nodes` or `edges` says that stretch is a bridge, and the heights alone cannot be read as one (a road up a hill
+  looks the same). An add-on that needs bridges has to get them elsewhere.
+- **It depends on the app having roads at all.** A server or app started without them (`--traffic off` / `--roads
+  off`, fixed when it starts) answers with `error` and no path. `has('roadGraph')` cannot see that — it is this
+  mod's version, not the app's state — so check `result.path` rather than the capability.
+- **It is a window, not a query.** The whole window's roads come back, and the add-on does the rest: nearest road,
+  matching a line, walking a route. Ask for the smallest `radius` that covers what you need; the cost grows with the
+  square of it, and the app builds it on the one thread it answers API requests on, so a 2000 m window asked for in
+  a loop will make the add-on wait on itself.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and

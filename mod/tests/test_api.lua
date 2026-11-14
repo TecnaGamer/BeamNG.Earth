@@ -5,7 +5,8 @@
 -- notify; the events as game hooks and listeners (worldReady after loading, teleported after a teleport only,
 -- routeArrived from gps.lua), a failing listener contained; places / buildings (1.4): the request sent, each answer
 -- to its own callback (a pending one kept for the next), paging, a timeout heard once; cachedOnly (1.8): the flag
--- sent and result.truncated surfaced.
+-- sent and result.truncated surfaced; roadGraph: the request sent cached-only, one answer a request, every result
+-- field defended, its own timeout beside the places one.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 dofile(dir .. '/stubs.lua')
@@ -54,8 +55,8 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 8,
-  'version 1.8 (routeSteps, rebase from 1.7; cachedPlaces)')
+T.check(api.version() == 1 and select(2, api.version()) == 10,
+  'the major and minor version (routeSteps, rebase from 1.7; cachedPlaces; roadGraph)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -347,5 +348,69 @@ T.near(bo, 7.01, 1e-8, 'toGeo round trip')
 st.inOurLevel = false
 T.check(api.toGame(45.0, 7.0) == nil and api.toGeo(0, 0) == nil, 'another level: nil')
 st.inOurLevel = true
+
+-- the road graph round a point (has('roadGraph'); server earthd Connection.road_graph, navgraph.py)
+api._reset()
+sent = {}
+T.check(api.has('roadGraph'), 'roadGraph: has()')
+T.check(select(2, api.version()) > 8, 'roadGraph: the minor version bumped past the cachedPlaces one')
+local graphs = {}
+local gid = api.roadGraph(39.2847, -76.5925, { radius = 1500 }, function(r) graphs[#graphs + 1] = r end)
+local gq = sent[#sent]
+T.check(gid and gq.type == 'road_graph' and gq.id == gid and gq.lat == 39.2847 and gq.radius == 1500,
+  'roadGraph: the request sent')
+T.check(gq.cachedOnly == true, 'roadGraph: cached-only is its only mode')
+api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_1.json', anchorId = 3, serial = 1,
+  complete = true })
+T.check(#graphs == 1 and graphs[1].path == '/temp/beamngEarth/s1/roadgraph_3_1.json' and graphs[1].anchorId == 3
+  and graphs[1].serial == 1 and graphs[1].complete == true and graphs[1].error == nil, 'roadGraph: the answer')
+api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_2.json', complete = true })
+T.check(#graphs == 1, 'roadGraph: one answer a request, nothing after it')
+api._onRoadGraph({ id = gid + 100, path = '/x', complete = true })
+T.check(#graphs == 1, 'roadGraph: another request\'s answer not ours')
+-- a result that says nothing useful: every field defended, nothing invented
+local bare = nil
+local bid = api.roadGraph(1, 2, function(r) bare = r end)
+T.check(bid and sent[#sent].radius == nil, 'roadGraph: opts may be left out; no radius sent (the app\'s default)')
+api._onRoadGraph({ id = bid, path = 7, anchorId = 'three', serial = {}, complete = 'yes', error = 42 })
+T.check(bare and bare.path == nil and bare.anchorId == nil and bare.serial == nil and bare.complete == false
+  and bare.error == nil, 'roadGraph: wrong types are nil, not passed on')
+local err = nil
+local eid = api.roadGraph(1, 2, {}, function(r) err = r end)
+api._onRoadGraph({ id = eid, complete = false, error = 'no map data (BeamNG.Earth\'s roads are off)' })
+T.check(err and err.path == nil and err.error:find('no map data') and err.complete == false,
+  'roadGraph: the app\'s reason surfaced')
+local g0, gwhy = api.roadGraph(91, 0, {}, print)
+T.check(g0 == nil and gwhy == 'bad coordinates', 'roadGraph: bad coordinates refused')
+T.check(api.roadGraph(1, 2, {}) == nil, 'roadGraph: no callback refused')
+connected = false
+local g1, gwhy1 = api.roadGraph(1, 2, {}, print)
+T.check(g1 == nil and gwhy1 and gwhy1:find('not connected'), 'roadGraph: not connected')
+connected = true
+-- never answered: heard once, timed out, and a failing callback contained
+local lateG = {}
+api.roadGraph(1, 2, {}, function(r) lateG[#lateG + 1] = r error('a broken callback') end)
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S - 1)
+T.check(#lateG == 0, 'roadGraph: not timed out yet')
+api.onUpdate(2)
+T.check(#lateG == 1 and lateG[1].error == 'timed out' and lateG[1].complete == false, 'roadGraph: timed out once')
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S * 2)
+T.check(#lateG == 1, 'roadGraph: only once')
+T.check(api.ROAD_GRAPH_TIMEOUT_S > 0 and api.ROAD_GRAPH_TIMEOUT_S < api.PLACES_TIMEOUT_S,
+  'roadGraph: its own wait, under the places one (no download is ever waited on)')
+-- the two request kinds keep their own tables and their own waits
+api._reset()
+sent = {}
+local bothP, bothG = {}, {}
+local pid = api.places(1, 2, {}, function(r) bothP[#bothP + 1] = r end)
+local ggid = api.roadGraph(1, 2, {}, function(r) bothG[#bothG + 1] = r end)
+api.onUpdate(api.ROAD_GRAPH_TIMEOUT_S + 1)
+T.check(#bothG == 1 and bothG[1].error == 'timed out' and #bothP == 0,
+  'the road graph times out on its own clock, the places request still waiting')
+api.onUpdate(api.PLACES_TIMEOUT_S)
+T.check(#bothP == 1 and bothP[1].error == 'timed out', 'and the places request on its own')
+api._onPlaces({ id = pid, places = {}, complete = true })
+api._onRoadGraph({ id = ggid, path = '/x', complete = true })
+T.check(#bothP == 1 and #bothG == 1, '_reset\'s tables: a late answer to a swept request is dropped')
 
 T.done('test_api')
