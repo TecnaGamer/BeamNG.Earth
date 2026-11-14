@@ -751,6 +751,18 @@ class ClassifyTest(unittest.TestCase):
 
 
 class PolicyTest(unittest.TestCase):
+    def test_category_overpass_timeout_and_breaker(self):
+        f, clock, sleep, tr = fetcher()
+        with mock.patch.object(tr, "request", side_effect=TimeoutError("slow Overpass")) as request:
+            with self.assertRaises(nf.FetchFailed):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "no automatic retry")
+            self.assertEqual(request.call_args.args[2], 4.0, "Overpass alone has the shorter timeout")
+            with self.assertRaises(nf.HostUnavailable):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "the breaker still prevents another request")
+        self.assertEqual(nf.POLICIES["query.wikidata.org"].timeout, 7.0)
+
     def test_denied_hosts(self):
         f, clock, sleep, tr = fetcher()
         for host in ("vector.openstreetmap.org", "build.protomaps.com"):

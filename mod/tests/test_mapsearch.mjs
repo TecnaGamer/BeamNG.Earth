@@ -58,7 +58,7 @@ function harness() {
   const factory = new Function('ref', 'computed', 'watch', 'onUnmounted', 'nextTick', 'setTimeout', 'clearTimeout',
     'engineLua', 'query', 'results', 'searchMsg', 'state', 'view', 'follow', 'sm', 'mm', 'w', 'h', 'screen',
     'toArray', 'luaStr', 'document', 'searchEl', 'setGps', 'askTeleport',
-    handlers + '\nreturn { liveSearch, searchCategory, clearSearch, moveResult, previewResult, leaveResult, selectResult, onSearch, pickResult, searching, searchWide, resultIndex, hoverIndex, searchPreview };')
+    handlers + '\nreturn { liveSearch, searchCategory, clearSearch, moveResult, previewResult, leaveResult, selectResult, onSearch, pickResult, searching, searchWide, resultIndex, hoverIndex, searchPreview, searchFocused, searchToolsVisible, searchPanelVisible, searchFocusOut };')
   const api = factory(ref, fn => ({ get value() { return fn() } }), (r, fn) => { r.watcher = fn },
     fn => unmount.push(fn), nextTick, (fn, delay) => { timers.set(++timerId, { fn, delay }); return timerId },
     id => timers.delete(id), (script, cb) => calls.push({ script, cb }), query, results, searchMsg, state, view,
@@ -141,3 +141,23 @@ function harness() {
   assert.equal(h.calls.length, 3, 'repeated Enter while wider search runs cannot select old results')
 }
 console.log('mapsearch presentation, chips, navigation, stale responses, empty/error states and teardown: OK')
+
+{
+  const h = harness()
+  assert.equal(h.searchPanelVisible.value, false, 'no idle palette over the map')
+  h.searchFocused.value = true
+  assert.equal(h.searchToolsVisible.value, true, 'empty focused field offers chips')
+  h.searchFocusOut({ currentTarget: { contains: () => true }, relatedTarget: {} })
+  assert.equal(h.searchToolsVisible.value, true, 'tabbing to a chip does not collapse it')
+  h.searchFocusOut({ currentTarget: { contains: () => false }, relatedTarget: null })
+  assert.equal(h.searchToolsVisible.value, false)
+  assert.equal(h.searchPanelVisible.value, false, 'leaving an empty search hides chips/hint')
+  h.results.value = [nearby]
+  assert.equal(h.searchPanelVisible.value, true, 'visible results retain their data attribution')
+  assert.equal(h.searchToolsVisible.value, false)
+  h.query.value = 'forest'; await h.tick()
+  assert.equal(h.searchToolsVisible.value, true, 'typed query keeps chips when focus leaves')
+}
+assert.match(source, /A sets GPS, then X teleports/)
+const areaHandlers = fullScript.slice(fullScript.indexOf('function askRoute('), fullScript.indexOf('// ---- search '))
+assert.ok(!areaHandlers.includes('searchPollTimer'), 'area polling never shares the search timer (0494de12)')

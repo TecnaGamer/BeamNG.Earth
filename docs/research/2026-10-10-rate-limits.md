@@ -791,4 +791,6 @@ flight, which removes most of the 21 req/s at 10 km.
 
 Category search also uses `query.wikidata.org`: 0.1/s, burst/concurrency 1, 50/day soft, 100/day hard,
 no retries or prefetch, 60-second breaker on failure, one-hour application cache. Queries return at most 24
-notable direct class instances and avoid recursive subclass walks. Both hosts use netfetch's project User-Agent.
+notable class-family instances (P31/P279*); motorsport searches exclude airports explicitly. Overpass has a
+4-second HTTP timeout, named selectors, and a 15 km radius for line/area categories (50 km for peaks, race tracks,
+airports and dams). Candidate distances are recomputed after the cache; admission failures are cached for at most 10 seconds. Both hosts use netfetch's project User-Agent.

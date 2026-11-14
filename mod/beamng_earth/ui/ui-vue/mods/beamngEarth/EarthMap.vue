@@ -144,7 +144,7 @@
         <span v-if="weatherBadge.temp != null">{{ weatherBadge.temp }}</span>
         <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
       </div>
-      <div class="search" @mousedown.stop>
+      <div class="search" @mousedown.stop @focusin="searchFocused = true" @focusout="searchFocusOut">
         <div class="search-field">
           <input ref="searchEl" v-model="query" class="search-input" role="combobox" aria-autocomplete="list" aria-label="Search places, categories or addresses"
                  aria-controls="earth-search-results" :aria-expanded="!!(searching || results.length || searchMsg)"
@@ -155,8 +155,8 @@
                  @keydown.up.stop.prevent="moveResult(-1)" @keydown.esc.stop.prevent="clearSearch" />
           <button v-if="query" class="search-clear" aria-label="Clear search" title="Clear search" @click="clearSearch">×</button>
         </div>
-        <div class="search-panel">
-          <div class="search-tools" aria-label="Find a driving destination">
+        <div v-if="searchPanelVisible" class="search-panel">
+          <div v-if="searchToolsVisible" class="search-tools" aria-label="Find a driving destination">
             <button v-for="c in sm.QUICK" :key="c.kind" class="category-chip" :class="{ on: query === c.query }"
                     :title="'Find ' + c.label.toLowerCase() + ' near you and notable places worldwide'"
                     @click="searchCategory(c)">
@@ -165,11 +165,11 @@
             <button class="category-chip" :aria-expanded="categoriesOpen" aria-controls="earth-categories"
                     @click="categoriesOpen = !categoriesOpen">{{ categoriesOpen ? 'Less' : 'More…' }}</button>
           </div>
-          <div v-if="categoriesOpen" id="earth-categories" class="category-picker" aria-label="More categories">
+          <div v-if="searchToolsVisible && categoriesOpen" id="earth-categories" class="category-picker" aria-label="More categories">
             <button v-for="c in sm.CATEGORIES.filter(c => !sm.QUICK.includes(c))" :key="c.kind" class="category-chip"
                     @click="searchCategory(c)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="c.path" /></svg>{{ c.label }}</button>
           </div>
-          <div v-if="!query && !searching" class="search-hint">Near you + notable places worldwide</div>
+          <div v-if="searchToolsVisible && !query && !searching" class="search-hint">Near you + notable places worldwide</div>
           <div v-if="searching || searchMsg" class="search-status" role="status" aria-live="polite">
             <span v-if="searching" class="search-spinner" aria-hidden="true"></span>
             <span>{{ searching ? (searchWide ? 'Searching wider… Finding category places and addresses.' : 'Searching places…') : searchMsg }}</span>
@@ -190,7 +190,7 @@
             </button>
           </div>
           <button v-if="moreFor && !searching" class="search-more" @click="liveSearch(true)">Search wider: categories &amp; addresses ↵</button>
-          <div v-if="results.length" class="search-hint">↑ ↓ choose · Enter / A sets GPS · X teleports</div>
+          <div v-if="searchToolsVisible && results.length" class="search-hint">↑ ↓ choose · Enter / A sets GPS, then X teleports</div>
           <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Overpass, Photon), Wikipedia, Wikidata</div>
         </div>
       </div>
@@ -1899,6 +1899,17 @@ function goTo(lat, lon, name) {
 // unless the server is sure of the list's first line (not a street, no house number); Enter on that answer takes its first line. A "lat, lon" on Enter.
 const MAP_WAIT_TRIES = 100      // x 150 ms: longer than the server's own limit (geocode.py ENTER_DEADLINE_S)
 const searching = ref(false), searchWide = ref(false), categoriesOpen = ref(false)
+const searchFocused = ref(false)
+const searchToolsVisible = computed(() => searchFocused.value || !!query.value.trim())
+// Before category chips, search attribution was shown whenever results were visible. Preserve that case.
+const searchPanelVisible = computed(() => searchToolsVisible.value || !!results.value.length || searching.value || !!searchMsg.value)
+function searchFocusOut(event) {
+  // Keep the palette open while focus moves from the empty field to a chip (keyboard/controller included).
+  if (!event.currentTarget.contains(event.relatedTarget)) {
+    searchFocused.value = false
+    categoriesOpen.value = false
+  }
+}
 const resultsEl = ref(null), hoverIndex = ref(-1)
 const displayResults = computed(() => results.value.map(r => sm.present(r, state.value.player)))
 const searchPreview = computed(() => {

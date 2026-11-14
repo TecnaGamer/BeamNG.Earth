@@ -343,7 +343,7 @@ POLICIES = {
                                        max_attempts=3, base_delay=2.0, optional=True),
     # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
     "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
-                                   cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,
+                                   cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
                                    interactive_only=True, breaker_threshold=1, breaker_open=60.0),
     "query.wikidata.org": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
                                      cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,

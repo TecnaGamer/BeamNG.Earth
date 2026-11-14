@@ -69,15 +69,18 @@ class CategoriesTest(unittest.TestCase):
     def test_builders(self):
         query = parse_qs(urlparse(g.category_overpass_url(self.cat, 40, -75)).query)['data'][0]
         self.assertIn('[timeout:5][maxsize:8388608]', query)
-        self.assertIn('nwr["highway"="raceway"](around:50000,40.00,-75.00)', query)
+        self.assertIn('nwr["highway"="raceway"]["name"](around:50000,40.00,-75.00)', query)
         self.assertTrue(query.endswith('out center tags 200;'))
         self.assertNotIn('poly', query)
         query = parse_qs(urlparse(g.category_wikidata_url(self.cat, (1, 2, 3, 4))).query)['query'][0]
-        self.assertIn('wd:Q1777138', query)
+        self.assertIn('wd:Q2338524', query)
+        self.assertNotIn('wd:Q1777138', query)
         self.assertIn('FILTER(?links >= 20)', query)
         self.assertIn('LIMIT 24', query)
         self.assertIn('geof:latitude(?coord) >= 1', query)
-        self.assertNotIn('P279*', query)
+        self.assertIn('wdt:P31/wdt:P279* ?class', query)
+        self.assertIn('FILTER NOT EXISTS', query)
+        self.assertIn('wd:Q1248784 wd:Q644371', query)
         for cat in g.CATEGORIES:
             self.assertTrue(cat['osm'])
             self.assertTrue(all(c.startswith('Q') and c[1:].isdigit() for c in cat['classes']))
@@ -87,8 +90,8 @@ class CategoriesTest(unittest.TestCase):
         data['elements'] += [{'lat': 91, 'lon': 0}, {'lat': 'NaN', 'lon': 0}, {},
                             {'lat': 40, 'lon': -75, 'tags': {}}]
         rows = g.parse_category_overpass(data, self.cat)
-        self.assertEqual(len(rows), 2)
-        self.assertTrue(rows[-1]['unnamed'])
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]['unnamed'])
         self.assertEqual(rows[0]['detail'], 'US')
         self.assertEqual(g.parse_category_wikidata(wd(), self.cat)[0]['links'], 80)
         bad = wd()
@@ -118,7 +121,7 @@ class CategoriesTest(unittest.TestCase):
         g._category_source(net, hit, 40, -75, 'wikidata')
         g._category_source(net, hit, 41, -74, 'wikidata')
         self.assertEqual(len(net.urls), 2)
-        self.assertEqual(a[0]['detail'], 'race track · 0.7 mi · US')
+        self.assertEqual(a[0]['detail'], 'race track · 0.6 mi · US')
         with mock.patch.object(g.time, 'monotonic', return_value=g.time.monotonic() + g.CACHE_S + 1):
             g._category_source(net, hit, 40, -75, 'overpass')
         self.assertEqual(len(net.urls), 3)
@@ -165,7 +168,7 @@ class CategoriesTest(unittest.TestCase):
         rows = [row('Far', 20), row('Near', 1), row('Unnamed race track', .1, unnamed=True),
                 row('Famous', 200, 'wikidata', links=90), row('Near', 1, 'wikidata', links=30)]
         out = g.merge_categories('race track', [], rows)
-        self.assertEqual([r['name'] for r in out], ['Near', 'Far', 'Unnamed race track', 'Famous'])
+        self.assertEqual([r['name'] for r in out], ['Near', 'Far', 'Famous'])
         net = Net()
         g.search('Laguna Seca', 40, -75, net=net, full=True)
         self.assertFalse(any('overpass' in u or 'query.wikidata' in u for u in net.urls))
@@ -237,4 +240,93 @@ class CategoriesTest(unittest.TestCase):
         g._category_cache.clear()
         names = run('Summit', 'Summit')
         self.assertIn('Summit', names)
-        self.assertEqual(names[0], 'Nearby Circuit', 'a bare category word still lists category places first')
+        self.assertEqual(names[0], 'Summit', 'an ambiguous single word prefers its exact place name')
+
+
+    def test_named_selectors_and_category_radii(self):
+        for cat in g.CATEGORIES:
+            with self.subTest(cat=cat['name']):
+                radius = 50000 if cat['name'] in ('race track', 'mountain peak', 'airport', 'dam') else 15000
+                self.assertEqual(cat['radius_m'], radius)
+                query = parse_qs(urlparse(g.category_overpass_url(cat, 40, -75)).query)['data'][0]
+                for selector in cat['osm']:
+                    self.assertIn('["name"]', selector)
+                    self.assertIn(selector + f'(around:{radius},40.00,-75.00)', query)
+                self.assertIn('[timeout:5]', query)
+                self.assertTrue(query.endswith('out center tags 200;'))
+        forest = g.category_query('forest')[0]
+        query = parse_qs(urlparse(g.category_overpass_url(forest, 40, -75, (39.5, 40.5, -75.5, -74.5))).query)['data'][0]
+        self.assertIn('(around:15000,40.00,-75.00)(39.5,-75.5,40.5,-74.5)', query,
+                      'a named region cannot bypass the radius limit')
+        for name in (None, '', '   '):
+            self.assertEqual(g.parse_category_overpass(osm(name=name), forest), [])
+
+    def test_class_families_and_airport_exclusion(self):
+        classes = {'race track': ['Q2338524', 'Q926439', 'Q1232319', 'Q357121'],
+                   'karting': ['Q1232319'], 'drag strip': ['Q357121'], 'rally': ['Q3924399']}
+        for cat in g.CATEGORIES:
+            query = parse_qs(urlparse(g.category_wikidata_url(cat)).query)['query'][0]
+            self.assertIn('LIMIT 24', query)
+            self.assertIn('wdt:P31/wdt:P279* ?class', query)
+            if cat['name'] in classes:
+                self.assertEqual(cat['classes'], classes[cat['name']])
+                self.assertIn('FILTER NOT EXISTS { VALUES ?excludedClass { wd:Q1248784 wd:Q644371 }', query)
+                self.assertIn('?item wdt:P31/wdt:P279* ?excludedClass', query)
+            elif cat['name'] == 'airport':
+                self.assertNotIn('FILTER NOT EXISTS', query, 'airport searches still return airports')
+
+    def test_admission_failure_cooldowns(self):
+        for error in (nf.RateLimited, nf.BudgetExceeded, nf.HostUnavailable):
+            with self.subTest(error=error.__name__), mock.patch.object(g.time, 'monotonic', return_value=100) as now:
+                key = ('admission', error.__name__)
+                fn = mock.Mock(side_effect=[error('not admitted'), ['recovered']])
+                with self.assertRaises(error):
+                    g._category_cached(key, fn)
+                now.return_value = 109
+                with self.assertRaises(error):
+                    g._category_cached(key, fn)
+                self.assertEqual(fn.call_count, 1)
+                now.return_value = 110.01
+                self.assertEqual(g._category_cached(key, fn), ['recovered'])
+                self.assertEqual(fn.call_count, 2)
+
+    def test_precise_distances_do_not_leak_into_candidate_cache(self):
+        net = Net()
+        hit = g.category_query('race tracks')
+        for source in ('overpass', 'wikidata'):
+            a = g._category_source(net, hit, 40.001, -75.001, source)
+            b = g._category_source(net, hit, 40.004, -75.004, source)
+            self.assertNotEqual(a[0]['distance_mi'], b[0]['distance_mi'])
+            self.assertAlmostEqual(a[0]['distance_mi'], g.category_km(40.001, -75.001, a[0]['lat'], a[0]['lon']) / 1.609344)
+            self.assertAlmostEqual(b[0]['distance_mi'], g.category_km(40.004, -75.004, b[0]['lat'], b[0]['lon']) / 1.609344)
+            a[0]['detail'] = 'caller changed it'
+            self.assertNotEqual(g._category_source(net, hit, 40.004, -75.004, source)[0]['detail'], a[0]['detail'])
+        self.assertEqual(len(net.urls), 2, 'moving inside a rounded cell reuses both wire requests')
+
+    def test_ambiguous_prefixes_prefer_places_and_full_names_stay_normal(self):
+        def run(query, names):
+            places = [dict(name=name, detail='US', kind='village', lat=40.2 + i, lon=-75)
+                      for i, name in enumerate(names)]
+            net = Net()
+            with mock.patch.object(g, '_photon', return_value=places), \
+                    mock.patch.object(g, '_nominatim', return_value=[]), \
+                    mock.patch.object(g, '_wikidata', return_value=[]), \
+                    mock.patch.object(g, '_wikipedia', return_value=[]):
+                rows = g.search(query, 40, -75, net=net, full=True)
+            return rows, net
+        for word in ('Summit', 'Dam', 'Forrest', 'rock', 'pass', 'mountain', 'coast', 'trail', 'wood'):
+            with self.subTest(word=word):
+                self.assertIsNotNone(g.category_query(word))
+                g._category_cache.clear()
+                rows, _ = run(word, [word, word + ' County'])
+                self.assertEqual(rows[0]['name'], word)
+                self.assertEqual(rows[1]['name'], word + ' County')
+                g._category_cache.clear()
+                rows, _ = run(word, [word + ' County'])
+                self.assertEqual(rows[0]['name'], word + ' County')
+                self.assertTrue(any(r['result_type'] == 'category' for r in rows))
+        for query in ('Rocky Mountain National Park', 'Peak District'):
+            self.assertIsNone(g.category_query(query))
+            rows, net = run(query, [query])
+            self.assertEqual(rows[0]['name'], query)
+            self.assertFalse(any('overpass' in u or 'query.wikidata' in u for u in net.urls))

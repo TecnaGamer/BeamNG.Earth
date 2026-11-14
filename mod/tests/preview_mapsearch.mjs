@@ -52,9 +52,11 @@ const pin = document.querySelector('#pin');
 for (const child of [...document.querySelector('#marker').content.childNodes]) pin.append(render(child, scope));
 document.body.dataset.ready = 'true';
 `
-for (const mode of ['results', 'wider', 'empty']) {
+for (const mode of ['results', 'wider', 'empty', 'idle', 'focused']) {
   const scope = {
-    query: 'race track', results: mode === 'empty' ? [] : fixture, searching: mode === 'wider', searchWide: true,
+    query: ['idle', 'focused'].includes(mode) ? '' : 'race track',
+    searchFocused: mode === 'focused', searchToolsVisible: mode !== 'idle', searchPanelVisible: mode !== 'idle',
+    results: ['empty', 'idle', 'focused'].includes(mode) ? [] : fixture, searching: mode === 'wider', searchWide: true,
     searchMsg: mode === 'empty' ? 'No places found. Try another category or add “near <place>”.' : '',
     resultIndex: mode === 'results' ? 0 : -1, moreFor: '', categoriesOpen: false,
     displayResults: fixture.map(r => sm.present(r, { lat: 39.28, lon: -76.59 })),
@@ -69,4 +71,4 @@ for (const mode of ['results', 'wider', 'empty']) {
 <template id="fixture">${template}</template><template id="marker">${marker}</template>
 <script type="module">const scope=${JSON.stringify(scope)};scope.sm=${JSON.stringify({ QUICK: sm.QUICK, CATEGORIES: sm.CATEGORIES })};scope.sm.icon=kind=>(${JSON.stringify(Object.fromEntries(sm.CATEGORIES.map(c=>[c.kind,c.path])) )})[kind];${adapter}</script>`)
 }
-console.log(`Offline UI fixtures: ${out}/{results,wider,empty}.html`)
+console.log(`Offline UI fixtures: ${out}/{results,wider,empty,idle,focused}.html`)

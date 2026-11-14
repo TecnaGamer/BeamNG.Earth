@@ -9,11 +9,19 @@
       "racing circuit"
     ],
     "osm": [
-      "[\"highway\"=\"raceway\"]",
-      "[\"leisure\"=\"track\"][\"sport\"~\"^(motor|karting|motocross)$\"]"
+      "[\"highway\"=\"raceway\"][\"name\"]",
+      "[\"leisure\"=\"track\"][\"sport\"~\"^(motor|karting|motocross)$\"][\"name\"]"
     ],
     "classes": [
-      "Q1777138"
+      "Q2338524",
+      "Q926439",
+      "Q1232319",
+      "Q357121"
+    ],
+    "radius_m": 50000,
+    "exclude_classes": [
+      "Q1248784",
+      "Q644371"
     ]
   },
   {
@@ -25,9 +33,16 @@
       "go karting"
     ],
     "osm": [
-      "[\"sport\"=\"karting\"]"
+      "[\"sport\"=\"karting\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [
+      "Q1232319"
+    ],
+    "radius_m": 15000,
+    "exclude_classes": [
+      "Q1248784",
+      "Q644371"
+    ]
   },
   {
     "name": "drag strip",
@@ -37,9 +52,16 @@
       "drag racing"
     ],
     "osm": [
-      "[\"sport\"=\"drag_racing\"]"
+      "[\"sport\"=\"drag_racing\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [
+      "Q357121"
+    ],
+    "radius_m": 15000,
+    "exclude_classes": [
+      "Q1248784",
+      "Q644371"
+    ]
   },
   {
     "name": "rally",
@@ -49,10 +71,17 @@
       "gravel road"
     ],
     "osm": [
-      "[\"sport\"=\"rally\"]",
-      "[\"highway\"=\"track\"][\"surface\"~\"^(gravel|fine_gravel|compacted)$\"]"
+      "[\"sport\"=\"rally\"][\"name\"]",
+      "[\"highway\"=\"track\"][\"surface\"~\"^(gravel|fine_gravel|compacted)$\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [
+      "Q3924399"
+    ],
+    "radius_m": 15000,
+    "exclude_classes": [
+      "Q1248784",
+      "Q644371"
+    ]
   },
   {
     "name": "off-road",
@@ -68,11 +97,12 @@
       "4x4 trail"
     ],
     "osm": [
-      "[\"highway\"=\"track\"][\"tracktype\"~\"^grade[2-5]$\"]",
-      "[\"highway\"=\"track\"][\"4wd_only\"=\"yes\"]",
-      "[\"sport\"=\"4wd\"]"
+      "[\"highway\"=\"track\"][\"tracktype\"~\"^grade[2-5]$\"][\"name\"]",
+      "[\"highway\"=\"track\"][\"4wd_only\"=\"yes\"][\"name\"]",
+      "[\"sport\"=\"4wd\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [],
+    "radius_m": 15000
   },
   {
     "name": "motocross",
@@ -83,9 +113,10 @@
       "dirt bike track"
     ],
     "osm": [
-      "[\"sport\"=\"motocross\"]"
+      "[\"sport\"=\"motocross\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [],
+    "radius_m": 15000
   },
   {
     "name": "rock crawling",
@@ -96,10 +127,11 @@
       "rocks"
     ],
     "osm": [
-      "[\"sport\"=\"rock_crawling\"]",
-      "[\"sport\"=\"4wd\"][\"surface\"~\"^(rock|stone)$\"]"
+      "[\"sport\"=\"rock_crawling\"][\"name\"]",
+      "[\"sport\"=\"4wd\"][\"surface\"~\"^(rock|stone)$\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [],
+    "radius_m": 15000
   },
   {
     "name": "mountain peak",
@@ -112,11 +144,12 @@
       "mountain"
     ],
     "osm": [
-      "[\"natural\"=\"peak\"]"
+      "[\"natural\"=\"peak\"][\"name\"]"
     ],
     "classes": [
       "Q8502"
-    ]
+    ],
+    "radius_m": 50000
   },
   {
     "name": "mountain pass",
@@ -125,11 +158,12 @@
       "pass"
     ],
     "osm": [
-      "[\"mountain_pass\"=\"yes\"]"
+      "[\"mountain_pass\"=\"yes\"][\"name\"]"
     ],
     "classes": [
       "Q133056"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "forest",
@@ -139,12 +173,13 @@
       "woods"
     ],
     "osm": [
-      "[\"landuse\"=\"forest\"]",
-      "[\"natural\"=\"wood\"]"
+      "[\"landuse\"=\"forest\"][\"name\"]",
+      "[\"natural\"=\"wood\"][\"name\"]"
     ],
     "classes": [
       "Q4421"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "lake",
@@ -153,11 +188,12 @@
       "reservoir"
     ],
     "osm": [
-      "[\"natural\"=\"water\"][\"water\"~\"^(lake|reservoir)$\"]"
+      "[\"natural\"=\"water\"][\"water\"~\"^(lake|reservoir)$\"][\"name\"]"
     ],
     "classes": [
       "Q23397"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "beach",
@@ -166,11 +202,12 @@
       "coast"
     ],
     "osm": [
-      "[\"natural\"=\"beach\"]"
+      "[\"natural\"=\"beach\"][\"name\"]"
     ],
     "classes": [
       "Q40080"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "desert",
@@ -178,11 +215,12 @@
       "desert"
     ],
     "osm": [
-      "[\"natural\"=\"desert\"]"
+      "[\"natural\"=\"desert\"][\"name\"]"
     ],
     "classes": [
       "Q8514"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "airport",
@@ -191,11 +229,12 @@
       "airfield"
     ],
     "osm": [
-      "[\"aeroway\"=\"aerodrome\"]"
+      "[\"aeroway\"=\"aerodrome\"][\"name\"]"
     ],
     "classes": [
       "Q1248784"
-    ]
+    ],
+    "radius_m": 50000
   },
   {
     "name": "bridge",
@@ -204,12 +243,13 @@
       "viaduct"
     ],
     "osm": [
-      "[\"man_made\"=\"bridge\"]",
+      "[\"man_made\"=\"bridge\"][\"name\"]",
       "[\"highway\"][\"bridge\"=\"yes\"][\"name\"]"
     ],
     "classes": [
       "Q12280"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "tunnel",
@@ -221,7 +261,8 @@
     ],
     "classes": [
       "Q44377"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "dam",
@@ -229,11 +270,12 @@
       "dam"
     ],
     "osm": [
-      "[\"waterway\"=\"dam\"]"
+      "[\"waterway\"=\"dam\"][\"name\"]"
     ],
     "classes": [
       "Q12323"
-    ]
+    ],
+    "radius_m": 50000
   },
   {
     "name": "canyon",
@@ -242,11 +284,12 @@
       "gorge"
     ],
     "osm": [
-      "[\"natural\"=\"valley\"][\"valley\"=\"gorge\"]"
+      "[\"natural\"=\"valley\"][\"valley\"=\"gorge\"][\"name\"]"
     ],
     "classes": [
       "Q150784"
-    ]
+    ],
+    "radius_m": 15000
   },
   {
     "name": "scenic drive",
@@ -255,8 +298,9 @@
       "scenic road"
     ],
     "osm": [
-      "[\"highway\"][\"scenic\"=\"yes\"]"
+      "[\"highway\"][\"scenic\"=\"yes\"][\"name\"]"
     ],
-    "classes": []
+    "classes": [],
+    "radius_m": 15000
   }
 ]
