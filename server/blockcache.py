@@ -169,6 +169,17 @@ def settings(grading, md, widths, surface, sea, airports, lids):
                                           getattr(surface, "extra_pads", None) is not None))
 
 
+def ground_rules(grading, md, widths, surface, sea, airports, lids):
+    """The GROUND RULES fingerprint: every server setting that changes the ground or the road geometry built on it
+    (--grading, the map data, --road-widths, --surface, --sea, --airports and its snapshot, the tunnel lids, roads in
+    the ground, the road lift): settings() without the surface's pad switches, which come on with a session's first
+    pads. ONE fingerprint for everything kept that stands on that ground: the terrain blocks' keys (settings), the
+    road geotiles' content, the block photos (blockworker._ground_rules, earthd Server.ground_rules). None of these
+    is a BNE_* switch, so the revisit code key does not hold them: a road geotile kept with --grading on was a hit
+    with it off, on terrain that had changed (review of 2026-11-13)."""
+    return settings(grading, md, widths, surface, sea, airports, lids)[:9]
+
+
 def _versions(md):
     if md is None or not hasattr(md, "versions"):
         return None

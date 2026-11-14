@@ -1055,6 +1055,15 @@ def _md_versions():
     return _s.md.versions() if _s.md is not None else None
 
 
+def _ground_rules():
+    """This process's ground rules fingerprint (blockcache.ground_rules: what changes the ground and the roads built
+    on it), in the key of every kept item that stands on that ground."""
+    return blockcache.ground_rules(bool(getattr(_s, "grading", False)), getattr(_s, "md", None),
+                                   getattr(_s, "widths", None), getattr(_s, "surface", None),
+                                   getattr(_s, "sea", None), getattr(_s, "airports", None),
+                                   getattr(_s, "lids", None))
+
+
 def _surf_tags(frame, x0, y0, x1, y1):
     """() or (tag,): the photo's road surface verdicts this run uses over the box (frame's metres) and round it
     (roadsurf.area_tags): a cached road or far tile made with other road kinds is not this one."""
@@ -1917,7 +1926,7 @@ def _geo_lat(key):
 
 
 def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None, pole_profile=None,
-                     models_dir=None, de_junctions=False, towns_on=False, wear=None):
+                     models_dir=None, de_junctions=False, towns_on=False, wear=None, rules=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
     check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
     built in: threedmr.local_signature; de_junctions: the German junction signs, near Germany with the border data
@@ -1935,6 +1944,8 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
+                       # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
+                       ("rules", _ground_rules() if rules is None else rules),
                        bool(de_junctions), *de)     # (the German junction parts last)
 
 

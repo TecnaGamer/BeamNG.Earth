@@ -2738,7 +2738,16 @@ class Server:
                                             self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
-                                            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self))
+                                            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),
+                                            rules=Server.ground_rules(self))
+
+    def ground_rules(self):
+        """This server's ground rules fingerprint (blockcache.ground_rules), as its road processes make it
+        (blockworker._ground_rules): in the keys of what stands on the ground."""
+        return blockcachemod.ground_rules(bool(getattr(self, "grading", False)), getattr(self, "mapdata", None),
+                                          getattr(self, "road_widths", None), getattr(self, "surface", None),
+                                          getattr(self, "sea", None), getattr(self, "airports", None),
+                                          getattr(self, "lids", None))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker; no network but Germany's border data
@@ -4486,7 +4495,7 @@ class Server:
                                   self.tex_modes, roadsmod.ROADS_IN_GROUND, bool(self.buildings),
                                   self.mapdata.versions() if self.mapdata is not None else None,
                                   self.road_widths is not None, self.surface is not None, anchor.zooms[0],
-                                  terraincache.PHOTO_EXT, terraincache.NO_PACK)
+                                  terraincache.PHOTO_EXT, terraincache.NO_PACK, ("rules", Server.ground_rules(self)))
         except Exception as e:          # (no cache rather than no photo)
             log.debug("revisit: base photo key: %s: %s", type(e).__name__, e)
             return None
