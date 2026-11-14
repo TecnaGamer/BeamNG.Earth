@@ -188,4 +188,32 @@ run(1, A)
 roads.onFarDrop({ anchorId = 1, key = HK }, 'H')
 run(1, A)
 T.check(roads.debugFar()[roads.farGeoKey('H', HK)] == nil and #objsWith('bh_' .. HK) == 0, 'the horizon tile dropped')
+-- a pack whose square misses one far tile hides once that geotile's road tile shows its own buildings (after a fast
+-- run the far field lagged 30-60 s and the pack's painted walls stood over the real buildings beside a stopped car)
+do
+  local P2 = geotile.key(sx + 1, sy, 15)
+  local p2lat, p2lon = geotile.centre(15, sx + 1, sy)
+  roads.onFarTile(farMsg(P2, { p2lat, p2lon }, { v = 1, key = P2, frame = { p2lat, p2lon }, h = 'q1',
+    shape = '/s/bp_' .. P2 .. '.cdae', pos = { -470, -470, 0 }, pivot = 15 }), 1, 'P')
+  run(1, A)
+  local ks = keysOf(P2)
+  local missing = geotile.key((sx + 1) * 4, gy)        -- (the square's geotile nearest the car: its road tile is made)
+  for _, k in ipairs(ks) do
+    if k ~= missing then roads.onFarTile(farMsg(k, centreOf(k), { v = 1, key = k, frame = centreOf(k), h = 'e9' }), 1) end
+  end
+  run(1, A)
+  local pk = roads.debugFar()[roads.farGeoKey('P', P2)]
+  T.check(roads.packCovered(pk) == false, 'one far tile of sixteen missing: the pack stays')
+  local mc = centreOf(missing)
+  car.x, car.y = A:geodeticToWorld(mc[1], mc[2], 0)   -- (the car beside it: buildings are made near the car)
+  files['/s/rg_m.json'] = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h = "m1",
+    bld = { shape = "/s/rgm_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 } }]], missing, mc[1], mc[2])
+  local okT = roads.onTile({ anchorId = 1, key = missing, path = '/s/rg_m.json', n = 0, frame = mc, h = 'm1' }, 1, A)
+  T.check(okT, 'the road tile accepted')
+  T.check(roads.packCovered(pk) == false, 'its road tile here, buildings not made yet: still')
+  for _ = 1, 10 do run(1, A) end
+  T.check(roads.nearShowsBuildings(missing) == true, 'the road tile shows its buildings')
+  T.check(roads.packCovered(pk) == true, 'covered: the missing far tile\'s geotile shows its own buildings')
+  T.check(objsWith('bp_' .. P2)[1].hidden == true, 'the pack hidden over the real buildings')
+end
 T.done('test_farpack')

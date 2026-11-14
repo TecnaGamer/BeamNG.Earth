@@ -1916,15 +1916,24 @@ function M.packCovered(f)
     local z, x, y = f.sky[1], f.sky[2], f.sky[3]
     if not z then return false end
     local n = 2 ^ (geotile.Z - z)
-    f.packKeys = {}
+    f.packKeys, f.packGeo = {}, {}
     for j = 0, n - 1 do
-      for i = 0, n - 1 do f.packKeys[#f.packKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+      for i = 0, n - 1 do
+        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+        f.packKeys[#f.packKeys + 1], f.packGeo[#f.packGeo + 1] = farGeoKey('F', g), g
+      end
     end
   end
-  for _, k in ipairs(f.packKeys) do
+  -- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
+  -- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
+  -- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
+  for idx, k in ipairs(f.packKeys) do
     local ff = far[k]
-    if not ff or ff.dropWait then return false end
-    for _, p in pairs(ff.parts) do if not p.id and not p.deferred then return false end end
+    local ok = ff ~= nil and not ff.dropWait
+    if ok then
+      for _, p in pairs(ff.parts) do if not p.id and not p.deferred then ok = false; break end end
+    end
+    if not ok and not M.nearShowsBuildings(f.packGeo[idx]) then return false end
   end
   return true
 end
