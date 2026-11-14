@@ -146,9 +146,6 @@
         <span class="odo-label">DRIVEN</span>
         <span class="odo-val">{{ fmtMiles((state.roadsDriven.totalKm || 0) * 1000) }}</span>
       </div>
-      <div v-if="view.z >= 13" class="zoom-level-badge" title="Street Level View">
-        <span>Street view (z{{ view.z.toFixed(0) }})</span>
-      </div>
       <div class="search">
         <input
           ref="searchEl"
@@ -551,7 +548,9 @@ let loadingDriven = false
 
 function checkDrivenLines() {
   if (!roadsDrivenOn.value) return
-  const rev = state.value.roadsDriven?.rev || 0
+  const rd = state.value.roadsDriven
+  if (!rd) return
+  const rev = rd.rev || 0
   if (rev > 0 && rev !== loadedDrivenRev.value && !loadingDriven) {
     loadingDriven = true
     engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
@@ -568,12 +567,26 @@ function checkDrivenLines() {
             if (lon < minLon) minLon = lon
             if (lon > maxLon) maxLon = lon
           }
-          segs.push({ box: [minLat, maxLat, minLon, maxLon], line })
+          segs.push({ box: [minLat, maxLat, minLon, maxLon], line: [...line] })
         }
         drivenSegments.value = segs
         loadedDrivenRev.value = rev
       }
     })
+  } else if (rd.cur && drivenSegments.value.length > 0) {
+    const cur = rd.cur
+    const segs = drivenSegments.value
+    const lastSeg = segs[segs.length - 1]
+    const line = lastSeg.line
+    const lastPt = line[line.length - 1]
+    if (cur[0] !== lastPt[0] || cur[1] !== lastPt[1]) {
+      line.push(cur)
+      if (cur[0] < lastSeg.box[0]) lastSeg.box[0] = cur[0]
+      if (cur[0] > lastSeg.box[1]) lastSeg.box[1] = cur[0]
+      if (cur[1] < lastSeg.box[2]) lastSeg.box[2] = cur[1]
+      if (cur[1] > lastSeg.box[3]) lastSeg.box[3] = cur[1]
+      drivenSegments.value = [...segs]
+    }
   }
 }
 
@@ -2527,11 +2540,6 @@ const fmtLatLon = mm.fmtLatLon
 }
 .odometer-badge .odo-val {
   font-weight: 600;
-}
-.zoom-level-badge {
-  display: flex; gap: 4px; align-items: center; padding: 4px 8px;
-  background: rgba(20, 30, 42, 0.85); border: 1px solid rgba(80, 150, 220, 0.35);
-  border-radius: 4px; font-size: 11px; color: #a8d0f8;
 }
 .bottom-left-group { display: flex; gap: 8px; align-items: flex-end; }
 .scale-bar-wrap {

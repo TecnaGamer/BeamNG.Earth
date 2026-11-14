@@ -25,8 +25,8 @@ To avoid coupling with the transient GPS route, exploration tracking is isolated
 - **Sampling & Teleport Detection**:
   - `MIN_STEP_M = 25.0`: New points are recorded only when the vehicle has moved at least 25 meters from the previous point, avoiding redundant points when idling or in traffic.
   - `TELEPORT_GAP_M = 2000.0`: Movements exceeding 2 km in a single step (such as map teleports, menu resets, or mission starts) automatically start a new polyline segment, preventing visual streaks across the globe.
-  - `MAX_POINTS = 50000`: Caps total stored points across all polylines. When the cap is reached, `trimPoints()` prunes the oldest points from the head of the history.
-  - `SAVE_INTERVAL_S = 180.0`: Dirty tracking data persists every 3 minutes, as well as on `onClientEndMission()` and `onExtensionUnloaded()`, avoiding disk thrashing.
+  - `MAX_POINTS = 50000`: Caps total stored points across all polylines. When the cap is reached, `trimPoints()` slices the oldest line in place, preserving table identity and keeping `currentLine` in sync without losing active points.
+  - **Zero Mid-Drive Disk Writes**: Tracking data is saved as compact JSON (`jsonWriteFile(..., false)`) exclusively when the car is stopped (`speed < 0.5 m/s`), paused (`st.paused`), or at level exit (`onClientEndMission()`), eliminating frame drops or disk I/O while driving at speed.
 - **Driving State Validation (`isDrivingVehicle`)**:
   Points are recorded only when the player is actively driving their own vehicle (`getPlayerVehicle(0)`):
   - Ignores free camera view (`commands.isFreeCamera()`, `core_camera.getActiveCamName() == 'free'`) to prevent flight exploration streaks.
@@ -36,16 +36,18 @@ To avoid coupling with the transient GPS route, exploration tracking is isolated
 
 ### 2. High-Performance UI Bridge (`settings.lua` & `EarthMap.vue`)
 
-- **Revision Counter (`rev`)**:
-  Instead of serializing up to 50,000 points across the Lua-to-Vue bridge on every 500 ms poll, `uiState()` returns lightweight metadata:
+- **Revision Counter (`rev`) & Active Tail (`cur`)**:
+  Instead of serializing up to 50,000 points across the bridge on every 500 ms poll, `uiState()` returns lightweight metadata:
   ```lua
   {
     totalKm = 142.5,
     sessionKm = 12.3,
-    rev = 42
+    rev = 42,
+    cur = { 37.7749, -122.4194 }
   }
   ```
-  The full polyline data is queried asynchronously via `uiDrivenLines()` only when `rev` changes and the layer is active.
+  - `rev` increments only on new polyline segments (teleports, session start) or trimming. Normal continuous driving updates stream only `cur` (~20 bytes) which the Vue frontend appends to the active segment in place.
+  - Full polyline data is queried asynchronously via `uiDrivenLines()` only when `rev` changes and the layer is active.
 
 - **Frontend Viewport Culling & Downsampling**:
   `EarthMap.vue` computes SVG polyline coordinates with two levels of optimization:

@@ -2936,7 +2936,7 @@ local function onUpdate(dtReal, dtSim)
   -- this frame's position, once the vehicle move has become visible in the matching world frame.
   if st.inOurLevel and not st.lagProbe then
     gps.update(st.anchor, st.player)
-    if st.player then require('beamngEarth/roads_driven').update(dt, st.player) end
+    if st.player then require('beamngEarth/roads_driven').update(dtReal, st.player, st.paused) end
   end
   if st.active then
     if not dropHoldFailed and (not st.paused or dropHold.active) then     -- (it runs on while it paused the game)

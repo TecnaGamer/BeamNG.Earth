@@ -6,7 +6,6 @@ M.FILE = '/settings/beamngEarth_driven.json'
 M.VERSION = 1
 M.MIN_STEP_M = 25.0       -- add point when moved at least this far from previous point
 M.TELEPORT_GAP_M = 2000.0 -- jumps larger than this start a new polyline segment
-M.SAVE_INTERVAL_S = 180.0 -- persist to disk every 180s (3 min) if dirty
 M.MAX_POINTS = 50000      -- max total points kept across lines
 
 local totalKm = 0
@@ -16,7 +15,6 @@ local currentLine = nil
 local lastLat, lastLon = nil, nil
 local dirty = false
 local clock = 0
-local lastSave = 0
 local loaded = false
 local rev = 1
 
@@ -79,23 +77,37 @@ local function trimPoints()
     if #polylines > 1 and #first <= excess then
       count = count - #first
       table.remove(polylines, 1)
-      rev = rev + 1
-    else
-      -- Slice the head of the oldest line without repeated table.remove shifts
-      local toRemove = math.min(#first, excess)
-      if toRemove >= #first - 1 then
-        count = count - #first
-        table.remove(polylines, 1)
-      else
-        local sliced = {}
-        for i = toRemove + 1, #first do sliced[#sliced + 1] = first[i] end
-        polylines[1] = sliced
-        count = count - toRemove
+      if currentLine == first then
+        currentLine = polylines[#polylines]
       end
       rev = rev + 1
+    else
+      -- Slice the head of the oldest line in place so table reference and currentLine remain in sync
+      local toRemove = math.min(#first - 2, excess)
+      if toRemove <= 0 then
+        if #polylines > 1 then
+          count = count - #first
+          table.remove(polylines, 1)
+          if currentLine == first then currentLine = polylines[#polylines] end
+          rev = rev + 1
+        else
+          break
+        end
+      else
+        local n = #first
+        for i = 1, n - toRemove do
+          first[i] = first[i + toRemove]
+        end
+        for i = n - toRemove + 1, n do
+          first[i] = nil
+        end
+        count = count - toRemove
+        rev = rev + 1
+      end
       if count <= M.MAX_POINTS or #polylines == 0 then break end
     end
   end
+  if #polylines == 0 then currentLine = nil end
 end
 M.trimPoints = trimPoints
 
@@ -125,6 +137,7 @@ function M.load()
   end
 end
 
+-- Save compact JSON to disk
 function M.save()
   if not dirty or not jsonWriteFile then return end
   dirty = false
@@ -135,12 +148,13 @@ function M.save()
     totalKm = math.floor(totalKm * 100) / 100,
     polylines = polylines,
   }
-  pcall(jsonWriteFile, M.FILE, data, true)
+  -- false: compact JSON (no indentation), avoiding heavy disk I/O
+  pcall(jsonWriteFile, M.FILE, data, false)
 end
 
--- Called periodically from core.lua
-function M.update(dt, player)
-  clock = clock + (dt or 0)
+-- Called each frame from core.lua: onUpdate(dtReal, dtSim)
+function M.update(dtReal, player, isPaused)
+  clock = clock + (dtReal or 0)
   if not loaded then M.load() end
   if not player or not player.lat or not player.lon then return end
 
@@ -174,16 +188,20 @@ function M.update(dt, player)
       if not currentLine then
         currentLine = { { quantize6(lastLat), quantize6(lastLon) } }
         polylines[#polylines + 1] = currentLine
+        rev = rev + 1
       end
       currentLine[#currentLine + 1] = { quantize6(lat), quantize6(lon) }
       dirty = true
-      rev = rev + 1
+      -- Note: rev is NOT incremented on normal step additions, preventing full 50k re-syncs
     end
     lastLat, lastLon = lat, lon
   end
 
-  if dirty and clock - lastSave >= M.SAVE_INTERVAL_S then
-    lastSave = clock
+  -- Persist only when stopped or paused, never mid-drive at speed
+  local speed = player.speed or 0
+  local stopped = speed < 0.5
+  local paused = isPaused or false
+  if dirty and (stopped or paused) then
     M.save()
   end
 end
@@ -191,10 +209,15 @@ end
 -- Lightweight state for periodic polling (uiMapState)
 function M.uiState()
   if not loaded then M.load() end
+  local cur = nil
+  if currentLine and #currentLine >= 1 then
+    cur = currentLine[#currentLine]
+  end
   return {
     totalKm = math.floor(totalKm * 10) / 10,
     sessionKm = math.floor(sessionKm * 10) / 10,
     rev = rev,
+    cur = cur,
   }
 end
 
@@ -209,6 +232,31 @@ function M.reset()
   currentLine = nil
   lastLat, lastLon = nil, nil
   dirty = false
+end
+
+-- Test helpers (used by mod/tests/test_roads_driven.lua)
+function M._state()
+  return {
+    totalKm = totalKm,
+    sessionKm = sessionKm,
+    polylines = polylines,
+    currentLine = currentLine,
+    dirty = dirty,
+    clock = clock,
+    rev = rev,
+  }
+end
+
+function M._clear()
+  totalKm = 0
+  sessionKm = 0
+  polylines = {}
+  currentLine = nil
+  lastLat, lastLon = nil, nil
+  dirty = false
+  clock = 0
+  loaded = false
+  rev = 1
 end
 
 return M
