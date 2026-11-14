@@ -1139,10 +1139,30 @@ class RoadStageTest(unittest.TestCase):
         self.assertTrue(all(revisit.has(self.dir, "plans", d.shared._revisit_key(key)) for key in keys))
 
 
+class _Holder:
+    """A Python process running code that prints its own pid once it holds its lock. pid: the holder's os.getpid()
+    (on Windows a venv's python.exe is a launcher whose child is the interpreter: Popen's pid is not the holder's)."""
+
+    def __init__(self, code):
+        import subprocess
+        self.p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, encoding="utf-8")
+        line = self.p.stdout.readline().strip()
+        if not line.isdigit():
+            self.wait()
+            raise AssertionError(f"the holder did not start: {line!r}")
+        self.pid = int(line)
+
+    def wait(self):
+        try:
+            self.p.wait(10)
+        finally:
+            self.p.stdout.close()
+
+
 def _read(path):
     """path's text, or None when it is not there yet."""
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return None
@@ -1229,47 +1249,38 @@ class LockTest(unittest.TestCase):
     def test_a_slow_live_holder_is_waited_for_past_stale_s(self):
         # another process holding a lock longer than STALE_S while it works: waited for, its result read, not done
         # here beside it (before: taken over at STALE_S, then the holder's own release removed the taker's lock)
-        import subprocess
-        result = os.path.join(self.dir, "result")
-        code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = 0.1; "
-                "assert xproc.take(%r); print('held', flush=True); time.sleep(1.5); "
-                "open(%r, 'w').write('done'); xproc.release(%r)") % (os.path.dirname(xproc.__file__), self.lock,
-                                                                     result, self.lock)
-        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        h, ready = self.holder(1.5)
         try:
-            self.assertEqual(p.stdout.readline().strip(), "held")
             with mock.patch.object(xproc, "STALE_S", 0.5):
-                got, mine = xproc.once(self.lock, lambda: _read(result), 10.0, "demand")
+                got, mine = xproc.once(self.lock, ready, 10.0, "demand")
         finally:
-            p.wait(10)
+            h.wait()
         self.assertEqual((got, mine), ("done", False), "the holder's result, waited for")
         self.assertFalse(os.path.exists(self.lock))
 
     def holder(self, seconds, heartbeat=0.1):
-        """A process holding self.lock for seconds (touching it every heartbeat s), then writing the result file."""
-        import subprocess
+        """(_Holder, ready): a process holding self.lock for seconds (touching it every heartbeat s), then writing the
+        result file ready() reads."""
         result = os.path.join(self.dir, "result")
         code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = %r; "
-                "assert xproc.take(%r); print('held', flush=True); time.sleep(%r); "
-                "open(%r, 'w').write('done'); xproc.release(%r)") % (os.path.dirname(xproc.__file__), heartbeat,
-                                                                     self.lock, seconds, result, self.lock)
-        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-        self.assertEqual(p.stdout.readline().strip(), "held")
-        return p, (lambda: _read(result))
+                "assert xproc.take(%r); print(os.getpid(), flush=True); time.sleep(%r); "
+                "f = open(%r, 'w', encoding='utf-8'); f.write('done'); f.close(); xproc.release(%r)"
+                ) % (os.path.dirname(xproc.__file__), heartbeat, self.lock, seconds, result, self.lock)
+        return _Holder(code), (lambda: _read(result))
 
     def test_a_working_holder_is_waited_for_past_wait_s(self):
         # live_s: a holder still at work is waited for by a thread holding no lock (London's cells planned again by
         # every process that stopped waiting at WAIT_S, 2026-11-13)
-        p, ready = self.holder(1.2)
+        h, ready = self.holder(1.2)
         try:
             got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
         finally:
-            p.wait(10)
+            h.wait()
         self.assertEqual((got, mine), ("done", False))
 
     def test_a_waiter_holding_a_lock_keeps_wait_s(self):
         # (a thread holding a lock of its own could close a circle of waits: wait_s as before)
-        p, ready = self.holder(2.0)
+        h, ready = self.holder(2.0)
         other = os.path.join(self.dir, "other.lock")
         try:
             self.assertTrue(xproc.take(other))
@@ -1280,12 +1291,12 @@ class LockTest(unittest.TestCase):
             self.assertLess(time.monotonic() - t0, 1.5)
         finally:
             xproc.release(other)
-            p.wait(10)
+            h.wait()
         self.assertTrue(xproc.holds_none())
 
     def test_a_holder_without_heartbeat_keeps_wait_s(self):
         # (a lock not touched lately: its holder not known to be at work)
-        p, ready = self.holder(2.0, heartbeat=60.0)
+        h, ready = self.holder(2.0, heartbeat=60.0)
         try:
             with mock.patch.object(xproc, "LIVE_FRESH_S", 0.2):
                 time.sleep(0.3)
@@ -1294,7 +1305,7 @@ class LockTest(unittest.TestCase):
             self.assertEqual((got, mine), (None, False))
             self.assertLess(time.monotonic() - t0, 1.5)
         finally:
-            p.wait(10)
+            h.wait()
 
     def test_release_leaves_another_live_holders_lock(self):
         # this process's lock taken over meanwhile: its release must not remove the new holder's
@@ -1398,15 +1409,15 @@ class LockTest(unittest.TestCase):
         xproc.release(self.lock)
 
     def test_a_long_live_wait_is_logged(self):
-        p, ready = self.holder(1.0)
+        h, ready = self.holder(1.0)
         try:
             with mock.patch.object(xproc, "LIVE_WARN_S", 0.4), self.assertLogs("earthd.xproc", "WARNING") as cm:
                 got, mine = xproc.once(self.lock, ready, 0.2, "demand", live_s=10.0, live_note="cell 14/1/2's plans")
         finally:
-            p.wait(10)
+            h.wait()
         self.assertEqual((got, mine), ("done", False))
         self.assertIn("cell 14/1/2's plans", cm.output[0])
-        self.assertIn(str(p.pid), cm.output[0])
+        self.assertIn(str(h.pid), cm.output[0])
 
     def test_waiter_reads_the_holders_urgency_once(self):
         self.assertTrue(xproc.take(self.lock, "demand"))
