@@ -56,7 +56,7 @@ class SchedulerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         s = self.s = earthd.Server(self.tmp.name, os.path.join(self.tmp.name, "cache"), imagery=None)
-        s.imagery = types.SimpleNamespace()         # imagery on (the render is faked below)
+        s.imagery = types.SimpleNamespace(chain=[types.SimpleNamespace(name="eox", url="https://tiles.maps.eox.at")])
         self.a = earthd.Anchor(1, test_server.LAT, test_server.LON, geodesy.EnuFrame(test_server.LAT, test_server.LON))
         s.anchors[1] = self.a
         self.starts, self.peak, self.active, self.lock = [], [0], [0], threading.Lock()
@@ -250,6 +250,213 @@ class SchedulerTest(unittest.TestCase):
         self.run_loop(body)
         self.assertEqual(self.conn.msgs, [])
         self.assertTrue(self.s.tiles[ck].stale)
+
+    def test_degraded_tile_retextures_and_clears_degraded_status(self):
+        """A tile built without imagery is registered in s.degraded; when s.retex_degraded()
+        runs, it is re-rendered live to _r1.dds, sends far_retex, and leaves s.degraded."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        async def body():
+            s.retex_degraded()
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        m = self.conn.msgs[0]
+        self.assertEqual(m["type"], "far_retex")
+        self.assertEqual(m["key"], "0_1_0")
+        self.assertEqual(m["texture"], f"{s.vfs_dir}/far_1_0_1_0_r1.dds")
+        self.assertNotIn(ck, s.degraded)
+        self.assertEqual(s.tiles[ck].rev, 1)
+        self.assertFalse(s.tiles[ck].stale)
+
+    def test_degraded_tile_waits_while_imagery_hosts_unavailable(self):
+        """When imagery chain hosts are open/unavailable, retex_degraded does not start retexture.
+        Unrelated non-optional hosts (e.g. DEM) being down do NOT gate imagery recovery."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        # An unrelated host (e.g. DEM) is down, but imagery is up -> recovery proceeds!
+        unavail = {"dem.example.com"}
+        fake_net = types.SimpleNamespace(offline=False,
+                                         available=lambda h: h not in unavail,
+                                         chain_hosts=lambda n: ("tiles.maps.eox.at",))
+        s.net = fake_net
+
+        async def body():
+            s.retex_degraded()
+        self.run_loop(body)
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+        # Now when the imagery host IS down -> recovery waits!
+        ck2 = self.add("0_2_0")
+        s.degraded.add(ck2)
+        s.tiles[ck2].stale = True
+        unavail.add("tiles.maps.eox.at")
+
+        async def body_down():
+            s.retex_degraded()
+        self.run_loop(body_down)
+        self.assertEqual(len(self.conn.msgs), 1)  # no new message
+        self.assertIn(ck2, s.degraded)
+
+    def test_degraded_retexture_failure_backs_off(self):
+        """When retexture fails, retex_repeat increments, backoff is recorded, and net_log
+        does not spam retexture on every tick until the backoff expires or circuit closes."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        # Simulate failed retexture: returns prev with retex_repeat + 1
+        def failing_make_tile(anchor, tile, prev=None):
+            return replace(prev, retex_repeat=prev.retex_repeat + 1)
+        s.make_tile = failing_make_tile
+
+        async def body_fail():
+            s.retex_degraded()
+        self.run_loop(body_fail)
+
+        self.assertEqual(self.conn.msgs, [])
+        self.assertIn(ck, s.degraded)
+        self.assertGreater(s.tiles[ck].retex_repeat, 0)
+        self.assertIn(ck, s.degraded_retry)
+        self.assertGreater(s.degraded_retry[ck], time.monotonic())
+
+        # Immediate next tick is skipped due to backoff
+        calls = []
+        s.make_tile = lambda *a, **kw: calls.append(1)
+        async def body_skipped():
+            s.retex_degraded()
+        self.run_loop(body_skipped)
+        self.assertEqual(calls, [])
+
+        # Circuit closed resets backoff and recovers tile
+        s.make_tile = lambda anchor, tile, prev=None: replace(
+            prev, texture=s.texture_name(anchor.id, tile.key, prev.rev + 1), rev=prev.rev + 1,
+            stale=False, cm_pending=frozenset()
+        )
+        async def body_circuit_closed():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body_circuit_closed)
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertNotIn(ck, s.degraded)
+        self.assertNotIn(ck, s.degraded_retry)
+
+    def test_degraded_three_failures_recover_on_circuit_closed(self):
+        """A degraded tile that fails 3 consecutive retextures (reaching RETEX_REPEAT) is not dropped
+        for good; it retries under its backoff, and when an imagery circuit closes, its repeat counter
+        is reset and far_retex recovers the tile."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        def failing_make_tile(anchor, tile, prev=None):
+            return replace(prev, retex_repeat=prev.retex_repeat + 1)
+        s.make_tile = failing_make_tile
+
+        # 3 failures in a row
+        for i in range(3):
+            s.degraded_retry[ck] = 0.0  # simulate time passing past backoff
+            async def body_fail():
+                s.retex_degraded()
+            self.run_loop(body_fail)
+            self.assertEqual(s.tiles[ck].retex_repeat, i + 1)
+
+        self.assertGreaterEqual(s.tiles[ck].retex_repeat, earthd.RETEX_REPEAT)
+        self.assertIn(ck, s.degraded)
+        self.assertEqual(self.conn.msgs, [])
+
+        # Even with retex_repeat >= RETEX_REPEAT, the degraded tile is not dropped by _retex_pick
+        s.degraded_retry[ck] = 0.0
+        picked = []
+        def recording_make_tile(anchor, tile, prev=None):
+            picked.append(tile.key)
+            return failing_make_tile(anchor, tile, prev)
+        s.make_tile = recording_make_tile
+        async def body_pick():
+            s.retex_degraded()
+        self.run_loop(body_pick)
+        self.assertEqual(picked, ["0_1_0"])
+
+        # Circuit breaker closes: resets repeat counter and recovers tile
+        s.make_tile = lambda anchor, tile, prev=None: replace(
+            prev, texture=s.texture_name(anchor.id, tile.key, prev.rev + 1), rev=prev.rev + 1,
+            stale=False, cm_pending=frozenset()
+        )
+        async def body_circuit_closed():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body_circuit_closed)
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["type"], "far_retex")
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+        self.assertEqual(s.tiles[ck].retex_repeat, 0)
+
+    def test_on_circuit_closed_triggers_retex_degraded(self):
+        """When the net circuit breaker closes for an imagery host, s._on_circuit_closed schedules retex_degraded."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        async def body():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+    def test_temporary_full_outage_recovers_via_retex(self):
+        """When all breakers are open during a full temporary outage (Fetcher.offline is True,
+        but offline_flag is False), tiles receive fallback material and recover in-place via far_retex."""
+        s = self.s
+        fake_net = types.SimpleNamespace(offline=True, offline_flag=False,
+                                         available=lambda h: False,
+                                         chain_hosts=lambda n: ("tiles.maps.eox.at",))
+        s.net = fake_net
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        # Breakers close -> hosts recover
+        fake_net.offline = False
+        fake_net.available = lambda h: True
+
+        s.make_tile = lambda anchor, tile, prev=None: replace(
+            prev, texture=s.texture_name(anchor.id, tile.key, prev.rev + 1), rev=prev.rev + 1,
+            stale=False, cm_pending=frozenset()
+        )
+        async def body():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["type"], "far_retex")
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+    def test_palette_fallback_rgb_has_water_and_height_tint(self):
+        """palette_fallback_rgb produces blue for water/sea and terrain tints for land/peaks."""
+        grid = np.zeros((33, 33), dtype=np.float32)
+        grid[:, :16] = -2.0  # sea
+        grid[:, 16:] = 2500.0  # high mountain
+        rgb = ff.palette_fallback_rgb(grid, 64)
+        self.assertEqual(rgb.shape, (64, 64, 3))
+        # Water: blue dominant (B > R)
+        water_px = rgb[32, 8]
+        self.assertGreater(water_px[2], water_px[0])
+        # High mountain: rock/snow tint (R >= B)
+        mountain_px = rgb[32, 48]
+        self.assertGreaterEqual(mountain_px[0], mountain_px[2])
 
     def test_tile_waiting_for_many_regions_gets_every_one(self):
         """A coarse tile spans many regions (an L5 texture up to 3 x 3 z12 regions, an L6 one 4 x 4, as

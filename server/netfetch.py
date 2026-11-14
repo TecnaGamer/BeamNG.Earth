@@ -1362,6 +1362,7 @@ class Fetcher:
         self.policies = dict(POLICIES if policies is None else policies)
         self.default_policy = default_policy
         self.offline_flag = bool(offline)
+        self.on_circuit_closed = None
         self._hosts = {}
         self._chains = {}               # name -> hosts of a failover chain (imagery, dem)
         self._lock = threading.Lock()
@@ -1406,6 +1407,11 @@ class Fetcher:
         hosts = tuple(dict.fromkeys(host_of(u) if "/" in u else u for u in urls_or_hosts))
         with self._lock:
             self._chains[name] = hosts
+
+    def chain_hosts(self, name):
+        """The host names registered for failover chain `name`."""
+        with self._lock:
+            return self._chains.get(name, ())
 
     @property
     def offline(self):
@@ -1748,6 +1754,12 @@ class Fetcher:
     def _succeeded(self, h):
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
+            cb = getattr(self, "on_circuit_closed", None)
+            if cb is not None:
+                try:
+                    cb(h.name)
+                except Exception:
+                    log.exception("on_circuit_closed callback failed")
 
     @ioprofiler.session_request
     @contextmanager
