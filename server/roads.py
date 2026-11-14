@@ -7231,10 +7231,9 @@ def limit_at(limits, pt, near=LIMIT_NEAR_M):
     """m: the lowest height limit [(xy (k, 2) ENU, m)] holding at pt (a limit's polyline passing within near m), or
     None. Pure."""
     best = None
-    pt = np.asarray(pt, np.float64)[None, :2]
+    x, y = float(pt[0]), float(pt[1])
     for xy, h in limits:
-        if len(xy) >= 2 and (best is None or h < best) and \
-                float(_seg_dist(pt, xy[:-1, :2], xy[1:, :2]).min()) <= near:
+        if len(xy) >= 2 and (best is None or h < best) and _seg_dist_min(xy[:, :2], (x, y)) <= near:
             best = h
     return best
 
