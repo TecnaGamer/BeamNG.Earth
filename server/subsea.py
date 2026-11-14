@@ -13,7 +13,13 @@ import fast
 import dnp
 
 log = logging.getLogger("earthd.roads")
+import os
+
 GRADE = .08                # maximum modeled grade; an engineering bound, not a survey
+# BNE_SUBSEA_RELAX=on: a network whose bounds cannot be met is solved again with the dry ground within a pinned
+# portal's grade reach not bounding its floor (_profiles). Off by default until it is seen in game: it builds bores
+# left out today (the Fort McHenry Tunnel's four, bore 2's west end climbing to a portal point on a cut's wall).
+RELAX = os.environ.get("BNE_SUBSEA_RELAX", "off").strip().lower() in ("on", "1", "yes", "true")
 K = 20.                     # model vertical-curve parameter, metres per percent change in grade
 STEP = 4.
 COVER = 8.
@@ -168,7 +174,7 @@ def _profiles(owner, comp, pool):
         return {}, membership
     local = {i: j for j, i in enumerate(active)}
     offsets = np.r_[0, np.cumsum([len(chains[i]["s"]) for i in active])].astype(np.int64)
-    targets, weights, lowers, uppers, svals, params = [], [], [], [], [], []
+    targets, weights, lowers, uppers, reaches, svals, params = [], [], [], [], [], [], []
     for i in active:
         c = chains[i]; s = c["s"]; wet = c["wet"]
         t = np.interp(s, [0., s[-1]], c["portal"])
@@ -204,7 +210,14 @@ def _profiles(owner, comp, pool):
                     log.warning("subsea chain ends under water; awaiting its missing source continuation")
                     return None
                 lower[at] = upper[at] = p
-        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper); svals.append(s)
+        # (a floor leaves its portal at the grade at most: a dry ground under that reach cannot bound it there. Used
+        # only when the bounds as they are cannot be met: the second solve below, BNE_SUBSEA_RELAX)
+        reach = upper.copy()
+        for at in (0, -1):
+            if np.isfinite(lower[at]):
+                reach = np.where(wet, reach, np.maximum(reach, lower[at] - GRADE * np.abs(s - s[at])))
+        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper); reaches.append(reach)
+        svals.append(s)
         params.append([GRADE, K, 2.e4, s[-1] / (len(s) - 1), 200.])
     rows = []
     for adjacent in ends.values():
@@ -217,6 +230,20 @@ def _profiles(owner, comp, pool):
     z, info = solve(pack(uppers))
     bounds = uppers                 # (the upper bounds of the solve whose verdict stands)
     ok = lambda info: info["converged"] and info["feasible"]
+    if RELAX and not ok(info) and info["infeasible"] and not info["timed_out"]:
+        # A dry ground falling inward from a portal faster than the grade (the Fort McHenry Tunnel's bore 2: its west
+        # portal's point on the DEM's wall of the approach cut, 4.8 m, the street over the bore 28 m in 2.5 m: 8.2 %
+        # asked, 8 % allowed; 2026-11-13): no floor leaves its portal steeply enough to stay under it, so there the
+        # floor is held under the portal's reach instead (wet ground keeps its cover). Only after the bounds as they
+        # are failed: every network solved before is solved by the same call on the same bounds. (RELAX: off by
+        # default; such a network is then infeasible, and final below.)
+        up = pack(reaches)
+        if not np.array_equal(up, pack(uppers)):
+            z, info = solve(up)
+            bounds = reaches
+            if ok(info):
+                log.info("subsea profile at %s solved with its dry ground under its portals' reach",
+                         chains[active[0]]["name"] or "an unnamed tunnel")
     if not ok(info):
         log.warning("subsea profile unsolved: %s; grade %.6g, curve %.6g, bounds %.3g/%.3g m", info["status"],
                     info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"])

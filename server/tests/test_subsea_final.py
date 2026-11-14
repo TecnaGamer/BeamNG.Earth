@@ -229,9 +229,30 @@ class SubseaInfeasibleTest(unittest.TestCase):
         wet = lambda x: (x > 300.0) & (x < 700.0)
         return _bore_owner({self.cell}, ground, wet), pool
 
-    def test_a_dry_ground_under_a_portals_reach_is_final(self):
-        got, b = self.solve(*self._reach_case())
+    def test_a_dry_ground_under_a_portals_reach_is_final_by_default(self):
+        # (BNE_SUBSEA_RELAX off, the default: infeasible as it is, left out as today, no fault)
+        old, subsea.RELAX = subsea.RELAX, False
+        try:
+            got, b = self.solve(*self._reach_case())
+        finally:
+            subsea.RELAX = old
         self.assertIs(got, subsea.LEFT_OUT)
+        self.assertTrue(b.complete)
+
+    def test_a_dry_ground_under_a_portals_reach_is_solved_with_relax(self):
+        # (BNE_SUBSEA_RELAX=on: that ground does not hold the floor within the portal's grade reach)
+        old, subsea.RELAX = subsea.RELAX, True
+        try:
+            got, b = self.solve(*self._reach_case())
+        finally:
+            subsea.RELAX = old
+        self.assertIsNot(got, subsea.LEFT_OUT)
+        self.assertIsNotNone(got)
+        floors, membership = got
+        self.assertEqual(membership, {("f", 1): True})
+        z = floors[("f", 1)]
+        self.assertAlmostEqual(float(z[0]), 3.0, places=2)
+        self.assertAlmostEqual(float(z[-1]), 10.0, places=2)
         self.assertTrue(b.complete)
 
 
