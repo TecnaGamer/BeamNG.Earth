@@ -545,7 +545,7 @@ const storedBase = stored("beamngEarth.map.base", "sat")
 const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
 const roadsDrivenOn = ref(stored("beamngEarth.map.roadsDriven", "1") === "1")
-const drivenPolylines = ref([])
+const drivenSegments = ref([])
 const loadedDrivenRev = ref(0)
 let loadingDriven = false
 
@@ -557,7 +557,20 @@ function checkDrivenLines() {
     engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
       loadingDriven = false
       if (Array.isArray(res)) {
-        drivenPolylines.value = res
+        const segs = []
+        for (const line of res) {
+          if (!line || line.length < 2) continue
+          let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
+          for (let i = 0; i < line.length; i++) {
+            const lat = line[i][0], lon = line[i][1]
+            if (lat < minLat) minLat = lat
+            if (lat > maxLat) maxLat = lat
+            if (lon < minLon) minLon = lon
+            if (lon > maxLon) maxLon = lon
+          }
+          segs.push({ box: [minLat, maxLat, minLon, maxLon], line })
+        }
+        drivenSegments.value = segs
         loadedDrivenRev.value = rev
       }
     })
@@ -862,8 +875,8 @@ const cursorText = computed(() => {
 const drivenLines = computed(() => {
   view.value; w.value; h.value
   if (!roadsDrivenOn.value) return []
-  const polylines = drivenPolylines.value || []
-  if (!polylines.length) return []
+  const segments = drivenSegments.value || []
+  if (!segments.length) return []
 
   const v = view.value
   const width = w.value, height = h.value
@@ -871,25 +884,17 @@ const drivenLines = computed(() => {
   const vb = mm.viewBox(v.lat, v.lon, v.z, width, height, margin)
 
   const out = []
-  for (const line of polylines) {
-    if (!line || line.length < 2) continue
-
-    // Fast bounding box check for this polyline against viewBox [wLon, sLat, eLon, nLat]
-    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
-    for (let i = 0; i < line.length; i++) {
-      const lat = line[i][0], lon = line[i][1]
-      if (lat < minLat) minLat = lat
-      if (lat > maxLat) maxLat = lat
-      if (lon < minLon) minLon = lon
-      if (lon > maxLon) maxLon = lon
-    }
-    if (maxLat < vb[1] || minLat > vb[3]) continue
+  for (const seg of segments) {
+    const box = seg.box
+    // O(1) Precomputed bounding box check against viewBox [wLon, sLat, eLon, nLat]
+    if (box[1] < vb[1] || box[0] > vb[3]) continue
     if (vb[0] <= vb[2]) {
-      if (maxLon < vb[0] || minLon > vb[2]) continue
+      if (box[3] < vb[0] || box[2] > vb[2]) continue
     } else {
-      if (maxLon < vb[0] && minLon > vb[2]) continue
+      if (box[3] < vb[0] && box[2] > vb[2]) continue
     }
 
+    const line = seg.line
     // Viewport clipping and Manhattan distance downsampling (threshold >= 1.5 px)
     let currentPts = []
     let lastX = -99999, lastY = -99999

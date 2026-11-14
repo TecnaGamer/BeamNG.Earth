@@ -61,6 +61,12 @@ local function distM(lat1, lon1, lat2, lon2)
 end
 M.distM = distM
 
+-- Quantize to 6 decimal places (~11 cm resolution; shrinks JSON disk & IPC payload by ~40%)
+local function quantize6(v)
+  return math.floor(v * 1000000 + 0.5) / 1000000
+end
+M.quantize6 = quantize6
+
 -- Trim oldest points when total point budget exceeds MAX_POINTS
 local function trimPoints()
   local count = 0
@@ -75,13 +81,15 @@ local function trimPoints()
       table.remove(polylines, 1)
       rev = rev + 1
     else
-      -- Trim points from the head of the oldest line
+      -- Slice the head of the oldest line without repeated table.remove shifts
       local toRemove = math.min(#first, excess)
       if toRemove >= #first - 1 then
         count = count - #first
         table.remove(polylines, 1)
       else
-        for _ = 1, toRemove do table.remove(first, 1) end
+        local sliced = {}
+        for i = toRemove + 1, #first do sliced[#sliced + 1] = first[i] end
+        polylines[1] = sliced
         count = count - toRemove
       end
       rev = rev + 1
@@ -146,7 +154,7 @@ function M.update(dt, player)
   local lat, lon = player.lat, player.lon
   if not lastLat or not lastLon then
     lastLat, lastLon = lat, lon
-    currentLine = { { lat, lon } }
+    currentLine = { { quantize6(lat), quantize6(lon) } }
     polylines[#polylines + 1] = currentLine
     rev = rev + 1
     return
@@ -156,7 +164,7 @@ function M.update(dt, player)
   if d >= M.MIN_STEP_M then
     if d >= M.TELEPORT_GAP_M then
       -- Player teleported: start a separate line so no streak across the globe
-      currentLine = { { lat, lon } }
+      currentLine = { { quantize6(lat), quantize6(lon) } }
       polylines[#polylines + 1] = currentLine
       rev = rev + 1
     else
@@ -164,10 +172,10 @@ function M.update(dt, player)
       sessionKm = sessionKm + km
       totalKm = totalKm + km
       if not currentLine then
-        currentLine = { { lastLat, lastLon } }
+        currentLine = { { quantize6(lastLat), quantize6(lastLon) } }
         polylines[#polylines + 1] = currentLine
       end
-      currentLine[#currentLine + 1] = { lat, lon }
+      currentLine[#currentLine + 1] = { quantize6(lat), quantize6(lon) }
       dirty = true
       rev = rev + 1
     end
