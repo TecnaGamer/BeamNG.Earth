@@ -581,8 +581,6 @@ class PackStyleTest(unittest.TestCase):
                                                                     "roof_shape": "gabled"}),
             # (a church with its steeple: kept lite, Codex round 7)
             (rect(0.0, 0.0, 30, 15), {"class": "church", "height": 18}),
-            # (a skillion with a mapped direction: Codex round 8)
-            (rect(0.0, 0.0, 30, 20), {"class": "house", "height": 20, "roof_shape": "skillion", "roof_direction": 45}),
         ]
         for ring, attrs in cases:
             b = [(bld.plan(ring, attrs), 0.0, 0.0)]

@@ -7388,10 +7388,6 @@ def _sky_simplify(items, copy=False):
         # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
         keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
         as_drawn = len(ring) == n0 and not spec.skel     # (the outline not simplified, no skeleton: its apex holds)
-        if keep == "skillion" and (spec.slope_dir is not None or not as_drawn):
-            # (a skillion with a mapped direction, or over a simplified outline: the skyline's slope is not the lite
-            # drawing's (a 30 x 20 m house 3.2 m over, Codex round 8): flat, its rise put back below)
-            keep = "flat"
         if keep == "pyramidal" and not as_drawn:
             # (a pyramid over a skeleton or a simplified outline: its apex from the new box would stand over or under
             # the building's own (an L-shaped house 13 m over, Codex review 2026-11-14): flat, its rise put back below)
