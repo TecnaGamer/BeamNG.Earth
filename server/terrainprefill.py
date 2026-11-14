@@ -335,7 +335,8 @@ def dds_bytes(p, rgba):
 def expected_size(px):
     n, total = px, 148
     while True:
-        total += max(1, (n + 3) // 4) ** 2 * 16
+        blocks = max(1, (n + 3) // 4)
+        total += blocks * blocks * 16
         if n == 1:
             return total
         n //= 2
