@@ -360,12 +360,41 @@ local gq = sent[#sent]
 T.check(gid and gq.type == 'road_graph' and gq.id == gid and gq.lat == 39.2847 and gq.radius == 1500,
   'roadGraph: the request sent')
 T.check(gq.cachedOnly == true, 'roadGraph: cached-only is its only mode')
+-- the graph is read and decoded for the add-on, not left as a file name for it to find (in game, 2026-11-13: an
+-- add-on written against an earlier draft of this call checked `r.nodes` and saw every window as "no answer")
+local graphFiles = {
+  ['/temp/beamngEarth/s1/roadgraph_3_1.json'] = 'GRAPH1',
+  ['/temp/beamngEarth/s1/roadgraph_3_2.json'] = 'GRAPH2',
+}
+function readFile(path) return graphFiles[path] end
+function jsonDecode(text)
+  if text == 'GRAPH1' then
+    return { nodes = { a = { 10, 20, 30, 4 }, b = { 11, 21, 31, 5 } },
+             edges = { { 'a', 'b', false, 1, 1, 25, 1.0, 4 } },
+             signals = { x = 1 }, rules = { right = true }, lines = { { 1, 2, 3, 4 } }, mph = false }
+  end
+  if text == 'GRAPH2' then return { nodes = {}, edges = {} } end
+  error('not a graph: ' .. tostring(text))
+end
 api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_1.json', anchorId = 3, serial = 1,
   complete = true })
 T.check(#graphs == 1 and graphs[1].path == '/temp/beamngEarth/s1/roadgraph_3_1.json' and graphs[1].anchorId == 3
   and graphs[1].serial == 1 and graphs[1].complete == true and graphs[1].error == nil, 'roadGraph: the answer')
+T.check(type(graphs[1].nodes) == 'table' and graphs[1].nodes.a[1] == 10 and graphs[1].nodes.b[4] == 5,
+  'roadGraph: the nodes come decoded, keyed by their stable names')
+T.check(type(graphs[1].edges) == 'table' and #graphs[1].edges == 1 and graphs[1].edges[1][1] == 'a'
+  and graphs[1].edges[1][2] == 'b', 'roadGraph: the edges come decoded, naming their two nodes')
+T.check(graphs[1].signals.x == 1 and graphs[1].rules.right == true and #graphs[1].lines == 1
+  and graphs[1].mph == false, 'roadGraph: the graph\'s other fields carried through')
 api._onRoadGraph({ id = gid, path = '/temp/beamngEarth/s1/roadgraph_3_2.json', complete = true })
 T.check(#graphs == 1, 'roadGraph: one answer a request, nothing after it')
+-- the graph was built but cannot be read back: an error, not a silent empty answer the caller cannot tell apart
+local gone = nil
+local goneId = api.roadGraph(1, 2, {}, function(r) gone = r end)
+api._onRoadGraph({ id = goneId, path = '/temp/beamngEarth/s1/roadgraph_9_9.json', anchorId = 9, complete = true })
+T.check(gone and gone.nodes == nil and gone.edges == nil and gone.complete == false
+  and gone.error and gone.error:find('could not be read back'),
+  'roadGraph: a graph file that will not read is an error, and not complete')
 api._onRoadGraph({ id = gid + 100, path = '/x', complete = true })
 T.check(#graphs == 1, 'roadGraph: another request\'s answer not ours')
 -- a result that says nothing useful: every field defended, nothing invented
@@ -378,8 +407,8 @@ T.check(bare and bare.path == nil and bare.anchorId == nil and bare.serial == ni
 local err = nil
 local eid = api.roadGraph(1, 2, {}, function(r) err = r end)
 api._onRoadGraph({ id = eid, complete = false, error = 'no map data (BeamNG.Earth\'s roads are off)' })
-T.check(err and err.path == nil and err.error:find('no map data') and err.complete == false,
-  'roadGraph: the app\'s reason surfaced')
+T.check(err and err.path == nil and err.nodes == nil and err.error:find('no map data') and err.complete == false,
+  'roadGraph: the app\'s reason surfaced, with no graph')
 local g0, gwhy = api.roadGraph(91, 0, {}, print)
 T.check(g0 == nil and gwhy == 'bad coordinates', 'roadGraph: bad coordinates refused')
 T.check(api.roadGraph(1, 2, {}) == nil, 'roadGraph: no callback refused')

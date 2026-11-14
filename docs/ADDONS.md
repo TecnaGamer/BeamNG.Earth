@@ -308,19 +308,17 @@ end
 
 For add-ons that need to know where the roads *are* rather than where the player is: a route painter, a trail tool, a
 stage matcher. `api.roadGraph(lat, lon, opts, callback)` asks the app to build one window of the road network round
-that point out of the map cells it already has, and hands back the file it wrote; the add-on reads the file itself.
+that point out of the map cells it already has, and hands the graph to the callback.
 
 ```lua
 if api.has('roadGraph') then
   api.roadGraph(lat, lon, { radius = 1500 }, function(r)
-    if not r.path then print('no road graph: ' .. tostring(r.error)) return end
-    local ok, g = pcall(jsonDecode, readFile(r.path) or '')     -- as the mod reads the session's own graph
-    if not (ok and type(g) == 'table') then return end
-    for name, n in pairs(g.nodes) do
+    if not r.nodes then print('no road graph: ' .. tostring(r.error)) return end
+    for name, n in pairs(r.nodes) do
       local la, lo = api.toGeo(n[1], n[2])        -- the graph's x, y are in the anchor frame r.anchorId names
       print(name, la, lo, n[3], n[4])
     end
-    for _, e in ipairs(g.edges) do print(e[1], e[2], e[6], e[7]) end
+    for _, e in ipairs(r.edges) do print(e[1], e[2], e[6], e[7]) end
   end)
 end
 ```
@@ -331,11 +329,19 @@ end
 |---|---|
 | `radius` | metres: half the side of the square around the point the graph covers, default 1100 (the session's own window), at most 2000. The build's cost grows with the square of it |
 
-The callback gets one result, once: `{path, anchorId, serial, complete, error}`.
+The callback gets one result, once:
+`{nodes, edges, signals, rules, lines, mph, complete, anchorId, serial, path, error}`.
 
-- `path`: the graph's file as a game VFS path (`'/temp/beamngEarth/<session>/roadgraph_<anchorId>_<serial>.json'`),
-  nil when there is none. Read it soon: the app keeps only the last two road graphs of an anchor and deletes the
-  older ones, so a path held across several requests can be gone.
+- `nodes`: `{ [name] = { x, y, z, radius } }` in the anchor frame `anchorId` names. `z` is the drivable surface, with
+  a bridge's deck height and a tunnel's floor already in it; `radius` is the road's half width. **A node's name is
+  stable across windows and across anchors**, so two windows that overlap name the same node once: stitch them by
+  keying on the name rather than by matching coordinates.
+- `edges`: `{ { in, out, oneway, lanesOut, lanesIn, speed m/s, drivability, radius, ... } }`, the first two being
+  node names. `signals`, `rules`, `lines` and `mph` are the same fields the session's own graph carries.
+- `nodes` and `edges` are nil when `error` is set, and only then.
+- `path`: the file the graph was read from, for an add-on that would rather read it itself. It is in the app's session
+  folder and only the last two road graphs of an anchor are kept, so a path held across several requests can be gone
+  — which is why the answer carries the tables and not only the name of a file.
 - `anchorId`, `serial`: the anchor whose frame the graph's coordinates are in, and the request's number within the
   session. The anchor is the one the world is built round now, the one `pose()` and `toGame` / `toGeo` use; a rebase
   (`onBeamNGEarthRebased`) makes an older graph's `x, y` stale, so ask again rather than convert them.
@@ -380,8 +386,8 @@ part of this call's promise: read `nodes`, `edges`, `lines` and `rules`, and exp
   `nodes` or `edges` says that stretch is a bridge, and the heights alone cannot be read as one (a road up a hill
   looks the same). An add-on that needs bridges has to get them elsewhere.
 - **It depends on the app having roads at all.** A server or app started without them (`--traffic off` / `--roads
-  off`, fixed when it starts) answers with `error` and no path. `has('roadGraph')` cannot see that — it is this
-  mod's version, not the app's state — so check `result.path` rather than the capability.
+  off`, fixed when it starts) answers with `error` and no graph. `has('roadGraph')` cannot see that — it is this
+  mod's version, not the app's state — so check `result.nodes` rather than the capability.
 - **It is a window, not a query.** The whole window's roads come back, and the add-on does the rest: nearest road,
   matching a line, walking a route. Ask for the smallest `radius` that covers what you need; the cost grows with the
   square of it, and the app builds it on the one thread it answers API requests on, so a 2000 m window asked for in

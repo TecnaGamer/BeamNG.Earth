@@ -424,13 +424,18 @@ M.ROAD_GRAPH_TIMEOUT_S = 90
 local graphReqs, graphReqId = {}, 0
 
 -- One window of the road network round lat, lon (has('roadGraph')), built by the app out of the map cells it already
--- has and written to a file the add-on reads itself. opts (all optional):
+-- has. opts (all optional):
 --   radius (m, half the side of the square around the point: default 1100, at most 2000).
--- callback(result) once: { path (the file, a game VFS path such as '/temp/beamngEarth/<session>/roadgraph_3_1.json'),
--- anchorId, serial, complete (every map cell of the window was on disk), error (why there is no graph: no map data,
--- the app started without roads, no world yet, bad coordinates, timed out) }. Returns the request's id, or nil and why.
--- The file is { nodes = { [name] = { x, y, z, radius } }, edges = { { in, out, oneway, lanesOut, lanesIn, speed m/s,
--- drivability, radius, ... } }, ... } in the current anchor's frame (api.toGeo turns x, y back into lat, lon).
+-- callback(result) once: { nodes = { [name] = { x, y, z, radius } }, edges = { { in, out, oneway, lanesOut, lanesIn,
+-- speed m/s, drivability, radius, ... } }, signals, rules, lines, mph, complete (every map cell of the window was on
+-- disk), anchorId, serial, path, error (why there is no graph: no map data, the app started without roads, no world
+-- yet, bad coordinates, timed out, or the graph could not be read back) }. Returns the request's id, or nil and why.
+-- x, y, z are in the current anchor's frame (api.toGeo turns x, y back into lat, lon) and z is the drivable surface.
+-- A node's name is stable across windows and across anchors, so two windows that overlap name the same node once:
+-- stitching them is keying on the name, not matching coordinates.
+-- nodes and edges are nil when error is set. `path` is the file they were read from, for an add-on that would rather
+-- read it itself -- but it is in our session folder and we keep only the last couple of graphs of an anchor, so an
+-- add-on that holds the path rather than the tables will find it gone.
 -- What it does not promise:
 --   * No map cell is downloaded for it. The app reads the window's layers only where it has them on disk; a window
 --     over ground the player has never been near comes back with few roads and complete = false, which is the honest
@@ -441,7 +446,6 @@ local graphReqs, graphReqId = {}, 0
 --     nodes or edges says that stretch is a bridge, and the heights alone cannot be read as one.
 --   * It depends on the app having roads at all: one started with roads off answers with error and no path, and
 --     has('roadGraph') cannot see that (it is this mod's version, not the app's state).
--- Read the file soon: the app keeps only the last couple of graphs of an anchor and deletes the older ones.
 function M.roadGraph(lat, lon, opts, callback)
   if type(opts) == 'function' and callback == nil then opts, callback = nil, opts end
   lat, lon = tonumber(lat), tonumber(lon)
@@ -467,9 +471,29 @@ function M._onRoadGraph(msg)
   local r = type(msg) == 'table' and graphReqs[msg.id]
   if not r then return end
   graphReqs[msg.id] = nil                 -- (one answer a request: nothing follows it)
-  roadGraphCall(r, { path = type(msg.path) == 'string' and msg.path or nil, anchorId = tonumber(msg.anchorId),
-    serial = tonumber(msg.serial), complete = msg.complete == true,
-    error = type(msg.error) == 'string' and msg.error or nil })
+  local path = type(msg.path) == 'string' and msg.path or nil
+  local out = { path = path, anchorId = tonumber(msg.anchorId), serial = tonumber(msg.serial),
+                complete = msg.complete == true,
+                error = type(msg.error) == 'string' and msg.error or nil }
+  -- The graph itself, read and decoded here rather than handed over as a file name: api.places answers with its rows
+  -- the same way, an add-on has no business knowing the layout of our session folder, and every caller would decode
+  -- it anyway. `path` stays in the answer for one that would rather read the file itself.
+  if path and not out.error then
+    local txt = rawget(_G, 'readFile')
+    txt = txt and txt(path) or nil
+    local okDecode, g = pcall(jsonDecode, txt or '')
+    if okDecode and type(g) == 'table' and type(g.nodes) == 'table' and type(g.edges) == 'table' then
+      out.nodes, out.edges = g.nodes, g.edges
+      out.signals = type(g.signals) == 'table' and g.signals or nil
+      out.rules = type(g.rules) == 'table' and g.rules or nil
+      out.lines = type(g.lines) == 'table' and g.lines or nil
+      out.mph = g.mph
+    else
+      -- (the file is written before the message is sent, so this is a real failure and not a race)
+      out.complete, out.error = false, 'the graph was built but could not be read back from ' .. tostring(path)
+    end
+  end
+  roadGraphCall(r, out)
 end
 
 local function roadGraphTimeouts()
