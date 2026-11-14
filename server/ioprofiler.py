@@ -368,12 +368,18 @@ def urlopen(req, **kwargs):
             raise
 
 
-def request(transport, url, headers, timeout):
-    if monitor.mode == 'off': return transport.request(url, headers, timeout)
+def _send(transport, url, headers, timeout, method):
+    # (a GET as before: the tests' transports take no method)
+    if method == 'GET': return transport.request(url, headers, timeout)
+    return transport.request(url, headers, timeout, method=method)
+
+
+def request(transport, url, headers, timeout, method='GET'):
+    if monitor.mode == 'off': return _send(transport, url, headers, timeout, method)
     # Application request bytes only: exclude TLS, TCP and response headers.
     sent = len(urlsplit(url).path.encode()) + 16 + sum(len(str(k).encode()) + len(str(v).encode()) + 4 for k,v in headers.items())
     with Request(url, sent) as measured:
-        status, rh, body = transport.request(url, headers, timeout)
+        status, rh, body = _send(transport, url, headers, timeout, method)
         measured.complete(status, len(body or b''))
         return status, rh, body
 

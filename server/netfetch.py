@@ -43,6 +43,7 @@ import collections
 import ioprofiler
 import netstate
 import email.utils
+import gzip
 import http.client
 import json
 import logging
@@ -59,6 +60,7 @@ from dataclasses import dataclass, field, replace
 import base64
 import errno
 import urllib.request
+import zlib
 from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
@@ -181,6 +183,8 @@ class HostPolicy:
     referer: bool = False                   # send PROJECT_URL as Referer (hosts that ask for one)
     optional: bool = False                  # the world builds without it (gravity, weather, search, routing,
                                             # updates): left out of the player's "Degraded" status (GitHub #23)
+    gzip: bool = False                      # ask for gzip, decoded here (JSON / text hosts; never with a Range, nor
+                                            # where the caller sets Accept-Encoding itself: airports, bdtopo)
     shared: bool = False                    # admitted across the server's processes (SharedGate: SHARED_DIR)
 
 
@@ -231,14 +235,16 @@ POLICIES = {
     # BeamNG.Earth's own data on GitHub Pages (railtags.py: the weekly OSM rail shards, ~300 km each, kept on disk)
     "tecnagamer.github.io": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=2000, allow_prefetch=True,
                                        offline_ok=True, miss_ttl=7 * DAY, timeout=20.0, max_attempts=2,
-                                       base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
+                                       base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True,
+                                       gzip=True),
     # the clouds seen from space (spaceclouds.py: NASA GIBS's latest VIIRS true-colour day, up to 144 small tiles when a
     # camera rises above the clouds; public domain, no key)
     "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
                                           miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
-                                     cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True),
+                                     cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True,
+                                     gzip=True),
     # the EGM2008 coefficients (74 MB once; gravity.py resumes and checks the SHA-256 itself)
     "downloads.sourceforge.net": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=None,
                                             offline_ok=True, miss_ttl=None, max_attempts=1, timeout=30.0, optional=True),
@@ -278,22 +284,24 @@ POLICIES = {
     # Photon (komoot's OpenStreetMap geocoder, made for search-as-you-type; geocode.py): the map's search box,
     # debounced and cached; a modest rate, a daily cap (fair use of a free public service)
     "photon.komoot.io": HostPolicy(rate=2.0, burst=4.0, max_conc=1, daily_budget=2000, daily_hard=3000,
-                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=5.0, timeout=12.0, max_attempts=1, optional=True),
+                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=5.0, timeout=12.0, max_attempts=1, optional=True,
+                                   gzip=True),
     # Nominatim (OpenStreetMap's own geocoder; geocode.py): streets and house numbers when the player presses Enter.
     # Its usage policy: one request a second at most, no autocomplete, a User-Agent that names the app
     "nominatim.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
                                               cache_ttl=7 * DAY, miss_ttl=None, max_wait=2.5, timeout=8.0,
-                                              max_attempts=1, optional=True),
+                                              max_attempts=1, optional=True, gzip=True),
     # Wikidata and Wikipedia (geocode.py): landmarks as you type, debounced by the map; a modest rate and a User-Agent
     # that names the app, as their API etiquette asks (the Wikipedias: WIKIPEDIA_LANGS below)
     "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
                                    cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
-                                   optional=True),
+                                   optional=True, gzip=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk (burst 1: two destinations set 2 s apart were the second answered 429,
     # GitHub #1027; the second now waits its turn, earthd.route asks again after a 429)
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
-                                           cache_ttl=DAY, miss_ttl=None, max_wait=10.0, timeout=20.0, max_attempts=1, optional=True),
+                                           cache_ttl=DAY, miss_ttl=None, max_wait=10.0, timeout=20.0, max_attempts=1, optional=True,
+                                           gzip=True),
     # the BeamNG.Earth server list (native/serverlist on the project's mini PC): the tab in BeamMP's server browser,
     # fetched when the player opens it or presses Refresh
     "earth.tgforever.net": HostPolicy(rate=0.2, burst=3.0, max_conc=1, daily_budget=3000, daily_hard=6000,
@@ -302,11 +310,11 @@ POLICIES = {
     # the update check (updates.py): the project's VERSION file on GitHub, a few times a day at most
     "raw.githubusercontent.com": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=24, daily_hard=48,
                                             cache_ttl=6 * 3600, miss_ttl=None, max_wait=5.0, timeout=8.0,
-                                            max_attempts=1, optional=True),
+                                            max_attempts=1, optional=True, gzip=True),
     # the one-click update (selfupdate.py, the player's button): the latest release's details, then its file (a
     # redirect from github.com to GitHub's asset host, followed by urllib inside the session)
     "api.github.com": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=20, daily_hard=40, max_wait=10.0,
-                                 timeout=30.0, max_attempts=1, optional=True),
+                                 timeout=30.0, max_attempts=1, optional=True, gzip=True),
     "github.com": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=10, daily_hard=20, max_wait=10.0,
                              timeout=60.0, max_attempts=1, optional=True),
     # OSM US Layercake (osmtags.py): the OSM highways GeoParquet on Cloudflare, read in ranges (the footer once, a few
@@ -326,21 +334,23 @@ POLICIES = {
     # once, kept on disk; a modest rate for a public API that asks clients to name themselves (X-Client, no user data)
     "nvdbapiles.atlas.vegvesen.no": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                                allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
-                                               max_attempts=3, base_delay=2.0, optional=True),
+                                               max_attempts=3, base_delay=2.0, optional=True, gzip=True),
     # 3DBAG's WFS (threedbag.py: the Netherlands' measured roofs): one request per 250 m square of the Dutch grid as road
     # tiles there are built, kept on disk; a modest rate for a university's public service
     "data.3dbag.nl": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                 allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
-                                max_attempts=3, base_delay=2.0, optional=True),
+                                max_attempts=3, base_delay=2.0, optional=True, gzip=True),
     # Hong Kong's road heights (roadz.py "hk", BNE_ROADZ_HK): the CSDI Portal's ArcGIS services (the Transport
     # Department's road centrelines, the CEDD LiDAR sheet index) a few requests per map-data cell, and the LiDAR sheets
     # themselves (zips of 5-6 MB, kept in a size-capped folder; ~0.8 MB/s a connection, 2026-11-10); optional
     "portal.csdi.gov.hk": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                      allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
-                                     max_attempts=3, base_delay=2.0, optional=True),
+                                     max_attempts=3, base_delay=2.0, optional=True, gzip=True),
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
+    # Mapterhorn's list of where detailed heights exist (dem.py, ~160 KB of JSON, about once a week): the default row
+    "download.mapterhorn.com": HostPolicy(gzip=True),
     # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
     "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
@@ -351,7 +361,8 @@ WIKIPEDIA_LANGS = ("en", "de", "fr", "it", "es", "pt", "nl", "pl", "cs", "sk", "
                    "tr", "ru", "uk", "ja", "ko", "zh", "hr", "sl", "bg", "sr")
 POLICIES.update({f"{lang}.wikipedia.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
                                                      cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0,
-                                                     max_attempts=1, optional=True) for lang in WIKIPEDIA_LANGS})
+                                                     max_attempts=1, optional=True, gzip=True)
+                 for lang in WIKIPEDIA_LANGS})
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
 # Optional: the global imagery stands in while one is down (Lower Saxony's WMS answered a maintenance page for hours,
@@ -420,7 +431,7 @@ POLICIES[_DEC_HOST + "#dec"] = replace(POLICIES.get(_DEC_HOST, POLICIES[_CDN_HOS
 # ("ign_wfs" lane: roadz, bdtopo; 30/s published) keeps its own 25/s. BNGE_IGN_RATE: the photo tiles' rate (25: before).
 _IGN_RATE = float(os.environ.get("BNGE_IGN_RATE") or 50.0)
 POLICIES["data.geopf.fr#ign_wfs"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
-                                            daily_budget=100000)
+                                            daily_budget=100000, gzip=True)
 POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=_IGN_RATE, burst=2.0 * _IGN_RATE,
                                     max_conc=max(12, int(_IGN_RATE / 2)), daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
@@ -901,8 +912,8 @@ class HttpsTransport:
         log.debug("net: proxy resolved for %s: %s:%d (user=%s)", host, phost, pport, user or "-")
         return phost, pport, user, passw
 
-    def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+    def request(self, url, headers, timeout, method="GET"):
+        """(status, {lower-case header: value}, body) of a GET (or a HEAD: no body). A public S3 source on an IPv6-only network (GitHub #763: its
         hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
         to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
         on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
@@ -915,23 +926,23 @@ class HttpsTransport:
         if proxy is None and host in _DUALSTACK_HOSTS:
             dual = _dualstack(url, auth)
             if dual != url:
-                return self._request_once(dual, headers, timeout, proxy)
+                return self._request_once(dual, headers, timeout, proxy, method)
         try:
-            return self._request_once(url, headers, timeout, proxy)
+            return self._request_once(url, headers, timeout, proxy, method)
         except OSError as e:
             if proxy is not None or not _no_route(e):
                 raise
             dual = _dualstack(url, auth)
             if dual == url:
                 raise
-            got = self._request_once(dual, headers, timeout, proxy)
+            got = self._request_once(dual, headers, timeout, proxy, method)
             if host not in _DUALSTACK_HOSTS:
                 _DUALSTACK_HOSTS.add(host)
                 log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
                          urlsplit(dual).hostname)
             return got
 
-    def _request_once(self, url, headers, timeout, proxy):
+    def _request_once(self, url, headers, timeout, proxy, method="GET"):
         """request's one connection: url as given (proxy: _resolve_proxy's for it, or None). timeout: s, or (s to
         connect, s for each read after)."""
         connect_timeout, timeout = timeout if isinstance(timeout, tuple) else (timeout, timeout)
@@ -993,9 +1004,9 @@ class HttpsTransport:
                         req_headers["Proxy-Authorization"] = conn._proxy_auth
                     # absolute URL for the proxy
                     full_url = url
-                    conn.request("GET", full_url, headers=req_headers)
+                    conn.request(method, full_url, headers=req_headers)
                 else:
-                    conn.request("GET", path, headers=req_headers)
+                    conn.request(method, path, headers=req_headers)
                 r = conn.getresponse()
                 ioprofiler.headers_received()
                 rh = {k.lower(): v for k, v in r.getheaders()}
@@ -1021,6 +1032,17 @@ class HttpsTransport:
                 raise
             self._give(key, conn)
             return out
+
+
+def _gunzip(rh, body):
+    """body decoded when the answer says Content-Encoding: gzip (a request of ours that asked for it), else as it
+    came; a broken stream raises OSError (a failed attempt, retried as one)."""
+    if not body or (rh or {}).get("content-encoding", "").strip().lower() != "gzip":
+        return body
+    try:
+        return gzip.decompress(body)
+    except (OSError, EOFError, zlib.error) as e:
+        raise OSError(f"bad gzip body: {e}") from None
 
 
 RANGE_IGNORED_MIN = 16 * 1024 * 1024    # bytes: a 200 this big (and 8x the range) for a range request is not read
@@ -1591,11 +1613,19 @@ class Fetcher:
         finally:
             _quiet.on = prev
 
-    def _get(self, url, kind, headers, lane):
+    def head(self, url, *, kind="demand", lane=None):
+        """HEAD url under its host's policy (a request like get's, no body): a Response, or NotFound and the other
+        errors. Whether a file exists without its bytes (dem's lidar test: Mapterhorn ignores Range)."""
+        return self._get(url, kind, None, lane, method="HEAD")
+
+    def _get(self, url, kind, headers, lane, method="GET"):
         h, probe = self._admit(url, kind, lane)
         p = h.policy
         attempts = 1 if probe else max(1, p.max_attempts)
         hd = self.headers(h.name, headers)
+        gz = p.gzip and method == "GET" and not any(k.lower() in ("range", "accept-encoding") for k in hd)
+        if gz:
+            hd["Accept-Encoding"] = "gzip"
         err = None
         try:
             for attempt in range(attempts):
@@ -1619,11 +1649,14 @@ class Fetcher:
                     self._count(h, "requests")
                     t0 = self.clock()
                     netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
-                    body = None
+                    body = wire = None        # (wire: as it came, before _gunzip; what the counters count)
                     try:
                         status, rh, body = ioprofiler.request(
                             self.transport, url, hd,
-                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
+                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout), method)
+                        wire = body
+                        if gz:
+                            body = _gunzip(rh, body)
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h, gate)
@@ -1632,20 +1665,21 @@ class Fetcher:
                         continue
                     elapsed = self.clock() - t0
                     if TEST_MBPS > 0 or TEST_LATENCY_S > 0:       # (testing: a slow connection)
-                        want = TEST_LATENCY_S + (len(body or b"") / (TEST_MBPS * 1e6) if TEST_MBPS > 0 else 0.0)
+                        want = TEST_LATENCY_S + (len(wire or b"") / (TEST_MBPS * 1e6) if TEST_MBPS > 0 else 0.0)
                         if want > elapsed:
                             time.sleep(want - elapsed)
                             elapsed = want
-                    if body and len(body) >= RATE_MIN_BYTES and elapsed > 0:
+                    if wire and len(wire) >= RATE_MIN_BYTES and elapsed > 0:
                         with self._lock:
-                            self._rates.append((t0 + elapsed, len(body) / elapsed / 1e6))
+                            self._rates.append((t0 + elapsed, len(wire) / elapsed / 1e6))
                     if NETLOG:
-                        _netlog(url, hd, status, body)
+                        _netlog(url, hd, status, wire)
                 finally:
-                    netstate.end(len(body) if body else 0, h.name)
+                    netstate.end(len(wire) if wire else 0, h.name)
                     SharedGate.release(slot)
                     sem.release()
-                res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
+                res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed,
+                                     len(wire or b""))
                 probe = False               # the breaker has its verdict
                 if gate is not None:        # (the others hold off too: its Retry-After, its breaker opened here)
                     if isinstance(res, RateLimited) and res.retry_after:
@@ -1664,10 +1698,11 @@ class Fetcher:
             if probe:                       # dropped before the network answered: let the next one probe
                 h.breaker.release_probe()
 
-    def _classify(self, h, url, status, rh, body, elapsed):
-        """A Response (success) or the error for this attempt; updates counters and the breaker."""
+    def _classify(self, h, url, status, rh, body, elapsed, nbytes=None):
+        """A Response (success) or the error for this attempt; updates counters and the breaker. nbytes: the bytes on
+        the wire (a gzip answer's, before decoding; default len(body))."""
         p = h.policy
-        self._count(h, "bytes", len(body or b""))
+        self._count(h, "bytes", len(body or b"") if nbytes is None else nbytes)
         cls = f"s{status // 100}xx" if 200 <= status < 600 else "errors"
         self._count(h, cls)
         if 200 <= status < 300:

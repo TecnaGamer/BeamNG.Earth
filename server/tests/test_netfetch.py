@@ -77,13 +77,14 @@ class FakeTransport:
     def __init__(self, clock=None, script=None, real_latency=False):
         self.clock, self.real_latency = clock, real_latency
         self.script = dict(script or {})
-        self.calls = []
+        self.calls, self.methods = [], []
         self.inflight = self.max_inflight = 0
         self.lock = threading.Lock()
 
-    def request(self, url, headers, timeout):
+    def request(self, url, headers, timeout, method="GET"):
         with self.lock:
             self.calls.append((self.clock() if self.clock else time.monotonic(), url, dict(headers)))
+            self.methods.append(method)
             self.inflight += 1
             self.max_inflight = max(self.max_inflight, self.inflight)
             pat = next((p for p in self.script if re.search(p, url)), None)
@@ -133,6 +134,54 @@ class ThroughputTest(unittest.TestCase):
         for n in range(4):
             g.get(url(USGS, n))
         self.assertIsNone(g.throughput())
+
+
+class GzipTest(unittest.TestCase):
+    """A host with policy gzip: JSON asked for and sent compressed, decoded here; the counters keep the wire's bytes."""
+    JSON = b'{"entities": [' + b'{"id": "Q1", "label": "x"},' * 400 + b'{}]}'
+
+    def setUp(self):
+        import gzip
+        self.packed = gzip.compress(self.JSON)
+        self.pol = {"api.example": nf.HostPolicy(gzip=True), USGS: nf.HostPolicy()}
+
+    def test_asked_and_decoded(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/w/api.php")
+        self.assertEqual(r.body, self.JSON)
+        self.assertEqual(tr.calls[0][2].get("Accept-Encoding"), "gzip")
+        self.assertEqual(f.host("api.example").total["bytes"], len(self.packed))
+
+    def test_not_asked_with_a_range_nor_by_other_hosts(self):
+        f, _, _, tr = fetcher(policies=self.pol)
+        f.get("https://api.example/file", headers={"Range": "bytes=0-9"})
+        f.get(url(USGS))
+        self.assertNotIn("Accept-Encoding", tr.calls[0][2])
+        self.assertNotIn("Accept-Encoding", tr.calls[1][2])
+
+    def test_a_caller_that_asks_itself_gets_the_bytes_as_sent(self):
+        """airports.py and bdtopo.py set Accept-Encoding and decode the body themselves."""
+        f, _, _, _ = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, self.packed, 0.0)]}, self.pol)
+        r = f.get("https://api.example/x", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(r.body, self.packed)
+
+    def test_a_broken_stream_is_a_failed_attempt(self):
+        f, _, _, tr = fetcher({"api.example": [(200, {"content-encoding": "gzip"}, b"not gzip", 0.0)]}, self.pol)
+        with self.assertRaises(nf.FetchFailed):
+            f.get("https://api.example/x")
+        self.assertEqual(len(tr.calls), nf.HostPolicy().max_attempts)
+
+
+class HeadTest(unittest.TestCase):
+    def test_head_asks_without_a_body(self):
+        f, _, _, tr = fetcher({MT: [(200, {"content-type": "image/webp"}, b"", 0.0)]})
+        self.assertEqual(f.head(f"https://{MT}/13/1/1.webp").status, 200)
+        self.assertEqual(tr.methods, ["HEAD"])
+
+    def test_head_404_is_not_found(self):
+        f, _, _, _ = fetcher({MT: [(404, {}, b"", 0.0)]})
+        with self.assertRaises(nf.NotFound):
+            f.head(f"https://{MT}/13/0/0.webp")
 
 
 class TokenBucketTest(unittest.TestCase):
@@ -871,7 +920,8 @@ class UserAgentTest(unittest.TestCase):
         except OSError:
             pass
         for _, u, headers in tr.calls:
-            self.assertEqual(headers, {"User-Agent": nf.USER_AGENT})
+            # (a gzip host's Accept-Encoding says nothing about the player)
+            self.assertEqual({k: v for k, v in headers.items() if k != "Accept-Encoding"}, {"User-Agent": nf.USER_AGENT})
             # the project URL is the one identifying part (its owner is the project, not the player)
             text = (u + " " + json.dumps(headers)).replace(nf.PROJECT_URL, "")
             for s in personal:
