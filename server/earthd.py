@@ -2384,15 +2384,8 @@ class Server:
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
-        # (temporary, while the add-on path is being brought up: says exactly where a window loses its roads)
-        try:
-            parts = sum(len(getattr(f, "ids", ()) or ()) for f in feats if f is not None)
-        except Exception:
-            parts = -1
-        log.warning("road graph probe: %.0f m at %.5f,%.5f | %d cell(s), %d not read, %d layer(s), %d road part(s)"
-                 " -> %d node(s), %d edge(s) | cached_only=%s",
-                 win, float(cla), float(clo), len(keys), missing, len([f for f in feats if f is not None]),
-                 parts, len(graph["nodes"]), len(graph["edges"]), cached_only)
+        log.debug("road graph: %.0f m at %.5f,%.5f: %d cell(s), %d not read -> %d node(s), %d edge(s)",
+                  win, float(cla), float(clo), len(keys), missing, len(graph["nodes"]), len(graph["edges"]))
         return graph, missing
 
     def build_navgraph(self, aid, x, y, serial):
