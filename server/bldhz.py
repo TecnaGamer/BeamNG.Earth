@@ -46,6 +46,11 @@ HORIZON_M = 120000.0
 DROP_EXTRA_M = 4000.0
 PER_POSE = 1
 MAX_TILE_BYTES = 16 << 20
+# a tile's decoded bounds, checked before anything is allocated for it (decode): the planet's build (2026-11-14, 7,885
+# tiles) has at most 7.6 MB decoded (Midtown), 99,726 rows, text of 101 characters
+MAX_DECODED = 64 << 20
+MAX_ROWS = 2_000_000
+MAX_TEXT = 1024
 DEM_ZOOM = 12               # the DEM zoom of the buildings' feet at most (~30 m: their skirts reach 10 m under)
 MIN_SIZE = (0.0, 0.0)       # (every indexed building: the index holds only tall ones; a part-tall one's outline is low)
 
@@ -64,12 +69,98 @@ def reach(building_scale, view_m=None):
     return min(HORIZON_M, float(view_m)) if view_m else HORIZON_M
 
 
+def _members():
+    """{member name: (dtype kind / str, columns or None)} a tile may hold: the map cells' columns (overture.LAYERS, as
+    tools/build_tall_index.py writes them) of the buildings (b_) and their parts (p_)."""
+    import overture
+    out = {}
+    for pre, layer in (("b_", "buildings"), ("p_", "building_parts")):
+        spec = overture.LAYERS[layer]
+        out[pre + "id.npy"] = ("U", None)
+        out[pre + "ring_off.npy"] = ("<i8", None)
+        out[pre + "ll.npy"] = ("<i4", 2)
+        for c in spec.get("text", ()):
+            out[f"{pre}t_{c}.npy"] = ("U", None)
+        for c in spec.get("float", ()):
+            out[f"{pre}f_{c}.npy"] = ("<f4", None)
+        for c in spec.get("bool", ()):
+            out[f"{pre}b_{c}.npy"] = ("|b1", None)
+    return out
+
+
+_MEMBERS = None
+
+
 def decode(b):
-    """A tile's npz bytes as {name: array} (no pickles)."""
+    """A tile's npz bytes as {name: array}, checked before anything is allocated for its arrays (Codex review of the
+    ring: np.load allocated what a 199-byte member's header declared, 8 GB): the zip's members only those a tile has
+    (_members), each one's declared size and the tile's total within MAX_DECODED, read no further than declared; each
+    NPY header's dtype the member's own (text at most MAX_TEXT characters), one dimension (ll: two, the second 2), at
+    most MAX_ROWS rows, and the payload exactly rows x item size; the arrays are views of the bytes read (no copy)."""
+    import zipfile
+    global _MEMBERS
+    if _MEMBERS is None:
+        _MEMBERS = _members()
     if len(b) > MAX_TILE_BYTES:
         raise ValueError(f"bldhz: a tile of {len(b)} bytes")
-    with np.load(io.BytesIO(bytes(b)), allow_pickle=False) as z:
-        return {k: z[k] for k in z.files}
+    out, total = {}, 0
+    try:
+        z = zipfile.ZipFile(io.BytesIO(bytes(b)))
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"bldhz: not a tile ({e})")
+    with z:
+        infos = z.infolist()
+        if len(infos) > len(_MEMBERS):
+            raise ValueError(f"bldhz: a tile of {len(infos)} members")
+        for zi in infos:
+            want = _MEMBERS.get(zi.filename)
+            if want is None or zi.filename[:-4] in out:
+                raise ValueError(f"bldhz: a tile member {zi.filename[:64]!r}")
+            if zi.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ValueError(f"bldhz: {zi.filename}: compression {zi.compress_type}")
+            total += zi.file_size
+            if zi.file_size > MAX_DECODED or total > MAX_DECODED:
+                raise ValueError(f"bldhz: a tile past {MAX_DECODED} decoded bytes")
+            with z.open(zi) as f:
+                raw = f.read(zi.file_size + 1)       # (no further than declared: a longer member is refused)
+            if len(raw) != zi.file_size:
+                raise ValueError(f"bldhz: {zi.filename}: {len(raw)} bytes, {zi.file_size} declared")
+            out[zi.filename[:-4]] = _npy(zi.filename, raw, *want)
+    return out
+
+
+def _npy(name, raw, kind, cols):
+    """One member's NPY bytes as an array view, its header checked first (decode)."""
+    from numpy.lib import format as npf
+    buf = io.BytesIO(raw)
+    try:
+        major, _minor = npf.read_magic(buf)
+        if major == 1:
+            shape, fortran, dtype = npf.read_array_header_1_0(buf, max_header_size=1024)
+        elif major == 2:
+            shape, fortran, dtype = npf.read_array_header_2_0(buf, max_header_size=1024)
+        else:
+            raise ValueError(f"version {major}")
+    except ValueError as e:
+        raise ValueError(f"bldhz: {name}: header ({e})")
+    if fortran or dtype.hasobject or dtype.fields is not None:
+        raise ValueError(f"bldhz: {name}: layout")
+    if kind == "U":
+        if dtype.kind != "U" or dtype.byteorder not in ("<", "=") or not 0 < dtype.itemsize <= 4 * MAX_TEXT:
+            raise ValueError(f"bldhz: {name}: dtype {dtype.str}")
+    elif dtype.str != kind:
+        raise ValueError(f"bldhz: {name}: dtype {dtype.str}, want {kind}")
+    want_dims = 1 if cols is None else 2
+    if len(shape) != want_dims or any(not isinstance(d, int) or d < 0 for d in shape) \
+            or (cols is not None and shape[1] != cols) or shape[0] > MAX_ROWS:
+        raise ValueError(f"bldhz: {name}: shape {shape}")
+    n = 1
+    for d in shape:
+        n *= d
+    off = buf.tell()
+    if len(raw) - off != n * dtype.itemsize:
+        raise ValueError(f"bldhz: {name}: {len(raw) - off} payload bytes for {shape}")
+    return np.frombuffer(raw, dtype, n, off).reshape(shape)
 
 
 def features(a):
