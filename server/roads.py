@@ -7566,14 +7566,20 @@ class BridgeProfiles:
     def _cell_entries(self, key):
         """([((fid, j), (spec, deck line, lon, level, ring points))], [((fid, "g"), [ground lines])]) of cell key, made
         once (every chain solved gathered its cells again: each a loop over all their roads, 2026-10-25). Not to be
-        changed by the caller."""
+        changed by the caller. Kept only when the cell was read complete: a read made short (a fault in this thread
+        or the process's while cell_fn ran: revisit.mark) is answered for this call alone, so the next chain solve reads the cell again and
+        faults again, rather than taking an empty copy without the fault and calling its network final
+        (subsea._final, review 2026-11-13)."""
+        import revisit
         cache = self.__dict__.setdefault("cell_entries", {})
         with self.lock:
             got = cache.get(str(key))
         if got is not None:
             return got
         parts, roads_ = [], []
+        m0 = revisit.mark()
         feats = self.cell_fn(key)
+        complete = revisit.mark() == m0
         if feats is not None and len(feats):
             bs = self.specs_of(feats)
             rs = road_specs(feats)
@@ -7610,6 +7616,8 @@ class BridgeProfiles:
                     if lines:
                         roads_.append(((fid, "r"), lines))
         got = (parts, roads_)
+        if not complete:
+            return got
         with self.lock:
             if len(cache) > 64:
                 cache.clear()
@@ -8880,8 +8888,11 @@ class TunnelProfiles(BridgeProfiles):
         done = self.__dict__.setdefault("hw_done", set())
         if str(key) in done:            # (the same half widths each time: once per cell)
             return
-        done.add(str(key))
+        import revisit
+        m0 = revisit.mark()
         feats = self.cell_fn(key)
+        if revisit.mark() == m0:
+            done.add(str(key))          # (once read complete: a short read is read again by the next solve)
         if feats is None or len(feats) == 0:
             return
         rs = road_specs(feats)

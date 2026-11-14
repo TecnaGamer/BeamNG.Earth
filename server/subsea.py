@@ -24,9 +24,28 @@ def node(p):
 
 
 # What a network that cannot be solved for good answers: no floors, the parts' marks as they are (left out whole, as
-# an unsolved one's), and NO revisit.fault. None (the caller faults: nothing built on it is kept) is for a network
-# that may still change: an input missing, or map cells its resolve did not read.
+# an unsolved one's), and NO revisit.fault: a stub ending in the water, a loop, fewer than two portals, or bounds the
+# solver proves cannot be met. None (the caller faults: nothing built on it is kept) is for a network that may still
+# change: an input missing or short, map cells its resolve did not read, the solver out of time.
 LEFT_OUT = ({}, {})
+
+# An unsolved network is final only on bounds that cross before the solver runs ("InconsistentBounds") or on Clarabel's
+# strict "PrimalInfeasible" with the bounds' own proof (_proven). Not its "Almost" statuses (reduced tolerances: a
+# numerically troubled solve) nor the dual ones (they prove nothing about the bounds): those stay awaiting (a fault).
+PROOF_M = .01               # m: how far out of a portal's grade reach a bound must be to prove the network infeasible
+
+
+def _proven(lowers, uppers, svals):
+    """Do the bounds prove the network infeasible without the solver: some chain's bound out of reach, by more than
+    PROOF_M, of a portal pinned on that chain at the grade (z_i >= p - GRADE |s_i - s_p| and z_i <= p + GRADE |s_i -
+    s_p| hold for every floor). A plain sum and comparison of the inputs: the same verdict on every platform, whatever
+    the solver's arithmetic. Only a check: a network infeasible for its curves alone is not proven (awaiting)."""
+    for lo, up, s in zip(lowers, uppers, svals):
+        for i in np.flatnonzero(np.isfinite(lo)):
+            reach = GRADE * np.abs(s - s[i])
+            if (lo[i] - reach - up).max() > PROOF_M or (lo - (lo[i] + reach)).max() > PROOF_M:
+                return True
+    return False
 
 
 def _final(owner, points, why):
@@ -35,9 +54,13 @@ def _final(owner, points, why):
     the map holds no continuation, and waiting for one made the cell's plans short on EVERY visit: a 26 m covered
     ramp onto a Hudson pier (one end over the water, nothing mapped beyond) kept Times Square's map cell from ever
     being kept, and with it every terrain block and road geotile round it (a warm revisit's graded block 38 s,
-    2026-11-13). Logged once a network."""
+    2026-11-13). Never while anything the solve read so far was short (revisit.scope_short: a map cell whose read
+    failed is in the resolve's cells all the same; a ground or water source that fell back). Logged once a network."""
     import mapcells
+    import revisit
     import roads
+    if revisit.scope_short():
+        return False
     tls = getattr(owner, "_tls", None)
     read = getattr(tls, "read", None)
     if not read or len(read) >= roads.CHAIN_CELLS:
@@ -145,7 +168,7 @@ def _profiles(owner, comp, pool):
         return {}, membership
     local = {i: j for j, i in enumerate(active)}
     offsets = np.r_[0, np.cumsum([len(chains[i]["s"]) for i in active])].astype(np.int64)
-    targets, weights, lowers, uppers, params = [], [], [], [], []
+    targets, weights, lowers, uppers, svals, params = [], [], [], [], [], []
     for i in active:
         c = chains[i]; s = c["s"]; wet = c["wet"]
         t = np.interp(s, [0., s[-1]], c["portal"])
@@ -181,7 +204,7 @@ def _profiles(owner, comp, pool):
                     log.warning("subsea chain ends under water; awaiting its missing source continuation")
                     return None
                 lower[at] = upper[at] = p
-        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper)
+        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper); svals.append(s)
         params.append([GRADE, K, 2.e4, s[-1] / (len(s) - 1), 200.])
     rows = []
     for adjacent in ends.values():
@@ -189,11 +212,24 @@ def _profiles(owner, comp, pool):
         for a in selected[1:]: rows.append([a[0], a[1], selected[0][0], selected[0][1], 0])
     pack = lambda a: np.ascontiguousarray(np.concatenate(a), np.float64)
     fast.require(156, "subsea profiles")
-    z, info = fast._ef.carriageway_profiles(pack(targets), pack(weights), pack(lowers), pack(uppers), offsets,
+    solve = lambda up: fast._ef.carriageway_profiles(pack(targets), pack(weights), pack(lowers), up, offsets,
         np.asarray(params, np.float64), np.asarray(rows, np.int64).reshape(-1, 5), np.zeros(len(rows)), 150, 30.)
-    if not info["converged"] or not info["feasible"]:
+    z, info = solve(pack(uppers))
+    bounds = uppers                 # (the upper bounds of the solve whose verdict stands)
+    ok = lambda info: info["converged"] and info["feasible"]
+    if not ok(info):
         log.warning("subsea profile unsolved: %s; grade %.6g, curve %.6g, bounds %.3g/%.3g m", info["status"],
                     info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"])
+        # Infeasible is the same answer on every build of the same inputs: once the map holds no more of the network
+        # (_final), it is left out for good, as an unsolved one, and its cells kept. Infeasible here: bounds that
+        # cross, or the solver's strict primal infeasibility AND the bounds' own proof (_proven). Anything else (an
+        # "Almost" or dual status, a time or iteration limit, a numerical failure), or a cell or input still short:
+        # awaiting (None, a fault): a numerically troubled solve must never become an omission kept for good.
+        final = info["status"] == "InconsistentBounds" or (
+            info["status"] == "PrimalInfeasible" and _proven(lowers, bounds, svals))
+        if final and not info["timed_out"] and _final(
+                owner, [c["xy"][e] for c in chains for e in (0, -1)], f"its bores cannot be solved ({info['status']})"):
+            return LEFT_OUT
         return None
     result = {}
     for k, (i, s) in locations.items():

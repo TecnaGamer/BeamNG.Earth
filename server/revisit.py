@@ -282,6 +282,21 @@ def thread_lidar_faults():
     return getattr(_tl, "lidar", 0)
 
 
+def scope_short():
+    """Has the innermost build scope open in this thread (the build being made now: roads' chain solve has one of its
+    own) read anything short so far (a fault, the lidar rule's too, or a fault of the process's since it began: not
+    Build.complete)? False with no scope open. subsea._final: a network's answer is final only when nothing its solve
+    read was short."""
+    st = getattr(_tl, "stack", None)
+    return bool(st) and not st[-1].complete
+
+
+def mark():
+    """This thread's faults, its lidar rule faults and the process's so far: a read was complete when mark() is the
+    same after it as before (a memo of it may be kept: roads.BridgeProfiles._cell_entries)."""
+    return getattr(_tl, "n", 0), getattr(_tl, "lidar", 0), _orphans[0]
+
+
 _PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")
 _IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([^#\n]+))", re.M)
 
