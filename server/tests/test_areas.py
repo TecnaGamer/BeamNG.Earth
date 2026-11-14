@@ -1,7 +1,9 @@
 """Saved areas (areas.py, native areacover.rs): the box checks and the deterministic plan, the estimate, the list's
 store (resume after a restart, pause / resume / delete), the download thread's gates (never while the live pools are
 busy or a teleport waits, a refused request tried again, a host's daily share used up: waiting for tomorrow), the pins
-(cache keys in a saved area) and netfetch's PREDOWNLOAD_SHARE. No network: stub producers."""
+(cache keys in a saved area), netfetch's PREDOWNLOAD_SHARE, and a layers subset (what it narrows, and that the store
+keeps it so a resume walks the same plan). No network: stub producers."""
+import json
 import os
 import sys
 import tempfile
@@ -345,6 +347,63 @@ class AreasTest(unittest.TestCase):
         self.assertEqual(b.areas[0]["route"], route)
         self.assertEqual(b.message()["areas"][0]["state"], "done")
         self.assertFalse(b.add_route(lats, lons, 20, "")[0])
+
+    def test_layers_subset(self):
+        """A subset of the layers (check_layers): what it takes, what it narrows, and that the store keeps it --
+        the plan is walked again on every pass and after every restart, so a subset that is not stored turns a
+        one-layer area back into a twelve-layer one and downloads what nobody asked for."""
+        self.assertIsNone(areas.check_layers(None), "no subset: the plain plan")
+        self.assertEqual(areas.check_layers(["terrain", "roads"]), ("roads", "terrain"), "all_layers() order")
+        self.assertIsNone(areas.check_layers(list(areas.all_layers())), "every name is no subset")
+        self.assertEqual(areas.check_layers({"roads"}), ("roads",), "a set is a list of names too")
+        for bad in (["nope"], [], "roads", 5, ["roads", "nope"], [None]):
+            with self.assertRaises(ValueError, msg=bad):
+                areas.check_layers(bad)
+        with self.assertRaisesRegex(ValueError, "roads"):         # (the names that would have worked)
+            areas.check_layers(["tarmac"])
+        with self.assertRaisesRegex(ValueError, "every layer"):   # (a geotile is built from several layers at once)
+            areas.check_layers(["roads"], "world")
+        lats, lons = list(ROUTE[0]), list(ROUTE[1])
+        a, s = self.make()
+        route = {"lat": lats, "lon": lons, "half": 800.0}
+        box = areas.route_bounds(route)
+        whole = a.steps(box, route=route)
+        roads = a.steps(box, route=route, layers=("roads",))
+        self.assertEqual({st[0] for st in roads}, {"cell"}, "roads only: no elevation and no imagery planned")
+        self.assertEqual({st[4] for st in roads}, {"roads"})
+        self.assertEqual(len(roads), len({st[1:4] for st in whole if st[0] == "cell"}), "one step a cell")
+        self.assertLess(len(roads), len(whole) / 5)
+        self.assertEqual({st[0] for st in a.steps(box, route=route, layers=("terrain",))}, {"dem"})
+        self.assertEqual({st[0] for st in a.steps(box, route=route, layers=("imagery",))}, {"img"})
+        self.assertEqual(a.steps(box, route=route, layers=areas.all_layers()), whole, "every name: the plain plan")
+        # the estimate narrows with it, and says which subset it honoured (an older server ignores the field)
+        p_whole, p_roads = a.plan_route(lats, lons, 800), a.plan_route(lats, lons, 800, layers=["roads"])
+        self.assertEqual((p_whole["layers"], p_roads["layers"]), ([], ["roads"]))
+        self.assertEqual((p_whole["items"], p_roads["items"]), (len(whole), len(roads)))
+        self.assertLess(p_roads["downloadBytes"], p_whole["downloadBytes"] / 2)
+        self.assertFalse(a.plan_route(lats, lons, 800, layers=["nope"])["ok"])
+        self.assertFalse(a.add_route(lats, lons, 800, "", layers=["nope"])[0])
+        # the area, the store, and the plan a resume walks
+        ok, aid = a.add_route(lats, lons, 800, "Roads only", layers=["roads"])
+        self.assertTrue(ok, aid)
+        m = a.message()["areas"][0]
+        self.assertEqual((m["layers"], m["total"]), (["roads"], len(roads)))
+        self.assertEqual(m["unavailable"], 0, "every area reports it from the moment it exists")
+        a.close()
+        b, _ = self.make(server=s)
+        self.assertEqual(b.areas[0]["layers"], ["roads"], "the subset survives a restart")
+        kept = b.areas[0]
+        self.assertEqual(len(b.steps((kept["s"], kept["w"], kept["n"], kept["e"]), kept["mode"], kept["route"],
+                                     kept.get("layers"))), len(roads), "and the resumed plan is the narrowed one")
+        b.close()
+        # an area stored with a layer this version no longer has is dropped, as one with a bad route is
+        path = os.path.join(self.tmp.name, areas.SUBDIR, areas.STORE)
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        doc["areas"][0]["layers"] = ["roads", "gone_in_this_version"]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        self.assertEqual(self.make(server=s)[0].areas, [], "a stored subset that no longer validates: no area")
 
     def test_world_mode(self):
         # "world": the downloads, then every road geotile's content built ahead (z17 tiles of the box), listed in
