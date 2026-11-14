@@ -6270,13 +6270,6 @@ class _Planner:
                     out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
         return out
 
-    def _covered_tunnels(self, feats):
-        """[(xy, half width)] of the tunnels' covered sections (not open roads): the grading leaves the ground over
-        them as it is (apply): the approaches' grading reached up to T_MAX past a portal and cut a park bridge's soil
-        down under its arch's vault, the terrain then cut away over it (2026-10-17)."""
-        return [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, kind in _twin_trimmed(self._tunnel_sections(feats))
-                if kind]
-
     def _open_tunnels(self, feats):
         """(fid, Plan) of the tunnels' open sections (roads.TUNNEL_OPEN_COVER): the ground graded to the road's floor
         (the lower hull of the ground), as the road is drawn (roads._tunnel_chunks): over a footbridge's hump in the

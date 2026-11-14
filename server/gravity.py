@@ -306,9 +306,6 @@ class GravityModel:
         db[zero] = np.sqrt(n[zero] * (n[zero] + 1) / 2)
         return da, db
 
-    def memory_bytes(self):
-        return sum(x.nbytes for x in (self.coef, self.ra, self.rb))
-
     def _row_sums(self, t, u, lam):
         """Per-degree sums over m (radius-independent): the (nmax+1, 2, ncol) matrices
         [P cos m lam; P sin m lam] @ coef rows, and P_n0, P_n1 up to NZONAL (float64). In Rust (earthfast 163,

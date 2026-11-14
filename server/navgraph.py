@@ -154,11 +154,6 @@ def _us_place(feats, i):
     return got
 
 
-def _us_state(feats, i):
-    """The US state (postal code) at road feature i's middle, '' outside the states."""
-    return _us_place(feats, i)[0]
-
-
 def mapped_limit(feats, i, at=0.5):
     """Is road feature i's speed limit at fraction at the map's own (max_speed_kmh), not its class's default?"""
     speed = feats.rules.get("max_speed_kmh")
