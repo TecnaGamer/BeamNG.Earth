@@ -514,7 +514,11 @@ impl Telemetry {
                     last24.entry((*k).clone()).or_default().add(s);
                 }
             }
-            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": src}));
+            // (each hour's sources as their request counts only: the page shows nothing else, and every field of every
+            // source for 169 hours made /stats/advanced 2.5 MB, 2.85 MB of it this list)
+            let req: BTreeMap<&String, serde_json::Value> =
+                src.iter().filter(|(_, s)| s.req > 0).map(|(k, s)| (*k, serde_json::json!({"req": s.req}))).collect();
+            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": req}));
         }
         serde_json::json!({"versions": versions, "systems": systems, "countries": countries, "beammp": mp,
                            "sources24h": last24, "hourly": hourly})
