@@ -41,6 +41,32 @@
     ],
     "doubleSided": false
   },
+  "bne_eu_frontage_asphalt": {
+    "name": "bne_eu_frontage_asphalt",
+    "mapTo": "bne_eu_frontage_asphalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a0a8621b-4a8c-4f03-b894-978f1490662b",
+    "translucent": true,
+    "translucentZWrite": true,
+    "Stages": [
+      {
+        "baseColorFactor": [0.35, 0.35, 0.35, 1],
+        "detailMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png",
+        "detailMapUseUV": 0,
+        "detailScale": [1, 1],
+        "detailBaseColorMapStrength": 1,
+        "detailNormalMap": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png",
+        "normalDetailMapUseUV": 0,
+        "detailNormalMapStrength": 0.8,
+        "roughnessFactor": 0.9,
+        "metallicFactor": 0,
+        "useAnisotropic": true,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityMapUseUV": 1
+      }
+    ]
+  },
   "bne_eu_tactile": {
     "name": "bne_eu_tactile",
     "mapTo": "bne_eu_tactile",
@@ -50,6 +76,153 @@
     "Stages": [
       {
         "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/tactile.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_light_asphalt": {
+    "name": "bne_eu_walk_light_asphalt",
+    "mapTo": "bne_eu_walk_light_asphalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a472c16a-1ea1-5c6c-b133-4e504b1b124b",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/light_asphalt.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_concrete": {
+    "name": "bne_eu_walk_concrete",
+    "mapTo": "bne_eu_walk_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1b67d290-d9a6-5bee-a2a2-cbc1f220957d",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/concrete.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_slabs": {
+    "name": "bne_eu_walk_slabs",
+    "mapTo": "bne_eu_walk_slabs",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3a5bd959-430e-5eb0-a65b-741d6bfa81ad",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/slabs.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_pavers": {
+    "name": "bne_eu_walk_pavers",
+    "mapTo": "bne_eu_walk_pavers",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "03339626-3ac3-5c79-8b89-ab0c97f7562e",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_pavers_mixed": {
+    "name": "bne_eu_walk_pavers_mixed",
+    "mapTo": "bne_eu_walk_pavers_mixed",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "53cab921-f427-5d5b-b098-c31cab61e048",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/pavers_mixed.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_stone": {
+    "name": "bne_eu_walk_stone",
+    "mapTo": "bne_eu_walk_stone",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5917c19f-99e0-5ae7-b51f-05edf838ae0d",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/stone.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_eu_walk_gravel": {
+    "name": "bne_eu_walk_gravel",
+    "mapTo": "bne_eu_walk_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "778a36c4-b17b-5b9a-93b2-588f8c288277",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/gravel.color.png",
         "baseColorFactor": [
           1,
           1,

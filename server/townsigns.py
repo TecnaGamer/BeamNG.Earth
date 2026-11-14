@@ -18,7 +18,7 @@ import europeinfra
 
 DATA_PATH=Path(__file__).with_name('data')/'fr_town_signs.cells'      # (pack_cells of the survey's fr_town_signs.json.gz)
 DATA_SHA256='c72a2a3690d00392973f2d02776abd6a8199bd4629323df1da2583ec3351205a'
-VERSION='town-signs-measured-v3'
+VERSION='town-signs-measured-v4'  # v4: with the town signs on, their French ones are these boards (roads.kit_town_boards)
 CLASSES={'primary','secondary','tertiary','unclassified','residential','living_street'}
 ESTIMATED_CLASSES={'primary','secondary','tertiary','unclassified'}
 

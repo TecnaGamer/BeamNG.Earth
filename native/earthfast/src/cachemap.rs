@@ -232,12 +232,12 @@ impl CoverIndex {
 
     /// Cache keys added (new files): how many were tiles of a known class.
     fn add(&mut self, py: Python<'_>, keys: Vec<String>) -> usize {
-        py.allow_threads(|| self.apply(&keys, 1))
+        py.detach(|| self.apply(&keys, 1))
     }
 
     /// Cache keys removed (evicted, cleared, forgotten).
     fn remove(&mut self, py: Python<'_>, keys: Vec<String>) -> usize {
-        py.allow_threads(|| self.apply(&keys, -1))
+        py.detach(|| self.apply(&keys, -1))
     }
 
     /// Rectangles (class, south, west, north, east) in degrees counted (sign 1) or taken out again (-1), each at the
@@ -281,7 +281,7 @@ impl CoverIndex {
             || (x0 as u64 + w as u64) > (1u64 << gz) || (y0 as u64 + h as u64) > (1u64 << gz) {
             return Err(pyo3::exceptions::PyValueError::new_err("cache map: bad grid"));
         }
-        let out = py.allow_threads(|| {
+        let out = py.detach(|| {
             let n = (w * h) as usize;
             let mut out = vec![0u8; n];
             match mode {

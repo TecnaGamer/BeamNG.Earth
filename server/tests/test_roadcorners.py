@@ -34,6 +34,30 @@ def curved(chunks, m="line_white"):
     return [c for c in chunks if c["m"] == m and len(c["n"]) > 10]
 
 
+class CurbCornerPaintTest(unittest.TestCase):
+    def test_curb_return_fill_painted_in_the_road_tone(self):
+        """The user, 2026-11-11: "side walk corners still need improvment, you can tell because the road paint is a
+        diffrent shape": the asphalt between a curb return's arc and the old square corner is painted with the roads,
+        in the painted road's colour beside it."""
+        f = crossing(cls="residential")
+        urban = lambda lat, lon: np.ones(np.shape(lat), bool)       # noqa: E731 (town streets: sidewalks)
+        specs = roads.road_specs(f, urban)
+        self.assertTrue(all(roads.has_sidewalks(sp) for sp in specs if sp is not None))
+        pads = roadcorners.curb_pads([f], urban, None, FRAME, bounds=(-32.0, -32.0, 32.0, 32.0))
+        self.assertGreaterEqual(len(pads), 4, "the four curb returns' fills")
+        image = np.full((257, 257, 3), 230, np.uint8)
+        photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f], urban)
+        hw = specs[0].width / 2
+        # just outside both carriageway edges, inside the return's arc (residential radius 3 m): painted
+        q = hw + 0.4
+        c, r = int(round((q + 32.0) * 4)), int(round((32.0 - q) * 4))
+        self.assertTrue(np.any(photo[r, c] != image[r, c]), "the corner's fill painted")
+        road = photo[128, 128].astype(int)                             # the junction's middle
+        self.assertLess(np.abs(photo[r, c].astype(int) - road).max(), 6, "in the road's colour")
+        far = int(round((32.0 - (hw + 6.0)) * 4)), int(round((hw + 6.0 + 32.0) * 4))
+        np.testing.assert_array_equal(photo[far], image[far], "the block's corner beyond the arc: the photo")
+
+
 class PavementCornerTest(unittest.TestCase):
     def test_oneway_highway_corner_keeps_yellow_left_edges(self):
         sp = roads.Spec(14.0, "paved", False, "motorway", True, dir=1, lanes=2)
@@ -78,6 +102,20 @@ class PavementCornerTest(unittest.TestCase):
         mask = surface.road_mask(FRAME, -32.0, -32.0, 64.0, 257, fake)
         self.assertGreater(mask[106, 150], 240)
         self.assertEqual(mask[88, 169], 0)
+
+    def test_quick_paint_asks_no_lidar_decided_parts(self):
+        # a stand-in block's paint (quick): the roads as the map tags them, no corners, nothing that waits on the
+        # session's lidar answers (roads.ground_parts / the tapers' bridge specs held a cold stand-in 17 s)
+        f = crossing()
+        e, n = np.meshgrid(np.arange(-32.0, 32.01, 0.25), np.arange(-32.0, 32.01, 0.25))
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+
+        def no(*_a, **_k):
+            raise AssertionError("waited on the lidar decisions")
+        with patch.object(roads, "ground_parts", no), patch.object(roads, "bridge_specs", no):
+            mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25, quick=True)
+        self.assertEqual(mat[128, 128], surface.ASPHALT, "the crossing's middle")
+        self.assertNotEqual(mat[150, 150], surface.ASPHALT, "no rounded corner in the stand-in")
 
     def test_corner_grading_holds_the_new_pavement_on_a_hillside(self):
         # a road with a narrow flat shoulder (grading.shoulder: a motorway's ramp terminal, an expressway) meets a

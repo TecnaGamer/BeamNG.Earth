@@ -554,7 +554,8 @@ local function applyPrecip(e, c)
   local alt = e.getCloudAltitudeKm and tonumber(e.getCloudAltitudeKm())
   local cz = cameraZ()
   if alt and cz and cz > alt * 1000 then rain, snow = 0, 0 end
-  M.rainNow = rain                          -- (its sound: ambience.lua)
+  M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
+  M.snowNow = snow
   drivePrecip(M.RAIN_NAME, rain, M.RAIN_POOL)
   drivePrecip(M.SNOW_NAME, snow, M.SNOW_POOL)
 end
@@ -734,6 +735,7 @@ end
 local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
   M.rainNow = 0
+  M.snowNow = 0
   pcall(restoreSun)
 end
 

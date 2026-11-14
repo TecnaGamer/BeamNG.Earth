@@ -1,0 +1,274 @@
+{
+  "bne_wear_tread": {
+    "name": "bne_wear_tread",
+    "mapTo": "bne_wear_tread",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0001-4a11-9c01-000000000001",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_b.color.png",
+        "normalMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/treadmark/tread_marks_worn/t_tread_marks_worn_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          0.7
+        ],
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_wear_sealed": {
+    "name": "bne_wear_sealed",
+    "mapTo": "bne_wear_sealed",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0002-4a11-9c01-000000000002",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_b.color.png",
+        "normalMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/asphalt/AsphaltRoad_joint_01/t_asphalt_repair_joint_01_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          0.9
+        ],
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_wear_cracks": {
+    "name": "bne_wear_cracks",
+    "mapTo": "bne_wear_cracks",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0003-4a11-9c01-000000000003",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_b.color.png",
+        "normalMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_o.data.png",
+        "roughnessMap": "/assets/materials/decalroad/asphalt/m_asphalt_cracks_02/t_asphalt_cracks_02_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          0.9
+        ],
+        "opacityDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png",
+        "opacityDetailMapUseUV": 1,
+        "detailOpacityMapStrength": 1,
+        "detailScale": [
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_crack_line": {
+    "name": "bne_crack_line",
+    "mapTo": "bne_crack_line",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0004-4a11-9c01-000000000004",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decalroad/detail/road_crack/t_road_crack_b.color.png",
+        "normalMap": "/assets/materials/decalroad/detail/road_crack/t_road_crack_nm.normal.png",
+        "opacityMap": "/assets/materials/decalroad/detail/road_crack/t_road_crack_o.data.png",
+        "baseColorFactor": [
+          0.75,
+          0.75,
+          0.75,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_spot_patch": {
+    "name": "bne_spot_patch",
+    "mapTo": "bne_spot_patch",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0005-4a11-9c01-000000000005",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decal/asphalt/asphalt_patches/t_asphalt_repair_patch_decal_b.color.png",
+        "normalMap": "/assets/materials/decal/asphalt/asphalt_patches/t_asphalt_repair_patch_decal_nm.normal.png",
+        "opacityMap": "/assets/materials/decal/asphalt/asphalt_patches/t_asphalt_repair_patch_decal_o.data.png",
+        "roughnessMap": "/assets/materials/decal/asphalt/asphalt_patches/t_asphalt_repair_patch_decal_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_spot_pothole": {
+    "name": "bne_spot_pothole",
+    "mapTo": "bne_spot_pothole",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0006-4a11-9c01-000000000006",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decal/asphalt/m_asphalt_pothole_decal/t_asphalt_pothole_decal_b.color.png",
+        "normalMap": "/assets/materials/decal/asphalt/m_asphalt_pothole_decal/t_asphalt_pothole_decal_nm.normal.png",
+        "opacityMap": "/assets/materials/decal/asphalt/m_asphalt_pothole_decal/t_asphalt_pothole_decal_o.data.png",
+        "roughnessMap": "/assets/materials/decal/asphalt/m_asphalt_pothole_decal/t_asphalt_pothole_decal_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_spot_manhole": {
+    "name": "bne_spot_manhole",
+    "mapTo": "bne_spot_manhole",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0007-4a11-9c01-000000000007",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_b.color.png",
+        "normalMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_nm.normal.png",
+        "opacityMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_o.data.png",
+        "roughnessMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_r.data.png",
+        "metallicMap": "/assets/materials/baked_props/italy_ground_parts/t_manhole_01_decal_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_spot_oil": {
+    "name": "bne_spot_oil",
+    "mapTo": "bne_spot_oil",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0008-4a11-9c01-000000000008",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decal/leakage/oilstains/t_oil_stains_01_decal_b.color.png",
+        "opacityMap": "/assets/materials/decal/leakage/oilstains/t_oil_stains_01_decal_o.data.png",
+        "roughnessMap": "/assets/materials/decal/leakage/oilstains/t_oil_stains_01_decal_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_spot_leaves": {
+    "name": "bne_spot_leaves",
+    "mapTo": "bne_spot_leaves",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0009-4a11-9c01-000000000009",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_b.color.png",
+        "normalMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_nm.normal.png",
+        "opacityMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_o.data.png",
+        "roughnessMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

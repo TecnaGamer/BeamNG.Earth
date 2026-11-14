@@ -638,5 +638,12 @@ files[settings.FILE] = { version = 1, groundCover = false, rocks = false, trees 
   groundCoverDensity = 'low', viewDistanceMode = 'fixed', viewDistanceKm = 40 }
 local v3 = settings.load()
 T.check(v3.quality == 'custom' or v3.quality == 'low', 'old knobs that match no preset stay theirs')
+-- town signs on by default (version 2, 2026-11-10): a version-1 file's false was the old default, a version-2 one's a choice
+files[settings.FILE] = nil
+T.check(settings.load().townSigns == true, 'no file: town signs on')
+files[settings.FILE] = { version = 1, townSigns = false }
+T.check(settings.load().townSigns == true, 'a version-1 file: on (false was the old default)')
+files[settings.FILE] = { version = 2, townSigns = false }
+T.check(settings.load().townSigns == false, 'a version-2 file: the player turned them off')
 files[settings.FILE] = nil
 T.done('test_settings')

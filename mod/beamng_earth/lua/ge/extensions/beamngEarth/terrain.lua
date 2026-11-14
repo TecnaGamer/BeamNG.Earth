@@ -92,6 +92,18 @@ local function golfLook(detail, dsize, macro, msize, near, far)
   l.baseColorDetailStrength = near .. ' ' .. far
   return l
 end
+-- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
+-- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
+-- no DDS), the asphalt's roughness, ao off
+local TL = '/temp/beamngEarth/terraintex/'
+local function tileLook(color, normal, dsize, near, far)
+  local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
+  l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
+  l.baseColorDetailStrength, l.aoDetailStrength = near .. ' ' .. far, '0 0'
+  -- (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
+  l.detailDistances = '0 0 150 250'
+  return l
+end
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
@@ -100,7 +112,6 @@ M.LOOKS = {
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
   bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
   -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
   -- GroundCover layer, so the 3D grass does not grow on them.
@@ -108,7 +119,17 @@ M.LOOKS = {
   bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
   bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
   bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
+  bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
+  bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
+  bngEarthGroundCobble = tileLook('bne_cobble_b.png', 'bne_cobble_nm.png', 2, 0.6, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+}
+-- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
+-- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)
+M.TILE_FALLBACK = {
+  bngEarthGroundPavers = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
+  bngEarthGroundBrick = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
+  bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
@@ -215,10 +236,33 @@ end
 -- block drawn (detail mode), screenshots after a forced redraw were pixel-identical with and without, the redraw
 -- itself as dear (PC 8.4 / 7.7 ms vs 8.4 / 7.5), the floor of Yosemite Valley sunlit near sunset either way; trees,
 -- roads, buildings and the far meshes cast the shadows.
+local tilesChecked = false
+-- Each tile layer (M.TILE_FALLBACK) whose PNG copy is missing gets its stand-in look, once, before the block's first
+-- material build. Returns the names given one.
+function M.checkTileTextures()
+  if tilesChecked then return {} end
+  tilesChecked = true
+  local fell = {}
+  for name, fb in pairs(M.TILE_FALLBACK) do
+    local want = M.LOOKS[name] and M.LOOKS[name].baseColorDetailTex
+    local m = scenetree.findObject(name)
+    if m and want and not FS:fileExists(want) then
+      for k, v in pairs(fb) do
+        if k:sub(-7) == 'TexSize' then v = toSamples(v) end
+        pcall(function() m:setField(k, 0, tostring(v)) end)
+      end
+      fell[#fell + 1] = name
+    end
+  end
+  if #fell > 0 then log('W', 'beamngEarth', 'terrain tile textures missing (' .. table.concat(fell, ', ') .. '): stock asphalt instead') end
+  return fell
+end
+
 local function getOrCreate()
   local tb = M.get()
   if tb then return tb end
   ensureMaterials()
+  M.checkTileTextures()
   M.applyBaseSize(wantBase)      -- (the settings' ground photo size, before the block: it sizes its base textures)
   tb = TerrainBlock()
   tb:setName(M.NAME)

@@ -744,11 +744,105 @@ class GermanTownTest(unittest.TestCase):
         self.assertFalse(ts.kreisfreie("Börde", boerde))
 
     def test_the_small_line(self):
+        """An Ortsteil's Ortstafel: its Gemeinde with "Stadt", "Markt" or "Gemeinde" before it, and the Kreis under
+        that (VwV-StVO zu den Zeichen 310 und 311 Rn. 6; the user, 2026-11-07: Sarching's says "Gemeinde Barbing" and
+        "Landkreis Regensburg"); the Gemeinde's own village the Kreis only (Rn. 4), a kreisfreie Stadt none."""
         de = ts.Commune("Rüdesheim am Rhein", [], [], None, "x", "", "DE", county="Rheingau-Taunus-Kreis")
-        self.assertEqual(ts.village_sub("Assmannshausen", de, "Rüdesheim am Rhein"), "Rüdesheim am Rhein")
+        self.assertEqual(ts.village_sub("Assmannshausen", de, "Rüdesheim am Rhein"),
+                         "Stadt Rüdesheim am Rhein\nRheingau-Taunus-Kreis")
         self.assertEqual(ts.village_sub("Rüdesheim am Rhein", de, "Rüdesheim am Rhein"), "Rheingau-Taunus-Kreis")
         self.assertEqual(ts.village_sub("Grünau", de._replace(county="Zwickau"), ""), "Landkreis Zwickau")
         self.assertEqual(ts.village_sub("Ulm", de._replace(county="Ulm"), ""), "", "a kreisfreie Stadt: no Kreis")
+        lkr = de._replace(name="Barbing", county="Landkreis Regensburg")
+        self.assertEqual(ts.village_sub("Sarching", lkr, "Barbing"), "Gemeinde Barbing\nLandkreis Regensburg")
+        self.assertEqual(ts.village_sub("Sulzbach", lkr, "Donaustauf"), "Markt Donaustauf\nLandkreis Regensburg")
+        self.assertEqual(ts.village_sub("Mühlried", de._replace(county="Neuburg-Schrobenhausen"), "Schrobenhausen"),
+                         "Stadt Schrobenhausen\nLandkreis Neuburg-Schrobenhausen")
+        # (a Markt whose name has the word already: Markt Indersdorf's Ortsteile say "Markt Indersdorf")
+        self.assertEqual(ts.village_sub("Glonn", de._replace(county="Landkreis Dachau"), "Markt Indersdorf"),
+                         "Markt Indersdorf\nLandkreis Dachau")
+
+    def test_zeichen_310_face(self):
+        """Zeichen 310 in DIN lettering (D-DIN, the Condensed for a long name, as DIN 1451's Engschrift): the name,
+        then each of the small line's two lines (an Ortsteil's Gemeinde and its Kreis) as its own block of ink; a name
+        of German letters drawn as the font has them (ß kept), a Sorbian one with its accents drawn on its letters."""
+        self.assertEqual(ts._din(80).getname()[0], "D-DIN")
+        self.assertEqual(ts._din(80, narrow=True).getname()[0], "D-DIN Condensed")
+        self.assertEqual(ts.de_letters("Großmehring"), ("Großmehring", {}))
+        self.assertEqual(ts.de_letters("Köfering"), ("Köfering", {}))
+        letters, marks = ts.de_letters("Chóśebuz")
+        self.assertEqual(letters, "Chosebuz")
+        self.assertTrue(marks)
+        img = ts.face_image("Sarching", ts.G_ENTRY, country="DE", sub="Gemeinde Barbing\nLandkreis Regensburg")
+        self.assertEqual(img.size, (round(ts.plate_w("DE") * ts.FACE_PX_PER_M), round(ts.PLATE_H * ts.FACE_PX_PER_M)))
+        a = np.asarray(img)
+        w = a.shape[1]
+        ink = (a[:, round(0.06 * w):-round(0.06 * w)].sum(axis=2) < 100).any(axis=1)
+        ink[:round(0.06 * a.shape[0])] = ink[-round(0.06 * a.shape[0]):] = False     # (the border)
+        runs = int(np.sum(ink[1:] & ~ink[:-1]))
+        self.assertEqual(runs, 3, "the name and the two small lines")
+        long = ts.face_image("Pfaffenhofen an der Ilm", ts.G_ENTRY, country="DE", sub="Landkreis Pfaffenhofen an der Ilm")
+        self.assertEqual(long.size, img.size)
+
+    def test_stadt_or_markt(self):
+        """de_kind: Destatis' Städte and Märkte (data/de_gemeinden.json.gz) matched to Overture's names: its
+        abbreviations (a.d., i., St.) and suffixes left out, the Kreis with or without the word, a name's first word
+        when it alone is unique in its Kreis (Rohr i.NB, Rohr in Niederbayern); everything else a Gemeinde."""
+        self.assertEqual(ts.de_kind("Neutraubling", "Landkreis Regensburg"), "Stadt")
+        self.assertEqual(ts.de_kind("Barbing", "Landkreis Regensburg"), "Gemeinde")
+        self.assertEqual(ts.de_kind("Donaustauf", "Regensburg"), "Markt")
+        self.assertEqual(ts.de_kind("Pfaffenhofen an der Ilm", "Landkreis Pfaffenhofen an der Ilm"), "Stadt")
+        self.assertEqual(ts.de_kind("Neustadt an der Donau", "Landkreis Kelheim"), "Stadt")
+        self.assertEqual(ts.de_kind("Rohr in Niederbayern", "Landkreis Kelheim"), "Markt")
+        self.assertEqual(ts.de_kind("Pfaffenhofen", "Landkreis Heilbronn"), "Gemeinde")
+        self.assertEqual(ts.de_kind("Neustadt", "Landkreis Nirgendwo"), "Gemeinde", "no such Kreis: a Gemeinde")
+        self.assertIsNone(ts.de_gemeinde("Sarching", "Landkreis Regensburg"), "an Ortsteil is no Gemeinde")
+
+    def test_the_gemeinde_of_a_village(self):
+        """de_town: a village's Gemeinde the innermost of its localities that Destatis has as one; the
+        Verwaltungsgemeinschaft Overture names after its seat ("Schrobenhausen" over Gachenbach) is not it."""
+        r = "region:r=Bayern|county:k=Landkreis Neuburg-Schrobenhausen|"
+        vg = "locality:vg=Schrobenhausen|"
+        self.assertEqual(ts.de_town(r + vg + "locality:g=Gachenbach", "Landkreis Neuburg-Schrobenhausen"),
+                         ("g", "Gachenbach"))
+        self.assertEqual(ts.de_town(r + vg + "locality:g=Gachenbach|locality:p=Peutenhausen",
+                                    "Landkreis Neuburg-Schrobenhausen"), ("g", "Gachenbach"))
+        self.assertEqual(ts.de_town(r + "locality:s=Schrobenhausen|locality:h=Hörzhausen",
+                                    "Landkreis Neuburg-Schrobenhausen"), ("s", "Schrobenhausen"))
+        self.assertIsNone(ts.de_town(r + "locality:x=Nirgendwo", "Landkreis Neuburg-Schrobenhausen"))
+
+    def test_a_citys_stadtteil(self):
+        """A kreisfreie Stadt's Stadtteil: the city's name, "Stadtteil Harting" under it (Rn. 6's first form, the
+        name OSM's Ortstafel there has: "Regensburg (Stadtteil Harting)"); a Gemeinde's village its own name with the
+        Gemeinde and the Kreis under it."""
+        class Points:
+            def __init__(self, rows):          # (id, name, localities, lon, lat)
+                self.rows = rows
+                self.ids = np.array([r[0] for r in rows])
+                self.attrs = {"country": np.array(["DE"] * len(rows)), "name": np.array([r[1] for r in rows]),
+                              "localities": np.array([r[2] for r in rows])}
+
+            def __len__(self):
+                return len(self.rows)
+
+            def parts(self, i):
+                return [[np.array([[self.rows[i][3], self.rows[i][4]]])]]
+        xy = [[np.array([(0, 0), (2000, 0), (2000, 1000), (0, 1000)], np.float64)]]
+        ll = [[r / M for r in rings] for rings in xy]
+        xy2 = [[r + (3000.0, 0.0) for r in rings] for rings in xy]
+        ll2 = [[r / M for r in rings] for rings in xy2]
+        city = ts.Commune("Regensburg", xy, ll, None, "c-1", "", "DE", county="Regensburg")
+        barbing = ts.Commune("Barbing", xy2, ll2, None, "c-2", "", "DE", county="Landkreis Regensburg")
+        r = "region:r=Bayern|"
+        pts = Points([("p-1", "Regensburg", r + "county:k=Regensburg|locality:c-1=Regensburg", 500 / M, 500 / M),
+                      ("p-2", "Harting", r + "county:k=Regensburg|locality:h=Harting", 1500 / M, 500 / M),
+                      ("p-3", "Barbing", r + "county:l=Landkreis Regensburg|locality:c-2=Barbing", 3500 / M, 500 / M),
+                      ("p-4", "Sarching", r + "county:l=Landkreis Regensburg|locality:c-2=Barbing|locality:s=Sarching",
+                       4500 / M, 500 / M)])
+        v = ts.split_villages([city, barbing], lambda c: [pts])
+        self.assertEqual(sorted((c.name, c.sub) for c in v),
+                         [("Barbing", "Landkreis Regensburg"), ("Regensburg", ""),
+                          ("Regensburg", "Stadtteil Harting"), ("Sarching", "Gemeinde Barbing\nLandkreis Regensburg")])
 
     def test_austria(self):
         """Austria's Statutarstädte are its counties named without Bezirk; an Ortstafel's small line is the Gemeinde
@@ -764,6 +858,136 @@ class GermanTownTest(unittest.TestCase):
             return np.flatnonzero((np.asarray(img)[60:-60, 100:-100].sum(axis=2) == 0).any(axis=1))
         self.assertGreater(np.ptp(ink_rows(ts.face_image("Dellach/Dole", ts.G_ENTRY, "", "AT"))),
                            np.ptp(ink_rows(ts.face_image("Dellach", ts.G_ENTRY, "", "AT"))))
+
+
+class MappedTest(unittest.TestCase):
+    """Germany's mapped Ortstafeln (the lane shards' city_limit nodes, Towns.mapped_nodes): each stands where it is
+    mapped, its entry face toward the traffic going into its town, and the estimate's sign of its town near it is left
+    out (town_signs' mapped, mapped_signs; native townsigns_de.rs)."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Barbing east of x = 200 (its estimated edge some 40 m before: EDGE_M)
+        cls.TOWN = [commune("Barbing", 0, -1500, 2000, 1500, east_of(200.0))._replace(country="DE")]
+
+    def at(self, rows, group=ts.G_ENTRY):
+        return sorted(round(r[1]) for r in rows if r[0] == group)
+
+    def test_a_mapped_ortstafel_stands_where_it_is(self):
+        est = signs([road("r")], self.TOWN)
+        self.assertEqual(len(est), 2)
+        self.assertGreater(est[0][1], 100.0)
+        got = signs([road("r")], self.TOWN, mapped=[(-50.0, 3.0, "Barbing")])
+        self.assertEqual(self.at(got), [-50], "the mapped one, the estimate's 210 m on left out")
+        self.assertEqual(self.at(got, ts.G_EXIT), [-50])
+        entry = next(r for r in got if r[0] == ts.G_ENTRY)
+        self.assertLess(entry[2], 0.0, "on the eastbound kerb: the way into town")
+        self.assertAlmostEqual(entry[4], 270.0, places=1)
+
+    def test_far_from_the_estimate_both(self):
+        """A mapped sign of its town 440 m from the estimate's: both stand (another place of the road)."""
+        got = signs([road("r")], self.TOWN, mapped=[(600.0, 3.0, "Barbing")])
+        self.assertEqual(len(self.at(got)), 2)
+
+    def test_two_towns_at_one_mapped_sign(self):
+        """"A / B" where two towns meet: a sign of each, back to back with its exit, each toward its own way in."""
+        towns = [commune("Aholfing", -2000, -1500, 0, 1500, lambda x, y: np.asarray(x) <= -150.0)._replace(country="DE"),
+                 commune("Barbing", 0, -1500, 2000, 1500, east_of(150.0))._replace(country="DE")]
+        est = signs([road("r", x0=-900.0)], towns)
+        self.assertEqual(len(self.at(est)), 2)
+        got = signs([road("r", x0=-900.0)], towns, mapped=[(0.0, 0.0, "Aholfing / Barbing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in got if r[0] == ts.G_ENTRY),
+                         [("Aholfing", 0), ("Barbing", 0)])
+        kerbs = {r[8]: r[2] for r in got if r[0] == ts.G_ENTRY}
+        self.assertGreater(kerbs["Aholfing"], 0.0, "westbound into Aholfing: the north kerb")
+        self.assertLess(kerbs["Barbing"], 0.0)
+        # (a village and its Gemeinde: the village's sign only, the Gemeinde's own estimated one stays)
+        village = [towns[0]._replace(name="Piesenkofen", town="Obertraubling"),
+                   towns[1]._replace(name="Obertraubling", town="Obertraubling")]
+        got = signs([road("r", x0=-900.0)], village, mapped=[(-120.0, 0.0, "Piesenkofen / Obertraubling")])
+        self.assertEqual(sorted((r[8], round(r[1]) == -120) for r in got if r[0] == ts.G_ENTRY),
+                         [("Obertraubling", False), ("Piesenkofen", True)])
+        aholf = [towns[0]._replace(town="Aholfing"), towns[1]]
+        got = signs([road("r", x0=-900.0)], aholf, mapped=[(-120.0, 0.0, "Aholfing / Barbing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in got if r[0] == ts.G_ENTRY),
+                         [("Aholfing", -120), ("Barbing", -120)])
+
+    def test_where_two_towns_meet_one_mapped(self):
+        """Two towns grown together (one estimated change from Aholfing to Barbing, a sign of each back to back) and
+        a mapped sign of Aholfing only: Aholfing's stands where it is mapped, Barbing's estimated one stays."""
+        towns = [commune("Aholfing", -2000, -1500, 0, 1500, lambda x, y: np.asarray(x) <= 0.0)._replace(country="DE"),
+                 commune("Barbing", 0, -1500, 2000, 1500, east_of(0.0))._replace(country="DE")]
+        est = signs([road("r", x0=-900.0)], towns)
+        at = sorted((r[8], round(r[1])) for r in est if r[0] == ts.G_ENTRY)
+        self.assertEqual([n for n, _ in at], ["Aholfing", "Barbing"])
+        self.assertEqual(at[0][1], at[1][1], "one change: back to back")
+        got = signs([road("r", x0=-900.0)], towns, mapped=[(-60.0, 0.0, "Aholfing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in got if r[0] == ts.G_ENTRY),
+                         [("Aholfing", -60), ("Barbing", at[1][1])])
+        # (a one-way road eastbound: Aholfing's estimated sign was its exit on the far kerb, the mapped one replaces it)
+        one = signs([road("r", x0=-900.0, oneway=True, d=1)], towns, mapped=[(-60.0, 0.0, "Aholfing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in one if r[0] == ts.G_ENTRY),
+                         [("Aholfing", -60), ("Barbing", at[1][1])])
+
+    def test_a_mapped_sign_without_a_name(self):
+        """No name (or one no commune has): the town on one side of it, its way in toward that side."""
+        got = signs([road("r")], self.TOWN, mapped=[(140.0, 0.0, "")])
+        self.assertEqual(self.at(got), [140])
+        self.assertEqual(next(r[8] for r in got if r[0] == ts.G_ENTRY), "Barbing")
+
+    def test_a_village_the_places_do_not_have(self):
+        """A mapped sign whose name no commune has (Oberhinkofen, which Overture's places lack): its own name, its
+        small line the Gemeinde's whose land it stands on and the Kreis, its way in toward the built-up land; without
+        built-up land either side, none."""
+        town = [commune("Hochweg", -2000, -1500, 2000, 1500, east_of(200.0))._replace(
+            country="DE", town="Obertraubling", county="Landkreis Regensburg")]
+        built = lambda lat, lon: (np.asarray(lon) * M >= -300.0) & (np.asarray(lon) * M <= -100.0)   # noqa: E731
+        got = signs([road("r")], town, mapped=[(-320.0, 0.0, "Oberhinkofen")], urban=built)
+        entry = [r for r in got if r[0] == ts.G_ENTRY and r[8] == "Oberhinkofen"]
+        self.assertEqual([round(r[1]) for r in entry], [-320])
+        self.assertEqual(entry[0][12], "Gemeinde Obertraubling\nLandkreis Regensburg")
+        self.assertLess(entry[0][2], 0.0, "eastbound: the way into its houses")
+        self.assertEqual(sorted(r[8] for r in got if r[0] == ts.G_ENTRY), ["Hochweg", "Oberhinkofen"],
+                         "Hochweg's own estimated sign stays")
+        got = signs([road("r")], town, mapped=[(-320.0, 0.0, "Oberhinkofen")], urban=lambda la, lo: np.zeros(
+            np.shape(la), bool))
+        self.assertEqual(sorted(r[8] for r in got if r[0] == ts.G_ENTRY), ["Hochweg"])
+        # (its other mapped sign: the village between them, whatever the land cover says)
+        got = signs([road("r")], town, mapped=[(-320.0, 0.0, "Oberhinkofen"), (-700.0, 300.0, "Oberhinkofen")],
+                    urban=built)
+        entry = [r for r in got if r[0] == ts.G_ENTRY and r[8] == "Oberhinkofen"]
+        self.assertGreater(entry[0][2], 0.0, "westbound: toward the village's middle, its houses east of it or not")
+        got = signs([road("r")], town, mapped=[(140.0, 0.0, "Ortsende")])
+        self.assertEqual(self.at(got), [140], "a name that is none: the town either side's")
+
+    def test_one_post_and_on_the_road_only(self):
+        """Two nodes of a town 10 m apart on one road are one post; a node 40 m off every road is none."""
+        got = signs([road("r")], self.TOWN, mapped=[(-50.0, 0.0, "Barbing"), (-40.0, 0.0, "Barbing")])
+        self.assertEqual(self.at(got), [-50])
+        got = signs([road("r")], self.TOWN, mapped=[(-50.0, 40.0, "Barbing")])
+        self.assertEqual(self.at(got), self.at(signs([road("r")], self.TOWN)), "off the road: the estimate's")
+
+    def test_on_any_road_but_a_motorway(self):
+        """A mapped one stands on the road it is mapped on, a track or a link too (no estimated sign there); not on a
+        motorway."""
+        for cls, link in (("track", False), ("service", False), ("primary", True)):
+            got = signs([road("r", cls, link=link)], self.TOWN, mapped=[(-50.0, 0.0, "Barbing")])
+            self.assertEqual(self.at(got), [-50], cls)
+            self.assertEqual(signs([road("r", cls, link=link)], self.TOWN), [], "the estimate: none there")
+        self.assertEqual(signs([road("r", "motorway")], self.TOWN, mapped=[(-50.0, 0.0, "Barbing")]), [])
+
+    def test_germany_only(self):
+        """A mapped sign in a commune of another country (the box around Germany reaches over its borders) is left
+        alone: that country's signs are the estimate's."""
+        fr = [c._replace(country="FR", name="BARBING") for c in self.TOWN]
+        self.assertEqual(signs([road("r")], fr, mapped=[(-50.0, 0.0, "BARBING")]), signs([road("r")], fr))
+
+    def test_the_same_signs_whichever_tile_draws_them(self):
+        mapped = [(-50.0, 0.0, "Barbing")]
+        whole = signs([road("r")], self.TOWN, mapped=mapped)
+        tiles = (signs([road("r")], self.TOWN, box=(-1000, -1000, -45, 1000), mapped=mapped)
+                 + signs([road("r")], self.TOWN, box=(-45, -1000, 1000, 1000), mapped=mapped))
+        self.assertEqual(sorted(map(tuple, tiles)), sorted(map(tuple, whole)))
 
 
 class NextPlaceTest(unittest.TestCase):

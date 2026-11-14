@@ -38,7 +38,7 @@ in a few minutes. No programming needed.
   and an area around your position), then Enter again takes the first line. It also answers
   "highest bridge in Switzerland", and takes your saved places and a typed "latitude, longitude". M or Esc closes it.
 - **Left-click** the map (or a saved place, or a search result) to plan a GPS route there: the whole
-  road route is planned online (OSRM on OpenStreetMap; your start and destination are sent to it)
+  road route is planned online (OSRM on OpenStreetMap; your start, destination and any waypoints are sent to it)
   and drawn on the map with the distance and driving time left; the game's own route arrows follow
   it on the road. Leave the route and it is planned again. **Clear** stops it, **Teleport** jumps there,
   **Autodrive** lets the car drive the route by itself (in its lane, at the speed limit, minding traffic;

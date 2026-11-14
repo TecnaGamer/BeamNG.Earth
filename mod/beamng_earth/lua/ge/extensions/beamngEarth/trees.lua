@@ -27,13 +27,22 @@ M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 1e9, 0.2 } }   -- tile
 -- on the GPU, and the engine's tick hitched at every tile change while driving: 19.8 fps over a drive, 38.4 with trees
 -- off; 2026-10-20). Cities and farmland stay under it (Columbia: ~540 a tile).
 M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
+-- Far clumps (server vegetation.CLUMP_OF; GitHub #1074: "trees cost too much"): a tile beyond CLUMP_M shows the clump
+-- items of its forest squares (FAR_ONLY groups: one stock forest-filler shape for 4-8 trees) instead of the trees they
+-- stand for (rows whose scale is negative), which show only within it. A tile's distance is to its nearest point
+-- (boxDist): a tile 200 m off holds trees out to ~500 m, and a 20 m tree is drawn as its imposter beyond ~230 m
+-- anyway; within SOLID_M (the colliding trees round the car) every tree is its own. Scaled with the tree distance and
+-- density settings (rescale: QUALITY_LEVELS' clump).
+M.CLUMP_M = 200
+M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
+  eucalyptus_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
-  sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
-  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+  sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
+  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
@@ -51,8 +60,8 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_lemon = true, wallsign_turboburger = true }
+M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+  wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
 -- ~20 shapes among ~130k items cost ~100 ms. A frame touches shapes whose items add up to SHAPE_ITEMS_PER_FRAME at most
@@ -88,16 +97,18 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
-  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  rrgate_eu_l = true, rrgate_l = true, rrbuffer = true, rrwalk = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_turboburger = true }
+  wallsign_turboburger = true, rooftank = true }
 
 local ECA = '/levels/east_coast_usa/art/shapes/'
 local WCA = '/levels/west_coast_usa/art/shapes/'
 local UT = '/levels/Utah/art/shapes/'
 local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
+local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
+local ATT = '/levels/automation_test_track/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
@@ -113,6 +124,11 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
+  -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
+  -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
+  tuft = { { HIR .. 'groundcover/daisies_closetop', 0.11 }, { HIR .. 'groundcover/Clover_closetop', 0.17 } },
+  fern = { { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+           { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 } },
   conifer = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
@@ -192,7 +208,15 @@ M.CATALOG = {
   bench = { { ECA .. 'clutter/clutter_city_bench_wood', 0.9 } },
   bin = { { '/art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round', 1.1 }, { WCA .. 'objects/garbage_bin_a', 1.1 } },
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
+  -- the mapped OpenStreetMap lamps' posts by lamp_mount (server worldprops._street_lamps; PR #981 by wyo-backroads)
+  streetlight_high_mast = { { '/levels/driver_training/art/shapes/buildings/s_light_pole_high_mast', 18.03 } },
+  streetlight_straight_mast = { { '/levels/driver_training/art/shapes/buildings/s_light_pole', 12.25 } },
+  streetlight_double_arm = { { '/art/shapes/objects/pole_light_double', 13.76 } },
+  high_mast_light = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens', 1.0 } },   -- (a high mast's lens)
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
+  -- the local lamp posts of Europe and its neighbours (server citylamps.py; tools/build_city_lamps.py)
+  eu_lamp_steel = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_steel', 9.0 } },
+  eu_lamp_concrete = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_concrete', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- optional French demo (server poleprofiles.py): original mesh, three LODs, one lean collision hull
   pole_concrete_recessed = { { '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/bne_pole_concrete_recessed', 8.5 } },
@@ -227,6 +251,48 @@ M.CATALOG = {
   rrflash = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher', 4.7 } }, rrflash_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher_eu', 4.7 } },
   rrgate = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate', 8.25 } }, rrgate_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_l', 8.25 } },
   rrgate_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu', 8.25 } }, rrgate_eu_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu_l', 8.25 } },
+  rrbuffer = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_buffer', 1.8 } }, rrwalk = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_walk', 2.52 } },
+  -- railway catenary mast with its cantilever (server catenary.py; tools/blender/build_catenary.py); its +x toward the track
+  catmast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_mast', 9.0 } },
+  catmast_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_steel', 9.3 } },
+  -- a rigid portal's posts (the girder between them is the tile's wire mesh: server catenary.portal_wires)
+  catpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_su', 10.4 } },
+  catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
+  -- the Mediterranean basin's Cs climates (server vegetation.G_MEDITERRANEAN): Italy's own trees, already loaded with
+  -- its folder (MATERIALS); heights measured from the shapes' bounds (the asset survey, 2026-11-10)
+  mediterranean = {
+    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 },
+    { IT .. 'trees/trees_italy/cypress_tree', 7.2 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+    { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
+    { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+  },
+  -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
+  -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
+  -- fillers, in the materials of the single trees they stand for (no new materials); heights from their bounds
+  -- (the asset survey, 2026-11-10).
+  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 } },
+  deciduous_clump = {
+    { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 }, { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+  },
+  oak_west_clump = { { WCA .. 'trees/trees_oak/oak_a_distant', 9.8 } },
+  -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
+  -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
+  vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
+  -- silage on meadows; by hemisphere, shown in their season only (SEASON)
+  straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
+  silage_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_alt_01', 1.18 } },
+  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
+  eucalyptus_clump = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 20.3 } },
+  -- regional trees (server vegetation.regional's zones; heights from the shapes' bounds, the asset survey 2026-11-10):
+  -- Australia's eucalypts (West Coast USA's), temperate Europe's riverside poplars and North America's hot-desert
+  -- creosote bushes (Automation Test Track's)
+  eucalyptus = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
+    { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 } },
+  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 } },
+  creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
+    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
@@ -271,12 +337,59 @@ for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500
 end
+-- Germany's junction signs (server designs.py GROUPS and HEIGHTS, tools/build_median_props.py's DE_SIGNS): each
+-- mesh is its sign at its true size (Größe 1 to 3, some over a 1002 plate, a roundabout's 205 over its 215), so rows
+-- carry these heights and draw at 1:1. Few items a tile: one spelling each (ONE_SPELLING), shown out to 300 m.
+local DE_SIGNS = { de_z205_g1 = 2.519, de_z205 = 2.742, de_z205_g3 = 3.038, de_z206_g1 = 2.9, de_z206 = 2.9,
+  de_z206_g3 = 3.05, de_z301_g1 = 2.519, de_z301 = 2.742, de_z301_g3 = 3.038, de_z306_g1 = 2.571, de_z306 = 2.816,
+  de_z306_g3 = 3.142, de_z307_g1 = 2.571, de_z307 = 2.816, de_z307_g3 = 3.142, de_z205_p0_g1 = 2.989,
+  de_z205_p0 = 3.392, de_z205_p0_g3 = 3.838, de_z205_p1_g1 = 2.989, de_z205_p1 = 3.392, de_z205_p1_g3 = 3.838,
+  de_z205_p2_g1 = 2.989, de_z205_p2 = 3.392, de_z205_p2_g3 = 3.838, de_z205_p3_g1 = 2.989, de_z205_p3 = 3.392,
+  de_z205_p3_g3 = 3.838, de_z205_p4_g1 = 2.989, de_z205_p4 = 3.392, de_z205_p4_g3 = 3.838, de_z205_p5_g1 = 2.989,
+  de_z205_p5 = 3.392, de_z205_p5_g3 = 3.838, de_z205_p6_g1 = 2.989, de_z205_p6 = 3.392, de_z205_p6_g3 = 3.838,
+  de_z205_p7_g1 = 2.989, de_z205_p7 = 3.392, de_z205_p7_g3 = 3.838, de_z205_p8_g1 = 2.989, de_z205_p8 = 3.392,
+  de_z205_p8_g3 = 3.838, de_z205_p9_g1 = 2.989, de_z205_p9 = 3.392, de_z205_p9_g3 = 3.838, de_z206_p0_g1 = 3.55,
+  de_z206_p0 = 3.55, de_z206_p0_g3 = 3.85, de_z206_p1_g1 = 3.55, de_z206_p1 = 3.55, de_z206_p1_g3 = 3.85,
+  de_z206_p2_g1 = 3.55, de_z206_p2 = 3.55, de_z206_p2_g3 = 3.85, de_z206_p3_g1 = 3.55, de_z206_p3 = 3.55,
+  de_z206_p3_g3 = 3.85, de_z206_p4_g1 = 3.55, de_z206_p4 = 3.55, de_z206_p4_g3 = 3.85, de_z206_p5_g1 = 3.55,
+  de_z206_p5 = 3.55, de_z206_p5_g3 = 3.85, de_z206_p6_g1 = 3.55, de_z206_p6 = 3.55, de_z206_p6_g3 = 3.85,
+  de_z206_p7_g1 = 3.55, de_z206_p7 = 3.55, de_z206_p7_g3 = 3.85, de_z206_p8_g1 = 3.55, de_z206_p8 = 3.55,
+  de_z206_p8_g3 = 3.85, de_z206_p9_g1 = 3.55, de_z206_p9 = 3.55, de_z206_p9_g3 = 3.85, de_z306_p0_g1 = 3.041,
+  de_z306_p0 = 3.466, de_z306_p0_g3 = 3.942, de_z306_p1_g1 = 3.041, de_z306_p1 = 3.466, de_z306_p1_g3 = 3.942,
+  de_z306_p2_g1 = 3.041, de_z306_p2 = 3.466, de_z306_p2_g3 = 3.942, de_z306_p3_g1 = 3.041, de_z306_p3 = 3.466,
+  de_z306_p3_g3 = 3.942, de_z306_p4_g1 = 3.041, de_z306_p4 = 3.466, de_z306_p4_g3 = 3.942, de_z306_p5_g1 = 3.041,
+  de_z306_p5 = 3.466, de_z306_p5_g3 = 3.942, de_z306_p6_g1 = 3.041, de_z306_p6 = 3.466, de_z306_p6_g3 = 3.942,
+  de_z306_p7_g1 = 3.041, de_z306_p7 = 3.466, de_z306_p7_g3 = 3.942, de_z306_p8_g1 = 3.041, de_z306_p8 = 3.466,
+  de_z306_p8_g3 = 3.942, de_z306_p9_g1 = 3.041, de_z306_p9 = 3.466, de_z306_p9_g3 = 3.942,
+  de_z205_z215_g1 = 3.169, de_z205_z215 = 3.392, de_z205_z215_g3 = 3.838 }
+for g, h in pairs(DE_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
+  M.GROUP_MAX_M[g] = 300
+  M.ONE_SPELLING[g] = true
+end
 -- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
 -- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
 M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
 M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
 M.GROUP_MAX_M.chainlink = 800
 M.GROUP_MAX_M.noisewall = 2000
+for group, asset in pairs(require('beamngEarth/frFenceAssets')) do
+  M.CATALOG[group] = { asset }
+  M.GROUP_MAX_M[group] = 320
+  M.ONE_SPELLING[group] = true
+end
+M.CATALOG.fr_hedge = { M.CATALOG.shrub[1] } -- Stock East Coast USA broadleaf shrub.
+M.CATALOG.fr_fence_hedge = M.CATALOG.fr_hedge -- Older server rows still use the same stock bush.
+M.GROUP_MAX_M.fr_hedge = 350
+M.GROUP_MAX_M.fr_fence_hedge = 350
+M.NO_COLLIDE.fr_hedge = true
+M.NO_COLLIDE.fr_fence_hedge = true
+for group, asset in pairs(require('beamngEarth/frRadarAssets')) do
+  M.CATALOG[group] = { { asset[1], asset[2] } }
+  M.GROUP_MAX_M[group] = asset[3]
+  M.ONE_SPELLING[group] = true
+  M.NO_COLLIDE[group] = true
+end
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
@@ -287,6 +400,15 @@ M.GROUP_MAX_M.picnicgrill = 400
 -- side local y, and it sits 0.2 m below its origin.
 M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }
 M.GROUP_MAX_M.busshelter = 600
+-- ... and the regional ones (server shelters.SHELTERS: Europe Italy's, the tropics Jungle Rock Island's, elsewhere
+-- West Coast USA's; global materials), open toward local -x as the East Coast's
+M.CATALOG.busshelter_it = { { '/art/shapes/objects/s_busstop_it', 3.11 } }
+M.CATALOG.busshelter_jri = { { '/art/shapes/objects/s_busstop_jri', 2.99 } }
+M.CATALOG.busshelter_wcu = { { '/art/shapes/objects/s_busstop_wcu', 3.12 } }
+for _, g in ipairs({ 'busshelter_it', 'busshelter_jri', 'busshelter_wcu' }) do
+  M.GROUP_MAX_M[g] = 600
+  M.ONE_SPELLING[g] = true
+end
 -- Cell and water towers, shipping containers, the drag-strip billboard (poster included) and a stock barn
 -- (server worldprops.py).
 -- The height is the mesh's vertical size, so a row of that height is the model at 1:1.
@@ -298,17 +420,85 @@ M.CATALOG.container = {
 }
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
 M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
+-- New York's rooftop water tanks (server buildings.tank_rows): Small Island's tank on legs (its materials with Small
+-- Island's buildings)
+M.CATALOG.rooftank = { { '/levels/small_island/art/shapes/buildings/si_water_tower', 6.1 } }
+M.GROUP_MAX_M.rooftank = 1500
+-- Places from the map data (server places.py; the user, 2026-11-10: "lets use as many assets as needed to give this
+-- world detail and variety"). Heights are the shapes' vertical sizes (the asset survey's bounds), rows at 1:1 unless
+-- the server scales them. Materials: West Coast USA's objects and Utah's buildings (both in MATERIALS), the rest global.
+-- solar farms' panel tables (16 m long, the face along local +y)
+M.CATALOG.solarpanel = { { WCA .. 'objects/solarpanel', 3.54 } }
+M.GROUP_MAX_M.solarpanel = 1500
+-- a container terminal's stacks: West Coast USA's 40 ft boxes (length along local y), the colour by the row's rank
+M.CATALOG.stack = {
+  { WCA .. 'objects/s_containers_40_white', 2.59 }, { WCA .. 'objects/s_containers_40_brown', 2.59 },
+  { WCA .. 'objects/s_containers_40_nodeoline', 2.59 }, { WCA .. 'objects/s_containers_40_okudai', 2.59 },
+  { WCA .. 'objects/s_containers_40_oilex', 2.59 }, { WCA .. 'objects/s_containers_40_folk', 2.59 },
+  { WCA .. 'objects/s_containers_40_beamng', 2.59 },
+}
+M.GROUP_MAX_M.stack = 1200
+-- its ship-to-shore cranes (Industrial's; the boom's long reach along local -y)
+M.CATALOG.portcrane = { { '/levels/Industrial/art/shapes/buildings/ind_portcrane_a', 35.47 } }
+M.GROUP_MAX_M.portcrane = 3000
+-- marinas' boats (Italy's, global materials; their length along local x), one group each: the server fits each to
+-- its berth
+for _, b in ipairs({ { 'a', 5.46 }, { 'b', 9.40 }, { 'c', 7.89 }, { 'd', 9.17 }, { 'e', 13.93 } }) do
+  M.CATALOG['boat_' .. b[1]] = { { IT .. 'buildings/italy_boat_small_' .. b[1], b[2] } }
+  M.GROUP_MAX_M['boat_' .. b[1]] = 900
+  M.ONE_SPELLING['boat_' .. b[1]] = true
+end
+-- trailer parks' homes and caravan sites' caravans (Utah's caravan, its length along local y)
+M.CATALOG.caravan = { { UT .. 'buildings/ut_caravan_a', 2.85 } }
+M.GROUP_MAX_M.caravan = 700
+-- a construction site's tower crane (West Coast USA's s_crane_tower: its materials in WCA objects, loaded; the user
+-- 2026-11-11 asked for a better one than Italy's low-poly pieces)
+M.CATALOG.towercrane = { { WCA .. 'objects/s_crane_tower', 38.98 } }
+M.GROUP_MAX_M.towercrane = 3000
+for _, g in ipairs({ 'portcrane', 'caravan', 'towercrane' }) do M.ONE_SPELLING[g] = true end
+-- mapped street furniture (server places.street_rows; the benches, bins and North America's hydrants are the groups
+-- above): Europe's pillar hydrant and post box (Italy's, global materials), the US post box, a bicycle stand (4.2 m of
+-- hoops along local x), a recycling bin
+M.CATALOG.hydrant_eu = { { IT .. 'buildings/italy_clutter_fire_hydrant', 0.79 } }
+M.CATALOG.postbox_eu = { { IT .. 'buildings/italy_clutter_mailboxstand', 1.60 } }
+M.CATALOG.postbox_us = { { WCA .. 'objects/postbox_blue', 1.56 } }
+M.CATALOG.bikestand = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
+M.CATALOG.recyclebin = { { JV .. 'misc/s_recyclebin_brown', 1.48 } }
+-- obstruction lights on tall roofs (server places.warning_rows: West Coast USA's red marker light, emissive) and the
+-- jet fans under a long tunnel's vault (places.tunnel_fan_rows: its fan housing and rotor)
+M.CATALOG.warnlight = { { WCA .. 'objects/marker_light_red', 1.29 } }
+M.CATALOG.jetfan = { { WCA .. 'objects/tunnel_ventilation_housing', 1.07 } }
+M.CATALOG.jetfan_rotor = { { WCA .. 'objects/tunnel_ventilation_fan', 0.73 } }
+M.GROUP_MAX_M.warnlight = 5000
+M.GROUP_MAX_M.jetfan = 500
+M.GROUP_MAX_M.jetfan_rotor = 500
+for _, g in ipairs({ 'warnlight', 'jetfan', 'jetfan_rotor' }) do
+  M.ONE_SPELLING[g] = true
+  M.NO_COLLIDE[g] = true
+end
+for _, g in ipairs({ 'hydrant_eu', 'postbox_eu', 'postbox_us', 'bikestand', 'recyclebin' }) do
+  M.GROUP_MAX_M[g] = 250
+  M.ONE_SPELLING[g] = true
+end
 M.GROUP_MAX_M.celltower = 2500
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500
 M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
+M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
+M.NO_COLLIDE.creosote = true
+M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
+for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
+-- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
+-- on). Out of season its group is off (M.applySeason at setup: the date's month).
+M.SEASON = { straw_n = { 7, 8, 9 }, straw_s = { 1, 2, 3 }, silage_n = { 5, 6, 7, 8, 9 }, silage_s = { 11, 12, 1, 2, 3 } }
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -337,11 +527,14 @@ for group, a in pairs(require('beamngEarth/europeStopAssets')) do
   M.ONE_SPELLING[group] = true
 end
 local MATERIALS = {
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_radars',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_fences',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_stops',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_road_details',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',
+  '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
@@ -352,11 +545,16 @@ local MATERIALS = {
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
   JRI .. 'trees/vines_tropical',     -- tro_tree_1's vines and aerial roots (tro_vines_2d; orange without it)
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
+  ATT .. 'trees', ATT .. 'trees/trees_poplar', ATT .. 'trees/trees_shrub',     -- riverside poplars, creosote bushes
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
+  '/vehicles/common/loads/haybale', '/vehicles/common/loads/haybale/round',     -- the round bales (straw, silage)
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
+  '/levels/driver_training/art/shapes/buildings',     -- the mapped straight-mast lamp's (15 materials)
   JV .. 'misc',     -- the cell tower
+  HIR .. 'groundcover',     -- the clover and daisy patches and ferns of a roundabout's island (server roundabouts.py)
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
+  '/levels/small_island/art/shapes/buildings',     -- the rooftop water tank
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',
@@ -413,18 +611,19 @@ M.groupOff = { lampglow = true }
 -- and caps' distances, and the server's tree tile reach (core.sendGraphics treeScale: vegetation.SEND_M times it;
 -- GHOST_FAR_M follows). 'normal': the defaults above. (Before the split 'trees' also set the distance: low 0.75,
 -- medium 0.9, high 1.3, ultra 1.6; settings.lua migrates a saved level so.)
+-- clump: CLUMP_M's factor (the far clumps start nearer on the low levels: GitHub #1074 asked for imposters only).
 M.QUALITY_LEVELS = {
-  lowest = { rank = 0.3, cap = 0.3 },       -- (GitHub #714: ~37 fps in a forest on Low with a 3060 Ti at 1440p)
-  low = { rank = 0.5, cap = 0.5 },
-  medium = { rank = 0.7, cap = 0.7 },
-  normal = { rank = 1.0, cap = 1.0 },
-  high = { rank = 1.35, cap = 1.5 },
-  ultra = { rank = 1.7, cap = 2.2 },
-  extreme = { rank = 2.5, cap = 2.5 },      -- (rank 2.5: every item the server sends out to ~700 m x distance)
+  lowest = { rank = 0.3, cap = 0.3, clump = 0.5 },     -- (GitHub #714: ~37 fps in a forest on Low, 3060 Ti at 1440p)
+  low = { rank = 0.5, cap = 0.5, clump = 0.67 },
+  medium = { rank = 0.7, cap = 0.7, clump = 0.85 },
+  normal = { rank = 1.0, cap = 1.0, clump = 1.0 },
+  high = { rank = 1.35, cap = 1.5, clump = 1.0 },
+  ultra = { rank = 1.7, cap = 2.2, clump = 1.35 },
+  extreme = { rank = 2.5, cap = 2.5, clump = 1.7 },    -- (rank 2.5: every item the server sends out to ~700 m x distance)
 }
 M.DISTANCES = { nearest = 0.6, near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
 M.TILE_SEND_M, M.TILE_DROP_M = 1280, 1536     -- the server's vegetation SEND_M / DROP_M at distance 1
-local BASE_RINGS, BASE_CAP = nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
+local BASE_RINGS, BASE_CAP, BASE_CLUMP = nil, nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
 M.quality = 'normal'
 M.distance = 'normal'
 
@@ -442,6 +641,12 @@ function M.scaledRings(level, rings, caps, distance)
   return r, c
 end
 
+-- Pure: CLUMP_M of a density level and a distance level from the base distance.
+function M.clumpDistance(level, distance, base)
+  local q = M.QUALITY_LEVELS[level] or M.QUALITY_LEVELS.normal
+  return math.floor((base or 200) * (q.clump or 1) * (M.DISTANCES[distance or 'normal'] or 1.0) + 0.5)
+end
+
 -- The server's tree tile reach factor for a distance level (core.sendGraphics treeScale).
 function M.distanceScale(distance) return M.DISTANCES[distance or M.distance] or 1.0 end
 
@@ -450,8 +655,10 @@ local function rescale()
     BASE_RINGS, BASE_CAP = {}, {}
     for i, v in ipairs(M.RINGS) do BASE_RINGS[i] = { v[1], v[2] } end
     for i, v in ipairs(M.TILE_CAP) do BASE_CAP[i] = { v[1], v[2] } end
+    BASE_CLUMP = M.CLUMP_M
   end
   M.RINGS, M.TILE_CAP = M.scaledRings(M.quality, BASE_RINGS, BASE_CAP, M.distance)
+  M.CLUMP_M = M.clumpDistance(M.quality, M.distance, BASE_CLUMP)
   M.GHOST_FAR_M = math.floor(M.TILE_SEND_M * M.distanceScale() + 0.5) + (M.TILE_DROP_M - M.TILE_SEND_M)
   M.refresh()
 end
@@ -554,8 +761,19 @@ local function staticSignal()
   return FS:fileExists(dae)
 end
 
+-- Groups out of season off, in season on (SEASON); month: 1-12 (default the date's).
+function M.applySeason(month)
+  month = month or tonumber(os.date('%m'))
+  for g, months in pairs(M.SEASON) do
+    local on = false
+    for _, m in ipairs(months) do if m == month then on = true end end
+    M.groupOff[g] = (not on) or nil
+  end
+end
+
 local function setup()
   if ready then return true end
+  M.applySeason()
   for _, m in ipairs(MATERIALS) do
     local p = m .. '/main.materials.json'
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end
@@ -943,19 +1161,30 @@ end
 
 -- The rank tile t shows below at distance d: threshold(d), lowered to keep it within M.TILE_CAP (the cap-th lowest
 -- of its rows' ranks: exact whatever share of the area's items the server sent, vegetation.TILE_ROWS_MAX).
+-- The ranks are those of the rows shown at that side of CLUMP_M: within it every row but the far clumps (FAR_ONLY),
+-- beyond it every row but the trees they stand for (a negative scale).
 local function tileThreshold(d, t)
   local want = threshold(d)
   local n = t.n or 0
   for _, r in ipairs(M.TILE_CAP) do
     if d <= r[1] then
       if n <= r[2] then return want end
-      if not t.ranks then
-        local rk, f, s = newTable(n, 0), t.f, t.s
-        for i = 1, n do rk[i] = f[(i - 1) * s + F_RANK] end
+      local far = d > M.CLUMP_M
+      local rk = far and t.ranksFar or t.ranksNear
+      if not rk then
+        local f, s, names, m = t.f, t.s, t.groups or GROUPS, 0
+        rk = newTable(n, 0)
+        for i = 1, n do
+          local b = (i - 1) * s
+          local g = names[f[b + F_GROUP] + 1]
+          local out = far and f[b + F_SCALE] < 0 or not far and g ~= nil and M.FAR_ONLY[g]
+          if not out then m = m + 1; rk[m] = f[b + F_RANK] end
+        end
         table.sort(rk)
-        t.ranks = rk
+        if far then t.ranksFar = rk else t.ranksNear = rk end
       end
-      return math.min(want, t.ranks[r[2] + 1])
+      if #rk <= r[2] then return want end
+      return math.min(want, rk[r[2] + 1])
     end
   end
   return want
@@ -1023,7 +1252,7 @@ bandCapsUpdate = function()
 end
 groupBand = function(t, d)
   if bandCaps[1] == nil then bandCapsUpdate() end
-  local k = 0
+  local k = d > M.CLUMP_M and 0.5 or 0      -- (the far clumps' side: caps are whole metres)
   for i = 1, #bandCaps do
     local cap = bandCaps[i]
     if d > cap then break end
@@ -1349,6 +1578,12 @@ function M.update(anchorId, player, view, frameMs)
           end
         elseif cap and dist > cap then
           r = 2     -- this group is not shown this far out
+        end
+        -- the far clumps beyond CLUMP_M, the trees they stand for within it
+        if g and M.FAR_ONLY[g] then
+          if dist <= M.CLUMP_M then r = 2 end
+        elseif f[b + F_SCALE] < 0 and dist > M.CLUMP_M then
+          r = 2
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree

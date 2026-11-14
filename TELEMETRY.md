@@ -84,6 +84,7 @@ We never send where you are. To know how demanding the scene was, a report says 
 | what was loaded (rounded) | road tiles, buildings, far buildings, trees, far tiles, traffic cars, parked cars, lit lamps | what the game had to draw |
 | how you moved | seconds stopped and in speed bands (under 30, 30-60, 60-100, 100-150, over 150 mph), seconds with the 3D map open | high speed is where world generation falls behind |
 | teleports | how many | each teleport loads a new place |
+| session length | how long the game had been running, as one of: under 30 min / 30-60 min / 1-2 h / 2-4 h / over 4 h | to see whether long sessions get slower |
 
 ## 4. Performance and world-generation speed (Performance data)
 

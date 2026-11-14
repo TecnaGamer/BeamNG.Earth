@@ -272,6 +272,12 @@ pub fn dirsign_face(rows: Vec<Row>, style: Vec<f64>, plates: Vec<Vec<f64>>, px_p
         }
         y += rh;
     }
+    let out = finish(&cv, wpx, hpx)?;
+    Ok((out, (wpx as f32 / ppm) as f64, (hpx as f32 / ppm) as f64))
+}
+
+/// The PNG of a canvas, stretched up to power-of-two sizes.
+fn finish(cv: &Canvas, wpx: usize, hpx: usize) -> PyResult<Vec<u8>> {
     // The engine's texture cooker takes only power-of-two sizes (in game 2026-11-02: "Size must be a power of two", the
     // board stayed IMPORT FAILED): the picture stretched up to the next ones (bilinear), the mesh's UV 0..1 stretches
     // it back to the board's own proportions.
@@ -300,5 +306,60 @@ pub fn dirsign_face(rows: Vec<Row>, style: Vec<f64>, plates: Vec<Vec<f64>>, px_p
         let mut w = enc.write_header().map_err(|e| PyValueError::new_err(e.to_string()))?;
         w.write_image_data(&raw).map_err(|e| PyValueError::new_err(e.to_string()))?;
     }
+    Ok(out)
+}
+
+/// The picture of a town entry or exit sign: the settlement's name (the English name smaller under it where there is
+/// one) on a plain field with a thin edge line; an exit has the diagonal bar across it. style: [bg r g b, ink r g b,
+/// edge r g b, bar r g b, cap height m, English name size (share of the local), min width m, max width m, edge inset m,
+/// edge line m, bar width m]. Returns (PNG bytes, width m, height m).
+#[pyfunction]
+pub fn dirsign_town_face(name: String, en: String, exit: bool, style: Vec<f64>, px_per_m: f64) -> PyResult<(Vec<u8>, f64, f64)> {
+    if style.len() < 21 || name.trim().is_empty() { return Err(PyValueError::new_err("bad sign description")); }
+    let (main, cond) = fonts()?;
+    let (bg, ink, edge, bar) = (rgb(&style, 0), rgb(&style, 3), rgb(&style, 6), rgb(&style, 9));
+    let (cap, en_share, min_w, max_w, inset, line_w, bar_w) =
+        (style[12] as f32, style[13] as f32, style[14] as f32, style[15] as f32, style[16] as f32, style[17] as f32, style[18] as f32);
+    let ppm = px_per_m as f32;
+    let cap_ratio = main.metrics('H', 100.0).height as f32 / 100.0;
+    let size_em = cap / cap_ratio;
+    let pad = cap * 0.7 + inset + line_w;
+    let measure = |face: &Font, s: f32| -> f32 {
+        let mut w = text_w(face, &name, size_em * s * ppm) / ppm;
+        if !en.is_empty() { w = w.max(text_w(face, &en, size_em * en_share * s * ppm) / ppm); }
+        w
+    };
+    let mut face: &Font = main;
+    let mut s = 1.0f32;
+    if measure(face, s) + pad * 2.0 > max_w {
+        face = cond;
+        while measure(face, s) + pad * 2.0 > max_w && s > 0.5 { s -= 0.04; }
+    }
+    let width_m = (measure(face, s) + pad * 2.0).clamp(min_w, max_w.max(min_w));
+    let lines_h = cap * s + if en.is_empty() { 0.0 } else { cap * s * en_share + cap * 0.35 };
+    let height_m = lines_h + pad * 2.0;
+    let (wpx, hpx) = ((width_m * ppm).ceil() as usize, (height_m * ppm).ceil() as usize);
+    if wpx == 0 || hpx == 0 || wpx > 4096 || hpx > 4096 { return Err(PyValueError::new_err("sign too large")); }
+    let mut cv = Canvas::new(wpx, hpx, edge);
+    let e = (inset * ppm).max(1.0);
+    let lw = (line_w * ppm).max(1.0);
+    cv.rrect(e, e, wpx as f32 - e, hpx as f32 - e, 0.0, bg);
+    cv.rrect(e + lw, e + lw, wpx as f32 - e - lw, hpx as f32 - e - lw, 0.0, bg);
+    let centred = |cv: &mut Canvas, text: &str, em: f32, base: f32| {
+        let tw = text_w(face, text, em * ppm);
+        draw_text(cv, face, text, em * ppm, (wpx as f32 - tw) / 2.0, base * ppm, ink);
+    };
+    let mut base = pad + cap * s;
+    centred(&mut cv, &name, size_em * s, base);
+    if !en.is_empty() {
+        base += cap * 0.35 + cap * s * en_share;
+        centred(&mut cv, &en, size_em * s * en_share, base);
+    }
+    if exit {
+        // from the upper right to the lower left corner of the field, over the name
+        let m = e + lw + 0.012 * ppm;
+        cv.line([wpx as f32 - m, m], [m, hpx as f32 - m], (bar_w * ppm).max(2.0), bar);
+    }
+    let out = finish(&cv, wpx, hpx)?;
     Ok((out, (wpx as f32 / ppm) as f64, (hpx as f32 / ppm) as f64))
 }

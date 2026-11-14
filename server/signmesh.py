@@ -283,6 +283,22 @@ class Mesh:
         if route:
             self.rect(YELLOW,max(.55,advance(route)*.17+.15),.28,2.85,-.025,.015)
             self.text(route,2.77,-.03,.16,1.4)
+
+    def island_marker(self, position, into):
+        """French J5, with a blank metal back and its face toward oncoming traffic."""
+        import buildings
+
+        self.transform(position, into)
+        size, centre = .5, 1.25
+        self.box(METAL, (0., .03, .62), (.024, .024, .65))
+        self.panel_body(size, size, centre, .018)
+        self.rect(WHITE, size, size, centre, -.026, .018)
+        self.rect(BLUE, size - .025, size - .025, centre, -.028, .012)
+        outline = size * np.array([(-.37, .37), (-.37, .15), (.01, -.18), (-.13, -.30),
+                                   (.38, -.38), (.34, .15), (.20, .01), (-.16, .37)])
+        for triangle in buildings.triangulate(outline):
+            self.face(WHITE, [(x, -.031, centre + z) for x, z in outline[triangle]])
+
     def write(self,path):
         if not self.t:return False
         if len(self.p)>60000:raise ValueError('Regional sign tile exceeds vertex budget')

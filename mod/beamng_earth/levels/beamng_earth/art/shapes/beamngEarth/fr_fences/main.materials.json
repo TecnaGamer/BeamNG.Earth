@@ -1,0 +1,183 @@
+{
+  "bne_fr_fence_mat_limestone": {
+    "name": "bne_fr_fence_mat_limestone",
+    "mapTo": "bne_fr_fence_mat_limestone",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.02,
+          0.98,
+          0.9,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png"
+      }
+    ],
+    "persistentId": "aae375e5-bf3e-53cb-92e2-3902ad339cad"
+  },
+  "bne_fr_fence_mat_dark_stone": {
+    "name": "bne_fr_fence_mat_dark_stone",
+    "mapTo": "bne_fr_fence_mat_dark_stone",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.61,
+          0.59,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png"
+      }
+    ],
+    "persistentId": "f13437e5-f885-5b48-bbe7-06e578e6b797"
+  },
+  "bne_fr_fence_mat_brick": {
+    "name": "bne_fr_fence_mat_brick",
+    "mapTo": "bne_fr_fence_mat_brick",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.76,
+          0.43,
+          0.34,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.png"
+      }
+    ],
+    "persistentId": "64521a4d-cc03-5c1c-b5eb-91a07bfc2789"
+  },
+  "bne_fr_fence_mat_render": {
+    "name": "bne_fr_fence_mat_render",
+    "mapTo": "bne_fr_fence_mat_render",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.67,
+          0.63,
+          0.55,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.png"
+      }
+    ],
+    "persistentId": "fdcd2a8f-b6f1-5f65-8464-c09960914beb"
+  },
+  "bne_fr_fence_mat_iron": {
+    "name": "bne_fr_fence_mat_iron",
+    "mapTo": "bne_fr_fence_mat_iron",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.15,
+          0.19,
+          0.16,
+          1.0
+        ],
+        "roughnessFactor": 0.66,
+        "metallicFactor": 0.45
+      }
+    ],
+    "persistentId": "3d10c8bb-9ea7-5767-a047-3ad6b2e5c315"
+  },
+  "bne_fr_fence_mat_zinc": {
+    "name": "bne_fr_fence_mat_zinc",
+    "mapTo": "bne_fr_fence_mat_zinc",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.47,
+          0.5,
+          0.48,
+          1.0
+        ],
+        "roughnessFactor": 0.66,
+        "metallicFactor": 0.55
+      }
+    ],
+    "persistentId": "1bd7dbcc-22c0-5838-a678-e9f0e31e302b"
+  },
+  "bne_fr_fence_mat_anthracite": {
+    "name": "bne_fr_fence_mat_anthracite",
+    "mapTo": "bne_fr_fence_mat_anthracite",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.18,
+          0.2,
+          0.21,
+          1.0
+        ],
+        "roughnessFactor": 0.66,
+        "metallicFactor": 0.35
+      }
+    ],
+    "persistentId": "15b2888a-a84a-52f1-8186-63da5b8aecf7"
+  },
+  "bne_fr_fence_mat_wood": {
+    "name": "bne_fr_fence_mat_wood",
+    "mapTo": "bne_fr_fence_mat_wood",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.67,
+          0.51,
+          0.42,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.png"
+      }
+    ],
+    "persistentId": "308c13c4-b1e0-59f9-b5b0-296392bc2f49"
+  },
+  "bne_fr_fence_mat_white": {
+    "name": "bne_fr_fence_mat_white",
+    "mapTo": "bne_fr_fence_mat_white",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.85,
+          0.85,
+          0.81,
+          1.0
+        ],
+        "roughnessFactor": 0.88,
+        "metallicFactor": 0.0
+      }
+    ],
+    "persistentId": "a3806488-7537-5c7b-86ac-39fe75909602"
+  }
+}

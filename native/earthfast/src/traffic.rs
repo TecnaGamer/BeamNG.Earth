@@ -169,7 +169,7 @@ impl Routes {
             }
             roads.push(Road { id, class, surface, oneway, sign, width, mph, skip, parts: xy });
         }
-        Ok(py.allow_threads(|| Self::prepare(roads, bounds, left_hand, major_only)))
+        Ok(py.detach(|| Self::prepare(roads, bounds, left_hand, major_only)))
     }
 
     #[staticmethod]
@@ -200,7 +200,7 @@ impl Routes {
         if shift.as_ref().is_some_and(|v| v.len() != c.xy.len() || v.iter().any(|v| !v.is_finite())) {
             return Err(PyValueError::new_err("traffic lane shifts must match the pending points and be finite"));
         }
-        self.lanes = py.allow_threads(|| {
+        self.lanes = py.detach(|| {
             let centre = shift.as_ref().map(|v| offset(&c.xy, v)).unwrap_or_else(|| c.xy.clone());
             c.directions.iter().flat_map(|dir| offset(&centre, &vec![-c.offset * *dir as f64; centre.len()])).collect()
         });
@@ -220,7 +220,7 @@ impl Routes {
         if z.len() != self.lanes.len() || z.len() != c.xy.len() * c.directions.len() {
             return Err(PyValueError::new_err("traffic heights must match the lane points"));
         }
-        let made = py.allow_threads(|| {
+        let made = py.detach(|| {
             let mut out = Vec::new();
             for (k, direction) in c.directions.iter().enumerate() {
                 let a = k * c.xy.len();

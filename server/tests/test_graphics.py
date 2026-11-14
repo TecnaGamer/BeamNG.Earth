@@ -5,6 +5,7 @@ scales the far field's K (more / fewer tiles, the exact-level rule near the car 
 buildings' / skyline's / far bridges' reach, and sets the ground photo's size (Server.set_base_px: the photo, its packed
 cache entry and every size's flat AO map the level ships)."""
 import asyncio
+import math
 import os
 import sys
 import tempfile
@@ -88,6 +89,59 @@ class GraphicsMessageTest(unittest.TestCase):
         self.assertEqual(c.view_cap, earthd.VIEW_CAP_MIN_M, "at least 10 km; a message without it keeps it")
         c = self.conn([{"type": "graphics", "viewM": 40000}, {"type": "graphics", "viewM": 0}])
         self.assertIsNone(c.view_cap, "0: the real horizon again")
+
+    def test_pixel_error_setting(self):
+        """lodPx (the mod's Terrain pixel error): the connection's screen-space LOD tau, over the server's --lod-px;
+        clamped to 0 .. LOD_PX_MAX; junk ignored; the View it builds carries it and the known tile errors."""
+        c = self.conn([])
+        self.assertIsNone(c.lod_px)
+        self.assertEqual(c.lod_px_now(), self.s.lod_px, "not sent: the server's")
+        self.s.lod_px = 3.0
+        self.assertEqual(c.lod_px_now(), 3.0)
+        c = self.conn([{"type": "graphics", "lodPx": 0}])
+        self.assertEqual(c.lod_px_now(), 0.0, "the mod's 0 turns the server's off for its connection")
+        c = self.conn([{"type": "graphics", "lodPx": 1.5}, {"type": "graphics", "lodPx": "x"},
+                       {"type": "graphics", "lodPx": True}])
+        self.assertEqual(c.lod_px_now(), 1.5)
+        c = self.conn([{"type": "graphics", "lodPx": 99}])
+        self.assertEqual(c.lod_px_now(), earthd.LOD_PX_MAX)
+        c = self.conn([{"type": "graphics", "lodPx": 2}])
+        self.assertIsNone(c.view(), "no camera yet")
+        a = self.s.new_anchor(40.0, -80.0)
+        self.s.anchors[a.id] = a
+        c.active = c.cam_aid = a.id
+        c.cam = {"x": 10.0, "y": 20.0, "z": 5.0, "fovDeg": 60, "h": 1440}
+        self.s.lod_errs[(a.id, (3, 1, 0))] = 0.4
+        self.s.glod_errs[(14, 1, 2)] = 0.7
+        v = c.view()
+        self.assertEqual(v.tau, 2.0)
+        self.assertAlmostEqual(v.ppr, 1440 / (2 * math.tan(math.radians(30))))
+        self.assertEqual(v.err((3, 1, 0)), 0.4)
+        self.assertIsNone(v.err((3, 2, 0)))
+        self.assertEqual(v.gerr[(14, 1, 2)], 0.7)
+
+    def test_pixels_per_radian_smoothed_and_capped(self):
+        c = self.conn([])
+        base = 1440 / (2 * math.tan(math.radians(earthd.LOD_BASE_FOV_DEG) / 2))
+        self.assertAlmostEqual(c.lod_ppr(1440, 60, now=100.0), base)
+        # zoomed in: at most LOD_PPR_ZOOM times the base FOV's
+        self.assertAlmostEqual(c.lod_ppr(1440, 5, now=101.0), earthd.LOD_PPR_ZOOM * base)
+        # zoomed out again: the most of the last LOD_PPR_WINDOW_S seconds ...
+        self.assertAlmostEqual(c.lod_ppr(1440, 90, now=102.0), earthd.LOD_PPR_ZOOM * base)
+        # ... then the new one
+        wide = 1440 / (2 * math.tan(math.radians(45)))
+        self.assertAlmostEqual(c.lod_ppr(1440, 90, now=101.0 + earthd.LOD_PPR_WINDOW_S + 0.5), wide)
+
+    def test_tile_errors_kept(self):
+        s = self.s
+        info = earthd.TileInfo([0, 0, 0], 3.0, None, 0.0, None, 0, 0.0, err_n=1.25)
+        s.note_lod_err((7, "2_1_-3"), info)
+        s.note_lod_err((earthd.GLOBAL_AID, "m14_5_6"), info)
+        s.note_lod_err((7, "1_0_0_c14_5_6"), earthd.TileInfo([0, 0, 0], 3.0, None, 0.0, None, 0, 0.0,
+                                                             tile=ff.Piece(1, 0, 0, 14, 5, 6, (), ())))
+        self.assertEqual(s.lod_errs[(7, (2, 1, -3))], 1.25)
+        self.assertEqual(s.glod_errs[(14, 5, 6)], 1.25)
+        self.assertEqual(s.lod_errs[(7, (1, 0, 0))], 3.0, "no err_n: the vertical error; a piece: its node's")
 
     def test_terrain_detail_scales_the_far_field_but_not_the_exact_level(self):
         lay = self.s.layout

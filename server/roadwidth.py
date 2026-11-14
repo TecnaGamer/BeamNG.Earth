@@ -76,26 +76,12 @@ class Walls:
             bk, self.seg_of = index
             self.keys, self.first, self.counts = bk[0], bk[1], bk[2]     # (rows: contiguous, as the Rust loop takes)
             return
-        # bucket index, vectorised (a Python loop per segment took ~18 s for a city's 9 cells, 2026-10-12):
-        # one (segment, bucket) pair per bucket a segment's box touches, sorted by bucket key
-        s = np.asarray(self.segs, np.float64)
-        bx0 = np.floor(np.minimum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        bx1 = np.floor(np.maximum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        by0 = np.floor(np.minimum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        by1 = np.floor(np.maximum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        nx, ny = bx1 - bx0 + 1, by1 - by0 + 1
-        cnt = nx * ny
-        seg = np.repeat(np.arange(len(s)), cnt)
-        k = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-        bx = np.repeat(bx0, cnt) + k % np.repeat(nx, cnt)
-        by = np.repeat(by0, cnt) + k // np.repeat(nx, cnt)
-        key = self._key(bx, by)
-        # (any order within a bucket: a ray keeps its nearest hit; np.unique would sort the sorted keys again)
-        order = np.argsort(key)
-        ks = key[order]
-        first = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]]) if len(ks) else np.zeros(0, np.int64)
-        self.keys = ks[first]
-        self.first, self.counts, self.seg_of = first, np.diff(np.r_[first, len(ks)]), seg[order]
+        # the bucket index (wallsindex.rs: one (segment, bucket) pair per bucket a segment's box touches, sorted by
+        # bucket key; numpy's ~15 whole-array passes were ~1.7 % of a cold road tile's samples, 2026-11-10)
+        import fast
+        fast.require(194, "walls_index")
+        self.keys, self.first, self.counts, self.seg_of = fast._ef.walls_index(
+            np.ascontiguousarray(self.segs, np.float64).reshape(-1, 4), float(BUCKET))
 
     def index_arrays(self):
         """(buckets (3, B) int64 rows key, first, count, seg_of (P,) int64): the bucket index, for the store."""
@@ -171,6 +157,24 @@ def measure_row(centreline, walls):
     fn = fast._ef.measure_row32 if f32 else fast._ef.measure_row
     return fn(np.ascontiguousarray(np.asarray(centreline, np.float64)[:, :2]), *k, BUCKET,
               STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE)
+
+
+def verge_frontage(centreline, walls, width):
+    """Shares of each side with façades within 4, 9.5 and 14.5 m of the road edge."""
+    import furniture
+
+    length = furniture._arclen(centreline)[-1]
+    if length <= 1. or not len(walls.keys):
+        return np.zeros((2, 3))
+    n = min(31, max(3, int(length / 5.) + 1))
+    edge = min(4., .12 * length)
+    points, tangent = furniture._at(centreline, np.linspace(edge, length - edge, n))
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    half = width / 2.
+    hits = walls.rays(np.tile(points, (2, 1)), np.concatenate([normal, -normal]), half + 14.5)
+    gaps = hits.reshape(2, n, 1) - half
+    return np.mean((gaps >= .20) & (gaps <= np.array([4., 9.5, 14.5])), axis=1)
+
 
 def split(row):
     """(carriageway m, sidewalk m) of a right-of-way, or None when the carriageway would be implausible."""
@@ -397,10 +401,11 @@ class RoadWidths:
                 if hit is not None and hit[0] is w:
                     sg = hit[1]
                 else:
-                    pts = sg.reshape(-1, 2)
-                    la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-                    sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                    # (through lon / lat at the ground in one pass: earthfast.reframe_segs, the conversions' maths)
+                    import fast
+                    fast.require(198, "reframe_segs")
+                    sg = fast._ef.reframe_segs(np.ascontiguousarray(sg, np.float64), f.origin, f.rot, frame.origin,
+                                               frame.rot)
                     with self.lock:
                         self.reframed[rk] = (w, sg)
                         while len(self.reframed) > REFRAMED:
@@ -430,3 +435,12 @@ class RoadWidths:
                 self.memo.clear()
             self.memo.setdefault(fid, res)
             return self.memo[fid]
+
+    def frontage(self, lonlat, width):
+        """Side-specific frontage, within a village street's normal range."""
+        scale = np.array([111320. * np.cos(np.radians(lonlat[len(lonlat) // 2, 1])), 111320.])
+        if np.linalg.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
+            return None
+        frame, walls = self._near_walls(lonlat)
+        xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]
+        return verge_frontage(np.column_stack(xy), walls, width)

@@ -26,11 +26,11 @@ package.preload['/lua/ge/extensions/gameplay/sites/sites'] = function()
     return s
   end
 end
-local setupCalls, scatterCalls, active, given = 0, 0, false, nil
+local setupCalls, scatterCalls, active, given, lastAmount = 0, 0, false, nil, nil
 gameplay_parking = {
   setSites = function(s) given = s end,
   getState = function() return active end,
-  setupVehicles = function() setupCalls = setupCalls + 1; active = true end,
+  setupVehicles = function(amount) setupCalls = setupCalls + 1; active = true; lastAmount = amount end,
   scatterParkedCars = function() scatterCalls = scatterCalls + 1 end,
   getParkedCarsList = function() return {} end,
 }
@@ -61,12 +61,13 @@ local s1 = given.parkingSpots.sorted[1]
 T.check(s1.scl.x == 2.5 and s1.scl.y == 6.0 and s1.customFields.tags.street and s1.customFields.tags.forwards,
   'stock spot size, street + forwards tags')
 T.check(setupCalls == 1, 'parked cars started (the player chose them)')
-P.onRows(1, '1:0_1', { { 50, 50, 1.0, 0, 1 } })
+P.onRows(1, '1:0_1', { { 50, 50, 1.0, 0, 1, 2.2, 5.0 } })
 clock = clock + 3
 P.update(1, player)
 local lot
 for _, ps in pairs(given.parkingSpots.objects) do if ps.pos.x == 50 then lot = ps end end
 T.check(lot and not lot.customFields.tags.street and not lot.customFields.tags.forwards, 'a lot stall: no street / forwards tags')
+T.check(lot and lot.scl.x == 2.2 and lot.scl.y == 5.0, 'mapped spot keeps its own dimensions')
 P.dropKey('1:0_1')
 clock = clock + 3
 P.update(1, player)
@@ -145,6 +146,13 @@ P.update(4, player)
 T.check(#given.parkingSpots.sorted == 30, 'parked cars off: not rebuilt every REBUILD_S')
 gameplay_parking.setupVehicles(8)
 T.check(#given.parkingSpots.sorted == 33 and setupCalls == calls0 + 1, 'turned on: the sites rebuilt first, then the cars')
+P.reset()
+NG.takeChoice({ trafficMode = 'disabled', trafficParked = 'enabled' })
+active = false
+P.onRows(5, '5:0_0', { { 50, 50, 1.0, 0, 1, 2.2, 5.0 } })
+clock = clock + 3
+P.update(5, player)
+T.check(active and lastAmount == 1, 'a mapped village driveway can start a small parked fleet')
 P.reset()
 local P0 = { x = 0, y = 0 }
 T.check(not P.offSpot({ x = 10, y = 0 }, nil, P0), 'near the player: never moved (one it pushed stays in view)')

@@ -34,6 +34,8 @@ T.check(out.held.edge == 5 and out.held.loading == 10, 'held seconds (rounded to
 T.check(out.blocks[1] == 1 and out.blocks[4] == 1 and out.blocks[#out.blocks] == 1, 'block waits in steps')
 T.check(out.teleports == 1 and out.drops.n == 2 and out.drops.s == 25 and out.drops.low == 15, 'teleports, drops rounded')
 T.check(out.roadsQueuedP90 == 10, 'the road queue p90 in steps')
+T.check(out.age == 0 and S.ageBand(29 * 60) == 0 and S.ageBand(45 * 60) == 30 and S.ageBand(90 * 60) == 60
+  and S.ageBand(3 * 3600) == 120 and S.ageBand(9 * 3600) == 240, 'session length: its band\'s lower edge in minutes')
 for k, v in pairs(out) do
   T.check(k ~= 'lat' and k ~= 'lon' and type(v) ~= 'string', 'no position, no text: ' .. k)
 end

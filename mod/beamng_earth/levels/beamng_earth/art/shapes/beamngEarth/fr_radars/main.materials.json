@@ -1,0 +1,136 @@
+{
+  "bne_fr_radar_zinc": {
+    "name": "bne_fr_radar_zinc",
+    "mapTo": "bne_fr_radar_zinc",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.31,
+          0.34,
+          0.35,
+          1.0
+        ],
+        "roughnessFactor": 0.64,
+        "metallicFactor": 0.4
+      }
+    ],
+    "persistentId": "2b05f594-19c9-530a-9b89-338cc38e8359"
+  },
+  "bne_fr_radar_silver": {
+    "name": "bne_fr_radar_silver",
+    "mapTo": "bne_fr_radar_silver",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.66,
+          0.69,
+          0.69,
+          1.0
+        ],
+        "roughnessFactor": 0.64,
+        "metallicFactor": 0.4
+      }
+    ],
+    "persistentId": "d9f32987-96ab-53a2-a0ba-4b7ca7d8079c"
+  },
+  "bne_fr_radar_black": {
+    "name": "bne_fr_radar_black",
+    "mapTo": "bne_fr_radar_black",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.075,
+          0.08,
+          0.084,
+          1.0
+        ],
+        "roughnessFactor": 0.64,
+        "metallicFactor": 0.0
+      }
+    ],
+    "persistentId": "9b2357fd-36bf-5748-a2b4-246c3ddf28f9"
+  },
+  "bne_fr_radar_glass": {
+    "name": "bne_fr_radar_glass",
+    "mapTo": "bne_fr_radar_glass",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.035,
+          0.06,
+          0.075,
+          1.0
+        ],
+        "roughnessFactor": 0.24,
+        "metallicFactor": 0.0
+      }
+    ],
+    "persistentId": "e821bf51-1455-52b5-9876-fd68edcb9737"
+  },
+  "bne_fr_radar_yellow": {
+    "name": "bne_fr_radar_yellow",
+    "mapTo": "bne_fr_radar_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.91,
+          0.62,
+          0.05,
+          1.0
+        ],
+        "roughnessFactor": 0.64,
+        "metallicFactor": 0.0
+      }
+    ],
+    "persistentId": "7367036f-97f4-5965-878a-c97e9d783761"
+  },
+  "bne_fr_radar_sr3a": {
+    "name": "bne_fr_radar_sr3a",
+    "mapTo": "bne_fr_radar_sr3a",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3a_512.color.png",
+        "roughnessFactor": 0.7
+      }
+    ],
+    "persistentId": "0799c756-0eae-5097-b664-1e76513762b4"
+  },
+  "bne_fr_radar_sr3b": {
+    "name": "bne_fr_radar_sr3b",
+    "mapTo": "bne_fr_radar_sr3b",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3b_512.color.png",
+        "roughnessFactor": 0.7
+      }
+    ],
+    "persistentId": "4ee3c804-815d-560d-8132-da0343156bb6"
+  },
+  "bne_fr_radar_stripe": {
+    "name": "bne_fr_radar_stripe",
+    "mapTo": "bne_fr_radar_stripe",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/stripe.color.png",
+        "roughnessFactor": 0.7
+      }
+    ],
+    "persistentId": "8822a61a-be7d-5ec8-ad10-08a2e055016b"
+  }
+}

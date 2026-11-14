@@ -23,6 +23,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy as g  # noqa: E402
 import imagery  # noqa: E402
+import missindex  # noqa: E402
 import netfetch  # noqa: E402
 
 LAT0, LON0 = 36.5785, -118.2923
@@ -318,8 +319,9 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(set(used), {"eox2023"})
         stats = im2.stats_snapshot()
         self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
-        markers = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        indexes = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f == missindex.NAME]
+        self.assertTrue(indexes)
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")], "no marker files")
 
     def test_unreachable_source_falls_back(self):
         def serve(name, z, x, y):
@@ -386,29 +388,43 @@ class ChainTest(unittest.TestCase):
             return (400, b"bad request") if name == "usgs" else self.tile(name, z, x, y)
         _, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
         self.assertEqual(set(used), {"eox2023"})
-        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")])
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")
+                          or f == missindex.NAME])
 
     def test_miss_marker_ttl(self):
-        """A .404 marker is valid for the host's miss_ttl (90 days): older ones are asked again. An
-        old-style marker (an empty file from before TTLs) works the same way."""
+        """A remembered 404 is valid for the host's miss_ttl (90 days): older ones are asked again (and remembered
+        anew). An old-style marker file works the same way."""
         def serve(name, z, x, y):
             return (404, b"") if name == "usgs" else self.tile(name, z, x, y)
         im = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im)
-        markers = [os.path.join(d, f) for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs"))
-                   for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        cols = [d for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) if missindex.NAME in fs]
+        self.assertTrue(cols)
+        misses = [missindex.marker(d, y) for d in cols for y in missindex.column(d)]
+        self.assertTrue(misses)
         n = len(im.requests)
         im2 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im2)
-        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh markers
+        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh misses
         old = time.time() - netfetch.POLICIES["basemap.nationalmap.gov"].miss_ttl - 60
-        for m in markers:
-            os.utime(m, (old, old))
+        missindex.record(misses, t=old)
         im3 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im3)
         self.assertTrue([r for r in im3.requests if r[0] == "usgs"])            # expired: asked again
-        self.assertTrue(all(time.time() - os.path.getmtime(m) < 60 for m in markers if os.path.exists(m)))
+        self.assertTrue(all(time.time() - missindex.when(m) < 60 for m in misses if missindex.known(m)))
+        # old marker files instead of the index lines: the same
+        for d in cols:
+            os.remove(os.path.join(d, missindex.NAME))
+        for m in misses:
+            open(m, "wb").close()
+        im4 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im4)
+        self.assertEqual(sum(1 for r in im4.requests if r[0] == "usgs"), 0)     # fresh old markers
+        for m in misses:
+            os.utime(m, (old, old))
+        im5 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im5)
+        self.assertTrue([r for r in im5.requests if r[0] == "usgs"])            # expired: asked again
         self.assertTrue(n)
 
     def test_prefetch_dropped_then_fetched_on_demand(self):

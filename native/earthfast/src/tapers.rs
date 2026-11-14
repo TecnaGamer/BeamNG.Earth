@@ -17,7 +17,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
     let (m_per_m, min_l, max_l, share, min_dw, max_turn) = (p[0], p[1], p[2], p[3], p[4], p[5]);
     let decks = p.len() > 6 && p[6] > 0.5;     // (deck mode: decks meeting decks, at their deck widths)
     let n = off.len().saturating_sub(1);
-    let rows = py.allow_threads(|| {
+    let rows = py.detach(|| {
         let mut rows: Vec<[f64; 5]> = Vec::new();
         let ok: Vec<bool> = (0..n).map(|i| (off[i + 1] - off[i]) >= 2 && at[[i, 1]] >= 0.0).collect();
         if !ok.iter().any(|&b| b) {
@@ -159,7 +159,7 @@ pub fn lane_flow<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off: 
                       attrs: PyReadonlyArray2<'py, f64>, max_lanes: f64) -> Bound<'py, numpy::PyArray1<f64>> {
     let (ll, off, at) = (lonlat.as_array(), off.as_array(), attrs.as_array());
     let n = off.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let key = |k: usize| node_key(ll[[k, 0]], ll[[k, 1]]);
         let ends = |i: usize| -> Option<(NodeKey, NodeKey)> {
             let (a, b) = (off[i] as usize, off[i + 1] as usize);
@@ -322,7 +322,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
     let (ll, off, at, p) = (lonlat.as_array(), off.as_array(), attrs.as_array(), params.as_array());
     let (m_per_m, min_l, max_l, share, min_shift) = (p[0], p[1], p[2], p[3], p[4]);
     let n = off.len().saturating_sub(1);
-    let rows = py.allow_threads(|| {
+    let rows = py.detach(|| {
         let mut rows: Vec<[f64; 5]> = Vec::new();
         let ok: Vec<bool> = (0..n).map(|i| (off[i + 1] - off[i]) >= 2 && at[[i, 0]] != 0.0).collect();
         if !ok.iter().any(|&b| b) {

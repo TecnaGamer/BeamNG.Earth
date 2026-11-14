@@ -202,6 +202,17 @@ class PortalCover(unittest.TestCase):
         self.assertEqual(roads.portal_cover(kinds, cover, park).tolist(), kinds.tolist())
         self.assertEqual(roads.portal_cover(np.zeros(5, np.int64), np.full(5, 3.0), trunk).tolist(), [0] * 5)
 
+    def test_a_short_end_run_is_the_tube_it_leads_into(self):
+        # CA-1's northbound Tom Lantos bore: a 4 m low arch before the full tube, a notch of sky over its short face
+        trunk = Spec(5.8, "paved", False, "trunk")
+        kinds = np.array([0, 2, 2, 2, 2])
+        cover = np.array([3.0, 20.0, 50.0, 60.0, 40.0])
+        self.assertEqual(roads.portal_cover(kinds, cover, trunk, np.array([0.0, 4.0, 8.0, 12.0, 16.0])).tolist(),
+                         [2, 2, 2, 2, 2])
+        self.assertEqual(roads.portal_cover(kinds, cover, trunk, np.array([0.0, 30.0, 34.0, 38.0, 42.0]))[0], 1,
+                         "a long one stays a low arch")
+
+
 
 class ArchRaise(unittest.TestCase):
     def test_ground_over_a_low_arch_stays_over_its_vault(self):
@@ -315,6 +326,19 @@ class TwinTunnels(unittest.TestCase):
         self.assertAlmostEqual(float(mid[0, 2]), 10.0, places=6)
         self.assertEqual(roads.twin_tunnels(self.parts(gap=40.0)), [], "apart: two tubes")
         self.assertEqual(roads.twin_tunnels(self.parts(dz=5.0)), [], "one over the other: two tubes")
+
+    def test_own_sections_and_continuations_not_twins(self):
+        # CA-1's northbound Tom Lantos bore: a 4 m low-arch section at its portal, then the 1.3 km tube, paired as
+        # twins, the tube left out (2026-11-09)
+        sp = Spec(5.8, "paved", False, "trunk")
+        stub = ("w.0#0", sp, np.array([[0.0, 0.0], [4.0, 0.0]]), np.array([10.0, 10.1]), 0.0)
+        tube = ("w.0#1", sp, np.array([[4.0, 0.0], [600.0, 0.0]]), np.array([10.1, 22.0]), 0.0)
+        self.assertEqual(roads.twin_tunnels([stub, tube]), [], "one tunnel's own sections")
+        other = ("v.0#0", sp, np.array([[0.0, 0.0], [4.0, 0.0]]), np.array([10.0, 10.1]), 0.0)
+        self.assertEqual(roads.twin_tunnels([other, tube]), [], "another segment going on from its end")
+        # (twin bores still pair when one is mapped as several sections)
+        a, b = self.parts()
+        self.assertEqual(len(roads.twin_tunnels([("a.0#1",) + a[1:], ("b.0#0",) + b[1:]])), 1)
 
     def test_chunks_one_tube_round_both(self):
         class T:
@@ -479,3 +503,66 @@ class Underwater(unittest.TestCase):
         w = np.zeros(50, bool)
         w[40:] = True
         self.assertEqual(roads.wet_run_inside(xy, w), 0.0)              # at an end: a portal on a bank
+
+
+class PortalDecks(unittest.TestCase):
+    """roads._portal_decks: a short ground gap between a tunnel's portal and a bridge of the same road is bridge (CA-1's
+    northbound Tom Lantos bore: 18 m of ground between them graded as a 22 % drop onto the bridge, 2026-11-09)."""
+
+    def feats(self, gap_m, side_road=False):
+        from test_roads import features
+        # 1000 m west-east: tunnel 0-0.5, then gap_m of ground, then a bridge to 0.8
+        a = 0.5 + gap_m / 1000.0
+        lines, classes = [[(-500, 0), (500, 0)]], ["trunk"]
+        if side_road:                           # (a road ending in the gap: a junction there)
+            lines.append([(gap_m / 2, 0), (gap_m / 2, 50)])
+            classes.append("residential")
+        return features(lines, classes, flags=[(0, "is_tunnel", 0.0, 0.5), (0, "is_bridge", a, 0.8)])
+
+    def ranges(self, f):
+        return [(round(a, 3), round(b, 3), k) for a, b, k in roads._portal_decks(f, 0, roads.tag_level_ranges(f, 0))]
+
+    def test_a_short_gap_is_bridge(self):
+        self.assertEqual(self.ranges(self.feats(18.0)), [(0.0, 0.5, "tunnel"), (0.5, 0.8, "bridge")])
+
+    def test_a_long_gap_or_a_junction_stays_ground(self):
+        self.assertEqual(self.ranges(self.feats(60.0)), [(0.0, 0.5, "tunnel"), (0.56, 0.8, "bridge")])
+        self.assertEqual(self.ranges(self.feats(18.0, side_road=True)), [(0.0, 0.5, "tunnel"), (0.518, 0.8, "bridge")])
+
+
+class SplitRanges(unittest.TestCase):
+    """roads.tag_level_ranges joins a segment's tunnel ranges only where one source way runs on
+    through the gap (2026-11-08, Potaarde under the R0 at Strombeek-Bever: three underpasses of a track, 24 m and 8 m
+    of open track between them, merged into one 157 m tunnel and graded as an open cut through the R0's lanes)."""
+
+    def feats(self, src_ways, tunnels=((0.0, 0.15), (0.25, 0.5), (0.55, 0.8))):
+        from test_roads import features, rules
+        # 200 m east-west; by default tunnel ranges 0-0.15, 0.25-0.5 and 0.55-0.8 (gaps of 20 m and 10 m)
+        f = features([[(-100, 0), (100, 0)]], ["track"], flags=[(0, "is_tunnel", a, b) for a, b in tunnels])
+        if src_ways is not None:
+            f.rules["src_ways"] = rules([(0, v, a, b) for v, a, b in src_ways])
+        return f
+
+    def ranges(self, f):
+        return [(round(a, 3), round(b, 3), k) for a, b, k in roads.tag_level_ranges(f, 0)]
+
+    def test_gaps_that_are_ways_of_their_own_stay_open(self):
+        f = self.feats([("w1@9", 0.0, 0.15), ("w2@8", 0.15, 0.25), ("w3@9", 0.25, 0.5), ("w4@8", 0.5, 0.55),
+                        ("w5@10", 0.55, 0.8), ("w6@10", 0.8, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.15, "tunnel"), (0.25, 0.5, "tunnel"), (0.55, 0.8, "tunnel")])
+
+    def test_a_split_inside_one_way_is_one_tunnel(self):
+        # (the Fort McHenry Tunnel: one OSM way per bore, its Overture range split inside it)
+        f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.9), ("w9@3", 0.9, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.8, "tunnel")])
+
+    def test_only_the_gap_inside_a_way_is_joined(self):
+        f = self.feats([("w1@1", 0.0, 0.15), ("w2@1", 0.15, 0.25), ("w3@1", 0.25, 0.9), ("w4@1", 0.9, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.15, "tunnel"), (0.25, 0.8, "tunnel")])
+
+    def test_a_segment_of_one_way_joins_all_its_gaps(self):
+        self.assertEqual(self.ranges(self.feats(None)), [(0.0, 0.8, "tunnel")])
+
+    def test_a_long_gap_inside_one_way_is_joined_too(self):
+        f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.6), ("w9@3", 0.6, 1.0)], tunnels=((0.0, 0.1), (0.3, 0.5)))
+        self.assertEqual(self.ranges(f), [(0.0, 0.5, "tunnel")])         # (40 m: the way's tag covers it all)

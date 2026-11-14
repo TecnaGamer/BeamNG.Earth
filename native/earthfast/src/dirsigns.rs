@@ -42,6 +42,8 @@ const OUT_MAX_M: f64 = 3.0;
 const CLEAR_M: f64 = 0.3;           // a post's centre from any pavement (plus its radius)
 const POST_R: f64 = 0.35;
 const BOARD_GAP_M: f64 = 60.0;      // no two boards for one direction closer than this
+const TOWN_PANEL_W: f64 = 1.6;      // m: a town board is small (the panel width the spot search reserves; the face is its own)
+const URBAN_GAP_M: f64 = 600.0;     // ... in a town: a board only where one is wanted (CITY BOARDS below), and far apart
 const SKIP_PAST_M: f64 = 60.0;
 const SAME_WAY_COS: f64 = 0.7;
 const M_PER_DEG: f64 = 111_320.0;
@@ -355,6 +357,27 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
             };
             cand.sort_by_key(|c| (key(c.2), net.arms_key(c.4, &arms)));
             cand.truncate(MAX_ROWS);
+            // A turn: no arm goes straight on along the road the board stands on (it ends here or bends), or the road it
+            // goes on along carries other route numbers: always a board (not thinned below).
+            let mut here_routes: Vec<i64> = Vec::new();
+            routes_at(a.road, net.frac(a.road, a.s_at(a.len() * 0.5)), &mut here_routes);
+            let straight = cand.iter().find(|c| c.2.abs() <= STRAIGHT_DEG);
+            let turn = match straight {
+                None => true,
+                Some(c) => !here_routes.is_empty() && !c.1.is_empty() && !c.1.iter().any(|r| here_routes.contains(r)),
+            };
+            // CITY BOARDS: in a town a board stands only at the junctions a driver needs one at (real towns: a few
+            // boards at the big junctions and at the ways out, the user, 2026-11-07), not at every crossing of two main
+            // streets: an interchange (a link among the arms), a way out of the built-up land (an arm that leaves
+            // it), a fork of numbered routes (two different route numbers among the arms) or a turn of a numbered road.
+            if rd.urban {
+                let interchange = here.iter().any(|&i| road_of(&arms[i]).link);
+                let way_out = cand.iter().any(|c| !net.roads[arms[c.4].road].urban);
+                let mut ids: Vec<i64> = Vec::new();
+                for c in &cand { for r in &c.1 { if !ids.contains(r) { ids.push(*r); } } }
+                let numbered_turn = turn && !here_routes.is_empty();      // (a plain T of unnumbered streets is no turn worth a board)
+                if !(interchange || way_out || ids.len() >= 2 || numbered_turn) { continue; }
+            }
             // the board's spot
             let freeway = rd.rank >= MOTORWAY || (rd.rank >= TRUNK && rd.dir != 0 && !rd.urban);
             let adv = if freeway { adv_freeway } else if rd.urban { adv_urban } else { adv_rural };
@@ -381,7 +404,9 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
             }
             if moved > SKIP_PAST_M || u < 5.0 { continue; }
             let side = if left_hand { -1.0 } else { 1.0 };
-            let base = rd.hw + lateral + panel_w / 2.0;
+            // (a town board: a small one on a single stand or a pole: one spot to keep clear, not two posts)
+            let pw = if rd.urban && !freeway { TOWN_PANEL_W } else { panel_w };
+            let base = rd.hw + lateral + pw / 2.0;
             let mut found: Option<([f64; 2], [f64; 2], [f64; 2])> = None;
             'spot: for du in ALONG_STEPS_M {
                 let uu = u - du;                       // (farther along: toward the junction)
@@ -393,9 +418,10 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 while extra <= OUT_MAX_M + 1e-9 {
                     let q = [road_xy[0] + right[0] * (base + extra), road_xy[1] + right[1] * (base + extra)];
                     // the two posts (near and far edge of the panel) clear of the pavements
-                    let p1 = [q[0] - right[0] * (panel_w / 2.0 - 0.3), q[1] - right[1] * (panel_w / 2.0 - 0.3)];
-                    let p2 = [q[0] + right[0] * (panel_w / 2.0 - 0.3), q[1] + right[1] * (panel_w / 2.0 - 0.3)];
-                    if clear(p1, POST_R + CLEAR_M, &poly, &poly_off, &boxes) && clear(p2, POST_R + CLEAR_M, &poly, &poly_off, &boxes)
+                    let p1 = [q[0] - right[0] * (pw / 2.0 - 0.3), q[1] - right[1] * (pw / 2.0 - 0.3)];
+                    let p2 = [q[0] + right[0] * (pw / 2.0 - 0.3), q[1] + right[1] * (pw / 2.0 - 0.3)];
+                    let town = pw < panel_w;
+                    if (town || (clear(p1, POST_R + CLEAR_M, &poly, &poly_off, &boxes) && clear(p2, POST_R + CLEAR_M, &poly, &poly_off, &boxes)))
                         && clear(q, POST_R + CLEAR_M, &poly, &poly_off, &boxes) {
                         found = Some((q, t, road_xy));
                         break 'spot;
@@ -404,7 +430,8 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 }
             }
             let Some((q, t, road_xy)) = found else { continue };
-            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < BOARD_GAP_M * BOARD_GAP_M) {
+            let gap = if rd.urban { URBAN_GAP_M } else { BOARD_GAP_M };
+            if placed.iter().any(|(p, d)| dot(*d, t) > SAME_WAY_COS && (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) < gap * gap) {
                 continue;
             }
             placed.push((q, t));
@@ -443,15 +470,6 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 made += 1;
             }
             if made == 0 { continue; }
-            // A turn: no arm goes straight on along the road the board stands on (it ends here or bends): always a
-            // board. Else the board repeats what the road's last boards said: thinned below.
-            let mut here_routes: Vec<i64> = Vec::new();
-            routes_at(a.road, net.frac(a.road, a.s_at(a.len() * 0.5)), &mut here_routes);
-            let straight = cand.iter().find(|c| c.2.abs() <= STRAIGHT_DEG);
-            let turn = match straight {
-                None => true,
-                Some(c) => !here_routes.is_empty() && !c.1.is_empty() && !c.1.iter().any(|r| here_routes.contains(r)),
-            };
             // what it says, without the distances: the same board from every junction that has it
             let sector = ((angle(t) / 45.0).round() as i64).rem_euclid(8) as u64;
             let mut sig = splitmix(sector ^ 0xD1B5_4A32_D192_ED03);
@@ -459,7 +477,8 @@ pub fn dirsign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: 
                 for &v in &[r[0], r[2], r[3], r[4], r[5], r[7]] { sig = splitmix(sig ^ (v as i64 as u64)); }
             }
             let key = splitmix(splitmix(((jll[0] * 1e5).round() as i64) as u64) ^ ((jll[1] * 1e5).round() as i64) as u64 ^ sector);
-            pend.push(Pending { q, t, road_xy, urban: rd.urban, size, jll, rows, sig, turn, key, inside });
+            // (a city board is a wanted one already: no thinning of repeats)
+            pend.push(Pending { q, t, road_xy, urban: rd.urban, size, jll, rows, sig, turn: turn || rd.urban, key, inside });
             let _ = jxy;
         }
     }
@@ -533,10 +552,16 @@ impl<'a> Net<'a> {
 const M_METAL: i64 = 0;             // material 0: bare metal (the back and the posts); the faces' are the caller's, 1..
 const POST_HALF_W: f64 = 0.04;
 const BACK_T: f64 = 0.05;           // the board's depth behind its face
+const POLE_R: f64 = 0.17;           // m: the radius a board's clamps go round on an existing pole
+const STAND_R: f64 = 0.06;          // m: a town board's own round steel stand
+const CLAMP_H: f64 = 0.06;
 
 /// The meshes of direction boards: signs (k, 10) [x, y, ground z, road z, travel x, travel y, width, height, material
-/// (the face's, >= 1), mount (m the board's bottom stands above the road's edge)], relative to origin. A board is its
-/// face (a quad textured 0..1, the lower left of the picture at u = 0, v = 0), a metal back and two posts (render-only).
+/// (the face's, >= 1), mount (m the board's bottom stands above the road's edge)] and, in a 12 column array, mode (-1
+/// the board's own two posts, 0 hung on an existing pole at (x, y) by two clamps, the board reaching out from the pole
+/// to the side away from the road, 1 on its own round stand at (x, y), the same way) and side (+1 right-hand traffic,
+/// -1 left-hand), relative to origin. A board is its face (a quad textured 0..1, the lower left of the picture at u = 0,
+/// v = 0), a metal back and its posts or clamps (render-only).
 /// Returns (vertices (n, 3), triangles (m, 3), uv (n, 2), material per triangle (m,)).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
@@ -559,6 +584,26 @@ pub fn dirsign_mesh<'py>(py: Python<'py>, signs: PyReadonlyArray2<'py, f64>, ori
         let bottom = (zr + mount).max(zg + 1.2) - zg;
         let top = bottom + h;
         let hw = w / 2.0;
+        let mode = if signs.ncols() >= 12 { signs[[k, 10]].round() as i64 } else { -1 };
+        if mode >= 0 {
+            // a town board by a pole (mode 0) or on its own stand (mode 1): the axis is at (x, y), the board's near edge
+            // 0.2 m inside it, reaching out to the side away from the road (a driver's right in right-hand traffic)
+            let side = if signs[[k, 11]] < 0.0 { -1.0 } else { 1.0 };
+            let r = if mode == 1 { STAND_R } else { POLE_R };
+            let (ylo, yhi) = if side > 0.0 { (-0.2, w - 0.2) } else { (-(w - 0.2), 0.2) };
+            let xf = r + BACK_T;
+            m.quad([[xf, ylo, bottom], [xf, yhi, bottom], [xf, yhi, top], [xf, ylo, top]], mat,
+                   [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+            m.cuboid([r, ylo, bottom], [xf - 0.004, yhi, top], M_METAL);
+            if mode == 1 {
+                m.pole(0.0, STAND_R, -0.3, top - 0.05, M_METAL);
+            } else {
+                for zc in [bottom + 0.12, top - 0.12 - CLAMP_H] {
+                    m.cuboid([-r - 0.015, -r - 0.015, zc], [r, r + 0.015, zc + CLAMP_H], M_METAL);
+                }
+            }
+            continue;
+        }
         // the face, then the back (a slab) and the posts
         m.quad([[0.0, -hw, bottom], [0.0, hw, bottom], [0.0, hw, top], [0.0, -hw, top]], mat,
                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);

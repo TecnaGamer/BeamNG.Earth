@@ -107,7 +107,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                          -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>,
                              Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>) {
     let (pts, off, half) = (pts.as_array(), off.as_array(), half.as_array());
-    let (l, r, s_out, z_out, o) = py.allow_threads(|| {
+    let (l, r, s_out, z_out, o) = py.detach(|| {
         let mut l: Vec<f64> = Vec::new();
         let mut r: Vec<f64> = Vec::new();
         let mut s_out: Vec<f64> = Vec::new();

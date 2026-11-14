@@ -12,6 +12,7 @@ peer places the same site.
 import logging
 import math
 import re
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,6 +38,8 @@ class Charger:
     records: int        # Overture's and OSM's records merged into it
     big: bool           # a known fast network, or 2+ records: a row of chargers
     tesla: bool         # Tesla's own (a Supercharger's 8)
+    cap: int = None     # OSM's capacity=* of its charging station (the weekly shards, with_shard), when tagged
+    points: tuple = ()  # (x, y) of its mapped man_made=charge_point nodes (with_shard)
 
 
 def _charging(category, taxonomy):
@@ -155,8 +158,10 @@ ENERGY = ("electricEnergy",)
 
 
 def count_of(ch):
-    """Chargers wanted at a site: ROW_TESLA for Tesla's, 2 per record (ROW_BIG..ROW_MAX) for a big site, else
-    ROW_SMALL."""
+    """Chargers wanted at a site: OSM's capacity (at most CAP_MAX) when its station has one; else ROW_TESLA for
+    Tesla's, 2 per record (ROW_BIG..ROW_MAX) for a big site, else ROW_SMALL."""
+    if ch.cap is not None and ch.cap >= 1:
+        return min(int(ch.cap), CAP_MAX)
     if ch.tesla:
         return ROW_TESLA
     if ch.big:
@@ -166,7 +171,51 @@ def count_of(ch):
 
 def reach_of(ch):
     """How far from its position a site's chargers and stalls can reach (the road tiles that lay it out)."""
-    return AISLE_REACH_M + AISLE_HALF_M + STALL_M + CHARGER_BACK_M + ROW_MAX * CHARGER_GAP_M / 2
+    r = AISLE_REACH_M + AISLE_HALF_M + STALL_M + CHARGER_BACK_M + max(ROW_MAX, count_of(ch)) * CHARGER_GAP_M / 2
+    far = max((math.hypot(px - ch.x, py - ch.y) for px, py in ch.points), default=0.0)
+    return max(r, far + STALL_M + CHARGER_BACK_M)
+
+
+# --- the weekly OpenStreetMap station shards (railtags.StationTags; Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
+# `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`")
+# (the user in game, 2026-11-09, Barstow's Supercharger as a row of 12: "some of them are sliding off a hill ... it
+# look s silly"; "Do that or just shift them") a row stays on level ground: it slides along its aisle by whole chargers
+# (ROW_SLIDE) to where every charger and stall is within FLAT_M of the row's middle height, else is shortened; a mapped
+# charge point on a bank is dropped
+FLAT_M = 0.5
+ROW_SLIDE = (0, -1, 1, -2, 2, -3, 3, -4, 4)
+CAP_MAX = 12                # chargers a site gets from its capacity at most (a big Supercharger has 12-40 stalls)
+POINTS_MAX = 16             # mapped charge points a site stands chargers at, at most
+
+
+def with_shard(chargers, stations, points, frame):
+    """The sites with OSM's capacity of the nearest shard charging station within gasstations.MERGE_M, and the charge
+    points (lat, lon) each nearest to it (to its matched station's position, else its own) within MERGE_M: a
+    neighbour's points stay the neighbour's. stations: railtags.StationTags.stations_in's; frame: the sites'."""
+    if not chargers:
+        return chargers
+    evs = [s for s in stations or () if s.get("kind") == "ev"]
+    sxy = np.array([frame.geodetic_to_enu(s["lat"], s["lon"], 0.0)[:2] for s in evs], np.float64).reshape(-1, 2)
+    caps, anchors = [], []
+    for ch in chargers:
+        cap, at = None, (ch.x, ch.y)
+        if len(sxy):
+            d = np.hypot(sxy[:, 0] - ch.x, sxy[:, 1] - ch.y)
+            k = int(np.argmin(d))
+            if d[k] <= gs.MERGE_M:
+                cap, at = evs[k].get("cap"), (float(sxy[k, 0]), float(sxy[k, 1]))
+        caps.append(cap)
+        anchors.append(at)
+    own = [[] for _ in chargers]
+    A = np.array(anchors, np.float64)
+    for la, lo in points or ():
+        x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
+        d = np.hypot(A[:, 0] - float(x), A[:, 1] - float(y))
+        k = int(np.argmin(d))
+        if d[k] <= gs.MERGE_M:
+            own[k].append((float(x), float(y)))
+    return [dataclasses.replace(ch, cap=cap, points=tuple(sorted(pts))[:POINTS_MAX])
+            for ch, cap, pts in zip(chargers, caps, own)]
 
 
 def _nearest(lines, p):
@@ -268,7 +317,46 @@ def _kerb_clear(pts, areas, blds, roads, service=()):
     return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
 
-def layout(ch, blds, roads, service=(), style="default"):
+def _level(pts, height):
+    """Whether every point's ground (height(xs, ys)) is within FLAT_M of their middle (median) height."""
+    h = np.asarray(height(pts[:, 0], pts[:, 1]), np.float64).ravel()
+    return bool(np.all(np.abs(h - np.median(h)) <= FLAT_M))
+
+
+def _at_points(ch, blds, roads, service, shape, height=None):
+    """A site with a charger at each mapped charge point, facing the nearest drive line within AISLE_REACH_M (else the
+    nearest public road), its stall in front; a point whose charger or stall is in a building or on a road dropped.
+    None when fewer than 2 stand (today's placements then). No pad: a mapped site's ground is there already."""
+    props, areas, keep = [], [], []
+    for px, py in ch.points:
+        p = np.array([px, py], np.float64)
+        near = _nearest(service, p)
+        if near is None or near[2] > AISLE_REACH_M:
+            near = _nearest([r[0] for r in roads], p)
+        f = (near[0] - p) / near[2] if near is not None and near[2] > 1e-6 else np.array([0.0, 1.0])
+        stall = p + f * (CHARGER_BACK_M + STALL_M / 2.0)
+        if not gs._clear(np.array([p, stall]), blds, roads):
+            continue
+        keep.append((p, stall))
+        yaw = gs._yaw(f)
+        props.append(dict(shape=shape, x=float(px), y=float(py), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
+                          scale=[1.0, 1.0, 1.0], collide=True))
+        areas.append(dict(x=float(stall[0]), y=float(stall[1]), dz=gs.AREA_DZ, yaw=yaw % 360.0,
+                          half=[STALL_M / 2, AREA_W_M / 2, 2.75], icon=gs.ICON_DZ))
+    if height is not None and keep:             # (a point on a bank: off the middle height of the site's points)
+        hp = np.asarray(height(np.array([k[0][0] for k in keep]), np.array([k[0][1] for k in keep])), np.float64)
+        hs = np.asarray(height(np.array([k[1][0] for k in keep]), np.array([k[1][1] for k in keep])), np.float64)
+        med = float(np.median(np.concatenate([hp.ravel(), hs.ravel()])))
+        ok = (np.abs(hp.ravel() - med) <= FLAT_M) & (np.abs(hs.ravel() - med) <= FLAT_M)
+        props = [p for p, k in zip(props, ok) if k]
+        areas = [a for a, k in zip(areas, ok) if k]
+    if len(props) < 2:
+        return None
+    st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
+    return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=[])
+
+
+def layout(ch, blds, roads, service=(), style="default", height=None):
     """A charger site (gasstations.Site): count_of(ch) chargers in a straight row CHARGER_GAP_M apart, each facing its
     stall STALL_M deep, along the nearest service line within AISLE_REACH_M (the stalls on the aisle's side) or at the
     site's position facing the nearest public road; or, by a public road, on its kerb KERB_GAP_M apart facing it, the
@@ -278,6 +366,10 @@ def layout(ch, blds, roads, service=(), style="default"):
     even one charger fits (a charger in a parking garage)."""
     shapes = CHARGER_SHAPES.get(style, CHARGER_SHAPES["default"])
     shape = shapes[0] if ch.big else shapes[1]
+    if len(ch.points) >= 2:
+        site = _at_points(ch, blds, roads, service, shape, height)
+        if site is not None:
+            return site
     tries = _placements(ch, roads, service)
     for n in range(count_of(ch), 0, -1):
         for kind, data in tries:
@@ -289,8 +381,12 @@ def layout(ch, blds, roads, service=(), style="default"):
                 front, area_yaw, pad = -nrm, gs._yaw(u), []
             else:
                 centre, u, f = data
-                pts, stalls, ring = _row(centre, u, f, n)
-                if not gs._clear(np.vstack([pts, stalls]), blds, roads):
+                for s in (ROW_SLIDE if height is not None else (0,)):     # (height(xs, ys): the ground, level rows)
+                    pts, stalls, ring = _row(centre + u * (s * CHARGER_GAP_M), u, f, n)
+                    both = np.vstack([pts, stalls])
+                    if gs._clear(both, blds, roads) and (height is None or _level(both, height)):
+                        break
+                else:
                     continue
                 front, area_yaw, pad = f, gs._yaw(f), [ring]
             yaw = gs._yaw(front)

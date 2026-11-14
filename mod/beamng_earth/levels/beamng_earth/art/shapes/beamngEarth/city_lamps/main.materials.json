@@ -1,0 +1,83 @@
+{
+  "bne_lamp_steel": {
+    "name": "bne_lamp_steel",
+    "mapTo": "bne_lamp_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c391d695-8b30-56e6-a695-8b04f54b1b85",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.52,
+          0.55,
+          0.56,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.55
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_lamp_concrete": {
+    "name": "bne_lamp_concrete",
+    "mapTo": "bne_lamp_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0008797f-c1ba-58e1-a63f-bf1d708570f9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.64,
+          0.63,
+          0.6,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.85,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/concrete_grain.png"
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_lamp_head": {
+    "name": "bne_lamp_head",
+    "mapTo": "bne_lamp_head",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "8afcc90c-5885-56c2-bf4c-9b24753d3b47",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.3,
+          0.32,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_lamp_bracket": {
+    "name": "bne_lamp_bracket",
+    "mapTo": "bne_lamp_bracket",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fa10590b-9ee8-5d67-85e4-d77b56b54576",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.4,
+          0.42,
+          0.43,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.55
+      }
+    ],
+    "doubleSided": false
+  }
+}

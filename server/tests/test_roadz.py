@@ -369,6 +369,36 @@ class BridgeOverrideTest(unittest.TestCase):
         _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0, atol=1e-9, err_msg="steeper than OBS_MAX_GRADE: the solve stays")
 
+    def test_lower_deck_under_a_higher_one_keeps_its_solve(self):
+        # the lidar sees the upper deck's top: a lower deck under it took that height and lay inside it (the Bay
+        # Bridge's two decks both 61.9 m, solved 52.3 / 60.7, Discord 2026-11-10); a deck beside it keeps its measurement
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
+        spec = types.SimpleNamespace(width=18.0)
+        lower, upper, beside = ("lo", 0), ("up", 0), ("bs", 0)
+        pool = {lower: (spec, line, 0.0, 1.0, 51, ""), upper: (spec, line + [0.4, 0.0], 0.0, 2.0, 51, ""),
+                beside: (spec, line + [0.0, 40.0], 0.0, 1.0, 51, "")}
+        z = np.full(51, FLAT + 4.0)
+        roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), FLAT + 6.0))
+        out = bp._observed([lower], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=1e-9, err_msg="under the upper deck: the solve")
+        out2 = bp._observed([beside], pool, [line + [0.0, 40.0]], [z])
+        self.assertGreater(float(np.median(out2[0])), FLAT + 5.0, "a deck beside it: measured (off its solve, FLAT + 4)")
+
+    def test_short_deck_spike_refused(self):
+        # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
+        # the grade check skipped parts this short, and the spike stood across the road as a tent (GitHub #1066)
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        k = ("culvert", 0)
+        pool = {k: (types.SimpleNamespace(width=9.0), None, 0.0, 1.0, 3, "")}
+        line = np.c_[[0.0, 2.2, 4.4], [0.0, 0.0, 0.0]]
+        z = np.array([FLAT, FLAT - 0.2, FLAT - 0.4])
+        roadz.PROVIDER = StubProvider(lambda xy_, s: FLAT + np.where(np.abs(s - 2.2) < 0.1, 5.2, 0.0) - 0.2 * s / 2.2)
+        out = bp._observed([k], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=0.05)
+
 
 @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
 class GradingOverrideTest(unittest.TestCase):

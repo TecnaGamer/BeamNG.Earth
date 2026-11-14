@@ -610,88 +610,11 @@
     "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
     "heightMacroTexSize": 64
   },
-  "bngEarthGroundCobble": {
-    "name": "bngEarthGroundCobble",
-    "internalName": "bngEarthGroundCobble",
-    "class": "TerrainMaterial",
-    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c37",
-    "groundmodelName": "COBBLESTONE",
-    "detailDistances": [
-      0,
-      0,
-      50,
-      80
-    ],
-    "macroDistances": [
-      0,
-      0,
-      150,
-      1500
-    ],
-    "baseColorDetailStrength": [
-      0.3,
-      0.08
-    ],
-    "normalDetailStrength": [
-      1,
-      0.3
-    ],
-    "roughnessDetailStrength": [
-      1,
-      0.4
-    ],
-    "aoDetailStrength": [
-      0.8,
-      0.2
-    ],
-    "baseColorMacroStrength": [
-      0.12,
-      0.08
-    ],
-    "normalMacroStrength": [
-      0.5,
-      0.3
-    ],
-    "roughnessMacroStrength": [
-      0,
-      0.8
-    ],
-    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
-    "baseColorBaseTexSize": 256,
-    "baseColorDetailTex": "/assets/materials/terrain/asphalt/t_asphalt_02/t_asphalt_02_b.png",
-    "baseColorDetailTexSize": 2,
-    "baseColorMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_b.png",
-    "baseColorMacroTexSize": 32,
-    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
-    "normalBaseTexSize": 256,
-    "normalDetailTex": "/assets/materials/terrain/asphalt/t_asphalt_02/t_asphalt_02_nm.png",
-    "normalDetailTexSize": 2,
-    "normalMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_nm.png",
-    "normalMacroTexSize": 32,
-    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
-    "roughnessBaseTexSize": 256,
-    "roughnessDetailTex": "/assets/materials/terrain/asphalt/t_asphalt_02/t_asphalt_02_r.png",
-    "roughnessDetailTexSize": 2,
-    "roughnessMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_r.png",
-    "roughnessMacroTexSize": 32,
-    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
-    "aoBaseTexSize": 256,
-    "aoDetailTex": "/assets/materials/terrain/asphalt/t_asphalt_02/t_asphalt_02_ao.png",
-    "aoDetailTexSize": 2,
-    "aoMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_ao.png",
-    "aoMacroTexSize": 32,
-    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
-    "heightBaseTexSize": 256,
-    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
-    "heightDetailTexSize": 2,
-    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
-    "heightMacroTexSize": 32
-  },
   "bngEarthGroundLawn": {
     "name": "bngEarthGroundLawn",
     "internalName": "bngEarthGroundLawn",
     "class": "TerrainMaterial",
-    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c38",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c37",
     "groundmodelName": "GRASS",
     "detailDistances": [
       0,
@@ -1071,6 +994,237 @@
     "heightDetailTexSize": 2,
     "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
     "heightMacroTexSize": 64
+  },
+  "bngEarthGroundPavers": {
+    "name": "bngEarthGroundPavers",
+    "internalName": "bngEarthGroundPavers",
+    "class": "TerrainMaterial",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c60",
+    "groundmodelName": "ASPHALT_OLD",
+    "detailDistances": [
+      0,
+      0,
+      150,
+      250
+    ],
+    "macroDistances": [
+      0,
+      0,
+      150,
+      1500
+    ],
+    "baseColorDetailStrength": [
+      0.5,
+      0.15
+    ],
+    "normalDetailStrength": [
+      1,
+      0.3
+    ],
+    "roughnessDetailStrength": [
+      1,
+      0.4
+    ],
+    "aoDetailStrength": [
+      0,
+      0
+    ],
+    "baseColorMacroStrength": [
+      0.12,
+      0.08
+    ],
+    "normalMacroStrength": [
+      0.5,
+      0.3
+    ],
+    "roughnessMacroStrength": [
+      0,
+      0.8
+    ],
+    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
+    "baseColorBaseTexSize": 256,
+    "baseColorDetailTex": "/temp/beamngEarth/terraintex/bne_pavers_b.png",
+    "baseColorDetailTexSize": 2,
+    "baseColorMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_b.png",
+    "baseColorMacroTexSize": 32,
+    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
+    "normalBaseTexSize": 256,
+    "normalDetailTex": "/temp/beamngEarth/terraintex/bne_pavers_nm.png",
+    "normalDetailTexSize": 2,
+    "normalMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_nm.png",
+    "normalMacroTexSize": 32,
+    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
+    "roughnessBaseTexSize": 256,
+    "roughnessDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_r.png",
+    "roughnessDetailTexSize": 2,
+    "roughnessMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_r.png",
+    "roughnessMacroTexSize": 32,
+    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
+    "aoBaseTexSize": 256,
+    "aoDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_ao.png",
+    "aoDetailTexSize": 2,
+    "aoMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_ao.png",
+    "aoMacroTexSize": 32,
+    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
+    "heightBaseTexSize": 256,
+    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightDetailTexSize": 2,
+    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightMacroTexSize": 32
+  },
+  "bngEarthGroundBrick": {
+    "name": "bngEarthGroundBrick",
+    "internalName": "bngEarthGroundBrick",
+    "class": "TerrainMaterial",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c61",
+    "groundmodelName": "COBBLESTONE",
+    "detailDistances": [
+      0,
+      0,
+      150,
+      250
+    ],
+    "macroDistances": [
+      0,
+      0,
+      150,
+      1500
+    ],
+    "baseColorDetailStrength": [
+      0.85,
+      0.3
+    ],
+    "normalDetailStrength": [
+      1,
+      0.3
+    ],
+    "roughnessDetailStrength": [
+      1,
+      0.4
+    ],
+    "aoDetailStrength": [
+      0,
+      0
+    ],
+    "baseColorMacroStrength": [
+      0.12,
+      0.08
+    ],
+    "normalMacroStrength": [
+      0.5,
+      0.3
+    ],
+    "roughnessMacroStrength": [
+      0,
+      0.8
+    ],
+    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
+    "baseColorBaseTexSize": 256,
+    "baseColorDetailTex": "/temp/beamngEarth/terraintex/bne_brick_b.png",
+    "baseColorDetailTexSize": 2,
+    "baseColorMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_b.png",
+    "baseColorMacroTexSize": 32,
+    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
+    "normalBaseTexSize": 256,
+    "normalDetailTex": "/temp/beamngEarth/terraintex/bne_brick_nm.png",
+    "normalDetailTexSize": 2,
+    "normalMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_nm.png",
+    "normalMacroTexSize": 32,
+    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
+    "roughnessBaseTexSize": 256,
+    "roughnessDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_r.png",
+    "roughnessDetailTexSize": 2,
+    "roughnessMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_r.png",
+    "roughnessMacroTexSize": 32,
+    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
+    "aoBaseTexSize": 256,
+    "aoDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_ao.png",
+    "aoDetailTexSize": 2,
+    "aoMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_ao.png",
+    "aoMacroTexSize": 32,
+    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
+    "heightBaseTexSize": 256,
+    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightDetailTexSize": 2,
+    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightMacroTexSize": 32
+  },
+  "bngEarthGroundCobble": {
+    "name": "bngEarthGroundCobble",
+    "internalName": "bngEarthGroundCobble",
+    "class": "TerrainMaterial",
+    "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c37",
+    "groundmodelName": "COBBLESTONE",
+    "detailDistances": [
+      0,
+      0,
+      150,
+      250
+    ],
+    "macroDistances": [
+      0,
+      0,
+      150,
+      1500
+    ],
+    "baseColorDetailStrength": [
+      0.6,
+      0.2
+    ],
+    "normalDetailStrength": [
+      1,
+      0.3
+    ],
+    "roughnessDetailStrength": [
+      1,
+      0.4
+    ],
+    "aoDetailStrength": [
+      0,
+      0
+    ],
+    "baseColorMacroStrength": [
+      0.12,
+      0.08
+    ],
+    "normalMacroStrength": [
+      0.5,
+      0.3
+    ],
+    "roughnessMacroStrength": [
+      0,
+      0.8
+    ],
+    "baseColorBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_b.png",
+    "baseColorBaseTexSize": 256,
+    "baseColorDetailTex": "/temp/beamngEarth/terraintex/bne_cobble_b.png",
+    "baseColorDetailTexSize": 2,
+    "baseColorMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_b.png",
+    "baseColorMacroTexSize": 32,
+    "normalBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_nm.png",
+    "normalBaseTexSize": 256,
+    "normalDetailTex": "/temp/beamngEarth/terraintex/bne_cobble_nm.png",
+    "normalDetailTexSize": 2,
+    "normalMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_nm.png",
+    "normalMacroTexSize": 32,
+    "roughnessBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_r.png",
+    "roughnessBaseTexSize": 256,
+    "roughnessDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_r.png",
+    "roughnessDetailTexSize": 2,
+    "roughnessMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_r.png",
+    "roughnessMacroTexSize": 32,
+    "aoBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_ao.png",
+    "aoBaseTexSize": 256,
+    "aoDetailTex": "/assets/materials/terrain/asphalt/asphalt/t_asphalt_ao.png",
+    "aoDetailTexSize": 2,
+    "aoMacroTex": "/assets/materials/terrain/asphalt/macro_asphalt/t_macro_asphalt_ao.png",
+    "aoMacroTexSize": 32,
+    "heightBaseTex": "/levels/beamng_earth/art/terrains/bngEarth_base_h.png",
+    "heightBaseTexSize": 256,
+    "heightDetailTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightDetailTexSize": 2,
+    "heightMacroTex": "/levels/beamng_earth/art/terrains/bngEarth_flat_h_1024.png",
+    "heightMacroTexSize": 32
   },
   "beamngEarthTerrainMaterialTextureSet": {
     "name": "beamngEarthTerrainMaterialTextureSet",

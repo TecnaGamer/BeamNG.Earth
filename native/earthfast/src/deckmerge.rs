@@ -174,7 +174,7 @@ pub fn deck_merge_round<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, of
     let (xy, off, zs, zoff, widths, pairs, dual) = (xy.as_array(), off.as_array(), zs.as_array(), zoff.as_array(),
                                                     widths.as_array(), pairs.as_array(), dual.as_array());
     let nz = zs.len();
-    let got = py.allow_threads(|| -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), String> {
+    let got = py.detach(|| -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), String> {
         let mut acc = vec![0.0f64; nz];
         let mut cnt = vec![0.0f64; nz];
         let mut up = vec![0.0f64; nz];
@@ -249,7 +249,7 @@ pub fn deck_ground_pins<'py>(py: Python<'py>, ends: PyReadonlyArray2<'py, f64>, 
                              goff: PyReadonlyArray1<'py, i64>, pin_road_m: f64, pin_m: f64)
                              -> Bound<'py, PyArray2<f64>> {
     let (ends, gl, goff) = (ends.as_array(), gl.as_array(), goff.as_array());
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let ne = ends.nrows();
         let mut shared: Vec<(f64, f64)> = Vec::new();
         for r in 0..ne {

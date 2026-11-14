@@ -195,7 +195,7 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Vec<u8>, String> {
 /// The RGB of a finished tile's JPEG (imagery: a texture is the same whichever way its tiles came).
 #[pyfunction]
 pub fn jpeg_rgb<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, numpy::PyArray3<u8>>> {
-    let px = py.allow_threads(|| decode_jpeg(data)).map_err(PyValueError::new_err)?;
+    let px = py.detach(|| decode_jpeg(data)).map_err(PyValueError::new_err)?;
     Ok(Array3::from_shape_vec((TILE, TILE, 3), px).expect("checked").into_pyarray(py))
 }
 
@@ -234,7 +234,7 @@ pub fn tile_warp<'py>(py: Python<'py>,
     if o.shape() != [px, px, 3] || f.shape() != [px, px] || cells * cw != px {
         return Err(PyValueError::new_err("tile_warp: out (px, px, 3), filled (px, px), cells * cw == px"));
     }
-    let got = py.allow_threads(|| {
+    let got = py.detach(|| {
         // the JPEGs decoded on up to 4 threads
         let jpegs: Vec<(usize, &[u8])> = views.iter().enumerate()
             .filter_map(|(i, v)| if let Src::Jpeg(b) = v.2 { Some((i, b)) } else { None }).collect();
@@ -697,7 +697,7 @@ pub fn season_img<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, xm: PyRe
     let p = SeasonParams { fall: params.0, winter: params.1, spring: params.2, fall_yellow: params.3,
                            winter_desat: params.4, canopy_v: params.5, canopy_std: params.6, patch_m: params.7,
                            noise_grid: params.8.max(1), canopy_texture_max_m: params.9, half_px: params.10 };
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         if xm.shape() == [hh, ww] {
             grade(a, Metres::Full(xm), Metres::Full(ym), &p, pal)
         } else {
@@ -719,7 +719,7 @@ pub fn dds_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyR
     if a.shape()[2] != 3 || lut.len() != 256 {
         return Err(PyValueError::new_err("dds_levels: rgb (h, w, 3), lut of 256"));
     }
-    let (data, n, err) = py.allow_threads(|| {
+    let (data, n, err) = py.detach(|| {
         let mut levels = vec![a.as_standard_layout().into_owned()];
         levels.extend(crate::mip_levels_core(a, lut, sharpen));
         let mut err = None;

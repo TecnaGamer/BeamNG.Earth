@@ -24,11 +24,14 @@ export const POOL_DEFAULT = 32
 // The lamps' far glow (tools/build_lamp_glow.py, bne_lamp_glow.dae): a ball at the lens growing with distance, in the
 // engine's detail levels. Its finest level is a speck (the lens shows near the camera), so the viewer draws the levels
 // itself: the same balls, switched at the same distances (scaled to this screen, as the engine's pixel size is).
-const GLOW_R = [0.3, 0.5, 0.8, 1.3, 2.0, 3.0]
-const GLOW_NEAR_M = 60, MIN_PX = 4, SCREEN_PX = 1130, ENGINE_PX = 4100, LAST_PX = 2
+// (The mod's balls each have their brightness, nightlights.lua M.GLOW_NITS, the far ones under the windows' 200 nits;
+// all at full here.)
+const GLOW_R = [0.1, 0.16, 0.26, 0.42, 0.67, 1.1, 1.75, 2.8]
+const END_PX = [2.5, 2.3, 2.1, 1.9, 1.7, 1.5, 1.3]   // (build_lamp_glow.py: each ball's width where the next takes over)
+const GLOW_NEAR_M = 60, SCREEN_PX = 1130, ENGINE_PX = 4100, LAST_PX = 2
 const GLOW_SHAPE_R = GLOW_R[GLOW_R.length - 1] * Math.sqrt(3)
 // the distances (on the game's 1440-pixel-high, 65-degree screen) where each level ends: the speck, then each ball
-export const GLOW_ENDS = [GLOW_NEAR_M, ...GLOW_R.slice(0, -1).map(r => 2 * r * SCREEN_PX / MIN_PX), GLOW_SHAPE_R * ENGINE_PX / LAST_PX]
+export const GLOW_ENDS = [GLOW_NEAR_M, ...GLOW_R.slice(0, -1).map((r, k) => 2 * r * SCREEN_PX / END_PX[k]), GLOW_SHAPE_R * ENGINE_PX / LAST_PX]
 export const GLOW_SHAPE = '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_glow'
 
 const glowScale = { value: 1 }       // this screen's pixels per radian over the game's (SCREEN_PX)

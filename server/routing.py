@@ -16,8 +16,11 @@ import netfetch
 # "Avoid highways" (GitHub #330): FOSSGIS's OSRM has no exclude=motorway, its Valhalla has use_highways=0 (a trip over
 # 1500 km crow-fly is refused there: the normal route is used, like for any other failure)
 VALHALLA_URL = "https://valhalla1.openstreetmap.de/route?json="
-OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{lon0:.6f},{lat0:.6f};{lon1:.6f},{lat1:.6f}" \
+OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{coords}" \
            "?overview=full&geometries=geojson&steps=false"
+# Waypoints between the start and the destination (GitHub #935 / #886: a charging stop, a route with several stops):
+# OSRM's own intermediate coordinates, at most MAX_VIA of them (one request for the whole trip, the FOSSGIS fair use).
+MAX_VIA = 10
 SIMPLIFY_M = 4.0
 MAX_POINTS = 6000
 ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODbL)"
@@ -26,11 +29,13 @@ ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODb
 BEARING_RANGE = 60          # degrees either side of the car's heading the start may take
 
 
-def url(lat0, lon0, lat1, lon1, bearing=None):
-    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way."""
-    u = OSRM_URL.format(lat0=float(lat0), lon0=float(lon0), lat1=float(lat1), lon1=float(lon1))
-    if bearing is not None:
-        u += f"&bearings={int(bearing) % 360},{BEARING_RANGE};"
+def url(lat0, lon0, lat1, lon1, bearing=None, via=()):
+    """bearing: the car's heading (compass degrees): the route starts on a road the car can follow that way. via:
+    [(lat, lon)] the route passes through on the way, in order (at most MAX_VIA)."""
+    pts = [(lat0, lon0)] + list(via)[:MAX_VIA] + [(lat1, lon1)]
+    u = OSRM_URL.format(coords=";".join(f"{float(lo):.6f},{float(la):.6f}" for la, lo in pts))
+    if bearing is not None:         # (the start's bearing, none for the others: as many entries as coordinates)
+        u += f"&bearings={int(bearing) % 360},{BEARING_RANGE}" + ";" * (len(pts) - 1)
     return u
 
 
@@ -118,8 +123,13 @@ def parse(data):
     while len(pts) > MAX_POINTS:            # very long routes: coarser
         tol *= 2
         pts = simplify(pts, tol)
-    return {"points": [[round(a, 6), round(b, 6)] for a, b in pts], "dist": float(r.get("distance") or 0),
-            "dur": float(r.get("duration") or 0)}
+    out = {"points": [[round(a, 6), round(b, 6)] for a, b in pts], "dist": float(r.get("distance") or 0),
+           "dur": float(r.get("duration") or 0)}
+    legs = r.get("legs") or []
+    if len(legs) > 1:               # (a route through waypoints: each leg's length and time, start to the first ...)
+        out["legs"] = [[round(float(g.get("distance") or 0), 1), round(float(g.get("duration") or 0), 1)]
+                       for g in legs]
+    return out
 
 
 def valhalla_url(lat0, lon0, lat1, lon1, heading=None):
@@ -161,26 +171,42 @@ def parse_valhalla(data):
                                             "geometry": {"coordinates": [[lo, la] for la, lo in pts]}}]})
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, avoid_highways=False):
-    """The road route from (lat0, lon0) to (lat1, lon1) (blocking), starting the way bearing points if it can (else
-    without it). avoid_highways: Valhalla's route without motorways, {..., "avoided": True}; without its answer the
-    normal route, "avoided": False. Raises netfetch.FetchError or ValueError."""
+def via_points(raw):
+    """A route message's via ([[lat, lon], ...]) as [(lat, lon)]: the valid coordinates, at most MAX_VIA. Pure."""
+    out = []
+    for p in raw if isinstance(raw, (list, tuple)) else ():
+        try:
+            la, lo = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if -90.0 <= la <= 90.0 and -180.0 <= lo <= 180.0:
+            out.append((la, lo))
+    return out[:MAX_VIA]
+
+
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, via=(), avoid_highways=False):
+    """The road route from (lat0, lon0) to (lat1, lon1) (blocking) through via [(lat, lon)] in order, starting the way
+    bearing points if it can (else without it). avoid_highways (only without via): Valhalla's route without
+    motorways, {..., "avoided": True}; without its answer the normal route, "avoided": False. Raises
+    netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
+    avoid_highways = avoid_highways and not via
     for b in ([bearing, None] if bearing is not None else [None]) if avoid_highways else []:
         try:
             r = parse_valhalla(json.loads(net.get(valhalla_url(lat0, lon0, lat1, lon1, b), kind="demand").body.decode("utf-8")))
             return dict(r, avoided=True)
         except (ValueError, netfetch.FetchError):
             pass
-    r = _osrm(lat0, lon0, lat1, lon1, net, bearing)
+    r = _osrm(lat0, lon0, lat1, lon1, net, bearing, via)
     return dict(r, avoided=False) if avoid_highways else r
 
 
-def _osrm(lat0, lon0, lat1, lon1, net, bearing):
+def _osrm(lat0, lon0, lat1, lon1, net, bearing, via=()):
     if bearing is not None:
         try:
-            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing), kind="demand").body.decode("utf-8")))
+            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing, via), kind="demand")
+                                    .body.decode("utf-8")))
         except (ValueError, netfetch.FetchFailed) as e:   # no road that way near the start (OSRM: 400 NoSegment,
             if isinstance(e, netfetch.FetchFailed) and e.status != 400:      # a car across a field): any direction
                 raise
-    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1), kind="demand").body.decode("utf-8")))
+    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, via=via), kind="demand").body.decode("utf-8")))

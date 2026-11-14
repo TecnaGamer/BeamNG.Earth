@@ -701,10 +701,11 @@ over to AWS, a 400 wrote a permanent `.404` marker, and the User-Agent lived in 
   Retry-After pauses the host give up at once and fail over (they used to sleep out the pause and
   then all fire); `HttpsTransport` re-sends only on a reused keep-alive connection (a fresh one that
   timed out was tried twice, outside the bucket, doubling every timeout).
-- **Markers**: 404/410 only (a 400 is an error); `.404` files keep their format (empty, mtime = when)
-  and expire after the host's `miss_ttl` (90 days; AWS never), but count as valid while the host
-  cannot be asked, so an expired marker never turns a "no data" into an error. Existing caches work
-  as they are.
+- **Markers**: 404/410 only (a 400 is an error); a 404 is a line "<y> <unix s>" in its tile column's
+  `_misses` file (server/missindex.py, since GitHub #1081: the per-tile empty `.404` files were 28 % of a
+  cache's files), and expires after the host's `miss_ttl` (90 days; AWS never), but counts as valid while
+  the host cannot be asked, so an expired marker never turns a "no data" into an error. Old `.404` files
+  still count and are moved into the indexes by the cache's start-up walk.
 - **Offline / degraded**: `--offline` makes every request raise `Offline` (disk hits only, no weather
   fetch, no EGM2008 download); `Fetcher.offline` is also true when every imagery and DEM host is open.
   `Server.net_note()` → every `status` text gets " | Offline - using cached data" or " | Degraded:
@@ -994,10 +995,13 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   state is (every face is MUTCD; `BNE_SIGNS_WORLD=1` everywhere). The mod's Highway signs switch sends
   `highway_signs` {on}: no sign tiles are built while it is off.
   `direction_signs` {on}: the sign tiles carry the direction boards (server/dirsigns.py) only while it is on (on by default since 2026-11-05).
+  `road_signs` {on}: the sign tiles carry the ordinary road signs (server/roadsigns.py, native roadsigns.rs) only while it is on and the server has BNE_ROADSIGNS=on.
 - Graphics settings (2026-10-28; settings.lua PRESETS low / medium / high / ultra / extreme): the mod sends
-  `graphics` {lodScale, treeScale, buildingScale, photoPx} after every hello and on a change (core.sendGraphics):
-  the far field's K times lodScale, the tree tiles' and the far buildings' / skyline's / far bridges' reach times
-  their scales, the block photo's size (terrain.lua points the texture set and every layer's flat base maps at that
+  `graphics` {lodScale, treeScale, buildingScale, photoPx, viewM, lodPx} after every hello and on a change
+  (core.sendGraphics): the far field's K times lodScale, the tree tiles' and the far buildings' / skyline's / far
+  bridges' reach times their scales, the screen-space LOD's tau (lodPx px, 0 = off: farfield.View; the built tiles'
+  errors along the normal decide splits and merges, at most one level coarser than the distance rule), the block
+  photo's size (terrain.lua points the texture set and every layer's flat base maps at that
   size before a level's first block). Mod-only knobs: tree density (trees.lua QUALITY_LEVELS), grass distance
   (groundcover.lua DISTANCE), object detail ($pref::TS::detailAdjust in our level, enginepref.lua).
 - Every reach that decides what is loaded or shown is a disc (2026-10-28): roads.tiles_near / tile_distance and the
@@ -1252,6 +1256,32 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   in one statement with many columns (read every row group between the matches: +12 MB, +9 s for a
   city cell), so the scan and the dedup are two statements. The Azure mirror is asked when AWS
   cannot deliver (same bytes, same block cache).
+- **Overture's own vector tiles** (`server/pmtiles.py` + earthfast `pmtiles.rs`, 2026-11-11; `BNGE_MAP_SOURCE=pmtiles`,
+  the default, `parquet` as before): roads, connectors, route numbers, buildings, building parts and places come from
+  Overture's PMTiles archives (`tiles.overturemaps.org/<release>/<theme>.pmtiles`, Planetiler z0-14 gzip MVT; z14 is
+  one of our cells), one ~0.1-1 MB range read per cell instead of the parquet row groups. The network stays in
+  netfetch (three mirrors with their own limits: the CDN, the bucket's regional and global names; their order
+  measured at a process's first read and kept on disk 6 h, a failing one last for 5 min); header, root and leaf
+  directories and tiles are kept on disk under `mapdata/raw/overture-pmtiles/<release>/<theme>/`, a read whose ETag
+  differs from the header's drops them. The native side decodes the tiles and gives the parquet path's columns and
+  rule tables (nested values are JSON strings in the tiles). Features stay whole: a line or polygon that crosses
+  tile edges is rebuilt from its pieces (each clipped to its tile's own square, joined where one piece ends on an edge
+  and the next starts; Planetiler simplifies a feature once, before slicing, so the pieces share their vertices); the
+  tiles still needed are fetched through a callback, round after round, inside the one native call (the cell's 3x3
+  first, then straight on past each cut, at most 6 rings out; each tile decompressed once per call, the last 64 MB per
+  process). A feature listed by a cell is one whose geometry reaches the cell (the parquet query also lists those whose
+  bbox alone touches it: no build reads them there). A line is owned by the cell holding its first vertex (not its
+  bbox centre): every cell that lists it agrees, also where a very long one (a rail line through Manhattan) is cut at
+  the 6-ring cap; a polygon keeps its bbox centre, or its first vertex when it does not reach that cell. Junction
+  vertices Planetiler's simplification dropped from straight roads (2 of 3 mid-segment junctions) are put back from
+  the connectors layer. Accuracy against the parquet cells (3x3 cells at Fells Point, Midtown, Colmar, Paducah,
+  Bozeman, 2026-11-11): every attribute and rule table equal; road vertices 0.11-0.12 m from the parquet line p50,
+  <= 0.27 m p95, 0.66 m max (the 4096 grid of a z14 tile: ~0.45 m); buildings the same; missing only sub-metre
+  degenerate segments and parts and, in Midtown, 4 real building parts of 10,030 the tiles do not have. The base theme
+  stays on parquet: its archive stops at z13, where polygons under ~30 m and short lines are left out
+  (`BNGE_PMT_BASE=1` reads it anyway). Cells from the tiles live in their own folder (`overture-pmt<FORMAT>`) and
+  `versions()["mapsrc"]` keys every plan, cell fact and tile built from them; when the tiles fail, the layer is built
+  from parquet, kept with the parquet cells and marked a revisit fault.
 - **Rasters**: COG range reads with `cog.py` (classic/BigTIFF, Deflate/PackBits/none, predictor
   2, sparse tiles; no GDAL, no tifffile). A missing file (open ocean for WorldCover, no CHM
   coverage) is a 404 remembered by a marker; the cell gets class 0 / no canopy layer. (Checked

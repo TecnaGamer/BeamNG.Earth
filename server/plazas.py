@@ -22,8 +22,12 @@ MIN_AREA_M2 = 60.0      # smaller polygons are left to the terrain
 # surface mapped or paving stones: red brick in the US (Fells Point's squares, the user's report #45), stone elsewhere.
 ASPHALT = ("road_asphalt_2lane", 11.0)
 STONE = ("italy_cobblestone", 2.5)
+# Flat-topped pavers (OSM's paving_stones: "flat top surface", unlike sett and cobblestone): the stock grey rectangular
+# sidewalk tiles (the game's art/main.materials.json, always loaded; its texture is 2:1, six by three pavers: 0.6 x 1.2 m
+# at 3.6 m per repeat), as the World Trade Center's granite pavers (the user, 2026-11-11: "the textue is now cobblestone").
+PAVERS = ("italy_sidewalk_tiles", 3.6)
 PAVING = {"asphalt": ASPHALT, "concrete": ASPHALT, "concrete:plates": ASPHALT, "concrete_plates": ASPHALT,
-          "paved": ASPHALT, "paving_stones": STONE, "sett": STONE, "cobblestone": STONE, "unhewn_cobblestone": STONE,
+          "paved": ASPHALT, "paving_stones": PAVERS, "sett": STONE, "cobblestone": STONE, "unhewn_cobblestone": STONE,
           "pebblestone": STONE, "bricks": (BRICK, BRICK_REPEAT_M)}
 UNPAVED = {"compacted", "gravel", "fine_gravel", "unpaved", "dirt", "ground", "sand", "grass", "earth", "mud",
            "woodchips", "grass_paver"}
@@ -68,15 +72,101 @@ def polygons(feats_list):
     return out
 
 
+# A US square mapped paving_stones (or nothing) was red brick (Fells Point's squares); New York's are mostly grey granite
+# and concrete pavers (the user, 2026-11-11 in game: "several parts of new york get covered in this red brick
+# texture": the World Trade Center's plaza and streets, 475 paving_stones pieces). Now red brick only where the tile's
+# orthophoto shows the area brick red (its hue under BRICK_HUE_MAX degrees, saturation over BRICK_SAT_MIN: the NYS photo
+# shows the WTC's granite warm tan, hue ~37: "red over green and blue" took that for brick), grey pavers (PAVERS)
+# otherwise; an area the photo cannot read takes the tile's majority, and with no photo at all the old US rule (brick)
+# stands.
+BRICK_HUE_MAX = 25.0
+BRICK_SAT_MIN = 0.18
+
+
+def is_brick_red(rgb):
+    """Is this sRGB colour (0..1) brick red: hue under BRICK_HUE_MAX (or over 345), saturation over BRICK_SAT_MIN?"""
+    r, g, b = (float(v) for v in rgb[:3])
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx <= 0 or (mx - mn) / mx < BRICK_SAT_MIN or mx != r:
+        return False
+    hue = 60.0 * ((g - b) / (mx - mn)) % 360.0
+    return hue < BRICK_HUE_MAX or hue > 345.0
+US_AMBIGUOUS = "us_ambiguous"
+
+
+# Tags that name a square's paving better than surface=paving_stones (rare: 40 surface:colour and 5
+# paving_stones:material among 4,942 cached squares, but exact where set; the ground-sources survey, 2026-11-11)
+TAG_BRICK_MATERIALS = {"brick", "bricks", "clay", "clinker", "terracotta"}
+TAG_GREY_MATERIALS = {"concrete", "stone", "granite", "basalt", "limestone", "sandstone", "marble", "slate"}
+TAG_RED_COLOURS = {"red", "brown", "darkred", "maroon", "orange", "terracotta", "brick"}
+TAG_GREY_COLOURS = {"grey", "gray", "white", "black", "silver", "lightgrey", "darkgrey", "lightgray", "darkgray",
+                    "beige"}
+
+
+def tag_look(tags):
+    """The look an OSM square's own tags give it (paving_stones:material / material, then surface:colour / colour:
+    red brick or grey pavers), None when they say nothing about it. tags: {key: value} (streetfront.tags_of)."""
+    if not tags:
+        return None
+    for key in ("paving_stones:material", "material"):
+        v = str(tags.get(key) or "").strip().lower()
+        if v in TAG_BRICK_MATERIALS:
+            return (BRICK, BRICK_REPEAT_M)
+        if v in TAG_GREY_MATERIALS:
+            return PAVERS
+    for key in ("surface:colour", "surface:color", "colour", "color"):
+        v = str(tags.get(key) or "").strip().lower()
+        if not v:
+            continue
+        if v in TAG_RED_COLOURS:
+            return (BRICK, BRICK_REPEAT_M)
+        if v in TAG_GREY_COLOURS:
+            return PAVERS
+        if v.startswith("#") and len(v) == 7:
+            try:
+                rgb = tuple(int(v[k:k + 2], 16) / 255.0 for k in (1, 3, 5))
+            except ValueError:
+                continue
+            return (BRICK, BRICK_REPEAT_M) if is_brick_red(rgb) else PAVERS
+    return None
+
+
 def paving(surface_value, lat, lon):
     """(material, m per repeat) of a square with this mapped surface at (lat, lon), None for an unpaved one."""
     if surface_value in UNPAVED:
         return None
     import buildings
     us = buildings.region_style(lat, lon).name.startswith("us_")
-    if us and surface_value in (None, "paving_stones"):     # (Fells Point's squares, mapped paving_stones: red brick)
-        return BRICK, BRICK_REPEAT_M
-    return PAVING.get(surface_value, STONE)
+    if us and surface_value in (None, "paving_stones"):     # (red brick or grey pavers by the photo: mesh's photo)
+        return US_AMBIGUOUS
+    # (no surface mapped elsewhere: flat stone pavers, the Zocalo's slabs, most squares' finish; setts and cobbles
+    # only where mapped)
+    return PAVING.get(surface_value, PAVERS) if surface_value is not None else PAVERS
+
+
+# No photo read for a cell's squares (on a first visit the photos are fetched later, by the road tiles' roofs: 7 of a
+# WTC block's 8 cells read nothing): grey pavers, the common US square (granite, concrete), not the red brick that
+# covered the World Trade Center
+US_UNREAD_BRICK = False
+
+
+def us_looks(xys, photo):
+    """The looks of US squares mapped paving_stones or nothing (paving's US_AMBIGUOUS), their outer rings xys [(k, 2)
+    in the photo's frame]: red brick where the photo shows the area brick red, grey pavers otherwise; an area the
+    photo cannot read (a thin footway, shade) takes the read areas' majority, none read (or no photo):
+    US_UNREAD_BRICK. photo: buildings.roof_photo's (colours(rings) -> (n, 3) sRGB 0..1, nan unread) or None."""
+    cols = None
+    if photo is not None and len(xys):
+        try:
+            cols = photo.colours(list(xys))
+        except Exception:
+            cols = None
+    votes = {}
+    for j in range(len(xys)):
+        if cols is not None and j < len(cols) and np.all(np.isfinite(cols[j])):
+            votes[j] = is_brick_red(cols[j])
+    default = (sum(votes.values()) * 2 >= len(votes)) if votes else US_UNREAD_BRICK
+    return [(BRICK, BRICK_REPEAT_M) if votes.get(j, default) else PAVERS for j in range(len(xys))]
 
 
 def _covered(cover, pts):
@@ -87,12 +177,14 @@ def _covered(cover, pts):
                                                np.ascontiguousarray(pts, np.float64), 8.0))
 
 
-def mesh(frame, box, rings, elev, origin, cover=None):
+def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
     """The paved mesh of the plaza rings (lon/lat) in the tile box (x0, y0, x1, y1) of the anchor frame:
     (positions relative to origin (k, 3), tris, uvs, [material], tri material index) or None. elev(lat, lon) -> m
     (the graded ground the physics block has). cover: the road mesh's triangles in the frame (n, 6: x0 y0 x1 y1 x2
     y2) or None: the ground they cover is left to them (a pedestrian street mapped over a square drew its cobbles
-    1 cm over the paving, and the two flickered at a distance; GitHub #127)."""
+    1 cm over the paving, and the two flickered at a distance; GitHub #127). Triangles steeper than MAX_SLOPE are left
+    out. The mesh near-visual mode's paving: in detail mode the terrain block draws the squares (surface.paint_lots,
+    the PAVERS / BRICK layers)."""
     import buildings
     x0, y0, x1, y1 = box
     Ps, Ts, Ms, n0 = [], [], [], 0
@@ -115,6 +207,10 @@ def mesh(frame, box, rings, elev, origin, cover=None):
         if area2 < 0:
             xy = xy[::-1]
         areas.append((abs(area2) / 2, xy, holes, look))
+    amb = [k for k, a in enumerate(areas) if a[3] == US_AMBIGUOUS]
+    if amb:                             # (US squares: red brick where the photo shows red, grey pavers otherwise)
+        for k, look in zip(amb, us_looks([areas[k][1] for k in amb], photo)):
+            areas[k] = areas[k][:3] + (look,)
     areas.sort(key=lambda a: a[0])
     done = []                           # (ring xy, its box) of the areas paved so far (smaller ones)
     for _, xy, holes, look in areas:
@@ -156,10 +252,6 @@ def mesh(frame, box, rings, elev, origin, cover=None):
         return None
     P = np.concatenate(Ps)
     T = np.concatenate(Ts)
-    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
-    h = np.asarray(elev(la, lo), np.float64)
-    _, _, z = frame.geodetic_to_enu(la, lo, h)
-    V = np.c_[P, np.asarray(z) + LIFT_M] - np.asarray(origin, np.float64)
     mats = []
     UV = np.empty((len(P), 2))
     idx = np.empty(len(T), np.int64)
@@ -170,7 +262,29 @@ def mesh(frame, box, rings, elev, origin, cover=None):
         UV[v0:v0 + nv] = P[v0:v0 + nv] / rep_m
         idx[t0:t0 + nt] = mats.index(mat)
         v0, t0 = v0 + nv, t0 + nt
+    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+    h = np.asarray(elev(la, lo), np.float64)
+    _, _, z = frame.geodetic_to_enu(la, lo, h)
+    V = np.c_[P, np.asarray(z) + LIFT_M] - np.asarray(origin, np.float64)
+    # (the elevation's humps where buildings stand, the 9/11 museum pavilion's pyramid, and the pools' walls carried the
+    # paving up and down them, its top-down tiling smeared into streaks: the user, 2026-11-11 at the WTC)
+    e = V[T]
+    n = np.cross(e[:, 1] - e[:, 0], e[:, 2] - e[:, 0])
+    level = np.hypot(n[:, 0], n[:, 1]) <= MAX_SLOPE * np.abs(n[:, 2])
+    if not level.all():
+        if not level.any():
+            return None
+        T, idx = T[level], idx[level]
+        used = np.unique(T)
+        remap = np.full(len(V), -1, np.int64)
+        remap[used] = np.arange(len(used))
+        V, UV, T = V[used], UV[used], remap[T]
     return V, T, UV, mats, idx
+
+
+# A paved square is near level (ramps 1:12, the lidar's ground 0.1-0.2 m from metre to metre); a triangle steeper than
+# this (rise over run; the top-down tiling stretches 1.22x) lies on a building's hump or a wall in the elevation
+MAX_SLOPE = 0.7
 
 
 def merge(a, b):

@@ -22,8 +22,13 @@ _EYE = np.eye(3)
 
 def _rust3(kernel, a, b, c, origin, rot):
     """kernel (earthfast's geodetic_to_enu / enu_to_geodetic) on broadcast scalars or arrays, shapes kept."""
-    fast.require(0, "geodesy")
+    fast.require(194, "geodesy")
     f64 = np.float64
+    if (type(a) is np.ndarray and type(b) is np.ndarray and a.ndim == 1 and a.dtype == f64 and b.dtype == f64
+            and a.shape == b.shape and type(c) is float):
+        # (the usual call: two point arrays and one height for all: the kernel takes the one value, no broadcast and
+        # no array of it; the same numbers. Most calls are a few points, their cost the wrapping: 2026-11-10)
+        return getattr(fast._ef, kernel + "_c")(a, b, c, origin, rot)
     A_, B_, C_ = np.broadcast_arrays(np.asarray(a, f64), np.asarray(b, f64), np.asarray(c, f64))
     shape = A_.shape
     got = getattr(fast._ef, kernel)(np.ascontiguousarray(A_.ravel()), np.ascontiguousarray(B_.ravel()),

@@ -941,4 +941,19 @@ do
   T.check(not paused and calls_[2] == false, 'fast pre-cache: the app gone, the pause let go')
   sh.paused, sh.pause = was[1], was[2]
 end
+-- the 3D map: viewAway follows the orbit target (tx / ty), not the camera kilometres behind it
+do
+  local st = core._state()
+  local was = { st.player, st.cam }
+  st.player = { x = 0, y = 0 }
+  st.cam = { x = 5000, y = 0, tx = 10, ty = 0 }
+  T.check(core.viewAway() == nil, '3D map: target beside the car, the camera behind it does not move the trees')
+  st.cam = { x = 5000, y = 0, tx = 200, ty = 0 }
+  local v = core.viewAway()
+  T.check(v and v.x == 200 and v.y == 0, '3D map: the trees follow the target')
+  st.cam = { x = 200, y = 0 }
+  v = core.viewAway()
+  T.check(v and v.x == 200 and v.y == 0, 'a free camera with no target')
+  st.player, st.cam = was[1], was[2]
+end
 T.done('test_core_stubbed')

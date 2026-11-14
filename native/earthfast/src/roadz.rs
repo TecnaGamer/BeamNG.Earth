@@ -105,7 +105,7 @@ pub fn decode_las(data: &[u8], bbox: [f64; 4]) -> Result<(Vec<[f64; 3]>, Vec<u8>
 #[pyfunction]
 pub fn las_decode<'py>(py: Python<'py>, data: &[u8], bbox: [f64; 4])
                        -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<u8>>)> {
-    let got = py.allow_threads(|| decode_las(data, bbox));
+    let got = py.detach(|| decode_las(data, bbox));
     let (xyz, cls) = got.map_err(pyo3::exceptions::PyValueError::new_err)?;
     let n = xyz.len();
     let flat: Vec<f64> = xyz.into_iter().flatten().collect();

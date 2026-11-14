@@ -43,6 +43,82 @@ def fetching(cache, fetcher):
         yield
 
 
+class FetchesAtOnceTest(unittest.TestCase):
+    """The band file fetched by several at once on a cold cache (processes that each need it at their first tile).
+    Each fetch writes a temporary file of its own and renames it over the file: none fails on another's rename, none
+    reads a part of the file, none is left without the borders (a checksum mismatch would keep countrybounds.Absent
+    for the process's life)."""
+
+    def test_two_at_once(self):
+        real = os.replace
+        both = threading.Barrier(2, timeout=10)
+
+        def replace(src, dst):          # (both downloads written before either is renamed)
+            both.wait()
+            return real(src, dst)
+        with tempfile.TemporaryDirectory() as cache, fetching(cache, Pages(FIXTURE)):
+            want = regionaldata.manifest()["files"][countrybounds.FILE]
+            got, errors = [], []
+
+            def fetch():
+                try:
+                    got.append(regionaldata.file(countrybounds.FILE))
+                except Exception as e:
+                    errors.append(e)
+            with mock.patch.object(os, "replace", replace):
+                threads = [threading.Thread(target=fetch) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(30)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(got), 2)
+            self.assertEqual(got[0], got[1])
+            self.assertEqual(hashlib.sha256(Path(got[0]).read_bytes()).hexdigest(), want)
+            self.assertEqual([p.name for p in Path(got[0]).parent.iterdir() if p.name.endswith(".part")], [])
+
+    def test_a_rename_refused_over_a_whole_file(self):
+        """The rename refused because another fetch landed the file meanwhile (Windows: it is held open there): that
+        file is the same bytes; this fetch's temporary file goes and the file is used."""
+        real = os.replace
+
+        def refused(src, dst):
+            if os.path.exists(dst):
+                raise PermissionError(f"in use: {dst}")
+            return real(src, dst)
+
+        class Racing(Pages):
+            def get(self, url, kind="demand"):
+                got = super().get(url, kind)
+                if url.endswith(countrybounds.FILE):        # (another process's fetch lands it meanwhile)
+                    os.makedirs(regionaldata._build_dir(), exist_ok=True)
+                    Path(regionaldata._build_dir(), countrybounds.FILE).write_bytes(got.body)
+                return got
+        with tempfile.TemporaryDirectory() as cache, fetching(cache, Racing(FIXTURE)):
+            want = regionaldata.manifest()["files"][countrybounds.FILE]
+            with mock.patch.object(os, "replace", refused):
+                path = regionaldata.file(countrybounds.FILE)
+            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), want)
+            self.assertEqual([p.name for p in Path(path).parent.iterdir() if p.name.endswith(".part")], [])
+
+
+class WriteTest(unittest.TestCase):
+    def test_a_failed_write_leaves_nothing(self):
+        """A write that fails part way (a full disk; here a body that is no bytes): its temporary file is removed and
+        the error raised, the file as it was."""
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, countrybounds.FILE)
+            with self.assertRaises(TypeError):
+                regionaldata._write(path, "not bytes")
+            self.assertEqual(os.listdir(d), [])
+            regionaldata._write(path, b"whole")
+            self.assertEqual(os.listdir(d), [countrybounds.FILE])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
 class OutageTest(unittest.TestCase):
     """GitHub down (the night of 1.9.0: 504s for hours): the manifest pinned on disk is used at once, whatever its age,
     and a stale one is refreshed in the background; it was fetched first by every process, which waited for it."""
@@ -91,7 +167,3 @@ class OutageTest(unittest.TestCase):
                 json.dump({"built": "new", "files": {}}, fh)
             with fetching(cache, Never()):
                 self.assertEqual(regionaldata.signature(), "new")
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -158,6 +158,24 @@ class PlaceTest(unittest.TestCase):
     def test_a_stop_past_the_tile_is_left_out(self):
         self.assertEqual(self.rows(self.stop([[-5.0, 8.0]]), self.road()), [])
 
+    def test_a_shelter_stays_off_a_track_beside_the_road(self):
+        # a track 3 m past the road's edge (Nemiia, prospekt Heroiv, 2026-11-08) that bends away from it at x = 70: the
+        # stop at x = 30 stood on the rails; it slides along the curb to where the track has left (or is left out)
+        feats = self.stop([[30.0, 8.0]])
+        axis = np.array([[x, 7.2 + max(0.0, x - 55.0) * 0.6, 0.0] for x in np.linspace(0.0, 100.0, 51)])
+        rails = [("rail:1", 2.6, axis)]
+        road = self.road()
+        self.assertEqual(shelters._rail_short(30.0, 8.0, 90.0, []), 0.0)
+        self.assertGreater(shelters._rail_short(30.0, 8.0, 90.0, rails), 0.5)
+        got = shelters._clear_of_rails(30.0, 8.0, 90.0, road, rails)
+        self.assertIsNone(got)              # (within the 15 m it can slide the track is still beside the road)
+        axis_far = np.array([[x, 7.2 + max(0.0, x - 35.0) * 1.0, 0.0] for x in np.linspace(0.0, 100.0, 51)])
+        got = shelters._clear_of_rails(30.0, 8.0, 90.0, road, [("rail:1", 2.6, axis_far)])
+        self.assertIsNotNone(got)
+        self.assertLessEqual(shelters._rail_short(got[0], got[1], 90.0, [("rail:1", 2.6, axis_far)]), 1e-3)
+        self.assertGreater(abs(got[0] - 30.0), 1.0, "it slid along the road")
+        self.assertEqual(len(self.rows(feats, road)), 1, "no tracks: the shelter stands")
+
     def test_catalog_names_the_stock_shape(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         path = os.path.join(root, "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth", "trees.lua")
@@ -166,3 +184,33 @@ class PlaceTest(unittest.TestCase):
         self.assertIn("M.CATALOG.busshelter", source)
         self.assertIn("s_busstop_ecu", source)
         self.assertNotIn("M.NO_COLLIDE.busshelter", source)
+
+
+class RegionTest(unittest.TestCase):
+    def test_regional_shelters(self):
+        self.assertIs(shelters.shelter_for("US", 39.3), shelters.SHELTERS["na"])
+        self.assertIs(shelters.shelter_for("DE", 48.1), shelters.SHELTERS["eu"])
+        self.assertIs(shelters.shelter_for("BR", -12.0), shelters.SHELTERS["tropics"])
+        self.assertIs(shelters.shelter_for("AU", -33.9), shelters.SHELTERS["other"])
+        self.assertIs(shelters.shelter_for(None, 39.3), shelters.SHELTERS["na"])
+
+    def test_a_european_stop_gets_its_shelter_clear_of_the_road(self):
+        frame = geodesy.EnuFrame(48.137, 11.575, 0.0)
+        xy = np.array([[50.0, 2.0]])
+        lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(1))
+        feats = mapgeom.Features(
+            layer="infrastructure", ids=np.array(["s"]), kind=np.array([mapgeom.POINT], np.uint8),
+            part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
+            coord_off=np.array([0, 1], np.int64), lonlat=np.column_stack((lon, lat)),
+            attrs={"subtype": np.array(["transit"]), "class": np.array(["bus_stop"]),
+                   "tags": np.array([json.dumps({"shelter": "yes"})])})
+        spec = type("S", (), {"width": 8.0})()
+        road = [("rd", spec, np.array([[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]]), 0.0)]
+        got = shelters.rows(frame, lambda key: feats, (0.0, 0.0, 100.0, 100.0),
+                            lambda la, lo: np.full(np.shape(la), 5.0), road, country="DE")
+        self.assertEqual(len(got), 1)
+        d = shelters.SHELTERS["eu"]
+        self.assertEqual(got[0][0], d.group)
+        self.assertEqual(got[0][6], d.h)
+        self.assertLessEqual(shelters._intrusion(got[0][1], got[0][2], got[0][4], road, d), shelters.BODY_ON_ROAD_M)
+        self.assertGreaterEqual(got[0][2] - d.front, 4.0 + shelters.CURB_PAD_M - 0.02)

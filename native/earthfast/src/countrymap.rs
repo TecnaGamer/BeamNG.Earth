@@ -194,7 +194,7 @@ pub fn country_index<'py>(py: Python<'py>, path: &str, lats: PyReadonlyArray1<'p
     let m = map(path)?;
     let (la, lo) = (lats.as_array().to_vec(), lons.as_array().to_vec());
     if la.len() != lo.len() { return Err(PyValueError::new_err("lats and lons differ in length")); }
-    let out: Result<Vec<u16>, String> = py.allow_threads(|| la.iter().zip(&lo).map(|(&a, &b)| m.at(a, b)).collect());
+    let out: Result<Vec<u16>, String> = py.detach(|| la.iter().zip(&lo).map(|(&a, &b)| m.at(a, b)).collect());
     Ok(out.map_err(PyValueError::new_err)?.into_pyarray(py))
 }
 

@@ -31,7 +31,7 @@ MANIFEST_TTL_S = 24 * 3600      # the build in use is checked again after this l
 RETRY_S = 3600                  # unreachable: asked again after this long
 SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
 FETCH_WAIT_S = 90.0             # s a caller waits for another thread's manifest fetch (then goes on without the data)
-COLUMNS = ("railway", "gauge", "electrified", "service", "usage")
+COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
 
 
 _WAY_ID = re.compile(r"^w(\d+)")
@@ -110,6 +110,43 @@ class Ways:
 
     def __bool__(self):
         return len(self.ids) > 0
+
+
+class Rules:
+    """A lane shard's "rules" ({key: {value: [way ids]}}, tools/build_lane_tags.py: Germany's road rules) kept
+    compact, as Ways: per key the way ids sorted (int64) and each one's value an index into the key's values; never a
+    dict per way. A value's id list is delta-coded (the first id, then each minus the one before: [100, 5, 125] is
+    100, 105, 230) and decoded with a cumulative sum. A malformed entry (not a dict, not a list, a list with an
+    entry that is not an int: dropped whole, a delta list cannot be partly trusted) is left out."""
+
+    def __init__(self, rules):
+        self.keys = {}
+        for k, by in rules.items():
+            if not isinstance(by, dict):
+                continue
+            values, ids, idx = [], [], []
+            for v, got in by.items():
+                ok = got if isinstance(got, list) and all(isinstance(i, int) and not isinstance(i, bool)
+                                                           for i in got) else []
+                if ok:
+                    ok = np.cumsum(np.array(ok, np.int64)).tolist()
+                    ids.extend(ok)
+                    idx.extend([len(values)] * len(ok))
+                    values.append(v)
+            ids = np.array(ids, np.int64)
+            o = np.argsort(ids, kind="stable")
+            self.keys[k] = (ids[o], np.array(idx, np.int32)[o], values)
+
+    def get_many(self, key, ids):
+        """[key's value or None] of each way id (strings as railtags.way_id gives them, or None)."""
+        got = self.keys.get(key)
+        ks = np.array([int(k) if isinstance(k, str) and k.isdigit() else -1 for k in ids], np.int64)
+        if got is None or not len(got[0]) or not len(ks):
+            return [None] * len(ks)
+        at, idx, values = got
+        i = np.minimum(np.searchsorted(at, ks), len(at) - 1)
+        hit = at[i] == ks
+        return [values[idx[j]] if h else None for j, h in zip(i.tolist(), hit.tolist())]
 
 
 class Shards:
@@ -254,6 +291,8 @@ class Shards:
         if side and os.path.exists(side):
             got = _load_idx(side)
             if got is not None:
+                if isinstance(got.get("rules"), dict):
+                    got["rules"] = Rules(got["rules"])
                 with self.lock:
                     self.shards[(x, y)] = got
                 return got
@@ -283,7 +322,9 @@ class Shards:
         if isinstance(got, dict) and isinstance(got.get("ways"), dict):
             got["ways"] = Ways.of(got["ways"])
             if side and isinstance(got["ways"], Ways):
-                _save_idx(side, got)
+                _save_idx(side, got)        # (its "rules" still the shard's JSON: made Rules below, and on reading it)
+        if isinstance(got, dict) and isinstance(got.get("rules"), dict):
+            got["rules"] = Rules(got["rules"])        # (the lane shards' road rules)
         with self.lock:
             self.shards[(x, y)] = got
         return got
@@ -329,12 +370,18 @@ class RailTags(Shards):
 
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
-# lane-by-lane data (markings.py)
+# lane-by-lane data (markings.py). bus:lanes:forward, bus:lanes:backward and psv:lanes join only if the shard has them.
 LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
                 "change:lanes:forward", "change:lanes:backward", "placement", "placement:forward", "placement:backward",
                 "lanes:forward", "lanes:backward", "lanes:both_ways", "overtaking", "overtaking:forward",
-                "overtaking:backward", "divider", "lane_markings", "bus:lanes", "busway", "hov:lanes",
+                "overtaking:backward", "divider", "lane_markings", "bus:lanes", "bus:lanes:forward",
+                "bus:lanes:backward", "psv:lanes", "busway", "hov:lanes",
                 "junction")     # (roundabout rings: roads._rings, attrs osm_junction)
+
+
+# Germany's road rules (tools/build_lane_tags.py: the lane shards' "rules", never in their "ways"), attrs lane_attr(k):
+# kept apart from LANE_COLUMNS, which the markings read as lane data (roads.lane_tags, LANE_PARTS)
+RULE_COLUMNS = ("priority_road", "zone:maxspeed")
 
 
 # per road feature of several ways: [(start, end, way id, its tags)], else None. The tags are the shard's own (Ways'
@@ -397,12 +444,16 @@ class LaneTags(Shards):
         super().__init__(cache_dir, fetcher, "lanes")
 
     def join(self, feats, key):
-        """Add OSM's lane tags (attrs lane_attr(k) for k in LANE_COLUMNS, None where absent) to cell key's road
-        segments, in place, joined by way id. Nothing when the shard cannot be had. The way ids are parsed and found
-        in the shard natively (fast.way_tag_rows, fast.lane_parts), each distinct tag set's columns made once and the
-        parts share the shard's tag sets (LANE_PARTS): a regex, a numpy search and a tag copy per road and per way
-        part and a rule-table slice per road were ~14 % of a dense Manhattan road tile (2026-11-08). A shard whose ids
-        are not plain numbers (Ways.of left it a dict) is read by way_id and the dict."""
+        """Add to cell key's road segments, in place, joined by way id (None where absent):
+        - OSM's lane tags from the shard's "ways": attrs lane_attr(k) for k in LANE_COLUMNS, and LANE_PARTS;
+        - Germany's road rules from its "rules" (tools/build_lane_tags.py): attrs osm_priority_road (designated /
+          end / yes_unposted) and osm_zone_maxspeed (DE:30 / DE:20 / DE:10), lane_attr(k) for k in RULE_COLUMNS;
+        - its German sign nodes in the cell (junction signs and the mapped Ortstafeln), for sign_nodes(feats).
+        Nothing when the shard cannot be had; a shard without "rules" or "nodes" (an older build) joins none of them.
+        The way ids are parsed and found in the shard natively (fast.way_tag_rows, fast.lane_parts), each distinct tag
+        set's columns made once and the parts share the shard's tag sets (LANE_PARTS): a regex, a numpy search and a
+        tag copy per road and per way part and a rule-table slice per road were ~14 % of a dense Manhattan road tile
+        (2026-11-08). A shard whose ids are not plain numbers (Ways.of left it a dict) is read by way_id and the dict."""
         sub = feats.attrs.get("subtype")
         if sub is None or not len(feats):
             return
@@ -450,6 +501,17 @@ class LaneTags(Shards):
                     cols[c][rows] = tab[inv]
         for c in LANE_COLUMNS:
             feats.attrs[lane_attr(c)] = cols[c]
+        # (the road rules of the way covering most of a feature, as the columns above: kept apart from them and from
+        # LANE_PARTS, which the markings read as lane data)
+        rules = sh.get("rules")
+        if isinstance(rules, dict):
+            rules = Rules(rules)            # (a shard not read through Shards.shard)
+        ids = [way_id(str(rec[i])) for i in road] if rec is not None and isinstance(rules, Rules) else []
+        for c in RULE_COLUMNS:
+            col = np.full(len(feats), None, object)
+            for i, v in zip(road, rules.get_many(c, ids) if ids else ()):
+                col[i] = v
+            feats.attrs[lane_attr(c)] = col
         # (the columns above hold the way covering most of a feature; a feature of several ways keeps each one's tags)
         table = feats.rules.get("src_ways")
         parts = np.empty(n, object)
@@ -482,8 +544,22 @@ class LaneTags(Shards):
                         w = way_id(r)
                         cur.append((a, b, w, ways.get(w) or {}))
         feats.attrs[LANE_PARTS] = parts
+        # (the shard's German sign nodes in the cell: [(lon, lat, tags)], as RailTags' _rail_nodes; none without a
+        # cell to bound them)
+        nodes, found = sh.get("nodes") or (), []
+        if nodes and key is not None:
+            lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+            pad = 0.002
+            found = [(lo, la, t) for _id, lo, la, t in nodes
+                     if lon0 - pad <= lo <= lon1 + pad and lat0 - pad <= la <= lat1 + pad]
+        feats.__dict__["_sign_nodes"] = found
         import roadlanes
         roadlanes.invalidate(feats)
+
+
+def sign_nodes(feats):
+    """The German sign nodes LaneTags.join found in feats' cell: [(lon, lat, tags)], [] when none."""
+    return feats.__dict__.get("_sign_nodes", [])
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"
@@ -578,3 +654,112 @@ class SignTags(Shards):
                     out[int(r["id"])] = {"id": int(r["id"]), "lon": float(r["lon"]), "lat": float(r["lat"]),
                                          "tags": {}, "ways": [], key: d}
         return [out[k] for k in sorted(out)]
+
+
+# The weekly station shards (tools/build_station_tags.py, dataset "stations"): every OpenStreetMap fuel and charging
+# station with its capacity, and every charge point (Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
+# `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`"). The station finder lists
+# them where no map data is downloaded (stationindex.py); the EV chargers take their count and spots (evchargers.py).
+STATIONS_ON = os.environ.get("BNE_STATIONTAGS", "on") != "off"
+STATIONS_DIR = os.environ.get("BNE_STATIONS_DIR") or None       # a local build (tests, before the data is published)
+
+
+class StationTags(Shards):
+    """Shards {"s": [[id, kind, lon, lat, name, brand, cap], ...], "p": [[lon, lat], ...]} (FORMAT 1), each record in
+    the shard of its point. stations_in / points_in give a lat/lon box's; None when off, not published yet, offline or
+    unreachable (the callers go on without them, as before the dataset existed)."""
+
+    def __init__(self, cache_dir, fetcher, local=None):
+        super().__init__(cache_dir, fetcher, "stations")
+        self.local = local if local is not None else STATIONS_DIR
+        self.by_cell = {}           # id(shard) -> {z14 cell: (records, points)}: a box reads only its own cells
+
+    def version(self):
+        if self.local is None:
+            return super().version()
+        if self.built is None:
+            try:
+                with open(os.path.join(self.local, "manifest.json"), encoding="utf-8") as fh:
+                    self.built = "local:" + str(json.load(fh).get("built"))
+            except (OSError, ValueError):
+                return None
+        return self.built
+
+    def shard(self, x, y):
+        if self.local is None:
+            return super().shard(x, y)
+        if self.version() is None:
+            return None
+        with self.lock:
+            got = self.shards.get((x, y))
+        if got is None:
+            try:
+                with gzip.open(os.path.join(self.local, str(x), f"{y}.json.gz"), "rt", encoding="utf-8") as fh:
+                    got = json.load(fh)
+            except FileNotFoundError:
+                got = {}
+            except (OSError, ValueError) as e:
+                log.debug("stations %s/%s: %s", x, y, e)
+                return None
+            with self.lock:
+                self.shards[(x, y)] = got
+        return got
+
+    def clear_memory(self):
+        """The shards and their cell indexes (each index holds its shard: Codex on #1111, 2026-11-10)."""
+        with self.lock:
+            self.shards.clear()
+            self.by_cell.clear()
+
+    def _shards(self, lat0, lon0, lat1, lon1):
+        """The box's shards, or None when one of them cannot be had."""
+        import mapcells
+        if not STATIONS_ON:
+            return None
+        out = []
+        for key in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1, z=SHARD_ZOOM):
+            sh = self.shard(key.x, key.y)
+            if sh is None:
+                return None
+            out.append(sh)
+        return out
+
+    def _cells(self, sh):
+        """The shard's records and points by map cell (z14), made once per shard (a city's 25 km map view asks ~800
+        cells of a 15,000-station shard: 1.2 s filtering the whole shard for each, instant by cell)."""
+        import mapcells
+        got = self.by_cell.get(id(sh))
+        if got is None or got[0] is not sh:
+            cells = {}
+            for r in sh.get("s") or ():
+                cells.setdefault(mapcells.cell_of(r[3], r[2]), ([], []))[0].append(r)
+            for p in sh.get("p") or ():
+                cells.setdefault(mapcells.cell_of(p[1], p[0]), ([], []))[1].append(p)
+            got = (sh, cells)
+            with self.lock:
+                self.by_cell[id(sh)] = got
+        return got[1]
+
+    def _in_box(self, lat0, lon0, lat1, lon1):
+        """[(records, points)] of the box's map cells, or None."""
+        import mapcells
+        shards = self._shards(lat0, lon0, lat1, lon1)
+        if shards is None:
+            return None
+        keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+        return [c[k] for c in (self._cells(sh) for sh in shards) for k in keys if k in c]
+
+    def stations_in(self, lat0, lon0, lat1, lon1):
+        """[{"id", "kind" ("fuel" | "ev"), "lat", "lon", "name", "brand", "cap" (int or None)}] in the box, or None."""
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
+            return None
+        return [{"id": r[0], "kind": r[1], "lat": r[3], "lon": r[2], "name": r[4], "brand": r[5], "cap": r[6]}
+                for recs, _ in got for r in recs if lat0 <= r[3] <= lat1 and lon0 <= r[2] <= lon1]
+
+    def points_in(self, lat0, lon0, lat1, lon1):
+        """[(lat, lon)] of the charge points in the box, or None."""
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
+            return None
+        return [(p[1], p[0]) for _, pts in got for p in pts if lat0 <= p[1] <= lat1 and lon0 <= p[0] <= lon1]

@@ -166,12 +166,23 @@ MOD_TO_SERVER = {
     # highway signs (signstream.py; additive): the settings page's switch, sent after every hello and when changed
     "highway_signs": {"on": F(bool)},
     "direction_signs": {"on": F(bool)},
+    "road_signs": {"on": F(bool)},
+    # German junction signs (designs.py; additive): the settings page's switch, sent after every hello and on a change
+    "german_junctions": {"on": F(bool)},
+    # town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change
+    "town_signs": {"on": F(bool)},
+    # road wear (roadwear.py; additive): the settings page's Road surface detail ('off' / 'basic' / 'full'), sent
+    # after every hello and on a change
+    "road_wear": {"value": F(str)},
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
-    # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
+    # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px, the
+    # far field's screen-space LOD (lodPx: the largest pop on screen, px; 0: off)
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
-                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT)},
+                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT), "lodPx": F(NUM, OPT)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
+    "stations": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "r_km": F(NUM), "kinds": F(list), "mode": F(str)},   # the station finder
+    "preload_place": {"lat": F(NUM), "lon": F(NUM)},     # a destination picked on the world map, loaded ahead
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
     # imagery / mapdata (world: not asked by the map yet)
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
@@ -186,10 +197,14 @@ MOD_TO_SERVER = {
     "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
-              "download": F(str, OPT)},  # the "Download along route" setting: off / ahead / route (route_download)
+              "download": F(str, OPT),   # the "Download along route" setting: off / ahead / route (route_download)
+              "via": F(list, OPT)},      # [[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     # the 3D map's labels by zoom (map3d.lua; maplabels.py)
     "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
+    # the modding API's places round a point (api.lua places / buildings; places.py)
+    "places": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "categories": F(list, OPT),
+               "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT)},
     # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
     "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
     "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
@@ -229,6 +244,7 @@ SERVER_TO_MOD = {
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
     "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT), "text": F(str, OPT)},   # geocode.py
+    "stations_result": {"id": F(int), "items": F(list), "partial": F(bool), "error": F(str, OPT)},   # stationindex.py
     # covermap.py: w x h levels (base64, north row first) for the asked box, clipped to the world; gen changes with
     # the index; ready: false while the index is being built
     "cache_map_result": {"id": F(int), "z": F(int), "x0": F(int), "y0": F(int), "w": F(int), "h": F(int),
@@ -244,7 +260,8 @@ SERVER_TO_MOD = {
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
-                      "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
+                      "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
+                      "legs": F(list, OPT)},          # with via: [[dist_m, dur_s], ...] per leg
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
     # the blocks built already round the player (follow.preferReady takes one instead of its own target)
     "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor
@@ -264,6 +281,9 @@ SERVER_TO_MOD = {
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
     "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows
+    # ... the modding API's places (places.py rows; buildings asked only, next while more pages follow)
+    "places_result": {"id": F(int), "places": F(list), "complete": F(bool), "pending": F(bool),
+                      "buildings": F(list, OPT), "next": F(str, OPT), "error": F(str, OPT)},
     "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
               "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
@@ -424,6 +444,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
+                       "places_result",                              # the modding API's places (test_places_api)
                        "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
@@ -442,6 +463,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "addons", "addon_detail", "addon_status",     # the Add-ons page: only when it asks (online;
                        "addon_apply", "addon_added",                 # test_addons, test_addons.lua)
                        "geocode_result", "route_result",             # only when the map / GPS asks
+                       "stations_result",                            # only when the station finder asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
@@ -502,7 +524,7 @@ def mod_sends():
     (core hands them net.send)."""
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
-                              "addons.lua"), r"net(?:'\))?\.send\(\{"),
+                              "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
@@ -518,7 +540,7 @@ def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
     for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
-                 "addons.lua"):
+                 "addons.lua", "api.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

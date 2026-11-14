@@ -116,6 +116,9 @@ class EuropeTest(unittest.TestCase):
         means={}
         for name,mat in materials.items():
             self.assertEqual(mat['mapTo'],name)
+            if name=='bne_eu_frontage_asphalt':     # (PR #505's paved frontages: the stock asphalt's detail maps)
+                self.assertTrue(mat['Stages'][0]['detailMap'].startswith('/assets/materials/terrain/asphalt/'))
+                continue
             texture=mat['Stages'][0]['baseColorMap']
             self.assertTrue(texture.endswith('.color.png'))
             with Image.open(levels/texture.lstrip('/')) as im:

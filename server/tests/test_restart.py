@@ -147,7 +147,10 @@ class SessionAdoptionTest(unittest.TestCase):
             self.s.claim_sessions(c, ["20261010-120000-bbbb"])
             self.s.claim_sessions(c, [])
             for _ in range(200):
-                seen.append(sorted(os.listdir(self.a[0])) if os.path.exists(self.a[0]) else None)
+                try:            # (the deleting thread can take the folder between a test for it and its listing)
+                    seen.append(sorted(os.listdir(self.a[0])))
+                except FileNotFoundError:
+                    seen.append(None)
                 if seen[-1] is None and not os.path.exists(self.a[1]):
                     return
                 await asyncio.sleep(0.005)

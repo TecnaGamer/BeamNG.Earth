@@ -164,5 +164,22 @@
       {},
       {}
     ]
+  },
+  "bne_rr_walk": {
+    "name": "bne_rr_walk",
+    "mapTo": "bne_rr_walk",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "05a90f0b-f0d5-565f-80e5-9d497107ded2",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_walk.png",
+        "metallicFactor": 0,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

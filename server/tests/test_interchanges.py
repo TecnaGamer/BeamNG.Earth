@@ -36,13 +36,15 @@ class FixturesTest(unittest.TestCase):
 
 
 class SilistraTest(unittest.TestCase):
-    """GitHub #936: the bridge at Aydemir pitches at ~43 % without the solver; with it, under 10 %."""
+    """GitHub #936: the bridge at Aydemir pitched at ~43 %; under 10 % with the solver and, since PR #993, without it."""
 
-    def test_without_the_solver_the_deck_is_impassable(self):
+    def test_without_the_solver_the_deck_is_passable_too(self):
+        # (it pitched at ~43 % without the solver until PR #993: a road meeting the deck at grade near its abutment no
+        # longer raises an approach fill there, and the deck lies at 3.5 % without the solver as well)
         r = replay("silistra_936", interchange=False)
         self.assertFalse(r["interchange"])
         self.assertEqual(r["decks"], 1)
-        self.assertGreater(r["max_grade"], 0.3)
+        self.assertLess(r["max_grade"], 0.1)
 
     def test_the_solver_levels_it(self):
         r = replay("silistra_936", interchange=True)

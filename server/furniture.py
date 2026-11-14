@@ -9,11 +9,15 @@ Each road's lamps sit at fixed distances along the road from its first vertex wi
 road's id, so every tile (and every anchor) puts them in the same places (ROADMAP "deterministic
 generation"). Pure.
 """
+import functools
 import hashlib
 import math
+import os
 
 import numpy as np
 
+import citylamps
+import designsigns
 import poleprofiles
 
 # class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
@@ -87,6 +91,10 @@ LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}
 POLE_OFF_M = 2.4            # m beyond the carriageway's edge
+# A road with mapped utility poles along it (mappedpoles.road_points: this many within this far of its edge) guesses
+# none of its own: the mapped ones stand there (the user, 2026-11-07, of a village with its poles in OpenStreetMap)
+MAPPED_ALONG_MIN = 2
+MAPPED_ALONG_M = 15.0
 END_CLEAR_M = 4.0           # m kept clear of a run's ends (corners, crosswalk ramps)
 CLEAR_OTHER_M = 1.5         # m kept off another road's carriageway
 G_LAMP, G_POLE = "streetlight", "pole"
@@ -151,12 +159,12 @@ WIRE_R = 0.012                  # m half width of a wire's ribbons
 WIRE_VERTS_MAX = 60000          # a tile's wire mesh at most (the engine's 16-bit index buffers; railways.VERTS_MAX)
 
 
-def wire_lines(poles, anchors=None, radius=None):
+def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
     """Polylines (k, 3) of the wires between consecutive poles [(x, y, z, yaw_deg)] of one road side."""
     out = []
     for (x0, y0, z0, w0), (x1, y1, z1, w1) in zip(poles[:-1], poles[1:]):
         span = math.hypot(x1 - x0, y1 - y0)
-        if span < 5.0 or span > 80.0:
+        if span < 5.0 or span > max_span:
             continue
         k = max(2, int(math.ceil(span / WIRE_SEG_M)))
         t = np.linspace(0.0, 1.0, k + 1)
@@ -171,23 +179,53 @@ def wire_lines(poles, anchors=None, radius=None):
     return out
 
 
-def wire_mesh(lines, origin):
+def wire_mesh(lines, origin, material_of=None, solid_of=None):
     """A mesh of the wires (each its points, or (points, half width): WIRE_R when not given): two crossed ribbons per
-    segment (seen from any side): (positions, tris, uvs)."""
-    P, T = [], []
+    segment (seen from any side): (positions, tris, uvs). material_of(half width) -> a material name: then
+    (positions, tris, uvs, [names], per-triangle index into them), the triangles grouped by material. solid_of(half
+    width) -> True: that wire is a four-sided bar (8 vertices a segment, as the ribbons, 8 triangles, lit as a solid;
+    its UVs: round the bar / metres along it over 2) instead of two crossed ribbons."""
+    P, T, TM, UV = [], [], [], []
+    names = []
     ox, oy, oz = origin
     for line in lines:
         line, r = line if isinstance(line, tuple) else (line, WIRE_R)
+        mi = 0
+        if material_of is not None:
+            nm = material_of(r)
+            if nm not in names:
+                names.append(nm)
+            mi = names.index(nm)
         if len(P) + 8 * (len(line) - 1) > WIRE_VERTS_MAX:       # (8 vertices a segment; the rest left out)
             break
+        solid = solid_of is not None and solid_of(r)
+        run = 0.0
         for a, b in zip(line[:-1], line[1:]):
             d = b - a
             L = float(np.linalg.norm(d))
             if L < 1e-6:
                 continue
             d /= L
+            if solid:
+                ref = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.95 else np.array([1.0, 0.0, 0.0])
+                sd = np.cross(d, ref)
+                sd = sd / (np.linalg.norm(sd) or 1.0) * r
+                up = np.cross(sd, d)
+                up = up / (np.linalg.norm(up) or 1.0) * r
+                i = len(P)
+                corners = (-sd - up, sd - up, sd + up, -sd + up)
+                P += [a + c for c in corners] + [b + c for c in corners]
+                UV += [(k / 4.0, run / 2.0) for k in range(4)] + [(k / 4.0, (run + L) / 2.0) for k in range(4)]
+                for k in range(4):
+                    k1 = (k + 1) % 4
+                    T += [(i + k, i + 4 + k1, i + k1), (i + k, i + 4 + k, i + 4 + k1)]
+                TM += [mi] * 8
+                run += L
+                continue
             # (np.cross written out: the same products and differences, without its per-call cost)
             side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
+            if abs(d[0]) + abs(d[1]) < 1e-6:        # (a vertical wire: d x z is zero, the ribbons had no width and a
+                side = np.array([0.0, 1.0, 0.0])    # catenary's droppers were never drawn)
             side = side / (np.linalg.norm(side) or 1.0) * r
             up = np.array([side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2],
                            side[0] * d[1] - side[1] * d[0]])
@@ -195,11 +233,15 @@ def wire_mesh(lines, origin):
             for v in (side, up):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
+                UV += [(0.0, 0.0)] * 4
                 T += [(i, i + 1, i + 2), (i, i + 2, i + 3), (i, i + 2, i + 1), (i, i + 3, i + 2)]
+                TM += [mi] * 4
     if not P:
         return None
     P = np.array(P) - np.array([ox, oy, oz])
-    return P, np.array(T, np.int64), np.zeros((len(P), 2))
+    if material_of is not None:
+        return P, np.array(T, np.int64), np.array(UV, np.float64), names, np.array(TM, np.int64)
+    return P, np.array(T, np.int64), np.array(UV, np.float64)
 
 
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
@@ -208,7 +250,15 @@ G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
+# The Nordic countries' junctions (Sweden's rule, junction_controls, the same in its neighbours): a lower road gives way
+# to the road through (a give-way triangle), roads of one class meet by the right-hand rule (no sign), a stop sign only
+# where the map has one. Norway: trafikkreglene §7 (vikeplikt for kjørende fra høyre; skilt 202 where a road joins a
+# main road), a stop sign (206) only where the view is poor (GitHub #1064: Harstad's minor junctions had STOP signs,
+# two back to back on one island); Finland's, Denmark's and Iceland's road traffic acts the same.
+GIVE_WAY_COUNTRIES = {"SE", "NO", "FI", "DK", "IS", "AX", "FO"}
+YELLOW_B1_COUNTRIES = {"SE", "FI", "AX"}       # (their give-way triangle is yellow inside: G_B1; Norway's white)
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
+ARM_JOIN_M = 3.0            # m: a road end alone this close to a junction of others belongs to it (_arms)
 
 
 def _arms(roads):
@@ -226,6 +276,17 @@ def _arms(roads):
                 continue
             k = (round(float(p[0]) / JUNCTION_SNAP_M), round(float(p[1]) / JUNCTION_SNAP_M))
             ends.setdefault(k, []).append((fid, spec, d / L, p, start, length))
+    # an end left alone within ARM_JOIN_M of a junction of two or more ends joins it (GitHub #1062: Harstad's roundabout
+    # entries ended 1-2.5 m off the ring's nodes, each a junction of one, and got no give-way sign)
+    multi = [k for k, v in ends.items() if len(v) >= 2]
+    if multi:
+        mp = np.array([np.asarray(ends[k][0][3][:2], np.float64) for k in multi])
+        for k in [k for k, v in ends.items() if len(v) == 1]:
+            p = np.asarray(ends[k][0][3][:2], np.float64)
+            d = np.hypot(*(mp - p).T)
+            j = int(np.argmin(d))
+            if d[j] <= ARM_JOIN_M:
+                ends[multi[j]].append(ends.pop(k)[0])
     return ends
 
 
@@ -238,6 +299,53 @@ def _outbound(a):
     if len(a) < 5 or not a[1].oneway or not getattr(a[1], "dir", 0):
         return False
     return (a[1].dir > 0) == bool(a[4])
+
+
+# Road-class right of way at unsignalised junctions (PR #728 / #773, ProxyFirewall202; BNE_PRIORITY_STOPS=on, off by
+# default: it puts stop signs, stop lines and AI stops at many more junctions everywhere, in the country too, and is
+# not checked in game yet). Where the roads of a junction rank differently (PRIORITY_RANK), the road through it is its
+# two highest arms (as Sweden's _SE_RANK) and every lower arm coming in stops; the AI's approaches carry the same order
+# in their drivability (navgraph._priority_way). Mapped signals still win, the hierarchy wins over guessed ones (no
+# infrastructure data); Sweden keeps its own rules, Germany's kernel its own junctions (de_on). Left as before: a
+# junction with a link (ramps and merges: a stop there halted the AI on an on-ramp's merge), a motorway, or fewer than
+# three ranked arms (service roads, driveways, tracks are neither the road through nor stopped: no stop sign at
+# every driveway).
+PRIORITY_STOPS = os.environ.get("BNE_PRIORITY_STOPS", "off") == "on"
+PRIORITY_RANK = {"trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "unclassified": 5, "residential": 4,
+                 "living_street": 3}
+PRIORITY_DRIVABILITY = {3: 0.50, 4: 0.79, 5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98}
+
+
+def priority_rank(spec):
+    """The road's rank in the right-of-way hierarchy (PRIORITY_RANK), None outside it (links, motorways, service)."""
+    if getattr(spec, "link", False):
+        return None
+    return PRIORITY_RANK.get(str(getattr(spec, "cls", "")))
+
+
+def priority_stop_arms(arms, ring=None):
+    """The arms (fid, spec, u, point, at its start, length) that stop by road-class right of way (PRIORITY_STOPS)."""
+    if not PRIORITY_STOPS or len(arms) < 3:
+        return []
+    if ring and sum(1 for a in arms if a[0] in ring) >= 2:
+        return []
+    if any(getattr(a[1], "link", False) or a[1].cls == "motorway" for a in arms):
+        return []
+    ranked = [(a, r) for a in arms for r in (priority_rank(a[1]),) if r is not None]
+    if len(ranked) < 3:
+        return []
+    through = sorted((r for _, r in ranked), reverse=True)[1]
+    return [a for a, r in ranked if r < through and not _outbound(a)]
+
+
+def priority_controls(arms, ring=None, signals=None, country=None):
+    """priority_stop_arms where the hierarchy decides the junction: not in Sweden, not at a mapped signal."""
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
+        return []
+    stops = priority_stop_arms(arms, ring)
+    if stops and signals is not None and _is_signalled(arms, signals):
+        return []
+    return stops
 
 
 SIGNAL_NEAR_M = 25.0        # m past the junction's widest arm a mapped traffic signal may stand (OSM maps them at the
@@ -336,14 +444,15 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
     major = [a for a in arms if a[1].cls in MAJOR]
-    minor = [a for a in arms if a[1].cls in MINOR]
-    if _is_signalled(arms, signals):
+    minor = [a for a in arms if a[1].cls in MINOR and not _outbound(a)]    # (no stop sign on a one-way out of it)
+    stops = priority_controls(arms, ring, signals, country)
+    if not stops and _is_signalled(arms, signals):
         # one head per way in: none on a one-way arm leaving it, none on a short link to the next signalled
         # junction (a divided road crossing a street is two junctions 20 m apart: the user's report 2026-10-14,
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
-    if str(country or "").upper() == "SE":
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
         put = []
@@ -354,13 +463,17 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
             if what is not None and not _outbound(a):
                 put.append((a, what))
         return put
+    if stops:
+        return [(a, G_STOP) for a in stops]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
         # the stem: the arm least in line with another
         def straightest(a):
             return max(-float(a[2] @ b[2]) for b in arms if b is not a)
-        return [(min(arms, key=straightest), G_STOP)] if all(a[1].cls in MINOR for a in arms) else []
+        incoming = [a for a in arms if not _outbound(a)]
+        stem = min(incoming, key=straightest) if incoming else None
+        return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and stem is not None else []
     # the all-way coin flip: keyed on the roads that meet there (their map ids, sorted: the arms' order differs between
     # the road tiles and the road graph), the same from both and from every anchor (an 8 m cell of the junction in
     # the anchor's frame flipped junctions at a rebase: geotiles, 2026-10-29)
@@ -393,15 +506,18 @@ def _off_carriageways(c, u, right, along, out, lines, group=G_SIGNAL, base_z=0.0
                       yaw=None):
     """First deterministic spot whose full stock collider clears every carriageway (None if none fits).
 
-    ground(x, y) -> base z at the candidate, when supplied; otherwise base_z is the junction's support height.
+    ground(x, y) -> base z at the candidate, when supplied; otherwise base_z is the junction's support height. The
+    collider is the group's at its catalog height (COLLISION_BOXES: scale 1, as the rows are placed), 3.0 for a group
+    without one.
     """
     clearance = clearance if clearance is not None else RoadClearance(lines)
     yaw = round(_yaw(right[0], right[1]), 1) if yaw is None else yaw
+    height = COLLISION_BOXES[group][0] if group in COLLISION_BOXES else 3.0
     for da in (0.0, 2.0, 4.0, 6.0, 8.0, 10.0):
         for do in (0.0, 1.0, 2.0, 3.0):
             q = np.round(c + u * (along + da) + right * (out + do), 2)
             z = float(ground(q[0], q[1])) if ground is not None else float(base_z)
-            row = [group, q[0], q[1], round(z, 2), yaw, 1.0, 9.4 if group == G_SIGNAL else 3.0, 0.0]
+            row = [group, q[0], q[1], round(z, 2), yaw, 1.0, height, 0.0]
             if clearance.clear(row, SIGN_CLEAR_M):
                 return q
     return None
@@ -463,16 +579,23 @@ def give_way_arms(roads, signals=None, country=None, priority=None, stops=False)
 
 
 def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=None, country=None, priority=None,
-                   ground=None, clearance=None, sign_obstacles=None):
+                   ground=None, clearance=None, sign_obstacles=None, de_on=False, de_ctx=None, de_ctl=None):
     """Signals at the junctions with a mapped traffic signal (signals: mapped_signals'; None: at urban junctions of
     two or more major roads), stop signs at urban junctions
     of minor roads (the minor arms meeting a major road; the stem of a T; half the four-way ones, hashed).
     Each on the approach's right (approach_pose: a sign on its left where traffic drives on the left, a signal's
     boom on its right everywhere), at the junction's edge, facing the drivers who come in. decks: [(centreline (k, 3),
     half width)] of the bridge decks near (signal_spot).
-    Sweden: junction_controls' rules, and the give-way signs in the country too."""
+    Sweden: junction_controls' rules, and the give-way signs in the country too.
+    Germany (de_on, de_ctx: the tile's designs.context, and the junction's point inside Germany: designs.inside): the
+    kernel's signs (designs.controls, designs.junction_rows) in town and out of town, and none where it decides none
+    (right before left, a driveway, a ramp, a carriageway split, no junction); a 205 at a roundabout's entries,
+    signals as elsewhere. A junction's rows are the tile's whose box holds its point, wherever they stand. de_ctl:
+    designs.decide's decisions of the tile's junctions (made once for the signs and the paint, roads.build_tile); a
+    junction of three arms or more it has not is decided here."""
     x0, y0, x1, y1 = box
-    sweden = str(country or "").upper() == "SE"
+    sweden = str(country or "").upper() in GIVE_WAY_COUNTRIES      # (the Nordic rules: GIVE_WAY_COUNTRIES)
+    yellow_b1 = str(country or "").upper() in YELLOW_B1_COUNTRIES   # (Sweden's and Finland's yellow give-way sign)
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -484,34 +607,66 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         own_lines.setdefault(fid, []).append(pts)
     clearance = clearance if clearance is not None else RoadClearance(lines, decks, bounds=box)
     paved = arm_lines = None
+    german = de_on and de_ctx is not None
+    if german:
+        import designs
+        exits = designs.ring_exits(junctions, ring) if ring else {}
+
+    def spot(arm, group, side, yaw, back=0.0, wide=0.0):
+        """(x, y, z) of a sign of group on arm at the junction's edge (signal_spot; wide: half the junction's widest
+        arm, back: m farther out), its foot on the ground there; None where nothing is clear."""
+        fid, spec, u, c = arm[:4]
+        # Relocation along a slope uses that spot's height, not the junction node's (PR #629)
+        own_line = min(own_lines[fid], key=lambda pts: _seg_dist_min(c[:2], pts[:, :2]))
+
+        def support(x, y):
+            if ground is not None:
+                return float(np.asarray(ground(np.asarray([x]), np.asarray([y]))).reshape(-1)[0]) + curb_h
+            at = _project(own_line, np.array([[x, y]]))
+            return float(_at(own_line, at)[0][0, 2]) + curb_h
+        q = signal_spot(c, u, side, wide + back, spec.width / 2, lines, group, float(c[2] + curb_h), support,
+                        clearance, yaw)
+        return None if q is None else (round(float(q[0]), 2), round(float(q[1]), 2), round(support(q[0], q[1]), 2))
+
+    def decided(k, arms, p):
+        """(arms, controls' answer) of a junction inside Germany (de_ctl's where the tile decided it), else None."""
+        if de_ctl is not None and k in de_ctl:
+            return de_ctl[k] if de_ctl[k][1] is not None else None
+        if not designs.inside(de_ctx, p[0], p[1]):
+            return None
+        return arms, (designs.controls(arms, k, link_ok, ring, signals, country, priority, de_ctx) if len(arms) >= 3
+                      else [(a, 0, -1) for a in arms])      # (a node of two ways: only a priority_road=end's 307)
     for k, arms in junctions.items():
+        p = arms[0][3]
+        put = None
+        got = decided(k, arms, p) if german and (len(arms) >= 3 or designs.end_way_starts(arms, de_ctx)) \
+            and _owns(box, p[0], p[1]) else None
+        if got is not None:
+            arms_k, ctl = got                               # (de_ctl's arms: the ones its answer names)
+            ring_fid = next((a[0] for a in arms_k if a[0] in ring), None)
+            rows.extend(designs.junction_rows(arms_k, ctl, de_ctx, designs.in_town(arms_k, de_ctx), left_hand,
+                                              functools.partial(spot, wide=max(a[1].width for a in arms_k) / 2),
+                                              exits.get(ring_fid, ())))
+            put = [(a, what) for a, what, _ in ctl if what == G_SIGNAL]     # (signals: today's, below)
+            if not put:
+                continue
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         here = _controlled_here(arms, signals)
-        if len(arms) < 3 or not (on_ring or here or sweden):
+        if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
             continue
-        p = arms[0][3]
         if not (_owns(box, p[0], p[1])):
             continue
-        put = junction_controls(arms, k, link_ok, ring, signals, country, priority)
+        if put is None:
+            put = junction_controls(arms, k, link_ok, ring, signals, country, priority)
         if sweden and not here:
-            put = [p for p in put if p[1] != G_SIGNAL]      # (no signals guessed out here)
+            put = [c for c in put if c[1] != G_SIGNAL]      # (no signals guessed out here)
         if not put:
             continue
         wide = max(a[1].width for a in arms) / 2
         for arm, what in put:
-            fid, spec, u, c, *_ = arm
-            side, yaw = approach_pose(u, what, left_hand)
-            # Relocation along a slope uses that spot's height, not the junction node's (PR #629)
-            own_line = min(own_lines[fid], key=lambda pts: _seg_dist_min(c[:2], pts[:, :2]))
-
-            def support(x, y, own_line=own_line):
-                if ground is not None:
-                    return float(np.asarray(ground(np.asarray([x]), np.asarray([y]))).reshape(-1)[0]) + curb_h
-                at = _project(own_line, np.array([[x, y]]))
-                return float(_at(own_line, at)[0][0, 2]) + curb_h
-            b1 = sweden and what == G_YIELD
+            side, yaw = approach_pose(arm[2], what, left_hand)
+            b1 = yellow_b1 and what == G_YIELD
             group = G_B1 if b1 else what
-            z = None
             if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)
                 import signplacement
@@ -524,15 +679,13 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
                         if len(ap) >= 2:
                             arm_lines.setdefault(afid, []).append(np.asarray(ap))
                 line = signplacement.arm_line(arm_lines, arm)
-                q, yaw, z = _visible_sign_spot(line, spec, wide, what, left_hand, paved, sign_obstacles, curb_h)
+                q, yaw, z = _visible_sign_spot(line, arm[1], wide, what, left_hand, paved, sign_obstacles, curb_h)
+                at = None if q is None else (round(float(q[0]), 2), round(float(q[1]), 2), round(float(z), 2))
             else:
-                q = signal_spot(c, u, side, wide, spec.width / 2, lines, group, float(c[2] + curb_h), support, clearance,
-                                yaw)
-            if q is None or not (x0 - 20 <= q[0] < x1 + 20 and y0 - 20 <= q[1] < y1 + 20):
+                at = spot(arm, group, side, yaw, wide=wide)
+            if at is None or not (x0 - 20 <= at[0] < x1 + 20 and y0 - 20 <= at[1] < y1 + 20):
                 continue
-            rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2),
-                         round(float(z) if z is not None else support(q[0], q[1]), 2), yaw, 1.0,
-                         B1_TOP if b1 else 9.4 if what == G_SIGNAL else 3.0, 0.0])
+            rows.append([group, *at, yaw, 1.0, B1_TOP if b1 else 9.4 if what == G_SIGNAL else 3.0, 0.0])
     return rows
 
 
@@ -596,6 +749,16 @@ G_LENS = "lamplens"
 # and a glow at each (tools/build_lamp_glow.py: a ball growing with distance, drawn at night only, so lamps show far off)
 G_GLOW = "lampglow"
 LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511), "fr_lantern": (0.0, 0.0, 4.67)}
+for _g in citylamps.GROUPS:         # the local lamp posts (citylamps.py): the lens under their luminaire
+    LAMP_HEADS[_g] = citylamps.HEAD
+# The mapped OpenStreetMap lamps' own stock posts (worldprops._street_lamps, by lamp_mount; PR #981 by wyo-backroads):
+# each head (x, y, z in the model's frame, the lens's yaw relative to the post's), two for a double arm.
+MAPPED_LAMP_HEADS = {
+    "streetlight_straight_mast": ((-.00029, -.41864, 12.0477, -90.),),
+    "streetlight_double_arm": ((4.9, 0., 12.65, 0.), (-4.9, 0., 12.65, 180.)),
+    "streetlight_high_mast": ((0., 0., 17.9326, 0.),),
+}
+G_HIGH_MAST_LENS = "high_mast_light"      # (nightlights.lua: a broader, brighter downward light)
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
@@ -624,7 +787,8 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # Handbook 2012 / AASHTO: luminaires at the gores and the ramp terminals only; every rural
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
-LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
+LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4, **{g: citylamps.HEIGHT for g in citylamps.GROUPS},
+         "streetlight_straight_mast": 12.25, "streetlight_double_arm": 13.76, "streetlight_high_mast": 18.03}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
@@ -636,6 +800,8 @@ BENCH_YAW = 90.0            # the bench model's front is its local +y (the yaw p
 # outwards to 1 mm. Lamps/poles split at the first overhead member, not at an invented vehicle-height cut:
 # the complete collider is covered while their legal high arms can overhang a carriageway.
 # STOP/give-way/polelamp have no Colmesh: use all transformed visual bounds (matching the native ObjectBox).
+# Germany's junction signs (the mod's own meshes): designsigns.BOXES, one each, its widest panel from the face's
+# front to the post's back, the post's foot to its top.
 COLLISION_BOXES = {
     G_LAMP: (9.0, ((-0.203, -0.200, -0.420, 0.144, 0.201, 7.124),
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
@@ -654,6 +820,8 @@ COLLISION_BOXES = {
     "hvpole": (9.96, ((-0.162, -0.162, -0.083, 0.162, 0.162, 5.803),
                       (-0.731, -0.189, 5.803, 0.769, 0.162, 9.948))),
 }
+COLLISION_BOXES.update(citylamps.COLLISION_BOXES)
+COLLISION_BOXES.update(designsigns.BOXES)
 ROAD_PROP_GAP_M = 0.15
 
 
@@ -812,42 +980,57 @@ class RoadClearance:
 
 
 def lamp_lenses(rows):
-    """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under the head of every lamp row (LAMP_HEADS; its scale: the row's
-    height over the catalog's, 1 for both), and a G_GLOW row at the same place."""
+    """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
+    double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
+    place. A lantern's lens is its own group (fr_lantern_light), a high mast's G_HIGH_MAST_LENS."""
     out = []
     for r in rows:
-        head = LAMP_HEADS.get(r[0])
-        if head is None:
-            continue
+        heads = MAPPED_LAMP_HEADS.get(r[0])
+        if heads is None:
+            head = LAMP_HEADS.get(r[0])
+            if head is None:
+                continue
+            heads = (head,)
         a = math.radians(r[4])
         c, s_ = math.cos(a), math.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
-        hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
-        lens = ["fr_lantern_light" if r[0] == "fr_lantern" else G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
-                round(r[3] + hz - LENS_DROP_M, 2), r[4], 1.0, 1.0, r[7]]
-        out += [lens, [G_GLOW] + lens[1:]]
+        group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
+                 else G_LENS)
+        for head in heads:
+            hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
+            yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
+            lens = [group, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
+                    round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, 1.0, r[7]]
+            out += [lens, [G_GLOW] + lens[1:]]
     return out
+
+
+def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
+    """The ids of the roads (build_tile's (fid, spec, centreline (k, 3), lon)) with at least `least` of points (n, 2)
+    within their half width + extra_m of their centreline (earthfast points_along): mapped poles or lamps along them."""
+    points = np.asarray(points if points is not None else (), np.float64).reshape(-1, 2)
+    if len(points) < max(least, 1) or not roads:
+        return set()
+    lines = [np.asarray(pts, np.float64)[:, :2] for _, _, pts, _ in roads]
+    off = np.zeros(len(lines) + 1, np.int64)
+    off[1:] = np.cumsum([len(ln) for ln in lines])
+    import fast
+    fast.require(199, "mapped points along roads")
+    count = fast._ef.points_along(np.ascontiguousarray(points), np.ascontiguousarray(np.concatenate(lines)), off,
+                                  np.array([sp.width / 2 + extra_m for _, sp, _, _ in roads], np.float64))
+    return {roads[i][0] for i in np.flatnonzero(count >= least)}
 
 
 def _stations(run, line, spacing, phase, clear, side):
-    """(point (3,), away-from-the-road unit (2,)) on a sidewalk run at the road's stations phase + k spacing
-    (arc length along the road line, so every tile and anchor gets the same ones), END_CLEAR_M from the run's
-    ends."""
-    s_run = _project(line, run[:, :2])
-    lo, hi = min(s_run[0], s_run[-1]), max(s_run[0], s_run[-1])
-    k0, k1 = math.ceil((lo - phase) / spacing), math.floor((hi - phase) / spacing)
-    if k1 < k0:
-        return []
-    p_road, _ = _at(line, phase + spacing * np.arange(k0, k1 + 1))
-    s_on_run = _project(run, p_road[:, :2])
-    L = _arclen(run)[-1]
-    out = []
-    for s in s_on_run:
-        if s < clear or s > L - clear:
-            continue
-        p, d = _at(run, np.array([s]))
-        out.append((p[0], np.array([-d[0][1], d[0][0]]) * side))   # away from the road (sidewalks.run_geometry)
-    return out
+    """[(point (3,), away-from-the-road unit (2,), arc length (the point's _project on the road line))] on a sidewalk
+    run at the road's stations phase + k spacing (arc length along the road line, so every tile and anchor gets the
+    same ones), END_CLEAR_M from the run's ends (earthfast furniture_stations: one call per run)."""
+    import fast
+    fast.require(188, "furniture stations")
+    P, O, S = fast._ef.furniture_stations(np.ascontiguousarray(run, np.float64),
+                                          np.ascontiguousarray(line, np.float64), float(spacing), float(phase),
+                                          float(clear), float(side))
+    return list(zip(P, O, S.tolist()))
 
 
 DECK_HEADROOM_M = 0.5      # m a prop's top stays below a bridge deck over it
@@ -930,7 +1113,8 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
-          sign_obstacles=None, defer_gore=False):
+          sign_obstacles=None, defer_gore=False, obstacles=(), mapped_poles=None, de_on=False, de_ctx=None,
+          de_ctl=None, mapped_lamps=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -941,22 +1125,45 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
     None: none of those. Lighting and mapped infrastructure stay independent. pole_profile: optional
     poleprofiles profile (PR #505); changes the pole shape and its wire attachment geometry, never its placement or
-    lamp spacing. pole_frame: ENU frame for the position-based country profiles."""
+    lamp spacing. pole_frame: ENU frame for the position-based country profiles. mapped_poles: (n, 2) ENU points of
+    the mapped poles mappedpoles.py draws (road_points): a road with MAPPED_ALONG_MIN of them along it guesses no
+    utility poles (its lamps on posts in town, as where the lines are buried); None: none mapped. de_on, de_ctx,
+    de_ctl: Germany's junction signs (junction_props). mapped_lamps: the rows of the mapped street lamps on and near the
+    tile (worldprops.tile_props' lamps): the tile's own drawn as mapped (where the local posts stand, the default ones
+    become those), and a road with MAPPED_ALONG_MIN of them along it guesses no lamps (lit=no)."""
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
     lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    mapped_lamps = list(mapped_lamps or ())
+    # (the mapped lamps stand instead of guessed ones along their road, which keeps its utility poles, without their
+    # lamps; the other roads keep their rules)
+    lamps_mapped = roads_with_points(roads, [r[1:3] for r in mapped_lamps], MAPPED_ALONG_M)
+
+    def lamp_ok(fid):           # may this road get guessed lamps (posts or on its poles)?
+        return lighting.get(fid) != "no" and fid not in lamps_mapped
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
+    poles_along = roads_with_points(roads, mapped_poles, MAPPED_ALONG_M)
+
+    def mapped_along(fid):      # are there mapped poles along this road (mappedpoles.py draws those instead)?
+        return fid in poles_along
 
     def overhead(fid):          # does this road's line run on poles (not buried)?
         import franceroads
         sp = by_fid.get(fid, (None, None))[0]
         if sp is not None and franceroads.enabled(sp) and not sp.urban:
             return False
+        if mapped_along(fid):
+            return False
         return _h01(fid, "buried") >= buried
     clearance = clearance if clearance is not None else RoadClearance(
         [(spec.width / 2, pts) for _, spec, pts, _ in roads], decks, bounds=box)
+    import fast
+    bed = fast.Others(list(obstacles)) if obstacles else None
+
+    def on_bed(q):              # is q on (or by) an obstacle's ground?
+        return bed is not None and not bed.clear(np.array([q[0], q[1]]), None, CLEAR_OTHER_M)
     rows = []
     lit = set()
     for wk in walks:
@@ -991,11 +1198,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             return _h01(fid, side, k, group, "development") < weight
 
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
-            for p, out in _stations(run, line, spacing, phase, clear, side):
+            for p, out, s_line in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):
                     if optional:
-                        k = int(round((float(_project(line, p[None, :2])[0]) - phase) / spacing))
+                        k = int(round((s_line - phase) / spacing))
                         if not decorated(group, p, out, k):
                             continue
                     chosen, height_ = group, height
@@ -1013,8 +1220,10 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 lit.add(fid)
                 run_poles = []
                 ph = _h01(fid, "tphase") * TOWN_POLE_SPACING
-                for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
+                for p, out, _ in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
+                    if on_bed(q):
+                        continue
                     yaw = _yaw(out[0], out[1])
                     pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
                     pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
@@ -1028,7 +1237,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     if _owns(box, q[0], q[1]):
                         rows.append(pole)
                         k = int(round((float(_project(line, q[None])[0]) - ph) / TOWN_POLE_SPACING))
-                        if lighting.get(fid) != "no" and pole_lamp(spec.cls, k, region):
+                        if lamp_ok(fid) and pole_lamp(spec.cls, k, region):
                             rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                          round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
                 if wires is not None and len(run_poles) > 1:
@@ -1038,20 +1247,21 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             spacing, both = rule
             lamp_side = 1 if _h01(fid, "side") < 0.5 else -1
             if both or side == lamp_side:
-                lit.add(fid)
+                lit.add(fid)            # (a mapped-lamp road too: lit by its own, nothing at its edge)
                 phase = _h01(fid, "phase") * spacing + (spacing / 2 if (both and side < 0) else 0.0)
-                put(G_LAMP, spacing, phase, LAMP_CURB_M, 9.0, lambda out: _yaw(-out[0], -out[1]))
+                if fid not in lamps_mapped:
+                    put(G_LAMP, spacing, phase, LAMP_CURB_M, 9.0, lambda out: _yaw(-out[0], -out[1]))
         if (development is not None or spec.urban) and spec.cls in STREET_TREE_CLASSES \
                 and _h01(fid, "trees") < STREET_TREE_SHARE:
             # street trees in pits along the curb (the photos' dense streets have rows of them; the canopy
             # model has few there): small broadleaves, both sides, clear of the junctions
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
-            for p, out in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
+            for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
                 if _owns(box, q[0], q[1]):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
-                    k = int(round((float(_project(line, p[None, :2])[0]) - tph) / STREET_TREE_SPACING))
+                    k = int(round((s_line - tph) / STREET_TREE_SPACING))
                     if not decorated(G_STREET_TREE, p, out, k):
                         continue
                     h = 6.5 + 3.5 * _h01(fid, side, k, "th")
@@ -1069,7 +1279,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             put(G_BIN, BIN_SPACING, _h01(fid, side, "bin") * BIN_SPACING, 0.7, 1.1,
                 lambda out: _yaw(-out[0], -out[1]), optional=True)
     rows.extend(junction_props(roads, box, curb_h, left_hand, decks, signals, country, priority, ground, clearance,
-                                sign_obstacles=sign_obstacles))
+                                sign_obstacles=sign_obstacles, de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl))
     for fid, spec, line, _ in roads:
         if fid in lit or len(line) < 2:
             continue
@@ -1082,7 +1292,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         highway = highway and lamps
         poles = not highway and overhead(fid) and (lamps or (not spec.urban and spec.cls in POLE_CLASSES)) \
             and not getattr(spec, "mountain", False)        # (a pass road's: none, as in town above)
-        if not (lamps or poles):
+        drawn = lamps and fid not in lamps_mapped     # (its guessed lamps; a mapped-lamp road keeps its poles' places)
+        if not (drawn or poles):
             continue
         side = 1 if _h01(fid, "pside") < 0.5 else -1
         if highway and spec.dir:            # a one-way carriageway: its outer edge (the drivers' right, left-hand: left)
@@ -1106,8 +1317,13 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             n = np.array([-d[1], d[0]]) * side
             q = p[:2] + n * (spec.width / 2 + (POLE_OFF_M if poles else LAMP_EDGE_M))
             inside = _owns(box, q[0], q[1])
+            if on_bed(q):
+                if len(run) > 1 and wires is not None:
+                    wires.extend(_own_spans(run, box))
+                run = []
+                continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
-                if inside:
+                if inside and drawn:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link
                          else LAMP_H[G_LAMP])
                     group = G_LAMP
@@ -1129,7 +1345,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             run.append((pole[1], pole[2], pole[3], pole[4], pole_style))
             if inside:
                 rows.append(pole)
-                if lamps and pole_lamp(spec.cls, k, region):
+                if drawn and pole_lamp(spec.cls, k, region):
                     rows.append([G_POLELAMP, round(float(q[0]), 2), round(float(q[1]), 2),
                                  round(float(p[2]) + POLE_LAMP_Z, 2), round(yaw, 1), 1.0, 1.1, 0.0])
         if len(run) > 1 and wires is not None:
@@ -1150,6 +1366,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             import frgore
             rows.extend(frgore.place(pole_frame,roads,box,country_at,
                                     ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
+    # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
+    rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
+    rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 

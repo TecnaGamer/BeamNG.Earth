@@ -254,6 +254,35 @@ class RacewayTest(unittest.TestCase):
         self.assertTrue(roads.bridge_specs(both)[2] is not None, "a raceway bridge")
         self.assertEqual(len(both.parts(3)[0][0]), 3)
 
+    def test_a_facility_outline_round_its_track_is_not_a_track(self):
+        """GitHub #1010: Tsukuba Circuit's site outline (leisure=sports_centre, also highway=raceway) round its track."""
+        def ring(lon0, lat0, w, h, n=8):
+            t = np.linspace(0, 2 * np.pi, n + 1)
+            return np.c_[lon0 + w * np.cos(t), lat0 + h * np.sin(t)]
+        site, track = ring(139.92, 36.15, 0.006, 0.004), ring(139.92, 36.15, 0.003, 0.002, 40)
+        self.assertTrue(osmtags.is_outline(site, [track]))
+        self.assertFalse(osmtags.is_outline(site, []), "nothing inside: a loop of its own")
+        self.assertFalse(osmtags.is_outline(site[:-2], [track]), "open: a track")
+        self.assertFalse(osmtags.is_outline(track, [site]), "the track is inside, not round")
+        # an oval's infield course leaves the oval and comes back to it: the oval stays
+        infield = np.r_[site[2:3], [[139.92, 36.15]], site[4:5]]
+        self.assertFalse(osmtags.is_outline(site, [infield]))
+        near = ring(139.92, 36.15, 0.006 - 0.00003, 0.004 - 0.00003)      # (~3 m inside the ring all round)
+        self.assertFalse(osmtags.is_outline(site, [near]), "a pit lane along it")
+        # a kart course's loop round its own links, one of them joined to nothing (Tsukuba's Course 1000): a track
+        link = np.array([[139.9195, 36.1495], [139.9200, 36.1497]])
+        self.assertTrue(osmtags.is_outline(site, [track, link]), "the site round its tracks")
+        self.assertFalse(osmtags.is_outline(site, [link, infield]), "a loop with a joined link is a track")
+
+    def test_only_an_untagged_raceway_may_be_an_outline(self):
+        names = list(osmtags.COLUMNS)
+
+        def row(**tags):
+            return (1, True, False, 10, *[tags.get(c) for c in names])
+        self.assertTrue(osmtags._maybe_outline(row(name="Tsukuba Circuit")))
+        for tags in ({"osm_surface": "asphalt"}, {"width": 10.0}, {"lanes": 2}, {"osm_oneway": "yes"}):
+            self.assertFalse(osmtags._maybe_outline(row(**tags)), tags)
+
     def test_busway_is_a_paved_carriageway_and_sorts_before_a_raceway(self):
         import mapgeom
         ways = [{"id": 1433304574, "highway": "busway", "name": "Zuidtangent", "surface": "asphalt",
@@ -267,6 +296,16 @@ class RacewayTest(unittest.TestCase):
         self.assertEqual(sp[1].kind, "paved")
         self.assertAlmostEqual(sp[1].width, 7.0)
         self.assertTrue(sp[1].oneway)
+        self.assertIsNone(sp[1].lanes, "no mapped count: the 7 m is not two lanes")
+        line = np.array([[0.0, 0, 0], [80.0, 0, 0]])
+        kinds = {lk.get("kind") for lk, _, _ in roads.extras(sp[1], line, 4.67, country="NL")}
+        self.assertIn("edge", kinds)
+        self.assertNotIn("centre", kinds, "one-way: no centre line")
+        self.assertNotIn("lane", kinds, "no invented dash")
+        mapped = osmtags.busway_features([{"id": 1, "lanes": "2", "oneway": "yes",
+                                           "coords": np.array([[4.67, 52.36], [4.66, 52.36]])}])
+        self.assertEqual(mapped.attrs["osm_lanes"][0], 2)
+        self.assertEqual(roads.road_specs(mapped)[0].lanes, 2)
         self.assertTrue(roads.tunnel_specs(bw)[0] is not None, "the canal crossing is a tunnel")
         self.assertTrue(roads.road_specs(bw)[0] is None, "a tunnel its whole length is not also a ground road")
         base = features([[(0, 0), (100, 0)]], ["residential"])

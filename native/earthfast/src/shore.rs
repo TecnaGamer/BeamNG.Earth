@@ -29,7 +29,7 @@ pub fn shore_steps<'py>(py: Python<'py>, water: PyReadonlyArray2<'py, bool>, kma
             }
         }
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let mut out = vec![0i16; n * m];
         let four = [1isize, -1, wp as isize, -(wp as isize)];
         let diag = [wp as isize + 1, wp as isize - 1, -(wp as isize) + 1, -(wp as isize) - 1];
@@ -114,7 +114,7 @@ pub fn carve_segments(py: Python<'_>, q: PyReadonlyArray2<'_, f64>, hw: PyReadon
     let mut drawn = drawn.as_array_mut();
     let n = depth.shape()[0] as i64;
     let nc = depth.shape()[1] as i64;
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..q.shape()[0].saturating_sub(1) {
             let (a0, a1, b0, b1) = (q[[k, 0]], q[[k, 1]], q[[k + 1, 0]], q[[k + 1, 1]]);
             let reach = hw[k].max(hw[k + 1]) + bank;

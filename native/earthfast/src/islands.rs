@@ -16,7 +16,7 @@ pub fn road_cycles<'py>(py: Python<'py>, a: PyReadonlyArray1<'py, i64>, b: PyRea
                         length: PyReadonlyArray1<'py, f64>, max_edges: usize, max_loop: f64)
                         -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<bool>>) {
     let (a, b, length) = (a.as_array(), b.as_array(), length.as_array());
-    let (off, edge, fwd) = py.allow_threads(|| {
+    let (off, edge, fwd) = py.detach(|| {
         let n = a.len();
         let mut adj: HashMap<i64, Vec<usize>> = HashMap::new();
         for k in 0..n {

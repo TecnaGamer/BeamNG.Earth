@@ -178,6 +178,24 @@ class GameStillRunning(unittest.TestCase):
         self.assertFalse(launcher.game_still_running(alive=lambda: False, sleep=lambda s: None))
 
 
+class WindowlessGame(unittest.TestCase):
+    """GitHub #1038: a game process hanging in the background (no window) kept the app saying "already running"."""
+
+    def test_no_window_now_and_later_is_stuck(self):
+        self.assertTrue(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: False, sleep=lambda s: None))
+
+    def test_a_window_or_no_game_is_not(self):
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: True, sleep=lambda s: None))
+        seq = iter([False, True])           # (its window came while it started)
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: next(seq),
+                                                  sleep=lambda s: None))
+        self.assertIsNone(launcher.windowless_game(pids_fn=lambda: [], window_fn=lambda p: False, sleep=lambda s: None))
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: None, sleep=lambda s: None))
+
+    def test_not_windows(self):
+        self.assertIsNone(launcher.windows_visible_window([1]) if not launcher.IS_WIN else None)
+
+
 class Popup(unittest.TestCase):
     def test_linux_zenity_yes_no_and_none_installed(self):
         run = lambda code, err=b"": (lambda cmd, timeout, **kw: mock.Mock(returncode=code, stderr=err))

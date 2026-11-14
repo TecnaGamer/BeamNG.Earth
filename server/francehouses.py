@@ -63,7 +63,8 @@ def eligible(spec, attrs):
         return False
     if spec.shop or spec.steeple or spec.deck or (attrs.get("min_height") or 0) > .5:
         return False
-    if str(attrs.get("roof_shape") or "").lower() not in {"", "gabled", "hipped", "half-hipped", "pyramidal", "flat"}:
+    if str(attrs.get("roof_shape") or "").lower().replace("_", "-") not in {"", "gabled", "hipped", "half-hipped",
+                                                                          "pyramidal", "flat"}:
         return False
     if str(attrs.get("facade_material") or "").lower() in {"glass", "metal", "steel", "aluminium", "copper"}:
         return False
@@ -133,7 +134,7 @@ def adapt(spec, attrs, lat, lon):
     if family == "wood":
         mat, color = "wood", pick(WOOD, "wood")
     color = b.parse_color(attrs.get("facade_color")) or color
-    roof_given = str(attrs.get("roof_shape") or "").lower()
+    roof_given = str(attrs.get("roof_shape") or "").lower().replace("_", "-")
     roof = roof_given or ("half-hipped" if family == "halfhip" else "hipped" if family == "render" and h("hip") < .18 else "gabled")
     if roof == "pyramidal":
         roof = "hipped"

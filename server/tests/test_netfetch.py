@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dem as demmod  # noqa: E402
 import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
+import missindex  # noqa: E402
 import gravity  # noqa: E402
 import netfetch as nf  # noqa: E402
 import test_server  # noqa: E402
@@ -647,26 +648,36 @@ class DemFailoverTest(unittest.TestCase):
         d, f, clock, tr = self.dem({MT: [(404, {}, b"", 0)], "amazonaws": [(200, {}, terrarium_png(7.0, 256), 0)]})
         d._download(demmod.MAPTERHORN, 10, 1, 2)
         miss = os.path.join(self.tmp.name, "mapterhorn", "10", "1", "2.404")
-        self.assertTrue(os.path.exists(miss))
+        self.assertTrue(missindex.known(miss))
+        self.assertFalse(os.path.exists(miss), "a line in the column's miss index, no marker file")
         n = len(tr.calls)
         self.assertIsNone(d._download(demmod.MAPTERHORN, 10, 1, 2))     # remembered
         self.assertEqual(len(tr.calls), n)
         old = clock() - nf.POLICIES[MT].miss_ttl - 60      # the fetcher's wall clock (T0), not the real one
-        os.utime(miss, (old, old))                              # 90 days old (or an old-style marker)
+        missindex.record(miss, t=old)                           # 90 days old
         tr.script[MT] = [(200, {}, mt, 0)]
         self.assertEqual(d._download(demmod.MAPTERHORN, 10, 1, 2), mt)  # asked again: Mapterhorn has lidar now
-        self.assertFalse(os.path.exists(miss))
-        # AWS markers never expire
+        self.assertFalse(missindex.known(miss))
+        # an old-style marker file works the same way, and goes when the data arrives
+        old_miss = os.path.join(self.tmp.name, "mapterhorn", "10", "3", "3.404")
+        os.makedirs(os.path.dirname(old_miss))
+        open(old_miss, "wb").close()
+        n = len(tr.calls)
+        self.assertIsNone(d._download(demmod.MAPTERHORN, 10, 3, 3))
+        self.assertEqual(len(tr.calls), n, "a fresh old marker: remembered")
+        os.utime(old_miss, (old, old))
+        tr.script[MT] = [(200, {}, mt, 0)]
+        self.assertEqual(d._download(demmod.MAPTERHORN, 10, 3, 3), mt)
+        self.assertFalse(os.path.exists(old_miss))
+        # AWS misses never expire
         aws_miss = os.path.join(self.tmp.name, "aws-terrarium", "11", "0", "0.404")
-        os.makedirs(os.path.dirname(aws_miss))
-        open(aws_miss, "wb").close()
-        os.utime(aws_miss, (0, 0))
+        missindex.record(aws_miss, t=1)
         self.assertIsNone(d._download(demmod.AWS, 11, 0, 0))
-        # 400: an error, no marker
+        # 400: an error, no miss remembered
         tr.script[MT] = [(400, {}, b"", 0)]
         with self.assertRaises(nf.FetchFailed):
             d._download(demmod.MAPTERHORN, 10, 5, 5)
-        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "mapterhorn", "10", "5", "5.404")))
+        self.assertFalse(missindex.known(os.path.join(self.tmp.name, "mapterhorn", "10", "5", "5.404")))
 
     def test_undecodable_tile_fails_over_and_is_not_kept(self):
         """A 200 whose body is no image (empty, or cut short where the server sent no length): the tile
@@ -985,10 +996,15 @@ class OfflineTest(unittest.TestCase):
             m = os.path.join(d, "x.404")
             open(m, "wb").close()
             os.utime(m, (0, 0))
+            t = os.path.join(d, "16", "1", "2.404")         # a tile's miss (missindex)
+            missindex.record(t, t=1)
             self.assertFalse(f.miss_alive(m, url(USGS)))
+            self.assertFalse(f.miss_alive(t, url(USGS)))
             f.host(USGS).breaker.trip(60.0)
             self.assertTrue(f.miss_alive(m, url(USGS)))
+            self.assertTrue(f.miss_alive(t, url(USGS)))
             self.assertFalse(f.miss_alive(m + "-none", url(USGS)))
+            self.assertFalse(f.miss_alive(os.path.join(d, "16", "1", "3.404"), url(USGS)))
 
     def test_cli_flag(self):
         got = []

@@ -88,7 +88,7 @@ def build(frame, elev, box, prefix, step=STEP_M):
             j0, j1 = int(round((py0 - box[1]) / step)), int(round((py1 - box[1]) / step))
             pos, tris = mesh(xs[i0:i1 + 1], ys[j0:j1 + 1], z[j0:j1 + 1, i0:i1 + 1], (cx, cy))
             # (atomic through staging: whole or not at all, the game may load it at once; read once on Windows, warm)
-            cdae.write(path, pos, tris, collision_only=True, material=MATERIAL)
+            cdae.write(path, pos, tris, collision_only=True, material=MATERIAL, close=False)   # (terrain)
         out.append((path, (cx, cy)))
         total += per_piece
     return out, total

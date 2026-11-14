@@ -61,6 +61,13 @@ class FootbridgeTest(unittest.TestCase):
         street = (((130.0, 0.0), (130.0, 256.0)), "residential")
         self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [bridge(extra=[street])], flat))
 
+    def test_under_a_model_bridge_left_out(self):
+        """GitHub #1071: Perth's Elizabeth Quay footbridge is a 3dmr model; the walkway's own deck stood in it."""
+        everywhere = lambda xy: np.ones(len(xy), bool)          # noqa: E731
+        nowhere = lambda xy: np.zeros(len(xy), bool)            # noqa: E731
+        self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [bridge()], valley, under=everywhere))
+        self.assertIsNotNone(railways.tile_mesh(FRAME, 0, 0, [bridge()], valley, under=nowhere))
+
     def test_on_the_ground_or_switched_off_nothing(self):
         ground_path = features([[(100.0, 128.0), (160.0, 128.0)]], ["footway"], subtypes=["road"])
         self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [ground_path], valley))

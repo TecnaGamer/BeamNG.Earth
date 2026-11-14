@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+import unittest.mock
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -270,6 +271,17 @@ class GuardrailForestTest(unittest.TestCase):
             self.assertAlmostEqual(row[2], 0.0, delta=0.05)
             self.assertAlmostEqual(row[3], 20.0, delta=0.05)
 
+    def test_a_median_on_a_deck_s_lanes_goes_to_the_gap_between_the_decks(self):
+        """GitHub #1025: the S7's viaducts, a median barrier mapped where a drawn deck reaches over it, 1 m on its lanes:
+        moved to the middle of the gap between the decks' edges (y -2..2: 0), at deck height."""
+        decks = [{"n": [[0.0, -6.0, 20.0], [100.0, -6.0, 20.0]], "w": 8.0},
+                 {"n": [[0.0, 6.0, 20.0], [100.0, 6.0, 20.0]], "w": 8.0}]
+        rows = self.rows_for([[10.0, -3.0], [90.0, -3.0]], 12.0, decks)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertAlmostEqual(row[2], 0.0, delta=0.05)
+            self.assertAlmostEqual(row[3], 20.0, delta=0.05)
+
     def test_rail_hanging_beside_the_deck_is_dropped_but_a_fill_rail_stays(self):
         decks, parapets = self.deck_fixture()
         # 2.5 m past the edge with the ground 8 m under the deck: the bridge's own rail, mapped off the edge.
@@ -304,6 +316,34 @@ class GuardrailForestTest(unittest.TestCase):
         built = [r for r in rows if r[1] < 100.0 and r[2] > 0]
         self.assertAlmostEqual(max(r[1] for r in built) + guardrails.MODULE_LENGTH_M / 2, 100.0, delta=0.6)
         self.assertLess(first[1] - 1.5 - 100.0, 1.5)
+
+    def test_an_approach_rail_that_stops_short_of_the_deck_is_run_on_to_the_bridge_rail(self):
+        """OSM's approach rails end a few metres before the bridge (Jüri's overpass: 7 m of nothing, and the end 2 m
+        outside the bridge rail's line). The rail runs on to the deck's end; BNE_RAIL_GAP=off leaves the gap."""
+        decks, parapets = self.deck_fixture()
+        line = guardrails.BRIDGE_EDGE_OFFSET_M + 4.0
+        mapped = [[106.0, 7.0], [160.0, 9.0]]           # (starts 6 m past the deck's end, 2.8 m off the rail's line)
+
+        def approach(rows):
+            return sorted((r for r in rows if r[1] > 100.0 and r[2] > 0), key=lambda r: r[1])
+
+        rows = self.rows_for(mapped, 14.0, decks, parapets, bridge_rails=True)
+        got = approach(rows)
+        self.assertTrue(got)
+        self.assertLess(got[0][1] - 100.0, guardrails.MODULE_LENGTH_M)      # the first module begins at the deck's end
+        self.assertAlmostEqual(got[0][2], line, delta=0.3)                  # on the bridge rail's line there
+        self.assertNotIn(1, [r[0] for r in got])                            # no cap where it joins the bridge's rail
+        for a, b in zip(got, got[1:]):                                      # a continuous chain, no gap on the way
+            self.assertLess(b[1] - a[1], guardrails.MODULE_STEP_M + 0.6)
+        with unittest.mock.patch.object(guardrails, "GAP_CLOSE_ON", False):
+            off = approach(self.rows_for(mapped, 14.0, decks, parapets, bridge_rails=True))
+        self.assertGreater(off[0][1] - 100.0, 5.0)                          # as before: it starts where it was mapped
+        self.assertIn(1, [r[0] for r in off])
+        # Not run on: ends far short of the deck, or standing well away from its rail
+        for far in ([[120.0, 6.0], [160.0, 7.0]], [[106.0, 11.0], [160.0, 12.0]]):
+            with self.subTest(mapped=far):
+                got = approach(self.rows_for(far, 14.0, decks, parapets, bridge_rails=True))
+                self.assertGreater(got[0][1] - 100.0, guardrails.GAP_CLOSE_M - 3.0 if far[0][0] > 110 else 5.0)
 
     def test_approach_rail_on_a_fill_stands_at_the_road_level_not_on_the_slope(self):
         deck = {"n": [[0.0, 0.0, 20.0], [100.0, 0.0, 26.0]], "w": 8.0}
@@ -482,6 +522,22 @@ class GuardrailForestTest(unittest.TestCase):
                 self.assertTrue(beside)
                 for row in beside:
                     self.assertAlmostEqual(row[2], 8.0, delta=0.05)
+
+    def test_a_median_barrier_on_a_lane_goes_to_the_gap_between_the_carriageways(self):
+        """GitHub #1025 (the S7 at Gdansk): a jersey barrier mapped on the median line, the drawn carriageways reaching
+        over it, stood 1.2-1.6 m into a lane. It goes to the middle of the gap between their edges; one already in
+        the gap stays where it was mapped."""
+        # two 12 m carriageways 15 m apart: edges at y=6 and y=9, the gap's middle y=7.5
+        roads_ = [self.road([[0.0, 0.0], [100.0, 0.0]], width=12.0),
+                  self.road([[0.0, 15.0], [100.0, 15.0]], width=12.0)]
+        on_lane = self._on_road("jersey_barrier", [[10.0, 5.0], [90.0, 5.0]], roads_)
+        self.assertTrue(on_lane)
+        for row in on_lane:
+            self.assertAlmostEqual(row[2], 7.5, delta=0.05)
+        in_gap = self._on_road("jersey_barrier", [[10.0, 8.2], [90.0, 8.2]], roads_)
+        self.assertTrue(in_gap)
+        for row in in_gap:
+            self.assertAlmostEqual(row[2], 8.2, delta=0.05)
 
     def test_a_skewed_lower_road_rail_stays_on_the_ground(self):
         """A lower road 23° off a deck still clears the deck's parallel test (Drie Merenweg under the

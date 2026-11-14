@@ -345,22 +345,24 @@ def overlaps(a, b):
 
 
 class View:
-    """The camera for screen-space LOD (select's `view`, 2026-10-16): position (cx, cy) in the anchor frame and height
-    above the ground under the player (dz), pixels per radian of the screen (ppr = height px / (2 tan(vfov / 2))),
-    the pop size allowed (tau px) and err(node) -> the built tile's geometric error (m: how far its surface moves
-    when it splits into its children, farfield.build_tile) or None when not known."""
+    """The camera for screen-space LOD (select's `view`, 2026-10-16; merging 2026-11-11): position (cx, cy) in the
+    anchor frame and height above the ground under the player (dz), pixels per radian of the screen (ppr = height px /
+    (2 tan(vfov / 2))), the pop size allowed (tau px; 0: the distance rule alone), err(node) -> the built anchor
+    tile's geometric error along the surface normal (m: Built.err_n, how far its surface moves when it splits into
+    its children) or None when not known, and gerr {(z, x, y): the same of a built global tile} (select_global's
+    Rust part)."""
 
-    def __init__(self, cx, cy, dz, ppr, err, tau=None, reach=None, h=None, cells=64, cap=None):
+    def __init__(self, cx, cy, dz, ppr, err, tau=None, reach=None, h=None, cells=64, cap=None, gerr=None):
         self.cx, self.cy, self.dz, self.ppr, self.err, self.cells = cx, cy, max(0.0, dz), ppr, err, cells
         self.cap = SSE_SPACING_CAP if cap is None else cap
         self.tau = SSE_TAU_PX if tau is None else tau
         self.reach = SSE_REACH if reach is None else reach
         self.h = SSE_HYSTERESIS if h is None else h
+        self.gerr = {} if gerr is None else gerr
 
     def pixels(self, node, x0, y0, x1, y1):
-        """The node's split pop on screen (px), or None (error not known). On steep ground the vertical error is
-        mostly a sideways shift of about one grid spacing (a cliff's 300 m "error" is its face moving a few
-        metres), so it counts at most SSE_SPACING_CAP spacings."""
+        """The node's split pop on screen (px), or None (error not known). The error is along the normal (a cliff's
+        300 m vertical "error" is its face moving a few metres) and counts at most SSE_SPACING_CAP vertex spacings."""
         e = self.err(node)
         if e is None:
             return None
@@ -368,14 +370,34 @@ class View:
         dxy = math.hypot(max(x0 - self.cx, 0.0, self.cx - x1), max(y0 - self.cy, 0.0, self.cy - y1))
         return e * self.ppr / max(math.hypot(dxy, self.dz), 1.0)
 
+    def decide(self, split, was, node, box, d, d3, lim, lim_f, h):
+        """Whether a node splits, from the distance rule's answer `split` (was: refined last time; d / d3: its
+        horizontal / selection distance; lim: its switch distance; lim_f: the floor, its children's): with a known
+        error the pop decides. Over tau px (tau / (1 + self.h) once split) it splits, within reach x lim; under that it
+        does not split even inside the distance rule (merges), unless d3 is within lim_f ((1 + h) lim_f once split):
+        never more than about one level coarser than the distance rule near the player. Unknown errors keep the
+        distance rule. (earthfast farglobal.rs Sse::decide: the same rule.)"""
+        p = self.pixels(node, *box)
+        if p is None:
+            return split
+        want = p > self.tau or (was and p > self.tau / (1.0 + self.h))
+        if split and not want:
+            return d3 < lim_f or (was and d3 < (1.0 + h) * lim_f)
+        if want and not split:
+            return d < self.reach * lim
+        return split
 
-# Screen-space LOD (View): a node also splits while its tile's split would pop more than SSE_TAU_PX on screen, within
+
+# Screen-space LOD (View, tau > 0): a node splits while its tile's split would pop more than tau px on screen, within
 # SSE_REACH times its distance-rule switch distance (at most ~2 levels finer than the distance rule: a cliff 30 km
-# away must not pull in thousands of tiles); a split node merges back once the pop is under SSE_TAU_PX / (1 + h).
-SSE_TAU_PX = 0.0       # off by default: in Yosemite 4 px cost 17 % fps and +36 % tiles for 25 % smaller pops (2026-10-16)
+# away must not pull in thousands of tiles), and merges (does not split, even inside the distance rule) once the pop is
+# under tau / (1 + SSE_HYSTERESIS), down to one level coarser than the distance rule at most (View.decide). The error
+# is Built.err_n (along the normal), at most SSE_SPACING_CAP vertex spacings.
+SSE_TAU_PX = 0.0       # off by default (the mod's lodPx setting, earthd --lod-px; 0: the distance rule alone)
 SSE_REACH = 4.0
 SSE_HYSTERESIS = 0.5
-SSE_SPACING_CAP = 2.0
+SSE_SPACING_CAP = 1.0
+SSE_NEED = 207         # earthfast: far_normal_err, far_global_mesh's err_n, far_global_select's view
 
 
 def out_of_view(cone, x0, y0, x1, y1, d):
@@ -409,11 +431,15 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
     disc (horizon mode): keep the nodes whose nearest point is closer than `radius` (a disc, not
     the square). horizon: a Horizon; beyond HORIZON_MIN it drops every node past the line-of-sight
     horizon, with its subtree (the server passes it with disc=True and max_level HORIZON_MAX_LEVEL).
-    view: a View (screen-space LOD): nodes whose known geometric error would pop more than view.tau px on
-    screen split too (within view.reach x the switch distance), distances from the camera.
+    view: a View (screen-space LOD, used when view.tau > 0): a node whose known geometric error would pop more than
+    view.tau px on screen splits too (within view.reach x the switch distance), one whose pop is under it does not
+    split even inside the distance rule, down to one level coarser than the distance rule (View.decide; the near
+    radii, the forced boxes, the holds and the finest level's switch distance stay as they are).
     Returns ({key: Tile}, set of refined nodes)."""
     kfun = kfun or layout.k
     radii = NEAR_RADII[layout.cells] if radii is None else radii
+    if view is not None and not view.tau > 0:
+        view = None
     lo_x, lo_y, hi_x, hi_y = px - radius, py - radius, px + radius, py + radius
     s = level_size(max_level)
     rx0, ry0, rx1, ry1 = (lo_x, lo_y, hi_x, hi_y) if region is None else region.bbox
@@ -450,11 +476,14 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                 d3 = math.hypot(d, eye_h)       # (eye_h: the camera's height over the ground; select_global)
                 if cone is not None:
                     d3 *= out_of_view(cone, x0, y0, x1, y1, d)
-                split = d3 < lim or (node in prev_refined and d3 < (1.0 + h) * lim)
-                if not split and view is not None and d < view.reach * lim:
-                    px_ = view.pixels(node, x0, y0, x1, y1)
-                    if px_ is not None:
-                        split = px_ > view.tau or (node in prev_refined and px_ > view.tau / (1.0 + view.h))
+                was = node in prev_refined
+                split = d3 < lim or (was and d3 < (1.0 + h) * lim)
+                if view is not None:
+                    # the floor: the children's switch distance (the finest split level: its own), and the near radii
+                    lim_f = (max(switch_distance(lvl - 1, kfun, radii, min_level),
+                                 max([r for m, r in radii.items() if min_level <= m < lvl] or [0.0]))
+                             if lvl - 1 > min_level else lim)
+                    split = view.decide(split, was, node, (x0, y0, x1, y1), d, d3, lim, lim_f, h)
             if split:
                 refined.add(node)
                 i2, j2 = 2 * i, 2 * j
@@ -789,11 +818,17 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
               float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
               (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
+    kw = {}
+    if cone is not None:
+        kw["cone"] = [float(v) for v in cone]
+    if view is not None and view.tau > 0:       # (screen-space LOD: the same rule as select's, View.decide)
+        fast.require(SSE_NEED, "screen-space LOD")
+        kw["view"] = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau),
+                      float(view.reach), float(view.h), float(view.cap), float(view.cells), view.gerr)
     t0 = time.perf_counter()
     tiles, grefined, regions = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h),
-        *(([float(v) for v in cone],) if cone is not None else ()))
+        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h), **kw)
     out = {}
     for z, x, y, q, s in tiles:
         t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
@@ -852,10 +887,11 @@ def build_global(dem, z, x, y, zoom, ref_zoom, layout=V131):
     rlat, rlon = ll(2 * n)
     ref = np.ascontiguousarray(np.asarray(dem.sample(rlat, rlon, ref_zoom), np.float64))
     eps = ADAPT_EPS if layout.cells == 64 else 0.0
-    P, nrm, uv, planar, tris, grid, pz, err, skirt, size = fast._ef.far_global_mesh(int(z), int(x), int(y), elev,
-                                                                                    ref, float(eps))
+    fast.require(SSE_NEED, "global far tiles' normal error")
+    P, nrm, uv, planar, tris, grid, pz, err, skirt, size, err_n = fast._ef.far_global_mesh(int(z), int(x), int(y),
+                                                                                           elev, ref, float(eps))
     return Built([0.0, 0.0, float(pz)], P, nrm, uv, planar, tris, grid.astype(np.float32), float(err), None,
-                 float(skirt), float(size))
+                 float(skirt), float(size), float(err_n))
 
 
 def clip_built(built, poly):
@@ -1157,10 +1193,18 @@ class Built:
     planar: np.ndarray      # (n, 2) tile-local xy / S: the footprint UV0 and the tangent frame
     tris: np.ndarray        # (m, 3) counter-clockwise from +Z
     grid: np.ndarray        # (cells + 1)² absolute vertex heights, float32 (for swap-group deltas)
-    err: float              # max |reference - tile| (m)
+    err: float              # max |reference - tile| (m): vertical (the skirts' depth)
     sink: float | None      # levels <= 0 with_sink (terrain / detail mode): drop that puts the tile under the terrain everywhere
     skirt: float            # skirt depth (m)
     size: float             # tile edge (m)
+    # the same along the surface's normal (m; earthfast normal_err: vertical x cos(slope)): the screen-space LOD's
+    # metric (View); None: not measured (an older cache entry; View then uses err)
+    err_n: float | None = None
+
+    @property
+    def lod_err(self):
+        """The error the screen-space LOD goes by: err_n, or err without it."""
+        return self.err if self.err_n is None else self.err_n
 
     @property
     def detail_uvs(self):
@@ -1243,13 +1287,18 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         fast.require(51, "adaptive far tiles")
         adaptive, U, _ = fast._ef.rtin_mesh(np.ascontiguousarray(U), ADAPT_EPS * sp)     # U: the mesh's surface
 
-    # Geometric error: the reference against the triangulated tile, on the 2x grid (fine: the samples themselves).
+    # Geometric error: the reference against the triangulated tile, on the 2x grid (fine: the samples themselves);
+    # vertical (the skirts) and along the normal (the screen-space LOD, earthfast normal_err)
     if fine:
-        err = float(worst)
+        err = err_n = float(worst)
     else:
         rf = np.arange(2 * cells + 1) * (sp / 2)
         RX, RY = np.meshgrid(rf, rf)
-        err = float(np.abs(ref - surface_at(U, sp, RX, RY)).max())
+        model = surface_at(U, sp, RX, RY)
+        err = float(np.abs(ref - model).max())
+        fast.require(SSE_NEED, "the far tiles' normal error")
+        err_n = float(fast._ef.far_normal_err(np.ascontiguousarray(ref, np.float64),
+                                              np.ascontiguousarray(model, np.float64), float(sp / 2)))
     sink = None
     if terrain is not None:
         lf = np.arange(terrain.shape[0]) * terrain_sq
@@ -1306,7 +1355,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
     pos = [float(x0), float(y0), float(np.round(U.mean()))]
     P -= pos
     planar = (P[:, :2] / S)
-    return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S)
+    return Built(pos, P, nrm, uv, planar, np.concatenate(tris), U.astype(np.float32), err, sink, depth, S, err_n)
 
 
 def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_px=None):
@@ -1321,7 +1370,7 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
     uvs2 = built.detail_uvs if textured else None
     if fmt == "cdae":
         return cdae.write(path, built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=uvs2,
-                          material=material, tangent_uvs=built.planar)
+                          material=material, tangent_uvs=built.planar, close=False)    # (terrain: a heightfield)
     dae.write_grid_dae(path, built.positions.ravel(), uvs.ravel(), built.tris.ravel(),
                        material=material, normals=built.normals.ravel(),
                        uvs2=None if uvs2 is None else uvs2.ravel())

@@ -292,7 +292,7 @@
     },
     {
       "key": "highway",
-      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs. Mapped highway milestones and route/direction references.",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs. Mapped highway milestones and route/direction references.",
       "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
     },
     {

@@ -26,10 +26,13 @@ local broken = false        -- a draw failed: the stock roads for the rest of th
 local floor = math.floor
 local function key(i, j) return i * 65536 + j end
 
--- Pure: the drivability class of a link (stock colours: >= 0.9 the road colour, > 0.25 the low one, else the lowest).
+-- Pure: the drivability class of a link (the stock colours: >= 0.85 the road colour, > 0.25 the low one, else the
+-- lowest). The stock minimap's road colour starts at 0.9; here at 0.85, so Germany's give-way steps
+-- (navgraph.DE_YIELD_STEP) keep a tertiary's 205 approach (0.9 -> 0.88) in the road colour. No drivability class or
+-- step outside Germany lies in 0.85 .. 0.9 (navgraph.DRIVE, ENTRY_DRIVABILITY 0.9): the same colours there.
 function M.class(d)
   d = d or 1
-  return d >= 0.9 and 1 or (d > 0.25 and 2 or 3)
+  return d >= 0.85 and 1 or (d > 0.25 and 2 or 3)
 end
 
 -- Pure (a coroutine when yieldEvery): the index of graph g ({nodes = {name -> {x, y, z, radius}}, edges =

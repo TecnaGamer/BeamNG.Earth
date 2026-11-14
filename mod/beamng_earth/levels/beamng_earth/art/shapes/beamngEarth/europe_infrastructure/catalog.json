@@ -155,6 +155,18 @@
     "no_collision": true,
     "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_is"
   },
+  "eu_marker_it_al": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_it_al"
+  },
+  "eu_marker_it_motorway": {
+    "distance": 300,
+    "height": 1.15,
+    "no_collision": true,
+    "path": "/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_it_motorway"
+  },
   "eu_marker_nl": {
     "distance": 300,
     "height": 1.15,
