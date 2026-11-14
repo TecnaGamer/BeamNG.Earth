@@ -251,6 +251,67 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(self.conn.msgs, [])
         self.assertTrue(self.s.tiles[ck].stale)
 
+    def test_degraded_tile_retextures_and_clears_degraded_status(self):
+        """A tile built without imagery is registered in s.degraded; when s.retex_degraded()
+        runs, it is re-rendered live to _r1.dds, sends far_retex, and leaves s.degraded."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        async def body():
+            s.retex_degraded()
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        m = self.conn.msgs[0]
+        self.assertEqual(m["type"], "far_retex")
+        self.assertEqual(m["key"], "0_1_0")
+        self.assertEqual(m["texture"], f"{s.vfs_dir}/far_1_0_1_0_r1.dds")
+        self.assertNotIn(ck, s.degraded)
+        self.assertEqual(s.tiles[ck].rev, 1)
+        self.assertFalse(s.tiles[ck].stale)
+
+    def test_degraded_tile_waits_while_host_unavailable(self):
+        """When an imagery host is still open/unavailable, retex_degraded does not start retexture;
+        once the host is available, retex_degraded completes the retexture."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+        fake_net = types.SimpleNamespace(offline=False, unavailable_hosts=lambda optional=False: ["tiles.maps.eox.at"])
+        s.net = fake_net
+
+        async def body():
+            s.retex_degraded()
+        self.run_loop(body)
+        self.assertEqual(self.conn.msgs, [])
+        self.assertIn(ck, s.degraded)
+
+        # Host recovers: circuit closes
+        fake_net.unavailable_hosts = lambda optional=False: []
+        async def body_recovered():
+            s.retex_degraded()
+        self.run_loop(body_recovered)
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+    def test_on_circuit_closed_triggers_retex_degraded(self):
+        """When the net circuit breaker closes, s._on_circuit_closed schedules retex_degraded."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        async def body():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
     def test_tile_waiting_for_many_regions_gets_every_one(self):
         """A coarse tile spans many regions (an L5 texture up to 3 x 3 z12 regions, an L6 one 4 x 4, as
         many de-shadow ones): it is re-rendered live each time one of them turns ready, however many,

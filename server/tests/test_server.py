@@ -839,10 +839,34 @@ class MeshServerTest(ServerHarness):
         quiet = self.c.drain(0.6)
         self.assertFalse([m for m in quiet if m["type"].startswith("far_")], quiet[:3])
 
-    def test_imagery_failure_falls_back_to_palette(self):
+    def test_imagery_failure_allocates_fallback_material_for_retexture(self):
+        """Under temporary network trouble (online mode), tiles receive a pooled material and fallback
+        texture so they can be retextured in-place via far_retex once the host recovers (ROADMAP)."""
+        class Broken(FakeImagery):
+            def render(self, *a, **kw):
+                raise imagery.ImageryError("host timeout")
+        self.server.imagery = Broken(os.path.join(self.tmp.name, "cache", "broken"))
+        far = FarState()
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.c.send({"type": "commit_anchor", "anchorId": aid})
+        self.pose(aid, 0, 0)
+        _, seen = self.stream_until_done(far, aid)
+        tiles = [m for m in seen if m["type"] == "far_tile"]
+        self.assertTrue(tiles)
+        self.assertTrue(all("material" in m and "texture" in m for m in tiles))
+        self.assertEqual(len(self.server.degraded), len(tiles))
+        shape = cdae.read(self.fs(tiles[0]["shape"]))
+        self.assertTrue(shape["materials"][0]["name"].startswith("bngEarthFar_"))
+        self.assertNotEqual(shape["meshes"][0]["tverts2"][0], 0)
+
+    def test_offline_imagery_failure_falls_back_to_palette(self):
+        """In offline mode, tiles keep the shared palette material (bnge_far_palette) with no per-tile
+        material slot."""
         class Broken(FakeImagery):
             def render(self, *a, **kw):
                 raise imagery.ImageryError("offline")
+        self.server.net.offline_flag = True
         self.server.imagery = Broken(os.path.join(self.tmp.name, "cache", "broken"))
         far = FarState()
         self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})

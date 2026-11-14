@@ -617,6 +617,24 @@ class BreakerTest(unittest.TestCase):
             clock.advance(31.0)
         self.assertEqual(b.state, "closed")
 
+    def test_on_circuit_closed_callback_fires_on_recovery(self):
+        closed_hosts = []
+        pol = nf.with_policy(nf.POLICIES, USGS, max_attempts=1)
+        f, clock, sleep, tr = fetcher({USGS: [(502, {}, b"", 0)]}, policies=pol)
+        f.on_circuit_closed = lambda name: closed_hosts.append(name)
+        p = pol[USGS]
+        for i in range(p.breaker_threshold):
+            with self.assertRaises(nf.FetchFailed):
+                f.get(url(USGS, i))
+        self.assertEqual(f.host(USGS).breaker.state, "open")
+        self.assertEqual(closed_hosts, [])
+
+        clock.advance(p.breaker_open)
+        tr.script[USGS] = [(200, {}, b"ok", 0)]
+        self.assertEqual(f.get(url(USGS, 100)).body, b"ok")
+        self.assertEqual(f.host(USGS).breaker.state, "closed")
+        self.assertEqual(closed_hosts, [USGS])
+
 
 def terrarium_png(elev, size):
     v = np.full((size, size), elev + 32768.0)

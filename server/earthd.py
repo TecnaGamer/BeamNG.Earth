@@ -1313,6 +1313,8 @@ class Server:
         # (anchorId, key) of cached tiles built with the palette because the imagery failed; shown in
         # the status note (re-texturing them once the host is back is a ROADMAP follow-up)
         self.degraded = set()
+        if self.net is not None:
+            self.net.on_circuit_closed = self._on_circuit_closed
         # Heightmap workers: with the block processes they mostly wait on a process, and with two a
         # request queued behind a prefetch and an earlier request (3.5 s at 90 m/s, 2026-10-12)
         self.hm_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="heightmap")
@@ -6162,6 +6164,11 @@ class Server:
                 if self.imagery_failures % 100 == 1:
                     log.warning("tile %s of anchor %d: no imagery (%s), palette material (%d tiles so far)",
                                 tile.key, anchor.id, e, self.imagery_failures)
+                if not (self.net is not None and self.net.offline):
+                    material = self.matslots.take(ck)
+                    texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
+                    fallback_rgb = np.full((16, 16, 3), [99, 89, 69], dtype=np.uint8)
+                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb)
         if geo is not None:             # (a revisit hit, or no imagery)
             w0 = time.perf_counter()
             built = geo.result()
@@ -6209,6 +6216,8 @@ class Server:
         if material is not None:
             info.rev = self.tex_rev.get(ck, 0)
             info.cm_pending = frozenset(pending or ())
+            if ck in self.degraded:
+                info.stale = True
         return info
 
     def tex_key(self, anchor, tile, px):
@@ -6822,6 +6831,7 @@ class Server:
         self.note_lod_err(ck, info)
         if before is not None and info.texture != before.texture:
             self._send_retex(ck, info)      # a re-rendered texture: the mods showing the tile switch to it
+            self.degraded.discard(ck)
         for rk in sorted(info.cm_pending, key=str):     # regions it was rendered without
             st = self._region_status(rk)
             if st is None:
@@ -6944,6 +6954,25 @@ class Server:
         """Deshadow worker thread: a region's relight values are ready (changed: it relights)."""
         self._cm_listener((imagerymod.DS_PENDING,) + tuple(rk), changed)
 
+    def _on_circuit_closed(self, host_name):
+        """Netfetch callback: a circuit breaker closed after a host became available again."""
+        loop = self.loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self.retex_degraded)
+
+    def retex_degraded(self):
+        """(event loop) Enqueue live retexture for tiles built without imagery due to network trouble."""
+        if not self.degraded or self.imagery is None or (self.net is not None and self.net.offline):
+            return
+        if self.net is not None and self.net.unavailable_hosts(optional=False):
+            return
+        for ck in list(self.degraded):
+            info = self.tiles.get(ck)
+            if info is not None and info.material is not None:
+                info.stale = True
+                self.retex_request(ck, pump=False)
+        self._retex_pump()
+
     def _region_status(self, rk):
         """None (not ready), False (ready, changes nothing) or True of a pending region: a colour-match
         (rx, ry) or a de-shadow (DS_PENDING, rx, ry) one (event loop: memory and stat calls only)."""
@@ -7009,6 +7038,8 @@ class Server:
                 self.retex_todo.discard(ck)
                 if info is not None and info.stale and ck not in self.tile_inflight:
                     self.retex_stats["dropped"] += 1
+                continue
+            if ck in self.degraded and self.net is not None and self.net.unavailable_hosts(optional=False):
                 continue
             t = info.tile if info.tile is not None else farfield.tile_of(ck[1])
             d = min(t.distance(*c.view_focus) for c in viewers)
@@ -11679,7 +11710,8 @@ class Connection:
                 if info.material is not None and not info.stale and self.first_ramp is None and self.tex_short(info, t):
                     info.stale = True   # (a coarse cover's texture: rendered again, the whole chain at its own size)
                 if info.stale:          # a region turned ready since: re-rendered live, then far_retex
-                    self.s.retex_request(ck)
+                    if ck not in self.s.degraded or not (self.s.net is not None and self.s.net.unavailable_hosts(optional=False)):
+                        self.s.retex_request(ck)
                 self.batch[1] += 1
                 m = {"type": "far_tile", "anchorId": self.active, "key": t.key, "level": t.level,
                      "shape": f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}",
@@ -11997,6 +12029,8 @@ async def main_async(args):
                 log.info("net: %s%s", line, "" if rate is None else f"; large downloads at {rate:.2f} MB/s")
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
+            if server.degraded and not net.offline and not net.unavailable_hosts(optional=False):
+                server.retex_degraded()
     ticker = asyncio.create_task(net_log())
     profile_task = asyncio.create_task(runtimeprofiler.stream(server))
 
