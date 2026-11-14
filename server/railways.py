@@ -676,11 +676,20 @@ def _underpass_masks(rails, line, half, margin, boxes=None):
         if n not in hit:
             candidates.append(masks[n])         # (nothing near: no run; the zeros mask, never written to)
             continue
-        tangent = np.gradient(xy, axis=0)
-        cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
-        cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
-        distance, _ = _underpass_distance(xy, line)
-        covered = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
+        # (only the points inside the tunnel's padded box: one outside it is more than pad from every point of the
+        # line, so never covered. A part is a whole feature's line, km long, and a central London cell's rail beds
+        # measured every one of its points against every tunnel in every node window: 65-83 CPU-s a cell, its plans
+        # past the other processes' waits, the cell planned by several at once, a road tile past 300 s and its road
+        # processes restarted, 2026-11-13. The same values at those points, elementwise.)
+        covered = np.zeros(len(xy), bool)
+        idx = np.flatnonzero((xy[:, 0] >= near[0]) & (xy[:, 0] <= near[2])
+                             & (xy[:, 1] >= near[1]) & (xy[:, 1] <= near[3]))
+        if len(idx):
+            tangent = np.gradient(xy, axis=0)[idx]
+            cross = np.abs(tangent[:, 0] * direction[1] - tangent[:, 1] * direction[0])
+            cross /= np.maximum(dnp.norm(tangent, axis=1) * dnp.norm(direction), 1e-9)
+            distance, _ = _underpass_distance(xy[idx], line)
+            covered[idx] = (distance <= pad) & (cross > UNDERPASS_MIN_SIN)
         candidates.append(covered)
         spans = covered[:-1] | covered[1:]
         cuts = np.flatnonzero(np.diff(np.concatenate(([False], spans, [False]))))

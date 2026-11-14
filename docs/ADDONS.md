@@ -154,6 +154,8 @@ end
 |---|---|
 | `version()` | `major, minor` (1, 10) |
 | `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'roadGraph'` (1.10) |
+| `version()` | `major, minor` (1, 9) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'areaRoute'` (1.9) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -174,6 +176,7 @@ end
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `roadGraph(lat, lon, opts, callback)` | 1.10: one window of the road network round a point, out of what the app already has on disk, as the graph's own tables (see "The road graph round a point" below). Returns the request's id, or `nil, why` |
+| `areaPlan(points, opts, callback)`, `areaAdd(points, opts, callback)`, `areaStatus(id)` | 1.9: the ground along a line downloaded ahead, through the app's own saved areas (see "The ground along a route" below). `areaPlan` / `areaAdd` return the request's id, or `nil, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -400,6 +403,126 @@ part of this call's promise: read `nodes`, `edges`, `lines` and `rules`, and exp
   matching a line, walking a route. Ask for the smallest `radius` that covers what you need; the cost grows with the
   square of it, and the app builds it on the one thread it answers API requests on, so a 2000 m window asked for in
   a loop will make the add-on wait on itself.
+### The ground along a route, downloaded ahead (1.9)
+
+With `api.has('areaRoute')`, an add-on can ask BeamNG.Earth to download the ground along a line before it is needed,
+through the app's own saved areas — the same machinery as the 3D map's "Download this area", with the same gates, the
+same progress and the same entry in the player's own area list.
+
+This is the companion to `api.places(..., cachedOnly = true)` and anything else that reads only what is on disk: those
+tell you what the app *has*, this is how the ground gets there.
+
+```lua
+if api.has('areaRoute') then
+  local line = { { 45.707, -120.794 }, { 45.714, -120.795 }, { 45.720, -120.801 } }   -- one point every 20-50 m
+  api.areaPlan(line, { half = 300, layers = { 'roads' } }, function(est)
+    if not est.ok then return print(est.error) end
+    -- ask the player first, with the one figure that means anything:
+    print(string.format('%.0f MB to download along %.1f km', est.downloadBytes / 1e6, est.km))
+    api.areaAdd(line, { half = 300, layers = { 'roads' }, name = 'My add-on: stage 3' }, function(res)
+      if not res.ok then return print(res.error) end
+      MY_AREA = res.id                         -- keep it: areaStatus is how you follow it
+    end)
+  end)
+end
+
+-- later, every frame or every second, as you like:
+local a = MY_AREA and api.areaStatus(MY_AREA)
+if a and a.state == 'done' then
+  if a.unavailable > 0 then print(a.msg) end   -- "done" is not "the data arrived": see below
+end
+```
+
+| function | returns |
+|---|---|
+| `areaPlan(points, opts, callback)` | what a corridor along `points` would download, without downloading or saving anything. Returns the request's id, or `nil, why` |
+| `areaAdd(points, opts, callback)` | the same corridor as a new saved area, downloading in the background. Returns the request's id, or `nil, why` |
+| `areaStatus(id)` | the saved area `id` as the app last broadcast it, or nil when it is no longer in the player's list |
+
+`points` are `{{lat, lon}, ...}` — exactly the shape `api.gpsRoute().points` gives, so the player's planned route can
+be handed straight over. `opts`:
+
+- `half` (needed): the corridor's half width in metres, 200 .. 5000. The plan dilates it by two map cells all round
+  anyway, so a narrow corridor and a wide one cost nearly the same; pick the width that describes the ground you
+  care about, not the smallest number you can get away with.
+- `layers`: a subset of `roads`, `connectors`, `buildings`, `water`, `land_use`, `infrastructure`, `landcover`,
+  `canopy`, `building_parts`, `places`, `terrain` (the elevation) and `imagery` (the aerial photography). Absent:
+  all of them. See below.
+- `name` (`areaAdd`): what the player sees in their area list. Say which add-on it is for.
+
+`areaPlan`'s `callback(result)`, once: `{ok, km, km2, items, missing, downloadBytes, diskBytes, seconds, days,
+hosts, excluded, layers, error}`. **Show the player `downloadBytes` and nothing else.** `seconds` is a
+serial-request model with no bandwidth or concurrency in it, `days` is 0 nearly everywhere, and `km2` is the
+corridor's own geometry — far smaller than the footprint actually downloaded, because of the two-cell ring. The
+figure runs about 20-25 % high and corrects itself as the cache learns its own file sizes.
+
+`areaAdd`'s `callback(result)`, once: `{ok, id, error}`. `id` is the new area's id, for `areaStatus`.
+
+#### A saved area is a persistent object in the player's world
+
+It is not a function call with a side effect, and an add-on that adds one has to live with all of this:
+
+- **The player sees it** in the 3D map's area list, its line drawn, and can pause, resume or delete it.
+- **There are ten slots.** Yours competes for them, and when they are full your add fails — and so does the
+  player's own next one, which is the worse half of that.
+- **Its data is pinned**: never evicted, and "Clear cache" keeps it. An add that would take the saved areas past
+  their share of the cache is refused with a message naming the setting to raise. Put that sentence in front of the
+  player; it is theirs to act on, not yours to swallow.
+- **It survives a restart** and resumes on its own, with no mod and no client involved.
+- **One area downloads at a time, in list order.** Yours is appended last, so it can sit at zero for a long time
+  behind the player's own. A progress display must not read that as broken: `state` is `'queued'` then.
+- **Nothing removes it for you.** There is deliberately no remove in this API — the area and its data stay for the
+  player to keep or delete, which is also what makes a second visit to the same ground free. Do not add one per
+  press of a button; check `areaStatus` for the one you added last time first.
+- Decimate the line to a point every 20-50 m before sending it. The points are persisted verbatim into the app's
+  area store and re-validated on every load, and a 6000-point line is a quarter of a megabyte of JSON rewritten
+  every time any area changes. The cap is 20000 points.
+
+#### `state` is `'done'` long before you can trust the ground
+
+`areaStatus(id)` is `{id, name, state, done, total, unavailable, msg, mode, half, layers}`. `state` is `'queued'`
+(waiting its turn), `'checking'` (walking the plan), `'running'`, `'waiting'` (a host's daily limit, or being
+offline — it tries again by itself), `'paused'` (the player) or `'done'`. `done` / `total` are items, not bytes.
+
+**`'done'` does not mean the data arrived.** After three passes with failures the items still failing are counted in
+`unavailable`, the area is marked done anyway, and `msg` becomes *"N items unavailable (no server had them in 3
+tries): Resume tries again"*. A real example: an area of 1079 items finished `done` with 122 of them unavailable —
+11 %. So:
+
+- re-check what you actually needed rather than trusting `'done'`, and
+- show `msg` when it is not empty. Resuming is an action only the player can take.
+
+#### Narrowing it to the layers you need
+
+A corridor downloads the whole ground by default: ten map data layers, the elevation and the aerial imagery. For an
+add-on that only wants to know where the roads are, that is about ten times what it needs — measured on a 300 m
+corridor over a 10 km line, 549 items and 309 MB for the whole ground against 51 items and 31 MB for `['roads']`.
+`layers` plans, counts and fetches only what it names:
+
+```lua
+api.areaPlan(line, { half = 300, layers = { 'roads' } }, function(est) ... end)
+```
+
+- A narrowed area is **not a finished world**. What it left out is downloaded on demand when the player drives
+  there, exactly as it is anywhere they have not been. Narrow it when you want data to read, not when you are
+  pre-loading a place to play in.
+- The result's `layers` is the subset the app honoured, `{}` for all of them. **Read it.** An older BeamNG.Earth
+  ignores the field and downloads everything, and `has('areaRoute')` is this mod's version, not the app's.
+- `terrain` and `imagery` are not map data layers, but an area downloads them too and an add-on after one layer of
+  the ground has no use for the photography of it either, so they take a name each in the same list.
+- Pinned disk does not fall as far as the download does (125 MB to 67 MB in the measurement above): a cell's raw
+  source blocks are shared by its layers and are downloaded whichever one you asked for. `diskBytes` says so.
+
+#### What this call will not do
+
+- **No fast mode.** The app's saved areas have one, and it is not reachable from here. In fast mode every gate that
+  keeps a download from slowing the world is skipped, and the pause that makes that survivable is applied by
+  BeamNG.Earth itself, for any client, on any fast area: an add-on able to set it could stop the player's physics in
+  the middle of whatever they were doing. If a player wants it, they can press it on their own area list.
+- **No `world` mode.** Building the world ahead puts the server's road processes to work over every core. That is
+  the player's choice to make from their own map, where they can see what it costs.
+- **No pause, resume, rename or delete.** Those are the player's controls over their own list.
+- **Nothing is downloaded for `areaPlan`.** It walks the plan and asks the cache what it already has.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and

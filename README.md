@@ -241,6 +241,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
   update changes how that part of the world is built.
+- Experimental, off by default (`BNE_STALE_REVISIT=on` turns it on): after an app update, a place you've been to is
+  shown as it was last built (its ground, roads, sidewalks, street furniture, trees and signs, all of that one version
+  together) while the new version is built in the background, then swapped in: the ground and road surfaces that
+  changed are prepared out of sight and switched in one frame with the car held for a moment, and only the parts the
+  update changed are loaded again. Versions older than 30 days are not used (`BNE_STALE_DAYS`); never in BeamMP
+  sessions.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the

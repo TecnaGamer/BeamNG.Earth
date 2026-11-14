@@ -106,6 +106,57 @@ class ScopeTest(unittest.TestCase):
         self.assertNotIn(c, revisit._tl.stack)
 
 
+class ExpiryTest(unittest.TestCase):
+    """revisit.expires: a build read an answer that holds only for a time (the roofs' photo "nothing there", a miss
+    with its TTL): kept only until then (Build.kept_until, store(until=), load: none after it); never forever."""
+
+    def test_a_build_on_an_expiring_answer_is_kept_until_it_expires(self):
+        import time
+        with revisit.scope() as b:
+            revisit.expires(time.time() + 600)
+            revisit.expires(time.time() + 300)
+        self.assertFalse(b.complete, "not kept for good")
+        keep, until = b.kept_until()
+        self.assertTrue(keep)
+        self.assertAlmostEqual(until, time.time() + 300, delta=5)
+        self.assertIn("expire", b.why_not())
+        with revisit.scope() as b2:
+            revisit.fault()
+            revisit.expires(time.time() + 600)
+        self.assertFalse(b2.kept_until()[0])
+
+    def test_through_a_pool_task_and_without_a_scope(self):
+        import time
+        ex = ThreadPoolExecutor(2)
+        try:
+            with revisit.scope() as sub:
+                ex.submit(revisit.expires, time.time() + 100).result()
+            self.assertIsNotNone(sub.until, "its helper task read it")
+        finally:
+            ex.shutdown()
+        with revisit.scope() as b:
+            in_thread(lambda: revisit.expires(time.time() + 100))     # (no scope to carry the time: a fault)
+        self.assertFalse(b.kept_until()[0])
+
+    def test_an_item_kept_until_is_gone_after(self):
+        import time
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            k = revisit.key("roadsg", "expiry-test")
+            self.assertFalse(revisit.store(d, "roadsg", k, {"a": b"x"}, {"n": 1}, until=time.time() - 1),
+                             "expired already: not kept")
+            self.assertTrue(revisit.store(d, "roadsg", k, {"a": b"x"}, {"n": 1}, until=time.time() + 60))
+            blobs, extra = revisit.load(d, "roadsg", k)
+            self.assertEqual((blobs["a"], extra["n"]), (b"x", 1))
+            later = time.time() + 120
+            with mock.patch.object(revisit.time, "time", lambda: later):
+                self.assertIsNone(revisit.load(d, "roadsg", k), "past its time: built again")
+            k2 = revisit.key("roadsg", "no-expiry")
+            self.assertTrue(revisit.store(d, "roadsg", k2, {"a": b"y"}, {"n": 2}))
+            with mock.patch.object(revisit.time, "time", lambda: later + 1e9):
+                self.assertIsNotNone(revisit.load(d, "roadsg", k2))
+
+
 class ShortPlansTest(unittest.TestCase):
     def test_plans_made_short_are_marked_for_other_processes(self):
         import plancache

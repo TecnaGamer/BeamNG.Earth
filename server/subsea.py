@@ -13,7 +13,13 @@ import fast
 import dnp
 
 log = logging.getLogger("earthd.roads")
+import os
+
 GRADE = .08                # maximum modeled grade; an engineering bound, not a survey
+# BNE_SUBSEA_RELAX=on: a network whose bounds cannot be met is solved again with the dry ground within a pinned
+# portal's grade reach not bounding its floor (_profiles). Off by default until it is seen in game: it builds bores
+# left out today (the Fort McHenry Tunnel's four, bore 2's west end climbing to a portal point on a cut's wall).
+RELAX = os.environ.get("BNE_SUBSEA_RELAX", "off").strip().lower() in ("on", "1", "yes", "true")
 K = 20.                     # model vertical-curve parameter, metres per percent change in grade
 STEP = 4.
 COVER = 8.
@@ -21,6 +27,62 @@ COVER = 8.
 
 def node(p):
     return round(float(p[0]), 6), round(float(p[1]), 6)
+
+
+# What a network that cannot be solved for good answers: no floors, the parts' marks as they are (left out whole, as
+# an unsolved one's), and NO revisit.fault: a stub ending in the water, a loop, fewer than two portals, or bounds the
+# solver proves cannot be met. None (the caller faults: nothing built on it is kept) is for a network that may still
+# change: an input missing or short, map cells its resolve did not read, the solver out of time.
+LEFT_OUT = ({}, {})
+
+# An unsolved network is final only on bounds that cross before the solver runs ("InconsistentBounds") or on Clarabel's
+# strict "PrimalInfeasible" with the bounds' own proof (_proven). Not its "Almost" statuses (reduced tolerances: a
+# numerically troubled solve) nor the dual ones (they prove nothing about the bounds): those stay awaiting (a fault).
+PROOF_M = .01               # m: how far out of a portal's grade reach a bound must be to prove the network infeasible
+
+
+def _proven(lowers, uppers, svals):
+    """Do the bounds prove the network infeasible without the solver: some chain's bound out of reach, by more than
+    PROOF_M, of a portal pinned on that chain at the grade (z_i >= p - GRADE |s_i - s_p| and z_i <= p + GRADE |s_i -
+    s_p| hold for every floor). A plain sum and comparison of the inputs: the same verdict on every platform, whatever
+    the solver's arithmetic. Only a check: a network infeasible for its curves alone is not proven (awaiting)."""
+    for lo, up, s in zip(lowers, uppers, svals):
+        for i in np.flatnonzero(np.isfinite(lo)):
+            reach = GRADE * np.abs(s - s[i])
+            if (lo[i] - reach - up).max() > PROOF_M or (lo - (lo[i] + reach)).max() > PROOF_M:
+                return True
+    return False
+
+
+def _final(owner, points, why):
+    """Is the network's shape final: its resolve (roads.TunnelProfiles._resolve) read the map cell at every loose end
+    without reaching its limit of cells, and the cells at these chain ends (points, owner's frame) among them? Then
+    the map holds no continuation, and waiting for one made the cell's plans short on EVERY visit: a 26 m covered
+    ramp onto a Hudson pier (one end over the water, nothing mapped beyond) kept Times Square's map cell from ever
+    being kept, and with it every terrain block and road geotile round it (a warm revisit's graded block 38 s,
+    2026-11-13). Never while anything the solve read so far was short (revisit.scope_short: a map cell whose read
+    failed is in the resolve's cells all the same; a ground or water source that fell back). Logged once a network."""
+    import mapcells
+    import revisit
+    import roads
+    if revisit.scope_short():
+        return False
+    tls = getattr(owner, "_tls", None)
+    read = getattr(tls, "read", None)
+    if not read or len(read) >= roads.CHAIN_CELLS:
+        return False
+    pts = np.asarray(points, np.float64).reshape(-1, 2)
+    la, lo, _ = owner.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
+    cells = {str(mapcells.cell_of(float(a), float(b))) for a, b in zip(np.asarray(la), np.asarray(lo))}
+    if not cells <= set(read):
+        return False
+    said = owner.__dict__.setdefault("_subsea_final", set())
+    key = (why, tuple(sorted(cells)), round(float(la[0]), 4), round(float(lo[0]), 4))
+    if key not in said:
+        said.add(key)
+        log.info("underwater tunnel at %.5f, %.5f left out for good: %s (its map cells are all read: the map has "
+                 "no more of it)", float(la[0]), float(lo[0]), why)
+    return True
 
 
 def profiles(owner, comp, pool):
@@ -53,6 +115,8 @@ def _profiles(owner, comp, pool):
         xy = np.concatenate(pieces)
         arc = np.r_[0., np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
         if arc[-1] <= 0 or node(xy[0]) == node(xy[-1]):
+            if _final(owner, xy[[0, -1]], "a chain without portals (a loop)"):
+                return LEFT_OUT
             log.warning("subsea chain has no identifiable portals")
             return None
         s = np.linspace(0., arc[-1], max(2, math.ceil(arc[-1] / STEP) + 1))
@@ -93,6 +157,9 @@ def _profiles(owner, comp, pool):
         portals = free[group]
         if len(portals) < 2:
             if any((c["depth"] > .5).any() for i, c in enumerate(chains) if root(i) == group):
+                if _final(owner, [c["xy"][at] for i, c in enumerate(chains) if root(i) == group for at in (0, -1)],
+                          "fewer than two mapped portals"):
+                    return LEFT_OUT
                 log.warning("subsea component has fewer than two mapped portals")
                 return None
             continue
@@ -107,7 +174,7 @@ def _profiles(owner, comp, pool):
         return {}, membership
     local = {i: j for j, i in enumerate(active)}
     offsets = np.r_[0, np.cumsum([len(chains[i]["s"]) for i in active])].astype(np.int64)
-    targets, weights, lowers, uppers, params = [], [], [], [], []
+    targets, weights, lowers, uppers, reaches, svals, params = [], [], [], [], [], [], []
     for i in active:
         c = chains[i]; s = c["s"]; wet = c["wet"]
         t = np.interp(s, [0., s[-1]], c["portal"])
@@ -137,10 +204,20 @@ def _profiles(owner, comp, pool):
         for at, p in [(0, c["portal"][0]), (-1, c["portal"][1])]:
             if len(ends[node(c["xy"][at])]) == 1:
                 if c["depth"][at] > .5:
+                    if _final(owner, [ch["xy"][e] for ch in chains for e in (0, -1)],
+                              "a chain ends under water with nothing mapped beyond"):
+                        return LEFT_OUT
                     log.warning("subsea chain ends under water; awaiting its missing source continuation")
                     return None
                 lower[at] = upper[at] = p
-        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper)
+        # (a floor leaves its portal at the grade at most: a dry ground under that reach cannot bound it there. Used
+        # only when the bounds as they are cannot be met: the second solve below, BNE_SUBSEA_RELAX)
+        reach = upper.copy()
+        for at in (0, -1):
+            if np.isfinite(lower[at]):
+                reach = np.where(wet, reach, np.maximum(reach, lower[at] - GRADE * np.abs(s - s[at])))
+        targets.append(t); weights.append(w); lowers.append(lower); uppers.append(upper); reaches.append(reach)
+        svals.append(s)
         params.append([GRADE, K, 2.e4, s[-1] / (len(s) - 1), 200.])
     rows = []
     for adjacent in ends.values():
@@ -148,11 +225,38 @@ def _profiles(owner, comp, pool):
         for a in selected[1:]: rows.append([a[0], a[1], selected[0][0], selected[0][1], 0])
     pack = lambda a: np.ascontiguousarray(np.concatenate(a), np.float64)
     fast.require(156, "subsea profiles")
-    z, info = fast._ef.carriageway_profiles(pack(targets), pack(weights), pack(lowers), pack(uppers), offsets,
+    solve = lambda up: fast._ef.carriageway_profiles(pack(targets), pack(weights), pack(lowers), up, offsets,
         np.asarray(params, np.float64), np.asarray(rows, np.int64).reshape(-1, 5), np.zeros(len(rows)), 150, 30.)
-    if not info["converged"] or not info["feasible"]:
+    z, info = solve(pack(uppers))
+    bounds = uppers                 # (the upper bounds of the solve whose verdict stands)
+    ok = lambda info: info["converged"] and info["feasible"]
+    if RELAX and not ok(info) and info["infeasible"] and not info["timed_out"]:
+        # A dry ground falling inward from a portal faster than the grade (the Fort McHenry Tunnel's bore 2: its west
+        # portal's point on the DEM's wall of the approach cut, 4.8 m, the street over the bore 28 m in 2.5 m: 8.2 %
+        # asked, 8 % allowed; 2026-11-13): no floor leaves its portal steeply enough to stay under it, so there the
+        # floor is held under the portal's reach instead (wet ground keeps its cover). Only after the bounds as they
+        # are failed: every network solved before is solved by the same call on the same bounds. (RELAX: off by
+        # default; such a network is then infeasible, and final below.)
+        up = pack(reaches)
+        if not np.array_equal(up, pack(uppers)):
+            z, info = solve(up)
+            bounds = reaches
+            if ok(info):
+                log.info("subsea profile at %s solved with its dry ground under its portals' reach",
+                         chains[active[0]]["name"] or "an unnamed tunnel")
+    if not ok(info):
         log.warning("subsea profile unsolved: %s; grade %.6g, curve %.6g, bounds %.3g/%.3g m", info["status"],
                     info["grade_excess"], info["curve_excess"], info["lower_shortfall_m"], info["upper_excess_m"])
+        # Infeasible is the same answer on every build of the same inputs: once the map holds no more of the network
+        # (_final), it is left out for good, as an unsolved one, and its cells kept. Infeasible here: bounds that
+        # cross, or the solver's strict primal infeasibility AND the bounds' own proof (_proven). Anything else (an
+        # "Almost" or dual status, a time or iteration limit, a numerical failure), or a cell or input still short:
+        # awaiting (None, a fault): a numerically troubled solve must never become an omission kept for good.
+        final = info["status"] == "InconsistentBounds" or (
+            info["status"] == "PrimalInfeasible" and _proven(lowers, bounds, svals))
+        if final and not info["timed_out"] and _final(
+                owner, [c["xy"][e] for c in chains for e in (0, -1)], f"its bores cannot be solved ({info['status']})"):
+            return LEFT_OUT
         return None
     result = {}
     for k, (i, s) in locations.items():

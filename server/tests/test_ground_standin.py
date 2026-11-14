@@ -76,6 +76,7 @@ class WriteGroundBaseTest(unittest.TestCase):
                                       ter_serial=itertools.count(5), block_pools=[], base_lock=threading.Lock(),
                                       ground_bases={}, near_visual="detail")
             s.hm_name = lambda key: earthd.Server.hm_name(s, key)
+            s.hm_stem = lambda key: earthd.Server.hm_stem(s, key)
             anchor = types.SimpleNamespace(id=1, lat=40.0, lon=-80.0)
             info = {"ter": name, "q": q, "surfaceComplete": True}
             a = earthd.Server.write_ground_base(s, anchor, 0.0, 0.0, info)

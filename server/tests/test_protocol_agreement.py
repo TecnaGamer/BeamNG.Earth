@@ -106,6 +106,8 @@ MOD_TO_SERVER = {
               "trafficVisuals": F(int, OPT),
               # ... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)
               "roadGeo": F(int, OPT),
+              # ... a generation swap's commit barrier (roads.lua swapCommit; earthd Connection.stale_swap)
+              "swapGen": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
               "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
@@ -126,6 +128,8 @@ MOD_TO_SERVER = {
     "commit_anchor": {"anchorId": F(int)},
     "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
+    # a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)
+    "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
@@ -201,13 +205,22 @@ MOD_TO_SERVER = {
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
                   "mode": F(str, OPT)},
     # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved
-    # route: route "current" (the last planned GPS route) and half (its corridor's half width, m) instead of the box
+    # route: route "current" (the last planned GPS route) or {"lat": [...], "lon": [...]} (points named outright),
+    # and half (its corridor's half width, m) instead of the box
     "area_plan": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                  "route": F(str, OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
+                  "route": F((str, dict), OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
     "area_add": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
+                 "route": F((str, dict), OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
                  "fast": F(bool, OPT)},       # (fast: areas.py fast mode, the game paused while it runs)
     "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
+    # the modding API's saved area along a corridor an add-on names (api.lua areaPlan / areaAdd; areas.py). Its own
+    # types rather than area_plan / area_add: the mod keeps one answer of those at a time (core.lua _areaPlans /
+    # _areaResults, replaced not added to), so an add-on sharing them would take the player's answer or lose its
+    # own. There is no "fast" and no "mode" here -- fast mode pauses the player's game (core.lua fastAreaPause) and
+    # "world" would put the server's road processes to work; neither is an add-on's to ask for. layers: a subset of
+    # areas.all_layers() (the elevation and the imagery under "terrain" / "imagery"), absent for all of them
+    "area_route_plan": {"id": F(int), "route": F(dict), "half": F(NUM), "layers": F(list, OPT)},
+    "area_route_add": {"id": F(int), "route": F(dict), "half": F(NUM), "name": F(str, OPT), "layers": F(list, OPT)},
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
               "download": F(str, OPT),   # the "Download along route" setting: off / ahead / route (route_download)
@@ -271,9 +284,20 @@ SERVER_TO_MOD = {
                          "missing": F(int, OPT), "downloadBytes": F(int, OPT), "diskBytes": F(int, OPT),
                          "seconds": F(int, OPT), "days": F(NUM, OPT), "hosts": F(list, OPT),
                          "excluded": F(list, OPT), "km": F(NUM, OPT), "worldTiles": F(int, OPT),
-                         "worldMissing": F(int, OPT), "error": F(str, OPT)},
-    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads
-    # (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd
+                         "worldMissing": F(int, OPT), "error": F(str, OPT),
+                         "layers": F(list, OPT)},     # a route's: the layers subset it would download ([] all)
+    # ... and the modding API's own: the estimate for a corridor (api.lua _onAreaPlan), and the area it added
+    # ("area" is the new area's id, for api.areaStatus). "layers" echoes the subset the server honoured, so a
+    # caller can tell an older app that ignored the field from one that narrowed the plan
+    "area_route_plan_result": {"id": F(int), "ok": F(bool), "km": F(NUM, OPT), "km2": F(NUM, OPT),
+                               "items": F(int, OPT), "missing": F(int, OPT), "downloadBytes": F(int, OPT),
+                               "diskBytes": F(int, OPT), "seconds": F(int, OPT), "days": F(NUM, OPT),
+                               "hosts": F(list, OPT), "excluded": F(list, OPT), "layers": F(list, OPT),
+                               "worldTiles": F(int, OPT), "worldMissing": F(int, OPT), "error": F(str, OPT)},
+    "area_route_add_result": {"id": F(int), "ok": F(bool), "area": F(str, OPT), "error": F(str, OPT)},
+    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, unavailable, route?, half?, layers?}]
+    # after hello, a change and while one downloads (at most every areas.STATUS_S); result: an area_add / area_cmd's
+    # answer
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
@@ -353,7 +377,13 @@ SERVER_TO_MOD = {
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
-    "terrain_refresh": {"anchorId": F(int), **TERRAIN},     # the graded block in place of the provisional one
+    # the graded block in place of the provisional one; swap: a generation swap's block, held by the mod until the
+    # swap's skins are staged and committed with them
+    "terrain_refresh": {"anchorId": F(int), "swap": F(int, OPT), **TERRAIN},
+    # a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up
+    "swap_begin": {"anchorId": F(int), "gen": F(int)},
+    "swap_end": {"anchorId": F(int), "gen": F(int), "skins": F(int)},
+    "swap_abort": {"anchorId": F(int), "gen": F(int)},
     "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
     "far_tile": {"anchorId": F(int), "key": F(str), "level": F(int), "shape": F(str), "pos": F(list),
                  "err": F(NUM), "skirt": F(NUM), "sink": F(NUM, OPT), "state": F(str),   # sink: exactly on L0
@@ -402,7 +432,8 @@ SERVER_TO_MOD = {
                    # exact {what: shape}: the parts this anchor shows as their exact variants (slots "x:<what>")
                    "frame": F(list, OPT), "h": F(str, OPT), "exact": F(dict, OPT)},
     # a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file
-    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT)},
+    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT),
+                   "swap": F(int, OPT)},
     # a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)
     "roads_exact": {"anchorId": F(int), "key": F(str), "parts": F(dict), "slots": F(dict, OPT)},
     "roads_drop": {"anchorId": F(int), "key": F(str)},
@@ -477,6 +508,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
+                       "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
@@ -507,6 +539,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "stations_result",                            # only when the station finder asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
+                       "area_route_plan_result", "area_route_add_result",   # ... the modding API's (test_areas)
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
                        "terrain_ready_set",                          # only to a fast player's mod that says readySet
                        "server_list",                                # only when the BeamMP tab asks (online)

@@ -36,6 +36,7 @@ Geometry conventions of the engine's Collada import (verified against golden pai
   - tangents are xyz + w (handedness), 16 bytes per vertex.
 """
 from runtimeprofiler import step as profile_step
+import logging
 import os
 import struct
 
@@ -43,6 +44,8 @@ import numpy as np
 
 import fast
 import staging
+
+log = logging.getLogger("earthd.cdae")
 
 SHAPE_VERSION = 31
 EXPORTER_VERSION = 0x7C
@@ -359,6 +362,13 @@ def tangents(V, UV, N, I):
     f64 = lambda a: np.ascontiguousarray(a, np.float64)        # noqa: E731
     return fast._ef.tangents(f64(V), f64(UV), f64(N), np.ascontiguousarray(I, np.int64))
 
+# The engine draws each mesh of a shape with its own 16-bit index buffer: a mesh past this many vertices has triangles
+# joining far-apart vertices ("spiderweb" triangles across the scene; the user's report 2026-10-14 in Fells Point, the
+# far building packs in dense cities 2026-11-14). Writers keep each mesh under it (buildings.build_parts, encode's parts).
+VERTS_MAX = 65535
+over_limit = {"meshes": 0}      # meshes written past VERTS_MAX by this process (_mesh_data)
+
+
 def _vec(data, count, elem):
     return (count, elem, data)
 
@@ -387,6 +397,10 @@ def _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors):
     TG = tangents(V.astype(np.float64), TTV, NN.astype(np.float64), idx).astype(np.float32)
     nv = len(V)
     ntri = len(idx)
+    if nv > VERTS_MAX:          # (its triangles join far-apart vertices in the game: split it, encode's parts)
+        over_limit["meshes"] += 1
+        if over_limit["meshes"] <= 3:
+            log.warning("shape mesh with %d vertices, past the engine's 16-bit indices (%d)", nv, VERTS_MAX)
 
     lo, hi = V.min(0), V.max(0)
     center = ((lo + hi) * np.float32(0.5)).astype(np.float32)
@@ -438,7 +452,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False, open_tris=None, packed=None):
+           collisions=None, close=False, open_tris=None, packed=None, parts=None):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -468,10 +482,17 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     under its open bottoms, caps on its other openings); "under": its bottoms only (a tunnel's tubes: their mouths are
     the way in); False: as given. open_tris (m,) bool: overlay triangles (the road mesh's markings) left as they are,
     not closed themselves. packed: the body compressed (PACKED when None; False: the plain file, farrestore's kept
-    shapes)."""
+    shapes).
+    parts: further drawn meshes beside this one, [dict of positions, tris and optional uvs / tri_materials / colors,
+    the same material list], each its own object ("<object_name>2", "<object_name>3", ...) in the one drawn detail:
+    a shape whose vertices are past the engine's 16-bit indices (VERTS_MAX: each mesh's own index buffer) as several
+    meshes under it. Not with collision_only, lods or collisions."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
+    parts = list(parts or ())
+    if parts and (collision_only or lods or collisions):
+        raise CdaeError("parts: not with collision_only, lods or collisions")
     materials = [material] if isinstance(material, str) else list(material)
     if tri_materials is not None and len(materials) > 1:
         # only the materials a level uses: the engine makes a material instance for every material a shape lists
@@ -485,6 +506,9 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         for _Pc, _Tc, TMc in (collisions or []):
             if TMc is not None:
                 used[np.unique(np.asarray(TMc, np.int64))] = True
+        for d in parts:
+            if d.get("tri_materials") is not None:
+                used[np.unique(np.asarray(d["tri_materials"], np.int64))] = True
         if not used.all():
             new = np.cumsum(used) - 1
             materials = [m for m, u in zip(materials, used) if u]
@@ -493,6 +517,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
                      if d.get("tri_materials") is not None else d) for size, d in (lods or [])] or None
             collisions = [(Pc, Tc, None if TMc is None else new[np.asarray(TMc, np.int64)])
                           for Pc, Tc, TMc in (collisions or [])] or None
+            parts = [dict(d, tri_materials=new[np.asarray(d["tri_materials"], np.int64)])
+                     if d.get("tri_materials") is not None else d for d in parts]
     nmat = len(materials)
     if close:                   # every mesh a closed solid (shells.py; the user, 2026-11-07)
         positions, tris, tri_materials, normals, uvs, uvs2, tangent_uvs, colors = _closed(
@@ -500,10 +526,18 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         lods = [(size, _closed_lod(d, close)) for size, d in lods] if lods else lods
         collisions = [_closed(Pc, Tc, TMc, None, None, None, None, None, close)[:3]
                       for Pc, Tc, TMc in collisions] if collisions else collisions
+        parts = [_closed_lod(d, close) for d in parts]
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T, TM = _sorted_tris(tris, tri_materials, nmat)
     body0, lo, hi, ntri = _mesh_data(P, T, TM, nmat, normals, uvs, uvs2, tangent_uvs, colors)
     levels = [(None, body0, ntri)]
+    drawn = []                  # parts: the further drawn objects' (body, triangles)
+    for d in parts:
+        Pp = np.asarray(d["positions"], np.float64).reshape(-1, 3)
+        Tp, TMp = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
+        bp, lop, hip, ntp = _mesh_data(Pp, Tp, TMp, nmat, None, d.get("uvs"), None, None, d.get("colors"))
+        lo, hi = np.minimum(lo, lop), np.maximum(hi, hip)
+        drawn.append((bp, ntp))
     for size, d in (lods or []):
         Pl = np.asarray(d["positions"], np.float64).reshape(-1, 3)
         Tl, TMl = _sorted_tris(d["tris"], d.get("tri_materials"), nmat)
@@ -531,8 +565,13 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     # collision only: a visible detail "detail2" whose mesh is a null mesh (draws nothing), then "Collision-1": with the
     # collision detail alone the engine logged "Shape with invalid detail levels" for every such shape (2026-10-17;
     # the buildings' lean collision meshes filled players' logs)
-    nobj = 1 + len(cols)
-    if cols:
+    nobj = 1 + len(cols) + len(drawn)
+    if drawn:
+        # the drawn objects, one mesh each in the one detail
+        names = [object_name] + [f"{object_name}{k + 2}" for k in range(len(drawn))] + [f"detail{int(sizes[0])}"]
+        details = _vec(struct.pack("<3i3fi2i2IfI", nobj, 0, 0, sizes[0], -1.0, -1.0,
+                                   levels[0][2] + sum(n for _b, n in drawn), 0, 0, 0, 0, 0.0, 0), 1, 52)
+    elif cols:
         # the drawn object, then the collision objects; the drawn detail, then the collision detail
         names = [object_name] + [f"Colmesh{k}" for k in range(len(cols))] + [f"detail{int(sizes[0])}", "Collision-1"]
         details = _vec(struct.pack("<3i3fi2i2IfI", nobj, 0, 0, sizes[0], -1.0, -1.0, levels[0][2], 0, 0, 0, 0, 0.0, 0)
@@ -548,7 +587,7 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
         # billboard dimension/detailLevel/equatorSteps/polarSteps/polarAngle/includePoles
         details = _vec(b"".join(struct.pack("<3i3fi2i2IfI", 1 + k, 0, k, sizes[k], -1.0, -1.0, levels[k][2],
                                             0, 0, 0, 0, 0.0, 0) for k in range(len(levels))), len(levels), 52)
-    nmesh = 2 if (collision_only or cols) else len(levels)
+    nmesh = 2 if (collision_only or cols) else 1 if drawn else len(levels)
     # object: name, numMeshes, startMeshIndex, node, nextSibling, firstDecal (each object a mesh per detail)
     objects = b"".join(struct.pack("<6i", k, nmesh, k * nmesh, 0, k + 1 if k + 1 < nobj else -1, -1) for k in range(nobj))
     shape_vecs = {
@@ -574,7 +613,12 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     _pack(out, len(names))
     for s_ in names:
         _pack(out, s_)
-    if cols:
+    if drawn:
+        _pack(out, nobj)                                   # meshes: each drawn object's one
+        out += levels[0][1]
+        for body, _n in drawn:
+            out += body
+    elif cols:
         _pack(out, nmesh * nobj)                           # meshes: the drawn one and a null one, then each collision
         out += levels[0][1]                                # object's null one and its own
         _pack(out, 4)
@@ -594,7 +638,7 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
             _pack(out, v)
 
     header = packb({"info": INFO, "compression": False, "bodysize": len(out),
-                    "objectNames": [object_name] + [f"Colmesh{k}" for k in range(len(cols))]})
+                    "objectNames": names[:nobj]})
     data = struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
     if PACKED if packed is None else packed:
         fast.require(PACK_NATIVE, "compressed shapes (cdae_pack)")
@@ -645,7 +689,7 @@ def _primitives(TM, nmat):
     return _vec(out, n, 12)
 
 
-VERTS_MAX_CLOSED = 65535   # a closed mesh past this many vertices is written as built (shells.stats over_limit)
+VERTS_MAX_CLOSED = VERTS_MAX     # a closed mesh past this many vertices is written as built (shells.stats over_limit)
 
 
 def _closed(P, T, TM, normals, uvs, uvs2, tangent_uvs, colors, how, open_tris=None):

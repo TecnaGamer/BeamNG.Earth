@@ -31,6 +31,14 @@ a whole block, a few ms for a moved block's new strip). The folder is cut back t
 cap: budget_mb) at the server's start and by each process after it wrote a tenth of that (on a thread), least
 recently used first.
 
+An older generation's block (revisit.stale: the server shows a place's last version while the current one is built)
+is found through the place's "latest" note: beside the files, <hex>.latest.json per block place (its key: every part
+but the code, the plans' format and the pads, which arrive during a session: a block's first build of a run has none
+of them, and its key is not the one the last run kept it under), naming the last block kept there, its generation
+(code id, plans format) and its chunks' keys (Build.finish writes it, Build.stale_hit reads it). Its heights come
+straight from the disk, never into the anchor's chunk memory (the current build computes its own). Notes untouched
+for LATEST_DAYS go at the server's start (prune).
+
 BNGE_BLOCKCACHE=off: nothing read or kept (A/B).
 """
 import hashlib
@@ -55,6 +63,8 @@ BLOCK_LEVEL = 3
 PAD_MARGIN_M = 250.0        # m round a chunk / block whose pads are in its key (a yard's levelling blends out within it)
 LOW_WATER = 0.9
 KEEP_S = 600.0              # files used this recently are never pruned
+LATEST_EXT = ".latest.json"  # a block place's note of the last block kept there (Build.stale_hit)
+LATEST_DAYS = 90.0          # ... removed when not written or read for this long (prune)
 SHARE_OF_CAP = 0.1          # budget_mb: this share of the cache cap ...
 MIN_MB, MAX_MB_CAP, DEFAULT_MB = 500.0, 4000.0, 2000.0     # ... within these (DEFAULT_MB: no cap given)
 
@@ -90,7 +100,33 @@ def prune(cache_dir, max_bytes=None, keep_s=KEEP_S):
     """The folder cut back (least recently used first). -> (files removed, bytes left)."""
     fast.require(NATIVE, "terrain block cache")
     mb = max_mb() if max_bytes is None else max_bytes / 1e6
+    prune_latest(cache_dir)
     return fast._ef.blockstore_prune(folder(cache_dir), int(mb * 1e6), LOW_WATER, float(keep_s))
+
+
+def prune_latest(cache_dir, days=LATEST_DAYS, now=None):
+    """The block places' "latest" notes not written or read for days removed. -> how many."""
+    import time
+    now = time.time() if now is None else now
+    n = 0
+    try:
+        subs = os.listdir(folder(cache_dir))
+    except OSError:
+        return 0
+    for sub in subs:
+        d = os.path.join(folder(cache_dir), sub)
+        try:
+            names = [x for x in os.listdir(d) if x.endswith(LATEST_EXT)]
+        except OSError:
+            continue
+        for x in names:
+            try:
+                if now - os.path.getmtime(os.path.join(d, x)) > days * 86400.0:
+                    os.remove(os.path.join(d, x))
+                    n += 1
+            except OSError:
+                pass
+    return n
 
 
 # BNGE_* settings that change no block (this cache's own, diagnostics, scheduling, networking, the per-run ids): every
@@ -114,6 +150,9 @@ _ENV_IGNORED = frozenset({
     "BNGE_PREFETCH_SPARE", "BNGE_FULL_PIN_GAME", "BNGE_PHOTO_PROCESS", "BNGE_IGN_RATE", "BNGE_CATCHUP_LEND_NORMAL",
     "BNGE_LIDAR_THREADS", "BNGE_LIDAR_CLAIMS",
     "BNGE_ROADSURF_T0",     # (the run's start for the road surface verdicts: their digests are in the keys)
+    "BNGE_SIM_BUMP",        # (revisit.SIM_BUMP: in the code id, and an older generation's blocks must still be found)
+    "BNGE_BLOCK_NOTE_LOG",
+    "BNGE_STALE_ANY_SWITCHES",
 })
 
 _code = []
@@ -167,6 +206,17 @@ def settings(grading, md, widths, surface, sea, airports, lids):
             None if surface is None else (bool(getattr(surface, "gas_pads", False)),
                                           bool(getattr(surface, "bus_pads", False)),
                                           getattr(surface, "extra_pads", None) is not None))
+
+
+def ground_rules(grading, md, widths, surface, sea, airports, lids):
+    """The GROUND RULES fingerprint: every server setting that changes the ground or the road geometry built on it
+    (--grading, the map data, --road-widths, --surface, --sea, --airports and its snapshot, the tunnel lids, roads in
+    the ground, the road lift): settings() without the surface's pad switches, which come on with a session's first
+    pads. ONE fingerprint for everything that stands on that ground: the terrain blocks' keys (settings), the road
+    geotiles' content and skins, the trees, the sign tiles, the block photos (blockworker._ground_rules, earthd
+    Server.ground_rules). None of these is a BNE_* switch, so the revisit code key does not hold them: a skin kept
+    with --grading on was a hit with it off, on terrain that had changed (review of 2026-11-13)."""
+    return settings(grading, md, widths, surface, sea, airports, lids)[:9]
 
 
 def _versions(md):
@@ -250,6 +300,20 @@ class ChunkDisk:
         return {k: u[i] for i, k in enumerate(ks) if found[i]}
 
 
+class _AltDisk:
+    """ChunkDisk's load for an older generation's chunk keys (Build.stale_hit)."""
+
+    def __init__(self, d, chunk_keys):
+        self.dir, self.chunk_keys = d, chunk_keys
+
+    def load(self, ks):
+        keys = [self.chunk_keys[k] for k in ks]
+        if not keys:
+            return {}
+        u, found = fast._ef.blockstore_get_heights(self.dir, keys, heightmap.CHUNK)
+        return {k: u[i] for i, k in enumerate(ks) if found[i]}
+
+
 class Build:
     """One graded block's cache handle: begin() makes it before the block is built."""
 
@@ -308,17 +372,114 @@ class Build:
 
     def hit(self, out_dir, name, ter_name, ground_at, with_surface):
         """The block written from the cache (heightmap PNG name, masks, .ter ter_name in out_dir) when its entry and
-        every chunk are there: its info (as the build's, without stages), or None (build it)."""
-        got = fast._ef.blockstore_get_block(self.dir, self.block_key, int(self.size))
+        every chunk are there: its info (as the build's, without stages), or None (build it). In a revisit.stale
+        scope a miss falls back to an older generation's block (stale_hit: its info has "stale", the generation's
+        id); with only the older generation alone is read and a miss raises revisit.StaleMiss."""
+        got = None if revisit.stale_only() else self._read(self.block_key, self.chunks, self.disk, with_surface)
+        gid = None
+        if got is None:
+            for gen in revisit.stale_gens():
+                got = self.stale_hit(gen, with_surface)
+                if got is not None:
+                    gid = gen["id"]
+                    break
+            if got is None:
+                if revisit.stale_only():
+                    revisit.end(self.scope)
+                    raise revisit.StaleMiss("block")
+                return None
+        info = self._write(got, out_dir, name, ter_name, ground_at)
+        if gid is not None:
+            info["stale"] = gid
+            revisit.note_stale_hit(gid)
+        self.hit_info = info
+        return info
+
+    def _latest_path(self):
+        """The file of this block place's "latest" note: keyed by every part of the block's key but the generation's
+        (the code, the plans' format) and the pads."""
+        # (nor the map data's versions: a run learns its shards' releases as it reads them, the first block's key is
+        # made before; a block of other map data is still the place's last version, and the road tiles, keyed by the
+        # versions, then miss and end the stale mode)
+        parts = {n: v for n, v in self.parts.items() if n not in ("code", "plans", "versions")}
+        # (the surface's pad switches come on with a session's first pads, as the pads do: not the place's either)
+        parts["settings"] = tuple(self.setting)[:9] if isinstance(self.setting, tuple) else self.setting
+        h = _h("bnge-block-latest", *sorted(parts.items()), repr(float(self.cx)), repr(float(self.cy)), int(self.size),
+               repr(float(self.q))).hex()
+        if os.environ.get("BNGE_BLOCK_NOTE_LOG"):       # (debugging: what a place's note is keyed by)
+            log.info("block note %s: %r", h[:12], (sorted(parts.items()), self.cx, self.cy, self.size, self.q))
+        return os.path.join(self.dir, h[:2], h + LATEST_EXT)
+
+    def note_latest(self):
+        """This block (just kept) is the last one kept at its place: its generation and keys in the place's note."""
+        ks = [k for _, _, k in self.cells]
+        rec = {"code": self.parts["code"], "plans": self.parts["plans"], "block": self.block_key.hex(),
+               "chunks": [self.chunk_keys[k].hex() for k in ks]}
+        path = self._latest_path()
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+    def latest(self):
+        """The place's note ({"code", "plans", "block", "chunks"}), or None."""
+        try:
+            with open(self._latest_path(), encoding="utf-8") as f:
+                rec = json.load(f)
+            ks = [k for _, _, k in self.cells]
+            if not (isinstance(rec["code"], str) and isinstance(rec["plans"], str) and len(rec["chunks"]) == len(ks)):
+                return None
+            bytes.fromhex(rec["block"])
+            return rec
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def latest_is_current(self):
+        """Is the last block kept at this place this generation's (whatever its pads)?"""
+        rec = self.latest()
+        return rec is not None and rec["code"] == self.parts["code"] and rec["plans"] == self.parts["plans"]
+
+    def stale_hit(self, gen, with_surface=True):
+        """(idx, holes, meta, heights) of the last block kept at this place when it is generation gen's, or None: none
+        kept, another generation's, its entry or one of its chunks gone, or this code cannot read that generation's
+        blocks. Nothing goes into the anchor's chunk memory."""
+        if not revisit.readable(gen, "block"):
+            return None
+        rec = self.latest()
+        if rec is None or rec["code"] != gen["block"] or rec["plans"] != gen["plans"]:
+            return None
+        try:
+            ks = [k for _, _, k in self.cells]
+            chunk_keys = {k: bytes.fromhex(h) for k, h in zip(ks, rec["chunks"])}
+            got = self._read(bytes.fromhex(rec["block"]), None, _AltDisk(self.dir, chunk_keys), with_surface)
+        except (ValueError, TypeError):
+            return None
+        if got is not None:
+            try:
+                os.utime(self._latest_path(), None)     # (used: prune_latest)
+            except OSError:
+                pass
+        return got
+
+    def _read(self, block_key, chunks, disk, with_surface):
+        got = fast._ef.blockstore_get_block(self.dir, block_key, int(self.size))
         if got is None:
             return None
         idx, holes, meta = got
         meta = json.loads(bytes(meta).decode("utf-8"))
         if bool(meta.get("surface")) != bool(with_surface):
             return None
-        u = heightmap.chunk_grid(self.cx, self.cy, self.size, self.chunks, self.disk)
+        u = heightmap.chunk_grid(self.cx, self.cy, self.size, chunks, disk)
         if u is None:
             return None
+        return idx, holes, meta, u
+
+    def _write(self, got, out_dir, name, ter_name, ground_at):
+        idx, holes, meta, u = got
         import surface as surfacemod
         q, z_base, max_height, qgrid = heightmap.write_png(os.path.join(out_dir, name), u, self.q)
         gz = heightmap.height_at(qgrid, z_base, max_height, self.cx, self.cy, *ground_at) if ground_at else None
@@ -336,7 +497,6 @@ class Build:
         info["ter"], mats = surfacemod.write_ter(out_dir, ter_name, qgrid, ter)
         if mats is not None:
             info["mats"] = mats
-        self.hit_info = info
         return info
 
     # ---- a build ----
@@ -368,7 +528,10 @@ class Build:
         keys = [self.chunk_keys[k] for k, _ in computed]
         u = (np.ascontiguousarray(np.stack([c for _, c in computed]), np.float64) if computed
              else np.zeros((0, heightmap.CHUNK, heightmap.CHUNK)))
-        return _writer.write(self.cache_dir, keys, u, block)
+        kept = _writer.write(self.cache_dir, keys, u, block)
+        if kept:
+            self.note_latest()
+        return kept
 
     def _short(self, info, keep, g, ks):
         """Why the build may not be kept (None: it may)."""

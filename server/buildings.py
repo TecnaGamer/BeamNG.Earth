@@ -285,8 +285,11 @@ def parse_color(val):
 # deep shadow left out). The roof textures are near neutral grey and the vertex colour multiplies them, so the tint
 # is the photo's colour over the texture's own mean (ROOF_TEX_MEAN, measured from the stock textures), at most 1.
 # The tile's photo is fetched (netfetch's limits; the same tiles the ground photo takes near the car) on a thread
-# started as the tile begins (RoofPhotoFuture), while its footprints are put together; a failed or slow fetch faults
-# the tile (revisit: built again, coloured, on a later visit) and keeps the procedural roofs.
+# started as the tile begins (RoofPhotoFuture), while its footprints are put together, the lazy sources' tiles too
+# (imagery.fetch_lazy: a render reads those from disk only); a failed or slow fetch faults the tile (revisit: built
+# again, coloured, on a later visit) and keeps the procedural roofs. A tile the sources hold too little of once all
+# was decided (a state's edge, a remembered nodata answer: roof_photo_final) keeps them without a fault, kept only
+# until the first of those answers expires (revisit.expires).
 ROOF_PHOTO_ON = os.environ.get("BNE_ROOF_PHOTO", "on") != "off"
 ROOF_PHOTO_INSET_M = 1.0
 ROOF_PHOTO_MIN_PX = 6
@@ -324,6 +327,7 @@ class RoofPhoto:
 
 
 ROOF_PHOTO_WAIT_S = 8.0     # s the buildings wait for the tile's photo at most (then the procedural roofs, a fault)
+NEG_RECHECK_S = 86400.0     # s a tile built where the sources hold no photo is kept at most (roof_photo_final)
 _PHOTO_READERS = {}
 _PHOTO_LOCK = __import__("threading").Lock()
 _PHOTO_POOL = None
@@ -370,20 +374,26 @@ class RoofPhotoFuture:
             if _PHOTO_POOL is None:
                 from concurrent.futures import ThreadPoolExecutor
                 _PHOTO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="roofphoto")
-        self.fut = _PHOTO_POOL.submit(roof_photo, frame, x0, y0, x1, y1, cache_dir, True, None,
+        self.fut = _PHOTO_POOL.submit(roof_photo_final, frame, x0, y0, x1, y1, cache_dir, True, None,
                                       getattr(_URGENT, "on", False))
 
     def colours(self, rings):
         if self.fut is None:
             return None
         try:
-            ph = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
+            ph, final, until = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
         except Exception:
-            ph = None
+            ph, final, until = None, False, None
         if ph is None:
             import revisit
-            revisit.fault()         # (a later visit builds it again, with the photo)
-            return None
+            if not final:           # (could not be had, or not yet: a later visit builds it again, with the photo)
+                revisit.fault()
+            elif until is not None:     # (none there on answers that expire: kept until the first one does)
+                revisit.expires(until)
+            return None             # (none there: the procedural roofs are the tile's answer)
+        if until is not None:       # (a later source's photo where an earlier one's "nothing there" expires)
+            import revisit
+            revisit.expires(until)
         return ph.colours(rings)
 
 
@@ -418,14 +428,31 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
     on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off). px: its size (default
     ROOF_PHOTO_PX; coarser is cheaper: the squares' colour votes). urgent: fetched as netfetch "urgent"
     (urgent_photos)."""
+    return roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online, px, urgent)[0]
+
+
+def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
+    """(roof_photo's RoofPhoto or None, final, until). A photo's until: when an earlier lazy source's "nothing there"
+    that handed some of its tiles to a later source expires (None: none did). A None is final when it is the answer:
+    no regional photo covers the box or ROOF_PHOTO_ON is off (until None: for good), or every lazy source tile it
+    could use is decided
+    (imagery.lazy_state: on disk, or known to hold nothing there) and the sources still hold too little of it (a
+    state's edge, a remembered nodata answer); those answers expire (a miss's host miss_ttl; the non-lazy sources'
+    misses, not looked at one by one, within NEG_RECHECK_S), so until (unix s) is when the first may: what was built
+    on it is kept only until then (revisit.expires). Not final when the photo could not be had (a fetch failed, a
+    lazy tile not decided: online=False, an error): RoofPhotoFuture's revisit fault only then. Before 2026-11-13 any
+    None was a fault: where Maryland's md6in was remembered missing (its service's white, kept as a miss for 90 days)
+    no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the tiles round the car at
+    every visit); and online the lazy sources (md6in, New York's, the German states') were read from disk only, so a
+    tile built before the ground photo's warm had fetched its photo faulted too."""
     if not ROOF_PHOTO_ON or cache_dir is None:
-        return None
+        return None, True, None
     try:
         import imagery
         import streetfront
         sources = _photo_sources(frame, x0, y0, x1, y1)
         if not sources:
-            return None
+            return None, True, None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
         # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
@@ -434,20 +461,28 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
         px = int(-(-int(px or ROOF_PHOTO_PX) // cells) * cells)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
-        if urgent and online:
-            with reader.urgent():
-                rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
-        else:
+        with (reader.urgent() if urgent and online else __import__("contextlib").nullcontext()):
+            if online:          # (the lazy sources' tiles too: render reads those from disk only)
+                reader.fetch_lazy(frame, x0 - pad, y0 - pad, size, px)
             rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
         if sum(used.get(name, 0) for name in sources) < px * px * 0.95:
-            return None
-        return RoofPhoto(rgb, x0 - pad, y0 - pad, size)
+            # (too little of it: the answer when every lazy tile it could use is decided; render raised where a
+            # non-lazy source's fetch failed)
+            resolved, expiry, _todo = reader.lazy_state(frame, x0 - pad, y0 - pad, size, px)
+            if not resolved:
+                return None, False, None
+            cap = __import__("time").time() + NEG_RECHECK_S
+            return None, True, cap if expiry is None else min(expiry, cap)
+        # (the photo; where an earlier lazy source's "nothing there" gave a tile to a later one, kept until that expires.
+        # Offline, roof_photo's callers: the photo alone)
+        expiry = reader.lazy_state(frame, x0 - pad, y0 - pad, size, px)[1] if online else None
+        return RoofPhoto(rgb, x0 - pad, y0 - pad, size), True, expiry
     except imagery.ImageryError:
-        return None
+        return None, False, None
     except Exception as ex:             # (the procedural roofs rather than none)
         import logging
         logging.getLogger("earthd.buildings").debug("roof photo: %s: %s", type(ex).__name__, ex)
-        return None
+        return None, False, None
 
 
 def photo_tint(mat, rgb):
@@ -2612,7 +2647,11 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
 # vertices (the user's report 2026-10-14: slabs across a Fells Point street; dense tiles had up to 81k vertices).
+# The far tiles and packs too (players' "spiderweb" reports 2026-11-14: a Manhattan pack was one mesh of 705k
+# vertices, a far tile 80k): every building shape is build_parts' meshes, several in one shape (write: an object each).
 MAX_MESH_VERTS = 60000
+VERTS_MAX = 65535           # cdae.VERTS_MAX: a single building past it is left out (build_parts; none near: ~11k most)
+over_limit = {"buildings": 0}   # buildings left out so by this process (build_parts)
 
 
 def _concat(meshes):
@@ -2629,7 +2668,8 @@ def _concat(meshes):
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
-    lite mesh of its buildings as a 7th element (write: the shape's coarse detail)."""
+    lite mesh of its buildings as a 7th element (write: the shape's coarse detail). A building alone past VERTS_MAX
+    (the engine's 16-bit indices: its triangles would join far-apart vertices) is left out, counted in over_limit."""
     parts, cur, cur_lite, n = [], [], [], 0
     if not isinstance(specs_and_ground, (list, tuple)):
         specs_and_ground = list(specs_and_ground)
@@ -2646,6 +2686,9 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
     for i, item in enumerate(specs_and_ground):
         one = prepared[i][0] if prepared is not None else build([item], lite)
         if one is None:
+            continue
+        if len(one[0]) > VERTS_MAX:
+            over_limit["buildings"] += 1
             continue
         if cur and n + len(one[0]) > max_verts:
             flush()
@@ -5247,8 +5290,27 @@ BLD_LOD_PX = 2700.0
 
 def write(path, mesh, collision_only=False):
     """The tile's .cdae (cdae.encode with one primitive per material; collision_only: a never-drawn collision detail).
-    A mesh with a 7th element (build_parts with_lod) gets that lite mesh as its coarse detail below BLD_LOD_PX."""
+    A mesh with a 7th element (build_parts with_lod) gets that lite mesh as its coarse detail below BLD_LOD_PX.
+    A list of meshes (build_parts' without lite meshes: a far tile's, a pack's, a skyline's): one shape, each mesh its
+    own object (cdae.encode's parts: under the engine's 16-bit indices each)."""
     import cdae
+    if isinstance(mesh, list):
+        if len(mesh) > 1:
+            if collision_only or any(len(m) > 6 and m[6] is not None for m in mesh):
+                raise ValueError("buildings.write: several meshes are drawn ones without lite meshes")
+            mats = list(mesh[0][4])
+            parts = []
+            for Pp, UVp, Tp, Mp, matsp, Cp in (m[:6] for m in mesh[1:]):
+                for m in matsp:
+                    if m not in mats:
+                        mats.append(m)
+                remap = np.array([mats.index(m) for m in matsp], np.int64)
+                parts.append({"positions": Pp, "tris": Tp, "uvs": UVp, "tri_materials": remap[np.asarray(Mp)],
+                              "colors": Cp})
+            P, UV, T, M, _mats, C = mesh[0][:6]
+            return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="buildings", colors=C,
+                              parts=parts)
+        mesh = mesh[0]
     P, UV, T, M, mats, C = mesh[:6]
     mats = list(mats)
     lods = None
@@ -6567,11 +6629,11 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None,
     import json
     import os
     items, lamps, (x0, y0, _x1, _y1) = far_items(frame, tx, ty, md, ground, lamp_region, urban_fn, widths, left_hand)
-    mesh = build(items, lite=True)
+    mesh = build_parts(items, lite=True)      # (meshes under the 16-bit indices, one shape: write)
     data = {"v": 1}
     if lamps:
         data["lamps"] = lamps
-    if mesh is not None:
+    if mesh:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"
         write(os.path.join(out_dir, shape), mesh)
         data["shape"] = f"{vfs_dir}/{shape}"
@@ -6742,14 +6804,17 @@ def _sky_colour(look, f):
 
 
 def _sky_mesh(items):
-    """The skyline mesh of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
+    """The skyline meshes of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
     texel, coloured per vertex (~4 per corner + the roof's corners: a row house is 20 vertices, the lite mesh ~72).
-    (positions, uvs, tris, tri material indices, MATERIALS, colours) as build, or None."""
+    [(positions, uvs, tris, tri material indices, MATERIALS, colours)] as build_parts (whole buildings, each mesh
+    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None."""
     m = Mesh()
     mi = MATERIALS.index(MARBLE)
     ms = MATERIALS.index(SKY_WALL)
     uv = SKY_UV
+    starts = []                 # each building's first vertex (the cuts between meshes: _cut_buildings)
     for spec, gmin, gmax in items:
+        starts.append(m.n)
         if spec.cls == landmarks.LANDMARK:      # (its far-away model, not a box of its footprint's size)
             landmarks.build(m, spec, gmin, _landmark_token(spec), lite=True, tokens=_landmark_tokens())
             continue
@@ -6796,12 +6861,54 @@ def _sky_mesh(items):
                   lite=True)
     if not m.n:
         return None
-    P, UV, T, M, C = m.arrays()
-    import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
-    if shells.ON:
-        P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (build_parts' vertex budget counts the closed
-                        # mesh; the walls already reach SKIRT_M under the ground: the bottom capped there)
-    return P, UV, T, M, MATERIALS, C
+    out = []
+    _sky_close(_cut_buildings(*m.arrays(), starts, MAX_MESH_VERTS), out)
+    return out or None
+
+
+def _sky_close(pieces, out):
+    """_sky_mesh's pieces [(P, UV, T, M, C, starts)] each closed into solids (shells.close, BNE_WATERTIGHT) and added
+    to out as build's meshes, in order. The cut counts the open vertices: a piece past VERTS_MAX once closed (its caps'
+    vertices) is cut again between its buildings, in halves; only a building past it alone is left out (over_limit)."""
+    import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07)
+    for P, UV, T, M, C, starts in pieces:
+        P2, T2, M2, UV2, C2 = P, T, M, UV, C
+        if shells.ON:
+            P2, T2, M2, (UV2, C2) = shells.close(P, T, M, (UV, C), skirt=False)  # (the walls already reach under
+                                                                                # the ground: the bottom capped there)
+        if len(P2) <= VERTS_MAX:
+            out.append((P2, UV2, T2, M2, MATERIALS, C2))
+        elif any(0 < k < len(P) for k in starts):
+            _sky_close(_cut_buildings(P, UV, T, M, C, starts, max(1, len(P) // 2)), out)
+        else:
+            over_limit["buildings"] += 1
+
+
+def _cut_buildings(P, UV, T, M, C, starts, limit):
+    """A Mesh's arrays (positions, uvs, tris, materials, colours; each building's vertices and triangles after the
+    one before's, starts their first vertices) cut between buildings into pieces of at most limit vertices each (a
+    building past it: a piece alone), in order. [(P, UV, T, M, C, its buildings' starts)]; the arrays as they are
+    when they fit."""
+    n = len(P)
+    if n <= limit:
+        return [(P, UV, T, M, C, list(starts))]
+    cuts, prev = [0], 0
+    for b in sorted(set(int(k) for k in starts if 0 < k < n)) + [n]:
+        if b - cuts[-1] > limit and prev > cuts[-1]:
+            cuts.append(prev)
+        prev = b
+    cuts.append(n)
+    T = np.asarray(T, np.int64)
+    piece = np.searchsorted(np.asarray(cuts), T.min(1), side="right") - 1
+    out = []
+    for k in range(len(cuts) - 1):
+        a, b = cuts[k], cuts[k + 1]
+        sel = piece == k
+        Tk = T[sel] - a
+        if len(Tk) and Tk.max() >= b - a:
+            raise ValueError("_cut_buildings: a triangle across two buildings")
+        out.append((P[a:b], UV[a:b], Tk, np.asarray(M)[sel], C[a:b], [int(k) - a for k in starts if a <= k < b]))
+    return out
 
 
 def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
