@@ -188,6 +188,13 @@ class DemUnavailable(IOError):
     """Neither Mapterhorn nor AWS could deliver a tile (network, offline)."""
 
 
+class NotOnDisk(Exception):
+    """A tile a reader inside Dem.cached_only() needs is not in the disk cache: nothing was downloaded for it.
+    Deliberately not a netfetch.FetchError: the DEM's own fall-backs catch those and answer from another source
+    (AWS, a coarser ancestor tile, the surface model instead of the ground), which for a reader that cannot
+    download would be a height off the one the world has rather than no height at all."""
+
+
 def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
     c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
@@ -519,6 +526,10 @@ class Dem:
                         return c["index"]
             except (OSError, ValueError):
                 pass
+            if getattr(self._local, "cached", False):
+                # (cached_only: the list as it stands, from disk or not at all. Not fetched, and not marked failed
+                #  either: that would hold the retry off for the readers that may download.)
+                return c["index"]
             try:
                 body = self.fetcher.get(COVERAGE_URL, kind="demand").body
                 idx = coverage_index(json.loads(body))
@@ -588,6 +599,8 @@ class Dem:
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
             return None
+        if getattr(self._local, "cached", False):       # cached_only: the one place every tile download goes through
+            raise NotOnDisk(f"{src['name']} tile {z}/{x}/{y} is not in the disk cache")
         if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
             got = self._download_pack(z, x, y, kind)
             if got is not False:
@@ -807,7 +820,11 @@ class Dem:
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
-        own _download to meet)."""
+        own _download to meet). Nothing is started for a reader inside cached_only(): a probe runs on a pool thread
+        of its own, which the lane does not reach, and every caller asks _download for the same tile right after
+        anyway (from the disk cache, or NotOnDisk)."""
+        if getattr(self._local, "cached", False):
+            return []
         futs = []
         with self._lock:
             for k in keys:
@@ -1261,9 +1278,50 @@ class Dem:
         """Whether this thread is in urgent() (a helper it starts carries the lane over: grading._plan_missing)."""
         return getattr(self._local, "urgent", False)
 
+    @contextlib.contextmanager
+    def cached_only(self):
+        """Inside this, every sample() of this thread reads only the elevation already in the disk cache: a tile that
+        would have to be downloaded raises NotOnDisk instead, and nothing is queued or probed for it either. For a
+        reader that must not outrun the world's own downloads nor spend the host's rate limits on ground the player
+        has never been near (the modding API's cached-only road graph, earthd.Server.road_graph_data). It holds for
+        every source a tile comes from through _download -- Mapterhorn, its CDN packs, AWS and the file list.
+
+        Its loads run in this thread, never in the pool: the pool's futures are shared with the world's own loads
+        (_inflight), and a load that cannot download must not be the one a block the player waits for ends up
+        waiting on. The tiles it does get are kept in the LRU like any other, so the window is sampled hundreds of
+        times without decoding them again."""
+        prev = getattr(self._local, "cached", False)
+        self._local.cached = True
+        try:
+            yield
+        finally:
+            self._local.cached = prev
+
+    def _cached_tile(self, key):
+        """One tile for cached_only(): the LRU's copy, else loaded in this thread (NotOnDisk when it is not on
+        disk) and kept there."""
+        with self._lock:
+            a = self._lru.get(key)
+            if a is not None:
+                self._lru.move_to_end(key)
+                return a
+        a = self._load_tile(key)
+        with self._lock:
+            self._lru[key] = a
+            while len(self._lru) > self.mem_tiles:
+                self._lru.popitem(last=False)
+        return a
+
     def tiles(self, keys, progress=None):
         """Fetch many tiles concurrently (deduplicated across callers)."""
         keys = list(dict.fromkeys(keys))
+        if getattr(self._local, "cached", False):       # cached_only: in this thread, nothing shared with the pool
+            out = {}
+            for k in keys:
+                out[k] = self._cached_tile(k)
+                if progress:
+                    progress(len(out), len(keys))
+            return out
         out, futs, new = {}, {}, []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool

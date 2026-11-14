@@ -173,7 +173,7 @@ end
 | `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
-| `roadGraph(lat, lon, opts, callback)` | 1.10: one window of the road network round a point, out of the map cells the app already has, as a file the add-on reads (see "The road graph round a point" below). Returns the request's id, or `nil, why` |
+| `roadGraph(lat, lon, opts, callback)` | 1.10: one window of the road network round a point, out of what the app already has on disk, as the graph's own tables (see "The road graph round a point" below). Returns the request's id, or `nil, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -345,8 +345,9 @@ The callback gets one result, once:
 - `anchorId`, `serial`: the anchor whose frame the graph's coordinates are in, and the request's number within the
   session. The anchor is the one the world is built round now, the one `pose()` and `toGame` / `toGeo` use; a rebase
   (`onBeamNGEarthRebased`) makes an older graph's `x, y` stale, so ask again rather than convert them.
-- `complete`: every map cell of the window was on disk. False means some were not, and they were not asked for:
-  the graph is the roads of the cells that were there.
+- `complete`: everything the window needed was on disk. False means something was not, and nothing was asked for:
+  some of its map cells were missing, and the graph is the roads of the cells that were there, or the ground under
+  them was, and the graph is empty. What is in it is right either way; `complete = false` says it is not all of it.
 - `error`: why there is no graph: `'bad coordinates'`, no map data, the app started without roads, no world yet,
   `'timed out'` (no answer in 90 s).
 
@@ -373,12 +374,14 @@ part of this call's promise: read `nodes`, `edges`, `lines` and `rules`, and exp
 
 #### What a cached-only road graph is and is not good for
 
-- **Nothing is downloaded for it.** The app reads the roads, signals, crossings and route layers of the window only
-  where it has them on disk, at no download priority at all. A window over ground the player has never been near
-  comes back with few roads and `complete = false`, which is the honest answer rather than a slow one. (The ground
-  heights under the nodes come from the app's elevation data, which it reads as it does everywhere else.) There is
-  deliberately no fetching form of this request: an add-on that wants a region's roads should ask for the region to
-  be downloaded (the map's area download) and then ask for the graph.
+- **Nothing is downloaded for it.** Not a map cell and not an elevation tile. The app reads the roads, signals,
+  crossings and route layers of the window, the cells around them its road rules look at, and the ground heights
+  under the nodes, only where it has them on disk already, at no download priority at all. A window over ground the
+  player has never been near comes back with few roads and `complete = false`, which is the honest answer rather
+  than a slow one; where the ground under it is not there it comes back with no roads rather than with roads at
+  guessed heights, `complete = false` again, and the add-on can ask for it once more when the world has been over
+  it. There is deliberately no fetching form of this request: an add-on that wants a region's roads should ask for
+  the region to be downloaded (the map's area download) and then ask for the graph.
 - **It is not the AI's graph.** The file is the add-on's own copy and never reaches the game's map, so it moves no
   car and no traffic, and the player's own graph (`navgraph_*.json`, rebuilt every 400 m as they drive) is never
   touched by a request. Equally, an add-on cannot steer the AI by asking for a graph.

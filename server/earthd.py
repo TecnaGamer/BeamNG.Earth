@@ -120,6 +120,7 @@ import pools as poolsmod  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
+import gradesep as gradesepmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwear  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
@@ -2273,8 +2274,14 @@ class Server:
         """navgraph.build's graph around (x, y) of anchor aid, built in this process: (graph, cells not read) or
         None when the anchor or the map data has gone. Nothing is written and nothing is sent; the callers decide
         what the graph is for. `window` stands in for navgraph's own WINDOW_M (the modding API's roadGraph asks for
-        a radius of its own); cached_only reads only the map cells already on disk and fetches none, and then the
-        second value says how many cells of the window were left unread. Worker threads.
+        a radius of its own). Worker threads.
+
+        cached_only: the build downloads nothing at all -- the map cells it reads are the ones on disk, and so is
+        the ground under them (dem.cached_only) and the cells round them a layer's own hook reaches for
+        (gradesep.cached_only). The second value is then how much of the window was not read: the cells of it that
+        were not on disk, and 1 where they all were but something else the build needed was not. Nothing is
+        approximated for what is missing, so an add-on reading a graph with "complete" false has roads and heights
+        that are right as far as they go, with holes, rather than a whole window it cannot trust.
 
         `at` is (lat, lon) in place of x, y, converted here rather than by the caller, and that is the whole point
         of it: the anchor can be re-centred between a caller working out x, y and this running on a worker thread,
@@ -2321,66 +2328,98 @@ class Server:
                     log.debug("road graph: %s of %s: %s: %s", layer, k, type(e).__name__, e)
             return out
 
-        if cached_only:
-            # (as the API's cachedOnly places read: the layers already on disk, through layer_unkept so a wide
-            #  read does not push every road tile's roads out of the MEM_MB cache. Nothing is fetched and no
-            #  background job is queued, so a window over ground the player has not been near has fewer roads.)
-            feats = on_disk("roads")
-            missing = len(keys) - len(feats)
-        else:
-            feats = [cd.layers.get("roads") for cd in mapcells.load_cells(self.mapdata, keys, ("roads",))]
         zoom = anchor.zooms[0]
         urban = self.surface.urban if self.surface is not None else None
         g = self.grader_for(anchor)
+        short = None
 
         def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles')
             z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom))
             return g.apply(la_, lo_, z, gradingmod.ROAD_LIFT) if g is not None else z
-        decks = {}
-        try:            # the bridges' deck heights (the road tiles' BridgeProfiles, one per anchor)
-            with self.grader_lock:
-                if anchor.bridges is None:
-                    anchor.bridges = self.chain_view(anchor, "bridges", elev)
-            for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
-                decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
-                                                  anchor.bridges.depth_of(fid)))
-        except Exception as e:          # no decks: the graph follows the ground under bridges
-            log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-        # (Germany's mapped nodes too: its junction signs on, the graph's window in Germany)
-        de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
-        want_nodes = secrossings.wanted(self.country(anchor), de_nodes)
-        if cached_only:
-            # (the same rule for the window's other layers. signals_for, secrossings.read and _de_routes each read
-            #  their cells through cell(kind="demand"), which fetches: a cached-only graph would otherwise download
-            #  the infrastructure and road_routes layers of its window, and at demand priority, ahead of the world's
-            #  own. Read from disk instead, so "nothing is fetched" holds for every layer the graph reads.)
-            infra = on_disk("infrastructure")
+
+        with contextlib.ExitStack() as lane:
+            if cached_only:
+                # One lane for the whole build, because a build reads more than the cells handed to it and those
+                # reads go at demand priority, ahead of the world the player is driving through:
+                #  * the DEM downloads a tile that is not on disk (dem.cached_only). The ground of a 16 km window
+                #    is ~150 z16 tiles, ~15 MB, and the host's rate limits are the player's;
+                #  * a roads layer carries the map data's own hook to the eight cells round it, which
+                #    roads.level_ranges and roads.home_copy read as the graph is built (gradesep.cached_only).
+                # revisit.scope: and what those misses record stays in this build. A fault in a thread with no
+                # scope of its own is the process's, so every build the server has running meanwhile (the player's
+                # road tiles) would go unkept because an add-on asked about ground nobody has driven.
+                lane.enter_context(self.dem.cached_only())
+                lane.enter_context(gradesepmod.cached_only())
+                short = lane.enter_context(revisitmod.scope())
+                # (the window's own cells: the ones on disk, read the way the player's graph reads them (on_disk).
+                #  Nothing is fetched and no background job is queued, so a window over ground the player has not
+                #  been near has fewer roads.)
+                feats = on_disk("roads")
+                missing = len(keys) - len(feats)
+            else:
+                feats = [cd.layers.get("roads") for cd in mapcells.load_cells(self.mapdata, keys, ("roads",))]
+            decks = {}
+            try:            # the bridges' deck heights (the road tiles' BridgeProfiles, one per anchor)
+                with self.grader_lock:
+                    if anchor.bridges is None:
+                        anchor.bridges = self.chain_view(anchor, "bridges", elev)
+                for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
+                    decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
+                                                      anchor.bridges.depth_of(fid)))
+            except Exception as e:          # no decks: the graph follows the ground under bridges
+                log.debug("navgraph decks: %s: %s", type(e).__name__, e)
+            # (Germany's mapped nodes too: its junction signs on, the graph's window in Germany)
+            de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
+            want_nodes = secrossings.wanted(self.country(anchor), de_nodes)
+            if cached_only:
+                # (the same rule for the window's other layers. signals_for, secrossings.read and _de_routes each
+                #  read their cells through cell(kind="demand"), which fetches: a cached-only graph would otherwise
+                #  download the infrastructure and road_routes layers of its window, and at demand priority, ahead
+                #  of the world's own. Read from disk instead, so "nothing is fetched" holds for every layer.)
+                infra = on_disk("infrastructure")
+                try:
+                    signals = furnituremod.mapped_signals(anchor.frame, infra)
+                    nodes = secrossings.nodes(anchor.frame, infra) if want_nodes else None
+                except Exception as e:      # (as signals_for / secrossings.read do: guessed signals, not no graph)
+                    log.debug("road graph signals: %s: %s", type(e).__name__, e)
+                    signals, nodes = None, None
+                de_routes = [lr for lr in on_disk("road_routes") if lr is not None and len(lr)] if de_nodes else ()
+            else:
+                signals = furnituremod.signals_for(self.mapdata, anchor.frame, keys)
+                nodes = secrossings.read(self.mapdata, anchor.frame, keys) if want_nodes else None
+                # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
+                de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
+            tun, open_tun = {}, {}
             try:
-                signals = furnituremod.mapped_signals(anchor.frame, infra)
-                nodes = secrossings.nodes(anchor.frame, infra) if want_nodes else None
-            except Exception as e:      # (as signals_for / secrossings.read do: guessed signals, not no graph)
-                log.debug("road graph signals: %s: %s", type(e).__name__, e)
-                signals, nodes = None, None
-            de_routes = [lr for lr in on_disk("road_routes") if lr is not None and len(lr)] if de_nodes else ()
-        else:
-            signals = furnituremod.signals_for(self.mapdata, anchor.frame, keys)
-            nodes = secrossings.read(self.mapdata, anchor.frame, keys) if want_nodes else None
-            # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
-            de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
-        tun, open_tun = {}, {}
-        try:
-            with self.grader_lock:
-                if anchor.tunnels is None:
-                    anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
-            tun, open_tun = navgraphmod.tunnel_floors(anchor.tunnels, feats, (x - w, y - w, x + w, y + w))
-        except Exception as e:
-            log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
-        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, window=win, decks=decks, tunnels=tun, open_tunnels=open_tun,
-                                  widths=self.road_widths,
-                                  left_hand=self.left_hand(anchor), mph=self.mph(anchor),
-                                  signals=signals,
-                                  country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
-                                  de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
+                with self.grader_lock:
+                    if anchor.tunnels is None:
+                        anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
+                tun, open_tun = navgraphmod.tunnel_floors(anchor.tunnels, feats, (x - w, y - w, x + w, y + w))
+            except Exception as e:
+                log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
+            try:
+                graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, window=win, decks=decks, tunnels=tun, open_tunnels=open_tun,
+                                          widths=self.road_widths,
+                                          left_hand=self.left_hand(anchor), mph=self.mph(anchor),
+                                          signals=signals,
+                                          country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
+                                          de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
+            except demmod.NotOnDisk as e:
+                # The window's ground is not all in the disk cache (cached_only only). An empty window that says it
+                # is incomplete, rather than one whose nodes stand at heights taken from somewhere else: an add-on
+                # cannot tell a made-up height from a measured one, while "complete": false says plainly that the
+                # window is not all there yet and can be asked for again once the world has been over it. Every
+                # cell counts unread -- none of the window could be built.
+                log.debug("road graph: the window's ground is not all on disk (%s): an empty window instead", e)
+                graph = navgraphmod.build(anchor.frame, [], elev, (x, y), urban, window=win,
+                                          left_hand=self.left_hand(anchor), mph=self.mph(anchor),
+                                          country=self.country(anchor), de_on=designsmod.enabled(self.dej_on))
+                missing = len(keys)
+        if short is not None and short.n and not missing:
+            # (every cell of the window was on disk, but something else the build needed was not: a cell's
+            #  neighbours, the land cover a road's surface rule reads. revisit counts what a build was short of,
+            #  and a window built short of something is no more complete than one with a cell missing.)
+            missing = 1
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
@@ -7973,11 +8012,12 @@ class Connection:
         is converted to the committed anchor's frame (the frame the graph's own x, y are in), the build runs in
         api_pool beside places, and the graph is written to the session folder as roadgraph_<aid>_<serial>.json, which
         is not a name the mod reads as the player's (navgraph.write's prefix). Cached-only is its only mode: nothing
-        is fetched and no background job is queued, so "complete" says whether every cell of the window was there and
-        a window over ground the player has never been near answers with few roads rather than slowly. The build never
-        goes to the road pool a pooled session builds the player's graph in: an add-on's request must not take a slot
-        the world needs. Each successful write sweeps this anchor's older roadgraph files down to the newest
-        ROAD_GRAPH_KEEP, and never touches a navgraph_ file."""
+        is fetched and no background job is queued, so "complete" says whether everything the window needed was
+        there -- its cells, the cells round them and the ground under them -- and a window over ground the player has
+        never been near answers with few roads, or none where the ground is not there either, rather than slowly.
+        The build never goes to the road pool a pooled session builds the player's graph in: an add-on's request must
+        not take a slot the world needs. Each successful write sweeps this anchor's older roadgraph files down to the
+        newest ROAD_GRAPH_KEEP, and never touches a navgraph_ file."""
         rid = msg.get("id")
         # (the mod's own counter, and the only way it can match an answer to a request: without one there is nothing
         #  to answer to. A Lua number may arrive as 1 or 1.0 depending on the game's JSON encoder, so either is taken

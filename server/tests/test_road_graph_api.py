@@ -1,15 +1,17 @@
 """earthd's 'road_graph': the modding API's one road-graph window at a point an add-on names (api.roadGraph in the
 mod), and Server.road_graph_data behind it.
 
-The build reads only the map cells already on disk (cached_only) and fetches nothing, not the roads layers and not the
-infrastructure or road_routes layers the player's graph reads through cell(kind="demand"); it says how many cells of
-the window were left unread, and builds the window it was asked for rather than navgraph.WINDOW_M.
+The build reads only what is already on disk (cached_only) and fetches nothing: not the roads layers, not the
+infrastructure or road_routes layers the player's graph reads through cell(kind="demand"), not the cells round them a
+roads layer's own hook reaches for (gradesep), and not the DEM tiles of the ground under them. It says how much of the
+window it could not read, and builds the window it was asked for rather than navgraph.WINDOW_M.
 The request clamps its radius to ROAD_GRAPH_RADIUS_MAX_M, defaults to navgraph.WINDOW_M, answers with an error rather
 than throwing when it cannot be served (bad coordinates, no map data, a server started without roads, no anchor yet),
 writes under its own name (roadgraph_<aid>_<serial>.json, never the player's navgraph_<aid>_*.json), and sweeps the
 anchor's older road-graph files down to ROAD_GRAPH_KEEP while leaving the player's graph where it is.
 """
 import asyncio
+import contextlib
 import os
 import sys
 import tempfile
@@ -25,6 +27,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import dem  # noqa: E402
+import gradesep  # noqa: E402
 import mapcells  # noqa: E402
 import navgraph  # noqa: E402
 from test_roads import FRAME, LAT, LON, features, rules  # noqa: E402
@@ -78,6 +82,37 @@ class FakeMapData:
         return [self.cell(k, layers, kind) for k in keys]
 
 
+class FakeDem:
+    """The ground under the window, with what road_graph_data reads of it. Away from cached_only() a tile that is
+    not in the disk cache is downloaded, which is what the player's own graph does and what dem.Dem does at
+    "demand"; inside it nothing is downloaded and the sample raises dem.NotOnDisk, as Dem._download does for every
+    source a tile comes from. `fetched` is what a cached-only build must leave empty, and `lanes` says which lanes
+    each sample was taken in: a sample outside them is one the real DEM would have downloaded for."""
+
+    def __init__(self, on_disk=True):
+        self.on_disk = on_disk
+        self.fetched = []       # the samples that went off disk (a download, in the real Dem)
+        self.lanes = []         # (dem lane, gradesep lane) at each sample
+        self.cached = False
+
+    @contextlib.contextmanager
+    def cached_only(self):
+        prev = self.cached
+        self.cached = True
+        try:
+            yield
+        finally:
+            self.cached = prev
+
+    def sample(self, la, lo, zoom, progress=None):
+        self.lanes.append((self.cached, getattr(gradesep._local, "cached", False)))
+        if not self.on_disk:
+            if self.cached:
+                raise dem.NotOnDisk(f"DEM tile of {zoom} is not in the disk cache")
+            self.fetched.append(zoom)
+        return np.zeros(np.shape(la))
+
+
 def fake_anchor(aid=AID):
     return types.SimpleNamespace(id=aid, lat=LAT, lon=LON, frame=FRAME, zooms=(14,), bridges=None, tunnels=None)
 
@@ -96,13 +131,13 @@ class NoChain:
         return None
 
 
-def fake_server(md, out_dir, aid=AID, traffic=True, anchors=None):
+def fake_server(md, out_dir, aid=AID, traffic=True, anchors=None, dem_=None):
     """A Server stand-in with what road_graph_data and Connection.road_graph read of it."""
     s = types.SimpleNamespace(
         anchors={aid: fake_anchor(aid)} if anchors is None else anchors,
         mapdata=md, surface=None, road_widths=None, dej_on="off", airports_db=None,
         grader_lock=threading.Lock(), out_dir=out_dir, vfs_dir="/temp/beamngEarth/test", traffic=traffic,
-        road_pool=None, dem=types.SimpleNamespace(sample=lambda la, lo, zoom: np.zeros(np.shape(la))))
+        road_pool=None, dem=FakeDem() if dem_ is None else dem_)
     s.grader_for = lambda anchor: None
     s.ground = lambda frame, la, lo, z: z
     s.chain_view = lambda *a, **k: NoChain()
@@ -113,7 +148,8 @@ def fake_server(md, out_dir, aid=AID, traffic=True, anchors=None):
 
 
 class RoadGraphDataTest(unittest.TestCase):
-    """Server.road_graph_data(cached_only=True): the window's cells on disk and nothing else."""
+    """Server.road_graph_data(cached_only=True): the window's cells on disk, the ground under them and the cells
+    round them that the build reaches for on its own -- and nothing else, downloaded or otherwise."""
 
     def setUp(self):
         self.us = mock.patch.object(navgraph, "country_at", lambda *a, **k: "US")
@@ -181,6 +217,85 @@ class RoadGraphDataTest(unittest.TestCase):
         big, _ = earthd.Server.road_graph_data(s, AID, 0.0, 0.0, window=1500.0, cached_only=True)
         self.assertEqual(len(small["nodes"]), 0, "clipped to the window asked for")
         self.assertGreater(len(big["nodes"]), 0)
+
+    def test_the_ground_comes_off_disk_and_nothing_is_fetched_for_it(self):
+        """The heights too: Dem.sample downloads a tile that is not there, at "demand", the same priority as the
+        world the player is driving through (~150 z16 tiles for a 16 km window). A cached-only build takes the
+        ground out of the disk cache inside dem.cached_only(), so there is nothing left for it to download."""
+        import earthd
+        keys = self.keys(300.0)
+        road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
+        md = FakeMapData({"roads": {k: (road if k == keys[0] else roads_cell([])) for k in keys}},
+                         on_disk=[(k, "roads") for k in keys])
+        d = FakeDem()
+        graph, not_read = earthd.Server.road_graph_data(fake_server(md, ".", dem_=d), AID, 0.0, 0.0,
+                                                        window=300.0, cached_only=True)
+        self.assertEqual(not_read, 0)
+        self.assertGreater(len(graph["nodes"]), 0, "the roads of the cells on disk, at their own heights")
+        self.assertEqual(d.fetched, [], "no DEM tile fetched for it")
+        self.assertTrue(d.lanes, "the ground was read at all")
+        self.assertTrue(all(lanes == (True, True) for lanes in d.lanes),
+                        "every sample inside both lanes (dem, gradesep): %r" % (d.lanes,))
+
+    def test_a_window_whose_ground_is_not_on_disk_is_incomplete_not_guessed(self):
+        """A node at a height taken from somewhere else reads like a measured one to an add-on, which cannot tell
+        the two apart; "complete" false says plainly that the window is not all there yet. So the window with the
+        ground missing comes back empty and incomplete, and nothing is downloaded to fill it."""
+        import earthd
+        keys = self.keys(300.0)
+        road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
+        md = FakeMapData({"roads": {k: (road if k == keys[0] else roads_cell([])) for k in keys}},
+                         on_disk=[(k, "roads") for k in keys])
+        d = FakeDem(on_disk=False)
+        graph, not_read = earthd.Server.road_graph_data(fake_server(md, ".", dem_=d), AID, 0.0, 0.0,
+                                                        window=300.0, cached_only=True)
+        self.assertEqual(not_read, len(keys), "every cell of it unread: none of the window could be built")
+        self.assertEqual(len(graph["nodes"]), 0, "no nodes rather than nodes at made-up heights")
+        self.assertIn("rules", graph, "and still a graph the add-on can read")
+        self.assertEqual(d.fetched, [], "nothing fetched for the ground it did not have")
+        self.assertEqual(md.fetched, [], "nor for its cells")
+
+    def test_the_players_own_graph_is_left_as_it_was(self):
+        """cached_only false (build_navgraph, the graph the AI drives): the cells at "demand" and the DEM free to
+        download the ground it needs, in no lane at all. The whole request rests on being invisible here."""
+        import earthd
+        keys = self.keys(300.0)
+        road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
+        md = FakeMapData({"roads": {k: (road if k == keys[0] else roads_cell([])) for k in keys}})
+        d = FakeDem(on_disk=False)
+        graph, not_read = earthd.Server.road_graph_data(fake_server(md, ".", dem_=d), AID, 0.0, 0.0, window=300.0)
+        self.assertEqual(not_read, 0)
+        self.assertGreater(len(graph["nodes"]), 0, "the roads of every cell, fetched or not")
+        self.assertTrue(d.fetched, "the ground downloaded as it always was")
+        self.assertTrue(all(lanes == (False, False) for lanes in d.lanes),
+                        "and no lane entered for it: %r" % (d.lanes,))
+        self.assertEqual([k for k, ls, kind in md.reads if kind in FETCHING_KINDS and "roads" in ls], keys,
+                         "every cell of the window read at demand, as on dev")
+
+    def test_the_cells_round_a_cell_are_read_from_disk_too(self):
+        """A roads layer carries the map data's own hook to the eight cells round it (gradesep.neighbours_hook),
+        which roads.level_ranges and roads.home_copy read while the graph is built -- at "demand", past every cell
+        the build itself read. In the lane it reads only the cells on disk, at a kind that cannot download, and one
+        that is not there takes the read with it (NotOnDisk: the callers then leave this cell's grade separations
+        and home copies out and keep nothing they made without them), never a None the hook would remember as a
+        cell with no roads -- the hook is the map data's, shared with every reader of that cell."""
+        key = mapcells.cells_for_bbox(LAT, LON, LAT, LON)[0]
+        around = gradesep._neighbour_keys(key)
+        md = FakeMapData({"roads": {str(k): roads_cell([]) for k in around}},
+                         on_disk=[(str(k), "roads") for k in around])
+        with gradesep.cached_only():
+            got = gradesep._neighbours(md, key)
+        self.assertEqual(len(got), len(around))
+        self.assertEqual(md.fetched, [], "no read at a kind that could download")
+        self.assertTrue(md.reads and all(kind not in FETCHING_KINDS for _, _, kind in md.reads))
+        md.on_disk.discard((str(around[0]), "roads"))
+        md.reads.clear()
+        with gradesep.cached_only():
+            with self.assertRaises(gradesep.NotOnDisk):
+                gradesep._neighbours(md, key)
+        self.assertEqual(md.reads, [], "and the cell that is not there is not reached for at all")
+        gradesep._neighbours(md, key)       # (no lane: the player's own read, at demand, as on dev)
+        self.assertEqual([kind for _, _, kind in md.reads], ["demand"] * len(around))
 
     def test_none_when_the_anchor_or_the_map_data_went(self):
         import earthd

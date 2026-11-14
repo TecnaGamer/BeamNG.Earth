@@ -32,8 +32,10 @@
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
 -- The road network round a point (has('roadGraph')): api.roadGraph(lat, lon, opts, callback) asks the app to build one
--- window of the road graph there out of the map cells it already has, and hands back the file it wrote (the add-on
--- reads it itself). It is not the AI's graph and no map cell is downloaded for it; see docs/ADDONS.md.
+-- window of the road graph there out of what it has on disk already, and hands the graph to the callback (result.nodes
+-- and result.edges; result.path is the file it wrote, for an add-on that would rather read it itself). It is not the
+-- AI's graph, and nothing is downloaded for it -- no map cell and no elevation tile: result.complete says whether
+-- everything the window needed was there. See docs/ADDONS.md.
 local M = {}
 
 M.MAJOR, M.MINOR = 1, 10
