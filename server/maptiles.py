@@ -250,15 +250,19 @@ def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
     when root's FORMAT_FILE is older than SAT_FORMAT; then FORMAT_FILE says SAT_FORMAT. The number deleted. Nothing
     outside root: a root that is a symlink, junction or other reparse point is refused, such a folder or file inside
     is skipped (_sat_tiles_fd, _sat_tiles_paths)."""
-    marker = os.path.join(root, FORMAT_FILE)
-    try:
-        with open(marker) as f:
-            if int(f.read().strip() or 0) >= SAT_FORMAT:
-                return 0
-    except (OSError, ValueError):
-        pass
+    # (the root checked before anything under it is opened: a linked root's marker is outside it, and a FIFO there
+    # would block the read)
     if _is_link(root) or not os.path.isdir(root):
         return 0
+    marker = os.path.join(root, FORMAT_FILE)
+    try:
+        st = os.lstat(marker)
+        if stat.S_ISREG(st.st_mode) and not _is_link(marker):
+            with open(marker) as f:
+                if int(f.read(32).strip() or 0) >= SAT_FORMAT:
+                    return 0
+    except (OSError, ValueError):
+        pass
     n = 0
 
     def visit(name, st, dir_fd):

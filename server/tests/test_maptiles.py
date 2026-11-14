@@ -555,6 +555,31 @@ class TileFilesTest(unittest.TestCase):
             self.assertTrue(os.path.exists(p))
             self.assertFalse(os.path.exists(os.path.join(self.root, maptiles.FORMAT_FILE)), "no format file written")
 
+    def test_a_refused_root_opens_nothing_under_it(self):
+        # (re-review of 37893241: the format marker was read before the root was refused; a FIFO there would block)
+        import types
+        from unittest import mock
+        with open(os.path.join(self.root, maptiles.FORMAT_FILE), "w") as f:
+            f.write("0")
+        real_lstat, real_open, opened = os.lstat, open, []
+
+        def lstat(path, *a, **k):
+            if os.path.abspath(path) == os.path.abspath(self.root):
+                return types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_file_attributes=0x400)
+            return real_lstat(path, *a, **k)
+
+        def spy_open(path, *a, **k):
+            opened.append(str(path))
+            return real_open(path, *a, **k)
+        with mock.patch("os.lstat", lstat), mock.patch("builtins.open", spy_open):
+            self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 0)
+        self.assertEqual([p for p in opened if os.path.abspath(p).startswith(os.path.abspath(self.root))], [])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs")
+    def test_a_fifo_marker_never_blocks(self):
+        os.mkfifo(os.path.join(self.root, maptiles.FORMAT_FILE))
+        maptiles.sweep_sat(self.root, time.time(), gap_s=0)    # (would block forever reading the FIFO)
+
     @unittest.skipUnless(os.name == "nt", "Windows junctions")
     def test_sweep_junctions_on_windows(self):
         outside = tempfile.mkdtemp()
