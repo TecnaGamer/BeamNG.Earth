@@ -39,15 +39,18 @@ M.PERCENTILE = 0.70     -- (0.80 held a city drive to 70.6 fps against 93.6 unpa
 M.TARGET_ALPHA = 0.25
 M.MIN_MS, M.MAX_MS = 4.0, 33.4  -- paced only between: frames faster than 250 fps or slower than 30 fps are left alone
 M.MIN_WAIT_MS = 0.3     -- a shorter wait is not done
-M.OVERSHOOT_MS = 1.5    -- sleeps overshooting by more than this on average (M.slept): no pacing for the session
-M.OVERSHOOT_ALPHA = 0.05
-M.OVERSHOOT_MIN = 60    -- waits seen before that is judged
+M.OVERSHOOT_MS = 1.5    -- a sleep overshooting by more than this is a coarse one (M.slept)
+M.OVERSHOOT_ALPHA = 0.05  -- (the average shown in stats)
+M.OVERSHOOT_MIN = 60    -- the last this many sleeps judged: ...
+M.OVERSHOOT_SHARE = 0.75  -- ... this share of them coarse: no pacing for the session (a coarse timer overshoots nearly
+                          -- every sleep; one descheduled sleep, 30 ms late, must not end the pacing: Codex review)
 
 local ring, n, head = {}, 0, 0
 local target = nil
 local sinceRecompute = 0
 local waitAvg = 0       -- the recent frames' wait (ms, an average over paced frames: M.stats)
 local overAvg, sleeps, coarse = 0, 0, false
+local slRing, slBad = {}, 0    -- the last OVERSHOOT_MIN sleeps: coarse (true) or not, and how many of them are
 
 function M.reset()
   if n == 0 and target == nil and waitAvg == 0 then return end     -- (called every frame while off: no table each time)
@@ -96,7 +99,12 @@ function M.slept(wantMs, gotMs)
   if coarse or not wantMs or not gotMs then return end
   sleeps = sleeps + 1
   overAvg = overAvg + ((gotMs - wantMs) - overAvg) * M.OVERSHOOT_ALPHA
-  if sleeps >= M.OVERSHOOT_MIN and overAvg > M.OVERSHOOT_MS then
+  local i = (sleeps - 1) % M.OVERSHOOT_MIN + 1
+  local bad = (gotMs - wantMs) > M.OVERSHOOT_MS
+  if slRing[i] then slBad = slBad - 1 end
+  slRing[i] = bad
+  if bad then slBad = slBad + 1 end
+  if sleeps >= M.OVERSHOOT_MIN and slBad >= M.OVERSHOOT_SHARE * M.OVERSHOOT_MIN then
     coarse, target = true, nil
     local lg = rawget(_G, 'log')
     if lg then
@@ -112,7 +120,7 @@ function M.stats()
 end
 
 -- (tests)
-function M._resetSleeps() overAvg, sleeps, coarse = 0, 0, false end
+function M._resetSleeps() overAvg, sleeps, coarse, slRing, slBad = 0, 0, false, {}, 0 end
 
 -- Pure: does the dtsmooth status text say it is applied in this session (since `since`, os.time())?
 function M.dtsmoothApplied(text, since)

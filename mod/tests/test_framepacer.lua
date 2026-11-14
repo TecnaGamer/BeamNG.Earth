@@ -51,6 +51,14 @@ T.check(P.stats().wait == 0, 'reset clears the wait')
 P._resetSleeps()
 for _ = 1, 200 do P.slept(2.0, 2.3) end
 T.check(not P.stats().coarse, 'accurate sleeps: still pacing')
+P._resetSleeps()
+for _ = 1, 60 do P.slept(2.0, 2.1) end
+P.slept(2.0, 32.0)                                  -- one descheduled sleep (Codex review's case)
+for _ = 1, 30 do P.slept(2.0, 2.1) end
+T.check(not P.stats().coarse, 'an isolated 30 ms late sleep: still pacing')
+P._resetSleeps()
+for _ = 1, 200 do P.slept(2.0, (_ % 3 == 0) and 9.0 or 2.2) end
+T.check(not P.stats().coarse, 'a third of the sleeps late: still pacing')
 for i = 1, 600 do P.step((i % 3 == 0) and 9.0 or 6.0) end
 T.check(P.target() ~= nil, 'paced before')
 for _ = 1, 200 do P.slept(2.0, 15.6) end
