@@ -5,6 +5,7 @@ import asyncio
 import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -525,11 +526,66 @@ class TileFilesTest(unittest.TestCase):
         self.assertFalse(os.path.exists(own[0]))
         self.assertTrue(all(os.path.exists(p) for p in victims), "nothing outside the folder is touched (paths)")
         linked = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, linked, True)
         os.rmdir(linked)
-        os.symlink(self.root, linked)                                           # the folder itself a link
+        os.symlink(self.root, linked, target_is_directory=True)                 # the folder itself a link
+        self.addCleanup(os.unlink if os.name != "nt" else os.rmdir, linked)     # (the link, not its target)
         self.assertEqual(maptiles.sweep_sat(linked, time.time(), gap_s=0), 0)
         self.assertTrue(os.path.exists(os.path.join(self.root, maptiles.FORMAT_FILE)))
+
+    def test_sweep_refuses_a_reparse_point_root(self):
+        # (review of 3a43adcc: a Windows junction is not a symlink; its target was trusted as the root.) Here a root whose
+        # lstat says reparse point (FILE_ATTRIBUTE_REPARSE_POINT); test_sweep_junctions_on_windows makes real ones.
+        import types
+        from unittest import mock
+        old = time.time() - 100
+        p = maptiles.tile_path(self.root, "sat", 14, 1, 2)
+        os.makedirs(os.path.dirname(p))
+        with open(p, "wb") as f:
+            f.write(b"x")
+        os.utime(p, (old, old))
+        real_lstat = os.lstat
+
+        def lstat(path, *a, **k):
+            if os.path.abspath(path) == os.path.abspath(self.root):
+                return types.SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_file_attributes=0x400)
+            return real_lstat(path, *a, **k)
+        for fd in (True, False):
+            with mock.patch.object(maptiles, "_DIR_FD", fd), mock.patch("os.lstat", lstat):
+                self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 0)
+            self.assertTrue(os.path.exists(p))
+            self.assertFalse(os.path.exists(os.path.join(self.root, maptiles.FORMAT_FILE)), "no format file written")
+
+    @unittest.skipUnless(os.name == "nt", "Windows junctions")
+    def test_sweep_junctions_on_windows(self):
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        old = time.time() - 100
+
+        def put(p):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"x")
+            os.utime(p, (old, old))
+            return p
+
+        def junction(link, target):
+            subprocess.run(["cmd", "/c", "mklink", "/J", link, target], check=True, capture_output=True)
+            self.addCleanup(lambda: os.path.isdir(link) and os.rmdir(link))     # (removes the junction, not its target)
+        victims = [put(os.path.join(outside, "17", "1", "2.jpg")), put(os.path.join(outside, "3", "4.jpg"))]
+        parent = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, parent, True)
+        linked_root = os.path.join(parent, "maptiles")
+        junction(linked_root, outside)                       # the root itself a junction to a folder outside
+        self.assertEqual(maptiles.sweep_sat(linked_root, time.time(), gap_s=0), 0)
+        self.assertTrue(all(os.path.exists(v) for v in victims), "nothing under the junction's target touched")
+        self.assertFalse(os.path.exists(os.path.join(outside, maptiles.FORMAT_FILE)), "no format file written there")
+        os.makedirs(os.path.join(self.root, "16"), exist_ok=True)
+        junction(os.path.join(self.root, "17"), outside)     # a zoom folder a junction
+        junction(os.path.join(self.root, "16", "3"), os.path.join(outside, "3"))   # a column a junction
+        own = put(maptiles.tile_path(self.root, "sat", 15, 1, 2))
+        self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 1)
+        self.assertFalse(os.path.exists(own))
+        self.assertTrue(all(os.path.exists(v) for v in victims), "nothing through a junction inside touched")
 
     def test_callback_errors_do_not_stop_workers(self):
         def boom(key, ok):

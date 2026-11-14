@@ -191,29 +191,53 @@ def _sat_tiles_fd(root, visit):
         os.close(rfd)
 
 
-def _sat_tiles_paths(root, visit):
-    """_sat_tiles_fd where descriptors cannot do it (Windows): no symlink or junction entered, each file's real path
-    under root's."""
-    real = os.path.realpath(root)
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
-    def inside(p):
+
+def _is_link(path, st=None):
+    """A symlink, a Windows junction or any other reparse point (a junction is not a symlink to os.path.islink: review
+    of 3a43adcc); st: path's lstat when at hand. A path that cannot be read counts as one (not entered)."""
+    try:
+        if st is None:
+            st = os.lstat(path)
+    except OSError:
+        return True
+    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        return True
+    isjunction = getattr(os.path, "isjunction", None)          # (Python 3.12+)
+    return bool(isjunction and isjunction(path))
+
+
+def _sat_tiles_paths(root, visit):
+    """_sat_tiles_fd where descriptors cannot do it (Windows): no symlink, junction or other reparse point entered at
+    any level, and each path's resolved form must be root's (only its parents resolved: root's own path is the one
+    trusted, never a target it points to) joined with the same relative path, so nothing on the way is a link."""
+    base = os.path.realpath(os.path.dirname(os.path.abspath(root)))
+    top = os.path.join(base, os.path.basename(os.path.abspath(root)))
+
+    def plain(path, rel):
+        if _is_link(path):
+            return False
         try:
-            return os.path.commonpath([real, os.path.realpath(p)]) == real
-        except ValueError:                  # (another drive)
+            return os.path.normcase(os.path.realpath(path)) == os.path.normcase(os.path.join(top, rel) if rel else top)
+        except (OSError, ValueError):
             return False
 
-    def subdirs(path):
+    def subdirs(path, rel):
         with os.scandir(path) as it:
             for e in it:
-                if e.name.isdigit() and not e.is_symlink() and e.is_dir(follow_symlinks=False) and inside(e.path):
-                    yield e.path
+                r = os.path.join(rel, e.name)
+                if e.name.isdigit() and not e.is_symlink() and e.is_dir(follow_symlinks=False) and plain(e.path, r):
+                    yield e.path, r
 
-    for zp in subdirs(root):
-        for xp in subdirs(zp):
+    if not plain(root, ""):
+        return
+    for zp, zr in subdirs(root, ""):
+        for xp, xr in subdirs(zp, zr):
             with os.scandir(xp) as it:
                 for e in it:
                     if _TILE_FILE.match(e.name) and not e.is_symlink() and e.is_file(follow_symlinks=False) \
-                            and inside(e.path):
+                            and plain(e.path, os.path.join(xr, e.name)):
                         try:
                             visit(e.path, e.stat(follow_symlinks=False), None)
                         except OSError:
@@ -224,7 +248,8 @@ def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
     """The "sat" tile files under root (<root>/<z>/<x>/<y>.jpg, digits: not the other layers' or PROV_DIR's) last
     written before `before` (unix s) deleted, a file at a time gap_s apart (the game's file watcher never sees a burst),
     when root's FORMAT_FILE is older than SAT_FORMAT; then FORMAT_FILE says SAT_FORMAT. The number deleted. Nothing
-    outside root: a symlinked root is refused, a symlinked folder or file inside is skipped (_sat_tiles_fd)."""
+    outside root: a root that is a symlink, junction or other reparse point is refused, such a folder or file inside
+    is skipped (_sat_tiles_fd, _sat_tiles_paths)."""
     marker = os.path.join(root, FORMAT_FILE)
     try:
         with open(marker) as f:
@@ -232,7 +257,7 @@ def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
                 return 0
     except (OSError, ValueError):
         pass
-    if os.path.islink(root) or not os.path.isdir(root):
+    if _is_link(root) or not os.path.isdir(root):
         return 0
     n = 0
 
