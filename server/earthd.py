@@ -10243,7 +10243,7 @@ class Connection:
             shutil.rmtree(os.path.join(s.root, "stale_scratch"), ignore_errors=True)
 
     SWAP_BUILD_S = 600.0        # s the swap's own builds (its blocks, the tiles asked again) may take
-    SWAP_COMMIT_S = 60.0        # s the mod may take to stage and commit them
+    SWAP_COMMIT_S = 150.0       # s the mod may take to stage and commit them (its own limits: swapgen.lua MAX_MS)
 
     def _block_digest(self, key, info):
         import hashlib
@@ -10267,8 +10267,9 @@ class Connection:
              and holds back the content of tiles the mod already has;
           3. the changed blocks sent as terrain_refresh {swap: gen} (held by the mod), every geotile sent asked for
              again (redo_all: only what changed is sent);
-          4. 'swap_end' {gen}; the mod answers 'swap_done' {gen, ok} once every staged skin is made and it has
-             committed them and the terrain together;
+          4. 'swap_end' {gen, skins}; the mod answers 'swap_done' {gen, ok} once every staged skin is made, it has
+             committed them and the terrain together in one frame with the car held, and the collision of both is in
+             effect (swapgen.lua); ok false when anything of it failed: it has put the old ground back then;
           5. then the held content (a tile each, replaced as any tile), the trees and the signs again.
         Any failure (a block that cannot be built, the tracker or the mod not done in time, ok false): 'swap_abort',
         the mod drops what it staged, the anchor is the older version's again, whole. -> swapped?"""
@@ -10327,7 +10328,8 @@ class Connection:
                     await asyncio.sleep(0.25)
             staged = getattr(tr, "swap_staged", 0)
             # 4. the mod's commit
-            self.send({"type": "swap_end", "anchorId": anchor.id, "gen": token})
+            # (skins: how many it staged: the mod commits only with every one of them made, roads.lua swapStaged)
+            self.send({"type": "swap_end", "anchorId": anchor.id, "gen": token, "skins": int(staged)})
             ok = await asyncio.wait_for(self.swap_done, self.SWAP_COMMIT_S)
             if not ok:
                 raise RuntimeError("the game could not commit the swap")

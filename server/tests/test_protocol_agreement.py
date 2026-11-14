@@ -129,7 +129,7 @@ MOD_TO_SERVER = {
     "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     # a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)
-    "swap_done": {"gen": F(int), "ok": F(bool)},
+    "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
@@ -356,7 +356,7 @@ SERVER_TO_MOD = {
     "terrain_refresh": {"anchorId": F(int), "swap": F(int, OPT), **TERRAIN},
     # a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up
     "swap_begin": {"anchorId": F(int), "gen": F(int)},
-    "swap_end": {"anchorId": F(int), "gen": F(int)},
+    "swap_end": {"anchorId": F(int), "gen": F(int), "skins": F(int)},
     "swap_abort": {"anchorId": F(int), "gen": F(int)},
     "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
     "far_tile": {"anchorId": F(int), "key": F(str), "level": F(int), "shape": F(str), "pos": F(list),

@@ -877,6 +877,7 @@ local function commitTerrain(msg)
   st.commitFrames = c
   M._psum.mod.note('swap')
   st.block = { cx = msg.cx, cy = msg.cy }
+  st.blockMsg = msg     -- (the block in use, as it was sent: a generation swap that fails commits it again, _swapStep)
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
   st.followCount = st.followCount + 1
@@ -884,38 +885,48 @@ local function commitTerrain(msg)
   return true
 end
 
--- A generation swap's commit (server stale_swap; the frame's step while st.swap): once the server said it sent all of
--- it ('swap_end') and every staged skin part is made (roads.swapStaged), the new skins are shown and the old ones
--- hidden (roads.swapCommit) and the swap's terrain committed in this same frame, so that no old road surface or
--- sidewalk ever lies on the new terrain. The server is told ('swap_done'). A swap of another anchor than the current
--- one, or one whose block is no longer the block in use, is given up whole (ok = false): the old ground stays.
-M.SWAP_MAX_MS = 120000
+-- A generation swap's frame step (server stale_swap; swapgen.lua has the rules): the skins staged by roads.lua and the
+-- swap's terrain are committed in one frame with the car held, and the server is told only once the collision of both
+-- is in effect; any failure leaves the old ground whole.
 function M._swapStep()
   local sw = st.swap
   if not sw then return end
-  local function giveUp()
+  local simhold = require('beamngEarth/simhold')
+  local res = require('beamngEarth/swapgen').step(sw, {
+    clock = st.clock, roads = roads, minimized = windowMinimized,
+    classify = function(msg)
+      local p = st.terrainPending
+      if msg.anchorId ~= st.anchorId or msg.size ~= terrain.SIZE then return nil end
+      if st.block and msg.cx == st.block.cx and msg.cy == st.block.cy then return 'now' end
+      if p and p.ready and p.msg and msg.cx == p.cx and msg.cy == p.cy then return 'later' end
+      return nil
+    end,
+    commitTerrain = function(msg)
+      sw.oldTerrain = st.blockMsg         -- (the block in use, to commit again if the swap's collision never comes)
+      return commitTerrain(msg) == true
+    end,
+    restoreTerrain = function()
+      return sw.oldTerrain ~= nil and commitTerrain(sw.oldTerrain) == true
+    end,
+    setLater = function(msg)
+      local p = st.terrainPending
+      if p and p.ready and p.msg and msg.cx == p.cx and msg.cy == p.cy then p.msg = msg end
+    end,
+    hold = function(on)
+      if on then
+        if simhold.paused() then return false end       -- (held already: not ours to release)
+        simhold.pause(true)
+        return true
+      end
+      simhold.pause(false)
+      return true
+    end,
+    send = function(m) net.send(m) end,
+  })
+  if res then
     st.swap = nil
-    roads.swapAbort(sw.gen)
-    net.send({ type = 'swap_done', gen = sw.gen, ok = false })
+    log('I', 'beamngEarth', 'generation swap ' .. tostring(sw.gen) .. ': ' .. res)
   end
-  if st.clock - sw.t0 > M.SWAP_MAX_MS then return giveUp() end
-  if not sw.ended or not roads.swapStaged(sw.gen) or windowMinimized() then return end
-  local now, later = nil, nil
-  for _, msg in ipairs(sw.terrains) do
-    local p = st.terrainPending
-    if msg.anchorId ~= st.anchorId or msg.size ~= terrain.SIZE then return giveUp() end
-    if st.block and msg.cx == st.block.cx and msg.cy == st.block.cy then now = msg
-    elseif p and p.ready and p.msg and msg.cx == p.cx and msg.cy == p.cy then later = msg
-    else return giveUp() end
-  end
-  st.swap = nil
-  roads.swapCommit(sw.gen)
-  local ok = true
-  if now then ok = commitTerrain(now) end
-  if later then st.terrainPending.msg = later end
-  log('I', 'beamngEarth', string.format('generation swap %s committed: %d terrain blocks, the staged skins with them',
-    tostring(sw.gen), (now and 1 or 0) + (later and 1 or 0)))
-  net.send({ type = 'swap_done', gen = sw.gen, ok = ok and true or false })
 end
 
 -- Pure: a spot with collision under it near (x, y): (x, y, ground z) where groundAt(x, y) (the ground's height there or
@@ -1156,7 +1167,11 @@ local function onMessage(msg)
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
-    if st.swap then st.swap = nil; roads.swapAbort() end
+    if st.swap then
+      if st.swap.held then require('beamngEarth/simhold').pause(false) end
+      st.swap = nil
+      roads.swapAbort()
+    end
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
     st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
@@ -1437,10 +1452,14 @@ local function onMessage(msg)
       net.send({ type = 'swap_done', gen = msg.gen, ok = false })
     end
   elseif t == 'swap_end' then             -- ... all of it is sent: committed once it is all made (the frame's swap step)
-    if st.swap and st.swap.gen == msg.gen then st.swap.ended = true
+    if st.swap and st.swap.gen == msg.gen then st.swap.ended, st.swap.skins = true, tonumber(msg.skins)
     else net.send({ type = 'swap_done', gen = msg.gen, ok = false }) end
   elseif t == 'swap_abort' then           -- ... given up: what was staged goes, the old ground stays
-    if st.swap and st.swap.gen == msg.gen then st.swap = nil end
+    if st.swap and st.swap.gen == msg.gen then
+      if st.swap.held then require('beamngEarth/simhold').pause(false) end
+      if st.swap.phase == 'settle' and st.swap.now and st.swap.oldTerrain then commitTerrain(st.swap.oldTerrain) end
+      st.swap = nil
+    end
     roads.swapAbort(msg.gen)
   elseif t == 'roads_exact' then          -- ... its tall parts' exact variants for this anchor
     roads.onExact(msg, st.anchorId)

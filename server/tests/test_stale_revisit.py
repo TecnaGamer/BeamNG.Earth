@@ -619,6 +619,7 @@ class StaleSwapTest(unittest.TestCase):
         self.assertEqual(self.types_of(sent), [
             ("swap_begin", None), ("terrain_refresh", token), ("roads_skin", token), ("roads_skin", token),
             ("swap_end", None), ("roads_tile", None)])
+        self.assertEqual(next(m for m in sent if m["type"] == "swap_end")["skins"], 2, "the skins it staged")
         # the block was built as this version's while the anchor was still the older one's, and not shown meanwhile
         self.assertEqual(events[0], ("build", True, True))
         self.assertEqual(anchor.stale, ())

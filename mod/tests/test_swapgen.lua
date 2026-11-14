@@ -111,6 +111,7 @@ run(); run()
 T.check(count(objs('old')) == 3 and objs('old').road.hidden == false and objs('new').road.hidden == true,
   'the stage holds over the frames')
 T.check(not roads.swapCommit(8), 'another swap cannot commit it')
+T.check(roads.swapCount(7) == 3, 'three parts staged')
 
 -- ---- the commit: one call --------------------------------------------------------------------------------
 T.check(roads.swapCommit(7), 'committed')
@@ -122,10 +123,98 @@ T.check(new.road.fields.collisionType == 'None' and new.walk.fields.collisionTyp
 for w, o in pairs(objs('old')) do
   T.check(o.hidden == true and o.fields.collisionType == 'None', 'the old ' .. w .. ' is out of sight and collision at once')
 end
+-- the old objects are KEPT until the commit is known to stand (its terrain imported, the collision in effect)
+T.check(count(objs('old')) == 3, 'the old parts are kept, hidden, until the swap is finished')
+T.check(not roads.swapSettled(7), 'not settled before the collision was rebuilt')
+local r0 = S.calls.reloadCollision or 0
+roads.update(gov, 1, car, nil, A)
+T.check((S.calls.reloadCollision or 0) == r0 + 1, 'the commit forces a collision rebuild in the next update')
+T.check(not roads.swapSettled(7), '... in effect a frame later')
+roads.update(gov, 1, car, nil, A)
+T.check(roads.swapSettled(7), 'settled: the rebuild ran and a frame has passed')
+T.check(count(objs('old')) == 3, 'still kept')
+T.check(roads.swapFinish(7), 'finished')
 run()
 T.check(count(objs('old')) == 0, 'the old parts are deleted after')
 T.check(count(objs('new')) == 3, 'the new skin stays')
 T.check(roads._swapState() == nil, 'no swap left')
+
+-- ---- the collision waits out a terrain swap's quiet frames -------------------------------------------------
+roads.swapBegin(20)
+roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = skinOf('q'), swap = 20 }, 1)
+run()
+T.check(roads.swapStaged(20), 'staged')
+roads.swapCommit(20)
+roads.terrainSwapped()          -- (core's commitTerrain with a swapped .ter: its collision follows by itself)
+r0 = S.calls.reloadCollision or 0
+local n = 0
+local tEnd = os.clock() + 3
+while not roads.swapSettled(20) and os.clock() < tEnd do
+  roads.update(gov, 1, car, nil, A)
+  n = n + 1
+  if roads.swapQuiet() then
+    T.check((S.calls.reloadCollision or 0) == r0, 'no collision rebuild in the terrain swap\'s quiet frames')
+    T.check(not roads.swapSettled(20), 'and not settled meanwhile')
+  end
+end
+T.check(roads.swapSettled(20) and n >= roads.SWAP_QUIET_FRAMES + 1, 'settled only after the quiet frames and the rebuild')
+T.check((S.calls.reloadCollision or 0) == r0 + 1, 'one rebuild')
+roads.swapFinish(20)
+run()
+T.check(count(objs('new')) == 0 and count(objs('q')) == 3, 'the swap stands')
+
+-- ---- a commit taken back (the terrain failed, or the collision never came): the old ground whole ------------
+roads.swapBegin(21)
+roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = skinOf('u'), swap = 21 }, 1)
+run()
+roads.swapCommit(21)
+T.check(objs('q').road.hidden == true and objs('u').road.hidden == false, 'committed: new shown, old hidden')
+T.check(roads.swapUndo(21), 'taken back')
+for w, o in pairs(objs('q')) do T.check(o.hidden == false, 'the old ' .. w .. ' is shown again') end
+T.check(objs('q').walkcol.fields.collisionType == 'Collision Mesh' and objs('q').walk.fields.collisionType == 'None'
+  and objs('q').road.fields.collisionType == 'None', 'with the collision it had')
+for w, o in pairs(objs('u')) do
+  T.check(o.hidden == true and o.fields.collisionType == 'None', 'the new ' .. w .. ' is out of sight and collision')
+end
+run()
+T.check(count(objs('u')) == 0 and count(objs('q')) == 3, 'the staged parts are gone, the old skin is the tile\'s')
+T.check(roads._swapState() == nil, 'no swap left')
+T.check(roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = skinOf('new') }, 1), 'an ordinary skin after')
+run()
+T.check(count(objs('new')) == 3 and count(objs('q')) == 0, 'and the tile takes an ordinary skin after it')
+
+-- ---- staging failures: the swap is not ready, and says why ---------------------------------------------------
+roads.swapBegin(30)
+local ok30, why30 = roads.swapStaged(30, 1)
+T.check(ok30 == false and why30 == nil, 'the server staged a skin that has not come yet: not ready, not failed')
+files['/s/none.json'] = nil
+T.check(roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = '/s/none.json', swap = 30 }, 1) == false,
+  'an unreadable staged skin is refused')
+ok30, why30 = roads.swapStaged(30)
+T.check(ok30 == false and type(why30) == 'string', 'an unreadable staged skin fails the swap: ' .. tostring(why30))
+roads.swapAbort(30)
+roads.swapBegin(31)
+T.check(roads.onSkin({ type = 'roads_skin', anchorId = 1, key = 'g17_1_1', path = skinOf('x'), swap = 31 }, 1) == false,
+  'a staged skin of a tile the mod has not')
+T.check(select(2, roads.swapStaged(31)) ~= nil, '... fails the swap')
+roads.swapAbort(31)
+roads.swapBegin(32)
+roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = skinOf('bad2'), swap = 32 }, 1)
+local realCreate = createObject
+local made32 = 0
+createObject = function(class)          -- (the second shape cannot be made)
+  made32 = made32 + 1
+  if made32 == 2 then error('no such shape') end
+  return realCreate(class)
+end
+run()
+createObject = realCreate
+local ok32, why32 = roads.swapStaged(32)
+T.check(ok32 == false and type(why32) == 'string', 'a part that could not be made fails the swap: ' .. tostring(why32))
+T.check(count(objs('new')) == 3 and objs('new').road.hidden == false, 'the old skin untouched')
+roads.swapAbort(32)
+run()
+T.check(count(objs('bad2')) == 0 and count(objs('new')) == 3, 'and whole after the abort')
 
 -- ---- a swap given up: the old ground stays whole ---------------------------------------------------------
 roads.swapBegin(9)
@@ -159,6 +248,9 @@ T.check(roads.swapStaged(11) and count(objs('next')) == 3, 'staged; the old side
 roads.swapCommit(11)
 T.check(objs('next').walk.hidden == true and objs('next').walkcol.fields.collisionType == 'None',
   'the old sidewalks out of sight and collision at the commit')
+local tEnd11 = os.clock() + 3
+while not roads.swapSettled(11) and os.clock() < tEnd11 do roads.update(gov, 1, car, nil, A) end
+T.check(roads.swapSettled(11) and roads.swapFinish(11), 'settled and finished')
 run()
 T.check(count(objs('next')) == 0 and count(objs('bare')) == 1, 'and deleted after')
 

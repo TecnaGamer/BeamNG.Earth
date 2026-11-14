@@ -947,6 +947,10 @@ function M.onSkin(msg, currentAnchor)
   local t = tiles[geoKey(msg.key)]
   local function release()
     if type(msg.slots) == 'table' then for w in pairs(msg.slots) do slotDrop(msgSlot(msg, w)) end end
+    -- (a skin of the running generation swap that cannot be staged: the swap must not commit without it)
+    if msg.swap ~= nil and swapState and swapState.gen == msg.swap then
+      swapState.failed = 'skin ' .. tostring(msg.key) .. ' could not be staged'
+    end
   end
   if not t or msg.anchorId ~= currentAnchor then release(); return false end
   local ok, data = true, msg.data
@@ -956,9 +960,12 @@ function M.onSkin(msg, currentAnchor)
   -- old skin stays as it is, and M.swapCommit shows them all in the frame the swap's terrain is committed
   local stage = msg.swap ~= nil and swapState ~= nil and swapState.gen == msg.swap
   if msg.swap ~= nil and not stage then release(); return false end     -- (a swap given up meanwhile: not wanted)
-  if stage and not swapState.tiles[t] then
-    swapState.tiles[t] = { skin = t.skin, walk = t.colliders.walk, walkcol = t.colliders.walkcol,
-      wantWalk = t.colWant.walk, wantWalkcol = t.colWant.walkcol }
+  if stage then
+    swapState.skins = swapState.skins + 1
+    if not swapState.tiles[t] then
+      swapState.tiles[t] = { skin = t.skin, walk = t.colliders.walk, walkcol = t.colliders.walkcol,
+        wantWalk = t.colWant.walk, wantWalkcol = t.colWant.walkcol }
+    end
   end
   -- the previous skin: its objects kept as the old ones (swapped as the new are made), its queue entries gone
   t.oldSkin = t.oldSkin or {}
@@ -997,6 +1004,7 @@ function M.onSkin(msg, currentAnchor)
         renderOnly = what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
+      if stage then swapState.expect = swapState.expect + 1 end
       -- (a staged part is always made now, far colliders too: all of the swap's ground is committed in one frame)
       if stage or q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     else
@@ -1014,29 +1022,56 @@ function M.onSkin(msg, currentAnchor)
   return true
 end
 
--- A generation swap (server earthd Connection.stale_swap; core.lua 'swap_begin' / 'swap_end' / 'swap_abort'): the
--- server shows a place from its last version and, once this version is built, swaps the ground that changed. NOTHING
--- of the new ground may show or collide beside the old: skins sent with `swap = gen` are staged (onSkin: their parts
--- made under the governor as ever, but hidden and with collisionType None, the old skin untouched), and swapCommit
--- shows them, gives them their collision and hides the old ones in ONE frame, the frame core.lua commits the swap's
--- terrain (whose commit rebuilds the collision). swapAbort drops what was staged: the old skin is the tile's again.
+-- A generation swap (server earthd Connection.stale_swap; swapgen.lua, core.lua 'swap_begin' / 'swap_end' /
+-- 'swap_abort'): the server shows a place from its last version and, once this version is built, swaps the ground that
+-- changed. NOTHING of the new ground may show or collide beside the old:
+--   staged     skins sent with `swap = gen` (onSkin): their parts are made under the governor as ever, but hidden and
+--              with collisionType None, the old skin untouched. Every part expected is counted, every part made too,
+--              and anything that goes wrong (an unreadable skin, a tile gone, a shape that cannot be made) marks the
+--              swap failed: swapStaged -> ready, failed.
+--   committed  swapCommit, the frame swapgen commits the swap's terrain: the old parts hidden and out of the collision,
+--              the new ones shown and given theirs. The old objects are KEPT (swapUndo puts them back when the terrain
+--              import fails or the collision never comes), and a collision rebuild is forced as soon as the terrain
+--              swap's quiet frames are over: swapSettled says when it ran and a frame has passed (the static
+--              collision of the new skins and the terrain's are both in effect; the car is held meanwhile, swapgen).
+--   finished   swapFinish: the old objects go (under the governor: they are hidden already).
+-- swapAbort drops what was staged before a commit: the old skin is the tile's again.
 function M.swapBegin(gen)
-  if swapState then M.swapAbort(swapState.gen) end
-  swapState = { gen = gen, parts = {}, tiles = {} }
+  if swapState then
+    if swapState.committed then M.swapUndo(swapState.gen) else M.swapAbort(swapState.gen) end
+  end
+  swapState = { gen = gen, parts = {}, tiles = {}, skins = 0, expect = 0, made = 0 }
 end
 
--- Is every staged part of swap gen made (none left in the queues)?
-function M.swapStaged(gen)
-  if not swapState or swapState.gen ~= gen then return false end
+-- (ready, failed): ready once every staged part of swap gen is made (the queues hold none, every part expected was
+-- made, and skins, when given, is the number of skins staged: the server's count); failed: why it cannot be committed.
+function M.swapStaged(gen, skins)
+  if not swapState or swapState.gen ~= gen then return false, 'no such swap' end
+  if swapState.failed then return false, swapState.failed end
   for _, q in ipairs(walkQ) do if q.stage == gen then return false end end
   for _, q in ipairs(held) do if q.stage == gen then return false end end
+  if swapState.made ~= swapState.expect then
+    swapState.failed = string.format('%d of %d parts made', swapState.made, swapState.expect)
+    return false, swapState.failed
+  end
+  if skins ~= nil and skins ~= swapState.skins then return false end     -- (some still on their way)
   return true
 end
 
+-- The parts staged for swap gen (0: nothing of the skins changed).
+function M.swapCount(gen)
+  return (swapState and swapState.gen == gen) and #swapState.parts or 0
+end
+
+local function oldCollide(t, w)     -- the collisionType an old skin part had (as the creation loop gave it)
+  if w == 'walkcol' then return 'Collision Mesh' end
+  if w == 'walk' and not (t.oldSkin and t.oldSkin.walkcol) then return 'Visible Mesh Final' end
+  return 'None'
+end
+
 function M.swapCommit(gen)
-  if not swapState or swapState.gen ~= gen then return false end
+  if not swapState or swapState.gen ~= gen or swapState.committed then return false end
   local sw = swapState
-  swapState = nil
   -- the old skins' objects out of sight and out of the collision first, then the new ones in
   for t in pairs(sw.tiles) do
     if t.oldSkin then
@@ -1058,17 +1093,30 @@ function M.swapCommit(gen)
       p.t.colAt = p.t.colAt or {}; p.t.colAt[p.what] = now()
     end
   end
-  for t in pairs(sw.tiles) do M.dropOldSkin(t) end       -- (their objects deleted under the governor: hidden already)
   markDirty('swap')
+  sw.committed, sw.reloaded, sw.frames = true, false, 0     -- (the update forces a collision rebuild: swapSettled)
+  sinceChange = stopwatch.new()
+  return true
+end
+
+-- Has the collision rebuild after swap gen's commit run, and a frame passed since (it is in effect a frame later)?
+function M.swapSettled(gen)
+  return swapState ~= nil and swapState.gen == gen and swapState.committed == true and swapState.reloaded == true
+    and swapState.frames >= 1
+end
+
+-- The commit stands: the old skins' objects go.
+function M.swapFinish(gen)
+  if not swapState or swapState.gen ~= gen or not swapState.committed then return false end
+  local sw = swapState
+  swapState = nil
+  for t in pairs(sw.tiles) do M.dropOldSkin(t) end       -- (deleted under the governor: hidden already)
   M.geoStats.swaps = (M.geoStats.swaps or 0) + 1
   sinceChange = stopwatch.new()
   return true
 end
 
-function M.swapAbort(gen)
-  if not swapState or (gen ~= nil and swapState.gen ~= gen) then return false end
-  local sw = swapState
-  swapState = nil
+local function swapRestore(sw)      -- the staged parts go, each tile's skin is the one of before again
   local function purge(list)
     local keep = {}
     for _, q in ipairs(list) do if q.stage ~= sw.gen then keep[#keep + 1] = q end end
@@ -1089,6 +1137,37 @@ function M.swapAbort(gen)
     t.colWant.walk, t.colWant.walkcol = undo.wantWalk, undo.wantWalkcol
   end
   sinceChange = stopwatch.new()
+end
+
+-- A commit taken back (the swap's terrain could not be imported, or its collision never came): the new parts out of
+-- sight and collision, the old ones shown and colliding again as they were, then all that was staged dropped.
+function M.swapUndo(gen)
+  if not swapState or (gen ~= nil and swapState.gen ~= gen) or not swapState.committed then return false end
+  local sw = swapState
+  swapState = nil
+  for _, p in ipairs(sw.parts) do
+    local o = scenetree.findObjectById(p.id)
+    if o then o:setHidden(true); o:setField('collisionType', 0, 'None') end
+  end
+  for t in pairs(sw.tiles) do
+    if t.oldSkin then
+      for _, w in ipairs(M.SKIN_WHATS) do
+        local o = t.oldSkin[w] and scenetree.findObjectById(t.oldSkin[w])
+        if o then o:setField('collisionType', 0, oldCollide(t, w)); o:setHidden(false) end
+      end
+    end
+  end
+  swapRestore(sw)
+  markDirty('swap')
+  return true
+end
+
+function M.swapAbort(gen)
+  if not swapState or (gen ~= nil and swapState.gen ~= gen) then return false end
+  if swapState.committed then return M.swapUndo(swapState.gen) end
+  local sw = swapState
+  swapState = nil
+  swapRestore(sw)
   return true
 end
 M._swapState = function() return swapState end
@@ -2130,6 +2209,9 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     -- (a staged part of a generation swap is made without collision: nothing to hold it for)
     local staged = q.stage ~= nil and swapState ~= nil and swapState.gen == q.stage
     if q.stage ~= nil and not staged then t = nil end       -- (its swap was given up)
+    if staged and not t then                                -- (its tile is gone: the swap cannot be whole)
+      swapState.failed = 'the tile of a staged ' .. tostring(q.what) .. ' is gone'
+    end
     if t and q.what ~= 'road' and not q.renderOnly and not staged and playerIn(t.colliders[q.what], q.what, t) then
       held[#held + 1] = q           -- the car is on it: made once the car is clear (playerIn)
       t = nil
@@ -2144,9 +2226,13 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
+      if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)
+        swapState.failed = 'staged ' .. tostring(q.what) .. ': ' .. tostring(id)
+      end
       if ok and staged then                        -- a generation swap's part: hidden until M.swapCommit
         local o = scenetree.findObjectById(id)
         if o then o:setHidden(true) end
+        swapState.made = swapState.made + 1
         t.skin.pending = t.skin.pending - 1
         swapState.parts[#swapState.parts + 1] = { t = t, what = q.what, id = id, q = q,
           collide = collide and (type(collide) == 'string' and collide or 'Visible Mesh Final') or nil }
@@ -2192,6 +2278,11 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     reloadWaits = reloadWaits + 1
     due = false
   end
+  -- a committed generation swap: its skins' collision rebuilt as soon as the terrain swap's quiet frames are over,
+  -- whatever else would wait (the car is held until it is in effect: swapgen.lua)
+  local swapWait = swapState ~= nil and swapState.committed == true
+  if swapWait and swapState.reloaded then swapState.frames = swapState.frames + 1 end
+  if swapWait and not swapState.reloaded and not swapQuiet then due = true end
   if due then
     reloadWaits = 0
     local t0 = now()
@@ -2202,6 +2293,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
+    if swapWait and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
     local ms = now() - t0
     -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
     -- EMA held the next sidewalk and building meshes back as if each cost that much more)
@@ -2602,6 +2694,8 @@ function M.collisionRebuilt()
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
+  -- (a generation swap committed in this frame, before the terrain's own rebuild: its skins' collision is in it)
+  if swapState and swapState.committed and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
 end
 
 -- Every road removed now (setting off, mod unload).
