@@ -9,7 +9,8 @@ are gated by the setting. Unchanged suppression cells do not rescan signal tiles
 
 Models and textures derive from Sven's confirmed `Groenpol.fbx`, SHA256
 `0c87eef5eea270f91807cabdaf9f37df3ebec64d115e6d99e6ecc28100effe77`.
-The component/source-object/triangle provenance is bundled with the assets.
+The component/source-object/triangle provenance is retained in `docs/assets/groenpol`,
+outside the runtime mod. The runtime component catalogue remains in its required Lua module.
 Model/texture author and licensor: Sven / svenegaming-glitch, **CC BY-SA 4.0**;
 see [the asset licence notice](GROENPOL_ASSET_LICENSE.md). Derived assets retain
 this licence independently of the project code and map-data licences.
@@ -35,8 +36,10 @@ with `python tools/build_nl_signal_index.py`. The default stock path never opens
 the pack. See the adjacent `context_attribution.md` and
 `context_provenance.json` for source URLs, queries, hashes and ODbL notice.
 This pack does not contain the BGT road adapter, BGT polygons or the earlier
-location-specific BGT pole overrides. Moving that independent context pack to
-the public data host can reduce the initial mod download in a later change.
+location-specific BGT pole overrides. The review requires moving this pack to the public data host and planning to
+native server code. Producer/reader preparation is described in
+[NL_SIGNAL_CONTEXT_DATA.md](NL_SIGNAL_CONTEXT_DATA.md); that coordinated runtime
+switch is still outstanding.
 
 The client integration preserves current dev's independent scenery hiders and
 native sign/road queues. The low-level tests exercise ownership, reloads,

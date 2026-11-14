@@ -1,3 +1,4 @@
 *.bat text eol=crlf
 *.sh text eol=lf
 mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/groenpol/** -text whitespace=cr-at-eol
+docs/assets/groenpol/** -text whitespace=cr-at-eol
