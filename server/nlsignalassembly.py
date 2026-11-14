@@ -106,16 +106,32 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
     if holes is not None and holes.shape != qgrid.shape:
         raise ValueError('terrain hole mask shape')
     origin = [centre[0] - qgrid.shape[1] * square / 2, centre[1] - qgrid.shape[0] * square / 2]
-    return fast.native(293, 'Dutch physical signal planning').NlSignalScene(
+    return fast.native(294, 'Dutch physical signal planning and mounted assemblies').NlSignalScene(
         p, t, np.asarray(kinds, np.uint8), z, origin, float(square),
         np.asarray(coverage, np.float64).reshape(-1, 4), holes)
 
 
 def plans(scene, requests):
+    return [json.loads(s) for s in scene.plans(_rows(requests))]
+
+
+def _rows(requests):
     rows = []
     for r in requests:
         if type(r['lanes']) is not int or type(r['opposite']) is not int or type(r['overhead']) is not bool:
             raise ValueError('explicit lane counts and overhead flag required')
         rows.append([*r['stop'], *r['travel'], r['lanes'], r['opposite'], r['radius'],
                      int(r['overhead']), r['before'], r['after']])
-    return [json.loads(s) for s in scene.plans(np.asarray(rows, np.float64).reshape(-1, 11))]
+    return np.asarray(rows, np.float64).reshape(-1, 11)
+
+
+def assemblies(scene, requests, catalog, turns, zones, motorway_exits):
+    """Marshal context and authored components; Rust chooses every part pose.
+
+    zones must cover the complete junction, not merely this approach. Unknown
+    coverage remains -1 and therefore selects 300 mm conservatively.
+    """
+    if not all(type(v) is bool for v in motorway_exits):
+        raise ValueError('explicit motorway-exit flags required')
+    source = json.dumps(catalog, allow_nan=False, separators=(',', ':'))
+    return [json.loads(s) for s in scene.assemblies(_rows(requests), source, turns, zones, motorway_exits)]

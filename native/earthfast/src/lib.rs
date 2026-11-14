@@ -60,6 +60,7 @@ mod nlsignal;
 mod nlsurface_core;
 mod nlassembly_core;
 mod nlassembly;
+mod nlparts;
 mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
@@ -6432,6 +6433,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
     // grading._Planner._road_stage)
     stageshare::register(m)?;
-    m.add("VERSION", 293)?;
+    m.add("VERSION", 294)?;
     Ok(())
 }

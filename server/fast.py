@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 293 # native Dutch roadside placement, context and physical support planning
+MIN_VERSION = 294 # native Dutch roadside placement, context and mounted signal assemblies
 
 
 class NativeMissing(RuntimeError):

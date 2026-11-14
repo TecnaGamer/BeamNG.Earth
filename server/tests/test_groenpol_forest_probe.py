@@ -8,10 +8,30 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'tools'),str(ROOT/'server')]
 import build_groenpol_forest_probe as producer
+import build_groenpol_forest_assets as assets
 import cdae
 
 
 class ForestProbeAssets(unittest.TestCase):
+    def test_runtime_assets_cover_all_vehicle_variants_without_duplicate_textures(self):
+        with tempfile.TemporaryDirectory() as folder:
+            a,b=Path(folder)/'a',Path(folder)/'b'
+            ca,ma=assets.build(a);cb,mb=assets.build(b)
+            self.assertEqual(ca,cb);self.assertEqual(ma,mb)
+            self.assertEqual(ma['vehicle_variants'],12)
+            self.assertLess(sum(v['bytes'] for v in ma['files'].values()),2_000_000)
+            self.assertEqual(list(a.glob('*.dds')),[])
+            for name in ma['files']:
+                self.assertEqual((a/name).read_bytes(),(b/name).read_bytes())
+            self.assertFalse((a/'provenance.json').exists())
+            self.assertFalse((a/'components.json').exists())
+            for name,h in ca['heads'].items():
+                if name.startswith('vehicle'):
+                    self.assertEqual(set(h['forest']),{'body','red','amber','green'})
+                    for shape in h['forest'].values():
+                        self.assertTrue(shape.startswith(assets.VIRTUAL))
+                        self.assertTrue((a/(Path(shape).stem+'.cdae')).is_file())
+            self.assertNotIn('forest',ca['heads']['pedestrian'])
     def test_authored_body_and_optics_are_small_reproducible_static_assets(self):
         with tempfile.TemporaryDirectory() as folder:
             a,b=Path(folder)/'a',Path(folder)/'b'

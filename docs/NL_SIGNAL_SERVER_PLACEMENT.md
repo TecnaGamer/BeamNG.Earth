@@ -5,7 +5,7 @@ client planner. It is not enabled by a setting or installed into a live game by
 the producer or tests. Do not remove the client pack until the complete assembly
 transport and renderer have replaced it.
 
-## Physical surface snapshot (earthfast 293)
+## Physical surface snapshot (earthfast 294)
 
 `nlsignalassembly.make_scene` marshals the actual drawn road and raised walk
 triangles, the decoded quantised terrain grid, its hole mask, and the rectangles
@@ -42,6 +42,35 @@ until a complete replacement assembly has actually been accepted.
 `nl_signal_lens_mm` selects 200 mm only for an entirely confirmed built-up
 junction. Mixed, outside or unknown context and motorway exits select 300 mm.
 
+## Mounted parts and far display
+
+`NlSignalScene.assemblies` combines physical support selection with Rust socket
+expansion using the authored component catalogue. A successful result contains
+every finished part matrix, lane identity and repeat-head identity. Posts and
+beam frames are independent of driver-facing head frames: mirroring the steel
+does not turn the lamps away from the approaching lane. Original hanger tilt,
+loose feet, per-lane arrows, straight beams and the left portal leg's actual
+ground height are preserved. Eight-head portals are included in the tests.
+Python only marshals arrays, catalogue data and context; it calculates no poses.
+
+`tools/build_groenpol_forest_assets.py` reproducibly compiles all twelve supplied
+vehicle variants into shared dark bodies and fixed red/amber/green optical
+surfaces. It also compiles the steel and feet. It reuses existing DDS textures;
+it does not make a texture or a unique 3D model for each placed lamp. Source
+audit output and the server catalogue are separate from runtime asset output.
+Pedestrian heads are excluded. These generated assets have not been added to
+the runtime mod while the coordinated migration is still incomplete.
+
+The new `nl_signal_assemblies` consumer validates identities, model roots and
+finished matrices, retains accepted parts if a replacement fails, and reuses
+unchanged parts. `farParts` selects a received fixed optical model from an
+explicit existing controller state; it never guesses a phase. The lazy
+`nl_signal_forest` backend uses the BeamNG editor datablock factory, shared
+model types and one Forest per receiver. Its frame transform rebases the
+existing Forest without rebuilding its beams. It creates no TSStatic objects.
+Level teardown forgets native handles without dereferencing deleted objects.
+These modules are not yet wired into the live protocol or enabled by settings.
+
 ## Renderer experiment
 
 `tools/build_groenpol_forest_probe.py` prepares a self-contained diagnostic from
@@ -71,11 +100,18 @@ A later native crash was logged in Earth's existing tree `removeItem` path;
 its relationship to the failed diagnostic is unproven. The next diagnostic is
 isolated on a stock map rather than run alongside active Earth streaming.
 
+The corrected primitive diagnostic was visually confirmed on Gridmap: all
+three fixed lens colours render, and the 5x beam instance retains its
+cross-section. This is proof of those two rendering behaviours, not a city
+performance measurement. `tools/build_groenpol_native_demo.py` prepares a
+second isolated diagnostic using actual native mounted-part output and the
+new far consumer, with resource paths relocated to temporary files only.
+
 ## Work still required before switching runtime
 
-- Native expansion into authored mounting feet, independently aimed head/socket
-  transforms, shared supports and double shields, plus conflicts between complete
-  assemblies. Numeric support selection alone does not implement these.
+- Shared supports and double shields, plus clearance conflicts between complete
+  neighbouring assemblies. The native mounted-part API currently expands each
+  approach independently; it does not yet coalesce adjacent approach supports.
 - Server integration using existing road and graph inputs; assembly ownership,
   transport and invalidation across tile arrival and anchor rebases.
 - A small client consumer and verified distant Forest representation, followed

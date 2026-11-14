@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 import tempfile
 import unittest
@@ -26,6 +27,33 @@ def request(n):
 
 
 class PhysicalSignalPlanning(unittest.TestCase):
+    def test_native_mounted_parts_have_complete_lanes_original_feet_and_mixed_zone_size(self):
+        catalog=json.loads((Path(__file__).resolve().parents[2]/'docs/assets/groenpol/components.json').read_text())
+        got=assembly.assemblies(scene([road(4)]),[request(4)],catalog,
+                                [['left','through','through','right']],[[1,0]],[False])[0]
+        self.assertTrue(got['ready'])
+        result=got['assembly'];self.assertEqual(result['lens_mm'],300)
+        heads=[p for p in result['parts'] if p['role']=='head' and not p['repeat']]
+        self.assertEqual([h['lane'] for h in heads],[0,1,2,3])
+        self.assertEqual([h['variant'] for h in heads],
+                         ['vehicle_300_arrow_left','vehicle_300','vehicle_300','vehicle_300_arrow_right'])
+        keys=[p['key'] for p in result['parts']]
+        self.assertEqual(len(keys),len(set(keys)))
+        for part in result['parts']:
+            self.assertEqual(len(part['pose']),12)
+            self.assertTrue(np.isfinite(part['pose']).all())
+        self.assertEqual(sum(p['role']=='beam' for p in result['parts']),1)
+
+    def test_native_assembly_rejects_mismatched_context_and_waits_for_missing_surfaces(self):
+        catalog=json.loads((Path(__file__).resolve().parents[2]/'docs/assets/groenpol/components.json').read_text())
+        got=assembly.assemblies(scene([road(3)]),[request(3)],catalog,[['left']],[[1]],[False])[0]
+        self.assertFalse(got['ready']);self.assertEqual(got['reason'],'assembly_context')
+        got=assembly.assemblies(scene([road(3)],coverage=[]),[request(3)],catalog,
+                                [['through']*3],[[1]],[False])[0]
+        self.assertFalse(got['ready']);self.assertTrue(got['retryable'])
+        with self.assertRaises(ValueError):
+            assembly.assemblies(scene([road(3)]),[request(3)],catalog,[['through']*3],[[1]],[1])
+
     def test_fresh_and_cached_drawn_road_give_identical_plans(self):
         fresh=road(4)
         with tempfile.TemporaryDirectory() as folder:

@@ -6,6 +6,14 @@ use serde_json::json;
 use crate::nlassembly_core::{self,Kind,Request};
 use crate::nlsurface_core::{Scene,Surface,Terrain,Rejection};
 
+fn request(r:numpy::ndarray::ArrayView1<'_,f64>)->Request{
+    Request{stop:[r[0],r[1],r[2]],travel:[r[3],r[4]],
+        lanes:if r[5].is_finite()&&r[5].fract()==0.&&(1. ..=16.).contains(&r[5])
+            &&(r[8]==0.||r[8]==1.){r[5] as usize}else{0},
+        opposite:if r[6].is_finite()&&r[6].fract()==0.&&(0. ..=16.).contains(&r[6]){r[6] as usize}else{17},
+        radius:r[7],overhead:r[8]==1.,before:r[9],after:r[10]}
+}
+
 #[pyclass(module="earthfast", name="NlSignalScene")]
 pub struct SignalScene { scene: Scene }
 
@@ -54,13 +62,7 @@ impl SignalScene {
     fn plans(&self,py:Python<'_>, rows:PyReadonlyArray2<'_,f64>) -> PyResult<Vec<String>> {
         let a=rows.as_array();
         if a.ncols()!=11 || a.nrows()>10_000 { return Err(PyValueError::new_err("signal approach rows")); }
-        let requests:Vec<Request>=a.rows().into_iter().map(|r|Request{
-            stop:[r[0],r[1],r[2]],travel:[r[3],r[4]],
-            lanes:if r[5].is_finite() && r[5].fract()==0. && (1. ..=16.).contains(&r[5])
-                && (r[8]==0. || r[8]==1.) {r[5] as usize}else{0},
-            opposite:if r[6].is_finite() && r[6].fract()==0. && (0. ..=16.).contains(&r[6]){r[6] as usize}else{17},
-            radius:r[7],overhead:r[8]==1.,before:r[9],after:r[10],
-        }).collect();
+        let requests:Vec<Request>=a.rows().into_iter().map(request).collect();
         Ok(py.detach(||requests.iter().map(|r|match nlassembly_core::plan(&self.scene,r) {
             Err(reason)=>json!({"ready":false,"reason":reason,"retryable":matches!(reason,"surface_tiles_pending"|"ground_tiles_pending")}).to_string(),
             Ok(p)=>{
@@ -68,6 +70,25 @@ impl SignalScene {
                     "lateral_m":g.foot.lateral,"mirrored":g.mirrored,"standing":g.standing,"lanes":g.lanes})).collect();
                 json!({"ready":true,"kind":match p.kind{Kind::Standing=>"standing",Kind::Cantilever=>"cantilever",
                     Kind::Portal=>"portal",Kind::Split=>"split"},"lane_width_m":p.lane_width,"groups":groups}).to_string()
+            }
+        }).collect()))
+    }
+
+    fn assemblies(&self,py:Python<'_>,rows:PyReadonlyArray2<'_,f64>,catalog:&str,
+                  turns:Vec<Vec<String>>,zones:Vec<Vec<i8>>,exits:Vec<bool>)->PyResult<Vec<String>>{
+        let a=rows.as_array();let n=a.nrows();
+        if a.ncols()!=11||n>256||turns.len()!=n||zones.len()!=n||exits.len()!=n||catalog.len()>1_000_000
+            ||turns.iter().any(|r|r.len()>16||r.iter().any(|s|s.len()>128))
+            ||zones.iter().any(|r|r.len()>128){return Err(PyValueError::new_err("signal assembly batch"));}
+        let catalog:serde_json::Value=serde_json::from_str(catalog).map_err(|_|PyValueError::new_err("signal component catalog JSON"))?;
+        let requests:Vec<Request>=a.rows().into_iter().map(request).collect();
+        Ok(py.detach(||requests.iter().enumerate().map(|(i,r)|{
+            let result=nlassembly_core::plan(&self.scene,r).and_then(|p|
+                crate::nlparts::expand(r,&p,&catalog,&turns[i],&zones[i],exits[i]));
+            match result{
+                Ok(parts)=>json!({"ready":true,"assembly":parts}).to_string(),
+                Err(reason)=>json!({"ready":false,"reason":reason,
+                    "retryable":matches!(reason,"surface_tiles_pending"|"ground_tiles_pending")}).to_string(),
             }
         }).collect()))
     }

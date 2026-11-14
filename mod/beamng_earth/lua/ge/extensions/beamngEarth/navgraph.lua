@@ -1502,7 +1502,9 @@ function M.update(aid, b, gov, frame)
   if M.dutchSignals then require('beamngEarth/nl_signal_surfaces').newFrame() end
   signalFrame = frame
   if M.dutchSignals then require('beamngEarth/trees').setSignalFrame(frame) end
-  for _,h in pairs(heads)do if h.visualOnly then signalScene.syncVisual(h) end end
+  if M.dutchSignals then
+    for _,h in pairs(heads)do if h.visualOnly then signalScene.syncVisual(h) end end
+  end
   if not M.enabled or not graph then return end
   -- Road skins arrive after the graph. Refit visuals against their new surfaces
   -- without resetting the AI map or changing the native controller's phase.
