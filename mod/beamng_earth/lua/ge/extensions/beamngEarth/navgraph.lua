@@ -413,13 +413,9 @@ function stockScene.create(p,inst)
 end
 local signalScene=stockScene
 function signalScene.visualObject()return nil end
-local signalFrame = nil -- current world anchor, supplied by core (no server/cache schema changes)
 local heads = {}        -- stable signal instance name -> owned head/support/hardware assembly
 local seenHeads = {}
 local signalRequests={}
-local groundRevision,lastGroundRefresh=nil,0
-local groundQueue={}
-local groundWaited=0
 local suppressionGrid
 
 local function clearHeads(keep)
@@ -435,7 +431,9 @@ end
 -- A head for instance inst at a's prop transform: the one already standing there is kept (it is linked by
 -- the instance's name, which stays the same: setupSignals finds it again), so a new graph costs only the new ones.
 local function makeHead(inst, a, junction, controller, sequence, visualOnly)
-  signalRequests[inst.name]={inst=inst,a=a,junction=junction,controller=controller,sequence=sequence,visualOnly=visualOnly}
+  if M.dutchSignals then
+    signalRequests[inst.name]={inst=inst,a=a,junction=junction,controller=controller,sequence=sequence,visualOnly=visualOnly}
+  end
   seenHeads[inst.name]=true
   if M.dutchSignals then
     nativeSignals().register(inst.name,inst,controller,sequence,a)
@@ -546,7 +544,7 @@ local function signalData(nodes)
       for i, a in ipairs(j.app) do
         local name='bne_'..j.j..'_'..i
         if not duplicate[name] and (nodes[a[1]] and nodes[j.j] or nlVisual and graph.nodes[a[1]]) then
-          apps[#apps + 1] = {a=a,index=i,visual=not(nodes[a[1]] and nodes[j.j])}
+          apps[#apps + 1] = {a=a,index=nlVisual and i or #apps+1,visual=not(nodes[a[1]] and nodes[j.j])}
         end
       end
       if #apps > 0 then
@@ -1260,7 +1258,7 @@ end
 function M.transform(xf, anchorId)
   if nativeStream then nativeStream.clear(false) end
   if not graph or not xf then return false end
-  signalRequests={};groundQueue={};groundRevision=nil
+  if M.dutchSignals then signalRequests={} end
   local nodes = {}
   for name, n in pairs(graph.nodes) do
     local m = {}
@@ -1277,38 +1275,43 @@ function M.transform(xf, anchorId)
       lines[i] = { x1, y1, x2, y2, l[5] }
     end
   end
-  local signals = {}
-  for _, j in ipairs(graph.signals or {}) do
-    local copy = {}; for k, v in pairs(j) do copy[k] = v end; copy.app = {}
-    for _, a in ipairs(j.app or {}) do
-      local b = {}; for k, v in pairs(a) do b[k] = v end
-      b[2], b[3], b[4] = xf:apply(a[2], a[3], a[4])
-      -- Difference of transformed points also supports the simple translation transforms used in tests.
-      local dx, dy = xf:apply(a[2] + a[5], a[3] + a[6], a[4])
-      local len = math.sqrt((dx-b[2])^2 + (dy-b[3])^2)
-      b[5], b[6] = (dx-b[2])/math.max(len, 1e-9), (dy-b[3])/math.max(len, 1e-9)
-      if a[8] then
-        b[8], b[9], b[10] = xf:apply(a[8], a[9], a[10])
-        local yaw = math.rad(a[11] or 0)
-        local x, y = xf:apply(a[8]+math.cos(yaw), a[9]+math.sin(yaw), a[10])
-        b[11] = math.deg(math.atan2(y-b[9], x-b[8]))
+  local signals = graph.signals
+  if M.dutchSignals then
+    signals = {}
+    for _, j in ipairs(graph.signals or {}) do
+      local copy = {}; for k, v in pairs(j) do copy[k] = v end; copy.app = {}
+      for _, a in ipairs(j.app or {}) do
+        local b = {}; for k, v in pairs(a) do b[k] = v end
+        b[2], b[3], b[4] = xf:apply(a[2], a[3], a[4])
+        -- Difference of transformed points also supports the simple translation transforms used in tests.
+        local dx, dy = xf:apply(a[2] + a[5], a[3] + a[6], a[4])
+        local len = math.sqrt((dx-b[2])^2 + (dy-b[3])^2)
+        b[5], b[6] = (dx-b[2])/math.max(len, 1e-9), (dy-b[3])/math.max(len, 1e-9)
+        if a[8] then
+          b[8], b[9], b[10] = xf:apply(a[8], a[9], a[10])
+          local yaw = math.rad(a[11] or 0)
+          local x, y = xf:apply(a[8]+math.cos(yaw), a[9]+math.sin(yaw), a[10])
+          b[11] = math.deg(math.atan2(y-b[9], x-b[8]))
+        end
+        copy.app[#copy.app+1] = b
       end
-      copy.app[#copy.app+1] = b
+      signals[#signals+1] = copy
     end
-    signals[#signals+1] = copy
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = signals,
-            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
-  -- Keep already-linked meshes with their junction while setup waits for the following frame.
-  for _, h in pairs(heads) do
-    local yaw = math.rad(h.yaw)
-    local dx, dy = xf:apply(h.x+math.cos(yaw), h.y+math.sin(yaw), h.z)
-    h.x, h.y, h.z = xf:apply(h.x, h.y, h.z)
-    h.yaw = math.deg(math.atan2(dy-h.y, dx-h.x))
-    if h.sourcex then h.sourcex,h.sourcey,h.sourcez=xf:apply(h.sourcex,h.sourcey,h.sourcez) end
-    signalScene.move(h)
+            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, nlNative=graph.nlNative, moved = true }
+  -- Optional Dutch ownership must not change the stock rebase path.
+  if M.dutchSignals then
+    for _, h in pairs(heads) do
+      local yaw = math.rad(h.yaw)
+      local dx, dy = xf:apply(h.x+math.cos(yaw), h.y+math.sin(yaw), h.z)
+      h.x, h.y, h.z = xf:apply(h.x, h.y, h.z)
+      h.yaw = math.deg(math.atan2(dy-h.y, dx-h.x))
+      if h.sourcex then h.sourcex,h.sourcey,h.sourcez=xf:apply(h.sourcex,h.sourcey,h.sourcez) end
+      signalScene.move(h)
+    end
+    if next(heads) then suppressHeads() end
   end
-  if next(heads) then suppressHeads() end
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true
@@ -1503,7 +1506,6 @@ local function overtakeScan(now)
 end
 
 function M.update(aid, b, gov, frame, ground)
-  signalFrame=frame
   if nativeStream and nativeWasOn and not M.dutchSignals then nativeStream.clear(false);nativeAccepted({}) end
   nativeWasOn=M.dutchSignals
   if M.dutchSignals and nativeStream then nativeStream.update(aid,ground,16) end
@@ -1535,8 +1537,10 @@ function M.update(aid, b, gov, frame, ground)
     stats.guardMaxMs = math.max(stats.guardMaxMs or 0, g)
   end
   if graph.anchor ~= aid then
-    releaseHeads()
-    pendingSignals = nil
+    if M.dutchSignals then
+      releaseHeads()
+      pendingSignals = nil
+    end
     graph = nil
     return
   end
@@ -1622,8 +1626,6 @@ end
 
 function M.reset()
   if nativeStream then nativeStream.clear(true) end
-  groundWaited=0
-  groundQueue={};groundRevision=nil;lastGroundRefresh=0
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)
@@ -1639,9 +1641,8 @@ function M.reset()
       protectedTraffic[id] = nil
     end
   end
-  releaseHeads()        -- also safe when a level unload already deleted its objects
-  signalFrame = nil
-  if nlSignals then nlSignals.reset() end
+  heads = {} -- the level took its objects with it; no stock refresh on teardown
+  signalRequests={};seenHeads={};suppressionGrid=nil;nativeWasOn=false
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
   adaptive = newAdaptive()

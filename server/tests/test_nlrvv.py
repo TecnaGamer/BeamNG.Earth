@@ -17,6 +17,7 @@ import dmath
 import nlrvvdata as data
 import build_nl_rvv
 import signstream
+import revisit
 
 
 def record(**kw):
@@ -108,8 +109,46 @@ class PublicData(unittest.TestCase):
             self.assertEqual(source.query((4, 51, 5, 52)), [])
         with patch.object(nlrvv.roadsigns, 'NL_ON', True), patch.object(source, 'version', return_value=None):
             self.assertEqual(source.query((4, 51, 5, 52)), [])
-        with patch.object(nlrvv, 'build_tile', side_effect=ValueError('bad tile')), self.assertLogs('earthd.signs'):
-            self.assertEqual(signstream._ndw(None, None, 0, 0, None, None, []), (None, []))
+        with revisit.scope() as build:
+            with patch.object(nlrvv, 'build_tile', side_effect=ValueError('bad tile')), self.assertLogs('earthd.signs'):
+                self.assertEqual(signstream._ndw(None, None, 0, 0, None, None, []), (None, []))
+            self.assertFalse(build.complete,'failed NDW render must not become a complete revisit tile')
+
+    def test_sign_revisit_key_tracks_ndw_build_and_opt_in(self):
+        import blockworker
+        from unittest.mock import Mock
+        source=SimpleNamespace(version=Mock(return_value='one'))
+        md=SimpleNamespace(highway_signs=SimpleNamespace(version=lambda:'stock'),nl_rvv=source)
+        with patch.object(blockworker,'_s',SimpleNamespace(md=md,cache_dir='cache')), \
+             patch.object(revisit,'ON',True),patch.object(blockworker,'_md_versions',return_value={}), \
+             patch.object(blockworker,'_ground_rules',return_value={}),patch.object(blockworker,'_radar_key',return_value=()), \
+             patch.object(blockworker,'_revisit_tile',side_effect=lambda kind,key,*a,**kw:key), \
+             patch.object(nlrvv.roadsigns,'NL_ON',False):
+            def key():return blockworker.signs_tile(1,52.,5.,16,0,0,'out','/temp/out',rsigns=True)
+            off=key();source.version.assert_not_called()
+            with patch.object(nlrvv.roadsigns,'NL_ON',True):
+                first=key();source.version.return_value='two';second=key()
+            self.assertNotEqual(first,off);self.assertNotEqual(second,first)
+            self.assertEqual(key(),off,'turning off restores the original stock cache identity')
+
+    def test_failed_ndw_version_bypasses_revisit_cache(self):
+        import blockworker
+        source=SimpleNamespace(version=lambda:(_ for _ in ()).throw(OSError('offline')))
+        md=SimpleNamespace(highway_signs=SimpleNamespace(version=lambda:'stock'),nl_rvv=source)
+        with patch.object(blockworker,'_s',SimpleNamespace(md=md,cache_dir='cache')), \
+             patch.object(revisit,'ON',True),patch.object(nlrvv.roadsigns,'NL_ON',True), \
+             patch.object(blockworker,'_signs_tile',return_value='uncached')as build, \
+             patch.object(blockworker,'_revisit_tile',side_effect=AssertionError('must not cache failed version')):
+            self.assertEqual(blockworker.signs_tile(1,52.,5.,16,0,0,'out','/out',rsigns=True),'uncached')
+            build.assert_called_once()
+
+    def test_missing_published_ndw_shard_marks_the_sign_tile_short(self):
+        source=nlrvv.Source(None,None);source.built='published'
+        with patch.object(nlrvv.roadsigns,'NL_ON',True), \
+             patch.object(source,'version',return_value='published'),patch.object(source,'shard',return_value=None):
+            with revisit.scope()as build:
+                self.assertEqual(source.query((5.,52.,5.001,52.001)),[])
+                self.assertFalse(build.complete)
 
     def test_published_public_tiles_use_normal_fetch_and_persistent_cache(self):
         row = data.normalize(record())[0]

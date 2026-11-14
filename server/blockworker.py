@@ -1117,9 +1117,14 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
         sv = src.version()
     except Exception:
         sv = None
+    import signstream
+    ndw = signstream.ndw_cache_key(_s.md, rsigns)
+    if ndw is None:
+        return _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country, dirs, rsigns, dej,
+                           towns_on)
     k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
                     country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
-                    ("rules", _ground_rules()), *_radar_key(), *de)
+                    ("rules", _ground_rules()), *_radar_key(), *de, *ndw)
     return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
                          lambda: _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country,
                                              dirs, rsigns, dej, towns_on),

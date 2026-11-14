@@ -5,6 +5,10 @@ assembly consumer and Forest backend load lazily. Stock mode does not parse a
 country outline, refill fitting queues or refresh signal trees every frame.
 The old client planner, cdae reads, AI graph augmentation and 46 MiB pack are removed.
 
+Native changes are source-only in this PR. Build the required API 302 with
+`python tools/build_native.py`; CI and maintainers build their platform binaries.
+The PR does not replace the native binaries already present on the dev branch.
+
 ## Live pipeline (earthfast 302)
 
 The server captures a ready graph serial, exact road/skin versions, quantised

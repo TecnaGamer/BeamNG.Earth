@@ -102,6 +102,13 @@ and does not measure placement acceptance against generated roads.
 
 ## Validation
 
+The sign-tile revisit key includes the enabled Dutch NDW dataset's build.
+Switching the feature off uses the original stock cache identity and performs
+no NDW version lookup. A failed version lookup bypasses the cache; failed NDW
+builds and unavailable published shards mark the tile incomplete, so partial
+fallback output cannot be retained as a complete tile. A manifest-proven empty
+shard needs no download. The live sign tracker also observes the NDW build.
+
 `python -m unittest discover -s server/tests -p test_roadsigns.py` checks the
 country switches, supported roles, existing-country behaviour and shared mesh.
 `python tools/build_sign_atlas.py --check` checks drawing/role consistency.

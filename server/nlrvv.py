@@ -62,8 +62,13 @@ class Source(railtags.Shards):
         # Pinning/versioning/failure backoff is the ordinary public-data path.
         if not (3 <= east and west <= 8 and 50 <= north and south <= 54):
             return []
-        if self.version() is None:
+        built = self.version()
+        if built is None:
             return []
+        with self.manifest.lock:
+            index = self.manifest.manifest
+            listed = index.get('tiles') if isinstance(index,dict) and index.get('built') == built \
+                and index.get('format') == data.FORMAT else None
         ax, ay = data.tile(min(54, north), max(3, west), maths=dmath)
         bx, by = data.tile(max(50, south), min(8, east), maths=dmath)
         if (bx - ax + 1) * (by - ay + 1) > 64:
@@ -72,11 +77,17 @@ class Source(railtags.Shards):
         with self.query_lock:
             for x in range(ax, bx + 1):
                 for y in range(ay, by + 1):
+                    if isinstance(listed,dict) and f'{x}/{y}.json.gz' not in listed:
+                        continue
                     shard = self.shard(x, y)
                     if not shard or shard.get('format') != data.FORMAT:
+                        import revisit
+                        revisit.fault(here=True)
                         continue
                     rows = shard.get('records', ())
                     if not isinstance(rows, list) or len(rows) > 100000:
+                        import revisit
+                        revisit.fault(here=True)
                         continue
                     for row in rows:
                         if (isinstance(row, dict) and isinstance(row.get('lat'), (int, float))
@@ -88,6 +99,10 @@ class Source(railtags.Shards):
                             self.shards.move_to_end((x, y))
                         while len(self.shards) > 16:
                             self.shards.popitem(last=False)
+        if self.known() != built:
+            import revisit
+            revisit.fault(here=True)
+            return []
         return found
 
 

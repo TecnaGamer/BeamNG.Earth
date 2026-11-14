@@ -149,11 +149,24 @@ def _ndw(md, frame, tx, ty, elev, context, decks):
         import nlrvv
         return nlrvv.build_tile(md, frame, tx, ty, elev, context, decks)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_rsigns >= 60.:
             _warned_rsigns = now
             log.warning('Dutch NDW signs unavailable; existing signs retained: %s', error, exc_info=True)
         return None, []
+
+
+def ndw_cache_key(md, rsigns):
+    """Only opt-in sign tiles depend on the public NDW build. None forbids caching."""
+    if not rsigns or not roadsigns.NL_ON:
+        return ()
+    source = getattr(md, 'nl_rvv', None)
+    try:
+        return ('nl-rvv', True, source.version() if source is not None else None)
+    except Exception:
+        _short()
+        return None
 
 
 def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country, ndw_claims=()):

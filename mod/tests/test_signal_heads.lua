@@ -7,7 +7,7 @@ local shape = require('beamngEarth/signalshape')
 N.MIN_GAP_S = 0
 table.clear = table.clear or function(t) for k in pairs(t) do t[k] = nil end end
 local graph, current, made, refreshed = nil, { nodes = {} }, {}, {}
-local refreshCount=0
+local refreshCount,moves=0,0
 local trees = { refresh = function(group) refreshed[group] = true;refreshCount=refreshCount+1 end,
   setSignalFrame = function() error('stock mode must not re-fit Dutch signal frames') end }
 package.loaded['beamngEarth/trees'] = trees
@@ -33,7 +33,7 @@ core_trafficSignals = {
     opts.createSignalObject = function(_, asset)
       local o = createObject('TSStatic')
       o:registerObject(opts.name)
-      o.setTransform = function(self, m) self.transform = m end
+      o.setTransform = function(self, m) self.transform = m;moves=moves+1 end
       o.asset = asset
       made[#made + 1] = o
       return o
@@ -71,4 +71,32 @@ package.loaded['beamngEarth/roads']={geoStats={tiles=1,skins=1,exact=1}}
 local unchanged=refreshCount
 for i=1,8 do N.update(1,{-500,-500,500,500}) end
 T.check(refreshCount==unchanged,'stock update does not refill Dutch re-fit work or refresh signal tiles')
+local budgetCalls=0
+local gov={roomFor=function()budgetCalls=budgetCalls+1;return true end,
+  noteFrame=function()budgetCalls=budgetCalls+1 end}
+for i=1,8 do N.update(1,{-500,-500,500,500},gov) end
+T.check(budgetCalls==0,'idle stock frames add no governor calls')
+local signals=N.currentGraph().signals
+local moved=moves
+N.transform({apply=function(_,x,y,z)return x+100,y+200,z end},2)
+T.check(N.currentGraph().signals==signals and moves==moved and refreshCount==unchanged,
+  'stock rebase retains upstream signal data and does not move heads or refresh trees')
+N.update(3,{-500,-500,500,500})
+T.check(scenetree.findObjectById(made[#made].id)~=nil and refreshCount==unchanged,
+  'stock anchor change adds no head release or tree refresh')
+N.reset()
+T.check(refreshCount==unchanged,'level teardown adds no stock tree refresh')
+local registered=0
+package.loaded['beamngEarth/net']={send=function()end}
+package.loaded['beamngEarth/nl_signal_stream']={configure=function()end,graph=function()end,
+  register=function()registered=registered+1 end,owns=function()return false end,spots=function()return{}end,
+  clear=function()end,update=function()end}
+N.dutchSignals=true
+apply(false)
+moved=moves;unchanged=refreshCount
+signals=N.currentGraph().signals
+N.transform({apply=function(_,x,y,z)return x+100,y+200,z end},2)
+T.check(registered>0 and moves>moved and N.currentGraph().signals~=signals,
+  'enabled Dutch path alone transforms approach positions and fallback heads')
+N.reset();N.dutchSignals=false
 T.done('test_signal_heads')
