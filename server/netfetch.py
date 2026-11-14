@@ -303,6 +303,13 @@ POLICIES = {
     "raw.githubusercontent.com": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=24, daily_hard=48,
                                             cache_ttl=6 * 3600, miss_ttl=None, max_wait=5.0, timeout=8.0,
                                             max_attempts=1, optional=True),
+    # the Polish LOD1 building files (polandlod1.py, BNE_PL_LOD1): the lane "lod1" of the same host, with a policy of
+    # its own so that the update check's tiny budget above is not shared. The repository's index (~0.6 MB) once a week, and
+    # one 0.1-3.7 MB file (433, 250 MB, for all of Poland) per county a map cell reaches, once, kept on disk; the budget
+    # lets a whole country's worth through in a day
+    "raw.githubusercontent.com#lod1": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=600, daily_hard=1000,
+                                                 allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True,
+                                                 timeout=60.0, max_attempts=3, base_delay=2.0, optional=True),
     # the one-click update (selfupdate.py, the player's button): the latest release's details, then its file (a
     # redirect from github.com to GitHub's asset host, followed by urllib inside the session)
     "api.github.com": HostPolicy(rate=0.2, burst=2.0, max_conc=1, daily_budget=20, daily_hard=40, max_wait=10.0,
@@ -477,6 +484,7 @@ ROLES = {
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
+    "raw.githubusercontent.com#lod1": "Poland's official building outlines and heights; those cells wait for them",
     "api.github.com": "one-click updates",
     "github.com": "one-click updates",
 }
@@ -488,6 +496,9 @@ ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang 
 def role_of(host):
     """What host gives the world and what is missing while it does not answer (ROLES; a regional photo source by its
     place), or None for a host not known here."""
+    got = ROLES.get(host)
+    if got is not None:
+        return got
     host = host.split("#", 1)[0]
     got = ROLES.get(host)
     if got is not None:

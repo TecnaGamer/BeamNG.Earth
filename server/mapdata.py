@@ -70,6 +70,7 @@ import bnwt
 import netfetch
 import overture
 import pmtiles
+import polandlod1
 import rangeread
 import revisit
 import levelways
@@ -124,6 +125,7 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # after it; the cached ones with the next Overture release bump)
 LAYER_VERSIONS = {"roads": 9}
 LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-road mouths (lanesections.split's context)
+LOD1_LAYERS = ("buildings", "building_parts")   # what polandlod1 (BNE_PL_LOD1) replaces in cells wholly in Poland
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -169,6 +171,7 @@ CREDIT_LINES = {
                       "processed by ESA WorldCover consortium",
     "meta-wri-chm": "Canopy height: Meta & WRI",
     "lidarbc-chm": "Canopy height: LidarBC (OGL-BC), Meta & WRI",
+    polandlod1.PROVENANCE_ID: polandlod1.ATTRIBUTION,
 }
 THEME_OF = {name: spec["theme"] for name, spec in overture.LAYERS.items()}
 
@@ -357,6 +360,7 @@ class MapData:
                  threads=overture.DUCKDB_THREADS):
         self.cache_dir = cache_dir
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
+        polandlod1.configure(cache_dir, self.fetcher)       # (opt-in: BNE_PL_LOD1; its files are fetched on demand)
         self.release = release
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
@@ -642,6 +646,8 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
+        if polandlod1.enabled():                # (Poland's official footprints, BNE_PL_LOD1: keyed only while on)
+            v["pl_lod1"] = polandlod1.signature()
         return v
 
     def warm_manifests(self):
@@ -689,7 +695,9 @@ class MapData:
         """The cell layer's file. A layer from Overture's tiles has a folder of its own (overture-pmt<FORMAT>): the
         parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over."""
         source, release = _source(layer, self.release)
-        if not parquet and MapData._pmt(self, layer):
+        if layer in LOD1_LAYERS and polandlod1.covers(key):
+            release = f"{release}+pllod1.{polandlod1.VERSION}"     # (Poland's official footprints: their own files)
+        elif not parquet and MapData._pmt(self, layer):
             source = f"overture-pmt{pmtiles.FORMAT}"
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
@@ -813,7 +821,13 @@ class MapData:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats = fell = None
-            if self._pmt(layer) and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
+            lod1 = polandlod1.query(key, kind) if layer == "buildings" else None   # None: not covered (off, outside Poland, no tiles)
+            if lod1 is not None:
+                feats, sources = lod1
+            elif layer == "building_parts" and polandlod1.covers(key):
+                feats, sources = overture.empty(layer), {}      # (parts of Overture buildings that are not drawn)
+            if feats is None and self._pmt(layer) and getattr(self, "bnwt", None) is not None \
+                    and layer in bnwt.LAYERS:
                 feats, sources = self._bnwt_query(layer, key, kind, bnwt.PMT)
             if self._pmt(layer) and feats is None:
                 try:
@@ -850,9 +864,12 @@ class MapData:
                 # lies (the pieces of all cells make the whole polygon), not only in the bbox-centre cell
                 feats.own |= feats.clipped
             arrays = _layer_arrays(feats)
-            prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
-            if prov is not None and self._pmt(layer):
-                prov["format"] = "parquet" if fell is not None else "pmtiles"
+            if lod1 is not None:
+                prov = polandlod1.provenance(sources) if len(feats) else None
+            else:
+                prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
+                if prov is not None and self._pmt(layer):
+                    prov["format"] = "parquet" if fell is not None else "pmtiles"
             if fell is not None:
                 arrays["_fallback"] = np.array(True)
         elif layer == "landcover":

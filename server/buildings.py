@@ -25,6 +25,7 @@ import dnp
 import landmarks
 import mapgeom
 import nycmassing
+import polandlod1
 import ships
 import staging
 import francehouses
@@ -40,6 +41,7 @@ FOUNDATION_M = 0.6          # m the walls reach under the lowest ground of the f
 # detail) stands on the coarsest ground: the deepest skirt.
 SKIRT_M = 3.0
 SKIRT_LITE_M = 10.0
+TRUSTED_FOOTPRINTS = {"OpenStreetMap", polandlod1.DATASET}   # surveyed outlines: not the ML ones _ml_false filters
 MIN_AREA_M2 = 12.0          # footprints smaller than this are skipped (kiosks, sheds' slivers)
 MAX_VERTS = 64              # footprints with more vertices are simplified until under this
 SIMPLIFY_M = 0.35           # m: vertices closer than this to the line of their neighbours are dropped
@@ -5223,7 +5225,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue
             if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
-            is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
+            is_ml = "src_dataset" in a and str(a["src_dataset"][i]) not in TRUSTED_FOOTPRINTS
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
                 continue
             if key is not None:

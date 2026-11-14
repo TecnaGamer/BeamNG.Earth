@@ -38,6 +38,7 @@ For the OpenStreetMap keys read by the server and weekly data builders, see the
 | Overture Maps vector tiles (the bucket behind the CDN) | `overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com`, `overturemaps-extras-us-west-2.s3.amazonaws.com` | The same tiles, used when the CDN is slower or does not answer. | Only matters while the CDN is down too. | named |
 | Overture Maps file index | `stac.overturemaps.org` | The list of which file holds which part of the world. | The app carries its own copy of the list, which is used instead. | named |
 | OpenStreetMap road details (OSM US Layercake) | `data.openstreetmap.us` | OpenStreetMap's own road tags matched to the roads: lanes, widths, sidewalks, surfaces, speed limits, roads under construction. | Roads keep their width, lane and sidewalk estimates from their class and the land around them. | optional |
+| Poland's official buildings (GUGiK LOD1; off unless you set `BNE_PL_LOD1=1`) | `raw.githubusercontent.com#lod1` (the file host of github.com/maalos/LOD1_2024_PL, on its own speed limit, apart from the update check's) | In map cells wholly in Poland, the building outlines with measured heights, instead of Overture's. A small index (once a week), then one file of 0.1 to 3.7 MB for each county a cell reaches, downloaded once (250 MB for all of Poland). | Those cells wait for the file (they are not built from Overture meanwhile); cells already built, and everywhere else, are not affected. | optional |
 
 ## Terrain heights (elevation)
 
