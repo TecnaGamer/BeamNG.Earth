@@ -133,6 +133,22 @@ class RoadClearanceTest(unittest.TestCase):
         self.assertTrue(np.allclose(seg[:, [1, 3]], 100.0, atol=0.5), "the driveway left out, the street once")
         self.assertAlmostEqual(float(half[0]), roads.road_specs(f)[0].width / 2, places=6)
 
+    def test_raceways_are_cleared_like_streets(self):
+        # Spa-Francorchamps: machine-learned footprints 4-5 m from the track's centre line, on its 12 m asphalt
+        f = features([[(-200, 100), (300, 100)]], ["raceway"], ids=["osm-raceway-126835638"])
+        cw = bld.carriageway_segments(FRAME, [f], 0, 0)
+        self.assertIsNotNone(cw, "a raceway's carriageway is cleared")
+        seg, half = cw
+        self.assertAlmostEqual(float(half[0]), roads.road_specs(f)[0].width / 2, places=6)
+        h = float(half[0])
+        out, stats = items_of([ll(20, 96, 20, 14)], (seg, half), ml=[True])    # its centre 3 m off the line
+        self.assertEqual(stats, {"ml_dropped": 1})
+        self.assertEqual(out, [])
+        edge = float(seg[0, 1]) + h
+        out, stats = items_of([ll(20, edge - 0.6, 12, 10)], (seg, half))       # a pit building 0.6 m over the edge
+        self.assertEqual(stats, {"osm_trimmed": 1})
+        self.assertLessEqual(depth(out, (seg, half)), 0.0)
+
 
 def tunnel(points, width=5.5):
     """A residential street's 'tunnel' along points (tile-relative), as tunnel_lines gives it (a RoadLines)."""
