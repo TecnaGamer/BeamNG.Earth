@@ -1239,6 +1239,31 @@ class LazyStateTest(unittest.TestCase):
         self.assertIsNotNone(until, "kept only until the preferred source is asked again")
         self.assertLessEqual(until, time.time() + imagery.UNAVAILABLE_RETRY_S + 60)
 
+    def test_map_tile_under_a_down_host_s_expired_miss_is_a_stand_in_until_it_recovers(self):
+        # (review of a9a978a9: the map tile from a later source under an expiring "nothing there" was written as the
+        # tile for good, and the mod never asked for it again)
+        import maptiles
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        self.assertEqual(src.name, "naipusda")
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
+        missindex.reset_memo()
+        br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
+        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        t0 = time.time()
+        tx, ty = kids[0]
+        mt = maptiles.MapTiles(im)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual(name, "naip", "the later source fills in")
+        self.assertFalse(final, "a stand-in: the preferred source may come back")
+        self.assertAlmostEqual(until, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        self.assertFalse(self.exports("naipusda"), "not asked while down")
+        br.state, br.open_until = "closed", 0.0                        # (the host is back)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual((name, final, until), ("naipusda", True, None), "asked again: its photo is the tile")
+        self.assertTrue(self.exports("naipusda"))
+
     def test_an_expired_outside_probe_is_asked_again_and_recovered_coverage_used(self):
         # (review of 6cbcfd2b: a probe's 404 kept in memory as None for the process's life, and "outside" renewed with
         # a fresh deadline at every look; now its own deadline, and once past it the probe is fetched again)

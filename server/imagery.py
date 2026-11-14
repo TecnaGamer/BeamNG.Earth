@@ -1606,6 +1606,29 @@ class Imagery:
         """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
         return self._warm_done(key)
 
+    def lazy_tile_state(self, key):
+        """A lazy source's tile (src, z, x, y) as a render would read it (_child_state): ("data", None) on disk,
+        ("none", until) known to hold nothing there (until: unix s when that answer ends, None never), ("todo", None)
+        not decided (never fetched, evicted, an expired miss)."""
+        return self._child_state(*key)
+
+    def fetch_lazy_tile(self, key):
+        """A lazy source's undecided tile (lazy_tile_state "todo") fetched now in the calling thread, as a demand
+        request (its export parent in one request: the parent's every tile written, data or a miss): the world map's
+        and the car screens' tiles (maptiles.MapTiles.tile), which tiles() alone passes on to the next source while
+        warm() has not fetched them yet. False: decided already, nothing fetched; raises ImageryError."""
+        src, z, x, y = key
+        if not src.lazy or self.lazy_tile_state(key)[0] != "todo":
+            return False
+        old = getattr(self._local, "kind", None)
+        self._local.kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        try:
+            self._download(src, z, x, y)
+            self._count(src.name + ":map")
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return True
+
     def fetch_key(self, key):
         """Fetch one route_keys key now in the calling thread at "prefetch" priority (the route download's thread).
         False: nothing was fetched (done already); raises ImageryError (deferred: the limiter has no room for a
