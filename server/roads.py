@@ -7588,13 +7588,20 @@ class BridgeProfiles:
             ground[("lim", str(key))] = self._cell_limits(key)
 
     def _cell_limits(self, key):
-        """[(xy (k, 2) ENU, m)]: the height limits (height_limit_lines) of cell key's roads, made once per cell."""
+        """[(xy (k, 2) ENU, m)]: the height limits (height_limit_lines) of cell key's roads, made once per cell. Kept
+        only when read complete, as _cell_entries: a read that fell back (a revisit fault) answers this call alone, so
+        the next one reads the cell again and faults again instead of taking the short limits as final (Codex review
+        of PR #1267)."""
+        import revisit
         memo = self.__dict__.setdefault("_limits_memo", {})
         with self.lock:
             got = memo.get(str(key))
         if got is not None:
             return got
-        out = self._read_limits(key)
+        with revisit.scope() as read:
+            out = self._read_limits(key)
+        if not read.complete:
+            return out
         with self.lock:
             return memo.setdefault(str(key), out)
 

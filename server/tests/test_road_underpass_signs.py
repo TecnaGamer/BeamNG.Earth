@@ -159,5 +159,36 @@ class BridgeOwnLimitTest(unittest.TestCase):
             self.assertEqual([h for _r, h in roads.height_limit_lines(f, on_bridges=False)], [4.0])
 
 
+
+class CellLimitsShortReadTest(unittest.TestCase):
+    """A cell whose height limits were read short (a revisit fault: a fallback read) is not kept by the limits memo:
+    the next read asks again (and is short again, or complete once the data is there), so a later scope never takes
+    the short limits without the fault (Codex review of PR #1267)."""
+
+    def test_a_faulted_read_is_read_again(self):
+        import revisit
+        calls, fail = [0], [True]
+
+        def read(key):
+            calls[0] += 1
+            if fail[0]:
+                revisit.fault()
+                return []
+            return [(np.zeros((2, 2)), 4.0)]
+        bp = roads.BridgeProfiles(None, None, None)
+        with mock.patch.object(roads.BridgeProfiles, "_read_limits", lambda self, key: read(key)):
+            with revisit.scope() as b1:
+                self.assertEqual(bp._cell_limits("k"), [])
+            self.assertFalse(b1.complete, "the short read's fault reaches the caller's scope")
+            fail[0] = False
+            with revisit.scope() as b2:
+                got = bp._cell_limits("k")
+            self.assertTrue(b2.complete)
+            self.assertEqual([h for _xy, h in got], [4.0], "read again once the data is there")
+            with revisit.scope() as b3:
+                bp._cell_limits("k")
+            self.assertEqual(calls[0], 2, "a complete read is kept")
+
+
 if __name__ == "__main__":
     unittest.main()
