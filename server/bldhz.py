@@ -243,6 +243,16 @@ def on(md=None):
         return False
 
 
+class _AllOwned(tuple):
+    """A tile's box whose every point is its own (tile_buildings' own): the index's blobs hold each building once."""
+
+    def __new__(cls, box):
+        return super().__new__(cls, tuple(float(v) for v in box))
+
+    def owns(self, x, y):
+        return True if np.ndim(x) == 0 else np.ones(np.shape(x), bool)
+
+
 def squares(tile, ground, md=None):
     """The horizon pieces of zoom-12 geotile `tile` (geotiles.GeoBox): {skyline square key: picked items} in the
     tile's frame, rings relative to its box's corner (x0, y0) (buildings.sky_items' rules: simplified, the tallest
@@ -265,7 +275,8 @@ def squares(tile, ground, md=None):
     bf, pf = got
     frame = tile.frame
     x0, y0, x1, y1 = tile.box
-    items = B.tile_buildings(frame, x0, y0, x1, y1, [bf], ground, min_size=MIN_SIZE, own=tile.box,
+    # (every building of the tile's blob: the index put each in one tile, by its bbox centre)
+    items = B.tile_buildings(frame, x0, y0, x1, y1, [bf], ground, min_size=MIN_SIZE, own=_AllOwned(tile.box),
                              part_layers=[pf] if len(pf) else (), parts_min_top=B.SKY_PARTS_MIN_M)
     if not items:
         return {}

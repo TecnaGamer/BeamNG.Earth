@@ -154,6 +154,26 @@ class BldhzTest(unittest.TestCase):
             empty = geotiles.geobox(gx + 5, gy, bldhz.Z)
             self.assertEqual(bldhz.squares(empty, lambda la, lo: np.zeros(np.shape(la)), md), {})
 
+    def test_builder_columns_are_the_map_cells(self):
+        """The standalone builder's column copies are overture.LAYERS' (the server reads its tiles as map cells), its
+        tile maths geotiles', its WKB ring mapgeom's."""
+        import build_tall_index as T
+        import overture
+        for mine, theirs in ((T.B_SPEC, overture.LAYERS["buildings"]), (T.P_SPEC, overture.LAYERS["building_parts"])):
+            for k in ("cols", "text", "float", "bool"):
+                self.assertEqual(mine.get(k, ()), theirs.get(k, ()), k)
+        lat = np.array([LAT, -33.86, 51.5, 85.0, -85.0])
+        lon = np.array([LON, 151.2, -0.12, 179.99, -179.99])
+        x, y = T.tile_of(lat, lon)
+        gx, gy = geotiles.tile_of(lat, lon, bldhz.Z)
+        self.assertEqual((x.tolist(), y.tolist()), (np.asarray(gx).tolist(), np.asarray(gy).tolist()))
+        import struct
+        ring = [(1.0, 2.0), (3.0, 2.0), (3.0, 4.0), (1.0, 2.0)]
+        poly = struct.pack("<BII", 1, 3, 1) + struct.pack("<I", 4) + b"".join(struct.pack("<dd", *p) for p in ring)
+        multi = struct.pack("<BI", 1, 6) + struct.pack("<I", 1) + poly
+        for b in (poly, multi):
+            self.assertEqual(T.first_ring_wkb(b).tolist(), mapgeom.parse_wkb(b)[1][0][0].tolist())
+
     def test_off_without_dir(self):
         with mock.patch.object(bldhz, "DIR", None):
             self.assertFalse(bldhz.on())

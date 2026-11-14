@@ -1,19 +1,26 @@
 """The tall-building index for the horizon ring (server bldhz.py, the user 2026-11-14: "buildings toward the real
 horizon"): every Overture building at least --min-height tall (its own height, its storeys, or one of its parts),
-with all its parts, in local shards, one a zoom-12 geotile.
+with all its parts, one blob a zoom-12 tile.
 
-    python3 tools/build_tall_index.py --footers DIR --out DIR --region NAME:LAT,LON,KM [--region ...] [--min-height 60]
+    python3 tools/build_tall_index.py --footers DIR --work DIR --world --pages OUT      (the published layout)
+    python3 tools/build_tall_index.py --footers DIR --work DIR --region NAME:LAT,LON,KM --out DIR   (local, tests)
+    python3 tools/build_tall_index.py --footers DIR --fetch-footers                    (the footers first, once)
 
---footers: the release's parquet footers already fetched (one file per Overture file, 'PAR1' + footer + its length +
-'PAR1', under building/ and building_part/). Each file's row groups are chosen from them (their bbox and height
-statistics), and only those row groups' byte ranges are fetched from Overture's S3, into sparse copies of the files
-(--work, kept: a second run fetches nothing again) that DuckDB reads locally (file_row_number picks the row groups).
+Standalone (numpy + duckdb, no server module): a pinned copy runs in the data repo's job, with
+build_osm_tag_shards.py (the PMTiles writer) beside it and the release's STAC file list (--stac).
 
-Shards: <out>/12/<x>_<y>.npz (allow_pickle=False: plain arrays) and <out>/manifest.json (format, release, zoom,
-threshold, regions, each tile's buildings and the shard's SHA-1, which the server keys its tiles on). A building goes
-to the tile of its bbox centre, its parts with it. Rings: the first outer ring of each, lon/lat in 1e-7 degrees (int32);
-attribute columns as the server's map cells have them (overture.LAYERS: text "" missing, float32 NaN missing, bool).
+--footers: the release's parquet footers (one file per Overture file, 'PAR1' + footer + its length + 'PAR1', under
+building/ and building_part/; --fetch-footers reads them with tail range requests, ~450 MB). Each file's row groups are
+chosen from them (their bbox and height / storey statistics), and only those row groups' byte ranges are fetched from
+Overture's S3, into sparse copies of the files (--work, kept: a second run fetches nothing again) that DuckDB reads
+locally (file_row_number alone picks the row groups). The planet: 7.6k row groups, ~23 GB of ranges.
+
+Blobs: npz (allow_pickle=False: plain arrays) b_* the buildings, p_* their parts: id, ring_off, ll (the first outer
+ring, open, lon / lat in 1e-7 degrees, int32), t_<col> / f_<col> / b_<col> the attribute columns as the server's map
+cells have them (overture.LAYERS: text "" missing, float32 NaN missing, bool; B_SPEC / P_SPEC here are copies). A
+building goes to the tile of its outer ring's centroid, its parts with it (the server takes a tile's every building).
 Deterministic for a release: rows sorted by id, the npz written with fixed zip entries.
+--pages: <key>/tallbld-NNN.pmtiles + manifest.json (write_pages); --out: 12/<x>_<y>.npz + manifest.json (local).
 
 Publishing anywhere needs the user's go (this writes local files only)."""
 import argparse
@@ -32,17 +39,88 @@ import zipfile
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
-import overture  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 FORMAT = 1
 Z = 12
 UA = "bnge-tall-index"
 FETCH_THREADS = 16
 FETCH_TRIES = 5
+FOOTER_TAIL = 800_000
 
-B_SPEC = overture.LAYERS["buildings"]
-P_SPEC = overture.LAYERS["building_parts"]
+# (copies of server/overture.py LAYERS["buildings"] / ["building_parts"]: the columns the map cells have; a test keeps
+# them equal)
+_SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
+_NAME = "names.\"primary\" AS name"
+B_SPEC = dict(cols=f"subtype, class, {_NAME}, {_SRC}, height, min_height, num_floors, "
+                   "num_floors_underground, min_floor, level, is_underground, has_parts, roof_shape, "
+                   "roof_height, roof_direction, roof_orientation, roof_material, roof_color, "
+                   "facade_material, facade_color, "
+                   "COALESCE(list_filter(sources, lambda s: s.property = '/properties/height')[1].dataset, "
+                   "CASE WHEN height IS NOT NULL THEN sources[1].dataset END) AS height_src",
+              text=("subtype", "class", "name", "src_dataset", "src_record", "roof_shape", "roof_orientation",
+                    "roof_material", "roof_color", "facade_material", "facade_color", "height_src"),
+              float=("height", "min_height", "num_floors", "num_floors_underground", "min_floor", "level",
+                     "roof_height", "roof_direction"),
+              bool=("is_underground", "has_parts"))
+P_SPEC = dict(cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
+                   "roof_height, facade_color, roof_color, facade_material, roof_material, "
+                   "roof_direction, roof_orientation",
+              text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color", "roof_color",
+                    "facade_material", "roof_material", "roof_orientation"),
+              float=("height", "min_height", "num_floors", "min_floor", "roof_height", "roof_direction"))
+
+
+def text_column(values):
+    v = ["" if x is None else str(x) for x in values]
+    return np.array(v, dtype=f"<U{max([1] + [len(x) for x in v])}")
+
+
+def float_column(values):
+    return np.array([np.nan if x is None else float(x) for x in values], dtype=np.float32)
+
+
+def bool_column(values):
+    return np.array([bool(x) for x in values], dtype=bool)
+
+
+def tile_of(lat, lon, z=Z):
+    """Web Mercator tile (x, y) arrays of lat / lon arrays (the server's geotiles grid)."""
+    n = 1 << z
+    lat = np.clip(np.asarray(lat, np.float64), -85.0511287798, 85.0511287798)
+    x = np.floor((np.asarray(lon, np.float64) + 180.0) / 360.0 * n).astype(np.int64)
+    r = np.radians(lat)
+    y = np.floor((1.0 - np.log(np.tan(r) + 1.0 / np.cos(r)) / np.pi) / 2.0 * n).astype(np.int64)
+    return np.clip(x, 0, n - 1), np.clip(y, 0, n - 1)
+
+
+def tile_key(x, y, z=Z):
+    return f"g{z}_{int(x)}_{int(y)}"
+
+
+def first_ring_wkb(b):
+    """The first outer ring of a WKB Polygon / MultiPolygon as float64 (k, 2) lon / lat (as written), or None."""
+    import struct
+    b = bytes(b)
+
+    def head(i):
+        le = b[i] == 1
+        t = struct.unpack_from("<I" if le else ">I", b, i + 1)[0]
+        return le, t % 1000, i + 5
+    le, t, i = head(0)
+    if t == 6:                          # (MultiPolygon: its first polygon)
+        n = struct.unpack_from("<I" if le else ">I", b, i)[0]
+        if n < 1:
+            return None
+        le, t, i = head(i + 4)
+    if t != 3:
+        return None
+    nr = struct.unpack_from("<I" if le else ">I", b, i)[0]
+    if nr < 1:
+        return None
+    npt = struct.unpack_from("<I" if le else ">I", b, i + 4)[0]
+    return np.frombuffer(b, "<f8" if le else ">f8", npt * 2, i + 8).reshape(-1, 2).astype(np.float64)
 # the leaf columns a query reads (top-level names: every leaf under one); geometry, bbox and the source / name structs
 B_TOP = ("id", "version", "geometry", "bbox", "sources", "names", "subtype", "class", "height", "min_height",
          "num_floors", "num_floors_underground", "min_floor", "level", "is_underground", "has_parts", "roof_shape",
@@ -217,11 +295,12 @@ def _rows(con, spec, sparse, pairs, where):
 
 def _ring(wkb):
     """The first outer ring of a WKB polygon as int32 (k, 2) lon/lat x 1e7 (open: no repeated last point), or None."""
-    import mapgeom as mg
-    kind, parts = mg.parse_wkb(wkb)
-    if kind != mg.POLYGON or not parts or not parts[0]:
+    try:
+        r = first_ring_wkb(wkb)
+    except Exception:
         return None
-    r = np.asarray(parts[0][0], np.float64)
+    if r is None:
+        return None
     if len(r) > 1 and np.array_equal(r[0], r[-1]):
         r = r[:-1]
     if len(r) < 3:
@@ -230,15 +309,14 @@ def _ring(wkb):
 
 
 def _columns(prefix, rows, names, spec):
-    import mapgeom as mg
     at = {c: i for i, c in enumerate(names)}
-    out = {f"{prefix}id": mg.text_column([r[at["id"]] for r in rows])}
+    out = {f"{prefix}id": text_column([r[at["id"]] for r in rows])}
     for c in spec.get("text", ()):
-        out[f"{prefix}t_{c}"] = mg.text_column([r[at[c]] for r in rows])
+        out[f"{prefix}t_{c}"] = text_column([r[at[c]] for r in rows])
     for c in spec.get("float", ()):
-        out[f"{prefix}f_{c}"] = mg.float_column([r[at[c]] for r in rows])
+        out[f"{prefix}f_{c}"] = float_column([r[at[c]] for r in rows])
     for c in spec.get("bool", ()):
-        out[f"{prefix}b_{c}"] = mg.bool_column([r[at[c]] for r in rows])
+        out[f"{prefix}b_{c}"] = bool_column([r[at[c]] for r in rows])
     rings = [_ring(r[at["wkb"]]) for r in rows]
     off = np.zeros(len(rows) + 1, np.int64)
     off[1:] = np.cumsum([len(x) for x in rings])
@@ -328,14 +406,15 @@ def build_region(con, metas, sparses, box, min_h, log):
 
 
 def tile_blobs(rows, names, prows, pnames, log):
-    """{(x, y): npz bytes} of zoom-Z tiles: each building in the tile of its bbox centre, its parts with it."""
-    import geotiles
+    """{(x, y): npz bytes} of zoom-Z tiles: each building in the tile of its outer ring's centroid (the vertices'
+    mean: as the server's tile_buildings finds a building's place), its parts with it."""
     at = {c: i for i, c in enumerate(names)}
-    rows = [r for r in rows if _ring(r[at["wkb"]]) is not None]
+    rings = {r[0]: _ring(r[at["wkb"]]) for r in rows}
+    rows = [r for r in rows if rings[r[0]] is not None]
     if not rows:
         return {}
-    bx, by = geotiles.tile_of(np.array([r[at["cy"]] for r in rows], np.float64),
-                              np.array([r[at["cx"]] for r in rows], np.float64), Z)
+    c = np.array([rings[r[0]].astype(np.float64).mean(0) / 1e7 for r in rows])
+    bx, by = tile_of(c[:, 1], c[:, 0], Z)
     tile = {r[0]: (int(x), int(y)) for r, x, y in zip(rows, np.atleast_1d(bx), np.atleast_1d(by))}
     pat = {c: i for i, c in enumerate(pnames)} if pnames else {}
     bt, pt = {}, {}
@@ -377,7 +456,7 @@ def write_npz(path, arrays):
 
 def write_local(out, blobs, release, min_h, regions):
     """The local layout (server BNE_BLDHZ_DIR): <out>/12/<x>_<y>.npz + manifest.json (each tile's SHA-1)."""
-    import geotiles
+
     os.makedirs(os.path.join(out, str(Z)), exist_ok=True)
     tiles = {}
     for (x, y), b in sorted(blobs.items()):
@@ -385,7 +464,7 @@ def write_local(out, blobs, release, min_h, regions):
         with open(p + ".tmp", "wb") as f:
             f.write(b)
         os.replace(p + ".tmp", p)
-        tiles[geotiles.key(x, y, Z)] = {"sha1": hashlib.sha1(b).hexdigest(), "bytes": len(b)}
+        tiles[tile_key(x, y)] = {"sha1": hashlib.sha1(b).hexdigest(), "bytes": len(b)}
     m = {"format": FORMAT, "release": release, "z": Z, "min_height": min_h, "regions": regions, "tiles": tiles}
     with open(os.path.join(out, "manifest.json.tmp"), "w") as f:
         json.dump(m, f, indent=1, sort_keys=True)
@@ -449,22 +528,73 @@ def write_pages(out, blobs, release, min_h, bbox=None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def fetch_footers(out, stac):
+    """Every buildings / building_part file's footer of the release (stac) into out/<type>/<name>, as 'PAR1' + footer
+    + its length + 'PAR1' (what parquet_metadata reads); ones already there kept."""
+    def rng(url, a, b):
+        for k in range(FETCH_TRIES):
+            try:
+                rq = urllib.request.Request(url, headers={"Range": f"bytes={a}-{b}", "User-Agent": UA})
+                return urllib.request.urlopen(rq, timeout=120).read()
+            except Exception:
+                if k == FETCH_TRIES - 1:
+                    raise
+                time.sleep(2 ** k)
+
+    def one(job):
+        typ, name, url, size = job
+        p = os.path.join(out, typ, name)
+        if os.path.exists(p):
+            return 0
+        tail = rng(url, max(0, size - FOOTER_TAIL), size - 1)
+        if tail[-4:] != b"PAR1":
+            raise IOError(f"{url}: no parquet footer")
+        fl = int.from_bytes(tail[-8:-4], "little")
+        if fl + 8 > len(tail):
+            tail = rng(url, size - 8 - fl, size - len(tail) - 1) + tail
+        with open(p + ".tmp", "wb") as f:
+            f.write(b"PAR1" + tail[-8 - fl:-8] + fl.to_bytes(4, "little") + b"PAR1")
+        os.replace(p + ".tmp", p)
+        return len(tail)
+    jobs = []
+    for typ in ("building", "building_part"):
+        os.makedirs(os.path.join(out, typ), exist_ok=True)
+        for name, _bb, urls, size in stac["collections"][f"buildings/{typ}"]["files"]:
+            jobs.append((typ, name, urls[0], int(size)))
+    t0 = time.time()
+    with cf.ThreadPoolExecutor(FETCH_THREADS) as ex:
+        n = sum(ex.map(one, jobs))
+    print(f"footers: {len(jobs)} files, {n / 1e6:.0f} MB read, {time.time() - t0:.0f} s", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--footers", required=True)
     ap.add_argument("--out", default=None, help="the local layout (server BNE_BLDHZ_DIR)")
     ap.add_argument("--pages", default=None, help="the published layout (PMTiles parts + manifest)")
-    ap.add_argument("--work", required=True, help="the sparse copies (kept: a second run fetches nothing again)")
+    ap.add_argument("--work", default=None, help="the sparse copies (kept: a second run fetches nothing again)")
     ap.add_argument("--region", action="append", default=[], help="NAME:LAT,LON,KM (a square of 2 KM)")
     ap.add_argument("--world", action="store_true", help="the whole planet")
     ap.add_argument("--min-height", type=float, default=60.0)
-    ap.add_argument("--stac", default=None)
+    ap.add_argument("--stac", default=None, help="the release's file list (default: the server's bundled one)")
     ap.add_argument("--prefetch", action="store_true", help="only fetch the whole planet's candidate row groups")
+    ap.add_argument("--fetch-footers", action="store_true", help="only fetch the footers (tail range reads)")
     a = ap.parse_args()
     import duckdb
-    stac_path = a.stac or overture.BUNDLED.format(release=overture.RELEASE)
+    stac_path = a.stac
+    if stac_path is None:
+        import glob
+        got = sorted(glob.glob(os.path.join(HERE, "..", "server", "overture_stac_*.json.gz")))
+        if not got:
+            raise SystemExit("--stac: the release's file list")
+        stac_path = got[-1]
     stac = json.load(gzip.open(stac_path))
     release = stac["release"]
+    if a.fetch_footers:
+        fetch_footers(a.footers, stac)
+        return
+    if not a.work:
+        raise SystemExit("--work: the sparse copies' folder")
     con = duckdb.connect()
     con.execute("SET threads = 4")
     metas = (Meta(con, a.footers, "building", B_TOP, stac["collections"]["buildings/building"]["files"]),
