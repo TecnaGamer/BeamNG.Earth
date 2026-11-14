@@ -6,7 +6,7 @@ M.FILE = '/settings/beamngEarth_driven.json'
 M.VERSION = 1
 M.MIN_STEP_M = 25.0       -- add point when moved at least this far from previous point
 M.TELEPORT_GAP_M = 2000.0 -- jumps larger than this start a new polyline segment
-M.SAVE_INTERVAL_S = 15.0  -- persist to disk every 15s if dirty
+M.SAVE_INTERVAL_S = 180.0 -- persist to disk every 180s (3 min) if dirty
 M.MAX_POINTS = 50000      -- max total points kept across lines
 
 local totalKm = 0
@@ -18,6 +18,37 @@ local dirty = false
 local clock = 0
 local lastSave = 0
 local loaded = false
+local rev = 1
+
+-- Check if player is actively driving their own car (not free-cam, not spectating in BeamMP)
+local function isDrivingVehicle()
+  local gpv = rawget(_G, 'getPlayerVehicle')
+  local veh = gpv and gpv(0)
+  if not veh then return false end
+
+  -- Check if view is free camera (Shift+C)
+  local c = rawget(_G, 'commands')
+  if c and c.isFreeCamera then
+    local ok, v = pcall(c.isFreeCamera)
+    if ok and v then return false end
+  end
+  local cam = rawget(_G, 'core_camera')
+  if cam and cam.getActiveCamName then
+    local ok, name = pcall(cam.getActiveCamName)
+    if ok and name == 'free' then return false end
+  end
+
+  -- In BeamMP: check if the vehicle belongs to this player (not spectating another player)
+  local id = veh.getID and veh:getID()
+  local mp = rawget(_G, 'MPVehicleGE')
+  if id and type(mp) == 'table' and type(mp.isOwn) == 'function' then
+    local ok, own = pcall(mp.isOwn, id)
+    if ok and not own then return false end
+  end
+
+  return true
+end
+M.isDrivingVehicle = isDrivingVehicle
 
 -- Haversine distance in metres between (lat1, lon1) and (lat2, lon2)
 local function distM(lat1, lon1, lat2, lon2)
@@ -29,6 +60,36 @@ local function distM(lat1, lon1, lat2, lon2)
   return 6371000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 end
 M.distM = distM
+
+-- Trim oldest points when total point budget exceeds MAX_POINTS
+local function trimPoints()
+  local count = 0
+  for _, line in ipairs(polylines) do count = count + #line end
+  if count <= M.MAX_POINTS then return end
+
+  while count > M.MAX_POINTS and #polylines > 0 do
+    local first = polylines[1]
+    local excess = count - M.MAX_POINTS
+    if #polylines > 1 and #first <= excess then
+      count = count - #first
+      table.remove(polylines, 1)
+      rev = rev + 1
+    else
+      -- Trim points from the head of the oldest line
+      local toRemove = math.min(#first, excess)
+      if toRemove >= #first - 1 then
+        count = count - #first
+        table.remove(polylines, 1)
+      else
+        for _ = 1, toRemove do table.remove(first, 1) end
+        count = count - toRemove
+      end
+      rev = rev + 1
+      if count <= M.MAX_POINTS or #polylines == 0 then break end
+    end
+  end
+end
+M.trimPoints = trimPoints
 
 function M.load()
   if loaded then return end
@@ -50,6 +111,8 @@ function M.load()
           if #clean >= 2 then polylines[#polylines + 1] = clean end
         end
       end
+      trimPoints()
+      rev = rev + 1
     end
   end
 end
@@ -57,13 +120,7 @@ end
 function M.save()
   if not dirty or not jsonWriteFile then return end
   dirty = false
-  -- Trim excess old points if we exceeded MAX_POINTS
-  local count = 0
-  for _, line in ipairs(polylines) do count = count + #line end
-  while count > M.MAX_POINTS and #polylines > 1 do
-    count = count - #polylines[1]
-    table.remove(polylines, 1)
-  end
+  trimPoints()
 
   local data = {
     version = M.VERSION,
@@ -73,16 +130,25 @@ function M.save()
   pcall(jsonWriteFile, M.FILE, data, true)
 end
 
--- Called periodically from core.lua or settings.lua
+-- Called periodically from core.lua
 function M.update(dt, player)
   clock = clock + (dt or 0)
   if not loaded then M.load() end
   if not player or not player.lat or not player.lon then return end
+
+  -- Only record when the player is actively driving their own car
+  if not isDrivingVehicle() then
+    currentLine = nil
+    lastLat, lastLon = nil, nil
+    return
+  end
+
   local lat, lon = player.lat, player.lon
   if not lastLat or not lastLon then
     lastLat, lastLon = lat, lon
     currentLine = { { lat, lon } }
     polylines[#polylines + 1] = currentLine
+    rev = rev + 1
     return
   end
 
@@ -92,6 +158,7 @@ function M.update(dt, player)
       -- Player teleported: start a separate line so no streak across the globe
       currentLine = { { lat, lon } }
       polylines[#polylines + 1] = currentLine
+      rev = rev + 1
     else
       local km = d / 1000
       sessionKm = sessionKm + km
@@ -102,6 +169,7 @@ function M.update(dt, player)
       end
       currentLine[#currentLine + 1] = { lat, lon }
       dirty = true
+      rev = rev + 1
     end
     lastLat, lastLon = lat, lon
   end
@@ -112,13 +180,20 @@ function M.update(dt, player)
   end
 end
 
+-- Lightweight state for periodic polling (uiMapState)
 function M.uiState()
   if not loaded then M.load() end
   return {
     totalKm = math.floor(totalKm * 10) / 10,
     sessionKm = math.floor(sessionKm * 10) / 10,
-    polylines = polylines,
+    rev = rev,
   }
+end
+
+-- Full polylines requested on demand when rev changes
+function M.uiLines()
+  if not loaded then M.load() end
+  return polylines
 end
 
 function M.reset()

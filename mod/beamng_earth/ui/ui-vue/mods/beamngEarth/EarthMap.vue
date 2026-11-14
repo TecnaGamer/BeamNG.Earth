@@ -117,11 +117,11 @@
         <span v-if="weatherBadge.localTime">{{ weatherBadge.localTime }}</span>
       </div>
       <div v-if="state.roadsDriven && state.roadsDriven.totalKm > 0" class="odometer-badge" title="Exploration Odometer (Issue #365): Total distance driven on Earth">
-        <span class="odo-icon">🛣️</span>
-        <span class="odo-val">{{ (state.roadsDriven.totalKm || 0).toFixed(1) }} km</span>
+        <span class="odo-label">DRIVEN</span>
+        <span class="odo-val">{{ fmtMiles((state.roadsDriven.totalKm || 0) * 1000) }}</span>
       </div>
       <div v-if="view.z >= 13" class="zoom-level-badge" title="Street Level View">
-        <span>🔍 Street view (z{{ view.z.toFixed(0) }})</span>
+        <span>Street view (z{{ view.z.toFixed(0) }})</span>
       </div>
       <div class="search">
         <input
@@ -198,7 +198,7 @@
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
           <label class="layer-opt"><input type="checkbox" v-model="roadsDrivenOn" /> Roads driven tracker
-            <span class="layer-hint" v-if="state.roadsDriven">({{ (state.roadsDriven.totalKm || 0).toFixed(1) }} km)</span></label>
+            <span class="layer-hint" v-if="state.roadsDriven">({{ fmtMiles((state.roadsDriven.totalKm || 0) * 1000) }})</span></label>
         </div>
       </div>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
@@ -457,6 +457,7 @@ function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     if (!s) { state.value = { places: [], recent: [], missing: true }; return }
     state.value = { places: [], recent: [], ...s }
+    checkDrivenLines()
     if (!s.others && playersPanel.value) closePlayers()   // (out of the session: not open again by itself in the next)
     if (followingPlayer()) {
       const o = followedPlayer.value
@@ -491,9 +492,31 @@ const storedBase = stored("beamngEarth.map.base", "sat")
 const baseLayer = ref(BASE_LAYERS.has(storedBase) ? storedBase : "sat")
 const labelsOn = ref(stored("beamngEarth.map.labels", "0") === "1")
 const roadsDrivenOn = ref(stored("beamngEarth.map.roadsDriven", "1") === "1")
+const drivenPolylines = ref([])
+const loadedDrivenRev = ref(0)
+let loadingDriven = false
+
+function checkDrivenLines() {
+  if (!roadsDrivenOn.value) return
+  const rev = state.value.roadsDriven?.rev || 0
+  if (rev > 0 && rev !== loadedDrivenRev.value && !loadingDriven) {
+    loadingDriven = true
+    engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
+      loadingDriven = false
+      if (Array.isArray(res)) {
+        drivenPolylines.value = res
+        loadedDrivenRev.value = rev
+      }
+    })
+  }
+}
+
 watch(baseLayer, v => store("beamngEarth.map.base", v))
 watch(labelsOn, on => store("beamngEarth.map.labels", on ? "1" : "0"))
-watch(roadsDrivenOn, on => store("beamngEarth.map.roadsDriven", on ? "1" : "0"))
+watch(roadsDrivenOn, on => {
+  store("beamngEarth.map.roadsDriven", on ? "1" : "0")
+  if (on) checkDrivenLines()
+})
 const layersPanel = ref(false)
 // "Dark" is not a tile source of its own: the "map" tiles (terrain-light, already hillshaded) through a CSS
 // filter (.tile-dark below) - the usual trick for a dark map without a dark-themed tile set of its own.
@@ -727,40 +750,110 @@ const cursorText = computed(() => {
 })
 
 // Roads Driven polylines (Issue #365): transformed into screen SVG polyline coords
+// Viewport-culled and downsampled to maintain 60 FPS even with 50,000 recorded points.
 const drivenLines = computed(() => {
   view.value; w.value; h.value
   if (!roadsDrivenOn.value) return []
-  const polylines = state.value.roadsDriven?.polylines || []
+  const polylines = drivenPolylines.value || []
+  if (!polylines.length) return []
+
+  const v = view.value
+  const width = w.value, height = h.value
+  const margin = 80
+  const vb = mm.viewBox(v.lat, v.lon, v.z, width, height, margin)
+
   const out = []
   for (const line of polylines) {
     if (!line || line.length < 2) continue
-    const pts = []
-    for (const pt of line) {
+
+    // Fast bounding box check for this polyline against viewBox [wLon, sLat, eLon, nLat]
+    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
+    for (let i = 0; i < line.length; i++) {
+      const lat = line[i][0], lon = line[i][1]
+      if (lat < minLat) minLat = lat
+      if (lat > maxLat) maxLat = lat
+      if (lon < minLon) minLon = lon
+      if (lon > maxLon) maxLon = lon
+    }
+    if (maxLat < vb[1] || minLat > vb[3]) continue
+    if (vb[0] <= vb[2]) {
+      if (maxLon < vb[0] || minLon > vb[2]) continue
+    } else {
+      if (maxLon < vb[0] && minLon > vb[2]) continue
+    }
+
+    // Viewport clipping and Manhattan distance downsampling (threshold >= 1.5 px)
+    let currentPts = []
+    let lastX = -99999, lastY = -99999
+    let lastWasOff = false
+
+    for (let i = 0; i < line.length; i++) {
+      const pt = line[i]
       const lat = Number(pt[0]), lon = Number(pt[1])
       if (!isFinite(lat) || !isFinite(lon)) continue
       const p = screen(lat, lon)
-      pts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      const off = p.x < -margin || p.x > width + margin || p.y < -margin || p.y > height + margin
+
+      if (off && lastWasOff) {
+        if (currentPts.length >= 2) out.push(currentPts.join(" "))
+        currentPts = []
+        lastX = p.x
+        lastY = p.y
+        continue
+      }
+      lastWasOff = off
+
+      const isLast = (i === line.length - 1)
+      const dx = Math.abs(p.x - lastX)
+      const dy = Math.abs(p.y - lastY)
+      if (!isLast && dx < 1.5 && dy < 1.5) {
+        continue
+      }
+
+      currentPts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+      lastX = p.x
+      lastY = p.y
     }
-    if (pts.length >= 2) out.push(pts.join(" "))
+
+    if (currentPts.length >= 2) {
+      out.push(currentPts.join(" "))
+    }
   }
   return out
 })
 
 // Dynamic Google Maps style scale bar: calculates real-world distance corresponding to ~100px
+// Supports metric (m/km) and imperial (ft/mi) based on settings.
 const scaleBar = computed(() => {
   const v = view.value
   const latRad = (v.lat * Math.PI) / 180
   const mPerPx = (156543.03392 * Math.cos(latRad)) / Math.pow(2, v.z)
-  const targetM = 100 * mPerPx
-  const steps = [
-    5, 10, 20, 50, 100, 200, 500,
-    1000, 2000, 5000, 10000, 20000, 50000,
-    100000, 200000, 500000, 1000000, 2000000
-  ]
-  const dist = steps.find(s => s >= targetM * 0.75) || steps[steps.length - 1]
-  const px = Math.min(180, Math.max(25, Math.round(dist / mPerPx)))
-  const label = dist >= 1000 ? `${dist / 1000} km` : `${dist} m`
-  return { px, label }
+  const isMetric = !!((state.value.gps || state.value).metric)
+
+  if (isMetric) {
+    const targetM = 100 * mPerPx
+    const steps = [
+      5, 10, 20, 50, 100, 200, 500,
+      1000, 2000, 5000, 10000, 20000, 50000,
+      100000, 200000, 500000, 1000000, 2000000
+    ]
+    const dist = steps.find(s => s >= targetM * 0.75) || steps[steps.length - 1]
+    const px = Math.min(180, Math.max(25, Math.round(dist / mPerPx)))
+    const label = dist >= 1000 ? `${dist / 1000} km` : `${dist} m`
+    return { px, label }
+  } else {
+    const targetFt = 100 * mPerPx * 3.28084
+    const stepsFt = [
+      20, 50, 100, 200, 500, 1000, 2000,
+      5280, 2 * 5280, 5 * 5280, 10 * 5280, 20 * 5280, 50 * 5280,
+      100 * 5280, 200 * 5280, 500 * 5280, 1000 * 5280
+    ]
+    const distFt = stepsFt.find(s => s >= targetFt * 0.75) || stepsFt[stepsFt.length - 1]
+    const distM = distFt / 3.28084
+    const px = Math.min(180, Math.max(25, Math.round(distM / mPerPx)))
+    const label = distFt >= 5280 ? `${Math.round(distFt / 5280)} mi` : `${distFt} ft`
+    return { px, label }
+  }
 })
 
 // ---- mouse ---------------------------------------------------------------------------------
@@ -2150,6 +2243,12 @@ const fmtLatLon = mm.fmtLatLon
   background: rgba(0, 180, 240, 0.18); border: 1px solid rgba(0, 210, 255, 0.45);
   border-radius: 4px; font-size: 12px; color: #7fe4ff; font-weight: 500;
   box-shadow: 0 0 10px rgba(0, 210, 255, 0.15);
+}
+.odometer-badge .odo-label {
+  font-size: 10px; opacity: 0.75; letter-spacing: 0.5px; font-weight: 600;
+}
+.odometer-badge .odo-val {
+  font-weight: 600;
 }
 .zoom-level-badge {
   display: flex; gap: 4px; align-items: center; padding: 4px 8px;

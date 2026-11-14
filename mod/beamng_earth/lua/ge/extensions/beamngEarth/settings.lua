@@ -788,6 +788,12 @@ function M.uiMapState()
   }
 end
 
+-- Full roads driven lines requested on-demand when rev changes (Issue #365)
+function M.uiDrivenLines()
+  local ok, res = pcall(function() return require('beamngEarth/roads_driven').uiLines() end)
+  return ok and res or {}
+end
+
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
 function M.uiMapTeleport(lat, lon, name)
   local ok, why = places.goTo(lat, lon, name)
