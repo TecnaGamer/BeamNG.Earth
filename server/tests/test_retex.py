@@ -349,6 +349,57 @@ class SchedulerTest(unittest.TestCase):
         self.assertNotIn(ck, s.degraded)
         self.assertNotIn(ck, s.degraded_retry)
 
+    def test_degraded_three_failures_recover_on_circuit_closed(self):
+        """A degraded tile that fails 3 consecutive retextures (reaching RETEX_REPEAT) is not dropped
+        for good; it retries under its backoff, and when an imagery circuit closes, its repeat counter
+        is reset and far_retex recovers the tile."""
+        s = self.s
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        def failing_make_tile(anchor, tile, prev=None):
+            return replace(prev, retex_repeat=prev.retex_repeat + 1)
+        s.make_tile = failing_make_tile
+
+        # 3 failures in a row
+        for i in range(3):
+            s.degraded_retry[ck] = 0.0  # simulate time passing past backoff
+            async def body_fail():
+                s.retex_degraded()
+            self.run_loop(body_fail)
+            self.assertEqual(s.tiles[ck].retex_repeat, i + 1)
+
+        self.assertGreaterEqual(s.tiles[ck].retex_repeat, earthd.RETEX_REPEAT)
+        self.assertIn(ck, s.degraded)
+        self.assertEqual(self.conn.msgs, [])
+
+        # Even with retex_repeat >= RETEX_REPEAT, the degraded tile is not dropped by _retex_pick
+        s.degraded_retry[ck] = 0.0
+        picked = []
+        def recording_make_tile(anchor, tile, prev=None):
+            picked.append(tile.key)
+            return failing_make_tile(anchor, tile, prev)
+        s.make_tile = recording_make_tile
+        async def body_pick():
+            s.retex_degraded()
+        self.run_loop(body_pick)
+        self.assertEqual(picked, ["0_1_0"])
+
+        # Circuit breaker closes: resets repeat counter and recovers tile
+        s.make_tile = lambda anchor, tile, prev=None: replace(
+            prev, texture=s.texture_name(anchor.id, tile.key, prev.rev + 1), rev=prev.rev + 1,
+            stale=False, cm_pending=frozenset()
+        )
+        async def body_circuit_closed():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body_circuit_closed)
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["type"], "far_retex")
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+        self.assertEqual(s.tiles[ck].retex_repeat, 0)
+
     def test_on_circuit_closed_triggers_retex_degraded(self):
         """When the net circuit breaker closes for an imagery host, s._on_circuit_closed schedules retex_degraded."""
         s = self.s
@@ -361,6 +412,35 @@ class SchedulerTest(unittest.TestCase):
         self.run_loop(body)
 
         self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+    def test_temporary_full_outage_recovers_via_retex(self):
+        """When all breakers are open during a full temporary outage (Fetcher.offline is True,
+        but offline_flag is False), tiles receive fallback material and recover in-place via far_retex."""
+        s = self.s
+        fake_net = types.SimpleNamespace(offline=True, offline_flag=False,
+                                         available=lambda h: False,
+                                         chain_hosts=lambda n: ("tiles.maps.eox.at",))
+        s.net = fake_net
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+
+        # Breakers close -> hosts recover
+        fake_net.offline = False
+        fake_net.available = lambda h: True
+
+        s.make_tile = lambda anchor, tile, prev=None: replace(
+            prev, texture=s.texture_name(anchor.id, tile.key, prev.rev + 1), rev=prev.rev + 1,
+            stale=False, cm_pending=frozenset()
+        )
+        async def body():
+            s._on_circuit_closed("tiles.maps.eox.at")
+        self.run_loop(body)
+
+        self.assertEqual(len(self.conn.msgs), 1)
+        self.assertEqual(self.conn.msgs[0]["type"], "far_retex")
         self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
         self.assertNotIn(ck, s.degraded)
 

@@ -6166,7 +6166,7 @@ class Server:
                 if self.imagery_failures % 100 == 1:
                     log.warning("tile %s of anchor %d: no imagery (%s), palette material (%d tiles so far)",
                                 tile.key, anchor.id, e, self.imagery_failures)
-                if not (self.net is not None and self.net.offline):
+                if not (self.net is not None and getattr(self.net, "offline_flag", False)):
                     if geo is not None:
                         w0 = time.perf_counter()
                         built, geo = geo.result(), None
@@ -6840,6 +6840,7 @@ class Server:
             self.degraded.discard(ck)
             self.degraded_fails.pop(ck, None)
             self.degraded_retry.pop(ck, None)
+            info.retex_repeat = 0
         elif before is not None and info.texture == before.texture and ck in self.degraded:
             fails = self.degraded_fails.get(ck, 0) + 1
             self.degraded_fails[ck] = fails
@@ -6982,7 +6983,7 @@ class Server:
 
     def imagery_down(self):
         """Is every host in the satellite imagery chain currently unreachable?"""
-        if self.net is None or self.net.offline:
+        if self.net is None or getattr(self.net, "offline_flag", False):
             return True
         hosts = self.imagery_hosts()
         return bool(hosts) and all(not self.net.available(h) for h in hosts)
@@ -7001,12 +7002,15 @@ class Server:
         now = time.monotonic()
         if reset_backoff:
             self.degraded_retry.clear()
+            self.degraded_fails.clear()
         for ck in list(self.degraded):
             if not reset_backoff and now < self.degraded_retry.get(ck, 0.0):
                 continue
             info = self.tiles.get(ck)
             if info is not None and info.material is not None:
                 info.stale = True
+                if reset_backoff:
+                    info.retex_repeat = 0
                 self.retex_request(ck, pump=False)
         self._retex_pump()
 
@@ -7071,7 +7075,7 @@ class Server:
             info = self.tiles.get(ck)
             viewers = self._retex_viewers(ck) if info is not None and info.stale else []
             if not viewers or ck in self.tile_inflight or (ck[0] not in self.anchors and ck[0] != GLOBAL_AID) \
-                    or info.retex_repeat >= RETEX_REPEAT:
+                    or (ck not in self.degraded and info.retex_repeat >= RETEX_REPEAT):
                 self.retex_todo.discard(ck)
                 if info is not None and info.stale and ck not in self.tile_inflight:
                     self.retex_stats["dropped"] += 1

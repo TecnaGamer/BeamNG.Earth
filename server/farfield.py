@@ -1134,7 +1134,7 @@ def palette_fallback_rgb(grid, px=64):
     im = Image.fromarray(np.asarray(grid, np.float32))
     elev = np.asarray(im.resize((px, px), Image.BILINEAR), np.float32)
     gy, gx = np.gradient(elev)
-    slope_t = np.clip(np.hypot(gx, gy) / 1.0, 0.0, 1.0)
+    slope_t = np.clip(dnp.hypot(gx, gy) / 1.0, 0.0, 1.0)
     water = (elev <= 0.5) & (slope_t < 0.02)
     uu = np.where(water, WATER_U, u_from_elev(elev))
     vv = np.clip(0.5 - 0.47 * slope_t, 0.0, 1.0)

@@ -881,6 +881,64 @@ class MeshServerTest(ServerHarness):
         self.assertEqual(shape["materials"][0]["name"], ff.MATERIAL)
         self.assertEqual(shape["meshes"][0]["tverts2"][0], 0)
 
+    def test_temporary_full_breaker_outage_allocates_material_and_recovers_via_retex(self):
+        """When all breakers are open during a full temporary outage (Fetcher.offline is True,
+        but offline_flag is False), tiles still receive fallback material and recover in-place via
+        far_retex once breakers close and hosts recover."""
+        class Broken(FakeImagery):
+            def render(self, *a, **kw):
+                raise imagery.ImageryError("temporary outage: all breakers open")
+        working_dir = os.path.join(self.tmp.name, "cache", "working")
+        broken_dir = os.path.join(self.tmp.name, "cache", "broken")
+        self.server.imagery = Broken(broken_dir)
+        self.server.net.register_chain("imagery", [s_.url for s_ in self.server.imagery.chain])
+
+        # Trip all breakers across all registered chains: makes Fetcher.offline True!
+        with self.server.net._lock:
+            all_hosts = {h for c in self.server.net._chains.values() for h in c}
+        for h_name in all_hosts:
+            self.server.net.host(h_name).breaker.trip(60.0)
+        self.assertTrue(self.server.net.offline)
+        self.assertFalse(self.server.net.offline_flag)
+
+        far = FarState()
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.c.send({"type": "commit_anchor", "anchorId": aid})
+        self.pose(aid, 0, 0)
+        _, seen = self.stream_until_done(far, aid)
+        tiles = [m for m in seen if m["type"] == "far_tile"]
+        self.assertTrue(tiles)
+        # Even with all breakers open, tiles received pooled material and fallback texture!
+        self.assertTrue(all("material" in m and "texture" in m for m in tiles))
+        self.assertEqual(len(self.server.degraded), len(tiles))
+
+        # Now hosts recover: reset breakers and restore working imagery
+        self.server.imagery = FakeImagery(working_dir)
+        for h_name in all_hosts:
+            b = self.server.net.host(h_name).breaker
+            b.state = "closed"
+            b.open_until = 0.0
+            b.failures.clear()
+            b.probing = False
+        self.assertFalse(self.server.net.offline)
+
+        # Close circuit for imagery hosts to trigger recovery
+        self.server.retex_rate = 500
+        for host in self.server.imagery_hosts():
+            self.server._on_circuit_closed(host)
+
+        # Drain messages until far_retex recovers degraded tiles
+        swaps = []
+        t0 = time.time()
+        while time.time() - t0 < 5.0 and not swaps:
+            msgs = self.c.drain(0.2)
+            swaps.extend(m for m in msgs if m.get("type") == "far_retex")
+        self.assertTrue(len(swaps) > 0)
+        self.assertEqual(swaps[0]["type"], "far_retex")
+        self.assertTrue(swaps[0]["texture"].endswith("_r1.dds"))
+        self.assertLess(len(self.server.degraded), len(tiles))
+
 
 class MeshServer64Test(MeshServerTest):
     """The same with --cells 64 (docs/V1_4_SPEC.md §3.1, M1): FORMAT 4, hello.cells, far_tile.tex,
