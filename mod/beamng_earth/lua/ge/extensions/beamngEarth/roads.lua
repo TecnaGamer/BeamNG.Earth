@@ -1728,7 +1728,7 @@ M.FAR_PACK = 1
 M.PACK_HANDOVER_S = 15
 -- The horizon ring (hello.farHz, server bldhz.py): past the skyline the tall buildings of a zoom-12 geotile, kind 'H',
 -- a piece per skyline square (its sub key, geotile.Z - 2). A piece hides while its square has its skyline tile (made, or
--- one with nothing in it), its pack made, or a far buildings tile under it seen (M.hzCovered): never drawn twice.
+-- one with nothing in it), its pack made, or all its far buildings tiles in and made (M.hzCovered): never drawn twice.
 M.FAR_HZ = 1
 function M.debugFar() return far end       -- (tests)
 M.farGeo = false
@@ -1949,8 +1949,14 @@ function M.hzCovered(p, sq)
       for i = 0, n - 1 do p.hzKeys[#p.hzKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
     end
   end
-  for _, k in ipairs(p.hzKeys) do if farSeen[k] then return true end end
-  return false
+  -- (all of its far tiles arrived and made: one of sixteen hid the whole piece, the towers of the other fifteen gone
+  -- until theirs came, Codex review 2026-11-14)
+  for _, k in ipairs(p.hzKeys) do
+    if not farSeen[k] then return false end
+    local f = far[k]
+    if f and not partsMade(f) then return false end
+  end
+  return #p.hzKeys > 0
 end
 
 -- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
