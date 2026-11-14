@@ -1075,4 +1075,22 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
 end
+
+------------------------------------------------------------------------------------------
+-- A route's answer reaches the GPS whole: its maneuvers (steps) and its legs too (GitHub #1259: the handler kept
+-- points, dist, dur, error and elev only, so api.gpsRoute().steps was nil although has('routeSteps') said true).
+do
+  serverSend({ type = 'route_result', id = 77, points = { { 0, 0 }, { 0, 1 } }, dist = 1000, dur = 60, elev = { 1, 2 },
+    legs = { { 1000, 60 } }, steps = { { type = 'turn', modifier = 'right' } } })
+  core.onUpdate(0.05, 0.05)
+  local r = core.takeRoute(77)
+  T.check(r and r.dist == 1000 and r.dur == 60 and #r.points == 2 and r.elev[2] == 2, 'a route result is kept for the GPS')
+  T.check(r and r.steps and r.steps[1].modifier == 'right', 'with its maneuvers (steps)')
+  T.check(r and r.legs and r.legs[1][1] == 1000 and r.legs[1][2] == 60, 'and its legs')
+  T.check(core.takeRoute(77) == nil, 'and is taken once')
+  serverSend({ type = 'route_result', id = 78, error = 'no route' })
+  core.onUpdate(0.05, 0.05)
+  r = core.takeRoute(78)
+  T.check(r and r.error == 'no route' and #r.points == 0 and r.steps == nil and r.legs == nil, 'a failed route: its error, no steps')
+end
 T.done('test_core_stubbed')
