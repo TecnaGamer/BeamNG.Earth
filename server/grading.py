@@ -5894,6 +5894,20 @@ class _Planner:
         return half if z[mine] < z[1 - mine] else -half
 
     def _end_lift_raw(self, xy):
+        """_end_lift_raw_calc, kept per point: _end_lift_calc asks it for an abutment and for each abutment near it (its
+        twins), and every one of those is asked again as an abutment of its own (448 calls for 203 points in a Las
+        Vegas 3 x 3 road tile build, 36 % of their time, 2026-11-13). An error is not kept: its cells may be read by
+        the next call."""
+        k = (round(float(xy[0]), 2), round(float(xy[1]), 2))
+        with self.lock:
+            memo = self.__dict__.setdefault("_end_raw_cache", {})
+            if k in memo:
+                return memo[k]
+        res = self._end_lift_raw_calc(xy)
+        with self.lock:
+            return memo.setdefault(k, res)
+
+    def _end_lift_raw_calc(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
         home = mapcells.cell_of(float(la[0]), float(lo[0]))
         hc = self._cell_enu(home, ground=False)
