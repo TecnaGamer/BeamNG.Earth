@@ -345,9 +345,12 @@ The callback gets one result, once:
 - `anchorId`, `serial`: the anchor whose frame the graph's coordinates are in, and the request's number within the
   session. The anchor is the one the world is built round now, the one `pose()` and `toGame` / `toGeo` use; a rebase
   (`onBeamNGEarthRebased`) makes an older graph's `x, y` stale, so ask again rather than convert them.
-- `complete`: everything the window needed was on disk. False means something was not, and nothing was asked for:
-  some of its map cells were missing, and the graph is the roads of the cells that were there, or the ground under
-  them was, and the graph is empty. What is in it is right either way; `complete = false` says it is not all of it.
+- `complete`: every map cell of the window was on disk, so the roads in the graph are all the roads there are.
+  False means some were not, and they were not asked for: the graph is then the roads of the cells that were there,
+  or — where the app has no elevation at all for that ground — empty. What is in it is right either way;
+  `complete = false` says it is not all of it. It is about the window's own cells: the app reads the cells around
+  them for its road rules too, and where one of those is not on disk it goes without it, exactly as it does when
+  that read fails for the player's own graph.
 - `error`: why there is no graph: `'bad coordinates'`, no map data, the app started without roads, no world yet,
   `'timed out'` (no answer in 90 s).
 
@@ -378,10 +381,12 @@ part of this call's promise: read `nodes`, `edges`, `lines` and `rules`, and exp
   crossings and route layers of the window, the cells around them its road rules look at, and the ground heights
   under the nodes, only where it has them on disk already, at no download priority at all. A window over ground the
   player has never been near comes back with few roads and `complete = false`, which is the honest answer rather
-  than a slow one; where the ground under it is not there it comes back with no roads rather than with roads at
-  guessed heights, `complete = false` again, and the add-on can ask for it once more when the world has been over
-  it. There is deliberately no fetching form of this request: an add-on that wants a region's roads should ask for
-  the region to be downloaded (the map's area download) and then ask for the graph.
+  than a slow one, and the add-on can ask for it once more when the world has been over it. Where the app has that
+  ground only at a coarser zoom than the one it would have asked for, the node heights come from the coarser
+  tile — measured, as the app's own world is wherever it has nothing deeper — and the window still counts complete;
+  only where it has no elevation at all for that ground does it come back with no roads, rather than with roads at
+  invented heights. There is deliberately no fetching form of this request: an add-on that wants a region's roads
+  should ask for the region to be downloaded (the map's area download) and then ask for the graph.
 - **It is not the AI's graph.** The file is the add-on's own copy and never reaches the game's map, so it moves no
   car and no traffic, and the player's own graph (`navgraph_*.json`, rebuilt every 400 m as they drive) is never
   touched by a request. Equally, an add-on cannot steer the AI by asking for a graph.

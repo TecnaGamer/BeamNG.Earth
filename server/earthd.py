@@ -2276,12 +2276,19 @@ class Server:
         what the graph is for. `window` stands in for navgraph's own WINDOW_M (the modding API's roadGraph asks for
         a radius of its own). Worker threads.
 
-        cached_only: the build downloads nothing at all -- the map cells it reads are the ones on disk, and so is
-        the ground under them (dem.cached_only) and the cells round them a layer's own hook reaches for
-        (gradesep.cached_only). The second value is then how much of the window was not read: the cells of it that
-        were not on disk, and 1 where they all were but something else the build needed was not. Nothing is
-        approximated for what is missing, so an add-on reading a graph with "complete" false has roads and heights
-        that are right as far as they go, with holes, rather than a whole window it cannot trust.
+        cached_only: the build downloads nothing -- the map cells it reads are the ones on disk, and so is the
+        ground under them (dem.cached_only) and the cells round them a layer's own hook reaches for
+        (gradesep.cached_only). The second value is how many cells of the window were left unread, which is what
+        the request answers "complete" from: whether the roads in the window are all the roads there are.
+
+        It is deliberately not every read the build made short. A cell's eight neighbours (gradesep) and the land
+        cover a road's surface rule reads are read from disk too, and where one of those is not there the build
+        goes on without it exactly as it does when such a read fails for the player -- the cell's grade separations
+        and home copies are left out, and nothing made short of them is kept (revisit.fault). That changes a
+        bridge range at the edge of a window, not which roads are in it, and a graph that says "incomplete" for it
+        is one an add-on throws away: a window whose roads are all there and whose heights are measured answers
+        complete. What does not answer complete is a window with cells missing, or one over ground no source has
+        cached elevation for at all, which comes back empty rather than at invented heights.
 
         `at` is (lat, lon) in place of x, y, converted here rather than by the caller, and that is the whole point
         of it: the anchor can be re-centred between a caller working out x, y and this running on a worker thread,
@@ -2331,7 +2338,6 @@ class Server:
         zoom = anchor.zooms[0]
         urban = self.surface.urban if self.surface is not None else None
         g = self.grader_for(anchor)
-        short = None
 
         def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles')
             z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom))
@@ -2345,12 +2351,13 @@ class Server:
                 #    is ~150 z16 tiles, ~15 MB, and the host's rate limits are the player's;
                 #  * a roads layer carries the map data's own hook to the eight cells round it, which
                 #    roads.level_ranges and roads.home_copy read as the graph is built (gradesep.cached_only).
-                # revisit.scope: and what those misses record stays in this build. A fault in a thread with no
-                # scope of its own is the process's, so every build the server has running meanwhile (the player's
-                # road tiles) would go unkept because an add-on asked about ground nobody has driven.
+                # revisit.scope: and what those misses record stays in this build, where it belongs -- a fault in a
+                # thread with no scope of its own is the process's, so every build the server had running
+                # meanwhile (the player's road tiles) would go unkept because an add-on asked about ground nobody
+                # has driven. It is not the answer's completeness: see below.
                 lane.enter_context(self.dem.cached_only())
                 lane.enter_context(gradesepmod.cached_only())
-                short = lane.enter_context(revisitmod.scope())
+                lane.enter_context(revisitmod.scope())
                 # (the window's own cells: the ones on disk, read the way the player's graph reads them (on_disk).
                 #  Nothing is fetched and no background job is queued, so a window over ground the player has not
                 #  been near has fewer roads.)
@@ -2405,21 +2412,18 @@ class Server:
                                           country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
                                           de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
             except demmod.NotOnDisk as e:
-                # The window's ground is not all in the disk cache (cached_only only). An empty window that says it
-                # is incomplete, rather than one whose nodes stand at heights taken from somewhere else: an add-on
-                # cannot tell a made-up height from a measured one, while "complete": false says plainly that the
-                # window is not all there yet and can be asked for again once the world has been over it. Every
-                # cell counts unread -- none of the window could be built.
-                log.debug("road graph: the window's ground is not all on disk (%s): an empty window instead", e)
+                # No source has elevation in the cache for some of this ground, not even the coarse global model
+                # (cached_only only; a tile that is merely not cached is read from its coarser cached ancestor, as
+                # the world's own tiles are wherever nothing deeper is published). An empty window that says it is
+                # incomplete, rather than nodes at sea level, which is what the DEM answers when it has nothing:
+                # an add-on cannot tell an invented height from a measured one, while "complete": false says
+                # plainly that the window is not there yet and can be asked for again once the world has been over
+                # it. Every cell counts unread -- none of the window could be built.
+                log.debug("road graph: no cached elevation for the window (%s): an empty window instead", e)
                 graph = navgraphmod.build(anchor.frame, [], elev, (x, y), urban, window=win,
                                           left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                           country=self.country(anchor), de_on=designsmod.enabled(self.dej_on))
                 missing = len(keys)
-        if short is not None and short.n and not missing:
-            # (every cell of the window was on disk, but something else the build needed was not: a cell's
-            #  neighbours, the land cover a road's surface rule reads. revisit counts what a build was short of,
-            #  and a window built short of something is no more complete than one with a cell missing.)
-            missing = 1
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
@@ -8012,9 +8016,9 @@ class Connection:
         is converted to the committed anchor's frame (the frame the graph's own x, y are in), the build runs in
         api_pool beside places, and the graph is written to the session folder as roadgraph_<aid>_<serial>.json, which
         is not a name the mod reads as the player's (navgraph.write's prefix). Cached-only is its only mode: nothing
-        is fetched and no background job is queued, so "complete" says whether everything the window needed was
-        there -- its cells, the cells round them and the ground under them -- and a window over ground the player has
-        never been near answers with few roads, or none where the ground is not there either, rather than slowly.
+        is fetched and no background job is queued, so "complete" says whether every cell of the window was there,
+        and a window over ground the player has never been near answers with few roads, or none at all where no
+        source has cached elevation for it, rather than slowly.
         The build never goes to the road pool a pooled session builds the player's graph in: an add-on's request must
         not take a slot the world needs. Each successful write sweeps this anchor's older roadgraph files down to the
         newest ROAD_GRAPH_KEEP, and never touches a navgraph_ file."""

@@ -241,10 +241,12 @@ class RoadGraphDataTest(unittest.TestCase):
         self.assertTrue(all(lanes == (True, True) for lanes in d.lanes),
                         "every sample inside both lanes (dem, gradesep): %r" % (d.lanes,))
 
-    def test_a_window_whose_ground_is_not_on_disk_is_incomplete_not_guessed(self):
-        """A node at a height taken from somewhere else reads like a measured one to an add-on, which cannot tell
-        the two apart; "complete" false says plainly that the window is not all there yet. So the window with the
-        ground missing comes back empty and incomplete, and nothing is downloaded to fill it."""
+    def test_a_window_with_no_cached_elevation_at_all_is_incomplete_not_guessed(self):
+        """Where no source has elevation cached for the ground -- not the deep tile, not its coarser ancestors, not
+        the global model -- the DEM's own answer is zeros, sea level. A node at an invented height reads like a
+        measured one to an add-on, which cannot tell the two apart, so the window comes back empty with "complete"
+        false instead, and nothing is downloaded to fill it. (A tile that is merely not cached is a different case:
+        its coarser cached ancestor is read, see CachedOnlyElevationTest.)"""
         import earthd
         keys = self.keys(300.0)
         road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
@@ -259,12 +261,18 @@ class RoadGraphDataTest(unittest.TestCase):
         self.assertEqual(d.fetched, [], "nothing fetched for the ground it did not have")
         self.assertEqual(md.fetched, [], "nor for its cells")
 
-    def test_what_the_build_read_short_makes_the_window_incomplete_and_stays_in_it(self):
+    def test_a_read_the_build_made_short_stays_in_the_build(self):
         """A build reads more than the window's own cells -- the cells round them (gradesep), the land cover a
-        road's surface rule asks for -- and a read that could not have what it needed records a revisit fault. The
-        window is incomplete for those too, not only for a cell that was missing. And the faults stay inside this
-        build: in a thread with no scope of its own a fault is the process's, so an add-on's request would
-        otherwise stop every build the server had running meanwhile from being kept in the revisit cache."""
+        road's surface rule asks for -- and a read that could not have what it needed records a revisit fault, so
+        nothing made short of it is kept. Two things that must hold of those faults, and a game found both:
+
+        they do not make the window incomplete. A missing neighbour cell changes a bridge range at the edge of a
+        window, not which roads are in it, and the player's own graph is built over the same misses without
+        refusing to exist. Answering incomplete for them emptied a whole stage of windows whose roads were all
+        there (2026-11-13: 548 nodes before, 0 after, because an add-on throws an incomplete window away);
+
+        and they stay in this build. In a thread with no scope of its own a fault is the process's, so an add-on's
+        request would otherwise stop every build the server had running meanwhile from being kept."""
         import earthd
         keys = self.keys(300.0)
         road = roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])
@@ -273,8 +281,8 @@ class RoadGraphDataTest(unittest.TestCase):
         orphans = revisit._orphans[0]
         graph, not_read = earthd.Server.road_graph_data(fake_server(md, ".", dem_=FakeDem(fault=True)), AID,
                                                         0.0, 0.0, window=300.0, cached_only=True)
-        self.assertGreater(len(graph["nodes"]), 0, "the roads it did read are in it, with their heights")
-        self.assertEqual(not_read, 1, "every cell of the window was there, and something else was not")
+        self.assertGreater(len(graph["nodes"]), 0, "the roads of the cells on disk are in it")
+        self.assertEqual(not_read, 0, "every cell of the window was read, so the window is complete")
         self.assertEqual(revisit._orphans[0], orphans, "and the faults stayed in this build, not the process's")
 
     def test_the_players_own_graph_is_left_as_it_was(self):
@@ -324,6 +332,109 @@ class RoadGraphDataTest(unittest.TestCase):
         md = FakeMapData({})
         self.assertIsNone(earthd.Server.road_graph_data(fake_server(md, "."), 99, 0.0, 0.0, cached_only=True))
         self.assertIsNone(earthd.Server.road_graph_data(fake_server(None, "."), AID, 0.0, 0.0, cached_only=True))
+
+
+class CachedOnlyElevationTest(unittest.TestCase):
+    """dem.Dem.cached_only(), the lane a cached-only build reads the ground in: the real Dem over a cache with one
+    tile in it, and a fetcher that fails the test if anything is downloaded.
+
+    It is here rather than beside the DEM's own tests because it is this request's promise, and because the fake
+    DEM above cannot see it. A lane that refused a tile merely because it was not cached, rather than reading the
+    coarser tile that was, emptied every window of a stage over ground the player had driven repeatedly
+    (2026-11-13: 548 nodes before, 0 after, every window incomplete) -- the graph's own zoom is deeper than
+    Mapterhorn's deepest, so the tile asked for is one the world itself only ever derives."""
+
+    LAT, LON = 45.70719, -120.79373     # (Maryhill, where that game was: no regional lidar source reads here)
+
+    class Loud:
+        """netfetch.Fetcher's part of the DEM, with the network taken away: a download is a failed test."""
+
+        def __init__(self):
+            self.tried = []
+
+        def register_chain(self, *a, **k):
+            pass
+
+        def miss_alive(self, miss, url):
+            return False
+
+        def get(self, url, **k):
+            self.tried.append(url)
+            raise AssertionError("downloaded " + url)
+
+        def session(self, *a, **k):
+            raise AssertionError("opened a session")
+
+    @staticmethod
+    def terrarium(size, metres):
+        """A Mapterhorn tile of one height, encoded as the format stores it (lossless: the heights come back)."""
+        import io
+        from PIL import Image
+        v = int(round((metres + 32768.0) * 256.0))
+        rgb = np.empty((size, size, 3), np.uint8)
+        rgb[..., 0], rgb[..., 1], rgb[..., 2] = (v >> 16) & 255, (v >> 8) & 255, v & 255
+        buf = io.BytesIO()
+        Image.fromarray(rgb, "RGB").save(buf, format="WEBP", lossless=True)
+        return buf.getvalue()
+
+    def dem_with(self, keys, metres=123.5):
+        """A real Dem over a cache of its own holding exactly the Mapterhorn tiles `keys`, each at one height."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.mirror = mock.patch.object(dem, "MIRROR_MB", 0)    # (no decoded mirror: one tile, read once)
+        self.mirror.start()
+        self.addCleanup(self.mirror.stop)
+        loud = self.Loud()
+        d = dem.Dem(os.path.join(tmp.name, "dem"), fetcher=loud)
+        for z, x, y in keys:
+            p = d._path(dem.MAPTERHORN, z, x, y)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(self.terrarium(dem.MAPTERHORN["size"], metres))
+        return d, loud
+
+    def at(self, d, zoom):
+        return d.sample(np.array([self.LAT]), np.array([self.LON]), zoom)
+
+    def test_a_tile_that_is_not_cached_is_read_from_the_coarser_tile_that_is(self):
+        """The window's own zoom is z16, deeper than Mapterhorn's z15, so most of the world has no z16 tile at all
+        and the DEM builds one from its z15 parent -- which is what the player's own world is built on there. A
+        lane that cannot download must do the same where the z16 tile exists but was never cached: the heights are
+        measured and the roads keep theirs, rather than the whole window coming back empty."""
+        parent = (dem.MAX_ZOOM,) + dem._tile_xy(self.LAT, self.LON, dem.MAX_ZOOM)
+        d, loud = self.dem_with([(parent[0], int(parent[1]), int(parent[2]))])
+        with d.cached_only():
+            z = self.at(d, dem.FINE_ZOOM)
+        self.assertAlmostEqual(float(z[0]), 123.5, delta=0.01, msg="the parent's measured height, not sea level")
+        self.assertEqual(loud.tried, [], "and nothing was downloaded for it")
+
+    def test_the_tile_it_stands_in_for_is_not_left_in_the_worlds_cache(self):
+        """The LRU is the world's own. A tile the lane made from a coarser ancestor must not be found there by the
+        player's next read of it, which has to download the real one."""
+        parent = (dem.MAX_ZOOM,) + dem._tile_xy(self.LAT, self.LON, dem.MAX_ZOOM)
+        d, _loud = self.dem_with([(parent[0], int(parent[1]), int(parent[2]))])
+        with d.cached_only():
+            self.at(d, dem.FINE_ZOOM)
+        deep = (dem.FINE_ZOOM,) + tuple(int(v) for v in dem._tile_xy(self.LAT, self.LON, dem.FINE_ZOOM))
+        self.assertNotIn(deep, d._lru, "the stand-in is kept for the lane alone")
+        self.assertIn(parent, d._lru, "the cached tile it was made from is the world's as much as ours")
+
+    def test_no_cached_elevation_at_all_raises_rather_than_answering_sea_level(self):
+        """An empty cache: the chain runs out at AWS, whose answer for a tile it has not got is zeros. That is the
+        one answer a reader who cannot download must not be handed, so sample raises and the caller leaves the
+        window empty and incomplete."""
+        d, loud = self.dem_with([])
+        with d.cached_only():
+            with self.assertRaises(dem.NotOnDisk):
+                self.at(d, dem.FINE_ZOOM)
+        self.assertEqual(loud.tried, [], "and it did not reach for the network on the way")
+
+    def test_outside_the_lane_the_same_read_goes_to_the_network(self):
+        """The player's own path is the one that may download, and does: the lane is the only thing that stops it."""
+        d, loud = self.dem_with([])
+        with self.assertRaises(Exception):
+            self.at(d, dem.FINE_ZOOM)
+        self.assertTrue(loud.tried, "the world's own read asked the network for the tile")
 
 
 class EarthdRoadGraphTest(unittest.TestCase):
