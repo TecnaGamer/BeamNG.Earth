@@ -500,6 +500,65 @@ class FarIndexLimitTest(unittest.TestCase):
             self.assertEqual(bld.over_limit["buildings"], 3)
 
 
+class PackStyleTest(unittest.TestCase):
+    """BNE_FARPACK_STYLE (2026-11-14): the far packs as the skyline's walls with day windows; the engine's shape load
+    grows with the vertices (Midtown's pack 728k lite: 86.5 ms on Windows DX11, 35k sky: 6.4 ms)."""
+
+    def items(self):
+        tall = [(bld.plan(rect((i % 6) * 40.0, (i // 6) * 40.0, 24, 18), {"class": "office", "height": 120,
+                                                                         "num_floors": 30}), 0.0, 0.0)
+                for i in range(12)]
+        low = [(bld.plan(rect(300.0 + i * 12.0, 0.0, 10, 8), {"class": "house", "height": 7, "num_floors": 2}),
+                0.0, 0.0) for i in range(6)]
+        return tall + low
+
+    def verts(self, meshes):
+        return sum(len(m[0]) for m in meshes)
+
+    def test_lite_is_build_parts(self):
+        items = self.items()
+        a, b = bld.pack_meshes(items, "lite"), bld.build_parts(items, lite=True)
+        self.assertEqual(len(a), len(b))
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x[0], y[0])
+
+    def test_sky_fewer_vertices_day_windows(self):
+        items = self.items()
+        floors = [int(s.floors or 0) for s, _a, _b in items]
+        lite = self.verts(bld.pack_meshes(items, "lite"))
+        sky = bld.pack_meshes(items, "sky")
+        self.assertLess(self.verts(sky), lite / 3)
+        day = bld.MATERIALS.index(bld.SKY_WALL_DAY)
+        self.assertTrue(any((np.asarray(m[3]) == day).any() for m in sky), "walls in the day-window material")
+        self.assertEqual([int(s.floors or 0) for s, _a, _b in items], floors, "the items' specs not changed")
+        tall = bld.pack_meshes(items, "tall")
+        self.assertLess(self.verts(sky), self.verts(tall))
+        self.assertLess(self.verts(tall), lite)
+
+    def test_revisit_key_lite_unchanged(self):
+        import blockworker
+        import geotiles
+        import revisit
+        seen = []
+        with mock.patch.object(revisit, "load", side_effect=lambda _c, kind, k: seen.append((kind, k)) or None), \
+                mock.patch.object(blockworker, "_far_geo_build", return_value=None), \
+                mock.patch.object(blockworker, "_s", mock.Mock(cache_dir="/nonexistent", md=None)), \
+                mock.patch.object(blockworker, "_md_versions", return_value="v"), \
+                mock.patch.object(blockworker, "_nyc_key", return_value=None):
+            gx, gy = geotiles.tile_of(40.758, -73.985, geotiles.SKY_Z)
+            for style in ("lite", "sky", "tall"):
+                with mock.patch.object(bld, "PACK_STYLE", style):
+                    blockworker.far_geo("bldpack", gx, gy, 15, "/tmp/x", "/x")
+                    blockworker.far_geo("bldfar", gx * 4, gy * 4, 15, "/tmp/x", "/x")
+        packs = [k for kind, k in seen if kind == "bldpack"]
+        fars = [k for kind, k in seen if kind == "bldfar"]
+        self.assertEqual(len(set(packs)), 3, "a pack's key changes with the style")
+        self.assertEqual(len(set(fars)), 1, "the far tiles' keys do not")
+        with mock.patch.object(bld, "PACK_STYLE", "lite"):
+            self.assertEqual(packs[0], revisit.key("bldpack", "g", geotiles.key(gx, gy, geotiles.SKY_Z), 15, "v", None,
+                                                   None), "the lite key as before")
+
+
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
