@@ -136,6 +136,54 @@ T.check(count() == 100 and solidCount() == 0, 'the camera at the tile, the car f
 trees.update(1, { x = 50, y = 50 }, { x = 50, y = 1900 })
 T.check(count() == 100 and solidCount() == 100, 'the car at the tile, the camera far: every item, all collide')
 trees.update(1, { x = 50, y = 50 })
+-- behind a moving car (roads.lua's kept heading, BEHIND_M): no solid items; made solid again near the car, the
+-- collision rebuild asked with the box round them (roads.requestCollision: at once when the car is about to reach them)
+do
+  local realRoads = package.loaded['beamngEarth/roads']
+  local dir, reqs = { x = 0, y = 1 }, {}
+  package.loaded['beamngEarth/roads'] = {
+    behindDir = function() return dir end,
+    behindBy = function(p, d, cx, cy, half)
+      return -((cx - p.x) * d.x + (cy - p.y) * d.y) - half * (math.abs(d.x) + math.abs(d.y))
+    end,
+    requestCollision = function(d) reqs[#reqs + 1] = d or false end }
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + 10 })
+  T.check(solidCount() == count() and count() > 0, 'past BEHIND_M heading on: still solid (hysteresis)')
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + trees.BEHIND_HYST_M + 10 })
+  T.check(count() > 0 and solidCount() == 0, 'past BEHIND_M + BEHIND_HYST_M, within SOLID_M: not solid')
+  dir = nil
+  reqs = {}
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + trees.BEHIND_HYST_M + 16 })    -- (RECHECK_M on)
+  local b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[1] == 0 and b[2] == 10 and b[4] == 99 and b[5] == 10,
+    'no heading (the car turned back): solid again, the rebuild asked with the box round them, 300 m off as they are')
+  -- a tile coming within SOLID_M ahead (not one BEHIND kept from solid): the next rebuild asked, no deadline box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 20 })
+  T.check(solidCount() == 0, '(beyond SOLID_M: not solid)')
+  reqs = {}
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M - 10 })
+  T.check(solidCount() == count() and #reqs > 0 and reqs[#reqs] == false, 'solid 190 m ahead: no box, as before')
+  -- made solid within CLOSE_M (a pass behind): a box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 20 })
+  reqs = {}
+  trees.update(1, { x = 50, y = 100 })
+  b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[2] == 10, 'made solid 90 m off: a box')
+  dir = { x = 0, y = -1 }
+  trees.update(1, { x = 50, y = 256 + 130 })
+  T.check(solidCount() == count(), 'heading towards the tile: solid')
+  -- solid only for another player's car (its focus), the active car far: every item sent with a box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 400 })
+  T.check(solidCount() == 0, '(the active car far: not solid)')
+  reqs = {}
+  trees.setFoci({ { x = 50, y = 300, r = 320, trees = true } })
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 400 })
+  b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[2] == 10, "solid for another player's car: a box")
+  trees.setFoci({})
+  package.loaded['beamngEarth/roads'] = realRoads
+  trees.update(1, { x = 50, y = 50 })
+end
 
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })
