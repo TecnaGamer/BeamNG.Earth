@@ -34,6 +34,34 @@ FETCH_WAIT_S = 90.0             # s a caller waits for another thread's manifest
 COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
 
 
+def data_url(m):
+    """A dataset manifest's "data": the https folder its build's files are served from (the data repo's workflow puts
+    them on the project's tile host, R2 behind Cloudflare's cache, data/<dataset>/<build>/, the same paths as on
+    Pages), or None: the files beside the manifest on Pages. (2026-11-11: ~1.15 TB a month of players' reads against
+    Pages' 100 GB soft limit.)"""
+    d = m.get("data") if isinstance(m, dict) else None
+    return d.rstrip("/") if isinstance(d, str) and d.startswith("https://") and len(d) > 8 else None
+
+
+def fetch_data(fetcher, data, pages, rel, kind="demand"):
+    """rel's bytes from a dataset's data host (data: data_url's, or None) else its Pages folder (pages). The data
+    host failing (not a 404: that answers for the build) is asked of Pages as well, while Pages still has the files
+    (old clients read them there); that failing too raises the data host's error, never a NotFound (no "none
+    there" from a copy that may be gone)."""
+    if not data:
+        return fetcher.get(f"{pages}/{rel}", kind=kind).body
+    try:
+        return fetcher.get(f"{data}/{rel}", kind=kind).body
+    except (netfetch.NotFound, netfetch.Deferred):
+        raise
+    except Exception as e:
+        first = e
+    try:
+        return fetcher.get(f"{pages}/{rel}", kind=kind).body
+    except Exception:
+        raise first from None
+
+
 _WAY_ID = re.compile(r"^w(\d+)")
 
 
@@ -149,9 +177,13 @@ class Rules:
         return [values[idx[j]] if h else None for j, h in zip(i.tolist(), hit.tolist())]
 
 
+PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may have pinned meanwhile (Shards.known)
+
+
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
-    <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build."""
+    <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
+    stays on Pages; the shards come from its "data" folder when it names one (data_url, fetch_data)."""
 
     def __init__(self, cache_dir, fetcher, name):
         self.name = name
@@ -160,6 +192,7 @@ class Shards:
         self.fetcher = fetcher
         self.lock = threading.Lock()
         self.built = None           # the manifest's build in use
+        self.data = None            # its "data" folder (data_url), None: the files on Pages
         self.checked = 0.0
         self.shards = {}            # (x, y) -> dict
         self.down_at = 0.0
@@ -174,8 +207,12 @@ class Shards:
         if self.built is not None or not ON:
             return self.built
         got = getattr(self, "_pinned", False)
-        if got is False:
+        # (none pinned yet: looked for again, at most every PIN_RECHECK_S: another process pins it a few seconds into a
+        # first run, and a process that had looked once kept None in its keys for the whole run while the others had
+        # the build, the next run's keys: a first visit's plans, cell facts and tiles were never found again, 2026-11-13)
+        if got is False or (got is None and time.monotonic() - getattr(self, "_pin_at", 0.0) > PIN_RECHECK_S):
             got = None
+            self._pin_at = time.monotonic()
             pin = os.path.join(self.dir, "manifest.json") if self.dir else None
             if pin and os.path.exists(pin):
                 try:
@@ -202,13 +239,14 @@ class Shards:
             if self.built is not None and now - self.checked < MANIFEST_TTL_S:
                 return self.built
         pin = os.path.join(self.dir, "manifest.json") if self.dir else None
-        pinned, age = None, None
+        pinned, age, pdata = None, None, None
         if pin and os.path.exists(pin):
             try:
                 age = now - os.path.getmtime(pin)
                 with open(pin, encoding="utf-8") as fh:
-                    pinned = json.load(fh).get("built")
-            except (OSError, ValueError):
+                    j = json.load(fh)
+                pinned, pdata = j.get("built"), data_url(j)
+            except (OSError, ValueError, AttributeError):
                 pinned = None
         if pinned is not None:
             refresh = False
@@ -216,6 +254,8 @@ class Shards:
                 if pinned != self.built and (self.built is None or age < MANIFEST_TTL_S):
                     self.shards.clear()
                     self.built = pinned
+                if pinned == self.built:
+                    self.data = pdata
                 if age < MANIFEST_TTL_S:
                     self.checked = now - age
                 elif self.fetching is None and now - self.down_at >= RETRY_S:
@@ -247,12 +287,14 @@ class Shards:
         try:
             try:
                 body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
-                built = json.loads(body.decode("utf-8")).get("built")
+                j = json.loads(body.decode("utf-8"))
+                built, data = j.get("built"), data_url(j)
                 if pin:
                     os.makedirs(self.dir, exist_ok=True)
-                    with open(pin + ".part", "wb") as fh:
+                    tmp = _part(pin)
+                    with open(tmp, "wb") as fh:
                         fh.write(body)
-                    os.replace(pin + ".part", pin)
+                    os.replace(tmp, pin)
             except Exception as e:      # (offline, not published yet: without it, or with the build pinned before)
                 log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
                 with self.lock:
@@ -261,13 +303,18 @@ class Shards:
             with self.lock:
                 if built != self.built:
                     self.shards.clear()
-                self.built, self.checked = built, now
+                self.built, self.data, self.checked = built, data, now
             return built
         finally:
             with self.lock:
                 ev, self.fetching = self.fetching, None
             if ev is not None:
                 ev.set()
+
+    def get(self, rel, kind="demand"):
+        """The bytes of the dataset's file rel (path in its folder) for the build in use: from the manifest's "data"
+        host, else (or that failing) Pages (fetch_data)."""
+        return fetch_data(self.fetcher, self.data, self.base, rel, kind)
 
     def clear_memory(self):
         """Drop the decoded shards kept in memory (budget.maybe_shed through MapData.clear_memory; ~20 MB a zoom-7
@@ -306,7 +353,7 @@ class Shards:
             if time.time() - self.shard_down.get((x, y), 0.0) < SHARD_RETRY_S:
                 return None             # (failed a moment ago: not every tile waits for it again)
             try:
-                body = self.fetcher.get(f"{self.base}/{x}/{y}.json.gz", kind="demand").body
+                body = self.get(f"{x}/{y}.json.gz")
                 got = json.loads(gzip.decompress(body).decode("utf-8"))
             except netfetch.NotFound:
                 body, got = None, {}
@@ -316,9 +363,10 @@ class Shards:
                 return None
             if path:
                 os.makedirs(d, exist_ok=True)
-                with open(path + ".part", "wb") as fh:
+                tmp = _part(path)
+                with open(tmp, "wb") as fh:
                     fh.write(body if body is not None else gzip.compress(b"{}"))
-                os.replace(path + ".part", path)
+                os.replace(tmp, path)
         if isinstance(got, dict) and isinstance(got.get("ways"), dict):
             got["ways"] = Ways.of(got["ways"])
             if side and isinstance(got["ways"], Ways):
@@ -396,15 +444,23 @@ LANE_PARTS = "osm_lane_parts"
 IDX_SUFFIX = ".idx.npz"
 
 
+def _part(path):
+    """A temporary name of path's own for this thread (two threads of a process, or two processes, fetching the same
+    shard at once each wrote path + ".part": the second's rename found it gone, FileNotFoundError, and the cell's tags
+    were not joined; seen as a shared decision item planned locally, 2026-11-13)."""
+    return f"{path}.{os.getpid()}.{threading.get_ident()}.part"
+
+
 def _save_idx(path, shard):
     w = shard["ways"]
     rest = {k: v for k, v in shard.items() if k != "ways"}
     try:
-        with open(path + ".part", "wb") as fh:
+        tmp = _part(path)
+        with open(tmp, "wb") as fh:
             np.savez(fh, ids=w.ids, idx=w.idx,
                      tags=np.frombuffer(json.dumps(w.tags, separators=(",", ":")).encode("utf-8"), np.uint8),
                      rest=np.frombuffer(json.dumps(rest, separators=(",", ":")).encode("utf-8"), np.uint8))
-        os.replace(path + ".part", path)
+        os.replace(tmp, path)
     except OSError as e:
         log.debug("%s: %s", path, e)
 

@@ -51,7 +51,7 @@ import staging
 
 log = logging.getLogger("earthd.mapdata")
 
-FORMAT = 1          # the cells' content from the tiles: bump on any change of what pmt_layer gives (the cells' folder
+FORMAT = 2          # the cells' content from the tiles: bump on any change of what pmt_layer gives (the cells' folder
                     # and MapData.versions() carry it: plans and cell facts keyed by it)
 NATIVE = 206
 MIRRORS = ("https://tiles.overturemaps.org/{release}/{theme}.pmtiles",
@@ -414,6 +414,36 @@ class Reader:
             if a is None:
                 a = self._arch[theme] = Archive(self, theme)
             return a
+
+    def tiles_for(self, layer, cell):
+        """(theme, {(z, x, y)}) of the tiles query() reads first for the layer of cell (its tile, and its 8 neighbours
+        but for POINT_LAYERS)."""
+        spec = overture.LAYERS[layer]
+        theme = spec["theme"]
+        tz = THEME_ZOOM[theme]
+        sh = cell.z - tz
+        cx, cy = cell.x >> sh, cell.y >> sh
+        n = 1 << tz
+        ring = (0,) if layer in POINT_LAYERS else (-1, 0, 1)
+        return theme, {(tz, cx + dx, cy + dy) for dx in ring for dy in ring if 0 <= cx + dx < n and 0 <= cy + dy < n}
+
+    def prefetch(self, needs, kind="prefetch"):
+        """The first tiles of every (cell, layer) in needs fetched at once, one archive at a time (Archive.tiles: those
+        near each other in the archive in one range read), before the cells are decoded one by one: a round of cells
+        ahead (earthd download_ahead) asked each cell's 3 x 3 tiles on its own, several range reads where one or two
+        would do (the retro optimization study's section N: a round trip costs as much as ~1 MB). Returns the tiles
+        asked for."""
+        want = {}
+        for cell, layer in needs:
+            if layer not in LAYERS:
+                continue
+            theme, ts = self.tiles_for(layer, cell)
+            want.setdefault(theme, set()).update(ts)
+        n = 0
+        for theme, ts in want.items():
+            self.archive(theme).tiles(ts, kind)
+            n += len(ts)
+        return n
 
     def query(self, layer, cell, kind="demand"):
         """The layer's Features of one cell (lon/lat; mapdata localises and marks `own`) and {(dataset, license):

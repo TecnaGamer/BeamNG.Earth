@@ -29,6 +29,8 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import netfetch
 import overture
@@ -70,7 +72,7 @@ COLUMNS = {
 }
 TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway", "lane_hw"}
 INT_COLUMNS = {"lanes", "osm_layer"}
-GROUPS_FILE = "groups.json"     # the version's parsed row groups (OsmTags._groups)
+GROUPS_FILE = overture.GROUPS_FILE     # the version's parsed row groups (OsmTags._groups)
 TABLE_DIR = "rg"        # a row group's decoded ways (OsmTags._table), in the version's folder
 TABLE_MEM = 6           # decoded row groups kept in memory (~6 MB each; a place's cells share 3-5)
 EXACT32 = {"bx0", "by0", "bx1", "by1", "lanes", "osm_layer"}   # float32 (the file's bbox; small integers)
@@ -232,46 +234,7 @@ class OsmTags:
         if got is not None and got[0] is remote:
             return got[1]
         # parsed once per version on disk too (0.8 s of every server process's first cell, the footer's ~84k rows)
-        saved = os.path.join(remote.cache_dir, GROUPS_FILE)
-        try:
-            with open(saved, encoding="utf-8") as f:
-                groups = {int(rg): {"first": g["first"], "n": g["n"],
-                                    "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
-                                    "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
-                          for rg, g in json.load(f).items()}
-            with self._lock:
-                self._meta = (remote, groups)
-            return groups
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        tail = remote.read(max(0, remote.size - overture.FOOTER_GUESS), remote.size, kind)
-        n = int.from_bytes(tail[-8:-4], "little")
-        if n + 8 > len(tail):
-            remote.read(remote.size - n - 8, remote.size, kind)
-        meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
-            dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
-            ORDER BY row_group_id, column_id""").fetchall()
-        groups, first = {}, 0
-        for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
-            g = groups.get(rg)
-            if g is None:
-                g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
-                first += nrows
-            offs = [o for o in (dict_off, data_off) if o]
-            if not offs:
-                continue
-            top, leaf = col.split(", ")[0], col.split(", ")[-1]
-            g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
-            if top == "bbox":
-                g["bbox"][leaf] = (smin, smax)
-        try:
-            os.makedirs(remote.cache_dir, exist_ok=True)
-            tmp = f"{saved}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({str(rg): g for rg, g in groups.items()}, f)
-            os.replace(tmp, saved)
-        except (OSError, TypeError, ValueError) as e:
-            log.debug("osmtags: row groups not saved: %s", e)
+        groups = overture.parquet_row_groups(con, uri, remote, kind)
         with self._lock:
             self._meta = (remote, groups)
         return groups
@@ -466,10 +429,10 @@ def is_outline(ring, others):
     ring = np.asarray(ring, np.float64)
     if len(ring) < 4:
         return False
-    kx = 111320.0 * np.cos(np.radians(float(ring[:, 1].mean())))
+    kx = 111320.0 * dnp.cos(np.radians(float(ring[:, 1].mean())))
     scale = np.array([kx, 110540.0])
     R = (ring - ring[0]) * scale
-    if np.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
+    if dnp.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
         return False
     poly = Path(R)
     enclosed = False
@@ -487,9 +450,9 @@ def _seg_dist(pts, line):
     """The least distance from points pts (k, 2) to polyline line (n, 2)."""
     a, b = line[:-1], line[1:]
     if not len(a):
-        return float(np.min(np.hypot(*(pts - line[0]).T)))
+        return float(np.min(dnp.hypot(*(pts - line[0]).T)))
     ab = b - a
-    t = np.clip(np.einsum("kij,ij->ki", pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
+    t = np.clip(dnp.vecdot(pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
     d = pts[:, None, :] - (a[None] + t[..., None] * ab[None])
     return float(np.sqrt((d * d).sum(-1)).min())
 _ROW_VAL = 4
@@ -550,7 +513,7 @@ def _lane_rows(rows, need):
             continue
         if need is not None:
             x0, y0, x1, y1 = (r[i] for i in box)
-            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
+            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(dnp.cos(np.radians((y0 + y1) / 2)))))
             dy = GEOMETRY_MARGIN_M / 110574.0
             if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
                        for a0, b0, a1, b1 in need):
@@ -681,7 +644,7 @@ def _named_way(feats, i, by_name):
         return None
     lon, lat = (float(v) for v in feats.lonlat[(a + b - 1) // 2][:2])
     my = NAME_MATCH_M / 111320.0
-    mx = my / max(math.cos(math.radians(lat)), 0.1)
+    mx = my / max(dmath.cos(math.radians(lat)), 0.1)
     best = None
     for w, x0, y0, x1, y1 in cands:
         if x0 - mx <= lon <= x1 + mx and y0 - my <= lat <= y1 + my:

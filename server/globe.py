@@ -12,6 +12,7 @@ import os
 import shutil
 
 import numpy as np
+import dnp
 
 log = logging.getLogger("earthd.globe")
 
@@ -38,7 +39,7 @@ def world_texture(cache_dir, fetcher):
                                   kind="demand")
     if not got:
         return None
-    whole = got >= (2 ** WORLD_ZOOM) ** 2
+    whole = got >= dnp.sq(2 ** WORLD_ZOOM)
     out = path if whole else path + ".partial.dds"
     os.makedirs(os.path.dirname(path), exist_ok=True)
     imagery.write_dds(out, img)
@@ -55,7 +56,7 @@ def sphere(rings=RINGS, segs=SEGS):
     LON, LAT = np.meshgrid(lon, lat)
     u = (LON + 180.0) / 360.0
     la = np.radians(np.clip(LAT, -MERC_LAT, MERC_LAT))
-    v = 0.5 - np.log(np.tan(np.pi / 4 + la / 2)) / (2 * np.pi)       # 0 at the top (north), 1 at the bottom
+    v = 0.5 - dnp.log(dnp.tan(np.pi / 4 + la / 2)) / (2 * np.pi)       # 0 at the top (north), 1 at the bottom
     w = segs + 1
     j, i = np.meshgrid(np.arange(rings), np.arange(segs), indexing="ij")
     a = (j * w + i).ravel()
@@ -86,7 +87,7 @@ def build(out_dir, vfs_dir, frame, anchor_id, cache_dir, fetcher):
     # the small copy: the same sphere about the earth's centre, MINI_R across its radius, in the same orientation
     # (a TSStatic scaled down at run time drew nothing, 2026-11-07: the mesh is small instead)
     centre = np.asarray(frame.ecef_to_enu(0.0, 0.0, 0.0), np.float64).reshape(3)
-    scale = MINI_R / float(np.linalg.norm(pos - centre, axis=1).mean())
+    scale = MINI_R / float(dnp.norm(pos - centre, axis=1).mean())
     mini = (pos - centre) * scale
     cdae.write(os.path.join(out_dir, name + "_mini.cdae"), mini, np.asarray(tris, np.int64), uvs=uv,
                material=material, object_name="globe_mini")

@@ -11,6 +11,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 ENABLED = os.environ.get("BNE_RAIL_XING", "") not in ("", "0", "off", "false")
 
@@ -107,17 +109,17 @@ def _unit_at(line, pt):
     a, b = line[:-1], line[1:]
     d = b - a
     t = np.clip(((pt - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.hypot(*(a + t[:, None] * d - pt).T)))
-    return d[j] / max(float(np.hypot(*d[j])), 1e-9)
+    j = int(np.argmin(dnp.hypot(*(a + t[:, None] * d - pt).T)))
+    return d[j] / max(float(dnp.hypot(*d[j])), 1e-9)
 
 
 def _arc_of(line, pt):
     """Arc length along polyline line to the point nearest pt."""
     a, b = line[:-1], line[1:]
     d = b - a
-    seg = np.hypot(d[:, 0], d[:, 1])
+    seg = dnp.hypot(d[:, 0], d[:, 1])
     t = np.clip(((pt - a) * d).sum(1) / np.maximum(seg * seg, 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.hypot(*(a + t[:, None] * d - pt).T)))
+    j = int(np.argmin(dnp.hypot(*(a + t[:, None] * d - pt).T)))
     return float(np.r_[0.0, np.cumsum(seg)][j] + t[j] * seg[j])
 
 
@@ -194,7 +196,7 @@ def crossing_rows(box, rails, roads, ground, *, worn=None, usage=None, nodes=Non
     z = np.asarray(ground(np.array([p[1] for p in pending])), np.float64).ravel()
     for (group, q, side, h), zz in zip(pending, z):
         rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
-                     round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, h, 0.0])
+                     round(math.degrees(dmath.atan2(side[1], side[0])) % 360.0, 1), 1.0, h, 0.0])
     return rows
 
 
@@ -210,7 +212,7 @@ def node_lookup(frame, cells):
     xy = np.stack([np.asarray(e), np.asarray(n)], -1)
 
     def look(p):
-        d = np.hypot(*(xy - np.asarray(p)[:2]).T)
+        d = dnp.hypot(*(xy - np.asarray(p)[:2]).T)
         j = int(np.argmin(d))
         return pts[j][2] if d[j] <= OSM_NODE_M else None
     return look
@@ -238,7 +240,7 @@ CORRIDOR_MIN_STEP = 1e-6
 
 def _tangents(xy):
     d = np.gradient(xy, axis=0)
-    n = np.hypot(d[:, 0], d[:, 1])
+    n = dnp.hypot(d[:, 0], d[:, 1])
     return d / np.maximum(n, CORRIDOR_MIN_STEP)[:, None]
 
 
@@ -258,7 +260,7 @@ def corridor_ground(lines, zs):
         for j, pj in enumerate(pts):
             if i == j or box[i][0] > box[j][2] or box[j][0] > box[i][2] or box[i][1] > box[j][3] or                     box[j][1] > box[i][3]:
                 continue
-            d = np.hypot(pi[:, None, 0] - pj[None, :, 0], pi[:, None, 1] - pj[None, :, 1])
+            d = dnp.hypot(pi[:, None, 0] - pj[None, :, 0], pi[:, None, 1] - pj[None, :, 1])
             k = np.argmin(d, axis=1)
             near = d[np.arange(len(pi)), k]
             cos = np.abs((tan[i] * tan[j][k]).sum(1))

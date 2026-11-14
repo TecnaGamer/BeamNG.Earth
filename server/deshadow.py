@@ -68,6 +68,8 @@ from dataclasses import dataclass
 import numpy as np
 
 import fast
+import dmath
+import dnp
 
 import pacer
 import staging
@@ -118,13 +120,13 @@ SAME = object()                     # LRU marker: the relit tile equals the raw 
 
 # --- colour -----------------------------------------------------------------------------------
 _x = np.arange(256) / 255.0
-SRGB2LIN = np.where(_x <= 0.04045, _x / 12.92, ((_x + 0.055) / 1.055) ** 2.4).astype(np.float32)
+SRGB2LIN = np.where(_x <= 0.04045, _x / 12.92, dnp.power((_x + 0.055) / 1.055, 2.4)).astype(np.float32)
 LUT_N = 1 << 14
 
 
 def to_srgb(lin):
     lin = np.clip(lin, 0, 1)
-    s = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(lin, 1 / 2.4) - 0.055)
+    s = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * dnp.power(lin, 1 / 2.4) - 0.055)
     return np.clip(np.rint(s * 255), 0, 255).astype(np.uint8)
 
 
@@ -141,7 +143,7 @@ def luma(lin):
 
 def shoulder(x):
     """Soft roll-off above 0.8 instead of a hard clip (boosted highlights)."""
-    return np.where(x > 0.8, 0.8 + 0.2 * np.tanh((x - 0.8) / 0.2), x)
+    return np.where(x > 0.8, 0.8 + 0.2 * dnp.tanh((x - 0.8) / 0.2), x)
 
 
 # --- filters ----------------------------------------------------------------------------------
@@ -202,7 +204,7 @@ def normals(h, res):
 
 def lambert(nrm, az, el):
     a, e = math.radians(az), math.radians(el)
-    return np.maximum(0.0, (nrm[0] * math.sin(a) + nrm[1] * math.cos(a)) * math.cos(e) + nrm[2] * math.sin(e))
+    return np.maximum(0.0, (nrm[0] * dmath.sin(a) + nrm[1] * dmath.cos(a)) * dmath.cos(e) + nrm[2] * dmath.sin(e))
 
 
 HORIZON_BATCH = 16          # horizon_tan steps per Rust call (pacer.pace between them)
@@ -214,7 +216,7 @@ def horizon_tan(hpad, res, pad, n, az, max_dist=PAD_M, dmax=None, growth=1.04):
     at max_dist, at the pad, or at dmax (beyond it nothing can rise above the sun). A fixed
     direction makes every step one shift of the whole grid: four slices, no gather."""
     best = np.full((n, n), -1e9, np.float32)
-    s, c = math.sin(math.radians(az)), math.cos(math.radians(az))
+    s, c = dmath.sin(math.radians(az)), dmath.cos(math.radians(az))
     stop = min(max_dist, (pad - 1.5) * res, max_dist if dmax is None else dmax)
     d = res
     # Rust (earthfast.horizon_steps): no full-grid temporaries; paced between batches
@@ -234,14 +236,14 @@ def horizon_tan(hpad, res, pad, n, az, max_dist=PAD_M, dmax=None, growth=1.04):
 
 def march_limit(hpad, h, el):
     """Distance beyond which no terrain of hpad rises above elevation el seen from h."""
-    return (float(hpad.max()) - float(h.min())) / math.tan(math.radians(el)) + 1.0
+    return (float(hpad.max()) - float(h.min())) / dmath.tan(math.radians(el)) + 1.0
 
 
 def terrain_terms(hpad, res, pad, n, az, el):
     """(lit, lam) on the n x n window: soft cast-shadow terminator and Lambert term."""
     h = hpad[pad:pad + n, pad:pad + n]
     ht = horizon_tan(hpad, res, pad, n, az, dmax=march_limit(hpad, h, el))
-    lit = np.clip(0.5 + (math.tan(math.radians(el)) - ht) / (2 * SOFT), 0, 1)
+    lit = np.clip(0.5 + (dmath.tan(math.radians(el)) - ht) / (2 * SOFT), 0, 1)
     lam = lambert(normals(box(h, 1), res), az, el)
     return lit.astype(np.float32), lam.astype(np.float32)
 
@@ -252,7 +254,7 @@ def otsu(x):
     p = hist / hist.sum()
     w = np.cumsum(p)
     mu = np.cumsum(p * edges[:-1])
-    sb = (mu[-1] * w - mu) ** 2 / np.maximum(w * (1 - w), 1e-12)
+    sb = dnp.sq(mu[-1] * w - mu) / np.maximum(w * (1 - w), 1e-12)
     return edges[np.argmax(sb)]
 
 
@@ -263,7 +265,7 @@ def score_grid(hpad, L, res, pad, azs, els):
     h = hpad[pad:pad + n, pad:pad + n]
     nx, ny, nz = normals(box(h, 1), res)
     Lc = (L - L.mean()).ravel()
-    Lv = float((Lc ** 2).sum()) + 1e-12
+    Lv = float((Lc * Lc).sum()) + 1e-12
     dark = (L < otsu(L)).ravel()
     nd = int(dark.sum())
     R2 = np.zeros((len(azs), len(els)))
@@ -271,14 +273,14 @@ def score_grid(hpad, L, res, pad, azs, els):
     dmax = march_limit(hpad, h, min(els))
     for i, az in enumerate(azs):
         ht = horizon_tan(hpad, res, pad, n, az, dmax=dmax).ravel()
-        a = (nx * math.sin(math.radians(az)) + ny * math.cos(math.radians(az))).ravel()
+        a = (nx * dmath.sin(math.radians(az)) + ny * dmath.cos(math.radians(az))).ravel()
         for j, el in enumerate(els):
             pacer.pace()
-            lit = ht < math.tan(math.radians(el))
-            dirc = np.maximum(0.0, a * math.cos(math.radians(el)) + nz.ravel() * math.sin(math.radians(el))) * lit
+            lit = ht < dmath.tan(math.radians(el))
+            dirc = np.maximum(0.0, a * dmath.cos(math.radians(el)) + nz.ravel() * dmath.sin(math.radians(el))) * lit
             dc = dirc - dirc.mean()
-            cov = float(dc @ Lc)
-            var = float(dc @ dc) + 1e-12
+            cov = float(dnp.matmul(dc, Lc))
+            var = float(dnp.matmul(dc, dc)) + 1e-12
             r = cov / math.sqrt(var * Lv)
             R2[i, j] = r * abs(r)
             sh = ~lit | (dirc < 0.15)
@@ -316,7 +318,7 @@ def fit_sun(hpad, L, res, pad):
 def features(I, r=1):
     """Shadow cues per pixel: log luminance and the blue ratio (shadows are lit by the sky only)."""
     bs = np.stack([box(I[..., c], r) for c in range(3)], -1)
-    return np.stack([np.log(luma(bs) + 1e-4), bs[..., 2] / (bs.sum(-1) + 1e-5)], -1)
+    return np.stack([dnp.log(luma(bs) + 1e-4), bs[..., 2] / (bs.sum(-1) + 1e-5)], -1)
 
 
 def gauss_fit(X, m, maxs=20000):
@@ -324,8 +326,9 @@ def gauss_fit(X, m, maxs=20000):
     if len(x) > maxs:
         x = x[np.random.default_rng(0).choice(len(x), maxs, replace=False)]
     mu = x.mean(0)
-    C = np.cov(x.T) + np.eye(2) * 1e-5
-    return dict(mu=mu.tolist(), icov=np.linalg.inv(C).tolist(), logdet=float(np.log(np.linalg.det(C))),
+    d = x - mu
+    C = dnp.matmul(d.T, d) / max(len(x) - 1, 1) + np.eye(2) * 1e-5       # np.cov without BLAS
+    return dict(mu=mu.tolist(), icov=dnp.inv(C).tolist(), logdet=float(dnp.log(dnp.det(C))),
                 sd=float(math.sqrt(C[0, 0])))
 
 
@@ -338,7 +341,7 @@ def loglik(X, g):
 def guard_lum(I):
     """Per-pixel log luminance: what the halo guard compares (and its statistics; a 3 x 3 mean
     would let the sunlit side lift the first shadow pixel: a dark rim)."""
-    return np.log(luma(I) + 1e-4)
+    return dnp.log(luma(I) + 1e-4)
 
 
 def mix_edge(lit, L, band=1, r=4):
@@ -370,9 +373,9 @@ def snap_mask(lit_dem, blur, X, I, gs, gl, fd=1, guard=None):
     if fd > 1:
         llr = np.repeat(np.repeat(llr, fd, 0), fd, 1)
     prior = np.clip(1 - blur, 0.03, 0.97)
-    lit = 1 / (1 + np.exp(np.log(prior / (1 - prior)) + llr))
+    lit = 1 / (1 + dnp.exp(dnp.log(prior / (1 - prior)) + llr))
     Y = luma(I)
-    lp = np.log(box(Y, 1) + 1e-3)
+    lp = dnp.log(box(Y, 1) + 1e-3)
     g = (lp - lp.mean()) / (lp.std() + 1e-6) * 0.25
     lit = np.clip((guided(g, lit.astype(np.float32), 2, 0.01) - 0.5) * 3 + 0.5, 0, 1)
     lit = mix_edge(lit, Y)
@@ -405,7 +408,7 @@ def region_params(rgb, lit, lam_raw, el, cast=True):
     """Region values from the grid image rgb (n x n uint8) and the DEM terms at the fitted sun:
     blurred-mask prior, shadow classifier (separation gate), haze, rho. Returns the params dict."""
     I = to_lin(rgb)
-    sz = math.sin(math.radians(el))
+    sz = dmath.sin(math.radians(el))
     lam = sz + LAM_STRENGTH * (lam_raw - sz)
     blur = box((lit > 0.5).astype(np.float32), BLUR_CELLS)     # the shadow-snap prior
     P = dict(cast=False, sep=None, gs=None, gl=None)
@@ -471,7 +474,7 @@ def refine_fine(P, samples, margin=M):
     classify. Updates P (each value only if the tiles hold enough pixels for it)."""
     if not samples:
         return P
-    sz = math.sin(math.radians(P["el"]))
+    sz = dmath.sin(math.radians(P["el"]))
     core = (slice(margin, -margin or None),) * 2
     # the shadow classifier and the guard at the resolution the tiles use them
     Xs, Bs, Gs, Ss = [], [], [], []
@@ -557,7 +560,7 @@ def tile_lit(rgb_m, terms, P, fd=0):
 def unchanged(terms, P, margin=M):
     """True if the tile is unchanged whatever its pixels (no shadow edge to snap, flat and lit):
     decided from the terms alone, before its neighbours are fetched."""
-    sz = math.sin(math.radians(P["el"]))
+    sz = dmath.sin(math.radians(P["el"]))
     core = (slice(margin, -margin or None),) * 2
     lam = sz + LAM_STRENGTH * (terms[core + (1,)] - sz)
     if not P["cast"]:
@@ -574,7 +577,7 @@ def relight_tile(rgb_m, terms, P, fd=0, margin=M):
     terms: lit, lam, blur at its pixels (float32 (n+2m)^2 x 3); P: region params; fd: shadow-snap
     feature downsampling (0 = no snap: the DEM mask as is). Returns (uint8 tile or None if
     unchanged, path: 'noop' | 'lambert' | 'fast' | 'edge')."""
-    sz = math.sin(math.radians(P["el"]))
+    sz = dmath.sin(math.radians(P["el"]))
     lam = sz + LAM_STRENGTH * (terms[..., 1] - sz)
     core = (slice(margin, -margin or None),) * 2
     lit, path, I = tile_lit(rgb_m, terms, P, fd)
@@ -617,12 +620,12 @@ def lonlat_of_px(X, Y, z):
     """lon, lat of global Web-Mercator pixel coordinates at zoom z."""
     w = TILE * 2.0 ** z
     lon = np.asarray(X, np.float64) / w * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(Y, np.float64) / w))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * np.asarray(Y, np.float64) / w))))
     return lon, lat
 
 
 def res_at(lat, z):
-    return 40075016.686 * math.cos(math.radians(lat)) / (TILE * 2 ** z)
+    return 40075016.686 * dmath.cos(math.radians(lat)) / (TILE * 2 ** z)
 
 
 def grid_pad(res):
@@ -788,7 +791,7 @@ class Deshadow:
         lat, lon = self._region_center(rk)
         la0, lo0 = self._center
         dy = (lat - la0) * 111320.0
-        dx = (lon - lo0) * 111320.0 * math.cos(math.radians(la0))
+        dx = (lon - lo0) * 111320.0 * dmath.cos(math.radians(la0))
         return math.hypot(dx, dy)
 
     def _enqueue(self, rk):
@@ -817,7 +820,7 @@ class Deshadow:
             return
         lat_r = math.radians(lat)
         x = (lon / 360.0 + 0.5) * w
-        y = (0.5 - math.asinh(math.tan(lat_r)) / (2 * math.pi)) * w
+        y = (0.5 - dmath.asinh(dmath.tan(lat_r)) / (2 * math.pi)) * w
         rpx = radius / res_at(lat, z)
         with self._lock:
             now = time.monotonic()

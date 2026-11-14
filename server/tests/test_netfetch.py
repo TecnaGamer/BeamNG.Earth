@@ -199,6 +199,22 @@ class TokenBucketTest(unittest.TestCase):
         self.assertEqual(len(tr.calls), 1)
 
 
+    def test_waits_on_our_own_limit_are_counted(self):
+        # (telemetry's "waited on our limit" / "refused by our limit": netfetch COUNTERS waited, wait_ms, limit_fail)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=1.0, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        f.get(url(USGS, 1))                             # waits ~1 s for the next token
+        t = f.host(USGS).total
+        self.assertEqual(t["waited"], 1)
+        self.assertGreaterEqual(t["wait_ms"], 900)
+        pol = nf.with_policy(nf.POLICIES, USGS, rate=0.01, burst=1.0, max_wait=5.0)
+        f, clock, sleep, tr = fetcher(policies=pol)
+        f.get(url())
+        with self.assertRaises(nf.RateLimited):
+            f.get(url(USGS, 1))
+        self.assertEqual(f.host(USGS).total["limit_fail"], 1)
+
     def test_a_pause_while_waiting_gives_up(self):
         """A demand request waiting for a token when another worker's request meets a Retry-After does
         not sleep out the pause and then fire (the breaker would allow one probe, not every waiter):
@@ -1065,6 +1081,39 @@ class ProxyTransportTest(unittest.TestCase):
                 self.assertEqual(len(made), 1)
                 self.assertEqual(made[0].netloc, "example.com")
 
+    def test_a_whole_file_for_a_range_is_not_read(self):
+        # the CDN once answered a 9 KB range of a 2.4 GB archive with the whole file (HTTP 200): not read, the
+        # connection dropped, a 200 with no body for the caller (its range check fails as before)
+        self._env()
+        self.assertTrue(nf._range_ignored({"Range": "bytes=100-9099"}, str(2366306078)))
+        self.assertFalse(nf._range_ignored({"Range": "bytes=0-1023"}, "4096"))        # (a small file sent whole)
+        self.assertFalse(nf._range_ignored({}, str(2366306078)))
+        with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
+            closed, read = [], []
+
+            class Conn:
+                def __init__(self, netloc, timeout=None, **kw):
+                    pass
+
+                def request(self, method, path, headers=None):
+                    pass
+
+                def getresponse(self):
+                    class R:
+                        status = 200
+                        def getheaders(self): return [("Content-Length", "2366306078")]
+                        def read(self): read.append(1); return b"x"
+                    return R()
+
+                def close(self):
+                    closed.append(1)
+
+            with mock.patch.object(nf.http.client, "HTTPSConnection", Conn):
+                st, hd, body = nf.HttpsTransport().request("https://example.com/a.pmtiles",
+                                                           {"Range": "bytes=100-9099"}, 20.0)
+            self.assertEqual((st, body, read), (200, b"", []))
+            self.assertTrue(closed)
+
     def test_https_proxy_uses_connect_tunnel(self):
         self._env(HTTPS_PROXY="http://proxy:8080")
         with mock.patch("netfetch.urllib.request.getproxies", return_value={}):
@@ -1189,5 +1238,5 @@ class RolesTest(unittest.TestCase):
     def test_sources_md_names_every_source(self):
         doc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "SOURCES.md"),
                    encoding="utf-8").read()
-        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h not in doc]
+        missing = [h for h, p in nf.POLICIES.items() if not p.denied and h.split("#", 1)[0] not in doc]
         self.assertEqual(missing, [])

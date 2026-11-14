@@ -4,6 +4,7 @@
 //! part's two ends against every other ground part's line) was ~1.5 s of a 16-tile probe at Penn Station. The same
 //! products, sums and comparisons in the same order as the numpy version (elementwise: bit for bit), np.interp's own
 //! formula and np.argmin's first-of-equals (a NaN first).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -24,7 +25,7 @@ fn clip(x: f64, lo: f64, hi: f64) -> f64 {
 fn arc(xy: &[[f64; 2]]) -> Vec<f64> {
     let mut s = vec![0.0f64; xy.len()];
     for k in 1..xy.len() {
-        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        s[k] = s[k - 1] + (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
     }
     s
 }
@@ -83,7 +84,7 @@ fn on_line(p: [f64; 2], xy: &[[f64; 2]], s: &[f64]) -> (f64, f64) {
         let num = (p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1];
         let den = nmax(ab[0] * ab[0] + ab[1] * ab[1], 1e-12);
         let t = clip(num / den, 0.0, 1.0);
-        let d = ((a[0] + t * ab[0]) - p[0]).hypot((a[1] + t * ab[1]) - p[1]);
+        let d = ((a[0] + t * ab[0]) - p[0]).dhypot((a[1] + t * ab[1]) - p[1]);
         // (np.argmin: the first NaN, else the first of the smallest)
         if k == usize::MAX || (!best.is_nan() && (d.is_nan() || d < best)) {
             best = d;

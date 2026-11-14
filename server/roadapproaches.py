@@ -5,6 +5,7 @@ context only; they do not change candidate locations or create synthetic roads.
 """
 import math
 import numpy as np
+import dnp
 
 
 class Context:
@@ -35,19 +36,19 @@ class Context:
             end = 0 if station < 0 else -1
             p = np.asarray(line[end])
             u = p[:2] - np.asarray(line[1 if end == 0 else -2])[:2]
-            u /= max(np.linalg.norm(u), 1e-9)
+            u /= max(dnp.norm(u), 1e-9)
             remaining = -station if station < 0 else station-length
             key = (math.floor(p[0]/2), math.floor(p[1]/2))
             candidates = []
             for x in range(key[0]-1, key[0]+2):
                 for y in range(key[1]-1, key[1]+2):
                     for j, e, q in self.ends.get((x, y), ()):
-                        if j in seen or np.linalg.norm(q[:2]-p[:2]) > 1.5:
+                        if j in seen or dnp.norm(q[:2]-p[:2]) > 1.5:
                             continue
                         other = self.rows[j]
                         v = np.asarray(other[2][1 if e == 0 else -2])[:2]-q[:2]
-                        v /= max(np.linalg.norm(v), 1e-9)
-                        alignment = float(u@v)
+                        v /= max(dnp.norm(v), 1e-9)
+                        alignment = float(dnp.matmul(u, v))
                         if alignment > .55:
                             candidates.append((alignment, str(other[0]), j, e))
             candidates.sort(key=lambda a: (-a[0], a[1], a[2]))

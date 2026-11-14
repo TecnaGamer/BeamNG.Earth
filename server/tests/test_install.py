@@ -128,6 +128,7 @@ class ModsAfterUpdate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.settings(d, {"disableModsAfterUpdate": True})
             with unittest.mock.patch.object(install, "MOD_SRC", d), \
+                    unittest.mock.patch.object(install.modtextures, "plan", return_value={}), \
                     unittest.mock.patch.object(install, "tree_hash", return_value="same"):
                 os.makedirs(os.path.join(d, "mods", "unpacked", install.MOD_NAME), exist_ok=True)
                 install.install_mod(d, True, dry_run=False, quiet=True, game_running=True)
@@ -236,7 +237,8 @@ class ModUpdateTimes(unittest.TestCase):
                 os.utime(os.path.join(dest, name), (old, old))
             for name in ("tex.png", "code.lua", "added.png"):
                 os.utime(os.path.join(src, name), (old + 50, old + 50))
-            with mock.patch.object(install, "MOD_SRC", src), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(install, "MOD_SRC", src), contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch.object(install.modtextures, "plan", return_value={}):
                 self.assertEqual(install.install_mod(user, True, dry_run=False, quiet=True), "updated")
             mtime = lambda name: os.stat(os.path.join(dest, name)).st_mtime     # noqa: E731
             self.assertEqual(mtime("tex.png"), old, "unchanged: the time of the copy it replaced")

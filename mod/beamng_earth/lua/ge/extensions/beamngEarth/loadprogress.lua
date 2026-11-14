@@ -19,10 +19,15 @@ M.PARTS = { { 'ground', 'ground' }, { 'roads', 'roads & buildings' }, { 'trees',
 
 local load = nil        -- { since, quietSince }
 
--- A load begins (a teleport asked for, the first place of a session); a load already on keeps its start.
-function M.start(now)
-  if not load then load = { since = now } end
+-- A load begins (a teleport asked for, the first place of a session); a load already on keeps its start. kind
+-- 'driving': the world fell behind a driving player (core: the server's catch-up boost or the edge guard's warning;
+-- the user, 2026-11-11: "the loading bar never comes back after it hits 100% while driving"): it ends once the world
+-- has caught up (info.behind false) for QUIET_S, not when every far tile is in (at speed they always are coming).
+function M.start(now, kind)
+  if not load then load = { since = now, kind = kind } end
 end
+
+function M.kind() return load and load.kind or nil end
 
 -- The load is dropped (the level ended, the server went away).
 function M.reset() load = nil end
@@ -38,6 +43,11 @@ function M.downloadText(net)
   local act, rate = tonumber(net[1]) or 0, tonumber(net[3]) or 0
   if act <= 0 then return nil end
   local s = act == 1 and 'downloading 1 file' or string.format('downloading %d files', act)
+  -- what most of them are, and whether the world's own request limit for that source holds them (the user,
+  -- 2026-11-11: players with gigabit lines read "1 MB/s" as their connection; it is the photo services' request
+  -- limits, many small tiles at a fixed number a second): 'downloading 14 files · satellite photos, rate-limited'
+  local what = type(net[4]) == 'string' and net[4] ~= '' and net[4] or nil
+  if what then s = s .. ' · ' .. what .. (net[5] == true and ', rate-limited' or '') end
   if rate >= 0.05 then s = s .. string.format(' · %.1f MB/s', rate) end
   return s
 end
@@ -79,6 +89,7 @@ function M.line(now, info)
     end
   end
   if not info.progress then busy = true end           -- (no counts from the server yet)
+  if load.kind == 'driving' and not info.behind then busy = false end   -- (caught up: the line ends after QUIET_S)
   if not busy then
     load.quietSince = load.quietSince or now
     if now - load.quietSince >= M.QUIET_S then load = nil; return nil end

@@ -8,6 +8,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 ON = os.environ.get("BNE_FR_ROADS", "off").lower() in {"on", "1", "true"}
 VERSION = "fr-roads-signs-v5"
@@ -39,11 +41,11 @@ def observed_lane_tags(feats, i, tags):
     if len(ll) < 2:
         return tags or None
     delta = ll[-1] - ll[0]
-    delta[0] *= math.cos(math.radians(float(ll[:, 1].mean())))
-    if np.linalg.norm(delta) < 1e-10:
+    delta[0] *= dmath.cos(math.radians(float(ll[:, 1].mean())))
+    if dnp.norm(delta) < 1e-10:
         return tags or None
     bearing = math.radians(OBSERVED_MIXED[way])
-    forward = float(delta @ np.array([math.sin(bearing), math.cos(bearing)])) > 0
+    forward = float(dnp.matmul(delta, np.array([dmath.sin(bearing), dmath.cos(bearing)]))) > 0
     tags["overtaking:forward"] = "no" if forward else "yes"
     tags["overtaking:backward"] = "yes" if forward else "no"
     tags["_fr_edge"] = "no"
@@ -136,12 +138,12 @@ def continuations(rows):
     for arms in furniture._arms(rows).values():
         best = {}
         for a in arms:
-            options = [(float(a[2] @ b[2]), b[0]) for b in arms if a[0] != b[0]
+            options = [(float(dnp.matmul(a[2], b[2])), b[0]) for b in arms if a[0] != b[0]
                        and a[1].oneway == b[1].oneway
                        and (not a[1].oneway or furniture._outbound(a) != furniture._outbound(b))]
             if options:
                 dot, other = min(options)
-                if dot <= -math.cos(math.radians(20)):
+                if dot <= -dmath.cos(math.radians(20)):
                     best[a[0]] = other
         for a, b in best.items():
             if best.get(b) == a:
@@ -150,13 +152,13 @@ def continuations(rows):
 
 
 def stations(pts):
-    return np.r_[0., np.cumsum(np.linalg.norm(np.diff(np.asarray(pts)[:, :2], axis=0), axis=1))]
+    return np.r_[0., np.cumsum(dnp.norm(np.diff(np.asarray(pts)[:, :2], axis=0), axis=1))]
 
 
 def at(pts, s):
     """Position and horizontal forward tangent, with duplicate nodes removed."""
     p = np.asarray(pts, dtype=float)
-    p = p[np.r_[True, np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
+    p = p[np.r_[True, dnp.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
     if len(p) < 2:
         return p[0].copy(), np.array([0., 1.])
     ss = stations(p)
@@ -164,13 +166,13 @@ def at(pts, s):
     i = min(int(np.searchsorted(ss, s, side="right")) - 1, len(p) - 2)
     t = (s - ss[i]) / (ss[i + 1] - ss[i])
     d = p[i + 1, :2] - p[i, :2]
-    return p[i] * (1 - t) + p[i + 1] * t, d / np.linalg.norm(d)
+    return p[i] * (1 - t) + p[i + 1] * t, d / dnp.norm(d)
 
 
 def sample(pts, values):
     """Batch version of at, so long features cost O(vertices + samples)."""
     p = np.asarray(pts, float)
-    p = p[np.r_[True, np.linalg.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
+    p = p[np.r_[True, dnp.norm(np.diff(p[:, :2], axis=0), axis=1) > 1e-6]]
     values = np.asarray(values, float)
     if len(p) < 2:
         return np.tile(p[0], (len(values), 1)), np.tile([0., 1.], (len(values), 1))
@@ -180,7 +182,7 @@ def sample(pts, values):
     t = ((values - ss[ii]) / (ss[ii + 1] - ss[ii]))[:, None]
     q = p[ii] * (1 - t) + p[ii + 1] * t
     d = p[ii + 1, :2] - p[ii, :2]
-    d /= np.linalg.norm(d, axis=1)[:, None]
+    d /= dnp.norm(d, axis=1)[:, None]
     return q, d
 
 
@@ -201,8 +203,8 @@ def bends(pts):
     p, _ = sample(pts, ss)
     b, _ = sample(pts, ss + 30.)
     u, v = p[:, :2] - a[:, :2], b[:, :2] - p[:, :2]
-    turns = np.arctan2(u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0], np.sum(u * v, axis=1))
-    keep = (np.minimum(np.linalg.norm(u, axis=1), np.linalg.norm(v, axis=1)) >= 10) & (np.abs(turns) >= math.radians(25))
+    turns = dnp.arctan2(u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0], np.sum(u * v, axis=1))
+    keep = (np.minimum(dnp.norm(u, axis=1), dnp.norm(v, axis=1)) >= 10) & (np.abs(turns) >= math.radians(25))
     candidates = list(zip(ss[keep].tolist(), turns[keep].tolist()))
     # Keep the strongest sample of each bend; no row of signs on one curve.
     groups = []
@@ -256,7 +258,7 @@ def recall_polygons(pts, s, direction):
 
     for a, b in zip(xy[:-1], xy[1:]):
         n = np.array([b[1] - a[1], a[0] - b[0]])
-        n = n / np.linalg.norm(n) * .075
+        n = n / dnp.norm(n) * .075
         yield world([a - n, b - n, b + n, a + n])
     yield world([(-.76, 1.45), (-.5, 3.), (.12, 1.85)])
 

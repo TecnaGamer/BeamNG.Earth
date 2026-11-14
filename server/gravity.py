@@ -46,6 +46,8 @@ from typing import NamedTuple
 import numpy as np
 
 import fast
+import dmath
+import dnp
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geodesy import A, F, B, E2, geodetic_to_ecef  # noqa: E402
@@ -57,7 +59,7 @@ OMEGA = 7.292115e-5              # rad/s
 GAMMA_E = 9.7803253359           # normal gravity on the equator, m/s^2
 GAMMA_P = 9.8321849378           # normal gravity at the poles, m/s^2
 K_SOMIGLIANA = B * GAMMA_P / (A * GAMMA_E) - 1     # 0.0019318526464 (TR8350.2: ...65241)
-M_RATIO = OMEGA ** 2 * A ** 2 * B / GM               # m = w^2 a^2 b / GM = 0.00344978650684
+M_RATIO = (OMEGA * OMEGA) * (A * A) * B / GM               # m = w^2 a^2 b / GM = 0.00344978650684
 LIN_ECC = math.sqrt(A * A - B * B)                   # E, linear eccentricity
 EP = LIN_ECC / B                                     # second eccentricity e'
 MGAL = 1e-5                                          # m/s^2
@@ -87,7 +89,7 @@ def normal_gravity(lat, h=0.0):
     Exact on the ellipsoid (1e-12). The height series is first order in f and m: against the exact
     closed form it is 1.1e-10 m/s^2 per metre off (0.05 mGal at 4.4 km, 0.11 mGal at 10 km).
     """
-    s2 = np.sin(np.radians(lat)) ** 2
+    s2 = dnp.sq(dnp.sin(np.radians(lat)))
     g0 = GAMMA_E * (1 + K_SOMIGLIANA * s2) / np.sqrt(1 - E2 * s2)
     h = np.asarray(h, dtype=np.float64)
     return g0 * (1 - 2 / A * (1 + F + M_RATIO - 2 * F * s2) * h + 3 * h * h / (A * A))
@@ -95,7 +97,7 @@ def normal_gravity(lat, h=0.0):
 
 def free_air_gradient(lat):
     """d(normal gravity)/dh on the ellipsoid, s^-2 (about -3.086e-6, i.e. -0.3086 mGal/m)."""
-    s2 = np.sin(np.radians(lat)) ** 2
+    s2 = dnp.sq(dnp.sin(np.radians(lat)))
     g0 = GAMMA_E * (1 + K_SOMIGLIANA * s2) / np.sqrt(1 - E2 * s2)
     return -2 * g0 / A * (1 + F + M_RATIO - 2 * F * s2)
 
@@ -113,7 +115,7 @@ def _qp_series(x):
     """q'(x) = 3 (1 + 1/x^2)(1 - atan(x)/x) - 1, same idea."""
     x2, s = x * x, 0.0
     for k in range(1, 40):
-        s += (-1) ** (k + 1) * 6 * x2 ** k / ((2 * k + 1) * (2 * k + 3))
+        s += (-1) ** (k + 1) * 6 * dnp.power(x2, k) / ((2 * k + 1) * (2 * k + 3))
     return s
 
 
@@ -129,25 +131,25 @@ def normal_gravity_exact(lat, h=0.0, vector=False):
     magnitude: above the ellipsoid the normal plumb line is curved, so north is not 0 there.
     """
     x, y, z = geodetic_to_ecef(lat, 0.0, h)
-    p2, z2, e2 = float(x * x + y * y), float(z * z), LIN_ECC ** 2
+    p2, z2, e2 = float(x * x + y * y), float(z * z), LIN_ECC * LIN_ECC
     rr = p2 + z2 - e2
     u = math.sqrt(0.5 * rr * (1 + math.sqrt(1 + 4 * e2 * z2 / (rr * rr))))
-    beta = math.atan2(z * math.sqrt(u * u + e2), u * math.sqrt(p2))
-    sb, cb = math.sin(beta), math.cos(beta)
+    beta = dmath.atan2(z * math.sqrt(u * u + e2), u * math.sqrt(p2))
+    sb, cb = dmath.sin(beta), dmath.cos(beta)
     w = math.sqrt((u * u + e2 * sb * sb) / (u * u + e2))
     q, qp = _q_series(LIN_ECC / u), _qp_series(LIN_ECC / u)
     ue = u * u + e2
-    g_u = -(GM / ue + OMEGA ** 2 * A ** 2 * LIN_ECC / ue * (qp / Q0) * (0.5 * sb * sb - 1 / 6)
-            - OMEGA ** 2 * u * cb * cb) / w
-    g_b = (-OMEGA ** 2 * A ** 2 / math.sqrt(ue) * (q / Q0) + OMEGA ** 2 * math.sqrt(ue)) * sb * cb / w
+    g_u = -(GM / ue + (OMEGA * OMEGA) * (A * A) * LIN_ECC / ue * (qp / Q0) * (0.5 * sb * sb - 1 / 6)
+            - (OMEGA * OMEGA) * u * cb * cb) / w
+    g_b = (-(OMEGA * OMEGA) * (A * A) / math.sqrt(ue) * (q / Q0) + (OMEGA * OMEGA) * math.sqrt(ue)) * sb * cb / w
     if not vector:
         return math.hypot(g_u, g_b)
     # unit vectors of increasing u and beta in the meridian plane (p, z), then onto (north, up)
     eu = np.array([u / math.sqrt(ue) * cb, sb])
     eb = np.array([-math.sqrt(ue) * sb, u * cb])
-    eu, eb = eu / np.linalg.norm(eu), eb / np.linalg.norm(eb)
+    eu, eb = eu / dnp.norm(eu), eb / dnp.norm(eb)
     g = g_u * eu - g_b * eb       # TR8350.2's gamma_beta is the component towards decreasing beta
-    sp, cp = math.sin(math.radians(lat)), math.cos(math.radians(lat))
+    sp, cp = dmath.sin(math.radians(lat)), dmath.cos(math.radians(lat))
     return float(-sp * g[0] + cp * g[1]), float(cp * g[0] + sp * g[1])
 
 
@@ -161,7 +163,7 @@ def normal_zonal_coefficients(nmax=20):
     c = np.zeros(nmax + 1)
     c[0] = 1.0
     for n in range(1, nmax // 2 + 1):
-        j2n = (-1) ** (n + 1) * 3 * E2 ** n / ((2 * n + 1) * (2 * n + 3)) * (1 - n + 5 * n * j2 / E2)
+        j2n = (-1) ** (n + 1) * 3 * dnp.power(E2, n) / ((2 * n + 1) * (2 * n + 3)) * (1 - n + 5 * n * j2 / E2)
         c[2 * n] = -j2n / math.sqrt(4 * n + 1)
     return c
 
@@ -220,7 +222,7 @@ class GravityModel:
         ds = np.array(s[:L], dtype=np.float64)
         dc[0] = 1.0
         nz = normal_zonal_coefficients(self.NZONAL)
-        self.zonal = nz * (GM / self.gm) * (A / self.a) ** np.arange(len(nz))
+        self.zonal = nz * (GM / self.gm) * dnp.power(A / self.a, np.arange(len(nz)))
         k = min(len(nz), nmax + 1)
         zidx = np.arange(k) * (np.arange(k) + 1) // 2
         dc[zidx] -= self.zonal[:k]
@@ -281,14 +283,14 @@ class GravityModel:
         # sectoral P_mm = cos(phi)^m * prod: keep log(prod); P_m+1,m = sqrt(2m+3) t P_mm
         k = np.arange(nmax + 1, dtype=np.float64)
         steps = np.zeros(nmax + 1)
-        steps[1:] = 0.5 * np.log((2 * k[1:] + 1) / (2 * k[1:]))
-        steps[1] = 0.5 * math.log(3.0)
+        steps[1:] = 0.5 * dnp.log((2 * k[1:] + 1) / (2 * k[1:]))
+        steps[1] = 0.5 * dmath.log(3.0)
         self.log_sect = np.cumsum(steps)
         self.sect_next = np.sqrt(2 * k + 3)
         # |P_n| <= (|ra| + |rb|) max(|P_n-1|, |P_n-2|): renormalising every `check_every` degrees
         # keeps every scaled column below RESCALE^2 = 1e200
         growth = max(float(np.max(self.ra + self.rb)), float(self.sect_next[-1]), 2.0)
-        self.check_every = max(1, int(100 / math.log10(growth)))
+        self.check_every = max(1, int(100 / dmath.log10(growth)))
         self.off = (np.arange(nmax + 2) * np.arange(1, nmax + 3)) // 2
         # dP_nm/dtheta = da * P_n,m-1 - db * P_n,m+1  (theta = colatitude, geodesy normalisation)
         da = (n + m) * (n - m + 1)
@@ -329,11 +331,11 @@ class GravityModel:
         x, y, z = (float(v) for v in geodetic_to_ecef(lat, lon, h))
         p = math.hypot(x, y)
         r = math.hypot(p, z)
-        lam = math.atan2(y, x)
+        lam = dmath.atan2(y, x)
         t, u = z / r, p / r
         out, zon = self._row_sums(t, u, lam)
         out = out.astype(np.float64)
-        cl, sl = math.cos(lam), math.sin(lam)
+        cl, sl = dmath.cos(lam), dmath.sin(lam)
         n = np.arange(self.nmax + 1, dtype=np.float64)
         s = {"a": out[:, 0, 0] + out[:, 1, 1],                 # sum_m P (C cos + S sin)
              "l": out[:, 0, 3] - out[:, 1, 2],                 # sum_m m P (S cos - C sin)
@@ -344,8 +346,8 @@ class GravityModel:
 
         # geoid: T on the ellipsoid along the same radius, Bruns, plus NGA's correction and offset
         re = A * B / math.hypot(B * u, A * t)
-        t0 = self.gm / re * float((self.a / re) ** n @ s["a"]) - (self.gm - GM) / re  # NGA: no 1/r
-        lat_e = math.degrees(math.atan2(t, u * (1 - E2)))            # geodetic lat of that point
+        t0 = self.gm / re * float(dnp.matmul(dnp.power(self.a / re, n), s["a"])) - (self.gm - GM) / re  # NGA: no 1/r
+        lat_e = math.degrees(dmath.atan2(t, u * (1 - E2)))            # geodetic lat of that point
         corr = float(np.sum(out[:, 0, 8] + out[:, 1, 9])) if out.shape[2] > 8 else 0.0
         geoid = t0 / normal_gravity_exact(lat_e, 0.0) + corr + self.height_offset
         if msl:
@@ -354,15 +356,15 @@ class GravityModel:
             p = math.hypot(x, y)
             r = math.hypot(p, z)
             t, u = z / r, p / r
-        q = (self.a / r) ** n
+        q = dnp.power(self.a / r, n)
         gr = self.gm / r
-        pot = {"T": gr * float(q @ s["a"]),
-               "dT_dr": -gr / r * float(q @ ((n + 1) * s["a"])),
-               "dT_dphi": gr * float(q @ s["d"]),
-               "dT_dlam": gr * float(q @ s["l"])}
+        pot = {"T": gr * float(dnp.matmul(q, s["a"])),
+               "dT_dr": -gr / r * float(dnp.matmul(q, (n + 1) * s["a"])),
+               "dT_dphi": gr * float(dnp.matmul(q, s["d"])),
+               "dT_dlam": gr * float(dnp.matmul(q, s["l"]))}
         qz = q[:len(zon)]
-        du_dr = -gr / r * float(qz @ ((nz + 1) * za))
-        du_dphi = gr * float(qz @ zd)
+        du_dr = -gr / r * float(dnp.matmul(qz, (nz + 1) * za))
+        du_dphi = gr * float(dnp.matmul(qz, zd))
         return lat, h, r, t, u, pot, du_dr, du_dphi, geoid
 
     def disturbing_potential(self, lat, lon, h=0.0):
@@ -375,14 +377,14 @@ class GravityModel:
         """The full field at one point. ``h`` is ellipsoidal unless ``msl`` (then h_ell = h + N)."""
         lat, h, r, t, u, pot, du_dr, du_dphi, geoid = self._evaluate(lat, lon, h, msl)
         # gradients in the geocentric spherical frame (east, north, radial); normal = U + centrifugal
-        gam = np.array([0.0, du_dphi / r - OMEGA ** 2 * r * u * t, du_dr + OMEGA ** 2 * r * u * u])
+        gam = np.array([0.0, du_dphi / r - (OMEGA * OMEGA) * r * u * t, du_dr + (OMEGA * OMEGA) * r * u * u])
         dlt = np.array([pot["dT_dlam"] / (r * u), pot["dT_dphi"] / r, pot["dT_dr"]])
-        d = math.radians(lat) - math.atan2(t, u)                    # geodetic - geocentric latitude
-        cd, sd = math.cos(d), math.sin(d)
+        d = math.radians(lat) - dmath.atan2(t, u)                    # geodetic - geocentric latitude
+        cd, sd = dmath.cos(d), dmath.sin(d)
         rot = np.array([[1, 0, 0], [0, cd, -sd], [0, sd, cd]])      # (e, n_c, r) -> (e, n, up)
-        gvec = rot @ (gam + dlt)
-        dvec = rot @ dlt
-        g = float(np.linalg.norm(gvec))
+        gvec = dnp.matmul(rot, gam + dlt)
+        dvec = dnp.matmul(rot, dlt)
+        g = float(dnp.norm(gvec))
         normal = normal_gravity_exact(lat, h)
         rad2as = 180 / math.pi * 3600
         return GravityField(
@@ -650,9 +652,9 @@ def egm2008_cached(cache_dir=CACHE_DIR):
 def distance_m(lat1, lon1, lat2, lon2):
     """Great-circle distance in m (spherical Earth; plenty for the recompute rule)."""
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    a = (math.sin((p2 - p1) / 2) ** 2
-         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
-    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+    a = (dnp.sq(dmath.sin((p2 - p1) / 2))
+         + dmath.cos(p1) * dmath.cos(p2) * dnp.sq(dmath.sin(math.radians(lon2 - lon1) / 2)))
+    return 2 * 6371008.8 * dmath.asin(min(1.0, math.sqrt(a)))
 
 
 class Provider:

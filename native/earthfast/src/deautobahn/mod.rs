@@ -3,6 +3,7 @@
 //! 2023 (via ARS 15/2024, BASt dWiSta 2022, the Hessen LWBA) and ZTV-ING; the design is
 //! docs/research/2026-11-08-german-autobahn-signs-design.md.
 #![allow(dead_code)]
+use crate::dm::Dm;
 
 pub(crate) mod content;
 pub(crate) mod stations;
@@ -147,7 +148,7 @@ pub fn autobahn_signs<'py>(py: Python<'py>, raw: Vec<String>, junctions: PyReado
     let (cx, cy) = ((tile[0] + tile[2]) / 2.0, (tile[1] + tile[3]) / 2.0);
     let mut order: Vec<(f64, usize)> = (0..n).filter(|&j| poff[j + 1] > poff[j]).map(|j| {
         let r = poff[j] as usize;
-        ((pr[[r, pc("x")]] - cx).hypot(pr[[r, pc("y")]] - cy), j)
+        ((pr[[r, pc("x")]] - cx).dhypot(pr[[r, pc("y")]] - cy), j)
     }).collect();
     order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
     let mut all = Mesh { p: Vec::new(), t: Vec::new(), uv: Vec::new(), mi: Vec::new(), centre: [0.0; 3],
@@ -222,7 +223,7 @@ pub fn autobahn_signs<'py>(py: Python<'py>, raw: Vec<String>, junctions: PyReado
                 }
             };
             let Some(a) = assembly else { continue };
-            let len = geo.dx.hypot(geo.dy);
+            let len = geo.dx.dhypot(geo.dy);
             if !(len > 1e-9 && geo.x.is_finite() && geo.y.is_finite() && geo.road_z.is_finite()) { continue; }
             let (dx, dy) = (geo.dx / len, geo.dy / len);
             let (ax, ay) = (geo.x + dy * a.anchor, geo.y - dx * a.anchor);

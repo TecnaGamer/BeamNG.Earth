@@ -16,6 +16,7 @@ tubes' mouths being the way in. Pure, deterministic."""
 import os
 
 import numpy as np
+import dnp
 
 # Off by default (merged from PR #987 behind a switch: 1.1-1.37x the triangles of every road / building tile in the
 # PR's own counts, and a Python pass over every mesh at its write): BNE_WATERTIGHT=on closes the meshes (cdae.write),
@@ -125,11 +126,11 @@ def open_loops(P, T):
     area, per, own = {}, {}, []
     for i, loop in enumerate(ls):
         Q = P[loop]
-        own.append(np.linalg.norm(np.cross(Q, np.roll(Q, -1, 0)).sum(0)) * 0.5 >= SLIT_M2)  # (a slit on its own)
+        own.append(dnp.norm(np.cross(Q, np.roll(Q, -1, 0)).sum(0)) * 0.5 >= SLIT_M2)  # (a slit on its own)
         area[root(i)] = area.get(root(i), 0.0) + np.cross(Q, np.roll(Q, -1, 0)).sum(0) * 0.5
-        per[root(i)] = per.get(root(i), 0.0) + float(np.linalg.norm(np.roll(Q, -1, 0) - Q, axis=1).sum())
+        per[root(i)] = per.get(root(i), 0.0) + float(dnp.norm(np.roll(Q, -1, 0) - Q, axis=1).sum())
     return [loop for i, loop in enumerate(ls)
-            if own[i] and np.linalg.norm(area[root(i)]) >= max(SLIT_M2, SLIT_W_M * 0.5 * per[root(i)])]
+            if own[i] and dnp.norm(area[root(i)]) >= max(SLIT_M2, SLIT_W_M * 0.5 * per[root(i)])]
 
 
 def _tri2d(xy):
@@ -149,12 +150,12 @@ def _tri2d(xy):
 def _cap(Q, want):
     """Triangles (into Q (k, 3)) closing the ring Q, facing want: ear clipping in the plane normal to want, else a fan from
     the mean point (index k: the caller adds it). (tris, fanned)."""
-    n = want / (np.linalg.norm(want) or 1.0)
+    n = want / (dnp.norm(want) or 1.0)
     u = np.cross(n, [0.0, 0.0, 1.0] if abs(n[2]) < 0.9 else [1.0, 0.0, 0.0])
-    u /= np.linalg.norm(u)
+    u /= dnp.norm(u)
     v = np.cross(n, u)
     c = Q.mean(0)
-    xy = np.c_[(Q - c) @ u, (Q - c) @ v]
+    xy = np.c_[dnp.matmul(Q - c, u), dnp.matmul(Q - c, v)]
     t, whole = _tri2d(xy)
     k = len(Q)
     if whole:               # a closed fan: ring edges used once, the inner ones twice (a ring folded in the plane fools
@@ -170,7 +171,7 @@ def _cap(Q, want):
     # each triangle facing want
     R = np.vstack([Q, c])
     nn = np.cross(R[t[:, 1]] - R[t[:, 0]], R[t[:, 2]] - R[t[:, 0]])
-    flip = nn @ n < 0
+    flip = dnp.matmul(nn, n) < 0
     t[flip] = t[flip][:, ::-1]
     return t, not whole
 
@@ -182,7 +183,7 @@ def _coarse(Q, tol=BOTTOM_TOL_M):
     k = len(Q)
     if k <= 4:
         return np.arange(k)
-    f = int(np.argmax(np.linalg.norm(Q - Q[0], axis=1)))
+    f = int(np.argmax(dnp.norm(Q - Q[0], axis=1)))
     a = sidewalks.simplify(Q[:f + 1], tol)
     b = sidewalks.simplify(np.vstack([Q[f:], Q[:1]]), tol) + f
     keep = np.unique(np.r_[a, b[b < k]])
@@ -226,7 +227,7 @@ def _close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M, open_tris=Non
         L = np.asarray(loop, np.int64)
         Q = P[L]
         n = np.cross(Q, np.roll(Q, -1, 0)).sum(0) * 0.5
-        nl = np.linalg.norm(n)
+        nl = dnp.norm(n)
         if nl < SLIT_M2:        # a T-junction's slit (collinear edges along another's): no gap to close
             continue
         mat = int(tm[tri_of[L[0]]]) if tm is not None else 0

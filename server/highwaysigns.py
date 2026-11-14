@@ -18,6 +18,7 @@ import roads
 import signroads
 import signlayout
 import throughsigns
+import travelboards
 
 log = logging.getLogger('earthd.highwaysigns')
 
@@ -30,6 +31,7 @@ class Source:
         self.md = md
         self.shields = legacyshields.Source(getattr(md, 'cache_dir', None))
         self.repeaters = routerepeaters.Source(md.raw_dir, md.fetcher) if hasattr(md, 'raw_dir') else None
+        self.boards = travelboards.Source(md) if hasattr(md,'raw_dir') and hasattr(md,'cell') else None
         self.contexts = {}
         self.lock = threading.Lock()
         self.warned = -float('inf')
@@ -41,7 +43,8 @@ class Source:
         """The sign data's build in use, or None (none yet)."""
         legacy = self.shields.version()
         version = self.tags.version()
-        return (version, legacy) if legacy else version
+        result = (version, legacy) if legacy else version
+        return (result,travelboards.version()) if self.boards is not None else result
 
     def context(self, urban, widths):
         key = (urban, widths)
@@ -52,7 +55,7 @@ class Source:
                     urban, widths)
             return self.contexts[key]
 
-    def objects(self, frame, box):
+    def objects(self, frame, box, board_box=None):
         """The sign records in box (x0, y0, x1, y1 of frame), in the sign modules' form."""
         # Bundled references remain available when the optional weekly index is
         # unpublished, empty here, or temporarily unavailable.
@@ -69,6 +72,20 @@ class Source:
             if now - self.warned >= 60.:
                 self.warned = now
                 log.warning('OSM signs unavailable; bundled mile markers remain: %s: %s', type(error).__name__, error)
+        if self.boards is not None:
+            try:
+                bla,blo=lat,lon
+                if board_box is not None:
+                    bx0,by0,bx1,by1=board_box
+                    bla,blo,_=frame.enu_to_geodetic(np.array([bx0,bx1,bx0,bx1]),np.array([by0,by0,by1,by1]),0.)
+                objects += self.boards.query(float(np.min(blo)),float(np.min(bla)),float(np.max(blo)),float(np.max(bla)))
+            except CancelledError:
+                raise
+            except Exception as error:
+                now=time.monotonic()
+                if now-self.warned>=60.:
+                    self.warned=now
+                    log.warning('Welcome/recreation source unavailable; other signs continue: %s',error)
         if self.repeaters is not None:
             try:
                 objects += self.repeaters.query(float(np.min(lon)), float(np.min(lat)),
@@ -80,6 +97,7 @@ class Source:
                 if now - self.warned >= 60.:
                     self.warned = now
                     log.warning('OSM route repeaters unavailable; indexed signs remain: %s', error)
+        objects += travelboards.park_exit_boards(objects)
         return objects
 
 
@@ -88,7 +106,12 @@ def tile_objects(source, frame, tx, ty):
     exitsigns.APPROACH_M before its junction)."""
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     m = max(exitsigns.QUERY_MARGIN + signlayout.MARGIN, routerepeaters.HALO_M)
-    return source.objects(frame, (x0 - m, y0 - m, x1 + m, y1 + m))
+    # Travel-board records own their upstream placement cell already; they do
+    # not need the exit junction/reassurance-marker search radius. Expanding
+    # forest scans by that radius was blocking the single sign-stream worker.
+    b=signlayout.MARGIN
+    return source.objects(frame, (x0 - m, y0 - m, x1 + m, y1 + m),
+                          board_box=(x0-b,y0-b,x1+b,y1+b))
 
 
 def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False, mph=True):
@@ -134,7 +157,8 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
     return ([s for s in exits if signlayout.owns(box, s)], [s for s in overheads if signlayout.owns(box, s)])
 
 
-def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None, french=False):
+def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None, french=False,
+               out_dir=None, vfs_dir=None, faces=None):
     """Return (exit mesh, mile-marker mesh); optional scenery cannot stop road generation."""
     source = getattr(md, 'highway_signs', None)
     if source is None:
@@ -166,7 +190,15 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             exits=[s for s in exits if euguardrails.country_at(frame,s['centre'])=='FR']
             overheads=[s for s in overheads if euguardrails.country_at(frame,s['centre'])=='FR']
             return frroadmesh.build_highways(exits,overheads,origin),None
-        return (plazas.merge(throughsigns.build(exits, overheads, origin), routemarkers.build(shields, origin)),
+        boards=None
+        try:
+            boards=travelboards.build_tile(md,frame,objects,context,box,elev,chunks,out_dir,vfs_dir,
+                                          faces if faces is not None else {},exits+overheads+shields)
+        except CancelledError:
+            raise
+        except Exception as error:
+            log.warning('Welcome/recreation boards unavailable; other signs continue: %s',error)
+        return (plazas.merge(plazas.merge(throughsigns.build(exits, overheads, origin), routemarkers.build(shields, origin)),boards),
                 milemarkers.build(miles, origin))
     except CancelledError:
         raise

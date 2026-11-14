@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
+import dnp
 
 TILE_MIN = 2048.0           # the sea's tiles: 6 inches off the curve at the corners of the smallest
 PLAN_SQUARE = 512.0         # the server plans again when the player enters another square of this size
@@ -129,7 +130,7 @@ def road_points(frame, lines, step=LOW_ROAD_STEP_M):
     e, nn, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
     q = np.c_[np.asarray(e, np.float64).reshape(-1), np.asarray(nn, np.float64).reshape(-1)]
     first = np.r_[0, np.cumsum(n)[:-1]]
-    seg = np.r_[0.0, np.hypot(*np.diff(q, axis=0).T)]
+    seg = np.r_[0.0, dnp.hypot(*np.diff(q, axis=0).T)]
     seg[first] = 0.0                        # (a line starts afresh)
     arc = np.cumsum(seg)
     length = arc[first + n - 1] - arc[first]
@@ -148,7 +149,7 @@ def low_points(frame, x, y, pts, ground_at, sea_at, raw=None, radius=LOW_ROAD_RA
     (sea_at(lat, lon) -> bool; a road on a pier the DEM has as water is sea). raw ((n,): the raw DEM at pts, cheaper
     than ground_at; optional): only the points under SEA_E + LOW_ROAD_RAW_M there are graded."""
     pts = np.asarray(pts, np.float64).reshape(-1, 2)
-    keep = np.hypot(pts[:, 0] - x, pts[:, 1] - y) <= radius
+    keep = dnp.hypot(pts[:, 0] - x, pts[:, 1] - y) <= radius
     if raw is not None:
         keep &= np.asarray(raw, np.float64).reshape(-1) < SEA_E + LOW_ROAD_RAW_M
     q = pts[keep]
@@ -266,7 +267,7 @@ def _plane(u, v, z):
     if len(z) < 3:
         return float(np.median(z)), 0.0, 0.0
     A = np.stack([np.ones_like(u), u, v], -1)
-    sol, _, rank, _ = np.linalg.lstsq(A, z, rcond=None)
+    sol, _, rank, _ = dnp.lstsq(A, z, rcond=None)
     if rank < 3:
         return float(np.median(z)), 0.0, 0.0
     return float(sol[0]), float(sol[1]), float(sol[2])

@@ -12,6 +12,7 @@ from collections import namedtuple, OrderedDict
 import threading
 
 import numpy as np
+import dnp
 
 import mapcells
 import mapgeom
@@ -19,7 +20,7 @@ import railtags
 import roads
 import signcontext
 
-Spec = namedtuple('SignRoad', 'width cls oneway dir link kmh', defaults=(False, None))
+Spec = namedtuple('SignRoad', 'width cls oneway dir link kmh walk sides', defaults=(False, None, 0., ()))
 NEIGHBOURHOODS = 64             # combined rows kept (Context._hoods)
 CELL_FRAMES = 4                 # anchors a cell keeps rows for
 
@@ -63,8 +64,9 @@ def cell_specs(feats, urban=None, widths=None, left_hand=False):
     return got
 
 
-def spec(value, link=False):
-    return Spec(value.width, value.cls, value.oneway, value.dir, link, value.kmh)
+def spec(value, link=False, left_hand=False):
+    sides = roads.walk_sides(value, left_hand) if roads.has_sidewalks(value) else ()
+    return Spec(value.width, value.cls, value.oneway, value.dir, link, value.kmh, value.walk, sides)
 
 
 def cross(points):
@@ -90,7 +92,7 @@ def feature_id(feats, i):
 
 def outline(value, line, frame=None, left_hand=False, link=False):
     """Use the beta renderer's centreline, width and mitered offsets unchanged."""
-    return spec(value, link), line, value.width
+    return spec(value, link, left_hand), line, value.width
 
 
 def polygon(line, width):
@@ -145,7 +147,7 @@ class Context(signcontext.Context):
         if not len(points):
             return Pavements()
         pad = margin / 110540.
-        lon_pad = pad / max(.01, float(np.cos(np.radians(points[:, 1])).min()))
+        lon_pad = pad / max(.01, float(dnp.cos(np.radians(points[:, 1])).min()))
         keys = tuple(mapcells.cells_near_points(points[:, 1], points[:, 0], pad, lon_pad))
         hood = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), keys)
         with self.lock:

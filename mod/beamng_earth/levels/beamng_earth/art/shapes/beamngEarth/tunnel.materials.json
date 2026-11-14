@@ -682,5 +682,32 @@
     ],
     "groundType": "METAL",
     "translucent": false
+  },
+  "bne_portal_collar": {
+    "name": "bne_portal_collar",
+    "mapTo": "bne_portal_collar",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1b8b0786-fcf3-5581-b6eb-a989a3e65ca7",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1.0,
+          0.99,
+          0.96,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
+    "translucent": false
   }
 }

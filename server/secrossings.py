@@ -18,6 +18,7 @@ import logging
 import math
 
 import numpy as np
+import dnp
 
 import furniture
 import junctions
@@ -191,15 +192,15 @@ def place(roads, found, on=None):
     for x, y, what in found["crossings"]:
         t = np.clip(((np.array([x, y]) - a[:, :2]) * d).sum(1) / l2, 0.0, 1.0)
         q = a[:, :2] + d * t[:, None]
-        off = np.hypot(q[:, 0] - x, q[:, 1] - y)
+        off = dnp.hypot(q[:, 0] - x, q[:, 1] - y)
         i = int(np.argmin(off))
         if off[i] > NODE_NEAR_M:
             continue                    # (on a footway, or a road not in this tile's list)
         fid, spec, _ = lines[own[i]]
         c = q[i]
-        if len(meet) and np.hypot(*(meet - c).T).min() < ON_JUNCTION_M:
+        if len(meet) and dnp.hypot(*(meet - c).T).min() < ON_JUNCTION_M:
             continue
-        if any(f == fid and np.hypot(*(c - e)) < ONE_CROSSING_M for f, e in taken):
+        if any(f == fid and dnp.hypot(*(c - e)) < ONE_CROSSING_M for f, e in taken):
             continue
         taken.append((fid, c))
         u = d[i] / float(np.sqrt(l2[i]))

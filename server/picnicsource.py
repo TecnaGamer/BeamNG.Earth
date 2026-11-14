@@ -102,7 +102,11 @@ class Source:
             if cached is not None:
                 return cached
             try:
-                feats = features_of(self._query(remote, key.bounds(), kind))
+                rows = _rows_load(remote, key)
+                if rows is None:
+                    rows = self._query(remote, key.bounds(), kind)
+                    _rows_save(remote, key, rows)
+                feats = features_of(rows)
             except rangeread.Changed:
                 if attempt:
                     raise
@@ -174,26 +178,8 @@ class Source:
             got = self._meta
         if got is not None and got[0] is remote:
             return got[1]
-        tail = remote.read(max(0, remote.size - overture.FOOTER_GUESS), remote.size, kind)
-        n = int.from_bytes(tail[-8:-4], "little")
-        if n + 8 > len(tail):
-            remote.read(remote.size - n - 8, remote.size, kind)
-        meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
-            dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
-            ORDER BY row_group_id, column_id""").fetchall()
-        groups, first = {}, 0
-        for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
-            g = groups.get(rg)
-            if g is None:
-                g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
-                first += nrows
-            offs = [o for o in (dict_off, data_off) if o]
-            if not offs:
-                continue
-            top, leaf = col.split(", ")[0], col.split(", ")[-1]
-            g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
-            if top == "bbox":
-                g["bbox"][leaf] = (smin, smax)
+        # (parsed once per version on disk, as osmtags does: each server process parsed the planet file's footer)
+        groups = overture.parquet_row_groups(con, uri, remote, kind)
         with self._lock:
             self._meta = (remote, groups)
         return groups
@@ -250,6 +236,33 @@ class Source:
                 continue
             out.append((int(fid), leisure, amenity, tourism, bytes(geom)))
         return out
+
+
+def _rows_path(remote, key):
+    return os.path.join(remote.cache_dir, "cells", str(key.z), str(key.x), f"{key.y}.json")
+
+
+def _rows_load(remote, key):
+    """A cell's picnic rows kept from an earlier read of this version (_rows_save), or None. Every server process
+    queried each cell's row groups again (a scan of the POI file's few columns per cell, ~1.3 CPU-s of a warm Le Mans
+    block + 4 road tiles, 2026-11-11), and every run after the first."""
+    try:
+        with open(_rows_path(remote, key), encoding="utf-8") as f:
+            return [(int(fid), le, am, to, bytes.fromhex(g)) for fid, le, am, to, g in json.load(f)]
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _rows_save(remote, key, rows):
+    path = _rows_path(remote, key)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump([[int(fid), le, am, to, bytes(g).hex()] for fid, le, am, to, g in rows], f)
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError) as e:
+        log.debug("picnic rows of %s not kept: %s", key, e)
 
 
 def _candidates(groups, bounds):

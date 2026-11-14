@@ -29,7 +29,7 @@
     "persistentId": "c3fe57b4-4f25-5707-b913-742989bdc1d0",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_am.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_am.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -53,7 +53,7 @@
     "persistentId": "176f0298-24cc-5fea-94fb-32eb3c5fd9fb",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_at.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_at.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -77,7 +77,7 @@
     "persistentId": "938b7309-8daf-5b99-b144-474b546013e1",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ba.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ba.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -101,7 +101,7 @@
     "persistentId": "d8128952-bf5e-5055-852c-a89d18ae37d9",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_be.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_be.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -125,7 +125,7 @@
     "persistentId": "f2226d78-e8a5-5cc0-8904-76f853e23229",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_bg.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_bg.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -149,7 +149,7 @@
     "persistentId": "9905f243-a2fc-5df4-a246-4aafe46c33f1",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ch.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ch.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -173,7 +173,7 @@
     "persistentId": "2c43569a-c411-53d6-b096-ab723a21f4f8",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cy.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cy.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -197,7 +197,7 @@
     "persistentId": "a008c3ce-f614-521b-ba98-f9f0335e02d2",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cz.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cz.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -221,7 +221,7 @@
     "persistentId": "bd0634e2-17fb-5c02-9df7-0ff8838e54ff",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_de.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_de.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -245,7 +245,7 @@
     "persistentId": "7fea6273-03ab-5bb7-aa5d-f8589213a97f",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_dk.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_dk.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -269,7 +269,7 @@
     "persistentId": "2330d05f-cb96-58e9-8e66-2d76997797a4",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ee.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ee.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -293,7 +293,7 @@
     "persistentId": "e88dd895-afe4-5858-8bbf-17c6fbf2c1d0",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_es.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_es.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -317,7 +317,7 @@
     "persistentId": "e1e23e69-ecc7-5374-b2e9-34f0efdc3fe0",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fi.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fi.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -341,7 +341,7 @@
     "persistentId": "91af71af-0bfe-5264-8732-9bf7755ebf18",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fr.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fr.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -365,7 +365,7 @@
     "persistentId": "3a115681-1f3e-541b-b739-7ba683162221",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gb.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gb.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -389,7 +389,7 @@
     "persistentId": "b62064c0-65d2-5544-8834-5f8b935dc37e",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ge.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ge.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -413,7 +413,7 @@
     "persistentId": "990054e3-773c-5b60-9fb9-ab131bd4fae7",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gr.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gr.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -437,7 +437,7 @@
     "persistentId": "3460d5ea-4b6f-54ec-95ac-354ea0c1ae17",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hr.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hr.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -461,7 +461,7 @@
     "persistentId": "7ec06a7e-b60b-559c-b07c-5433df8b3d1f",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hu.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hu.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -485,7 +485,7 @@
     "persistentId": "99789452-d8dc-5b74-9b5d-92f61b7b8a06",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ie.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ie.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -509,7 +509,7 @@
     "persistentId": "5fec9170-3c1a-5fab-9a08-731b3a282ece",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_is.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_is.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -533,7 +533,7 @@
     "persistentId": "eff74d51-dce9-5432-a188-a154d20ee7a4",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_it.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_it.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -557,7 +557,7 @@
     "persistentId": "093372f5-227b-56d0-80d6-b73f37f03bac",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lt.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lt.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -581,7 +581,7 @@
     "persistentId": "7620d492-3938-51fc-ae3c-35e0d4eceed9",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lu.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lu.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -605,7 +605,7 @@
     "persistentId": "12b2b454-1e61-5145-955c-17b5da86d859",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lv.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lv.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -629,7 +629,7 @@
     "persistentId": "f73ded1b-5373-5af9-a255-10c4717b06d3",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_md.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_md.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -653,7 +653,7 @@
     "persistentId": "cad65255-8efc-5689-8307-c1f9eb1a49a1",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_me.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_me.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -677,7 +677,7 @@
     "persistentId": "6d3b7af1-ebe7-579f-82d3-42aeb86e7077",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_mk.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_mk.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -701,7 +701,7 @@
     "persistentId": "87c79376-33a9-56ff-bf4a-85498890351d",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_nl.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_nl.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -725,7 +725,7 @@
     "persistentId": "0c66fa76-9ffc-5414-b4c6-4f591be38ff3",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_no.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_no.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -749,7 +749,7 @@
     "persistentId": "dcd206ae-c5eb-54b4-b189-917bd5e75051",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pl.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pl.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -773,7 +773,7 @@
     "persistentId": "d0859c2d-9869-5178-b4c3-7fbc58c8fd02",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pt.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pt.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -797,7 +797,7 @@
     "persistentId": "d30d23d6-a9af-5391-912a-b9e4c3b949ef",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ro.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ro.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -821,7 +821,7 @@
     "persistentId": "4ca1ea13-880e-5224-8b3b-fe821e5c478c",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_rs.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_rs.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -845,7 +845,7 @@
     "persistentId": "d08379d1-9b74-5692-a4b8-cb7646fc2c7f",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ru.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ru.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -869,7 +869,7 @@
     "persistentId": "1a003b9f-f65b-5d2c-b710-0bd01305fa92",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_se.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_se.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -893,7 +893,7 @@
     "persistentId": "fc1e0c47-6ed2-5f97-ac45-3ac6b587ef70",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_si.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_si.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -917,7 +917,7 @@
     "persistentId": "2312e348-b099-5cbb-8a8d-254850976121",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_sk.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_sk.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -941,7 +941,7 @@
     "persistentId": "eabea852-aaca-599c-a53f-4edc84c8d836",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_tr.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_tr.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -965,7 +965,7 @@
     "persistentId": "a5b4cf19-a38c-50fc-8f52-fa75cd4c0fe4",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ua.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ua.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -989,7 +989,7 @@
     "persistentId": "41b7377e-e4fb-5d35-9654-17d7c635ee84",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_vienna.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_vienna.dds",
         "baseColorFactor": [
           1.0,
           1.0,

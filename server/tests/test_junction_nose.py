@@ -33,7 +33,10 @@ class NoseTest(unittest.TestCase):
         # (its far edge lies between the branches, past the corner, off both carriageways)
         mid = (o[1, :2] + o[2, :2]) / 2
         self.assertGreater(float(np.hypot(*mid)), 10.0)
-        self.assertIsNone(junctions._on_carriageway(np.array([mid]), rows, (np.zeros(2), 200.0)))
+        for _fid, sp, pts, _lon in rows:        # (off every carriageway: farther than half its width - 0.3 m)
+            a, b = pts[0, :2], pts[1, :2]
+            t = np.clip(np.dot(mid - a, b - a) / np.dot(b - a, b - a), 0.0, 1.0)
+            self.assertGreater(float(np.hypot(*(mid - (a + t * (b - a))))), sp.width / 2 - 0.3)
 
     def test_wide_corners_unchanged(self):
         corners = junctions.find(fork(90.0), roads.has_sidewalks, None)[0]

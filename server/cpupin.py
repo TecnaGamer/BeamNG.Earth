@@ -41,6 +41,24 @@ def _siblings(usable=None):
     return sorted(groups.items())
 
 
+FEW_CORES = 4               # a machine of this many physical cores or fewer (a Steam Deck): native_threads' rule
+
+
+def native_threads(server_cpus):
+    """The cap on the native kernels' threads per call (earthfast par.rs, BNGE_NATIVE_THREADS) for the server's CPU set,
+    or None for no cap of its own (the kernels stop at the process's CPU set and at 8 anyway). On a machine of FEW_CORES
+    physical cores or fewer, one thread per physical core of the server's set: the hyperthread siblings are left to the
+    server's other processes, whose kernels may run at the same time (a Steam Deck: 2 a call)."""
+    if not server_cpus:
+        return None
+    try:
+        if len(_siblings()) > FEW_CORES:
+            return None
+        return max(1, len(_siblings(sorted(server_cpus))))
+    except (OSError, ValueError):
+        return None
+
+
 def split(share=SERVER_SHARE):
     """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server."""
     cores = _siblings()
@@ -63,6 +81,7 @@ def split(share=SERVER_SHARE):
 # seconds): the mod writes them to its settings file in the game's user folder (settings.lua M.FILE, as bmplaunch reads
 # beammpOnLaunch), read when the server starts. "auto" / "low": the defaults above.
 MOD_SETTINGS = ("settings", "beamngEarth.json")
+LIGHT_GROUND_PRESETS = ("low", "medium")   # the mod's quality presets whose groundGrid is "2" (settings.lua PRESETS)
 CORE_CHOICES = ("1", "2", "3", "4", "6", "8")
 PRIORITIES = ("low", "normal")
 
@@ -107,6 +126,19 @@ def player_settings(user_dir):
         out["teleport_full"] = env == "1"
     if d.get("models3dmr") is False:
         out["models3dmr"] = False
+    ram = str(d.get("maxRamGb", "auto"))       # the settings page's Max RAM for BeamNG.Earth (budget.SETTING_ENV)
+    try:
+        if ram != "auto" and 0 < float(ram) < 1e6:
+            out["max_ram_gb"] = float(ram)
+    except ValueError:
+        pass
+    # the Low / Medium presets' lighter ground (heightmap.ground_square); a file from before the setting existed follows
+    # its quality preset, as the mod's settings do (settings.lua: a knob a file lacks takes its preset's value)
+    grid = d.get("groundGrid")
+    if grid is None and str(d.get("quality", "")) in LIGHT_GROUND_PRESETS:
+        grid = "2"
+    if str(grid) == "2":
+        out["ground_square"] = "2"
     return out
 
 
@@ -123,6 +155,9 @@ def apply_player_settings(user_dir, nice, default_nice, environ=None):
     if chosen.get("priority") == "normal" and nice == default_nice:
         nice = 0
         notes.append("normal priority")
+    if chosen.get("max_ram_gb") and not environ.get("BNGE_MAX_RAM_GB"):
+        environ["BNGE_MAX_RAM_GB"] = f"{chosen['max_ram_gb']:g}"   # (budget.SETTING_ENV; the workers inherit it)
+        notes.append(f"at most {chosen['max_ram_gb']:g} GB of memory")
     if chosen.get("models3dmr") is False and not environ.get("BNE_3DMR"):
         environ["BNE_3DMR"] = "off"            # (threedmr.enabled; the worker processes inherit it)
         notes.append("no 3dmr.eu models")

@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import unicodedata
 import numpy as np
+import dmath
+import dnp
 
 FONT_PATH=Path(__file__).with_name('data')/'sign_font.json'
 MATERIALS=['bne_sign_'+s for s in ('white','red','black','metal','yellow','glyph','blue','green','glyph_white')]
@@ -95,11 +97,11 @@ class Mesh:
         self.origin=np.asarray(origin,float);self.p=[];self.uv=[];self.t=[];self.tm=[]
         self.offset=np.zeros(3);self.axes=np.eye(3)
     def transform(self,position,into):
-        d=np.asarray(into,float);d=d/max(np.linalg.norm(d),1e-9)
+        d=np.asarray(into,float);d=d/max(dnp.norm(d),1e-9)
         self.offset=np.asarray(position,float)-self.origin
         self.axes=np.array([[d[1],-d[0],0],[d[0],d[1],0],[0,0,1]])
     def face(self,mat,pts,uv=None):
-        p=np.asarray(pts,float)@self.axes+self.offset;k=len(self.p)
+        p=dnp.matmul(np.asarray(pts,float), self.axes)+self.offset;k=len(self.p)
         self.p.extend(p);self.uv.extend(uv if uv is not None else [(0,0)]*len(p))
         for i in range(1,len(p)-1):self.t.append((k,k+i,k+i+1));self.tm.append(mat)
     def box(self,mat,c,half):
@@ -117,13 +119,13 @@ class Mesh:
         pts=[];r=min(r,w/2,h/2)
         for cx,cz,start in ((w/2-r,z-h/2+r,-90),(w/2-r,z+h/2-r,0),(-w/2+r,z+h/2-r,90),(-w/2+r,z-h/2+r,180)):
             for a in np.linspace(start,start+90,5):
-                rad=math.radians(a);pts.append((cx+r*math.cos(rad),y,cz+r*math.sin(rad)))
+                rad=math.radians(a);pts.append((cx+r*dmath.cos(rad),y,cz+r*dmath.sin(rad)))
         self.face(mat,pts)
     def panel_body(self,w,h,z,r):
         points=[];r=min(r,w/2,h/2)
         for cx,cz,start in ((w/2-r,z-h/2+r,-90),(w/2-r,z+h/2-r,0),(-w/2+r,z+h/2-r,90),(-w/2+r,z-h/2+r,180)):
             for a in np.linspace(start,start+90,5):
-                a=math.radians(a);points.append((cx+r*math.cos(a),cz+r*math.sin(a)))
+                a=math.radians(a);points.append((cx+r*dmath.cos(a),cz+r*dmath.sin(a)))
         front=[(x,-.025,zz)for x,zz in points];back=[(x,.025,zz)for x,zz in points]
         self.face(METAL,front);self.face(METAL,list(reversed(back)))
         for i,a in enumerate(front):
@@ -139,9 +141,9 @@ class Mesh:
         rings=[]
         for cx,cz,start in ((hw-r,z-hh+r,-90),(hw-r,z+hh-r,0),(-hw+r,z+hh-r,90),(-hw+r,z-hh+r,180)):
             for angle in np.linspace(start,start+90,7):
-                a=math.radians(angle);out=np.array([math.cos(a),0.,math.sin(a)])
-                c=np.array([cx+r*math.cos(a),0.,cz+r*math.sin(a)])
-                rings.append([c+radius*(math.cos(b)*out+np.array([0.,math.sin(b),0.]))
+                a=math.radians(angle);out=np.array([dmath.cos(a),0.,dmath.sin(a)])
+                c=np.array([cx+r*dmath.cos(a),0.,cz+r*dmath.sin(a)])
+                rings.append([c+radius*(dmath.cos(b)*out+np.array([0.,dmath.sin(b),0.]))
                               for b in np.linspace(0,2*math.pi,8,endpoint=False)])
         for i,ring in enumerate(rings):
             following=rings[(i+1)%len(rings)]
@@ -216,14 +218,14 @@ class Mesh:
                               (w/2-inset,-.033,top),(-w/2+inset,-.033,top)])
             cx=-w/2+inset+.18;cz=(top+bottom)/2
             for material,r,y in ((RED,.145,-.035),(WHITE,.115,-.036)):
-                self.face(material,[(cx+r*math.cos(a),y,cz+r*math.sin(a))for a in np.linspace(0,2*math.pi,24,endpoint=False)])
+                self.face(material,[(cx+r*dmath.cos(a),y,cz+r*dmath.sin(a))for a in np.linspace(0,2*math.pi,24,endpoint=False)])
             self.text(str(style.header_speed),cz,-.038,.12,.21,x_offset=cx,font_key='din',centre_ink=True)
         if exit:
             # A slash has a real, bounded stroke width, not a trapezoid whose
             # apparent thickness changes with the name's length.
             a=np.array([-w/2+inset+.018,plan.bottom+inset+.018])
             b=np.array([w/2-inset-.018,plan.top-inset-.018])
-            delta=b-a;normal=np.array([-delta[1],delta[0]])/max(np.linalg.norm(delta),1e-9)
+            delta=b-a;normal=np.array([-delta[1],delta[0]])/max(dnp.norm(delta),1e-9)
             half=min(.045,h*.075)
             # Keep all four corners inside the inner board rectangle.
             v=[a-normal*half,b-normal*half,b+normal*half,a+normal*half]

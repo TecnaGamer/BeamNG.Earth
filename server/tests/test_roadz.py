@@ -4,6 +4,7 @@ BridgeProfiles / TunnelProfiles / grading with today's inference as the fallback
 import os
 import struct
 import sys
+import time
 import unittest
 
 import numpy as np
@@ -244,6 +245,111 @@ class PartsTest(unittest.TestCase):
             provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
             self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
 
+    def test_a_node_two_cells_share_is_read_once(self):
+        """Neighbouring cells' boxes share EPT nodes: a node this process read for one cell is not downloaded again for
+        the next (RoadZ._node_bytes), each cell's points its own boxes'."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            a = rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1010.0, 2010.0)],
+                         mapcells.CellKey(14, 4683, 6266))
+            b = rz._read("USGS_X", ["1-0-0-0", "2-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)],
+                         mapcells.CellKey(14, 4684, 6266))
+            self.assertEqual(sorted(u.rsplit("/", 1)[-1] for u in asked), ["0-0-0-0.laz", "1-0-0-0.laz", "2-0-0-0.laz"])
+            self.assertEqual(rz.stats.get("shared"), 1)
+            self.assertEqual(len(a[0]), 2)              # (one point a node in the first cell's box)
+            self.assertEqual(len(b[0]), 4)              # (both in the second's)
+
+    def _parts(self, d, key, name="USGS_X"):
+        import glob
+        return sorted(glob.glob(os.path.join(d, "roadz", f"v{roadz.VERSION}", "eptparts", str(key).replace("/", "_"),
+                                             name, "*", "*.npz")))
+
+    def test_a_node_another_process_reads_is_waited_for(self):
+        """The main process's warm and a block process read the same cell: a node the other one has claimed (its
+        lock file) is not downloaded again; its part file is taken once written."""
+        import shutil
+        import subprocess
+        import tempfile
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            key = mapcells.CellKey(14, 4683, 6266)
+            boxes = [(1000.0, 2000.0, 1060.0, 2010.0)]
+            nodes = ["0-0-0-0", "1-0-0-0"]
+            a = rz._read("USGS_X", nodes, boxes, key)
+            p0, p1 = self._parts(d, key)
+            keep = os.path.join(d, "keep.npz")
+            shutil.copy(p1, keep)
+            os.remove(p0)
+            os.remove(p1)
+            with open(p1 + ".lock", "w") as fh:         # (held by a live process: this one's parent)
+                fh.write(f"1 0 {os.getppid()}")
+
+            def other():
+                time.sleep(0.3)
+                shutil.copy(keep, p1 + ".tmp")
+                os.replace(p1 + ".tmp", p1)
+                os.remove(p1 + ".lock")
+            t = threading.Thread(target=other)
+            t.start()
+            import xproc
+            xproc._cancel_proc[0] = lambda: True    # (a job's cancel check: not the read's business)
+            rz._raw.clear()                         # (as another process: nothing of this one's memory)
+            try:
+                b = rz._read("USGS_X", nodes, boxes, key)
+            finally:
+                xproc._cancel_proc[0] = None
+            t.join()
+            self.assertEqual(len(asked), 3, "node 1 waited for, not read again")
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[1], b[1])
+            # a holder that died: its claim taken over at once
+            os.remove(p1)
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()
+            with open(p1 + ".lock", "w") as fh:
+                fh.write(f"1 0 {dead.pid}")
+            t0 = time.monotonic()
+            rz._raw.clear()
+            c = rz._read("USGS_X", nodes, boxes, key)
+            self.assertLess(time.monotonic() - t0, 5.0)
+            self.assertEqual(len(asked), 4)
+            np.testing.assert_array_equal(a[0], c[0])
+            self.assertFalse(os.path.exists(p1 + ".lock"))
+
+    def test_a_cell_another_process_built_is_taken_from_disk(self):
+        """Another process wrote the cell's file (and removed its parts) while this one read its nodes: the cell is
+        read from that file, not built again."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            rz = roadz.RoadZ(d, None)
+            key = mapcells.CellKey(14, 4683, 6266)
+            final = rz._path("lidar", key)
+            os.makedirs(os.path.dirname(final), exist_ok=True)
+            done = roadz.Lines.build([], corrected=True)
+
+            def fetch(url, headers=None, lane=None):
+                with open(final + ".gaps.json", "w") as fh:
+                    fh.write("[]")
+                done.save(final)                        # (the other process's, mid-read)
+                return las_bytes([(100, 200, 550, 2)])
+            rz._fetch = fetch
+            rz._lidar = lambda k: rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1060.0, 2010.0)], k)
+            roadz.LIDAR_FETCH_THREADS, old = 1, roadz.LIDAR_FETCH_THREADS
+            try:
+                got = rz.lines("lidar", key)
+            finally:
+                roadz.LIDAR_FETCH_THREADS = old
+            self.assertEqual(len(got), 0)
+            self.assertEqual(got.gaps, [])
+
 class FakeDem:
     def __init__(self, z):
         self.z = z
@@ -297,6 +403,33 @@ class ObservedTest(unittest.TestCase):
         xy = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
         self.assertIsNone(rz.observed(FRAME, xy, 4.0, 1), "a ground road gives no deck height")
         self.assertIsNotNone(rz.observed(FRAME, xy, 4.0, 0))
+
+    def test_deck_of_another_tier_crossing_overhead(self):
+        """A deck one tier up crosses this sloping bridge at a shallow angle, and hides its own line's heights under
+        it: the stations nearest the upper line do not take its heights (a 10 m tent on the lower deck, whose own
+        heights the grade rule dropped for it)."""
+        x = np.linspace(-300, 300, 121)
+        own = self.src_line(x, np.full(121, 2.0), np.where(np.abs(x) < 30, np.nan, FLAT + 12.0 - 0.02 * x), 1)
+        upper = self.src_line(np.linspace(-150, 150, 31), np.linspace(-40, 40, 31), np.full(31, FLAT + 22.0), 2)
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build([own, upper, ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        self.assertIsNotNone(z)
+        ok = np.isfinite(z)
+        np.testing.assert_allclose(z[ok], FLAT + 12.0 - 0.02 * q[ok], atol=0.05)
+        self.assertGreater(ok.mean(), 0.85, "the deck's own heights either side of the crossing stay")
+
+    def test_road_that_changes_tier_keeps_both(self):
+        """A road up to a higher tier and down again over 150 m is its own: nothing is dropped."""
+        xs = (np.linspace(-300, -75, 46), np.linspace(-75, 75, 31), np.linspace(75, 300, 46))
+        zs = (np.linspace(FLAT + 6.0, FLAT + 12.0, 46), np.full(31, FLAT + 12.0), np.linspace(FLAT + 12.0, FLAT + 6.0, 46))
+        decks = [self.src_line(x, np.full(len(x), 2.0), z, t) for x, z, t in zip(xs, zs, (1, 2, 1))]
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build(decks + [ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        np.testing.assert_allclose(z, np.interp(q, np.concatenate(xs), np.concatenate(zs)), atol=0.05)
 
     def test_off(self):
         bridge = self.src_line(np.linspace(-35, 35, 15), np.zeros(15), np.full(15, 20.0), 1)

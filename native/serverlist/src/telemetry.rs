@@ -49,6 +49,15 @@ pub struct SourceIn {
     e5xx: Option<u64>,
     err: Option<u64>,
     retry: Option<u64>,
+    // our own limits (clients from 2026-11-11 on): background requests dropped, demand ones that waited (and ms),
+    // refused after waiting, refused by the daily budget
+    deferred: Option<u64>,
+    waited: Option<u64>,
+    #[serde(rename = "waitMs")]
+    wait_ms: Option<u64>,
+    #[serde(rename = "limitFail")]
+    limit_fail: Option<u64>,
+    budget: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +90,16 @@ pub struct Source {
     pub e5xx: u64,
     pub err: u64,
     pub retry: u64,
+    #[serde(default)]
+    pub deferred: u64,
+    #[serde(default)]
+    pub waited: u64,
+    #[serde(default, rename = "waitMs")]
+    pub wait_ms: u64,
+    #[serde(default, rename = "limitFail")]
+    pub limit_fail: u64,
+    #[serde(default)]
+    pub budget: u64,
 }
 
 impl Source {
@@ -94,6 +113,11 @@ impl Source {
         self.e5xx += o.e5xx;
         self.err += o.err;
         self.retry += o.retry;
+        self.deferred += o.deferred;
+        self.waited += o.waited;
+        self.wait_ms += o.wait_ms;
+        self.limit_fail += o.limit_fail;
+        self.budget += o.budget;
     }
 }
 
@@ -136,6 +160,7 @@ pub struct Telemetry {
     dir: Option<PathBuf>,
     last_sample: u64,
     written: HashSet<u64>, // hours already in hours.jsonl
+    uniques: crate::uniques::Uniques, // distinct installs per day, ids not kept (uniques.rs)
 }
 
 fn unix() -> u64 {
@@ -152,10 +177,17 @@ fn host_ok(h: &str) -> bool {
 
 impl Telemetry {
     pub fn new(dir: Option<PathBuf>) -> Telemetry {
+        let uniques = crate::uniques::Uniques::new(dir.clone());
         let mut t = Telemetry { installs: HashMap::new(), per_ip: HashMap::new(), samples: VecDeque::new(),
                                 hours: BTreeMap::new(), dir, last_sample: 0, written: HashSet::new(),
-                                minutes: VecDeque::new(), last_minute: 0 };
+                                minutes: VecDeque::new(), last_minute: 0, uniques };
         t.load();
+        // (the installs heard from in the last day, restored from installs.json: counted on their days too, the
+        // first start's seed)
+        let seen: Vec<(String, u64)> = t.installs.iter().map(|(id, i)| (id.clone(), i.seen_unix)).collect();
+        for (id, at) in seen {
+            t.uniques.saw(&id, at);
+        }
         t
     }
 
@@ -288,10 +320,14 @@ impl Telemetry {
                 }
                 let c = |v: Option<u64>| v.unwrap_or(0).min(10_000_000);
                 let add = Source { req: c(s.req), mb: s.mb.unwrap_or(0.0).clamp(0.0, 1.0e6), ok: c(s.ok), e4xx: c(s.e4xx),
-                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry) };
+                                   e404: c(s.e404), e429: c(s.e429), e5xx: c(s.e5xx), err: c(s.err), retry: c(s.retry),
+                                   deferred: c(s.deferred), waited: c(s.waited),
+                                   wait_ms: s.wait_ms.unwrap_or(0).min(1_000_000_000), limit_fail: c(s.limit_fail),
+                                   budget: c(s.budget) };
                 entry.sources.entry(host.to_ascii_lowercase()).or_default().add(&add);
             }
         }
+        self.uniques.saw(&id, unix_now);
         self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean(r.v, 24), os: clean(r.os, 12), cc,
                                            game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
         let (o, p) = self.online(now);
@@ -309,6 +345,7 @@ impl Telemetry {
         if minute > self.last_minute {
             self.last_minute = minute;
             self.save_installs(now);
+            self.uniques.save();
             let (o, p) = self.online(now);
             self.minutes.push_back((minute, o, p));
             self.append("minutes.jsonl", serde_json::to_string(&(minute, o, p)).unwrap());
@@ -393,6 +430,7 @@ impl Telemetry {
         }
         serde_json::json!({"online": o, "playing": p, "peak24h": peak24, "peakAll": peak_all, "peakAllAt": peak_at,
                            "history": hist, "daily": daily, "countries": countries, "sampleSeconds": SAMPLE_S,
+                           "unique": self.uniques.view(unix_now),
                            "onlineMeans": "a BeamNG.Earth app running now; playing: with the game connected"})
     }
 
@@ -400,7 +438,8 @@ impl Telemetry {
     pub fn now(&self, now: Instant, unix_now: u64) -> serde_json::Value {
         let p = self.public(now, unix_now);
         serde_json::json!({"t": unix_now, "online": p["online"], "playing": p["playing"], "peak24h": p["peak24h"],
-                           "peakAll": p["peakAll"], "peakAllAt": p["peakAllAt"], "countries": p["countries"]})
+                           "peakAll": p["peakAll"], "peakAllAt": p["peakAllAt"], "countries": p["countries"],
+                           "unique": p["unique"]})
     }
 
     /// Players over [from, to] (unix s): the finest series whose retention reaches `from` (1 min, 5 min, hourly

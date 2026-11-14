@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 6) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6) |
+| `version()` | `major, minor` (1, 8) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -163,8 +163,9 @@ end
 | `place()` | `{street, place, region, country}` (each optional) as the status bar shows it, or nil |
 | `teleport(lat, lon, name)` | true once taken (as the map's Go), else `false, why` |
 | `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning, waypoints, legs}` or nil |
-| `gpsRoute()` | 1.6: the planned route as the map draws it: `{version, points = {{lat, lon}, ...}, dist (m), dur (s), elev = {{distM, elevM}, ...}, legs}`, or nil without one. `version` changes with every new plan (a replan after a wrong turn too); `gps()` also has `off` (m off the route) and `routeVersion` from 1.6. A copy: keep it as long as you like |
-| `toGame(lat, lon, h)`, `toGeo(x, y, z)` | 1.6: lat / lon (h m over the WGS84 ellipsoid, default 0) to the game's `x, y, z`, and back to `lat, lon, h`, in the current anchor's frame as `pose()` gives them; nil before the world is there. Game coordinates change at every rebase (`onBeamNGEarthTeleported`, and quietly while driving): convert again rather than keep them |
+| `gpsRoute()` | 1.6: the planned route as the map draws it: `{version, points = {{lat, lon}, ...}, dist (m), dur (s), elev = {{distM, elevM}, ...}, legs, steps}`, or nil without one. `steps` from 1.7: see "Route maneuvers" below. `version` changes with every new plan (a replan after a wrong turn too); `gps()` also has `off` (m off the route) and `routeVersion` from 1.6. A copy: keep it as long as you like |
+| `toGame(lat, lon, h)`, `toGeo(x, y, z)` | 1.6: lat / lon (h m over the WGS84 ellipsoid, default 0) to the game's `x, y, z`, and back to `lat, lon, h`, in the current anchor's frame as `pose()` gives them; nil before the world is there. Game coordinates change at every rebase (`onBeamNGEarthRebased` from 1.7 says when): convert again rather than keep them |
+| `rebasing()` | 1.7: true between a rebase's two frames (the vehicles are in the new frame already, `toGame` / `toGeo` and `pose()` still in the old one): leave positions alone until `onBeamNGEarthRebased` |
 | `gpsSetRoute(points)` | 1.2: the GPS through waypoints, `points` `{{lat, lon, name?}, ...}`, the last one the destination, at most 11; one route through them all, each waypoint passed in order (within 40 m). `gps().waypoints` is the ones still ahead, `gps().legs` the planned route's `{dist m, dur s}` per leg. True, or `false, why` |
 | `notify(text, seconds)` | a short message on screen |
 | `inTunnel()`, `inTunnel(x, y, z)` | 1.3: the player (1 m over its position), or a point in game coordinates, under a roof: a tunnel, a covered arch, a parking structure (the rule the tunnel sound uses). `true` / `false`, nil before the world is there |
@@ -173,6 +174,31 @@ end
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
+
+### Route maneuvers (1.7)
+
+With `api.has('routeSteps')`, `api.gpsRoute().steps` is the planned route's maneuvers from OSRM, in travel order.
+It is nil when the companion did not supply them (an older app), and an empty table when supplied but none were
+usable. The steps and their nested tables are copies. A successful replan replaces them and changes `version`;
+a failed replan keeps the current route's steps. A new destination or `gpsClear()` drops the old route.
+
+Each step has:
+
+| field | meaning |
+|---|---|
+| `type`, `modifier` | OSRM maneuver type (`'depart'`, `'turn'`, `'roundabout'`, `'arrive'`, etc.) and optional turn modifier (`'right'`, `'slight left'`, etc.). Unknown types may be added by OSRM; treat them as turns using `modifier` |
+| `name` | the road's name, empty string where not known |
+| `location` | `{lat, lon}` of the maneuver, degrees (independent of the simplified overview's vertices) |
+| `distance`, `duration` | metres/seconds **from** this maneuver to the next, not the distance remaining to this maneuver |
+| `offset`, `leg` | metres from the planned route's start and one-based leg index. Each waypoint ends a leg; its arrival and the next departure are both retained |
+| `exit` | optional roundabout/rotary exit number |
+| `bearingBefore`, `bearingAfter` | optional direction of travel before/after the maneuver, compass degrees |
+| `ref`, `destinations`, `rotary_name`, `driving_side` | optional OSRM road reference, destination text, rotary name and `'left'`/`'right'` driving side |
+| `lanes` | optional `{ {valid = bool, indications = {'straight', 'right', ...}}, ... }`, left to right in travel direction, at the maneuver's own intersection |
+
+These fields describe the whole planned trip, including stops already passed. They are not a live instruction
+index. Poll `api.gps().routeVersion` and fetch a new `gpsRoute()` snapshot only when it changes, rather than copying
+a long trip every frame. See [OSRM's route steps](https://project-osrm.org/docs/v5.24.0/api/#routestep-object) for maneuver semantics.
 
 The session `navgraph_*.json` also keeps tunnel-only minimap stretches in `lines`; each entry is
 `[x1, y1, x2, y2, drivability, postedSpeedMs]`. The sixth field is the legal road speed in m/s (including the
@@ -192,6 +218,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthTeleported` | `teleported` | `{lat, lon}`: a teleport finished, the player is set down |
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
+| `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. Every game coordinate an add-on kept is stale: convert again with `toGame` |
 
 ### Places (1.4)
 
@@ -212,14 +239,15 @@ end
 
 | field | |
 |---|---|
-| `radius` | metres, default 1000, at most 3000 |
+| `radius` | metres, default 1000, at most 3000 (at most 25000 with `cachedOnly`) |
 | `categories` | Overture `basic_category` values (`'gas_station'`, `'car_dealer'`), prefixes ending in `*` (`'car_*'`), or the 3D map's icon groups (`'group:food'`, `food` / `shop` / `lodging` / `culture` / `park` / `transit` / `education` / `health` / `fuel`); none: every kind. A place's taxonomy value counts as well as its category |
 | `limit` | rows a page, default 50, at most 200 |
 | `cursor` | a result's `next`: the following page |
 | `minConfidence` | 0..1: only places Overture is at least this sure of (the 3D map shows 0.75 and up) |
 | `buildings` | true: the footprints too (as `buildings()`) |
+| `cachedOnly` | 1.8: only the map cells the app already has, so `radius` may go to 25000. It asks for no cell it does not already have on disk and no second answer comes; a radius over 3000 must name `categories`. See "A wide search over what is cached" below |
 
-The callback gets a result for each answer: `{places, buildings, complete, pending, next, error}`.
+The callback gets a result for each answer: `{places, buildings, complete, pending, next, truncated, error}`.
 
 - `places`: `{id, name, category, lat, lon, confidence, open}` each, nearest first; named places only. `id` is
   Overture's GERS id; `open` is Overture's `operating_status`
@@ -230,11 +258,50 @@ The callback gets a result for each answer: `{places, buildings, complete, pendi
 - `complete`: every map cell round the point was read. The first answer comes at once from the cells on disk; when
   some were missing, the app fetches them in the background and answers once more (`pending` true until then, at
   most about 2 minutes). The second answer is the asked page built again over every cell, the first answer's rows
-  included: replace them with it rather than appending.
+  included: replace them with it rather than appending. With `cachedOnly` there is no second answer and no download
+  is asked for, so a false `complete` is the final word.
 - `next`: the next page's cursor, nil on the last. Pages follow the order (distance, id), so asking for the next
   page after more cells came neither repeats nor skips a row of the pages before (a nearer place come since is not
   in them).
-- `error`: why there are none (`'bad coordinates'`, no map data, `'timed out'`: no answer in 150 s).
+- `truncated` (1.8): true when the box of map cells round the point held more than the app's cell cap (2048), so
+  the reach was shortened to one that fits and cells inside the `radius` you asked for were left unread. `complete`
+  is false with it. A radius whose box fits is never shortened and never reports this, however close to the cap it
+  comes — the app counts the box rather than estimating it. The wire leaves the field out when it is false and
+  `api.lua` fills in `false`, so an add-on always sees a boolean. Far north a map cell covers less ground, so the
+  cap bites at a shorter reach: 25 km fits whole up to about 62 degrees, and 4.5 km is left at the Web-Mercator
+  limit.
+- `error`: why there are none (`'bad coordinates'`, no map data, `'timed out'`: no answer in 150 s, `'a radius over
+  3000 m needs categories'`).
+
+### A wide search over what is cached (1.8)
+
+`cachedOnly = true` reads the map cells the app has on disk and asks for no others: it queues no background job of
+its own, there is no second answer and `pending` is always false. Because it costs only what is already there,
+`radius` may go to 25000 m, which is far past the 3000 m an ordinary request is held to. It finds only places the
+player has already been near, so it suits an add-on that wants the few sparse places of a whole region (a career's
+car dealers, a mission's truck stops) rather than one that needs every place round a point.
+
+It is not a promise that nothing is downloaded. The app asks for no cell it does not already have, but a cell whose
+stored layer turns out to be damaged is a miss like any other and is rebuilt from its sources, which may download.
+
+```lua
+if api.has('cachedPlaces') then
+  api.places(lat, lon, { radius = 25000, cachedOnly = true, categories = { 'car_dealer' } }, function(r)
+    -- r.pending is always false; r.complete says every cell in reach was on disk, r.truncated that the reach was cut
+    for _, p in ipairs(r.places) do print(p.name, p.lat, p.lon) end
+  end)
+end
+```
+
+- A radius over 3000 m must name `categories`: a wide search is for sparse kinds, not for a region's places of every
+  kind (`error` `'a radius over 3000 m needs categories'`). It holds down the rows the answer builds, not the cells
+  the app reads: every cell in reach is read whatever the categories are, so a narrow list is the courteous thing
+  rather than a cheaper one.
+- `complete` false is the final answer here, not a promise of a better one: the missing cells are not asked for.
+- The cell cap is 2048 map cells. The app counts the box first: a radius whose box fits is read whole, and only a
+  box over the cap has its reach cut back to fit, with `truncated` saying so. The cut is concentric round the point
+  and the same on every page, so paging by `next` stays right across it.
+- `buildings` keeps its own 500 m reach and count of 100 whatever `radius` and `cachedOnly` say.
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and

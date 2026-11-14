@@ -7,6 +7,7 @@ import sys
 import unittest
 from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -54,6 +55,33 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_rumble_heuristic_is_country_and_road_type_scoped(self):
+        motorway = SimpleNamespace(kind="paved", cls="motorway", urban=True, link=False)
+        rural_primary = SimpleNamespace(kind="paved", cls="primary", urban=False, link=False)
+        urban_primary = SimpleNamespace(kind="paved", cls="primary", urban=True, link=False)
+        link = SimpleNamespace(kind="paved", cls="motorway", urban=False, link=True)
+        gravel = SimpleNamespace(kind="unpaved", cls="primary", urban=False, link=False)
+        self.assertTrue(navgraph.rumble_eligible("AU", motorway))
+        self.assertTrue(navgraph.rumble_eligible("NZ", rural_primary))
+        self.assertTrue(navgraph.rumble_eligible("US", rural_primary))
+        self.assertFalse(navgraph.rumble_eligible("AU", urban_primary))
+        self.assertFalse(navgraph.rumble_eligible("GB", rural_primary))
+        self.assertFalse(navgraph.rumble_eligible("AU", link))
+        self.assertFalse(navgraph.rumble_eligible("AU", gravel))
+
+    def test_rumble_flag_is_serialized_for_rural_australian_highway(self):
+        f = features([[(0, 0), (500, 0)]], ["primary"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        rural = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False, country="AU",
+                               urban_fn=lambda lat, lon: np.zeros_like(lat, dtype=bool))
+        self.assertTrue(rural["edges"])
+        self.assertTrue(all(len(e) > 11 and e[11] is True and e[10] is False for e in rural["edges"]),
+                        "rural eligible edges carry the optional rumble flag (after the rough-road flag)")
+        urban = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False, country="AU",
+                               urban_fn=lambda lat, lon: np.ones_like(lat, dtype=bool))
+        self.assertTrue(all(len(e) <= 11 or e[11] is not True for e in urban["edges"]),
+                        "urban non-motorway edges do not get rumble metadata")
+
     def test_graph_has_a_traffic_profile(self):
         g = graph([[(0, 0), (300, 0)]], ["primary"], connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
         p = g["trafficProfile"]
@@ -258,6 +286,90 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(any(130 < m < 200 for m in mids), "an edge through it")
         self.assertFalse(g["lines"], "nothing left for the minimap alone")
 
+    def test_open_underpass_uses_the_rendered_road_with_tube_ai_off(self):
+        # (an open section: with tunnels under flat ground buried by default, PLANS_FORMAT 57, this flat fixture is
+        # only open without the burial)
+        self.enterContext(mock.patch.object(roads, "BURY_ON", False))
+        f = features([[(-150, 0), (150, 0)]], ["motorway"], flags=[(0, "is_tunnel")])
+        f.rules["oneway"] = rules([(0, 1.0)], "float")
+        profiles = roads.TunnelProfiles(FRAME, lambda key: f, flat)
+        box = (-256, -128, 256, 128)
+        chunks = roads._tunnel_chunks(profiles, [f], box)
+        self.assertTrue(chunks and not any(c.get("tunnel") for c in chunks), "the renderer builds an open road")
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            closed, opened = navgraph.tunnel_floors(profiles, [f], box)
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels=closed, open_tunnels=opened)
+        self.assertTrue(opened)
+        self.assertFalse(closed)
+        self.assertFalse(g["lines"], "the rendered ground road is connected in the AI graph")
+        self.assertTrue(g["edges"])
+        self.assertTrue(all(e[2] == 1 and g["nodes"][e[0]][0] < g["nodes"][e[1]][0] for e in g["edges"]),
+                        "one-way direction survives")
+        plain = features([[(-150, 0), (150, 0)]], ["motorway"])
+        plain.rules["oneway"] = f.rules["oneway"]
+        expected = navgraph.build(FRAME, [plain], flat, (0, 0))
+        self.assertEqual([e[2:] for e in g["edges"]], [e[2:] for e in expected["edges"]],
+                         "open roads keep ordinary lanes, speeds and width, without portal narrowing")
+
+    def test_missing_open_floor_elevation_stays_out_of_the_ai_graph(self):
+        f = features([[(-150, 0), (150, 0)]], ["motorway"], flags=[(0, "is_tunnel")])
+
+        def missing(lat, lon):
+            return np.full(np.broadcast(lat, lon).shape, np.nan)
+
+        profiles = roads.TunnelProfiles(FRAME, lambda key: f, missing)
+        box = (-256, -128, 256, 128)
+        self.assertFalse(roads._tunnel_chunks(profiles, [f], box), "the renderer skips the invalid floor")
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            closed, opened = navgraph.tunnel_floors(profiles, [f], box)
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels=closed, open_tunnels=opened)
+        self.assertFalse(opened, "an unbuilt open floor cannot supply AI heights")
+        self.assertFalse(g["edges"], "no AI road crosses the unbuilt section")
+        self.assertTrue(all(np.isfinite(n).all() for n in g["nodes"].values()))
+
+    def test_tunnel_floors_skip_invalid_sections_without_losing_valid_ones(self):
+        xy = np.array([[0., 0.], [100., 0.]])
+        heights = ([3., 4.], [3., np.nan], [np.inf, 4.], [3., -np.inf])
+        parts = [(f"road.0#{i}", None, xy, z, 0.) for i, z in enumerate(heights)]
+        profiles = SimpleNamespace(parts=lambda *_: parts, open_parts=lambda *_: parts)
+        with mock.patch.object(navgraph, "AI_TUNNELS", True):
+            closed, opened = navgraph.tunnel_floors(profiles, [], (0, 0, 100, 100))
+        for floors in (closed, opened):
+            self.assertEqual(set(floors), {"road"})
+            self.assertEqual(len(floors["road"]), 1, "skip invalid parts, keeping their valid sibling")
+            np.testing.assert_array_equal(floors["road"][0][1], [3., 4.])
+
+    def test_open_profiles_do_not_enable_closed_or_missing_tunnels(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        fid = str(f.ids[0])
+        floor = (np.array([[110.0, 0.0], [220.0, 0.0]]), np.array([3.0, 3.0]))
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), tunnels={fid: [floor]}, open_tunnels={})
+        self.assertTrue(g["lines"], "built closed tubes still require their separate opt-in")
+        self.assertFalse(any(130 < n[0] < 200 for n in g["nodes"].values()))
+
+    def test_open_floor_coverage_cannot_join_separate_open_sections(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.2, 0.8)])
+        fid = str(f.ids[0])
+        opened = {fid: [(np.array([[60., 0.], [140., 0.]]), np.array([3., 3.])),
+                        (np.array([[150., 0.], [240., 0.]]), np.array([3., 3.]))]}
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), open_tunnels=opened)
+        self.assertTrue(any(min(ln[0], ln[2]) < 140 and max(ln[0], ln[2]) > 150 for ln in g["lines"]),
+                        "two open sections cannot bridge an unbuilt closed section between them")
+        self.assertFalse(navgraph._open_floor(opened[fid], []))
+
+    def test_open_floor_covers_only_the_tunnel_part_of_a_boundary_edge(self):
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        fid = str(f.ids[0])
+        opened = {fid: [(np.array([[120., 0.], [210., 0.]]), np.array([3., 3.]))]}
+        with mock.patch.object(navgraph, "AI_TUNNELS", False):
+            g = navgraph.build(FRAME, [f], flat, (0, 0), open_tunnels=opened)
+        self.assertFalse(g["lines"], "a partly ordinary-road edge needs coverage only over its mapped tunnel range")
+        inside = [n for n in g["nodes"].values() if 130 < n[0] < 200]
+        self.assertTrue(inside)
+        self.assertTrue(all(abs(n[2] - 3.) < .05 for n in inside), "the graph uses the rendered open floor")
+
     def test_the_approach_narrows_to_the_tube_at_the_portal(self):
         """A road wider than its tunnel's tube narrows to the tube's AI half width at the portal over PORTAL_LEAD_M
         (Fort Pitt: the AI spread its lanes over the wide approach into the pier): the portal node's radius is the
@@ -344,7 +456,11 @@ class SignalsTest(unittest.TestCase):
             furniture.junction_controls = orig
         self.assertEqual(set(rh), {"cN", "cS", "cW", "cE"})
         for nb in rh:
-            self.assertEqual(lh[nb][7:11], rh[nb][7:11], f"{nb}: the head's transform")
+            self.assertEqual(len(rh[nb]), 11, "right-hand layout unchanged")
+            self.assertEqual(lh[nb][11], 1, "left-hand shape marker")
+            self.assertEqual(lh[nb][10], rh[nb][10], f"{nb}: both heads face incoming drivers")
+        self.assertLess(lh["cS"][7], 0.0, "northbound head on the left kerb")
+        self.assertGreater(rh["cS"][7], 0.0, "right-hand head on the right kerb")
         self.assertLess(lh["cS"][1], 0.0, "northbound stop point on the west (left) half")
         self.assertGreater(rh["cS"][1], 0.0, "and on the east half for right-hand traffic")
 
@@ -859,6 +975,7 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(navgraph.road_rules("GB")["mph"])
         self.assertTrue(navgraph.road_rules("gb")["rightHandDrive"], "the game's name: true = driving on the left")
         self.assertTrue(navgraph.road_rules("GB")["redYellow"])
+        self.assertFalse(navgraph.road_rules("NL")["redYellow"], "Dutch signals: red straight to green")
         self.assertFalse(navgraph.road_rules("DE")["rightHandDrive"])
         self.assertTrue(navgraph.road_rules("JP")["rightHandDrive"])
         self.assertFalse(navgraph.road_rules(None)["rightHandDrive"], "unknown: US rules")

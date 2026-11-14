@@ -3,6 +3,7 @@
 //! the strictest, the moves run out along the track at its grade. Was numpy per vertex per road plan of the cell
 //! (a foot search of every near vertex on every road: ~5 s of a Manhattan cell's 35 s of planning, 2026-11-09). The
 //! same products and comparisons in the same order as the numpy version (elementwise: bit for bit).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -27,7 +28,7 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
         let a = xy[i.saturating_sub(1)];
         let b = xy[(i + 1).min(n - 1)];
         let d = [b[0] - a[0], b[1] - a[1]];
-        let len = d[0].hypot(d[1]);
+        let len = d[0].dhypot(d[1]);
         if len > 1e-9 {
             td[i] = [d[0] / len, d[1] / len];
         }
@@ -77,7 +78,7 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
                 let t = ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / ab2;
                 let t = if t.is_nan() { t } else if t < 0.0 { 0.0 } else if t > 1.0 { 1.0 } else { t };
                 let f = [a[0] + t * ab[0], a[1] + t * ab[1]];
-                let dj = (p[0] - f[0]).hypot(p[1] - f[1]);
+                let dj = (p[0] - f[0]).dhypot(p[1] - f[1]);
                 d[j] = dj;
                 if j == 0 || (!best.is_nan() && (dj < best || dj.is_nan())) {
                     best = dj;
@@ -94,7 +95,7 @@ pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64
             // approach cannot be taken to the road under it (the deck then fell to the road and the embankment
             // ended mid-span). At grade (within CROSS_M) the flush crossing still takes the road's height.
             let ab = [pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]];
-            let l = ab[0].hypot(ab[1]);
+            let l = ab[0].dhypot(ab[1]);
             if (zr - z[i]).abs() > CROSS_M && l > 1e-9 {
                 let cross = (td[i][0] * ab[0] / l + td[i][1] * ab[1] / l).abs();
                 if cross < CROSS_COS {
@@ -175,11 +176,24 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
         }
         let mut s = vec![0.0f64; n];
         for k in 1..n {
-            s[k] = s[k - 1] + (pts[k][0] - pts[k - 1][0]).hypot(pts[k][1] - pts[k - 1][1]);
+            s[k] = s[k - 1] + (pts[k][0] - pts[k - 1][0]).dhypot(pts[k][1] - pts[k - 1][1]);
         }
         let up = tent(&s, &dv.iter().map(|&x| x.max(0.0)).collect::<Vec<_>>(), grade);
         let down = tent(&s, &dv.iter().map(|&x| (-x).max(0.0)).collect::<Vec<_>>(), grade);
-        Some((0..n).map(|k| zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] }).collect::<Vec<f64>>())
+        // A vertex with a band of its own keeps to it: a move run out from another road's stretch of the track only
+        // fills the room this vertex's roads leave (between their two strictest bounds where they disagree, and out
+        // to its own move where that is clipped at max_move). Run out whole, a 3-5 m move down to a bus lane the
+        // track lies in carried 2 m down the track at its grade onto a street it crosses at grade 30 m on, its bed
+        // 2.3 m under that street's lanes: a 2.65 m step there (Kennedybruecke in Vienna, GitHub #1169).
+        Some((0..n).map(|k| {
+            let v = zv[k] + if up[k] >= down[k] { up[k] } else { -down[k] };
+            if !both[k] {
+                return v;
+            }
+            let own = zv[k] + dv[k];
+            let (a, b) = (lo[k].min(hi[k]).min(own), lo[k].max(hi[k]).max(own));
+            if v < a { a } else if v > b { b } else { v }
+        }).collect::<Vec<f64>>())
     });
     Ok(out.map(|v| v.into_pyarray(py)))
 }

@@ -10,14 +10,14 @@
 //
 // The hook replaces slot 5 (createTexture(const Path&, GFXTextureProfile*)) of the texture manager's vtables. Only for
 // the call from TerrainCellMaterial's pack loader where the engine has just checked that the cache file is up to date
-// (its return address 0x173c24e), it hands back a texture it keeps (one strong reference of its own), if it has one
+// (its return address 0x173f2ee), it hands back a texture it keeps (one strong reference of its own), if it has one
 // for the same path and profile; otherwise it calls the stock function and keeps the result. The loader's second call
-// (0x173c67e, after it re-packed an outdated or missing cache file) always goes to the stock function and drops a kept
+// (0x173f71e, after it re-packed an outdated or missing cache file) always goes to the stock function and drops a kept
 // texture of that path first. Kept textures are released least-recently-used first beyond MAX_KEEP entries or
 // MAX_KEEP_MB, and all of them when the BeamNG.Earth level ends (the level flag gone). Every other caller and every
 // other level: the stock function, nothing kept.
 //
-// Exact build only (BeamNG.drive 0.40 Linux, the 2026-10-29 executable): the code and data it relies on are compared
+// Exact build only (BeamNG.drive 0.40.4 Linux, the 2026-11-06 executable; ported from the 2026-10-29 one on 2026-11-13): the code and data it relies on are compared
 // byte for byte at startup (the vtable slots' relocated values, createTexture's prologue, both call sites,
 // requestDeleteTexture's and destroySelf's code); on any difference it does nothing and says why in
 // <user>/temp/beamngEarth_texkeep.txt. Opt-in: BNGEARTH_TEXKEEP=1 (BNGEARTH_TEXKEEP_OFF=1 wins). BNGEARTH_TEXKEEP_DRY=1: installed but
@@ -30,8 +30,8 @@
 //   length (u32) at +4 and the characters at +0x20.
 // - GFXTextureObject: vptr +0, strong count (i32) +0x10, device +0x50, width / height (u32) +0x80 / +0x84. The count's
 //   states: n > 0 alive; 0xfff0bdc1 = 0 and waiting in the manager's delete list (a handle may revive it); -1 / -2 dying
-//   / dead. Acquire (0x877c10): n > 0 or 0xfff0bdc1 -> max(n, 0) + 1. Release (0x7f40e0): n > 1 -> n - 1; 1 -> -1, then
-//   vtable[2] destroySelf (0xc7b6a0): lock device+0x88, requestDeleteTexture(device+0xb0 manager, obj) (0xc68800),
+//   / dead. Acquire: n > 0 or 0xfff0bdc1 -> max(n, 0) + 1. Release: n > 1 -> n - 1; 1 -> -1, then
+//   vtable[2] destroySelf (0xc7d4d0): lock device+0x88, requestDeleteTexture(device+0xb0 manager, obj) (0xc6a630),
 //   unlock. The pack loader calls createTexture with that device mutex held, so a release that would destroy the object
 //   while this thread owns the mutex calls requestDeleteTexture itself (what destroySelf does under the lock) instead of
 //   locking a second time.
@@ -39,42 +39,41 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <strings.h>
 
 #define TAG "bngearth-texkeep"
 #define STATUS_FILE "beamngEarth_texkeep.txt"
 #define LOG_FILE "beamngEarth_texkeep.log"
 
-// BeamNG.drive 0.40 Linux (BinLinux/BeamNG.drive.x64 sha256 a365912e45f7735f...): vaddrs (PIE, base added at runtime)
-#define CREATE_TEXTURE 0xc6ceb0UL       // GFXTextureManager::createTexture(const Path&, GFXTextureProfile*)
-#define REQUEST_DELETE 0xc68800UL       // GFXTextureManager::requestDeleteTexture(GFXTextureObject*)
-#define DESTROY_SELF 0xc7b6a0UL         // GFXTextureObject::destroySelf (vtable[2] of the texture objects)
-#define SITE_CACHED_CALL 0x173c23fUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rax  (cache file up to date)
-#define SITE_PACKED_CALL 0x173c66fUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rbx  (just re-packed)
+// BeamNG.drive 0.40 Linux (BinLinux/BeamNG.drive.x64 sha256 4fa0771d463ab31f...): vaddrs (PIE, base added at runtime)
+#define CREATE_TEXTURE 0xc6ece0UL       // GFXTextureManager::createTexture(const Path&, GFXTextureProfile*)
+#define REQUEST_DELETE 0xc6a630UL       // GFXTextureManager::requestDeleteTexture(GFXTextureObject*)
+#define DESTROY_SELF 0xc7d4d0UL         // GFXTextureObject::destroySelf (vtable[2] of the texture objects)
+#define SITE_CACHED_CALL 0x173f2dfUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rax  (cache file up to date)
+#define SITE_PACKED_CALL 0x173f70fUL    // lea rdx,[profile]; mov rsi,r15; mov rdi,r13; call rbx  (just re-packed)
 #define SITE_CALL_LEN 15
-static const uintptr_t VTABLE_SLOTS[3] = {0x4d5fe30UL, 0x4dd8378UL, 0x4e24cc8UL};   // slot 5 of the 3 managers' vtables
+static const uintptr_t VTABLE_SLOTS[3] = {0x4d6ad50UL, 0x4de3298UL, 0x4e2fcc8UL};   // slot 5 of the 3 managers' vtables
 
 static const unsigned char SIG_CREATE[24] = {
     0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
     0x53, 0x48, 0x81, 0xec, 0x28, 0x04, 0x00, 0x00};
 static const unsigned char SIG_SITE_CACHED[SITE_CALL_LEN] = {
-    0x48, 0x8d, 0x15, 0xfa, 0x60, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd0};
+    0x48, 0x8d, 0x15, 0x5a, 0xe0, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd0};
 static const unsigned char SIG_SITE_PACKED[SITE_CALL_LEN] = {
-    0x48, 0x8d, 0x15, 0xca, 0x5c, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd3};
+    0x48, 0x8d, 0x15, 0x2a, 0xdc, 0x7a, 0x03, 0x4c, 0x89, 0xfe, 0x4c, 0x89, 0xef, 0xff, 0xd3};
 // requestDeleteTexture: the start, up to its use of +0x30 (name), +0x70 (delete time), +0x2c (weak count)
 static const unsigned char SIG_REQUEST_DELETE[64] = {
     0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
     0x49, 0x89, 0xf4, 0x53, 0x48, 0x89, 0xfb, 0x48, 0x8d, 0x7e, 0x30, 0x48, 0x83, 0xec, 0x08, 0xe8,
-    0xac, 0x2a, 0xe0, 0xff, 0x41, 0x89, 0xc0, 0x31, 0xc0, 0x45, 0x84, 0xc0, 0x0f, 0x84, 0x16, 0x01,
+    0x9c, 0x2a, 0xe0, 0xff, 0x41, 0x89, 0xc0, 0x31, 0xc0, 0x45, 0x84, 0xc0, 0x0f, 0x84, 0x16, 0x01,
     0x00, 0x00, 0x4d, 0x8d, 0x6c, 0x24, 0x2c, 0x41, 0x89, 0x44, 0x24, 0x70, 0xf0, 0x41, 0x83, 0x44};
 // destroySelf, whole: rbx = obj+0x50 (device); lock rbx+0x88; rdi = [rbx+0xb0]; requestDeleteTexture; unlock
 static const unsigned char SIG_DESTROY_SELF[0x54] = {
     0xf3, 0x0f, 0x1e, 0xfa, 0x55, 0x48, 0x89, 0xe5, 0x41, 0x55, 0x41, 0x54, 0x49, 0x89, 0xfc, 0x53,
     0x48, 0x83, 0xec, 0x08, 0x48, 0x8b, 0x5f, 0x50, 0x4c, 0x8d, 0xab, 0x88, 0x00, 0x00, 0x00, 0x4c,
-    0x89, 0xef, 0xe8, 0xb9, 0x9d, 0x99, 0xff, 0x85, 0xc0, 0x75, 0x29, 0x48, 0x8b, 0xbb, 0xb0, 0x00,
+    0x89, 0xef, 0xe8, 0x89, 0x8f, 0x99, 0xff, 0x85, 0xc0, 0x75, 0x29, 0x48, 0x8b, 0xbb, 0xb0, 0x00,
     0x00, 0x00, 0x48, 0x85, 0xff, 0x74, 0x08, 0x4c, 0x89, 0xe6, 0xe8, 0x21, 0xd1, 0xfe, 0xff, 0x4c,
-    0x89, 0xef, 0xe8, 0x79, 0x9d, 0x99, 0xff, 0x48, 0x83, 0xc4, 0x08, 0x31, 0xc0, 0x5b, 0x41, 0x5c,
+    0x89, 0xef, 0xe8, 0x49, 0x8f, 0x99, 0xff, 0x48, 0x83, 0xc4, 0x08, 0x31, 0xc0, 0x5b, 0x41, 0x5c,
     0x41, 0x5d, 0x5d, 0xc3};
 
 #define OBJ_REFS 0x10
@@ -88,6 +87,7 @@ static const unsigned char SIG_DESTROY_SELF[0x54] = {
 #define MAX_KEEP 96                    // entries (6 per material + slack; detail mode lists up to ~10 materials)
 #define MAX_KEEP_MB 160                // estimated at 1 byte per pixel + mips (the packs are BC7 DDS: 4096² ~ 22 MB)
 #define KEY_MAX 1024
+#define OFF_RELEASE_TICKS 8            // x BNGE_FLAG_POLL_MS = 2 s
 
 typedef void *(*create_fn)(void *mgr, void *path, void *profile);
 typedef void (*request_delete_fn)(void *mgr, void *obj);
@@ -136,17 +136,11 @@ static int acquire(void *obj) {
     }
 }
 
-// Is the device mutex (pthread_mutex_t, glibc layout: __owner at int [2]) held by this thread?
-static int own_device_mutex(void *obj) {
-    char *dev = *(char **)((char *)obj + OBJ_DEVICE);
-    if (!dev) return 0;
-    int owner = ((volatile int *)(dev + DEV_MUTEX))[2];
-    return owner == (int)syscall(SYS_gettid);
-}
-
 // Our reference back. The last one destroys the object as the engine's release does: destroySelf, or, under the device
 // mutex this thread already holds (the pack loader's call), destroySelf's body without the second lock.
-static void release(void *obj) {
+// held: the caller is the pack loader's call (the engine holds the device mutex on this thread); 0: the watcher thread
+// (never inside the engine: destroySelf takes the mutex itself).
+static void release(void *obj, int held) {
     int *rc = refs(obj);
     int c = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
     for (;;) {
@@ -155,7 +149,6 @@ static void release(void *obj) {
             continue;
         }
         if (c != 1) { atomic_fetch_add(&st_dropped, 1); return; }   // not ours any more: leave it alone
-        int held = own_device_mutex(obj);
         if (!__atomic_compare_exchange_n(rc, &c, -1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;
         void **vt = *(void ***)obj;
         if (held) {
@@ -202,6 +195,7 @@ static unsigned kept_mb(void) {
     return mb;
 }
 
+// (the watcher thread only: see watch)
 static void release_all(void) {
     void *victims[MAX_KEEP + 1];
     int nv = 0;
@@ -209,7 +203,7 @@ static void release_all(void) {
     while (g_nkeep > 0) take_out(g_nkeep - 1, victims, &nv);
     atomic_store(&st_kept_mb, 0);
     pthread_mutex_unlock(&g_lock);
-    for (int i = 0; i < nv; i++) release(victims[i]);
+    for (int i = 0; i < nv; i++) release(victims[i], 0);
 }
 
 static void log_call(const char *what, int site, const char *key, void *obj, unsigned long long ns) {
@@ -230,10 +224,8 @@ static void log_call(const char *what, int site, const char *key, void *obj, uns
 static void *hook_create(void *mgr, void *path, void *profile) {
     uintptr_t ret = (uintptr_t)__builtin_return_address(0);
     int site = ret == g_ret_cached ? 1 : ret == g_ret_packed ? 2 : 0;
-    if (!atomic_load_explicit(&g_on, memory_order_relaxed)) {
-        if (g_nkeep) release_all();           // the level ended: back to stock (unlocked read: a later call catches up)
-        return g_orig(mgr, path, profile);
-    }
+    if (!atomic_load_explicit(&g_on, memory_order_relaxed))
+        return g_orig(mgr, path, profile);    // (the level ended: stock; the watcher lets the kept textures go)
     char key[KEY_MAX];
     if (!site) {
         if (g_log && path_key(path, profile, key, sizeof key) && strcasestr(key, "terrainmaterialcache")) {
@@ -255,7 +247,7 @@ static void *hook_create(void *mgr, void *path, void *profile) {
         int i = find(key);
         if (i >= 0) take_out(i, victims, &nv);
         pthread_mutex_unlock(&g_lock);
-        if (nv) { release(victims[0]); atomic_fetch_add(&st_evicted, 1); }
+        if (nv) { release(victims[0], 1); atomic_fetch_add(&st_evicted, 1); }
         unsigned long long t0 = now_ns();
         void *obj = g_orig(mgr, path, profile);
         unsigned long long dt = now_ns() - t0;
@@ -277,7 +269,7 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     }
     g_last_call_ns = now;
     pthread_mutex_unlock(&g_lock);
-    for (int k = 0; k < nstale; k++) release(stale[k]);
+    for (int k = 0; k < nstale; k++) release(stale[k], 1);
 
     if (!g_dry) {
         pthread_mutex_lock(&g_lock);
@@ -325,8 +317,8 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     g_keep[g_nkeep].key = strdup(key);
     if (!g_keep[g_nkeep].key) {
         pthread_mutex_unlock(&g_lock);
-        for (int k = 0; k < nv; k++) release(victims[k]);
-        release(obj);
+        for (int k = 0; k < nv; k++) release(victims[k], 1);
+        release(obj, 1);
         return obj;
     }
     g_keep[g_nkeep].obj = obj;
@@ -343,7 +335,7 @@ static void *hook_create(void *mgr, void *path, void *profile) {
     }
     atomic_store(&st_kept_mb, kept_mb());
     pthread_mutex_unlock(&g_lock);
-    for (int k = 0; k < nv; k++) release(victims[k]);
+    for (int k = 0; k < nv; k++) release(victims[k], 1);
     return obj;
 }
 
@@ -363,10 +355,14 @@ static void *watch(void *arg) {
     char flag[512];
     bnge_temp_path(flag, sizeof flag, BNGE_LEVEL_FLAG);
     unsigned long long last_sum = ~0ULL;
-    int last_on = -1, tick = 0;
+    int last_on = -1, tick = 0, off_ticks = 0;
     for (;;) {
         int on = access(flag, F_OK) == 0;
         atomic_store(&g_on, on);
+        // The level ended: the kept textures go from here, OFF_RELEASE_TICKS polls later (the hook hands nothing out
+        // once the flag is off, and a texture it handed out just before is referenced by the engine by then).
+        off_ticks = on ? 0 : off_ticks + 1;
+        if (!on && off_ticks >= OFF_RELEASE_TICKS && g_nkeep) release_all();
         unsigned long long sum = atomic_load(&st_hits) + atomic_load(&st_misses) + atomic_load(&st_packed) +
                                  atomic_load(&st_evicted) + (unsigned long long)g_nkeep;
         if (on != last_on || (++tick % 8 == 0 && sum != last_sum)) {
@@ -390,8 +386,10 @@ static int same(const struct bnge_main *m, uintptr_t vaddr, const unsigned char 
 
 __attribute__((constructor)) static void bngearth_texkeep(void) {
     if (!bnge_is_main_game()) return;
-    // (opt-in for now, BNGEARTH_TEXKEEP=1: a review 2026-11-03 found a rare permanent-deadlock path (the device mutex's
-    // owner read from glibc's layout) and release_all's lock order; to be fixed before it is on by default)
+    // (opt-in, BNGEARTH_TEXKEEP=1. The 2026-11-03 review's deadlock paths are gone since 2026-11-13: no mutex-owner
+    // probe (the pack loader's calls release under the engine's lock, the watcher thread without it) and nothing is
+    // released from other callers of createTexture. Still to do before it is on by default: a teleport soak (a crash
+    // at a teleport's teardown was seen with it on, 2026-11-05, cause unknown))
     const char *on_ = getenv("BNGEARTH_TEXKEEP");
     if (!on_ || !*on_ || !strcmp(on_, "0")) {
         bnge_report(TAG, STATUS_FILE, "off (opt-in: BNGEARTH_TEXKEEP=1)");

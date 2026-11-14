@@ -42,7 +42,7 @@ jobs:
       publish: ${{ steps.v.outputs.publish }}
       dev: ${{ steps.v.outputs.dev }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: v
         env:
           GH_TOKEN: ${{ github.token }}
@@ -72,11 +72,11 @@ jobs:
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-22.04          # an older glibc: the AppImage runs on more distributions
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Development build's version
         if: needs.check.outputs.dev == 'true'
         run: printf '%s\n' "${{ needs.check.outputs.version }}" > VERSION
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Rust kernels
@@ -104,7 +104,7 @@ jobs:
           f=$(ls dist/*.AppImage)
           "$f" --appimage-extract-and-run --server --help > help.txt && head -3 help.txt
           "$f" --appimage-extract-and-run --world-cache --help > world-cache-help.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: dist/*.AppImage
@@ -117,12 +117,12 @@ jobs:
     env:
       SIGN_PFX_SET: ${{ secrets.BNGE_SIGN_PFX != '' }}     # (the signing step's condition: secrets cannot be in an if)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Development build's version
         if: needs.check.outputs.dev == 'true'
         shell: bash
         run: printf '%s\n' "${{ needs.check.outputs.version }}" > VERSION
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Rust kernels
@@ -181,7 +181,7 @@ jobs:
           "$f" --world-cache --help > world-cache-help.txt
       - name: Verify the Windows hosting executable
         run: python tools/build_host.py --platform windows --out build/host-smoke --smoke
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/*.exe
@@ -192,10 +192,10 @@ jobs:
     if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0              # (a development build's notes: the commits since the previous one)
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: out
       - name: Publish the development build v${{ needs.check.outputs.version }}
@@ -323,7 +323,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Development build's version
         if: needs.check.outputs.dev == 'true'
         run: printf '%s\n' "${{ needs.check.outputs.version }}" > VERSION
@@ -337,13 +337,13 @@ jobs:
             tags="$image:$v,$image:$moving"
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile

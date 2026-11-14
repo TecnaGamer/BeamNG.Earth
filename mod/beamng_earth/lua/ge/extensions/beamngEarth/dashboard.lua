@@ -1,4 +1,6 @@
--- Satellite imagery on the vehicle's own BeamNavigator WebView while BeamNG.Earth is active.
+-- Satellite imagery on the vehicle's own BeamNavigator WebView while BeamNG.Earth is active, with the server's road
+-- graph drawn over it as lines (the user, 2026-11-12, London: "Nav screeb blurry mess": the photo alone, 1 m a pixel
+-- from 10 m Sentinel-2 imagery in most of the world, showed no road to follow).
 -- BeamNavigator calls ui_uinavi.requestVehicleDashboardMap with the screen's actual material tag;
 -- that is the supported registration point, so this works without per-vehicle JBeam mappings.
 local M = {}
@@ -11,10 +13,20 @@ M.VIEW_INTERVAL_S = 0.1
 M.TILE_INTERVAL_S = 0.5
 M.RESTORE_RELOAD_S = 0.5
 
-local OFFSETS = {
-  { 0, 0 }, {-1, 0}, {1, 0}, {0, -1}, {0, 1},
-  {-1, -1}, {1, -1}, {-1, 1}, {1, 1},
-}
+-- The photo tiles round the car: every tile within VIEW_RADIUS_PX of it (the farthest screen corner of a 512 x 256 screen
+-- with the car 62 % down is ~300 px away; the fixed 3 x 3 block left bare corners when the car was near a tile's edge)
+M.VIEW_RADIUS_PX = 320
+M.ROADS_YIELD = 300       -- the roads' conversion pauses for a frame after this many edges (no hitch per graph)
+
+-- The page's updates are acknowledged (from iambobab's PR #472): the roads and the tiles each go with a key and a Lua
+-- call the page makes once it drew them (navDrawn, built here: the page only echoes it). An update not acknowledged
+-- after ACK_S is sent again, ACK_TRIES times at most; a page that never said it loaded (screenReady) after APPLY_S is
+-- loaded again, APPLY_TRIES times at most. Every PROBE_S a drawn screen is asked whether it still has what it was sent
+-- (a car's page reloaded with no request we saw, or replaced by the stock page): if not (navLost) it is sent again or
+-- our page loaded again, LOST_TRIES times per graph at most.
+M.ACK_S, M.ACK_TRIES = 3.0, 3
+M.APPLY_S, M.APPLY_TRIES = 5.0, 3
+M.PROBE_S, M.LOST_TRIES = 5.0, 3
 
 local enabled = true
 local active = false
@@ -23,6 +35,18 @@ local navExtension, stockRequest, wrappedRequest
 local lastViewAt, lastTilesAt = 0, 0
 local lastTilesSignature = nil
 local currentVehicle = nil
+local tilesUpdate = nil        -- { key, json }: the newest tiles update (the screens' "tiles" channel)
+local tilesSerial = 0
+
+-- (diagnostics: the main thread's cost of the last graph's roads, ms; hptimer where the game has it)
+M.stats = { roadsSlices = 0, roadsWorstMs = 0, roadsTotalMs = 0, roadsSendMs = 0, roadsBytes = 0, roadsSends = 0,
+  resends = 0, probes = 0, lost = 0, reapplied = 0 }
+local function timer()
+  local ok, sw = pcall(require, 'beamngEarth/stopwatch')
+  if ok and type(sw) == 'table' and sw.new then return sw.new() end
+  local t0 = os.clock()
+  return function() return (os.clock() - t0) * 1000 end
+end
 
 local function extension(name)
   local all = rawget(_G, 'extensions')
@@ -87,6 +111,18 @@ local function dashboardCall(rec, method, data)
   return true
 end
 
+-- The Lua the page runs back (beamng.sendEngineLua): built here from the screen's own record, the page only echoes it.
+local function luaCall(rec, fn, ...)
+  local args = { tostring(rec.vehicleId), string.format('%q', rec.tag) }
+  for _, v in ipairs({ ... }) do args[#args + 1] = type(v) == 'number' and tostring(v) or string.format('%q', tostring(v)) end
+  return 'if beamngEarth_dashboard then beamngEarth_dashboard.' .. fn .. '(' .. table.concat(args, ',') .. ') end'
+end
+
+-- a screen's updates: per channel ("roads", "tiles") the key sent, the key the page said it drew, when and how often
+local function resetChannels(rec)
+  rec.ch = { roads = { tries = 0 }, tiles = { tries = 0 } }
+end
+
 local function restoreScreen(rec)
   if not rec.applied or rec.restoring then return end
   local target = vehicleFor(rec.vehicleId)
@@ -95,9 +131,8 @@ local function restoreScreen(rec)
     return
   end
   target:queueJSUITexture(rec.tag, 'window.beamngEarthDashboard&&window.beamngEarthDashboard.restore()')
-  rec.applied, rec.restoring = false, true
+  rec.applied, rec.restoring, rec.ready = false, true, false
   rec.restoreAt = os.clock() + M.RESTORE_RELOAD_S
-  rec.sentTiles, rec.lastViewAt = false, 0
 end
 
 local function processRestores(now)
@@ -109,7 +144,6 @@ local function processRestores(now)
         rec.stockRequest(rec.tag, rec.initmap, rec.vehicleId)
       end
       rec.restoring, rec.restoreAt = false, nil
-      rec.sentTiles, rec.lastViewAt = false, 0
       if not target then screens[key] = nil else restored = true end
     elseif not vehicleFor(rec.vehicleId) then
       screens[key] = nil
@@ -126,8 +160,9 @@ local function applyScreen(rec)
   local prefix = M.DASHBOARD_URI .. '?vehicle=' .. rec.vehicleId .. '&screen='
   target:queueJSUITexture(rec.tag, 'window.location.replace(' .. jsonEncode(prefix)
     .. '+encodeURIComponent(' .. jsonEncode(rec.tag) .. ')+"&return="+encodeURIComponent(window.location.href))')
-  rec.applied, rec.sentTiles, rec.lastViewAt = true, false, 0
-  lastTilesSignature = nil
+  rec.applied, rec.ready, rec.appliedAt = true, false, os.clock()
+  rec.applyTries = (rec.applyTries or 0) + 1
+  resetChannels(rec)
 end
 
 local function activateScreens()
@@ -156,7 +191,12 @@ local function registerScreen(tag, initmap, vehId, callback)
     screens[key] = rec
   end
   rec.initmap, rec.stockRequest = initmap, callback
-  rec.restoring = false
+  rec.requested = true                          -- (came through the hook: askScreens)
+  rec.applyTries, rec.lost, rec.lostKey = 0, 0, nil
+  -- a request comes from a navigator starting (a spawn, the car reloaded with its id kept: Ctrl+R): its screen shows
+  -- the stock page again, ours to load anew (in-game 2026-11-12: after a reload the stock page stayed, the record
+  -- still marked as ours)
+  rec.restoring, rec.applied = false, false
   if active and enabled and id == playerVehicleId() then applyScreen(rec) end
 end
 
@@ -191,15 +231,24 @@ M.project = project
 local function tileLayout(lat, lon, zoom)
   local x, y, n = project(lat, lon, zoom)
   if not x then return nil end
-  local cx, cy = math.floor(x), math.floor(y)
-  local requests, tiles = {}, {}
-  for _, d in ipairs(OFFSETS) do
-    local worldX, tileY = cx + d[1], cy + d[2]
-    if tileY >= 0 and tileY < n then
-      local tileX = worldX % n
-      requests[#requests + 1] = { zoom, tileX, tileY, 'sat' }
-      tiles[#tiles + 1] = { x = worldX, y = tileY, tileX = tileX }
+  local r = M.VIEW_RADIUS_PX / 256
+  local list = {}
+  for worldX = math.floor(x - r), math.floor(x + r) do
+    for tileY = math.floor(y - r), math.floor(y + r) do
+      if tileY >= 0 and tileY < n then
+        local ddx = math.max(worldX - x, 0, x - worldX - 1)
+        local ddy = math.max(tileY - y, 0, y - tileY - 1)
+        if ddx * ddx + ddy * ddy <= r * r then
+          list[#list + 1] = { x = worldX, y = tileY, tileX = worldX % n, d = ddx * ddx + ddy * ddy }
+        end
+      end
     end
+  end
+  table.sort(list, function(a, b) return a.d < b.d end)     -- the car's own tile first
+  local requests, tiles = {}, {}
+  for i, t in ipairs(list) do
+    requests[i] = { zoom, t.tileX, t.y, 'sat' }
+    tiles[i] = { x = t.x, y = t.y, tileX = t.tileX }
   end
   return { zoom = zoom, pixelX = x * 256, pixelY = y * 256, requests = requests, tiles = tiles }
 end
@@ -218,6 +267,112 @@ local function keyFor(z, x, y)
   return string.format('sat/%d/%d/%d', z, x, y)
 end
 
+------------------------------------------------------------------------------------------
+-- The roads over the photo
+
+-- Pure: a graph edge's drivability (server navgraph.py DRIVE: main roads 1, tertiary 0.9, town streets 0.8, living
+-- streets 0.5, service 0.4, busways / tracks 0.2) as the page's road class: 3 main, 2 town street, 1 service, 0 track.
+function M.roadClass(d)
+  d = tonumber(d) or 1
+  if d >= 0.85 then return 3 end
+  if d >= 0.7 then return 2 end
+  if d >= 0.3 then return 1 end
+  return 0
+end
+
+local function finite(v) return type(v) == 'number' and v == v and v > -1e7 and v < 1e7 end
+
+-- Pure: the page's setRoads argument (JSON text) for graph g ({ anchor, nodes = { name = {x, y, z, radius} },
+-- edges = { {a, b, oneway, lo, li, speed, drivability, half width} } }): n = node x, y pairs in metres from (ox, oy)
+-- (0.1 m), e = (node a, node b, class, half width in dm) per road, each road once (not its reverse), only nodes a road
+-- uses. Also the road count. yieldEvery: a coroutine.yield after that many edges (in a coroutine).
+-- The numbers go into two reused buffers turned to text by table.concat at every pause, the pieces joined at the
+-- end (no string per node, road or pair key: the old one made ~50,000 small strings per city graph for the main
+-- thread's collector, and its last slice formatted every number at once).
+local PAIR = 2 ^ 24                -- (a node pair's number key: ia * PAIR + ib, exact for ids under 2^24)
+function M.roadsText(g, key, yieldEvery)
+  local nodes = type(g) == 'table' and type(g.nodes) == 'table' and g.nodes or {}
+  local index, seen = {}, {}
+  local nbuf, ebuf, nparts, eparts, nb, eb = {}, {}, {}, {}, 0, 0
+  local count, ox, oy = 0, nil, nil
+  local floor, concat = math.floor, table.concat
+  local function id(name, p)
+    local i = count
+    index[name] = i
+    count = count + 1
+    if not ox then ox, oy = floor(p[1]), floor(p[2]) end
+    nbuf[nb + 1], nbuf[nb + 2] = floor((p[1] - ox) * 10 + 0.5) / 10, floor((p[2] - oy) * 10 + 0.5) / 10
+    nb = nb + 2
+    return i
+  end
+  local function flush()
+    if nb > 0 then nparts[#nparts + 1], nb = concat(nbuf, ',', 1, nb), 0 end
+    if eb > 0 then eparts[#eparts + 1], eb = concat(ebuf, ',', 1, eb), 0 end
+  end
+  local roads = 0
+  for k, edge in ipairs(type(g) == 'table' and type(g.edges) == 'table' and g.edges or {}) do
+    local na, nb_ = edge[1], edge[2]
+    local a, b = nodes[na], nodes[nb_]
+    if na ~= nb_ and type(a) == 'table' and type(b) == 'table' and finite(a[1]) and finite(a[2]) and finite(b[1])
+        and finite(b[2]) then
+      local ia, ib = index[na], index[nb_]
+      if not (ia and ib and seen[ib * PAIR + ia]) then        -- (its reverse already drawn: not again)
+        ia, ib = ia or id(na, a), ib or id(nb_, b)
+        seen[ia * PAIR + ib] = true
+        local half = tonumber(edge[8]) or math.max(tonumber(a[4]) or 0, tonumber(b[4]) or 0)
+        if not finite(half) or half <= 0 then half = 3 end
+        ebuf[eb + 1], ebuf[eb + 2], ebuf[eb + 3], ebuf[eb + 4] = ia, ib, M.roadClass(edge[7]),
+          floor(math.min(half, 40) * 10 + 0.5)
+        eb = eb + 4
+        roads = roads + 1
+      end
+    end
+    if yieldEvery and k % yieldEvery == 0 then
+      flush()
+      coroutine.yield()
+    end
+  end
+  flush()
+  local anchor = type(g) == 'table' and g.anchor
+  return '{"key":' .. string.format('%q', tostring(key or '')) .. ',"anchor":'
+    .. (type(anchor) == 'number' and tostring(anchor) or string.format('%q', tostring(anchor)))
+    .. ',"ox":' .. (ox or 0) .. ',"oy":' .. (oy or 0) .. ',"n":[' .. concat(nparts, ',') .. '],"e":['
+    .. concat(eparts, ',') .. ']}', roads
+end
+
+local roadsJob = nil          -- { key, co }: a graph's conversion in progress
+local roadsBuilt = nil        -- { key, text, roads }: the last graph converted
+
+-- The server's road graph (navgraph.lua's, moved with a rebase) as the page's roads, converted over a few frames.
+local function updateRoads()
+  local ok, nav = pcall(require, 'beamngEarth/navgraph')
+  local g = ok and type(nav) == 'table' and type(nav.graph) == 'function' and nav.graph() or nil
+  if type(g) ~= 'table' then return end
+  local key = tostring(g.anchor) .. ':' .. tostring(g.serial) .. (g.moved and ':moved' or '') .. ':' .. tostring(g.nodes)
+  if roadsBuilt and roadsBuilt.key == key then return end
+  if not roadsJob or roadsJob.key ~= key then
+    roadsJob = { key = key, slices = 0, ms = 0, worst = 0,
+      co = coroutine.create(function() return M.roadsText(g, key, M.ROADS_YIELD) end) }
+  end
+  local elapsed = timer()
+  local okR, text, roads = coroutine.resume(roadsJob.co)
+  local ms = elapsed()
+  roadsJob.slices, roadsJob.ms, roadsJob.worst = roadsJob.slices + 1, roadsJob.ms + ms, math.max(roadsJob.worst, ms)
+  if not okR then
+    if log then log('W', 'beamngEarth.dashboard', 'roads for the car screens: ' .. tostring(text)) end
+    roadsJob, roadsBuilt = nil, { key = key, text = nil }
+  elseif coroutine.status(roadsJob.co) == 'dead' then
+    local st = M.stats
+    st.roadsSlices, st.roadsTotalMs, st.roadsWorstMs, st.roadsBytes = roadsJob.slices, roadsJob.ms, roadsJob.worst, #text
+    roadsJob, roadsBuilt = nil, { key = key, text = text, roads = roads }
+  end
+end
+
+-- Pure: metres a photo pixel at a zoom and latitude (Web Mercator, 256 px tiles).
+function M.metresPerPixel(lat, zoom)
+  return 156543.03392804097 * math.cos(math.rad(lat)) / 2 ^ zoom
+end
+
 local function imageryCredits(ctx)
   local ok, credits = pcall(require, 'beamngEarth/credits')
   if ok and credits and credits.serverText then
@@ -233,11 +388,14 @@ local function tileFiles(layout, ready, settings)
   local out, parts = {}, {}
   for _, tile in ipairs(layout.tiles) do
     local key = keyFor(layout.zoom, tile.tileX, tile.y)
-    if readySet[key] then
-      local path = settings.mapTilePath and settings.mapTilePath('sat', layout.zoom, tile.tileX, tile.y)
-        or string.format('/temp/beamngEarth/maptiles/%d/%d/%d.jpg', layout.zoom, tile.tileX, tile.y)
+    -- (only a stand-in there, settings.mapTiles' "satp": shown until the real tile's own path comes, a new src)
+    local layer = readySet[key] and 'sat' or readySet['satp/' .. key:sub(5)] and 'satp' or nil
+    if layer then
+      local path = settings.mapTilePath and settings.mapTilePath(layer, layout.zoom, tile.tileX, tile.y)
+        or string.format('/temp/beamngEarth/maptiles/%s%d/%d/%d.jpg', layer == 'satp' and 'prov/' or '', layout.zoom,
+          tile.tileX, tile.y)
       out[#out + 1] = { x = tile.x, y = tile.y, src = path }
-      parts[#parts + 1] = key .. '@' .. tostring(tile.x)
+      parts[#parts + 1] = key .. '@' .. tostring(tile.x) .. (layer == 'satp' and 'p' or '')
     end
   end
   return out, table.concat(parts, '|')
@@ -254,9 +412,10 @@ local function updateTiles(ctx, layout, now)
   local files, signature = tileFiles(layout, ready, settings)
   if signature ~= lastTilesSignature then
     lastTilesSignature = signature
-    return { zoom = layout.zoom, tiles = files }
+    tilesSerial = tilesSerial + 1
+    local key = 't' .. tilesSerial
+    tilesUpdate = { key = key, json = jsonEncode({ key = key, zoom = layout.zoom, tiles = files }) }
   end
-  return nil
 end
 
 local function sendView(ctx, layout, status, now)
@@ -266,23 +425,85 @@ local function sendView(ctx, layout, status, now)
   local view
   if layout and player then
     view = { pixelX = layout.pixelX, pixelY = layout.pixelY, zoom = layout.zoom,
-      heading = tonumber(player.heading) or 0, attribution = imageryCredits(ctx), status = status or '' }
+      heading = tonumber(player.heading) or 0, attribution = imageryCredits(ctx), status = status or '',
+      -- the roads' frame: the car in the world frame, true north there, the photo's metres a pixel
+      x = finite(player.x) and player.x or nil, y = finite(player.y) and player.y or nil,
+      north = finite(player.north) and player.north or 0, anchor = ctx.anchorId,
+      mpp = M.metresPerPixel(player.lat, layout.zoom) }
   else
     view = { status = status or '', attribution = imageryCredits(ctx) }
   end
   for _, rec in pairs(screens) do
-    if rec.applied and rec.vehicleId == currentVehicle then
+    if rec.ready and rec.vehicleId == currentVehicle then
       dashboardCall(rec, 'setView', view)
     end
   end
 end
 
-local function sendTiles(data)
-  if not data then return end
+-- A channel's update due: 1 a new key, 2 the same again (not acknowledged after ACK_S), nil neither.
+local function due(c, key, now)
+  if key == nil then return nil end
+  if c.sent ~= key then return 1 end
+  if c.ack ~= key and now - (c.at or now) >= M.ACK_S and (c.tries or 0) < M.ACK_TRIES then return 2 end
+  return nil
+end
+local function markSent(c, key, now, why)
+  if why == 1 then c.sent, c.at, c.tries = key, now, 1
+  else c.at, c.tries = now, (c.tries or 0) + 1; M.stats.resends = M.stats.resends + 1 end
+end
+
+local function jsValue(v) return v == nil and 'null' or jsonEncode(v) end
+
+-- Asks the page whether it still has what it was sent (PROBE_S): navLost('page') where it is not ours any more,
+-- navLost('data') where its roads or tiles are not the ones it acknowledged.
+local function probe(rec, target, now)
+  rec.probedAt = now
+  rec.probeSerial = (rec.probeSerial or 0) + 1
+  M.stats.probes = M.stats.probes + 1
+  target:queueJSUITexture(rec.tag, '(function(){var d=window.beamngEarthDashboard,S=function(c){if(typeof beamng!=='
+    .. '"undefined"&&beamng.sendEngineLua)beamng.sendEngineLua(c)};if(!d||typeof d.keys!=="function"){S('
+    .. jsonEncode(luaCall(rec, 'navLost', 'page', rec.probeSerial)) .. ');return}var k=d.keys();if(k.roads!=='
+    .. jsValue(rec.ch.roads.sent) .. '||k.tiles!==' .. jsValue(rec.ch.tiles.sent) .. ')S('
+    .. jsonEncode(luaCall(rec, 'navLost', 'data', rec.probeSerial)) .. ')})()')
+end
+
+-- The player's screens: a page that never said it loaded is loaded again; a loaded one gets the newest tiles and
+-- roads (each until it says it drew them) and is probed now and then.
+local function sendScreens(now)
   for _, rec in pairs(screens) do
     if rec.applied and rec.vehicleId == currentVehicle then
-      dashboardCall(rec, 'setTiles', data)
-      rec.sentTiles = true
+      if not rec.ready then
+        if now - (rec.appliedAt or now) >= M.APPLY_S and (rec.applyTries or 0) < M.APPLY_TRIES then
+          rec.applied = false
+          M.stats.reapplied = M.stats.reapplied + 1
+          applyScreen(rec)
+        end
+      else
+        local target = vehicleFor(rec.vehicleId)
+        if target and type(target.queueJSUITexture) == 'function' then
+          local ch = rec.ch
+          local why = tilesUpdate and due(ch.tiles, tilesUpdate.key, now)
+          if why then
+            markSent(ch.tiles, tilesUpdate.key, now, why)       -- (first: the page's answer may come at once)
+            target:queueJSUITexture(rec.tag, 'window.beamngEarthDashboard&&window.beamngEarthDashboard.setTiles('
+              .. tilesUpdate.json .. ',' .. jsonEncode(luaCall(rec, 'navDrawn', tilesUpdate.key)) .. ')')
+          end
+          local built = roadsBuilt and roadsBuilt.text and roadsBuilt
+          if built and rec.lostKey ~= nil and rec.lostKey ~= built.key then rec.lost, rec.lostKey = 0, nil end
+          why = built and due(ch.roads, built.key, now)
+          if why then
+            markSent(ch.roads, built.key, now, why)
+            local elapsed = timer()
+            target:queueJSUITexture(rec.tag, 'window.beamngEarthDashboard&&window.beamngEarthDashboard.setRoads('
+              .. built.text .. ',' .. jsonEncode(luaCall(rec, 'navDrawn', built.key)) .. ')')
+            M.stats.roadsSendMs, M.stats.roadsSends = elapsed(), M.stats.roadsSends + 1
+          end
+          if ch.roads.ack == ch.roads.sent and ch.tiles.ack == ch.tiles.sent and (rec.lost or 0) < M.LOST_TRIES
+              and now - (rec.probedAt or now) >= M.PROBE_S then
+            probe(rec, target, now)
+          end
+        end
+      end
     end
   end
 end
@@ -309,8 +530,9 @@ local function updateDashboard(now, ctx)
     sendView(ctx, nil, 'Satellite map unavailable', now)
     return
   end
-  local tileUpdate = updateTiles(ctx, layout, now)
-  sendTiles(tileUpdate)
+  updateTiles(ctx, layout, now)
+  updateRoads()
+  sendScreens(now)
   local status = (lastTilesSignature == '' and 'Satellite tiles are loading') or ''
   sendView(ctx, layout, status, now)
 end
@@ -326,8 +548,36 @@ function M.screenReady(vehicleId, tag)
     restoreScreen(rec)
     return false
   end
-  rec.sentTiles = false
-  lastTilesSignature, lastTilesAt, lastViewAt = nil, 0, 0
+  rec.ready, rec.applyTries, rec.probedAt = true, 0, os.clock()
+  resetChannels(rec)                  -- (a new page: the tiles and the roads sent again)
+  lastTilesAt, lastViewAt = 0, 0
+  return true
+end
+
+-- A page drew an update (the Lua it was sent with it, luaCall).
+function M.navDrawn(vehicleId, tag, key)
+  local rec = type(tag) == 'string' and screens[screenKey(tonumber(vehicleId) or -1, tag)]
+  if not rec or not rec.ch then return false end
+  for _, c in pairs(rec.ch) do
+    if c.sent ~= nil and c.sent == key then c.ack = key end
+  end
+  return true
+end
+
+-- A page answered a probe (what: 'page', our page is gone; 'data', its roads or tiles are not what it was sent):
+-- loaded again, or sent everything again. LOST_TRIES per graph at most (probes stop after that).
+function M.navLost(vehicleId, tag, what, serial)
+  local rec = type(tag) == 'string' and screens[screenKey(tonumber(vehicleId) or -1, tag)]
+  if not rec or not rec.ready or serial ~= rec.probeSerial then return false end
+  rec.lost = (rec.lost or 0) + 1
+  rec.lostKey = roadsBuilt and roadsBuilt.key or rec.lostKey
+  M.stats.lost = M.stats.lost + 1
+  if what == 'page' then
+    rec.applied, rec.ready, rec.applyTries = false, false, 0
+    if active and enabled and rec.vehicleId == playerVehicleId() then applyScreen(rec) end
+  else
+    resetChannels(rec)
+  end
   return true
 end
 
@@ -374,25 +624,53 @@ end]]
 
 local function hasScreen(id)
   local prefix = tostring(id) .. '\0'
-  for key in pairs(screens) do
-    if key:sub(1, #prefix) == prefix then return true end
+  for key, rec in pairs(screens) do
+    if rec.requested and key:sub(1, #prefix) == prefix then return true end
   end
   return false
 end
 
--- once per car: its navigators' requests made again through our hook (registerScreen), when it has none registered
+-- The car's navigation screens by its jbeam (core_vehicle_manager's vehicle data: beamNavigator controllers, gauges
+-- with a navigationData module, as VEHICLE_ASK asks them); nil where the data is not at hand.
+M.ASK_TRIES = 3
+local function navigatorCount(id)
+  local mgr = rawget(_G, 'core_vehicle_manager')
+  if not mgr or type(mgr.getVehicleData) ~= 'function' then return nil end
+  local ok, vd = pcall(mgr.getVehicleData, id)
+  local ctrl = ok and type(vd) == 'table' and type(vd.vdata) == 'table' and vd.vdata.controller
+  if type(ctrl) ~= 'table' then return nil end
+  local n = 0
+  for _, c in pairs(ctrl) do
+    if type(c) == 'table' then
+      local file = c.fileName
+      if type(file) == 'string' and (file == 'beamNavigator' or file:sub(-14) == '/beamNavigator') then n = n + 1 end
+      for _, m in pairs(type(c.customModules) == 'table' and c.customModules or {}) do
+        if type(m) == 'table' and m.moduleName == 'navigationData' then n = n + 1 end
+      end
+    end
+  end
+  return n
+end
+
+-- per car: its navigators' requests made again through our hook (registerScreen), when it has none registered;
+-- a car whose jbeam lists one is asked again (ASK_RETRY_S apart, ASK_TRIES times) until one registers (PR #472: a
+-- request can still miss the hook, the first car's loads ui_uinavi with that very request); one with none listed is
+-- not asked; one whose data is not at hand, once
 local function askScreens(now)
   local id = playerVehicleId()
   if not id or ask.done[id] then return end
-  if ask.id ~= id then ask.id, ask.at = id, now + M.ASK_AFTER_S return end
+  if ask.id ~= id then ask.id, ask.at, ask.tries = id, now + M.ASK_AFTER_S, 0 return end
   if now < ask.at then return end
   if hasScreen(id) then ask.done[id] = true return end
   local ctx = coreContext()
   if not (enabled and ctx and ctx.active == true) then ask.at = now + M.ASK_RETRY_S return end
   local target = vehicleFor(id)
   if not target or type(target.queueLuaCommand) ~= 'function' then ask.at = now + M.ASK_RETRY_S return end
+  local n = navigatorCount(id)
+  if n == 0 then ask.done[id] = true return end
   target:queueLuaCommand(M.VEHICLE_ASK)
-  ask.done[id] = true
+  ask.tries = (ask.tries or 0) + 1
+  if n == nil or ask.tries >= M.ASK_TRIES then ask.done[id] = true else ask.at = now + M.ASK_RETRY_S end
   M.asked = (M.asked or 0) + 1        -- (diagnostics)
 end
 
@@ -439,6 +717,7 @@ function M.onClientEndMission()
   restoreScreens()
   currentVehicle = nil
   lastTilesAt, lastViewAt, lastTilesSignature = 0, 0, nil
+  roadsJob, roadsBuilt, tilesUpdate = nil, nil, nil
 end
 
 function M.onVehicleSwitched(oldId, newId)

@@ -18,6 +18,7 @@ import os
 import threading
 
 import fast
+import dmath
 import missindex
 import revisit
 
@@ -339,6 +340,8 @@ class CoverMap:
         import math
 
         import dem as demmod
+        if self.cache is not None and hasattr(self.cache, "walk_soon"):
+            self.cache.walk_soon()              # (the view needs the cache's walk: it waits WALK_DELAY_S otherwise)
         if isinstance(z, bool) or not isinstance(z, int) or not GRID_MIN_Z <= z <= GRID_MAX_Z:
             raise ValueError(f"cache map zoom {z!r}: {GRID_MIN_Z}..{GRID_MAX_Z}")
         m = MODES.get(mode or "summary")
@@ -367,7 +370,7 @@ class CoverMap:
         self._drain()
         self._sidecars()
         self._caps()
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y0 + h / 2) / n))))
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y0 + h / 2) / n))))
         hm = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)
         world = self.world_classes() if m == MODES["world"] else []
         with self.lock:

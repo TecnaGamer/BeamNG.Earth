@@ -11,6 +11,7 @@ need those climbs, and a slab at the street's level would block it: those are le
 Walkway tunnels stay as they are (the walkway is not drawn on the ground either).
 """
 import numpy as np
+import dnp
 
 WALK_CLASSES = ("footway", "path", "pedestrian", "cycleway", "bridleway", "steps")   # (grading.WALK_SPAN_CLASSES)
 STEP_M = 2.0                # m between cross-sections (railways.STEP_M)
@@ -63,6 +64,9 @@ def parts(frame, cells, box, reach=REACH_M):
         hit = np.isin(cls, WALK_CLASSES)
         if sub is not None:
             hit &= np.asarray(sub).astype(str) == "road"
+        if hit.any():                   # (a street closed to cars is a road, its bridge the roads': roads.cycle_streets)
+            import roads
+            hit &= ~roads.cycle_streets(feats)
         fb = None
         for i in np.flatnonzero(hit):
             c = str(cls[i])
@@ -101,7 +105,7 @@ def _over_roads(xy, crossers):
         d = b - a
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((xy[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
-        dist = np.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
+        dist = dnp.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
         on |= dist <= hw
     return on
 
@@ -128,7 +132,7 @@ def deck(xy, zg, crossers):
     return z
 
 
-def add(mesh, bridges, ground, crossers, ex, concrete, small):
+def add(mesh, bridges, ground, crossers, ex, concrete, small, obstacles=None):
     """The decks of bridges (parts') into railways' _Mesh mesh: the slab and its parapets over the points within ex (the
     tile's box with its overlap), the piers into small (railways.tile_mesh draws them with the sleepers, as room
     allows). ground(xy (n, 2)) -> z (one call for all of them)."""
@@ -166,27 +170,11 @@ def add(mesh, bridges, ground, crossers, ex, concrete, small):
                 mesh.strip(np.c_[e_in, t], np.c_[e_in, hi], 0.0, 0.3, v, concrete, -o)
                 mesh.strip(np.c_[e_in, hi], np.c_[e_out, hi], 0.0, 0.05, v, concrete, up)
                 mesh.strip(np.c_[e_out, hi], np.c_[e_out, t - DECK_D], 0.0, 0.5, v, concrete, o)
-            pr = _piers(s, xy, u, z, zg, i, j)
-            pr = railways._sited(pr, crossers, ground) if pr is not None else None
+            if obstacles is None:
+                obstacles = (np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0))
+            pr = railways.pier_sites(s, xy, u, z, zg, i, j, obstacles, ground, PIER_EVERY, DECK_D, PIER_MIN_H,
+                                     np.array([PIER_ALONG / 2, max(half - 0.2, 0.4)]))
             if pr is not None:
                 small.append((pr, PIER_ALONG / 2, max(half - 0.2, 0.4), concrete))
 
 
-def _piers(s, xy, u, z, zg, i, j):
-    """(centres, along, across, z0, z1) of the piers under run i..j, every PIER_EVERY from the piece's start, where the
-    slab's underside stands PIER_MIN_H or more over the ground (railways._piers' shape)."""
-    ss = np.arange(PIER_EVERY, s[-1] - PIER_EVERY / 2, PIER_EVERY)
-    ss = ss[(ss >= s[i]) & (ss <= s[j])]
-    if not len(ss):
-        return None
-    zt = np.interp(ss, s, z) - DECK_D
-    zgs = np.interp(ss, s, zg)
-    keep = zt - zgs >= PIER_MIN_H
-    ss, zt, zgs = ss[keep], zt[keep], zgs[keep]
-    if not len(ss):
-        return None
-    import railways
-    cx, cy = np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])
-    ux, uy = np.interp(ss, s, u[:, 0]), np.interp(ss, s, u[:, 1])
-    un = np.c_[ux, uy] / np.maximum(np.hypot(ux, uy), 1e-9)[:, None]
-    return np.c_[cx, cy], np.c_[un[:, 1], -un[:, 0]], un, zgs - railways.PIER_FOOT_M, zt

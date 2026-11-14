@@ -1,5 +1,6 @@
 //! Cosmetic road and bridge routes (#565). Python supplies shared road rules, lane shifts and solved deck heights;
 //! chunking, selection, lane geometry and relief simplification stay here. No connection to the physics graph.
+use crate::dm::Dm;
 
 use blake2::{digest::consts::U8, Blake2s, Digest};
 use numpy::{ndarray::Array2, IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -40,7 +41,7 @@ fn simplify(xy: &[[f64; 2]], tolerance: f64) -> Vec<usize> {
 
 fn arcs(xy: &[[f64; 2]]) -> Vec<f64> {
     let mut out = vec![0.0];
-    for p in xy.windows(2) { out.push(out.last().unwrap() + (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1])); }
+    for p in xy.windows(2) { out.push(out.last().unwrap() + (p[1][0] - p[0][0]).dhypot(p[1][1] - p[0][1])); }
     out
 }
 
@@ -55,7 +56,7 @@ fn interpolate(xy: &[[f64; 3]], s: &[f64], at: f64) -> [f64; 3] {
 fn pieces(raw: &[[f64; 3]], bounds: [f64; 4], bridge: bool) -> Vec<(usize, Vec<[f64; 3]>)> {
     if raw.len() < 2 || raw.iter().flatten().any(|v| !v.is_finite()) { return Vec::new(); }
     let xy: Vec<_> = raw.iter().enumerate().filter(|(i, p)| *i == 0 ||
-        (p[0] - raw[i - 1][0]).hypot(p[1] - raw[i - 1][1]) > 0.01).map(|(_, p)| *p).collect();
+        (p[0] - raw[i - 1][0]).dhypot(p[1] - raw[i - 1][1]) > 0.01).map(|(_, p)| *p).collect();
     if xy.len() < 2 { return Vec::new(); }
     let s = arcs(&xy.iter().map(|p| [p[0], p[1]]).collect::<Vec<_>>());
     let length = *s.last().unwrap();
@@ -73,7 +74,7 @@ fn pieces(raw: &[[f64; 3]], bounds: [f64; 4], bridge: bool) -> Vec<(usize, Vec<[
         let keep = crate::sidewalks::simplify(&p.iter().map(|p| p.to_vec()).collect::<Vec<_>>(), if bridge { 0.15 } else { 0.5 });
         let p: Vec<_> = keep.iter().map(|i| p[*i]).collect();
         let steps: Vec<_> = p.windows(2).map(|p|
-            (((p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1]) / STEP_M).ceil() as usize).max(1)).collect();
+            (((p[1][0] - p[0][0]).dhypot(p[1][1] - p[0][1]) / STEP_M).ceil() as usize).max(1)).collect();
         if steps.iter().sum::<usize>() + 1 > MAX_POINTS { continue; }
         let mut dense = vec![p[0]];
         for (seg, n) in p.windows(2).zip(steps) {
@@ -91,13 +92,13 @@ fn pieces(raw: &[[f64; 3]], bounds: [f64; 4], bridge: bool) -> Vec<(usize, Vec<[
 fn offset(xy: &[[f64; 2]], d: &[f64]) -> Vec<[f64; 2]> {
     let normals: Vec<_> = xy.windows(2).map(|p| {
         let (dx, dy) = (p[1][0] - p[0][0], p[1][1] - p[0][1]);
-        let len = dx.hypot(dy).max(1e-9);
+        let len = dx.dhypot(dy).max(1e-9);
         [-dy / len, dx / len]
     }).collect();
     xy.iter().enumerate().map(|(i, p)| {
         let n = if i == 0 { normals[0] } else if i == xy.len() - 1 { normals[i - 1] } else {
             let v = [normals[i - 1][0] + normals[i][0], normals[i - 1][1] + normals[i][1]];
-            let len = v[0].hypot(v[1]).max(1e-9);
+            let len = v[0].dhypot(v[1]).max(1e-9);
             let m = [v[0] / len, v[1] / len];
             let scale = (m[0] * normals[i][0] + m[1] * normals[i][1]).clamp(0.5, 1.0);
             [m[0] / scale, m[1] / scale]

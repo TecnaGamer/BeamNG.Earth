@@ -24,6 +24,8 @@ fraction) is the mod's (beamngEarth/weather.lua).
 import json
 import logging
 import math
+import dmath
+import dnp
 import threading
 import time
 import urllib.parse
@@ -148,9 +150,9 @@ def derive(om, lat=None, lon=None):
 def distance_m(lat1, lon1, lat2, lon2):
     """Great-circle distance (spherical Earth; plenty for a refetch rule)."""
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    a = (math.sin((p2 - p1) / 2) ** 2
-         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
-    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+    a = (dnp.sq(dmath.sin((p2 - p1) / 2))
+         + dmath.cos(p1) * dmath.cos(p2) * dnp.sq(dmath.sin(math.radians(lon2 - lon1) / 2)))
+    return 2 * 6371008.8 * dmath.asin(min(1.0, math.sqrt(a)))
 
 
 class Service:

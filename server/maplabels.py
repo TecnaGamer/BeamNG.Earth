@@ -25,6 +25,8 @@ import threading
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import mapcells
 
 WORLD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "world_labels.json.gz")
@@ -94,8 +96,8 @@ def world():
 def _dist_m(lat, lon, lats, lons):
     p1, p2 = math.radians(lat), np.radians(lats)
     dl = np.radians(lons - lon)
-    a = np.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
-    return 2 * 6371000.0 * np.arcsin(np.minimum(1.0, np.sqrt(a)))
+    a = dnp.sq(dnp.sin((p2 - p1) / 2)) + dmath.cos(p1) * dnp.cos(p2) * dnp.sq(dnp.sin(dl / 2))
+    return 2 * 6371000.0 * dnp.arcsin(np.minimum(1.0, np.sqrt(a)))
 
 
 def world_labels(lat, lon, zoom, radius_m):
@@ -138,9 +140,9 @@ def town_labels(towns, world_rows):
         pop = float(pop) if pop and math.isfinite(float(pop)) else 0.0
         z = TOWN_MIN_Z.get(cls, TOWN_MIN_Z_DEFAULT)
         if pop > 0:     # (the bigger the earlier, within its class's level)
-            z = min(z, max(3.0, 15.0 - 1.15 * math.log10(max(pop, 10.0))))
+            z = min(z, max(3.0, 15.0 - 1.15 * dmath.log10(max(pop, 10.0))))
         kind = "town" if cls else "district"
-        out.append([kind, clean(name), round(la, 5), round(lo, 5), round(z, 2), 99, round(40 - math.log10(max(pop, 1.0)), 2),
+        out.append([kind, clean(name), round(la, 5), round(lo, 5), round(z, 2), 99, round(40 - dmath.log10(max(pop, 1.0)), 2),
                     cls or "", None])
     return out
 
@@ -219,7 +221,7 @@ def street_labels(cells, lat, lon, zoom, radius_m=STREET_RADIUS_M):
             continue
         # (a street cut into many segments: one label per spacing along it)
         near = done.setdefault(text, [])
-        if any(abs(q[0] - la[k]) * 111320 < sp and abs(q[1] - lo[k]) * 111320 * math.cos(math.radians(lat)) < sp
+        if any(abs(q[0] - la[k]) * 111320 < sp and abs(q[1] - lo[k]) * 111320 * dmath.cos(math.radians(lat)) < sp
                for q in near):
             continue
         near.append((float(la[k]), float(lo[k])))
@@ -305,5 +307,5 @@ def poi_labels(cells, lat, lon, radius_m=POI_RADIUS_M, limit=POI_MAX):
 def near_cells(lat, lon, radius_m):
     """The map cells (zoom 14) within radius_m of (lat, lon)."""
     dla = radius_m / 111320.0
-    dlo = radius_m / (111320.0 * max(0.05, math.cos(math.radians(lat))))
+    dlo = radius_m / (111320.0 * max(0.05, dmath.cos(math.radians(lat))))
     return mapcells.cells_for_bbox(lat - dla, lon - dlo, lat + dla, lon + dlo)

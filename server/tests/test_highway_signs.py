@@ -115,7 +115,7 @@ class PipelineTest(unittest.TestCase):
             with mock.patch.object(blockworker, '_s', state), mock.patch.object(revisit, 'ON', True), \
                     mock.patch.object(revisit, 'SKIP', set()):
                 blockworker.roads_tile(1, LAT, LON, 15, 0, 0, str(first), '/temp/first', False, .05)
-                self.assertTrue(list(Path(root, 'revisit').rglob('*.zip')))
+                self.assertTrue(list(Path(root, 'revisit').rglob('*.rpk')))     # (kept in a pack)
                 with mock.patch.object(blockworker, '_roads_tile', side_effect=AssertionError('cache missed')):
                     path, _, pads = blockworker.roads_tile(
                         2, LAT, LON, 15, 0, 0, str(revisit_dir), '/temp/revisited', False, .05)

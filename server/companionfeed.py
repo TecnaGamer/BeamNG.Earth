@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import time
+import dmath
 
 log = logging.getLogger("companionfeed")
 
@@ -52,7 +53,7 @@ class Feed:
             return
         import math
         ve, vn = float(vx or 0.0), float(vy or 0.0)
-        bearing = (math.degrees(math.atan2(ve, vn)) + 360.0) % 360.0 if math.hypot(ve, vn) >= 0.5 else None
+        bearing = (math.degrees(dmath.atan2(ve, vn)) + 360.0) % 360.0 if math.hypot(ve, vn) >= 0.5 else None
         self.pose = {"ok": True, "lat": lat, "lon": lon, "speed": float(speed or 0.0), "ve": ve, "vn": vn,
                      "bearing": bearing, "anchorId": anchor_id if isinstance(anchor_id, int) else None,
                      "t": self.clock()}

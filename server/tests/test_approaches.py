@@ -175,6 +175,52 @@ class ApproachAddTest(unittest.TestCase):
         self.assertLess(float(add[10]), 0.5, "low where the side road joins")
         self.assertGreater(float(add[0]), 3.0, "the abutment still raised")
 
+    def test_fill_to_a_surface_not_an_offset(self):
+        # a diverging diamond's crossover: 25 m from a junction raised 9.9 m over a pond to the next junction, 8.6 m up
+        # the bank (Wesley Chapel, GitHub #1043): never over the raised end's height, offset on top of the bank as before
+        xy = np.c_[np.zeros(11), np.arange(0.0, 25.1, 2.5)]
+        z = 26.0 + np.arange(11) * 0.86
+        off = grading.approach_add(xy, False, 9.9, 4.0)
+        fill = grading.approach_add(xy, False, 9.9, 4.0, fill_z=z)
+        self.assertAlmostEqual(float(fill[0]), 9.9, places=6)
+        self.assertGreater(float(off[-1] + z[-1]), 26.0 + 9.9 + 7.0, "(as an offset it stood 18 m over the pond)")
+        self.assertLessEqual(float((fill + z).max()), 26.0 + 9.9 + 1e-9)
+        down = 26.0 - np.arange(11) * 0.3          # a road falling away from its raised end: the offset, as before
+        np.testing.assert_allclose(grading.approach_add(xy, False, 9.9, 4.0, fill_z=down), off)
+
+
+class UnderDeckReachTest(unittest.TestCase):
+    def test_a_deck_climbs_from_its_ends_for_the_dips_under_it(self):
+        import fast
+        reach = fast._ef.under_deck_reach
+        # (ends 35 m and 37 m, 96 m long; the crossing 34 m from the lower end, its corridor +-8 m)
+        straight = reach(35.0, 37.0, 96.0, 26.0, 42.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, False)
+        self.assertAlmostEqual(straight, 35.0 + 2.0 * 26.0 / 96.0, places=9)
+        self.assertAlmostEqual(reach(35.0, 37.0, 96.0, 26.0, 42.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True),
+                               straight, places=9, msg="the straight line is higher there already")
+        # (level ends, the crossing in the middle: it climbs from both, the corridor's lowest point counts)
+        climbed = reach(35.0, 35.0, 96.0, 40.0, 56.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True)
+        self.assertAlmostEqual(climbed, 35.0 + roads.DECK_GRADE * (40.0 - grading.APPROACH_FLAT_M), places=9)
+        # a short deck: within both ends' flat run it is the straight line
+        self.assertAlmostEqual(reach(35.0, 35.5, 30.0, 10.0, 20.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True),
+                               35.0 + 0.5 * 10.0 / 30.0, places=9)
+
+    def test_junction_arm_raise_is_a_height(self):
+        import fast
+        jar = fast._ef.junction_arm_raise
+        args = (grading.APPROACH_GRADE, grading.APPROACH_MIN_RUN, grading.APPROACH_MAX_RUN, grading.APPROACH_MIN_LIFT)
+        one = (np.array([9.9]), np.array([8.0]), np.array([26.0]), np.array([26.0]))     # (lift, stub, z_b, z_far)
+        level = jar(*one, 26.0, *args)
+        up = jar(*one, 34.6, *args)
+        down = jar(*one, 20.0, *args)
+        self.assertAlmostEqual(up[0], level[0] - 8.6, places=9, msg="an arm end 8.6 m higher: only to the junction")
+        self.assertAlmostEqual(down[0], level[0], places=9, msg="a lower arm end: the ramp's offset, as before")
+        self.assertIsNone(jar(*one, 36.0, *args))
+        # an abutment mapped down in a cut (Vienna's S1 under Rautenweg): the stub's climb out of it is taken off
+        cut = jar(np.array([10.0]), np.array([10.0]), np.array([153.9]), np.array([160.5]), 160.5, *args)
+        flat = jar(np.array([10.0]), np.array([10.0]), np.array([160.5]), np.array([160.5]), 160.5, *args)
+        self.assertAlmostEqual(cut[0], flat[0] - 6.6, places=9)
+
 
 class OverpassIntegrationTest(unittest.TestCase):
     def deck_over_lanes(self, on):

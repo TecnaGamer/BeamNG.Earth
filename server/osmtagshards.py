@@ -1,5 +1,5 @@
-"""OpenStreetMap's road tags for a map cell from the weekly tag shards (tools/build_osm_tag_shards.py: one PMTiles
-archive of zoom-12 tiles, each the Layercake highways rows osmtags.py would read for its 16 cells), instead of the
+"""OpenStreetMap's road tags for a map cell from the weekly tag shards (tools/build_osm_tag_shards.py: a PMTiles
+archive in parts of zoom-12 tiles, each the Layercake highways rows osmtags.py would read for its 16 cells), instead of the
 29 GB Layercake parquet file itself.
 
 Why (2026-11-11, the owner: "sub-second world gen, even with clear cache"): on a fresh cache every place's roads
@@ -18,10 +18,14 @@ manifest's source_etag; 125 cells of 5 places compared equal, tags in the same o
   <cache>/pagesdata/osmtags/manifest.json            the build in use (railtags.Shards: pinned first, refreshed daily)
   <cache>/pagesdata/osmtags/<build>/head.bin         the archive's first 16 KB (header + root directory), head.json
                                    /leaf/<off>_<len> leaf directories
+                                   /p<i>/head.bin, /p<i>/leaf/...   the same of part i (a manifest with "parts")
                                    /tiles/<x>_<y>.otg  tiles as stored (raw deflate; empty: none in the archive)
 
-The archive's URL is the manifest's "archive" (relative: beside the manifest). An archive whose ETag changes under
-the cached directories is dropped (Changed) and the cell asked of the Layercake file.
+The archive is in parts (the manifest's "parts": [{"archive", "first", "last", ...}], tile-id runs in that order, each
+a whole PMTiles archive < 512 MB, so Cloudflare caches it: the one 2.4 GB archive answered every read from R2,
+BYPASS, 2026-11-11); a tile is read from the part whose run holds its id. The first layout, one "archive", is read as a
+single part. A part's URL is its "archive" (relative: beside the manifest). A part whose ETag changes under its cached
+directories drops the build's cache (Changed) and the cell is asked of the Layercake file.
 
 Off: BNE_OSMTAGS_SHARDS=off (or no manifest published, the archive unreachable, a tile that fails: DOWN_S): the cell's
 tags come from the Layercake file as before (osmtags.OsmTags). BNE_OSMTAGS_BASE: the dataset's folder elsewhere (a
@@ -76,6 +80,28 @@ def schema_ok(s):
             and lines == list(osmtags.RACEWAY_COLUMNS[1:]))
 
 
+def parts_of(m):
+    """The archive's parts of manifest m, [(first tile id, last tile id or None, archive URL as given, cache subfolder)]
+    in tile-id order, or None (no archive, or parts this cannot read). The first layout (one "archive") is one part
+    of every tile id, cached where it was."""
+    ps = m.get("parts")
+    if ps is None:
+        a = m.get("archive")
+        return [(0, None, str(a), "")] if isinstance(a, str) and a else None
+    if not isinstance(ps, list) or not ps:
+        return None
+    out = []
+    for i, p in enumerate(ps):
+        try:
+            a, first, last = p["archive"], int(p["first"]), int(p["last"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(a, str) or not a or last < first or (out and first <= out[-1][1]):
+            return None
+        out.append((first, last, a, f"p{i}"))
+    return out
+
+
 def decode(b, m):
     """A tile's bytes as stored decoded by the manifest m's schema (earthfast otg_decode)."""
     s = m["schema"]
@@ -108,8 +134,8 @@ class TagShards:
         if BASE:
             self.pages.base = BASE.rstrip("/")
         self._lock = threading.Lock()
-        self._man = None            # (build, manifest dict)
-        self._head = None           # (build, header dict, root bytes, etag)
+        self._man = None            # (build, manifest dict; its "_parts": parts_of)
+        self._heads = {}            # (build, part subfolder) -> (header dict, root bytes, etag)
         self._leaves = OrderedDict()
         self._mem = OrderedDict()   # (build, x, y) -> decoded tile
         self._inflight = {}
@@ -132,9 +158,12 @@ class TagShards:
                 m = json.load(f)
         except (OSError, ValueError, TypeError):
             return None
-        if m.get("built") != built or m.get("format") != FORMAT or not m.get("archive") \
+        parts = parts_of(m) if isinstance(m, dict) else None
+        if parts is None or m.get("built") != built or m.get("format") != FORMAT \
                 or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not schema_ok(m.get("schema")):
             return None
+        m["_parts"] = parts
+        m["_firsts"] = [p[0] for p in parts]
         got = (built, m)
         with self._lock:
             self._man = got
@@ -143,9 +172,22 @@ class TagShards:
     def _dir(self, built):
         return os.path.join(self.pages.dir, re.sub(r"[^0-9A-Za-z]+", "_", built))
 
-    def _url(self, m):
-        a = str(m["archive"])
+    def _url(self, part):
+        a = part[2]
         return a if a.startswith(("http://", "https://")) else f"{self.pages.base}/{a.lstrip('/')}"
+
+    def _pdir(self, built, part):
+        return os.path.join(self._dir(built), part[3]) if part[3] else self._dir(built)
+
+    @staticmethod
+    def part_of(m, t):
+        """The part of manifest m (manifest()'s) whose run holds tile id t, or None (in none: no such tile)."""
+        import bisect
+        i = bisect.bisect_right(m["_firsts"], t) - 1
+        if i < 0:
+            return None
+        p = m["_parts"][i]
+        return p if p[1] is None or t <= p[1] else None
 
     def down(self, e):
         log.warning("osmtags shards: %s: %s; the parquet file for %.0f min", type(e).__name__, e, DOWN_S / 60)
@@ -164,7 +206,7 @@ class TagShards:
 
     def _forget(self, built):
         with self._lock:
-            self._head = None
+            self._heads = {k: v for k, v in self._heads.items() if k[0] != built}
             self._leaves.clear()
             self._mem.clear()
         import shutil
@@ -177,18 +219,21 @@ class TagShards:
                 lk = self._keylocks[key] = threading.Lock()
             return lk
 
-    def head(self, built, m, kind):
+    def head(self, built, part, kind):
+        """(header, root directory, etag) of an archive part (parts_of's), read once and kept on disk."""
+        k = (built, part[3])
         with self._lock:
-            if self._head is not None and self._head[0] == built:
-                return self._head
-        with self._once(("head", built)):
-            return self._head_once(built, m, kind)
+            got = self._heads.get(k)
+        if got is not None:
+            return got
+        with self._once(("head",) + k):
+            with self._lock:
+                got = self._heads.get(k)
+            return got if got is not None else self._head_once(built, part, kind)
 
-    def _head_once(self, built, m, kind):
-        with self._lock:
-            if self._head is not None and self._head[0] == built:
-                return self._head
-        d = self._dir(built)
+    def _head_once(self, built, part, kind):
+        d = self._pdir(built, part)
+        url = self._url(part)
         b = _read(os.path.join(d, "head.bin"))
         try:
             with open(os.path.join(d, "head.json"), encoding="utf-8") as f:
@@ -196,21 +241,21 @@ class TagShards:
         except (OSError, ValueError):
             b = None
         if b is None:
-            b, etag = self._get(self._url(m), 0, HEAD_BYTES, kind, short_ok=True)
+            b, etag = self._get(url, 0, HEAD_BYTES, kind, short_ok=True)
             _write(os.path.join(d, "head.bin"), b)
             _write(os.path.join(d, "head.json"), json.dumps({"etag": etag}).encode())
         h = fast._ef.pmt_header(b)
         if h["internal_compression"] not in (1, 2) or h["tile_compression"] not in (1, 2):
             raise ShardError(f"unsupported archive (compression {h['internal_compression']}/{h['tile_compression']})")
         ro, rl = h["root_offset"], h["root_length"]
-        root = b[ro:ro + rl] if ro + rl <= len(b) else self._get(self._url(m), ro, ro + rl, kind, etag)[0]
-        got = (built, h, root, etag or None)
+        root = b[ro:ro + rl] if ro + rl <= len(b) else self._get(url, ro, ro + rl, kind, etag)[0]
+        got = (h, root, etag or None)
         with self._lock:
-            self._head = got
+            self._heads[(built, part[3])] = got
         return got
 
-    def _leaf(self, built, m, h, off, ln, kind, etag):
-        k = (built, off, ln)
+    def _leaf(self, built, part, h, off, ln, kind, etag):
+        k = (built, part[3], off, ln)
         with self._lock:
             b = self._leaves.get(k)
             if b is not None:
@@ -221,10 +266,10 @@ class TagShards:
                 b = self._leaves.get(k)
             if b is not None:
                 return b
-            path = os.path.join(self._dir(built), "leaf", f"{off}_{ln}")
+            path = os.path.join(self._pdir(built, part), "leaf", f"{off}_{ln}")
             b = _read(path)
             if b is None or len(b) != ln:
-                b, _ = self._get(self._url(m), h["leaf_offset"] + off, h["leaf_offset"] + off + ln, kind, etag)
+                b, _ = self._get(self._url(part), h["leaf_offset"] + off, h["leaf_offset"] + off + ln, kind, etag)
                 _write(path, b)
             with self._lock:
                 self._leaves[k] = b
@@ -234,21 +279,24 @@ class TagShards:
 
     def _fetch(self, built, m, z, x, y, kind):
         """Tile z/x/y's bytes as stored (b"": none in the archive), read and kept on disk."""
-        _, h, root, etag = self.head(built, m, kind)
         t = fast._ef.pmt_tile_id(z, x, y)
-        d, body = root, b""
-        for _ in range(4):
-            e = fast._ef.pmt_find(d, t)
-            if e is None:
-                break
-            off, ln, leaf = e
-            if not leaf:
-                a = h["data_offset"] + off
-                body, _ = self._get(self._url(m), a, a + ln, kind, etag)
-                break
-            d = self._leaf(built, m, h, off, ln, kind, etag)
-        else:
-            raise ShardError("directories deeper than 4 levels")
+        part = self.part_of(m, t)
+        body = b""
+        if part is not None:
+            h, root, etag = self.head(built, part, kind)
+            d = root
+            for _ in range(4):
+                e = fast._ef.pmt_find(d, t)
+                if e is None:
+                    break
+                off, ln, leaf = e
+                if not leaf:
+                    a = h["data_offset"] + off
+                    body, _ = self._get(self._url(part), a, a + ln, kind, etag)
+                    break
+                d = self._leaf(built, part, h, off, ln, kind, etag)
+            else:
+                raise ShardError("directories deeper than 4 levels")
         _write(os.path.join(self._dir(built), "tiles", f"{x}_{y}.otg"), body)
         return body
 

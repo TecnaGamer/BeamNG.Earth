@@ -17,6 +17,8 @@ import re
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 import geotiles
 
@@ -75,7 +77,7 @@ def _way_ring(element):
         if not np.array_equal(ring[0], ring[-1]) or (np.abs(ring[:, 1]) > 85).any() or (np.abs(ring[:, 0]) > 180).any():
             return None
         ring[:, 0] = np.rad2deg(np.unwrap(np.deg2rad(ring[:, 0])))
-        metres = np.array([111320 * math.cos(math.radians(float(ring[:, 1].mean()))), 110540])
+        metres = np.array([111320 * dmath.cos(math.radians(float(ring[:, 1].mean()))), 110540])
         xy = (ring - ring[0]) * metres
         # Large generator areas can describe a farm; only an individual tower footprint is suitable.
         if np.ptp(xy, axis=0).max() > 100.0:
@@ -84,7 +86,7 @@ def _way_ring(element):
         # rather than constructing a plausible-looking but unmapped position.
         for i in range(len(xy) - 1):
             a, b = xy[i], xy[i + 1]
-            if np.linalg.norm(b - a) < 1e-6:
+            if dnp.norm(b - a) < 1e-6:
                 return None
             for j in range(i + 2, len(xy) - 1):
                 if i == 0 and j == len(xy) - 2:
@@ -175,7 +177,7 @@ def features_from_document(document):
             reference = float(ring[0, 0])
             nl = reference + (node.lon - reference + 180) % 360 - 180
             if Path(ring).contains_points(np.array([[nl, node.lat]]))[0] or math.hypot(
-                    ((node.lon - lon + 180) % 360 - 180) * 111320 * math.cos(math.radians(lat)),
+                    ((node.lon - lon + 180) % 360 - 180) * 111320 * dmath.cos(math.radians(lat)),
                     (node.lat - lat) * 110540) < 2:
                 duplicate = True
                 break
@@ -386,7 +388,7 @@ def worldcover_built_fn(md):
 
     def built(lat, lon):
         dlat = URBAN_PROBE_M / 111320.0
-        dlon = dlat / max(0.05, math.cos(math.radians(lat)))
+        dlon = dlat / max(0.05, dmath.cos(math.radians(lat)))
         pts = [(lat, lon), (lat + dlat, lon), (lat - dlat, lon), (lat, lon + dlon), (lat, lon - dlon)]
         hits = 0
         for la, lo in pts:

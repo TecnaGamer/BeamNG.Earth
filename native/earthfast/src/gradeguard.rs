@@ -21,6 +21,7 @@
 //! road rank), the change eased by a box blur, and a final projection to the full ceiling. Where the limits cannot be
 //! met (a ramp that has no room: the other end of the road is pinned too), the least violated profile is returned and
 //! the worst remaining violation is in the stats, for the caller to log. Pure and deterministic.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -259,7 +260,7 @@ fn find_nodes(inp: &Inp) -> Ends {
                 if let Some(v) = grid.get(&(cx + dx, cy + dy)) {
                     for &o in v {
                         let [ox, oy] = inp.xy[pt(o)];
-                        if (ox - x).hypot(oy - y) <= NODE_R_M {
+                        if (ox - x).dhypot(oy - y) <= NODE_R_M {
                             let (a, b) = (root(&mut parent, o), root(&mut parent, e));
                             parent[b] = a;
                         }
@@ -350,7 +351,7 @@ fn ease_end(inp: &Inp, nodes: &Ends, s: &[f64], z: &mut [f64], e: usize, step: f
     let reach_off = (now - far_off).abs().max((target - far_off).abs()) * 1.2 + 0.05;
     let taper = span.iter().all(|&(i, _)| (z[i] - inp.base[i] - far_off).abs() <= reach_off);
     for &(i, along) in &span {
-        let c = 0.5 * (1.0 + (pi * along / len).cos());
+        let c = 0.5 * (1.0 + (pi * along / len).dcos());
         if taper {
             z[i] = inp.base[i] + far_off + (target - far_off) * c;
         } else {
@@ -431,7 +432,7 @@ pub fn guard(inp: &Inp, reach: f64, designed_tol: f64, node_max: f64) -> (Vec<f6
         let wr = 1.0 + inp.rank[p].max(0) as f64;
         for i in o0..o1 {
             if i > o0 {
-                s[i] = s[i - 1] + (inp.xy[i][0] - inp.xy[i - 1][0]).hypot(inp.xy[i][1] - inp.xy[i - 1][1]);
+                s[i] = s[i - 1] + (inp.xy[i][0] - inp.xy[i - 1][0]).dhypot(inp.xy[i][1] - inp.xy[i - 1][1]);
             }
             w[i] = if inp.gmax[p] <= 0.0 {
                 FIXED_W
@@ -482,7 +483,7 @@ pub fn guard(inp: &Inp, reach: f64, designed_tol: f64, node_max: f64) -> (Vec<f6
                 }
                 let (mut bv, mut bd) = (usize::MAX, f64::INFINITY);
                 for v in inp.off[k]..inp.off[k + 1] {
-                    let d = (inp.xy[v][0] - x).hypot(inp.xy[v][1] - y);
+                    let d = (inp.xy[v][0] - x).dhypot(inp.xy[v][1] - y);
                     if d < bd {
                         bd = d;
                         bv = v;
@@ -760,7 +761,7 @@ mod tests {
         let mut z = base.clone();
         for i in 60..140 {
             let t = (i - 60) as f64 / 80.0; // 160 m long, 6 m deep: 11.8 % at the steepest
-            z[i] = 20.0 - 6.0 * (std::f64::consts::PI * t).sin().powi(2);
+            z[i] = 20.0 - 6.0 * (std::f64::consts::PI * t).dsin().powi(2);
         }
         let (out, _) = run(&[(p, z.clone(), base, 0.09, 40.0, 0.75, 14, [false, false])], 3.0);
         assert!(out[100] < 14.1, "dip {}", out[100]);

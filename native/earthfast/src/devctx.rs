@@ -502,7 +502,7 @@ pub fn dev_pois<'py>(py: Python<'py>, n: usize, status: Option<PyReadonlyArray2<
 // ---- the raster ---------------------------------------------------------------------------------------------
 
 /// numpy's pairwise summation (pairwise_sum_DOUBLE: 8 accumulators up to 128 values, halves beyond), 0.0 first.
-fn pairwise(a: &[f64]) -> f64 {
+pub(crate) fn pairwise(a: &[f64]) -> f64 {
     let n = a.len();
     if n < 8 {
         let mut r = 0.0;

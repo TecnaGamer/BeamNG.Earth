@@ -567,6 +567,8 @@ class WindowsStartTest(unittest.TestCase):
     def test_through_steam_without_options(self):
         with mock.patch.object(launcher, "IS_WIN", True), mock.patch.object(launcher, "under_wine", return_value=False), \
                 mock.patch.object(launcher.os, "startfile", create=True) as sf, \
+                mock.patch.object(launcher, "windows_steam_running", return_value=True), \
+                mock.patch.object(launcher, "game_pids", return_value=[42]), \
                 mock.patch.object(launcher.subprocess, "Popen") as po, mock.patch.dict(os.environ, {"BNGE_GAME_ARGS": ""}):
             self.assertIsNone(launcher.start_game(False))
             sf.assert_called_once_with("steam://rungameid/284160")

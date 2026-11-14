@@ -53,6 +53,7 @@ local function propKey(p)
 end
 
 local function makeProp(st, p)
+  require('beamngEarth/texdbg').log('fuelShape', p.shape)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, p.shape)
   -- the shapes' own collision meshes (West Coast USA leaves its fuel shapes at the default, 'Collision Mesh'), not

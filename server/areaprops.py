@@ -27,6 +27,8 @@ import os
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import mapgeom
 
 log = logging.getLogger("earthd.places")
@@ -217,7 +219,7 @@ def _area(pts, off):
     for k in range(len(off) - 1):
         r = pts[off[k]:off[k + 1]]
         x, y = r[:, 0], r[:, 1]
-        a += (float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+        a += (float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
     return abs(a)
 
 
@@ -454,7 +456,7 @@ def _z_low(frame, elev, xy, yaw_deg, half):
     if not len(xy):
         return np.zeros(0)
     t = np.radians(np.asarray(yaw_deg, np.float64))
-    ux, uy = np.cos(t), np.sin(t)
+    ux, uy = dnp.cos(t), dnp.sin(t)
     xs = np.concatenate([xy[:, 0], xy[:, 0] + ux * half, xy[:, 0] - ux * half])
     ys = np.concatenate([xy[:, 1], xy[:, 1] + uy * half, xy[:, 1] - uy * half])
     return _z(frame, elev, xs, ys).reshape(3, len(xy)).min(axis=0)
@@ -463,7 +465,7 @@ def _z_low(frame, elev, xy, yaw_deg, half):
 def _offset(yaw_deg, ox, oy):
     """World offset of an item's local (ox, oy) at yaw (trees.lua: local +x toward yaw)."""
     t = math.radians(yaw_deg)
-    c, s = math.cos(t), math.sin(t)
+    c, s = dmath.cos(t), dmath.sin(t)
     return ox * c - oy * s, ox * s + oy * c
 
 
@@ -553,7 +555,7 @@ def solar_rows(frame, places, box, elev, seg, blds, lat, md=None):
             got = _grid(pts, off, float("nan"), (SOLAR_SIZE[0], 0.5), SOLAR_PITCH, (0, 0), (0.0, 0.0), 0.0, seg_r,
                         blds, SOLAR_BLD_M, box)
             if len(got):
-                v = -math.sin(math.radians(got[0, 2]))       # (local +y's north component at this yaw: cos(yaw+90))
+                v = -dmath.sin(math.radians(got[0, 2]))       # (local +y's north component at this yaw: cos(yaw+90))
                 if (v > 0.0) != south:
                     got[:, 2] = (got[:, 2] + 180.0) % 360.0
         out.append((fid, got))
@@ -582,10 +584,10 @@ def _quay_axis(spots):
     if not len(spots):
         return None
     a = np.radians(spots[:, 2] + 90.0) * 2.0
-    c, s_ = float(np.cos(a).mean()), float(np.sin(a).mean())
+    c, s_ = float(dnp.cos(a).mean()), float(dnp.sin(a).mean())
     if math.hypot(c, s_) < 0.3:
         return None
-    return math.degrees(math.atan2(s_, c) / 2.0) % 180.0
+    return math.degrees(dmath.atan2(s_, c) / 2.0) % 180.0
 
 
 def terminal_rows(frame, places, box, elev, seg, blds, water, parking=None):
@@ -633,7 +635,7 @@ def terminal_rows(frame, places, box, elev, seg, blds, water, parking=None):
     placed.sort()
     kept = []
     for hsh, x, y, w in placed:
-        if any((x - a) ** 2 + (y - b) ** 2 < CRANE_APART_M ** 2 for a, b in kept):
+        if any(dnp.sq(x - a) + dnp.sq(y - b) < CRANE_APART_M * CRANE_APART_M for a, b in kept):
             continue
         kept.append((x, y))
         if not (box[0] <= x < box[2] and box[1] <= y < box[3]):
@@ -772,8 +774,8 @@ def construction_rows(frame, places, box, elev, seg):
         got = fast._ef.outline_panels(pts, off, HOARD_LEN, np.ascontiguousarray(seg), HOARD_GATE_M,
                                       [float(v) for v in box])
         if len(got):
-            z = _z_low(frame, elev, got[:, :2] - np.column_stack([np.cos(np.radians(got[:, 2])),
-                                                                  np.sin(np.radians(got[:, 2]))]) * HOARD_LEN / 2,
+            z = _z_low(frame, elev, got[:, :2] - np.column_stack([dnp.cos(np.radians(got[:, 2])),
+                                                                  dnp.sin(np.radians(got[:, 2]))]) * HOARD_LEN / 2,
                        got[:, 2], HOARD_LEN / 2)
             for (x, y, yaw), zz in zip(got.tolist(), z.tolist()):
                 rows.append([G_HOARD, round(x, 2), round(y, 2), round(zz + HOARD_LIFT, 2), round(yaw, 1), 1.0,
@@ -947,8 +949,8 @@ def drop_inferred(props, mapped):
         if pts is not None and len(pts):
             if len(pts) >= INFERRED_TILE_MIN:
                 continue
-            d2 = (pts[:, 0] - float(r[1])) ** 2 + (pts[:, 1] - float(r[2])) ** 2
-            if float(d2.min()) < INFERRED_DROP[r[0]] ** 2:
+            d2 = dnp.sq(pts[:, 0] - float(r[1])) + dnp.sq(pts[:, 1] - float(r[2]))
+            if float(d2.min()) < dnp.sq(INFERRED_DROP[r[0]]):
                 continue
         out.append(r)
     return out
@@ -1025,11 +1027,11 @@ def tunnel_fan_rows(chunks):
         hw = float(ch.get("w") or 0.0) / 2.0 + roadmesh.TUNNEL_SHOULDER
         off = min(FAN_PAIR_OFF, 0.35 * hw)
         wall = roadmesh.TUNNEL_WALL_H * th / roadmesh.TUNNEL_H
-        vault = wall + math.sqrt(max(0.0, 1.0 - (off / hw) ** 2)) * (th - wall)      # the vault's height over `off`
+        vault = wall + math.sqrt(max(0.0, 1.0 - dnp.sq(off / hw))) * (th - wall)      # the vault's height over `off`
         fast.require(NATIVE, "places.grid_marks")
         marks = fast._ef.grid_marks(np.ascontiguousarray(pts[:, :3]), FAN_GRID_M)
         for x, y, z, tx, ty in marks.tolist():
-            yaw = (math.degrees(math.atan2(ty, tx)) - 90.0) % 360.0      # (the housing's axis is its local y)
+            yaw = (math.degrees(dmath.atan2(ty, tx)) - 90.0) % 360.0      # (the housing's axis is its local y)
             ztop = z + vault - FAN_HANG_M
             for side in (-1.0, 1.0):
                 px, py = x - ty * side * off, y + tx * side * off

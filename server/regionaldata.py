@@ -190,8 +190,10 @@ def _fetch(rel):
     except OSError:
         if _local() is not None:
             return None
+    import railtags
     try:
-        body = _state["fetcher"].get(f"{_base()}/{rel}", kind="demand").body
+        # (from the host the manifest names, railtags.data_url: R2 behind the CDN; else, or that failing, Pages)
+        body = railtags.fetch_data(_state["fetcher"], railtags.data_url(manifest()), _base(), rel)
     except Exception as e:
         log.info("regional data %s: %s: %s", rel, type(e).__name__, e)
         return None

@@ -16,6 +16,8 @@ import math
 import os
 
 import numpy as np
+import dmath
+import dnp
 
 # NBI item 43B, the main span's design
 NBI_DECK_TRUSS, NBI_THROUGH_TRUSS = 9, 10
@@ -92,8 +94,8 @@ def wd_near(lat, lon, r_m):
     la = wd["lat"]
     if not len(la):
         return False
-    kx = 111320.0 * np.cos(np.radians(lat))
-    d = np.hypot((wd["lon"] - lon) * kx, (la - lat) * 110540.0)
+    kx = 111320.0 * dnp.cos(np.radians(lat))
+    d = dnp.hypot((wd["lon"] - lon) * kx, (la - lat) * 110540.0)
     return bool((d <= r_m).any())
 
 
@@ -107,7 +109,7 @@ def wd_matches(frame, lines):
     pts = np.concatenate(lines)
     c = pts.mean(0)
     la, lo, _ = frame.enu_to_geodetic(np.array([c[0]]), np.array([c[1]]), 0.0)
-    reach = float(np.hypot(*(pts.max(0) - pts.min(0)))) / 2 + WD_MATCH_M
+    reach = float(dnp.hypot(*(pts.max(0) - pts.min(0)))) / 2 + WD_MATCH_M
     dlat = reach / 110540.0
     i0, i1 = np.searchsorted(wd["lat"], float(la[0]) - dlat), np.searchsorted(wd["lat"], float(la[0]) + dlat)
     idx = np.arange(i0, i1)
@@ -144,7 +146,7 @@ def paint(colour):
                 [int(c[1 + 2 * i:3 + 2 * i], 16) for i in range(3)]
         except ValueError:
             return None
-        return min(PAINTS, key=lambda k: sum((a - b) ** 2 for a, b in zip(PAINTS[k], rgb)))
+        return min(PAINTS, key=lambda k: sum(dnp.sq(a - b) for a, b in zip(PAINTS[k], rgb)))
     return None
 
 
@@ -224,8 +226,8 @@ def nbi_near(lat, lon, r_m):
     idx = np.arange(i0, i1)
     if not len(idx):
         return idx, np.zeros(0)
-    kx = 111320.0 * np.cos(np.radians(lat))
-    d = np.hypot((db["lon"][idx] - lon) * kx, (la[idx] - lat) * 110540.0)
+    kx = 111320.0 * dnp.cos(np.radians(lat))
+    d = dnp.hypot((db["lon"][idx] - lon) * kx, (la[idx] - lat) * 110540.0)
     keep = d <= r_m
     return idx[keep], d[keep]
 
@@ -239,19 +241,19 @@ def matches(frame, lines):
     pts = np.concatenate(lines)
     c = pts.mean(0)
     la, lo, _ = frame.enu_to_geodetic(np.array([c[0]]), np.array([c[1]]), 0.0)
-    reach = float(np.hypot(*(pts.max(0) - pts.min(0)))) / 2 + MATCH_M
+    reach = float(dnp.hypot(*(pts.max(0) - pts.min(0)))) / 2 + MATCH_M
     idx, _ = nbi_near(float(la[0]), float(lo[0]), reach)
     if not len(idx):
         return []
     db = _load()
     e, n, _ = frame.geodetic_to_enu(db["lat"][idx].astype(np.float64), db["lon"][idx].astype(np.float64), 0.0)
-    longest = max(float(np.hypot(*np.diff(ln, axis=0).T).sum()) for ln in lines)
+    longest = max(float(dnp.hypot(*np.diff(ln, axis=0).T).sum()) for ln in lines)
     out = []
     for i, q in zip(idx, np.c_[e, n]):
         d = min(_seg_dist(q, ln) for ln in lines)
         if d <= MATCH_M:
             rl = float(db["length"][i])
-            mis = abs(math.log(max(rl, 5.0) / max(longest, 5.0))) if rl > 0 else 1.0
+            mis = abs(dmath.log(max(rl, 5.0) / max(longest, 5.0))) if rl > 0 else 1.0
             out.append((d + MATCH_LEN_M * mis, int(i)))
     return sorted(out)
 
@@ -309,7 +311,7 @@ def _seg_dist(q, xy):
     a, b = xy[:-1], xy[1:]
     ab = b - a
     t = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-9), 0, 1)
-    return float(np.min(np.hypot(*(a + t[:, None] * ab - q).T)))
+    return float(np.min(dnp.hypot(*(a + t[:, None] * ab - q).T)))
 
 
 def chain_structure(frame, parts, wet_fn=None, infra=()):
@@ -401,24 +403,24 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
         if any(_in_rings(o, c[None])[0] for o in taken) or _near_sites(c, osm_sites):
             continue                        # (a tagged bridge's own record)
         L = float(db["length"][i])
-        if any(t == t2 and float(np.hypot(*(c - c2))) < max(L, L2) / 2 for t2, c2, L2 in nbi_sites):
+        if any(t == t2 and float(dnp.hypot(*(c - c2))) < max(L, L2) / 2 for t2, c2, L2 in nbi_sites):
             continue                        # a bridge's second record (the Queensboro Bridge's upper and lower
                                             # roadways: two trusses drawn)
         nbi_sites.append((t, c, L))
         r = max(L / 2, 100.0) + MATCH_M
         ang = np.linspace(0, 2 * np.pi, 33)
         out.append({**record(i), "src": "nbi", "paint": chain_paint,
-                    "outline": np.c_[c[0] + r * np.cos(ang), c[1] + r * np.sin(ang)]})
+                    "outline": np.c_[c[0] + r * dnp.cos(ang), c[1] + r * dnp.sin(ang)]})
     for d, i, c in wdm:                     # Wikidata's typed bridges the map and the inventory did not give
         if i in wd_used or any(_in_rings(o, c[None])[0] for o in taken) or _near_sites(c, osm_sites) or \
-                any(float(np.hypot(*(c - c2))) < max(L2 / 2, 150.0) for _, c2, L2 in nbi_sites):
+                any(float(dnp.hypot(*(c - c2))) < max(L2 / 2, 150.0) for _, c2, L2 in nbi_sites):
             continue
         wd_used.add(i)
         r = wd_record(i)
         L = r["length"]
         ang = np.linspace(0, 2 * np.pi, 33)
         rad = max(L / 2, 150.0) + 60.0
-        circle = np.c_[c[0] + rad * np.cos(ang), c[1] + rad * np.sin(ang)]
+        circle = np.c_[c[0] + rad * dnp.cos(ang), c[1] + rad * dnp.sin(ang)]
         taken.append(circle)
         if r["type"] == PLAIN or not (NBI_DECK_TRUSS <= r["type"] <= NBI_SWING or r["type"] == ARCH_ANY):
             continue                        # a girder bridge: a plain deck (and no size rule there)
@@ -431,7 +433,7 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
     if len(nbi_near(float(la[0]), float(lo[0]), COVER_M)[0]):
         return []                           # inside the inventory: no notable record, a plain deck
     longest = _longest_wet(parts, wet_fn)
-    total = sum(float(np.hypot(*np.diff(ln, axis=0).T).sum()) for ln in lines)
+    total = sum(float(dnp.hypot(*np.diff(ln, axis=0).T).sum()) for ln in lines)
     if longest >= WET_SPAN_M and total <= max(NETWORK_M, NETWORK_SHARE * longest):
         return [{"type": NBI_THROUGH_TRUSS, "span": float(min(longest, 250.0)), "length": 0.0, "width": 0.0,
                  "src": "size", "paint": chain_paint}]
@@ -485,7 +487,7 @@ def _held(rings, lines):
     held = 0.0
     for ln in lines:
         m = _in_rings(rings, ln)
-        held = max(held, float(np.hypot(*np.diff(ln, axis=0).T)[m[1:] & m[:-1]].sum()))
+        held = max(held, float(dnp.hypot(*np.diff(ln, axis=0).T)[m[1:] & m[:-1]].sum()))
     return held
 
 
@@ -495,7 +497,7 @@ def _circle(frame, i):
     e, n, _ = frame.geodetic_to_enu(np.array([float(db["lat"][i])]), np.array([float(db["lon"][i])]), 0.0)
     r = max(float(db["length"][i]) / 2, 100.0) + MATCH_M
     ang = np.linspace(0, 2 * np.pi, 33)
-    return np.c_[float(e[0]) + r * np.cos(ang), float(n[0]) + r * np.sin(ang)]
+    return np.c_[float(e[0]) + r * dnp.cos(ang), float(n[0]) + r * dnp.sin(ang)]
 
 
 def _drop_strays(out):
@@ -558,7 +560,7 @@ def pylon_sites(frame, feats_list, ground_fn):
     # (a tower mapped as several parts, the Golden Gate's north tower's 12-224 m: one tower, its tallest top)
     merged = []
     for c, top in sorted(out, key=lambda t: -t[1]):
-        if not any(float(np.hypot(*(c - m[0]))) <= PYLON_MERGE_M for m in merged):
+        if not any(float(dnp.hypot(*(c - m[0]))) <= PYLON_MERGE_M for m in merged):
             merged.append((c, top))
     return merged
 
@@ -600,7 +602,7 @@ def _osm_outlines(frame, parts, feats_list):
         held = 0.0                      # Bridge's three outlines were three arches)
         for ln in lines:
             m = _in_rings(rings, ln)
-            seg = np.hypot(*np.diff(ln, axis=0).T)
+            seg = dnp.hypot(*np.diff(ln, axis=0).T)
             held += float(seg[m[1:] & m[:-1]].sum())
         if held >= OSM_MIN_M:
             out.append((td, rings))
@@ -627,7 +629,7 @@ def _longest_wet(parts, wet_fn):
         xy = np.asarray(xy, np.float64)
         if len(xy) < 2:
             continue
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
         wet = np.asarray(wet_fn(xy), bool)
         i = 0
         while i < len(wet):
@@ -709,9 +711,9 @@ def _span_axis(groups):
     each took their own (three lenses over the Smithfield Street Bridge's two spans, 2026-10-27)."""
     c = np.array([(L + R) / 2 for run in groups for L, R, *_ in run])
     o = c.mean(0)
-    _, _, vt = np.linalg.svd(c - o, full_matrices=False)
-    ax = vt[0]
-    x = (c - o) @ ax
+    d = c - o
+    ax = dnp.eigh(dnp.matmul(d.T, d))[1][:, -1]         # the principal direction (deterministic: no LAPACK SVD)
+    x = dnp.matmul(c - o, ax)
     return o, ax, float(x.min()), float(x.max())
 
 
@@ -722,7 +724,7 @@ def _spans_of(run, span, axis):
     its 110 m spans (in life, 2 lenses and approach spans): BeamMaps' hand-made one had 3, a fixed 78 m span."""
     o, ax, lo, hi = axis
     c = np.array([(L + R) / 2 for L, R, *_ in run])
-    a = (c - o) @ ax - lo
+    a = dnp.matmul(c - o, ax) - lo
     length = hi - lo
     span = max(float(span), 1.0)
     # (the run reaches SHAPED_ARM of a span past the water each side: the spans that fit over the water itself)
@@ -791,11 +793,11 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
     P = [(np.asarray(xy, np.float64), np.asarray(z, np.float64), float(w)) for xy, z, w in parts if len(xy) >= 2]
     if not P:
         return ([], []) if with_piers else []
-    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] for xy, _, _ in P]
+    arcs = [np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))] for xy, _, _ in P]
     tans = []
     for xy, _, _ in P:
         t = np.gradient(xy, axis=0)
-        tans.append(t / np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None])
+        tans.append(t / np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None])
     order = sorted(range(len(P)), key=lambda k: -arcs[k][-1])
     ins_all = _inside(P, info)
     wets = [np.asarray(wet_fn(xy), bool) if wet_fn is not None else np.zeros(len(xy), bool) for xy, _, _ in P]
@@ -834,7 +836,7 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
                 ii = min(int(np.searchsorted(s, sc)), len(s) - 1)
                 t = tans[k][ii]
                 nrm = np.array([-t[1], t[0]])
-                if any(abs((p - c) @ u) < PANEL_M / 2 and abs((p - c) @ np.array([-u[1], u[0]])) < hw
+                if any(abs(dnp.matmul(p - c, u)) < PANEL_M / 2 and abs(dnp.matmul(p - c, np.array([-u[1], u[0]]))) < hw
                        for c, u, hw in placed):
                     if run:
                         groups.append(run)
@@ -845,12 +847,12 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
                 for k2, (xy2, z2, w2) in enumerate(P):
                     if k2 == k:
                         continue
-                    d = np.hypot(*(xy2 - p).T)
+                    d = dnp.hypot(*(xy2 - p).T)
                     m = int(np.argmin(d))
-                    if d[m] > SIDE_REACH_M or abs(tans[k2][m] @ t) < PARALLEL_COS:
+                    if d[m] > SIDE_REACH_M or abs(dnp.matmul(tans[k2][m], t)) < PARALLEL_COS:
                         continue
-                    off = float((xy2[m] - p) @ nrm)
-                    if abs(float((xy2[m] - p) @ t)) > PANEL_M:
+                    off = float(dnp.matmul(xy2[m] - p, nrm))
+                    if abs(float(dnp.matmul(xy2[m] - p, t))) > PANEL_M:
                         continue
                     lo, hi = min(lo, off - w2 / 2), max(hi, off + w2 / 2)
                     zlo, zhi = min(zlo, float(z2[m])), max(zhi, float(z2[m]))
@@ -879,7 +881,7 @@ def truss_members(parts, info, ground_fn, wet_fn=None, with_piers=False, road_li
             beams += extra
         if not small:                           # a solid pier under each end (the anchor piers)
             for (L, R, bot, top, t), inward in ((run[0], 1.0), (run[-1], -1.0)):
-                wd = float(np.hypot(*(L - R)))
+                wd = float(dnp.hypot(*(L - R)))
                 for off in (0.0, 0.5, 1.0, 1.5, 2.0):              # panels toward the truss's middle
                     c = (L + R) / 2 + t * inward * off * PANEL_M
                     nrm = (L - R) / max(wd, 1e-9)
@@ -969,11 +971,11 @@ def _station(P, tans, k, sc, arcs):
         ab = b - a
         f = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
         q = a + f[:, None] * ab
-        d = np.hypot(*(q - p).T)
+        d = dnp.hypot(*(q - p).T)
         m = int(np.argmin(d))
-        if d[m] > SIDE_REACH_M or abs(tans[k2][m] @ t) < PARALLEL_COS or abs(float((q[m] - p) @ t)) > PANEL_M:
+        if d[m] > SIDE_REACH_M or abs(dnp.matmul(tans[k2][m], t)) < PARALLEL_COS or abs(float(dnp.matmul(q[m] - p, t))) > PANEL_M:
             continue
-        off = float((q[m] - p) @ nrm)
+        off = float(dnp.matmul(q[m] - p, nrm))
         zq = float(z2[m] + f[m] * (z2[m + 1] - z2[m]))
         lo, hi = min(lo, off - w2 / 2), max(hi, off + w2 / 2)
         zlo, zhi = min(zlo, zq), max(zhi, zq)
@@ -983,11 +985,11 @@ def _station(P, tans, k, sc, arcs):
 
 def _prep(parts):
     P = [(np.asarray(xy, np.float64), np.asarray(z, np.float64), float(w)) for xy, z, w in parts if len(xy) >= 2]
-    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] for xy, _, _ in P]
+    arcs = [np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))] for xy, _, _ in P]
     tans = []
     for xy, _, _ in P:
         t = np.gradient(xy, axis=0)
-        tans.append(t / np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None])
+        tans.append(t / np.maximum(dnp.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None])
     return P, arcs, tans
 
 
@@ -1016,7 +1018,7 @@ def main_span(P, arcs, info, ground_fn, wet_fn=None):
             for (xy_, _, _), a, m in zip(P, arcs, ins):
                 w_ = np.asarray(wet_fn(xy_), bool) & m
                 wet_held.append(float(np.sum(np.diff(a)[w_[1:] & w_[:-1]])))
-                near.append(float(np.min(np.hypot(*(xy_[w_] - ctr).T))) if ctr is not None and w_.any() else 0.0)
+                near.append(float(np.min(dnp.hypot(*(xy_[w_] - ctr).T))) if ctr is not None and w_.any() else 0.0)
             ok = [i for i, v in enumerate(wet_held) if v >= SPAN_MIN]
             if ok:              # (a record's circle: the wet part passing nearest its point; an outline: the longest)
                 k = min(ok, key=lambda i: near[i]) if ctr is not None else max(ok, key=lambda i: wet_held[i])
@@ -1091,9 +1093,9 @@ def arch_members(P, arcs, tans, ms, info, ground_fn):
         top = deck_c - 1.5 - rh / 2
     x = np.linspace(-1, 1, n + 1)
     base = z0[0] + (z0[1] - z0[0]) * (x + 1) / 2
-    zr = base + (top - base) * (1 - x ** 2)
+    zr = base + (top - base) * (1 - x * x)
     trussed = L >= ARCH_TRUSS_M
-    dz_t = (ARCH_DEPTH_CROWN + (ARCH_DEPTH_END - ARCH_DEPTH_CROWN) * x ** 2) * L if trussed else np.zeros(n + 1)
+    dz_t = (ARCH_DEPTH_CROWN + (ARCH_DEPTH_END - ARCH_DEPTH_CROWN) * (x * x)) * L if trussed else np.zeros(n + 1)
     if not through:                                 # a deck arch's upper chord stays under the deck
         dz_t = np.clip(np.minimum(dz_t, np.array([s[6] for s in st]) - 1.5 - rh / 2 - zr), 0.0, None)
     for side in (0, 1):
@@ -1136,7 +1138,7 @@ def mapped_towers(P, arcs, ms, pylons):
     s = arcs[k]
     on = []
     for q, top in pylons:
-        d = np.hypot(*(xy - np.asarray(q, np.float64)[:2]).T)
+        d = dnp.hypot(*(xy - np.asarray(q, np.float64)[:2]).T)
         i = int(np.argmin(d))
         if d[i] <= PYLON_NEAR_M and abs(s[i] - c) <= PYLON_REACH * L:
             on.append((float(s[i]), float(top)))
@@ -1189,14 +1191,14 @@ def suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=False, mapped_
                 e = p + nrm * ((hi + leg[0] / 2) if which else (lo - leg[0] / 2))
                 if sc < towers[0]:                      # side span: straight down to the anchorage at the deck
                     f = (sc - s0) / max(towers[0] - s0, 1e-9)
-                    zc = (zhi + 1.0) + (tops[0][5] - zhi - 1.0) * f ** 1.3
+                    zc = (zhi + 1.0) + (tops[0][5] - zhi - 1.0) * dnp.power(f, 1.3)
                 elif sc > towers[1]:
                     f = (s1 - sc) / max(s1 - towers[1], 1e-9)
-                    zc = (zhi + 1.0) + (tops[1][5] - zhi - 1.0) * f ** 1.3
+                    zc = (zhi + 1.0) + (tops[1][5] - zhi - 1.0) * dnp.power(f, 1.3)
                 else:
                     x = (sc - c) / (L / 2)
                     low = zhi + SUSP_LOW_M
-                    zc = low + (min(tops[0][5], tops[1][5]) - low) * x ** 2
+                    zc = low + (min(tops[0][5], tops[1][5]) - low) * (x * x)
                 q = np.r_[e, zc]
                 if prev is not None:
                     beams.append((prev, q, 0.9, 0.9))
@@ -1373,7 +1375,7 @@ def _clear_of_decks(beams, P):
     out = []
     for b in beams:
         p, q = np.asarray(b[0], np.float64), np.asarray(b[1], np.float64)
-        n = max(int(np.hypot(*(q[:2] - p[:2])) / HEADROOM_STEP_M), 1) + 1
+        n = max(int(dnp.hypot(*(q[:2] - p[:2])) / HEADROOM_STEP_M), 1) + 1
         pts = p[None] + (q - p)[None] * np.linspace(0.0, 1.0, n)[:, None]
         lo_b, hi_b = pts[:, :2].min(0) - 30.0, pts[:, :2].max(0) + 30.0
         near = ~((np.maximum(A, B) < lo_b).any(1) | (np.minimum(A, B) > hi_b).any(1))
@@ -1382,7 +1384,7 @@ def _clear_of_decks(beams, P):
             continue
         a, ab, l2 = A[near], AB[near], L2[near]
         t = np.clip(((pts[:, None, :2] - a[None]) * ab[None]).sum(2) / l2[None], 0.0, 1.0)
-        d = np.hypot(*(pts[:, None, :2] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
+        d = dnp.hypot(*(pts[:, None, :2] - (a[None] + t[..., None] * ab[None])).transpose(2, 0, 1))
         dz = pts[:, 2:3] - (ZA[near][None] + (ZB[near] - ZA[near])[None] * t)
         over = (d < HW[near][None] - 0.3) & (dz > -0.5) & (dz < HEADROOM_M)
         if not over.any():

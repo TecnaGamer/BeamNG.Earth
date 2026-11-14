@@ -12,6 +12,7 @@ the edge's points, smoothed along it, weighted by distance for the points inside
 import math
 
 import numpy as np
+import dnp
 
 import busstationmesh as bm
 import busstations as bs
@@ -55,24 +56,24 @@ def _runs(snapped, ring, tidx=None):
     runs, cur = [], [int(idx[0])]
     for i in idx[1:]:
         i = int(i)
-        gap = float(np.hypot(*(ring[i] - ring[cur[-1]])))
+        gap = float(dnp.hypot(*(ring[i] - ring[cur[-1]])))
         if i - cur[-1] <= 2 and gap < RUN_BREAK_M:
             cur.append(i)
         else:
             runs.append(cur)
             cur = [i]
     runs.append(cur)
-    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][-1] == n - 1 and             float(np.hypot(*(ring[0] - ring[-1]))) < RUN_BREAK_M:
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][-1] == n - 1 and             float(dnp.hypot(*(ring[0] - ring[-1]))) < RUN_BREAK_M:
         runs[0] = runs.pop() + runs[0]
     out = []
-    cos_max = np.cos(np.radians(TURN_BREAK_DEG))
+    cos_max = dnp.cos(np.radians(TURN_BREAK_DEG))
     for run in runs:
         cut = [0]
         for k in range(1, len(run) - 1):
             a = ring[run[k]] - ring[run[k - 1]]
             b = ring[run[k + 1]] - ring[run[k]]
-            la, lb = float(np.hypot(*a)), float(np.hypot(*b))
-            sharp = la > 1e-6 and lb > 1e-6 and float(np.dot(a, b)) / (la * lb) < cos_max
+            la, lb = float(dnp.hypot(*a)), float(dnp.hypot(*b))
+            sharp = la > 1e-6 and lb > 1e-6 and float(dnp.dot(a, b)) / (la * lb) < cos_max
             moved = tidx is not None and int(tidx[run[k]]) != int(tidx[run[k - 1]])
             if sharp or moved:
                 cut.append(k if sharp else k)
@@ -91,7 +92,7 @@ def _smooth(z, n):
     k = min(n, len(z) if len(z) % 2 else len(z) - 1)
     pad = k // 2
     zp = np.concatenate((np.full(pad, z[0]), z, np.full(pad, z[-1])))
-    return np.convolve(zp, np.ones(k) / k, mode="valid")
+    return dnp.convolve(zp, np.ones(k) / k, mode="valid")
 
 
 def platform_height(pl, country, n_platforms):
@@ -101,7 +102,7 @@ def platform_height(pl, country, n_platforms):
 
 
 def _resample(xy, step):
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))))
     if s[-1] < 1e-6:
         return xy[:1]
     t = np.arange(0.0, s[-1], step)
@@ -132,7 +133,7 @@ def reference(frame, elev, pl):
         q = _resample(np.asarray(xy, float), REF_STEP_M)
         if len(q) < 2:
             continue
-        d = np.sqrt(((q[:, None, :] - ring[None, :, :]) ** 2).sum(2)).min(1)
+        d = np.sqrt((dnp.sq(q[:, None, :] - ring[None, :, :])).sum(2)).min(1)
         keep = d < REF_NEAR_M
         if not keep.any():
             continue
@@ -151,10 +152,10 @@ def _profile_z(poly, z, xy):
     ends clamped), linear along each segment."""
     a, b = poly[:-1], poly[1:]
     ab = b - a
-    l2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    l2 = np.maximum((ab * ab).sum(1), 1e-9)
     t = np.clip(((xy[:, None, 0] - a[None, :, 0]) * ab[None, :, 0] + (xy[:, None, 1] - a[None, :, 1]) * ab[None, :, 1]) / l2, 0.0, 1.0)
     f = a[None] + ab[None] * t[:, :, None]
-    d = np.hypot(f[:, :, 0] - xy[:, None, 0], f[:, :, 1] - xy[:, None, 1])
+    d = dnp.hypot(f[:, :, 0] - xy[:, None, 0], f[:, :, 1] - xy[:, None, 1])
     j = np.argmin(d, axis=1)
     r = np.arange(len(xy))
     tt = t[r, j]
@@ -197,7 +198,7 @@ def _clip_half(poly, u, c, keep_ge):
     n = len(poly)
     if n == 0:
         return poly
-    v = poly @ u - c
+    v = dnp.matmul(poly, u) - c
     if not keep_ge:
         v = -v
     for i in range(n):
@@ -222,7 +223,7 @@ def bands(ring, step=BAND_M):
         u = np.asarray(u, float)
     except Exception:
         u = np.array([1.0, 0.0])
-    t = ring @ u
+    t = dnp.matmul(ring, u)
     out = []
     lo = np.floor(t.min() / step) * step
     for c0 in np.arange(lo, t.max(), step):
@@ -263,7 +264,7 @@ def _strips(mesh, ref, pl, height, frame, elev):
         d[1:-1] = pts[2:] - pts[:-2]
         d[0] = pts[1] - pts[0]
         d[-1] = pts[-1] - pts[-2]
-        d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+        d /= np.maximum(dnp.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
         nrm = np.c_[-d[:, 1], d[:, 0]]
         for off, w, mat in ((STRIP_IN_M, STRIP_W_M, BAND), (LINE_IN_M, LINE_W_M, LINE)):
             a, b = pts + nrm * off, pts + nrm * (off + w)
@@ -274,7 +275,7 @@ def _strips(mesh, ref, pl, height, frame, elev):
             T = []
             for i in range(m - 1):
                 T += [[i, i + 1, m + i + 1], [i, m + i + 1, m + i]]
-            s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+            s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
             UV = np.vstack((np.c_[s / mat[1], np.zeros(m)], np.c_[s / mat[1], np.full(m, w / mat[1])]))
             mesh.add(mat[0], P, UV, T)
 
@@ -331,7 +332,7 @@ def _roofs(mesh, frame, elev, st, box, columns_only=False):
             bm._face(mesh, mat, rep, ring, lambda P, z=ztop: np.full(len(P), z), step=step)
             bm._face(mesh, mat, rep, ring, lambda P, z=zbot: np.full(len(P), z), up=False, step=step)
             bm.walls(mesh, mat, rep, bm._densify(ring, step), zbot, ztop)
-        pts = [q for q in _roof_columns(st, ring, plats, surfs) if all(float(np.hypot(*(q - o))) >= 1.5 for o in placed)]
+        pts = [q for q in _roof_columns(st, ring, plats, surfs) if all(float(dnp.hypot(*(q - o))) >= 1.5 for o in placed)]
         placed += pts
         for q in pts:
             zf = float(np.median([f(np.asarray(q)[None])[0] for f in surfs]))
@@ -364,18 +365,18 @@ def _ramps(mesh, frame, elev, ref, pl, height):
     fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
     for run in _runs(pl.snapped, pl.ring, pl.tidx):
         pts = pl.ring[run]
-        if len(pts) < 3 or float(np.hypot(*np.diff(pts, axis=0).T).sum()) < RAMP_MIN_RUN_M:
+        if len(pts) < 3 or float(dnp.hypot(*np.diff(pts, axis=0).T).sum()) < RAMP_MIN_RUN_M:
             continue
         for end, away in ((0, -1.0), (-1, 1.0)):
             a, b = (pts[0], pts[1]) if end == 0 else (pts[-1], pts[-2])
             d = (a - b)
-            dl = float(np.hypot(*d))
+            dl = float(dnp.hypot(*d))
             if dl < 1e-6:
                 continue
             t = d / dl                                   # (out of the platform along the edge)
             run_dir = (pts[1] - pts[0]) if end == 0 else (pts[-1] - pts[-2])
             n = np.array([-run_dir[1], run_dir[0]])
-            n = n / max(float(np.hypot(*n)), 1e-9)       # (inward: the platform is to the left of the run's direction)
+            n = n / max(float(dnp.hypot(*n)), 1e-9)       # (inward: the platform is to the left of the run's direction)
             start = a + n * RAMP_IN_M
             z0 = float(top_z(ref, start[None], fb)[0]) + height
             g0 = float(bm.ground(frame, elev, start[None])[0])

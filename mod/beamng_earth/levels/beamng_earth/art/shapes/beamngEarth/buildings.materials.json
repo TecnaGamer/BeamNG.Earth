@@ -18,7 +18,7 @@
           1,
           1
         ],
-        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_facade_night_e.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_facade_night_e.dds",
         "vertColor": true,
         "emissiveFactor": [
           0,
@@ -52,7 +52,7 @@
           1
         ],
         "vertColor": true,
-        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.dds",
         "emissiveFactor": [
           0,
           0,
@@ -85,7 +85,7 @@
           1
         ],
         "vertColor": true,
-        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.dds",
         "emissiveFactor": [
           0,
           0,
@@ -364,9 +364,9 @@
     "persistentId": "6b896ec1-8656-5353-b786-9e84ea63b34c",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,
@@ -480,7 +480,7 @@
         "roughnessFactor": 0.9,
         "metallicFactor": 0,
         "vertColor": true,
-        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_sky_night_e.dds",
         "emissiveFactor": [
           0,
           0,
@@ -647,9 +647,9 @@
     "persistentId": "1457f020-7c7b-5500-a552-641f4d185bb8",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,
@@ -673,9 +673,9 @@
     "persistentId": "f02de19c-ae64-5bff-aa05-88b9a2cac89f",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,
@@ -699,9 +699,9 @@
     "persistentId": "b7bf815d-75ff-52e0-85b1-ea43ee57164f",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,
@@ -725,9 +725,9 @@
     "persistentId": "c1128c91-a929-5688-909a-421e6deca0b4",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,
@@ -751,9 +751,9 @@
     "persistentId": "dce44997-0a52-5fe1-9f33-df51bf19cb84",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_r.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_r.data.dds",
         "metallicFactor": 0,
         "baseColorFactor": [
           1,

@@ -30,6 +30,7 @@ PLACE = {
     "poland": "Poland", "czechia": "Czechia", "estonia": "Estonia", "flanders": "Flanders (Belgium)",
     "de_bayern": "Bavaria", "de_nrw": "North Rhine-Westphalia", "de_bw": "Baden-Wurttemberg",
     "de_nds": "Lower Saxony", "de_berlin": "Berlin", "de_hessen": "Hesse", "japan": "Japan",
+    "hongkong": "Hong Kong",
     "au_nsw": "New South Wales", "au_tas": "Tasmania", "ontario": "Ontario",
 }
 
@@ -120,6 +121,9 @@ REGIONAL = {
     # --- Asia / Oceania / Americas -------------------------------------------------------------------------------
     "japan": ("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", "GSI Japan (Geospatial Information Authority of Japan) seamless photo",
               (24.0, 122.9, 45.6, 146.0), "xyz", False),
+    # LandsD Imagery Map API: outside Hong Kong it serves a coarse fill (Shenzhen, the estuary), not blank tiles
+    "hongkong": ("https://mapapi.hkmapservice.gov.hk/gs/api/v1.0.0/xyz/imagery/WGS84/{z}/{x}/{y}.png",
+                 "Aerial Photograph from Lands Department", (22.13, 113.82, 22.57, 114.45), "xyz", False),
     "au_nsw": ("https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery/MapServer/tile/{z}/{y}/{x}",
                "(c) Spatial Services NSW (CC BY 4.0)", (-37.6, 140.9, -28.1, 153.7), "xyz", False),
     "au_tas": ("https://services.thelist.tas.gov.au/arcgis/rest/services/Basemaps/Orthophoto/MapServer/tile/{z}/{y}/{x}",

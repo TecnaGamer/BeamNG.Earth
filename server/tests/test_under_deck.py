@@ -9,6 +9,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import dnp  # noqa: E402
 import grading  # noqa: E402
 import roads  # noqa: E402
 from test_roads import features, FRAME  # noqa: E402
@@ -57,7 +58,7 @@ def _line_hits_ref(a, b):
     t = (qp[..., 0] * s[None, :, 1] - qp[..., 1] * s[None, :, 0]) / den
     u = (qp[..., 0] * r[:, None, 1] - qp[..., 1] * r[:, None, 0]) / den
     i, j = np.nonzero(ok & (t >= 0.0) & (t <= 1.0) & (u >= 0.0) & (u <= 1.0))
-    la, lb = np.hypot(*r.T), np.hypot(*s.T)
+    la, lb = dnp.hypot(*r.T), dnp.hypot(*s.T)
     sa, sb = np.r_[0.0, np.cumsum(la)], np.r_[0.0, np.cumsum(lb)]
     sin = np.abs(rxs[i, j]) / np.maximum(la[i] * lb[j], 1e-12)
     return sa[i] + t[i, j] * la[i], sb[j] + u[i, j] * lb[j], sin, float(sb[-1])
@@ -81,7 +82,7 @@ def deck_capped_ref(pts, z, decks):
                 wins.append((float(a) - h, float(a) + h))
     if not wins:
         return z
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))]
     z = np.asarray(z, np.float64)
     out = z.copy()
     wins.sort()
@@ -115,7 +116,7 @@ def _seg_old(decks, k):
     got = None
     if len(b) >= 2:
         s = np.diff(b, axis=0)
-        lb = np.hypot(*s.T)
+        lb = dnp.hypot(*s.T)
         sb = np.r_[0.0, np.cumsum(lb)]
         got = (b[:-1], s, lb, sb[:-1], float(sb[-1]))
     segs[k] = got
@@ -128,7 +129,7 @@ def _deck_hits_old(pts, decks, near):
     deck was most of deck_capped's ~0.1 ms a call, 2026-11-03), and pts' arcs (n,). The same products in the same
     order per pair of segments as one deck at a time (elementwise: bit for bit). Pure."""
     p, r = pts[:-1], np.diff(pts, axis=0)
-    la = np.hypot(*r.T)
+    la = dnp.hypot(*r.T)
     sa = np.r_[0.0, np.cumsum(la)]
     ks, sg = [], []
     for k in near:
@@ -247,7 +248,7 @@ class DeckHitsTest(unittest.TestCase):
                                                         (int(rng.integers(2, 400)), 2)), axis=0)
                     if n % 5 == 1:          # (repeated points: zero-length segments, np.interp's equal arcs)
                         road = np.repeat(road, rng.integers(1, 3, len(road)), axis=0)
-                    z = 40.0 + 6.0 * np.sin(np.arange(len(road)) / 7.0)
+                    z = 40.0 + 6.0 * dnp.sin(np.arange(len(road)) / 7.0)
                     if n % 7 == 3:          # (sea level, flat stretches)
                         z = np.where(np.arange(len(road)) % 30 < 12, 0.0, z)
                     want = deck_capped_ref(road, z, decks)

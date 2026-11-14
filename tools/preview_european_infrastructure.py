@@ -12,9 +12,10 @@ from PIL import Image,ImageDraw,ImageFont
 import build_european_infrastructure as a
 import europeinfra as ei
 import signmesh
+from mod_textures_dds import open_texture
 
 FONT=a.ROOT/'tools/fonts/DejaVuSans-Bold.ttf'
-MASK=np.asarray(Image.open(a.OUT.parent/'regional_signs/sign_font_opacity.data.png'))
+MASK=np.asarray(open_texture(a.OUT.parent/'regional_signs/sign_font_opacity.data.png'))   # (shipped as .dds)
 
 def render(mesh,w,h,angle=0,crop=False):
     points=np.asarray(mesh.p,float);uv=np.asarray(mesh.uv,float)

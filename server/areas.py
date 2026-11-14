@@ -45,6 +45,7 @@ import threading
 import time
 
 import fast
+import dmath
 import netfetch
 import pacer
 import roadz
@@ -155,7 +156,7 @@ def route_bounds(route):
     """(s, w, n, e) round a route's corridor."""
     lats, lons, half = route["lat"], route["lon"], route["half"]
     dlat = half / 111_195.0
-    dlon = half / (111_195.0 * max(0.01, math.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
+    dlon = half / (111_195.0 * max(0.01, dmath.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
     return (max(-85.0, min(lats) - dlat), max(-180.0, min(lons) - dlon), min(85.0, max(lats) + dlat),
             min(180.0, max(lons) + dlon))
 
@@ -400,8 +401,12 @@ class Areas:
         bounds)."""
         tiles = route_tiles(route) if route is not None else box_tiles(box)
         if phase == "data":
-            return plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
-                              area_layers() if self.s.mapdata is not None else ())
+            import decisions    # (the shared decision archives' blocks first: one request a ~60 km2 block)
+            dec = ([("dec", decisions.BLOCK_Z, x, y) for x, y in tiles(decisions.BLOCK_Z, 0)]
+                   if decisions.enabled() and self.s.mapdata is not None and getattr(self.s, "grading", False)
+                   else [])
+            return dec + plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
+                                    area_layers() if self.s.mapdata is not None else ())
         if phase == "world":
             # the road heights' lidar first: a road build waits only seconds for it (roadz.gap_answers) and a cell it
             # had to give up on keeps no geotile for the rest of the server's run
@@ -427,6 +432,9 @@ class Areas:
         """Is a step's data on disk already (no network; but a world tile near Germany, with its junction signs on,
         fetches Germany's border data once: geo_prebuilt's key names it, earthd.Server.geo_content_key)?"""
         kind = step[0]
+        if kind == "dec":
+            import decisions
+            return decisions.region_block_present(self.s.cache_dir, self.s.mapdata.versions(), step[2], step[3])
         if kind == "cell":
             import mapcells
             return self.s.mapdata.has(mapcells.CellKey(step[1], step[2], step[3]), step[4])
@@ -951,6 +959,10 @@ class Areas:
 
     def _fetch(self, a, st):
         kind = st[0]
+        if kind == "dec":
+            import decisions
+            decisions.region_block(self.s.cache_dir, self.s.mapdata.versions(), st[2], st[3])
+            return
         if kind == "geo":
             k = self.s.prebuild_geo(st[2], st[3])
             if k is None:

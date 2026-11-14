@@ -13,6 +13,8 @@ import math
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 import busbays
 import busstations as bs
@@ -60,9 +62,9 @@ def _shapes(st):
     for ln in st.lanes:                         # the exits widen to a funnel at the street (plan 028)
         path = np.asarray(ln["xy"], float)
         for end, nxt in ((path[0], path[1]), (path[-1], path[-2])):
-            if any(float(np.hypot(end[0] - mx, end[1] - my)) < 1.0 for mx, my in st.mouths):
+            if any(float(dnp.hypot(end[0] - mx, end[1] - my)) < 1.0 for mx, my in st.mouths):
                 t = nxt - end
-                ln_ = float(np.hypot(*t))
+                ln_ = float(dnp.hypot(*t))
                 if ln_ < 1e-6:
                     continue
                 t = t / ln_
@@ -72,7 +74,7 @@ def _shapes(st):
                 pts.append(r)
     for r in st.roads:
         xy = np.asarray(r["xy"], float)
-        near = [p for p in _resample(xy, 4.0) if float(np.hypot(*(p - st.hub))) <= YARD_ROAD_M]
+        near = [p for p in _resample(xy, 4.0) if float(dnp.hypot(*(p - st.hub))) <= YARD_ROAD_M]
         if near:
             pts.append(np.array(near))
     return [r for r in rings if len(r) >= 3], pts
@@ -82,7 +84,7 @@ def _resample(path, step):
     path = np.asarray(path, float)
     out = [path[0]]
     for a, b in zip(path[:-1], path[1:]):
-        k = max(1, int(np.hypot(*(b - a)) // step))
+        k = max(1, int(dnp.hypot(*(b - a)) // step))
         out += [a + (b - a) * (i / k) for i in range(1, k + 1)]
     return out
 
@@ -154,8 +156,8 @@ def yard_polys(st):
         reach = np.zeros(len(grid), bool)
         for i in range(0, len(cand), 4000):
             idx = cand[i:i + 4000]
-            d2 = ((grid[idx][:, None, :] - sample[None, :, :]) ** 2).sum(2).min(1)
-            reach[idx] = d2 <= REACH_M ** 2
+            d2 = (dnp.sq(grid[idx][:, None, :] - sample[None, :, :])).sum(2).min(1)
+            reach[idx] = d2 <= REACH_M * REACH_M
         mask &= reach
     for ring in list(getattr(st, "greens", ())) + list(st.obstacles):
         if mask.any():
@@ -204,7 +206,7 @@ FLAT_MAX_SAMPLES = 3000
 
 
 def _local(rings, lat0, lon0):
-    kx = 111320.0 * math.cos(math.radians(lat0))
+    kx = 111320.0 * dmath.cos(math.radians(lat0))
     return [np.column_stack(((np.asarray(lo, float) - lon0) * kx, (np.asarray(la, float) - lat0) * 110574.0))
             for la, lo in rings], kx
 
@@ -214,12 +216,12 @@ def _ring_dist(ring, pts):
     a = ring
     b = np.roll(ring, -1, axis=0)
     ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    ab2 = np.maximum((ab * ab).sum(1), 1e-9)
     t = np.clip(((pts[:, None, 0] - a[None, :, 0]) * ab[None, :, 0] + (pts[:, None, 1] - a[None, :, 1]) * ab[None, :, 1])
                 / ab2[None, :], 0.0, 1.0)
     qx = a[None, :, 0] + t * ab[None, :, 0]
     qy = a[None, :, 1] + t * ab[None, :, 1]
-    return np.hypot(qx - pts[:, None, 0], qy - pts[:, None, 1]).min(1)
+    return dnp.hypot(qx - pts[:, None, 0], qy - pts[:, None, 1]).min(1)
 
 
 class YardPlan:
@@ -247,13 +249,13 @@ class YardPlan:
         z = np.asarray(dem_sample(la, lo), float).ravel()
         mx, my = pts.mean(0)
         A = np.column_stack((pts[:, 0] - mx, pts[:, 1] - my, np.ones(len(pts))))
-        coef, *_ = np.linalg.lstsq(A, z, rcond=None)
-        res = z - A @ coef
+        coef, *_ = dnp.lstsq(A, z, rcond=None)
+        res = z - dnp.matmul(A, coef)
         keep = np.abs(res) <= max(2.0 * float(res.std()), 0.05)             # (a tree, a wall in the DEM: left out once)
         if keep.sum() >= 3:
-            coef, *_ = np.linalg.lstsq(A[keep], z[keep], rcond=None)
+            coef, *_ = dnp.lstsq(A[keep], z[keep], rcond=None)
         gxy = np.array(coef[:2])
-        g = float(np.hypot(*gxy))
+        g = float(dnp.hypot(*gxy))
         if g > FLAT_SLOPE_MAX:
             gxy *= FLAT_SLOPE_MAX / g
         z0 = float(np.mean(z[keep] - (pts[keep, 0] - mx) * gxy[0] - (pts[keep, 1] - my) * gxy[1]))

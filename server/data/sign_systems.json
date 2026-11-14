@@ -5,6 +5,9 @@
                 "octagon": [0.6, 0.75, 0.9], "diamond": [0.6, 0.75, 0.9], "rect": [0.8, 1.0, 1.2]}
   },
   "countries": {
+    "NL": {"atlas": "vienna_w", "lateral": [0.5, 1.5], "mount": [2.2, 1.5], "gap_m": [10, 20], "max_on_pole": 2,
+           "only": ["prio.give_way", "prio.stop", "reg.no_entry", "mand.roundabout"],
+           "order": ["priority", "mandatory"]},
     "UA": {"atlas": "vienna_w", "lateral": [0.5, 1.2], "mount": [2.0, 1.5], "gap_m": [25, 50], "max_on_pole": 3,
            "off": ["info.living_street", "info.living_street_end"],
            "order": ["priority", "warning", "mandatory", "prohibition", "information"]},

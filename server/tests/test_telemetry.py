@@ -205,6 +205,28 @@ class PerfTest(unittest.TestCase):
         self.assertNotIn("setup", again)        # (sent once, again only when it changes)
         self.assertNotIn("game", again)
 
+    def test_version_2_summary_and_server_tree(self):
+        """perfsummary.lua version 2's fields pass (the fine histogram's 0-based keys, the context's fixed names, the
+        machine's memory), anything else is still dropped; the server's tree gives memory and its worker count."""
+        import perfstats
+        c = perfstats.Collector(tree=lambda: (5.0, 6000.0, 9))
+        c.on_setup({"modSettings": {"quality": "high", "framePacing": False, "teleportPriority": True, "lastPlace": "x"}})
+        c.on_summary({"v": 2, "ft": {"5": 900, "13": 3}, "p50": 16.625, "p99": 40.125, "p999": 120.5, "over2x": 3,
+                      "over4x": 1, "ctx": {"swap": [3, 2, 0, 0], "C:/Users": [1, 1, 1, 1]}, "cause1s": {"FramePresent": 1},
+                      "tp": {"t10": [10, 1, 0, 0, 0]}, "idle": [60, 0, 0, 0, 0],
+                      "mach": {"gameMB": 6144, "freeMB": 2048, "vramMB": 8192},
+                      "bands": {"s60": {"s": 300, "fh": [1, 2], "hit": [1, 1, 0, 0]}}, "where": "Baltimore"})
+        out = c.take()
+        g = out["game"][0]
+        self.assertEqual(out["setup"]["modSettings"], {"quality": "high", "framePacing": False, "teleportPriority": True})
+        self.assertEqual(g["ft"], {"5": 900, "13": 3})
+        self.assertEqual(g["ctx"], {"swap": [3, 2, 0, 0]})
+        self.assertEqual((g["p99"], g["mach"]["freeMB"], g["tp"]["t10"][0], g["bands"]["s60"]["hit"]), (40.125, 2048, 10, [1, 1, 0, 0]))
+        self.assertNotIn("where", g)
+        self.assertEqual((out["server"]["memMB"], out["server"]["workers"]), (4096, 8))
+        tree = perfstats.tree_stats()           # (this process: memory and no workers, wherever it runs)
+        self.assertTrue(tree is None or (tree[1] > 0 and tree[2] == 0))
+
     def test_catchup_and_errors(self):
         import perfstats
         t = [0.0]

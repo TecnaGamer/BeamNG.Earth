@@ -219,17 +219,18 @@ class ModelTest(unittest.TestCase):
                 face["sha256"],
             )
             self.assertTrue((stops.OUT / (n + ".dae")).exists())
-            self.assertTrue((stops.OUT / (n + ".png")).exists())
+            __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+            self.assertTrue(_mt.is_shipped(stops.OUT / (n + ".dds")))     # (a DDS made at install from its source)
             self.assertTrue(
-                materials[n + "_face"]["Stages"][0]["baseColorMap"].endswith("/" + n + ".png")
+                materials[n + "_face"]["Stages"][0]["baseColorMap"].endswith("/" + n + ".dds")
             )
         self.assertNotEqual(
-            (stops.OUT / "bne_eu_stop_fr.png").read_bytes(),
-            (stops.OUT / "bne_eu_stop_de.png").read_bytes(),
+            _mt.open_texture(stops.OUT / "bne_eu_stop_fr.dds").tobytes(),
+            _mt.open_texture(stops.OUT / "bne_eu_stop_de.dds").tobytes(),
         )
         self.assertNotEqual(
-            (stops.OUT / "bne_eu_stop_fr.png").read_bytes(),
-            (stops.OUT / "bne_eu_stop_gb.png").read_bytes(),
+            _mt.open_texture(stops.OUT / "bne_eu_stop_fr.dds").tobytes(),
+            _mt.open_texture(stops.OUT / "bne_eu_stop_gb.dds").tobytes(),
         )
 
     def test_stop_localization_preserves_pose_and_legacy_quebec(self):

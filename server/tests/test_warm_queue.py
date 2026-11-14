@@ -47,6 +47,56 @@ class ReadWarmTest(unittest.TestCase):
         self.assertEqual(asked, [3])
         self.assertEqual(want, [("grader", (15, 1, 2))])
 
+    def test_read_only_mark(self):
+        st = types.SimpleNamespace(cv=threading.Condition(), want=None, anchor=lambda aid, la, lo: ("grader", None))
+        with mock.patch.object(blockworker, "_s", st):
+            blockworker._read_warm(_Q([(3, 40.0, -74.0, [(15, 1, 2)], True)]))
+        self.assertTrue(st.warm_read_only)
+        with mock.patch.object(blockworker, "_s", st):
+            blockworker._read_warm(_Q([(3, 40.0, -74.0, [(15, 1, 2)])]))       # (a list without the mark: planned)
+        self.assertFalse(st.warm_read_only)
+
+
+class _Shared:
+    def __init__(self, has=(), busy=()):
+        self._has, self._busy = set(has), set(busy)
+
+    def has(self, k):
+        return k in self._has
+
+    def busy(self, k):
+        return k in self._busy
+
+
+class _G:
+    def __init__(self, shared, planned=()):
+        self.shared, self._planned = shared, set(planned)
+
+    def planned(self, k):
+        return k in self._planned
+
+
+class WarmNextTest(unittest.TestCase):
+    """blockworker._warm_next: which cell a block process's warm thread takes next."""
+
+    def test_skips_the_cells_another_process_is_planning(self):
+        g = _G(_Shared(busy={"a"}), planned={"p"})
+        self.assertEqual(blockworker._warm_next([(g, "p"), (g, "a"), (g, "b")], False), (g, "b"))
+
+    def test_reads_what_is_planned_even_read_only(self):
+        g = _G(_Shared(has={"b"}))
+        self.assertEqual(blockworker._warm_next([(g, "a"), (g, "b")], True), (g, "b"))      # ("a" is not planned here)
+        self.assertEqual(blockworker._warm_next([(g, "a"), (g, "b")], False), (g, "a"))
+
+    def test_nothing_left(self):
+        g = _G(_Shared(busy={"a"}))
+        self.assertIsNone(blockworker._warm_next([(g, "a")], False))
+        self.assertIsNone(blockworker._warm_next([(g, "a")], True))
+
+    def test_without_a_plan_cache_as_before(self):
+        g = _G(None)
+        self.assertEqual(blockworker._warm_next([(g, "a")], True), (g, "a"))
+
 
 if __name__ == "__main__":
     unittest.main()

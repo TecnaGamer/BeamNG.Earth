@@ -6,6 +6,8 @@ carriageway can extend the search to the first usable gap downstream.
 
 import math
 import numpy as np
+import dmath
+import dnp
 import geotiles
 
 MODELS = (("fr_j14a", 1.0, 1.70), ("fr_j14a_small", 0.5, 1.20))  # group, radius, height (m)
@@ -31,11 +33,11 @@ def _interior_arms(mainlines, junction):
         if len(line) < 3:
             continue
         offsets = line[1:-1] - junction
-        close = (np.linalg.norm(offsets[:, :2], axis=1) <= 1.0) & (abs(offsets[:, 2]) <= 1.2)
+        close = (dnp.norm(offsets[:, :2], axis=1) <= 1.0) & (abs(offsets[:, 2]) <= 1.2)
         for index in np.flatnonzero(close) + 1:
             for neighbor, start in ((index - 1, False), (index + 1, True)):
                 direction = line[neighbor, :2] - line[index, :2]
-                length = float(np.linalg.norm(direction))
+                length = float(dnp.norm(direction))
                 if length > 1e-3:
                     yield (key, spec, direction / length, line[index], start, length)
 
@@ -44,7 +46,7 @@ def _near_ends(ends, point):
     x, y = map(round, point[:2])
     return [arm for xx in range(x - 2, x + 3) for yy in range(y - 2, y + 3)
             for arm in ends.get((xx, yy), ())
-            if np.linalg.norm(arm[3][:2] - point[:2]) <= 1.45 and abs(arm[3][2] - point[2]) <= 1.2]
+            if dnp.norm(arm[3][:2] - point[:2]) <= 1.45 and abs(arm[3][2] - point[2]) <= 1.2]
 
 
 def _follow(arm, lines, ends, eligible):
@@ -57,12 +59,12 @@ def _follow(arm, lines, ends, eligible):
         key, _, _, start, forward, _ = arm
         line = lines[key] if forward else lines[key][::-1]
         # A motorway connector can be an interior vertex of its through road.
-        index = int(np.argmin(np.linalg.norm(line - start, axis=1)))
+        index = int(np.argmin(dnp.norm(line - start, axis=1)))
         line = line[index:]
         if len(line) < 2:
             break
         ids.append(key)
-        if parts and np.linalg.norm(parts[-1][-1] - line[0]) < .01:
+        if parts and dnp.norm(parts[-1][-1] - line[0]) < .01:
             parts.append(line[1:])
         else:
             parts.append(line)
@@ -70,9 +72,9 @@ def _follow(arm, lines, ends, eligible):
         if length >= SEARCH_M + 25.:
             break
         delta = line[-1, :2] - line[-2, :2]
-        delta /= max(np.linalg.norm(delta), .001)
+        delta /= max(dnp.norm(delta), .001)
         next_arms = [a for a in _near_ends(ends, line[-1]) if a[0] not in ids
-                     and eligible(a[1]) and f._outbound(a) and float(a[2] @ delta) > .72]
+                     and eligible(a[1]) and f._outbound(a) and float(dnp.matmul(a[2], delta)) > .72]
         if len(next_arms) != 1:
             break
         arm = next_arms[0]
@@ -121,7 +123,7 @@ def place(frame, roads, box, country_at, ground=None, decks=(), guardrails=(), o
             candidates = [
                 a
                 for a in outgoing
-                if a[2] @ ramp[2] > 0.4 and any(a[2] @ (-b[2]) > 0.7 for b in incoming)
+                if dnp.matmul(a[2], ramp[2]) > 0.4 and any(dnp.matmul(a[2], -b[2]) > 0.7 for b in incoming)
             ]
             if not candidates:
                 continue
@@ -131,7 +133,7 @@ def place(frame, roads, box, country_at, ground=None, decks=(), guardrails=(), o
                     for i, sp, p, _ in indexed
                 ]
                 polygons = exitsigns._outlines(pavements)
-            main = max(candidates, key=lambda a: max(a[2] @ (-b[2]) for b in incoming))
+            main = max(candidates, key=lambda a: max(dnp.matmul(a[2], -b[2]) for b in incoming))
             ramp_ids, line = _follow(ramp, lines, ends, lambda sp: sp.link and sp.cls == ramp[1].cls)
             main_ids, through = _follow(main, lines, ends, lambda sp: _mainline(sp) and sp.cls == main[1].cls)
             travel = main[2]
@@ -161,7 +163,7 @@ def place(frame, roads, box, country_at, ground=None, decks=(), guardrails=(), o
                     if obstacles is not None and not obstacles.clear(q, radius + .30):
                         return False
                     return (country_at(float(q[0]), float(q[1]), float(c[2])) == "FR"
-                            and all(np.linalg.norm(q - p) >= 8. for p in used))
+                            and all(dnp.norm(q - p) >= 8. for p in used))
 
                 hit = exitsigns._compute_gore(
                     extra, approach, line[:, :2], pavements, {}, 2 * radius, max_distance=SEARCH_M,
@@ -175,7 +177,7 @@ def place(frame, roads, box, country_at, ground=None, decks=(), guardrails=(), o
                     if ground is None
                     else np.asarray(ground(np.array([q[0]]), np.array([q[1]]))).ravel()[0]
                 )
-                yaw = math.degrees(math.atan2(-direction[0], direction[1]))
+                yaw = math.degrees(dmath.atan2(-direction[0], direction[1]))
                 result.append([group, float(q[0]), float(q[1]), float(z), yaw, 1.0, height, 0.0])
                 used.append(q)
                 break

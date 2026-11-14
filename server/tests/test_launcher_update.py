@@ -56,6 +56,18 @@ class UpdateAtStart(unittest.TestCase):
         self.assertFalse(r)
         self.assertEqual(asked, [])
 
+    def test_a_slow_github_does_not_hold_the_start(self):
+        import threading
+        gate = threading.Event()
+        with mock.patch.object(launcher, "UPDATE_CHECK_S", 0.2):
+            r = launcher.update_at_start(argparse.Namespace(no_update_check=False), ask=lambda q: "y",
+                                         popup=lambda text: True, packaged=True,
+                                         check=lambda current, net: gate.wait(5) and {"current": "1", "latest": "2"},
+                                         download=lambda *a: self.fail("asked"), start=lambda: True)
+        gate.set()
+        self.assertFalse(r)
+        self.assertEqual(launcher.bounded(lambda: 7, 1), 7)
+
     def test_a_source_copy_or_the_switch_asks_nothing(self):
         self.assertEqual(self.go(packaged=False), (False, []))
         self.assertEqual(self.go(args=argparse.Namespace(no_update_check=True)), (False, []))
@@ -101,6 +113,7 @@ class HandOver(unittest.TestCase):
         dropped = []
         with mock.patch.object(launcher, "FROZEN", True), \
                 mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
+                mock.patch.object(selfupdate, "packaged_path", lambda: "/x/BeamNG.Earth-old.exe"), \
                 mock.patch.object(selfupdate, "drop_staged",
                                   lambda path=None, blocked_by=None: dropped.append(blocked_by or 1)), \
                 mock.patch.object(launcher, "smart_app_control_on", lambda: sac), \
@@ -118,6 +131,9 @@ class HandOver(unittest.TestCase):
         self.assertTrue(r)
         self.assertEqual(dropped, [])
         self.assertEqual(popen.call_args[0][0][0], "/x/BeamNG.Earth-new.exe")
+        import selfupdate
+        self.assertEqual(popen.call_args[1]["env"].get(selfupdate.HANDED_OVER_FROM), "/x/BeamNG.Earth-old.exe",
+                         "the new copy is told which file started it (kept: the player's shortcut, GitHub #900)")
 
     def test_a_new_copy_that_dies_at_once_is_dropped_and_this_one_runs(self):
         r, dropped, _ = self.go(wait=1)

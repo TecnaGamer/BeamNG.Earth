@@ -176,7 +176,7 @@ class Context:
         h, w = self.shape
         self._grid = fast._ef.DevContext((float(lo[0]), float(lo[1])), (float(lo[0]), float(lo[1])),
                                          (float(hi[0]), float(hi[1])), int(h), int(w), self.radius,
-                                         self.radius ** 2, float(BUILDING_MAX_M2), polys, pois)
+                                         self.radius * self.radius, float(BUILDING_MAX_M2), polys, pois)
         self._layers = None             # (no decoded cells kept in each tile's index)
 
     def samples(self, points_xy, outward, road_half_width):

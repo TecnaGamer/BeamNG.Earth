@@ -1,5 +1,6 @@
 """routing: the GPS's whole-route planning (OSRM response handling, simplification)."""
 import sys
+import copy
 import unittest
 import numpy as np
 from pathlib import Path
@@ -38,6 +39,31 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.resample([(39.0, -76.0)]), [(39.0, -76.0, 0.0)])
         self.assertEqual(routing.resample([]), [])
 
+    def test_resample_crosses_dateline_near_the_route_in_both_directions(self):
+        line = [(-16.5, 179.9), (-16.5, -179.9)]
+        expected = 111320.0 * 0.2 * np.cos(np.deg2rad(16.5))
+        for points in (line, line[::-1]):
+            with self.subTest(points=points):
+                got = routing.resample(points, max_points=5)
+                self.assertAlmostEqual(got[-1][2], expected, places=5)
+                self.assertEqual(got[0][:2], points[0])
+                self.assertAlmostEqual(got[-1][1], points[-1][1], places=6)
+                self.assertTrue(all(179.89 <= abs(lo) <= 180.0 for _, lo, _ in got))
+                self.assertTrue(all(a[2] < b[2] for a, b in zip(got, got[1:])))
+
+    def test_simplify_keeps_a_dateline_bend_and_drops_straight_vertices(self):
+        # The middle of the straight eastbound run is not a corner at the longitude wrap.
+        line = [(0.0, 179.9), (0.0, 180.0), (0.0, -179.9), (0.1, -179.9)]
+        for points in (line, line[::-1]):
+            with self.subTest(points=points):
+                self.assertEqual(routing.simplify(points), [points[0], line[2], points[-1]])
+
+    def test_resample_crosses_dateline_more_than_once(self):
+        line = [(0.0, 179.9), (0.0, -179.9), (0.0, 179.9)]
+        got = routing.resample(line, max_points=9)
+        self.assertAlmostEqual(got[-1][2], 111320.0 * 0.4, places=5)
+        self.assertTrue(all(abs(lo) >= 179.89 for _, lo, _ in got))
+
     def test_url_through_waypoints(self):
         # GitHub #935: the waypoints as OSRM's intermediate coordinates, in order; a bearing only for the start
         u = routing.url(39.28, -76.59, 38.9, -77.03, 370, via=[(39.1, -76.8), (39.0, -76.9)])
@@ -65,7 +91,50 @@ class RoutingTest(unittest.TestCase):
         self.assertIn("-76.590000,39.280000;-77.030000,38.900000", u)
         self.assertTrue(u.startswith("https://routing.openstreetmap.de/"))
         self.assertNotIn("bearings", u)
+        self.assertIn("steps=true", u)
         self.assertTrue(routing.url(39.28, -76.59, 38.9, -77.03, 370).endswith("&bearings=10,60;"))
+
+    def test_steps_keep_maneuvers_lanes_and_offsets_through_waypoints(self):
+        def step(kind, distance, lon, **maneuver):
+            return {"name": "Laugavegur", "distance": distance, "duration": distance / 10,
+                    "maneuver": {"type": kind, "location": [lon, 64.1], **maneuver}}
+        depart = step("depart", 900, -21.9, bearing_after=90)
+        turn = step("roundabout", 100, -21.89, modifier="right", exit=3, bearing_before=90, bearing_after=180)
+        turn.update(ref="1", driving_side="right", intersections=[
+            {"lanes": [{"indications": ["straight", "right"], "valid": True},
+                       {"indications": ["left"], "valid": False}]},
+            {"lanes": [{"indications": ["left"], "valid": True}]}])
+        data = {"code": "Ok", "routes": [{"distance": 1500, "duration": 150,
+            "geometry": {"coordinates": [[-21.9, 64.1], [-21.88, 64.1]]}, "legs": [
+                {"distance": 1000, "duration": 100, "steps": [depart, turn, step("arrive", 0, -21.885)]},
+                {"distance": 500, "duration": 50, "steps": [step("depart", 500, -21.885),
+                                                             step("arrive", 0, -21.88)]}]}]}
+        original = copy.deepcopy(data)
+        got = routing.parse(data)
+        self.assertEqual(data, original, "parsing does not mutate the provider's response")
+        self.assertEqual([s["type"] for s in got["steps"]], ["depart", "roundabout", "arrive", "depart", "arrive"])
+        self.assertEqual([s["leg"] for s in got["steps"]], [1, 1, 1, 2, 2])
+        self.assertEqual([s["offset"] for s in got["steps"]], [0, 900, 1000, 1000, 1500])
+        s = got["steps"][1]
+        self.assertEqual((s["name"], s["ref"], s["modifier"], s["exit"]), ("Laugavegur", "1", "right", 3))
+        self.assertEqual((s["distance"], s["duration"], s["bearingBefore"], s["bearingAfter"]), (100, 10, 90, 180))
+        self.assertEqual(s["location"], {"lat": 64.1, "lon": -21.89})
+        self.assertEqual(s["lanes"], turn["intersections"][0]["lanes"], "only the maneuver's lanes")
+        self.assertEqual(got["legs"], [[1000.0, 100.0], [500.0, 50.0]])
+
+    def test_missing_or_bad_steps_do_not_lose_a_route(self):
+        data = {"code": "Ok", "routes": [{"distance": 1000, "duration": 60,
+            "geometry": {"coordinates": [[7, 45], [7.01, 45]]}, "legs": [{"distance": 1000}]}]}
+        self.assertNotIn("steps", routing.parse(data), "older/step-less responses stay usable")
+        data["routes"][0]["legs"][0]["steps"] = [None, {},
+            {"distance": 10, "maneuver": {"type": "turn", "location": [7]}},
+            {"distance": 20, "maneuver": {"type": "turn", "location": [7, float('nan')]}},
+            {"distance": 30, "duration": 2, "maneuver": {"type": "future maneuver", "location": [7, 45]}}]
+        got = routing.parse(data)
+        self.assertEqual(len(got["steps"]), 1)
+        self.assertEqual(got["steps"][0]["type"], "future maneuver")
+        self.assertEqual(got["steps"][0]["offset"], 30)
+        self.assertEqual(len(got["points"]), 2)
 
 
 if __name__ == "__main__":

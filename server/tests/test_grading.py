@@ -260,6 +260,41 @@ class GradePointsTest(unittest.TestCase):
         sel = (s_y >= main.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
         self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the built side road eases down, no step")
 
+    def open_tunnel_case(self, open_tunnel, angle_deg=90.0):
+        """grade_points along a bus lane (rank: no class) crossing a primary's tunnel part open all along (its core,
+        sidewalks too, held as its carriageway, as _make_cell plans it) 1.6 m under it: (s, heights) every metre."""
+        tun = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([188.2, 188.2]), 7.3)
+        tun.rank = grading.grade_rank(roads.Spec(8.6, "paved", True, "primary"))
+        tun.open_tunnel = open_tunnel
+        a = np.radians(angle_deg)
+        d = np.array([np.cos(a), np.sin(a)])
+        bus = grading.Plan(np.array([-60.0 * d, 60.0 * d]), np.array([189.8, 189.8]), 4.5, road_half=3.5)
+        bus.rank = grading.grade_rank(roads.Spec(7.0, "paved", True, "busway"))
+        tun.rid, bus.rid = 1, 2
+        s = np.arange(-30.0, 30.01, 1.0)
+        pts = s[:, None] * d[None, :]
+        return s, grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(s), 189.8), [tun, bus])
+
+    def test_a_road_crossing_an_open_tunnel_eases_onto_it(self):
+        # GitHub #1169, Kennedybruecke in Vienna: the "Unterfahrung" lies under a plaza the elevation leaves out, so its
+        # tunnel is open all along; a bus lane mapped over it (rank: no class, 14 under the primary's, past
+        # RANK_SIDE_MAX_DIFF) kept its own ground up to the section's held carriageway and stepped 1.2 m there. Flagged
+        # open_tunnel, the crossing road eases onto it over the side ease's reach instead.
+        s, old = self.open_tunnel_case(False)
+        self.assertGreater(float(np.abs(old[:-2] - 2 * old[1:-1] + old[2:]).max()), 1.0, "(the step this fixes)")
+        s, z = self.open_tunnel_case(True)
+        held = np.abs(s) <= 7.3 - 0.01
+        self.assertTrue(np.allclose(z[held], 188.2 + 0.0, atol=0.01), "the open section's carriageway holds")
+        # (the drivability ratchet's step, a ledge or a kink on 1 m samples: 1.37 m without; the ease's S-curve bends
+        # 0.11 m over 1 m for the 1.6 m it comes down)
+        self.assertLess(float(np.abs(z[:-2] - 2 * z[1:-1] + z[2:]).max()), 0.15, "the bus lane eases onto it, no step")
+        self.assertAlmostEqual(float(z[-1]), 189.8, delta=0.02, msg="past the ease the bus lane keeps its ground")
+
+    def test_a_road_beside_an_open_tunnel_keeps_its_ground(self):
+        # ... while a road running along it (a street on the cover beside its trench) is not eased onto it: the flag
+        # changes nothing for a road at 20 degrees to it.
+        np.testing.assert_array_equal(self.open_tunnel_case(True, 20.0)[1], self.open_tunnel_case(False, 20.0)[1])
+
     def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
         # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
         # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.
@@ -766,6 +801,7 @@ class DirtTest(unittest.TestCase):
         self.assertLess(float(np.abs(residual[np.abs(np.arange(len(xy)) - 100) > 2]).max()), 1e-9,
                         "limiting a hole must not spread its height error over 40 m")
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_damage_is_independent_of_the_natural_grade(self):
         xy = self.xy()
         sp = roads.Spec(3.5, "dirt", False, "track")
@@ -815,6 +851,7 @@ class DirtTest(unittest.TestCase):
             self.assertLess(float(np.abs(z - 100.0).max()), 0.12,
                             "the whole graded carriageway keeps centimetre-scale wear on flat ground")
 
+    @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
     def test_random_lean_is_bounded_in_metres_for_wide_roads_too(self):
         xy = self.xy()
         for width in (2.0, 3.5, 7.0, 12.0):
@@ -1012,7 +1049,9 @@ class MajorRoadTest(unittest.TestCase):
         """GitHub #835: on the coarse global model (30 m cells, metres of noise) a minor dirt road smoothed over 6 m
         rode every bump of the data. There it is smoothed over DIRT_SIGMA_COARSE_M; on fine elevation it is not."""
         spec = roads.Spec(3.5, "dirt", False, "unclassified")
-        self.assertEqual(grading.profile_sigma(spec), grading.DIRT_SIGMA_MINOR_M)
+        # (on fine elevation a gravel road of a class is smoothed as the paved road of its class; a track less)
+        self.assertEqual(grading.profile_sigma(spec), max(grading.SIGMA_M, grading.CLASS_SIGMA_M["unclassified"]))
+        self.assertEqual(grading.profile_sigma(roads.Spec(3.5, "dirt", False, "track")), grading.DIRT_SIGMA_MINOR_M)
         self.assertEqual(grading.profile_sigma(spec, coarse=True), grading.DIRT_SIGMA_COARSE_M)
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified"), coarse=True),
                          grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified")), "paved: unchanged")
@@ -1022,7 +1061,7 @@ class MajorRoadTest(unittest.TestCase):
             return 100.0 + 0.02 * x + 1.5 * np.sin(x / 9.0) + 0.8 * np.sin(x / 4.3 + 1.0)
         xs = np.arange(-200.0, 201.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
-        part = [(np.c_[lo, la], spec)]
+        part = [(np.c_[lo, la], roads.Spec(3.5, "dirt", False, "track"))]     # (a track: 6 m on fine elevation)
         with unittest.mock.patch.object(grading, "DIRT_ROUGH", 0.0):     # (the profile alone, not the potholes)
             fine = grading.plan_roads(FRAME, part, noisy, cuts=False)[0]
             rough = grading.plan_roads(FRAME, part, noisy, cuts=False, coarse=True)[0]
@@ -1489,6 +1528,7 @@ class DirtEndsTest(unittest.TestCase):
     """PR #677 merge: a worn dirt road's damage and lean are zero at its own ends, short parts too (a junction meets
     the joining road at its height, level across)."""
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_short_part_ends_untouched_and_level(self):
         spec = roads.Spec(4.0, "dirt", False, "unclassified")
         for length in (12.0, 30.0, 300.0):

@@ -1708,7 +1708,8 @@ class ZoneSignsTest(unittest.TestCase):
                 off, off_mesh = self.table(lines, False)
                 self.assertEqual(off, TODAY_274[name], name)
                 self.assertEqual(off_mesh[3], speedsigns.MATERIALS)
-                away, away_mesh = self.table(lines, True, baltimore)
+                with mock.patch.object(roads, "WIDTH_MODEL_ON", False):     # (today's widths: the record's)
+                    away, away_mesh = self.table(lines, True, baltimore)
                 self.assertEqual(away, TODAY_274[name], name)
                 self.assertEqual(len(away_mesh[1]), len(off_mesh[1]))
 
@@ -1959,8 +1960,9 @@ class ZoneSignsTest(unittest.TestCase):
             mats = json.load(f)
         self.assertLessEqual(set(dezones.MATERIALS_ZONE), set(mats))
         sheet = mats["bne_de_zones"]["Stages"][0]["baseColorMap"]
-        self.assertTrue(sheet.endswith("/bne_de_zones.png"))
-        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
+        self.assertTrue(sheet.endswith("/bne_de_zones.dds"))
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        self.assertTrue(_mt.is_shipped(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
 
 
 def _flat0(la, lo):
