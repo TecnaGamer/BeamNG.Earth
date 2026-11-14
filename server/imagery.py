@@ -1442,6 +1442,30 @@ class Imagery:
                             want.append(key)
         return want
 
+    def fetch_lazy(self, frame, x0, y0, size, px):
+        """Fetch now, in the calling thread, the lazy sources' tiles a render(frame, x0, y0, size, px) would use and
+        that are not on disk (nor known missing, nor under an earlier lazy source's data: _warm_done), as demand
+        requests (netfetch "urgent" within urgent()): a render that must not skip them (render reads a lazy tile only
+        from disk; warm() fetches the ones round the player). The roofs' photo (buildings.roof_photo): a road tile read
+        Maryland's md6in only where the ground photo's warm had fetched it first, so its roofs were drawn procedural
+        and the tile was never kept (2026-11-13). The number fetched; raises ImageryError (a fetch failed)."""
+        kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        old = getattr(self._local, "kind", None)
+        self._local.kind = kind
+        n = 0
+        try:
+            for key in self.lazy_keys(frame, x0, y0, size, px):
+                if self._warm_done(key):
+                    continue
+                src, z, x, y = key
+                last = (1 << src.export) - 1
+                self._download(src, z, x | last, y | last)
+                self._count(src.name + ":photo")
+                n += 1
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return n
+
     def key_done(self, key):
         """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
         return self._warm_done(key)
@@ -1963,8 +1987,13 @@ class Imagery:
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, _ = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
+                ref, ref_used = None, {}
+            if ref is not None and ref_used.get("none"):
+                # (texels no source of the reference has, FALLBACK_RGB: none to match to. The roofs' photo, md6in
+                # then Virginia's service, blank in Maryland and finer than the reference's zoom: every roof's colour
+                # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
                 rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))

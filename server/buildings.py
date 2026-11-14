@@ -285,8 +285,10 @@ def parse_color(val):
 # deep shadow left out). The roof textures are near neutral grey and the vertex colour multiplies them, so the tint
 # is the photo's colour over the texture's own mean (ROOF_TEX_MEAN, measured from the stock textures), at most 1.
 # The tile's photo is fetched (netfetch's limits; the same tiles the ground photo takes near the car) on a thread
-# started as the tile begins (RoofPhotoFuture), while its footprints are put together; a failed or slow fetch faults
-# the tile (revisit: built again, coloured, on a later visit) and keeps the procedural roofs.
+# started as the tile begins (RoofPhotoFuture), while its footprints are put together, the lazy sources' tiles too
+# (imagery.fetch_lazy: a render reads those from disk only); a failed or slow fetch faults the tile (revisit: built
+# again, coloured, on a later visit) and keeps the procedural roofs. A tile the sources hold too little of once all
+# was asked for (a state's edge, a remembered nodata answer: roof_photo_final) keeps them without a fault.
 ROOF_PHOTO_ON = os.environ.get("BNE_ROOF_PHOTO", "on") != "off"
 ROOF_PHOTO_INSET_M = 1.0
 ROOF_PHOTO_MIN_PX = 6
@@ -370,20 +372,21 @@ class RoofPhotoFuture:
             if _PHOTO_POOL is None:
                 from concurrent.futures import ThreadPoolExecutor
                 _PHOTO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="roofphoto")
-        self.fut = _PHOTO_POOL.submit(roof_photo, frame, x0, y0, x1, y1, cache_dir, True, None,
+        self.fut = _PHOTO_POOL.submit(roof_photo_final, frame, x0, y0, x1, y1, cache_dir, True, None,
                                       getattr(_URGENT, "on", False))
 
     def colours(self, rings):
         if self.fut is None:
             return None
         try:
-            ph = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
+            ph, final = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
         except Exception:
-            ph = None
+            ph, final = None, False
         if ph is None:
-            import revisit
-            revisit.fault()         # (a later visit builds it again, with the photo)
-            return None
+            if not final:           # (could not be had, or not yet: a later visit builds it again, with the photo)
+                import revisit
+                revisit.fault()
+            return None             # (none there for good: the procedural roofs are the tile's answer)
         return ph.colours(rings)
 
 
@@ -418,14 +421,26 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
     on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off). px: its size (default
     ROOF_PHOTO_PX; coarser is cheaper: the squares' colour votes). urgent: fetched as netfetch "urgent"
     (urgent_photos)."""
+    return roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online, px, urgent)[0]
+
+
+def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
+    """(roof_photo's RoofPhoto or None, final): final when a None is the answer for good (no regional photo covers
+    the box, ROOF_PHOTO_ON is off, or every source tile it could use was asked for and the sources hold too little
+    of it: a state's edge, its nodata), not when the photo could not be had (a fetch failed, a lazy source's tile
+    not on disk where it was not fetched: online=False, an error): RoofPhotoFuture's revisit fault only then. Before
+    2026-11-13 any None was a fault: where Maryland's md6in was remembered missing (its service's white, kept as a
+    miss for 90 days) no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the
+    tiles round the car at every visit); and online the lazy sources (md6in, New York's, the German states') were
+    read from disk only, so a tile built before the ground photo's warm had fetched its photo faulted too."""
     if not ROOF_PHOTO_ON or cache_dir is None:
-        return None
+        return None, True
     try:
         import imagery
         import streetfront
         sources = _photo_sources(frame, x0, y0, x1, y1)
         if not sources:
-            return None
+            return None, True
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
         # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
@@ -434,20 +449,21 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
         px = int(-(-int(px or ROOF_PHOTO_PX) // cells) * cells)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
-        if urgent and online:
-            with reader.urgent():
-                rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
-        else:
+        with (reader.urgent() if urgent and online else __import__("contextlib").nullcontext()):
+            if online:          # (the lazy sources' tiles too: render reads those from disk only)
+                reader.fetch_lazy(frame, x0 - pad, y0 - pad, size, px)
             rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
         if sum(used.get(name, 0) for name in sources) < px * px * 0.95:
-            return None
-        return RoofPhoto(rgb, x0 - pad, y0 - pad, size)
+            # (too little of it: for good when every lazy tile it could use is on disk or known missing; render raised
+            # where a non-lazy source's fetch failed)
+            return None, bool(reader.lazy_ready(frame, x0 - pad, y0 - pad, size, px))
+        return RoofPhoto(rgb, x0 - pad, y0 - pad, size), True
     except imagery.ImageryError:
-        return None
+        return None, False
     except Exception as ex:             # (the procedural roofs rather than none)
         import logging
         logging.getLogger("earthd.buildings").debug("roof photo: %s: %s", type(ex).__name__, ex)
-        return None
+        return None, False
 
 
 def photo_tint(mat, rgb):

@@ -2781,6 +2781,11 @@ class RoofPhotoTest(unittest.TestCase):
                 return contextlib.nullcontext()
 
             @staticmethod
+            def fetch_lazy(frame, x0, y0, size, px):
+                asked.append("fetch_lazy")
+                return 0
+
+            @staticmethod
             def render(frame, x0, y0, size, px):
                 asked.append("render")
                 return np.zeros((px, px, 3), np.uint8), {"france": px * px}
@@ -2790,12 +2795,93 @@ class RoofPhotoTest(unittest.TestCase):
                 mock.patch.object(bld, "_photo_reader_live", return_value=Reader()):
             with bld.urgent_photos(True):
                 f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
-            self.assertIsNotNone(f.fut.result(5))
-            self.assertEqual(asked, ["urgent", "render"])
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["urgent", "fetch_lazy", "render"])
             asked.clear()
             f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
-            self.assertIsNotNone(f.fut.result(5))
-            self.assertEqual(asked, ["render"])
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["fetch_lazy", "render"])
+
+    class _Reader:
+        """A stand-in photo reader: render's texel counts (used), lazy_ready's answer, an ImageryError to raise."""
+
+        def __init__(self, used_share=1.0, ready=True, error=False):
+            self.used_share, self.ready, self.error = used_share, ready, error
+            self.asked = []
+
+        def urgent(self):
+            import contextlib
+            return contextlib.nullcontext()
+
+        def fetch_lazy(self, frame, x0, y0, size, px):
+            self.asked.append("fetch_lazy")
+            if self.error:
+                import imagery
+                raise imagery.ImageryError("md6in: HTTP 503")
+            return 1
+
+        def render(self, frame, x0, y0, size, px):
+            self.asked.append("render")
+            n = int(px * px * self.used_share)
+            return np.zeros((px, px, 3), np.uint8), {"md6in": n, "none": px * px - n}
+
+        def lazy_ready(self, frame, x0, y0, size, px):
+            return self.ready
+
+    def photo_final(self, reader, online=True):
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                mock.patch.object(bld, "_photo_reader_live", return_value=reader), \
+                mock.patch("streetfront._photo_reader", lambda *_a: reader):
+            return bld.roof_photo_final(geodesy.EnuFrame(39.2833, -76.5967), 0.0, 0.0, 100.0, 100.0,
+                                        tempfile.gettempdir(), online)
+
+    def test_a_photo_too_short_for_good_is_final_one_not_had_yet_is_not(self):
+        # 2026-11-13: every road tile of a Fells Point session faulted on its roofs' photo (797 not kept): md6in is a
+        # lazy source, read from disk only. Online the lazy tiles are fetched first; a None is a fault only when the
+        # photo could not be had (a fetch failed, a lazy tile not on disk yet), not where the sources hold too little
+        # of the tile after everything was asked (a state's edge: the procedural roofs are its answer)
+        r = self._Reader()
+        ph, final = self.photo_final(r)
+        self.assertIsNotNone(ph)
+        self.assertTrue(final)
+        self.assertEqual(r.asked, ["fetch_lazy", "render"])
+        ph, final = self.photo_final(self._Reader(used_share=0.5, ready=True))
+        self.assertEqual((ph, final), (None, True), "every tile asked for, too little there: for good")
+        ph, final = self.photo_final(self._Reader(used_share=0.5, ready=False))
+        self.assertEqual((ph, final), (None, False), "a lazy tile still missing: not yet")
+        ph, final = self.photo_final(self._Reader(error=True))
+        self.assertEqual((ph, final), (None, False), "a failed fetch: not had")
+        r = self._Reader(used_share=0.0, ready=False)
+        ph, final = self.photo_final(r, online=False)
+        self.assertEqual((ph, final), (None, False))
+        self.assertEqual(r.asked, ["render"], "offline: nothing fetched")
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=()):
+            self.assertEqual(bld.roof_photo_final(geodesy.EnuFrame(10.0, 10.0), 0, 0, 10, 10, "/nowhere", True),
+                             (None, True), "no regional photo there: for good")
+
+    def test_only_a_photo_not_had_faults_the_tile(self):
+        import geodesy
+        import revisit
+        frame = geodesy.EnuFrame(39.2833, -76.5967)
+        for reader, faults in ((self._Reader(), 0), (self._Reader(used_share=0.3, ready=True), 0),
+                               (self._Reader(used_share=0.3, ready=False), 1), (self._Reader(error=True), 1)):
+            with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                    mock.patch.object(bld, "_photo_reader_live", return_value=reader):
+                f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+                with revisit.scope() as b:
+                    f.colours([np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)])
+                self.assertEqual(b.n, faults, (reader.used_share, reader.ready, reader.error))
+
+    def test_a_photo_late_past_the_wait_faults_the_tile(self):
+        import concurrent.futures
+        import revisit
+        f = bld.RoofPhotoFuture.__new__(bld.RoofPhotoFuture)
+        f.fut = concurrent.futures.Future()         # (never done)
+        with mock.patch.object(bld, "ROOF_PHOTO_WAIT_S", 0.05), revisit.scope() as b:
+            self.assertIsNone(f.colours([np.array([[0, 0], [5, 0], [5, 5]], float)]))
+        self.assertEqual(b.n, 1)
 
     def test_which_geotiles_are_near_the_car(self):
         import blockworker

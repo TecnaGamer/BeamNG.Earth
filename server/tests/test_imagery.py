@@ -620,7 +620,7 @@ class ExportImageryTest(unittest.TestCase):
     def child_colour(x, y):
         return (50 + x % 7 * 20, 60 + y % 5 * 30, 210)
 
-    def make(self, black=False):
+    def make(self, black=False, xyz_status=200):
         def serve_export(z, x, y, size):
             n = size // 256
             a = np.zeros((size, size, 3), np.uint8)
@@ -635,6 +635,8 @@ class ExportImageryTest(unittest.TestCase):
             return 200, b.getvalue()
 
         def serve_xyz(name, z, x, y):
+            if xyz_status != 200 and z > 12:        # (its coverage probes, z10 / z12, say covered)
+                return xyz_status, b""
             a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
             a[::2, ::2] += 6
             return 200, png(a)
@@ -642,6 +644,24 @@ class ExportImageryTest(unittest.TestCase):
         net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests),
                                sleep=lambda s: None, policies=FAST)
         return imagery.Imagery(self.tmp.name, ("naip", "usgs"), fetcher=net, tone=0.0)
+
+    def test_no_colour_match_to_a_reference_with_no_data(self):
+        # the lazy source's colours are matched to the rest of the chain's; where that has no data the reference is
+        # the fallback colour, and matching to it pulled every texel toward it (the roofs' photo in Maryland: md6in
+        # then Virginia's blank service). Then the lazy source as served
+        im = self.make(xyz_status=404)
+        im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertEqual(set(used), {"naip"})
+        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        self.assertTrue((rgb == raw).all())
+        self.tmp.cleanup()              # (a cache of its own: the first one remembers the reference's misses)
+        self.tmp = tempfile.TemporaryDirectory()
+        im2 = self.make()               # (a reference with data: matched, as before)
+        im2.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        rgb2, _ = im2.render(self.frame, 0.0, 0.0, 256.0, 256)
+        raw2, _ = im2._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        self.assertFalse((rgb2 == raw2).all())
 
     def wait(self, im):
         for _ in range(200):
@@ -879,6 +899,30 @@ class ExportImageryTest(unittest.TestCase):
         self.assertGreater(hi(rgb), 0.5 * hi(raw))                                  # ... NAIP's detail
         same = imagery.match_colours(raw, raw, 10)
         self.assertTrue((same == raw).all(), "matching an image to itself changes nothing")
+
+    def test_fetch_lazy_fetches_what_a_render_would_skip(self):
+        # the roofs' photo (buildings.roof_photo online): a render reads a lazy tile from disk only, so its lazy tiles
+        # are fetched first, in the calling thread, as demand requests; once each, then nothing more to fetch
+        im = self.make()
+        self.assertFalse(im.lazy_ready(self.frame, 0.0, 0.0, 256.0, 256))
+        kinds = []
+        get = im.fetcher.get
+        im.fetcher.get = lambda url, kind="demand", **kw: (kinds.append(kind) if "bbox=" in url else None) or \
+            get(url, kind=kind, **kw)     # (the exports' kinds: not the coverage probes' background requests)
+        n = im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertGreater(n, 0)
+        self.assertTrue(kinds and set(kinds) == {"demand"}, kinds)
+        self.assertTrue(im.lazy_ready(self.frame, 0.0, 0.0, 256.0, 256))
+        rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertEqual(set(used), {"naip"})
+        asked = len(self.requests)
+        self.assertEqual(im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256), 0, "on disk: nothing again")
+        self.assertEqual(len(self.requests), asked)
+        kinds.clear()
+        with im.urgent():               # (a tile round the car: urgent_photos)
+            im.fetch_lazy(self.frame, 3000.0, 0.0, 256.0, 256)
+        self.assertTrue(kinds and set(kinds) == {"urgent"})
+        self.assertEqual(getattr(im._local, "kind", "demand"), "demand", "the thread's kind put back")
 
     def test_lazy_ready(self):
         im = self.make()
