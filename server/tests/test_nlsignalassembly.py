@@ -27,6 +27,23 @@ def request(n):
 
 
 class PhysicalSignalPlanning(unittest.TestCase):
+    def test_shared_native_junction_keeps_both_controller_identities(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tools'))
+        import build_groenpol_forest_assets
+        with tempfile.TemporaryDirectory() as folder:
+            catalog,_=build_groenpol_forest_assets.build(folder)
+            r=request(1);r['overhead']=False
+            a=assembly.assemblies(scene([road(1)]),[r],catalog,[['left']],[[1]],[False])[0]['assembly']
+            b=assembly.assemblies(scene([road(1)]),[r],catalog,[['right']],[[1]],[False])[0]['assembly']
+            got=assembly.bundle([a,b],['left_turn','right_turn'],catalog)
+            self.assertTrue(got['ready'])
+            result=got['assembly'];self.assertTrue(result['bundle'])
+            self.assertEqual(sum(p['role']=='support' for p in result['parts']),1)
+            heads=[p for p in result['parts'] if p['role']=='head']
+            self.assertEqual({h['approach'] for h in heads},{'left_turn','right_turn'})
+            self.assertTrue(all(h['bare'] and 'bare_body' in h['forest']['body'] for h in heads))
+            self.assertEqual(result['shared_posts'][0]['style'],'double_shield')
+
     def test_native_mounted_parts_have_complete_lanes_original_feet_and_mixed_zone_size(self):
         catalog=json.loads((Path(__file__).resolve().parents[2]/'docs/assets/groenpol/components.json').read_text())
         got=assembly.assemblies(scene([road(4)]),[request(4)],catalog,

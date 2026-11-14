@@ -56,6 +56,9 @@ class ForestProbeAssets(unittest.TestCase):
             for name,h in ca['heads'].items():
                 if name.startswith('vehicle'):
                     self.assertEqual(set(h['forest']),{'body','red','amber','green'})
+                    self.assertEqual(set(h['forest_bare']),{'body','red','amber','green'})
+                    self.assertNotEqual(h['forest_bare']['body'],h['forest']['body'])
+                    self.assertEqual(h['forest_bare']['green'],h['forest']['green'])
                     for shape in h['forest'].values():
                         self.assertTrue(shape.startswith(assets.VIRTUAL))
                         self.assertTrue((a/(Path(shape).stem+'.cdae')).is_file())

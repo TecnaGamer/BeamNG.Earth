@@ -51,7 +51,9 @@ function M.farParts(assembly,channels)
   local rows={}
   for _,p in ipairs(assembly.parts) do
     if p.role=='head' then
-      local phase=type(p.lane)=='number' and channels[p.lane+1]
+      local controller=channels
+      if assembly.bundle then controller=channels[p.approach] end
+      local phase=type(p.lane)=='number' and type(controller)=='table' and controller[p.lane+1]
       if phase~='red' and phase~='amber' and phase~='green' and phase~='off' then return nil,'phase_unavailable' end
       if type(p.forest)~='table' or type(p.key)~='string' then return nil,'forest_models_unavailable' end
       local body=copyPart({key=p.key..':body',shape=p.forest.body,pose=p.pose})

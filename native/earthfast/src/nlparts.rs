@@ -33,7 +33,7 @@ fn mul(a:Basis,b:Basis)->Basis{
     let mut out=[0.;9];for i in 0..3{for j in 0..3{out[i*3+j]=(0..3).map(|k|a[i*3+k]*b[k*3+j]).sum();}}out
 }
 fn at(origin:Vec3,b:Basis,p:Vec3)->Vec3{let q=rotate(b,p);[origin[0]+q[0],origin[1]+q[1],origin[2]+q[2]]}
-fn part(key:String,role:&str,model:&Value,p:Vec3,b:Basis,scale:Vec3)->Result<Value,&'static str>{
+pub(crate) fn part(key:String,role:&str,model:&Value,p:Vec3,b:Basis,scale:Vec3)->Result<Value,&'static str>{
     let shape=shape(model)?;
     if !p.iter().chain(scale.iter()).all(|v|v.is_finite())||scale.iter().any(|v|*v<=0.||*v>40.){return Err("invalid_part_transform");}
     Ok(json!({"key":key,"role":role,"shape":shape,"pose":[p[0],p[1],p[2],
@@ -60,6 +60,8 @@ fn head(c:&Value,variant:&str,key:String,lane:usize,repeat:bool,world_socket:Vec
         for role in ["body","red","amber","green"]{shape(&h["forest"][role])?;}
         out["forest"]=h["forest"].clone();
     }
+    out["bare_shape"]=h["bare_shape"].clone();
+    if !h["forest_bare"].is_null(){out["forest_bare"]=h["forest_bare"].clone();}
     Ok(out)
 }
 

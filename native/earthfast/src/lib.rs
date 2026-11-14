@@ -61,6 +61,7 @@ mod nlsurface_core;
 mod nlassembly_core;
 mod nlassembly;
 mod nlparts;
+mod nlshared;
 mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
@@ -6047,6 +6048,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nlsignal::nl_signal_context_match, m)?)?;
     m.add_class::<nlassembly::SignalScene>()?;
     m.add_function(wrap_pyfunction!(nlassembly::nl_signal_lens_mm,m)?)?;
+    m.add_function(wrap_pyfunction!(nlassembly::nl_signal_bundle,m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
@@ -6433,6 +6435,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
     // grading._Planner._road_stage)
     stageshare::register(m)?;
-    m.add("VERSION", 294)?;
+    m.add("VERSION", 295)?;
     Ok(())
 }

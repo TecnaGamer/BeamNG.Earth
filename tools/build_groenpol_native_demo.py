@@ -20,7 +20,7 @@ TEMP='/temp/nl_native_assembly_assets_20261114/'
 ORIGINAL='/levels/beamng_earth/art/shapes/beamngEarth/groenpol/'
 
 
-def build(target,temp_root=TEMP):
+def build(target,temp_root=TEMP,shared=False):
     if not temp_root.startswith('/temp/nl_native_assembly_assets_') or not temp_root.endswith('/') or '..' in temp_root:
         raise ValueError('use an isolated native demo temp resource root')
     target=Path(target)
@@ -28,13 +28,23 @@ def build(target,temp_root=TEMP):
     target.mkdir(parents=True,exist_ok=True)
     folder=target/'forest_v1'
     catalog,audit=assets.build(folder)
-    road=dict(kind='road',positions=np.array([[-4.95,-50.,0.],[4.95,-50.,0.],[4.95,50.,0.],[-4.95,50.,0.]]),
+    width=1.65 if shared else 4.95
+    road=dict(kind='road',positions=np.array([[-width,-50.,0.],[width,-50.,0.],[width,50.,0.],[-width,50.,0.]]),
               triangles=np.array([[0,1,2],[0,2,3]]))
     scene=nlsignalassembly.make_scene([road],np.zeros((3,3),np.uint16),0.,100.,(50.,50.),
                                       [[-100.,-100.,100.,100.]],square=100.)
     request=dict(stop=[0.,0.,0.],travel=[0.,1.],lanes=3,opposite=0,radius=4.95,
                  overhead=True,before=20.,after=3.)
-    result=nlsignalassembly.assemblies(scene,[request],catalog,[['left','through','right']],[[1,0]],[False])[0]
+    if shared:
+        # Synthetic coincident approaches test independent controller ownership;
+        # this is a component/renderer test, not a real junction layout.
+        request.update(lanes=1,radius=1.65,overhead=False)
+        result_a=nlsignalassembly.assemblies(scene,[request],catalog,[['left']],[[1,0]],[False])[0]
+        result_b=nlsignalassembly.assemblies(scene,[request],catalog,[['right']],[[1,0]],[False])[0]
+        if not result_a['ready'] or not result_b['ready']:raise ValueError((result_a,result_b))
+        result=nlsignalassembly.bundle([result_a['assembly'],result_b['assembly']],['left_turn','right_turn'],catalog)
+    else:
+        result=nlsignalassembly.assemblies(scene,[request],catalog,[['left','through','right']],[[1,0]],[False])[0]
     if not result['ready']:raise ValueError(result)
     # Relocate resource names only. All geometry and poses remain native output.
     (target/'assembly.json').write_text(json.dumps(result['assembly']).replace(ORIGINAL,temp_root)+'\n')
@@ -55,8 +65,12 @@ def build(target,temp_root=TEMP):
         if raw.count(ORIGINAL)!=1:raise ValueError('unexpected consumer resource-root declaration')
         (target/(name+'.lua')).write_text(raw.replace(ORIGINAL,temp_root))
     (target/'native_audit.json').write_text(json.dumps(audit,sort_keys=True,indent=2)+'\n')
-    (target/'nl_native_assembly.lua').write_text(DEMO.replace(TEMP,temp_root))
-    return dict(lanes=3,lens_mm=result['assembly']['lens_mm'],native_parts=len(result['assembly']['parts']),
+    script=DEMO.replace(TEMP,temp_root)
+    if shared:
+        script=script.replace("{'red','amber','green'}","{left_turn={'red'},right_turn={'green'}}")
+        script=script.replace('Native three-lane 300mm assembly displayed','Native shared post with independent left/right controllers displayed')
+    (target/'nl_native_assembly.lua').write_text(script)
+    return dict(lanes=request['lanes'],shared=shared,lens_mm=result['assembly']['lens_mm'],native_parts=len(result['assembly']['parts']),
                 variants=audit['vehicle_variants'],pose_source='earthfast.NlSignalScene.assemblies')
 
 
@@ -94,5 +108,6 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output')
     parser.add_argument('--temp-root',default=TEMP)
+    parser.add_argument('--shared',action='store_true')
     args=parser.parse_args()
-    print(json.dumps(build(args.output,args.temp_root)))
+    print(json.dumps(build(args.output,args.temp_root,args.shared)))

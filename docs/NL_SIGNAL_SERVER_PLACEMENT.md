@@ -5,7 +5,7 @@ client planner. It is not enabled by a setting or installed into a live game by
 the producer or tests. Do not remove the client pack until the complete assembly
 transport and renderer have replaced it.
 
-## Physical surface snapshot (earthfast 294)
+## Physical surface snapshot (earthfast 295)
 
 `nlsignalassembly.make_scene` marshals the actual drawn road and raised walk
 triangles, the decoded quantised terrain grid, its hole mask, and the rectangles
@@ -71,6 +71,24 @@ existing Forest without rebuilding its beams. It creates no TSStatic objects.
 Level teardown forgets native handles without dereferencing deleted objects.
 These modules are not yet wired into the live protocol or enabled by settings.
 
+`nl_signal_bundle` now reconciles a complete junction snapshot in Rust, with
+stable source approach IDs retained as controller identities. Verified
+coincident feet may share a post. Co-facing low heads use the original compound
+mount and a double shield; the supplied bare housings reuse the same shared
+optical models. Opposed/angled heads try rigid quarter-turn feet and retain
+individual shields wherever they fit. Original road bearings remain unchanged.
+The fitter checks head volumes and mast clearance; colliding heads cannot become
+an accepted bundle. It rejects inconsistent junction lens sizes instead of
+silently mixing 200/300 mm models. A client bundle requires a separate explicit
+controller phase list per source approach.
+
+This first reconciliation pass shares only coincident, already verified feet.
+It does not relocate merely nearby feet, and it does not yet resolve every
+beam/assembly conflict. More than two low heads on a shared post is not guessed.
+Results are deterministic when source approach order changes. The caller must
+replan or keep stock objects when a bundle reports a conflict; an unsuccessful
+bundle is not grounds to suppress those objects.
+
 ## Renderer experiment
 
 `tools/build_groenpol_forest_probe.py` prepares a self-contained diagnostic from
@@ -109,9 +127,9 @@ new far consumer, with resource paths relocated to temporary files only.
 
 ## Work still required before switching runtime
 
-- Shared supports and double shields, plus clearance conflicts between complete
-  neighbouring assemblies. The native mounted-part API currently expands each
-  approach independently; it does not yet coalesce adjacent approach supports.
+- Safe relocation/coalescing of merely nearby feet and clearance conflicts
+  between complete neighbouring steel assemblies; the current bundle pass
+  handles coincident feet and head volumes only.
 - Server integration using existing road and graph inputs; assembly ownership,
   transport and invalidation across tile arrival and anchor rebases.
 - A small client consumer and verified distant Forest representation, followed

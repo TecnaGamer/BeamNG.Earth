@@ -23,6 +23,9 @@ do
           'controller change replaces optical face, keeps shared body')
   T.check(#assert(consumer.farParts(assembly,{'off'}))==2,'explicit off retains body')
   T.check(not consumer.farParts(assembly,{}),'missing controller phase is never guessed')
+  assembly.bundle=true;h.approach='north'
+  T.check(consumer.farParts(assembly,{north={'green'}})~=nil,'bundled approaches retain their own controllers')
+  T.check(not consumer.farParts(assembly,{'red'}),'bundle never reuses another approaches phase list')
 end
 T.check(not reader:enqueue(packet(0,{part('a')})) and made==0,'off does no scene work')
 reader:setEnabled(true)

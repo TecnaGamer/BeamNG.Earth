@@ -57,7 +57,7 @@ unknown. Missing WKD data remains unknown unless the caller explicitly proves
 complete WKD coverage. This server API is tested but not yet wired into the
 live signal planner.
 
-The native physical support and mounted-part API (earthfast 294) now checks actual drawn surfaces
+The native physical support, mounted-part and junction-bundle API (earthfast 295) now checks actual drawn surfaces
 and quantised terrain; its intermediate contract and remaining assembly work are
 documented in [NL_SIGNAL_SERVER_PLACEMENT.md](NL_SIGNAL_SERVER_PLACEMENT.md).
 The next integration step is shared-support reconciliation and connection of the

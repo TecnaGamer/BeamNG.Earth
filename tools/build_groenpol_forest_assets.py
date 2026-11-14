@@ -69,6 +69,16 @@ def build(target):
         for role,(name,pieces) in files.items():
             compiled[name+'.cdae']=mesh.write_mesh(target/(name+'.cdae'),pieces)
             h['forest'][role]=VIRTUAL+name+'.dae'
+        # A shared double shield replaces the individual plates. Keep the
+        # author's supplied bare housing, with exactly the same optical faces.
+        if h.get('bare_shape'):
+            bare=[]
+            for p,t,n,uv,mat in source(h['bare_shape']):
+                dark_mat=mat.rsplit('_lens_',1)[0]+'_dark_v4' if '_lens_' in mat else mat
+                bare.append((p,t,n,uv,material(dark_mat)))
+            name=variant+'_bare_body'
+            compiled[name+'.cdae']=mesh.write_mesh(target/(name+'.cdae'),bare)
+            h['forest_bare']={**h['forest'],'body':VIRTUAL+name+'.dae'}
 
     # Steel and feet use the same fixed body material. Compile each source only
     # once even when several support templates share it.

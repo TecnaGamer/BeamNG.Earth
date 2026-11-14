@@ -135,3 +135,14 @@ def assemblies(scene, requests, catalog, turns, zones, motorway_exits):
         raise ValueError('explicit motorway-exit flags required')
     source = json.dumps(catalog, allow_nan=False, separators=(',', ':'))
     return [json.loads(s) for s in scene.assemblies(_rows(requests), source, turns, zones, motorway_exits)]
+
+
+def bundle(approaches, owners, catalog):
+    """Marshal a complete junction snapshot; native code reconciles its parts.
+
+    Owner IDs remain separate controller identities even when a post is shared.
+    The caller must recompute all approaches with the whole junction's zones.
+    """
+    dump=lambda value:json.dumps(value,allow_nan=False,separators=(',',':'))
+    return json.loads(fast.native(295,'Dutch shared junction supports').nl_signal_bundle(
+        [dump(a) for a in approaches],owners,dump(catalog)))

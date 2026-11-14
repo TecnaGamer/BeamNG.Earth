@@ -99,3 +99,17 @@ pub fn nl_signal_lens_mm(zones:Vec<i8>,motorway_exit:bool)->PyResult<u16> {
     if zones.len()>128 || zones.iter().any(|v|!(-1..=1).contains(v)) { return Err(PyValueError::new_err("junction zones")); }
     Ok(nlassembly_core::lens_mm(&zones,motorway_exit))
 }
+
+#[pyfunction]
+pub fn nl_signal_bundle(py:Python<'_>,assemblies:Vec<String>,owners:Vec<String>,catalog:&str)->PyResult<String>{
+    if assemblies.len()>128||assemblies.iter().map(|s|s.len()).sum::<usize>()>4_000_000||catalog.len()>1_000_000{
+        return Err(PyValueError::new_err("signal junction batch"));
+    }
+    let catalog:serde_json::Value=serde_json::from_str(catalog).map_err(|_|PyValueError::new_err("signal component catalog JSON"))?;
+    let rows:Vec<serde_json::Value>=assemblies.iter().map(|s|serde_json::from_str(s)
+        .map_err(|_|PyValueError::new_err("signal assembly JSON"))).collect::<PyResult<_>>()?;
+    Ok(py.detach(||match crate::nlshared::bundle(&rows,&owners,&catalog){
+        Ok(assembly)=>json!({"ready":true,"assembly":assembly}).to_string(),
+        Err(reason)=>json!({"ready":false,"reason":reason,"retryable":false}).to_string(),
+    }))
+}
