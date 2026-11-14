@@ -520,7 +520,9 @@ _CATEGORY_ALIASES = {_category_words(a): c for c in CATEGORIES for a in c["alias
 
 def category_query(q):
     """(category data, near/in/None, place text), or None. Conservative whole-phrase typo correction."""
-    bits = re.split(r"\s+(near|in)\s+", q.strip(), maxsplit=1, flags=re.I)
+    # "near me", "nearby", "around here": the player's own position, not a place for Nominatim to look up ("me" is Maine)
+    q = re.sub(r"\s+(nearby|close by|(near|around|close to)\s+(me|here|my location|my position))$", "", q.strip(), flags=re.I)
+    bits = re.split(r"\s+(near|in)\s+", q, maxsplit=1, flags=re.I)
     words = _category_words(bits[0])
     cat = _CATEGORY_ALIASES.get(words)
     if cat is None and len(words) >= 5:
@@ -709,13 +711,19 @@ def _category_source(net, hit, lat, lon, source):
 
 def merge_categories(q, normal, categories):
     """Keep strong name matches, then nearby named places, then two notable suggestions further away."""
+    # A place named exactly as typed ("Summit", "Dam" in Amsterdam, "Lake in the Hills") is never dropped: first when
+    # the text has its own near/in (the whole phrase naming a place is no coincidence), else after the nearest few.
+    exact = [r for r in normal if fold(r["name"]) == fold(q)][:1]
     normal = [r for r in normal if fits(q, r) >= WEAK and fold(r["name"]) != fold(q)][:2]
+    hit = category_query(q)
+    if exact and hit and hit[1]:
+        normal, exact = exact + normal[:1], []
     local = sorted((r for r in categories if r.get("source") == "overpass"),
                    key=lambda r: (r.get("unnamed", False), r["distance"], r["name"]))
     famous = sorted((r for r in categories if r.get("source") == "wikidata"),
                     key=lambda r: (-r.get("links", 0), r["distance"], r["name"]))
     # Reserve space for distant suggestions, filling with more local results if not enough unique famous ones exist.
-    ordered = normal + local[:max(0, RESULTS - len(normal) - min(2, len(famous)))] + famous + local
+    ordered = normal + local[:max(0, RESULTS - len(normal) - len(exact) - min(2, len(famous)))] + exact + famous + local
     out = []
     for r in ordered:
         if any(_same_place(fold(o["name"]), fold(r["name"]), category_km(o["lat"], o["lon"], r["lat"], r["lon"])) for o in out):

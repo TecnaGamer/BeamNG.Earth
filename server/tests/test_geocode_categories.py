@@ -219,3 +219,22 @@ class CategoriesTest(unittest.TestCase):
         self.assertEqual(normal['result_type'], 'name')
         self.assertNotIn('distance_mi', normal)
         self.assertEqual(normal['country'], '')
+
+    def test_near_me_is_the_player_not_a_place(self):
+        for text in ('race tracks near me', 'race tracks nearby', 'peaks around here', 'forest close to me'):
+            with self.subTest(text=text):
+                self.assertEqual(g.category_query(text)[1:], (None, None))
+
+    def test_exact_place_name_matching_a_category_is_kept(self):
+        def run(q, name):
+            place = dict(name=name, detail='US', kind='village', lat=40.2, lon=-75)
+            with mock.patch.object(g, '_photon', return_value=[place]), \
+                    mock.patch.object(g, '_nominatim', return_value=[]), \
+                    mock.patch.object(g, '_wikidata', return_value=[]), \
+                    mock.patch.object(g, '_wikipedia', return_value=[]):
+                return [r['name'] for r in g.search(q, 40, -75, net=Net(), full=True)]
+        self.assertEqual(run('Lake in the Hills', 'Lake in the Hills')[0], 'Lake in the Hills')
+        g._category_cache.clear()
+        names = run('Summit', 'Summit')
+        self.assertIn('Summit', names)
+        self.assertEqual(names[0], 'Nearby Circuit', 'a bare category word still lists category places first')
