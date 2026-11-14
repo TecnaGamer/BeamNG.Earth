@@ -221,6 +221,44 @@ class MappedBlocksTest(unittest.TestCase):
             self.assertEqual(set(self.held().values()), {bytes})
             self.assertEqual(rangeread.mem_mapped(), (0, 0))
 
+    def advised(self, fail=False):
+        """A mapping class that records the advice it is given (Windows' has no madvise), and the list."""
+        got = []
+
+        class Advised(self.mmap):
+            def madvise(self, option, *a):
+                got.append((option, a))
+                if fail:
+                    raise OSError(22, "Invalid argument")
+
+        return Advised, got
+
+    def test_a_mapped_block_is_asked_for_whole_where_the_system_takes_the_advice(self):
+        """Its page faults hold the GIL (read()'s join): read ahead from the moment it is mapped, fetched or from the
+        disk; nothing is asked where there is no such advice (Windows)."""
+        cls, got = self.advised()
+        with mock.patch.object(rangeread.mmap, "mmap", cls), mock.patch.object(rangeread, "_WILLNEED", 3):
+            self.assertEqual(self.remote.read(0, 2 * self.BLOCK), self.data[:2 * self.BLOCK])
+            self.assertEqual(got, [(3, ())] * 2, "each fetched block, whole")
+            rangeread.clear_memory()
+            self.assertEqual(self.remote.read(5, 50), self.data[5:50])
+            self.assertEqual(got, [(3, ())] * 3, "and a block mapped from the disk")
+            self.assertEqual(self.remote.read(5, 50), self.data[5:50])
+            self.assertEqual(len(got), 3, "once, when it is mapped: not at every read of a held block")
+            rangeread.clear_memory()
+        cls, got = self.advised()
+        with mock.patch.object(rangeread.mmap, "mmap", cls), mock.patch.object(rangeread, "_WILLNEED", None):
+            self.assertEqual(self.remote.read(5, 50), self.data[5:50])
+            self.assertEqual((got, rangeread.mem_mapped()), ([], (1, self.BLOCK)))
+            rangeread.clear_memory()
+
+    def test_refused_advice_leaves_the_block_mapped(self):
+        cls, got = self.advised(fail=True)
+        with mock.patch.object(rangeread.mmap, "mmap", cls), mock.patch.object(rangeread, "_WILLNEED", 3):
+            self.assertEqual(self.remote.read(0, self.BLOCK + 9), self.data[:self.BLOCK + 9])
+            self.assertEqual((len(got), rangeread.mem_mapped()), (2, (2, 2 * self.BLOCK)))
+            rangeread.clear_memory()
+
     def test_small_blocks_stay_copies(self):
         """The lidar bias's 16 KB blocks: a mapping each would be thousands of descriptors."""
         d = os.path.join(self.temp.name, "small")

@@ -83,6 +83,14 @@ MEM_BYTES = 64 * 1024 * 1024    # in-memory block LRU shared by every RemoteFile
 # the cache cap's eviction skips it (cache.py) and a second write of the same block keeps the copy there
 # (staging.replace_cached), as for the DEM's and the map data's mapped mirrors.
 MAP_MIN = 128 * 1024 if os.environ.get("BNGE_RANGE_MAP", "1") != "0" else None
+# A mapped block's pages are read from the disk on their page faults, inside read()'s join and so with the GIL held,
+# where f.read() released it: on a slow disk (a Steam Deck's microSD) every other thread of the process waits for them,
+# the main process's event loop among them. Where the system takes the advice (Linux, macOS, the BSDs; not Windows),
+# a block is asked for whole when it is mapped: the system reads it ahead in the background, in one request instead
+# of one per faulted window, and the call does not wait for it. That shortens the wait and does not end it: a read
+# that follows at once still faults on the pages not in yet, and pages the system drops later from a block held here
+# come back on faults as before (BNGE_RANGE_MAP=0 is the comparison).
+_WILLNEED = getattr(mmap, "MADV_WILLNEED", None)
 CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)")
 # Errors after which the next mirror is asked (the same bytes from another host); NotFound is not
 # one of them: a release file that is missing on one mirror is missing.
@@ -151,9 +159,15 @@ def _map_file(path, want):
         with open(path, "rb") as f:
             if os.fstat(f.fileno()).st_size != want:
                 return None
-            return mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     except (OSError, ValueError):       # (no such file, or a file system that cannot map: read as before)
         return None
+    if _WILLNEED is not None:
+        try:
+            m.madvise(_WILLNEED)
+        except (OSError, ValueError):   # (advice only: the block is read on its faults)
+            pass
+    return m
 
 
 def clear_memory():
