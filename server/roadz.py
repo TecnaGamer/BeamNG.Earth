@@ -258,14 +258,12 @@ def _await_part(lock, pp, wait_s=None):
             h = xproc._holder(lock)
             token = xproc._token(lock)
             pid, recheck = (h[2] if h is not None else None), time.monotonic() + xproc.ALIVE_RECHECK_S
-            if h is not None and not xproc.alive(h[2]):
-                xproc.break_dead(lock, token)       # (that holder's lock only: xproc.break_dead)
-                seen = None
+            if h is not None and not xproc.alive(h[2]) and xproc.break_dead(lock, token):
+                seen = None                         # (that holder's lock only; not broken now: the deadline below)
                 continue
         elif seen is not None and now == seen and pid is not None and time.monotonic() >= recheck:
             recheck = time.monotonic() + xproc.ALIVE_RECHECK_S       # (one that died since: xproc.once's)
-            if not xproc.alive(pid):
-                xproc.break_dead(lock, token)
+            if not xproc.alive(pid) and xproc.break_dead(lock, token):
                 seen = None
                 continue
         if time.monotonic() > end:

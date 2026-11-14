@@ -73,19 +73,24 @@ def holds_none():
 def _heartbeat():
     me = os.getpid()
     while _HEART[0] == me:
-        _WAKE.wait(PENDING_RETRY_S if _PENDING else HEARTBEAT_S)
+        _WAKE.wait(min(PENDING_RETRY_S if _PENDING else HEARTBEAT_S, max(0.0, _NEXT_TOUCH[0] - time.monotonic())))
         _WAKE.clear()
-        if _PENDING:
-            time.sleep(0.05)        # (a busy guard: a moment's grace before the first retry)
-        _retry_pending()
-        if time.monotonic() >= _NEXT_TOUCH[0]:
-            _NEXT_TOUCH[0] = time.monotonic() + HEARTBEAT_S
-            _touch_held()
+        _beat()
+
+
+def _beat():
+    """One tick of the heartbeat: the held locks touched when due, first (no put-off release, however many, delays
+    them past STALE_S), then one round of the put-off releases (PENDING_BATCH_S at most, no guard waited for)."""
+    if time.monotonic() >= _NEXT_TOUCH[0]:
+        _NEXT_TOUCH[0] = time.monotonic() + HEARTBEAT_S
+        _touch_held()
+    _retry_pending()
 
 
 _NEXT_TOUCH = [0.0]
 _WAKE = threading.Event()   # set when a release is put off (_PENDING): retried soon, not at the next heartbeat
 PENDING_RETRY_S = 1.0       # s between tries of the releases whose guard was busy (_PENDING)
+PENDING_BATCH_S = 0.5       # s one round of those tries takes at most (each one look at its guard, no wait)
 
 
 def _retry_pending():
@@ -94,11 +99,14 @@ def _retry_pending():
     and once this process is gone it is a dead holder's (break_dead)."""
     with _HELD_LOCK:
         todo = list(_PENDING.items())
+    end = time.monotonic() + PENDING_BATCH_S
     for lock, token in todo:
-        with _guard(lock) as g:
+        if time.monotonic() > end:
+            break                   # (the rest at the next round)
+        with _guard(lock, 0.0) as g:
             if not g.ok:
-                continue
-            done = _token(lock) != token or _remove(lock)
+                continue            # (busy: the next round)
+            done = _token(lock) != token or _remove(lock, 0.0)
         if done:
             with _HELD_LOCK:
                 if _PENDING.get(lock) == token:
@@ -155,8 +163,9 @@ class _guard:
     over or removed without it: when it is not had, the caller changes nothing and says "not now". missing: no guard
     file can be made at all (no temporary folder): take works unlocked then, making no lock file."""
 
-    def __init__(self, lock):
+    def __init__(self, lock, wait_s=None):
         self.path = _guard_path(lock)
+        self.wait_s = GUARD_WAIT_S if wait_s is None else wait_s
         self.fd = None
         self.ok = self.missing = False
 
@@ -170,7 +179,7 @@ class _guard:
         except OSError:
             self.missing = True
             return self
-        end = time.monotonic() + GUARD_WAIT_S
+        end = time.monotonic() + self.wait_s
         pause = 0.001
         while not _try_lock(fd):
             if time.monotonic() >= end:
@@ -389,9 +398,10 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
             if h is not None and not alive(h[2]):
                 # its process is gone (the game closed mid-download: the server's processes end with it); the
                 # lock was waited out for STALE_S before, a minute a block after a quick restart
-                break_dead(lock, seen)
-                holder = None
-                continue
+                if break_dead(lock, seen):
+                    holder = None
+                    continue
+                # (not broken now, its guard busy: the deadline and cancel checks below, then looked at again)
             if h is not None and h[:2] > _rank(kind):
                 return None, False          # do it here, not wait
         elif holder is not None and holder == now_holder and pid is not None and time.monotonic() >= recheck:
@@ -399,8 +409,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_not
             # worker killed or a process ended mid-build, kept its lock to the end of wait_s, BUILD_WAIT_S 180 s of
             # a road tile's cells, 2026-11-11)
             recheck = time.monotonic() + ALIVE_RECHECK_S
-            if not alive(pid):
-                break_dead(lock, seen)
+            if not alive(pid) and break_dead(lock, seen):
                 holder = None
                 continue
         if not waited:
@@ -471,7 +480,7 @@ def break_dead(lock, seen=None):
         return _remove(lock)
 
 
-def _remove(lock):
+def _remove(lock, retry_s=None):
     """Remove the lock file (the caller holds its guard). On Windows a file another process has open (a waiter reading
     its urgency) cannot be removed: tried again for up to RELEASE_S. A failed remove left the lock behind, so every
     process wanting that piece waited out its wait_s and the next ones STALE_S (road tiles "building for 90 s", the
@@ -484,7 +493,7 @@ def _remove(lock):
         except FileNotFoundError:
             return True
         except OSError:
-            if time.monotonic() - t0 > RELEASE_S:
+            if time.monotonic() - t0 > (RELEASE_S if retry_s is None else retry_s):
                 return False
             time.sleep(0.01)
 
