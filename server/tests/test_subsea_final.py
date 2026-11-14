@@ -368,5 +368,67 @@ class CellEntriesWorkerFaultTest(unittest.TestCase):
         self.check(cell_fn)
 
 
+class CellEntriesSpecFaultTest(unittest.TestCase):
+    """A cell read complete whose specs are made short (germanroads.adjust_specs, in road_specs / specs_of, faults and
+    returns fallback specs when its axes are not there): the entries and the half widths made from it are not kept by
+    the memos either; the next chain solve makes them again and stays non-final (review, 2026-11-13)."""
+
+    class Feats:
+        ids = ["w1"]
+        attrs = {}
+
+        def __len__(self):
+            return 1
+
+    def setUp(self):
+        self.frame = geodesy.EnuFrame(LAT, LON)
+        self.key = mapcells.cell_of(LAT, LON)
+        self.reads = 0
+        self.specs = 0
+        self.fail = True
+
+        def cell_fn(key):
+            self.reads += 1
+            return self.Feats()             # (read complete)
+
+        def road_specs(feats):
+            self.specs += 1
+            if self.fail:
+                revisit.fault()             # (a survey's lookup that fell back)
+            return [None] * len(feats)
+        for name, fn in (("road_specs", road_specs), ("_rail_drawn", lambda feats, i: False)):
+            old = getattr(roads, name)
+            setattr(roads, name, fn)
+            self.addCleanup(setattr, roads, name, old)
+        self.tp = roads.TunnelProfiles(self.frame, cell_fn, None)
+        self.tp.specs_of = lambda feats: [None] * len(feats)
+        self.tp._tls.read = frozenset({str(self.key)})
+
+    def chain_solve(self):
+        with revisit.scope() as b:
+            self.tp._load(self.key, {}, {})
+            final = subsea._final(self.tp, [[0.0, 0.0]], "test")
+        return b, final
+
+    def test_short_specs_are_made_again_and_stay_non_final(self):
+        b1, final1 = self.chain_solve()
+        n = self.specs
+        b2, final2 = self.chain_solve()
+        self.assertFalse(b1.complete or b2.complete)
+        self.assertFalse(final1)
+        self.assertFalse(final2, "the second chain solve must stay non-final")
+        self.assertGreater(self.specs, n, "the specs are made again")
+        self.assertNotIn(str(self.key), self.tp.__dict__.get("hw_done", ()))
+        self.assertNotIn(str(self.key), self.tp.__dict__.get("cell_entries", {}))
+
+    def test_complete_specs_are_kept(self):
+        self.fail = False
+        b1, final1 = self.chain_solve()
+        n = self.reads, self.specs
+        b2, final2 = self.chain_solve()
+        self.assertTrue(b1.complete and b2.complete and final1 and final2)
+        self.assertEqual((self.reads, self.specs), n, "made once")
+
+
 if __name__ == "__main__":
     unittest.main()
