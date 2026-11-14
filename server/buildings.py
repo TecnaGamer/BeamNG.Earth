@@ -6861,26 +6861,37 @@ def _sky_mesh(items):
                   lite=True)
     if not m.n:
         return None
-    import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
     out = []
-    for P, UV, T, M, C in _cut_buildings(*m.arrays(), starts, MAX_MESH_VERTS):
+    _sky_close(_cut_buildings(*m.arrays(), starts, MAX_MESH_VERTS), out)
+    return out or None
+
+
+def _sky_close(pieces, out):
+    """_sky_mesh's pieces [(P, UV, T, M, C, starts)] each closed into solids (shells.close, BNE_WATERTIGHT) and added
+    to out as build's meshes, in order. The cut counts the open vertices: a piece past VERTS_MAX once closed (its caps'
+    vertices) is cut again between its buildings, in halves; only a building past it alone is left out (over_limit)."""
+    import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07)
+    for P, UV, T, M, C, starts in pieces:
+        P2, T2, M2, UV2, C2 = P, T, M, UV, C
         if shells.ON:
-            P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (the walls already reach under the
-                                                                            # ground: the bottom capped there)
-        if len(P) <= VERTS_MAX:
-            out.append((P, UV, T, M, MATERIALS, C))
+            P2, T2, M2, (UV2, C2) = shells.close(P, T, M, (UV, C), skirt=False)  # (the walls already reach under
+                                                                                # the ground: the bottom capped there)
+        if len(P2) <= VERTS_MAX:
+            out.append((P2, UV2, T2, M2, MATERIALS, C2))
+        elif any(0 < k < len(P) for k in starts):
+            _sky_close(_cut_buildings(P, UV, T, M, C, starts, max(1, len(P) // 2)), out)
         else:
             over_limit["buildings"] += 1
-    return out or None
 
 
 def _cut_buildings(P, UV, T, M, C, starts, limit):
     """A Mesh's arrays (positions, uvs, tris, materials, colours; each building's vertices and triangles after the
     one before's, starts their first vertices) cut between buildings into pieces of at most limit vertices each (a
-    building past it: a piece alone), in order. [(P, UV, T, M, C)]; the arrays as they are when they fit."""
+    building past it: a piece alone), in order. [(P, UV, T, M, C, its buildings' starts)]; the arrays as they are
+    when they fit."""
     n = len(P)
     if n <= limit:
-        return [(P, UV, T, M, C)]
+        return [(P, UV, T, M, C, list(starts))]
     cuts, prev = [0], 0
     for b in sorted(set(int(k) for k in starts if 0 < k < n)) + [n]:
         if b - cuts[-1] > limit and prev > cuts[-1]:
@@ -6896,7 +6907,7 @@ def _cut_buildings(P, UV, T, M, C, starts, limit):
         Tk = T[sel] - a
         if len(Tk) and Tk.max() >= b - a:
             raise ValueError("_cut_buildings: a triangle across two buildings")
-        out.append((P[a:b], UV[a:b], Tk, np.asarray(M)[sel], C[a:b]))
+        out.append((P[a:b], UV[a:b], Tk, np.asarray(M)[sel], C[a:b], [int(k) - a for k in starts if a <= k < b]))
     return out
 
 

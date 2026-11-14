@@ -466,6 +466,32 @@ class FarIndexLimitTest(unittest.TestCase):
         (one,) = bld._sky_mesh(items[:3])
         self.assertLess(len(one[0]), bld.MAX_MESH_VERTS, "a small skyline stays one mesh")
 
+    def test_watertight_skyline_cut_by_its_closed_vertices(self):
+        """BNE_WATERTIGHT: closing adds each building's caps after the cut (Codex review of b2b87e51: 2900 boxes fit
+        sky_items' 60000-vertex estimate open, past 65535 closed, and the whole skyline was dropped)."""
+        import shells
+        items = [(bld.plan(rect((i % 60) * 25.0, (i // 60) * 25.0, 12, 10), {"class": "", "height": 12}), 0.0, 0.0)
+                 for i in range(2900)]
+        (opened,) = bld._sky_mesh(items)
+        self.assertLessEqual(len(opened[0]), bld.MAX_MESH_VERTS)
+        with mock.patch.object(shells, "ON", True), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            meshes = bld._sky_mesh(items)
+            self.assertIsNotNone(meshes)
+            self.assertGreater(sum(len(m[0]) for m in meshes), 65535, "(the case: past the indices once closed)")
+            self.assertTrue(all(len(m[0]) <= 65535 for m in meshes), [len(m[0]) for m in meshes])
+            self.assertEqual(bld.over_limit["buildings"], 0)
+            self.assertEqual(sum(len(m[2]) for m in meshes), len(shells.close(
+                *[np.asarray(a) for a in (opened[0], opened[2], opened[3])], (opened[1], opened[5]), skirt=False)[1]))
+
+    def test_watertight_far_tile(self):
+        """build_parts counts each building closed (build closes it) before its cut: the far tile under the indices."""
+        import shells
+        items = _dense_items()
+        with mock.patch.object(shells, "ON", True), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
     def test_a_building_past_the_indices_is_left_out(self):
         items = _dense_items(3)
         n1 = len(bld.build(items[:1], lite=True)[0])
