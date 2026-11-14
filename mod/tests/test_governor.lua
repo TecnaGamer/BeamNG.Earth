@@ -444,4 +444,40 @@ do
   T.check(meshes.due > 4 * math.max(1, meshes.plain), 'due + reserve: the meshes keep coming beside the far tiles ('
     .. meshes.plain .. ' -> ' .. meshes.due .. ' in 600 frames)')
 end
+
+-- tryUrgent (roads.lua's drawn surfaces under the car): may run short of tokens, but only as the frame's first unit,
+-- with little else done in the frame, and not deep in debt
+do
+  now = 0
+  local g = governor.new({ clock = clock })
+  for _ = 1, 50 do frame(g, { cost = 1e9 }) end
+  g:beginFrame(true); g.tokens = -3
+  T.check(not g:try('roadSurf', 'near') and g:tryUrgent('roadSurf'), 'starved (tokens -3): try no, tryUrgent yes')
+  g:charge('roadSurf', 8, 'near')
+  T.check(not g:tryUrgent('roadSurf'), 'never a second unit in the frame')
+  g:beginFrame(true); g.tokens = -governor.URGENT_DEBT_MS - 1
+  T.check(not g:tryUrgent('roadSurf'), 'deep in debt (an engine tick, earlier urgent units): waits')
+  g:beginFrame(true); g.tokens = 0
+  g:charge('roadDelete', governor.URGENT_ROOM_MS + 1)
+  T.check(not g:tryUrgent('roadSurf'), 'the frame already busy with other units: waits')
+  g:beginFrame(true); g.tokens = 0
+  g:noteOther(governor.URGENT_ROOM_MS + 1)
+  T.check(not g:tryUrgent('roadSurf'), '... or with the mod\'s other noted work (messages, trees)')
+  g:beginFrame(true); g.tokens = 0
+  g.blocked = true
+  T.check(not g:tryUrgent('roadSurf'), 'not in quiet frames')
+  g.blocked = false
+  g:requestHeavy()
+  T.check(not g:tryUrgent('roadSurf'), 'not while a heavy op waits for its slot')
+  -- a run of urgent units paces itself: each charged, the bucket's debt stops them until the budget repays it
+  local g2 = governor.new({ clock = clock })
+  for _ = 1, 50 do frame(g2, { queue = {} }) end     -- (work waiting, none run: b at its target)
+  local ran = 0
+  for _ = 1, 300 do
+    g2:beginFrame(true)
+    if g2:tryUrgent('roadSurf') then g2:charge('roadSurf', 9, 'near'); ran = ran + 1 end
+    now = now + BASE
+  end
+  T.check(ran > 30 and ran < 300 * 2.0 / 9 + 10, 'urgent units paced by the bucket (' .. ran .. ' in 300 frames at b 2)')
+end
 T.done('test_governor')

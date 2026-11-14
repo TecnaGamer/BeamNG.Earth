@@ -2244,7 +2244,10 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   step('collideRange')
   local forced = nil
   if #walkQ > 0 and sinceUrgent >= M.URGENT_EVERY_FRAMES and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
-    forced = M.urgentWalk(walkQ, gov.blocked)
+    local surface
+    forced, surface = M.urgentWalk(walkQ, gov.blocked)
+    -- (a drawn surface: only into a frame with room for it, governor.lua tryUrgent; else it waits its turn as any mesh)
+    if forced and surface and gov.tryUrgent and not gov:tryUrgent(M.walkKind(walkQ[forced].what)) then forced = nil end
   end
   sinceUrgent = sinceUrgent + 1
   local dueSaid = false
@@ -2581,7 +2584,8 @@ M._surfaceKeys = surfaceKeys
 -- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading; else (URGENT_SURFACES)
 -- the drawn road or sidewalks of the tile under the car or just ahead (the roads before the sidewalks, the nearer tile
 -- first) - not in the governor's quiet frames round a heavy op (quiet: a heavy frame must stay a lone spike, and
--- what is only drawn can wait the two frames).
+-- what is only drawn can wait the two frames). Also returns whether it is such a surface: those still ask the governor
+-- (tryUrgent: never into a frame already busy or a bucket deep in debt), the decks, tunnels and sidewalk colliders not.
 function M.urgentWalk(q, quiet)
   local p = playerNow()
   if not p then return nil end
@@ -2608,7 +2612,7 @@ function M.urgentWalk(q, quiet)
       end
     end
   end
-  if best or not M.URGENT_SURFACES or quiet then return best end
+  if best or not M.URGENT_SURFACES or quiet then return best, false end
   local keys = nil
   for i, e in ipairs(q) do
     if (e.what == 'road' or e.what == 'walk') and e.stage == nil then
@@ -2621,7 +2625,7 @@ function M.urgentWalk(q, quiet)
       end
     end
   end
-  return best
+  return best, best ~= nil
 end
 
 -- A made object's world box { x0, y0, z0, x1, y1, z1 } (nil: none)

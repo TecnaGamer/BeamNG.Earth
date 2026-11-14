@@ -772,6 +772,32 @@ do
   local made = 0
   for _, o in pairs(S.objects) do if o.class == 'TSStatic' then made = made + 1 end end
   T.check(made == made0 + 1, 'the road under the car made at once, the budget denied (' .. made .. ')')
+  -- with the real governor: an urgent surface skips token starvation, not a used-up frame or a deep debt
+  -- (governor.lua tryUrgent)
+  local function count()
+    local n = 0
+    for _, o in pairs(S.objects) do if o.class == 'TSStatic' then n = n + 1 end end
+    return n
+  end
+  roads.onDrop({ anchorId = 9, key = '0_0' })
+  for _ = 1, 3 do roads.update(gov, 9) end
+  local G = require('beamngEarth/governor')
+  local gv = G.new({ clock = function() return elapsedMs end })
+  local function frameWith(setup)
+    gv:beginFrame(true, 30)
+    setup(gv)
+    roads.update(gv, 9)
+  end
+  roads.onTile({ anchorId = 9, key = '0_0', path = '/t/dq.json', n = 0 }, 9)
+  local c0 = count()
+  for _ = 1, roads.URGENT_EVERY_FRAMES + 1 do
+    frameWith(function(x) x.tokens = -G.URGENT_DEBT_MS - 5 end)
+  end
+  T.check(count() == c0, 'urgent surface: not with the bucket deep in debt')
+  frameWith(function(x) x.tokens = -2; x:noteOther(G.URGENT_ROOM_MS + 2) end)
+  T.check(count() == c0, 'urgent surface: not into a frame already busy (its budget used up, tokens negative)')
+  frameWith(function(x) x.tokens = -2 end)
+  T.check(count() == c0 + 1, 'urgent surface: starved of tokens but the frame free: made at once')
   roads.onDrop({ anchorId = 9, key = '0_0' }); roads.onDrop({ anchorId = 9, key = '5_0' })
   roads.update(gov, 9)
   roads.COLLIDE_CHECK_S = check

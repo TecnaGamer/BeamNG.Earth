@@ -127,6 +127,13 @@ M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, m
 M.DUE_TARGET_MS = 6.0
 M.RAMP_UP_DUE = 0.25
 M.RESERVE_FREE_MS = 0.5
+-- An urgent unit (tryUrgent: roads.lua's drawn road and sidewalks under the car) may run short of tokens, but only as
+-- the frame's first unit, with at most URGENT_ROOM_MS of the frame's other work (units charged, their engine share, the
+-- mod's noted work) before it, and not while the bucket is more than URGENT_DEBT_MS in debt (the engine's own tick
+-- after a slow frame, chargeEngine, or the urgent units before it): a busy frame is never made busier, and a run of
+-- urgent units is paced by the bucket again once they have overdrawn it.
+M.URGENT_ROOM_MS = 4.0
+M.URGENT_DEBT_MS = 10.0
 
 -- Unit kind of a textured .cdae import from its far_tile.tex (px): cdaeTex<px> for a size with a
 -- prior, else (FORMAT 3 tiles have no tex) 'cdaeTex'.
@@ -356,6 +363,16 @@ function Gov:try(kind, lane)
     self.stats.midYields = (self.stats.midYields or 0) + 1
     return false
   end
+  return true
+end
+
+-- May an urgent unit of this kind run now, tokens or not (URGENT_ROOM_MS above)? The caller charges it as any unit.
+function Gov:tryUrgent(kind)
+  self.used[kind] = true
+  if self.blocked or self.heavyFrame == self.frame or self.heavyPending then return false end
+  if self.frameUnits > 0 then return false end
+  if self.frameSpent + self.frameDef + self.frameOther > M.URGENT_ROOM_MS then return false end
+  if self.tokens < -M.URGENT_DEBT_MS then return false end
   return true
 end
 
