@@ -333,6 +333,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::dm::Dm;
     use super::*;
 
     #[test]
@@ -357,7 +358,7 @@ mod tests {
         let ring: Vec<P> = (0..n)
             .map(|i| {
                 let a = i as f64 * std::f64::consts::TAU / n as f64;
-                (5.0 * a.cos(), 5.0 * a.sin())
+                (5.0 * a.dcos(), 5.0 * a.dsin())     // (dm::Dm, not the platform's C maths: test_determinism)
             })
             .collect();
         let prof = [(1.0, 0.0), (0.7, 0.7), (0.0, 1.0)];
