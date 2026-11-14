@@ -255,6 +255,33 @@ OVERTURE_HEX = {
 }
 
 
+DOME_PALE_RGB = (0.95, 0.95, 0.93)     # a dome's pale painted metal (ROOF_METAL) where its walls lend no light look
+DOME_WALLS = ("bne_bld_stone", "bne_bld_stone_rubble", "bne_bld_stucco", "bne_bld_panel")
+
+
+def dome_look(facade, band):
+    """A dome's look from its walls' (plan: no roof material mapped): a light plain wall's material and colour (the
+    plaster window sheet's as plain stucco), else DOME_PALE_RGB metal."""
+    mat, rgb = LOOKS.get(facade, (None, None))
+    if mat == FACADE and band is not BAND_BRICK:
+        mat = STUCCO
+    if mat in DOME_WALLS and rgb is not None and len(rgb) >= 3 \
+            and 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] >= 0.6:
+        return custom_look(mat, tuple(float(v) for v in rgb[:3]))
+    return custom_look(ROOF_METAL, DOME_PALE_RGB)
+
+
+def masonry_colour(rgb):
+    """Is rgb (0..1) a stone's colour (MASONRY_WARM / MASONRY_PALE) rather than a curtain wall's?"""
+    if rgb is None:
+        return False
+    r, g, b = (float(v) for v in rgb[:3])
+    v = max(r, g, b)
+    sat = (v - min(r, g, b)) / v if v > 0 else 0.0
+    return (v >= MASONRY_WARM[0] and sat <= MASONRY_WARM[1] and r >= b + MASONRY_WARM[2]) \
+        or (v >= MASONRY_PALE[0] and sat <= MASONRY_PALE[1])
+
+
 def parse_color(val):
     """Parse an OSM/Overture color (hex or CSS name) into an (r, g, b) float tuple in [0, 1], or None."""
     if not val or not isinstance(val, str):
@@ -615,7 +642,22 @@ TANK_PAINTS = ((0.92, 0.92, 0.90), (0.84, 0.85, 0.86), (0.90, 0.88, 0.80), (0.72
 # Venlo block 5-7 m to the gutter under a near-flat ridged roof; a garden one a small glass gable. Drawn in glazing
 # (GLASSHOUSE), clear, whitewashed (summer shading) or with the shade screens drawn (dark), or as the aerial shows it.
 TOWER_METAL_FLOORS = 8      # storeys (or that height): a building's mapped metal is its curtain wall, not sheeting
-SUPERTALL_M = 150.0         # m: a building this tall with no material mapped has a curtain wall
+SUPERTALL_M = 150.0         # m: a building this tall with no material mapped has a curtain wall, ...
+# ... but not where its mapped colour is a stone's (masonry_colour): a pale or a warm light one, the limestone,
+# terracotta and granite of the pre-war towers and their heirs; the dark, the cool mid greys and the coloured ones stay
+# glass. A building drawn as its parts: its bare parts too where the colours its parts carry are (by area) mostly
+# stone's (tile_buildings' _masonry_colour, parts_masonry_colour). The Empire State Building's parts carry no material
+# and a pale grey on 3 of 11 (its tower turned dark glass once its base part's concrete no longer spread to them all),
+# 1 Wall Street's 42 parts a light limestone colour on every one (a glass curtain wall), the 2026-11-14 in-game check.
+# Of 307 buildings of 150 m or more in nine Manhattan map cells, 250 came out glass; 57 of them turn masonry: the
+# Woolworth, the Trump Building, 30 Park Place, 15 Central Park West, the Waldorf and ~45 more of stone, brick or
+# terracotta, and a handful of stone and glass ones (the Solow Building, 125 Broad Street); a tower with no colour
+# mapped stays glass (no year to go by).
+# A warm stone colour: its brightest channel, saturation and red over blue (MASONRY_WARM); a pale one (white, light
+# grey): its brightest channel and saturation (MASONRY_PALE).
+MASONRY_WARM = (0.60, 0.30, 0.02)   # brightest channel at least, saturation at most, red over blue at least
+MASONRY_PALE = (0.80, 0.08)         # brightest channel at least, saturation at most
+MASONRY_NOT = ("glass", "metal", "steel", "aluminium", "stainless_steel", "plastic")
 MAST_MAX_M2 = 100.0         # m2: a mast's footprint at most ...
 MAST_MIN_H = 20.0           # ... this tall ...
 MAST_MATERIALS = ("metal", "steel")     # ... of steel, or slender past MAST_SLENDER (height / sqrt(area))
@@ -1273,7 +1315,14 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
     tall_ = (nf or 0) >= TOWER_METAL_FLOORS or top_ >= TOWER_METAL_FLOORS * FLOOR_M
     if not fm and top_ >= SUPERTALL_M and not (church or barn or shed or industrial):
-        fm = "glass"
+        own_c = parse_color(attrs.get("facade_color"))
+        stone_c = own_c if masonry_colour(own_c) else attrs.get("_masonry_colour") if own_c is None else None
+        if stone_c is not None:
+            # (a stone colour: the plaster window sheet in it, its tall windows, MASONRY_*; the mapped colour is laid
+            # on below)
+            facade, band, plain, wall = custom_look(FACADE, facade_tone(stone_c)), BAND_TALL, False, None
+        else:
+            fm = "glass"
     if fm in ("metal", "steel", "aluminium") and tall_ and not (barn or shed or industrial):
         fm = "glass"
     if fm in STONE_FACADES and not (barn or shed):
@@ -1328,7 +1377,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         wall = f"{kind}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[kind]))}"
         facade, windows = wall, False
     rmat = str(attrs.get("roof_material") or "").lower()
-    if rmat in ("metal", "tin", "steel", "zinc", "corrugated_iron", "sheet"):
+    # a dome with no roof material, or "slate" over stone walls (Overture's roof_material has no stone or marble: the
+    # US Capitol's marble dome, OSM roof:material=marble, comes as slate; a flat "slate" roof there too, its drum's and
+    # lantern's rings), takes its walls' light look, or a pale metal
+    # (it came out in the region's dark slate, or a tall building's dark metal: the Capitol's white dome dark, the
+    # 2026-11-14 in-game check; real domes are painted metal, stone, copper or lead, mapped where they are)
+    slate_on_stone = rmat in ("slate", "stone", "marble") and str(attrs.get("facade_material") or "").lower() \
+        in STONE_FACADES
+    dome_walls = (roof in DOME_ROOFS and (not rmat or slate_on_stone)) or (roof == "flat" and slate_on_stone)
+    if dome_walls:
+        roof_mat = dome_look(facade, band)
+    elif rmat in ("metal", "tin", "steel", "zinc", "corrugated_iron", "sheet"):
         roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
     elif rmat == "copper":
         roof_mat = custom_look(ROOF_METAL, COLOR_NAMES["copper"])
@@ -1411,7 +1470,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                                           and not attrs.get("_parts_drawn")
                                           and (STEEPLE_KIND.get(style.name, "spire") if
                                                _hash01(seed, "tower") < STEEPLE_SHARE.get(style.name, 1.0) else False))
-                or ((STEEPLE_TOP_LOW if STEEPLE_KIND.get(style.name) == "campanile" else STEEPLE_TOP)
+                or (steeple_top(STEEPLE_TOP_LOW if STEEPLE_KIND.get(style.name) == "campanile" else STEEPLE_TOP,
+                                attrs["_steeple_part"])
                     if attrs.get("_steeple_part") and roof == "flat" else False),
                 porch=porch, cls=cls,
                 deck=garage and roof == "flat",
@@ -1954,24 +2014,43 @@ def _box_tiled(m, c, u, hx, hy, z0, z1, mat, tile=1.0):
 STEEPLE_KIND = {"mediterranean": "campanile", "latin_america": "campanile", "warm": "campanile"}
 STEEPLE_SHARE = {"mediterranean": 0.6, "warm": 0.6}
 # A church mapped in parts: no tower of our own on every part (Trinity Church, New York: ten slate spires on its nave,
-# aisles and tower parts, streets.gl comparison 2026-11-14), but a roof over its tower part, the tallest flat-topped
-# part standing on the ground (tile_buildings' _steeple_part): a slate spire STEEPLE_TOP_RISE times the tower's short
-# side, or around the Mediterranean (STEEPLE_KIND) the campanile's low tiled pyramid.
+# aisles and tower parts, streets.gl comparison 2026-11-14), but a roof over its tower part, the top of its tallest
+# compact column (steeple_parts; on the ground or not: New York's measured massing stacks a tower's top as a band of its
+# own): a slate spire STEEPLE_TOP_RISE times the tower's short side (or up to the building's own height where that
+# stands over the tower), or around the Mediterranean (STEEPLE_KIND) the campanile's low tiled pyramid.
 STEEPLE_TOP, STEEPLE_TOP_LOW = "top", "top_low"
 STEEPLE_TOP_RISE = 3.0          # x the short side (Trinity's 45 m spire on its ~10 m tower: 4.5; gothic spires 2-5)
 STEEPLE_TOP_LOW_PITCH = 25.0    # degrees: a campanile's tiled pyramid
+STEEPLE_TOP_MAX_HW = 3.5        # m: a spire's half width at most (St. Nicholas of Myra's 16 x 12 m tower band, New
+                                # York: a squat pyramid over all of it)
+
+
+def steeple_top(kind, rise):
+    """Spec.steeple of a tower part: kind (STEEPLE_TOP / _LOW), with the spire's rise in metres where it is known
+    (steeple_parts: up to the building's own height), "top:12.50"; rise True: the default."""
+    return kind if rise is True or kind == STEEPLE_TOP_LOW else f"{kind}:{float(rise):.2f}"
+
+
+def _is_steeple_top(steeple):
+    return isinstance(steeple, str) and (steeple == STEEPLE_TOP_LOW or steeple.split(":")[0] == STEEPLE_TOP)
 
 
 def _steeple_top(m, spec, z_eave, mat_idx):
     """A spire (or a campanile's low pyramid) over the whole of a church's tower part: its oriented box at the eave."""
     c, u, hl, hw = oriented_box(spec.ring)
     v = np.array([-u[1], u[0]])
-    k = [c + u * sx * hl + v * sy * hw for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    if spec.steeple == STEEPLE_TOP_LOW:
+        k = [c + u * sx * hl + v * sy * hw for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    else:                           # (a spire on at most STEEPLE_TOP_MAX_HW each way: a wide tower top keeps a parapet)
+        bl, bw = min(hl, STEEPLE_TOP_MAX_HW), min(hw, STEEPLE_TOP_MAX_HW)
+        k = [c + u * sx * bl + v * sy * bw for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
     if spec.steeple == STEEPLE_TOP_LOW:
         rise = hw * dmath.tan(math.radians(STEEPLE_TOP_LOW_PITCH))
         rm = mat_idx[f"{ROOF_TILES}|{int(_hash01(spec.seed, 'tower roof') * len(ROOF_TINTS[ROOF_TILES]))}"]
     else:
         rise = STEEPLE_TOP_RISE * 2.0 * hw
+        if ":" in spec.steeple:     # (the building's own height over the tower: its spire's tip, at most the default)
+            rise = min(rise, float(spec.steeple.split(":")[1]))
         rm = mat_idx[f"{ROOF_SLATE}|3"]
     apex = (float(c[0]), float(c[1]), float(z_eave + rise))
     for i in range(4):
@@ -1982,7 +2061,7 @@ def _steeple_top(m, spec, z_eave, mat_idx):
 
 def _steeple(m, spec, z_eave, mat_idx):
     """A church's square tower at one end of its nave (hashed): a slate spire on it, or a campanile (STEEPLE_KIND)."""
-    if spec.steeple in (STEEPLE_TOP, STEEPLE_TOP_LOW):
+    if _is_steeple_top(spec.steeple):
         _steeple_top(m, spec, z_eave, mat_idx)
         return
     if spec.steeple == "campanile":
@@ -4607,9 +4686,18 @@ PART_TINY_M2 = 0.25
 PART_TINY_TALL_M = 10.0
 SKY_BODY_RISE = 1.5             # a part this many times the body's height rises over it (and SKY_BODY_OVER_M more)
 SKY_BODY_OVER_M = 6.0
-STEEPLE_SPIRE_SHARE = 0.25      # a mapped pyramid on the tower part covering this share of it is the tower's spire
-STEEPLE_TOWER_ASPECT = 1.6      # a church's tower part: at most this long for its width ...
-STEEPLE_TOWER_OVER = 1.25       # ... and this many times its parts' mean top at least
+# A church's tower part (steeple_parts): compact (its oriented box at most STEEPLE_TOWER_ASPECT long for its width),
+# STEEPLE_TOWER_M2 in area, the top of its column (no part covering STEEPLE_SPIRE_SHARE of it on it), and rising
+# STEEPLE_TOWER_RISE_M over every part not under it, or over them at all where the building's own height stands
+# STEEPLE_OUTLINE_OVER_M over it (the map's or the lidar's spire tip: St. Nicholas of Myra, New York, drawn from the
+# city's measured massing, a 3.3 m tower band over an 18.1 m body under a 31.4 m outline, 2026-11-14). The tower's own
+# top already mapped (a pyramid, cone, dome or onion over STEEPLE_SPIRE_SHARE of it): no spire of ours.
+STEEPLE_SPIRE_SHARE = 0.25
+STEEPLE_TOWER_ASPECT = 1.6
+STEEPLE_TOWER_M2 = (9.0, 160.0)    # (St. Bartholomew's, New York: its dome's drum, a 212 m² band in the massing)
+STEEPLE_TOWER_RISE_M = 6.0
+STEEPLE_OUTLINE_OVER_M = 3.0
+STEEPLE_TWIN = (0.5, 0.25)      # a second tower this close in top (m) and area (share): a twin front, a spire on each
 
 
 def _part_top(p):
@@ -4641,52 +4729,117 @@ def sky_body(bparts, height):
     body = weighted / total
     tall = [p for p in known if _part_top(p) > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M)]
     if tall:
-        return tall, body
+        # (and the parts over the body they stand on: the Capitol's lowest drum ring, 27-39.3 m, was left out under its
+        # dome, the drum floating over a gap from the 26.3 m body, the 2026-11-14 in-game check)
+        from polygon import Path
+        keep = {id(p) for p in tall}
+        grew = True
+        while grew:
+            grew = False
+            for p in known:
+                if id(p) in keep or _part_top(p) <= body:
+                    continue
+                path = None
+                for q in known:
+                    if id(q) not in keep or abs(q[1][1] - _part_top(p)) > 1.0:
+                        continue
+                    if path is None:
+                        path = Path(np.asarray(p[0], np.float64)[:, :2])
+                    if bool(path.contains_points(np.asarray(q[0], np.float64)[:, :2].mean(0)[None, :])[0]):
+                        keep.add(id(p))
+                        grew = True
+                        break
+        return [p for p in known if id(p) in keep], body
     h = float(height) if height is not None and np.isfinite(height) else 0.0
     if h > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M):
         return [], body
     return [], None
 
 
-def steeple_part(bparts):
-    """The index in bparts of a church's tower part that gets a spire of ours, or None. The tower: the tallest
-    flat-topped part standing on the ground, compact (its oriented box at most STEEPLE_TOWER_ASPECT long for its
-    width) and STEEPLE_TOWER_OVER times the parts' mean top (by area) at least. None too where the map already puts a
-    pyramid over most of that tower (its own spire)."""
-    best = None
-    for k, p in enumerate(bparts):
-        if p[1] is None or p[1][1] > PARTS_GROUND_M:
-            continue
-        own = p[2] if len(p) > 2 else {}
-        if str(own.get("roof_shape") or "flat").lower() != "flat":
-            continue
-        if best is None or _part_top(p) > _part_top(bparts[best]):
-            best = k
-    if best is None:
+def parts_masonry_colour(bparts, at):
+    """A building's stone colour for its parts that carry none (plan's MASONRY_*): where the facade colours it and
+    its parts carry are, by the parts' area, mostly stone's, the largest such part's (else the building's); None where
+    any carries a curtain wall's material (MASONRY_NOT: a masonry one on some, the Empire State Building's concrete
+    base, agrees), or none a colour."""
+    mats = [str(at.get("facade_material") or "").lower()] + [str(p[2].get("facade_material") or "").lower()
+                                                             for p in bparts if len(p) > 2]
+    if any(m in MASONRY_NOT for m in mats):
         return None
-    _, _, hl, hw = oriented_box(np.asarray(bparts[best][0], np.float64)[:, :2])
-    total = weighted = 0.0
-    for p in bparts:
-        if p[1] is not None:
-            a = abs(_area2(_local(p[0]))) / 2
-            total += a
-            weighted += a * _part_top(p)
-    if hl > STEEPLE_TOWER_ASPECT * max(hw, 1e-6) or total <= 0.0 \
-            or _part_top(bparts[best]) < STEEPLE_TOWER_OVER * weighted / total:
-        return None
+    stone = other = 0.0
+    best, best_a = None, -1.0
+    for p in bparts:                            # (in the parts' order: the same sums everywhere)
+        c = parse_color(p[2].get("facade_color")) if len(p) > 2 else None
+        if c is None:
+            continue
+        a = abs(_area2(_local(p[0]))) / 2
+        if masonry_colour(c):
+            stone += a
+            if a > best_a:
+                best, best_a = c, a
+        else:
+            other += a
+    bc = parse_color(at.get("facade_color"))
+    if bc is not None and best is None:
+        return bc if masonry_colour(bc) and other == 0.0 else None
+    return best if best is not None and stone >= other else None
+
+
+def steeple_parts(bparts, height=None):
+    """(indices in bparts of a church's tower parts that get a spire of ours, the spire's rise or None for the default)
+    : the top of the tallest compact column (STEEPLE_TOWER_*), a twin of it too (STEEPLE_TWIN); ((), None) where there
+    is none or the map tops it itself. The rise: up to the building's own height where that stands over the tower
+    (STEEPLE_OUTLINE_OVER_M), else None (STEEPLE_TOP_RISE times the tower's short side). bparts: tile_buildings' [(ring,
+    (own height, bottom) or None, own attrs)], in their order (ties to the first: the same choice everywhere)."""
     from polygon import Path
-    tower = np.asarray(bparts[best][0], np.float64)[:, :2]
-    t_area = abs(_area2(tower)) / 2
-    path = Path(tower)
-    for k, p in enumerate(bparts):
-        own = p[2] if len(p) > 2 else {}
-        if k == best or p[1] is None or str(own.get("roof_shape") or "").lower() not in ("pyramidal", "cone"):
+    known = [k for k, p in enumerate(bparts) if p[1] is not None]
+    rings = {k: np.asarray(bparts[k][0], np.float64)[:, :2] for k in known}
+    areas = {k: abs(_area2(_local(rings[k]))) / 2 for k in known}
+    paths = {}
+
+    def inside(k, pt):
+        if k not in paths:
+            paths[k] = Path(rings[k])
+        return bool(paths[k].contains_points(np.asarray(pt, np.float64)[None, :])[0])
+
+    def roof(k):
+        own = bparts[k][2] if len(bparts[k]) > 2 else {}
+        return str(own.get("roof_shape") or "flat").lower() or "flat"
+
+    def on_top(k):
+        """The parts standing on part k covering STEEPLE_SPIRE_SHARE of it (their bottom at its top, centre in it)."""
+        t = _part_top(bparts[k])
+        return [j for j in known if j != k and abs(bparts[j][1][1] - t) <= 1.0
+                and areas[j] >= STEEPLE_SPIRE_SHARE * areas[k] and inside(k, rings[j].mean(0))]
+
+    cands = []
+    for k in known:
+        if roof(k) != "flat" or not STEEPLE_TOWER_M2[0] <= areas[k] <= STEEPLE_TOWER_M2[1]:
             continue
-        r = np.asarray(p[0], np.float64)[:, :2]
-        if p[1][1] >= _part_top(bparts[best]) - 1.0 and abs(_area2(r)) / 2 >= STEEPLE_SPIRE_SHARE * t_area \
-                and bool(path.contains_points(r.mean(0)[None, :])[0]):
-            return None
-    return best
+        _, _, hl, hw = oriented_box(rings[k])
+        if hl > STEEPLE_TOWER_ASPECT * max(hw, 1e-6):
+            continue
+        cands.append(k)
+    if not cands:
+        return (), None
+    best = None
+    for k in cands:
+        if best is None or _part_top(bparts[k]) > _part_top(bparts[best]) + 1e-9:
+            best = k
+    tops = [best] + [k for k in cands if k != best and abs(_part_top(bparts[k]) - _part_top(bparts[best]))
+                     <= STEEPLE_TWIN[0] and abs(areas[k] - areas[best]) <= STEEPLE_TWIN[1] * areas[best]]
+    t = _part_top(bparts[best])
+    for k in tops:
+        if on_top(k):               # (its own spire, dome or flat top mapped: the map's, or a higher column's)
+            return (), None
+    rest = [_part_top(bparts[j]) for j in known
+            if j not in tops and not any(inside(k, rings[j].mean(0)) and areas[j] <= areas[k] * 1.05 + 1.0
+                                         for k in tops)]       # (not the column under a tower)
+    over = t - max(rest) if rest else t
+    h = float(height) if height is not None and np.isfinite(height) else 0.0
+    spire = h >= t + STEEPLE_OUTLINE_OVER_M
+    if over < STEEPLE_TOWER_RISE_M and not (spire and over >= 1.0):
+        return (), None
+    return tuple(tops), (h - t if spire else None)
 
 
 # A building is drawn as its parts (OSM's Simple 3D Buildings: the outline is not rendered where parts exist), but its
@@ -4967,7 +5120,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # marble, streets.gl comparison 2026-11-14)
                     sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals and 2 * len(vals) >= len(parts_all) \
                         else None
-                steeple_k = steeple_part(bparts) if str(at.get("class") or "").lower() in CHURCH_CLASSES else None
+                masonry_c = parts_masonry_colour(parts_all, at)
+                steeple_k, steeple_rise = steeple_parts(bparts, at.get("height")) \
+                    if str(at.get("class") or "").lower() in CHURCH_CLASSES else ((), None)
                 for pk, ppart in enumerate(bparts):
                     pring, hh = ppart[0], ppart[1]
                     pat = ppart[2] if len(ppart) > 2 else {}
@@ -4985,7 +5140,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None,
                                   "roof_shape": p_rshape,
-                                  "building_height": top, "_part_min": pmh, "_steeple_part": pk == steeple_k,
+                                  "building_height": top, "_part_min": pmh, "_masonry_colour": masonry_c,
+                                  "_steeple_part": (steeple_rise or True) if pk in steeple_k else False,
                                   "facade_material": pat.get("facade_material") or at.get("facade_material")
                                   or sib["facade_material"],
                                   "facade_color": p_fcol,

@@ -263,6 +263,107 @@ class PartRulesTest(unittest.TestCase):
         self.assertEqual(bld.sky_body([(ring(50), (20.0, 0.0), {})], 80.0), ([], 20.0), "a spire's height: the body")
 
 
+def lum(look):
+    c = bld._sky_colour(look, 1.0)
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+class InGameCheckTest(unittest.TestCase):
+    """The four looks the 2026-11-14 in-game check of the branch found wrong: a church's tower band (New York's measured
+    massing) with no spire, the Empire State Building and 1 Wall Street as dark glass, the Capitol's dark dome."""
+    _building = PartRulesTest._building
+
+    @city
+    def test_spire_on_a_tower_band_under_the_outline_height(self):
+        """St. Nicholas of Myra, New York: an 18.1 m body and a 14 x 10 m tower band from 18.1 to 21.4 m (the city's
+        massing: a band per roof level, none on the ground), the outline 31.4 m: one spire on the band, to 31.4 m."""
+        parts = [(-17, -8, 34, 16, {"height": 18.1}), (5, -6, 14, 10, {"height": 21.4, "min_height": 18.1})]
+        items = tile(*self._building(parts, height=31.4, cls="church"))
+        st = [s for s, _, _ in items if s.steeple]
+        self.assertEqual(len(st), 1)
+        self.assertAlmostEqual(top(st[0]), 21.4, delta=0.01)
+        self.assertTrue(bld._is_steeple_top(st[0].steeple), st[0].steeple)
+        P = bld.build([(st[0], 0.0, 0.0)])[0]
+        self.assertAlmostEqual(P[:, 2].max(), 31.4, delta=0.05, msg="the spire up to the building's height")
+        self.assertLessEqual(np.ptp(P[P[:, 2] > 23.0][:, 0]), 2 * bld.STEEPLE_TOP_MAX_HW, "a spire, not a hip roof")
+        items = tile(*self._building(parts, height=None, cls="church"))
+        self.assertFalse([s for s, _, _ in items if s.steeple], "3.3 m over the body, no taller outline: no tower")
+
+    @city
+    def test_spire_on_a_massing_tower_column(self):
+        """St. Mark's in-the-Bowery: a 6 x 6 m band 16.2-23.9 m over a 16.2 m church: the tower's spire."""
+        parts = [(-20, -10, 40, 20, {"height": 5.6}), (-20, -10, 38, 20, {"height": 16.2, "min_height": 5.6}),
+                 (18, -3, 6, 6, {"height": 23.9, "min_height": 16.2})]
+        st = [s for s, _, _ in tile(*self._building(parts, height=16.4, cls="church")) if s.steeple]
+        self.assertEqual([round(top(s), 1) for s in st], [23.9])
+
+    @city
+    def test_no_spire_where_the_map_tops_the_tower(self):
+        """The Church of the Most Holy Redeemer: a dome mapped on its 48 m tower; St. Paul's Chapel: a pyramid."""
+        for shape in ("dome", "pyramidal", "onion"):
+            parts = [(-20, -8, 40, 16, {"height": 28.0}), (20, -5, 10, 10, {"height": 48.0}),
+                     (21, -4, 8, 8, {"height": 60.0, "min_height": 48.0, "roof_shape": shape})]
+            items = tile(*self._building(parts, height=None, cls="church"))
+            self.assertFalse([s for s, _, _ in items if s.steeple], shape)
+
+    @city
+    def test_twin_towers_both_spired(self):
+        parts = [(-20, -10, 30, 20, {"height": 20.5}), (10, -10, 6, 6, {"height": 35.0}),
+                 (10, 4, 6, 6, {"height": 35.0})]
+        st = [s for s, _, _ in tile(*self._building(parts, height=None, cls="church")) if s.steeple]
+        self.assertEqual(len(st), 2)
+
+    @city
+    def test_a_domes_drum_band_is_no_tower(self):
+        """St. Bartholomew's, New York: its dome's drum a 16 x 16 m band in the massing (over STEEPLE_TOWER_M2)."""
+        parts = [(-20, -20, 40, 40, {"height": 26.7}), (-8, -8, 16, 16, {"height": 43.8, "min_height": 26.7})]
+        self.assertFalse([s for s, _, _ in tile(*self._building(parts, height=41.6, cls="church")) if s.steeple])
+
+    def test_a_supertall_in_a_stone_colour_is_masonry(self):
+        ring = bld.clean_ring(np.array([(0, 0), (30, 0), (30, 30), (0, 30)], np.float64))
+        for col, glass in (("#DFD4D0", False), ("#D7DBDE", False), ("#DCD5B9", False), ("#2F4F6F", True),
+                           ("#C0C0C0", True), ("#46433A", True), (None, True)):
+            s = bld.plan(ring, {"class": "office", "height": 200.0, "facade_color": col}, lat=40.7, lon=-74.0,
+                         town=False, dense=True)
+            self.assertEqual(base(s.facade) == bld.OFFICE, glass, (col, s.facade))
+            if not glass:
+                self.assertEqual((base(s.facade), s.band), (bld.FACADE, bld.BAND_TALL))
+        s = bld.plan(ring, {"class": "office", "height": 200.0, "facade_color": "#DFD4D0", "facade_material": "glass"},
+                     lat=40.7, lon=-74.0)
+        self.assertEqual(base(s.facade), bld.OFFICE, "mapped glass stays glass")
+
+    @city
+    def test_bare_parts_follow_their_stone_coloured_siblings(self):
+        """The Empire State Building: a concrete base part, a pale grey on its shaft, nothing on the setbacks: all
+        masonry, the base its concrete; a part mapped glass keeps the bare ones glass."""
+        parts = [(-20, -20, 40, 40, {"height": 17.0, "facade_material": "concrete"}),
+                 (-15, -15, 30, 30, {"height": 300.0, "facade_color": "#D7DBDE"}),
+                 (-10, -10, 20, 20, {"height": 330.0, "min_height": 300.0}),
+                 (-8, -8, 16, 16, {"height": 350.0, "min_height": 330.0})]
+        items = tile(*self._building(parts, height=350.0))
+        self.assertFalse([s.facade for s, _, _ in items if base(s.facade) == bld.OFFICE])
+        self.assertEqual(sum(base(s.facade) == bld.FACADE and s.band == bld.BAND_TALL for s, _, _ in items), 3)
+        parts[2][4]["facade_material"] = "glass"
+        parts.append((-4, -4, 8, 8, {"height": 360.0, "min_height": 350.0}))
+        items = tile(*self._building(parts, height=360.0))
+        self.assertEqual(sum(base(s.facade) == bld.OFFICE for s, _, _ in items), 3, "the glass one and the bare ones")
+
+    def test_a_dome_takes_its_walls_light_look(self):
+        ring = np.array([(10 * math.cos(a), 10 * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)])
+        ring = bld.clean_ring(ring)
+        for attrs in ({"facade_material": "stone", "roof_material": "slate"}, {"facade_material": "stone"},
+                      {"facade_material": "brick"}, {}):
+            s = bld.plan(ring, dict({"class": "government", "height": 30.0, "roof_shape": "dome", "roof_height": 8.0,
+                                     "building_height": 90.0, "_part_min": 20.0}, **attrs), lat=38.9, lon=-77.0)
+            self.assertEqual(s.roof, "dome")
+            self.assertGreaterEqual(lum(s.roof_mat), 140, (attrs, s.roof_mat))
+        s = bld.plan(ring, {"class": "government", "height": 30.0, "roof_shape": "dome", "roof_material": "copper"})
+        self.assertEqual(s.roof_mat, bld.custom_look(bld.ROOF_METAL, bld.COLOR_NAMES["copper"]), "mapped: kept")
+        s = bld.plan(ring, {"class": "church", "height": 30.0, "roof_shape": "dome", "facade_material": "brick",
+                            "roof_material": "slate"})
+        self.assertIn(base(s.roof_mat), (bld.ROOF_SLATE_DARK, bld.ROOF_SLATE_ROUND), "slate over brick: slate")
+
+
 class DomeTest(unittest.TestCase):
     def _l_ring(self):
         # an L whose corners' mean lies outside it (the old dome's centre)
@@ -360,6 +461,12 @@ class LandmarkRegressionTest(unittest.TestCase):
         self.assertFalse([s for s, _, _ in sky if abs(bld._area2(s.ring)) / 2 > 10000 and top(s) > 80],
                          "far away: not one 87.6 m box")
         self.assertTrue([s for s, _, _ in sky if s.roof == "dome"], "far away: its dome")
+        dome = max((s for s, _, _ in items if s.roof == "dome"), key=lambda s: abs(bld._area2(s.ring)))
+        self.assertGreaterEqual(lum(dome.roof_mat), 150, "its marble dome (Overture: slate) light, not dark slate")
+        sky_dome = max((s for s, _, _ in sky if s.roof == "dome"), key=lambda s: abs(bld._area2(s.ring)))
+        self.assertEqual(sky_dome.roof_mat, dome.roof_mat)
+        self.assertTrue([s for s, _, _ in sky if abs(float(s.min_h or 0) - 27.0) < 0.1],
+                        "far away: the drum's lowest ring under the dome (it floated over a gap)")
 
     def test_chrysler(self):
         items = self._items("chrysler")
@@ -382,6 +489,21 @@ class LandmarkRegressionTest(unittest.TestCase):
         concrete = [s for s, _, _ in items if base(s.facade) == "bne_bridge_concrete"]
         self.assertLessEqual(len(concrete), 1, "only the base mapped concrete")
         self.assertGreater(max(top(s) for s, _, _ in items), 329.0)
+        self.assertFalse([s.facade for s, _, _ in items if base(s.facade) == bld.OFFICE],
+                         "no dark glass: its parts' only colours are a stone's (the 2026-11-14 in-game check)")
+        sky = self._items("empire_state", min_size=(bld.SKY_SLENDER_H, bld.SKY_MIN_AREA_M2),
+                          parts_min_top=bld.SKY_PARTS_MIN_M)
+        shaft = max((s for s, _, _ in sky if s.cls != "mast"), key=lambda s: abs(bld._area2(s.ring)) * top(s))
+        self.assertGreaterEqual(lum(shaft.facade), 130, "pale from the Hudson, as the old concrete was")
+
+    def test_one_wall_street(self):
+        """1 Wall Street (Overture's "Bank of New York Building"): 42 parts in a light limestone colour, no material;
+        its slender corner piers came out as plain steel masts, then glass like the rest: all masonry."""
+        items = self._items("one_wall_street")
+        self.assertGreaterEqual(len(items), 40)
+        self.assertFalse([s for s, _, _ in items if s.cls == "mast"])
+        self.assertFalse([s.facade for s, _, _ in items if base(s.facade) == bld.OFFICE])
+        self.assertTrue(all(base(s.facade) == bld.FACADE and s.band == bld.BAND_TALL for s, _, _ in items))
 
     def test_one_world_trade_center(self):
         items = self._items("one_wtc")
