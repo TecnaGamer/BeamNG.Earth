@@ -106,6 +106,8 @@ MOD_TO_SERVER = {
               "trafficVisuals": F(int, OPT),
               # ... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)
               "roadGeo": F(int, OPT),
+              # ... a generation swap's commit barrier (roads.lua swapCommit; earthd Connection.stale_swap)
+              "swapGen": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
               "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
@@ -126,6 +128,8 @@ MOD_TO_SERVER = {
     "commit_anchor": {"anchorId": F(int)},
     "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
+    # a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)
+    "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
@@ -347,7 +351,13 @@ SERVER_TO_MOD = {
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
-    "terrain_refresh": {"anchorId": F(int), **TERRAIN},     # the graded block in place of the provisional one
+    # the graded block in place of the provisional one; swap: a generation swap's block, held by the mod until the
+    # swap's skins are staged and committed with them
+    "terrain_refresh": {"anchorId": F(int), "swap": F(int, OPT), **TERRAIN},
+    # a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up
+    "swap_begin": {"anchorId": F(int), "gen": F(int)},
+    "swap_end": {"anchorId": F(int), "gen": F(int), "skins": F(int)},
+    "swap_abort": {"anchorId": F(int), "gen": F(int)},
     "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
     "far_tile": {"anchorId": F(int), "key": F(str), "level": F(int), "shape": F(str), "pos": F(list),
                  "err": F(NUM), "skirt": F(NUM), "sink": F(NUM, OPT), "state": F(str),   # sink: exactly on L0
@@ -396,7 +406,8 @@ SERVER_TO_MOD = {
                    # exact {what: shape}: the parts this anchor shows as their exact variants (slots "x:<what>")
                    "frame": F(list, OPT), "h": F(str, OPT), "exact": F(dict, OPT)},
     # a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file
-    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT)},
+    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT),
+                   "swap": F(int, OPT)},
     # a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)
     "roads_exact": {"anchorId": F(int), "key": F(str), "parts": F(dict), "slots": F(dict, OPT)},
     "roads_drop": {"anchorId": F(int), "key": F(str)},
@@ -471,6 +482,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
+                       "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)

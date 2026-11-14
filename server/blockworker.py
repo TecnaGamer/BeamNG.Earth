@@ -639,9 +639,38 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     CPU-s of a Manhattan session's 250 on its one interpreter, beside the far textures, the road plans and the map
     layers (the user, 2026-11-01: "trees, poles, sidewalks struggle to keep up")."""
     import geotiles
-    import vegetation as vegetationmod
+    import revisit
     if _s.md is None:
         return None
+    # (kept in the revisit cache, kind "vegg", since 2026-11-13: no anchor in a geotile's trees; an older generation's
+    # are shown with its block and road tiles, revisit.stale, instead of none until the plans are made again)
+    if not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat)
+    tkey = geotiles.key(gx, gy)
+    name = f"veg_{tkey}.flat.json" if flat else f"veg_{tkey}.json"
+    k = revisit.key("vegg", str(tkey), int(zoom), bool(flat), _md_versions(), ("rules", _ground_rules()))
+    got = revisit.load(_s.cache_dir, "vegg", k)
+    if got is not None:
+        blobs, extra = got
+        _write_bytes(os.path.join(out_dir, name), blobs["veg.json"])
+        return f"{vfs_dir}/{name}", int(extra["n"]), tuple(extra["frame"]), extra["pivot"]
+    with revisit.scope() as f0:
+        res = _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat)
+    if res is not None and revisit.ON and f0.complete:
+        try:
+            with open(os.path.join(out_dir, name), "rb") as f:
+                data = f.read()
+            revisit.store(_s.cache_dir, "vegg", k, {"veg.json": data},
+                          {"n": int(res[1]), "frame": list(res[2]), "pivot": res[3]})
+        except Exception as ex:          # (not kept rather than no tile)
+            log.debug("revisit: trees geotile %s not kept: %s: %s", tkey, type(ex).__name__, ex)
+    return res
+
+
+def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
+    """veg_geo's build."""
+    import geotiles
+    import vegetation as vegetationmod
     if getattr(_s, "veg", None) is None:
         v = vegetationmod.Vegetation(_s.md, _s.cache_dir)
         v.dem = _s.dem
@@ -675,7 +704,8 @@ def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
         try:
             out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
         except Exception as e:
-            out.append(e)
+            import revisit
+            out.append(None if isinstance(e, revisit.StaleMiss) else e)
     return out
 
 def _take_pads(fuel_pads):
@@ -698,6 +728,36 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     finally:
         revisit.unwind(depth)
         _BUILDING[0] -= 1
+
+
+def stale_probe(aid, lat, lon, hm_zoom, q, cx, cy, size, gens, fuel_pads=None):
+    """earthd.Server.stale_probe in a block process (the one whose keys the blocks are kept and read under): is the
+    last block kept at anchor aid's block place (cx, cy) one of the older generations gens', and not this one's? Its
+    generation's id, or None. Nothing built."""
+    import revisit
+    _take_pads(fuel_pads)
+    g, _chunks = _s.anchor(aid, lat, lon)
+    depth = revisit.depth()
+    try:
+        bc = blockcache.begin(_s.cache_dir, geodesy.EnuFrame(lat, lon), hm_zoom, cx, cy, size, q,
+                              blockcache.settings(g is not None, getattr(_s, "md", None), _s.widths, _s.surface,
+                                                  getattr(_s, "sea", None), _s.airports, getattr(_s, "lids", None)),
+                              getattr(_s, "md", None), _s.surface, heightmap.ChunkCache())
+        if bc is None:
+            return None
+        ws = _s.surface is not None
+        if bc.latest_is_current() or bc._read(bc.block_key, None, bc.disk, ws) is not None:
+            return None                 # (this generation has it: nothing older shown)
+        for gen in gens:
+            if bc.stale_hit(gen, ws) is not None:
+                return gen["id"]
+        rec = bc.latest()
+        log.info("older versions: block (%s, %s) of anchor %d: %s", cx, cy, aid,
+                 "none kept at its place" if rec is None else
+                 f"the last one kept there is of another version (plans {rec['plans']}) or no longer whole")
+        return None
+    finally:
+        revisit.unwind(depth)
 
 
 def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
@@ -724,6 +784,10 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
                                                   getattr(_s, "sea", None), _s.airports, getattr(_s, "lids", None)),
                               getattr(_s, "md", None), _s.surface, chunks)
         got = bc.hit(out_dir, name, ter_name, tuple(ground_at), _s.surface is not None) if bc is not None else None
+        if bc is None:
+            import revisit
+            if revisit.stale_only():        # (an older version's block alone was asked for: none to be had)
+                raise revisit.StaleMiss("block")
         if got is not None:
             got["stages"] = {"heights": 0.0, "anchor": anchor_s, "blockCache": time.perf_counter() - t1,
                              "newShare": 0.0}
@@ -984,6 +1048,41 @@ def signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, m
     """signstream.build_tile here: the highway signs of a road tile the mod has (from cody196's PR #363), in a road
     process: its map cells are warm there (and its town signs' towns: towns_on, the speed-limit signs then without
     Germany's general limits). Returns (vfs path of the sign tile's JSON, number of meshes)."""
+    import revisit
+    # (kept in the revisit cache, kind "signs", since 2026-11-13: a place visited again has its signs at once, and an
+    # older generation's are shown with its block and road tiles, revisit.stale)
+    src = getattr(_s.md, "highway_signs", None) if _s.md is not None else None
+    if src is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country, dirs, rsigns, dej,
+                           towns_on)
+    de = ()
+    if dej:
+        import designs
+        de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
+    try:
+        sv = src.version()
+    except Exception:
+        sv = None
+    k = revisit.key("signs", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(left_hand), bool(mph),
+                    country, bool(dirs), bool(rsigns), bool(dej), bool(towns_on), _md_versions(), repr(sv),
+                    ("rules", _ground_rules()), *_radar_key(), *de)
+    return _revisit_tile("signs", k, aid, tx, ty, out_dir, vfs_dir, f"signs_{aid}_{tx}_{ty}.json",
+                         lambda: _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand, mph, country,
+                                             dirs, rsigns, dej, towns_on),
+                         lambda res: {"n": int(res[1])}, lambda path, extra: (path, int(extra.get("n", 0))),
+                         files_of=_vfs_files)
+
+
+def _vfs_files(text, vfs_dir):
+    """The names of every file of vfs_dir a tile's JSON names anywhere (a sign tile's shapes and its boards' faces)."""
+    import re
+    pre = vfs_dir.rstrip("/") + "/"
+    return sorted({m for m in re.findall(r'"' + re.escape(pre) + r'([^"/]+)"', text)})
+
+
+def _signs_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, left_hand=False, mph=True, country=None, dirs=False,
+                rsigns=False, dej=False, towns_on=False):
+    """signs_tile's build."""
     import signstream
     g, _ = _s.anchor(aid, lat, lon)
     frame = geodesy.EnuFrame(lat, lon)
@@ -1057,7 +1156,7 @@ def _md_versions():
 
 def _ground_rules():
     """This process's ground rules fingerprint (blockcache.ground_rules: what changes the ground and the roads built
-    on it), in the key of every kept item that stands on that ground."""
+    on it), in the key of every item that stands on that ground."""
     return blockcache.ground_rules(bool(getattr(_s, "grading", False)), getattr(_s, "md", None),
                                    getattr(_s, "widths", None), getattr(_s, "surface", None),
                                    getattr(_s, "sea", None), getattr(_s, "airports", None),
@@ -1094,7 +1193,7 @@ def _where_enu(lat, lon, x0, y0, x1, y1, **settings):
         return None
 
 
-def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of, result_of, where=None):
+def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of, result_of, where=None, files_of=None):
     """A tile written to out_dir as name (a JSON pointing to its shapes in vfs_dir) from the revisit cache (key k), or
     built (build() -> its result) and kept there when complete (its revisit.scope clean). extra_of(result): JSON data
     kept with it; result_of(vfs path of name, that data): the result again on a hit. The session's names (vfs_dir, the
@@ -1117,7 +1216,9 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
             with open(os.path.join(out_dir, name), encoding="utf-8") as f:
                 text = f.read()
             blobs = {revisit.swap(name, mine): revisit.swap(text, mine).encode("utf-8")}
-            for n in revisit.shapes_in(text, vfs_dir):
+            for n in (files_of or revisit.shapes_in)(text, vfs_dir):
+                if n == name:
+                    continue
                 with open(os.path.join(out_dir, n), "rb") as f:
                     blobs[revisit.swap(n, mine)] = f.read()
             revisit.store(_s.cache_dir, kind, k, blobs, extra_of(res), where=where)
@@ -1984,6 +2085,50 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     return k if revisit.has(_s.cache_dir, "roadsg", k) else None
 
 
+def _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q):
+    """The revisit key of an anchor's skin of the geotile whose content has key ckey (_geo_skin)."""
+    import revisit
+    import heightmap as heightmapmod
+    return revisit.key("rskin", ckey, round(float(lat), 7), round(float(lon), 7), int(zoom), bool(sidewalks),
+                       float(lift), None if q is None else float(q), ("rules", _ground_rules()),
+                       float(heightmapmod.SQUARE))
+
+
+def prebuild_geo_skin(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings, left_hand,
+                      mph, q, gas_stations, buried=0.0, lamp_region=None, country=None, pole_profile=None,
+                      de_junctions=False, towns_on=False, wear=None):
+    """An anchor shown from an older version (earthd Connection.stale_run): geotile (gx, gy)'s content and anchor aid's
+    skin of THIS version built into the revisit cache behind it (roads_geo into scratch, a folder beside the session's
+    as prebuild_geo's; its files removed after), nothing for the game. {"content": kept?, "skin": kept?}."""
+    import geotiles
+    import revisit
+    tile_key = geotiles.geobox(gx, gy).key
+    os.makedirs(scratch, exist_ok=True)
+
+    def keys():
+        ck = _geo_content_key(tile_key, gzoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
+                              pole_profile=pole_profile, models_dir=os.path.dirname(scratch),
+                              de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+        return ck, _skin_key(ck, lat, lon, zoom, sidewalks, lift, q)
+    with revisit.stale(()):             # (this version's alone, whatever scope the caller is in)
+        ck, sk = keys()
+        if not (revisit.has(_s.cache_dir, "roadsg", ck) and revisit.has(_s.cache_dir, "rskin", sk)):
+            try:
+                roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, scratch, scratch_vfs, sidewalks, lift, buildings,
+                          left_hand, mph, q, gas_stations, buried, lamp_region, country, True, True, None,
+                          pole_profile, de_junctions, towns_on, wear)
+            finally:
+                for name in list(geo_names(tile_key).values()) + list(geo_names(tile_key, aid).values()):
+                    try:
+                        os.remove(os.path.join(scratch, name))
+                    except OSError:
+                        pass
+                with _geo_lock:
+                    _geo_inputs.pop(tile_key, None)
+            ck, sk = keys()
+        return {"content": revisit.has(_s.cache_dir, "roadsg", ck), "skin": revisit.has(_s.cache_dir, "rskin", sk)}
+
+
 @profile_step('Road geometry')
 def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried, lamp_region,
                  country, pole_profile=None, de_junctions=False, towns_on=False, wear=None):
@@ -2186,7 +2331,60 @@ def _clip_mesh(mesh, origin, quad):
     return P2[used], remap[T2], UV2[used], mats, np.asarray(M)[src]
 
 
-def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
+def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content, ckey=None):
+    """_geo_skin_build, kept in the revisit cache (kind "rskin", since 2026-11-13: keyed by its content's key ckey, the
+    anchor and the skin's own settings; teleport anchors are snapped, so a place visited again asks for the same
+    skins): a revisit no longer drapes every tile again, and an older generation's skin is shown with the content and
+    block of that generation (revisit.stale). Its info has "h": the digest of its files (the server sends a skin
+    again only when it changed)."""
+    import hashlib
+    import json
+    import geotiles
+    import revisit
+    if ckey is None or not revisit.ON or getattr(_s, "cache_dir", None) is None:
+        return _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+    tile = geotiles.geobox(gx, gy)
+    names = geo_names(tile.key, aid)
+    mine = [(f"{vfs_dir}/", "@V@/"), (f"rs_{aid}_", "rs_@A@_")]
+    k = _skin_key(ckey, lat, lon, zoom, sidewalks, lift, q)
+    got = revisit.load(_s.cache_dir, "rskin", k)
+    if got is not None:
+        blobs, extra = got
+        back = [(b, a) for a, b in reversed(mine)]
+        for g_, data in blobs.items():
+            if g_.endswith(".json"):
+                d = json.loads(revisit.swap(data.decode("utf-8"), back))
+                d["anchorId"] = aid
+                data = json.dumps(d, separators=(",", ":")).encode("utf-8")
+            _write_bytes(os.path.join(out_dir, revisit.swap(g_, back)), data)
+        _geo_stats["skin_hits"] += 1
+        return f"{vfs_dir}/{names['json']}", {"lift": float(lift), "h": (extra or {}).get("h")}
+    with revisit.scope() as f0:
+        res = _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content)
+    if res is None:
+        return None
+    try:
+        with open(os.path.join(out_dir, names["json"]), encoding="utf-8") as f:
+            d = json.loads(f.read())
+        d["anchorId"] = 0
+        blobs = {revisit.swap(names["json"], mine):
+                 revisit.swap(json.dumps(d, separators=(",", ":")), mine).encode("utf-8")}
+        for what in ("road", "walk", "walkcol"):
+            if isinstance(d.get(what), dict):
+                with open(os.path.join(out_dir, names[what]), "rb") as f:
+                    blobs[revisit.swap(names[what], mine)] = f.read()
+        dg = hashlib.sha1()
+        for n_ in sorted(blobs):
+            dg.update(n_.encode() + b"\0" + blobs[n_])
+        res[1]["h"] = dg.hexdigest()[:16]
+        if f0.complete:
+            revisit.store(_s.cache_dir, "rskin", k, blobs, {"h": res[1]["h"]})
+    except Exception as ex:          # (not kept rather than no skin)
+        log.debug("revisit: skin of geotile %s not kept: %s: %s", tile.key, type(ex).__name__, ex)
+    return res
+
+
+def _geo_skin_build(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, content):
     """Anchor aid's skin of geotile (gx, gy): the draped road surfaces (the road mesh and plazas: roadmesh.build on the
     anchor's lattice and height quantum q, follow) and the sidewalks (curbs on the drawn ground, their lean collision
     mesh), from the content's skin inputs mapped into the anchor's world, cut exactly at the tile's quad there (its
@@ -2279,7 +2477,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     return f"{vfs_dir}/{names['json']}", {"lift": float(lift)}
 
 
-_geo_stats = {"content_built": 0, "content_hits": 0, "skins": 0, "exact": 0}
+_geo_stats = {"content_built": 0, "content_hits": 0, "skins": 0, "skin_hits": 0, "exact": 0}
 
 
 def geo_stats():
@@ -2365,7 +2563,13 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
             out["stages"]["content"] = last_tile_stages()
         t1, c1 = time.perf_counter(), time.process_time()
         if skin:
-            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content)
+            import geotiles
+            ckey = _geo_content_key(geotiles.geobox(gx, gy).key, gzoom, buildings, left_hand, mph, gas_stations, buried,
+                                    lamp_region, country, pole_profile=pole_profile,
+                                    models_dir=os.path.dirname(out_dir), de_junctions=de_junctions, towns_on=towns_on,
+                                    wear=wear)
+            out["skin"] = _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q, build_content,
+                                    ckey)
             out["stages"]["skin"] = last_tile_stages()
         t2, c2 = time.perf_counter(), time.process_time()
         if exact == "auto":             # (a fresh content: the parts its anchor needs exact, roads.geo_exact_auto)

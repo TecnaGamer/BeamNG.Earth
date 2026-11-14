@@ -1649,6 +1649,15 @@ class Tracker:
         self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
         self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
         self.ever = set() if rebuild_history else None
+        # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
+        # sent files' digests are kept for that, earthd's stale mode turns it on)
+        self.redo, self.sent_h, self.digests = set(), {}, False
+
+    def redo_all(self):
+        """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
+        one whose file comes back the same is not sent."""
+        if self.geo:
+            self.redo = set(self.sent)
 
     def close(self):
         if self.pool is not None:
@@ -1762,13 +1771,15 @@ class Tracker:
             if k not in done:
                 done.add(k)
                 order.append(k)
-        want = [k for k in order if k not in self.sent and k not in self.building]
+        self.redo &= self.sent
+        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
         for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((gx, gy))
             fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
+            self.sent_h.pop(k, None)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
@@ -1826,6 +1837,19 @@ class Tracker:
             return
         path, n, frame, pivot = res[:4]
         shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
+        again = key in self.redo
+        self.redo.discard(key)
+        if self.digests or again:
+            h = None
+            try:
+                import hashlib
+                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                    h = hashlib.sha1(f.read()).digest()
+            except (OSError, AttributeError):
+                pass
+            if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
+                return                  # (the same tile as the one the mod has)
+            self.sent_h[key] = h
         if self.ever is not None:
             if key in self.ever:
                 self.rebuilt += 1
