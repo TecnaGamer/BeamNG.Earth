@@ -722,12 +722,15 @@ class Style:
     walls; wood: siding walls are stained wood (WOOD_TINTS, barns too); barn_red: the share of barns painted barn red
     (the US's and Scandinavia's; elsewhere their siding colours: a Lauterbrunnen garage row came out a 150 m red
     wall, 2026-10-15); attached: low attached buildings (terraces, old town
-    blocks) with a pitched roof (the US: flat; Amsterdam's canal houses, Europe's old towns: gables).
+    blocks) with a pitched roof (the US: flat; Amsterdam's canal houses, Europe's old towns: gables);
+    one_storey: the share of houses of unknown height drawn single-storey; detached_brick: the brick share's factor on
+    detached houses (the US: few brick detached houses where its row houses are brick).
     Coarse boxes by region until a facade-material map; the US ones keep their earlier behaviour."""
 
     def __init__(self, name, brick, walls, porch, flat, hipped, roofs, pitch=None, paint=0.3, wall_tints=None,
-                 wood=False, attached=0.0, barn_red=0.0, stone=0.0):
+                 wood=False, attached=0.0, barn_red=0.0, stone=0.0, one_storey=0.3, detached_brick=0.35):
         self.name, self.brick, self.walls, self.porch, self.flat = name, brick, walls, porch, flat
+        self.one_storey, self.detached_brick = one_storey, detached_brick
         self.barn_red, self.stone = barn_red, stone
         self.hipped, self.roofs, self.pitch, self.paint, self.wall_tints = hipped, roofs, pitch, paint, wall_tints
         self.wood, self.attached = wood, attached
@@ -762,6 +765,13 @@ STYLES = {
     "east_asia": Style("east_asia", 0.08, ((SIDING, 0.5), (STUCCO, 0.3)), 0.0, 0.35, 0.5,
                        (_DARK, (ROOF_SHINGLE, (6, 7)), (ROOF_METAL, (1, 4))), pitch=25.0, paint=0.0,
                        wall_tints=(0, 1, 6, 5), attached=0.3),
+    # Australia's suburbs: single-storey brick and brick-veneer houses under hipped terracotta or concrete tile, some
+    # weatherboard, fibro and rendered walls and metal roofs; semi-detached pairs and terraces keep pitched roofs.
+    # (it was "oceania"'s: 70 % two-storey, ~19 % brick, half the roofs metal, every semi flat: a Sydney suburb's mapped
+    # houses through plan(), 2026-11-13)
+    "australia": Style("australia", 0.75, ((STUCCO, 0.45), (SIDING, 0.35)), 0.05, 0.03, 0.75,
+                       (_CLAY, _CLAY, _CLAY, (ROOF_METAL, (0, 1, 4))), pitch=24.0, paint=0.05, attached=0.8,
+                       one_storey=0.7, detached_brick=0.9),
     "oceania": Style("oceania", 0.55, ((STUCCO, 0.5), (SIDING, 0.3)), 0.25, 0.05, 0.7, (_CLAY, (ROOF_METAL, (0, 1, 4))),
                      pitch=24.0, paint=0.1),
     # South Asia (India, Pakistan, Bangladesh, Sri Lanka, Nepal): a concrete frame and brick under plaster, flat terrace
@@ -798,7 +808,9 @@ def region_style(lat, lon):
         return STYLES["mediterranean"]
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
-    if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
+    if -44.0 <= lat <= -10.0 and 112.0 <= lon <= 154.0:         # Australia (Tasmania too; not New Zealand, east of 154)
+        return STYLES["australia"]
+    if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # New Zealand, the Pacific
         return STYLES["oceania"]
     if 6.0 <= lat <= 37.5 and 68.0 <= lon <= 92.5:              # South Asia (not Myanmar, east of 92.5)
         return STYLES["south_asia"]
@@ -1048,7 +1060,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             # Bishop's and Moab's photos (2026-10-14): one-storey shops with false fronts, ranch houses
             nf = 1 if seed < WEST_TOWN_ONE_STOREY else 2
         elif cls in HOUSE_CLASSES or (area < 220 and not shop):
-            nf = 1 if seed < 0.3 else 2
+            nf = 1 if seed < style.one_storey else 2
         elif industrial:
             nf = 2 if area > 6000 else 1
         elif cls == "apartments":
@@ -1201,7 +1213,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             u_brick = _hash01(seed, "brick")
             detached = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
+            brick = u_brick < brick_share(lat, lon) * (1.15 if row else style.detached_brick if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
             if brick:
                 band = BAND_BRICK
                 facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
