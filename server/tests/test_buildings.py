@@ -917,7 +917,8 @@ class PartsTest(unittest.TestCase):
         P = bld.build(items)[0]
         self.assertAlmostEqual(P[:, 2][P[:, 2] < 90.5].max(), 90.0, delta=0.01)
 
-    def _items(self, part_rect, part_bottom=np.nan, height=10.0):
+    def _items(self, part_rect, part_bottom=np.nan, height=10.0, part_top=5.0,
+               floors=np.nan, part_floors=np.nan, part_min_floor=np.nan, height_src=""):
         import geodesy
         f = geodesy.EnuFrame(59.42, 24.79)
 
@@ -926,9 +927,10 @@ class PartsTest(unittest.TestCase):
             la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
             return np.stack([lo, la], 1)
         b = Feats(["B"], [ll(-100, -125, 200, 250)], **{"class": ["retail"], "height": [height], "has_parts": [1.0],
-                                                         "min_height": [np.nan]})
-        parts = Feats(["p1"], [ll(*part_rect)], building_id=["B"], height=[5.0], min_height=[part_bottom],
-                      num_floors=[np.nan], min_floor=[np.nan])
+                                                         "min_height": [np.nan], "num_floors": [floors],
+                                                         "height_src": [height_src]})
+        parts = Feats(["p1"], [ll(*part_rect)], building_id=["B"], height=[part_top], min_height=[part_bottom],
+                      num_floors=[part_floors], min_floor=[part_min_floor])
         return bld.tile_buildings(f, -256, -256, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
                                   part_layers=[parts])
 
@@ -954,6 +956,63 @@ class PartsTest(unittest.TestCase):
         items = self._items((60, 60, 21, 22), part_bottom=3.0)
         self.assertEqual(len(items), 1, "the part alone")
         self.assertEqual(len(self._items((60, 60, 21, 22), height=1.0)), 1, "(an outline mapped as a base: its part)")
+
+    def test_rooftop_part_keeps_the_building_below_it(self):
+        """Overture's Belgorod apartments have a 51 m outline and a 51–57 m rooftop part."""
+        items = self._items((-30, -20, 60, 40), part_bottom=51.0, height=51.0, part_top=57.0)
+        spans = sorted((round(s.min_h), round(s.height + s.min_h)) for s, _, _ in items)
+        self.assertEqual(spans, [(0, 51), (51, 57)])
+
+    def test_rooftop_part_and_body_mapped_in_floors(self):
+        """Four Belgorod apartment blocks have 17 floors and rooftop parts spanning floors 17–19."""
+        items = self._items((-30, -20, 60, 40), height=np.nan, floors=17,
+                            part_top=np.nan, part_floors=19, part_min_floor=17)
+        spans = sorted((s.min_h, s.height + s.min_h) for s, _, _ in items)
+        self.assertEqual(spans, [(0, 51), (51, 57)])
+
+    def test_elevated_part_below_the_roof_does_not_fill_the_outline(self):
+        items = self._items((-30, -20, 60, 40), height=np.nan, floors=17,
+                            part_top=np.nan, part_floors=19, part_min_floor=3)
+        self.assertEqual([s.min_h for s, _, _ in items], [9.0])
+
+    def test_rooftop_parts_use_the_parent_floor_scale(self):
+        cases = [
+            (24.916, "Microsoft ML Buildings", np.nan, np.nan, 14, [(0, 42), (42, 48)]),
+            (49.0, "OpenStreetMap", np.nan, np.nan, 14, [(0, 49), (49, 56)]),
+            (49.0, "OpenStreetMap", np.nan, 57.0, 14, [(0, 49), (49, 57)]),
+            (49.0, "OpenStreetMap", 42.0, 57.0, 14, [(42, 57)]),
+            (49.0, "OpenStreetMap", np.nan, np.nan, 3, [(9, 48)]),
+            (49.0, "OpenStreetMap", np.nan, 57.0, 3, [(0, 49), (0, 57)]),
+        ]
+        for height, source, bottom, top, min_floor, expected in cases:
+            with self.subTest(height=height, bottom=bottom, top=top, min_floor=min_floor):
+                items = self._items((-30, -20, 60, 40), height=height, floors=14, height_src=source,
+                                    part_top=top, part_bottom=bottom, part_floors=16, part_min_floor=min_floor)
+                self.assertEqual(sorted((s.min_h, s.height + s.min_h) for s, _, _ in items), expected)
+
+    def test_rooftop_parts_at_different_heights_keep_the_body(self):
+        """A Belgorod apartment block has a dome at 55 m and a second rooftop part at 58 m."""
+        import geodesy
+        frame = geodesy.EnuFrame(50.5945, 36.5815)
+
+        def ll(x, y, w, d):
+            ring = rect(x, y, w, d)
+            ring = np.vstack((ring, ring[0]))
+            lat, lon, _ = frame.enu_to_geodetic(ring[:, 0], ring[:, 1], 0.0)
+            return np.stack((lon, lat), axis=1)
+
+        body = Feats(["B"], [ll(-20, -20, 40, 40)], **{"class": ["apartments"], "height": [55.0],
+                                                     "num_floors": [16]})
+        for second_base, expected in [(58.0, [0.0, 55.0, 58.0]), (20.0, [20.0, 55.0])]:
+            with self.subTest(second_base=second_base):
+                parts = Feats(["p1", "p2"], [ll(-10, -10, 20, 20), ll(-4, -4, 8, 8)],
+                              building_id=["B", "B"], height=[65.0, 73.0], min_height=[55.0, second_base],
+                              roof_shape=["dome", "pyramidal"], roof_height=[np.nan, 5.0])
+                items = bld.tile_buildings(frame, -128, -128, 128, 128, [body], lambda lat, lon: np.zeros_like(lat),
+                                          part_layers=[parts])
+                self.assertEqual(sorted(s.min_h for s, _, _ in items), expected)
+                if second_base == 58.0:
+                    self.assertEqual(next(s.height for s, _, _ in items if s.min_h == 0), 55.0)
 
     def _dome(self, num_floors, part_rect=(-6, -6, 12, 12)):
         """A 60 x 40 m building, height 54 to its lantern, with a dome part mapped without a height."""
