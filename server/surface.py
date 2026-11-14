@@ -85,6 +85,19 @@ CLASS_MATERIAL = {0: DIRT, 10: GRASS, 20: DUSTY, 30: GRASS, 40: DIRT, 50: DIRT, 
 LAWN_SHARE_HUMID = 0.9
 LAWN_SHARE_DRY = 0.75
 LAWN_PATCH_M = 30.0
+# Forest (WorldCover tree cover): the only ground the terrain's own roughness is kept on (the user, 2026-11-07: "keep
+# the unevenness only in the forests, the fields and the rest flat"). Read on a world-locked lattice of FOREST_CELL_M
+# (a binary mask bilinear in between: a wood's edge fades in over a couple of metres instead of a step, and a block
+# pays a few thousand samples instead of a million).
+FOREST = 10
+FOREST_CELL_M = 4.0
+FOREST_CELLS_MAX = 1000000  # the lattice's nodes at most (~4 x 4 km): points farther apart than that are read one by one
+# The open country a road rides its own low embankment through (grading.embank_lift; the user, 2026-11-08: field lanes
+# and paved roads in forests and fields sit ~1 m over the ground, in a village they lie at grade). WorldCover's
+# classes: tree, shrub, grass, crop and bare ground are open; built-up (anywhere within EMBANK_MARGIN_M of the road),
+# water, wetland, snow and ice, and the moss are not.
+OPEN_CLASSES = (10, 20, 30, 40, 60)
+EMBANK_MARGIN_M = 20.0      # m: built-up this near a road keeps it at grade (a village's yards and gardens too)
 # Past Web Mercator's limit (+-85.05 deg) there are no map cells: all of it is ice, Antarctica's ice sheet and the
 # Arctic Ocean's year-round sea ice (the user, 2026-10-22: "add polar support"), WorldCover's "snow and ice".
 POLAR_CLASS = 70
@@ -1655,7 +1668,38 @@ class Surface:
                     self._pending_layers.discard((key, layers))
                     if not any(k == key for k, _ in self._pending_layers):
                         self._pending.discard(key)
-        self.pool.submit(run)
+        try:
+            self.pool.submit(run)
+        except RuntimeError:            # (closed: a shut-down pool takes no new work; nothing is in flight then)
+            with self._lock:
+                self._pending_layers.discard((key, layers))
+                if not any(k == key for k, _ in self._pending_layers):
+                    self._pending.discard(key)
+
+    def wait_cover(self, lat, lon, timeout_s=5.0):
+        """Wait (worker threads only) until the land cover under the points is read, at most timeout_s: a road plan is
+        made once and cached (grading.PlanStore), so it must not be built on a half-read cover. Waits only while a
+        fetch of it is actually in flight (a failed one is not retried here). True when it is all here."""
+        lat = np.asarray(lat, np.float64).ravel()
+        lon = np.asarray(lon, np.float64).ravel()
+        if lat.size == 0:
+            return True
+        keys = mapcells.cells_for_points(lat, lon)
+        missing = [k for k in keys if not self.md.has(k, "landcover")]
+        if not missing:
+            return True
+        for k in missing:
+            self._queue(k)
+        if threading.current_thread() is threading.main_thread():
+            return all(self.md.has(k, "landcover") for k in keys)   # (never sleep on the server's event loop)
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            if all(self.md.has(k, "landcover") for k in keys):
+                return True
+            if not any(self._is_queued(k) for k in missing):
+                return False        # (a fetch failed: no wait for a retry that is not coming)
+            time.sleep(0.02)
+        return False
 
     def prefetch(self, lat, lon, radius_m=PREFETCH_M):
         """Queue the land cover of the cells within radius_m (at most every PREFETCH_MOVE_M)."""
@@ -1916,6 +1960,88 @@ class Surface:
         values, complete = (self.classes(lat.ravel()[missing], lon.ravel()[missing]) if len(missing)
                             else (np.empty(0, np.uint8), True))
         return cache.finish(plan, np.ascontiguousarray(values, np.uint8), complete), complete
+    def forest(self, lat, lon):
+        """0..1 share of forest (WorldCover tree cover) at the points: where the terrain keeps its own roughness (the
+        user, 2026-11-07: the fields and the rest stay flat), a wood's edge fading in over a cell. The mask is read on
+        a world-locked lattice of FOREST_CELL_M (a few thousand samples a block, not a million), from the cached land
+        cover alone (a cell not cached yet reads as open ground: no roughening and no wait; its prefetch is queued),
+        so the same block or tile always gets the same values. Pure given the cache."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        if lat.size == 0:
+            return np.zeros(np.shape(lat), np.float32)
+        xm = lon * M_PER_DEG * dnp.cos(np.radians(lat))
+        ym = lat * M_PER_DEG
+        fx = xm / FOREST_CELL_M
+        fy = ym / FOREST_CELL_M
+        i0 = np.floor(fx)
+        j0 = np.floor(fy)
+        tx = fx - i0
+        ty = fy - j0
+        i0 = i0.astype(np.int64)
+        j0 = j0.astype(np.int64)
+        imin, jmin = int(i0.min()), int(j0.min())
+        imax, jmax = int(i0.max()) + 1, int(j0.max()) + 1
+        if (imax - imin + 1) * (jmax - jmin + 1) > FOREST_CELLS_MAX:
+            return self._forest_at(lat, lon)        # (sparse points over a wide land: no lattice of ours to pay for)
+        ii = np.arange(imin, imax + 1)
+        jj = np.arange(jmin, jmax + 1)
+        # (the lattice's own nodes read back to lat / lon by the same projection: a pure function of the world)
+        la = np.broadcast_to((jj * FOREST_CELL_M / M_PER_DEG)[:, None], (len(jj), len(ii)))
+        lo = np.broadcast_to((ii * FOREST_CELL_M)[None, :] /
+                             np.maximum(M_PER_DEG * dnp.cos(np.radians(la)), 1e-6), (len(jj), len(ii)))
+        vals = self._forest_at(la, lo)
+        ci = i0 - imin
+        cj = j0 - jmin
+        v00 = vals[cj, ci]
+        v10 = vals[cj, ci + 1]
+        v01 = vals[cj + 1, ci]
+        v11 = vals[cj + 1, ci + 1]
+        out = (v00 * (1.0 - tx) + v10 * tx) * (1.0 - ty) + (v01 * (1.0 - tx) + v11 * tx) * ty
+        return out.astype(np.float32)
+
+    def _forest_at(self, lat, lon):
+        """1.0 on tree cover, 0.0 elsewhere, from the cached cells only (no fault: this only shapes the ground's
+        roughness, nothing is built of it)."""
+        out = np.zeros(np.shape(lat), np.float32)
+        for key in mapcells.cells_for_points(lat, lon):
+            r = self._cached(key)
+            if r is None:
+                continue
+            lon0, lat0, lon1, lat1 = key.bounds()
+            inside = (lat >= lat0) & (lat < lat1) & (lon >= lon0) & (lon < lon1)
+            if not inside.any():
+                continue
+            out[inside] = r.sample(lon[inside], lat[inside]) == FOREST
+        out[np.abs(lat) > mapcells.MAX_LAT] = 0.0
+        return out
+
+    def tree(self, lat, lon):
+        """1.0 on tree cover at the points, pointwise from the cached cells (no lattice: a road profile reads the
+        cover along its own line, and its points can span a whole planning cell). A dirt road in a wood is cut into
+        the ground, not embanked over it (grading.embank_lift)."""
+        return self._forest_at(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+
+    def open_ground(self, lat, lon):
+        """1.0 where the land at the points is open country (fields, grass, scrub, a wood, bare ground), 0.0 in a
+        built-up place (WorldCover's built-up, EMBANK_MARGIN_M either side -- a road by the houses lies at grade), on
+        water, snow or ice: where a road rides its own low embankment (grading.embank_lift; the user, 2026-11-08).
+        Read from the cached land cover alone: a cell not cached yet is revisit.fault's, so the plans built with a
+        half-read cover are not kept. Pure given the cache."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        if lat.size == 0:
+            return np.zeros(np.shape(lat), np.float32)
+        shape = lat.shape
+        lat, lon = lat.ravel(), lon.ravel()
+        d = EMBANK_MARGIN_M / M_PER_DEG
+        dl = d / np.maximum(dnp.cos(np.radians(lat)), 1e-6)
+        cls, _complete = self.classes(np.concatenate([lat, lat + d, lat - d, lat, lat]),
+                                      np.concatenate([lon, lon, lon, lon + dl, lon - dl]))
+        cls = cls.reshape(5, -1)
+        built = (cls == roadsmod.URBAN_CLASS).any(axis=0)
+        open_ = np.isin(cls[0], OPEN_CLASSES) & ~built
+        return open_.astype(np.float32).reshape(shape)
 
     def _is_queued(self, key):
         with self._lock:

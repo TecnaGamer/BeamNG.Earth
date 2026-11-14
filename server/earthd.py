@@ -3783,8 +3783,11 @@ class Server:
         return self.lids.apply(la, lo, z) if getattr(self, "lids", None) is not None else z
 
     def ground(self, frame, la, lo, z):
-        """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened."""
-        z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+        """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened in the
+        forests (surface.Surface.forest)."""
+        cover = self.surface.forest(la, lo) if self.surface is not None else None
+        z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                                 cover)
         if self.airports is not None:
             z = self.airports.apply(la, lo, z)
         if getattr(self, "lids", None) is not None:
@@ -3808,6 +3811,8 @@ class Server:
                     self.plan_store = gradingmod.PlanStore(
                         self.mapdata, self._plan_elev if getattr(self, "lids", None) is not None
                         else (lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)), self.road_widths)
+                    if self.surface is not None:     # (the roads' embankment mask reads the same land cover)
+                        self.plan_store.surface = self.surface
                     if PLAN_ELSEWHERE and getattr(self, "plan_elsewhere", None) is not None:
                         self.plan_store.delegate = self.plan_elsewhere
                 # (plan_elsewhere: an anchor for the worker's store settings)
@@ -6006,7 +6011,8 @@ class Server:
             if self.sea is not None:
                 base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
             # (past them: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
-            src = (gradingmod.GradedDem(base, g) if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
+            src = (gradingmod.GradedDem(base, g, self.surface.forest if self.surface is not None else None)
+                   if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
                 if g is not None else base
             analyses = self.deshadow is not None or self.colormatch is not None
             if quick and analyses and self.far_pool is not None and self.imagery is not None and node is tile:

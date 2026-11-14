@@ -100,7 +100,7 @@
   }
  },
  "casagranda_bridge": {
-  "steps": 147,
+  "steps": 140,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
     "step_m": 0.4731,
@@ -108,7 +108,7 @@
     "lift_g": 7.8907
    },
    "ground:053629ed-5cd3-43a0-9a3f-45d606754d27": {
-    "step_m": 0.2079,
+    "step_m": 0.1079,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -123,7 +123,7 @@
     "lift_g": 0.4049
    },
    "ground:56a28a10-46e0-4513-aadc-4ad7ffe86ab4": {
-    "step_m": 6.2478,
+    "step_m": 6.3375,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1292,7 +1292,7 @@
     "lift_g": 0.8538
    },
    "ground:2b5e621a-57f3-40da-b21c-44766045de85": {
-    "step_m": 0.1723,
+    "step_m": 0.1482,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1834,7 +1834,7 @@
   }
  },
  "vienna_s1_rautenweg_1083": {
-  "steps": 17,
+  "steps": 16,
   "parts": {
    "bridge:0a852ccd-6eb5-46f9-a85b-b800c36a214b": {
     "step_m": 0.1115,
@@ -1957,7 +1957,7 @@
     "lift_g": 2.6753
    },
    "ground:c62f1aa4-c009-4767-a7c2-06d3a72aba19": {
-    "step_m": 0.3033,
+    "step_m": 0.1968,
     "grade": 0.0,
     "lift_g": 0.0
    },
