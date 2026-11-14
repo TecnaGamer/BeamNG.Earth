@@ -9,7 +9,9 @@ Key: method, URL, Range, Accept-Encoding (and the body's hash for a POST). Bodie
 wire (still gzip-encoded when they were), so byte counts match. HEAD is answered from a stored GET. Conditional
 requests (If-None-Match / If-Modified-Since) are sent upstream without their condition on a miss, and answered here:
 a 304 when the stored ETag matches. Only clean answers are stored (2xx, 3xx redirects, 404, 410): a 429 or a 5xx passes
-through and is asked again next time. Concurrent misses for one key wait for the first one's answer.
+through and is asked again next time. Concurrent misses for one key wait for the first one's answer. Misses go
+upstream at each host's own netfetch rate and max_conc (limits.json, limits.py: proxy.sh writes it), whatever the
+servers behind the proxy ask: a cold store is fetched at a live server's pace.
 
 With a line (link.py: a server's proxy user names it, netprobe --link), answers reach the server at that line's speed
 and latency, so a run measures load times too; http://netbench.link/off/ID (and /on/ID) through the proxy switches a
@@ -26,7 +28,7 @@ import os
 import re
 import time
 
-from mitmproxy import ctx, http
+from mitmproxy import ctx, exceptions, http
 
 import link
 
@@ -43,9 +45,29 @@ ALIASES = ((re.compile(r"^https://overturemaps-extras-us-west-2\.s3(?:\.us-west-
 # ask would get the same broken answer, where live the next one is fine). A Prometheus page: one of IGN's Geoplateforme
 # backends answered a WFS GetFeature with its JMX exporter's metrics (2026-11-12, ~1 in 19 asks).
 BAD_CONTENT_TYPES = ("text/plain; version=0.0.4",)
-# Misses a host gets at once from here: the servers run with their own per-host limits lifted (sitepatch), so a cold
-# place's misses would otherwise reach a host as fast as the server asks. 4: the regional photo hosts' own limit.
-UPSTREAM_CONC = 4
+
+
+class Upstream:
+    """One host's misses: max_conc at once, rate a second (burst at most at once), as netfetch's policy for it."""
+
+    def __init__(self, rate, burst, max_conc):
+        self.rate, self.burst = rate, burst
+        self.tokens, self.t = burst, time.monotonic()
+        self.slots = asyncio.Semaphore(max_conc)
+
+    async def acquire(self):
+        await self.slots.acquire()
+        while True:
+            now = time.monotonic()
+            self.tokens = min(self.burst, self.tokens + (now - self.t) * self.rate)
+            self.t = now
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                return
+            await asyncio.sleep((1.0 - self.tokens) / self.rate)
+
+    def release(self):
+        self.slots.release()
 
 
 def _bad(resp):
@@ -249,18 +271,32 @@ def _replay(req, m, body, head=False):
 class CacheProxy:
     def __init__(self):
         self.inflight = {}              # key -> asyncio.Event of the miss being fetched
-        self.gates = {}                 # host -> asyncio.Semaphore: UPSTREAM_CONC misses at once
+        self.gates = {}                 # host -> Upstream: its misses at its netfetch limits
+        self.limits = None              # limits.json
         self.counts = {"hit": 0, "assembled": 0, "miss": 0}
         self.store = self.ranges = None
         self.lines = link.Lines()
 
     def load(self, loader):
         loader.add_option("cache_dir", str, "", "the store's folder")
+        loader.add_option("host_limits", str, "", "limits.json: netfetch's per-host limits for the misses (limits.py)")
 
     def configure(self, updated):
         if "cache_dir" in updated and ctx.options.cache_dir:
             self.store = Store(ctx.options.cache_dir)
             self.ranges = RangeIndex(self.store)
+        if "host_limits" in updated:
+            try:
+                with open(ctx.options.host_limits) as f:
+                    self.limits = json.load(f)
+            except (OSError, ValueError) as e:
+                raise exceptions.OptionsError(f"cacheproxy: no host limits ({e}): proxy.sh writes them") from None
+
+    def _upstream(self, host):
+        gate = self.gates.get(host)
+        if gate is None:
+            gate = self.gates[host] = Upstream(*self.limits["hosts"].get(host, self.limits["default"]))
+        return gate
 
     def _log(self, name, req, status, n):
         with open(os.path.join(self.store.root, name), "a") as f:
@@ -306,7 +342,7 @@ class CacheProxy:
         flow.metadata["cacheproxy_cond"] = {h: req.headers[h] for h in CONDITIONAL if h in req.headers}
         for h in CONDITIONAL:           # (the full answer upstream, so it can be stored; the condition is answered here)
             req.headers.pop(h, None)
-        gate = self.gates.setdefault(req.host, asyncio.Semaphore(UPSTREAM_CONC))
+        gate = self._upstream(req.host)
         await gate.acquire()
         flow.metadata["cacheproxy_gate"] = gate
         flow.metadata["cacheproxy_line"] = line

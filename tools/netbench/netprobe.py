@@ -45,6 +45,7 @@ HEADLESS = [("--update-check", "off"), ("--telemetry", "off"), ("--companion-fee
 PARTS = ("ground", "roads", "trees", "far")     # load_progress's counts (the mod's loading line)
 UNTIL = PARTS + ("loaded",)
 POSE_S = 0.5                # core.lua POSE_INTERVAL: every pose re-runs the server's far selection (~0.4 s of GIL)
+PY_SPY = "py-spy==0.4.2"     # (--pyspy without one on PATH: uv tool run's)
 SITEPATCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sitepatch")
 USER_SETTINGS = os.path.expanduser("~/.local/share/BeamNG/BeamNG.drive/current/settings/beamngearth.json")
 # the mod's hello (core.lua) with its constants: sea.GUARD_VERSION, geotile.Z, roads.ROAD_GEO / FAR_GEO,
@@ -123,7 +124,8 @@ class Server:
         cmd += a.extra
         self.pyspy = a.pyspy
         if a.pyspy:                 # (py-spy as the server's parent: ptrace_scope 1 lets it attach to its own children only)
-            spy = [shutil.which("py-spy")] if shutil.which("py-spy") else ["uv", "tool", "run", "py-spy"]
+            spy = [shutil.which("py-spy")] if shutil.which("py-spy") else ["uv", "tool", "run", "--from", PY_SPY,
+                                                                          "py-spy"]
             cmd = spy + ["record", "-r", "50", "--gil", "--subprocesses", "--format", "raw", "-o",
                          os.path.abspath(a.pyspy), "--"] + cmd
         # BNE_LIDAR_GAPS_WAIT: a road build waits for each cell's lidar to the end (as fast pre-cache does), not 8 s and
@@ -135,7 +137,8 @@ class Server:
             env["BNE_LIDAR_GAPS_WAIT"] = "900"
         if a.link:
             env.update(line_env(env, a.link))
-        else:   # sitepatch: netfetch's per-host limits lifted in every server process (the proxy keeps its own upstream)
+        else:   # sitepatch: netfetch's per-host limits lifted in every server process, behind the cache proxy only
+                # (sitecustomize checks HTTPS_PROXY; the proxy keeps each host's own limits upstream)
             env["PYTHONPATH"] = os.pathsep.join(p for p in (SITEPATCH, os.environ.get("PYTHONPATH")) if p)
         self.log = open(os.path.join(self.out, "server.log"), "w", buffering=1)
         self.log.write(" ".join(cmd) + "\n")
