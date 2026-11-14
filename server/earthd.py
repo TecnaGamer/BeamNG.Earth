@@ -2910,7 +2910,8 @@ class Server:
         import geotiles
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
-                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
+                                            self.gas_stations, buried, lamps, country,
+                                            md=self.mapdata.versions(buildings=bool(self.buildings)),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
                                             towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),

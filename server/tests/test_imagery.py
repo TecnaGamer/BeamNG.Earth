@@ -1447,7 +1447,9 @@ class NetworkImageryTest(unittest.TestCase):
 
     def test_open_ocean(self):
         rgb, used = self.render(30.0, -140.0, size=4096.0)
-        self.assertEqual(set(used), {"eox2016"})       # uniform deep blue from both EOX layers
+        # EOX's open-sea blue: EOX 2023 serves it on a fresh cache (its sea is the picture, not a blank: e2ff61f5); a
+        # cache holding an older run's blank verdict for its tiles takes EOX 2016's, the same blue
+        self.assertTrue(used and set(used) <= {"eox2023", "eox2016"}, used)
         self.assertLess(rgb.reshape(-1, 3).std(0).max(), 2)
         self.assertGreater(int(rgb[..., 2].mean()), int(rgb[..., 0].mean()))
 

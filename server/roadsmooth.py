@@ -114,16 +114,6 @@ def smooth_lines_g2(xy, off, radius, window, pin_off, pins, tol=None):
                                    np.ascontiguousarray(pins, np.int64), PARAMS, G2_PARAMS)
 
 
-def smooth_line_g2(xy, radius, pins, window, tol=None):
-    """smooth_lines_g2 of one line xy (k, 2): (points (m, 2), old distances, new distances at the knots) or None when
-    nothing changes."""
-    xy = np.asarray(xy, np.float64)
-    pins = np.asarray(pins, np.int64).reshape(-1)
-    pts, _, ko, old_s, new_s = smooth_lines_g2(xy, [0, len(xy)], [radius], [window], [0, len(pins)], pins,
-                                               [np.nan if tol is None else tol])
-    return (pts, old_s, new_s) if ko[1] > 0 else None
-
-
 def pinned_vertices(xy, ends):
     """The interior vertex indices of the line xy (k, 2) not to be rounded: both ends of every segment that a point of
     ends (m, 2: the ends of the other rail lines) lies within SWITCH_PIN_M of, but for those at the line's own ends. Pure."""

@@ -614,16 +614,6 @@ def pad_ring(ring, pad):
 SIGN_LANE_PAD_M = 2.5       # the sign stands this far off a drive lane's corridor and a mouth's circle
 
 
-def _walkable_at(st, p):
-    """Is p on the station's raised walking ground (platforms, the walking zone under the roofs)?"""
-    import busstationmesh as bm
-    x0, y0, F = bm.walk_field(st)
-    if not F.size:
-        return False
-    i, j = int(round(p[0] - x0)), int(round(p[1] - y0))
-    return 0 <= j < F.shape[0] and 0 <= i < F.shape[1] and bool(F[j, i] >= 0.5)
-
-
 def sign_spot(st):
     """(x, y, ux, uy) where the station's name sign stands and the unit vector from the street to it (the board faces
     the street), or None. In place of one of the station's own benches, the one nearest a public street (that bench is

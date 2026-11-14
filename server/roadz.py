@@ -191,9 +191,29 @@ PREFETCHED_WAIT_S = float(os.environ.get("BNGE_LIDAR_PREFETCH_WAIT", "0"))
 PREFETCH_CELLS = int(os.environ.get("BNGE_LIDAR_PREFETCH_CELLS", "4"))     # cells read at once (each: the node pool)
 PREFETCH_POLL_S = 1.0       # s between the prefetch's looks at the cells the run's processes asked for
 PREFETCH_FAR_M = 8000.0     # m: a queued cell this far from the player when its turn comes is dropped (teleported away)
+# ... and a cell a planning process asked for (a want file): planning a cell near the player reads its neighbours'
+# roads, and their candidates' deck ends lie in the cells beyond, 8-16 km out at Fells Point (z14 cells ~1.9 km). Those
+# were dropped at PREFETCH_FAR_M, so they were never read, the rule stood for them on every visit, and no plan near
+# their edge, nor any block or road tile built on one, was ever kept (a 16 GB Windows PC, the small tier with no late
+# pool to read them: 0 blocks kept in four sessions, 2026-11-14)
+PREFETCH_WANT_FAR_M = 24000.0
+# A want lasts PREFETCH_WANT_KEEP_S after its last ask (a planning process asking again renews it) and
+# PREFETCH_WANT_TRIES failed reads (the retries PREFETCH_RETRY_S x 1, 2, 4 ... apart); a 404 (netfetch.NotFound: no data
+# there) ends it at once. An ended want is a queued cell like any other (dropped past PREFETCH_FAR_M): a cell 8-24 km out
+# whose read keeps failing was read again every minute for as long as the player stayed within 24 km
+PREFETCH_WANT_KEEP_S = 900.0
+PREFETCH_WANT_TRIES = 3
 PREFETCH_RETRY_S = 60.0     # s before a cell whose read failed is read again
 WANT_DIR = "want"
 _tl = threading.local()     # .prefetch: this thread reads for the prefetch (its reads never stop: _read)
+
+
+def _not_found(e):
+    """Is e (an error of a cell's read, or None) a host's 404 / 410 (netfetch.NotFound: no data there, final)?"""
+    if e is None:
+        return False
+    import netfetch
+    return isinstance(e, netfetch.NotFound)
 
 
 def prefetched():
@@ -750,6 +770,14 @@ class RoadZ:
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                    # (used: the download cache's eviction takes a file's mtime for its last use when this server's
+                    # own process did not read it, and these are read in the workers; a cell read on every visit was
+                    # as old as its download, among the first evicted when the disk ran short of its reserve, and
+                    # the next visit read its ~5 MB again and planned on the rule meanwhile: Windows PC, 2026-11-14)
+                    import cache as cachemod
+                    cachemod.touch_once(p)
+                    if src == "lidar":
+                        cachemod.touch_once(p + ".gaps.json")
                 except Exception as e:
                     log.debug("roadz read %s: %s", p, e)
                     got = None
@@ -765,6 +793,7 @@ class RoadZ:
                         p = None
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
+                    _tl.failed = e          # (the prefetch's: a 404 ends a want, _pf_loop)
                     import revisit
                     revisit.fault()
                     return None
@@ -873,14 +902,16 @@ class RoadZ:
             if st is None:
                 st = self._pf_state = {"queue": {}, "seq": 0, "where": None, "done": {}, "failed": {}, "threads": 0,
                                        "busy": set(), "cv": threading.Condition(), "polled": 0.0,
-                                       "t0": None, "last": None, "n": 0, "logged": True}
+                                       "t0": None, "last": None, "n": 0, "logged": True,
+                                       "wanted": {}}    # (cell -> [last ask, failed reads]: asked by planning)
             return st
 
     def prefetch(self, keys, where=None):
         """Queue cells keys' road heights (every source at each: the lidar's first of all) to be read in the
         background, PREFETCH_CELLS at once, a prefetch's reads never stopped (_read); where(key) -> m from the player
         (the server's latest focus, kept for the next calls too): the nearest queued cell is read first, one past
-        PREFETCH_FAR_M dropped; without one, the newest call's cells first in their order. Returns at once."""
+        PREFETCH_FAR_M dropped (one a planning process asked for: past PREFETCH_WANT_FAR_M); without one, the newest
+        call's cells first in their order. Returns at once."""
         if not self.enabled or self.fetcher is None:
             return
         st = self._pf()
@@ -944,8 +975,10 @@ class RoadZ:
                 k = mapcells.CellKey(int(z), int(x), int(y))
             except (OSError, ValueError):
                 continue
-            if k not in st["done"] and k not in st["busy"]:
-                st["queue"].setdefault(k, st["seq"])
+            if k not in st["done"]:
+                st["wanted"][k] = [now, 0]  # (dropped only past PREFETCH_WANT_FAR_M: _pf_next; asked again: renewed)
+                if k not in st["busy"]:
+                    st["queue"].setdefault(k, st["seq"])
                 st["logged"] = False
                 if st["t0"] is None:
                     st["t0"] = now
@@ -954,9 +987,14 @@ class RoadZ:
         """The next cell to read (under st's lock), or None: the nearest the player (st["where"]), else the first."""
         where = st["where"]
         best, bd = None, None
+        now = time.monotonic()
         for k, seq in list(st["queue"].items()):
+            w = st["wanted"].get(k)
+            if w is not None and now - w[0] > PREFETCH_WANT_KEEP_S:
+                del st["wanted"][k]         # (asked for long ago and not since: a cell like the rest)
+                w = None
             f = st["failed"].get(k)
-            if f is not None and time.monotonic() - f < PREFETCH_RETRY_S:
+            if f is not None and now - f < PREFETCH_RETRY_S * (2 ** max(0, w[1] - 1) if w is not None else 1):
                 continue
             d = seq
             if where is not None:
@@ -964,13 +1002,15 @@ class RoadZ:
                     d = float(where(k))
                 except Exception:
                     d = float("inf")
-                if d > PREFETCH_FAR_M:
+                if d > (PREFETCH_WANT_FAR_M if w is not None else PREFETCH_FAR_M):
                     del st["queue"][k]      # (the player is far from it now: asked again when near)
+                    st["wanted"].pop(k, None)
+                    st["failed"].pop(k, None)   # (not queued for a later try any more: prefetch_state)
                     continue
             if bd is None or (d, str(k)) < bd:
                 best, bd = k, (d, str(k))
         if best is not None:
-            del st["queue"][best]
+            del st["queue"][best]       # (still wanted while read, and when queued again after a failed read)
         return best
 
     def _pf_loop(self):
@@ -993,22 +1033,31 @@ class RoadZ:
                                      self.stats["bytes"] / 1e6)
                         st["cv"].wait(PREFETCH_POLL_S)
                 st["busy"].add(k)
-            ok = True
+            ok, missing = True, False
             try:
                 la, lo = k.center()
                 for src in sources_at(la, lo, self.lidar):
+                    _tl.failed = None
                     if self.lines(src, k) is None:
                         ok = False
+                        missing = missing or _not_found(getattr(_tl, "failed", None))
             except Exception as e:      # (asked again after PREFETCH_RETRY_S, or by the planning processes)
                 log.debug("roadz prefetch %s: %s: %s", k, type(e).__name__, e)
                 ok = False
+                missing = missing or _not_found(e)
             with st["cv"]:
                 st["busy"].discard(k)
                 st["last"] = time.monotonic()
+                w = st["wanted"].get(k)
                 if ok:
                     st["done"][k] = st["last"]
                     st["failed"].pop(k, None)
+                    st["wanted"].pop(k, None)
                 else:
+                    if w is not None:
+                        w[1] += 1
+                        if missing or w[1] >= PREFETCH_WANT_TRIES:
+                            del st["wanted"][k]     # (a 404, or tried enough: the want ends)
                     st["failed"][k] = st["last"]
                     st["queue"].setdefault(k, st["seq"])    # (again once PREFETCH_RETRY_S is past)
 

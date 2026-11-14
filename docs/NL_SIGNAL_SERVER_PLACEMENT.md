@@ -5,7 +5,7 @@ client planner. It is not enabled by a setting or installed into a live game by
 the producer or tests. Do not remove the client pack until the complete assembly
 transport and renderer have replaced it.
 
-## Physical surface snapshot (earthfast 298)
+## Physical surface snapshot (earthfast 299)
 
 `nlsignalassembly.make_scene` marshals the actual drawn road and raised walk
 triangles, the decoded quantised terrain grid, its hole mask, and the rectangles
@@ -133,6 +133,10 @@ worker results. A successful build alone cannot suppress stock approaches: only
 the matching renderer acceptance can transfer ownership. Pending recalculations
 retain the last accepted generation, and disconnect/disable clears ownership.
 This guard is tested in isolation and is not yet connected to live messages.
+The client consumer can be pinned with `setScope(epoch, anchor)`; after that it
+rejects packets for another connection/anchor, including after level teardown
+or disabling. Repeating the same scope preserves existing items. The isolated
+Gridmap diagnostic remains usable without a connection scope.
 
 - Safe relocation/coalescing of merely nearby feet and clearance conflicts
   between complete neighbouring steel assemblies; the current bundle pass

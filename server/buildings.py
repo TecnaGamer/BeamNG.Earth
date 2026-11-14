@@ -25,6 +25,7 @@ import dnp
 import landmarks
 import mapgeom
 import nycmassing
+import osmyears
 import ships
 import staging
 import francehouses
@@ -319,6 +320,8 @@ def parse_color(val):
     s = OVERTURE_HEX.get(s, s)
     if s in COLOR_NAMES:
         return COLOR_NAMES[s]
+    if s.replace("_", "") in COLOR_NAMES:     # ("light_gray", "dark-grey": OSM's spellings of the names)
+        return COLOR_NAMES[s.replace("_", "")]
     if s.startswith("#"):
         hex_str = s[1:]
         if len(hex_str) in (3, 4):
@@ -570,13 +573,45 @@ ERA_PANEL_SHARE = 0.6
 
 def era(year):
     """"old" (before 1930), "postwar" (1950-1989), "new" (2000 on), or None (not known, or between)."""
-    try:
-        y = int(year)
-    except (TypeError, ValueError):
-        return None
-    if y < 1000 or y > 2100:
+    y = _year_of(year)
+    if y is None:
         return None
     return "old" if y < 1930 else "postwar" if 1950 <= y < 1990 else "new" if y >= 2000 else None
+
+
+# A tower's facade by its construction year where known (OSM's start_date, osmyears.py; 3DBAG's): with no material
+# mapped, every tower of TOWER_ERA_M (its whole building's height) or TOWER_ERA_FLOORS was a glass curtain wall (the
+# GLASS_FLOORS share, all past SUPERTALL_M), and the pre-war skyscrapers came out as glass (the Empire State
+# Building, 1931; Chrysler, 1930; Woolworth, 1913: the streets.gl comparison 2026-11-14, fix 7). Built before
+# TOWER_MASONRY_YEAR: masonry with punched windows (the stone / plaster window sheet in the region's tints); up to
+# TOWER_MIXED_YEAR: TOWER_MIXED_MASONRY of them masonry, the others as before; later, or no year: as before (glass).
+TOWER_ERA_M = 60.0
+TOWER_ERA_FLOORS = 18
+TOWER_MASONRY_YEAR = 1940
+TOWER_MIXED_YEAR = 1970
+TOWER_MIXED_MASONRY = 0.5
+# OSM's years (osmyears.py) for every era rule (True: era()'s brick, panel, window and tank rules see them too, as 3DBAG's
+# years) or for the towers' facades alone (False: they reach tower_era only, as "_osm_year"; era() keeps 3DBAG's).
+# Towers only for now (the user's go on the dataset, 2026-11-14): the other era rules were written for OSM's years but
+# have only seen 3DBAG's Dutch ones; widen it once they are checked against dated buildings elsewhere.
+OSM_YEARS_ALL_ERAS = False
+
+
+def tower_era(year):
+    """"masonry" (built before TOWER_MASONRY_YEAR), "mixed" (before TOWER_MIXED_YEAR) or None (later, not known)."""
+    y = _year_of(year)
+    if y is None:
+        return None
+    return "masonry" if y < TOWER_MASONRY_YEAR else "mixed" if y < TOWER_MIXED_YEAR else None
+
+
+def _year_of(year):
+    """year as an int when it is one (1000-2100), else None."""
+    try:
+        y = int(year)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return y if 1000 <= y <= 2100 else None
 
 
 # A mapped facade colour is a name or a pure hex ("yellow": 0.92 / 0.82 / 0.20), a painted facade a muted one: a
@@ -1074,13 +1109,18 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # was siding with 14 storeys of windows): plain steel, no windows, its mapped roof kept (mapped_pitch: a spire)
     # (not a slender part the map gives a sloped roof: a tower's crown fins, Manhattan's 133 mapped skillions drawn as
     # flat steel masts, streets.gl study 2026-11-11)
+    # (nor a part standing on the ground, unless mapped steel: a mast stands on its building, and a part mapped from
+    # the ground to just over its roof is a chimney stack, a turret or a corner bay of the walls: The Plaza's eight
+    # stacks and turrets, 86-93 m on 17-81 m² over its 85 m roof, were bare steel masts; streets.gl / Google Earth
+    # comparison 2026-11-14)
     if area <= MAST_MAX_M2 and h is not None and np.isfinite(h) and h >= MAST_MIN_H and not attrs.get("bridge_part") \
             and ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower()) \
             not in ("skillion", "gabled", "hipped", "half-hipped") \
             and (str(attrs.get("facade_material") or "").lower() in MAST_MATERIALS
                  or (h / math.sqrt(max(area, 1.0)) >= MAST_SLENDER
-                     and (not part or float(attrs.get("_part_min") or 0.0) + h
-                          >= MAST_TOP_SHARE * float(attrs["building_height"])))):
+                     and (not part or (float(attrs.get("_part_min") or 0.0) > 0.0
+                                       and float(attrs.get("_part_min") or 0.0) + h
+                                       >= MAST_TOP_SHARE * float(attrs["building_height"]))))):
         look = custom_look(METALWALL, MAST_RGB)
         mroof = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
         rh_m = mapped_roof_h(mroof, attrs.get("roof_height")) if mroof == "pyramidal" else None
@@ -1246,6 +1286,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 1 if church else max(1, int(round(h / floor_h)))
     nf = max(1, min(nf, 120))
     floor_h = h / nf
+    # (a tower built before the curtain walls, by its year: tower_era; with a mapped material, that material)
+    top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
+    te = tower_era(attrs.get("_year") or attrs.get("_osm_year")) \
+        if top_ >= TOWER_ERA_M or (nf or 0) >= TOWER_ERA_FLOORS else None
+    masonry_tower = not str(attrs.get("facade_material") or "").strip() and not (shed or barn or church) and (
+        te == "masonry" or (te == "mixed" and _hash01(seed, "era tower") < TOWER_MIXED_MASONRY))
     if shed or barn:
         facade, band, plain = SIDING, None, True
     else:
@@ -1262,12 +1308,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         modern = cls in ("office", "commercial", "hotel") and u_glass < MIDRISE_GLASS_OFFICE * ERA_GLASS.get(ep, 1.0)
         tall = snf >= GLASS_FLOORS[1] or (snf >= GLASS_FLOORS[0] and (modern or u_glass < OLD_TOWER_GLASS)) \
             or (snf >= 7 and modern)
+        if masonry_tower:               # (a pre-war tower: masonry, whatever its height, tower_era)
+            tall = False
         if ep == "postwar" and snf >= 4 and not tall and not industrial and not shop \
                 and _hash01(seed, "era panel") < ERA_PANEL_SHARE:
             # (the post-war estates' precast concrete slabs, their windows in ribbons)
             facade, band = f"{PANEL}|{int(_hash01(seed, 'panel tint') * len(WALL_TINTS[PANEL]))}", BAND_PANEL
         elif snf >= 7 and not tall and not industrial:
-            if _hash01(seed, "brick") < brick_share(lat, lon) * 1.2 * ERA_BRICK.get(ep, 1.0):
+            # (a pre-war tower: the stone / plaster window sheet, not the red brick: limestone, terracotta and buff
+            # brick, the Empire State, Chrysler and Woolworth Buildings, Chicago's and Philadelphia's of the time)
+            if not masonry_tower and _hash01(seed, "brick") < brick_share(lat, lon) * 1.2 * ERA_BRICK.get(ep, 1.0):
                 facade, band = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK
             else:
                 tints = REGION_FACADE_TINTS.get(style.name, FACADE_TINTS)
@@ -1341,9 +1391,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # supertall with no material mapped is one too, not plaster or brick (New York by Gehry, 8 Spruce St: 271 m of
     # steel, its parts "metal" or nothing, drawn as a corrugated shed and a brown plaster sheet; the Brooklyn Bridge
     # view against a 360 photo and Google Earth, 2026-11-10)
-    top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
     tall_ = (nf or 0) >= TOWER_METAL_FLOORS or top_ >= TOWER_METAL_FLOORS * FLOOR_M
-    if not fm and top_ >= SUPERTALL_M and not (church or barn or shed or industrial):
+    if not fm and top_ >= SUPERTALL_M and not (church or barn or shed or industrial or masonry_tower):
         # (judged on the colour as mapped, source_rgb, not the muted shade a named one is drawn in; a colour taken
         # from the siblings' most common is no part's own: tile_buildings' _facade_color_inherited)
         own_v = None if attrs.get("_facade_color_inherited") else attrs.get("facade_color")
@@ -4989,7 +5038,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
-                   industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None):
+                   industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -5005,9 +5054,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out.
     nyc: nycmassing.Fetch, New York's measured massing: a building without parts of its own that matches a record
     takes the record's parts (its setbacks), drawn as the map's parts are. carriageways: carriageway_segments' roads,
-    the footprints kept off them (road_clearance; clear_stats its counts)."""
+    the footprints kept off them (road_clearance; clear_stats its counts). years: osmyears.Fetch, OSM's construction
+    years by way (a building's _year, its parts' too: era, tower_era)."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     nyc_idx = nyc.index() if nyc is not None else None
+    year_idx = years.years() if years is not None else None
     seen = set()
     turbines = None                             # (turbine_points, looked up at the first building)
     # the decks' and the tunnels' floors at their heights (decks): a building such a floor runs through gets its way at
@@ -5039,6 +5090,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         # (New York's measured massing: the rows whose outline takes a record, nycmassing.Records)
         nyc_rows = nyc_idx.match_layer(f, frame, rows) if nyc_idx is not None and isinstance(f, mapgeom.Features) \
             else None
+        # (OSM's construction years of the rows' ways: osmyears.py)
+        row_years = dict(zip(rows, osmyears.lookup(year_idx, [a["src_record"][i] for i in rows]).tolist())) \
+            if year_idx is not None and a.get("src_record") is not None else None
         for i in rows:
             if a.get("is_underground") is not None and bool(a["is_underground"][i]):
                 continue
@@ -5080,6 +5134,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    "roof_direction", "height_src", "roof_rise")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
+            if row_years is not None and row_years.get(i):
+                at["_year" if OSM_YEARS_ALL_ERAS else "_osm_year"] = int(row_years[i])
             if roofs is not None:
                 roofs.fill(at, e, n)
             lm = landmarks.of(a["src_record"][i]) if a.get("src_record") is not None else None
@@ -5187,6 +5243,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                                   "building_height": top, "_part_min": pmh, "_masonry_colour": masonry_c,
                                   "_facade_color_inherited": p_finh,
                                   "_steeple_part": (steeple_rise or True) if pk in steeple_k else False,
+                                  "_year": at.get("_year"), "_osm_year": at.get("_osm_year"),
                                   "facade_material": pat.get("facade_material") or at.get("facade_material")
                                   or sib["facade_material"],
                                   "facade_color": p_fcol,
@@ -6415,6 +6472,7 @@ def road_tile_items(
     import threedbag
     bag3d = threedbag.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (the Dutch roofs, likewise)
     nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks, likewise)
+    years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years, likewise)
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
     keys = roads.cells_of_tile(frame, tx, ty, margin=0.0)
     measured_wait(md, keys)
@@ -6440,6 +6498,7 @@ def road_tile_items(
         photo=photo,
         bag3d=bag3d,
         nyc=nyc,
+        years=years,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
@@ -6949,11 +7008,12 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widt
     own = box if hasattr(box, "owns") else None
     keys, layers = far_needs(frame, tile, ty)
     nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks)
+    years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years)
     measured_wait(md, keys)
     import mapcells
     cds = mapcells.load_cells(md, keys, layers)
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
-                           part_layers=[c.layers.get("building_parts") for c in cds], nyc=nyc,
+                           part_layers=[c.layers.get("building_parts") for c in cds], nyc=nyc, years=years,
                            house_land_layers=[c.layers.get("land_use") for c in cds],
                            roofs=measured_roofs(md, frame, x0, y0, x1, y1),
                            west_town=district_town(frame, tile, ty, md),
@@ -7274,12 +7334,13 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         # after another in the one far process they held the far buildings back, 2026-11-07)
         md.warm([(k, layer) for k in keys for layer in sky_layers], kind="prefetch")
         return None
+    years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years: the towers' facades by era)
     measured_wait(md, keys, wait=False)
     cds = [md.cell(k, layers=sky_layers, kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
     items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(SKY_SLENDER_H, SKY_MIN_AREA_M2), own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds] if SKY_PARTS else (),
-                           parts_min_top=SKY_PARTS_MIN_M)
+                           parts_min_top=SKY_PARTS_MIN_M, years=years)
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)

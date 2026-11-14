@@ -34,6 +34,32 @@ M.GUARD_S = 0.5
 M.FALL_MS = -12         -- a parked car falling faster than this (m/s) is off the ground: moved too
 M.OFF_SPOT_M = 4        -- ... and one this far from its spot (none, or another frame's) ...
 M.OFF_SPOT_FAR_M = 60   -- ... once the player is this far from it (a car the player pushed stays in view)
+-- Every active parked car costs frame time even when it sleeps: the engine's physics frame waits for each vehicle,
+-- and while the world server streams (driving) those waits grow. Steam Deck, Des Moines at 45 mph, the player's 5
+-- parked cars: PhysicsAndVLUA 0.7 -> 5.1 ms a frame, 26.8 -> 24.4 fps; standing still with the CPU busy, 5 cars 13 ms,
+-- 2 cars 3 ms, none 0.2 (2026-11-14; the cars' own vehicle Lua steps were not the cost). So:
+-- - a parked car the stock system left behind (no free spot ahead for it: a highway, open country) goes inactive
+--   (hidden) once it is HIDE_BEHIND_M behind a moving player (more than 120 degrees off its heading), or HIDE_M away
+--   in any direction, and only while it is outside the camera's view (its field of view plus VIEW_MARGIN_DEG: a
+--   rear-facing or orbit camera looking at it keeps it); the stock pool uses inactive cars first for its next spot
+--   ahead, and with every car hidden one comes back on a free spot UNHIDE_MIN_M .. START_M from the player;
+-- - the low quality presets keep fewer of the player's parked cars active at once (ACTIVE_CAP, the stock pool's
+--   activeAmount: the rest wait pooled and take turns on the spots ahead), only while the game's parked-car amount
+--   is its default (an amount the player chose, in the options or at level start, is kept on every preset), and only
+--   while the active amount is still the one this module set (changed by anyone else: theirs, the cap suspended
+--   until a new fleet or level).
+-- Deck A/B (ABBA, same route, the player's 5 cars, medium): physics 4.1 -> 1.6 ms a frame, 23.4 -> 24.5 fps, frames
+-- over 50 ms 1297 -> 1124, physics-led slow frames 283 -> 42 a drive (parked cars off: 27.5 fps, 0.3 ms).
+M.HIDE_M = 600          -- (the stock system places cars up to ~400 m ahead: searchPointDist + searchRadius)
+M.HIDE_BEHIND_M = 150   -- (it moves a car behind the player on after ~70 m: 50 m + the speed)
+M.HIDE_MIN_SPEED = 3    -- m/s: slower, no direction (HIDE_M only)
+M.UNHIDE_MIN_M = 120    -- (the stock keepClearRadius: parked cars avoid appearing nearer)
+M.HIDE_HOLD_S = 10      -- a car that came back stays at least this long before it can hide again
+M.BEHIND_COS = -0.5     -- behind: the cosine of its angle off the player's heading below this (over 120 degrees)
+M.VIEW_MARGIN_DEG = 20  -- the camera's half field of view (horizontal, at VIEW_ASPECT) widened by this
+M.VIEW_ASPECT = 2.4     -- (the widest screens: 21:9)
+M.DEFAULT_PARKED_AMOUNT = 5   -- the game's trafficParkingAmount default (settings/defaults.json) when unreadable
+M.ACTIVE_CAP = { low = 2, medium = 2 }   -- (Deck drive: 5 active 5.1 ms, 3: 4.2, 2: 3.0, none 0.7)
 M.enabled = true
 
 local spots = {}        -- tile key -> { anchor, rows }
@@ -212,30 +238,140 @@ end
 -- teleport to any road of the graph, in view, and the guard moved it again half a second later: 16 cars flickered
 -- about in the distance, ~30 moves a second (the user's session 2026-10-15, Arizona). Those cars wait hidden instead
 -- and come back once spots are near (M.freeNear).
-local hidden = {}       -- parked car id -> true while it waits hidden for a spot
-function M.freeNear(player, rad)
+local hidden = {}       -- parked car id -> 'stranded' (no free spot for it) or 'behind' (left behind) while hidden
+local backAt = {}       -- parked car id -> os.clock() it came back (HIDE_HOLD_S)
+-- Free spots within rad (START_M) of the player, at least minRad (0) from it.
+function M.freeNear(player, rad, minRad)
   local n = 0
-  local r2 = (rad or M.START_M) ^ 2
+  local r2, m2 = (rad or M.START_M) ^ 2, (minRad or 0) ^ 2
   for _, ps in pairs(objs) do
     local p = ps.pos
-    if p and not ps.vehicle and (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2 < r2 then n = n + 1 end
+    if p and not ps.vehicle then
+      local d2 = (p.x - player.x) ^ 2 + (p.y - player.y) ^ 2
+      if d2 < r2 and d2 >= m2 then n = n + 1 end
+    end
   end
   return n
+end
+
+-- Pure: a parked car at p left behind by the stock system: HIDE_M from the player pp, or HIDE_BEHIND_M behind it
+-- while it moves (pp.vx, pp.vy at least HIDE_MIN_SPEED).
+function M.leftBehind(p, pp)
+  local dx, dy = p.x - pp.x, p.y - pp.y
+  local d2 = dx * dx + dy * dy
+  if d2 > M.HIDE_M * M.HIDE_M then return true end
+  if not M.moving(pp) or d2 < M.HIDE_BEHIND_M * M.HIDE_BEHIND_M then return false end
+  local vx, vy = pp.vx or 0, pp.vy or 0
+  return dx * vx + dy * vy < M.BEHIND_COS * math.sqrt(d2 * (vx * vx + vy * vy))
+end
+
+-- The current camera as { pos, fwd, cosHalf } (cosHalf: the cosine of the half field of view widened by
+-- VIEW_MARGIN_DEG), nil when unknown (then nothing hides).
+function M.cameraView()
+  local cam = rawget(_G, 'core_camera')
+  if not (cam and cam.getPosition and cam.getForward) then return nil end
+  local okP, pos = pcall(cam.getPosition)
+  local okF, fwd = pcall(cam.getForward)
+  if not (okP and okF and pos and fwd) then return nil end
+  local vfov = 75
+  if cam.getFovDeg then
+    local okV, v = pcall(cam.getFovDeg)
+    if okV and tonumber(v) then vfov = tonumber(v) end
+  end
+  local half = math.deg(math.atan(math.tan(math.rad(vfov) / 2) * M.VIEW_ASPECT)) + M.VIEW_MARGIN_DEG
+  return { pos = pos, fwd = fwd, cosHalf = half >= 180 and -1 or math.cos(math.rad(half)) }
+end
+
+-- Pure: point p inside the camera view v (M.cameraView); no view: in view.
+function M.inView(p, v)
+  if not v then return true end
+  local dx, dy, dz = p.x - v.pos.x, p.y - v.pos.y, (p.z or 0) - (v.pos.z or 0)
+  local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+  if d < 1 then return true end
+  local f = v.fwd
+  local fl = math.sqrt(f.x * f.x + f.y * f.y + (f.z or 0) * (f.z or 0))
+  if fl == 0 then return true end
+  return (dx * f.x + dy * f.y + dz * (f.z or 0)) / (d * fl) > v.cosHalf
+end
+
+-- Pure: the player moves (HIDE_MIN_SPEED or faster).
+function M.moving(pp)
+  local vx, vy = pp.vx or 0, pp.vy or 0
+  return vx * vx + vy * vy >= M.HIDE_MIN_SPEED * M.HIDE_MIN_SPEED
+end
+
+-- Pure: the parked-car amount is the game's default: the option (getValue('trafficParkingAmount')) at its default
+-- (defaultValue, else DEFAULT_PARKED_AMOUNT) and no amount picked at level start (choice.parkedAmount -1: auto).
+function M.amountIsDefault(getValue, defaultValue, choice)
+  local picked = choice and tonumber(choice.parkedAmount)
+  if picked and picked ~= -1 then return false end
+  local v = getValue and getValue('trafficParkingAmount')
+  if defaultValue == nil then defaultValue = M.DEFAULT_PARKED_AMOUNT end
+  return v == nil or v == defaultValue
+end
+
+-- The quality preset's cap on active parked cars (nil: the player's amount as it is).
+function M.activeCap()
+  local ok, s = pcall(require, 'beamngEarth/settings')
+  local q = ok and type(s) == 'table' and s.get and s.get('quality')
+  local cap = q and M.ACTIVE_CAP[q] or nil
+  if not cap then return nil end
+  local gs = rawget(_G, 'settings')
+  local getValue = gs and gs.getValue and function(k) return gs.getValue(k) end
+  local defaults = gs and type(gs.impl) == 'table' and type(gs.impl.defaultValues) == 'table' and gs.impl.defaultValues
+  local okN, ng = pcall(require, 'beamngEarth/navgraph')
+  if not M.amountIsDefault(getValue, defaults and defaults.trafficParkingAmount, okN and ng.choice or nil) then return nil end
+  return cap
+end
+-- The cap is ours only while the stock activeAmount is the value we set (applied); then capped is the amount it had
+-- before. Anyone else changing it (the player, a mission, another mod) ends that and suspends the cap (theirs, any
+-- value, kept) until a new fleet (setupVehicles) or a new level; a new fleet also ends ownership.
+local capped, applied, suspended = nil, nil, false
+local function applyCap(gp)
+  if heldActive or suspended or not (gp.getParkingVars and gp.setActiveAmount) then return end
+  local cur = tonumber((gp.getParkingVars() or {}).activeAmount)
+  if applied ~= nil and cur ~= applied then                 -- changed from outside: theirs from now on
+    capped, applied, suspended = nil, nil, true
+    return
+  end
+  local cap = M.activeCap()
+  if cap and cur and cur > cap then
+    if applied == nil then capped = cur end
+    pcall(gp.setActiveAmount, cap)
+    applied = cap
+  elseif applied ~= nil and capped and (not cap or cap > applied) then
+    local back = cap and math.min(cap, capped) or capped     -- (the cap gone or raised: theirs back, as far as allowed)
+    pcall(gp.setActiveAmount, back)
+    if back == capped then capped, applied = nil, nil else applied = back end
+  end
 end
 
 local function guard(player)
   local gp = gameplay_parking
   if not box or not gp or not gp.getState() then return end
+  applyCap(gp)
+  local now = os.clock()
   local data = (not scatterPending and sites and gp.getParkedCarsData) and gp.getParkedCarsData() or nil
-  local free = M.freeNear(player)
-  for _, id in ipairs(gp.getParkedCarsList() or {}) do
+  local free = M.freeNear(player, M.START_M, M.UNHIDE_MIN_M)
+  local list = gp.getParkedCarsList() or {}
+  local anyActive = false
+  for _, id in ipairs(list) do
+    local o = getObjectByID(id)
+    if o and not hidden[id] and o:getActive() then anyActive = true break end
+  end
+  local here = vec3(player.x, player.y, player.z)
+  local view = nil        -- the camera view, read once a pass when needed (false: unknown)
+  for _, id in ipairs(list) do
     local o = getObjectByID(id)
     if o and hidden[id] then
-      if free > 0 then                     -- spots near again: back, onto one of them
-        hidden[id] = nil
+      if o:getActive() then                -- the stock pool took it for a spot ahead: back
+        hidden[id], backAt[id] = nil, now
+      elseif free > 0 and (hidden[id] == 'stranded' or not anyActive) then
+        -- spots near again (for a car left behind: only with no parked car out, else the stock pool brings it)
+        hidden[id], backAt[id] = nil, now
         o:setActive(1)
-        pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
-        free = free - 1
+        pcall(gp.forceTeleport, id, here, M.UNHIDE_MIN_M, M.START_M)
+        free, anyActive = free - 1, true
       end
     elseif o and o:getActive() then
       local p = o:getPosition()
@@ -244,10 +380,16 @@ local function guard(player)
       local off = d and M.offSpot(p, d.parkingSpotId and sites.parkingSpots.objects[d.parkingSpotId], player)
       if falling or off or not M.inside(box, p.x, p.y, M.GUARD_M) then
         if free > 0 then
-          pcall(gp.forceTeleport, id, vec3(player.x, player.y, player.z), 0, M.START_M)
+          pcall(gp.forceTeleport, id, here, M.UNHIDE_MIN_M, M.START_M)
           free = free - 1
         else
-          hidden[id] = true
+          hidden[id] = 'stranded'
+          o:setActive(0)
+        end
+      elseif now - (backAt[id] or -math.huge) >= M.HIDE_HOLD_S and M.leftBehind(p, player) then
+        view = view == nil and (M.cameraView() or false) or view
+        if view and not M.inView(p, view) then         -- (seen: it waits until it is out of the camera's view)
+          hidden[id] = 'behind'
           o:setActive(0)
         end
       end
@@ -264,6 +406,12 @@ local function hookSetup()
   if not gp or gp.__bngeEarthHooked or type(gp.setupVehicles) ~= 'function' then return end
   local orig = gp.setupVehicles
   gp.setupVehicles = function(...)
+    -- a new fleet: the amount we capped goes back to the player's first, and the cap is worked out again for it
+    if applied ~= nil and gp.getParkingVars and gp.setActiveAmount
+        and tonumber((gp.getParkingVars() or {}).activeAmount) == applied and capped then
+      pcall(gp.setActiveAmount, capped)
+    end
+    capped, applied, suspended = nil, nil, false
     if M.enabled and lastPlayer and next(spots) and (dirty or not sites) then
       lastBuild, dirty = os.clock(), false
       local ok, err = pcall(rebuild, lastPlayer)
@@ -278,7 +426,13 @@ end
 -- A rebuild waits for a light frame (governor roomFor, as navgraph's applies), REBUILD_WAIT_FRAMES at most
 M.REBUILD_ROOM_MS = 4.0
 M.REBUILD_WAIT_FRAMES = 30
+-- While the player moves, a rebuild also waits until it is REBUILD_MOVE_M from the last one (driving, new tiles make
+-- the sites dirty all the time: a rebuild every REBUILD_S cost 5-59 ms frames on a Steam Deck, 33 a 6.6 km drive);
+-- the stock search looks at most ~400 m ahead, KEEP_M covers it with this margin. A new anchor, block or scatter
+-- rebuilds at once.
+M.REBUILD_MOVE_M = 100
 local waited = 0
+local builtAt = nil     -- the player's {x, y} at the last rebuild; nil: the next one is due at once
 
 function M.update(aid, player, blk, gov)
   if aid ~= anchorId then
@@ -286,10 +440,12 @@ function M.update(aid, player, blk, gov)
     objs = {}
     dirty = true
     newAnchor = true
+    builtAt = nil
   end
   if blk and (not box or blk[1] ~= box[1] or blk[2] ~= box[2]) then
     box = { blk[1], blk[2], blk[3], blk[4] }
     dirty = true
+    builtAt = nil
   end
   if player and os.clock() - lastGuard >= M.GUARD_S then
     lastGuard = os.clock()
@@ -307,12 +463,16 @@ function M.update(aid, player, blk, gov)
   local off = not gpOn and (started or not require('beamngEarth/navgraph').choice.parked)
   local t = os.clock()
   if t - lastBuild < (off and M.REBUILD_OFF_S or M.REBUILD_S) then return end
+  if builtAt and started and not scatterPending and M.moving(player)
+      and (player.x - builtAt[1]) ^ 2 + (player.y - builtAt[2]) ^ 2 < M.REBUILD_MOVE_M * M.REBUILD_MOVE_M then
+    return
+  end
   if gov and gov.roomFor and waited < M.REBUILD_WAIT_FRAMES and not gov:roomFor(M.REBUILD_ROOM_MS) then
     waited = waited + 1
     return
   end
   waited = 0
-  lastBuild, dirty = t, false
+  lastBuild, dirty, builtAt = t, false, { player.x, player.y }
   local sw = stopwatch.new()
   local ok, near, mappedNear = pcall(rebuild, player)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
@@ -358,7 +518,7 @@ end
 function M.reset()
   require('beamngEarth/busparked').reset()
   spots, objs, anchorId, dirty, lastBuild, sites = {}, {}, nil, false, -math.huge, nil
-  hidden = {}
+  hidden, backAt, capped, applied, builtAt, suspended = {}, {}, nil, nil, nil, false
   box, lastGuard, heldActive = nil, -math.huge, nil
   started, scatterPending = false, false
   lastPlayer = nil

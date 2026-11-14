@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 298 # current dev kernels plus native Dutch roadside and shared signal assemblies
+MIN_VERSION = 299 # current dev plus native Dutch roadside assemblies
 
 
 class NativeMissing(RuntimeError):

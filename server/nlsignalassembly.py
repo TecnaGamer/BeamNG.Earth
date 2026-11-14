@@ -106,7 +106,7 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
     if holes is not None and holes.shape != qgrid.shape:
         raise ValueError('terrain hole mask shape')
     origin = [centre[0] - qgrid.shape[1] * square / 2, centre[1] - qgrid.shape[0] * square / 2]
-    return fast.native(298, 'Dutch physical signal planning and mounted assemblies').NlSignalScene(
+    return fast.native(299, 'Dutch physical signal planning and mounted assemblies').NlSignalScene(
         p, t, np.asarray(kinds, np.uint8), z, origin, float(square),
         np.asarray(coverage, np.float64).reshape(-1, 4), holes)
 
@@ -144,5 +144,5 @@ def bundle(approaches, owners, catalog):
     The caller must recompute all approaches with the whole junction's zones.
     """
     dump=lambda value:json.dumps(value,allow_nan=False,separators=(',',':'))
-    return json.loads(fast.native(298,'Dutch shared junction supports').nl_signal_bundle(
+    return json.loads(fast.native(299,'Dutch shared junction supports').nl_signal_bundle(
         [dump(a) for a in approaches],owners,dump(catalog)))

@@ -75,7 +75,7 @@ end
 
 function M.new(backend)
   assert(backend and backend.create and backend.remove)
-  local self={enabled=false,revision=-1,live={},pending=nil,errors=0}
+  local self={enabled=false,revision=-1,live={},pending=nil,errors=0,scope=nil,requireScope=false}
   local function discard(p)
     if p then for _,entry in pairs(p.created) do backend.remove(entry.handle) end end
   end
@@ -87,12 +87,26 @@ function M.new(backend)
       discard(self.pending);self.pending=nil
       for _,entry in pairs(self.live) do backend.remove(entry.handle) end
       self.live={};self.revision=-1
+      self.scope=nil
     end
+  end
+  function self:setScope(epoch,anchor)
+    if not finite(epoch) or epoch%1~=0 or epoch<0 or not finite(anchor) or anchor%1~=0 or anchor<0 then
+      return false,'invalid_scope'
+    end
+    if self.scope and self.scope.epoch==epoch and self.scope.anchor==anchor then return true end
+    local on=self.enabled
+    if on then self:setEnabled(false) end
+    self.requireScope=true;self.scope={epoch=epoch,anchor=anchor}
+    if on then self:setEnabled(true) end
+    return true
   end
   function self:enqueue(packet)
     if not self.enabled then return false,'disabled' end
     if type(packet)~='table' or packet.format~=1 or not finite(packet.revision)
         or packet.revision%1~=0 or packet.revision<0 or not array(packet.parts,4096) then return false,'invalid_packet' end
+    if self.requireScope and (not self.scope or packet.epoch~=self.scope.epoch
+        or packet.anchor~=self.scope.anchor) then return false,'stale_scope' end
     if packet.revision<=self.revision or self.pending and packet.revision<=self.pending.revision then
       return false,'stale_revision'
     end
@@ -139,7 +153,7 @@ function M.new(backend)
   end
   function self:forgetLevel()
     -- The engine tears the scene down. Never call into stale Forest userdata.
-    self.live={};self.pending=nil;self.revision=-1
+    self.live={};self.pending=nil;self.revision=-1;self.scope=nil
     if backend.forgetLevel then backend.forgetLevel() end
   end
   return self

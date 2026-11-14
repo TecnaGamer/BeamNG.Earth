@@ -352,10 +352,6 @@ def _tracks_of(items):
     return sorted(out, key=lambda e: e[0])
 
 
-def _near_path(xy, path, d):
-    return bs.dist_to_path(path, xy) <= d
-
-
 def _ring_overlap(a, b):
     """Do the polygons a and b overlap (a vertex of one inside the other, or the nearest points under 0)?"""
     oa, ob = bs._open(a), bs._open(b)

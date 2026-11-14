@@ -73,7 +73,7 @@ NET_RETRY_S = 60.0              # ... after a network error
 FETCH_WAIT_S = 20.0             # s a process waits for another downloading the same block
 MAX_BLOCK_BYTES = 96 << 20
 MEM_BLOCKS = 6                  # blocks kept in memory per process
-WEEKLY = ("rails", "lanes", "stations")     # versions() keys left out of the vkey (per item instead: slice_digest)
+WEEKLY = ("rails", "lanes", "stations", "osmyears")     # versions() keys left out of the vkey (per item instead: slice_digest)
 PINS = "pins.json"
 
 

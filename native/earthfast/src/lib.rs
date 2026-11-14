@@ -117,6 +117,7 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod osmtagshards;
+mod buildyears;
 mod gradebins;
 mod par;
 mod bc1fast;
@@ -6450,7 +6451,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 297: domes::dome_roof (a dome over any outline from its centroid or pole of inaccessibility: Streets GL's
     // CurvedRoofBuilder, MIT; server/buildings.py _dome)
     domes::register(m)?;
-    // 298: Dutch source signs, signal context, mounted parts and shared junction bundles.
-    m.add("VERSION", 298)?;
+    // 298: OSM building construction years, retained alongside Dutch roadside kernels.
+    buildyears::register(m)?;
+    // 299: current dev plus Dutch signs, signal context and shared mounted assemblies.
+    m.add("VERSION", 299)?;
     Ok(())
 }

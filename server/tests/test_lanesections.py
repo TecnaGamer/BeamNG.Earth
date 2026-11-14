@@ -47,6 +47,33 @@ def enu(f, i):
 
 
 class LaneSections(unittest.TestCase):
+    def test_graph_does_not_repeat_unsplit_copy_from_neighbour_cell(self):
+        sections = lanesections.split(merged(), FRAME)
+        original = merged()
+        expected = navgraph.build(FRAME, [sections], flat, (500., 0.), window=1500.)
+        for cells in ([original, sections], [sections, original]):
+            with self.subTest(original_first=cells[0] is original):
+                actual = navgraph.build(FRAME, cells, flat, (500., 0.), window=1500.)
+                self.assertEqual(actual["edges"], expected["edges"])
+                self.assertEqual(actual["nodes"], expected["nodes"])
+
+    def test_graph_keeps_original_when_section_coverage_is_incomplete(self):
+        for case in ("missing", "gap", "clipped"):
+            with self.subTest(case=case):
+                sections = lanesections.split(merged(), FRAME)
+                if case == "missing":
+                    sections.attrs[lanesections.PROFILE][1] = None
+                elif case == "gap":
+                    sections.ids[1] = str(sections.ids[1]).replace("700000000-", "700000001-")
+                else:
+                    sections.clipped = np.array([False, True])
+                original = merged()
+                expected = navgraph.build(FRAME, [original], flat, (500., 0.), window=1500.)
+                actual = navgraph.build(FRAME, [original, sections], flat, (500., 0.), window=1500.)
+                original_nodes = {n for n in expected["nodes"] if n.startswith("sid000_")}
+                self.assertTrue(original_nodes)
+                self.assertTrue(original_nodes <= actual["nodes"].keys())
+
     def test_through_lines_stay_fixed_as_fourth_lane_opens(self):
         """The 3-lane section's separators go on straight beside the opening fourth lane (the lanes' grid stands
         roads.driving_offset off the pavement's centre: the wider right shoulder)."""

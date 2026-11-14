@@ -432,8 +432,8 @@ class MapData:
         if built is None or feats.__dict__.get("_rails_built") == built:
             return
         try:
-            rt.join(feats, key)
-            feats.__dict__["_rails_built"] = built
+            if rt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_rails_built"] = built
         except Exception as e:      # (Overture's classes alone)
             log.debug("railtags join %s: %s: %s", key, type(e).__name__, e)
 
@@ -447,8 +447,8 @@ class MapData:
         if built is None or feats.__dict__.get("_lanes_built") == built:
             return
         try:
-            lt.join(feats, key)
-            feats.__dict__["_lanes_built"] = built
+            if lt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_lanes_built"] = built
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
@@ -615,7 +615,12 @@ class MapData:
             revisit.fault()
         return ok
 
-    def versions(self):
+    def versions(self, buildings=False):
+        """The map data's identity for cache keys; buildings: for a tile that draws buildings, with the OSM building
+        years' build too ("osmyears": osmyears.identity, frozen per process; "off" / "none" without one)."""
+        if buildings:
+            import osmyears
+            return dict(self.versions(), osmyears=osmyears.identity(self))
         import europewalks
 
         rails = getattr(self, "rail_tags", None)
@@ -651,8 +656,13 @@ class MapData:
         server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
         ask, and none of those was found again by the next run (versions)."""
         def run():
+            import osmyears
+            try:
+                years = osmyears.shards(self)  # (the building years: pinned now for the next start, osmyears.frozen)
+            except Exception:
+                years = None
             for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
-                        getattr(self, "station_tags", None)):
+                        getattr(self, "station_tags", None), years):
                 if src is None:
                     continue
                 try:

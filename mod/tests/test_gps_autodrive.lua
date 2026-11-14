@@ -684,8 +684,78 @@ do
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
 end
 
+-- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
+-- Autodrive on its confirmed graph chain instead of reducing every refresh to the reached first waypoint.
+do
+  local module = '/lua/ge/extensions/gameplay/route/route'
+  local original, pins = package.loaded[module], nil
+  local nativePath = { 'w', 'j', 's', 't' }
+  package.loaded[module] = function()
+    return { path = {}, setupPathMultiWaypoints = function(self, ids)
+      pins = ids
+      for _, id in ipairs(nativePath) do
+        self.path[#self.path + 1] = { wp = id, pos = map.getMap().nodes[id].pos }
+      end
+    end }
+  end
+  local function roads(f)
+    local function n(x, links) return { pos = { x = x, y = 0, z = 0 }, radius = 6, links = links } end
+    f.nodes = { w = n(0, { j = {} }), j = n(100, { s = {} }), s = n(500, { t = {} }), t = n(1000, {}),
+      u = n(200, { v = {} }), v = n(300, {}) }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 60 }
+  end
+  local f = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(f.drives[#f.drives] and table.concat(f.drives[#f.drives], ',') == 'j,s,t',
+    'an overlapping marker chain is replanned through exact nodes rather than driven as one short waypoint')
+  T.check(pins and pins[1] == 'w' and pins[2] == 'j' and pins[#pins] == 't',
+    'node planning retains the occupied directed edge and the confirmed route target')
+  nativePath = { 'w', 'j' }
+  local partial = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
+  T.check(not partial.gps.nodePlans, 'a native planner that omits an unreachable pin is not accepted as a continuation')
+  local point = { segment = { 1000, 0, 500, 0, a = 't', b = 's' }, dx = 1, dy = 0 }
+  local exact = f.gps.targetNodes('w', 'j', { via = { { projection = point } }, projection = point })
+  T.check(table.concat(exact, ',') == 'w,j,t', 'pins follow travel direction, not edge storage order, without duplicate endpoints')
+  package.loaded[module] = original
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
+-- Physics pause is not a stationary vehicle: the GPS may keep updating its route, but must not recover it.
+do
+ for _, pauseKind in ipairs({'physics', 'engine'}) do
+  local oldBe, oldSpawn, oldQuat, oldLog = be, spawn, quatFromDir, log
+  local running, recoveries = true, 0
+  be = { getPhysicsRunning = function() return pauseKind ~= 'physics' or running end,
+         getEnabled = function() return pauseKind ~= 'engine' or running end }
+  spawn = { safeTeleport = function() recoveries = recoveries + 1 end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local f = fixture(nil, 0, 6)
+  f.speed = 0
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1) -- one genuine retry before pausing
+  local retries = f.gps.noProgressReplans
+  running = false
+  for _ = 1, 6 do f:step(f.gps.AUTO_NOPROGRESS_S + 1) end
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'a paused simulation never replans for stalled progress or teleports the vehicle')
+  T.check(f.gps.status().remaining ~= nil and f.gps.autodrive(),
+    'the GPS remains available and Autodrive stays enabled while physics is paused')
+  running = true
+  f:step()
+  f:step(f.gps.AUTO_NOPROGRESS_S - 1)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries,
+    'resuming grants a full progress interval instead of counting paused time')
+  f:step(2)
+  T.check(recoveries == 0 and f.gps.noProgressReplans == retries + 1,
+    'the first genuine stall after resume retries instead of inheriting a recovery attempt')
+  f:step(); f:step(f.gps.AUTO_NOPROGRESS_S + 1)
+  T.check(recoveries == 1, 'normal recovery still works after the resumed vehicle remains stalled')
+  be, spawn, quatFromDir, log = oldBe, oldSpawn, oldQuat, oldLog
+ end
+end
+
+
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')

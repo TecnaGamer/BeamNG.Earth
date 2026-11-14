@@ -900,7 +900,7 @@ class RoadStageTest(unittest.TestCase):
                 self.assertEqual((b3.n, b3.lidar), (0, 0))
         self.assertEqual(fail["calls"], 4, "each made once")
         for name in ("_chain_cands", "_stronger_z", "_junction_lift", "_cw_cell_parts", "_cw_region", "_end_lift",
-                     "_decks_near", "_xsolve", "_grade_match"):
+                     "_decks_near", "_xsolve", "_grade_match", "_end_lift_raw"):
             self.assertEqual(getattr(grading._Planner, name).__name__, name)
             self.assertTrue(getattr(getattr(grading._Planner, name), "marked", None), name + " keeps its marks")
 
@@ -1055,7 +1055,7 @@ class RoadStageTest(unittest.TestCase):
         # (every kept answer's marks are read where its entry is taken out)
         import inspect
         for name in ("_chain_cands", "_stronger_z", "_junction_lift", "_cw_cell_parts", "_cw_region", "_end_lift",
-                     "_decks_near", "_xsolve", "_grade_match"):
+                     "_decks_near", "_xsolve", "_grade_match", "_end_lift_raw"):
             fn = getattr(grading._Planner, name)
             memo = fn.marked[0]
             src = inspect.getsource(fn.__closure__[[c for c in fn.__code__.co_freevars].index("fn")].cell_contents)

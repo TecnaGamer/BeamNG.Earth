@@ -64,4 +64,24 @@ assert(reader:enqueue(packet(0,{part('a')})));assert(reader:tick(1))
 local before=removed
 reader:forgetLevel()
 T.check(removed==before and next(reader.live)==nil,'level teardown never calls stale native handles')
+do
+  local count=0
+  local scoped=consumer.new({create=function()count=count+1;return {} end,remove=function()count=count-1 end})
+  scoped:setEnabled(true);assert(scoped:setScope(10,1))
+  local p=packet(10,{part('scoped')});p.epoch=10;p.anchor=1
+  assert(scoped:enqueue(p));assert(scoped:tick(1))
+  assert(scoped:setScope(10,1))
+  T.check(count==1 and scoped.revision==10,'unchanged scope never remakes accepted items')
+  assert(scoped:setScope(11,2))
+  T.check(count==0 and not scoped:enqueue(p),'new anchor removes old items and refuses delayed packet')
+  p.epoch=11;p.anchor=2;p.revision=11
+  assert(scoped:enqueue(p))
+  scoped:forgetLevel()
+  T.check(not scoped:enqueue(p),'level teardown requires an explicit fresh scope')
+  assert(scoped:setScope(12,3))
+  p.epoch=12;p.anchor=3;p.revision=12
+  assert(scoped:enqueue(p));assert(scoped:tick(1))
+  scoped:setEnabled(false);scoped:setEnabled(true)
+  T.check(not scoped:enqueue(p) and count==0,'disable cannot reuse an old connection scope')
+end
 T.done('test_nl_signal_assemblies')
