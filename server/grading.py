@@ -120,7 +120,9 @@ SIDEWALK_MARGIN_M = 0.5     # m of flat ground beyond a sidewalk (roads.SIDEWALK
 LONG_PART_M = 3000.0        # a road part longer than this is planned per cell, only within CLIP_MARGIN_M of the cell
 CLIP_MARGIN_M = 400.0
 PLAN_THREADS = 4            # cells planned at once (_plan_missing)
-PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town)
+PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._plan_set; ~1 MB each in a town), as many
+#                             of the sets without the tunnels' own roads (_over_tunnel_ground's _over_sets: up to ~16 MB
+#                             more per planner in a town with a tunnel)
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
@@ -163,6 +165,7 @@ TUNNEL_KEEP_M = 5.0         # m beside a covered tunnel's road where the ground 
 PORTAL_REACH_M = 30.0       # m: the cells this near a tunnel's portal grade it (apply roads_only)
 TUNNEL_OWN_MARGIN_M = 30.0  # m round a cell's box: the tunnel parts reaching into it are its plans' (_tunnel_sections)
 OVER_TUNNEL_SMALL_M = 0.5   # ... but for a change smaller than this (a road crossing over it, graded flush)
+OVER_TUNNEL_APPROACH_M = 1.0  # m: a road ending this near a tunnel's portal is its approach (_cell_own_roads)
 WALL_AHEAD_M = 2.5          # ... only beside a segment or this little past its end (a joint between two: VERTEX_STEP)
 YIELD_RAMP_M = 0.5          # m over which a road gives way to another's carriageway at another level (grade_points): in
                             # height difference up to WALL_CUT_M and in distance past its own carriageway's edge
@@ -200,6 +203,16 @@ RETRY_S = 60.0              # s before a cell whose road data failed is asked fo
 # block only when every cell whose plans can reach it is known complete: plans made short and kept in memory for the
 # session raise no fault when a later block reads them.
 _PLANS_COMPLETE = {}
+
+
+def _tunnel_feature(fid):
+    """The map feature of plan fid: a tunnel's plans are named for its sections, "<fid>.<n>#<k>" + TUNNEL_TAG (the map
+    part, roads.TunnelProfiles._part_id, then the section), a road's for the feature itself."""
+    fid = str(fid)
+    if TUNNEL_TAG not in fid:
+        return fid
+    part = fid.split(TUNNEL_TAG)[0].rsplit("#", 1)[0]
+    return part.rsplit(".", 1)[0]
 
 
 def _note_plans(key, complete):
@@ -6475,8 +6488,85 @@ class _Planner:
             # a street's smoothed profile 1 m over a dip in the ground over Vienna's A23 tunnel fell back to that dip
             # in the strip over the tube, a ledge at each edge of it, 2026-11-12)
             keep &= base.ravel() - out >= OVER_TUNNEL_SMALL_M
-            out[keep] = base.ravel()[keep]
+            if keep.any():
+                # (what is undone there is the tunnels' own roads' grading, whose approaches reached up over the tube;
+                # a road crossing over it keeps its own cutting: undone too, the hillside stood back up across the road
+                # in a strip over each tube, the road's mesh on its profile up to 2.8 m off the ground and banks and
+                # pits beside it; the stage road over the A25's twin tubes at Popoli, 2026-11-14)
+                # (never below the full grading: what the other roads cut stays as it is, what the tunnel's own plans
+                # cut beyond it is undone; the full grading where the other roads cut deeper, so no ledge where a
+                # point's cut reaches OVER_TUNNEL_SMALL_M: a trunk's wheel track over the Peripherique's tube at
+                # Porte Maillot stepped 2.5 m there from its full grading to the other roads', test_drivability)
+                out[keep] = np.maximum(out[keep], self._over_tunnel_ground(keys, e[keep], n[keep], base.ravel()[keep],
+                                                                          lift))
         return out.reshape(shape)
+
+    def _over_tunnel_ground(self, keys, e, n, base, lift):
+        """base at the points over covered tunnels graded under the plans of the cells keys that are not a tunnel's
+        own road (its sections, mouths and approaches, _cell_own_roads), so a road crossing over the tube keeps its
+        grading there while the tunnel's approaches leave the ground over it as it is."""
+        mk = tuple(sorted(str(k) for k in keys))
+        memo = self.__dict__.setdefault("_over_sets", {})
+        with self.lock:
+            hit = memo.get(mk, False)
+        if hit is False:
+            # (which plans are a tunnel's own: each cell's own verdict, _cell_own_roads, not one made from whatever
+            # cells this call reached: the block and a road tile reaching other cells grade the same point alike)
+            cells = [self._cell_own_roads(k) for k in keys]
+            own = set().union(*(o for _ps, o in cells))
+            got = {}
+            for ps, _o in cells:
+                for fid, p in ps:
+                    pk = (fid, float(p.xy[0, 0]), float(p.xy[0, 1]))
+                    if pk not in own:
+                        got.setdefault(pk, p)
+            plans = [got[k] for k in sorted(got)]   # (in key order and merged, as _plan_set: the same sums everywhere)
+            # (no copies: the merge replaces its list's items, it never changes a Plan, and this list is our own)
+            hit = merge_plan_set(plans) if plans else None
+            with self.lock:
+                if all(k in self.cells for k in keys):
+                    if len(memo) >= PLAN_SETS_MAX:
+                        memo.pop(next(iter(memo)))
+                    memo[mk] = hit
+        if hit is None:
+            return base
+        # (never above the bare ground: only what would cut the cover down is undone here, and it stays a cut)
+        return np.minimum(grade_points(e, n, base, hit, lift), base)
+
+    def _cell_own_roads(self, key):
+        """(plans of cell key, {(fid, first x, first y)} of those that are a tunnel's own road): its sections and mouths
+        (TUNNEL_TAG), the plans of the same map feature as one of them, and a road ending within OVER_TUNNEL_APPROACH_M
+        of one of their ends. Made once per cell from that cell's plans alone, so the verdict on a plan is the same
+        whatever other cells a call reaches; a cell's plans are kept for good, and so is this."""
+        ps = self._cell_plans(key)
+        memo = self.__dict__.setdefault("_own_roads", {})
+        with self.lock:
+            got = memo.get(key)
+        if got is not None and got[0] is ps:
+            return got
+        feats = {_tunnel_feature(fid) for fid, _p in ps if TUNNEL_TAG in fid}
+        # (an approach mapped as a way of its own, ending at the portal: the Peripherique's trunk into its tube at Porte
+        # Maillot, its descent cutting the ground over the tube under Avenue de Neuilly)
+        # (every end of the tunnel's plans, not its real portals alone (the mouth plans' portal ends): those ends are
+        # its sections' joins too, a T junction at a portal or a side road ending at a trench's joint counts as the
+        # tunnel's own and loses its grading over the tubes, as every road's was undone before. The portals alone lost
+        # that trunk, which reaches its tube at a join: Porte Maillot 296.2 -> 296.8, test_drivability, 2026-11-15)
+        portals = [q for fid, p in ps if TUNNEL_TAG in fid for q in np.asarray(p.xy)[[0, -1], :2]]
+        own = set()
+        if feats or portals:
+            near = np.zeros(len(ps), bool)
+            if portals:
+                pt = np.asarray(portals, np.float64)
+                ends = np.asarray([np.asarray(p.xy)[[0, -1], :2] for _f, p in ps], np.float64)     # (plans, 2, 2)
+                d = dnp.hypot(ends[:, :, None, 0] - pt[None, None, :, 0], ends[:, :, None, 1] - pt[None, None, :, 1])
+                near = (d <= OVER_TUNNEL_APPROACH_M).any(axis=(1, 2))
+            own = {(fid, float(p.xy[0, 0]), float(p.xy[0, 1])) for (fid, p), nr in zip(ps, near)
+                   if nr or _tunnel_feature(fid) in feats}
+        got = (ps, own)
+        with self.lock:
+            if key in self.cells:
+                memo[key] = got
+        return got
 
     def open_tunnels(self, lat, lon):
         """[(lat (k,), lon (k,), Spec)] of the tunnels' open sections planned near the points: roads on the ground
