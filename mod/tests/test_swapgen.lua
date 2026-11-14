@@ -170,11 +170,19 @@ run()
 roads.swapCommit(21)
 T.check(objs('q').road.hidden == true and objs('u').road.hidden == false, 'committed: new shown, old hidden')
 T.check(roads.swapUndo(21), 'taken back')
+T.check(not roads.swapRolledBack(), 'the rollback\'s collision is still to come')
 for w, o in pairs(objs('q')) do T.check(o.hidden == false, 'the old ' .. w .. ' is shown again') end
 T.check(objs('q').walkcol.fields.collisionType == 'Collision Mesh' and objs('q').walk.fields.collisionType == 'None'
   and objs('q').road.fields.collisionType == 'None', 'with the collision it had')
 for w, o in pairs(objs('u')) do
   T.check(o.hidden == true and o.fields.collisionType == 'None', 'the new ' .. w .. ' is out of sight and collision')
+end
+do
+  local r1 = S.calls.reloadCollision or 0
+  local tEnd = os.clock() + 3
+  while not roads.swapRolledBack() and os.clock() < tEnd do roads.update(gov, 1, car, nil, A) end
+  T.check(roads.swapRolledBack(), 'rolled back: its collision rebuilt and a frame passed')
+  T.check((S.calls.reloadCollision or 0) > r1, 'by a rebuild the rollback forced')
 end
 run()
 T.check(count(objs('u')) == 0 and count(objs('q')) == 3, 'the staged parts are gone, the old skin is the tile\'s')
@@ -254,5 +262,12 @@ T.check(roads.swapSettled(11) and roads.swapFinish(11), 'settled and finished')
 run()
 T.check(count(objs('next')) == 0 and count(objs('bare')) == 1, 'and deleted after')
 
+-- ---- the level ends with a swap under way: nothing of it is left ------------------------------------------------
+roads.swapBegin(40)
+roads.onSkin({ type = 'roads_skin', anchorId = 1, key = key, path = skinOf('end'), swap = 40 }, 1)
+run()
+roads.swapCommit(40)
 roads.reset()
+T.check(roads._swapState() == nil and roads.swapRolledBack(), 'reset forgets the swap')
+T.check(roads.swapStaged(40) == false and not roads.swapCommit(40) and not roads.swapFinish(40), 'and it cannot go on')
 T.done('test_swapgen')

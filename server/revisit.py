@@ -448,9 +448,10 @@ def current_codes():
 # is whole, all of one generation. What may be shown together is earthd's to say (its stale mode: one generation an
 # anchor). An older item whose format this code or the mod cannot read is not found: READ_FORMAT per kind (bump a
 # kind's number when its kept blobs change shape) and the road tiles' JSON version are part of a generation.
-# BNE_STALE_REVISIT=off: none of it. BNGE_SIM_BUMP=<tag>: another code key and other format markers without a change
+# Off unless BNE_STALE_REVISIT=on. BNGE_SIM_BUMP=<tag>: another code key and other format markers without a change
 # of code (tests, tools/staleprobe.py).
-STALE_ON = os.environ.get("BNE_STALE_REVISIT", "on").strip().lower() not in ("off", "0", "no", "false")
+# (OFF by default until its failure paths have run in the real game: BNE_STALE_REVISIT=on turns it on)
+STALE_ON = os.environ.get("BNE_STALE_REVISIT", "off").strip().lower() in ("on", "1", "yes", "true")
 SIM_BUMP = os.environ.get("BNGE_SIM_BUMP", "")
 STALE_GENS = 2              # older generations tried, newest first
 GENS_KEPT = 6               # generations kept in the file

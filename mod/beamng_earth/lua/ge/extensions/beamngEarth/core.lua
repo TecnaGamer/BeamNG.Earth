@@ -400,6 +400,7 @@ local function loadBlock(tr)
   if ter and terrain.swap(tr.ter, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize)) then
     roads.terrainSwapped()      -- its collision follows by itself next frame: no other rebuild meanwhile
     groundcover.afterBlockChange()
+    st.blockMsg = tr            -- (the block in use, as it was sent: a generation swap's rollback installs it again)
     return true, nil, true
   end
   local ok, err = terrain.load(tr.heightmap, sq, maxH, x, y, tr.zBase, layers, base, tonumber(tr.baseSize))
@@ -408,6 +409,7 @@ local function loadBlock(tr)
   end
   -- every block import / move drops all the grass on it; rebuild it before this frame is drawn
   groundcover.afterBlockChange()
+  if ok then st.blockMsg = tr end   -- (as above: every terrain install leaves the snapshot a rollback needs)
   return ok, err
 end
 
@@ -853,12 +855,12 @@ local COMMIT_LOG = 20
 local COMMIT_SLOW_MS = 300     -- a commit frame this slow is logged with its materials
 local frameTimer = hptimer and hptimer() or nil
 
-local function commitTerrain(msg)
+local function commitTerrain(msg, quiet)
   local sw = stopwatch.new()
   local ok, err, swapped = loadBlock(msg)
   if not ok then
     setStatus('Terrain-follow import failed: ' .. tostring(err))
-    st.terrainRetryAt = st.clock + follow.RETRY_S
+    if not quiet then st.terrainRetryAt = st.clock + follow.RETRY_S end
     return false
   end
   local tLoad = sw()
@@ -877,7 +879,6 @@ local function commitTerrain(msg)
   st.commitFrames = c
   M._psum.mod.note('swap')
   st.block = { cx = msg.cx, cy = msg.cy }
-  st.blockMsg = msg     -- (the block in use, as it was sent: a generation swap that fails commits it again, _swapStep)
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
   st.followCount = st.followCount + 1
@@ -885,9 +886,11 @@ local function commitTerrain(msg)
   return true
 end
 
--- A generation swap's frame step (server stale_swap; swapgen.lua has the rules): the skins staged by roads.lua and the
--- swap's terrain are committed in one frame with the car held, and the server is told only once the collision of both
--- is in effect; any failure leaves the old ground whole.
+-- A generation swap's frame step (server stale_swap; swapgen.lua has the rules, in seconds as st.clock): the skins
+-- staged by roads.lua and the swap's terrain are committed in one frame with the car held, and the server is told only
+-- once the collision of both is in effect; any failure puts the old ground back whole (the old block from its own
+-- files: st.blockMsg, set by every terrain install) before the car is let go. From its commit on the swap is stepped
+-- to its end whatever happens to the server (M._swapLive).
 function M._swapStep()
   local sw = st.swap
   if not sw then return end
@@ -902,11 +905,13 @@ function M._swapStep()
       return nil
     end,
     commitTerrain = function(msg)
-      sw.oldTerrain = st.blockMsg         -- (the block in use, to commit again if the swap's collision never comes)
-      return commitTerrain(msg) == true
+      sw.oldTerrain = st.blockMsg         -- (the block in use: committed again if the swap must be rolled back)
+      return commitTerrain(msg, true) == true
     end,
     restoreTerrain = function()
-      return sw.oldTerrain ~= nil and commitTerrain(sw.oldTerrain) == true
+      local old = sw.oldTerrain
+      if type(old) ~= 'table' or not (st.block and old.cx == st.block.cx and old.cy == st.block.cy) then return false end
+      return commitTerrain(old, true) == true
     end,
     setLater = function(msg)
       local p = st.terrainPending
@@ -921,12 +926,22 @@ function M._swapStep()
       simhold.pause(false)
       return true
     end,
-    send = function(m) net.send(m) end,
+    send = function(m) if st.sessionId then net.send(m) end end,
   })
   if res then
     st.swap = nil
     log('I', 'beamngEarth', 'generation swap ' .. tostring(sw.gen) .. ': ' .. res)
   end
+end
+function M._swapLive() return require('beamngEarth/swapgen').live(st.swap) end
+
+-- A generation swap ends with the level or the extension: the hold released, nothing of it left (roads.reset forgets
+-- its tiles and parts).
+function M._swapTeardown()
+  local sw = st.swap
+  st.swap = nil
+  if sw and sw.held then require('beamngEarth/simhold').pause(false) end
+  roads.swapCancel()
 end
 
 -- Pure: a spot with collision under it near (x, y): (x, y, ground z) where groundAt(x, y) (the ground's height there or
@@ -1087,7 +1102,9 @@ M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
   -- taken at once brought the road / green / road ground flicker back, the same player)
+  -- (and a generation swap's own messages: its terrain_refresh is handled at once, so its swap_begin must be before it)
   urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
+    swap_begin = true, swap_end = true, swap_abort = true,
     block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
@@ -1167,11 +1184,10 @@ local function onMessage(msg)
       readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
-    if st.swap then
-      if st.swap.held then require('beamngEarth/simhold').pause(false) end
-      st.swap = nil
-      roads.swapAbort()
-    end
+    -- (a generation swap: before its commit it is dropped at the next frame's step; from its commit on it is stepped
+    -- to its end, committed or rolled back, and only then is the car let go: the new terrain was left under the old
+    -- skins when the connection went in between)
+    if st.swap and not M._swapLive() then st.swap.cancel = 'the connection was lost' end
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
     st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
@@ -1455,12 +1471,11 @@ local function onMessage(msg)
     if st.swap and st.swap.gen == msg.gen then st.swap.ended, st.swap.skins = true, tonumber(msg.skins)
     else net.send({ type = 'swap_done', gen = msg.gen, ok = false }) end
   elseif t == 'swap_abort' then           -- ... given up: what was staged goes, the old ground stays
-    if st.swap and st.swap.gen == msg.gen then
-      if st.swap.held then require('beamngEarth/simhold').pause(false) end
-      if st.swap.phase == 'settle' and st.swap.now and st.swap.oldTerrain then commitTerrain(st.swap.oldTerrain) end
-      st.swap = nil
+    -- (before its commit: dropped at the next frame's step, with its answer. From its commit on it is a local
+    -- transaction that ends committed or rolled back by itself, swapgen.lua: the server's abort changes nothing)
+    if st.swap and st.swap.gen == msg.gen and not M._swapLive() then
+      st.swap.cancel = 'given up by the server'
     end
-    roads.swapAbort(msg.gen)
   elseif t == 'roads_exact' then          -- ... its tall parts' exact variants for this anchor
     roads.onExact(msg, st.anchorId)
   elseif t == 'roads_drop' then
@@ -3164,6 +3179,7 @@ local function onClientEndMission()
   horizon.restoreSky() -- M1h: the level's sky planet radius (its LevelInfo goes with the level)
   groundcover.reset() -- its objects go with the level
   groundcover.enginePatch(false)
+  M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
   roads.reset()
   sea.reset()
   if st.inOurLevel then pcall(trees.saveShapes, true) end    -- (the next level start warms them: prewarmSaved)
@@ -3215,6 +3231,7 @@ local function onExtensionUnloaded()
   groundcover.enginePatch(false)
   net.close()
   farfield.clear()
+  M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
   roads.clear()
   sea.clear()
   trees.clear()

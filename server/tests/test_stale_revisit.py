@@ -27,6 +27,10 @@ import revisitpack  # noqa: E402
 import roads  # noqa: E402
 import vegetation  # noqa: E402
 
+# (the feature is OFF by default, BNE_STALE_REVISIT=on turns it on: these tests run it on)
+STALE_DEFAULT = revisit.STALE_ON
+revisit.STALE_ON = True
+
 
 class _Bump:
     """with _Bump(tag): the process keys as after an update tagged tag (another code key, other format markers, another
@@ -123,6 +127,19 @@ class GenerationsTest(unittest.TestCase):
             revisit._switches.clear()
             self.assertEqual(revisit.switches_key(), k)
         revisit._switches.clear()
+
+    def test_off_by_default(self):
+        if "BNE_STALE_REVISIT" not in os.environ:
+            self.assertFalse(STALE_DEFAULT, "off unless BNE_STALE_REVISIT=on")
+        import subprocess
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        for value, want in ((None, "False"), ("on", "True"), ("off", "False"), ("1", "True")):
+            env = {k: v for k, v in os.environ.items() if k != "BNE_STALE_REVISIT"}
+            if value is not None:
+                env["BNE_STALE_REVISIT"] = value
+            out = subprocess.run([sys.executable, "-c", "import revisit; print(revisit.STALE_ON)"], cwd=here, env=env,
+                                 capture_output=True, text=True).stdout.strip()
+            self.assertEqual(out, want, f"BNE_STALE_REVISIT={value}")
 
     def test_a_damaged_file_is_no_generations(self):
         os.makedirs(os.path.join(self.d, revisit.SUBDIR))
@@ -512,12 +529,42 @@ class StaleRunTest(unittest.TestCase):
         self.assertEqual(sum(1 for c in calls if c[0] == bad), earthd.Server.STALE_TRIES)
         self.assertEqual([e[0] for e in events], ["swap"])
 
-    def test_a_failed_swap_keeps_the_older_version_and_is_not_tried_again(self):
-        anchor, events, _calls, _near, _far, ticks = self.run_case(swap_ok=False, ticks=80)
-        self.assertEqual([e[0] for e in events], ["swap"], "one try")
+    def test_a_failed_swap_keeps_the_older_version_and_is_tried_again_as_a_whole(self):
+        import earthd
+        with mock.patch.object(earthd.Server, "STALE_RETRY_S", 0.0):
+            anchor, events, _calls, _near, _far, ticks = self.run_case(swap_ok=False, ticks=80)
+        self.assertEqual([e[0] for e in events], ["swap"] * earthd.Server.STALE_RETRIES,
+                         "each try a whole swap, a few at most")
+        self.assertTrue(all(e[1] for e in events), "the older version shown at each")
         self.assertTrue(anchor.stale, "the older version stays, whole")
         self.assertTrue(anchor.stale_held)
-        self.assertLess(ticks, 80, "and the run ends: nothing is released later")
+        self.assertLess(ticks, 80, "and the run ends: nothing is released by a timeout")
+
+    def test_a_block_the_older_version_lacks_is_never_built_under_it(self):
+        """Server.stale_wait_swap: the request of a block the older version does not have waits for a committed swap;
+        when none comes it FAILS (the mod's edge guard holds the car), it never goes on to build this version's block
+        under the older version's skins."""
+        import threading
+        import types
+        import earthd
+        import pools
+        a = types.SimpleNamespace(id=7, stale=({"id": "old"},), stale_why=None, stale_held=True)
+        with mock.patch.object(earthd.Server, "STALE_SWAP_WAIT_S", 0.4):
+            t0 = time.monotonic()
+            with self.assertRaises(RuntimeError):
+                earthd.Server.stale_wait_swap(None, a, 512.0, 0.0)
+            self.assertGreaterEqual(time.monotonic() - t0, 0.4)
+        self.assertIn("not in the older version", a.stale_why, "the swap was asked for")
+        with self.assertRaises(pools.Abandoned):
+            earthd.Server.stale_wait_swap(None, a, 512.0, 0.0, gone=lambda: True)
+        # a committed swap lets it through
+        threading.Timer(0.3, lambda: setattr(a, "stale", ())).start()
+        earthd.Server.stale_wait_swap(None, a, 512.0, 0.0)
+        self.assertEqual(a.stale, ())
+        # and its caller builds only after it returned
+        import inspect
+        src = inspect.getsource(earthd.Server.make_heightmap)
+        self.assertEqual(src.count("Server.stale_wait_swap(self, anchor, cx, cy, gone)"), 2)
 
 
 class StaleSwapTest(unittest.TestCase):
@@ -543,14 +590,16 @@ class StaleSwapTest(unittest.TestCase):
         anchor = types.SimpleNamespace(id=7, stale=(gen,), stale_fresh=set(), stale_held=False, swap_gate=None)
         server = types.SimpleNamespace(out_dir=d, hm=collections.OrderedDict({key: {"ter": "old.ter", "stale": "old"}}),
                                        hm_committed=collections.deque([key]), hm_sent=collections.deque([key]),
-                                       ui_pool=None, is_abandoned=lambda aid: False, hm_name=lambda k: "hm.png",
+                                       ui_pool=None, is_abandoned=lambda aid: False, hm_suffix={},
                                        _remove=lambda p: events.append(("removed", os.path.basename(p))))
+        server.hm_name = lambda k: f"hm{server.hm_suffix.get(k, '')}.png"
 
         async def terrain(a, cx, cy, lane=None):
             events.append(("build", (a.id, cx, cy) in a.stale_fresh, bool(a.stale)))
             if build_fails:
                 raise RuntimeError("no block")
-            with open(os.path.join(d, "hm.png"), "wb") as f:
+            events.append(("built as", server.hm_name((a.id, cx, cy))))
+            with open(os.path.join(d, server.hm_name((a.id, cx, cy))), "wb") as f:
                 f.write(b"old heights" if block_same else b"new heights")
             with open(os.path.join(d, "new.ter"), "wb") as f:
                 f.write(b"old ter" if block_same else b"new ter")
@@ -624,6 +673,12 @@ class StaleSwapTest(unittest.TestCase):
         self.assertEqual(events[0], ("build", True, True))
         self.assertEqual(anchor.stale, ())
         self.assertEqual(server.hm[key], {"ter": "new.ter"})
+        # built under names of its own: the shown block's files were never written over (the mod's rollback)
+        built = next(e[1] for e in events if e[0] == "built as")
+        self.assertNotEqual(built, "hm.png")
+        with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
+            self.assertEqual(f.read(), b"old heights")
+        self.assertEqual(server.hm_name(key), built, "and they are the block's names from the commit on")
         self.assertIsNone(anchor.swap_gate, "the blocks' gate is open again")
         # the content, the trees and the signs only after the mod's commit
         self.assertLess(events.index(("tracker end", True)), events.index(("veg redo",)))
@@ -635,6 +690,7 @@ class StaleSwapTest(unittest.TestCase):
         self.assertNotIn("terrain_refresh", [m["type"] for m in sent])
         self.assertEqual(server.hm[key], {"ter": "old.ter"}, "the mod's block: its mark gone, its .ter kept")
         self.assertIn(("removed", "new.ter"), events)
+        self.assertEqual(server.hm_name(key), "hm.png", "its own files are the block's")
 
     def test_the_mod_cannot_commit_the_older_version_stays_whole(self):
         for kw in ({"mod_ok": False}, {"mod_answers": False}):
@@ -648,6 +704,9 @@ class StaleSwapTest(unittest.TestCase):
             self.assertNotIn(("veg redo",), events)
             self.assertIn(("removed", "new.ter"), events)
             self.assertIsNone(anchor.swap_gate)
+            self.assertEqual(server.hm_name(key), "hm.png", "the shown block's names are the key's again")
+            with open(os.path.join(server.out_dir, "hm.png"), "rb") as f:
+                self.assertEqual(f.read(), b"old heights", "and its file is untouched: the mod can install it again")
 
     def test_a_block_that_cannot_be_built_nothing_is_sent_but_the_abort(self):
         ok, anchor, server, conn, sent, events, key = self.make(build_fails=True)

@@ -657,6 +657,7 @@ M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'w
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
+local swapBack = nil         -- a rollback's collision still to come: { reloaded, frames } (M.swapUndo)
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
 M.geoKey = geoKey
@@ -1159,7 +1160,22 @@ function M.swapUndo(gen)
   end
   swapRestore(sw)
   markDirty('swap')
+  -- (the restored skins' collision, and a restored terrain's: rebuilt as a commit's, after the quiet frames;
+  -- swapRolledBack says when it is in effect)
+  swapBack = { reloaded = false, frames = 0 }
   return true
+end
+
+-- Is the collision of the last rollback (swapUndo) in effect: its rebuild ran, and a frame has passed? True when no
+-- rollback is waiting.
+function M.swapRolledBack()
+  if swapBack and swapBack.reloaded and swapBack.frames >= 1 then swapBack = nil end
+  return swapBack == nil
+end
+
+-- The level is ending (or the extension): whatever swap there is is forgotten, its objects are the level's to delete.
+function M.swapCancel()
+  swapState, swapBack = nil, nil
 end
 
 function M.swapAbort(gen)
@@ -2283,6 +2299,8 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   local swapWait = swapState ~= nil and swapState.committed == true
   if swapWait and swapState.reloaded then swapState.frames = swapState.frames + 1 end
   if swapWait and not swapState.reloaded and not swapQuiet then due = true end
+  if swapBack and swapBack.reloaded then swapBack.frames = swapBack.frames + 1 end        -- (a rollback's: swapUndo)
+  if swapBack and not swapBack.reloaded and not swapQuiet then due = true end
   if due then
     reloadWaits = 0
     local t0 = now()
@@ -2294,6 +2312,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
     if swapWait and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
+    if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
     local ms = now() - t0
     -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
     -- EMA held the next sidewalk and building meshes back as if each cost that much more)
@@ -2696,6 +2715,7 @@ function M.collisionRebuilt()
   collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
   -- (a generation swap committed in this frame, before the terrain's own rebuild: its skins' collision is in it)
   if swapState and swapState.committed and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
+  if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
 end
 
 -- Every road removed now (setting off, mod unload).
@@ -2736,6 +2756,7 @@ function M.prewarm(path)
 end
 
 function M.clear()
+  M.swapCancel()            -- (a generation swap's tiles and parts go with everything else)
   for key in pairs(tiles) do dropTile(key) end
   speedtraps.clear()
   for key, f in pairs(far) do
@@ -2760,6 +2781,7 @@ end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  M.swapCancel()            -- (a generation swap's tiles and parts go with the level)
   for _, t in pairs(tiles) do sea.release(t.waterguard) end
   for _, token in pairs(objectWater) do sea.release(token) end
   for _, r in ipairs(waterReleases) do sea.release(r[1]) end

@@ -28,7 +28,13 @@ local function world(o)
       return false
     end,
     swapFinish = function() note('finish'); return true end,
-    swapUndo = function() w.skins = 'old'; note('skins undone'); return true end,
+    swapUndo = function() w.skins = 'old'; note('skins undone'); w.backFrames = 0; return true end,
+    swapRolledBack = function()
+      if o.rollbackNeverSettles then return false end
+      w.backFrames = (w.backFrames or 0) + 1
+      if w.backFrames >= (o.backAfter or 2) then w.collision = w.terrain .. '+' .. w.skins; return true end
+      return false
+    end,
     swapAbort = function() note('abort'); return true end,
   }
   w.d = function()
@@ -40,7 +46,10 @@ local function world(o)
         w.terrain = 'new'
         return true
       end,
-      restoreTerrain = function() w.terrain = 'old'; note('terrain restored'); return true end,
+      restoreTerrain = function()
+        if o.restoreFails then note('restore FAILS'); return false end
+        w.terrain = 'old'; note('terrain restored'); return true
+      end,
       setLater = function(msg) note('later set') end,
       hold = function(on)
         if on and o.alreadyHeld then return false end
@@ -59,7 +68,7 @@ local function world(o)
         T.check(w.terrain == w.skins, 'free car: terrain ' .. w.terrain .. ' with skins ' .. w.skins)
       end
       if res then break end
-      w.clock = w.clock + 16
+      w.clock = w.clock + 0.016       -- (seconds, as core's st.clock)
     end
     return res
   end
@@ -94,8 +103,70 @@ do
   T.check(res == 'failed' and w.sent[1].ok == false, 'answered ok = false')
   T.check(w.skins == 'old' and w.terrain == 'old', 'the old skins back on the old terrain')
   T.check(has(w, 'skins undone') and not has(w, 'finish'), 'the commit taken back, the old skins never deleted')
+  T.check(not has(w, 'terrain restored'), 'the failed import left the old terrain in use: nothing to restore')
   T.check(not w.held, 'the hold released')
   T.check(index(w, 'skins undone') < index(w, 'send false'), 'restored before the server is told')
+  T.check(w.collision == 'old+old' and index(w, 'release') > index(w, 'skins undone'),
+    'the hold kept until the restored collision was in effect')
+end
+
+-- ---- a rollback keeps the hold until its own collision is in effect -------------------------------------------
+do
+  local w = world({ terrainFails = true, backAfter = 7 })
+  local sw = swap()
+  T.check(swapgen.step(sw, w.d()) == nil, 'the commit frame: rolled back, not over')
+  T.check(w.held and #w.sent == 0 and w.skins == 'old', 'skins back, the car still held, the server not told')
+  for i = 1, 5 do
+    T.check(swapgen.step(sw, w.d()) == nil and w.held and #w.sent == 0, 'rollback frame ' .. i .. ': held, not told')
+    w.clock = w.clock + 0.016
+  end
+  T.check(w.run(sw) == 'failed' and not w.held and w.sent[1].ok == false, 'then released and told')
+  -- a rollback whose collision never comes: released after ROLLBACK_MAX_S, never later
+  local w2 = world({ terrainFails = true, rollbackNeverSettles = true })
+  local res2 = w2.run(swap(), 2000)
+  T.check(res2 == 'failed' and not w2.held and w2.clock > swapgen.ROLLBACK_MAX_S and w2.clock < swapgen.ROLLBACK_MAX_S + 1,
+    'a rollback\'s hold ends after ROLLBACK_MAX_S')
+end
+
+-- ---- the old terrain cannot be had again: no half rollback, the commit stands -------------------------------
+do
+  local w = world({ neverSettles = true, restoreFails = true })
+  local sw = swap()
+  local res = w.run(sw, 4000)
+  T.check(has(w, 'restore FAILS') and not has(w, 'skins undone'), 'the skins are NOT put back on a terrain that is not')
+  T.check(res == 'done' and w.sent[1].ok == true, 'the commit stands: ok')
+  T.check(w.skins == 'new' and w.terrain == 'new' and not w.held, 'this version\'s skins on this version\'s terrain')
+  T.check(w.clock > swapgen.SETTLE_MAX_S + swapgen.STAND_MAX_S - 1, 'after waiting for its collision as long as it may')
+  T.check(type(w.sent[1].why) == 'string', 'and the server is told why it was late')
+end
+
+-- ---- the units: seconds --------------------------------------------------------------------------------------
+do
+  T.check(swapgen.SETTLE_MAX_S == 5 and swapgen.MAX_S == 120 and swapgen.ROLLBACK_MAX_S == 5, 'the limits are seconds')
+  local w = world({ neverSettles = true })
+  local sw = swap()
+  swapgen.step(sw, w.d())
+  w.clock = 4.9
+  T.check(swapgen.step(sw, w.d()) == nil and sw.phase == 'settle', '4.9 s after the commit: still settling')
+  w.clock = 5.1
+  swapgen.step(sw, w.d())
+  T.check(sw.phase == 'rollback', '5.1 s after it: rolled back (it was 5,000 s when the clock was read as ms)')
+end
+
+-- ---- past its commit a swap is a local transaction (core steps it whatever the server does) ------------------
+do
+  local sw = swap()
+  T.check(not swapgen.live(sw) and not swapgen.live(nil), 'staging: not live')
+  local w = world({ settleAfter = 5 })
+  swapgen.step(sw, w.d())
+  T.check(swapgen.live(sw), 'from the commit on: live')
+  -- before the commit a cancel (the server's abort, a lost connection) drops it at the next step
+  local w2 = world({ notReady = 1e12 })
+  local sw2 = swap()
+  swapgen.step(sw2, w2.d())
+  sw2.cancel = 'the connection was lost'
+  T.check(swapgen.step(sw2, w2.d()) == 'failed' and has(w2, 'abort') and w2.sent[1].why == 'the connection was lost',
+    'a cancel before the commit: aborted')
 end
 
 -- ---- a skin that could not be staged: no commit at all ---------------------------------------------------------
@@ -112,7 +183,7 @@ do
   local sw = swap()
   local res = w.run(sw, 2000)
   T.check(res == 'failed' and w.sent[1].ok == false, 'answered ok = false')
-  T.check(w.clock > swapgen.SETTLE_MAX_MS, 'after the settle time')
+  T.check(w.clock > swapgen.SETTLE_MAX_S and w.clock < swapgen.SETTLE_MAX_S + swapgen.ROLLBACK_MAX_S + 1, 'after the settle time')
   T.check(has(w, 'terrain restored') and has(w, 'skins undone') and not has(w, 'finish'), 'both put back')
   T.check(w.skins == 'old' and w.terrain == 'old' and not w.held, 'the old ground whole, the car free')
   T.check(#w.sent == 1, 'one answer')
@@ -125,17 +196,17 @@ do
   for i = 1, 5 do
     T.check(swapgen.step(sw, w.d()) == nil, 'frame ' .. i .. ': still settling')
     T.check(w.held and #w.sent == 0, 'frame ' .. i .. ': held, the server not told')
-    w.clock = w.clock + 16
+    w.clock = w.clock + 0.016
   end
   T.check(w.run(sw) == 'done' and w.sent[1].ok == true, 'then done')
 end
 
 -- ---- staging still running, the server not done, a minimized window: wait -------------------------------------
 do
-  local w = world({ notReady = 100 })
+  local w = world({ notReady = 0.1 })
   local sw = swap()
   T.check(swapgen.step(sw, w.d()) == nil and #w.log == 0, 'not staged yet: nothing happens')
-  w.clock = 200
+  w.clock = 0.2
   sw.ended = false
   T.check(swapgen.step(sw, w.d()) == nil and #w.log == 0, 'the server has not sent all: nothing happens')
   sw.ended = true
@@ -144,7 +215,7 @@ do
   T.check(swapgen.step(swap(), w2.d()) == nil and #w2.log == 0, 'a minimized window: no terrain import now')
   local w3 = world({ stageFails = false, notReady = 1e12 })
   local sw3 = swap()
-  T.check(w3.run(sw3, 8000) == 'failed' and has(w3, 'abort') and w3.sent[1].ok == false, 'never staged: given up, not released')
+  T.check(w3.run(sw3, 9000) == 'failed' and has(w3, 'abort') and w3.sent[1].ok == false, 'never staged: given up, not released')
 end
 
 -- ---- a block of the swap that is no longer in use: given up whole ---------------------------------------------

@@ -2053,9 +2053,15 @@ class Server:
         loop.call_later(due[0] - loop.time(), step)
 
     # --- heightmaps ------------------------------------------------------
-    def hm_name(self, key):
+    def hm_stem(self, key):
         aid, cx, cy = key
-        return f"hm_{aid}_{int(cx)}_{int(cy)}.png"
+        return f"hm_{aid}_{int(cx)}_{int(cy)}"
+
+    def hm_name(self, key):
+        """The block's heightmap file (its masks are named after it). A generation swap builds this version's block
+        beside the one in use under names of its own (hm_suffix: Connection.stale_swap), so the files of the block
+        the mod has are never written over: its rollback installs them again."""
+        return f"{self.hm_stem(key)}{getattr(self, 'hm_suffix', {}).get(key, '')}.png"
 
     def ter_name(self, key):
         """A new .ter name for every build of key: the engine skips a terrainFile it already has, and a
@@ -2713,7 +2719,9 @@ class Server:
     # and geotiles; never in a BeamMP session (the players would stand on different ground) or with
     # BNE_STALE_REVISIT=off.
     STALE_NEAR_M = 250.0            # a road geotile the older version lacks this near the car: the swap begins
-    STALE_SWAP_WAIT_S = 900.0       # a block the older version lacks waits this long for the swap at most
+    STALE_SWAP_WAIT_S = 600.0       # a block the older version lacks waits this long for a swap, then its request fails
+    STALE_RETRY_S = 20.0            # a swap that failed is tried again this much later (times its tries, 120 s at most)
+    STALE_RETRIES = 3               # ... this often when nothing waits for it (a block that does: as long as it waits)
     STALE_JOBS = 2                  # road geotiles built behind at once
     STALE_TRIES = 2                 # a geotile that cannot be kept (short builds) is left to the swap after this many
     _stale_lock = threading.Lock()  # the anchors' verdicts (stale_probe, stale_of)
@@ -2801,19 +2809,19 @@ class Server:
 
     def stale_wait_swap(self, anchor, cx, cy, gone=None):
         """Worker thread: the older version has no block (cx, cy) of anchor. Its swap is asked for (stale_why:
-        Connection.stale_run) and waited for: this version's block is built only once the swap is committed, so it is
-        never sent under the older version's road skins. A swap given up (stale_held) or STALE_SWAP_WAIT_S over: built
-        all the same (the car needs ground), said in the log."""
+        Connection.stale_run, which tries again after one that failed) and waited for: this version's block is built
+        ONLY once a swap is committed, never under the older version's road skins. No swap in STALE_SWAP_WAIT_S (or
+        the anchor left): the request fails (pools.Abandoned / RuntimeError: a terrain_error for the mod, whose edge
+        guard holds the car; it asks again), nothing is built."""
         anchor.stale_why = f"block ({cx:.0f}, {cy:.0f}) is not in the older version"
         end = time.monotonic() + Server.STALE_SWAP_WAIT_S
-        while getattr(anchor, "stale", ()) and not getattr(anchor, "stale_held", False) and time.monotonic() < end:
+        while getattr(anchor, "stale", ()):
             if gone is not None and gone():
                 raise poolsmod.Abandoned()
+            if time.monotonic() > end:
+                raise RuntimeError(f"block ({cx:.0f}, {cy:.0f}) of anchor {anchor.id}: not in the older version shown, "
+                                   f"and the swap to this version did not come")
             time.sleep(0.25)
-        if getattr(anchor, "stale", ()):
-            log.warning("block (%s, %s) of anchor %d: built as this version's although the older one is still shown "
-                        "(its swap %s): the ground under the car comes first", cx, cy, anchor.id,
-                        "was given up" if getattr(anchor, "stale_held", False) else "did not come in time")
 
     def stale_exec(self):
         ex = getattr(self, "_stale_exec", None)
@@ -5008,10 +5016,10 @@ class Server:
 
     def base_name(self, key, rev=0):
         ext = terraincache.PHOTO_EXT
-        return self.hm_name(key)[:-4] + (f"_base{ext}" if not rev else f"_base_r{rev}{ext}")
+        return self.hm_stem(key) + (f"_base{ext}" if not rev else f"_base_r{rev}{ext}")
 
     def quick_base_name(self, key):
-        return self.hm_name(key)[:-4] + "_base_q" + terraincache.PHOTO_EXT
+        return self.hm_stem(key) + "_base_q" + terraincache.PHOTO_EXT
 
     def _stand_in(self, anchor, cx, cy):
         """A requested block's stand-in photo made beside its heights (fast): in the prefetch lane's process, else
@@ -5103,7 +5111,7 @@ class Server:
         try:
             rgb = l0roads.ground_photo(os.path.join(self.out_dir, ter), info["q"], anchor.lat, anchor.lon,
                                        info.get("surfaceComplete") is not False, self.base_px, heightmap.SQUARE)
-            name = f"{self.hm_name(key)[:-4]}_base_g{next(self.ter_serial)}{terraincache.PHOTO_EXT}"
+            name = f"{self.hm_stem(key)}_base_g{next(self.ter_serial)}{terraincache.PHOTO_EXT}"
             path = os.path.join(self.out_dir, name)
             tmp = staging.tmp_for(path)
             with open(tmp, "wb") as f:
@@ -10176,6 +10184,7 @@ class Connection:
         t0 = time.monotonic()
         done, flying, tries, later, quads = set(), {}, {}, {}, {}
         why, built = None, [0]
+        fails, retry_at = 0, 0.0
 
         def finish(k, f):
             flying.pop(k, None)
@@ -10232,12 +10241,21 @@ class Connection:
             log.info("anchor %d: the swap to the current version begins %.1f s after the older one was shown (%s; "
                      "%d road geotiles built behind, %d of %d ready)", anchor.id, time.monotonic() - t0,
                      why or "all of it is built", built[0], sum(1 for _d, k in keys if k in done), len(keys))
+            if time.monotonic() < retry_at:
+                continue
             ok = await self.stale_swap(anchor, gen, t0)
-            if not ok:
-                # (the older version stays, whole: no second try this anchor; what was built is in the cache for the
-                # next anchor. Never released by a timeout)
-                anchor.stale_held = True
-            break
+            if ok:
+                break
+            # (the older version stays, whole; never released by a timeout. Tried again as a full swap: later, and
+            # only so often unless a block the older version lacks waits for it, Server.stale_wait_swap)
+            anchor.stale_held = True
+            fails += 1
+            retry_at = time.monotonic() + min(120.0, Server.STALE_RETRY_S * fails)
+            why = None
+            if fails >= Server.STALE_RETRIES and not anchor.stale_why:
+                log.info("anchor %d: the swap to the current version failed %d times: the older version stays for "
+                         "this anchor", anchor.id, fails)
+                break
         import shutil
         if not flying:
             shutil.rmtree(os.path.join(s.root, "stale_scratch"), ignore_errors=True)
@@ -10280,8 +10298,17 @@ class Connection:
         for k in list(s.hm_committed)[-1:] + list(s.hm_sent)[-1:]:
             if k[0] == anchor.id and k not in keys and (s.hm.get(k) or {}).get("stale"):
                 keys.append(k)
-        fresh, olds = {}, {}
+        fresh, olds, old_png, old_suffix = {}, {}, {}, {}
         deadline = time.monotonic() + self.SWAP_BUILD_S
+
+        def drop_fresh(key, info):          # (this version's block of a swap that did not use it: its own files go)
+            for name in [s.hm_name(key), info.get("ter")] + list(info.get("layers") or ()):
+                if name:
+                    s._remove(os.path.join(s.out_dir, name))
+            if old_suffix.get(key) is None:
+                s.hm_suffix.pop(key, None)
+            else:
+                s.hm_suffix[key] = old_suffix[key]
         gate = anchor.swap_gate = asyncio.Event()
         try:
             # 1. this version's blocks, beside the ones shown
@@ -10289,6 +10316,13 @@ class Connection:
                 old = s.hm.pop(key, None)
                 olds[key] = old
                 d0 = await self.loop.run_in_executor(s.ui_pool, self._block_digest, key, old)
+                # (built beside the one shown, under names of its own: the shown block's files stay as they are, the
+                # mod's rollback installs them again)
+                old_png[key] = s.hm_name(key)
+                if not hasattr(s, "hm_suffix"):
+                    s.hm_suffix = {}
+                old_suffix[key] = s.hm_suffix.get(key)
+                s.hm_suffix[key] = f"_v{token}"
                 anchor.stale_fresh.add(key)
                 try:
                     info = await asyncio.wait_for(s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH),
@@ -10340,10 +10374,9 @@ class Connection:
             if hasattr(tr, "swap_end"):
                 tr.swap_end(False)
             anchor.stale = (gen,)
-            for key, (info, _same) in fresh.items():
-                ter = info.get("ter")
-                if ter and ter != (olds.get(key) or {}).get("ter"):
-                    s._remove(os.path.join(s.out_dir, ter))
+            for key in list(old_png):
+                info = (fresh.get(key) or ({},))[0]
+                drop_fresh(key, info)       # (the shown block's names are the key's again)
             return False
         finally:
             self.swap_token = None
@@ -10356,13 +10389,14 @@ class Connection:
                 kept = dict(old)
                 kept.pop("stale", None)
                 s.hm[key] = kept
-                if info.get("ter") and info.get("ter") != old.get("ter"):
-                    s._remove(os.path.join(s.out_dir, info["ter"]))
+                drop_fresh(key, info)
             else:
                 s.hm[key] = info
                 s.hm_sent.append(key)
-                if old.get("ter") and old.get("ter") != info.get("ter"):
-                    self.spawn(self._remove_later(os.path.join(s.out_dir, old["ter"])))
+                # (the older block's own files: once the mod no longer needs them for a rollback)
+                for name in [old_png.get(key), old.get("ter")] + list(old.get("layers") or ()):
+                    if name and name not in (info.get("ter"), s.hm_name(key)) and name not in (info.get("layers") or ()):
+                        self.spawn(self._remove_later(os.path.join(s.out_dir, name)))
         for k in [k for k, info in list(s.hm.items()) if k[0] == anchor.id and info.get("stale")]:
             if k not in s.hm_committed and k not in list(s.hm_sent)[-2:]:
                 s.hm.pop(k, None)       # (older blocks nobody shows: built again when asked for)
@@ -10391,6 +10425,8 @@ class Connection:
         anchor = s.anchors.get(aid)
         if key is None or anchor is None:
             return
+        if getattr(anchor, "stale", ()) or getattr(anchor, "swap_gate", None) is not None:
+            return                          # (an older version's block, or a swap under way: only the swap replaces it)
         half = s.layout.block * heightmap.SQUARE / 2
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([key[1] - half, key[1] + half]),
                                                  np.array([key[2] - half, key[2] + half]), 0.0)
@@ -10531,6 +10567,8 @@ class Connection:
         anchor = s.anchors.get(aid)
         if key is None or anchor is None:
             return
+        if getattr(anchor, "stale", ()) or getattr(anchor, "swap_gate", None) is not None:
+            return                          # (an older version's block, or a swap under way: only the swap replaces it)
         self.pads_busy = True
         s.pads_rebuild.discard(key)
 

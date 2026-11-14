@@ -48,7 +48,7 @@ def main():
     ap.add_argument("--cache", required=True)
     ap.add_argument("--server-dir", default=os.path.join(ROOT, "server"))
     ap.add_argument("--bump", default="")
-    ap.add_argument("--stale", default="on", choices=("on", "off"))
+    ap.add_argument("--stale", default="on", choices=("on", "off"), help="BNE_STALE_REVISIT (the server's default: off)")
     ap.add_argument("--timeout", type=float, default=400)
     ap.add_argument("--settle", type=float, default=0.0, help="s to pose on after far_done (the swap)")
     ap.add_argument("--warm", default="30.0,-140.0")
