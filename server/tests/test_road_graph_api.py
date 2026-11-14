@@ -203,12 +203,16 @@ class EarthdRoadGraphTest(unittest.TestCase):
 
     def run_road_graph(self, msgs, s, active=AID, data=None, not_read=0):
         """Connection.road_graph over a Server stand-in: returns (what was sent, the connection, the calls made to
-        road_graph_data as (aid, x, y, window, cached_only))."""
+        road_graph_data as (aid, x, y, window, cached_only, at)).
+
+        The handler hands the point over as `at` = (lat, lon) and does not convert it: the conversion belongs beside
+        the build, in the frame the build uses, because the anchor can be re-centred while the request waits for the
+        pool."""
         import earthd
         sent, calls = [], []
 
-        def road_graph_data(aid, x, y, window=None, cached_only=False):
-            calls.append((aid, x, y, window, cached_only))
+        def road_graph_data(aid, x, y, window=None, cached_only=False, at=None):
+            calls.append((aid, x, y, window, cached_only, at))
             if data is None:
                 return None
             return data, not_read
@@ -241,12 +245,24 @@ class EarthdRoadGraphTest(unittest.TestCase):
         self.assertEqual([m["anchorId"] for m in sent], [AID, AID, AID])
         self.assertEqual([m["serial"] for m in sent], [1, 2, 3])
 
-    def test_the_point_is_converted_to_the_anchor_frame(self):
+    def test_the_point_goes_over_as_lat_lon_and_is_not_converted_here(self):
+        """The handler must not work out x, y. The anchor can be re-centred between it doing so and the build
+        running on the pool, and the coordinates are then read in a frame that has gone -- which in a game put every
+        window about 19 km from the stage, at a constant offset, while still answering "complete" because the cells
+        over there happened to be cached. road_graph_data converts beside the build instead."""
         s = fake_server(FakeMapData({}), self.tmp.name)
         _sent, _conn, calls = self.run_road_graph([self.ask(lat=LAT + 0.01, lon=LON)], s, data=self.graph())
-        self.assertAlmostEqual(calls[0][1], 0.0, delta=2.0)                 # (0.01 deg north: east stays put)
-        self.assertGreater(calls[0][2], 1000.0)
-        self.assertLess(calls[0][2], 1200.0)
+        self.assertEqual(calls[0][5], (LAT + 0.01, LON), "the point handed over as lat, lon")
+        self.assertIsNone(calls[0][1], "and no x worked out here")
+        self.assertIsNone(calls[0][2], "nor y")
+
+    def test_the_builder_converts_at_in_the_anchors_frame(self):
+        """And road_graph_data does the conversion, from the anchor it is about to build in."""
+        import earthd
+        md = FakeMapData({})
+        got = earthd.Server.road_graph_data(fake_server(md, self.tmp.name), AID, None, None,
+                                            window=300.0, cached_only=True, at=(LAT + 0.01, LON))
+        self.assertIsNotNone(got, "a window with no cells still builds, empty")
 
     def test_says_why_rather_than_throwing(self):
         s = fake_server(FakeMapData({}), self.tmp.name)

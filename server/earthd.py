@@ -2269,15 +2269,25 @@ class Server:
             anchor._mph = v
         return v
 
-    def road_graph_data(self, aid, x, y, window=None, cached_only=False):
+    def road_graph_data(self, aid, x, y, window=None, cached_only=False, at=None):
         """navgraph.build's graph around (x, y) of anchor aid, built in this process: (graph, cells not read) or
         None when the anchor or the map data has gone. Nothing is written and nothing is sent; the callers decide
         what the graph is for. `window` stands in for navgraph's own WINDOW_M (the modding API's roadGraph asks for
         a radius of its own); cached_only reads only the map cells already on disk and fetches none, and then the
-        second value says how many cells of the window were left unread. Worker threads."""
+        second value says how many cells of the window were left unread. Worker threads.
+
+        `at` is (lat, lon) in place of x, y, converted here rather than by the caller, and that is the whole point
+        of it: the anchor can be re-centred between a caller working out x, y and this running on a worker thread,
+        and the coordinates are then read in a frame that is no longer the one they were made in. In a game
+        (2026-11-13) that put every window of an add-on's request about 19 km from the stage it asked for, the same
+        constant offset each time -- and because the cells over there happened to be cached it answered "complete"
+        with no roads in it rather than failing. Converting beside the build closes that gap."""
         anchor = self.anchors.get(aid)
         if anchor is None or self.mapdata is None:
             return None
+        if at is not None:
+            ax, ay, _ = anchor.frame.geodetic_to_enu(float(at[0]), float(at[1]), 0.0)
+            x, y = float(ax), float(ay)
         win = navgraphmod.WINDOW_M if window is None else float(window)
         w = win + 200.0
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
@@ -2374,6 +2384,15 @@ class Server:
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
+        # (temporary, while the add-on path is being brought up: says exactly where a window loses its roads)
+        try:
+            parts = sum(len(getattr(f, "ids", ()) or ()) for f in feats if f is not None)
+        except Exception:
+            parts = -1
+        log.warning("road graph probe: %.0f m at %.5f,%.5f | %d cell(s), %d not read, %d layer(s), %d road part(s)"
+                 " -> %d node(s), %d edge(s) | cached_only=%s",
+                 win, float(cla), float(clo), len(keys), missing, len([f for f in feats if f is not None]),
+                 parts, len(graph["nodes"]), len(graph["edges"]), cached_only)
         return graph, missing
 
     def build_navgraph(self, aid, x, y, serial):
@@ -7998,17 +8017,15 @@ class Connection:
         if anchor is None:
             fail("no world yet (no anchor): ask once api.ready()")
             return
-        try:
-            x, y, _ = anchor.frame.geodetic_to_enu(lat, lon, 0.0)
-        except Exception as e:                  # (a frame that cannot place the point: never a crash for an add-on)
-            log.info("road graph: %s: %s", type(e).__name__, e)
-            fail(f"{type(e).__name__}")
-            return
         serial = self._road_graph_serial = getattr(self, "_road_graph_serial", 0) + 1
         t0 = time.perf_counter()
         try:
+            # (the point goes over as lat / lon and is converted inside, in the frame the build itself uses: the
+            #  anchor can be re-centred while a request waits for the pool, and converting out here read the
+            #  coordinates in a frame that had already gone -- road_graph_data's own note says what that looked like)
             got = await asyncio.get_running_loop().run_in_executor(
-                self.s.api_pool, self.s.road_graph_data, aid, float(x), float(y), radius, True)
+                self.s.api_pool,
+                lambda: self.s.road_graph_data(aid, None, None, radius, True, (lat, lon)))
         except Exception as e:
             log.info("road graph: %s: %s", type(e).__name__, e)
             fail(f"{type(e).__name__}")
