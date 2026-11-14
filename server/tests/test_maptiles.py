@@ -88,9 +88,9 @@ class MapTilesTest(unittest.TestCase):
     def test_eox_first_at_low_zoom_usgs_above(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
-        _, src, _ = t.tile(11, 584, 783)
+        _, src, _, _ = t.tile(11, 584, 783)
         self.assertEqual(src, "eox2023")
-        _, src, _ = t.tile(14, 4683, 6266)
+        _, src, _, _ = t.tile(14, 4683, 6266)
         self.assertEqual(src, "usgs")
         self.assertTrue(all(c[4] == maptiles.FETCH_KIND for c in img.calls))
 
@@ -106,7 +106,7 @@ class MapTilesTest(unittest.TestCase):
         self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("usgs", "eox2023", "eox2016"))).tile(15, 1, 1))
 
     def test_failure_raises_only_when_nothing_else_has_it(self):
-        _, src, final = maptiles.MapTiles(FakeImagery(fail=("usgs",))).tile(15, 9412, 12490)
+        _, src, final, _ = maptiles.MapTiles(FakeImagery(fail=("usgs",))).tile(15, 9412, 12490)
         self.assertEqual(src, "eox2023")
         self.assertFalse(final, "a later source standing in for one that failed: a stand-in")
         self.assertTrue(maptiles.MapTiles(FakeImagery(missing=("usgs",))).tile(15, 9412, 12490)[2],
@@ -120,7 +120,7 @@ class MapTilesTest(unittest.TestCase):
         # z16 from the z14 ancestor: 4 x 4 children; the bottom row of children holds the
         # ancestor's rows 192..255 of the gradient
         x, y = (100 << 2) + 1, (200 << 2) + 3
-        jpeg, src, final = t.tile(16, x, y)
+        jpeg, src, final, _ = t.tile(16, x, y)
         self.assertTrue(final)
         self.assertEqual(img.calls[-1][:4], ("eox2023", 14, 100, 200))
         a = decode(jpeg)
@@ -192,7 +192,7 @@ class LayersTest(unittest.TestCase):
     def test_map_layer_native_and_overzoomed(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
-        jpeg, final = t.layer_tile("map", 12, 1176, 1561)
+        jpeg, final, _ = t.layer_tile("map", 12, 1176, 1561)
         self.assertTrue(final)
         self.assertEqual(img.calls[-1], ("eoxmap", 12, 1176, 1561, maptiles.FETCH_KIND))
         self.assertEqual(jpeg[:2], b"\xff\xd8")
@@ -228,12 +228,12 @@ class LazyImagery(FakeImagery):
     """FakeImagery with a lazy regional source (md6in): its tile is undecided until fetch_lazy_tile, which `fetch`
     says how to answer: "data", "none", "fail" or "nothing" (still undecided after)."""
 
-    def __init__(self, fetch="data", state="todo"):
+    def __init__(self, fetch="data", state="todo", until=None):
         super().__init__(chain=("md6in", "usgs", "eox2023"))
-        self.fetch, self.state, self.fetched = fetch, state, []
+        self.fetch, self.state, self.until, self.fetched = fetch, state, until, []
 
     def lazy_tile_state(self, key):
-        return self.state
+        return self.state, (self.until if self.state == "none" else None)
 
     def fetch_lazy_tile(self, key):
         self.fetched.append(key[1:])
@@ -261,22 +261,31 @@ class StandInTest(unittest.TestCase):
 
     def test_lazy_tile_fetched_on_demand(self):
         img = LazyImagery("data")
-        _, src, final = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
+        _, src, final, _ = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
         self.assertEqual((src, final), ("md6in", True))
         self.assertEqual(img.fetched, [(self.Z, self.X, self.Y)])
 
     def test_known_missing_lazy_tile_is_final(self):
         img = LazyImagery(state="none")
-        _, src, final = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
-        self.assertEqual((src, final), ("usgs", True))
+        _, src, final, until = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final, until), ("usgs", True, None), "nothing there for good: the next source is the tile")
         self.assertEqual(img.fetched, [], "decided already: not fetched")
 
     def test_failed_or_undecided_lazy_tile_is_a_stand_in(self):
         for fetch in ("fail", "nothing"):
-            _, src, final = maptiles.MapTiles(LazyImagery(fetch)).tile(self.Z, self.X, self.Y)
-            self.assertEqual((src, final), ("usgs", False), fetch)
-        _, src, final = maptiles.MapTiles(LazyImagery("none")).tile(self.Z, self.X, self.Y)
-        self.assertEqual((src, final), ("usgs", True), "nothing there after the fetch: the next source is the tile")
+            _, src, final, until = maptiles.MapTiles(LazyImagery(fetch)).tile(self.Z, self.X, self.Y)
+            self.assertEqual((src, final, until), ("usgs", False, None), fetch)
+        _, src, final, _ = maptiles.MapTiles(LazyImagery("none")).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final), ("usgs", True), "nothing there for good after the fetch: the next source is the tile")
+
+    def test_an_expiring_nothing_there_keeps_the_next_source_a_stand_in(self):
+        # (review of a9a978a9: a miss with a TTL, an expired one reused while its host is down: the better source may
+        # come back, so the later source's tile is kept only until then)
+        t = time.time() + 3600
+        _, src, final, until = maptiles.MapTiles(LazyImagery(state="none", until=t)).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final, until), ("usgs", False, t))
+        _, src, final, until = maptiles.MapTiles(LazyImagery("none", until=t)).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final, until), ("usgs", False, t), "decided by the fetch, with its expiry")
 
 
 class FakeLayers:
@@ -285,6 +294,7 @@ class FakeLayers:
     def __init__(self, delay=0.0, gate=None, missing=(), fail=(), stand_in=()):
         self.delay, self.gate = delay, gate
         self.missing, self.fail, self.stand_in = set(missing), set(fail), set(stand_in)
+        self.stand_in_until = None
         self.calls = []
         self.lock = threading.Lock()
 
@@ -299,8 +309,8 @@ class FakeLayers:
         if (layer, z, x, y) in self.missing:
             return None
         if (layer, z, x, y) in self.stand_in:
-            return b"blur", False
-        return b"tile", True
+            return b"blur", False, self.stand_in_until
+        return b"tile", True, None
 
 
 class TileFilesTest(unittest.TestCase):
@@ -437,6 +447,25 @@ class TileFilesTest(unittest.TestCase):
         self.assertFalse(os.path.exists(prov), "the stand-in's file goes once the tile is there")
         self.assertEqual(tf.stats["stand_in"], 2)
 
+    def test_stand_in_built_again_once_the_better_source_s_absence_ends(self):
+        now, wall = [100.0], [1000.0]
+        k = ("sat", 17, 7, 8)
+        fake = FakeLayers(stand_in=(k,))
+        fake.stand_in_until = wall[0] + 3.0         # (the better source's miss ends in 3 s, before PROV_RETRY_S[0])
+        tf = maptiles.TileFiles(fake, self.root, self.ready, workers=1, clock=lambda: now[0], wall=lambda: wall[0])
+        self.addCleanup(tf.close)
+        tf.request([k])
+        self.wait_for(1)
+        now[0] += 2.0
+        tf.request([k])
+        time.sleep(0.1)
+        self.assertEqual(len(fake.calls), 1, "not before the absence ends")
+        now[0] += 1.5
+        fake.stand_in.clear()
+        tf.request([k])
+        self.wait_for(2)
+        self.assertTrue(os.path.exists(maptiles.tile_path(self.root, *k)), "the better source's tile, as the tile")
+
     def test_old_sat_files_swept_once(self):
         def put(p, mtime=None):
             os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -460,6 +489,46 @@ class TileFilesTest(unittest.TestCase):
         self.assertEqual(maptiles.sweep_sat(self.root, t0, gap_s=0), 0, "once: the format file says it is done")
         self.assertTrue(os.path.exists(old_sat))
         self.assertEqual(maptiles.prune(self.root, keep=0, gap_s=0), 4, "prune never removes the format file")
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "no symlinks")
+    def test_sweep_never_leaves_the_folder(self):
+        # (review of a9a978a9: a numeric entry linked elsewhere was walked and every older file there deleted)
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        old = time.time() - 100
+
+        def put(p):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"x")
+            os.utime(p, (old, old))
+            return p
+        victims = [put(os.path.join(outside, "3", "4.jpg")), put(os.path.join(outside, "notes.txt")),
+                   put(os.path.join(outside, "9", "9", "9.jpg"))]
+        os.makedirs(self.root, exist_ok=True)
+        os.symlink(outside, os.path.join(self.root, "17"))                     # a zoom folder linked outside
+        os.makedirs(os.path.join(self.root, "16"))
+        os.symlink(os.path.join(outside, "3"), os.path.join(self.root, "16", "5"))     # a column linked outside
+        os.makedirs(os.path.join(self.root, "15", "2"))
+        os.symlink(victims[0], os.path.join(self.root, "15", "2", "1.jpg"))    # a tile linked outside
+        own = [put(maptiles.tile_path(self.root, "sat", 14, 1, 2)), put(os.path.join(self.root, "14", "1", "x.txt"))]
+        self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 1)
+        self.assertFalse(os.path.exists(own[0]), "its own old tile goes")
+        self.assertTrue(os.path.exists(own[1]), "not a tile file: kept")
+        self.assertTrue(all(os.path.exists(p) for p in victims), "nothing outside the folder is touched")
+        # the same without directory descriptors (Windows): paths checked to stay inside
+        from unittest import mock
+        os.remove(os.path.join(self.root, maptiles.FORMAT_FILE))
+        put(own[0])
+        with mock.patch.object(maptiles, "_DIR_FD", False):
+            self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 1)
+        self.assertFalse(os.path.exists(own[0]))
+        self.assertTrue(all(os.path.exists(p) for p in victims), "nothing outside the folder is touched (paths)")
+        linked = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, linked, True)
+        os.rmdir(linked)
+        os.symlink(self.root, linked)                                           # the folder itself a link
+        self.assertEqual(maptiles.sweep_sat(linked, time.time(), gap_s=0), 0)
         self.assertTrue(os.path.exists(os.path.join(self.root, maptiles.FORMAT_FILE)))
 
     def test_callback_errors_do_not_stop_workers(self):
