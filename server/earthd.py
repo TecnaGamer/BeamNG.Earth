@@ -3404,6 +3404,14 @@ class Server:
                                          bld_fn))
             except Exception as ex:
                 log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import localpoi
+            try:
+                props.extend(localpoi.rows(anchor.frame, infra_fn, land_fn, box, elev,
+                                           (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None,
+                                           bld_fn, clearance=clearance[0] if clearance else None,
+                                           country=self.country(anchor)))
+            except Exception as ex:
+                log.warning("local pois: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import busfurniture
             import shelters
             try:                        # (not under a bus station's roof, nor in its bays: it has its own)

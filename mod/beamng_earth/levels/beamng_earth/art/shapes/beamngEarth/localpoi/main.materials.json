@@ -1,0 +1,269 @@
+{
+  "bne_lp_wood": {
+    "name": "bne_lp_wood",
+    "mapTo": "bne_lp_wood",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fdc2eb17-690f-5fdc-b83e-276ff4194037",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_wood.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_wood.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_wood.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_shingle": {
+    "name": "bne_lp_shingle",
+    "mapTo": "bne_lp_shingle",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5433ad78-fb0f-5f6b-a729-cec48a910a38",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_shingle.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_shingle.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_shingle.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_stone": {
+    "name": "bne_lp_stone",
+    "mapTo": "bne_lp_stone",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9e24de6c-440a-5180-915d-75cac0a5ed7a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_stone.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_stone.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_stone.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_ash": {
+    "name": "bne_lp_ash",
+    "mapTo": "bne_lp_ash",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fb634363-340c-5069-a2c2-aa2eac08e951",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_ash.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_ash.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_ash.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_oak": {
+    "name": "bne_lp_oak",
+    "mapTo": "bne_lp_oak",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "76912d8b-5a01-50e9-8128-dba83cb35dc3",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_oak.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_oak.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_oak.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_iron": {
+    "name": "bne_lp_iron",
+    "mapTo": "bne_lp_iron",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "06bdfdff-c4a5-5e85-bc53-c8d4a8fdb21b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_iron.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_iron.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_iron.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_tin": {
+    "name": "bne_lp_tin",
+    "mapTo": "bne_lp_tin",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "89c721ff-fc9f-521c-ae7f-eed98dc1e401",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_tin.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_tin.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/localpoi/bne_lp_tin.data.png"
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_paint": {
+    "name": "bne_lp_paint",
+    "mapTo": "bne_lp_paint",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "91d4a729-94df-57c9-aede-2d0bb31e7c40",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.81,
+          0.8,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_niche": {
+    "name": "bne_lp_niche",
+    "mapTo": "bne_lp_niche",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "36cfb79e-402b-58d3-84a9-3cf35cd00fe0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.04,
+          0.04,
+          0.04,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_galv": {
+    "name": "bne_lp_galv",
+    "mapTo": "bne_lp_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f35ff26c-5ac2-568b-af1d-50d2dca75505",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_granite": {
+    "name": "bne_lp_granite",
+    "mapTo": "bne_lp_granite",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f8dc906b-ac6b-5970-addf-f9935fd258b7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.18,
+          0.18,
+          0.19,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.35
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  }
+}

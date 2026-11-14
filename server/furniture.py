@@ -20,6 +20,7 @@ import dnp
 
 import citylamps
 import designsigns
+import localpoi
 import poleprofiles
 
 # class: (spacing m along one side, both sides staggered: a lamp every half that along the road). Measured (the user,
@@ -831,6 +832,7 @@ COLLISION_BOXES = {
 COLLISION_BOXES.update(citylamps.COLLISION_BOXES)
 COLLISION_BOXES.update(poleprofiles.COLLISION_BOXES)     # (the regional poles: every group a pole style names)
 COLLISION_BOXES.update(designsigns.BOXES)
+COLLISION_BOXES.update(localpoi.COLLISION_BOXES)    # (the forest tables, picnic huts and fire rings)
 ROAD_PROP_GAP_M = 0.15
 
 

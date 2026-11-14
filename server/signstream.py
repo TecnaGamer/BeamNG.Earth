@@ -102,6 +102,11 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                                       vfs_dir, country)
     if rail_mesh is not None:
         dir_mesh, dir_faces = busstationsign.merge(dir_mesh, rail_mesh), {**dir_faces, **rail_faces}
+    import localpoisign                 # the hiking guideposts' plates and arrows, the information boards and maps
+    poi_mesh, poi_faces = _optional('Local POI signs', localpoisign.sign_tile, md, frame, tx, ty, elev, out_dir, vfs_dir,
+                                    country)
+    if poi_mesh is not None:
+        dir_mesh, dir_faces = busstationsign.merge(dir_mesh, poi_mesh), {**dir_faces, **poi_faces}
     import euguardrails
     french = False
     if euguardrails.enabled():

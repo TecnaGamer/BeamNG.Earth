@@ -419,6 +419,49 @@ M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
 M.CATALOG.picnicgrill = { { ECA .. 'buildings/eca_BBQ', 1.48 } }
 M.GROUP_MAX_M.picnictable = 400
 M.GROUP_MAX_M.picnicgrill = 400
+-- Local POIs outside the parks (server localpoi.py, tools/make_localpoi_models.py): a forest table with benches, a picnic
+-- hut (open at its local +Y end), a fire ring. Centred on the footprint, ground at z 0; their materials load from the folder.
+local LP = '/levels/beamng_earth/art/shapes/beamngEarth/localpoi/'
+M.CATALOG.lp_table = { { LP .. 'bne_lp_table_forest', 0.77 } }
+M.CATALOG.lp_altan = { { LP .. 'bne_lp_altan', 3.2 } }
+M.CATALOG.lp_firepit = { { LP .. 'bne_lp_firepit', 0.3 } }
+M.CATALOG.lp_cross_stone = { { LP .. 'bne_lp_cross_stone', 3.76 } }       -- roadside crosses, the front towards local -Y
+M.CATALOG.lp_cross_wood = { { LP .. 'bne_lp_cross_wood', 3.78 } }
+M.CATALOG.lp_cross_metal = { { LP .. 'bne_lp_cross_metal', 2.65 } }
+M.CATALOG.lp_shrine = { { LP .. 'bne_lp_shrine_column', 3.35 } }          -- a "Boží muka" column
+M.GROUP_MAX_M.lp_cross_stone = 700
+M.GROUP_MAX_M.lp_cross_wood = 700
+M.GROUP_MAX_M.lp_cross_metal = 600
+M.GROUP_MAX_M.lp_shrine = 700
+M.ONE_SPELLING.lp_cross_stone = true
+M.ONE_SPELLING.lp_cross_wood = true
+M.ONE_SPELLING.lp_cross_metal = true
+M.ONE_SPELLING.lp_shrine = true
+-- hiking guideposts' tube (its plates and arrows: the sign tile, server localpoisign.py) and memorials (stage D, F)
+M.CATALOG.lp_gp = { { LP .. 'bne_lp_gp_post', 2.64 } }
+M.CATALOG.lp_stele = { { LP .. 'bne_lp_stele', 1.92 } }
+M.CATALOG.lp_obelisk = { { LP .. 'bne_lp_obelisk', 3.5 } }
+M.CATALOG.lp_boulder = { { LP .. 'bne_lp_boulder', 1.3 } }
+M.CATALOG.lp_statue = { { LP .. 'bne_lp_statue', 3.75 } }
+M.CATALOG.lp_stone_cross = { { LP .. 'bne_lp_stone_cross', 1.05 } }
+M.GROUP_MAX_M.lp_gp = 500
+M.GROUP_MAX_M.lp_stele = 600
+M.GROUP_MAX_M.lp_obelisk = 700
+M.GROUP_MAX_M.lp_boulder = 400
+M.GROUP_MAX_M.lp_statue = 700
+M.GROUP_MAX_M.lp_stone_cross = 400
+M.ONE_SPELLING.lp_gp = true
+M.ONE_SPELLING.lp_stele = true
+M.ONE_SPELLING.lp_obelisk = true
+M.ONE_SPELLING.lp_boulder = true
+M.ONE_SPELLING.lp_statue = true
+M.ONE_SPELLING.lp_stone_cross = true
+M.GROUP_MAX_M.lp_table = 350
+M.GROUP_MAX_M.lp_altan = 600
+M.GROUP_MAX_M.lp_firepit = 250
+M.ONE_SPELLING.lp_table = true
+M.ONE_SPELLING.lp_altan = true
+M.ONE_SPELLING.lp_firepit = true
 -- Bus shelters (server shelters.py): East Coast's glass stop. Its signed face is local +x, its long
 -- side local y, and it sits 0.2 m below its origin.
 M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }

@@ -1811,6 +1811,13 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                      (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None, bld_fn))
         except Exception as ex:
             log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import localpoi
+        try:
+            props.extend(localpoi.rows(frame, infra_fn, land_fn, box, elev,
+                                       (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None, bld_fn,
+                                       clearance=clearance[0] if clearance else None, country=country))
+        except Exception as ex:
+            log.warning("local pois: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import busfurniture
         import shelters
         try:                            # (not under a bus station's roof, nor in its bays: it has its own)
