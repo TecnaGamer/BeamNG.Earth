@@ -815,7 +815,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir", "ml", "rise")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1289,6 +1289,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 1 if church else max(1, int(round(h / floor_h)))
     nf = max(1, min(nf, 120))
     floor_h = h / nf
+    # (the rise its roof is drawn with over the walls, plan()'s own span and pitch: a flattened stand-in, the skyline's or
+    # a sky-style far pack's, puts it back on its walls so it reaches the building's top: _sky_simplify)
+    if roof == "flat" or roof is None:
+        drawn_rise = None
+    elif roof in DOME_ROOFS:
+        drawn_rise = dome_rise(roof, hw, attrs.get("roof_height"))
+    elif attrs.get("roof_height") and np.isfinite(attrs["roof_height"]):
+        drawn_rise = float(attrs["roof_height"])
+    else:
+        drawn_rise = roof_rise(roof, shw, style.pitch or PITCH.get(roof, PITCH["gabled"]))
     # (a tower built before the curtain walls, by its year: tower_era; with a mapped material, that material)
     top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
     te = tower_era(attrs.get("_year") or attrs.get("_osm_year")) \
@@ -1549,7 +1559,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             hm = float("nan")
         h = hm if math.isfinite(hm) and 2.0 <= hm <= 30.0 else CANOPY_H.get(cls, 3.0)
         nf, floor_h = 1, h
-    spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
+    spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade, rise=drawn_rise,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS and not part
                                           and not attrs.get("_parts_drawn")
@@ -7377,13 +7387,11 @@ def _sky_simplify(items, copy=False):
         # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
         keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
         if keep == "flat" and spec.roof not in (None, "flat") and spec.roof not in DOME_ROOFS:
-            # (a pitched roof flattened: its rise back on the walls, whose height plan() took it off, so the block
-            # still reaches the building's top: a mapped 20 m gable on 40 m came out 20 m, Codex review 2026-11-14)
-            rise = spec.roof_h
-            if not rise:
-                _c, _u, hl, hw = oriented_box(np.asarray(spec.ring, np.float64))
-                pitch = spec.pitch if isinstance(spec.pitch, (int, float)) else PITCH.get(spec.roof, 30.0)
-                rise = roof_rise(spec.roof, min(hl, hw), pitch)
+            # (a pitched roof flattened: its drawn rise back on the walls, so the block still reaches the building's
+            # top: a mapped 20 m gable on 40 m came out 20 m, an L-shaped hip 3.4 m over, Codex review 2026-11-14)
+            rise = getattr(spec, "rise", None)      # (plan()'s drawn rise: its own span, skeleton, ridge and pitch)
+            if rise is None:
+                rise = spec.roof_h
             if rise and math.isfinite(rise) and rise > 0:
                 spec.height = float(spec.height or 0.0) + float(rise)
         spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
