@@ -1,7 +1,9 @@
 """Saved areas (areas.py, native areacover.rs): the box checks and the deterministic plan, the estimate, the list's
 store (resume after a restart, pause / resume / delete), the download thread's gates (never while the live pools are
 busy or a teleport waits, a refused request tried again, a host's daily share used up: waiting for tomorrow), the pins
-(cache keys in a saved area) and netfetch's PREDOWNLOAD_SHARE. No network: stub producers."""
+(cache keys in a saved area), netfetch's PREDOWNLOAD_SHARE, and a layers subset (what it narrows, and that the store
+keeps it so a resume walks the same plan). No network: stub producers."""
+import json
 import os
 import sys
 import tempfile
@@ -346,6 +348,63 @@ class AreasTest(unittest.TestCase):
         self.assertEqual(b.message()["areas"][0]["state"], "done")
         self.assertFalse(b.add_route(lats, lons, 20, "")[0])
 
+    def test_layers_subset(self):
+        """A subset of the layers (check_layers): what it takes, what it narrows, and that the store keeps it --
+        the plan is walked again on every pass and after every restart, so a subset that is not stored turns a
+        one-layer area back into a twelve-layer one and downloads what nobody asked for."""
+        self.assertIsNone(areas.check_layers(None), "no subset: the plain plan")
+        self.assertEqual(areas.check_layers(["terrain", "roads"]), ("roads", "terrain"), "all_layers() order")
+        self.assertIsNone(areas.check_layers(list(areas.all_layers())), "every name is no subset")
+        self.assertEqual(areas.check_layers({"roads"}), ("roads",), "a set is a list of names too")
+        for bad in (["nope"], [], "roads", 5, ["roads", "nope"], [None]):
+            with self.assertRaises(ValueError, msg=bad):
+                areas.check_layers(bad)
+        with self.assertRaisesRegex(ValueError, "roads"):         # (the names that would have worked)
+            areas.check_layers(["tarmac"])
+        with self.assertRaisesRegex(ValueError, "every layer"):   # (a geotile is built from several layers at once)
+            areas.check_layers(["roads"], "world")
+        lats, lons = list(ROUTE[0]), list(ROUTE[1])
+        a, s = self.make()
+        route = {"lat": lats, "lon": lons, "half": 800.0}
+        box = areas.route_bounds(route)
+        whole = a.steps(box, route=route)
+        roads = a.steps(box, route=route, layers=("roads",))
+        self.assertEqual({st[0] for st in roads}, {"cell"}, "roads only: no elevation and no imagery planned")
+        self.assertEqual({st[4] for st in roads}, {"roads"})
+        self.assertEqual(len(roads), len({st[1:4] for st in whole if st[0] == "cell"}), "one step a cell")
+        self.assertLess(len(roads), len(whole) / 5)
+        self.assertEqual({st[0] for st in a.steps(box, route=route, layers=("terrain",))}, {"dem"})
+        self.assertEqual({st[0] for st in a.steps(box, route=route, layers=("imagery",))}, {"img"})
+        self.assertEqual(a.steps(box, route=route, layers=areas.all_layers()), whole, "every name: the plain plan")
+        # the estimate narrows with it, and says which subset it honoured (an older server ignores the field)
+        p_whole, p_roads = a.plan_route(lats, lons, 800), a.plan_route(lats, lons, 800, layers=["roads"])
+        self.assertEqual((p_whole["layers"], p_roads["layers"]), ([], ["roads"]))
+        self.assertEqual((p_whole["items"], p_roads["items"]), (len(whole), len(roads)))
+        self.assertLess(p_roads["downloadBytes"], p_whole["downloadBytes"] / 2)
+        self.assertFalse(a.plan_route(lats, lons, 800, layers=["nope"])["ok"])
+        self.assertFalse(a.add_route(lats, lons, 800, "", layers=["nope"])[0])
+        # the area, the store, and the plan a resume walks
+        ok, aid = a.add_route(lats, lons, 800, "Roads only", layers=["roads"])
+        self.assertTrue(ok, aid)
+        m = a.message()["areas"][0]
+        self.assertEqual((m["layers"], m["total"]), (["roads"], len(roads)))
+        self.assertEqual(m["unavailable"], 0, "every area reports it from the moment it exists")
+        a.close()
+        b, _ = self.make(server=s)
+        self.assertEqual(b.areas[0]["layers"], ["roads"], "the subset survives a restart")
+        kept = b.areas[0]
+        self.assertEqual(len(b.steps((kept["s"], kept["w"], kept["n"], kept["e"]), kept["mode"], kept["route"],
+                                     kept.get("layers"))), len(roads), "and the resumed plan is the narrowed one")
+        b.close()
+        # an area stored with a layer this version no longer has is dropped, as one with a bad route is
+        path = os.path.join(self.tmp.name, areas.SUBDIR, areas.STORE)
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        doc["areas"][0]["layers"] = ["roads", "gone_in_this_version"]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+        self.assertEqual(self.make(server=s)[0].areas, [], "a stored subset that no longer validates: no area")
+
     def test_world_mode(self):
         # "world": the downloads, then every road geotile's content built ahead (z17 tiles of the box), listed in
         # <id>.world (pinned_world), none built twice
@@ -612,6 +671,68 @@ class AreaMessagesTest(test_server.ServerHarness):
         self.c.send({"type": "area_cmd", "id": 5, "area": aid, "op": "delete"})
         m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 5, timeout=10)
         self.assertEqual((m["result"]["ok"], m["areas"]), (True, []))
+
+    def test_area_route_messages(self):
+        """The modding API's own types (api.areaPlan / api.areaAdd): points named outright, a layers subset, no
+        fast and no mode -- and area_plan / area_add taking the same points instead of falling through to the box
+        path and answering "an area needs south, west, north and east in degrees"."""
+        self.hello()
+        line = {"lat": [BOX[0], (BOX[0] + BOX[2]) / 2, BOX[2]], "lon": [BOX[1], (BOX[1] + BOX[3]) / 2, BOX[3]]}
+        # without saved areas, both types answer rather than leaving the add-on waiting
+        self.c.send({"type": "area_route_plan", "id": 1, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result", timeout=10)
+        self.assertEqual((m["id"], m["ok"]), (1, False))
+        self.assertIn("download cache", m["error"])
+        self.c.send({"type": "area_route_add", "id": 2, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_add_result", timeout=10)
+        self.assertEqual((m["id"], m["ok"]), (2, False))
+        self.server.areas = areas.Areas(self.tmp.name, StubServer())
+        self.addCleanup(self.server.areas.close)
+        # the estimate, and the subset echoed back
+        self.c.send({"type": "area_route_plan", "id": 3, "route": line, "half": 800, "layers": ["roads"]})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 3, timeout=10)
+        self.assertTrue(m["ok"], m)
+        self.assertEqual(m["layers"], ["roads"])
+        self.assertGreater(m["km"], 1)
+        self.c.send({"type": "area_route_plan", "id": 4, "route": line, "half": 800})
+        wide, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 4, timeout=10)
+        self.assertEqual(wide["layers"], [])
+        self.assertLess(m["items"], wide["items"], "the subset really is a smaller plan")
+        # the refusals, each in words an add-on can act on
+        for rid, extra, want in ((5, {}, "route"),
+                                 (6, {"route": "current"}, "route"),
+                                 (7, {"route": {"lat": [BOX[0]], "lon": [BOX[1]]}}, "route"),
+                                 (8, {"route": line, "layers": ["tarmac"]}, "tarmac"),
+                                 (9, {"route": {"lat": "x", "lon": []}}, "lat")):
+            self.c.send(dict({"type": "area_route_plan", "id": rid, "half": 800}, **extra))
+            m, _ = self.c.until(lambda m, rid=rid: m["type"] == "area_route_plan_result" and m["id"] == rid,
+                                timeout=10)
+            self.assertFalse(m["ok"], m)
+            self.assertIn(want, m["error"], (rid, m["error"]))
+        self.c.send({"type": "area_route_plan", "id": 10, "route": line, "half": 5})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 10, timeout=10)
+        self.assertFalse(m["ok"])
+        self.assertIn("each side", m["error"])
+        # the add -- with a forged "fast": true, which the handler must not read. api.lua not sending it is
+        # politeness; this is the guarantee, because fast mode pauses the player's game (core.lua fastAreaPause)
+        self.c.send({"type": "area_route_add", "id": 11, "route": line, "half": 800, "layers": ["roads"],
+                     "name": "An add-on area", "fast": True, "mode": "world"})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_add_result" and m["id"] == 11, timeout=10)
+        self.assertTrue(m["ok"], m)
+        aid = m["area"]
+        self.assertIsNone(self.server.areas.fast_id, "no add-on may start fast mode")
+        a = next(x for x in self.server.areas.message()["areas"] if x["id"] == aid)
+        self.assertEqual((a["name"], a["layers"], a["mode"]), ("An add-on area", ["roads"], "data"))
+        self.assertEqual(a["unavailable"], 0)
+        self.assertEqual(self.server.areas_message()["fast"], "", "and the mod is never told to pause the game")
+        # the player's own messages take the same points now, instead of falling through to the box path
+        self.c.send({"type": "area_plan", "id": 12, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_plan_result" and m["id"] == 12, timeout=10)
+        self.assertTrue(m["ok"], m)
+        self.c.send({"type": "area_add", "id": 13, "route": {"lat": "x", "lon": []}, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 13, timeout=10)
+        self.assertFalse(m["result"]["ok"], "a malformed route is answered, not dropped on the floor")
+        self.assertIn("lat", m["result"]["error"])
 
     def test_live_busy_and_driving(self):
         """The gates' answers: a worker pool with jobs in flight or a loading line not full is busy; a player moving

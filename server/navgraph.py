@@ -1273,11 +1273,13 @@ def short_ids(graph):
 SHORT_IDS = True
 
 
-def write(out_dir, vfs_dir, aid, serial, graph):
-    """The graph as navgraph_<aid>_<serial>.json in the session folder (short_ids); returns its vfs path."""
+def write(out_dir, vfs_dir, aid, serial, graph, prefix="navgraph"):
+    """The graph as <prefix>_<aid>_<serial>.json in the session folder (short_ids); returns its vfs path.
+    prefix: "navgraph" for the session's own graph, which the mod reads as the AI's; the modding API's roadGraph
+    writes "roadgraph" instead, so a graph built for an add-on can never be taken for the player's."""
     import json
     import os
-    name = f"navgraph_{aid}_{serial}.json"
+    name = f"{prefix}_{aid}_{serial}.json"
     path = os.path.join(out_dir, name)
     tmp = staging.tmp_for(path)
     if SHORT_IDS:

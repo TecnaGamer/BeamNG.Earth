@@ -120,6 +120,7 @@ import pools as poolsmod  # noqa: E402
 import memwatch as memwatchmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
+import gradesep as gradesepmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
 import roadwear  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
@@ -454,6 +455,12 @@ WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
 # the modding API's places (Connection.places): incomplete requests waiting for their cells at a time, and how long
 # each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
 PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
+# the modding API's road graph (Connection.road_graph): the widest window it will build. A graph's cost grows with the
+# square of its window, and the session's own is navgraph.WINDOW_M (1100 m), so this already asks for ~3.3x its work.
+ROAD_GRAPH_RADIUS_MAX_M = 2000.0
+# ... and the newest graph files of an anchor kept after a request (the one a callback was just handed, and the one
+# before it, so a callback still reading an earlier answer does not lose its file under it)
+ROAD_GRAPH_KEEP = 2
 
 HM_CACHE = 16               # heightmaps kept beyond the protected ones (6 before 2026-10-30: a fast player's prefetched
                             # chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again)
@@ -2283,6 +2290,167 @@ class Server:
             anchor._mph = v
         return v
 
+    def road_graph_data(self, aid, x, y, window=None, cached_only=False, at=None):
+        """navgraph.build's graph around (x, y) of anchor aid, built in this process: (graph, cells not read) or
+        None when the anchor or the map data has gone. Nothing is written and nothing is sent; the callers decide
+        what the graph is for. `window` stands in for navgraph's own WINDOW_M (the modding API's roadGraph asks for
+        a radius of its own). Worker threads.
+
+        cached_only: the build downloads nothing -- the map cells it reads are the ones on disk, and so is the
+        ground under them (dem.cached_only) and the cells round them a layer's own hook reaches for
+        (gradesep.cached_only). The second value is how many cells of the window were left unread, which is what
+        the request answers "complete" from: whether the roads in the window are all the roads there are.
+
+        It is deliberately not every read the build made short. A cell's eight neighbours (gradesep) and the land
+        cover a road's surface rule reads are read from disk too, and where one of those is not there the build
+        goes on without it exactly as it does when such a read fails for the player -- the cell's grade separations
+        and home copies are left out, and nothing made short of them is kept (revisit.fault). That changes a
+        bridge range at the edge of a window, not which roads are in it, and a graph that says "incomplete" for it
+        is one an add-on throws away: a window whose roads are all there and whose heights are measured answers
+        complete. What does not answer complete is a window with cells missing, or one over ground no source has
+        cached elevation for at all, which comes back empty rather than at invented heights.
+
+        `at` is (lat, lon) in place of x, y, converted here rather than by the caller, and that is the whole point
+        of it: the anchor can be re-centred between a caller working out x, y and this running on a worker thread,
+        and the coordinates are then read in a frame that is no longer the one they were made in. In a game
+        (2026-11-13) that put every window of an add-on's request about 19 km from the stage it asked for, the same
+        constant offset each time -- and because the cells over there happened to be cached it answered "complete"
+        with no roads in it rather than failing. Converting beside the build closes that gap."""
+        anchor = self.anchors.get(aid)
+        if anchor is None or self.mapdata is None:
+            return None
+        if at is not None:
+            ax, ay, _ = anchor.frame.geodetic_to_enu(float(at[0]), float(at[1]), 0.0)
+            x, y = float(ax), float(ay)
+        win = navgraphmod.WINDOW_M if window is None else float(window)
+        w = win + 200.0
+        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
+        keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+        missing = 0
+
+        def on_disk(layer):
+            """One layer of the window's cells that are on disk already, read exactly as the session's own graph
+            reads them -- through load_cells, so a layer arrives with the same decoding, tag joins and neighbour
+            discovery -- but at a kind that will not fetch: a cell that is not there raises (DEFERRED) instead of
+            being downloaded, and no background job is queued for it.
+
+            Not layer_unkept, which exists for the API's cachedOnly *places* read. In a game (2026-11-13) that
+            returned road features the graph then found nothing drivable in, so a window over ground whose cells
+            were all present came back with 0 nodes while the player's own graph of the same anchor had 489 --
+            intermittently, because it answers from the MEM_MB cache when the player's path has just filled it and
+            decodes afresh when it has not. Reading the way the player's path reads removes the divergence rather
+            than trying to reproduce it."""
+            out = []
+            for k in keys:
+                if not self.mapdata.has(k, layer):
+                    continue
+                try:
+                    # (one cell at a time: a cell that is not on disk must not take the others down with it, and
+                    #  the window's cells are few enough that the side-by-side load buys little here)
+                    for cd in mapcells.load_cells(self.mapdata, [k], (layer,), kind="background"):
+                        got = cd.layers.get(layer)
+                        if got is not None:
+                            out.append(got)
+                except Exception as e:      # not on disk after all, a cell being written, a damaged file
+                    log.debug("road graph: %s of %s: %s: %s", layer, k, type(e).__name__, e)
+            return out
+
+        zoom = anchor.zooms[0]
+        urban = self.surface.urban if self.surface is not None else None
+        g = self.grader_for(anchor)
+
+        def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles')
+            z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom))
+            return g.apply(la_, lo_, z, gradingmod.ROAD_LIFT) if g is not None else z
+
+        with contextlib.ExitStack() as lane:
+            if cached_only:
+                # One lane for the whole build, because a build reads more than the cells handed to it and those
+                # reads go at demand priority, ahead of the world the player is driving through:
+                #  * the DEM downloads a tile that is not on disk (dem.cached_only). The ground of a 16 km window
+                #    is ~150 z16 tiles, ~15 MB, and the host's rate limits are the player's;
+                #  * a roads layer carries the map data's own hook to the eight cells round it, which
+                #    roads.level_ranges and roads.home_copy read as the graph is built (gradesep.cached_only).
+                # revisit.scope: and what those misses record stays in this build, where it belongs -- a fault in a
+                # thread with no scope of its own is the process's, so every build the server had running
+                # meanwhile (the player's road tiles) would go unkept because an add-on asked about ground nobody
+                # has driven. It is not the answer's completeness: see below.
+                lane.enter_context(self.dem.cached_only())
+                lane.enter_context(gradesepmod.cached_only())
+                lane.enter_context(revisitmod.scope())
+                # (the window's own cells: the ones on disk, read the way the player's graph reads them (on_disk).
+                #  Nothing is fetched and no background job is queued, so a window over ground the player has not
+                #  been near has fewer roads.)
+                feats = on_disk("roads")
+                missing = len(keys) - len(feats)
+            else:
+                feats = [cd.layers.get("roads") for cd in mapcells.load_cells(self.mapdata, keys, ("roads",))]
+            decks = {}
+            try:            # the bridges' deck heights (the road tiles' BridgeProfiles, one per anchor)
+                with self.grader_lock:
+                    if anchor.bridges is None:
+                        anchor.bridges = self.chain_view(anchor, "bridges", elev)
+                for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
+                    decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
+                                                      anchor.bridges.depth_of(fid)))
+            except Exception as e:          # no decks: the graph follows the ground under bridges
+                log.debug("navgraph decks: %s: %s", type(e).__name__, e)
+            # (Germany's mapped nodes too: its junction signs on, the graph's window in Germany)
+            de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
+            want_nodes = secrossings.wanted(self.country(anchor), de_nodes)
+            if cached_only:
+                # (the same rule for the window's other layers. signals_for, secrossings.read and _de_routes each
+                #  read their cells through cell(kind="demand"), which fetches: a cached-only graph would otherwise
+                #  download the infrastructure and road_routes layers of its window, and at demand priority, ahead
+                #  of the world's own. Read from disk instead, so "nothing is fetched" holds for every layer.)
+                infra = on_disk("infrastructure")
+                try:
+                    signals = furnituremod.mapped_signals(anchor.frame, infra)
+                    nodes = secrossings.nodes(anchor.frame, infra) if want_nodes else None
+                except Exception as e:      # (as signals_for / secrossings.read do: guessed signals, not no graph)
+                    log.debug("road graph signals: %s: %s", type(e).__name__, e)
+                    signals, nodes = None, None
+                de_routes = [lr for lr in on_disk("road_routes") if lr is not None and len(lr)] if de_nodes else ()
+            else:
+                signals = furnituremod.signals_for(self.mapdata, anchor.frame, keys)
+                nodes = secrossings.read(self.mapdata, anchor.frame, keys) if want_nodes else None
+                # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
+                de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
+            tun, open_tun = {}, {}
+            try:
+                with self.grader_lock:
+                    if anchor.tunnels is None:
+                        anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
+                tun, open_tun = navgraphmod.tunnel_floors(anchor.tunnels, feats, (x - w, y - w, x + w, y + w))
+            except Exception as e:
+                log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
+            try:
+                graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, window=win, decks=decks, tunnels=tun, open_tunnels=open_tun,
+                                          widths=self.road_widths,
+                                          left_hand=self.left_hand(anchor), mph=self.mph(anchor),
+                                          signals=signals,
+                                          country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
+                                          de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
+            except demmod.NotOnDisk as e:
+                # No source has elevation in the cache for some of this ground, not even the coarse global model
+                # (cached_only only; a tile that is merely not cached is read from its coarser cached ancestor, as
+                # the world's own tiles are wherever nothing deeper is published). An empty window that says it is
+                # incomplete, rather than nodes at sea level, which is what the DEM answers when it has nothing:
+                # an add-on cannot tell an invented height from a measured one, while "complete": false says
+                # plainly that the window is not there yet and can be asked for again once the world has been over
+                # it. Every cell counts unread -- none of the window could be built.
+                log.debug("road graph: no cached elevation for the window (%s): an empty window instead", e)
+                graph = navgraphmod.build(anchor.frame, [], elev, (x, y), urban, window=win,
+                                          left_hand=self.left_hand(anchor), mph=self.mph(anchor),
+                                          country=self.country(anchor), de_on=designsmod.enabled(self.dej_on))
+                missing = len(keys)
+        cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
+        graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
+        graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
+        log.debug("road graph: %.0f m at %.5f,%.5f: %d cell(s), %d not read -> %d node(s), %d edge(s)",
+                  win, float(cla), float(clo), len(keys), missing, len(graph["nodes"]), len(graph["edges"]))
+        return graph, missing
+
     def build_navgraph(self, aid, x, y, serial):
         """navgraph.py: the AI road graph around (x, y) of anchor aid, written to the session folder (the
         anchor's earlier graphs deleted): (vfs path, nodes, edges) or None. Worker threads."""
@@ -2308,50 +2476,10 @@ class Server:
                         pass
             return path, n_nodes, n_edges
         t0 = time.perf_counter()
-        w = navgraphmod.WINDOW_M + 200.0
-        la, lo, _ = anchor.frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
-        keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
-        feats = [cd.layers.get("roads") for cd in mapcells.load_cells(self.mapdata, keys, ("roads",))]
-        zoom = anchor.zooms[0]
-        urban = self.surface.urban if self.surface is not None else None
-        g = self.grader_for(anchor)
-
-        def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles')
-            z = self.ground(anchor.frame, la_, lo_, self.dem.sample(la_, lo_, zoom))
-            return g.apply(la_, lo_, z, gradingmod.ROAD_LIFT) if g is not None else z
-        decks = {}
-        try:            # the bridges' deck heights (the road tiles' BridgeProfiles, one per anchor)
-            with self.grader_lock:
-                if anchor.bridges is None:
-                    anchor.bridges = self.chain_view(anchor, "bridges", elev)
-            for fid, _spec, xy, z, _lon in anchor.bridges.parts(feats, (x - w, y - w, x + w, y + w)):
-                decks.setdefault(fid, []).append((np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64),
-                                                  anchor.bridges.depth_of(fid)))
-        except Exception as e:          # no decks: the graph follows the ground under bridges
-            log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-        # (Germany's mapped nodes too: its junction signs on, the graph's window in Germany)
-        de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
-        nodes = secrossings.read(self.mapdata, anchor.frame, keys) \
-            if secrossings.wanted(self.country(anchor), de_nodes) else None
-        # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
-        de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
-        tun, open_tun = {}, {}
-        try:
-            with self.grader_lock:
-                if anchor.tunnels is None:
-                    anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
-            tun, open_tun = navgraphmod.tunnel_floors(anchor.tunnels, feats, (x - w, y - w, x + w, y + w))
-        except Exception as e:
-            log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
-        graph = navgraphmod.build(anchor.frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, open_tunnels=open_tun,
-                                  widths=self.road_widths,
-                                  left_hand=self.left_hand(anchor), mph=self.mph(anchor),
-                                  signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
-                                  country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
-                                  de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
-        cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
-        graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
-        graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
+        got = self.road_graph_data(aid, x, y)
+        if got is None:
+            return None
+        graph, _ = got
         for old in glob.glob(os.path.join(self.out_dir, f"navgraph_{aid}_*.json")):    # one file at a time
             try:
                 os.remove(old)
@@ -7210,7 +7338,7 @@ BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's telepor
 
 # (rs / rx: the road geotiles' skins and exact variants of the anchor; rail / railcol / tunnel: its road tiles' rail and
 # tunnel shapes. Left out until 2026-11-02: kept until the server stopped, GitHub #599's 9 GB session folder)
-ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
+ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph", "roadgraph",
                      "rs", "rx", "rail", "railcol", "tunnel", "buscol")
 
 
@@ -8095,6 +8223,103 @@ class Connection:
         finally:
             self._places_followups = getattr(self, "_places_followups", 1) - 1
 
+    async def road_graph(self, msg):
+        """The modding API's road graph {"id", "lat", "lon", "radius", "cachedOnly"} -> road_graph_result
+        {"id", "path", "anchorId", "serial", "complete", "error"} (api.roadGraph in the mod; navgraph.py builds it).
+        One window of the road graph around a point the add-on names, out of the map cells already on disk: the point
+        is converted to the committed anchor's frame (the frame the graph's own x, y are in), the build runs in
+        api_pool beside places, and the graph is written to the session folder as roadgraph_<aid>_<serial>.json, which
+        is not a name the mod reads as the player's (navgraph.write's prefix). Cached-only is its only mode: nothing
+        is fetched and no background job is queued, so "complete" says whether every cell of the window was there,
+        and a window over ground the player has never been near answers with few roads, or none at all where no
+        source has cached elevation for it, rather than slowly.
+        The build never goes to the road pool a pooled session builds the player's graph in: an add-on's request must
+        not take a slot the world needs. Each successful write sweeps this anchor's older roadgraph files down to the
+        newest ROAD_GRAPH_KEEP, and never touches a navgraph_ file."""
+        rid = msg.get("id")
+        # (the mod's own counter, and the only way it can match an answer to a request: without one there is nothing
+        #  to answer to. A Lua number may arrive as 1 or 1.0 depending on the game's JSON encoder, so either is taken
+        #  and the answer carries the int the protocol table declares)
+        if isinstance(rid, bool) or not isinstance(rid, (int, float)) or not math.isfinite(rid) or rid != int(rid):
+            return
+        rid = int(rid)
+
+        def fail(why):
+            self.send({"type": "road_graph_result", "id": rid, "complete": False, "error": why})
+
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            radius = float(msg.get("radius") or navgraphmod.WINDOW_M)
+        except (KeyError, TypeError, ValueError):
+            fail("bad coordinates")
+            return
+        if not all(math.isfinite(v) for v in (lat, lon, radius)) or not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            fail("bad coordinates")
+            return
+        radius = max(1.0, min(radius, ROAD_GRAPH_RADIUS_MAX_M))
+        if self.s.mapdata is None:
+            fail("no map data (BeamNG.Earth's roads are off)")
+            return
+        if not self.s.traffic:
+            fail("the app was started without roads (--traffic off): there is no road graph")
+            return
+        aid = self.active
+        anchor = self.s.anchors.get(aid)
+        if anchor is None:
+            fail("no world yet (no anchor): ask once api.ready()")
+            return
+        serial = self._road_graph_serial = getattr(self, "_road_graph_serial", 0) + 1
+        t0 = time.perf_counter()
+        try:
+            # (the point goes over as lat / lon and is converted inside, in the frame the build itself uses: the
+            #  anchor can be re-centred while a request waits for the pool, and converting out here read the
+            #  coordinates in a frame that had already gone -- road_graph_data's own note says what that looked like)
+            got = await asyncio.get_running_loop().run_in_executor(
+                self.s.api_pool,
+                lambda: self.s.road_graph_data(aid, None, None, radius, True, (lat, lon)))
+        except Exception as e:
+            log.info("road graph: %s: %s", type(e).__name__, e)
+            fail(f"{type(e).__name__}")
+            return
+        if got is None:                         # (the anchor or the map data went while it built)
+            fail("the world moved on while the graph was built")
+            return
+        graph, not_read = got
+
+        def write_and_sweep():          # (the same thread as the build: no file work on the event loop)
+            written = navgraphmod.write(self.s.out_dir, self.s.vfs_dir, aid, serial, graph, prefix="roadgraph")
+            self._sweep_road_graphs(aid)
+            return written
+        try:
+            path = await asyncio.get_running_loop().run_in_executor(self.s.api_pool, write_and_sweep)
+        except Exception as e:
+            log.info("road graph: write: %s: %s", type(e).__name__, e)
+            fail(f"{type(e).__name__}")
+            return
+        log.debug("road graph %d of anchor %d: %d nodes, %d cells unread, in %.2f s", serial, aid,
+                  len(graph["nodes"]), not_read, time.perf_counter() - t0)
+        self.send({"type": "road_graph_result", "id": rid, "path": path, "anchorId": aid, "serial": serial,
+                   "complete": not_read == 0})
+
+    def _sweep_road_graphs(self, aid):
+        """The anchor's roadgraph_<aid>_*.json files down to the newest ROAD_GRAPH_KEEP, so a session's requests cannot
+        pile up in the session folder while a callback still has time to read the file it was just handed. Only that
+        name: the player's navgraph_ file is never one of these, and build_navgraph keeps its own sweep."""
+        files = glob.glob(os.path.join(self.s.out_dir, f"roadgraph_{aid}_*.json"))
+        if len(files) <= ROAD_GRAPH_KEEP:
+            return
+
+        def serial_of(p):
+            try:
+                return int(os.path.basename(p).rsplit("_", 1)[1].split(".")[0])
+            except (IndexError, ValueError):
+                return -1
+        for old in sorted(files, key=serial_of)[:-ROAD_GRAPH_KEEP]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -8177,16 +8402,32 @@ class Connection:
         self.send(out)
 
     def _area_route(self, msg):
-        """A saved route's points (area_plan / area_add with "route": "current": the last planned GPS route) as
-        (lats, lons), or None (a box)."""
-        if msg.get("route") != "current":
-            return None
-        pts = self.route_points or []
-        return [p[0] for p in pts], [p[1] for p in pts]
+        """A saved area's route points as (lats, lons), or None (a box). Two forms:
+
+          "route": "current"                            the player's last planned GPS route (the 3D map's
+                                                        "Download along my route": the server keeps its points)
+          "route": {"lat": [...], "lon": [...]}         a line the caller names
+
+        The second is the shape areas.json already persists and areas.check_route already validates, so nothing
+        here converts or re-checks anything -- the one validation stays in the one place, which is also where the
+        store's own re-validation on load runs. Without it explicit points fell through to the box path and the
+        caller was answered "an area needs south, west, north and east in degrees", which is not an error a caller
+        holding a line can act on. ValueError when the form is there but malformed (both callers answer with it)."""
+        route = msg.get("route")
+        if route == "current":
+            pts = self.route_points or []
+            return [p[0] for p in pts], [p[1] for p in pts]
+        if isinstance(route, dict):
+            lats, lons = route.get("lat"), route.get("lon")
+            if not isinstance(lats, (list, tuple)) or not isinstance(lons, (list, tuple)):
+                raise ValueError('a route needs "lat" and "lon": a list of degrees each, a point per index')
+            return list(lats), list(lons)
+        return None
 
     async def area_plan(self, msg):
-        """{"id", "s", "w", "n", "e"} or {"id", "route": "current", "half"} -> area_plan_result {"id", "ok", km2, items,
-        missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, km? (a route's length), "error"?}
+        """{"id", "s", "w", "n", "e"} or {"id", "route": "current" | {"lat", "lon"}, "half"} -> area_plan_result
+        {"id", "ok", km2, items, missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, km? (a route's
+        length), layers? (the subset it would download, [] all of them), "error"?}
         (areas.Areas.plan / plan_route, in an executor thread: no network, but a box near Germany fetches Germany's
         border data once, geo_content_key)."""
         out = {"type": "area_plan_result", "id": msg.get("id"), "ok": False}
@@ -8207,8 +8448,8 @@ class Connection:
         self.send(out)
 
     async def area_add(self, msg):
-        """{"id", "s", "w", "n", "e", "name"?} or {"id", "route": "current", "half", "name"?} -> areas {..., "result":
-        {"id", "ok", "area" or "error"}}."""
+        """{"id", "s", "w", "n", "e", "name"?} or {"id", "route": "current" | {"lat", "lon"}, "half", "name"?} ->
+        areas {..., "result": {"id", "ok", "area" or "error"}}."""
         if self.s.areas is None:
             self.send({"type": "areas", "areas": [], "result": {"id": msg.get("id"), "ok": False,
                                                                 "error": "saved areas need the download cache"}})
@@ -8217,7 +8458,11 @@ class Connection:
         name = name if isinstance(name, str) else ""
         mode = msg.get("mode") if isinstance(msg.get("mode"), str) else areasmod.DEFAULT_MODE
         fast = msg.get("fast") is True      # (fast mode: areas.py; the mod pauses the game while it runs)
-        route = self._area_route(msg)
+        try:
+            route = self._area_route(msg)
+        except ValueError as e:     # (a malformed route form: an answer, not a task that dies with nothing sent)
+            self.send(self.s.areas_message({"id": msg.get("id"), "ok": False, "error": str(e)[:200]}))
+            return
         if route is not None:
             ok, info = await asyncio.get_running_loop().run_in_executor(
                 None, self.s.areas.add_route, route[0], route[1], msg.get("half"), name, mode, fast)
@@ -8235,6 +8480,82 @@ class Connection:
         ok = isinstance(area, str) and isinstance(op, str) and await asyncio.get_running_loop().run_in_executor(
             None, self.s.areas.command, area, op)
         self.send(self.s.areas_message({"id": msg.get("id"), "ok": bool(ok)}))
+
+    def _area_route_points(self, msg):
+        """The corridor an add-on named, as (lats, lons), or ValueError. Only the explicit form: "current" is the
+        player's own planned route, which is theirs to pre-cache from the map and which api.gpsRoute() already
+        hands an add-on if it wants to ask for it by its points."""
+        if not isinstance(msg.get("route"), dict):
+            raise ValueError('an area along a route needs "route": {"lat": [...], "lon": [...]}')
+        pts = self._area_route(msg)
+        if pts is None:     # (_area_route answers every dict, so this is belt -- but a sentence, not a TypeError)
+            raise ValueError('a route needs "lat" and "lon": a list of degrees each, a point per index')
+        return pts
+
+    async def area_route_plan(self, msg):
+        """The modding API's estimate for a corridor an add-on names (api.areaPlan):
+        {"id", "route": {"lat", "lon"}, "half", "layers"?} -> area_route_plan_result {"id", "ok", km, km2, items,
+        missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, layers, "error"?}. Nothing is downloaded
+        and nothing is saved: it is the figure to put in front of the player before asking them.
+
+        Its own message type rather than area_plan, for the same reason a requested road graph gets its own file
+        name: the mod keeps one answer at a time (core.lua `M._areaPlans = { [msg.id] = msg }`, replaced rather
+        than added to, and requestAreaPlan empties it before it sends), so an add-on sharing that type would take
+        the player's answer out of the area confirm box, or lose its own to it.
+
+        Mode is always "data". An add-on may not ask for "world", which would put the server's road processes to
+        work building geotiles ahead -- that is the player's choice from their own map, where they can see what it
+        costs."""
+        out = {"type": "area_route_plan_result", "id": msg.get("id"), "ok": False}
+        if self.s.areas is None:
+            out["error"] = "saved areas need the download cache"
+        else:
+            try:
+                lats, lons = self._area_route_points(msg)
+                out.update(await asyncio.get_running_loop().run_in_executor(
+                    None, self.s.areas.plan_route, lats, lons, msg.get("half"), areasmod.DEFAULT_MODE,
+                    msg.get("layers")))
+            except ValueError as e:     # (a malformed request: its own words, which an add-on can act on)
+                out.update(ok=False, error=f"{e}"[:200])
+            except Exception as e:
+                log.info("area_route_plan: %s: %s", type(e).__name__, e)
+                out.update(ok=False, error=f"{type(e).__name__}: {e}"[:200])
+        self.send(out)
+
+    async def area_route_add(self, msg):
+        """The modding API's new saved area along a corridor (api.areaAdd):
+        {"id", "route": {"lat", "lon"}, "half", "name"?, "layers"?} -> area_route_add_result
+        {"id", "ok", "area" (the new area's id) or "error"}. The list itself is not answered here: areas.py
+        broadcasts the 'areas' message on every change, to every connection, so the player's own area list shows
+        it as it appears and an add-on follows it through api.areaStatus.
+
+        **Fast mode is not reachable from here: "fast" is never read from this message.** In fast mode every gate
+        that keeps a download from slowing the world is skipped, and the pause that makes that survivable is
+        applied by the mod for any client on any fast area (core.lua fastAreaPause -> simhold.pause(true)) -- so an
+        add-on able to set it could stop the player's physics mid-drive, with no say for whatever they are doing at
+        the time. An add-on that wants fast mode has to ask the player to press the button on their own area list.
+
+        Mode is always "data", as area_route_plan's own note says."""
+        out = {"type": "area_route_add_result", "id": msg.get("id"), "ok": False}
+        if self.s.areas is None:
+            out["error"] = "saved areas need the download cache"
+            self.send(out)
+            return
+        name = msg.get("name")
+        name = name if isinstance(name, str) else ""
+        try:
+            lats, lons = self._area_route_points(msg)
+            ok, info = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.s.areas.add_route(lats, lons, msg.get("half"), name=name,
+                                                     mode=areasmod.DEFAULT_MODE, fast=False,
+                                                     layers=msg.get("layers")))
+            out.update(ok=bool(ok), **({"area": info} if ok else {"error": str(info)[:200]}))
+        except ValueError as e:
+            out.update(ok=False, error=f"{e}"[:200])
+        except Exception as e:
+            log.info("area_route_add: %s: %s", type(e).__name__, e)
+            out.update(ok=False, error=f"{type(e).__name__}: {e}"[:200])
+        self.send(out)
 
     def send(self, msg):
         lease = getattr(self, "lease", None)
@@ -8719,6 +9040,10 @@ class Connection:
             self.spawn(self.area_add(msg))
         elif kind == "area_cmd":                # a saved area paused, resumed or deleted
             self.spawn(self.area_cmd(msg))
+        elif kind == "area_route_plan":         # the modding API's corridor: its estimate (areas.py; api.areaPlan)
+            self.spawn(self.area_route_plan(msg))
+        elif kind == "area_route_add":          # ... and the area itself, never fast (api.areaAdd)
+            self.spawn(self.area_route_add(msg))
         elif kind == "preload_place":           # a destination picked on the map: loaded before the teleport
             self.preload_place(msg)
         elif kind == "stations":                # the station finder: the map's layers, Nearest (stationindex.py)
@@ -8731,6 +9056,8 @@ class Connection:
             self.spawn(self.map_labels(msg))
         elif kind == "places":                  # the modding API's places round a point (places.py; api.places)
             self.spawn(self.places(msg))
+        elif kind == "road_graph":              # ... its road graph round a point (navgraph.py; api.roadGraph)
+            self.spawn(self.road_graph(msg))
         elif kind == "map_focus":               # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)

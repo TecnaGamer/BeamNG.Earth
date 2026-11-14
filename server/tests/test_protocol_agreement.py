@@ -205,13 +205,22 @@ MOD_TO_SERVER = {
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
                   "mode": F(str, OPT)},
     # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved
-    # route: route "current" (the last planned GPS route) and half (its corridor's half width, m) instead of the box
+    # route: route "current" (the last planned GPS route) or {"lat": [...], "lon": [...]} (points named outright),
+    # and half (its corridor's half width, m) instead of the box
     "area_plan": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                  "route": F(str, OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
+                  "route": F((str, dict), OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
     "area_add": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
+                 "route": F((str, dict), OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
                  "fast": F(bool, OPT)},       # (fast: areas.py fast mode, the game paused while it runs)
     "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
+    # the modding API's saved area along a corridor an add-on names (api.lua areaPlan / areaAdd; areas.py). Its own
+    # types rather than area_plan / area_add: the mod keeps one answer of those at a time (core.lua _areaPlans /
+    # _areaResults, replaced not added to), so an add-on sharing them would take the player's answer or lose its
+    # own. There is no "fast" and no "mode" here -- fast mode pauses the player's game (core.lua fastAreaPause) and
+    # "world" would put the server's road processes to work; neither is an add-on's to ask for. layers: a subset of
+    # areas.all_layers() (the elevation and the imagery under "terrain" / "imagery"), absent for all of them
+    "area_route_plan": {"id": F(int), "route": F(dict), "half": F(NUM), "layers": F(list, OPT)},
+    "area_route_add": {"id": F(int), "route": F(dict), "half": F(NUM), "name": F(str, OPT), "layers": F(list, OPT)},
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
               "download": F(str, OPT),   # the "Download along route" setting: off / ahead / route (route_download)
@@ -223,6 +232,9 @@ MOD_TO_SERVER = {
     "places": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "categories": F(list, OPT),
                "limit": F(NUM, OPT), "cursor": F(str, OPT), "buildings": F(bool), "minConfidence": F(NUM, OPT),
                "cachedOnly": F(bool)},      # only the cells on disk, a wide radius then allowed (places.py)
+    # the modding API's road graph round a point (api.lua roadGraph; navgraph.py, earthd ROAD_GRAPH_RADIUS_MAX_M).
+    # cachedOnly is always true: there is no fetching form of this request
+    "road_graph": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM, OPT), "cachedOnly": F(bool)},
     # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
     "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
     "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
@@ -272,9 +284,20 @@ SERVER_TO_MOD = {
                          "missing": F(int, OPT), "downloadBytes": F(int, OPT), "diskBytes": F(int, OPT),
                          "seconds": F(int, OPT), "days": F(NUM, OPT), "hosts": F(list, OPT),
                          "excluded": F(list, OPT), "km": F(NUM, OPT), "worldTiles": F(int, OPT),
-                         "worldMissing": F(int, OPT), "error": F(str, OPT)},
-    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads
-    # (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd
+                         "worldMissing": F(int, OPT), "error": F(str, OPT),
+                         "layers": F(list, OPT)},     # a route's: the layers subset it would download ([] all)
+    # ... and the modding API's own: the estimate for a corridor (api.lua _onAreaPlan), and the area it added
+    # ("area" is the new area's id, for api.areaStatus). "layers" echoes the subset the server honoured, so a
+    # caller can tell an older app that ignored the field from one that narrowed the plan
+    "area_route_plan_result": {"id": F(int), "ok": F(bool), "km": F(NUM, OPT), "km2": F(NUM, OPT),
+                               "items": F(int, OPT), "missing": F(int, OPT), "downloadBytes": F(int, OPT),
+                               "diskBytes": F(int, OPT), "seconds": F(int, OPT), "days": F(NUM, OPT),
+                               "hosts": F(list, OPT), "excluded": F(list, OPT), "layers": F(list, OPT),
+                               "worldTiles": F(int, OPT), "worldMissing": F(int, OPT), "error": F(str, OPT)},
+    "area_route_add_result": {"id": F(int), "ok": F(bool), "area": F(str, OPT), "error": F(str, OPT)},
+    # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, unavailable, route?, half?, layers?}]
+    # after hello, a change and while one downloads (at most every areas.STATUS_S); result: an area_add / area_cmd's
+    # answer
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
@@ -303,6 +326,9 @@ SERVER_TO_MOD = {
     "places_result": {"id": F(int), "places": F(list), "complete": F(bool), "pending": F(bool),
                       "buildings": F(list, OPT), "next": F(str, OPT), "truncated": F(bool, OPT),
                       "error": F(str, OPT)},
+    # ... its road graph: the file the add-on reads (navgraph.write prefix "roadgraph"), or error and no path
+    "road_graph_result": {"id": F(int), "complete": F(bool), "path": F(str, OPT), "anchorId": F(int, OPT),
+                          "serial": F(int, OPT), "error": F(str, OPT)},
     "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
               "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
@@ -489,6 +515,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "where_result",                               # the status bar: asked by the mod while driving
                        "map_labels_result",                          # the 3D map's labels: asked in map mode
                        "places_result",                              # the modding API's places (test_places_api)
+                       "road_graph_result",                          # ... its road graph (test_road_graph_api)
                        "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
@@ -512,6 +539,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "stations_result",                            # only when the station finder asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
+                       "area_route_plan_result", "area_route_add_result",   # ... the modding API's (test_areas)
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
                        "terrain_ready_set",                          # only to a fast player's mod that says readySet
                        "server_list",                                # only when the BeamMP tab asks (online)

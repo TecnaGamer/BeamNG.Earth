@@ -188,6 +188,16 @@ class DemUnavailable(IOError):
     """Neither Mapterhorn nor AWS could deliver a tile (network, offline)."""
 
 
+class NotOnDisk(Exception):
+    """Inside Dem.cached_only(), no source in a tile's chain has heights for it in the cache: there are none to be
+    had here without a download, and none were made up. Raised at the end of the chain, not for the first tile that
+    is not cached -- a coarser cached ancestor is read for that (see _download).
+
+    Deliberately not a netfetch.FetchError: the DEM's own fall-backs catch those and answer from somewhere else,
+    and the last of those answers is zeros (sea level), which is the one thing a reader that cannot download must
+    not be handed."""
+
+
 def zoom_for(lat, pixel_m, max_zoom=MAX_ZOOM):
     """Smallest zoom whose 512 px tile pixels are <= pixel_m at this latitude."""
     c = 40075016.686 * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
@@ -519,6 +529,10 @@ class Dem:
                         return c["index"]
             except (OSError, ValueError):
                 pass
+            if getattr(self._local, "cached", False):
+                # (cached_only: the list as it stands, from disk or not at all. Not fetched, and not marked failed
+                #  either: that would hold the retry off for the readers that may download.)
+                return c["index"]
             try:
                 body = self.fetcher.get(COVERAGE_URL, kind="demand").body
                 idx = coverage_index(json.loads(body))
@@ -587,6 +601,20 @@ class Dem:
                 return data
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
+            return None
+        if getattr(self._local, "cached", False):
+            # cached_only, and the one place every tile download goes through. Not in the cache is answered the way
+            # a source with no tile here is answered -- None -- so _make_tile0's own chain reads a coarser tile
+            # instead: a z16 window's z15 parent covers four of its tiles and its z12 ancestor four thousand, and
+            # those are measured heights upsampled, which is what the world itself is built on wherever Mapterhorn
+            # publishes nothing deeper (most of it at z16). Not a height invented to fill a hole. AWS is the floor
+            # of that chain with no ancestor under it, so a tile it cannot answer for raises instead: the caller is
+            # left with no heights rather than with the zeros _make_tile0 would otherwise return.
+            self._partial()         # (a stand-in: the tile is not mirrored, nor kept in the world's own LRU)
+            revisit.fault()         # (nor is anything built on it kept: gradesep's spans read the DEM too)
+            log.debug("dem cached_only: %s %d/%d/%d is not in the cache", src["name"], z, x, y)
+            if src is AWS:
+                raise NotOnDisk(f"no cached elevation for {z}/{x}/{y}")
             return None
         if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
             got = self._download_pack(z, x, y, kind)
@@ -807,7 +835,11 @@ class Dem:
     def _ahead(self, keys):
         """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
-        own _download to meet)."""
+        own _download to meet). Nothing is started for a reader inside cached_only(): a probe runs on a pool thread
+        of its own, which the lane does not reach, and every caller asks _download for the same tile right after
+        anyway (from the disk cache, or NotOnDisk)."""
+        if getattr(self._local, "cached", False):
+            return []
         futs = []
         with self._lock:
             for k in keys:
@@ -1261,9 +1293,71 @@ class Dem:
         """Whether this thread is in urgent() (a helper it starts carries the lane over: grading._plan_missing)."""
         return getattr(self._local, "urgent", False)
 
+    @contextlib.contextmanager
+    def cached_only(self):
+        """Inside this, every sample() of this thread reads only the elevation already in the disk cache, and
+        nothing is downloaded, queued or probed for it: for a reader that must not outrun the world's own downloads
+        nor spend the host's rate limits on ground the player has never been near (the modding API's cached-only
+        road graph, earthd.Server.road_graph_data). It holds for every source a tile comes from through _download
+        -- Mapterhorn, its CDN packs, AWS and the file list.
+
+        A tile that is not cached is not a failure: its coarser cached ancestor is read instead (_download), as the
+        world's own tiles are wherever Mapterhorn publishes nothing deeper. Only where no source in the chain has
+        anything cached for that ground does sample() raise NotOnDisk, because the answer there would be zeros.
+
+        Its loads run in this thread, never in the pool: the pool's futures are shared with the world's own loads
+        (_inflight), and a load that cannot download must not be the one a block the player waits for ends up
+        waiting on. A tile read whole goes in the LRU like any other; one made with a stand-in is kept for this
+        lane alone, so a window is still sampled hundreds of times without making it again."""
+        prev, prev_tiles = getattr(self._local, "cached", False), getattr(self._local, "cached_tiles", None)
+        self._local.cached, self._local.cached_tiles = True, {}
+        try:
+            yield
+        finally:
+            self._local.cached, self._local.cached_tiles = prev, prev_tiles
+
+    def _cached_tile(self, key):
+        """One tile for cached_only(): the LRU's copy, else loaded in this thread. A tile made with a stand-in (a
+        coarser cached ancestor for one that is not cached) is kept for this lane only and never put in the LRU:
+        that one is the world's, and the player's next read of this tile must download the real one rather than
+        find ours."""
+        mine = getattr(self._local, "cached_tiles", None)
+        if mine is None:                        # (not in a lane after all: as the pool path would)
+            return self._load_tile(key)
+        a = mine.get(key)
+        if a is not None:
+            return a
+        with self._lock:
+            a = self._lru.get(key)
+            if a is not None:
+                self._lru.move_to_end(key)
+                return a
+        prev = getattr(self._local, "partial", False)
+        self._local.partial = False
+        try:
+            a = self._load_tile(key)
+            stand_in = getattr(self._local, "partial", False)
+        finally:
+            self._local.partial = prev or getattr(self._local, "partial", False)
+        if stand_in:
+            mine[key] = a
+        else:
+            with self._lock:
+                self._lru[key] = a
+                while len(self._lru) > self.mem_tiles:
+                    self._lru.popitem(last=False)
+        return a
+
     def tiles(self, keys, progress=None):
         """Fetch many tiles concurrently (deduplicated across callers)."""
         keys = list(dict.fromkeys(keys))
+        if getattr(self._local, "cached", False):       # cached_only: in this thread, nothing shared with the pool
+            out = {}
+            for k in keys:
+                out[k] = self._cached_tile(k)
+                if progress:
+                    progress(len(out), len(keys))
+            return out
         out, futs, new = {}, {}, []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool

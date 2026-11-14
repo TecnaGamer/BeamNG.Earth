@@ -31,12 +31,26 @@
 -- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
+-- The road network round a point (has('roadGraph')): api.roadGraph(lat, lon, opts, callback) asks the app to build one
+-- window of the road graph there out of what it has on disk already, and hands the graph to the callback (result.nodes
+-- and result.edges; result.path is the file it wrote, for an add-on that would rather read it itself). It is not the
+-- AI's graph, and nothing is downloaded for it -- no map cell and no elevation tile: result.complete says whether
+-- everything the window needed was there. See docs/ADDONS.md.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 8
+-- 1.9: both of this change's calls, api.roadGraph and api.areaPlan / areaAdd / areaStatus. They were written on
+-- branches of their own and each took the next minor; they are one change now, so they are one minor.
+M.MAJOR, M.MINOR = 1, 9
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true,
+  roadGraph = true, areaRoute = true }
+-- The ground along a route, downloaded ahead (1.9, has('areaRoute')): api.areaPlan(points, opts, callback) says what
+-- a corridor along points would download, and api.areaAdd(points, opts, callback) adds it to the player's own saved
+-- areas, which download in the background and persist; api.areaStatus(id) follows one. opts.layers narrows it to the
+-- layers an add-on needs ('roads' alone, say) instead of the whole ground. There is no fast mode here: it pauses the
+-- player's game. See docs/ADDONS.md, and read areaAdd's own note before adding one -- an area is a persistent
+-- object in the player's world, not a function call with a side effect.
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
@@ -394,8 +408,7 @@ function M._onPlaces(msg)
   placesCall(r, result)
 end
 
-local function placesTimeouts(dt)
-  clock = clock + (tonumber(dt) or 0)
+local function placesTimeouts()
   local late = {}
   for id, r in pairs(placeReqs) do
     if clock - r.t > M.PLACES_TIMEOUT_S then late[#late + 1] = id end
@@ -406,6 +419,307 @@ local function placesTimeouts(dt)
     local r = placeReqs[id]
     placeReqs[id] = nil
     placesCall(r, { places = {}, complete = false, pending = false, error = 'timed out' })
+  end
+end
+
+------------------------------------------------------------------------------------------
+-- the road graph round a point (has('roadGraph'))
+
+-- (its own wait, shorter than PLACES_TIMEOUT_S: no map cell is fetched for a road graph, so unlike a places request
+-- it never waits on a download, and PLACES_TIMEOUT_S is 150 s because the app's own wait for missing cells is 2 min.
+-- What is left to wait for is the build itself and the requests queued ahead of it on the one thread the app answers
+-- API requests on: a road-graph window is a wider read than a places query and the app assembles nodes, lanes,
+-- speeds and bridge decks from it, which is seconds, so 90 s is well past several of them in a row)
+M.ROAD_GRAPH_TIMEOUT_S = 90
+local graphReqs, graphReqId = {}, 0
+
+-- One window of the road network round lat, lon (has('roadGraph')), built by the app out of the map cells it already
+-- has. opts (all optional):
+--   radius (m, half the side of the square around the point: default 1100, at most 2000).
+-- callback(result) once: { nodes = { [name] = { x, y, z, radius } }, edges = { { in, out, oneway, lanesOut, lanesIn,
+-- speed m/s, drivability, radius, ... } }, signals, rules, lines, mph, complete (every map cell of the window was on
+-- disk), anchorId, serial, path, error (why there is no graph: no map data, the app started without roads, no world
+-- yet, bad coordinates, timed out, or the graph could not be read back) }. Returns the request's id, or nil and why.
+-- x, y, z are in the current anchor's frame (api.toGeo turns x, y back into lat, lon) and z is the drivable surface.
+-- A node's name is stable across windows and across anchors, so two windows that overlap name the same node once:
+-- stitching them is keying on the name, not matching coordinates.
+-- nodes and edges are nil when error is set. `path` is the file they were read from, for an add-on that would rather
+-- read it itself -- but it is in our session folder and we keep only the last couple of graphs of an anchor, so an
+-- add-on that holds the path rather than the tables will find it gone.
+-- What it does not promise:
+--   * No map cell is downloaded for it. The app reads the window's layers only where it has them on disk; a window
+--     over ground the player has never been near comes back with few roads and complete = false, which is the honest
+--     answer rather than a slow one. There is deliberately no fetching form of the request.
+--   * It is not the AI's graph. The file is the add-on's own copy and never reaches the game's map, so writing to it
+--     or ignoring it moves no car and no traffic.
+--   * There is no bridge flag. A node on a bridge takes the deck's height, which is the right height, but nothing in
+--     nodes or edges says that stretch is a bridge, and the heights alone cannot be read as one.
+--   * It depends on the app having roads at all: one started with roads off answers with error and no path, and
+--     has('roadGraph') cannot see that (it is this mod's version, not the app's state).
+function M.roadGraph(lat, lon, opts, callback)
+  if type(opts) == 'function' and callback == nil then opts, callback = nil, opts end
+  lat, lon = tonumber(lat), tonumber(lon)
+  if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then return nil, 'bad coordinates' end
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  opts = type(opts) == 'table' and opts or {}
+  graphReqId = graphReqId + 1
+  graphReqs[graphReqId] = { fn = callback, t = clock }
+  net.send({ type = 'road_graph', id = graphReqId, lat = lat, lon = lon, radius = tonumber(opts.radius),
+    cachedOnly = true })
+  return graphReqId
+end
+
+local function roadGraphCall(r, result)
+  local ok, err = pcall(r.fn, result)
+  if not ok and log then log('W', 'beamngEarth', 'api: a roadGraph callback failed: ' .. tostring(err)) end
+end
+
+-- (ours: core.lua hands the app's road_graph_result here)
+function M._onRoadGraph(msg)
+  local r = type(msg) == 'table' and graphReqs[msg.id]
+  if not r then return end
+  graphReqs[msg.id] = nil                 -- (one answer a request: nothing follows it)
+  local path = type(msg.path) == 'string' and msg.path or nil
+  local out = { path = path, anchorId = tonumber(msg.anchorId), serial = tonumber(msg.serial),
+                complete = msg.complete == true,
+                error = type(msg.error) == 'string' and msg.error or nil }
+  -- The graph itself, read and decoded here rather than handed over as a file name: api.places answers with its rows
+  -- the same way, an add-on has no business knowing the layout of our session folder, and every caller would decode
+  -- it anyway. `path` stays in the answer for one that would rather read the file itself.
+  if path and not out.error then
+    local txt = rawget(_G, 'readFile')
+    txt = txt and txt(path) or nil
+    local okDecode, g = pcall(jsonDecode, txt or '')
+    if okDecode and type(g) == 'table' and type(g.nodes) == 'table' and type(g.edges) == 'table' then
+      out.nodes, out.edges = g.nodes, g.edges
+      out.signals = type(g.signals) == 'table' and g.signals or nil
+      out.rules = type(g.rules) == 'table' and g.rules or nil
+      out.lines = type(g.lines) == 'table' and g.lines or nil
+      out.mph = g.mph
+    else
+      -- (the file is written before the message is sent, so this is a real failure and not a race)
+      out.complete, out.error = false, 'the graph was built but could not be read back from ' .. tostring(path)
+    end
+  end
+  roadGraphCall(r, out)
+end
+
+local function roadGraphTimeouts()
+  local late = {}
+  for id, r in pairs(graphReqs) do
+    if clock - r.t > M.ROAD_GRAPH_TIMEOUT_S then late[#late + 1] = id end
+  end
+  -- (called after the walk, as placesTimeouts is: a callback may ask again, and a key added during pairs() is
+  --  undefined in Lua)
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = graphReqs[id]
+    graphReqs[id] = nil
+    roadGraphCall(r, { complete = false, error = 'timed out' })
+  end
+end
+
+-- a saved area along a route (has('areaRoute'))
+
+-- (its own wait, and a long one: an estimate walks every item of the plan and asks each imagery source what it
+--  would fetch for every square, and an add walks the same plan again. A 300 m corridor over a 20 km stage is tens
+--  of thousands of items, and it runs on the app's shared executor behind whatever else is queued there.)
+M.AREA_TIMEOUT_S = 120
+M.AREA_MAX_POINTS = 20000           -- (the app's own areas.ROUTE_MAX_POINTS; decimate long before this, see below)
+local areaReqs, areaReqId = {}, 0
+
+-- Every layer name api.areaPlan / api.areaAdd take (the app's areas.all_layers(); 'terrain' is the elevation and
+-- 'imagery' the aerial photography, which an area downloads too and which a caller after one layer of the ground
+-- has no use for either).
+M.AREA_LAYERS = { 'roads', 'connectors', 'buildings', 'water', 'land_use', 'infrastructure', 'landcover', 'canopy',
+                  'building_parts', 'places', 'terrain', 'imagery' }
+
+local function areaPoints(points)
+  if type(points) ~= 'table' then return nil, 'points must be a list of { lat, lon }' end
+  local lat, lon, n = {}, {}, 0
+  for i, p in ipairs(points) do
+    local a, o
+    if type(p) == 'table' then a, o = tonumber(p[1] or p.lat), tonumber(p[2] or p.lon) end
+    if not a or not o or a <= -85 or a >= 85 or o < -180 or o > 180 then
+      return nil, 'point ' .. tostring(i) .. ' is not on the map'
+    end
+    lat[i], lon[i], n = a, o, i
+  end
+  if n < 2 then return nil, 'a corridor needs at least two points' end
+  if n > M.AREA_MAX_POINTS then return nil, 'at most ' .. M.AREA_MAX_POINTS .. ' points (decimate the line first)' end
+  return { lat = lat, lon = lon }
+end
+
+local function areaLayers(v)
+  if v == nil then return nil end
+  if type(v) ~= 'table' then return nil, 'layers must be a list of layer names' end
+  local out, n = {}, 0
+  for i, name in ipairs(v) do
+    if type(name) ~= 'string' then return nil, 'layers must be a list of layer names' end
+    out[i], n = name, i
+  end
+  if n == 0 then return nil, 'an area with no layers would download nothing' end
+  return out
+end
+
+-- The arguments checked and the request booked: (id, body, net) or nil, why. The two calls below put the message's
+-- own type on it rather than taking it as an argument: a literal `type = '...'` in each net.send is what a reader
+-- and the app's protocol agreement table both go by.
+local function areaBook(points, opts, callback)
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  local route, why = areaPoints(points)
+  if not route then return nil, why end
+  opts = type(opts) == 'table' and opts or {}
+  local layers
+  layers, why = areaLayers(opts.layers)
+  if why then return nil, why end
+  local half = tonumber(opts.half)
+  if not half then return nil, 'opts.half (the width each side, m) is needed' end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  areaReqId = areaReqId + 1
+  areaReqs[areaReqId] = { fn = callback, t = clock }
+  return areaReqId, { route = route, half = half, layers = layers,
+                      name = type(opts.name) == 'string' and opts.name or nil }, net
+end
+
+-- What a saved area along `points` would download, without downloading or saving anything (has('areaRoute')).
+-- points: { { lat, lon }, ... } (api.gpsRoute().points is exactly this shape). opts:
+--   half    (m, the corridor's width each side: 200 .. 5000, needed)
+--   layers  (M.AREA_LAYERS, a subset; absent: all of them)
+-- callback(result) once: { ok, km (the line's length), km2 (the corridor's own area), items (the plan's steps),
+-- missing (those not on disk), downloadBytes, diskBytes, seconds, days, hosts, excluded, layers (the subset the app
+-- honoured, {} for all of them), error }. Returns the request's id, or nil and why.
+--
+-- Show the player `downloadBytes` and ask them before calling areaAdd. Not `seconds` (a serial-request model with
+-- no bandwidth in it), not `days` (0 nearly everywhere), and not `km2` (the corridor's geometry, far smaller than
+-- the footprint actually downloaded: the plan dilates it by two map cells all round).
+-- `layers` in the result is there to be read: an older BeamNG.Earth without this call ignores the field and
+-- downloads everything, and has('areaRoute') is this mod's version, not the app's.
+function M.areaPlan(points, opts, callback)
+  local id, body, net = areaBook(points, opts, callback)
+  if not id then return nil, body end
+  -- (no name: nothing is saved by a plan, so there is nothing to call anything)
+  net.send({ type = 'area_route_plan', id = id, route = body.route, half = body.half, layers = body.layers })
+  return id
+end
+
+-- A new saved area along `points`, downloaded in the background (has('areaRoute')). Arguments as areaPlan, plus
+-- opts.name (what the player sees in their area list: say which add-on it is for).
+-- callback(result) once: { ok, id (the new area's id, for areaStatus), error }. Returns the request's id, or nil
+-- and why.
+--
+-- An area is not a function call with a side effect. It is a persistent object in the player's world, and an
+-- add-on that adds one has to live with all of this:
+--   * **The player sees it** in the 3D map's area list, its line drawn, and can pause, resume or delete it. Name
+--     it so they know what it is.
+--   * **There are ten slots** (areas.MAX_AREAS) and you are competing for them. When they are full your add fails
+--     -- and so does the player's own next one, which is the worse half of that.
+--   * **Its data is pinned**: never evicted, and "Clear cache" keeps it. An add that would take the saved areas
+--     past their share of the cache is refused with a message naming the setting to raise. Surface it; it is the
+--     player's to act on, not yours to swallow.
+--   * **It survives a restart** and resumes on its own, with no mod and no client involved.
+--   * **One area downloads at a time, in list order.** Yours is appended last, so it can legitimately sit at zero
+--     behind the player's own. A progress display must not read that as broken.
+--   * **It is not removed for you.** There is no remove in this API: the area and its data stay for the player to
+--     keep or delete. Do not add one per press of a button.
+--   * **"done" does not mean the data arrived** -- see areaStatus.
+-- Decimate the line to a point every 20-50 m first. The points are persisted verbatim into the app's area store
+-- and re-validated on every load, and a 6000-point line is a quarter of a megabyte of JSON rewritten every time
+-- any area changes.
+-- There is no fast mode here, deliberately. Fast mode skips the gates that keep a download from slowing the world,
+-- and the pause that makes that survivable is applied by BeamNG.Earth itself for any client on any fast area -- so
+-- an add-on able to set it could stop the player's physics in the middle of whatever they were doing. If a player
+-- wants it, they can press it on their own area list.
+function M.areaAdd(points, opts, callback)
+  local id, body, net = areaBook(points, opts, callback)
+  if not id then return nil, body end
+  -- (no `fast`, on purpose and for good: see above. There is nothing to leave out, because there is no argument
+  --  for it anywhere in this file.)
+  net.send({ type = 'area_route_add', id = id, route = body.route, half = body.half, layers = body.layers,
+             name = body.name })
+  return id
+end
+
+-- The saved area `id` (the id areaAdd handed back), as the app last broadcast it, or nil when it is not in the
+-- player's list any more (deleted, or a store that would not load):
+--   { id, name, state, done, total, unavailable, msg, mode, half, layers }
+-- state is 'queued' (waiting its turn), 'checking' (walking the plan), 'running', 'waiting' (a host's daily limit
+-- or being offline: it tries again by itself), 'paused' (the player) or 'done'. done / total are items, not bytes.
+-- **'done' does not mean the data arrived.** After three passes with failures the items still failing are counted
+-- in `unavailable`, the area is marked done anyway, and `msg` becomes "N items unavailable (no server had them in
+-- 3 tries): Resume tries again". So: re-check what you asked for rather than trusting 'done', and put `msg` in
+-- front of the player when it is not empty -- resuming is an action only they can take.
+-- A copy: the caller may keep it. Cheap enough to call every frame (no request, no allocation beyond the table).
+function M.areaStatus(id)
+  local c = core()
+  local st = c and c.areasState and c.areasState()
+  if type(st) ~= 'table' or type(st.areas) ~= 'table' or id == nil then return nil end
+  for _, a in ipairs(st.areas) do
+    if type(a) == 'table' and a.id == id then
+      local layers = nil
+      if type(a.layers) == 'table' then
+        layers = {}
+        for i, name in ipairs(a.layers) do layers[i] = name end
+      end
+      return { id = a.id, name = type(a.name) == 'string' and a.name or nil,
+               state = type(a.state) == 'string' and a.state or nil,
+               done = tonumber(a.done) or 0, total = tonumber(a.total) or 0,
+               unavailable = tonumber(a.unavailable) or 0,
+               msg = type(a.msg) == 'string' and a.msg ~= '' and a.msg or nil,
+               mode = type(a.mode) == 'string' and a.mode or nil, half = tonumber(a.half), layers = layers }
+    end
+  end
+  return nil
+end
+
+local function areaCall(r, result)
+  local ok, err = pcall(r.fn, result)
+  if not ok and log then log('W', 'beamngEarth', 'api: an area callback failed: ' .. tostring(err)) end
+end
+
+-- (ours: core.lua hands the app's area_route_plan_result here)
+function M._onAreaPlan(msg)
+  local r = type(msg) == 'table' and areaReqs[msg.id]
+  if not r then return end
+  areaReqs[msg.id] = nil                  -- (one answer a request: nothing follows it)
+  local layers = nil
+  if type(msg.layers) == 'table' then
+    layers = {}
+    for i, name in ipairs(msg.layers) do layers[i] = name end
+  end
+  areaCall(r, { ok = msg.ok == true, km = tonumber(msg.km), km2 = tonumber(msg.km2), items = tonumber(msg.items),
+                missing = tonumber(msg.missing), downloadBytes = tonumber(msg.downloadBytes),
+                diskBytes = tonumber(msg.diskBytes), seconds = tonumber(msg.seconds), days = tonumber(msg.days),
+                hosts = type(msg.hosts) == 'table' and msg.hosts or nil,
+                excluded = type(msg.excluded) == 'table' and msg.excluded or nil, layers = layers,
+                error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+-- (ours: ... and the app's area_route_add_result here)
+function M._onAreaAdd(msg)
+  local r = type(msg) == 'table' and areaReqs[msg.id]
+  if not r then return end
+  areaReqs[msg.id] = nil
+  local id = type(msg.area) == 'string' and msg.area or nil
+  areaCall(r, { ok = msg.ok == true and id ~= nil, id = id,
+                error = type(msg.error) == 'string' and msg.error or nil })
+end
+
+local function areaTimeouts()
+  local late = {}
+  for id, r in pairs(areaReqs) do
+    if clock - r.t > M.AREA_TIMEOUT_S then late[#late + 1] = id end
+  end
+  -- (after the walk, as placesTimeouts is: a callback may ask again, and a key added during pairs() is undefined)
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = areaReqs[id]
+    areaReqs[id] = nil
+    -- (an areaAdd that timed out may still have been made: the area list is the truth, not this)
+    areaCall(r, { ok = false, error = 'timed out' })
   end
 end
 
@@ -446,7 +760,12 @@ end
 local wasReady, teleporting = false, false
 
 function M.onUpdate(dtReal)
-  if next(placeReqs) then placesTimeouts(dtReal) end
+  -- (the one clock both request kinds date themselves by: carried forward only while something is in flight, so a
+  --  request made after a long quiet spell is not already late)
+  if next(placeReqs) or next(graphReqs) or next(areaReqs) then clock = clock + (tonumber(dtReal) or 0) end
+  if next(placeReqs) then placesTimeouts() end
+  if next(graphReqs) then roadGraphTimeouts() end
+  if next(areaReqs) then areaTimeouts() end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
   if st.pending and st.pending.purpose == 'teleport' then teleporting = true end
@@ -460,6 +779,10 @@ function M.onUpdate(dtReal)
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
+function M._reset()
+  listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0
+  graphReqs = {}
+  areaReqs = {}
+end
 
 return M

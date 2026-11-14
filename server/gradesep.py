@@ -12,6 +12,7 @@ ranges (roads.tag_level_ranges), so every cell finds the same bridges for a line
 the map has no range (MapData.cell hooks a cell's roads layer: hook()). The kernels: earthfast gradesep_candidates /
 gradesep_spans; the ground: the DEM at DEM_ZOOM, raw (not graded).
 """
+import contextlib
 import logging
 import os
 import threading
@@ -112,6 +113,30 @@ def _spans_kept(md, key, feats):
 
 _POOL = None
 _POOL_LOCK = threading.Lock()
+_local = threading.local()
+
+
+class NotOnDisk(Exception):
+    """A cell round the one being read is not on disk, and this thread may not download it (cached_only)."""
+
+
+@contextlib.contextmanager
+def cached_only():
+    """Inside this, the eight cells round a cell (_neighbours) are read only where they are on disk already, at a
+    kind that queues nothing either; a cell that is not there raises NotOnDisk. For a reader that must not download
+    anything (the modding API's cached-only road graph, earthd.Server.road_graph_data): the hook a decoded roads
+    layer carries holds the map data itself, so a build reaches past the cells its caller read -- at "demand", ahead
+    of the world's own tiles -- for every cell whose level ranges or home copy it asks for.
+
+    This thread's lane, taken over the pool with the read, because the hooks belong to the map data and are shared
+    with every reader of that cell (the player's own world among them): the layer cannot carry the kind it is read
+    at, and a cell left out of one must not be remembered as a cell without roads for the next reader."""
+    prev = getattr(_local, "cached", False)
+    _local.cached = True
+    try:
+        yield
+    finally:
+        _local.cached = prev
 
 
 def neighbours_hook(md, key):
@@ -154,14 +179,27 @@ def _neighbour_keys(key):
 
 def _neighbours(md, key, keys=None):
     """The roads layers of the eight cells round key (or of keys), asked at once (one after another, cold, they held a
-    fresh place's first road tile ~7 s: 2026-10-27 A/B)."""
+    fresh place's first road tile ~7 s: 2026-10-27 A/B). At "demand", as the world's own tiles: a cell these need is a
+    cell the build it is for needs. Inside cached_only() only the ones on disk, and NotOnDisk when one is not."""
     global _POOL
     keys = _neighbour_keys(key) if keys is None else keys
+    kind = "demand"
+    if getattr(_local, "cached", False):
+        # (cached_only: the cells on disk, read at a kind that cannot download or queue a job. One of them not there
+        #  takes the whole read with it, as a failed read does: the callers (_spans, roads.home_copy) then leave this
+        #  cell's grade separations and home copies out and keep nothing they made with them -- revisit.fault, so
+        #  what was found short of a neighbour is not what the player's world reads out of the cache later.)
+        import revisit
+        missing = [k for k in keys if not md.has(k, "roads")]
+        if missing:
+            revisit.fault()
+            raise NotOnDisk(f"{len(missing)} of the {len(keys)} cells round {key} are not on disk")
+        kind = "background"
     with _POOL_LOCK:
         if _POOL is None:
             from runtimeprofiler import ThreadPoolExecutor
             _POOL = ThreadPoolExecutor(8, thread_name_prefix="gradesep-cells")
-    futs = [_POOL.submit(lambda k: md.cell(k, layers=("roads",), kind="demand").layers.get("roads"), k) for k in keys]
+    futs = [_POOL.submit(lambda k: md.cell(k, layers=("roads",), kind=kind).layers.get("roads"), k) for k in keys]
     return [f.result() for f in futs]
 
 

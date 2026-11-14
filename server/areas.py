@@ -36,6 +36,13 @@ street furniture: built the same from any anchor since the geotiles) built into 
 (earthd.Server.prebuild_geo), so arriving there loads it instead of building it. Its keys are listed in
 <cache>/areas/<id>.world (rewritten each pass: the cache's code key changes with every update, the old ones fall
 out) and kept out of the revisit cache's trim (pinned_world).
+
+Layers: an area downloads every layer of the ground by default, which is what the player picking a box on the map
+wants. A caller that needs one of them can name a subset instead (check_layers: any of area_layers() and the two
+names the elevation and the aerial imagery go under, TERRAIN_LAYER / IMAGERY_LAYER), and only those are planned,
+counted and fetched. A narrowed area is NOT a finished world: what it left out is downloaded on demand when the
+player arrives there, exactly as it is anywhere they have not been. The subset is stored with the area and
+re-validated on every load, because the plan a resume walks has to be the plan the area was added with.
 """
 import json
 import logging
@@ -110,6 +117,18 @@ def area_layers():
     return tuple(mapdatamod.LAYERS) + ("building_parts", "places")
 
 
+# The elevation and the aerial imagery are not map data layers, but an area downloads them too, and a caller that
+# wants one layer of the ground does not want the aerial photography of it either, so a subset has to be able to
+# drop them. They go under a name each in the same list.
+TERRAIN_LAYER = "terrain"
+IMAGERY_LAYER = "imagery"
+
+
+def all_layers():
+    """Every name a layers subset may hold, in the order a plan walks them."""
+    return area_layers() + (TERRAIN_LAYER, IMAGERY_LAYER)
+
+
 def check_box(s, w, n, e):
     """(s, w, n, e) as floats, or ValueError: a box inside Web Mercator's latitudes, not crossing the antimeridian,
     MIN_KM2 .. MAX_KM2."""
@@ -136,8 +155,13 @@ def check_route(lats, lons, half):
         half = float(half)
     except (TypeError, ValueError):
         raise ValueError("a route needs its points and a width") from None
-    if len(lats) != len(lons) or len(lats) < 2:
-        raise ValueError("no route: plan one with the GPS first")
+    if len(lats) != len(lons):
+        raise ValueError("a route needs as many latitudes as longitudes")
+    if len(lats) < 2:
+        # (no points at all is the GPS case -- "route": "current" with nothing planned -- and the player's hint
+        #  belongs there. One point is a caller that named its own line and needs telling what was wrong with it.)
+        raise ValueError("no route: plan one with the GPS first" if not lats else
+                         "a route needs at least two points")
     if len(lats) > ROUTE_MAX_POINTS:
         raise ValueError("that route has too many points")
     if not all(math.isfinite(v) and -85.0 < v < 85.0 for v in lats) or \
@@ -199,6 +223,34 @@ def check_mode(mode, server=None):
     return mode
 
 
+def check_layers(layers, mode=DEFAULT_MODE):
+    """The layers an area downloads: a subset of all_layers() as a tuple in that order, None for all of them, or
+    ValueError. None rather than the full tuple when every name is named, so that an area's stored plan is the
+    plain one and a later all_layers() (a new map data layer) is not frozen out of it.
+
+    Refused with a mode that builds the world: a geotile's content is built from the roads, the buildings, the
+    water, the land use and the land cover of its cells at once, so a narrowed world phase would bake a world with
+    pieces missing and keep it (pinned, out of the revisit trim) as though it were finished."""
+    if layers is None:
+        return None
+    if isinstance(layers, (str, bytes)) or not isinstance(layers, (list, tuple, set, frozenset)):
+        raise ValueError("layers must be a list of layer names")
+    every = all_layers()
+    want = {str(v) for v in layers}
+    bad = sorted(want - set(every))
+    if bad:
+        raise ValueError(f"unknown layer{'s' if len(bad) > 1 else ''} {', '.join(bad)}: "
+                         f"one or more of {', '.join(every)}")
+    out = tuple(lr for lr in every if lr in want)
+    if not out:
+        raise ValueError("an area with no layers would download nothing")
+    if len(out) == len(every):
+        return None
+    if "world" in MODES[mode]:
+        raise ValueError('building the world ahead needs every layer: ask for mode "data" with a layers subset')
+    return out
+
+
 def world_too_big(km2):
     return (f"too large to build the world ahead: {km2 / 2.59:,.0f} square miles; at most "
             f"{MAX_WORLD_KM2 / 2.59:,.0f} (or download its data only)")
@@ -238,29 +290,34 @@ def world_fuel_steps(geo_tiles):
     return [("fuel", z, x, y) for z, x, y in out]
 
 
-def plan_steps(tiles, hm_zooms, img_zoom, layers):
+def plan_steps(tiles, hm_zooms, img_zoom, layers, terrain=True, imagery=True):
     """The download plan of an area (tiles(z, ring) -> its [(x, y)] at zoom z with ring more round them: box_tiles,
     route_tiles), in order: ("cell", z, x, y, layer) for the map data cells (with CELL_RING), ("dem", z, x, y) at the
     near terrain's zooms (hm_zooms(x6, y6) -> its zoom under that z6 tile) and DEM_ZOOMS_FAR, then ("img",
-    IMG_PARENT_Z, x, y, zoom) squares at img_zoom and IMG_STEPS coarser. Deterministic."""
+    IMG_PARENT_Z, x, y, zoom) squares at img_zoom and IMG_STEPS coarser. Deterministic.
+
+    `layers` are the map data layers to plan (empty: no cells at all); terrain / imagery whether the elevation and
+    the aerial squares are planned (a layers subset may leave either out, check_layers)."""
     if isinstance(tiles, tuple):        # (a box)
         tiles = box_tiles(tiles)
     out = []
     for x, y in tiles(CELL_Z, CELL_RING):
         for layer in layers:
             out.append(("cell", CELL_Z, x, y, layer))
-    near = {}
-    for x, y in tiles(6, 0):
-        near.setdefault(hm_zooms(x, y), True)
-    zooms = sorted(set(DEM_ZOOMS_FAR) | set(near), reverse=True)
-    for z in zooms:
-        for x, y in tiles(z, DEM_RING if z == min(DEM_ZOOMS_FAR) else 0):
-            if z in DEM_ZOOMS_FAR or hm_zooms(x >> (z - 6), y >> (z - 6)) == z:
-                out.append(("dem", z, x, y))
-    for step in IMG_STEPS:
-        zw = img_zoom - step
-        for x, y in tiles(IMG_PARENT_Z, 0):
-            out.append(("img", IMG_PARENT_Z, x, y, zw))
+    if terrain:
+        near = {}
+        for x, y in tiles(6, 0):
+            near.setdefault(hm_zooms(x, y), True)
+        zooms = sorted(set(DEM_ZOOMS_FAR) | set(near), reverse=True)
+        for z in zooms:
+            for x, y in tiles(z, DEM_RING if z == min(DEM_ZOOMS_FAR) else 0):
+                if z in DEM_ZOOMS_FAR or hm_zooms(x >> (z - 6), y >> (z - 6)) == z:
+                    out.append(("dem", z, x, y))
+    if imagery:
+        for step in IMG_STEPS:
+            zw = img_zoom - step
+            for x, y in tiles(IMG_PARENT_Z, 0):
+                out.append(("img", IMG_PARENT_Z, x, y, zw))
     return out
 
 
@@ -306,12 +363,17 @@ class Areas:
                     box = route_bounds(route)
                 else:
                     box = check_box(a["s"], a["w"], a["n"], a["e"])
+                mode = a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE
+                # (re-validated like the route's points: the plan a resume walks has to be the plan the area was
+                #  added with, and a stored subset naming a layer this version no longer has is not one)
+                layers = check_layers(a.get("layers"), mode)
                 self.areas.append({"id": str(a["id"])[:16], "name": str(a.get("name", ""))[:NAME_MAX], "route": route,
                                    "s": box[0], "w": box[1], "n": box[2], "e": box[3],
                                    "created": float(a.get("created", 0)), "paused": bool(a.get("paused")),
                                    "complete": bool(a.get("complete")), "total": int(a.get("total", 0)),
                                    "diskBytes": int(a.get("diskBytes", 0)), "done": 0, "state": "queued", "msg": "",
-                                   "retry_at": 0.0, "mode": a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE,
+                                   "retry_at": 0.0, "mode": mode,
+                                   "layers": list(layers) if layers else None,
                                    "failedPasses": int(a.get("failedPasses", 0)),
                                    "unavailable": int(a.get("unavailable", 0))})
             except (KeyError, TypeError, ValueError):
@@ -327,8 +389,8 @@ class Areas:
     def _save(self):
         doc = {"v": STORE_VERSION, "next": self.next_id,
                "areas": [{k: a[k] for k in ("id", "name", "s", "w", "n", "e", "created", "paused", "complete", "total",
-                                            "diskBytes", "mode", "route", "failedPasses", "unavailable")
-                          if k in a and (k != "route" or a[k] is not None)}
+                                            "diskBytes", "mode", "route", "layers", "failedPasses", "unavailable")
+                          if k in a and (k not in ("route", "layers") or a[k] is not None)}
                          for a in self.areas]}
         try:
             os.makedirs(self.dir, exist_ok=True)
@@ -396,17 +458,25 @@ class Areas:
         import imagery as imagerymod
         return imagerymod.zoom_for((box[0] + box[2]) / 2, IMG_TEXEL_M)
 
-    def phase_steps(self, phase, box, route=None):
+    def phase_steps(self, phase, box, route=None, layers=None):
         """The steps of one phase of an area's job ("data": plan_steps) for a box, or a route's corridor (box: its
-        bounds)."""
+        bounds).
+
+        `layers`: a subset of all_layers() (check_layers) or None for all of them -- which map data layers of the
+        cells are planned, and whether the elevation and the aerial imagery are planned at all."""
         tiles = route_tiles(route) if route is not None else box_tiles(box)
+        want = None if layers is None else set(layers)
         if phase == "data":
             import decisions    # (the shared decision archives' blocks first: one request a ~60 km2 block)
             dec = ([("dec", decisions.BLOCK_Z, x, y) for x, y in tiles(decisions.BLOCK_Z, 0)]
                    if decisions.enabled() and self.s.mapdata is not None and getattr(self.s, "grading", False)
                    else [])
-            return dec + plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
-                                    area_layers() if self.s.mapdata is not None else ())
+            cells = area_layers() if self.s.mapdata is not None else ()
+            if want is not None:
+                cells = tuple(lr for lr in cells if lr in want)
+            return dec + plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box), cells,
+                                    terrain=want is None or TERRAIN_LAYER in want,
+                                    imagery=want is None or IMAGERY_LAYER in want)
         if phase == "world":
             # the road heights' lidar first: a road build waits only seconds for it (roadz.gap_answers) and a cell it
             # had to give up on keeps no geotile for the rest of the server's run
@@ -421,11 +491,11 @@ class Areas:
             return lidar + fuel + geo
         raise ValueError(f"unknown area phase {phase!r}")
 
-    def steps(self, box, mode=DEFAULT_MODE, route=None):
+    def steps(self, box, mode=DEFAULT_MODE, route=None, layers=None):
         """Every step of an area's job: its mode's phases in order."""
         out = []
         for phase in MODES[mode]:
-            out += self.phase_steps(phase, box, route)
+            out += self.phase_steps(phase, box, route, layers)
         return out
 
     def _present(self, step, done_imgs=None):
@@ -466,19 +536,23 @@ class Areas:
             return {"ok": False, "error": world_too_big(km2)}
         return self._estimate(self.steps(box, mode), km2)
 
-    def plan_route(self, lats, lons, half, mode=DEFAULT_MODE):
-        """plan() for a route's corridor (half: its half width, m), with its length "km" too."""
+    def plan_route(self, lats, lons, half, mode=DEFAULT_MODE, layers=None):
+        """plan() for a route's corridor (half: its half width, m), with its length "km" too, and the layers it
+        would download ("layers": [] for all of them -- a caller that named a subset can see it was honoured, which
+        an older server that ignored the field would not say)."""
         try:
             lats, lons, half = check_route(lats, lons, half)
             mode = check_mode(mode, self.s)
+            layers = check_layers(layers, mode)
         except ValueError as err:
             return {"ok": False, "error": str(err)}
         route = {"lat": lats, "lon": lons, "half": half}
         length, km2 = fast._ef.corridor_size(lats, lons, half)
         if "world" in MODES[mode] and km2 > MAX_WORLD_KM2:
             return {"ok": False, "error": world_too_big(km2)}
-        out = self._estimate(self.steps(route_bounds(route), mode, route), km2)
+        out = self._estimate(self.steps(route_bounds(route), mode, route, layers), km2)
         out["km"] = round(length / 1000.0, 2)
+        out["layers"] = list(layers or ())
         return out
 
     def _estimate(self, steps, km2):
@@ -575,23 +649,26 @@ class Areas:
             return False, str(err)
         return self._fast_after(self._add(box, None, self.plan(*box, mode=mode), name, mode), fast)
 
-    def add_route(self, lats, lons, half, name="", mode=DEFAULT_MODE, fast=False):
-        """A new saved route (its corridor: half m each side; fast: in fast mode). (True, area id) or (False, why)."""
+    def add_route(self, lats, lons, half, name="", mode=DEFAULT_MODE, fast=False, layers=None):
+        """A new saved route (its corridor: half m each side; fast: in fast mode; layers: a subset of all_layers(),
+        None for all of them). (True, area id) or (False, why)."""
         try:
             lats, lons, half = check_route(lats, lons, half)
             mode = check_mode(mode, self.s)
+            layers = check_layers(layers, mode)
         except ValueError as err:
             return False, str(err)
         route = {"lat": lats, "lon": lons, "half": half}
-        return self._fast_after(self._add(route_bounds(route), route, self.plan_route(lats, lons, half, mode), name,
-                                          mode), fast)
+        return self._fast_after(self._add(route_bounds(route), route,
+                                          self.plan_route(lats, lons, half, mode, layers), name, mode, layers),
+                                fast)
 
     def _fast_after(self, res, fast):
         if fast and res[0]:
             self.command(res[1], "fast")
         return res
 
-    def _add(self, box, route, est, name, mode=DEFAULT_MODE):
+    def _add(self, box, route, est, name, mode=DEFAULT_MODE, layers=None):
         if not est.get("ok"):
             return False, est.get("error") or "no estimate"
         with self.lock:
@@ -609,7 +686,10 @@ class Areas:
                                "e": box[3],
                                "created": time.time(), "paused": False, "complete": False, "total": est.get("items", 0),
                                "diskBytes": est.get("diskBytes", 0), "done": 0, "state": "queued", "msg": "",
-                               "retry_at": 0.0, "mode": mode})
+                               "retry_at": 0.0, "mode": mode, "layers": list(layers) if layers else None,
+                               # (counted from the first pass on; _load and command("resume") set them too, and
+                               #  message() reports unavailable, so every area has them from the moment it exists)
+                               "failedPasses": 0, "unavailable": 0})
             self._save()
         self.pin_at = -1e18
         self.wake.set()
@@ -675,10 +755,17 @@ class Areas:
         self._changed(force=True)
 
     def message(self):
-        """The 'areas' message's fields."""
+        """The 'areas' message's fields.
+
+        "unavailable" goes with every area, because "state": "done" does not mean the data arrived: after
+        MAX_FAILED_PASSES the items still failing are counted unavailable and the area is marked done (_pass). The
+        player reads that off "msg" (unavailable_msg), but a caller that has to decide whether to trust the ground
+        needs the number, and inferring it from a sentence is not a contract."""
         with self.lock:
             out = {"areas": [dict({k: a[k] for k in ("id", "name", "s", "w", "n", "e", "state", "done", "total", "msg",
-                                                     "mode")}, **({"route": self._preview(a), "half": a["route"]["half"]} if a["route"] else {}))
+                                                     "mode", "unavailable")},
+                                  **({"route": self._preview(a), "half": a["route"]["half"]} if a["route"] else {}),
+                                  **({"layers": list(a["layers"])} if a.get("layers") else {}))
                              for a in self.areas]}
         if self.pinned_bytes is not None:
             out["pinnedBytes"] = int(self.pinned_bytes)
@@ -811,7 +898,7 @@ class Areas:
     def _pass(self, a):
         """One walk over the area's plan: what is on disk is counted, the rest fetched."""
         box = (a["s"], a["w"], a["n"], a["e"])
-        steps = self.steps(box, a.get("mode", DEFAULT_MODE), a["route"])
+        steps = self.steps(box, a.get("mode", DEFAULT_MODE), a["route"], a.get("layers"))
         done_imgs = self._done_set(a["id"])
         with self.lock:
             a["total"], a["done"], a["state"], a["msg"] = len(steps), 0, "checking", ""
