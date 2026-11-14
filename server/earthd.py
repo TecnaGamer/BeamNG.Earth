@@ -3679,7 +3679,7 @@ class Server:
         geo = getattr(getattr(conn, "roads", None), "geo", False)
         loop = asyncio.get_running_loop()
         for t in tiles:
-            for key in osm_fuel_cells(anchor.frame, t, geo):
+            for key in self.fuel_cells(aid, anchor.frame, t, geo):
                 k = str(key)
                 if k in self.osm_fuel_done:
                     continue
@@ -3701,6 +3701,22 @@ class Server:
         log.debug("osm fuel: cell %s, %d stations in %.2f s", key, len(rows), time.perf_counter() - t0)
         return rows, True
 
+    FUEL_CELLS_MAX = 20000
+
+    def fuel_cells(self, aid, frame, tile, geo):
+        """osm_fuel_cells of a road tile, memoised: every pose asked them for all the tiles round the car, each a
+        conversion to lat/lon on the event loop (a 4.1 s 'event loop stalled' in geotiles.enu_to_geodetic < ...
+        osm_fuel_want < on_pose, 2026-11-14). A geotile's cells are the same for every anchor; an anchor tile's are its
+        anchor's."""
+        memo = self.__dict__.setdefault("_fuel_cells", {})
+        mk = (bool(geo), None if geo else aid, tuple(tile))
+        got = memo.get(mk)
+        if got is None:
+            if len(memo) >= self.FUEL_CELLS_MAX:
+                memo.clear()
+            got = memo[mk] = tuple(osm_fuel_cells(frame, tile, geo))
+        return got
+
     def _osm_fuel_got(self, k, key, fut):
         waiting = self.osm_fuel_wait.pop(k, set())
         try:
@@ -3718,7 +3734,8 @@ class Server:
             # (a geotile's content is the connection's, whatever the anchor: dev's geotiles, kept by the mod across
             # anchors; an anchor's road tiles only while it is the tracker's)
             if anchor is not None and roads is not None and (geo or roads.aid == aid):
-                again = osm_fuel_tiles(anchor.frame, key, roads.sent, geo)
+                k_ = str(key)
+                again = {t for t in roads.sent if any(str(c) == k_ for c in self.fuel_cells(aid, anchor.frame, t, geo))}
                 if again:
                     log.info("osm fuel: cell %s brought %d stations: road tiles %s again", k, len(rows), sorted(again))
                     roads.again(again)

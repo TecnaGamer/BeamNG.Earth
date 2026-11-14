@@ -21,6 +21,31 @@ class OsmFuelTilesTest(unittest.TestCase):
         self.assertIn((0, 0), near)
         self.assertNotIn((40, 40), near, "10 km off")
 
+    def test_cells_memoised(self):
+        # every pose asked the cells of all the tiles round the car again (a 4.1 s event-loop stall, 2026-11-14):
+        # Server.fuel_cells computes a tile's once (per anchor; a geotile's once for all anchors), same answer
+        import types
+        from unittest import mock
+        import earthd
+        frame = geodesy.EnuFrame(40.44, -80.0)
+        fake = types.SimpleNamespace(FUEL_CELLS_MAX=earthd.Server.FUEL_CELLS_MAX)
+        calls = []
+        real = earthd.osm_fuel_cells
+
+        def counting(*a, **k):
+            calls.append(a[1])
+            return real(*a, **k)
+        with mock.patch.object(earthd, "osm_fuel_cells", counting):
+            a = earthd.Server.fuel_cells(fake, 1, frame, (0, 0), False)
+            b = earthd.Server.fuel_cells(fake, 1, frame, (0, 0), False)
+            earthd.Server.fuel_cells(fake, 2, frame, (0, 0), False)       # (another anchor: its own)
+            g1 = earthd.Server.fuel_cells(fake, 1, frame, (37000, 49000), True)
+            g2 = earthd.Server.fuel_cells(fake, 2, frame, (37000, 49000), True)
+        self.assertEqual(a, b)
+        self.assertEqual(tuple(real(frame, (0, 0))), a)
+        self.assertEqual(g1, g2)
+        self.assertEqual(len(calls), 3)
+
     def test_tracker_again(self):
         t = roads.Tracker()
         t.sent = {(0, 0), (1, 0), (5, 5)}
