@@ -5893,7 +5893,31 @@ class _Planner:
         mine = 0 if dnp.hypot(*(ends[0] - xy)) <= dnp.hypot(*(ends[1] - xy)) else 1
         return half if z[mine] < z[1 - mine] else -half
 
+    @_marked("_end_raw_cache", lambda self, xy: (float(xy[0]), float(xy[1])))
     def _end_lift_raw(self, xy):
+        """_end_lift_raw_calc, kept per point: _end_lift_calc asks it for an abutment and for each abutment near it (its
+        twins), and every one of those is asked again as an abutment of its own (448 calls for 203 points in a Las
+        Vegas 3 x 3 road tile build, 36 % of their time, 2026-11-13; PR #1238). An error is not kept: its cells may be
+        read by the next call. Keyed on the exact point (two ends within a centimetre do not share an answer whichever
+        was made first), its marks kept with it (_marked: it reads the deck-corrected elevation, which can be short
+        without raising), at most 4096 kept."""
+        k = (float(xy[0]), float(xy[1]))
+        with self.lock:
+            memo = self.__dict__.setdefault("_end_raw_cache", {})
+            if k in memo:
+                self._marks_seen("_end_raw_cache", k)
+                return memo[k]
+        res = self._end_lift_raw_calc(xy)
+        with self.lock:
+            if len(memo) > 4096:
+                memo.clear()
+            if k not in memo:
+                memo[k] = res
+                self._marks_at("_end_raw_cache", k)
+            self._marks_seen("_end_raw_cache", k)
+            return memo[k]
+
+    def _end_lift_raw_calc(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
         home = mapcells.cell_of(float(la[0]), float(lo[0]))
         hc = self._cell_enu(home, ground=False)
@@ -6269,13 +6293,6 @@ class _Planner:
                     # portal 1.3-1.9 m down to the floor beside the covered zone, a 2.3 m step: Norway #1137)
                     out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
         return out
-
-    def _covered_tunnels(self, feats):
-        """[(xy, half width)] of the tunnels' covered sections (not open roads): the grading leaves the ground over
-        them as it is (apply): the approaches' grading reached up to T_MAX past a portal and cut a park bridge's soil
-        down under its arch's vault, the terrain then cut away over it (2026-10-17)."""
-        return [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, kind in _twin_trimmed(self._tunnel_sections(feats))
-                if kind]
 
     def _open_tunnels(self, feats):
         """(fid, Plan) of the tunnels' open sections (roads.TUNNEL_OPEN_COVER): the ground graded to the road's floor

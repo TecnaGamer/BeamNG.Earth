@@ -494,8 +494,17 @@ class Reach:
         self.tree = Tree(got, x, y, vx, vy, now)
         return self.tree
 
-    def current(self, now=None):
-        """The latest tree while it is fresh (TREE_MAX_AGE_S), else None."""
+    def current(self, now=None, x=None, y=None, speed=0.0):
+        """The latest tree while it is fresh (TREE_MAX_AGE_S), else None. With the car's position (x, y): also None
+        when the tree was grown farther from it than the car could have come since at speed (+ 2 x GROW_MOVE_M): a jump
+        within the anchor, or a grow of an older pose finishing late (trees are grown off the event loop,
+        Connection.reach_tree), never steers the prefetch to where the car was."""
         t = self.tree
         now = time.monotonic() if now is None else now
-        return t if t is not None and now - t.t <= TREE_MAX_AGE_S else None
+        if t is None or now - t.t > TREE_MAX_AGE_S:
+            return None
+        if x is not None and y is not None:
+            room = max(0.0, float(speed)) * max(0.0, now - t.t) + 2.0 * GROW_MOVE_M
+            if math.hypot(float(x) - t.x, float(y) - t.y) > room:
+                return None
+        return t

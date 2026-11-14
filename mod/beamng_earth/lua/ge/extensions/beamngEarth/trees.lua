@@ -1494,6 +1494,12 @@ M.WARM_PER_PASS = 3       -- (less the pass's own new shapes)
 M.WARM_DEPTH_M = 1500
 M.warmed = 0
 local warmForestId = nil
+-- Each warm item at a spot of its own, WARM_GRID_M apart on a WARM_GRID_N square grid round the point: every item at one
+-- point made the engine's forest cell split without end (211 saved shapes warmed at (0, 0, -1500) at a level's start:
+-- the main thread spun in the forest insert and grew to 28-39 GB, the game killed by the OOM killer; 105 loaded fine,
+-- the texkeep soak 2026-11-14).
+M.WARM_GRID_M, M.WARM_GRID_N = 3.0, 24
+local warmK = 0
 local function warmItem(sh, player)
   local f = warmForestId and scenetree.findObjectById(warmForestId)
   if not f then
@@ -1509,7 +1515,10 @@ local function warmItem(sh, player)
   if not itemMat then itemMat, itemVec, itemPos = MatrixF(true), vec3(0, 0, 0), vec3(0, 0, 0) end
   itemVec:set(0, 0, 0)
   itemMat:setFromEuler(itemVec)
-  itemPos:set(player.x or 0, player.y or 0, (player.z or 0) - M.WARM_DEPTH_M)
+  local k = warmK % (M.WARM_GRID_N * M.WARM_GRID_N)
+  warmK = warmK + 1
+  itemPos:set((player.x or 0) + (k % M.WARM_GRID_N) * M.WARM_GRID_M,
+    (player.y or 0) + math.floor(k / M.WARM_GRID_N) * M.WARM_GRID_M, (player.z or 0) - M.WARM_DEPTH_M)
   itemMat:setPosition(itemPos)
   local fd = f:getData()
   if fd and pcall(function() return fd:createNewItem(d, itemMat, 1) end) then M.warmed = M.warmed + 1 end

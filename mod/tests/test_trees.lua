@@ -325,6 +325,11 @@ do
   local n = trees.prewarmSaved()
   T.check(n == 2 and trees.warmed - w1 == 2 and count() == 2, 'the next level: its two shapes warmed, not the stranger (' .. n .. ')')
   T.check(trees.prewarmSaved() == 0, '... once')
+  local spots = {}
+  for it in pairs(items) do spots[string.format('%.2f %.2f', it.m.p.x, it.m.p.y)] = true end
+  local nSpots = 0
+  for _ in pairs(spots) do nSpots = nSpots + 1 end
+  T.check(nSpots == count(), 'each warmed item at a spot of its own (all at one point split the forest cell without end)')
   writeFile, jsonEncode = savedWrite, savedEnc
 end
 trees.clear()

@@ -294,11 +294,17 @@ class AreasTest(unittest.TestCase):
         ok, why = small.add(*BOX)
         self.assertFalse(ok)
         self.assertIn("not enough room", why)
-        # at most MAX_AREAS
-        with mock.patch.object(areas, "MAX_AREAS", 1):
-            ok, why = a.add(*BOX)
-            self.assertFalse(ok)
-            self.assertIn("at most", why)
+        # no cache cap (0: no limit): the area must fit in the disk's free space less the cache's reserve
+        import collections
+        du = collections.namedtuple("du", "total used free")
+        for free, want in ((2.5e9, False), (500e9, True)):
+            srv = StubServer(cap=0)
+            srv.cache.root, srv.cache.disk_usage = self.tmp.name, lambda _root, f=free: du(1000e9, 0, f)
+            nocap = areas.Areas(os.path.join(self.tmp.name, f"c{int(free)}"), srv)
+            ok, why = nocap.add(*BOX)
+            self.assertEqual(ok, want, why)
+            if not ok:
+                self.assertIn("disk", why)
 
     def test_routes(self):
         # a corridor: the route's points and a half width; its plan walks the corridor's tiles in order along it

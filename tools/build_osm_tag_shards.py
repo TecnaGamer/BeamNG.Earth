@@ -350,11 +350,12 @@ def directories(entries, root_max=16384 - 127):
 
 
 def write_pmtiles(path, entries, data_path, bounds, n_rows, z=SHARD_ZOOM, root_max=16384 - 127, data_start=0,
-                  data_len=None):
+                  data_len=None, title="BeamNG.Earth OSM road tags", fmt=f"otg{FORMAT}"):
     """The archive at path: header, root directory, metadata, leaves, then the tile data (data_path's data_len bytes
-    from data_start; the entries' offsets are from there)."""
+    from data_start; the entries' offsets are from there). title / fmt: the metadata's name and format (another
+    dataset's archive: build_osm_building_years.py)."""
     root, leaves = directories(entries, root_max)
-    meta = gzip.compress(json.dumps({"name": "BeamNG.Earth OSM road tags", "format": f"otg{FORMAT}",
+    meta = gzip.compress(json.dumps({"name": title, "format": fmt,
                                      "rows": n_rows, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
                                     ).encode(), 9, mtime=0)
     if data_len is None:
@@ -403,18 +404,18 @@ def split_parts(entries, part_bytes):
     return out
 
 
-def write_parts(out, entries, data_path, bounds, n_rows, z, root_max, part_bytes):
-    """The archive's parts in out (osmtags-NNN.pmtiles), each a PMTiles archive of one tile-id run: the manifest's
-    "parts"."""
+def write_parts(out, entries, data_path, bounds, n_rows, z, root_max, part_bytes, prefix="osmtags", **meta):
+    """The archive's parts in out (<prefix>-NNN.pmtiles), each a PMTiles archive of one tile-id run: the manifest's
+    "parts" (meta: write_pmtiles' title and fmt)."""
     parts = []
     for k, (i0, i1) in enumerate(split_parts(entries, part_bytes)):
         ents = entries[i0:i1]
         start = ents[0][1] if ents else 0
         length = ents[-1][1] + ents[-1][2] - start if ents else 0
-        name = f"osmtags-{k:03d}.pmtiles"
+        name = f"{prefix}-{k:03d}.pmtiles"
         path = os.path.join(out, name)
         write_pmtiles(path, [(t, o - start, n, r) for t, o, n, r in ents], data_path, bounds, n_rows, z, root_max,
-                      data_start=start, data_len=length)
+                      data_start=start, data_len=length, **meta)
         size = os.path.getsize(path)
         if size > part_bytes:
             raise SystemExit(f"{name}: {size} B, over the {part_bytes} B a part may have")

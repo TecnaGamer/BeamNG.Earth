@@ -434,7 +434,8 @@ LOD_PPR_WINDOW_S = 5.0
 LOD_BASE_FOV_DEG = 60.0
 LOD_PPR_ZOOM = 2.0
 LOD_ERRS_MAX = 400000           # known tile errors kept (Server.lod_errs / glod_errs, oldest dropped first)
-VIEW_CAP_MIN_M = 10000.0        # ... and its fixed view distance (viewM, the far field's radius cap) to at least this
+VIEW_CAP_MIN_M = 1000.0         # ... and its fixed view distance (viewM, the far field's radius cap) to at least this
+                                # (1 km, the settings' least: players asked for under 20 km, 2026-11-14)
 DETAIL_ROAD_LIFT = 0.025        # detail mode: road surfaces over the drawn block, within roadmesh.FOLLOW_TOL of it (0.05
                                 # before, over a coarser surface it still cut through on hills: the tyres sank into it,
                                 # the user 2026-10-20)
@@ -1406,6 +1407,10 @@ class Server:
         self.horizon_pool = ThreadPoolExecutor(1, thread_name_prefix="horizon") if self.horizon else None
         self.ahead_pool = ThreadPoolExecutor(1, thread_name_prefix="download-ahead")   # download_ahead
         self.reach_pool = ThreadPoolExecutor(1, thread_name_prefix="reach-cells")    # Connection.reach_tree's cells
+        # ... and its trees, grown here, never on the event loop: a tree's grow rebuilds the graph's index when cells came
+        # since (reach.rs grow_impl), seconds in a dense city on a busy CPU (a player's Tokyo session, dev.431: 52 event
+        # loop stalls in reach.grow, 725 s in all, the longest 51 s, every game message waiting)
+        self.reach_grow_pool = ThreadPoolExecutor(1, thread_name_prefix="reach-grow")
         self.ahead_busy = False
         self.ahead_last = None          # (anchor id, x, y) of the last round
         self.ahead_stats = {"dem": 0, "cells": 0, "deferred": 0}
@@ -2910,7 +2915,8 @@ class Server:
         import geotiles
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
-                                            self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
+                                            self.gas_stations, buried, lamps, country,
+                                            md=self.mapdata.versions(buildings=bool(self.buildings)),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
                                             towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),
@@ -10041,13 +10047,24 @@ class Connection:
                 finally:
                     r.busy = False
             self.s.reach_pool.submit(run)
-        it = self.__dict__.get("intent")
-        try:
-            return r.grow(*self.focus, *self.vel, route_xy=self.route_xy(aid),
-                          intent=it.value() if it is not None else None)
-        except Exception:
-            log.exception("reach: the time-to-reach tree")
-            return None
+        if not getattr(r, "growing", False):
+            it = self.__dict__.get("intent")
+            pose = (*self.focus, *self.vel)
+            route, intent = self.route_xy(aid), (it.value() if it is not None else None)
+            at = time.monotonic()           # (the pose's time: the tree's age counts the queue too)
+            r.growing = True
+
+            def grow():
+                try:
+                    if time.monotonic() - at <= reachmod.TREE_MAX_AGE_S:     # (a pose queued too long: not grown)
+                        r.grow(*pose, route_xy=route, intent=intent, now=at)   # (its own GROW_EVERY_S check)
+                except Exception:
+                    log.exception("reach: the time-to-reach tree")
+                finally:
+                    r.growing = False
+            self.s.reach_grow_pool.submit(grow)
+        # the latest tree while fresh (TREE_MAX_AGE_S) and grown near where the car is now, else None (distance order)
+        return r.current(x=self.focus[0], y=self.focus[1], speed=sp)
 
     def nav_may_start(self, aid):
         """May the AI graph of anchor aid be built now? Its first one waits until half the road tiles round the car are
@@ -10933,7 +10950,7 @@ class Connection:
             radius = farfield.HORIZON_MIN if grid is None else grid.radius(*focus, eye)[0]
             extra = {"max_level": self.s.max_level, "disc": True,
                      "horizon": None if grid is None else farfield.Horizon(eye, grid)}
-        if self.view_cap is not None:
+        if self.view_cap is not None and not (self.map_view or self.map_open):     # (the 3D map: its own reach)
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
         # (the far PVS's rings are made at the commit, not here: beside the first block they held it 2.3 -> 7 s at a
         # cold Zermatt, their DEM fetches and this interpreter, 2026-11-11)
@@ -10963,7 +10980,9 @@ class Connection:
         self.retired = {ck: t for ck, t in self.retired.items() if now - t < self.s.retired_keep}
         self.node_changed = {n: t for n, t in self.node_changed.items() if now - t < farfield.HOLD_S}
         radius, extra = (self.horizon_select() if self.s.horizon else (self.s.radius, {}))
-        if self.view_cap is not None:       # (a fixed view distance: nothing past it is drawn; a disc, as the horizon)
+        if self.view_cap is not None and not (self.map_view or self.map_open):
+            # (a fixed view distance: nothing past it is drawn; a disc, as the horizon. Not for the 3D map, whose view
+            # reaches as far as its eye: a 1 km driving distance would leave it a 1 km map)
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
         anchor = self.s.anchors[self.active]
         t_sel = time.perf_counter()

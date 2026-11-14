@@ -37,7 +37,11 @@ class FakeMapData:
     def warm(self, needs, kind="demand"):
         return 0
 
-    def versions(self):             # (part of the revisit cache's key)
+    def versions(self, buildings=False):    # (part of the revisit cache's key; buildings: as MapData.versions's)
+        if buildings:
+            import osmcolours
+            import osmyears
+            return dict(self.versions(), osmyears=osmyears.identity(self), osmcolours=osmcolours.identity(self))
         return {"pipeline": 0}
 
     def side_prefetch(self, keys):  # (mapdata.MapData's: the props' per-cell sources started early)

@@ -83,7 +83,7 @@ M.SCHEMA = {
   rebaseDistance = { kind = 'number', default = rebase.DEFAULT_DISTANCE, min = rebase.MIN_DISTANCE,
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
-  viewDistanceKm = { kind = 'number', default = 100, min = 20, max = 1000, label = 'Fixed view distance (km)' },
+  viewDistanceKm = { kind = 'number', default = 100, min = 1, max = 1000, label = 'Fixed view distance (km)' },   -- (1 km: players asked for under 20, 2026-11-14)
   hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
@@ -463,10 +463,20 @@ local function ext(name) return rawget(_G, name) end
 -- LevelInfo.visibleDistance only takes effect after postApply (in-game, 2026-10-10). Only in our
 -- level, and the default (the level file's 100 km) never touches the engine: nothing changes until
 -- the player picks another distance.
-local function applyViewDistance()
+-- The fixed view distance (m) in force now: the setting's while driving, none with the real horizon or the 3D map open
+-- (the map reaches as far as its eye: a 1 km driving distance must not make a 1 km map; core.applyHorizon drives the
+-- distance then, and closing the map puts the fixed one back: M.reapplyView).
+function M.fixedViewM()
+  if values.viewDistanceMode ~= 'fixed' then return nil end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then return nil end
+  return values.viewDistanceKm * 1000
+end
+
+local function applyViewDistance(force)
   local li = scenetree and scenetree.theLevelInfo
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
-  if values.viewDistanceMode ~= 'fixed' then
+  if not M.fixedViewM() then
     -- 'horizon' (the default): v1.4 M1h drives it. Coming back from a fixed distance we set, the
     -- level's own distance is put back once (M1h's next status sets its own).
     if li and level == M.LEVEL_ID and appliedView ~= nil then
@@ -478,12 +488,19 @@ local function applyViewDistance()
     end
     return
   end
-  local m = values.viewDistanceKm * 1000
-  if not li or level ~= M.LEVEL_ID or appliedView == m then return end
-  if appliedView == nil and m == M.SCHEMA.viewDistanceKm.default * 1000 then return end
+  local m = M.fixedViewM()
+  if not li or level ~= M.LEVEL_ID or (appliedView == m and not force) then return end
+  -- (the default untouched at a level's start; force: the 3D map closed, a globe view may have raised it)
+  if not force and appliedView == nil and m == M.SCHEMA.viewDistanceKm.default * 1000 then return end
   li.visibleDistance = m
   if li.postApply then li:postApply() end
   appliedView = m
+end
+
+-- The 3D map opened or closed (core's onUpdate): the view distance as fixedViewM says now (a globe view may have raised
+-- it meanwhile: set again whatever it was).
+function M.reapplyView()
+  applyViewDistance(M.fixedViewM() ~= nil)
 end
 
 -- The server's graphics knobs now ({ lodScale, lodPx, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the

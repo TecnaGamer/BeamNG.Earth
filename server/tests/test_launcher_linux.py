@@ -165,7 +165,9 @@ class GameClosed(unittest.TestCase):
 @unittest.skipIf(os.name == "nt", "Linux: ensure_ca_certs leaves Windows alone")
 class CaCerts(unittest.TestCase):
     """The packaged app's OpenSSL looks in /usr/lib/ssl (Ubuntu's): elsewhere SSL_CERT_FILE points at a bundle."""
-    NONE = mock.Mock(cafile="/usr/lib/ssl/cert.pem", capath="/nonexistent/certs")
+    # OpenSSL's defaults that find nothing: not /usr/lib/ssl/cert.pem, which exists on Ubuntu (the mini PC test lane
+    # and GitHub's runner) and so made ensure_ca_certs keep the defaults there
+    NONE = mock.Mock(cafile="/nonexistent/ssl/cert.pem", capath="/nonexistent/certs")
 
     def run_it(self, bundles, env=None):
         with mock.patch.dict(os.environ, env or {}, clear=False), \

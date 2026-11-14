@@ -214,7 +214,19 @@ do
   T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'node radii supply the width when edge radii are absent')
   wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
   wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
-  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'a road containing the car wins over another road found only through the fallback tolerance')
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0, nil, 25) == 'c', 'approximate route projections retain their explicit search tolerance')
+end
+
+-- Balzac: a narrow service road is slightly closer than the occupied highway lane.
+do
+  local function n(x, y, radius, links) return { pos = { x = x, y = y, z = 0 }, radius = radius, links = links } end
+  local roads = { a = n(0, 0, 6, { b = {} }), b = n(100, 0, 6, {}),
+    c = n(0, 9, 1.5, { d = {} }), d = n(100, 9, 1.5, {}) }
+  T.check(G.edgeUnder(roads, 50, 4.6, 1, 0, 0) == 'a', 'a service road outside its own width cannot steal the highway anchor')
+  T.check(G.edgeUnder(roads, 50, 8, 1, 0, 0) == 'c', 'driving on the service road still selects it')
+  roads.c, roads.d = nil, nil
+  T.check(G.edgeUnder(roads, 50, 7, 1, 0, 0) == 'a', 'the eight-metre fallback still supports a car just beyond the mapped road width')
 end
 
 -- Overlapping fork lanes retain an active path only while it is physically underfoot.

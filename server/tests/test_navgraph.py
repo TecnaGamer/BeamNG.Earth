@@ -55,6 +55,24 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_submetre_source_road_keeps_its_connection_and_direction(self):
+        lines = [[(0, 0), (100, 0)], [(100, 0), (100.74, 0)], [(100.74, 0), (200, 0)]]
+        con = [(0, "A", 0, 0), (0, "B", 1, 1), (1, "B", 0, 0), (1, "C", 1, 1),
+               (2, "C", 0, 0), (2, "D", 1, 1)]
+        for direction in (0, 1, -1):
+            with self.subTest(direction=direction):
+                g = graph(lines, ["primary"] * 3, connectors=con, oneway=[(1, direction)] if direction else [])
+                edge = next((e for e in g["edges"] if {e[0], e[1]} == {"cB", "cC"}), None)
+                self.assertIsNotNone(edge, "a mapped short link must not split an otherwise connected road")
+                if edge is not None:
+                    self.assertEqual(edge[:3], ["cC", "cB", 1] if direction < 0 else ["cB", "cC", int(bool(direction))])
+
+    def test_degenerate_short_roads_do_not_create_invalid_edges(self):
+        for length in (0., .001, .03):
+            with self.subTest(length=length):
+                g = graph([[(0, 0), (length, 0)]], ["primary"])
+                self.assertEqual(g["edges"], [])
+
     def test_rumble_heuristic_is_country_and_road_type_scoped(self):
         motorway = SimpleNamespace(kind="paved", cls="motorway", urban=True, link=False)
         rural_primary = SimpleNamespace(kind="paved", cls="primary", urban=False, link=False)

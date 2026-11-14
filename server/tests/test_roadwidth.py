@@ -236,5 +236,43 @@ class CopiesTest(unittest.TestCase):
         self.assertEqual(rw.cap("r1", b), fresh.cap("r1", b))
 
 
+
+class ShedTest(unittest.TestCase):
+    """clear_memory (budget.maybe_shed: a process over its memory ceiling) drops everything the walls keep in memory.
+    The segments of a cell in its neighbour's frame (reframed) stayed: 64 float64 arrays a process, none of them
+    usable once the walls they were made from were gone, each holding its Walls and so the walls' mapped files."""
+
+    def test_a_shed_drops_the_reframed_segments_and_the_walls_they_hold(self):
+        import weakref
+        import mapcells
+        feats, home = StoreTest.houses(self)
+
+        class F:
+            def __len__(self):
+                return len(feats.coord_off) - 1
+        F.lonlat, F.coord_off = feats.lonlat, feats.coord_off
+        # a road across the home cell's east edge: the walls of the cells on both sides, the second's in the first's frame
+        lon0, lat0, lon1, lat1 = home.bounds()
+        la = 0.5 * (lat0 + lat1)
+        road = np.array([[lon1 - 0.0004, la], [lon1 + 0.0004, la]])
+        rw = roadwidth.RoadWidths(lambda key: F())
+        first = rw.get("r1", road)
+        rw.cap("r1", road)
+        self.assertGreaterEqual(len(rw.walls), 2, "the cells on both sides of the edge")
+        self.assertEqual(len(rw.combos), 1)
+        self.assertGreaterEqual(len(rw.reframed), 1)
+        held = [weakref.ref(w) for w, _ in rw.reframed.values()]
+        held_bytes = sum(sg.nbytes for _, sg in rw.reframed.values())
+        self.assertGreater(held_bytes, 0)
+        self.assertTrue(rw.memo and rw.near)
+        rw.clear_memory()
+        self.assertEqual([len(d) for d in (rw.walls, rw.combos, rw.reframed, rw.memo, rw.caps, rw.near)], [0] * 6)
+        gc.collect()
+        self.assertTrue(all(r() is None for r in held), "the walls are free to go (and their files' mappings)")
+        self.assertEqual(rw.get("r1", road), first, "made again when asked: the same width")
+        self.assertGreaterEqual(len(rw.reframed), 1)
+        self.assertEqual(len(mapcells.cells_near_points(np.array([la, la]), road[:, 0], 0.0, 0.0)), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
