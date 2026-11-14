@@ -5057,7 +5057,8 @@ class _Planner:
                 k0 += len(ring)
         limits = []
         if f is not None and len(f) and ground and (RAIL_SIGNED_ON or roadsmod.ROAD_SIGNED_ON):
-            hl = roadsmod.height_limit_lines(f)
+            # (not a bridge's own limit, with the road signs on: a road under is not cleared by it; off: as before)
+            hl = roadsmod.height_limit_lines(f, on_bridges=not roadsmod.ROAD_SIGNED_ON)
             if hl:
                 allh = np.concatenate([r for r, _h in hl])
                 he, hn, _ = self.frame.geodetic_to_enu(allh[:, 1], allh[:, 0], 0.0)

@@ -114,9 +114,6 @@ class CorridorUnderDeckTest(unittest.TestCase):
         self.assertFalse(grading._raised_under(xy, far, deck))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class PiersBesideLimitsTest(unittest.TestCase):
     def test_a_chain_with_height_limits_keeps_its_piers(self):
@@ -132,3 +129,35 @@ class PiersBesideLimitsTest(unittest.TestCase):
         self.assertGreaterEqual(len(plain), 3)
         signed = bp._precommit("k", part, {("r1", "g"): [road], ("lim", "c"): [limit(100.0, 3.5)]})
         self.assertEqual(signed, plain)
+
+
+class BridgeOwnLimitTest(unittest.TestCase):
+    def test_a_limit_on_the_road_s_own_bridge_is_left_out(self):
+        # a truss or covered bridge's own maxheight is not the clearance of a road under it (PR #1267 review)
+        rows = [(3.0, 0.4, 0.6), (4.0, 0.0, 0.1)]                  # (on the bridge 0.3-0.7; on the ground)
+
+        class Rule:
+            feature = np.array([0, 0])
+
+            def __len__(self):
+                return len(rows)
+
+            def for_feature(self, i):
+                return rows
+
+        class Feats:
+            rules = {"max_height_m": Rule()}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                return [[np.array([[0.0, 0.0], [0.001, 0.0]])]]
+        f = Feats()
+        with mock.patch.object(roads, "tag_level_ranges", lambda feats, i: [(0.3, 0.7, "bridge")]):
+            self.assertEqual(sorted(h for _r, h in roads.height_limit_lines(f)), [3.0, 4.0])
+            self.assertEqual([h for _r, h in roads.height_limit_lines(f, on_bridges=False)], [4.0])
+
+
+if __name__ == "__main__":
+    unittest.main()

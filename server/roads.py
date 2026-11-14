@@ -1422,11 +1422,14 @@ def sub_polyline(ring, a, b):
 MIN_PART = 1e-3     # parts shorter than this share of a segment are dropped
 
 
-def height_limit_lines(feats):
+def height_limit_lines(feats, on_bridges=True):
     """[(ring (k, 2) lon/lat, limit m)]: where a height limit (the "max_height_m" rule: a maxheight sign, Overture's
     access restriction for vehicles over a height) holds, each range of each road as its polyline. A road under a low
-    bridge has one over the bridge's short stretch. Kept on the layer."""
-    got = feats.__dict__.get("_height_limit_lines")
+    bridge has one over the bridge's short stretch. on_bridges=False: without the ranges lying mostly on the road's own
+    bridge (tag_level_ranges): a truss or covered bridge's own limit is not the clearance of a road under it (PR #1267
+    review). Kept on the layer."""
+    memo = "_height_limit_lines" if on_bridges else "_height_limit_lines_ground"
+    got = feats.__dict__.get(memo)
     if got is not None:
         return got
     t = feats.rules.get("max_height_m") if feats is not None else None
@@ -1434,6 +1437,10 @@ def height_limit_lines(feats):
     if t is not None and len(t):
         for i in sorted({int(x) for x in np.asarray(t.feature).tolist()}):
             rows = t.for_feature(i)
+            if not on_bridges:
+                decks = [(ra, rb) for ra, rb, kind in tag_level_ranges(feats, i) if kind == "bridge"]
+                rows = [(h, a, b) for h, a, b in rows
+                        if sum(max(0.0, min(b, rb) - max(a, ra)) for ra, rb in decks) <= 0.5 * (b - a)]
             for part in feats.parts(i):
                 for ring in part:
                     if len(ring) < 2:
@@ -1441,7 +1448,7 @@ def height_limit_lines(feats):
                     for h, a, b in rows:
                         if b - a > 1e-4 and np.isfinite(h):
                             out.append((np.asarray(sub_polyline(ring, a, b), np.float64), float(h)))
-    feats.__dict__["_height_limit_lines"] = out
+    feats.__dict__[memo] = out
     return out
 
 
@@ -7632,7 +7639,7 @@ class BridgeProfiles:
         out = []
         if feats is None or not len(feats) or getattr(feats, "rules", None) is None:
             return out
-        for ring, h in height_limit_lines(feats):
+        for ring, h in height_limit_lines(feats, on_bridges=False):
             e, n = mapgeom.enu_xy(feats, self.frame, ring)
             out.append((np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1), h))
         return out
