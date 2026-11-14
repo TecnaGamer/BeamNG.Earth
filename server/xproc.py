@@ -11,15 +11,22 @@ urgent its holder is (the request kind's rank, then the process's PRIORITY, the 
 process waits only for a holder at least as urgent as itself, so the terrain block under the car never waits behind
 a background fetch or a road tile's process below it. A lock older than STALE_S (its process died) is taken over; a
 wait longer than wait_s does the work itself. A holder touches its locks every HEARTBEAT_S while it holds them, so a
-long piece of work is never taken for a dead one's.
+long piece of work is never taken for a dead one's. A lock holds its taker's token (a random number): it is taken,
+taken over (stale, or its holder gone) and released only under its guard (_guard, an OS file lock: one process
+at a time), and removed only while its token is the one expected, so two processes breaking the same dead
+holder's lock never remove the new holder's after it (as stageshare.rs's claims, its folder lock and owner tokens).
 """
 import json
+import logging
 import os
 import re
 import shutil
 import sys
 import threading
 import time
+import uuid
+
+log = logging.getLogger("earthd.xproc")
 
 STALE_S = 120.0
 HEARTBEAT_S = 20.0          # s between touches of the locks this process holds (_hold): a holder at work is never stale
@@ -32,13 +39,13 @@ RUN_KEEP_S = 86400.0
 
 
 _FAVOURED = [0]             # jobs of this process running as favoured() now
-_HELD = {}                  # lock -> None: the locks this process holds now (take, release), touched by _heartbeat
+_HELD = {}                  # lock -> its token: the locks this process holds now (take, release), touched by _heartbeat
 _HELD_LOCK = threading.Lock()
 _HEART = [0]                # the pid whose _heartbeat thread runs (a forked child starts its own)
 _MINE = threading.local()   # .held: the locks this thread took and holds (once's live_s: a waiter holding none)
 
 
-def _hold(lock):
+def _hold(lock, token):
     """lock now this process's: touched every HEARTBEAT_S until released. A lock's age was all STALE_S went by: a
     central London cell planned for longer than 120 s on a busy machine had its claim taken over by the processes
     waiting for it while its planner still worked (and its release then removed the new holder's lock), the cell
@@ -48,7 +55,7 @@ def _hold(lock):
             _HELD.clear()
             _HEART[0] = os.getpid()
             threading.Thread(target=_heartbeat, name="xproc-heartbeat", daemon=True).start()
-        _HELD[lock] = None
+        _HELD[lock] = token
     _MINE.__dict__.setdefault("held", set()).add(lock)
 
 
@@ -68,12 +75,95 @@ def _heartbeat():
 def _touch_held():
     """Every lock this process holds touched now (its age: STALE_S counts from here)."""
     with _HELD_LOCK:
-        held = list(_HELD)
-    for lock in held:
+        held = list(_HELD.items())
+    for lock, token in held:
+        if _token(lock) != token:   # (taken over meanwhile, or released: not this process's to keep fresh)
+            continue
         try:
             os.utime(lock)
         except OSError:             # (released meanwhile; a file system without times: STALE_S as before)
             pass
+
+
+GUARD_SHARDS = 256          # guard files (_guard): a lock's is one of these by its path, in the temporary folder (not
+                            # beside the locks: cache folders are listed, and a file there that is not theirs counts)
+GUARD_WAIT_S = 10.0         # s a guard is waited for (Windows' byte lock, polled) before going on without it
+
+
+def _guard_path(lock):
+    import hashlib
+    import tempfile
+    user = os.getuid() if hasattr(os, "getuid") else 0
+    h = hashlib.sha1(os.path.normcase(os.path.abspath(lock)).encode("utf-8", "surrogateescape")).digest()
+    shard = int.from_bytes(h[:4], "little") % GUARD_SHARDS
+    return os.path.join(tempfile.gettempdir(), f"bnge-xproc-{user}", f"{shard}.guard")
+
+
+class _guard:
+    """lock's guard held for this process alone (an OS lock on its guard file: fcntl.flock on Linux, msvcrt.locking on
+    Windows) while lock is taken, taken over or released: a look at its holder and the change it decides are one step
+    for the other processes. Without a guard file (no temporary folder) the step runs as before, unguarded."""
+
+    def __init__(self, lock):
+        self.path = _guard_path(lock)
+        self.fd = None
+
+    def __enter__(self):
+        try:
+            try:
+                fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+            except FileNotFoundError:
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+        except OSError:
+            return self
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                end = time.monotonic() + GUARD_WAIT_S
+                while True:
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        if time.monotonic() > end:
+                            raise
+                        time.sleep(0.002)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            self.fd = fd
+        except OSError:
+            os.close(fd)
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    os.lseek(self.fd, 0, os.SEEK_SET)
+                    msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                os.close(self.fd)
+                self.fd = None
+        return False
+
+
+def _token(lock):
+    """The token written in lock (its taker's), or None (released, being written, or a lock without one)."""
+    try:
+        with open(lock, "rb") as fh:
+            held = fh.read().split()
+        return held[3].decode() if len(held) > 3 else None
+    except (OSError, IndexError, UnicodeDecodeError):
+        return None
 
 
 def _rank(kind):
@@ -97,27 +187,38 @@ class favoured:
 
 def take(lock, kind="demand"):
     """True when this process now holds lock (or no lock file can be made: then it does the work unlocked); False
-    when another process holds it (a stale lock is taken over)."""
-    for _ in range(2):
-        try:
-            os.makedirs(os.path.dirname(lock), exist_ok=True)
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            try:
-                if time.time() - os.path.getmtime(lock) > STALE_S:
-                    _remove(lock)           # its process died doing it (or left it: a failed release on Windows)
-                    continue
-            except OSError:
-                continue                    # (released meanwhile)
+    when another process holds it (a stale lock is taken over). Under its guard (_guard; a lock there that is not
+    stale is answered without it: once polls take)."""
+    try:
+        if time.time() - os.path.getmtime(lock) <= STALE_S:
             return False
-        except OSError:
-            return True
-        try:
-            os.write(fd, ("%d %d %d" % (*_rank(kind), os.getpid())).encode())
-        finally:
-            os.close(fd)
-        _hold(lock)
+    except OSError:
+        pass                                # (none there, or a folder still to make)
+    try:
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+    except OSError:
         return True
+    with _guard(lock):
+        for _ in range(2):
+            try:
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(lock) > STALE_S:
+                        _remove(lock)       # its process died doing it (or left it: a failed release on Windows)
+                        continue
+                except OSError:
+                    continue                # (released meanwhile)
+                return False
+            except OSError:
+                return True
+            token = uuid.uuid4().hex
+            try:
+                os.write(fd, ("%d %d %d %s" % (*_rank(kind), os.getpid(), token)).encode())
+            finally:
+                os.close(fd)
+            _hold(lock, token)
+            return True
     return False
 
 
@@ -203,20 +304,22 @@ def check_cancel():
         raise pools.Abandoned()
 
 
-def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None):
+def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None, live_note=None):
     """(result, False): ready() gave it (at once or after waiting for another process); (None, True): this process
     does the work (release(lock) after the result is written); (None, False): do it without the lock (a wait past
     wait_s, or a less urgent holder). on_wait(): called once when this process starts waiting. live_s: past wait_s,
     waited on up to live_s while the holder still works (alive, its lock touched within LIVE_FRESH_S: _heartbeat) and
     this thread holds no lock itself (no wait of its can close a circle of waits: the holder's own waits for other
-    processes stay bounded by their wait_s)."""
+    processes stay bounded by their wait_s); such a wait past LIVE_WARN_S is logged once (live_note: what it waits
+    for)."""
     got = ready()
     if got is not None:
         return got, False
     t0 = time.monotonic()
     waited = False
-    holder = None
+    holder = seen = None
     pid, recheck = None, 0.0
+    warned = False
     while True:
         if take(lock, kind):
             got = ready()                   # (written by the process whose lock we just followed)
@@ -234,11 +337,12 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None):
         if now_holder is not None and now_holder[1] > 0 and now_holder != holder:
             holder = now_holder
             h = _holder(lock)
+            seen = _token(lock)
             pid, recheck = (h[2] if h is not None else None), time.monotonic() + ALIVE_RECHECK_S
             if h is not None and not alive(h[2]):
                 # its process is gone (the game closed mid-download: the server's processes end with it); the
                 # lock was waited out for STALE_S before, a minute a block after a quick restart
-                release(lock)
+                break_dead(lock, seen)
                 holder = None
                 continue
             if h is not None and h[:2] > _rank(kind):
@@ -249,16 +353,22 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None):
             # a road tile's cells, 2026-11-11)
             recheck = time.monotonic() + ALIVE_RECHECK_S
             if not alive(pid):
-                release(lock)
+                break_dead(lock, seen)
                 holder = None
                 continue
         if not waited:
             waited = True
             if on_wait is not None:
                 on_wait()
-        if time.monotonic() - t0 > wait_s and not (live_s is not None and time.monotonic() - t0 <= live_s
-                                                     and _works(lock, pid) and holds_none()):
-            return None, False
+        if time.monotonic() - t0 > wait_s:
+            if not (live_s is not None and time.monotonic() - t0 <= live_s and _works(lock, pid) and holds_none()):
+                return None, False
+            if not warned and time.monotonic() - t0 > LIVE_WARN_S:
+                # (alive and touching its lock, not necessarily getting on: a holder stuck alive is waited out to
+                # live_s by every waiter, each of its cells)
+                warned = True
+                log.warning("%s: waited %.0f s for process %s, still at it (alive, its lock kept fresh)",
+                            live_note or os.path.basename(lock), time.monotonic() - t0, pid)
         if waited and _cancelled():
             import pools
             raise pools.Abandoned()
@@ -270,6 +380,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None, live_s=None):
 
 RELEASE_S = 2.0         # s a release keeps trying to remove its lock file
 LIVE_FRESH_S = 3 * HEARTBEAT_S      # s: a lock touched within this long has a holder at work (once's live_s)
+LIVE_WARN_S = 120.0                 # s: a live wait this long is logged (with the holder's pid: a holder stuck alive)
 
 
 def _works(lock, pid):
@@ -282,23 +393,38 @@ def _works(lock, pid):
 
 
 def release(lock):
-    """Remove the lock file: this process's own, or one whose holder is gone (a waiter breaking a dead holder's lock).
-    Another live process's lock stays (this process's was taken over meanwhile, STALE_S: removing it let a third
-    process in beside that holder)."""
+    """Give this process's lock back: removed under its guard while its token is still the one take wrote.
+    One taken over meanwhile (STALE_S) stays its new holder's: removing it let a third process in beside that holder.
+    A lock this process does not hold is left as it is (a dead holder's: break_dead)."""
     with _HELD_LOCK:
-        _HELD.pop(lock, None)
+        token = _HELD.pop(lock, None)
     getattr(_MINE, "held", set()).discard(lock)
-    h = _holder(lock)
-    if h is not None and h[2] is not None and h[2] != os.getpid() and alive(h[2]):
+    if token is None:
         return
-    _remove(lock)
+    with _guard(lock):
+        if _token(lock) == token:
+            _remove(lock)
+
+
+def break_dead(lock, seen=None):
+    """Remove lock when its holder is gone, under its guard: its holder read again there (alive: kept), and
+    with seen (the token the caller saw with the dead holder) only that same lock, never a new holder's that another
+    waiter let in meanwhile. True when removed."""
+    with _guard(lock):
+        h = _holder(lock)
+        if h is None or h[2] is None or alive(h[2]):
+            return False
+        if seen is not None and _token(lock) != seen:
+            return False
+        _remove(lock)
+        return True
 
 
 def _remove(lock):
-    """Remove the lock file. On Windows a file another process has open (a waiter reading its urgency) cannot be
-    removed: tried again for up to RELEASE_S. A failed remove left the lock behind, so every process wanting that piece
-    waited out its wait_s and the next ones STALE_S (road tiles "building for 90 s", the road workers "stuck", on
-    Windows since the locks came in 1.6.1: GitHub #435, PR #481's diagnosis)."""
+    """Remove the lock file (the caller holds its guard). On Windows a file another process has open (a waiter reading
+    its urgency) cannot be removed: tried again for up to RELEASE_S. A failed remove left the lock behind, so every
+    process wanting that piece waited out its wait_s and the next ones STALE_S (road tiles "building for 90 s", the
+    road workers "stuck", on Windows since the locks came in 1.6.1: GitHub #435, PR #481's diagnosis)."""
     t0 = time.monotonic()
     while True:
         try:

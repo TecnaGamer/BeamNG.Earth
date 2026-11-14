@@ -478,7 +478,7 @@ class PlanCache:
             h = xproc._holder(self._path(key) + ".lock")
             holder.append(h[2] if h else None)
         got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting,
-                               live_s=LIVE_WAIT_S)
+                               live_s=LIVE_WAIT_S, live_note=f"cell {key}'s plans")
         waited = time.monotonic() - t0
         if got is not None and waited > xproc.POLL_S:
             with self._lock:

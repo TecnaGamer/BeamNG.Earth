@@ -1139,6 +1139,15 @@ class RoadStageTest(unittest.TestCase):
         self.assertTrue(all(revisit.has(self.dir, "plans", d.shared._revisit_key(key)) for key in keys))
 
 
+def _read(path):
+    """path's text, or None when it is not there yet."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
 class LockTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -1230,8 +1239,7 @@ class LockTest(unittest.TestCase):
         try:
             self.assertEqual(p.stdout.readline().strip(), "held")
             with mock.patch.object(xproc, "STALE_S", 0.5):
-                got, mine = xproc.once(self.lock, lambda: (open(result).read() if os.path.exists(result) else None),
-                                       10.0, "demand")
+                got, mine = xproc.once(self.lock, lambda: _read(result), 10.0, "demand")
         finally:
             p.wait(10)
         self.assertEqual((got, mine), ("done", False), "the holder's result, waited for")
@@ -1247,7 +1255,7 @@ class LockTest(unittest.TestCase):
                                                                      self.lock, seconds, result, self.lock)
         p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
         self.assertEqual(p.stdout.readline().strip(), "held")
-        return p, (lambda: open(result).read() if os.path.exists(result) else None)
+        return p, (lambda: _read(result))
 
     def test_a_working_holder_is_waited_for_past_wait_s(self):
         # live_s: a holder still at work is waited for by a thread holding no lock (London's cells planned again by
@@ -1293,15 +1301,112 @@ class LockTest(unittest.TestCase):
         import subprocess
         p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
         try:
-            with open(self.lock, "w") as f:
-                f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid}")
+            self.assertTrue(xproc.take(self.lock))
+            with open(self.lock, "w") as f:         # (taken over: another process's, another token)
+                f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid} theirs")
             xproc.release(self.lock)
             self.assertTrue(os.path.exists(self.lock), "a live holder's lock kept")
+            self.assertFalse(xproc.break_dead(self.lock), "alive: not broken")
         finally:
             p.kill()
             p.wait()
-        xproc.release(self.lock)
+        self.assertTrue(xproc.break_dead(self.lock))
         self.assertFalse(os.path.exists(self.lock), "a dead holder's lock removed")
+
+    def dead_pid(self):
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        return p.pid
+
+    def test_two_reclaimers_never_remove_the_new_holders_lock(self):
+        # two waiters saw the same dead holder: the first breaks its lock and a new planner takes it; the second's
+        # break must leave the new planner's (before: both removed, a third process planned beside the new one)
+        import subprocess
+        with open(self.lock, "w") as f:
+            f.write(f"{xproc.KIND_RANK['demand']} 0 {self.dead_pid()} t0")
+        self.assertTrue(xproc.break_dead(self.lock, "t0"), "the first waiter")
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            with open(self.lock, "w") as f:
+                f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid} t1")
+            self.assertFalse(xproc.break_dead(self.lock, "t0"), "the second waiter: another token")
+            self.assertFalse(xproc.break_dead(self.lock), "the second waiter: a live holder")
+            self.assertEqual(xproc._token(self.lock), "t1")
+        finally:
+            p.kill()
+            p.wait()
+
+    def test_a_break_is_one_step_under_the_guard(self):
+        # the interleaving: waiter B has read the dead holder and is about to remove; waiter A breaks the lock and a
+        # new planner takes it meanwhile. Under the folder's guard A waits for B's step, then finds nothing to break,
+        # and the new planner's lock stays
+        import threading
+        dead = self.dead_pid()
+        with open(self.lock, "w") as f:
+            f.write(f"{xproc.KIND_RANK['demand']} 0 {dead} t0")
+        inside, real = threading.Event(), xproc.alive
+
+        def slow_alive(pid):
+            if pid == dead and threading.current_thread().name == "B":
+                inside.set()
+                time.sleep(0.3)
+            return real(pid)
+        got = {}
+        with mock.patch.object(xproc, "alive", slow_alive):
+            b = threading.Thread(target=lambda: got.setdefault("B", xproc.break_dead(self.lock, "t0")), name="B")
+            b.start()
+            self.assertTrue(inside.wait(5))
+            got["A"] = xproc.break_dead(self.lock, "t0")        # (waits for B's step)
+            got["planner"] = xproc.take(self.lock)
+            b.join(5)
+        self.assertEqual(got, {"B": True, "A": False, "planner": True})
+        with xproc._HELD_LOCK:
+            mine = xproc._HELD.get(self.lock)
+        self.assertEqual(xproc._token(self.lock), mine, "the new planner's lock kept")
+        xproc.release(self.lock)
+        self.assertFalse(os.path.exists(self.lock))
+
+    def test_a_retried_release_is_not_overtaken(self):
+        # Windows: a release whose remove fails while a waiter has the lock open retries; meanwhile a process taking
+        # the lock over as stale waits for the guard, so the retry never removes that process's new lock
+        import threading
+        self.assertTrue(xproc.take(self.lock))
+        real, calls, racer = os.remove, [], {}
+
+        def busy(path):
+            calls.append(path)
+            if len(calls) == 1:
+                old = time.time() - xproc.STALE_S - 5
+                os.utime(self.lock, (old, old))         # (stale to the racer)
+                t = threading.Thread(target=lambda: racer.setdefault("took", xproc.take(self.lock)))
+                t.start()
+                racer["t"] = t
+            if len(calls) < 3:
+                time.sleep(0.15)
+                raise PermissionError(32, "in use")
+            real(path)
+        with mock.patch.object(xproc.os, "remove", busy):
+            xproc.release(self.lock)
+            racer["t"].join(5)
+        self.assertEqual(racer["took"], True)
+        self.assertEqual(len(calls), 3)
+        with xproc._HELD_LOCK:
+            mine = xproc._HELD.get(self.lock)
+        self.assertIsNotNone(mine)
+        self.assertEqual(xproc._token(self.lock), mine, "the racer's lock, not removed by the retry")
+        xproc.release(self.lock)
+
+    def test_a_long_live_wait_is_logged(self):
+        p, ready = self.holder(1.0)
+        try:
+            with mock.patch.object(xproc, "LIVE_WARN_S", 0.4), self.assertLogs("earthd.xproc", "WARNING") as cm:
+                got, mine = xproc.once(self.lock, ready, 0.2, "demand", live_s=10.0, live_note="cell 14/1/2's plans")
+        finally:
+            p.wait(10)
+        self.assertEqual((got, mine), ("done", False))
+        self.assertIn("cell 14/1/2's plans", cm.output[0])
+        self.assertIn(str(p.pid), cm.output[0])
 
     def test_waiter_reads_the_holders_urgency_once(self):
         self.assertTrue(xproc.take(self.lock, "demand"))
