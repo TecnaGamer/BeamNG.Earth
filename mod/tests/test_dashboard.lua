@@ -80,25 +80,44 @@ T.near(dashboard.metresPerPixel(60, 17), 0.5972, 1e-3, '... half that at 60 degr
 T.check(dashboard.zoomFor(0) == dashboard.ZOOM_CITY and dashboard.zoomFor(60) == dashboard.ZOOM_FAST,
   'the live speed selects an appropriate dashboard zoom')
 
--- the player's screen gets the roads once per graph, again after its page reloaded, and the view carries their frame
+-- the player's screen: our page loaded, then the roads once per graph (acknowledged by the page: PR #472's handshake),
+-- again after its page reloaded, and the view carries their frame
+local J = dofile(dir .. '/minijson.lua')
+-- the page's echo: the Lua string the mod sent as an update's last argument (navDrawn), run as the page would
+local function ackOf(code) local q = code:match(',("if beamngEarth_dashboard.-end")%)$') return q and J.decode(q) end
+local function runLua(code) assert(loadstring(code))() end
 do
   local js = {}
-  local veh = { queueJSUITexture = function(_, tag, code) js[#js + 1] = code end }
+  local autoAck = true
+  local veh = { queueJSUITexture = function(_, tag, code)
+    js[#js + 1] = code
+    if autoAck and (code:find('setRoads(', 1, true) or code:find('setTiles(', 1, true)) then
+      local ack = ackOf(code)
+      if ack then runLua(ack) end
+    end
+  end }
   local nav = { requestVehicleDashboardMap = function() return true end }
   local saved = { scenetree = rawget(_G, 'scenetree'), be = rawget(_G, 'be'), extensions = rawget(_G, 'extensions'),
     jsonEncode = rawget(_G, 'jsonEncode') }
   scenetree = { findObjectById = function(id) return id == 5 and veh or nil end }
   be = { getPlayerVehicleID = function() return 5 end }
-  jsonEncode = function(v)
-    if type(v) ~= 'table' then return string.format('%q', tostring(v)) end
-    local out = {}
-    for k, x in pairs(v) do out[#out + 1] = string.format('%q', k) .. ':' .. tostring(x) end
-    return '{' .. table.concat(out, ',') .. '}'
-  end
+  jsonEncode = J.encode
+  beamngEarth_dashboard = dashboard
   local graph = { anchor = 2, serial = 1, nodes = { a = { 0, 0, 0, 3 }, b = { 50, 0, 0, 3 } },
     edges = { { 'a', 'b', 0, 1, 1, 11, 1, 3 } } }
   package.loaded['beamngEarth/navgraph'] = { graph = function() return graph end }
-  extensions = { ui_uinavi = nav, beamngEarth_core = { dashboardContext = function()
+  local tilesAsked = 0
+  local settingsStub = {
+    mapTilePath = function(layer, z, x, y)
+      return (layer == 'satp' and '/temp/beamngEarth/maptiles/prov/' or '/temp/beamngEarth/maptiles/') .. z .. '/' .. x .. '/' .. y .. '.jpg'
+    end,
+    mapTiles = function(reqs)
+      tilesAsked = tilesAsked + 1
+      local r1, r2 = reqs[1], reqs[2]
+      -- the car's own tile there, the next one only as a stand-in (server maptiles.PROV_DIR)
+      return { string.format('sat/%d/%d/%d', r1[1], r1[2], r1[3]), string.format('satp/%d/%d/%d', r2[1], r2[2], r2[3]) }
+    end }
+  extensions = { ui_uinavi = nav, beamngEarth_settings = settingsStub, beamngEarth_core = { dashboardContext = function()
     return { active = true, connected = true, mapPort = 1, anchorId = 2,
       player = { lat = 51.5, lon = -0.13, speed = 0, heading = 10, x = 20, y = 5, north = 0.01 } } end } }
   local clock, t = os.clock, 3000
@@ -111,21 +130,78 @@ do
     for _, code in ipairs(js) do if code:find(pat, 1, true) then c = c + 1 end end
     return c
   end
-  for _ = 1, 5 do t = t + 1; dashboard.onUpdate() end
+  local function step(n, dt) for _ = 1, n do t = t + (dt or 1); dashboard.onUpdate() end end
+  T.check(count('window.location.replace(') == 1, 'our page loaded on the screen')
+  step(2)
+  T.check(count('setRoads(') == 0 and count('setView(') == 0, 'nothing sent before the page said it loaded')
+  dashboard.screenReady(5, '@vivace_gps_screen')
+  step(5)
   T.check(count('setRoads({"key":') == 1, 'the roads go to the screen once (' .. count('setRoads(') .. ')')
+  local tiles
+  for _, code in ipairs(js) do if code:find('setTiles(', 1, true) then tiles = code end end
+  T.check(count('setTiles(') == 1 and tiles:find('/maptiles/prov/', 1, true) and tiles:find('"key":"t1"', 1, true),
+    'the tiles once, a stand-in from its own path (' .. count('setTiles(') .. ')')
+  T.check(tiles and ackOf(tiles) and ackOf(tiles):find('navDrawn(5,"@vivace_gps_screen","t1")', 1, true),
+    'the tiles carry the Lua the page runs back once it drew them')
   local view
   for _, code in ipairs(js) do if code:find('setView(', 1, true) then view = code end end
   T.check(view and view:find('"anchor":2', 1, true) and view:find('"x":20', 1, true) and view:find('"mpp":', 1, true),
     'the view carries the car in the world frame, its anchor and the metres a pixel')
   graph = { anchor = 2, serial = 2, nodes = graph.nodes, edges = graph.edges }
-  for _ = 1, 3 do t = t + 1; dashboard.onUpdate() end
+  step(3)
   T.check(count('setRoads({"key":') == 2, 'a new graph: sent again')
   dashboard.screenReady(5, '@vivace_gps_screen')
-  for _ = 1, 3 do t = t + 1; dashboard.onUpdate() end
+  step(3)
   T.check(count('setRoads({"key":') == 3, 'a page loaded again: the roads sent again')
+
+  -- not acknowledged: sent again every ACK_S, ACK_TRIES times in all
+  autoAck = false
+  graph = { anchor = 2, serial = 3, nodes = graph.nodes, edges = graph.edges }
+  local probes0 = count('navLost')
+  step(30, 0.5)
+  T.check(count('setRoads({"key":') == 3 + dashboard.ACK_TRIES,
+    'an update the page never acknowledged: sent ' .. dashboard.ACK_TRIES .. ' times (' .. count('setRoads({"key":') - 3 .. ')')
+  T.check(count('navLost') == probes0, 'no probe while an update is not acknowledged')
+  autoAck = true
+  local last
+  for _, code in ipairs(js) do if code:find('setRoads(', 1, true) then last = code end end
+  runLua(ackOf(last))                          -- (the page drew it after all)
+
+  -- the probe: a page that lost its roads gets them again, a page that is not ours is loaded again
+  local before = #js
+  step(math.ceil(dashboard.PROBE_S) + 1)
+  local probe
+  for i = before + 1, #js do if js[i]:find('navLost', 1, true) then probe = js[i] end end
+  T.check(probe ~= nil, 'a drawn screen is probed after PROBE_S')
+  local lost = {}
+  for q in probe:gmatch('S%(("if beamngEarth_dashboard.-end")%)') do lost[#lost + 1] = J.decode(q) end
+  T.check(#lost == 2 and lost[1]:find('"page"', 1, true) and lost[2]:find('"data"', 1, true),
+    'the probe carries the two answers the mod built')
+  local sends = count('setRoads({"key":')
+  runLua(lost[2])
+  step(1)
+  T.check(count('setRoads({"key":') == sends + 1, 'its data lost: the roads sent again')
+  before = #js
+  step(math.ceil(dashboard.PROBE_S) + 1)
+  for i = before + 1, #js do if js[i]:find('navLost', 1, true) then probe = js[i] end end
+  runLua(lost[2])
+  step(1)
+  T.check(count('setRoads({"key":') == sends + 1, 'an answer to an older probe is ignored')
+  lost = {}
+  for q in probe:gmatch('S%(("if beamngEarth_dashboard.-end")%)') do lost[#lost + 1] = J.decode(q) end
+  local loads = count('window.location.replace(')
+  runLua(lost[1])
+  T.check(count('window.location.replace(') == loads + 1, 'not our page any more: loaded again')
+  -- a page that never says it loaded is loaded again after APPLY_S, APPLY_TRIES times in all
+  step(40)
+  T.check(count('window.location.replace(') == loads + dashboard.APPLY_TRIES,
+    'a page that never said it loaded: loaded ' .. dashboard.APPLY_TRIES .. ' times (' .. count('window.location.replace(') - loads .. ')')
+  T.check(dashboard.navDrawn(5, '@nope', 'x') == false and dashboard.navLost(99, '@vivace_gps_screen', 'page', 1) == false,
+    'answers for screens we do not know are ignored')
   os.clock = clock
   dashboard.onClientEndMission()
   package.loaded['beamngEarth/navgraph'] = nil
+  beamngEarth_dashboard = nil
   scenetree, be, extensions, jsonEncode = saved.scenetree, saved.be, saved.extensions, saved.jsonEncode
 end
 
@@ -208,6 +284,52 @@ do
   T.check(#queued == 1, 'a car with its screen registered is not asked')
   os.clock = clock
   dashboard.onClientEndMission()
+  scenetree, be, extensions, jsonEncode = saved.scenetree, saved.be, saved.extensions, saved.jsonEncode
+end
+
+-- a car whose jbeam lists a navigator is asked again until a screen registers (ASK_TRIES at most; PR #472: the first
+-- request can miss the hook); a car with none listed is not asked
+do
+  local queued = {}
+  local veh = { queueJSUITexture = function() end, queueLuaCommand = function(_, code) queued[#queued + 1] = code end }
+  local nav = { requestVehicleDashboardMap = function() end }
+  local saved = { scenetree = rawget(_G, 'scenetree'), be = rawget(_G, 'be'), extensions = rawget(_G, 'extensions'),
+    jsonEncode = rawget(_G, 'jsonEncode'), mgr = rawget(_G, 'core_vehicle_manager') }
+  local pid = 21
+  local data = { [21] = { vdata = { controller = { { fileName = 'beamNavigator', screenMaterialName = '@s' } } } },
+                 [22] = { vdata = { controller = { { fileName = 'gauges/genericGauges', customModules = {} } } } } }
+  core_vehicle_manager = { getVehicleData = function(id) return data[id] end }
+  scenetree = { findObjectById = function(id) return data[id] and veh or nil end }
+  be = { getPlayerVehicleID = function() return pid end }
+  jsonEncode = J.encode
+  extensions = { ui_uinavi = nav, beamngEarth_core = { dashboardContext = function()
+    return { active = true, connected = true, mapPort = 1, player = { lat = 39.28, lon = -76.6, speed = 0 } } end } }
+  dashboard.onExtensionLoaded()
+  dashboard.onClientStartMission()
+  local clock, t = os.clock, 5000
+  os.clock = function() return t end
+  dashboard.onUpdate()
+  for _ = 1, 40 do t = t + 1; dashboard.onUpdate() end
+  T.check(#queued == dashboard.ASK_TRIES, 'a car with a navigator and no screen registered: asked ' .. dashboard.ASK_TRIES
+    .. ' times (' .. #queued .. ')')
+  queued = {}
+  pid = 22
+  dashboard.onUpdate()
+  for _ = 1, 40 do t = t + 1; dashboard.onUpdate() end
+  T.check(#queued == 0, 'a car with no navigator in its jbeam: not asked')
+  -- registered after the first ask: not asked again
+  dashboard.onVehicleSpawned(21)
+  pid = 21
+  dashboard.onUpdate()
+  t = t + dashboard.ASK_AFTER_S + 0.1; dashboard.onUpdate()
+  T.check(#queued == 1, 'asked once')
+  dashboard.onExtensionLoaded()          -- (the hook)
+  nav.requestVehicleDashboardMap('@s', nil, 21)
+  for _ = 1, 40 do t = t + 1; dashboard.onUpdate() end
+  T.check(#queued == 1, 'its screen registered: not asked again')
+  os.clock = clock
+  dashboard.onClientEndMission()
+  core_vehicle_manager = saved.mgr
   scenetree, be, extensions, jsonEncode = saved.scenetree, saved.be, saved.extensions, saved.jsonEncode
 end
 

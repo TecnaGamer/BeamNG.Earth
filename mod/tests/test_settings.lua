@@ -425,6 +425,15 @@ do
   T.check(#sent == 3 and #sent[3] == 0, 'nothing missing any more: an empty list cancels the last one')
   settings.mapTiles(list)
   T.check(#sent == 3, 'and only once')
+  -- a sat tile with only its stand-in there (server maptiles.PROV_DIR): shown from its own path, still asked for
+  T.check(settings.mapTilePath('satp', 3, 2, 1) == '/temp/beamngEarth/maptiles/prov/3/2/1.jpg', 'stand-in path')
+  have[settings.mapTilePath('satp', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 }, { 6, 2, 1 } })
+  T.check(#ready == 1 and ready[1] == 'satp/6/1/1', 'a stand-in comes back as satp')
+  T.check(#sent == 4 and #sent[4] == 2 and sent[4][1][2] == 1, 'the tile with a stand-in is still asked for')
+  have[settings.mapTilePath('sat', 6, 1, 1)] = true
+  ready = settings.mapTiles({ { 6, 1, 1 } })
+  T.check(#ready == 1 and ready[1] == 'sat/6/1/1', 'the real tile once it is there')
   beamngEarth_core, FS = core0, fs0
 end
 

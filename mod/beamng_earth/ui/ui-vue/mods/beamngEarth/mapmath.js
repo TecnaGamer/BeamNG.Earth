@@ -201,8 +201,10 @@ export function fallbackTiles(tiles, ready, levels = 6) {
 // ---- tile layers (server/maptiles.py LAYERS: the files the server writes) -------------------------------------
 export const LAYER_EXT = { sat: "jpg", map: "jpg", labels: "png" }
 
-// A layer's tile file under dir: dir/z/x/y.jpg for "sat" (where it always was), dir/<layer>/z/x/y.<ext> otherwise.
+// A layer's tile file under dir: dir/z/x/y.jpg for "sat" (where it always was), dir/<layer>/z/x/y.<ext> otherwise;
+// "satp": a "sat" tile's stand-in (server maptiles.PROV_DIR, settings.mapTiles), dir/prov/z/x/y.jpg.
 export function tilePath(dir, layer, z, x, y) {
+  if (layer === "satp") return `${dir}prov/${z}/${x}/${y}.jpg`
   return layer === "sat" ? `${dir}${z}/${x}/${y}.jpg` : `${dir}${layer}/${z}/${x}/${y}.${LAYER_EXT[layer]}`
 }
 

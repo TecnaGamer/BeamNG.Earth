@@ -75,6 +75,8 @@ def prune(root, keep=MAX_FILES, gap_s=PRUNE_GAP_S, sleep=time.sleep):
     files = []
     for d, _, names in os.walk(root):
         for n in names:
+            if n.startswith("."):           # (FORMAT_FILE)
+                continue
             p = os.path.join(d, n)
             try:
                 files.append((os.stat(p).st_mtime, p))
@@ -124,6 +126,63 @@ def tile_path(root, layer, z, x, y):
     if layer == "sat":
         return os.path.join(root, str(z), str(x), f"{y}.{ext}")
     return os.path.join(root, layer, str(z), str(x), f"{y}.{ext}")
+
+
+# A "sat" tile built from a stand-in (MapTiles.tile's final False: a better source could not be read yet) goes to
+# <root>/prov/z/x/y.jpg, never to its own path: the mod shows it there while it keeps asking for the real one (it asks
+# only for tiles whose own file is missing: settings.mapTiles), and the real one's new path makes the screens load it.
+PROV_DIR = "prov"
+# A stand-in is built again only after PROV_RETRY_S[tries] (the last for every later try): the mod asks for it every
+# few seconds while it shows one.
+PROV_RETRY_S = (10.0, 30.0, 60.0, 120.0, 300.0)
+# The "sat" files' format: 2 since stand-ins are kept apart (PROV_DIR). Files of an older one (no FORMAT_FILE, or a
+# smaller number) may be stand-ins written as the tile for good: deleted once, a file at a time (sweep_sat), and the
+# map asks for them again.
+SAT_FORMAT = 2
+FORMAT_FILE = ".format"
+
+
+def prov_path(root, z, x, y):
+    """A stand-in "sat" tile's file (PROV_DIR)."""
+    return os.path.join(root, PROV_DIR, str(z), str(x), f"{y}.jpg")
+
+
+def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
+    """The "sat" tile files under root (<root>/<z>/...: not the other layers' or PROV_DIR's) last written before
+    `before` (unix s) deleted, a file at a time gap_s apart (the game's file watcher never sees a burst), when root's
+    FORMAT_FILE is older than SAT_FORMAT; then FORMAT_FILE says SAT_FORMAT. The number deleted."""
+    marker = os.path.join(root, FORMAT_FILE)
+    try:
+        with open(marker) as f:
+            if int(f.read().strip() or 0) >= SAT_FORMAT:
+                return 0
+    except (OSError, ValueError):
+        pass
+    if not os.path.isdir(root):
+        return 0
+    n = 0
+    for top in os.listdir(root):
+        if not top.isdigit():
+            continue
+        for d, _, names in os.walk(os.path.join(root, top)):
+            for name in names:
+                p = os.path.join(d, name)
+                try:
+                    if os.stat(p).st_mtime < before:
+                        os.remove(p)
+                        n += 1
+                except OSError:
+                    continue
+                if gap_s:
+                    sleep(gap_s)
+    try:
+        tmp = f"{marker}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            f.write(str(SAT_FORMAT))
+        os.replace(tmp, marker)
+    except OSError as e:
+        log.debug("map tiles format file: %s", e)
+    return n
 
 
 class BadTile(ValueError):
@@ -214,10 +273,17 @@ class MapTiles:
         return chain
 
     def tile(self, z, x, y):
-        """(jpeg bytes, source name), or None where no source has imagery. Raises
-        imagery.ImageryError when a fetch failed (and no later source had the tile)."""
+        """(jpeg bytes, source name, final), or None where no source has imagery. Raises
+        imagery.ImageryError when a fetch failed (and no later source had the tile).
+
+        final: False when a source before the one used could hold the tile but could not be read now: a fetch
+        failed, or a lazy source's tile (the regional six-inch photos, NAIP: lazy_tile_state) is still undecided
+        after asking for it. Such a tile is a stand-in (TileFiles keeps it apart and builds it again later): before,
+        it was written as the tile for good, and the car screen's map kept a blur of Sentinel-2 enlarged 8 times
+        beside sharp MD iMAP tiles (Fells Point, 2026-11-13: tiles built two days earlier, never asked for again)."""
         z, x, y = check_tile(z, x, y)
         err = None
+        final = True
         for src in self.order(z):
             if z < src.min_zoom:
                 continue
@@ -228,30 +294,42 @@ class MapTiles:
                 continue                    # a regional source elsewhere
             try:
                 t = self.imagery.tiles([key], self.kind).get(key)
+                if t is None and src.lazy and self._undecided(key):
+                    # (tiles() reads a lazy source only from disk: fetched here, else the next source would stand in)
+                    self.imagery.fetch_lazy_tile(key)
+                    t = self.imagery.tiles([key], self.kind).get(key)
+                    if t is None and self._undecided(key):
+                        final = False
             except imagerymod.ImageryError as e:
                 err = e
+                final = False
                 continue
             if t is None or t.uniform:
                 continue
-            return encode_jpeg(crop_up(t.rgb, dz, x, y)), src.name
+            return encode_jpeg(crop_up(t.rgb, dz, x, y)), src.name, final
         if err is not None:
             raise err
         return None
 
+    def _undecided(self, key):
+        """A lazy source's tile neither on disk nor known to be missing (an imagery without lazy_tile_state: no)."""
+        state = getattr(self.imagery, "lazy_tile_state", None)
+        return state is not None and state(key) == "todo"
+
     def layer_tile(self, layer, z, x, y):
-        """A layer's tile as file bytes (JPEG; PNG for "labels"), or None where it has none. Raises
-        imagery.ImageryError when a fetch failed."""
+        """(file bytes, final) of a layer's tile (JPEG; PNG for "labels"), or None where it has none (final: tile's;
+        the other layers have one source, always final). Raises imagery.ImageryError when a fetch failed."""
         z, x, y = check_tile(z, x, y)
         if layer == "sat":
             r = self.tile(z, x, y)
-            return r[0] if r is not None else None
+            return (r[0], r[2]) if r is not None else None
         src = LAYER_SOURCES[layer]
         sz = min(z, src.max_zoom)
         dz = z - sz
         data = self.imagery.raw(src, sz, x >> dz, y >> dz, self.kind)
         if data is None:
             return None
-        return layer_image(data, layer, dz, x, y)
+        return layer_image(data, layer, dz, x, y), True
 
     def attribution(self):
         return self.imagery.attribution()
@@ -343,9 +421,11 @@ class TileFiles:
         self._want = []             # keys still to build, in order (the newest request's)
         self._running = set()       # keys being built
         self._failed = {}           # key -> clock() of its failure / "no imagery"
+        self._prov = {}             # key -> (stand-ins built, clock() when it may be built again): PROV_DIR
         self._active = 0            # worker loops running
-        self.stats = {"built": 0, "had": 0, "missing": 0, "failed": 0, "dropped": 0}
+        self.stats = {"built": 0, "had": 0, "missing": 0, "failed": 0, "dropped": 0, "stand_in": 0}
         self._since_prune = PRUNE_EVERY             # a prune at the first request (old files of earlier sessions)
+        self.started = time.time()                  # (sweep_sat: files written before this)
         self._pruning = False
 
     def request(self, keys):
@@ -353,7 +433,8 @@ class TileFiles:
         now = self.clock()
         with self._lock:
             self._failed = {k: t for k, t in self._failed.items() if now - t < self.retry_s}
-            want = [k for k in dict.fromkeys(keys) if k not in self._running and k not in self._failed]
+            want = [k for k in dict.fromkeys(keys) if k not in self._running and k not in self._failed
+                    and not (k in self._prov and now < self._prov[k][1])]
             ws = set(want)
             self.stats["dropped"] += sum(1 for k in self._want if k not in ws)
             self._want = want
@@ -371,6 +452,9 @@ class TileFiles:
 
         def run():
             try:
+                k = sweep_sat(self.root, self.started)
+                if k:
+                    log.info("map tiles: %d files of an older format removed (built again when shown)", k)
                 k = prune(self.root)
                 if k:
                     log.info("map tiles: %d old files removed (at most %d kept)", k, MAX_FILES)
@@ -413,18 +497,46 @@ class TileFiles:
     def _build(self, key):
         layer, z, x, y = key
         path = tile_path(self.root, layer, z, x, y)
+        prov = prov_path(self.root, z, x, y) if layer == "sat" else None
         if os.path.exists(path):
             self.stats["had"] += 1
+            self._drop_prov(key, prov)
             return True
         try:
-            data = self.maptiles.layer_tile(layer, z, x, y)
+            got = self.maptiles.layer_tile(layer, z, x, y)
         except imagerymod.ImageryError as e:    # an unreachable source: the map asks again later
             log.debug("map tile %s: %s", key, e)
             self.stats["failed"] += 1
             return False
-        if data is None:
+        if got is None:
             self.stats["missing"] += 1
             return False
+        data, final = got
+        if prov is not None and not final:
+            # a stand-in: kept apart, built again later (the mod keeps asking while it shows one)
+            with self._lock:
+                tries = self._prov.get(key, (0, 0.0))[0]
+                self._prov[key] = (tries + 1, self.clock() + PROV_RETRY_S[min(tries, len(PROV_RETRY_S) - 1)])
+            self.stats["stand_in"] += 1
+            return self._write(key, prov, data)
+        ok = self._write(key, path, data)
+        if ok:
+            self.stats["built"] += 1
+            self._drop_prov(key, prov)
+        return ok
+
+    def _drop_prov(self, key, prov):
+        """The real tile is there: its stand-in's file and retry go."""
+        with self._lock:
+            self._prov.pop(key, None)
+        if prov is not None:
+            try:
+                os.remove(prov)
+            except OSError:
+                pass
+
+    def _write(self, key, path, data):
+        """data written to path (atomically); whether the file is there."""
         # a temporary name of this thread's own: two writers of the same tile renamed each other's file away
         # (blank map squares, Paris 2026-10-15)
         tmp = f"{path}.{threading.get_ident()}.tmp"
@@ -437,7 +549,6 @@ class TileFiles:
             log.debug("map tile %s: %s", key, e)
         ok = os.path.exists(path)
         if ok:
-            self.stats["built"] += 1
             self._since_prune += 1
         return ok
 

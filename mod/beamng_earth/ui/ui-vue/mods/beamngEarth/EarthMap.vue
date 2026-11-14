@@ -587,9 +587,17 @@ onUnmounted(() => { clearTimeout(askTimer); askTimer = null; clearTimeout(search
 
 const tileLayers = computed(() => activeLayers.value.map(L => {
   const ready = readySet(L)
+  // (a "sat" tile with only its stand-in there, "satp": shown from its own file until the real one comes, which is
+  // still asked for: missingTiles looks at "sat" alone)
+  const stand = L === "sat" ? readySet("satp") : NONE
+  const src = t => {
+    const k = `${t.z}/${t.x}/${t.y}`
+    return mm.tilePath(TILE_DIR, ready.has(k) || !stand.has(k) ? L : "satp", t.z, t.x, t.y)
+  }
   return {
     id: L, overlay: L === "labels",
-    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`)).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
+    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`) || stand.has(`${t.z}/${t.x}/${t.y}`))
+      .map(t => ({ ...t, src: src(t) })),
     // loaded coarser tiles stretched over the ones still coming (mapmath.fallbackTiles)
     fallback: mm.fallbackTiles(wanted.value, ready).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
   }

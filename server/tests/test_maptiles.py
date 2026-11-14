@@ -88,9 +88,9 @@ class MapTilesTest(unittest.TestCase):
     def test_eox_first_at_low_zoom_usgs_above(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
-        _, src = t.tile(11, 584, 783)
+        _, src, _ = t.tile(11, 584, 783)
         self.assertEqual(src, "eox2023")
-        _, src = t.tile(14, 4683, 6266)
+        _, src, _ = t.tile(14, 4683, 6266)
         self.assertEqual(src, "usgs")
         self.assertTrue(all(c[4] == maptiles.FETCH_KIND for c in img.calls))
 
@@ -106,7 +106,11 @@ class MapTilesTest(unittest.TestCase):
         self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("usgs", "eox2023", "eox2016"))).tile(15, 1, 1))
 
     def test_failure_raises_only_when_nothing_else_has_it(self):
-        self.assertEqual(maptiles.MapTiles(FakeImagery(fail=("usgs",))).tile(15, 9412, 12490)[1], "eox2023")
+        _, src, final = maptiles.MapTiles(FakeImagery(fail=("usgs",))).tile(15, 9412, 12490)
+        self.assertEqual(src, "eox2023")
+        self.assertFalse(final, "a later source standing in for one that failed: a stand-in")
+        self.assertTrue(maptiles.MapTiles(FakeImagery(missing=("usgs",))).tile(15, 9412, 12490)[2],
+                        "one that has nothing there: the tile")
         with self.assertRaises(imagery.ImageryError):
             maptiles.MapTiles(FakeImagery(fail=("usgs", "eox2023", "eox2016"))).tile(15, 9412, 12490)
 
@@ -116,7 +120,8 @@ class MapTilesTest(unittest.TestCase):
         # z16 from the z14 ancestor: 4 x 4 children; the bottom row of children holds the
         # ancestor's rows 192..255 of the gradient
         x, y = (100 << 2) + 1, (200 << 2) + 3
-        jpeg, src = t.tile(16, x, y)
+        jpeg, src, final = t.tile(16, x, y)
+        self.assertTrue(final)
         self.assertEqual(img.calls[-1][:4], ("eox2023", 14, 100, 200))
         a = decode(jpeg)
         self.assertEqual(a.shape, (256, 256, 3))
@@ -187,11 +192,12 @@ class LayersTest(unittest.TestCase):
     def test_map_layer_native_and_overzoomed(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
-        jpeg = t.layer_tile("map", 12, 1176, 1561)
+        jpeg, final = t.layer_tile("map", 12, 1176, 1561)
+        self.assertTrue(final)
         self.assertEqual(img.calls[-1], ("eoxmap", 12, 1176, 1561, maptiles.FETCH_KIND))
         self.assertEqual(jpeg[:2], b"\xff\xd8")
         # z16 from the z14 tile: the bottom row of its 4 x 4 children has rows 192..255 of the gradient
-        a = decode(t.layer_tile("map", 16, (100 << 2) + 1, (200 << 2) + 3))
+        a = decode(t.layer_tile("map", 16, (100 << 2) + 1, (200 << 2) + 3)[0])
         self.assertEqual(img.calls[-1][:4], ("eoxmap", 14, 100, 200))
         self.assertEqual(a.shape, (256, 256, 3))
         self.assertTrue(185 <= a[:, :, 1].mean() <= 230, a[:, :, 1].mean())
@@ -199,31 +205,86 @@ class LayersTest(unittest.TestCase):
     def test_labels_keep_transparency(self):
         img = FakeImagery()
         t = maptiles.MapTiles(img)
-        png = t.layer_tile("labels", 10, 5, 7)
+        png = t.layer_tile("labels", 10, 5, 7)[0]
         self.assertEqual(png[:4], b"\x89PNG")
         a = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))
         self.assertEqual(a[10, 10, 3], 255)
         self.assertEqual(a[200, 200, 3], 0)
         # overzoomed: the top-left child of the opaque quarter is all opaque, the bottom-right one all clear
-        tl = np.asarray(Image.open(io.BytesIO(t.layer_tile("labels", 15, 100 << 1, 200 << 1))).convert("RGBA"))
+        tl = np.asarray(Image.open(io.BytesIO(t.layer_tile("labels", 15, 100 << 1, 200 << 1)[0])).convert("RGBA"))
         self.assertEqual(img.calls[-1][:4], ("eoxlabels", 14, 100, 200))
         self.assertTrue((tl[8:-8, 8:-8, 3] == 255).all())
-        br = np.asarray(Image.open(io.BytesIO(t.layer_tile("labels", 15, (100 << 1) + 1, (200 << 1) + 1))).convert("RGBA"))
+        br = np.asarray(Image.open(io.BytesIO(t.layer_tile("labels", 15, (100 << 1) + 1, (200 << 1) + 1)[0])).convert("RGBA"))
         self.assertTrue((br[..., 3] == 0).all())
 
     def test_missing_and_failing_layers(self):
         self.assertIsNone(maptiles.MapTiles(FakeImagery(missing=("eoxmap",))).layer_tile("map", 5, 1, 1))
         with self.assertRaises(imagery.ImageryError):
             maptiles.MapTiles(FakeImagery(fail=("eoxlabels",))).layer_tile("labels", 5, 1, 1)
-        self.assertEqual(maptiles.MapTiles(FakeImagery()).layer_tile("sat", 12, 1170, 1566)[:2], b"\xff\xd8")
+        self.assertEqual(maptiles.MapTiles(FakeImagery()).layer_tile("sat", 12, 1170, 1566)[0][:2], b"\xff\xd8")
+
+
+class LazyImagery(FakeImagery):
+    """FakeImagery with a lazy regional source (md6in): its tile is undecided until fetch_lazy_tile, which `fetch`
+    says how to answer: "data", "none", "fail" or "nothing" (still undecided after)."""
+
+    def __init__(self, fetch="data", state="todo"):
+        super().__init__(chain=("md6in", "usgs", "eox2023"))
+        self.fetch, self.state, self.fetched = fetch, state, []
+
+    def lazy_tile_state(self, key):
+        return self.state
+
+    def fetch_lazy_tile(self, key):
+        self.fetched.append(key[1:])
+        if self.fetch == "fail":
+            raise imagery.ImageryError("md down")
+        if self.fetch in ("data", "none"):
+            self.state = self.fetch
+        return True
+
+    def tiles(self, keys, kind="demand"):
+        out = super().tiles(keys, kind)
+        for k in keys:
+            if k[0].name == "md6in" and self.state == "data":
+                a = np.zeros((256, 256, 3), np.uint8)
+                a[..., 0] = 20
+                a[..., 1] = np.arange(256, dtype=np.uint8)[:, None]
+                out[k] = imagery.as_tile(a)
+        return out
+
+
+class StandInTest(unittest.TestCase):
+    """A tile from a later source standing in for a better one that could not be read now is not final (Fells Point,
+    2026-11-13: an 8x enlarged Sentinel-2 tile kept for good beside sharp MD iMAP tiles on the car screen)."""
+    Z, X, Y = 17, 37649, 49959          # Fells Point, Baltimore: inside md6in
+
+    def test_lazy_tile_fetched_on_demand(self):
+        img = LazyImagery("data")
+        _, src, final = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final), ("md6in", True))
+        self.assertEqual(img.fetched, [(self.Z, self.X, self.Y)])
+
+    def test_known_missing_lazy_tile_is_final(self):
+        img = LazyImagery(state="none")
+        _, src, final = maptiles.MapTiles(img).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final), ("usgs", True))
+        self.assertEqual(img.fetched, [], "decided already: not fetched")
+
+    def test_failed_or_undecided_lazy_tile_is_a_stand_in(self):
+        for fetch in ("fail", "nothing"):
+            _, src, final = maptiles.MapTiles(LazyImagery(fetch)).tile(self.Z, self.X, self.Y)
+            self.assertEqual((src, final), ("usgs", False), fetch)
+        _, src, final = maptiles.MapTiles(LazyImagery("none")).tile(self.Z, self.X, self.Y)
+        self.assertEqual((src, final), ("usgs", True), "nothing there after the fetch: the next source is the tile")
 
 
 class FakeLayers:
     """MapTiles.layer_tile with a delay per tile, a gate the first build waits on, and tiles with nothing."""
 
-    def __init__(self, delay=0.0, gate=None, missing=(), fail=()):
+    def __init__(self, delay=0.0, gate=None, missing=(), fail=(), stand_in=()):
         self.delay, self.gate = delay, gate
-        self.missing, self.fail = set(missing), set(fail)
+        self.missing, self.fail, self.stand_in = set(missing), set(fail), set(stand_in)
         self.calls = []
         self.lock = threading.Lock()
 
@@ -237,7 +298,9 @@ class FakeLayers:
             raise imagery.ImageryError("down")
         if (layer, z, x, y) in self.missing:
             return None
-        return b"tile"
+        if (layer, z, x, y) in self.stand_in:
+            return b"blur", False
+        return b"tile", True
 
 
 class TileFilesTest(unittest.TestCase):
@@ -339,6 +402,65 @@ class TileFilesTest(unittest.TestCase):
         self.wait_for(4)
         self.assertEqual(len(fake.calls), 4)
         self.assertFalse(os.path.exists(maptiles.tile_path(self.root, *bad)))
+
+    def test_stand_in_kept_apart_and_built_again(self):
+        now = [100.0]
+        k = ("sat", 17, 5, 6)
+        fake = FakeLayers(stand_in=(k,))
+        tf = maptiles.TileFiles(fake, self.root, self.ready, workers=1, clock=lambda: now[0])
+        self.addCleanup(tf.close)
+        tf.request([k])
+        self.wait_for(1)
+        real, prov = maptiles.tile_path(self.root, *k), maptiles.prov_path(self.root, 17, 5, 6)
+        self.assertEqual(self.done[0][:2], (k, True))
+        self.assertFalse(os.path.exists(real), "a stand-in never takes the tile's own path")
+        with open(prov, "rb") as f:
+            self.assertEqual(f.read(), b"blur")
+        tf.request([k])                         # (the mod asks again while it shows the stand-in)
+        time.sleep(0.1)
+        self.assertEqual(len(fake.calls), 1, "not built again before PROV_RETRY_S")
+        now[0] += maptiles.PROV_RETRY_S[0] + 0.1
+        tf.request([k])
+        self.wait_for(2)
+        self.assertEqual(len(fake.calls), 2)
+        self.assertFalse(os.path.exists(real))
+        now[0] += maptiles.PROV_RETRY_S[0] + 0.1
+        tf.request([k])
+        time.sleep(0.1)
+        self.assertEqual(len(fake.calls), 2, "the second wait is longer")
+        fake.stand_in.clear()                   # the better source answers now
+        now[0] += maptiles.PROV_RETRY_S[1]
+        tf.request([k])
+        self.wait_for(3)
+        with open(real, "rb") as f:
+            self.assertEqual(f.read(), b"tile")
+        self.assertFalse(os.path.exists(prov), "the stand-in's file goes once the tile is there")
+        self.assertEqual(tf.stats["stand_in"], 2)
+
+    def test_old_sat_files_swept_once(self):
+        def put(p, mtime=None):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"x")
+            if mtime is not None:
+                os.utime(p, (mtime, mtime))
+        t0 = time.time()
+        old_sat = maptiles.tile_path(self.root, "sat", 17, 1, 2)
+        new_sat = maptiles.tile_path(self.root, "sat", 17, 1, 3)
+        old_map = maptiles.tile_path(self.root, "map", 12, 1, 2)
+        old_prov = maptiles.prov_path(self.root, 17, 1, 4)
+        put(old_sat, t0 - 100)
+        put(new_sat, t0 + 5)
+        put(old_map, t0 - 100)
+        put(old_prov, t0 - 100)
+        self.assertEqual(maptiles.sweep_sat(self.root, t0, gap_s=0), 1)
+        self.assertFalse(os.path.exists(old_sat))
+        self.assertTrue(all(os.path.exists(p) for p in (new_sat, old_map, old_prov)))
+        put(old_sat, t0 - 100)
+        self.assertEqual(maptiles.sweep_sat(self.root, t0, gap_s=0), 0, "once: the format file says it is done")
+        self.assertTrue(os.path.exists(old_sat))
+        self.assertEqual(maptiles.prune(self.root, keep=0, gap_s=0), 4, "prune never removes the format file")
+        self.assertTrue(os.path.exists(os.path.join(self.root, maptiles.FORMAT_FILE)))
 
     def test_callback_errors_do_not_stop_workers(self):
         def boom(key, ok):
