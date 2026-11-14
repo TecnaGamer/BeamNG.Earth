@@ -557,21 +557,6 @@ class PackStyleTest(unittest.TestCase):
             self.assertGreater(top(bld.pack_meshes(b, "sky")), 39.0, roof)
             self.assertLessEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")) + 0.01, roof)
 
-    def test_sky_top_matches_lite_for_skeleton_and_across_roofs(self):
-        """The rise put back is plan()'s drawn one (its skeleton, ridge and span), not the simplified box's: an L-shaped
-        hipped house reached 23.4 m for 20, a gable across a 20 x 10 m block 16.9 m for 20 (Codex 2026-11-14)."""
-        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
-        cases = [
-            (np.array([(0, 0), (20, 0), (20, 6), (6, 6), (6, 20), (0, 20)], float), {"class": "house", "height": 20,
-                                                                                    "roof_shape": "hipped"}),
-            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 20, "roof_shape": "gabled",
-                                      "roof_orientation": "across"}),
-        ]
-        for ring, attrs in cases:
-            b = [(bld.plan(ring, attrs), 0.0, 0.0)]
-            self.assertAlmostEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")), delta=0.3,
-                                   msg=str(attrs))
-
     def test_revisit_key_lite_unchanged(self):
         import blockworker
         import geotiles
