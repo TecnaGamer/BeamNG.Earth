@@ -3,6 +3,9 @@
 Author and licensor: **Sven / svenegaming-glitch**
 (<https://github.com/svenegaming-glitch>).
 
+Sven confirms that Groenpol is his original work, created from scratch and not
+derived from another 3D model (contributor declaration, 15 November 2026).
+
 The contributor's Groenpol model and texture material, supplied as
 `Groenpol.fbx` (SHA256
 `0c87eef5eea270f91807cabdaf9f37df3ebec64d115e6d99e6ecc28100effe77`),
