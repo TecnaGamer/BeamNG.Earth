@@ -672,6 +672,68 @@ class AreaMessagesTest(test_server.ServerHarness):
         m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 5, timeout=10)
         self.assertEqual((m["result"]["ok"], m["areas"]), (True, []))
 
+    def test_area_route_messages(self):
+        """The modding API's own types (api.areaPlan / api.areaAdd): points named outright, a layers subset, no
+        fast and no mode -- and area_plan / area_add taking the same points instead of falling through to the box
+        path and answering "an area needs south, west, north and east in degrees"."""
+        self.hello()
+        line = {"lat": [BOX[0], (BOX[0] + BOX[2]) / 2, BOX[2]], "lon": [BOX[1], (BOX[1] + BOX[3]) / 2, BOX[3]]}
+        # without saved areas, both types answer rather than leaving the add-on waiting
+        self.c.send({"type": "area_route_plan", "id": 1, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result", timeout=10)
+        self.assertEqual((m["id"], m["ok"]), (1, False))
+        self.assertIn("download cache", m["error"])
+        self.c.send({"type": "area_route_add", "id": 2, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_add_result", timeout=10)
+        self.assertEqual((m["id"], m["ok"]), (2, False))
+        self.server.areas = areas.Areas(self.tmp.name, StubServer())
+        self.addCleanup(self.server.areas.close)
+        # the estimate, and the subset echoed back
+        self.c.send({"type": "area_route_plan", "id": 3, "route": line, "half": 800, "layers": ["roads"]})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 3, timeout=10)
+        self.assertTrue(m["ok"], m)
+        self.assertEqual(m["layers"], ["roads"])
+        self.assertGreater(m["km"], 1)
+        self.c.send({"type": "area_route_plan", "id": 4, "route": line, "half": 800})
+        wide, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 4, timeout=10)
+        self.assertEqual(wide["layers"], [])
+        self.assertLess(m["items"], wide["items"], "the subset really is a smaller plan")
+        # the refusals, each in words an add-on can act on
+        for rid, extra, want in ((5, {}, "route"),
+                                 (6, {"route": "current"}, "route"),
+                                 (7, {"route": {"lat": [BOX[0]], "lon": [BOX[1]]}}, "route"),
+                                 (8, {"route": line, "layers": ["tarmac"]}, "tarmac"),
+                                 (9, {"route": {"lat": "x", "lon": []}}, "lat")):
+            self.c.send(dict({"type": "area_route_plan", "id": rid, "half": 800}, **extra))
+            m, _ = self.c.until(lambda m, rid=rid: m["type"] == "area_route_plan_result" and m["id"] == rid,
+                                timeout=10)
+            self.assertFalse(m["ok"], m)
+            self.assertIn(want, m["error"], (rid, m["error"]))
+        self.c.send({"type": "area_route_plan", "id": 10, "route": line, "half": 5})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_plan_result" and m["id"] == 10, timeout=10)
+        self.assertFalse(m["ok"])
+        self.assertIn("each side", m["error"])
+        # the add -- with a forged "fast": true, which the handler must not read. api.lua not sending it is
+        # politeness; this is the guarantee, because fast mode pauses the player's game (core.lua fastAreaPause)
+        self.c.send({"type": "area_route_add", "id": 11, "route": line, "half": 800, "layers": ["roads"],
+                     "name": "An add-on area", "fast": True, "mode": "world"})
+        m, _ = self.c.until(lambda m: m["type"] == "area_route_add_result" and m["id"] == 11, timeout=10)
+        self.assertTrue(m["ok"], m)
+        aid = m["area"]
+        self.assertIsNone(self.server.areas.fast_id, "no add-on may start fast mode")
+        a = next(x for x in self.server.areas.message()["areas"] if x["id"] == aid)
+        self.assertEqual((a["name"], a["layers"], a["mode"]), ("An add-on area", ["roads"], "data"))
+        self.assertEqual(a["unavailable"], 0)
+        self.assertEqual(self.server.areas_message()["fast"], "", "and the mod is never told to pause the game")
+        # the player's own messages take the same points now, instead of falling through to the box path
+        self.c.send({"type": "area_plan", "id": 12, "route": line, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_plan_result" and m["id"] == 12, timeout=10)
+        self.assertTrue(m["ok"], m)
+        self.c.send({"type": "area_add", "id": 13, "route": {"lat": "x", "lon": []}, "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 13, timeout=10)
+        self.assertFalse(m["result"]["ok"], "a malformed route is answered, not dropped on the floor")
+        self.assertIn("lat", m["result"]["error"])
+
     def test_live_busy_and_driving(self):
         """The gates' answers: a worker pool with jobs in flight or a loading line not full is busy; a player moving
         faster than a walk drives."""

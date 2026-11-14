@@ -8255,6 +8255,82 @@ class Connection:
             None, self.s.areas.command, area, op)
         self.send(self.s.areas_message({"id": msg.get("id"), "ok": bool(ok)}))
 
+    def _area_route_points(self, msg):
+        """The corridor an add-on named, as (lats, lons), or ValueError. Only the explicit form: "current" is the
+        player's own planned route, which is theirs to pre-cache from the map and which api.gpsRoute() already
+        hands an add-on if it wants to ask for it by its points."""
+        if not isinstance(msg.get("route"), dict):
+            raise ValueError('an area along a route needs "route": {"lat": [...], "lon": [...]}')
+        pts = self._area_route(msg)
+        if pts is None:     # (_area_route answers every dict, so this is belt -- but a sentence, not a TypeError)
+            raise ValueError('a route needs "lat" and "lon": a list of degrees each, a point per index')
+        return pts
+
+    async def area_route_plan(self, msg):
+        """The modding API's estimate for a corridor an add-on names (api.areaPlan):
+        {"id", "route": {"lat", "lon"}, "half", "layers"?} -> area_route_plan_result {"id", "ok", km, km2, items,
+        missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, layers, "error"?}. Nothing is downloaded
+        and nothing is saved: it is the figure to put in front of the player before asking them.
+
+        Its own message type rather than area_plan, for the same reason a requested road graph gets its own file
+        name: the mod keeps one answer at a time (core.lua `M._areaPlans = { [msg.id] = msg }`, replaced rather
+        than added to, and requestAreaPlan empties it before it sends), so an add-on sharing that type would take
+        the player's answer out of the area confirm box, or lose its own to it.
+
+        Mode is always "data". An add-on may not ask for "world", which would put the server's road processes to
+        work building geotiles ahead -- that is the player's choice from their own map, where they can see what it
+        costs."""
+        out = {"type": "area_route_plan_result", "id": msg.get("id"), "ok": False}
+        if self.s.areas is None:
+            out["error"] = "saved areas need the download cache"
+        else:
+            try:
+                lats, lons = self._area_route_points(msg)
+                out.update(await asyncio.get_running_loop().run_in_executor(
+                    None, self.s.areas.plan_route, lats, lons, msg.get("half"), areasmod.DEFAULT_MODE,
+                    msg.get("layers")))
+            except ValueError as e:     # (a malformed request: its own words, which an add-on can act on)
+                out.update(ok=False, error=f"{e}"[:200])
+            except Exception as e:
+                log.info("area_route_plan: %s: %s", type(e).__name__, e)
+                out.update(ok=False, error=f"{type(e).__name__}: {e}"[:200])
+        self.send(out)
+
+    async def area_route_add(self, msg):
+        """The modding API's new saved area along a corridor (api.areaAdd):
+        {"id", "route": {"lat", "lon"}, "half", "name"?, "layers"?} -> area_route_add_result
+        {"id", "ok", "area" (the new area's id) or "error"}. The list itself is not answered here: areas.py
+        broadcasts the 'areas' message on every change, to every connection, so the player's own area list shows
+        it as it appears and an add-on follows it through api.areaStatus.
+
+        **Fast mode is not reachable from here: "fast" is never read from this message.** In fast mode every gate
+        that keeps a download from slowing the world is skipped, and the pause that makes that survivable is
+        applied by the mod for any client on any fast area (core.lua fastAreaPause -> simhold.pause(true)) -- so an
+        add-on able to set it could stop the player's physics mid-drive, with no say for whatever they are doing at
+        the time. An add-on that wants fast mode has to ask the player to press the button on their own area list.
+
+        Mode is always "data", as area_route_plan's own note says."""
+        out = {"type": "area_route_add_result", "id": msg.get("id"), "ok": False}
+        if self.s.areas is None:
+            out["error"] = "saved areas need the download cache"
+            self.send(out)
+            return
+        name = msg.get("name")
+        name = name if isinstance(name, str) else ""
+        try:
+            lats, lons = self._area_route_points(msg)
+            ok, info = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.s.areas.add_route(lats, lons, msg.get("half"), name=name,
+                                                     mode=areasmod.DEFAULT_MODE, fast=False,
+                                                     layers=msg.get("layers")))
+            out.update(ok=bool(ok), **({"area": info} if ok else {"error": str(info)[:200]}))
+        except ValueError as e:
+            out.update(ok=False, error=f"{e}"[:200])
+        except Exception as e:
+            log.info("area_route_add: %s: %s", type(e).__name__, e)
+            out.update(ok=False, error=f"{type(e).__name__}: {e}"[:200])
+        self.send(out)
+
     def send(self, msg):
         lease = getattr(self, "lease", None)
         if not getattr(self, "closing", False) and (lease is None or lease.connection is self) and not self.writer.is_closing():
@@ -8738,6 +8814,10 @@ class Connection:
             self.spawn(self.area_add(msg))
         elif kind == "area_cmd":                # a saved area paused, resumed or deleted
             self.spawn(self.area_cmd(msg))
+        elif kind == "area_route_plan":         # the modding API's corridor: its estimate (areas.py; api.areaPlan)
+            self.spawn(self.area_route_plan(msg))
+        elif kind == "area_route_add":          # ... and the area itself, never fast (api.areaAdd)
+            self.spawn(self.area_route_add(msg))
         elif kind == "preload_place":           # a destination picked on the map: loaded before the teleport
             self.preload_place(msg)
         elif kind == "stations":                # the station finder: the map's layers, Nearest (stationindex.py)

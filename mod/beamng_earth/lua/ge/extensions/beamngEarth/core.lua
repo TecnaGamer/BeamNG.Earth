@@ -1596,6 +1596,12 @@ local function onMessage(msg)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
+  elseif t == 'area_route_plan_result' then  -- the modding API's corridor estimate (api.lua areaPlan; server areas.py)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onAreaPlan then api._onAreaPlan(msg) end
+  elseif t == 'area_route_add_result' then   -- ... and the area it added (api.areaAdd)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onAreaAdd then api._onAreaAdd(msg) end
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
