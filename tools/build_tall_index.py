@@ -343,6 +343,14 @@ def _columns(prefix, rows, names, spec):
     return out
 
 
+def _want(con, ids):
+    """Add building ids to the want table (DuckDB's executemany refuses an empty list: a region with no directly tall
+    building, or a parts file with no new tall building, aborted the whole build; Codex review 2026-11-14)."""
+    ids = list(ids)
+    if ids:
+        con.executemany("INSERT INTO want VALUES (?)", [(b,) for b in ids])
+
+
 def _by_file(pairs):
     by = {}
     for f, rg in pairs:
@@ -379,7 +387,7 @@ def build_region(con, metas, sparses, box, min_h, log):
     have = {r[0] for r in rows}
     con.execute("DROP TABLE IF EXISTS want")
     con.execute("CREATE TEMP TABLE want (id VARCHAR)")
-    con.executemany("INSERT INTO want VALUES (?)", [(b,) for b in sorted(have)])
+    _want(con, sorted(have))
     tall_parts, prows, pnames = [], [], None
     for grp in _by_file(pp):
         if not sp.load(con, "pall", "building_id, height, bbox, (bbox.xmin + bbox.xmax) / 2 AS cx, "
@@ -388,7 +396,7 @@ def build_region(con, metas, sparses, box, min_h, log):
         tp = con.execute(f"""SELECT building_id, min(cx), max(cx), min(cy), max(cy) FROM pall
                              WHERE {inbox} AND coalesce(height, 0) >= {min_h} GROUP BY building_id""").fetchall()
         tall_parts += tp
-        con.executemany("INSERT INTO want VALUES (?)", [(t[0],) for t in tp if t[0] not in have])
+        _want(con, [t[0] for t in tp if t[0] not in have])
         have.update(t[0] for t in tp)
         got, pnames = _rows(con, P_SPEC, sp, grp, f"{inbox} AND building_id IN (SELECT id FROM want)")
         prows += got

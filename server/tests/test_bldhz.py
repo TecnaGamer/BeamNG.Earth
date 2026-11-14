@@ -217,6 +217,21 @@ def _npy_header(dtype, shape):
     return npf.magic(1, 0) + b.getvalue()
 
 
+class BuilderWantTest(unittest.TestCase):
+    def test_empty_batches(self):
+        """A region with no directly tall building, or a parts file adding no new tall building: an empty batch
+        is skipped, not handed to DuckDB's executemany (which refuses it and aborted the whole build)."""
+        import duckdb
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+        import build_tall_index as T
+        con = duckdb.connect()
+        con.execute("CREATE TEMP TABLE want (id VARCHAR)")
+        T._want(con, [])
+        T._want(con, (b for b in ()))
+        T._want(con, ["b2", "b1"])
+        self.assertEqual(sorted(r[0] for r in con.execute("SELECT id FROM want").fetchall()), ["b1", "b2"])
+
+
 class DecodeBoundsTest(unittest.TestCase):
     """bldhz.decode refuses a hostile tile before allocating for it (Codex review of the ring: a 199-byte npz whose
     member's header declared 1e9 float64 made np.load ask for 8 GB)."""
