@@ -47,7 +47,7 @@ local trees = require('beamngEarth/trees')
 for _,name in ipairs({'nl_signals','nl_signal_scene','nl_groenpol_catalog','nl_country'})do
   T.check(package.loaded['beamngEarth/'..name]==nil,'stock trees never load '..name)
 end
-T.check(trees.setSignalFrame({})==false,'stock frame changes do not rebuild Dutch static signals')
+T.check(trees.setSignalFrame==nil,'tree renderer has no client-side Dutch placement or re-fit pass')
 -- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
 -- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
 T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2

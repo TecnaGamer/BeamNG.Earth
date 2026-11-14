@@ -1,9 +1,7 @@
 # Public Dutch signal-context tiles
 
-This is the producer and server data-access part of the Groenpol migration.
-It is **not yet connected to the signal planner**. The existing client context
-pack must only be removed together with its server/native replacement; shipping
-this intermediate work alone does not fix the outstanding client-side planning.
+This public context feeds the live optional native Groenpol pipeline. The old
+client pack and planner are removed. Unpublished data keeps stock signals available.
 
 ## Reproduce
 
@@ -51,26 +49,14 @@ reader is disabled by default, performs no requests while disabled and returns
 no context when the dataset is unpublished. It does not suppress stock objects.
 
 `nlsignalcontext.match` now marshals local ENU coordinates into the native
-`nl_signal_context_match` kernel (earthfast 299). Direction and lane counts must
+`nl_signal_context_match` kernel (earthfast 300). Direction and lane counts must
 agree before turn arrows are returned; equally close conflicting arrows remain
 unknown. Missing WKD data remains unknown unless the caller explicitly proves
-complete WKD coverage. This server API is tested but not yet wired into the
-live signal planner.
+complete WKD coverage. Matching feeds the live native junction planner.
 
-The native physical support, mounted-part and junction-bundle API (earthfast 299) now checks actual drawn surfaces
-and quantised terrain; its intermediate contract and remaining assembly work are
-documented in [NL_SIGNAL_SERVER_PLACEMENT.md](NL_SIGNAL_SERVER_PLACEMENT.md).
-The next integration step is shared-support reconciliation and connection of the
-tested client assembly reader and Forest backend to the live protocol. The old bundled
-pack and Lua matching remain until that coordinated switch is tested.
-Performance and placement still require in-game measurement.
-
-## Checks
-
-`test_nl_signal_context_data` checks reproducibility, motor-road filtering,
-64-bit source IDs, direction tags, tile halos and conflicting records.
-`test_nlsignaldata` checks opt-in isolation, bounded reads, actual public-shard
-fetch/cache reuse, malformed geometry and duplicate/conflicting halo records.
-`test_nlsignalcontext` exercises actual geodesy and the native matcher, including
-unknown coverage, conflicting arrows and JSON-safe outputs. All three modules
-are included in the foundation quality gate.
+The native physical support and shared-junction solver checks actual drawn surfaces
+and quantised terrain. Its live transport and ownership contract is documented in
+[NL_SIGNAL_SERVER_PLACEMENT.md](NL_SIGNAL_SERVER_PLACEMENT.md).
+The companion data workflow fetches pinned WKD and attributed Overpass sources,
+builds deterministic shards and validates them before the existing publication
+and mirror job. Raw national sources never enter the mod.

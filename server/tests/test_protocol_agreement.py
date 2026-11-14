@@ -132,6 +132,7 @@ MOD_TO_SERVER = {
     "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
+             "nlSignals": F(int, OPT), "nlGround": F(str, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
              "view": F(bool, OPT),          # true: the 3D map's view frame (earthd Conn.map_view)
              "map": F(bool, OPT),           # true: the 3D map open (earthd Conn.map_open)
@@ -148,6 +149,7 @@ MOD_TO_SERVER = {
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
+    "nl_signals_ack": {"anchorId": F(int), "epoch": F(int), "revision": F(int)},
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
@@ -258,6 +260,7 @@ TERRAIN = {"cx": F(NUM), "cy": F(NUM), "heightmap": F(str), "size": F(int), "squ
            "base": F(str, OPT), "baseSize": F(NUM, OPT),           # --near-visual detail: the block's photo
            "ter": F(str, OPT)}                                     # the block as a .ter (swapped in, no import)
 SERVER_TO_MOD = {
+    "nl_signals": {"anchorId": F(int), "epoch": F(int), "revision": F(int), "path": F(str)},
     "server_list": {"servers": F(list, OPT), "error": F(str, OPT)},   # earthd.server_list (the list service)
     "share_info": {"code": F(str), "weight": F(NUM)},     # BeamMP sharing v2: our share code for the poses
     "share_out": {"to": F(str), "d": F(str)},             # ... a message for the plugin ("S") or a player
@@ -407,7 +410,7 @@ SERVER_TO_MOD = {
                    "frame": F(list, OPT), "h": F(str, OPT), "exact": F(dict, OPT)},
     # a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file
     "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT),
-                   "swap": F(int, OPT)},
+                   "swap": F(int, OPT), "h": F(str, OPT)},
     # a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)
     "roads_exact": {"anchorId": F(int), "key": F(str), "parts": F(dict), "slots": F(dict, OPT)},
     "roads_drop": {"anchorId": F(int), "key": F(str)},
@@ -478,6 +481,7 @@ WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "from
                   "aloft": {"ms", "fromDeg"}}
 # message types the plain session cannot produce (each has its own session test below)
 EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+                       "nl_signals",                               # opt-in native packets: test_nlsignalstream
                        "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
@@ -571,7 +575,7 @@ def mod_sends():
     out = {}
     for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
                               "addons.lua", "api.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua", "nl_signal_stream.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{"),
                            (("reportsend.lua",), r"\bnet\(\)\.send\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")

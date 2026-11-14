@@ -2,6 +2,7 @@
 //! Only verified coincident feet are shared here. Relocating nearby feet remains
 //! a physical-planner operation; this pass does not guess a new road-safe position.
 use serde_json::{json,Value};
+use crate::dm::Dm;
 use crate::nlparts::part;
 type V=[f64;3];
 type B=[f64;9];
@@ -46,6 +47,13 @@ fn box3(p:&Value,bounds:[V;2])->Result<Box3,&'static str>{
     Ok(Box3{centre:at(origin,b,centre),axes,half})
 }
 fn boxes_clear(a:&Box3,b:&Box3)->bool{
+    // Most neighbouring assemblies are many metres apart. Reject those in
+    // world axes before allocating the SAT cross-axis list.
+    for k in 0..3{
+        let ra=(0..3).map(|i|a.axes[i][k].abs()*a.half[i]).sum::<f64>();
+        let rb=(0..3).map(|i|b.axes[i][k].abs()*b.half[i]).sum::<f64>();
+        if (a.centre[k]-b.centre[k]).abs()>=ra+rb+GAP{return true;}
+    }
     let mut axes=Vec::from(a.axes);axes.extend(b.axes);
     for x in &a.axes{for y in &b.axes{axes.push(cross(*x,*y));}}
     for axis in axes{
@@ -55,6 +63,53 @@ fn boxes_clear(a:&Box3,b:&Box3)->bool{
         let rb=(0..3).map(|i|dot(b.axes[i],axis).abs()*b.half[i]).sum::<f64>();
         if dot(sub(a.centre,b.centre),axis).abs()>=ra+rb+GAP{return true;}
     }false
+}
+
+fn physical_bounds(c:&Value,p:&Value)->Result<Option<[V;2]>,&'static str>{
+    match p["role"].as_str(){
+        Some("head")=>Ok(Some(head_bounds(c,p,p["bare"]==true)?)),
+        Some("support")=>Ok(Some(support_bounds(c,&p["shape"])?)),
+        Some("beam")=>{
+            for s in c["supports"].as_object().ok_or("bundle_catalog")?.values(){
+                if s["construction"]["beam_shape"]==p["shape"]{
+                    let b=&s["construction"]["beam_bounds_m"];return Ok(Some([vector(&b[0])?,vector(&b[1])?]));
+                }
+            }Err("bundle_beam_shape")
+        },_=>Ok(None)
+    }
+}
+fn shared_joint(a:&Value,b:&Value,parts:&[Value],c:&Value)->bool{
+    if a["role"]=="head"||b["role"]=="head"{return false;}
+    if a["role"]=="beam"&&b["role"]=="beam"{
+        let (Ok((_,aa)),Ok((_,bb)))=(pose(a),pose(b))else{return false};
+        let x=[aa[1],aa[4],aa[7]];let y=[bb[1],bb[4],bb[7]];
+        if dot(x,y)>0.5*(dot(x,x)*dot(y,y)).sqrt(){return false;}
+    }
+    for post in parts.iter().filter(|p|p["role"]=="support"){
+        let Some(owners)=post["shared_owners"].as_array()else{continue};
+        if !owners.contains(&a["approach"])||!owners.contains(&b["approach"]){continue;}
+        let Ok((foot,_))=pose(post)else{continue};
+        let near=|p:&Value|->bool{
+            let Ok((origin,basis))=pose(p)else{return false};
+            if p["role"]=="support"{return (origin[0]-foot[0]).dhypot(origin[1]-foot[1])<0.01;}
+            let Ok(Some(bounds))=physical_bounds(c,p)else{return false};
+            // The beam's original mast-side end is y=0, not its distant tip.
+            let start=at(origin,basis,[(bounds[0][0]+bounds[1][0])/2.,bounds[1][1],0.]);
+            (start[0]-foot[0]).dhypot(start[1]-foot[1])<0.35
+        };
+        if near(a)&&near(b){return true;}
+    }false
+}
+pub fn clearance(parts:&[Value],c:&Value)->Result<(),&'static str>{
+    if parts.len()>4096{return Err("bundle_parts");}
+    let mut boxes=Vec::with_capacity(parts.len());
+    for p in parts{boxes.push(physical_bounds(c,p)?.map(|b|box3(p,b)).transpose()?);}
+    for i in 0..parts.len(){let Some(a)=&boxes[i]else{continue};
+        for j in i+1..parts.len(){let Some(b)=&boxes[j]else{continue};
+            if parts[i]["approach"]==parts[j]["approach"]{continue;}
+            if !boxes_clear(a,b)&&!shared_joint(&parts[i],&parts[j],parts,c){return Err("assembly_clearance_conflict");}
+        }
+    }Ok(())
 }
 fn clears_post(p:&Value,bounds:[V;2],foot:V,radius:f64,top:f64)->Result<bool,&'static str>{
     let (pos,b)=pose(p)?;

@@ -128,6 +128,7 @@ M.LAUNCH_TIMEOUT_S = 6
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
 
 local graph = nil       -- the server's last graph {anchor, nodes, edges}
+local nativeStream,nativeAccepted,nativeWasOn
 local applied = nil     -- {anchor, serial, box} of the graph in the game's map now
 local dirty = false
 local lastApply = -math.huge
@@ -368,7 +369,8 @@ function M.onMessage(msg, currentAnchor)
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
             lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
             trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
-            mph = g.mph }       -- (the country's speed signs: api.speedLimit)
+            mph = g.mph, nlNative = g.nlNative }       -- (the country's speed signs: api.speedLimit)
+  if nativeStream then nativeStream.graph(msg.serial) end
   dirty = true
   return true
 end
@@ -381,16 +383,17 @@ M.SIGNAL_TYPE = 'lightsBasic'
 -- the switchable head (the stock boom, instanced_trafficlight material): one TSStatic per approach where the
 -- road tile's static boom stands (trees.lua's signal group is hidden while these exist)
 M.SIGNAL_SHAPE = '/art/shapes/objects/s_trafficlight_boom_sn.dae'
-local nlSignals
-local function dutchPlanner()
-  if not nlSignals then nlSignals=require('beamngEarth/nl_signals') end
-  return nlSignals
+M.dutchSignals = false -- opt-in; native server geometry, stock controllers.
+local function nativeSignals()
+  if not nativeStream then
+    nativeStream=require('beamngEarth/nl_signal_stream')
+    nativeStream.configure(require('beamngEarth/net').send,function(owners)nativeAccepted(owners)end)
+    if graph then nativeStream.graph(graph.serial) end
+  end
+  return nativeStream
 end
-M.dutchSignals = false -- opt-in via settings; restart applies the selected mode consistently.
-local dutchScene
-local function getDutchScene()
-  if not dutchScene then dutchScene=require('beamngEarth/nl_signal_scene') end
-  return dutchScene
+function M.onNativeSignals(msg,anchor)
+  return M.dutchSignals and nativeSignals().onMessage(msg,anchor) or false
 end
 -- Keep stock heads independent of the optional Dutch catalogue/planner.
 local stockScene={syncVisual=function()end}
@@ -408,14 +411,8 @@ function stockScene.create(p,inst)
            parts={{id=o:getID(),role='head'}}}
   stockScene.move(h);return h
 end
-local signalScene={visualObject=function(...)return getDutchScene().visualObject(...)end}
-for _,name in ipairs({'create','delete','alive','move','syncVisual'})do
-  local method=name
-  signalScene[method]=function(first,...)
-    local scene=first.model=='stock'and stockScene or getDutchScene()
-    return scene[method](first,...)
-  end
-end
+local signalScene=stockScene
+function signalScene.visualObject()return nil end
 local signalFrame = nil -- current world anchor, supplied by core (no server/cache schema changes)
 local heads = {}        -- stable signal instance name -> owned head/support/hardware assembly
 local seenHeads = {}
@@ -438,21 +435,21 @@ end
 -- A head for instance inst at a's prop transform: the one already standing there is kept (it is linked by
 -- the instance's name, which stays the same: setupSignals finds it again), so a new graph costs only the new ones.
 local function makeHead(inst, a, junction, controller, sequence, visualOnly)
-  if not a[8] or not inst.createSignalObject then return end
   signalRequests[inst.name]={inst=inst,a=a,junction=junction,controller=controller,sequence=sequence,visualOnly=visualOnly}
   seenHeads[inst.name]=true
-  local p
-  if M.dutchSignals then p=dutchPlanner().resolve(a,signalFrame,M.SIGNAL_SHAPE,graph,junction,heads,inst.name)
-  else
-    local stock=M.SIGNAL_SHAPE
-    if a[12]==1 then
-      local left=require('beamngEarth/signalshape').ensureLeft()
-      if not left then return end
-      stock=left..'.dae'
-    end
-    p={shape=stock,model='stock',yaw=a[11]or 0,x=a[8],y=a[9],z=a[10],
-       stop={a[2],a[3],a[4]},dir={a[5],a[6]},approach_key=a[1],junction_key=junction}
+  if M.dutchSignals then
+    nativeSignals().register(inst.name,inst,controller,sequence,a)
+    if nativeSignals().owns(inst.name)then return end
   end
+  if not a[8] or not inst.createSignalObject then return end
+  local stock=M.SIGNAL_SHAPE
+  if a[12]==1 then
+    local left=require('beamngEarth/signalshape').ensureLeft()
+    if not left then return end
+    stock=left..'.dae'
+  end
+  local p={shape=stock,model='stock',yaw=a[11]or 0,x=a[8],y=a[9],z=a[10],
+    stop={a[2],a[3],a[4]},dir={a[5],a[6]},approach_key=a[1],junction_key=junction}
   if p.omit then
     if heads[inst.name]then signalScene.delete(heads[inst.name]);heads[inst.name]=nil end
     return
@@ -487,6 +484,9 @@ end
 local function suppressHeads()
   local trees = require('beamngEarth/trees')
   local grid = {}
+  if nativeStream then for _,p in ipairs(nativeStream.spots())do
+    grid[math.floor(p[1]/4)..','..math.floor(p[2]/4)]=true
+  end end
   for _, h in pairs(heads) do
     local x,y=h.sourcex or h.x,h.sourcey or h.y
     grid[math.floor(x / 4) .. ',' .. math.floor(y / 4)] = true
@@ -513,14 +513,21 @@ local function releaseHeads()
   suppressHeads()
 end
 
-function M.signalAudit(frame)
-  if not M.dutchSignals then return {disabled=true} end
-  local result=dutchPlanner().audit(graph or {}, frame or signalFrame, M.SIGNAL_SHAPE)
-  result.osm=M.osmSignalReport
-  result.surface_reader=require('beamngEarth/nl_signal_surfaces').stats
-  local native,visual=0,0;for _,h in pairs(heads)do if h.visualOnly then visual=visual+1 else native=native+1 end end
-  result.active_approaches=native;result.visual_approaches=visual
-  return result
+nativeAccepted=function(owners)
+  for name,h in pairs(heads)do if owners[name]then
+    local request=signalRequests[name]
+    if request then request.inst.linkedObjects={} end
+    stockScene.delete(h);heads[name]=nil
+  end end
+  for name,request in pairs(signalRequests)do
+    if not owners[name]and not heads[name]then
+      pcall(makeHead,request.inst,request.a,request.junction,request.controller,request.sequence,request.visualOnly)
+    end
+  end
+  suppressHeads()
+end
+function M.signalAudit()
+  return nativeStream and nativeStream.stats or {disabled=not M.dutchSignals,pending=true}
 end
 
 local function signalData(nodes)
@@ -528,16 +535,12 @@ local function signalData(nodes)
   local inst, ctrls, seqs = {}, {}, {}
   local stop = nil
   local ns = 0
-  local duplicate=M.dutchSignals and dutchPlanner().duplicates(graph,signalFrame)or{}
+  local duplicate={}
   for _, j in ipairs(graph.signals or {}) do
     local jn = nodes[j.j]
     local sourceNode=graph.nodes[j.j]
-    local nlVisual=false
-    if M.dutchSignals and j.kind=='signal' and sourceNode and signalFrame and signalFrame.worldToGeodetic then
-      local ok,lat,lon=pcall(signalFrame.worldToGeodetic,signalFrame,sourceNode[1],sourceNode[2],sourceNode[3])
-      nlVisual=ok and require('beamngEarth/nl_country').contains(lat,lon)
-      if nlVisual and not jn then jn={radius=sourceNode[4],links={}} end
-    end
+    local nlVisual=M.dutchSignals and graph.nlNative==true
+    if nlVisual and sourceNode and not jn then jn={radius=sourceNode[4],links={}} end
     if jn and type(j.app) == 'table' then
       local apps = {}
       for i, a in ipairs(j.app) do
@@ -1255,6 +1258,7 @@ end
 -- the AI planned toward roads hundreds of metres off and swerved, into a street tree on North Front Street, Baltimore
 -- (Steam Deck, 3 of 3 rebase drives, 2026-10-29). The server's own graph replaces this one when it comes.
 function M.transform(xf, anchorId)
+  if nativeStream then nativeStream.clear(false) end
   if not graph or not xf then return false end
   signalRequests={};groundQueue={};groundRevision=nil
   local nodes = {}
@@ -1498,48 +1502,12 @@ local function overtakeScan(now)
     function(id) return localplayers.controlled(id, getObjectByID(id), controlled) end)
 end
 
-function M.update(aid, b, gov, frame)
-  if M.dutchSignals then require('beamngEarth/nl_signal_surfaces').newFrame() end
-  signalFrame = frame
-  if M.dutchSignals then require('beamngEarth/trees').setSignalFrame(frame) end
-  if M.dutchSignals then
-    for _,h in pairs(heads)do if h.visualOnly then signalScene.syncVisual(h) end end
-  end
+function M.update(aid, b, gov, frame, ground)
+  signalFrame=frame
+  if nativeStream and nativeWasOn and not M.dutchSignals then nativeStream.clear(false);nativeAccepted({}) end
+  nativeWasOn=M.dutchSignals
+  if M.dutchSignals and nativeStream then nativeStream.update(aid,ground,16) end
   if not M.enabled or not graph then return end
-  -- Road skins arrive after the graph. Refit visuals against their new surfaces
-  -- without resetting the AI map or changing the native controller's phase.
-  local roads=M.dutchSignals and package.loaded['beamngEarth/roads']
-  local gs=roads and roads.geoStats
-  local revision=gs and tostring(gs.tiles)..':'..tostring(gs.skins)..':'..tostring(gs.exact)
-  if revision and (revision~=groundRevision or os.clock()-lastGroundRefresh>3) and os.clock()-lastGroundRefresh>.75 then
-    groundRevision=revision;lastGroundRefresh=os.clock()
-    if #groundQueue==0 then
-      for _,request in pairs(signalRequests)do groundQueue[#groundQueue+1]=request end
-      if b and b[4]then
-        local cx,cy=(b[1]+b[3])/2,(b[2]+b[4])/2
-        table.sort(groundQueue,function(a,c)
-          return (a.a[8]-cx)^2+(a.a[9]-cy)^2>(c.a[8]-cx)^2+(c.a[9]-cy)^2
-        end)
-      end
-    end
-  end
-  local groundHeavy=gov and gov.isHeavyFrame and gov:isHeavyFrame()
-  local groundRoom=not gov or not gov.roomFor or gov:roomFor(3)
-  if M.dutchSignals and #groundQueue>0 and not pendingSignals and not groundHeavy then groundWaited=groundWaited+1 end
-  if M.dutchSignals and #groundQueue>0 and not pendingSignals and not groundHeavy and (groundRoom or groundWaited>=60)then
-    groundWaited=0
-    local groundTimer=stopwatch.new()
-    local request=table.remove(groundQueue)
-    if signalRequests[request.inst.name]==request then
-      pcall(makeHead,request.inst,request.a,request.junction,request.controller,request.sequence,request.visualOnly)
-      suppressHeads()
-    end
-    if gov and gov.noteFrame then gov:noteFrame(groundTimer())end
-  end
-  if M.dutchSignals and frame and not graph.osmReady then
-    local enriched,report=require('beamngEarth/nl_signal_osm').augment(graph,frame)
-    graph=enriched;graph.osmReady=report.reason~='frame_unavailable';M.osmSignalReport=report
-  end
   local t0 = os.clock()
   do
     local ok, err = pcall(checkRegion, t0)
@@ -1653,6 +1621,7 @@ function M.status()
 end
 
 function M.reset()
+  if nativeStream then nativeStream.clear(true) end
   groundWaited=0
   groundQueue={};groundRevision=nil;lastGroundRefresh=0
   local gt = gameplay_traffic

@@ -1,0 +1,513 @@
+{
+  "adjustments_m": {
+    "low_mount_standoff": 0.05,
+    "overhead_leg_top": 0.05
+  },
+  "files": {
+    "hanger_cantilever_1_1_sven_v4.cdae": {
+      "bytes": 1680,
+      "sha256": "c6e41f7da19fb5c71623d2729ac279c9e3b5951fca6680535a2ce1813f2e1115",
+      "triangles": 28
+    },
+    "hanger_cantilever_2_1_sven_v4.cdae": {
+      "bytes": 1680,
+      "sha256": "ac4e994972ee5d15bafc7ea9d564f42e72305ef4122f55ed1f78bb96603ff932",
+      "triangles": 28
+    },
+    "hanger_cantilever_2_2_sven_v4.cdae": {
+      "bytes": 1668,
+      "sha256": "b95cfa18bb9c66022f036639bdfc495b659d97cbd218d1b8be9613f665f12ec1",
+      "triangles": 28
+    },
+    "hanger_cantilever_3_1_sven_v4.cdae": {
+      "bytes": 1683,
+      "sha256": "53e8c176e623d6e38d0238d730fd3bf392133ce8e98a47617f794414ac9c1498",
+      "triangles": 28
+    },
+    "hanger_cantilever_3_2_sven_v4.cdae": {
+      "bytes": 1644,
+      "sha256": "5a388b9d765b4aecad909334314097dd05657247d8ebb3b4d7464ab7ea33b9e0",
+      "triangles": 28
+    },
+    "hanger_cantilever_3_3_sven_v4.cdae": {
+      "bytes": 1699,
+      "sha256": "e7209c56aff5e75b7094651205f439de1834ef576753f6137aa14792fb49a624",
+      "triangles": 28
+    },
+    "hanger_portal_5_1_sven_v4.cdae": {
+      "bytes": 1636,
+      "sha256": "4fded7910ca7983e2680d00ed2ac9bf28a8e45937bc456338cb8932b3f5ea42b",
+      "triangles": 28
+    },
+    "hanger_portal_5_2_sven_v4.cdae": {
+      "bytes": 1618,
+      "sha256": "f2290b103051fbbb5e3bf1390d8a1d1887cc4cd1c970a5fe3c2628111803dd11",
+      "triangles": 28
+    },
+    "hanger_portal_5_3_sven_v4.cdae": {
+      "bytes": 1669,
+      "sha256": "1772cf6e9efb4eacad2acda244459a639afe994ce30297deab5ade2658cf167d",
+      "triangles": 28
+    },
+    "hanger_portal_5_4_sven_v4.cdae": {
+      "bytes": 1667,
+      "sha256": "6fd345dddfb2d0699f7c1108a2096be08dfb5aa33ae2c2cae3f03e50e5a9846e",
+      "triangles": 28
+    },
+    "hanger_portal_5_5_sven_v4.cdae": {
+      "bytes": 1729,
+      "sha256": "4a88789bfa3f7b9e3194da909657e758f15ced53e67ff8fd89b9e450a5eec79c",
+      "triangles": 28
+    },
+    "hardware_double_mount_sven_v4.cdae": {
+      "bytes": 5540,
+      "sha256": "03a3479075794aa6dc624b01a06fc37bdac907c245a446343e6fa3af8d1f5e7c",
+      "triangles": 180
+    },
+    "hardware_loose_mount_sven_v4.cdae": {
+      "bytes": 3628,
+      "sha256": "05e265ed8cfe09a3c384f0578da59d6b7529516299e1fa6800761e2f88de801a",
+      "triangles": 112
+    },
+    "mast_cantilever_1_sven_v4.cdae": {
+      "bytes": 4608,
+      "sha256": "c11c8f5036484086d45456ab17cb54f31994e89c1b5dc034971b26dc98784a2d",
+      "triangles": 188
+    },
+    "mast_cantilever_2_sven_v4.cdae": {
+      "bytes": 4600,
+      "sha256": "20df3ed7d39d7309a04f8b38cdb017be5e72ae1e8c445cd252832e1300df1e6c",
+      "triangles": 188
+    },
+    "mast_cantilever_3_sven_v4.cdae": {
+      "bytes": 4596,
+      "sha256": "b46bdeb8ea436ed135a9def0427a95a9612694f157d23f58e27dab52f2c51a9b",
+      "triangles": 188
+    },
+    "mast_portal_5_sven_v4.cdae": {
+      "bytes": 7600,
+      "sha256": "f0a9439ec0a7bb087bbdf8a4145f645fad2f968a4a3e22d5832526848c0f1b97",
+      "triangles": 304
+    },
+    "mast_straight_sven_v4.cdae": {
+      "bytes": 3367,
+      "sha256": "f925ad25e9228d43785647cbd0fd9db5fb75fb3e3d27a88271ad424259047031",
+      "triangles": 116
+    },
+    "mast_straight_tall_sven_v4.cdae": {
+      "bytes": 2492,
+      "sha256": "360bae4ed08b9d6465921bc45951f5887cb7d903ff72e856f739b552c23fe257",
+      "triangles": 82
+    },
+    "shield_double_200_sven_v4.cdae": {
+      "bytes": 6195,
+      "sha256": "010a61d1e5ccffd4d9c2cddf3d08db15036e6661bec3ef9372acf10dabd31c81",
+      "triangles": 132
+    },
+    "shield_double_300_sven_v4.cdae": {
+      "bytes": 6317,
+      "sha256": "995c4bbcc6802f0e60eb35fa10e959ec8730c6c935590730d46d2097ece48f0a",
+      "triangles": 132
+    },
+    "support_cantilever_1_beam_sven_v4.cdae": {
+      "bytes": 2230,
+      "sha256": "b869e23320c7e618336f5e064eb68be2210112109a307c381516c998a46eb094",
+      "triangles": 82
+    },
+    "support_cantilever_1_leg_sven_v4.cdae": {
+      "bytes": 2880,
+      "sha256": "295110ec001982697bf79010f1a2be02d7e40b659d80591f9645daf23d18116c",
+      "triangles": 106
+    },
+    "support_cantilever_2_beam_sven_v4.cdae": {
+      "bytes": 2240,
+      "sha256": "02149176c9a6cc5015ee402e455f09f64dc3eada859421dd995d1749e1e02935",
+      "triangles": 82
+    },
+    "support_cantilever_2_leg_sven_v4.cdae": {
+      "bytes": 2880,
+      "sha256": "295110ec001982697bf79010f1a2be02d7e40b659d80591f9645daf23d18116c",
+      "triangles": 106
+    },
+    "support_cantilever_3_beam_sven_v4.cdae": {
+      "bytes": 2239,
+      "sha256": "2efbc8d235cbbcdc58831d71dcc7cc1dbb383baec5c0d0c179fc7768dccde99d",
+      "triangles": 82
+    },
+    "support_cantilever_3_leg_sven_v4.cdae": {
+      "bytes": 2855,
+      "sha256": "3d69a9c79257e396c4cee7d64170711bef5613ed367804fcae4c29cb42cf993b",
+      "triangles": 106
+    },
+    "support_portal_5_beam_sven_v4.cdae": {
+      "bytes": 1376,
+      "sha256": "c9afc8b156edd3a2bef185b966fccecc68a82e2f7263b3ca4ab61ebafbdeb6e8",
+      "triangles": 44
+    },
+    "support_portal_5_leg_sven_v4.cdae": {
+      "bytes": 3436,
+      "sha256": "c0d1152d3090af65f5e47cc653b71d55387ee6bafa82d933fde4ad476118cf61",
+      "triangles": 130
+    },
+    "vehicle_300_amber.cdae": {
+      "bytes": 1155,
+      "sha256": "599640cac892d8d93dcc56607d5f5d8857b58df66d85f574d0e64b9e2017b184",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_left_amber.cdae": {
+      "bytes": 1145,
+      "sha256": "cecbe6596e6f72e84b858b598fa59e901e50c53b438a7fc89ad1e9eaad50dd3f",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_left_bare_body.cdae": {
+      "bytes": 9503,
+      "sha256": "10ae08ee42965f9a5edc1b3c00a4a5d1d5629d22a2f8de9beec2ece2164c14ec",
+      "triangles": 336
+    },
+    "vehicle_300_arrow_left_body.cdae": {
+      "bytes": 15690,
+      "sha256": "65ba7f002ed295eb9bc277a696b7767bc842ef73048bded6d34348b34687386c",
+      "triangles": 468
+    },
+    "vehicle_300_arrow_left_green.cdae": {
+      "bytes": 1188,
+      "sha256": "7de010e345080e4af79bb2c44de2fcfa7b9c023c9ff5b0d4a2c39db26dffc145",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_left_red.cdae": {
+      "bytes": 1144,
+      "sha256": "7c674a48d61fafb9a540f495f1aba81582284c282d2c429e90219d2169a75b5b",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_right_amber.cdae": {
+      "bytes": 1148,
+      "sha256": "79c72f8eda4052ae9185ed04bd675519d312a79b51be96bd8ab3758094eeba22",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_right_bare_body.cdae": {
+      "bytes": 9517,
+      "sha256": "b5ce5437c0ad8637a9a148aa503fd3419fb4550962b6256353fe8892b78ee3e4",
+      "triangles": 336
+    },
+    "vehicle_300_arrow_right_body.cdae": {
+      "bytes": 15704,
+      "sha256": "a72a58c0cee180f905afbfc578d10829d1384123a0acdbc116d96b734f006549",
+      "triangles": 468
+    },
+    "vehicle_300_arrow_right_green.cdae": {
+      "bytes": 1179,
+      "sha256": "c0f0df378f11a6ffec4f0889f859bf29563add79b7dcd224ba1cfc3e75e72829",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_right_red.cdae": {
+      "bytes": 1148,
+      "sha256": "01c3b84b20cda07f1d191cfa888f61d7661290ae668d865bb332fe95a03b6c8c",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_left_amber.cdae": {
+      "bytes": 1177,
+      "sha256": "2de366c30261f5e4dc7ece5d2f1e56e56f0be4e6479fe49f7013aba279f72528",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_left_bare_body.cdae": {
+      "bytes": 9538,
+      "sha256": "849b4406ea0ce9ffa70aec4f11aa61611f508146279b5c6161c8ac5a00c028d8",
+      "triangles": 336
+    },
+    "vehicle_300_arrow_slight_left_body.cdae": {
+      "bytes": 15724,
+      "sha256": "defc99c231f00eea4836a4c73163a5181a6287feddf14f65c594e64be48df764",
+      "triangles": 468
+    },
+    "vehicle_300_arrow_slight_left_green.cdae": {
+      "bytes": 1178,
+      "sha256": "476ba21b5bfefa42602e1c13bda7640e7b05c474f21ff7f6756580e9b13ea0d1",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_left_red.cdae": {
+      "bytes": 1169,
+      "sha256": "408ff56ecc3555e551f81d7c8978a428bfcc3226683feaed6a2186b68f3553fd",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_right_amber.cdae": {
+      "bytes": 1173,
+      "sha256": "73524bbdee5eb56aaa16a4a13851e2049dee050739fd473c01f7ff3b8012f1de",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_right_bare_body.cdae": {
+      "bytes": 9520,
+      "sha256": "95269cc2a0269b563bfa24fa03c5c7886a4e825b3b4df386fafda05193892e5b",
+      "triangles": 336
+    },
+    "vehicle_300_arrow_slight_right_body.cdae": {
+      "bytes": 15705,
+      "sha256": "af2652fece66163862f799a4f5d0340718d755c68a2d38e4a4b720863c63c580",
+      "triangles": 468
+    },
+    "vehicle_300_arrow_slight_right_green.cdae": {
+      "bytes": 1180,
+      "sha256": "cc1a6bc49f0bde326c5cc82d00f316067b93882e67270aedff0cf4c018f04e81",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_slight_right_red.cdae": {
+      "bytes": 1162,
+      "sha256": "f89a0eadbc5c50f658d0c27296aa01c6d595bedabf27814eef196351bd214a9d",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_straight_amber.cdae": {
+      "bytes": 1144,
+      "sha256": "44474089b2391edee90de1c27516356a38b051ae579675f63c9095bb95950aaf",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_straight_bare_body.cdae": {
+      "bytes": 9500,
+      "sha256": "464415a0e5bf309a50356709c2c18a8069fbb63521d518ee669619c2854a1e0e",
+      "triangles": 336
+    },
+    "vehicle_300_arrow_straight_body.cdae": {
+      "bytes": 15679,
+      "sha256": "afa7a235f2b21dd8ae74f575e9186efcf4e29c3e88e7b14d3532eb9a4953f87e",
+      "triangles": 468
+    },
+    "vehicle_300_arrow_straight_green.cdae": {
+      "bytes": 1184,
+      "sha256": "6cfa4c009b1e6da31010033692ea2a98fce25863f5fc4679b2ef8a1f48aecc48",
+      "triangles": 16
+    },
+    "vehicle_300_arrow_straight_red.cdae": {
+      "bytes": 1132,
+      "sha256": "548fe2fe9741f361020a283d11db606536e55e1554eb605a4659d972c9d9d9a7",
+      "triangles": 16
+    },
+    "vehicle_300_bare_body.cdae": {
+      "bytes": 9388,
+      "sha256": "5376361bb5b7ad092cdad015365afd8a336f6eb02b9c907976fe0332c12e2277",
+      "triangles": 336
+    },
+    "vehicle_300_body.cdae": {
+      "bytes": 15583,
+      "sha256": "621035287923bc0679f9e9d5dee991bd9d0a166824252851670fb09ffe81fb23",
+      "triangles": 468
+    },
+    "vehicle_300_green.cdae": {
+      "bytes": 1149,
+      "sha256": "0c31ebe8d7b5e4dcfd8670a561e0e75a38bfb46e52ce0b0a88d8178349c40780",
+      "triangles": 16
+    },
+    "vehicle_300_red.cdae": {
+      "bytes": 1146,
+      "sha256": "3aba7b287b2d82fa9b2c4045a4fd390ef8dc8351f1c591ea4ef58fb3066332af",
+      "triangles": 16
+    },
+    "vehicle_amber.cdae": {
+      "bytes": 1185,
+      "sha256": "301a2d35caa480960b61ebb3f49969efe498ae846bd3feea6baf694024f809cf",
+      "triangles": 16
+    },
+    "vehicle_arrow_left_amber.cdae": {
+      "bytes": 1186,
+      "sha256": "35d55221883db3535db388de4c23974c06fe588ea8f030cf2fb8c651c394fac6",
+      "triangles": 16
+    },
+    "vehicle_arrow_left_bare_body.cdae": {
+      "bytes": 10203,
+      "sha256": "7ebc9996a5b800ed96e2cc25cf78908fc9e7215af0e7965fdd0b71b5dd4e2710",
+      "triangles": 300
+    },
+    "vehicle_arrow_left_body.cdae": {
+      "bytes": 16135,
+      "sha256": "4a079dff2119128173435486470114086cab3773bcfccad13039e729462d3e58",
+      "triangles": 432
+    },
+    "vehicle_arrow_left_green.cdae": {
+      "bytes": 1212,
+      "sha256": "6032826811a39908487e8dbcb5c36169a861967b1b71e1f463d8b4f52f3937e8",
+      "triangles": 16
+    },
+    "vehicle_arrow_left_red.cdae": {
+      "bytes": 1176,
+      "sha256": "059d7fb8322cce7e25cc1138cf04a17d924d2dbd66e976e80406fdbd0c4eebdc",
+      "triangles": 16
+    },
+    "vehicle_arrow_right_amber.cdae": {
+      "bytes": 1176,
+      "sha256": "7ae6d0a3cdfae92fdcf6df088d03636d11686be435b5810f6538f13c1d8d07ae",
+      "triangles": 16
+    },
+    "vehicle_arrow_right_bare_body.cdae": {
+      "bytes": 10231,
+      "sha256": "c2aa4cc387e3e91d65cce781db1605978ddc2f0b3c57efa9016323d747f7b438",
+      "triangles": 300
+    },
+    "vehicle_arrow_right_body.cdae": {
+      "bytes": 16170,
+      "sha256": "c3e5601e5ebe9017fc60f9cf3b0be0b7a36ae79560ff467104144aa07279794f",
+      "triangles": 432
+    },
+    "vehicle_arrow_right_green.cdae": {
+      "bytes": 1205,
+      "sha256": "a1ebe2b607740278d5d4ceef72cb30b26c3ea00559ba939ffbe1832db1fc5362",
+      "triangles": 16
+    },
+    "vehicle_arrow_right_red.cdae": {
+      "bytes": 1178,
+      "sha256": "1227decc0616ef2bf60444f19ae62bbbeab6162aa1ef24f1622b7905e1b41e38",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_left_amber.cdae": {
+      "bytes": 1198,
+      "sha256": "4c4af10f3c963f45310554551367eda298e1545bc03b9a1a1f2eef227b875929",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_left_bare_body.cdae": {
+      "bytes": 10197,
+      "sha256": "813cf22bfee88c99923c69aa837c2a54044c29a16564d6b9cfb608cc1575b128",
+      "triangles": 300
+    },
+    "vehicle_arrow_slight_left_body.cdae": {
+      "bytes": 16141,
+      "sha256": "68818a760c0ca790e5d105b49127fe6f22ea503d97d76085732756e9297262e0",
+      "triangles": 432
+    },
+    "vehicle_arrow_slight_left_green.cdae": {
+      "bytes": 1207,
+      "sha256": "8a85cb8faceebde2535fb68a4087b9ff7116e1928913e6a1b395a8f011425d8f",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_left_red.cdae": {
+      "bytes": 1199,
+      "sha256": "df4254a5c6d76f3617d1f1393899be330172677631f97628cd1c928f111d3ca2",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_right_amber.cdae": {
+      "bytes": 1195,
+      "sha256": "97d09a3b229608bc14789da9bbea8e6f87965733d4be0b0a5bd8b4d659cc7b71",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_right_bare_body.cdae": {
+      "bytes": 10216,
+      "sha256": "98ee2fb9799d8cc0d2879487fb623bd2330ef65ba3880c296d9f888a08621595",
+      "triangles": 300
+    },
+    "vehicle_arrow_slight_right_body.cdae": {
+      "bytes": 16158,
+      "sha256": "f4022a53ce28069ed5c2dcc956dd5497de022cdedd78d731f5ffb83695d6dce9",
+      "triangles": 432
+    },
+    "vehicle_arrow_slight_right_green.cdae": {
+      "bytes": 1203,
+      "sha256": "1afc5209e772ca2f97aadb0bcca081e3d8379fe282624e618f04bc5b0b57c2c3",
+      "triangles": 16
+    },
+    "vehicle_arrow_slight_right_red.cdae": {
+      "bytes": 1196,
+      "sha256": "4845d1632c505a00f28a0458db5ac369156aee74c36181f2097790e697e9084a",
+      "triangles": 16
+    },
+    "vehicle_arrow_straight_amber.cdae": {
+      "bytes": 1167,
+      "sha256": "74d2234fd8a23f76683fe51f5e31803edb85d84a6a873b17bbc9e48128503b9d",
+      "triangles": 16
+    },
+    "vehicle_arrow_straight_bare_body.cdae": {
+      "bytes": 10172,
+      "sha256": "53fa24f4a24e489783e81f5c3eb1349bfce20f42a497897ff10249a80a5bd98b",
+      "triangles": 300
+    },
+    "vehicle_arrow_straight_body.cdae": {
+      "bytes": 16118,
+      "sha256": "30460a3c1b91113170f3ee87a3baa411277119ed93584200de865b84c7b8507e",
+      "triangles": 432
+    },
+    "vehicle_arrow_straight_green.cdae": {
+      "bytes": 1200,
+      "sha256": "824ab067aca4467dcffa19bd2048faf0d44b331a55da4990f0fd2dd16b57ee46",
+      "triangles": 16
+    },
+    "vehicle_arrow_straight_red.cdae": {
+      "bytes": 1160,
+      "sha256": "21389c9ac65cddc1105e55735fd328eff5385a71b935afce7ae1824dbb5bf08a",
+      "triangles": 16
+    },
+    "vehicle_bare_body.cdae": {
+      "bytes": 10200,
+      "sha256": "02b8893dc74e3a7c48a698dac6d138ad2fc4cf5367332ecb274f05740e607c61",
+      "triangles": 300
+    },
+    "vehicle_body.cdae": {
+      "bytes": 16135,
+      "sha256": "46d9d5127d1ccd7c1602b76fc77e486693d948dd40db283597a1b8da7716d918",
+      "triangles": 432
+    },
+    "vehicle_green.cdae": {
+      "bytes": 1212,
+      "sha256": "2c0b08e1d73bcde7a45ed7aa5b4701cd9578f297db1e33b546cff54b42a55f91",
+      "triangles": 16
+    },
+    "vehicle_red.cdae": {
+      "bytes": 1188,
+      "sha256": "ee5493439bf8c9c1d3e011b5e02241c7c97b08aab5d331064c5729fee44ba9a3",
+      "triangles": 16
+    }
+  },
+  "format": 1,
+  "license": "CC-BY-SA-4.0",
+  "source_sha256": "0c87eef5eea270f91807cabdaf9f37df3ebec64d115e6d99e6ecc28100effe77",
+  "source_shapes": {
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_1_1_sven_v4.dae": "f033a6f8ec762156764870ba837e50dc0cdaa0a76ad02b4e5f8e3930e378736e",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_2_1_sven_v4.dae": "c7e126b10aebf5439b85da455074e00a8e1b304ebe11c0fceb59647d67933b8a",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_2_2_sven_v4.dae": "50fb293f32cf7d32e0dc5238421544a5dfab917487e4b57253c715974dd2fdfb",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_1_sven_v4.dae": "e1fd1be2fc5d7ffe5dcaa858d468f33dbc7ba86aac86aefe4099c7ee4272988c",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_2_sven_v4.dae": "f30098ce8fe725bf7b46211c2a6d73760c09305db63e42b7c91d32f63278baed",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_cantilever_3_3_sven_v4.dae": "3903912d212099012aa19c48bf540e3d218194f92cfaed68ab26942e0b097904",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_1_sven_v4.dae": "e52562f5530eb3ce3f8d6e5831ccb7e18855f860acfc2b6d0d05eabe2e5707c0",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_2_sven_v4.dae": "c480d3285ab14c9e7e621dd7c5abed96d1fb03141cc616856d02df9ca239c794",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_3_sven_v4.dae": "e163c59c54fd8ddc2adbd3920e6742ebe5503eab352204d226e2c73e066592c2",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_4_sven_v4.dae": "6bb25e3e88740e30f414f58854976311549e0eea6999101d91868f26428f9f3e",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hanger_portal_5_5_sven_v4.dae": "76093640585e5c6e18ea3bc3db34fb42b2e1ba8b44ce58f48fb0dd140ec8c662",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hardware_double_mount_sven_v4.dae": "620ffd5507db10d3b8a86ac4134f8fbacc7b04746d52d7bdea172f6b43cc8f09",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/hardware_loose_mount_sven_v4.dae": "2f2c212a53016e6af76511d1e08340ffa17088fa038532a19ca31c5cbe4669ca",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_left_bare_sven_v4.dae": "9cffc543cfaa1790f6282d6fc7f7d0c5f0e4c5120f4fbdbacfd26706ac15b979",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_left_sven_v4.dae": "a05a1f80c28979e9f5199db086f67f4563681c4adc2ba340942bff507069a44f",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_right_bare_sven_v4.dae": "76e7591a97425f5deb362e3635d0008696ff3829ce756cc586a012b34d5feffc",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_right_sven_v4.dae": "2845d2b2b177db21148c0cf79511281a5e3ec3e50a202775734a37b019f513a9",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_left_bare_sven_v4.dae": "5ddef6a3ca3a5a16538c8431b427c8adf658fbf409d242e270511db97f96477b",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_left_sven_v4.dae": "d9f040f0b0844b92b3ee75717ca16b6da0a62b13729aeebd5f9c4a8af90ca5bb",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_right_bare_sven_v4.dae": "9f445c7817bce2493f5809ed92d585f71ee535e89b4da3b59ad46a23c8233bd9",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_slight_right_sven_v4.dae": "39bfe31583cef42f75797ccb1f5b002ae0e89d5cae99348edad63930fef87209",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_straight_bare_sven_v4.dae": "4ac7ff0d75841a4cb2ad66ca886e8e2f713828d9e98856b438573dee83fb5865",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_arrow_straight_sven_v4.dae": "d7f45dc3c0f93429610b0dd0acbea3430020d686ca658d43a557c2a04a87b85e",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_bare_sven_v4.dae": "2bdd6b7a7f8878c3f09a8072f800e04269dac120c668bd13778d287d26becaf6",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_300_sven_v4.dae": "c5c1918edce1b2dc49b76050a5938015455ba8dee89e89136dd22c47ec441f53",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_left_bare_sven_v4.dae": "b3bdba9edd3c49aa047778c96ae19421d925e27ea020bd00f2ca09a24553406b",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_left_sven_v4.dae": "194691f5d9b26de908ca0f9f3c12bdfbdbfac9e4bc9e925e5cd961a114b9298b",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_right_bare_sven_v4.dae": "41c8067f7f6b8e8fa054838c446d82d8faffa8111c121fc5fa8932f417c5fad8",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_right_sven_v4.dae": "f3dcbfbd62903168c614cb24bb83c8a4bda439866dd1edfc8f5236d0a89f7695",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_left_bare_sven_v4.dae": "fc71261fe23328a634c003f647f0fb801bbef2ae86d6c0b64c4fc720b753aa6d",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_left_sven_v4.dae": "92e48902f780005dedfebd819788d72e84c9038ecf0603dae86bed1cb98f1d54",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_right_bare_sven_v4.dae": "f783a05efaff39ef000f00f566cae3fe94abd75d97b313ed4854ea12670500c4",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_slight_right_sven_v4.dae": "1ba96cd2ffa8348f75a5c21c100c8b0e06b4450eceabe4a1351b78b4cdfd843e",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_straight_bare_sven_v4.dae": "5a5067b72ff1c59474deeec34c0be9752abe0ca04e593abcb0d59a744189a863",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_arrow_straight_sven_v4.dae": "23e634a069548f0df762dfb67604e503bb409f595bd242cc60fed73f6bbf3bdb",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_bare_sven_v4.dae": "dbb51ee11e805713bd488d56cc40c40f05fb9f29ae5a8b571431dd2ae26eb105",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/head_vehicle_sven_v4.dae": "9cae2eaf25218e23e219bab25620028afbf34a46d4bb8dd78ee6742ea7e46f85",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_1_sven_v4.dae": "311d1d5593da901c94741e464a0304c4710e757ff4cc648c30baf01835e9e35d",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_2_sven_v4.dae": "b0d0bd85d1f64f3b73868fafc678a6d56077357bbcfc9fbf13618eb1c80c6a37",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_cantilever_3_sven_v4.dae": "a0532803b239a80f7e08e03c501417452c01c6a234427004138d936e957de0f9",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_portal_5_sven_v4.dae": "7d1a23fd914b385a18463388587fec4aa4ce23571c695705e16ee96d4098a989",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_straight_sven_v4.dae": "6d139ddf2f57ae6d7a58d670d73fdf0362b6d1991e42207dd9a90f573abbfcb6",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/mast_straight_tall_sven_v4.dae": "48d0951e3a733831c74a69055883bab7539cc91d0caefd3404af8d7cc6188944",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/shield_double_200_sven_v4.dae": "f0f8a4951d88f1350a3c90311fc81da18a1e4a2a15383c15eb4c200a73247edb",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/shield_double_300_sven_v4.dae": "d5e35cda7d845f818ad299734b5edd8b8f8d0ad0e06a4caa4c3f50a94fb105e3",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_1_beam_sven_v4.dae": "d638f4bb338944c4fa017fb6fcf813e31ee833a34ee6945882643a77e859c7fd",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_1_leg_sven_v4.dae": "c0f9bec256aeaddfb299d5f4cfb08ce6d4733fdfc68edfd295d9ffd42d12bb15",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_2_beam_sven_v4.dae": "635fd2707c54d7dc8e8c14ccbe4bc71f06d204ec846943c87e2184cc149c6774",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_2_leg_sven_v4.dae": "c0f9bec256aeaddfb299d5f4cfb08ce6d4733fdfc68edfd295d9ffd42d12bb15",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_3_beam_sven_v4.dae": "b7ba6026b7b8dbf16649124137b32e97751ef3de6001aa9ba6fcdf045f5937a4",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_cantilever_3_leg_sven_v4.dae": "6030315361c3cd0d678944b672d83966a2d47b753efe4f8fade63a25ee86b18a",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_portal_5_beam_sven_v4.dae": "885500f21708b7f64c96b185354e17b88eea353d37d9292bf8964eca7a183d25",
+    "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/support_portal_5_leg_sven_v4.dae": "28715fbff5b577d532c260bb8a602d4f7a44ca658654ca63743c2ebc4235fe58"
+  },
+  "textures": "reuse original Groenpol DDS assets",
+  "vehicle_variants": 12
+}

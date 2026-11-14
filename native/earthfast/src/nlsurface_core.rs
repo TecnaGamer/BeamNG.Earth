@@ -78,11 +78,46 @@ pub struct Scene {
     terrain: Terrain,
     terrain_known: bool,
     coverage: Vec<[f64;4]>, // fully decoded surface tiles; pending neighbours are not empty verges
+    quads: Vec<[[f64;2];4]>,
+}
+
+fn clip(poly:&[[f64;2]],a:[f64;2],b:[f64;2],inside:bool)->Vec<[f64;2]>{
+    let side=|p:[f64;2]|(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);
+    let mut out=Vec::new();
+    if poly.is_empty(){return out;}
+    let mut p=*poly.last().unwrap();let mut dp=side(p);
+    for &q in poly{let dq=side(q);let ip=if inside{dp>=0.}else{dp<=0.};let iq=if inside{dq>=0.}else{dq<=0.};
+        if ip!=iq&&(dp-dq).abs()>1e-14{let t=dp/(dp-dq);out.push([p[0]+t*(q[0]-p[0]),p[1]+t*(q[1]-p[1])]);}
+        if iq{out.push(q);}p=q;dp=dq;
+    }out
+}
+fn area(poly:&[[f64;2]])->f64{
+    if poly.len()<3{return 0.;}
+    let o=poly[0];poly[1..].windows(2).map(|w|
+        (w[0][0]-o[0])*(w[1][1]-o[1])-(w[0][1]-o[1])*(w[1][0]-o[0])).sum::<f64>().abs()/2.
 }
 
 impl Scene {
     pub fn covered(&self, p:[f64;2], radius:f64) -> bool {
         if !p.iter().all(|v|v.is_finite()) || !radius.is_finite() || radius<=0. { return false; }
+        if !self.quads.is_empty(){
+            let mut remaining=vec![vec![[p[0]-radius,p[1]-radius],[p[0]+radius,p[1]-radius],
+                [p[0]+radius,p[1]+radius],[p[0]-radius,p[1]+radius]]];
+            for quad in &self.quads{
+                let mut next=Vec::new();
+                for poly in remaining{
+                    let mut within=poly;
+                    for k in 0..4{
+                        let outside=clip(&within,quad[k],quad[(k+1)%4],false);
+                        if area(&outside)>1e-10{next.push(outside);}
+                        within=clip(&within,quad[k],quad[(k+1)%4],true);
+                        if area(&within)<=1e-10{break;}
+                    }
+                }
+                if next.is_empty(){return true;}
+                if next.len()>4096{return false;}remaining=next;
+            }return false;
+        }
         let mut remaining=vec![[p[0]-radius,p[1]-radius,p[0]+radius,p[1]+radius]];
         // Exact rectangle-union coverage: two complete adjacent tiles cover a
         // foot on their seam; a missing neighbour must not count as empty verge.
@@ -133,7 +168,19 @@ impl Scene {
             for x in a[0]..=b[0] { for y in a[1]..=b[1] { cells.entry((x,y)).or_default().push(i); } }
         }
         let terrain_known=terrain.z.iter().all(|v|v.is_finite());
-        Ok(Self { surfaces, cells, terrain, terrain_known, coverage })
+        Ok(Self { surfaces, cells, terrain, terrain_known, coverage, quads:Vec::new() })
+    }
+
+    pub fn with_quads(mut self,mut quads:Vec<[[f64;2];4]>)->Result<Self,&'static str>{
+        if quads.len()+self.coverage.len()>4096{return Err("invalid surface quads");}
+        for q in &quads{
+            if !q.iter().flatten().all(|v|v.is_finite()&&v.abs()<1e9){return Err("invalid surface quads");}
+            for k in 0..4{let a=q[k];let b=q[(k+1)%4];let c=q[(k+2)%4];
+                if (b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0])<=1e-10{return Err("nonconvex surface quad");}
+            }
+        }
+        for r in &self.coverage{quads.push([[r[0],r[1]],[r[2],r[1]],[r[2],r[3]],[r[0],r[3]]]);}
+        self.quads=quads;Ok(self)
     }
 
     pub fn ground_covered(&self,p:[f64;2],radius:f64)->bool {
@@ -285,6 +332,15 @@ mod tests {
         assert!(scene.foot([0.,0.],0.).is_ok());
         let partial=Scene::new(vec![],terrain(0.),vec![[-20.,-20.,0.,20.]]).unwrap();
         assert!(!partial.covered([0.,0.],0.6));
+    }
+    #[test]fn rotated_loaded_tiles_cover_a_seam_without_bounding_box_false_coverage(){
+        let left=[[-20.,-22.],[0.,-20.],[0.,20.],[-20.,18.]];
+        let right=[[0.,-20.],[20.,-18.],[20.,22.],[0.,20.]];
+        let full=Scene::new(vec![],terrain(0.),vec![]).unwrap().with_quads(vec![left,right]).unwrap();
+        assert!(full.covered([0.,0.],0.6));
+        let half=Scene::new(vec![],terrain(0.),vec![]).unwrap().with_quads(vec![left]).unwrap();
+        assert!(!half.covered([0.,0.],0.6));
+        assert!(!full.covered([19.,-19.],0.1));
     }
     #[test] fn raised_island_overrides_underlying_road_skin_without_becoming_a_lane() {
         let scene=Scene::new(vec![triangle(1,0.),triangle(2,0.15)],terrain(0.),vec![[-20.,-20.,20.,20.]]).unwrap();

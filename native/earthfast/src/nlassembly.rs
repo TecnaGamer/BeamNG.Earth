@@ -20,10 +20,11 @@ pub struct SignalScene { scene: Scene }
 #[pymethods]
 impl SignalScene {
     #[new]
-    #[pyo3(signature=(points,triangles,kinds,terrain,origin,step,coverage,holes=None))]
+    #[pyo3(signature=(points,triangles,kinds,terrain,origin,step,coverage,holes=None,quads=None))]
     fn new(py: Python<'_>, points: PyReadonlyArray2<'_,f64>, triangles: PyReadonlyArray2<'_,i64>,
            kinds: PyReadonlyArray1<'_,u8>, terrain: PyReadonlyArray2<'_,f64>, origin:[f64;2],
-           step:f64, coverage:PyReadonlyArray2<'_,f64>, holes:Option<PyReadonlyArray2<'_,u8>>) -> PyResult<Self> {
+           step:f64, coverage:PyReadonlyArray2<'_,f64>, holes:Option<PyReadonlyArray2<'_,u8>>,
+           quads:Option<PyReadonlyArray2<'_,f64>>) -> PyResult<Self> {
         let (p,t,k,z,c)=(points.as_array(),triangles.as_array(),kinds.as_array(),terrain.as_array(),coverage.as_array());
         if p.ncols()!=3 || t.ncols()!=3 || t.nrows()!=k.len() || t.nrows()>1_000_000
             || p.nrows()>2_000_000 || c.ncols()!=4 || c.nrows()>4096 || z.ncols()>4096 || z.nrows()>4096 {
@@ -42,7 +43,12 @@ impl SignalScene {
         } else { Vec::new() };
         let terrain=Terrain{origin,step,width:z.ncols(),height:z.nrows(),z:z.iter().copied().collect(),holes:hole_flags};
         let coverage:Vec<[f64;4]>=c.rows().into_iter().map(|r|[r[0],r[1],r[2],r[3]]).collect();
-        let scene=py.detach(||Scene::new(surfaces,terrain,coverage)).map_err(PyValueError::new_err)?;
+        let quad_rows:Vec<[[f64;2];4]>=if let Some(q)=quads{let q=q.as_array();
+            if q.ncols()!=8||q.nrows()>4096{return Err(PyValueError::new_err("surface coverage quads"));}
+            q.rows().into_iter().map(|r|[[r[0],r[1]],[r[2],r[3]],[r[4],r[5]],[r[6],r[7]]]).collect()
+        }else{Vec::new()};
+        let scene=py.detach(||Scene::new(surfaces,terrain,coverage).and_then(|s|
+            if quad_rows.is_empty(){Ok(s)}else{s.with_quads(quad_rows)})).map_err(PyValueError::new_err)?;
         Ok(Self{scene})
     }
 
@@ -74,6 +80,22 @@ impl SignalScene {
         }).collect()))
     }
 
+    fn junction_assemblies(&self,py:Python<'_>,rows:PyReadonlyArray2<'_,f64>,catalog:&str,
+                  turns:Vec<Vec<String>>,zones:Vec<Vec<i8>>,exits:Vec<bool>,owners:Vec<String>,neighbours:&str)->PyResult<String>{
+        let a=rows.as_array();let n=a.nrows();
+        if a.ncols()!=11||n>16||turns.len()!=n||zones.len()!=n||exits.len()!=n||owners.len()!=n
+            ||catalog.len()>1_000_000||neighbours.len()>4_000_000
+            ||turns.iter().any(|r|r.len()>16||r.iter().any(|s|s.len()>128))
+            ||zones.iter().any(|r|r.len()>128){return Err(PyValueError::new_err("signal junction batch"));}
+        let c:serde_json::Value=serde_json::from_str(catalog).map_err(|_|PyValueError::new_err("signal catalog JSON"))?;
+        let neighbours:Vec<serde_json::Value>=serde_json::from_str(neighbours).map_err(|_|PyValueError::new_err("signal neighbours JSON"))?;
+        let requests:Vec<Request>=a.rows().into_iter().map(request).collect();
+        Ok(py.detach(||match crate::nljunction::solve(&self.scene,&requests,&c,&turns,&zones,&exits,&owners,&neighbours){
+            Ok(assembly)=>json!({"ready":true,"assembly":assembly}).to_string(),
+            Err(reason)=>json!({"ready":false,"reason":reason,"retryable":matches!(reason,"surface_tiles_pending"|"ground_tiles_pending")}).to_string()
+        }))
+    }
+
     fn assemblies(&self,py:Python<'_>,rows:PyReadonlyArray2<'_,f64>,catalog:&str,
                   turns:Vec<Vec<String>>,zones:Vec<Vec<i8>>,exits:Vec<bool>)->PyResult<Vec<String>>{
         let a=rows.as_array();let n=a.nrows();
@@ -98,6 +120,14 @@ impl SignalScene {
 pub fn nl_signal_lens_mm(zones:Vec<i8>,motorway_exit:bool)->PyResult<u16> {
     if zones.len()>128 || zones.iter().any(|v|!(-1..=1).contains(v)) { return Err(PyValueError::new_err("junction zones")); }
     Ok(nlassembly_core::lens_mm(&zones,motorway_exit))
+}
+
+#[pyfunction]
+pub fn nl_signal_graph_requests(py:Python<'_>,graph:&str,signals:&str)->PyResult<String>{
+    if graph.len()>32_000_000||signals.len()>8_000_000{return Err(PyValueError::new_err("signal graph input bounds"));}
+    let g:serde_json::Value=serde_json::from_str(graph).map_err(|_|PyValueError::new_err("signal graph JSON"))?;
+    let s:serde_json::Value=serde_json::from_str(signals).map_err(|_|PyValueError::new_err("signal source JSON"))?;
+    py.detach(||crate::nlgraph::requests(&g,&s).map(|v|v.to_string())).map_err(PyValueError::new_err)
 }
 
 #[pyfunction]

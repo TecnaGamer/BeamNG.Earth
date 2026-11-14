@@ -1,4 +1,4 @@
-"""Server data glue for native physical support planning (not yet a live renderer).
+"""Server data glue for live native physical support planning.
 
 Supply the actual drawn meshes and decoded quantised terrain, not a guessed
 flat floor. Cached .cdae files are read here on the server, never by the mod.
@@ -56,7 +56,7 @@ def cached_mesh(path, kind, origin=(0., 0., 0.)):
                 triangles=np.concatenate(triangles) if triangles else np.empty((0, 3), np.int64))
 
 
-def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=heightmap.SQUARE, terrain_holes=None):
+def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=heightmap.SQUARE, terrain_holes=None, coverage_quads=None):
     """Build one immutable native index for a complete surface snapshot.
 
     coverage contains fully decoded road-tile rectangles. Pending neighbours are
@@ -74,7 +74,7 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
     points, triangles, kinds, offset = [], [], [], 0
     triangle_count = 0
     for i, part in enumerate(parts):
-        if i >= 128:
+        if i >= 256:
             raise ValueError('too many signal surface parts')
         if part['kind'] not in ('road', 'walk'):
             raise ValueError('signal surface kind')
@@ -106,9 +106,10 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
     if holes is not None and holes.shape != qgrid.shape:
         raise ValueError('terrain hole mask shape')
     origin = [centre[0] - qgrid.shape[1] * square / 2, centre[1] - qgrid.shape[0] * square / 2]
-    return fast.native(299, 'Dutch physical signal planning and mounted assemblies').NlSignalScene(
+    return fast.native(300, 'Dutch physical signal planning and mounted assemblies').NlSignalScene(
         p, t, np.asarray(kinds, np.uint8), z, origin, float(square),
-        np.asarray(coverage, np.float64).reshape(-1, 4), holes)
+        np.asarray(coverage, np.float64).reshape(-1, 4), holes,
+        None if coverage_quads is None else np.asarray(coverage_quads,np.float64).reshape(-1,8))
 
 
 def plans(scene, requests):
@@ -144,5 +145,11 @@ def bundle(approaches, owners, catalog):
     The caller must recompute all approaches with the whole junction's zones.
     """
     dump=lambda value:json.dumps(value,allow_nan=False,separators=(',',':'))
-    return json.loads(fast.native(299,'Dutch shared junction supports').nl_signal_bundle(
+    return json.loads(fast.native(300,'Dutch shared junction supports').nl_signal_bundle(
         [dump(a) for a in approaches],owners,dump(catalog)))
+
+
+def junction(scene, requests, catalog, turns, zones, motorway_exits, owners, neighbours=()):
+    dump=lambda value:json.dumps(value,allow_nan=False,separators=(',',':'))
+    return json.loads(scene.junction_assemblies(_rows(requests),dump(catalog),turns,zones,motorway_exits,
+                                               owners,dump(list(neighbours))))

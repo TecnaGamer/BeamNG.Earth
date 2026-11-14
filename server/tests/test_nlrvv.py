@@ -179,14 +179,14 @@ class PublicData(unittest.TestCase):
                            for y in (-6., -4.9, -.1, .1, 4.9, 6.)])
         rows = np.c_[points, np.zeros(len(points)), np.zeros(len(points)),
                      np.ones(len(points)), np.full(len(points), .22), np.ones(len(points))]
-        got = nlrvv.fast.native(299, 'Dutch source sign placement').nl_source_sign_place(
+        got = nlrvv.fast.native(300, 'Dutch source sign placement').nl_source_sign_place(
             [str(i) for i in range(len(points))], rows, polygons[0],
             np.array([0, len(polygons[0])], np.int64), np.empty((0, 5)), [-10., -10., 10., 10.])
         expected = [i for i, point in enumerate(points) if nlrvv.exitsigns._clear(point, .22, polygons)]
         self.assertEqual(list(got), expected)
 
     def test_native_source_boundary_rejects_malformed_geometry(self):
-        kernel = nlrvv.fast.native(299, 'Dutch source sign placement')
+        kernel = nlrvv.fast.native(300, 'Dutch source sign placement')
         rows = np.array([[0., 0., 0., 0., 1., .22, 1.]])
         with self.assertRaises(ValueError):
             kernel.nl_source_sign_place(['a'], rows, np.empty((0, 2)),

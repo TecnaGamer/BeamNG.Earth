@@ -54,6 +54,7 @@ class ContextReader(unittest.TestCase):
         a = dict(kind='signal', id='1', geometry=[[5., 52.]], tags={})
         b = dict(a, geometry=[[5.1, 52.]])
         source = data.Source(None, None, enabled=True)
+        source.built = 'test'
         # A rectangle crossing a tile edge reads two source tiles.
         bounds = (5.00976, 52., 5.00978, 52.)
         with patch.object(source, 'version', return_value='test'), \
@@ -62,6 +63,18 @@ class ContextReader(unittest.TestCase):
         with patch.object(source, 'version', return_value='test'), \
              patch.object(source, 'shard', side_effect=[dict(format=1, records=[a]), dict(format=1, records=[b])]):
             self.assertEqual(source.query(bounds), [])
+
+    def test_missing_tile_and_mid_query_build_change_never_prove_bubeko(self):
+        source=data.Source(None,None,enabled=True);source.built='one'
+        bounds=(5.,52.,5.001,52.001)
+        with patch.object(source,'version',return_value='one'),patch.object(source,'shard',return_value=None):
+            got=source.snapshot(bounds)
+            self.assertFalse(got['complete']);self.assertEqual(got['records'],[])
+        row=dict(kind='signal',id='1',geometry=[[5.,52.]])
+        with patch.object(source,'version',return_value='one'),patch.object(source,'known',return_value='two'), \
+             patch.object(source,'shard',return_value=dict(format=1,records=[row])):
+            got=source.snapshot(bounds)
+            self.assertFalse(got['complete']);self.assertEqual(got['records'],[])
 
     def test_query_neighbourhood_is_bounded(self):
         source = data.Source(None, None, enabled=True)

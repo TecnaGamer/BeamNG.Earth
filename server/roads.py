@@ -12807,6 +12807,8 @@ class GeoTracker:
 
         def skin_msg(path, token=None):
             m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": path}
+            if self.skin_h.get(key) is not None:
+                m["h"] = self.skin_h[key]
             if token is not None:       # (staged by the mod, committed with the swap's terrain)
                 m["swap"] = token
             data = staging.inline_json(out_dir, path) if out_dir else None

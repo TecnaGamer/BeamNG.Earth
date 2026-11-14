@@ -63,6 +63,8 @@ mod nlassembly_core;
 mod nlassembly;
 mod nlparts;
 mod nlshared;
+mod nlgraph;
+mod nljunction;
 mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
@@ -6052,6 +6054,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<nlassembly::SignalScene>()?;
     m.add_function(wrap_pyfunction!(nlassembly::nl_signal_lens_mm,m)?)?;
     m.add_function(wrap_pyfunction!(nlassembly::nl_signal_bundle,m)?)?;
+    m.add_function(wrap_pyfunction!(nlassembly::nl_signal_graph_requests,m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
@@ -6454,6 +6457,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 298: OSM building construction years, retained alongside Dutch roadside kernels.
     buildyears::register(m)?;
     // 299: current dev plus Dutch signs, signal context and shared mounted assemblies.
-    m.add("VERSION", 299)?;
+    m.add("VERSION", 300)?;
     Ok(())
 }

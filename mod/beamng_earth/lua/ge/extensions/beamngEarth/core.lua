@@ -878,7 +878,7 @@ local function commitTerrain(msg, quiet)
   if #st.commits > COMMIT_LOG then table.remove(st.commits, 1) end
   st.commitFrames = c
   M._psum.mod.note('swap')
-  st.block = { cx = msg.cx, cy = msg.cy }
+  st.block = { cx = msg.cx, cy = msg.cy, ter = msg.ter and msg.ter:match('([^/]+)$') }
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
   st.followCount = st.followCount + 1
@@ -1606,6 +1606,8 @@ local function onMessage(msg)
   elseif t == 'navgraph' then
     -- the AI road graph around the player (server navgraph.py, --traffic on): map.reset (navgraph.lua)
     navgraph.onMessage(msg, st.anchorId)
+  elseif t == 'nl_signals' then
+    navgraph.onNativeSignals(msg, st.anchorId)
   elseif t == 'sea' then
     -- the sea's water tiles near the player (server seatiles.py, --sea on): sea.lua
     sea.onMessage(msg)
@@ -1932,6 +1934,8 @@ local function updateWorld(dt)
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
+      nlSignals = navgraph.dutchSignals and 1 or nil,
+      nlGround = navgraph.dutchSignals and st.block and st.block.ter or nil,
       lat = pl.lat, lon = pl.lon, speed = pl.speed, follow = not st.followHeld and not st.viewFrame,
       view = st.viewFrame and true or nil,       -- (the 3D map's view frame: server Conn.map_view)
       map = (rawget(_G, 'beamngEarth_map3d') and beamngEarth_map3d.isActive()) and true or nil,   -- (Conn.map_open)
@@ -3007,7 +3011,7 @@ local function onUpdate(dtReal, dtSim)
     if package.loaded['beamngEarth/keepup'] and package.loaded['beamngEarth/keepup'].on then
       pcall(package.loaded['beamngEarth/keepup'].tick, st)
     end
-    navgraph.update(st.anchorId, pb, gov, st.anchor)
+    navgraph.update(st.anchorId, pb, gov, st.anchor, st.block and st.block.ter)
     t = mark('navgraph', t)
     do
       local ok, err = pcall(require('beamngEarth/rumble').update, dtReal, navgraph.currentGraph(), not st.paused)

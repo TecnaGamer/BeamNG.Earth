@@ -37,7 +37,7 @@ def match(records, frame, queries, complete_wkd=False):
         xy = np.column_stack((x, y))
     else:
         xy = np.empty((0, 2))
-    matches = fast.native(299, 'Dutch signal-context matching').nl_signal_context_match(
+    matches = fast.native(300, 'Dutch signal-context matching').nl_signal_context_match(
         np.asarray(queries, np.float64).reshape(-1, 5), xy, np.asarray(offsets, np.int64),
         np.asarray(kinds, np.uint8), np.asarray(oneways, np.int8), turns, bool(complete_wkd))
     out = []

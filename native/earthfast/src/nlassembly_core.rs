@@ -20,7 +20,7 @@ pub struct Request {
 #[derive(Clone, Copy, Debug)]
 pub struct Site { pub xyz: [f64;3], pub lateral: f64, pub back: f64 }
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub struct Group {
     pub foot: Site,
     pub mirrored: bool,
@@ -28,7 +28,7 @@ pub struct Group {
     pub lanes: Vec<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub struct Plan {
     pub kind: Kind,
     pub groups: Vec<Group>,
@@ -76,6 +76,21 @@ fn group(scene: &Scene, r: &Request, right: [f64;2], width: f64, site: Site,
         if !scene.overhead_clear([site.xyz[0],site.xyz[1]],end,site.xyz[2]+5.1,site.xyz[2]+6.9) { return None; }
     }
     Some(Group{foot:site,mirrored,standing,lanes:(first..last).collect()})
+}
+
+pub fn share_foot(scene:&Scene,r:&Request,p:&Plan,foot:[f64;3])->Option<Plan>{
+    // A portal's two legs and span are one construction, not independently moved.
+    if p.kind==Kind::Portal||p.groups.len()!=1{return None;}
+    let g=&p.groups[0];let dx=foot[0]-r.stop[0];let dy=foot[1]-r.stop[1];
+    let right=[r.travel[1],-r.travel[0]];
+    let back=-(dx*r.travel[0]+dy*r.travel[1]);
+    if back< -r.after||back>r.before{return None;}
+    let floor=scene.foot([foot[0],foot[1]],r.stop[2]).ok()?;
+    if (floor.z-foot[2]).abs()>0.02{return None;}
+    let site=Site{xyz:[foot[0],foot[1],floor.z],lateral:dx*right[0]+dy*right[1],back};
+    let first=*g.lanes.first()?;let last=*g.lanes.last()?+1;
+    let g=group(scene,r,right,p.lane_width,site,first,last,g.mirrored,g.standing)?;
+    Some(Plan{kind:p.kind,groups:vec![g],lane_width:p.lane_width})
 }
 
 pub fn plan(scene: &Scene, request: &Request) -> Result<Plan,&'static str> {

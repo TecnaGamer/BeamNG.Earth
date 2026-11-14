@@ -1117,7 +1117,7 @@ function M.onSkin(msg, currentAnchor)
   t.colliders.walk, t.colliders.walkcol = cols.walk, cols.walkcol
   t.colWant.walk, t.colWant.walkcol = nil, nil
   local pv = type(data.pivot) == 'table' and data.pivot or {}
-  t.skin = { anchor = msg.anchorId, anchorObj = anchorObj, pending = 0,
+  t.skin = { anchor = msg.anchorId, anchorObj = anchorObj, pending = 0, h = msg.h or data.h,
     pivot = { tonumber(pv[1]) or t.cx or 0, tonumber(pv[2]) or t.cy or 0, tonumber(pv[3]) or 0 }, q = tonumber(data.q) or 0 }
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
@@ -3268,6 +3268,26 @@ end
 
 -- keepup.lua (a debug recorder): what geotile gkey shows now ({ tile, skin, road, walkWant, walk, signsWant, signs,
 -- props }), its old skin's meshes counting as shown (kept until the new ones are made).
+-- Optional native furniture waits for the precise visible surfaces used by its
+-- server solve. A sent tile or the retained old skin is not acceptance.
+function M.signalSurfacesReady(aid, rows)
+  if type(rows) ~= 'table' or #rows > 64 then return false end
+  if swapState and not swapState.committed then return false end
+  for _, row in ipairs(rows) do
+    local t = tiles[geoKey(row.key)]
+    if not t or t.ghost or t.anchor ~= aid or t.h ~= row.h or not t.skin
+        or t.skin.anchor ~= aid or t.skin.h ~= row.skin then return false end
+    for _, what in ipairs({'road', 'walk'}) do
+      if t.skin[what] and not t[what] then return false end
+    end
+    if t.parts.deck and not t.deck then return false end
+    for what, exactAid in pairs(row.exact or {}) do
+      if what == 'deck' and t.exactOf[what] ~= exactAid then return false end
+    end
+  end
+  return true
+end
+
 function M.keepupTile(gkey)
   local t = tiles[geoKey(gkey)]
   if not t then return {} end

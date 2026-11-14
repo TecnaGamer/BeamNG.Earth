@@ -589,7 +589,6 @@ M.APPLY = {
   end,
   dutchSignals = function(v)
     require('beamngEarth/navgraph').dutchSignals=v
-    require('beamngEarth/trees').dutchSignals=v
   end,
   roadSigns = function(v)
     local core = ext('beamngEarth_core')
