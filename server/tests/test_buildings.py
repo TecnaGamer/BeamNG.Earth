@@ -534,7 +534,7 @@ class PackStyleTest(unittest.TestCase):
         self.assertTrue(any((np.asarray(m[3]) == day).any() for m in sky), "walls in the day-window material")
         self.assertEqual([int(s.floors or 0) for s, _a, _b in items], floors, "the items' specs not changed")
         tall = bld.pack_meshes(items, "tall")
-        self.assertLess(self.verts(sky), self.verts(tall))
+        self.assertLessEqual(self.verts(sky), self.verts(tall))     # (sloped houses lite in both)
         self.assertLess(self.verts(tall), lite)
 
     def test_a_mapped_dome_keeps_its_dome_and_height(self):
@@ -546,6 +546,33 @@ class PackStyleTest(unittest.TestCase):
         lite, sky = bld.pack_meshes(dome, "lite"), bld.pack_meshes(dome, "sky")
         self.assertAlmostEqual(top(sky), top(lite), places=3)
         self.assertGreater(top(sky), 39.0)
+
+    def test_sky_top_matches_lite_for_every_roof(self):
+        """Only flat roofs without a steeple take the sky style: every sloped, domed or steepled building keeps the
+        lite mesh, so its top is the same in both (the review rounds' cases, 2026-11-14)."""
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        L = np.array([(0, 0), (20, 0), (20, 6), (6, 6), (6, 20), (0, 20)], float)
+        cases = [
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": "hipped", "roof_height": 20}),
+            (L, {"class": "house", "height": 20, "roof_shape": "hipped"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 20, "roof_shape": "gabled",
+                                      "roof_orientation": "across"}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "gabled", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "mansard", "roof_height": 20}),
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "round", "roof_height": 20}),
+            (L, {"class": "house", "height": 40, "roof_shape": "pyramidal", "roof_height": 10}),
+            (np.array([(0, 0), (10, 0), (10, 8), (0, 8)], float), {"class": "greenhouse", "height": 4,
+                                                                    "roof_shape": "gabled"}),
+            (rect(0.0, 0.0, 30, 15), {"class": "church", "height": 18}),
+            (rect(0.0, 0.0, 30, 20), {"class": "house", "height": 15, "roof_shape": "skillion", "roof_height": 7,
+                                      "roof_direction": 45}),
+            (rect(0.0, 0.0, 40, 30), {"class": "office", "height": 60}),          # (flat: sky, the same top)
+        ]
+        for ring, attrs in cases:
+            b = [(bld.plan(ring, attrs), 0.0, 0.0)]
+            self.assertAlmostEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")), delta=0.05,
+                                   msg=str(attrs))
 
     def test_revisit_key_lite_unchanged(self):
         import blockworker

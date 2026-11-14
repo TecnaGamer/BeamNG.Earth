@@ -7392,8 +7392,13 @@ def pack_meshes(items, style=None):
     def boxy(s):        # (a closed block: not a landmark's model, a French house, an open frame, a ship, a canopy,
         # nor a mapped dome: _sky_simplify flattens its roof, and plan() took the dome's rise off its height, so it lost
         # its top half at the pack's hand-over: it keeps the lite mesh, Codex review 2026-11-14)
+        # Only a flat roof without a steeple: the skyline's simplify keeps a sloped roof as drawn only in some cases
+        # and the dome's / gable's / skillion's rise came off the walls' height in plan(), so every sloped form needed
+        # its own height rule (nine review rounds, each a new form 2-350 m off: mapped skillions, skeleton pyramids,
+        # greenhouses, steeples ...): sloped, domed and steepled buildings keep the lite mesh, flat ones lose nothing.
         return (s.cls != landmarks.LANDMARK and not s.fr_house and s.cls not in BRIDGE_CLASSES and s.cls != "ship"
-                and s.cls not in CANOPY_CLASSES and s.cls != "toll_booth" and s.roof not in DOME_ROOFS)
+                and s.cls not in CANOPY_CLASSES and s.cls != "toll_booth" and s.roof in (None, "flat")
+                and not s.steeple)
     sky = [it for it in items if boxy(it[0]) and (style == "sky" or int(it[0].floors or 0) > PACK_SKY_FLOORS)]
     ids = {id(it) for it in sky}
     rest = [it for it in items if id(it) not in ids]
