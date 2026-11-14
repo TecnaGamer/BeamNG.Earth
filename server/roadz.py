@@ -238,7 +238,7 @@ def _await_part(lock, pp, wait_s=None):
     job's cancel check plays no part (as xproc.once's would: a teleport's abandoned block must not leave the cell to
     the rule for the session through its read's wait)."""
     end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
-    seen = None
+    seen = token = None
     pid, recheck = None, 0.0
     while True:
         if os.path.exists(pp):
@@ -256,15 +256,14 @@ def _await_part(lock, pp, wait_s=None):
         if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
             seen = now
             h = xproc._holder(lock)
+            token = xproc._token(lock)
             pid, recheck = (h[2] if h is not None else None), time.monotonic() + xproc.ALIVE_RECHECK_S
-            if h is not None and not xproc.alive(h[2]):
-                xproc.release(lock)
-                seen = None
+            if h is not None and not xproc.alive(h[2]) and xproc.break_dead(lock, token):
+                seen = None                         # (that holder's lock only; not broken now: the deadline below)
                 continue
         elif seen is not None and now == seen and pid is not None and time.monotonic() >= recheck:
             recheck = time.monotonic() + xproc.ALIVE_RECHECK_S       # (one that died since: xproc.once's)
-            if not xproc.alive(pid):
-                xproc.release(lock)
+            if not xproc.alive(pid) and xproc.break_dead(lock, token):
                 seen = None
                 continue
         if time.monotonic() > end:

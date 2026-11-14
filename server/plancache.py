@@ -31,6 +31,10 @@ import xproc
 log = logging.getLogger("earthd.plancache")
 
 WAIT_S = 90.0
+LIVE_WAIT_S = 240.0         # s: past WAIT_S a holder still at work is waited for this long by a thread holding no claim
+                            # (xproc.once live_s): central London's cells took 2-4 minutes on a busy PC's four server
+                            # threads, and each process that stopped waiting at WAIT_S planned them again beside their
+                            # planner, slower still for all (a road tile past 300 s, its road processes restarted, 2026-11-13)
 LONG_WAIT_S = 20.0          # s: a wait for another process's plans this long is logged (claim)
 KEEP_S = 6 * 3600.0         # run folders untouched this long are removed (prune)
 VERSIONS_RECHECK_S = 2.0    # s between reads of the map data's versions for the revisit keys (PlanCache.persist)
@@ -473,7 +477,8 @@ class PlanCache:
                 self.stats["waited"] += 1
             h = xproc._holder(self._path(key) + ".lock")
             holder.append(h[2] if h else None)
-        got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting)
+        got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting,
+                               live_s=LIVE_WAIT_S, live_note=f"cell {key}'s plans")
         waited = time.monotonic() - t0
         if got is not None and waited > xproc.POLL_S:
             with self._lock:
