@@ -1289,16 +1289,6 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 1 if church else max(1, int(round(h / floor_h)))
     nf = max(1, min(nf, 120))
     floor_h = h / nf
-    # (the rise its roof is drawn with over the walls, plan()'s own span and pitch: a flattened stand-in, the skyline's or
-    # a sky-style far pack's, puts it back on its walls so it reaches the building's top: _sky_simplify)
-    if roof == "flat" or roof is None:
-        drawn_rise = None
-    elif roof in DOME_ROOFS:
-        drawn_rise = dome_rise(roof, hw, attrs.get("roof_height"))
-    elif attrs.get("roof_height") and np.isfinite(attrs["roof_height"]):
-        drawn_rise = float(attrs["roof_height"])
-    else:
-        drawn_rise = roof_rise(roof, shw, style.pitch or PITCH.get(roof, PITCH["gabled"]))
     # (a tower built before the curtain walls, by its year: tower_era; with a mapped material, that material)
     top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
     te = tower_era(attrs.get("_year") or attrs.get("_osm_year")) \
@@ -1559,7 +1549,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             hm = float("nan")
         h = hm if math.isfinite(hm) and 2.0 <= hm <= 30.0 else CANOPY_H.get(cls, 3.0)
         nf, floor_h = 1, h
-    spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade, rise=drawn_rise,
+    spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS and not part
                                           and not attrs.get("_parts_drawn")
@@ -1576,6 +1566,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
     if skel:
         spec.pitch = skel_pitch
+    # (the rise its roof is drawn with over the walls, with the drawing's own span, skeleton and final pitch (a mapped
+    # pitch clamped, the mansard's and gambrel's fixed profiles): a flattened stand-in, the skyline's or a sky-style far
+    # pack's, puts it back on its walls so it reaches the building's top (_sky_simplify, Codex review 2026-11-14))
+    if roof in DOME_ROOFS:
+        spec.rise = dome_rise(roof, hw, rh)
+    elif roof not in (None, "flat"):
+        spec.rise = roof_rise(roof, shw, spec.pitch or PITCH.get(roof, PITCH["gabled"]))
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
