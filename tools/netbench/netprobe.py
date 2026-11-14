@@ -47,6 +47,9 @@ UNTIL = PARTS + ("loaded",)
 POSE_S = 0.5                # core.lua POSE_INTERVAL: every pose re-runs the server's far selection (~0.4 s of GIL)
 PY_SPY = "py-spy==0.4.2"     # (--pyspy without one on PATH: uv tool run's)
 SITEPATCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sitepatch")
+# the server's working folders under --out: removed once it has stopped (--keep-cache keeps them). staging.STAGING sits
+# next to the user folder
+SCRATCH = ("cache", "user", "beamngEarth_staging")
 USER_SETTINGS = os.path.expanduser("~/.local/share/BeamNG/BeamNG.drive/current/settings/beamngearth.json")
 # the mod's hello (core.lua) with its constants: sea.GUARD_VERSION, geotile.Z, roads.ROAD_GEO / FAR_GEO,
 # turbinestream.PROTOCOL, farfield.GLOBAL_FAR, distanttraffic.PROTO
@@ -72,6 +75,8 @@ def main():
                     "runs that time one milestone; bytes then stop there too)")
     ap.add_argument("--pyspy", default=None, help="record the server under py-spy into this file (folded stacks of the "
                     "threads holding the GIL, its worker processes too; py-spy from PATH, else uv tool run)")
+    ap.add_argument("--keep-cache", action="store_true", help="keep the server's cache and user folders after the run "
+                    "(2-5 GB a place; the reports read net.log and places.jsonl only)")
     ap.add_argument("extra", nargs="*", help="more earthd arguments")
     a = ap.parse_args()
     if os.path.exists(os.path.join(a.out, "net.log")):
@@ -122,7 +127,7 @@ class Server:
             if flag in known:
                 cmd += [flag, value]
         cmd += a.extra
-        self.pyspy = a.pyspy
+        self.pyspy, self.keep_cache = a.pyspy, a.keep_cache
         if a.pyspy:                 # (py-spy as the server's parent: ptrace_scope 1 lets it attach to its own children only)
             spy = [shutil.which("py-spy")] if shutil.which("py-spy") else ["uv", "tool", "run", "--from", PY_SPY,
                                                                           "py-spy"]
@@ -198,6 +203,9 @@ class Server:
                 pass
         stop_server(self.proc)
         self.log.close()
+        if not self.keep_cache:
+            for d in SCRATCH:
+                shutil.rmtree(os.path.join(self.out, d), ignore_errors=True)
 
     def _server_pid(self):
         """earthd's own pid: under --pyspy the process started is uv / py-spy, the server a descendant (not counted)."""

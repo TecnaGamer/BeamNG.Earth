@@ -18,6 +18,8 @@
 #   NB_PLACES     the places measured, by label (default all five)
 #   NB_FRESH_BASE 1: measure the base again. Otherwise a base run is reused (build/netbench/base-runs/<key>) while its
 #                 commit, the mode and the netbench code that shapes a run (netprobe, sitepatch, cacheproxy) are the same
+#   NB_MIN_FREE_GB a run starts only with this much free on the data disk (default 50): each server's cache takes
+#                 2-5 GB a place while it runs (netprobe removes it after; a run keeps its logs, ~1 MB a place)
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$(dirname "$HERE")")
@@ -37,6 +39,12 @@ fi
 PROBE_ARGS=(${NB_LINK:+--link "$NB_LINK"} ${NB_UNTIL:+--until "$NB_UNTIL"})
 [ -e "$OUT" ] && { echo "$OUT exists: pick a new name"; exit 1; }
 log() { echo "$(date +%H:%M:%S) $*"; }
+free_gb() { df -Pk "$1" | awk 'NR == 2 { print int($4 / 1048576) }'; }
+mkdir -p "$DATA"
+if [ "$(free_gb "$DATA")" -lt "${NB_MIN_FREE_GB:-50}" ]; then
+  echo "only $(free_gb "$DATA") GB free on $DATA's disk (NB_MIN_FREE_GB: ${NB_MIN_FREE_GB:-50}); old runs: $DATA/runs"
+  exit 1
+fi
 rev() { echo "$(git -C "$1" rev-parse --short HEAD)$(git -C "$1" diff --quiet HEAD -- . ':!build' || echo +dirty)"; }
 place() { for p in "${PLACES[@]}"; do [ "${p%%=*}" = "$1" ] && echo "$p"; done; }
 checkout() {   # dir ref: a detached worktree of ref, the checkout's .venv in it
@@ -111,3 +119,4 @@ MISSES1=$(wc -l < "$MISSES" 2>/dev/null || echo 0)
   echo '```'; AB_ROOT=$OUT python3 "$HERE/ab_changes.py"; AB_ROOT=$OUT python3 "$HERE/ab_hosts.py"; echo '```'
 } > "$OUT/report.md" 2>&1
 log "$NAME: done, $((MISSES1 - MISSES0)) upstream requests, report $OUT/report.md"
+log "netbench data: $(du -sh "$DATA" | cut -f1) in $DATA, $(free_gb "$DATA") GB free"
