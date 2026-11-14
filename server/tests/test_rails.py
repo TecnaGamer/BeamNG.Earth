@@ -59,9 +59,59 @@ class TrackTest(unittest.TestCase):
         self.assertLess(lift[rails.BALLAST["m"]], lift[rails.SLEEPER["m"]])
         self.assertLess(lift[rails.SLEEPER["m"]], lift[rails.RAIL["m"]])
 
+    def test_worn_crossings_follow_the_3d_motorway_exclusions(self):
+        """A worn line's street track only across the roads its 3D track is not cut at (railways.WORN_CUT_CLASSES):
+        a disused line not across a motorway, an abandoned one not across a motorway or trunk road (PR #1117)."""
+        for road_class in ("motorway", "trunk", "primary"):
+            for flag in (None, "is_disused", "is_abandoned"):
+                with self.subTest(road=road_class, flag=flag):
+                    f = features([[(-50, 128), (300, 128)], [(100, -50), (100, 300)]],
+                                 [road_class, "standard_gauge"], subtypes=["road", "rail"],
+                                 flags=[] if flag is None else [(1, flag)])
+                    chunks = rails.tile_chunks(FRAME, 0, 0, [f])
+                    street = [c for c in chunks if c["m"] == rails.STREET_TRACK["m"]]
+                    excluded = (flag == "is_abandoned" and road_class in ("motorway", "trunk")) or \
+                        (flag == "is_disused" and road_class == "motorway")
+                    self.assertEqual(bool(street), not excluded)
+
     def test_subways_and_tracks_elsewhere_left_out(self):
         self.assertEqual(rails.tile_chunks(FRAME, 0, 0, cells([[(100, 0), (100, 256)]], ["subway"], ["rail"])), [])
         self.assertEqual(rails.tile_chunks(FRAME, 5, 5, self.cells), [])
+
+
+class SwedishTownTramTest(unittest.TestCase):
+    """A tram beside a street: VGU 2024's 3.5 m from the road's edge to a reserved track's middle."""
+    TOWN = staticmethod(lambda la, lo: np.ones(np.shape(la), bool))
+
+    def track(self, y, country="SE", urban=None):
+        roadline = [(-300, 128), (600, 128)]
+        feats = cells([[(-300, 128 + y), (600, 128 + y)], roadline], ["tram", "residential"], ["rail", "road"])
+        return rails.tile_chunks(FRAME, 0, 0, feats, country, self.TOWN if urban is None else urban)
+
+    def test_near_the_road_is_paved_street_track(self):
+        half = roads.road_specs(cells([[(-300, 128), (600, 128)]], ["residential"], ["road"])[0], self.TOWN)[0].width / 2
+        ch = self.track(half + 1.5)
+        mats = {c["m"] for c in ch}
+        self.assertIn(rails.STREET_TRACK["m"], mats)
+        self.assertIn(rails.EMBEDDED["m"], mats)
+        self.assertNotIn(rails.BALLAST["m"], mats)
+        self.assertNotIn(rails.SLEEPER["m"], mats)
+
+    def test_past_the_distance_is_a_reserved_track(self):
+        mats = {c["m"] for c in self.track(14.0)}
+        self.assertIn(rails.BALLAST["m"], mats)
+        self.assertNotIn("road_tramline", mats)
+
+    def test_out_of_town_or_abroad_nothing_changes(self):
+        country = lambda la, lo: np.zeros(np.shape(la), bool)       # noqa: E731
+        self.assertIn(rails.BALLAST["m"], {c["m"] for c in self.track(8.0, urban=country)})
+        self.assertIn(rails.BALLAST["m"], {c["m"] for c in self.track(8.0, country="DE")})
+
+    def test_tram_lines_for_the_sidewalks(self):
+        feats = cells([[(-300, 133), (600, 133)], [(-300, 128), (600, 128)]], ["tram", "residential"], ["rail", "road"])
+        lines = rails.tram_lines(FRAME, 0, 0, feats)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0][1], rails.EMBEDDED["w"] / 2)
 
 
 if __name__ == "__main__":

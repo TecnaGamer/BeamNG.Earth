@@ -16,9 +16,12 @@ local function rec(mod)
     return function(...) calls[#calls + 1] = { mod, fn, ... } end
   end })
 end
-for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'ambience' }) do
+for _, m in ipairs({ 'trees', 'nightlights', 'parking', 'gasstations', 'pumpjacks', 'windturbines', 'ambience' }) do
   package.loaded['beamngEarth/' .. m] = rec(m)
 end
+rawset(package.loaded['beamngEarth/windturbines'], 'placeRows', function(...)
+  calls[#calls + 1] = { 'windturbines', 'placeRows', ... }
+end)
 rawset(package.loaded['beamngEarth/gasstations'], 'MATERIAL_FILES', {})
 local function called(mod, fn)
   local out = {}
@@ -43,7 +46,13 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
-local function run(aid, a) for _ = 1, 6 do roads.update(gov, aid, car, nil, a) end end
+-- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
+-- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
+local function run(aid, a)
+  local n = 0
+  repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
+  for _ = 1, 3 do roads.update(gov, aid, car, nil, a) end
+end
 
 local LAT, LON = 39.2834, -76.5934
 local gx, gy = geotile.tileOf(LAT, LON)
@@ -58,10 +67,15 @@ local content = string.format([[{ v = 1, key = "%s", frame = { %.10f, %.10f }, h
   bldcol = { shape = "/s/rg_bldcol.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   bld = { shape = "/s/rg_bld.cdae", pos = { -118, -118, 0 }, pivot = 20, relief = 30 },
   deck = { shape = "/s/rg_deck.cdae", pos = { -118, -118, 0 }, pivot = 12, relief = 2 },
+  signs = { shape = "/s/rg_signs.cdae", pos = { -118, -118, 0 }, pivot = 2, relief = 1 },
   colliders = { deck = { { -10, -10, 5, 10, 10, 15 } }, bldcol = { { 50, 50, 0, 60, 60, 30 } } },
   park = { { 10, 20, 3, 90 } }, wells = { { 30, 40, 3, 45 } },
+  turbines = { { id = "osm:node:1175681635", x = 8, y = 9, z = 1800, yaw = 30, scale = 1,
+    lat = 41.1397814, lon = -104.9978882, dimensions = { basis = "stock_model_default" } } },
   sound = { 1, 5, 6, 7, 20, 10, 5, 0.5 },
-  props = { groups = { "lamp" }, items = { { 0, 1, 2, 3, 0, 1, 6, 0 } } } }]], key, clat, clon)
+  props = { groups = { "lamp" }, items = { { 0, 1, 2, 3, 0, 1, 6, 0 } } },
+  b3dmr = { { shape = "/s/threedmr_22.cdae", pos = { 30, 40, 0 }, col = false },
+            { shape = "/s/threedmr_22_deck.cdae", pos = { 30, 40, 0 } } } }]], key, clat, clon)
 files['/s/rg.json'] = content
 local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { %f, %f, 10 },
   road = { shape = "/s/rs_%d_road.cdae", pos = { %f, %f, 0 } },
@@ -88,6 +102,8 @@ T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, fram
 run(1, A)
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
+local sign = objsWith('rg_signs')[1]
+T.check(sign ~= nil and sign.fields.collisionType == 'None', 'regional sign faces created without collision')
 local frame = geotile.frameOf({ frame = { clat, clon } })
 do
   local pl = geotile.placement(frame, A, 0, 0, 20)
@@ -112,6 +128,29 @@ do
 end
 T.check(#called('trees', 'onGeoRows') == 1 and #called('pumpjacks', 'onRows') == 1 and #called('ambience', 'onSpaces') == 1,
   'furniture, wells, sound handed on')
+-- its 3dmr models (b3dmr): each made once, placed as the parts are (the bld part's placement), a model bridge's
+-- drawn mesh without collision, its deck slab a collision mesh
+local function placedAt(a, o)
+  local pl = geotile.placement(frame, a, 0, 0, 20)
+  local xf = geodesy.transformOf(pl.r, pl.t)
+  local x, y, z = xf:apply(30, 40, 0)
+  return math.abs(o.pos.x - x) < 1e-9 and math.abs(o.pos.y - y) < 1e-9 and math.abs(o.pos.z - z) < 1e-9
+end
+do
+  local m, d = objsWith('threedmr_22.cdae'), objsWith('threedmr_22_deck')
+  T.check(#m == 1 and #d == 1, '3dmr model and its deck slab made once each (no second, untransformed copy)')
+  T.check(m[1].fields.collisionType == 'None' and d[1].fields.collisionType == 'Collision Mesh',
+    'the bridge drawn without collision, its slab a collision mesh')
+  T.check(placedAt(A, m[1]) and placedAt(A, d[1]) and m[1].rot ~= nil, '3dmr models placed into A (with the rotation)')
+end
+do
+  local r = called('windturbines', 'onRows')[1][4][1]
+  local ex, ey, ez = geotile.worldMap(frame, A, 8, 9, 1800)
+  T.check(r.id == 'osm:node:1175681635' and r.lat == 41.1397814 and r.dimensions.basis == 'stock_model_default',
+    'turbine identity and dimensions retained')
+  T.check(math.abs(r.x - ex) < 1e-3 and math.abs(r.y - ey) < 1e-3 and math.abs(r.z - ez) < 1e-3,
+    'turbine base mapped exactly at elevation')
+end
 
 -- its skin for A
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
@@ -131,6 +170,15 @@ run(2, B)
 T.check(n == 1, 'one geotile re-placed')
 T.check((S.calls['createObject_TSStatic'] or 0) == made0 and (S.calls['delete_TSStatic'] or 0) == del0,
   'no object made or deleted at the rebase')
+T.check(objsWith('rg_signs')[1] == sign, 'regional signs retained at the rebase')
+do
+  local pl = geotile.placement(frame, B, 0, 0, 2)
+  local xf = geodesy.transformOf(pl.r, pl.t)
+  local x, y, z = xf:apply(-118, -118, 0)
+  T.near(sign.pos.x, x, 1e-9, 'regional signs re-placed: x')
+  T.near(sign.pos.y, y, 1e-9, 'regional signs re-placed: y')
+  T.near(sign.pos.z, z, 1e-9, 'regional signs re-placed: z')
+end
 do
   local pl = geotile.placement(frame, B, 0, 0, 20)
   local xf = geodesy.transformOf(pl.r, pl.t)
@@ -142,6 +190,15 @@ do
   T.near(o.rot.w, qw, 1e-12, 'bldcol re-placed: rotation')
 end
 T.check(#called('parking', 'onRows') == 1 and #called('trees', 'onGeoRows') == 0, 'rows mapped again (trees: its own)')
+do
+  local m, d = objsWith('threedmr_22.cdae'), objsWith('threedmr_22_deck')
+  T.check(#m == 1 and #d == 1 and placedAt(B, m[1]) and placedAt(B, d[1]), '3dmr models moved into B, not made again')
+  local r = called('windturbines', 'placeRows')[1][4][1]
+  local ex, ey, ez = geotile.worldMap(frame, B, 8, 9, 1800)
+  T.check(math.abs(r.x - ex) < 1e-3 and math.abs(r.y - ey) < 1e-3 and math.abs(r.z - ez) < 1e-3,
+    'turbine placed again into the new anchor')
+  T.near(r.yaw, 30 + geotile.yawOf(geotile.placement(frame, B, 0, 0, 20)), 1e-9, 'turbine heading mapped')
+end
 do                          -- the kept skin: moved into B, lifted q/2 + 3 mm
   local o = objsWith('rs_1_road')[1]
   local x0, y0 = A:geodeticToWorld(clat, clon, 0)
@@ -186,15 +243,125 @@ end
 -- a server restart: the same content hash keeps the objects; another tile's content dropped once far
 roads.newSession()
 local made1 = S.calls['createObject_TSStatic'] or 0
+local turbineHandoffs = #called('windturbines', 'onRows') + #called('windturbines', 'placeRows')
 roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, B)
 run(1, B)
 T.check((S.calls['createObject_TSStatic'] or 0) == made1 and #objsWith('rg_bldcol') == 1,
   'same content hash after a restart: kept, nothing made again')
 T.check(roads.status().geoStats.kept == 1, 'counted as kept')
+T.check(#called('windturbines', 'onRows') + #called('windturbines', 'placeRows') == turbineHandoffs,
+  'same hash resend keeps the turbine owner and objects')
+T.check(objsWith('rg_signs')[1] == sign, 'regional signs kept after server restart')
 
 -- a drop goes for good
 roads.onDrop({ anchorId = 1, key = key })
 run(1, B)
 T.check(#objsWith('rg_') == 0 and #objsWith('rs_') == 0, 'dropped: every part and skin gone')
+T.check(#objsWith('threedmr_') == 0, 'dropped: its 3dmr models gone')
+T.check(#called('windturbines', 'dropKey') == 1, 'dropping geotile releases its turbine owner')
+
+-- A newer content record without a turbine reconciles an empty list too.
+roads.onTile({ anchorId = 1, key = key, n = 0, frame = { clat, clon }, h = 'empty',
+  data = { key = key, frame = { clat, clon }, h = 'empty' } }, 1, B)
+local empty = called('windturbines', 'onRows')
+T.check(#empty[#empty][4] == 0, 'content with no turbine hands on an empty list')
+roads.reset()
+
+-- far geotile churn must not trigger the player's collision rebuild (a parked hour at dev.212: the server rebuilt
+-- 1,489 road geotiles, most 7-15 km out, and kept collisionDirty set in every RELOAD_EVERY_S window): a far tile's
+-- collider defers on the tile, a near one marks at once, deferred dirt is promoted when the player arrives, a
+-- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
+do
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
+  -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
+  local room = roads.RELOAD_ROOM_MS
+  roads.RELOAD_ROOM_MS = math.huge
+  local function reloads() return S.calls.reloadCollision or 0 end
+  -- (on a mismatch: the count and the rebuild state, for CI runs that fail where no machine here does)
+  local function rc(want, what)
+    local got = reloads()
+    if got ~= want then
+      print(string.format('  %s: reloads %d, want %d, queued %d, os.clock %.2f', what, got, want, roads.queued(), os.clock()))
+    end
+    T.check(got == want, what)
+  end
+  -- a second road geotile ~8 km east; each tile's only collider a 3dmr deck slab (spawned at once at any distance)
+  local gx2, gy2 = geotile.tileOf(LAT, LON + 8000 / (111320 * math.cos(math.rad(LAT))))
+  local key2 = geotile.key(gx2, gy2)
+  local clat2, clon2 = geotile.centre(17, gx2, gy2)
+  T.check(key2 ~= key, 'a second geotile 8 km east')
+  local function slabTile(k, la, lo, h)
+    files['/s/' .. h .. '.json'] = string.format(
+      '{ v = 1, key = "%s", frame = { %.10f, %.10f }, h = "%s", b3dmr = { { shape = "/s/threedmr_%s_deck.cdae", pos = { 10, 10, 0 } } } }',
+      k, la, lo, h, h)
+    return { anchorId = 2, key = k, path = '/s/' .. h .. '.json', n = 0, frame = { la, lo }, h = h }
+  end
+  car.x, car.y = B:geodeticToWorld(clat, clon, 0)
+  local r0 = reloads()
+  T.check(roads.onTile(slabTile(key2, clat2, clon2, 'f1'), 2, B), 'far geotile accepted')
+  run(2, B)
+  T.check(#objsWith('threedmr_f1_deck') == 1, 'its colliding slab made out there')
+  rc(r0, 'a far tile: no player rebuild')
+  -- the churn: the far tile rebuilt with new content - still none
+  roads.onTile(slabTile(key2, clat2, clon2, 'f2'), 2, B)
+  run(2, B)
+  T.check(#objsWith('threedmr_f2_deck') == 1 and #objsWith('threedmr_f1_deck') == 0, 'the far tile swapped')
+  rc(r0, 'a far tile swap does not set the player-rebuild flag')
+  -- the same under the car marks at once
+  roads.onTile(slabTile(key, clat, clon, 'n1'), 2, B)
+  run(2, B)
+  rc(r0 + 1, 'a near tile rebuilds')
+  roads.onTile(slabTile(key, clat, clon, 'n2'), 2, B)
+  run(2, B)
+  rc(r0 + 2, 'a near tile swap rebuilds as before')
+  -- deferred dirt is promoted when the player arrives
+  roads.onTile(slabTile(key2, clat2, clon2, 'f3'), 2, B)
+  run(2, B)
+  rc(r0 + 2, 'far churn again: deferred, no rebuild')
+  car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
+  run(2, B)
+  rc(r0 + 3, 'the player arrives: the deferred dirt promotes, one rebuild')
+  -- a rebuild in between makes the far slab solid: nothing left to promote
+  car.x, car.y = B:geodeticToWorld(clat, clon, 0)
+  run(2, B)
+  roads.onTile(slabTile(key2, clat2, clon2, 'f4'), 2, B)
+  run(2, B)
+  rc(r0 + 3, 'far churn once more: deferred')
+  roads.onTile(slabTile(key, clat, clon, 'n3'), 2, B)
+  run(2, B)
+  rc(r0 + 4, 'the near swap rebuilds (and makes the far slab solid with it)')
+  car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
+  run(2, B)
+  rc(r0 + 4, 'arriving later: nothing left to promote')
+  -- a rebase / teleport still rebuilds at once (the island moved)
+  car.x, car.y = A:geodeticToWorld(clat, clon, 0)
+  T.check(roads.replace(A, 3) == 2, 'both geotiles re-placed')
+  run(3, A)
+  rc(r0 + 5, 'a rebase forces the rebuild')
+  roads.RELOAD_ROOM_MS = room
+  roads.reset()
+end
+
+-- a geotile's pending colliders due for another player's car (roads.focusDue): its focus carries no z (far cars'), the
+-- pieces' boxes are in the tile's frame (a 3D inverse transform): measured, not an error (Codex review, 2026-11-14)
+do
+  local cx, cy = A:geodeticToWorld(clat, clon, 0)
+  local every = roads.RELOAD_EVERY_S
+  roads.RELOAD_EVERY_S = 1e9                 -- (no timed rebuild: what is made stays pending)
+  car.x, car.y = cx + 300, cy                -- (near enough to make them, beyond needReach)
+  T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
+    'the geotile again')
+  for _ = 1, 40 do roads.update(gov, 1, car, nil, A) end
+  roads.setFoci({ { x = cx, y = cy, r = 320, trees = true, kind = 'player' } })
+  local ok, due = pcall(roads.focusDue, roads.needDistance)
+  T.check(ok, 'focusDue with a focus without z: ' .. tostring(due))
+  local n = roads.needDistance(1e9, { x = cx, y = cy, z = 0 })
+  T.check(n < 200, 'its colliders pending, measured from the focus (' .. tostring(n) .. ' m)')
+  T.check(due == true, 'due for the other player\'s car at the tile')
+  roads.setFoci({})
+  roads.RELOAD_EVERY_S = every
+  roads.reset()
+end
 
 T.done('test_roadgeo')

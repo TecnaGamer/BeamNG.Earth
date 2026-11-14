@@ -196,5 +196,51 @@ class MeshTest(unittest.TestCase):
             self.assertEqual(signstream.shape_files(2,0,0)['mileposts'],'mileposts_2_0_0.cdae')
 
 
+class BundledReferenceTest(unittest.TestCase):
+    def test_displayed_mileage_and_posted_direction_come_from_real_references(self):
+        refs,_ = milemarkers.references()
+        point, = [o for o in refs if o['mile_marker']['state']=='MI' and
+                  o['mile_marker']['route']==69 and o['mile_marker']['mile']==116 and
+                  o['mile_marker']['direction']=='W']
+        self.assertAlmostEqual(point['lat'],42.9149444,places=6)
+        self.assertAlmostEqual(point['lon'],-84.0395286,places=6)
+        self.assertLess(point['mile_marker']['axis'][0],-.7)
+        ky = {o['mile_marker']['mile'] for o in refs if o['mile_marker']['state']=='KY'
+              and o['mile_marker']['route']==65 and o['mile_marker']['direction']=='N'}
+        self.assertTrue(set(range(1,137)) <= ky)
+
+    def test_units_are_not_silently_confused(self):
+        self.assertEqual(milemarkers.miles('116 mi'),116.)
+        self.assertAlmostEqual(milemarkers.miles('1.609344'),1.)
+        self.assertAlmostEqual(milemarkers.miles('1.609344 km'),1.)
+        for bad in ('116 miles;117 miles','unknown','-1 mi','nan','116ft'):
+            self.assertIsNone(milemarkers.miles(bad))
+        self.assertEqual(milemarkers.interstate('I 69 West'),69)
+        self.assertIsNone(milemarkers.interstate('US 69'))
+        self.assertEqual(milemarkers.cardinal('I 69 WB'),'W')
+
+    def test_lookup_has_stable_numbers_across_anchor_changes(self):
+        refs,_ = milemarkers.references()
+        obj = next(o for o in refs if o['mile_marker']['state']=='MI' and
+                   o['mile_marker']['route']==69 and o['mile_marker']['mile']==116)
+        found = []
+        for shift in (0.,.02):
+            frame = geodesy.EnuFrame(obj['lat']+shift,obj['lon']+shift)
+            x,y,_ = frame.geodetic_to_enu(obj['lat'],obj['lon'],0.)
+            result = milemarkers.query(frame,(x-100.,y-100.,x+100.,y+100.))
+            found.append({o['id'] for o in result})
+        self.assertEqual(found[0],found[1])
+        self.assertIn(obj['id'],found[0])
+
+    def test_missing_optional_snapshot_keeps_roads_available(self):
+        milemarkers.references.cache_clear()
+        try:
+            with mock.patch.object(milemarkers,'DATA',Path('absent-mile-reference.json')):
+                with self.assertLogs('earthd.milemarkers',level='WARNING'):
+                    self.assertEqual(milemarkers.query(FRAME,(0.,0.,256.,256.)),[])
+        finally:
+            milemarkers.references.cache_clear()
+
+
 if __name__ == '__main__':
     unittest.main()

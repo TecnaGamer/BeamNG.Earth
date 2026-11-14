@@ -11,7 +11,8 @@ local M = {}
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/shapes/buildings/main.materials.json',     -- m_gasstation_tyrannos
   '/levels/west_coast_usa/art/shapes/objects/main.materials.json',                          -- corrugation
-  '/levels/east_coast_usa/art/shapes/buildings/main.materials.json' }                       -- (US East's units)
+  '/levels/east_coast_usa/art/shapes/buildings/main.materials.json',                        -- (US East's units)
+  '/levels/italy/art/shapes/buildings/main.materials.json' }    -- (Europe's EV chargers: docs/research/2026-10-29-ev-chargers.md)
 M.CLEAR_S = 0.5            -- the POI list gathered again at most this often (s)
 M.ENERGY = { 'gasoline', 'diesel' }
 M.now = os.clock
@@ -35,13 +36,14 @@ end
 
 local function deleteObjs(st)
   local any = #st.objs > 0
+  local p = any and st.objs[1].pos or nil     -- (the spot, for onCollide's distance rule in roads.lua)
   for _, ob in ipairs(st.objs) do
     local o = scenetree.findObjectById(ob.id)
     if o then o:delete() end
   end
   -- its colliding pumps and canopy out of the collision too (no invisible pump left to crash into); a station half
   -- made (spawnStep) may have some in it already, by another rebuild
-  if any and M.onCollide then M.onCollide() end
+  if any and M.onCollide then M.onCollide(p and p[1], p and p[2]) end
   st.objs, st.pumps, st.made, st.cursor = {}, {}, false, nil
 end
 
@@ -51,6 +53,7 @@ local function propKey(p)
 end
 
 local function makeProp(st, p)
+  require('beamngEarth/texdbg').log('fuelShape', p.shape)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, p.shape)
   -- the shapes' own collision meshes (West Coast USA leaves its fuel shapes at the default, 'Collision Mesh'), not
@@ -103,7 +106,8 @@ local function spawnStep(id, st)
   st.cursor = nil
   st.made = true
   poisDirty = true
-  if M.onCollide then M.onCollide() end
+  local p = st.objs[1] and st.objs[1].pos     -- (the spot too: far away, roads.lua defers the rebuild)
+  if M.onCollide then M.onCollide(p and p[1], p and p[2]) end
   return true
 end
 
@@ -174,7 +178,8 @@ local function relayout(id, st, r)
   end
   for i, a in ipairs(r.areas or {}) do makeArea(id, st, i, a) end
   poisDirty = true
-  if changed and M.onCollide then M.onCollide() end
+  local p = st.objs[1] and st.objs[1].pos
+  if changed and M.onCollide then M.onCollide(p and p[1], p and p[2]) end
   return true
 end
 
@@ -290,8 +295,10 @@ function M.pois(levelIdentifier, elements)
       local r = st.rec
       elements[#elements + 1] = freeroam_gasStations.formatGasStationPoi({
         id = 'bne_fuel_' .. id, type = 'gasStation',
-        name = (r.name and r.name ~= '') and r.name or 'Gas station', description = r.brand or '',
-        energyTypes = M.ENERGY, pumps = st.pumps })
+        name = (r.name and r.name ~= '') and r.name or (r.energy and 'EV charger' or 'Gas station'),
+        description = r.brand or '',
+        -- (an EV charger's record says electricEnergy: the stock charge prompt and bolt icon, freeroam/gasStations.lua)
+        energyTypes = r.energy or M.ENERGY, pumps = st.pumps })
     end
   end
 end

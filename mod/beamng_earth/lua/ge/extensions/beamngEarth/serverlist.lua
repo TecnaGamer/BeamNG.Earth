@@ -23,7 +23,11 @@ function M.toServers(list)
     if type(s) == 'table' and type(s.ip) == 'string' and tonumber(s.port) then
       out[#out + 1] = { ip = s.ip, port = math.floor(tonumber(s.port)), name = tostring(s.name or ''),
         players = tonumber(s.players) or 0, maxPlayers = tonumber(s.maxPlayers) or 0,
-        version = tostring(s.version or ''), place = tostring(s.place or ''),
+        version = tostring(s.version or ''), place = tostring(s.place or ''), desc = tostring(s.desc or ''),
+        -- the rest of what BeamMP's own list carries (the plugin sends what BeamMP's heartbeat does)
+        tags = tostring(s.tags or ''), map = tostring(s.map or ''), modlist = tostring(s.modlist or ''),
+        modstotalsize = tonumber(s.modstotalsize) or 0, modstotal = tonumber(s.modstotal) or 0,
+        playerslist = tostring(s.playerslist or ''), pass = s.pass == true,
         official = M.OFFICIAL[s.ip .. ':' .. math.floor(tonumber(s.port))] == true,
         -- the country of the server's address (the list service's GeoIP; "" unknown: BeamMP's "?" flag)
         location = type(s.location) == 'string' and s.location:match('^%a%a$') and s.location:upper() or '' }

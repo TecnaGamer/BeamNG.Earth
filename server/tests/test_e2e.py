@@ -71,18 +71,18 @@ class EndToEndTest(unittest.TestCase):
         print(f"\n  anchor_ready in {time.monotonic() - t0:.2f} s: zBase={t['zBase']} "
               f"maxHeight={t['maxHeight']} q=1/{round(1 / t['q'])} groundZ={a1['groundZ']}", file=sys.stderr)
         self.assertEqual(t["heightmap"], f"/temp/beamngEarth/{sid}/hm_{aid}_0_0.png")
-        self.assertEqual((t["cx"], t["cy"], t["size"], t["squareSize"]), (0.0, 0.0, 1024, 2.0))
+        self.assertEqual((t["cx"], t["cy"], t["size"], t["squareSize"]), (0.0, 0.0, 2048, heightmap.SQUARE))   # terrain mode: 2 km
         self.assertEqual(t["maxHeight"], 65536 * t["q"])
         with Image.open(self.fs(t["heightmap"])) as im:
-            self.assertEqual(im.size, (1024, 1024))
+            self.assertEqual(im.size, (2048, 2048))     # terrain mode: its 2 km block at 1 m
             q = np.asarray(im).astype(np.int64)[::-1]       # [gy, gx]
         h = heightmap.heights(q, t["zBase"], t["maxHeight"])
         self.assertGreater(q.min(), 0)
         self.assertLess(q.max(), 65535)
-        # Whitney summit ~4420 m; the 2 km box reaches down to ~3700 m.
+        # Whitney summit ~4420 m; the 1 km box reaches some hundreds of metres down.
         self.assertTrue(4380 < a1["groundZ"] < 4440, a1["groundZ"])
         self.assertTrue(4380 < h.max() < 4440 and 3000 < h.min() < 4200, (h.min(), h.max()))
-        self.assertAlmostEqual(h[512, 512], a1["groundZ"], delta=0.001)
+        self.assertAlmostEqual(h[1024, 1024], a1["groundZ"], delta=0.001)
 
         # --- commit, pose: the far field streams nearest-first until far_done ---
         c.send({"type": "commit_anchor", "anchorId": aid})
@@ -121,7 +121,7 @@ class EndToEndTest(unittest.TestCase):
         print(f"  600 m move: {len(adds)} tiles, {len(swaps)} swap groups (replacing "
               f"{sum(len(m['remove']) for m in swaps)} tiles) in {time.monotonic() - t0:.2f} s", file=sys.stderr)
         self.assertTrue(adds and [m for m in seen if m["type"] == "far_swap" and m["remove"]])
-        forced = [ff.Block(0.0, 0.0).bbox, ff.Block(512.0, 0.0).bbox]      # committed + predicted
+        forced = [ff.Block(0.0, 0.0, 2048).bbox, ff.Block(512.0, 0.0, 2048).bbox]      # committed + predicted
         self.assertEqual(far.keys(aid), set(ff.select(600.0, 0.0, forced, refined)[0]))
 
         # --- terrain-follow ---
@@ -130,15 +130,16 @@ class EndToEndTest(unittest.TestCase):
         tr, _ = c.until(lambda m: m["type"] in ("terrain_ready", "terrain_error"), timeout=120)
         self.assertEqual(tr["type"], "terrain_ready", tr)
         print(f"  terrain_ready in {time.monotonic() - t0:.2f} s", file=sys.stderr)
-        self.assertEqual((tr["requestId"], tr["anchorId"], tr["cx"], tr["cy"], tr["size"]), (2, aid, 512.0, 0.0, 1024))
-        self.assertEqual((tr["q"], tr["squareSize"]), (t["q"], 2.0))
+        self.assertEqual((tr["requestId"], tr["anchorId"], tr["cx"], tr["cy"], tr["size"]), (2, aid, 512.0, 0.0, 2048))
+        self.assertEqual((tr["q"], tr["squareSize"]), (t["q"], heightmap.SQUARE))
         self.assertEqual(tr["heightmap"], f"/temp/beamngEarth/{sid}/hm_{aid}_512_0.png")
         with Image.open(self.fs(tr["heightmap"])) as im:
-            self.assertEqual(im.size, (1024, 1024))
+            self.assertEqual(im.size, (2048, 2048))     # terrain mode: its 2 km block at 1 m
             q2 = np.asarray(im).astype(np.int64)[::-1]
         # The overlap with the first block is bit-identical on real data (§1.8).
         h2 = heightmap.heights(q2, tr["zBase"], tr["maxHeight"])
-        self.assertTrue((h2[:, :768] == h[:, 256:]).all())
+        k = int(512 / heightmap.SQUARE)                 # the 512 m move in samples
+        self.assertTrue((h2[:, :-k] == h[:, k:]).all())
 
     def test_bad_prepare(self):
         self.c.send({"type": "prepare_anchor", "requestId": 7, "lat": 95, "lon": 0})

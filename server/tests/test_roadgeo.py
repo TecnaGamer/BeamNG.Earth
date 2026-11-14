@@ -149,7 +149,7 @@ class ExactVariantTest(unittest.TestCase):
         T = np.array([[0, 1, 2], [0, 2, 3], [1, 2, 4]])
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "t.cdae")
-            cdae.write(path, P, T)
+            cdae.write(path, P, T, close=False)     # (an open test shape: its vertex count checked)
             blob = open(path, "rb").read()
             n, med, lo, hi = fast._ef.cdae_zstats(blob)
             self.assertEqual(n, 5)
@@ -288,6 +288,10 @@ class RealDataTest(unittest.TestCase):
         import blockworker as bw
         import revisit
         import roadmesh
+        # (restored after: left off, the revisit / plan cache tests after it in one run failed, 2026-11-02)
+        self.addCleanup(setattr, revisit, "ON", revisit.ON)
+        self.addCleanup(setattr, revisit, "CACHE_DIR", revisit.CACHE_DIR)      # (_State points it at CACHE)
+        self.addCleanup(setattr, bw, "_s", getattr(bw, "_s", None))
         revisit.ON = False
         bw._s = bw._State(CACHE, True, True, True, True, True, True, True)
         out = tempfile.mkdtemp(prefix="roadgeo_")

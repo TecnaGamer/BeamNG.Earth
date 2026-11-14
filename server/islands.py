@@ -14,6 +14,7 @@ import math
 import numpy as np
 
 import fast
+import dnp
 
 JOIN_M = 1.5            # road ends this close are one graph node
 MAX_EDGES = 10          # roads in a loop (a ring split at every entry; matches RING_MAX_EDGES)
@@ -31,7 +32,7 @@ MIN_INSET_AREA_M2 = 6.0  # an inset loop smaller than this (a thin median): no i
 
 def _area(xy):
     x, y = xy[:, 0], xy[:, 1]
-    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    return 0.5 * float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))
 
 
 def _inside(xy, p):
@@ -40,7 +41,7 @@ def _inside(xy, p):
 
 
 def _length(pts):
-    return float(np.sum(np.hypot(*np.diff(pts[:, :2], axis=0).T)))
+    return float(np.sum(dnp.hypot(*np.diff(pts[:, :2], axis=0).T)))
 
 
 def _offset(pts, d):
@@ -118,6 +119,7 @@ def ring_directions(roads_list, left_hand=False):
     both decide the same. Mapped one-way directions take precedence; missing directions follow the ring's mapped
     circulation, or the driving side when none is mapped. Sorting makes inference independent of cell/load order."""
     edges, adj = _graph(sorted(roads_list, key=lambda r: r[0]))
+    boxes = _edge_boxes(edges)
     out = {}
     for cyc in _cycles(edges, adj, RING_MAX_EDGES, RING_MAX_LOOP_M):
         L = sum(edges[k][5] for k, _ in cyc)
@@ -136,7 +138,7 @@ def ring_directions(roads_list, left_hand=False):
         if rnd >= RING_ROUND_ANY or (rnd >= RING_ROUND and oneway_ok):
             # A through road makes this a connected road loop, not a roundabout with a central island.
             members = {k for k, _ in cyc}
-            if any(_crosses(poly, e[2]) for j, e in enumerate(edges) if j not in members):
+            if any(_crosses(poly, edges[j][2]) for j in _near_edges(boxes, poly) if j not in members):
                 continue
             forward = along[0] if along else (signed_area > 0) != bool(left_hand)
             for k, fwd in cyc:
@@ -173,7 +175,7 @@ def ring_approaches(roads_list, ring=None):
         if fid in ring or len(pts) < 2:
             continue
         for p in (pts[0, :2], pts[-1, :2]):
-            if float(np.min(np.hypot(*(ends - p).T))) < JOIN_APPROACH_M:
+            if float(np.min(dnp.hypot(*(ends - p).T))) < JOIN_APPROACH_M:
                 out.add(fid)
                 break
     return out
@@ -184,6 +186,7 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
     geometry)}, "ring": (k, 3) curb line counter-clockwise or None}] of roads_list [(fid, spec, pts (k, 3), lon)].
     structures: building centres (x, y); a loop round one is a block, not an island."""
     edges, adj = _graph(roads_list)
+    boxes = _edge_boxes(edges)
     found = []
     for cyc in _cycles(edges, adj, MAX_EDGES, MAX_LOOP_M):
         key = {k for k, _ in cyc}
@@ -207,7 +210,7 @@ def find(roads_list, is_oneway=lambda spec: bool(getattr(spec, "oneway", False))
             continue
         if any(_inside(poly, c) for c in structures):
             continue                                # a building inside: a city block, not an island
-        if any(_crosses(poly, edges[j][2]) for j in range(len(edges)) if j not in key):
+        if any(_crosses(poly, edges[j][2]) for j in _near_edges(boxes, poly) if j not in key):
             continue                                # a road through it (a turn lane across the triangle, not
                                                     # joined at its corners): the AI drove into the island's curb
                                                     # and backed out, twice (Timisoara 2026-10-15)
@@ -238,6 +241,24 @@ RAY_STEP_M = 0.2
 CROSS_MARGIN_M = 2.0    # a road's point this far inside a loop's centreline polygon is through it
 
 
+def _edge_boxes(edges):
+    """(n, 4) x0, y0, x1, y1 of each edge's points (_graph's edges)."""
+    if not edges:
+        return np.zeros((0, 4))
+    xy = [np.asarray(e[2], np.float64)[:, :2] for e in edges]
+    return np.array([(*p.min(0), *p.max(0)) for p in xy], np.float64)
+
+
+def _near_edges(boxes, poly):
+    """Indices (ascending) of the edges whose box meets loop poly's: only those can have a point inside it (_crosses
+    of every edge for every candidate loop was ~390k calls on one Las Vegas road tile, 2026-11-01)."""
+    if not len(boxes):
+        return ()
+    lo, hi = poly.min(0), poly.max(0)
+    return np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 1] <= hi[1]) & (boxes[:, 2] >= lo[0])
+                          & (boxes[:, 3] >= lo[1])).tolist()
+
+
 def _crosses(poly, pts):
     """Does road pts (k, 3) run through the inside of loop poly (k, 2) (points every ~2 m, those within CROSS_MARGIN_M
     of the loop's line not counted: roads joining at its corners)?"""
@@ -254,7 +275,7 @@ def _seg_dist(pts, p):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
     q = a + d * t[:, None]
-    return float(np.min(np.hypot(*(q - p).T)))
+    return float(np.min(dnp.hypot(*(q - p).T)))
 
 
 def _island_ring(poly, roads_hw, z):
@@ -264,7 +285,7 @@ def _island_ring(poly, roads_hw, z):
     c = poly.mean(0)
     if not _inside(poly, c) or any(_seg_dist(pts, c) <= hw for pts, hw in roads_hw):
         return None
-    rmax = float(np.max(np.hypot(*(poly - c).T)))
+    rmax = float(np.max(dnp.hypot(*(poly - c).T)))
     import fast
     return _ring_finish(fast.island_ring_rays(poly, roads_hw, c, RAYS, RAY_STEP_M, rmax), z)
 
@@ -285,3 +306,103 @@ def inner_sides(found):
 def in_island(found, p):
     """Is point p (x, y) inside one of the loops?"""
     return any(_inside(f["poly"], p) for f in found)
+
+
+def _splitter_flow(point, into, lanes):
+    """A keep-right marker needs opposing traffic, with the incoming lane to its right."""
+    import furniture
+
+    left = np.array([-into[1], into[0]])
+    sides = set()
+    for spec, line in lanes:
+        q, tangent = furniture._at(line, furniture._project(line, point[None]))
+        delta = q[0, :2] - point
+        gap = dnp.norm(delta) - spec.width / 2
+        across = float(dnp.matmul(delta, left))
+        if not .32 <= gap <= 7. or abs(across) <= .6:
+            continue
+        side = 1 if across > 0 else -1
+        forward = float(dnp.matmul(tangent[0], into))
+        if (spec.oneway and -side * forward * (spec.dir or 1) >= .48
+                or not spec.oneway and abs(forward) >= .65):
+            sides.add(side)
+    return len(sides) == 2
+
+
+def _splitter_noses(ring):
+    """A point inside each end of the raised curb and its inward approach axis."""
+    xy = ring[:, :2]
+    d = xy - xy.mean(axis=0)
+    axes = dnp.eigh(dnp.matmul(d.T, d))[1][:, ::-1].T      # rows: the principal axis, then the other (no LAPACK SVD)
+    along, across = (dnp.matmul(xy, axes.T)).T
+    if not 4. <= np.ptp(along) <= 115. or not .85 <= np.ptp(across) <= 16.:
+        return
+    for sign in (1, -1):
+        signed = sign * along
+        next_s = np.roll(signed, -1)
+        for depth in (.9, 1.5, 2.4, 3.2):
+            level = signed.min() + depth
+            cross = (signed <= level) != (next_s <= level)
+            u = (level - signed[cross]) / (next_s[cross] - signed[cross])
+            meets = across[cross] + u * (np.roll(across, -1)[cross] - across[cross])
+            if len(meets) == 2 and np.ptp(meets) >= .82:
+                yield dnp.matmul(np.array([sign * level, meets.mean()]), axes), sign * axes[0]
+                break
+
+
+def splitter_heads(found, runs, roads_list, box):
+    """Positions and approach axes for raised traffic separators, owned once per tile."""
+    import furniture
+    import geotiles
+    import roads
+
+    local = {"primary", "secondary", "tertiary", "unclassified", "residential", "living_street"}
+    streets = {fid: (spec, line) for fid, spec, line, _ in roads_list if spec.kind == "paved" and spec.cls in local}
+    if len(streets) < 2:
+        return []
+    bounds = roads._blocker_segments([(line[:, :2], max(.2, spec.width / 2 + .23))
+                                      for _, spec, line, _ in roads_list])
+    from streetfront import _road_overlap
+
+    candidates = []
+    for f in found:
+        if f["round"] or f["ring"] is None:
+            continue
+        roadsides = [streets[fid] for fid in f["inner"] if fid in streets]
+        if len(roadsides) >= 2:
+            candidates.extend((p, d) for p, d in _splitter_noses(f["ring"]) if _splitter_flow(p, d, roadsides))
+    medians = [w for w in runs if w.get("median") and w["fid"] in streets]
+    for walk in medians:
+        spec, road = streets[walk["fid"]]
+        run = walk["pts"]
+        s = furniture._project(road, run[[0, -1], :2]) * (spec.dir or 1)
+        start = int(s[1] < s[0])
+        if walk["open"][start]:
+            continue
+        run = run if start == 0 else run[::-1]
+        if furniture._arclen(run)[-1] < 3.:
+            continue
+        p, into = furniture._at(run, np.array([1.4]))
+        p, into = p[0, :2], into[0]
+        # Both raised bands must start at this physical opening, rather than at a split in the map data.
+        for other in medians:
+            if walk["fid"] == other["fid"] or not any(
+                    not is_open and dnp.norm(end[:2] - run[0, :2]) <= 5.
+                    for end, is_open in zip(other["pts"][[0, -1]], other["open"])):
+                continue
+            q, _ = furniture._at(other["pts"], furniture._project(other["pts"], p[None]))
+            q = q[0, :2]
+            if .35 <= dnp.norm(p - q) <= 5.:
+                middle = (p + q) / 2
+                if _splitter_flow(middle, into, [streets[walk["fid"]], streets[other["fid"]]]):
+                    candidates.append((middle, into))
+    placed = []
+    for point, into in candidates:
+        if not geotiles.box_owns(box, *point):
+            continue
+        if any(dnp.norm(point - q) < 3. and float(dnp.matmul(into, d)) > .5 for q, d in placed):
+            continue
+        across = .29 * np.array([into[1], -into[0]])
+        if not _road_overlap(np.array([[point - across, point + across]]), bounds)[0]:
+            placed.append((point, into))
+    return placed

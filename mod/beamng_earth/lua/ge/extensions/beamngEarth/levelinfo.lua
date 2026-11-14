@@ -129,6 +129,52 @@ function M.placeId(name)
   return id and tonumber(id) or nil
 end
 
+-- True for a spawn point name of ours that has no SpawnSphere in the level (M.RANDOM, M.PREFIX .. id).
+function M.isOurs(name)
+  return name == M.RANDOM or (type(name) == 'string' and name:sub(1, #M.PREFIX) == M.PREFIX)
+end
+
+-- The big map's POI list (gameplay_rawPois): core_levels' onGetRawPoiListForLevel lists the level's spawn points that
+-- have a scene object and logs an error for each one without. Ours have none, so each gathering logged one per place
+-- (663 errors in a 33 min drive on BeamNG 0.40.4, 2026-10-30; gasstations.lua gathers it again as stations come and
+-- go). While in our level the stock function is called with our level's spawn points less ours, put back after.
+-- extensions.hook keeps the functions it calls: hookUpdate makes it take the wrap (and the stock one back).
+local poiOrig, poiWrap = nil, nil
+function M.hookSpawnPois()
+  local levels, ext = rawget(_G, 'core_levels'), rawget(_G, 'extensions')
+  if not levels or type(levels.onGetRawPoiListForLevel) ~= 'function' or type(levels.getLevelByName) ~= 'function'
+      or not ext or type(ext.hookUpdate) ~= 'function' then return false end
+  if levels.onGetRawPoiListForLevel == poiWrap then return true end
+  local orig = levels.onGetRawPoiListForLevel
+  poiOrig = orig
+  poiWrap = function(levelIdentifier, ...)
+    local info = type(levelIdentifier) == 'string' and levelIdentifier:lower() == M.LEVEL
+      and levels.getLevelByName(levelIdentifier) or nil
+    local all = type(info) == 'table' and info.spawnPoints or nil
+    if type(all) ~= 'table' then return orig(levelIdentifier, ...) end
+    local kept = {}
+    for _, sp in ipairs(all) do
+      if not M.isOurs(type(sp) == 'table' and sp.objectname) then kept[#kept + 1] = sp end
+    end
+    info.spawnPoints = kept
+    local ok, err = pcall(orig, levelIdentifier, ...)
+    info.spawnPoints = all
+    if not ok then error(err, 0) end
+  end
+  levels.onGetRawPoiListForLevel = poiWrap
+  ext.hookUpdate('onGetRawPoiListForLevel')
+  return true
+end
+
+function M.unhookSpawnPois()
+  local levels, ext = rawget(_G, 'core_levels'), rawget(_G, 'extensions')
+  if levels and poiWrap and levels.onGetRawPoiListForLevel == poiWrap then
+    levels.onGetRawPoiListForLevel = poiOrig
+    if ext and type(ext.hookUpdate) == 'function' then ext.hookUpdate('onGetRawPoiListForLevel') end
+  end
+  poiOrig, poiWrap = nil, nil
+end
+
 function M._reset() last, asked = nil, {} end -- tests
 
 return M

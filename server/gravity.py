@@ -34,6 +34,7 @@ import http.client
 import json
 import math
 import os
+import ioprofiler
 import struct
 import sys
 import tarfile
@@ -43,6 +44,10 @@ import urllib.request
 from typing import NamedTuple
 
 import numpy as np
+
+import fast
+import dmath
+import dnp
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geodesy import A, F, B, E2, geodetic_to_ecef  # noqa: E402
@@ -54,7 +59,7 @@ OMEGA = 7.292115e-5              # rad/s
 GAMMA_E = 9.7803253359           # normal gravity on the equator, m/s^2
 GAMMA_P = 9.8321849378           # normal gravity at the poles, m/s^2
 K_SOMIGLIANA = B * GAMMA_P / (A * GAMMA_E) - 1     # 0.0019318526464 (TR8350.2: ...65241)
-M_RATIO = OMEGA ** 2 * A ** 2 * B / GM               # m = w^2 a^2 b / GM = 0.00344978650684
+M_RATIO = (OMEGA * OMEGA) * (A * A) * B / GM               # m = w^2 a^2 b / GM = 0.00344978650684
 LIN_ECC = math.sqrt(A * A - B * B)                   # E, linear eccentricity
 EP = LIN_ECC / B                                     # second eccentricity e'
 MGAL = 1e-5                                          # m/s^2
@@ -84,7 +89,7 @@ def normal_gravity(lat, h=0.0):
     Exact on the ellipsoid (1e-12). The height series is first order in f and m: against the exact
     closed form it is 1.1e-10 m/s^2 per metre off (0.05 mGal at 4.4 km, 0.11 mGal at 10 km).
     """
-    s2 = np.sin(np.radians(lat)) ** 2
+    s2 = dnp.sq(dnp.sin(np.radians(lat)))
     g0 = GAMMA_E * (1 + K_SOMIGLIANA * s2) / np.sqrt(1 - E2 * s2)
     h = np.asarray(h, dtype=np.float64)
     return g0 * (1 - 2 / A * (1 + F + M_RATIO - 2 * F * s2) * h + 3 * h * h / (A * A))
@@ -92,7 +97,7 @@ def normal_gravity(lat, h=0.0):
 
 def free_air_gradient(lat):
     """d(normal gravity)/dh on the ellipsoid, s^-2 (about -3.086e-6, i.e. -0.3086 mGal/m)."""
-    s2 = np.sin(np.radians(lat)) ** 2
+    s2 = dnp.sq(dnp.sin(np.radians(lat)))
     g0 = GAMMA_E * (1 + K_SOMIGLIANA * s2) / np.sqrt(1 - E2 * s2)
     return -2 * g0 / A * (1 + F + M_RATIO - 2 * F * s2)
 
@@ -110,7 +115,7 @@ def _qp_series(x):
     """q'(x) = 3 (1 + 1/x^2)(1 - atan(x)/x) - 1, same idea."""
     x2, s = x * x, 0.0
     for k in range(1, 40):
-        s += (-1) ** (k + 1) * 6 * x2 ** k / ((2 * k + 1) * (2 * k + 3))
+        s += (-1) ** (k + 1) * 6 * dnp.power(x2, k) / ((2 * k + 1) * (2 * k + 3))
     return s
 
 
@@ -126,25 +131,25 @@ def normal_gravity_exact(lat, h=0.0, vector=False):
     magnitude: above the ellipsoid the normal plumb line is curved, so north is not 0 there.
     """
     x, y, z = geodetic_to_ecef(lat, 0.0, h)
-    p2, z2, e2 = float(x * x + y * y), float(z * z), LIN_ECC ** 2
+    p2, z2, e2 = float(x * x + y * y), float(z * z), LIN_ECC * LIN_ECC
     rr = p2 + z2 - e2
     u = math.sqrt(0.5 * rr * (1 + math.sqrt(1 + 4 * e2 * z2 / (rr * rr))))
-    beta = math.atan2(z * math.sqrt(u * u + e2), u * math.sqrt(p2))
-    sb, cb = math.sin(beta), math.cos(beta)
+    beta = dmath.atan2(z * math.sqrt(u * u + e2), u * math.sqrt(p2))
+    sb, cb = dmath.sin(beta), dmath.cos(beta)
     w = math.sqrt((u * u + e2 * sb * sb) / (u * u + e2))
     q, qp = _q_series(LIN_ECC / u), _qp_series(LIN_ECC / u)
     ue = u * u + e2
-    g_u = -(GM / ue + OMEGA ** 2 * A ** 2 * LIN_ECC / ue * (qp / Q0) * (0.5 * sb * sb - 1 / 6)
-            - OMEGA ** 2 * u * cb * cb) / w
-    g_b = (-OMEGA ** 2 * A ** 2 / math.sqrt(ue) * (q / Q0) + OMEGA ** 2 * math.sqrt(ue)) * sb * cb / w
+    g_u = -(GM / ue + (OMEGA * OMEGA) * (A * A) * LIN_ECC / ue * (qp / Q0) * (0.5 * sb * sb - 1 / 6)
+            - (OMEGA * OMEGA) * u * cb * cb) / w
+    g_b = (-(OMEGA * OMEGA) * (A * A) / math.sqrt(ue) * (q / Q0) + (OMEGA * OMEGA) * math.sqrt(ue)) * sb * cb / w
     if not vector:
         return math.hypot(g_u, g_b)
     # unit vectors of increasing u and beta in the meridian plane (p, z), then onto (north, up)
     eu = np.array([u / math.sqrt(ue) * cb, sb])
     eb = np.array([-math.sqrt(ue) * sb, u * cb])
-    eu, eb = eu / np.linalg.norm(eu), eb / np.linalg.norm(eb)
+    eu, eb = eu / dnp.norm(eu), eb / dnp.norm(eb)
     g = g_u * eu - g_b * eb       # TR8350.2's gamma_beta is the component towards decreasing beta
-    sp, cp = math.sin(math.radians(lat)), math.cos(math.radians(lat))
+    sp, cp = dmath.sin(math.radians(lat)), dmath.cos(math.radians(lat))
     return float(-sp * g[0] + cp * g[1]), float(cp * g[0] + sp * g[1])
 
 
@@ -158,7 +163,7 @@ def normal_zonal_coefficients(nmax=20):
     c = np.zeros(nmax + 1)
     c[0] = 1.0
     for n in range(1, nmax // 2 + 1):
-        j2n = (-1) ** (n + 1) * 3 * E2 ** n / ((2 * n + 1) * (2 * n + 3)) * (1 - n + 5 * n * j2 / E2)
+        j2n = (-1) ** (n + 1) * 3 * dnp.power(E2, n) / ((2 * n + 1) * (2 * n + 3)) * (1 - n + 5 * n * j2 / E2)
         c[2 * n] = -j2n / math.sqrt(4 * n + 1)
     return c
 
@@ -217,7 +222,7 @@ class GravityModel:
         ds = np.array(s[:L], dtype=np.float64)
         dc[0] = 1.0
         nz = normal_zonal_coefficients(self.NZONAL)
-        self.zonal = nz * (GM / self.gm) * (A / self.a) ** np.arange(len(nz))
+        self.zonal = nz * (GM / self.gm) * dnp.power(A / self.a, np.arange(len(nz)))
         k = min(len(nz), nmax + 1)
         zidx = np.arange(k) * (np.arange(k) + 1) // 2
         dc[zidx] -= self.zonal[:k]
@@ -278,14 +283,14 @@ class GravityModel:
         # sectoral P_mm = cos(phi)^m * prod: keep log(prod); P_m+1,m = sqrt(2m+3) t P_mm
         k = np.arange(nmax + 1, dtype=np.float64)
         steps = np.zeros(nmax + 1)
-        steps[1:] = 0.5 * np.log((2 * k[1:] + 1) / (2 * k[1:]))
-        steps[1] = 0.5 * math.log(3.0)
+        steps[1:] = 0.5 * dnp.log((2 * k[1:] + 1) / (2 * k[1:]))
+        steps[1] = 0.5 * dmath.log(3.0)
         self.log_sect = np.cumsum(steps)
         self.sect_next = np.sqrt(2 * k + 3)
         # |P_n| <= (|ra| + |rb|) max(|P_n-1|, |P_n-2|): renormalising every `check_every` degrees
         # keeps every scaled column below RESCALE^2 = 1e200
         growth = max(float(np.max(self.ra + self.rb)), float(self.sect_next[-1]), 2.0)
-        self.check_every = max(1, int(100 / math.log10(growth)))
+        self.check_every = max(1, int(100 / dmath.log10(growth)))
         self.off = (np.arange(nmax + 2) * np.arange(1, nmax + 3)) // 2
         # dP_nm/dtheta = da * P_n,m-1 - db * P_n,m+1  (theta = colatitude, geodesy normalisation)
         da = (n + m) * (n - m + 1)
@@ -306,54 +311,17 @@ class GravityModel:
 
     def _row_sums(self, t, u, lam):
         """Per-degree sums over m (radius-independent): the (nmax+1, 2, ncol) matrices
-        [P cos m lam; P sin m lam] @ coef rows, and P_n0, P_n1 up to NZONAL (float64)."""
-        N = self.nmax
-        mm = np.arange(N + 1)
-        dt = self.dtype
-        cs = np.stack([np.cos(mm * lam), np.sin(mm * lam)])
-        log_s = self.log_sect + mm * math.log(u)        # u > 0: field() keeps off the pole
-        w = np.where(log_s > -650, np.exp(np.maximum(log_s, -650)), 0.0)
-        ws = w * cs              # column scale x cos/sin m lam (float64: w alone may be < 1e-38)
-        out = np.zeros((N + 1, 2, self.coef.shape[1]), dtype=dt)
-        zon = np.zeros((min(N, self.NZONAL) + 1, 2))
-        bufs = [np.zeros(N + 1) for _ in range(3)]
-        ybuf = np.zeros(2 * (N + 1), dtype=dt)
-        tmp = np.zeros(N + 1)
-        ra, rb, coef, off = self.ra, self.rb, self.coef, self.off
-        sect_next, nzon, every = self.sect_next, len(zon) - 1, self.check_every
-        p2, p1 = bufs[0], bufs[1]
-        for n in range(N + 1):
-            pn = bufs[(n + 2) % 3]
-            o, k = off[n], n + 1
-            if n >= 2:
-                j = n - 1
-                np.multiply(ra[o:o + j], p1[:j], out=pn[:j])
-                pn[:j] *= t
-                np.multiply(rb[o:o + j], p2[:j], out=tmp[:j])
-                pn[:j] -= tmp[:j]
-            if n >= 1:
-                pn[n - 1] = sect_next[n - 1] * t * p1[n - 1]
-            pn[n] = 1.0
-            if n and n % every == 0:
-                mag = np.abs(pn[:k])
-                np.maximum(mag[:n], np.abs(p1[:n]), out=mag[:n])
-                big = np.nonzero(mag > self.RESCALE)[0]
-                if len(big):
-                    sc = mag[big]
-                    pn[big] /= sc
-                    b1 = big[big < n]
-                    p1[b1] /= sc[:len(b1)]
-                    log_s[big] += np.log(sc)
-                    w[big] = np.where(log_s[big] > -650, np.exp(np.maximum(log_s[big], -650)), 0.0)
-                    ws[:, big] = w[big] * cs[:, big]
-            y = ybuf[:2 * k].reshape(2, k)
-            np.multiply(pn[:k], ws[:, :k], out=y)          # [P cos m lam; P sin m lam], true scale
-            np.matmul(y, coef[o:o + k], out=out[n])
-            if n <= nzon:
-                zon[n, 0] = pn[0] * w[0]
-                zon[n, 1] = pn[1] * w[1] if n else 0.0
-            p2, p1 = p1, pn
-        return out, zon
+        [P cos m lam; P sin m lam] @ coef rows, and P_n0, P_n1 up to NZONAL (float64). In Rust (earthfast 163,
+        gravity.rs: the same recursion and rescale points; the Python loop took 37.8 CPU-s of the server's interpreter
+        per 15 minutes, 2026-11-07)."""
+        fast.require(163, "gravity row sums")
+        fn = fast._ef.gravity_row_sums_f32 if self.coef.dtype == np.float32 else fast._ef.gravity_row_sums_f64
+        coef = self.coef if self.coef.dtype in (np.float32, np.float64) else self.coef.astype(np.float64)
+        return fn(float(t), float(u), float(lam), np.ascontiguousarray(self.ra, np.float64),
+                  np.ascontiguousarray(self.rb, np.float64), np.ascontiguousarray(coef),
+                  np.ascontiguousarray(self.off, np.int64), np.ascontiguousarray(self.sect_next, np.float64),
+                  np.ascontiguousarray(self.log_sect, np.float64), int(self.check_every), float(self.RESCALE),
+                  int(self.NZONAL), int(self.nmax))
 
     def _evaluate(self, lat, lon, h, msl):
         """Row sums along the direction of (lat, lon, h), then the radial factors at the final
@@ -363,11 +331,11 @@ class GravityModel:
         x, y, z = (float(v) for v in geodetic_to_ecef(lat, lon, h))
         p = math.hypot(x, y)
         r = math.hypot(p, z)
-        lam = math.atan2(y, x)
+        lam = dmath.atan2(y, x)
         t, u = z / r, p / r
         out, zon = self._row_sums(t, u, lam)
         out = out.astype(np.float64)
-        cl, sl = math.cos(lam), math.sin(lam)
+        cl, sl = dmath.cos(lam), dmath.sin(lam)
         n = np.arange(self.nmax + 1, dtype=np.float64)
         s = {"a": out[:, 0, 0] + out[:, 1, 1],                 # sum_m P (C cos + S sin)
              "l": out[:, 0, 3] - out[:, 1, 2],                 # sum_m m P (S cos - C sin)
@@ -378,8 +346,8 @@ class GravityModel:
 
         # geoid: T on the ellipsoid along the same radius, Bruns, plus NGA's correction and offset
         re = A * B / math.hypot(B * u, A * t)
-        t0 = self.gm / re * float((self.a / re) ** n @ s["a"]) - (self.gm - GM) / re  # NGA: no 1/r
-        lat_e = math.degrees(math.atan2(t, u * (1 - E2)))            # geodetic lat of that point
+        t0 = self.gm / re * float(dnp.matmul(dnp.power(self.a / re, n), s["a"])) - (self.gm - GM) / re  # NGA: no 1/r
+        lat_e = math.degrees(dmath.atan2(t, u * (1 - E2)))            # geodetic lat of that point
         corr = float(np.sum(out[:, 0, 8] + out[:, 1, 9])) if out.shape[2] > 8 else 0.0
         geoid = t0 / normal_gravity_exact(lat_e, 0.0) + corr + self.height_offset
         if msl:
@@ -388,15 +356,15 @@ class GravityModel:
             p = math.hypot(x, y)
             r = math.hypot(p, z)
             t, u = z / r, p / r
-        q = (self.a / r) ** n
+        q = dnp.power(self.a / r, n)
         gr = self.gm / r
-        pot = {"T": gr * float(q @ s["a"]),
-               "dT_dr": -gr / r * float(q @ ((n + 1) * s["a"])),
-               "dT_dphi": gr * float(q @ s["d"]),
-               "dT_dlam": gr * float(q @ s["l"])}
+        pot = {"T": gr * float(dnp.matmul(q, s["a"])),
+               "dT_dr": -gr / r * float(dnp.matmul(q, (n + 1) * s["a"])),
+               "dT_dphi": gr * float(dnp.matmul(q, s["d"])),
+               "dT_dlam": gr * float(dnp.matmul(q, s["l"]))}
         qz = q[:len(zon)]
-        du_dr = -gr / r * float(qz @ ((nz + 1) * za))
-        du_dphi = gr * float(qz @ zd)
+        du_dr = -gr / r * float(dnp.matmul(qz, (nz + 1) * za))
+        du_dphi = gr * float(dnp.matmul(qz, zd))
         return lat, h, r, t, u, pot, du_dr, du_dphi, geoid
 
     def disturbing_potential(self, lat, lon, h=0.0):
@@ -409,14 +377,14 @@ class GravityModel:
         """The full field at one point. ``h`` is ellipsoidal unless ``msl`` (then h_ell = h + N)."""
         lat, h, r, t, u, pot, du_dr, du_dphi, geoid = self._evaluate(lat, lon, h, msl)
         # gradients in the geocentric spherical frame (east, north, radial); normal = U + centrifugal
-        gam = np.array([0.0, du_dphi / r - OMEGA ** 2 * r * u * t, du_dr + OMEGA ** 2 * r * u * u])
+        gam = np.array([0.0, du_dphi / r - (OMEGA * OMEGA) * r * u * t, du_dr + (OMEGA * OMEGA) * r * u * u])
         dlt = np.array([pot["dT_dlam"] / (r * u), pot["dT_dphi"] / r, pot["dT_dr"]])
-        d = math.radians(lat) - math.atan2(t, u)                    # geodetic - geocentric latitude
-        cd, sd = math.cos(d), math.sin(d)
+        d = math.radians(lat) - dmath.atan2(t, u)                    # geodetic - geocentric latitude
+        cd, sd = dmath.cos(d), dmath.sin(d)
         rot = np.array([[1, 0, 0], [0, cd, -sd], [0, sd, cd]])      # (e, n_c, r) -> (e, n, up)
-        gvec = rot @ (gam + dlt)
-        dvec = rot @ dlt
-        g = float(np.linalg.norm(gvec))
+        gvec = dnp.matmul(rot, gam + dlt)
+        dvec = dnp.matmul(rot, dlt)
+        g = float(dnp.norm(gvec))
         normal = normal_gravity_exact(lat, h)
         rad2as = 180 / math.pi * 3600
         return GravityField(
@@ -454,6 +422,10 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
     process-wide one): the host's policy (one at a time), the project User-Agent (nothing else is
     sent), its circuit breaker and Retry-After."""
     net = net if net is not None else netfetch.default_fetcher()
+    # Windows: the system's own certificate check, as every other request (netfetch.HttpsTransport): OpenSSL's chain
+    # picked an expired intermediate on some SourceForge mirrors and every attempt failed with "certificate has
+    # expired" (GitHub #567; this download opens its own connections, so the 1.7.0 fix never reached it)
+    tls = netfetch.windows_ssl_context()
     part = dest + ".part"
     for i in range(attempts):
         have = os.path.getsize(part) if os.path.exists(part) else 0
@@ -466,7 +438,8 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                     req = urllib.request.Request(url, headers=s.headers)
                     if have:
                         req.add_header("Range", f"bytes={have}-")
-                    with urllib.request.urlopen(req, timeout=30) as resp:
+                    with urllib.request.urlopen(req, timeout=30, context=tls) as resp:
+                        ioprofiler.headers_received()
                         s.status = resp.status
                         mode = "ab" if have and resp.status == 206 else "wb"
                         with open(part, mode) as f:
@@ -477,6 +450,7 @@ def _download(url, dest, sha256, size, attempts=10, min_rate=50e3, log=print, ne
                                     break
                                 f.write(chunk)
                                 got += len(chunk)
+                                ioprofiler.received_bytes(len(chunk))
                                 s.nbytes = got
                                 dt = time.monotonic() - t0
                                 if dt > 20 and got / dt < min_rate:   # a stalled mirror: try another
@@ -561,13 +535,75 @@ def ensure_egm2008(cache_dir=CACHE_DIR, log=print, net=None):
     return npy
 
 
-def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, **kw):
-    """EGM2008 truncated to degree ``nmax`` (<= 2190)."""
+# The built model's tables kept on disk and memory-mapped (load_egm2008): kept in memory they were ~128 MB of the
+# server's main process for a value asked every 2 km (and building them peaked at ~380 MB); mapped, they are file pages
+# the system may drop and read again. DERIVED_V: raise it when GravityModel's tables change.
+DERIVED_V = 1
+_BIG = ("coef", "ra", "rb")
+_SMALL = ("zonal", "log_sect", "sect_next", "off")
+_SCALARS = ("nmax", "gm", "a", "name", "height_offset", "check_every")
+
+
+def _derived_dir(cache_dir, nmax, dtype):
+    return os.path.join(cache_dir, f"egm2008_model_v{DERIVED_V}_{nmax}_{np.dtype(dtype).name}")
+
+
+def _save_derived(model, d):
+    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        for k in _BIG + _SMALL:
+            np.save(os.path.join(tmp, k + ".npy"), getattr(model, k))
+        with open(os.path.join(tmp, "meta.json"), "w") as f:
+            json.dump({k: getattr(model, k) for k in _SCALARS} | {"dtype": model.dtype.name}, f)
+        if os.path.isdir(d):
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+        os.rename(tmp, d)
+    except OSError:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _load_derived(d):
+    """The model from _save_derived's folder (big tables memory-mapped), or None."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        model = GravityModel.__new__(GravityModel)
+        for k in _SCALARS:
+            setattr(model, k, meta[k])
+        model.dtype = np.dtype(meta["dtype"])
+        for k in _BIG:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy"), mmap_mode="r"))
+        for k in _SMALL:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy")))
+        if model.coef.shape[0] != tri_len(model.nmax) or model.coef.dtype != model.dtype:
+            return None
+        return model
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, mapped=True, **kw):
+    """EGM2008 truncated to degree ``nmax`` (<= 2190); mapped: its tables memory-mapped from the cache (built and
+    written there the first time)."""
+    dtype = kw.get("dtype", np.float32)
+    d = _derived_dir(cache_dir, min(int(nmax), EGM2008_NMAX), dtype)
+    if mapped and set(kw) <= {"dtype"}:
+        model = _load_derived(d)
+        if model is not None:
+            return model
     arr = np.asarray(np.load(ensure_egm2008(cache_dir, log=log), mmap_mode="r"))   # read as needed (a plain view)
     L = tri_len(min(nmax, EGM2008_NMAX))
     model = GravityModel(arr[0, :L], arr[1, :L], nmax=nmax, corr_c=arr[2, :L], corr_s=arr[3, :L],
                          name=f"EGM2008/{nmax}", **kw)
     del arr
+    if mapped and set(kw) <= {"dtype"}:
+        _save_derived(model, d)
+        mm = _load_derived(d)
+        if mm is not None:
+            return mm           # (the built tables go: the mapped ones are the same bytes)
     return model
 
 
@@ -616,9 +652,9 @@ def egm2008_cached(cache_dir=CACHE_DIR):
 def distance_m(lat1, lon1, lat2, lon2):
     """Great-circle distance in m (spherical Earth; plenty for the recompute rule)."""
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    a = (math.sin((p2 - p1) / 2) ** 2
-         + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2)
-    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+    a = (dnp.sq(dmath.sin((p2 - p1) / 2))
+         + dmath.cos(p1) * dmath.cos(p2) * dnp.sq(dmath.sin(math.radians(lon2 - lon1) / 2)))
+    return 2 * 6371008.8 * dmath.asin(min(1.0, math.sqrt(a)))
 
 
 class Provider:
@@ -633,7 +669,7 @@ class Provider:
 
     def __init__(self, cache_dir=CACHE_DIR, model=None, nmax=None, download=True, log=None, net=None):
         import logging
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         self.cache_dir = cache_dir
         self.nmax = nmax or int(os.environ.get("BNGE_GRAVITY_NMAX", DEFAULT_NMAX))
         self.model = model

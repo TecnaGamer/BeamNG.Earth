@@ -89,6 +89,10 @@ T.check(fmt.urlEncode('a b&c=d/é') == 'a%20b%26c%3Dd%2F%C3%A9', 'urlEncode: ' .
 local url, cut = fmt.issueUrl('t', 'short', 'map')
 T.check(not cut and url == 'https://github.com/TecnaGamer/BeamNG.Earth/issues/new?title=t&labels=map&body=short', 'short url')
 local long = string.rep('é line\n', 3000)
+-- (Windows: the shell opens ~2083 characters of a URL; GitHub #743)
+T.check(fmt.urlMax('Windows') == 2000 and fmt.urlMax('Linux') == fmt.URL_MAX, 'the URL cap per system')
+url, cut = fmt.issueUrl('A title', long, 'bug', fmt.urlMax('Windows'))
+T.check(#url <= 2000 and cut, 'a long report on Windows: under 2000 characters, cut')
 url, cut = fmt.issueUrl('A title', long, 'bug', 7000)
 T.check(cut and #url <= 7000 and #url > 6500, 'long body truncated under the limit (' .. #url .. ')')
 T.check(url:find(fmt.urlEncode('Truncated'), 1, true), 'truncation note')
@@ -103,4 +107,12 @@ do
       'the folder line has no account name')
   end
 end
+
+-- the car held while the world loads: a line of its own, not slow frames (2026-11-11)
+local hl = fmt.heldLine({ fps = 40, frames = 600, held = { s = 4.2, frames = 250, over50 = 0, why = { edge = 4.0, loading = 0.2 } },
+  playing = { frames = 350, fps = 58.6, over50 = 2 } })
+T.check(hl and hl:find('held still while the world loaded for 4.2 s', 1, true) and hl:find('edge of the ground', 1, true)
+  and hl:find('58.6 fps', 1, true) and hl:find('2 frames over 50 ms', 1, true), 'held line: seconds, why, the frames while not held')
+T.check(fmt.heldLine({ fps = 60, frames = 10 }) == nil and fmt.heldLine(nil) == nil, 'not held: no line')
+
 T.done('test_issuefmt')

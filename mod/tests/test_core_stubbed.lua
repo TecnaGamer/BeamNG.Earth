@@ -9,6 +9,10 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+-- (the v1.3.1 block, 1024² at 2 m: these checks are written for it; the 1 m default: test_lattice / test_follow)
+require('beamngEarth/lattice').configure(1024, 2.0)
+require('beamngEarth/follow').configure()
+require('beamngEarth/rebase').configure(2048)
 require('beamngEarth/farfield').SPARE_MAX = 0 -- deletion timing as before; the spare pool: test_farfield_spares.lua
 local framing = require('beamngEarth/framing')
 local geodesy = require('beamngEarth/geodesy')
@@ -152,6 +156,25 @@ end
 -- the session
 
 local core = require('beamngEarth/core')
+local gps = require('beamngEarth/gps')
+local gpsUpdate, gpsFrames = gps.update, {}
+gps.update = function(anchor, player)
+  if anchor and player then
+    gpsFrames[#gpsFrames + 1] = { frame = frameNo, anchor = anchor, player = vec3(player.x, player.y, player.z),
+      vehicle = vec3(veh.pos), lagProbe = core._state().lagProbe ~= nil }
+  end
+  return gpsUpdate(anchor, player)
+end
+local function gpsConsistent(from, label)
+  local checked, bad = 0, 0
+  for i = from + 1, #gpsFrames do
+    local f = gpsFrames[i]
+    checked = checked + 1
+    local dx, dy, dz = f.player.x - f.vehicle.x, f.player.y - f.vehicle.y, f.player.z - f.vehicle.z
+    if f.lagProbe or dx * dx + dy * dy + dz * dz > 1 then bad = bad + 1 end
+  end
+  T.check(checked > 0 and bad == 0, label .. ': GPS receives fresh positions only after the origin move is visible')
+end
 require('beamngEarth/statusbar').enabled = false   -- its own test: test_statusbar.lua (these count text draws)
 -- the governor's wall clock: 16 ms per frame (deterministic heavy-slot timing)
 local wallNow = 0
@@ -194,6 +217,7 @@ T.check(tb and tb.lastImport.sq == SQ and tb.pos.x == -1024 and tb.pos.y == -102
 frames(3)
 T.check(#received('hello') == 1 and received('hello')[1].protocol == 4 and received('hello')[1].format == 4,
   'hello (protocol 4, format 4: the newest the mod reads) sent on connect')
+T.check(received('hello')[1].turbineGeo == 1, 'far turbine geotile capability sent on connect')
 T.check(calls.safeTeleport == 1, 'player placed on flat ground')
 
 -- capture the mod's warnings (the stub log() drops everything)
@@ -337,6 +361,7 @@ T.check(calls.importMaps == imports + 1, 'stale terrain_ready ignored')
 
 ------------------------------------------------------------------------------------------
 -- origin rebase at 10 km (its anchor at the player, unsnapped: the frame change's geometry; snapped below)
+local gpsRebaseStart = #gpsFrames
 core.SNAP_TELEPORTS = false
 T.check(core.setRebaseDistance(500) == 2000 and core.setRebaseDistance(10000) == 10000, 'setRebaseDistance clamps')
 veh.pos = vec3(9690, 0, 1200)
@@ -426,6 +451,7 @@ for id, p in pairs(farBefore) do
 end
 T.check(calls.safeTeleport == 2, 'rebase does not reset the vehicle')
 T.check(core._rebaseLag() == 0, 'measured lag = 0 frames (same frame)')
+gpsConsistent(gpsRebaseStart, 'same-frame rebase')
 
 -- new anchor's far tiles, then far_done -> old tiles deleted progressively
 serverSend({ type = 'far_tile', anchorId = 1, key = 'late', shape = '/x.dae', pos = { 0, 0, 0 } }) -- stale
@@ -449,6 +475,7 @@ T.check(last('prepare_terrain').anchorId == 2, 'new anchor id in prepare_terrain
 -- run phase 2 one frame after phase 1
 core.setRebaseDistance(2000)
 veh.engineLag = 1
+gpsRebaseStart = #gpsFrames
 local function rebaseTo(n, x)
   veh.pos = vec3(x - 250, 0, 1200)
   veh.vel = vec3(25, 0, 0)
@@ -471,8 +498,10 @@ frame()
 T.check(type(core.status()) == 'string', 'status works')
 local function lagOf() local v = core._rebaseLag(); return v end
 T.check(lagOf() == 1, 'measured lag = 1 frame')
+gpsConsistent(gpsRebaseStart, 'first delayed rebase')
 
 moves = calls.setClusterPosRelRot
+gpsRebaseStart = #gpsFrames
 local nCommits = #received('commit_anchor')
 rebaseTo(4, 2001)
 imports = calls.importMaps
@@ -489,6 +518,7 @@ ph = physicsLog[#physicsLog]
 T.check(ph.frame == frameNo and ph.terrainX == scenetree.findObject('bngEarthTerrain').pos.x, 'the physics step that moved the car had the new terrain')
 seen = preRenderLog[frameNo]
 T.check(seen.car.x < 1500 and seen.car.x - seen.last2.x > 1.4, 'frame N+1: car, world and camera all in the new frame, camera behind')
+gpsConsistent(gpsRebaseStart, 'known delayed rebase')
 veh.engineLag = 0
 core.setRebaseDistance(10000)
 local req4 = received('prepare_anchor')[4]
@@ -786,6 +816,75 @@ drawnCredits = {}
 frames(3)
 T.check(drawnCredits[#drawnCredits] == 'Elevation: s11', 'credits: a new session shows its attribution line until its credits arrive')
 
+-- the trees' fill argument (new shapes unbounded, trees.lua newShapeCap) follows the far cap (PR #1128): a stop (the
+-- governor's loading mode through st.slowFor) is not a fill with the cap on, and is one again with it off
+-- (governor.FAR_CAP_MS 0: the pre-cap behaviour as a whole); a teleport's fill fills either way
+do
+  local governor = require('beamngEarth/governor')
+  local trees = require('beamngEarth/trees')
+  local loadprogress = require('beamngEarth/loadprogress')
+  local stC = core._state()
+  local realUpdate, savedCap, lastFill = trees.update, governor.FAR_CAP_MS, nil
+  trees.update = function(a, p, v, ms, fill) lastFill = fill; return realUpdate(a, p, v, ms, fill) end
+  stC.placeFrames, stC.loadingUntil, stC.teleportAt = nil, 0, nil
+  stC.slowFor = 10                       -- parked past SLOW_S: loading mode without a teleport
+  frame()
+  T.check(core._governor().loading and core._governor().farCap == governor.FAR_CAP_MS, 'standing: loading mode, the cap on (default)')
+  T.check(lastFill == false, 'cap on: a stop is no fill (new shapes one a frame)')
+  governor.FAR_CAP_MS = 0
+  stC.slowFor = 10
+  frame()
+  T.check(core._governor().farCap == nil, 'FAR_CAP_MS 0: the cap is off')
+  T.check(lastFill == true, 'cap off: a stop fills as before (the old behaviour, both halves)')
+  governor.FAR_CAP_MS = savedCap
+  stC.slowFor = 10
+  stC.loadingUntil = stC.clock + 5       -- a teleport's fill
+  frame()
+  T.check(core._governor().farCap ~= nil and lastFill == true, 'cap on: a teleport still fills')
+  stC.loadingUntil = 0
+
+  -- the loading cover (core M._loadCover): past the 3 s, on while the load is on and the player stays put, at most
+  -- MAX_S after the teleport (driven directly: the frame's player here is not a car)
+  local cov = core._cover
+  local savedPlayer = stC.player          -- (the clock runs on: time passing)
+  local function teleported()
+    stC.loadingUntil, stC.teleportAt = stC.clock + 3, stC.clock
+    stC.player = { x = 0, y = 0, vx = 0, vy = 0, vz = 0 }
+    loadprogress.reset(); loadprogress.start(stC.clock)
+  end
+  teleported()
+  stC.clock = stC.clock + 5
+  T.check(core._loadCover(), 'cover: still loading 5 s after a teleport while the load is on and the car stands')
+  stC.slowFor = 0
+  frame()                                 -- (the frame's own player: none here, which ends nothing)
+  T.check(core._governor().loading and lastFill == true, 'cover: the governor in loading mode, the trees fill')
+  stC.player = { x = 0, y = 0, vx = 0.5, vy = 0, vz = -6 }    -- (dropping onto the ground: not driving off)
+  T.check(core._loadCover(), 'cover: a vertical drop does not end it')
+  stC.player = { x = 0, y = 0, vx = 3, vy = 0, vz = 0 }       -- 6.7 mph: driving off
+  T.check(not core._loadCover(), 'cover: the car driving off ends it')
+  stC.player = { x = 0, y = 0, vx = 0, vy = 0, vz = 0 }
+  T.check(not core._loadCover(), 'cover: ... for good (stopping again is no teleport)')
+  teleported()
+  stC.clock = stC.clock + 4
+  T.check(core._loadCover(), 'cover: on past the 3 s')
+  loadprogress.reset()
+  T.check(not core._loadCover(), 'cover: the load over ends it')
+  teleported()
+  stC.clock = stC.clock + cov.MAX_S + 1
+  T.check(not core._loadCover(), 'cover: never past MAX_S')
+  cov.ON = false
+  teleported()
+  stC.clock = stC.clock + 2
+  T.check(core._loadCover(), 'cover off: the 3 s still')
+  stC.clock = stC.clock + 2
+  T.check(not core._loadCover(), 'cover off: none after the 3 s (the old rule)')
+  cov.ON = true
+  stC.teleportAt, stC.loadingUntil, stC.player = nil, 0, savedPlayer
+  loadprogress.reset()
+  frames(2)                              -- (loading mode off again before the next sections)
+  trees.update = realUpdate
+end
+
 -- the download cache (server cache.py) for the settings page: hello sends the page's cap, the
 -- server's 'cache' is kept (outliving levels) and a clear's answer counts; the requests go out only
 -- with a server session; a disconnect or a new session forgets the numbers
@@ -831,8 +930,38 @@ do -- the window gets its view only while it is shown: it is hidden by default (
   T.check(#views == 1 and type(views[1].connection) == 'string', 'shown window: its view built')
   ui.draw, ui.visible = draw, vis0
 end
+-- The connection survives a level reload; its negotiated capability must survive the scene reset too.
+do
+  local actual, seen = core._trafficvisuals, {}
+  core._trafficvisuals = { PROTO = 2,
+    session = function(id, available) seen.id, seen.available = id, available end,
+    reset = function() seen = {} end,
+    hasWork = function() return false end, update = function() end, onTeleport = function() end }
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    streamLease = 1, leaseId = 'game-owner',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
+  frames(3)
+  T.check(seen.available, 'hello negotiates distant traffic before the level reload')
+  core.onClientEndMission()
+  core.onClientStartMission()
+  T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  local leaseSession, leaseId = require('beamngEarth/net').lease()
+  T.check(leaseSession == 'traffic-reload' and leaseId == 'game-owner', 'level reset preserves resource ownership')
+  core._trafficvisuals = actual
+end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
+do
+  local n = #received('hello')
+  T.check(pumpUntil(function() return #received('hello') > n end, 10), 'reconnect sends a new hello')
+  local h = received('hello')[#received('hello')]
+  T.check(h.streamLease == 1 and h.leaseId == 'game-owner' and h.leaseSession == 'traffic-reload',
+    'reconnect names the same game resource owner')
+  T.check(h.slotSession == 'traffic-reload' and type(h.slotsHeld) == 'table' and type(h.held) == 'table',
+    'reconnect includes complete snapshots, including an empty scene')
+  T.check(not core._netq.urgent._connected and not core._netq.urgent._disconnected,
+    'ownership snapshots remain ordered after incoming tile messages')
+end
 beamngEarth_settings = nil
 
 core.onExtensionUnloaded()
@@ -861,5 +990,89 @@ do
   local a, b, c = core.safeSpot(5, 5, function() return 7 end)
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
+end
+-- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
+do
+  local core = require('beamngEarth/core')
+  local terrain = require('beamngEarth/terrain')
+  local setBase, n = terrain.setBase, 0
+  terrain.setBase = function() n = n + 1; return true end
+  local st = core._state()
+  local was = { st.anchorId, st.block, st.player }
+  st.anchorId, st.block = 7, { cx = 512, cy = -512 }
+  core._baseLater = { anchorId = 7, cx = 512, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  st.player = { speed = core.BASE_LATER_MS + 5 }
+  T.check(core.applyBaseLater() == false and n == 0 and core._baseLater ~= nil, 'base photo refresh: waits while the car is fast')
+  st.player = { speed = (core.BASE_LATER_MS + core.BASE_NOW_MS) / 2 }
+  T.check(core.applyBaseLater() == false and n == 0, 'base photo refresh: still waits between the two speeds')
+  st.player = { speed = core.BASE_NOW_MS - 5 }
+  T.check(core.applyBaseLater() == true and n == 1 and core._baseLater == nil, 'base photo refresh: applied once the car is slower')
+  core._baseLater = { anchorId = 7, cx = 0, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  T.check(core.applyBaseLater() == false and n == 1 and core._baseLater == nil,
+    'base photo refresh: dropped when its block is no longer the one in use')
+  terrain.setBase = setBase
+  st.anchorId, st.block, st.player = was[1], was[2], was[3]
+end
+-- fast pre-cache's pause (PR #773): only our own pause is let go, and the app going away ends it
+do
+  local sh = require('beamngEarth/simhold')
+  local was = { sh.paused, sh.pause }
+  local paused, calls_ = false, {}
+  sh.paused = function() return paused end
+  sh.pause = function(on) calls_[#calls_ + 1] = on; paused = on end
+  core._fastHeld, core._fastPaused = false, false
+  core.fastAreaPause('a1')
+  T.check(paused and calls_[1] == true, 'fast pre-cache: the game paused')
+  core.fastAreaPause('')
+  T.check(not paused and calls_[2] == false, 'fast pre-cache over: our pause let go')
+  paused, calls_ = true, {}                    -- the player paused already
+  core.fastAreaPause('a2')
+  core.fastAreaPause(nil)
+  T.check(paused and #calls_ == 0, "fast pre-cache: a pause it didn't make is left as it was")
+  paused, calls_ = false, {}
+  core.fastAreaPause('a3')
+  core.reconnect()                            -- (drops the connection through the '_disconnected' handler)
+  T.check(not paused and calls_[2] == false, 'fast pre-cache: the app gone, the pause let go')
+  sh.paused, sh.pause = was[1], was[2]
+end
+-- the 3D map: viewAway follows the orbit target (tx / ty), not the camera kilometres behind it
+do
+  local st = core._state()
+  local was = { st.player, st.cam }
+  st.player = { x = 0, y = 0 }
+  st.cam = { x = 5000, y = 0, tx = 10, ty = 0 }
+  T.check(core.viewAway() == nil, '3D map: target beside the car, the camera behind it does not move the trees')
+  st.cam = { x = 5000, y = 0, tx = 200, ty = 0 }
+  local v = core.viewAway()
+  T.check(v and v.x == 200 and v.y == 0, '3D map: the trees follow the target')
+  st.cam = { x = 200, y = 0 }
+  v = core.viewAway()
+  T.check(v and v.x == 200 and v.y == 0, 'a free camera with no target')
+  st.player, st.cam = was[1], was[2]
+end
+gps.update = gpsUpdate
+do -- a computer with too little memory (the server's emergency tier): one warning toast a server session
+  local toasts, oldGh = {}, rawget(_G, 'guihooks')
+  guihooks = { trigger = function(name, data)
+    if name == 'toastrMsg' and type(data) == 'table' and tostring(data.title):find('memory', 1, true) then
+      toasts[#toasts + 1] = data
+    end
+    if oldGh and oldGh.trigger then return oldGh.trigger(name, data) end
+  end }
+  local hello = { type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's5',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'emergency',
+    memoryNote = 'This computer has 4 GB of memory.' }
+  serverSend(hello)
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1 and toasts[1].msg == hello.memoryNote and toasts[1].type == 'warning',
+    'emergency memory tier: a warning toast with the server\'s note')
+  serverSend(hello)
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1, 'the same server session: not again')
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, serverVersion = '0.4.0', sessionId = 's6',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', memoryTier = 'lean', memoryNote = 'x' })
+  core.onUpdate(0.05, 0.05)
+  T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
+  guihooks = oldGh
 end
 T.done('test_core_stubbed')

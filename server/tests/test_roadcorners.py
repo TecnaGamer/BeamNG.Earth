@@ -34,6 +34,30 @@ def curved(chunks, m="line_white"):
     return [c for c in chunks if c["m"] == m and len(c["n"]) > 10]
 
 
+class CurbCornerPaintTest(unittest.TestCase):
+    def test_curb_return_fill_painted_in_the_road_tone(self):
+        """The user, 2026-11-11: "side walk corners still need improvment, you can tell because the road paint is a
+        diffrent shape": the asphalt between a curb return's arc and the old square corner is painted with the roads,
+        in the painted road's colour beside it."""
+        f = crossing(cls="residential")
+        urban = lambda lat, lon: np.ones(np.shape(lat), bool)       # noqa: E731 (town streets: sidewalks)
+        specs = roads.road_specs(f, urban)
+        self.assertTrue(all(roads.has_sidewalks(sp) for sp in specs if sp is not None))
+        pads = roadcorners.curb_pads([f], urban, None, FRAME, bounds=(-32.0, -32.0, 32.0, 32.0))
+        self.assertGreaterEqual(len(pads), 4, "the four curb returns' fills")
+        image = np.full((257, 257, 3), 230, np.uint8)
+        photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f], urban)
+        hw = specs[0].width / 2
+        # just outside both carriageway edges, inside the return's arc (residential radius 3 m): painted
+        q = hw + 0.4
+        c, r = int(round((q + 32.0) * 4)), int(round((32.0 - q) * 4))
+        self.assertTrue(np.any(photo[r, c] != image[r, c]), "the corner's fill painted")
+        road = photo[128, 128].astype(int)                             # the junction's middle
+        self.assertLess(np.abs(photo[r, c].astype(int) - road).max(), 6, "in the road's colour")
+        far = int(round((32.0 - (hw + 6.0)) * 4)), int(round((hw + 6.0 + 32.0) * 4))
+        np.testing.assert_array_equal(photo[far], image[far], "the block's corner beyond the arc: the photo")
+
+
 class PavementCornerTest(unittest.TestCase):
     def test_oneway_highway_corner_keeps_yellow_left_edges(self):
         sp = roads.Spec(14.0, "paved", False, "motorway", True, dir=1, lanes=2)
@@ -68,7 +92,7 @@ class PavementCornerTest(unittest.TestCase):
         mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25)
         self.assertEqual(mat[150, 150], surface.ASPHALT, "(5.5, 5.5) is between the old square corner and the arc")
         self.assertNotEqual(mat[168, 168], surface.ASPHALT, "(10, 10) stays roadside")
-        self.assertEqual(mat[164, 164], surface.VERGE, "(9, 9): a bare verge round the corner, as along the roads")
+        self.assertEqual(mat[162, 162], surface.VERGE, "(8.5, 8.5): a bare verge round the corner, as along the roads")
         self.assertEqual(mat[168, 168], surface.GRASS)
         image = np.full((257, 257, 3), 230, np.uint8)
         photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f])
@@ -79,10 +103,27 @@ class PavementCornerTest(unittest.TestCase):
         self.assertGreater(mask[106, 150], 240)
         self.assertEqual(mask[88, 169], 0)
 
+    def test_quick_paint_asks_no_lidar_decided_parts(self):
+        # a stand-in block's paint (quick): the roads as the map tags them, no corners, nothing that waits on the
+        # session's lidar answers (roads.ground_parts / the tapers' bridge specs held a cold stand-in 17 s)
+        f = crossing()
+        e, n = np.meshgrid(np.arange(-32.0, 32.01, 0.25), np.arange(-32.0, 32.01, 0.25))
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+
+        def no(*_a, **_k):
+            raise AssertionError("waited on the lidar decisions")
+        with patch.object(roads, "ground_parts", no), patch.object(roads, "bridge_specs", no):
+            mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25, quick=True)
+        self.assertEqual(mat[128, 128], surface.ASPHALT, "the crossing's middle")
+        self.assertNotEqual(mat[150, 150], surface.ASPHALT, "no rounded corner in the stand-in")
+
     def test_corner_grading_holds_the_new_pavement_on_a_hillside(self):
         # a road with a narrow flat shoulder (grading.shoulder: a motorway's ramp terminal, an expressway) meets a
         # secondary: its 12 m corners' fans reach past the roads' graded ground
-        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]], ["motorway", "secondary"])
+        # Keep this grading fixture's original 13 m carriageway explicit: lane defaults must not change the
+        # geometry whose corner blending is measured here.
+        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]],
+                     ["motorway", "secondary"], widths=[(0, 13.0)])
         _, rows, corners = roadcorners.source([f], frame=FRAME)
         rows = [(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon) for fid, sp, p, lon in rows]
         plans = [(fid, grading.Plan(p[:, :2], p[:, 2], sp.width / 2 + grading.shoulder(sp), road_half=sp.width / 2))
@@ -105,7 +146,8 @@ class PavementCornerTest(unittest.TestCase):
         cx, cy = np.r_[t, np.zeros(61)], np.r_[np.zeros(61), t]
         base = np.full(len(cx), 16.0)
         np.testing.assert_allclose(grading.grade_points(cx, cy, base, [p for _, p in plans + extra]),
-                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.07)
+                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.09)
+        # (0.09: the segments' lines carried on past their joints, grading.EXTRAP_M, 7.8 cm at 9 m from the junction)
         # two streets (a sidewalk-wide flat shoulder each, in the country too): their corners are on it already
         _, rows, _ = roadcorners.source([crossing()], frame=FRAME)
         self.assertEqual(roadcorners.grade([(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon)
@@ -195,6 +237,16 @@ class RuralTeeTest(unittest.TestCase):
             return roads.build_tile(FRAME, 0, 0, [tee()], flat, walks=[], country=country) + \
                 roads.build_tile(FRAME, -1, 0, [tee()], flat, walks=[], country=country)
 
+    def test_sweden_paints_a_give_way_line_on_the_lesser_road(self):
+        f = features([[(-100, 0), (0, 0)], [(0, 0), (100, 0)], [(0, 0), (0, 100)]], ["primary", "primary", "residential"])
+        def teeth(country):
+            return [c for t in (0, -1) for c in roads.build_tile(FRAME, t, 0, [f], flat, walks=[], country=country)
+                    if c.get("layer") == "mark" and len(c.get("poly") or ()) == 3]
+        got = teeth("SE")
+        self.assertTrue(got, "M14's triangles")
+        self.assertTrue(all(q[1] > 5.0 for c in got for q in c["poly"]), "on the side road, back from the main road")
+        self.assertEqual(teeth("DE"), [])
+
     def test_one_fill_per_corner_and_lines_along_each_arc(self):
         chunks = self.build("DE")
         self.assertEqual(sum(bool(c.get("poly")) for c in chunks), 2)
@@ -208,9 +260,10 @@ class RuralTeeTest(unittest.TestCase):
 
     def test_straight_edges_end_at_the_tangents(self):
         chunks = self.build("DE")
-        t = 3.25 + junctions_pave()           # half the side road's width + the radius
-        decal = 3.25 + (roads.EDGE_DECAL_AT - 0.5) * roads.EDGE_DECAL["w"]
-        line = 3.25 - roads.EDGE_LINE["inset"]
+        h = roads.road_specs(tee())[0].width / 2     # (the tertiary's: the frame's measured rural width, WIDTH_TABLE)
+        t = h + junctions_pave()              # half the side road's width + the radius
+        decal = h + (roads.EDGE_DECAL_AT - 0.5) * roads.EDGE_DECAL["w"]
+        line = h - roads.EDGE_LINE["inset"]
         for m, off in ((DECAL, decal), ("line_white", line)):
             north = [np.array(c["n"]) for c in chunks if c["m"] == m and len(c["n"]) <= 10
                      and all(abs(q[1] - off) < 0.02 for q in c["n"])]

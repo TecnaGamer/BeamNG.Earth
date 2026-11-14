@@ -1,0 +1,220 @@
+# Distant traffic: integration and rendering checks
+
+The contract and code map are in [DISTANT_TRAFFIC.md](../DISTANT_TRAFFIC.md). This note records the checks
+performed for this contribution and their limits.
+
+## Source and review
+
+Integrated upstream dev `5ef60f111f298d9e1dc2f8993778ec4fc40391bc`, including the native fine-terrain API. The
+upstream delta and current source rules were read before integration. New route algorithms remain in Rust;
+Python marshals shared road rules, projections, samples and bridge profiles. Both native artifacts were rebuilt
+from the combined source as version 126; no old binary was retained to resolve the merge.
+
+Updated integration: merged dev.116 (`ae96a16a41fd7ceefcddcd642531d77421c46bb3`) and rebuilt both artifacts as
+native132, preserving `TrafficRoutes` alongside the new fine-terrain APIs. The subsequent dev commit `a78df749`
+changes only fine-height sampling; a local merge-tree check found no conflicts with that current target. The
+feature's route, rendering and settings behavior did not change during this update.
+
+Independent Standards review found a duplicated resync readiness condition; execution and `hasWork()` now share
+one predicate. Independent Spec review found that inferred divided-carriageway direction was dropped. A failing
+regression reproduced two same-direction streams on opposite carriageways; the producer now forwards `Spec.dir`
+when no explicit one-way direction exists. The regression covers both driving sides and explicit rules. Both
+reviewers confirmed their findings resolved. Neither static review proves whole-engine crash or leak freedom.
+
+## Bridges and distribution
+
+Bridge routes share the far slabs' anchor-free `BridgeProfiles` store. The profile owner's `(fid, part index)`
+survives `ChainView` mapping; ids remain stable when neighbouring tiles request different spans. Deck Z is already
+in the destination world frame, so it is not replaced with water elevation or given a second curvature offset.
+Missing/non-finite decks are omitted. Ground routes and tunnels keep their existing separation.
+
+The actual production stream in Vladivostok delivered 61 unique bridge routes at the observed checkpoint.
+The renderer had 44 bridge assignments; 57 non-hidden planes belonged to the Russky Bridge's two carriageways.
+The inspected screenshot showed white/red points along the span, and the user confirmed movement there. These
+are delivered/rendered object counts, not a claim that every object was an unobscured visible pixel.
+
+The user then noticed repeated three-car groups. The former linear rank transformation correlated adjacent slot
+numbers before budget thinning (lag-one correlation about 0.28 in the fixed 64-road sample). Mixing those bits
+before the existing bounded modular multiplications reduced that sample's correlation to about 0.002. Position
+cell jitter was initially widened, but the tester still saw a regular pattern. The final sequence instead
+distributes 80% of the route over bounded exponential gap weights and reserves 20% for minimum headways. It is
+computed once, cached at no more than 128 offsets per route and released with that route. Expected density,
+constant route speed and work/object limits remain unchanged; fractional rounding and selected identities can
+differ between versions. Six deterministic rank-correlation regressions cover adjacent slots and a three-slot
+lag; headway tests check ordering, variation, exact total length, wrap and cache reuse. This is cosmetic variation,
+not a car-following simulation.
+
+## Verification
+
+Repeated on the dev.116 integration:
+
+- Windows: 27 feature, 85 road, 8 fine-terrain, 46 grading, 13 plan-cache, 22 heightmap, one anchor-quantum and
+  74 building tests passed. Protocol agreement: 32 run, 31 passed, one skipped. Synthetic far-geotile checks:
+  six run, four passed, two real-data tests skipped.
+- LuaJIT: 239 pure path, 1740 renderer, 282 core, 293 settings, 43 terrain-swap, 28 terrain-patch, four XXH64,
+  17 geotile, 31 road-geotile and 33 far-geotile assertions passed.
+- Both native132 artifacts were rebuilt from source. Windows API import and Linux bridge-route/API checks passed.
+  The updated mod was installed and the Windows game connected with capability 2. This fresh daytime scene did
+  not exercise nighttime movement; the moving-light and bridge observations below remain from the earlier build.
+
+Earlier feature acceptance and lifecycle checks:
+
+- Windows feature suite: 27 tests passed, including deck relief, missing/invalid profiles, stable bridge-part ids,
+  the default profile-reader contract and divided carriageway directions.
+- Protocol agreement: 32 run, 31 passed, one skipped.
+- Adjacent roads: 83 passed; navigation graph: 13 passed; geotiles: 14 run, one skipped.
+- LuaJIT fixtures: 239 pure path assertions, 1740 renderer assertions, 282 core and 293 settings assertions passed.
+  The saturated camera-return fixture uses longer roads whose slots clear endpoint fades, so that it measures
+  view restoration rather than intentional route-end dimming. Geotile 17 and navigation graph 46 also passed.
+- Renderer lifecycle regression repeatedly creates the full 512-car pool and checks zero retained engine objects,
+  routes and pending points after reset. A separate 60-cycle stub-engine run, collected every 20 cycles, measured
+  about 2026/2079/2083 KiB of Lua heap with the final phase cache. This finite result does not measure native renderer allocations or prove
+  absence of a long-session process-memory leak.
+- JavaScript syntax and Git whitespace checks passed. The Linux artifact has a native route/API smoke check;
+  the live game and comprehensive suites above ran on Windows, not Linux BeamNG.
+
+The game stayed open during companion replacement; the user's camera and time were preserved. Physics was
+running during the bridge check. No distant-traffic traceback was observed. A pending asyncio task warning
+reappeared during companion reconnect, as it had before this integration. The earlier reported native crash
+while deleting gameplay traffic was not reproduced in the finite moving-traffic checks; its cause remains
+unestablished. Genuine driving rebases, long sessions and controlled full CPU/GPU comparisons remain additional
+acceptance work, rather than implied by these fixtures or mixed live timing counters.
+
+## Camera stability and quality (2026-11-02)
+
+The former view-dependent budget reproduced two visible problems: zooming added 235 planes to an already
+occupied central road, and a 45-degree turn initially revealed fewer cars than the settled view. Regression
+fixtures failed on that renderer. Admission now builds a stable population around the player, independently of
+camera position, orientation, FOV and aspect. Fixed slot phases prevent unrelated road populations changing when
+moving cars cross selection bands. Genuine additions fade in; revealing an established actor refreshes its
+cached pose immediately, even when the preparation governor is blocked.
+
+The first world-wide 512-car variant passed the transition checks but the user found it too sparse. They
+accepted the denser 2048-car variant's appearance and transitions, then reported a frame-rate cost. Low/Medium/High
+now cap the whole population at 512/1024/2048 cars, including retiring assignments. Hidden planes receive no
+transform/color uploads, off-screen motion is cached at 2 Hz, and an unchanged population avoids repeat scans.
+Quality reductions release excess native pairs incrementally. Producer ranges, road density, protocol and the
+dev.116/native132 server remain unchanged.
+
+A fixed-camera Windows comparison with the user's background frame-rate cap disabled sampled each phase for
+15 seconds. Camera position/orientation/FOV remained unchanged within each sample; time continued normally.
+
+| Phase | Mean FPS | Mean module time per frame | World cars at end | In-frustum count |
+|---|---:|---:|---:|---:|
+| Off, before | 53.4 | 0.03 ms | 0 | 0 |
+| High | 38.7 | 4.96 ms | 1932 | 660 |
+| Medium | 43.8 | 2.39 ms | 953 | 321 |
+| Low | 50.3 | 1.33 ms | 470 | 154 |
+| Off, after | 55.0 | 0.04 ms | 0 | 0 |
+
+These are short, scene-specific end-to-end samples, not a hardware-independent FPS promise or a separated GPU
+profile. Population/density continued changing slowly with the clock. The final small change skips native object
+lookups for already-hidden planes; the table predates that change and does not claim a measured gain from it.
+
+LuaJIT fixtures passed: 241 pure path assertions, 6780 renderer assertions, 310 settings assertions, 282 core,
+17 geotile and 46 navigation graph assertions, plus JS syntax and whitespace checks. They cover zoom/aspect/free
+camera movement, a first-frame 45-degree turn, moving off-screen poses, admission fades, quality migration,
+quality reductions and repeated full-pool reset. A separate 60-cycle full-2048-pool run also passed, with zero
+retained stub objects/routes/pending points after each reset. Collected Lua heap at cycles 20/40/60 was about
+1768/1787/1830 KiB; this is finite harness evidence with a small increase, not proof of zero native-memory leaks.
+
+Upstream conventions were refreshed through `eefbb41549e1d0125169bb8537e815a508a3de9e`; the instruction/workflow
+files were unchanged. That newer terrain work was inspected for conventions, not merged or executed in this test.
+
+A subsequent human-driven High test recorded 590 one-second samples over about ten minutes, with roughly 23 km
+of sampled movement within common anchor frames. Physical-follow commits increased from 130 to 188. Anchor ids
+changed from 2 through 3 to 4, with the driving rebase counter increasing from 2 to 3. Every sample's native group
+count equalled the renderer's pool count. Peaks were 2048 actors, 4096 planes, 336 tiles, 5379 prepared routes and
+87626 prepared plus pending points; no deferred tiles were needed. The route cache changed with travel rather
+than retaining all visited roads. No input, camera, weather or time commands were used to drive this test.
+
+Whole-game physical memory ranged from about 3674 to 5470 MiB and GE Lua heap from 261 to 360 MiB, with falls as
+well as rises. These include terrain, vegetation, other mods and the bounded telemetry itself; they cannot be
+attributed to this feature alone. Native-object equality, fixed ceilings and repeated cleanup provide finite
+resource evidence, not an assertion of leak freedom. The game logged a 359 ms world-loading hitch near a rebase
+(146.6 ms world work, 15.9 ms traffic module work); limits on work units are not hard frame-time guarantees.
+High still has a measurable rendering cost; weaker machines should use a lower quality or disable the effect.
+The user confirmed smooth operation and good camera/zoom transitions after this drive.
+
+An actual idle cleanup check then disabled the renderer and verified all 4096 native traffic planes disappeared
+in about 34.4 seconds, including the 30-second idle hold and incremental deletion. A global TSStatic shape scan
+found zero remaining traffic planes, agreeing with zero pool/group objects. Route data stayed cached as designed.
+The test restored the user's High/on settings; temporary metrics extensions were removed after verification.
+
+All 190 installed mod files matched source SHA256. The actual CEF runtime module cache exposed the new quality
+control with all three options. The game remained open throughout these checks; public PR/test archives still
+contain the preceding version until a separately approved publication.
+
+## Overnight density adjustment (2026-11-02)
+
+The user found the enlarged world population too busy at midnight and 04:00. The previous local-hour curve
+retained 40% and 12% of peak traffic respectively. These now use 8% and 1.5%, with smooth intermediate knots at
+02:00, 06:00 and 22:00. The 08:00–21:00 curve, including the accepted evening rush hour, is unchanged. This is
+an artistic density adjustment, without an extra per-frame mechanism or a change to camera-independent admission.
+
+The pure regression failed on the old midnight/04:00 values, then passed all 246 assertions, including preserved
+noon/18:00 values and midnight continuity. The live module received only the new density table; actors, elapsed
+motion, camera, FOV and environment time were preserved. At the user's fixed 00:00 view near 55.16418,50.51869,
+world actors fell from 794 to 148 and the in-frustum counter from 401 to 68. These counters do not measure occlusion.
+Source and installed curve hashes match. Live04:00 appearance remains for user feedback; its density and
+population limits are covered by the pure/renderer fixtures. Evidence is in build/camera-stability/night-*.
+The user confirmed the new night density was appropriate. Final renderer fixtures passed 6781 assertions,
+including positive but bounded 04:00/midnight populations. No game/companion restart or public update was needed.
+
+## Late evening adjustment (2026-11-02)
+
+At the user's request, 21:00 density decreased from 85% to 70% of peak, about 18% fewer than the previous
+setting. An explicit 18:00 knot retains its accepted 97.65625% density while easing through the later evening.
+The previously agreed 22:00, midnight and 04:00 knots are unchanged. The curve remains an artistic impression,
+not local traffic measurements. This changes only the density table, without another runtime mechanism.
+
+The 21:00 regression failed at the previous 85%, then passed with the preserved 18:00 and overnight assertions:
+248 pure and 6781 renderer assertions passed. The installed density file matches source; the live table was
+replaced without resetting actors, elapsed motion, the user's camera or selected time. The server/native module
+and public PR remain unchanged. Evidence is in build/camera-stability/evening-*.
+At the user's selected 21:00, world actors decreased from 1664 to 1386 after settling. The user turned the camera
+during this interval, so in-frustum counts are not a controlled before/after comparison. The camera position,
+FOV and environment clock remained unchanged; no camera or time commands were issued.
+The user requested further reductions after the 70% and 60% previews. The 21:00 knot now uses 50% of peak;
+the same 18:00, 22:00 and overnight anchors remain. Live world counts were 1386 at 70%, 1184 at 60%, then 1008
+at 50%. These are successive live samples rather than a controlled frame-rate comparison. The 70% comparison
+above records the intermediate preview rather than the final density.
+The 50% variant passed 248 pure and 6781 renderer assertions; the installed density file matches source.
+
+## dev.123 integration (2026-11-02)
+
+Merged the official dev.123 tag (`eefbb41549e1d0125169bb8537e815a508a3de9e`) after reading its complete source/test
+delta and current maintainer rules. Native registration retains both `TrafficRoutes` and the new fine-terrain
+APIs, including `fine_filter`. Both conflicted native artifacts were rebuilt as version 138 from the combined
+source; Linux targets glibc 2.35. No feature tuning changed during this integration.
+
+Windows checks passed: 27 feature tests; protocol agreement 32 run with one skip; 11 CDAE, 9 fine-terrain,
+46 grading, 85 roads, 13 plan-cache, 22 heightmap, one anchor test, 6 synthetic far-geotile tests with two real-data
+skips, and 74 building tests. Fresh isolated test caches were used. The first restricted test process stalled;
+its exact owned process tree was stopped, and the complete suite passed with the required local process access.
+LuaJIT checks passed: 248 paths, 6781 renderer, 282 core, 310 settings, 47 terrain-swap, 110 trees, 17 geotile and
+46 navigation-graph assertions. JavaScript syntax passed. Linux native/API/two-direction bridge-route smoke passed.
+
+The standalone Windows launcher was rebuilt with the project's source-built PyInstaller bootloader. An isolated
+offline launch negotiated protocol 4 / trafficVisuals 2. All 190 embedded mod files, the native binary and server
+code fingerprint matched source. These packaging checks are separate from actual game rendering and long-session
+memory testing. Evidence is in `build/dev123/`.
+
+The final review found two issues and confirmed their fixes. The combined native API now uses version 139,
+coordinated with `fast.MIN_VERSION` and the traffic caller, plus an explicit `TrafficRoutes` capability check.
+This supersedes the initial native138 artifacts above. Import regressions reject an older module and a newer
+stock module missing this branch's class with a useful `NativeMissing` message. Both native139 artifacts and
+the standalone EXE were rebuilt; the Linux API/bridge-route smoke check passed again.
+
+The two new traffic trackers now opt out of the shared tracker's ever-visited diagnostic set. A 10,000-tile
+build/drop regression leaves no sent tiles or diagnostic history; existing trackers keep their default rebuild
+diagnostics. The final feature suite has 31 tests. Protocol agreement passed again (32 run, one skip), together
+with 21 vegetation tests and synthetic far-geotile checks (6 run, two real-data skips). Both review axes reported
+their findings resolved, with no further actionable source findings.
+
+Fresh Windows startup did encounter `OSError: [WinError 6]` / `BrokenProcessPool` in a terrain worker; the
+provisional first block stayed in place and later road-worker delay warnings were observed. The far field then
+reported ready with 939 tiles, no backlog and no missing shape files at the checkpoint. The final server
+negotiated capability 2 and delivered a live nighttime stream (270 routes, 34 cosmetic cars in the sampled rural
+scene at 00:00). This records an unresolved startup condition rather than claiming error-free world loading or
+attributing its cause to this feature. The broader game's worker recovery still needs investigation separately.

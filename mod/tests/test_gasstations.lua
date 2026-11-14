@@ -16,8 +16,8 @@ local G = require('beamngEarth/gasstations')
 G.enabled = true
 local clock = 0
 G.now = function() return clock end
-local collide = 0
-G.onCollide = function() collide = collide + 1 end
+local collide, collideAt = 0, nil
+G.onCollide = function(x, y) collide = collide + 1; collideAt = { x, y } end
 local gov = { try = function() return true end, charge = function() end }
 
 local function rec(id, x)
@@ -53,6 +53,7 @@ T.near(solid.rot.w, math.sqrt(0.5), 1e-9, 'yaw quaternion w')
 local area = scenetree.findObject('bne_fuel_abc_a1')
 T.near(area.scale.x, 1.6, 1e-9, 'area half extents as its scale')
 T.check(collide == 1, 'a collision rebuild asked once per spawned station')
+T.check(collideAt[1] == 0 and collideAt[2] == 0, 'asked with the station\'s spot (roads.lua gates far spots)')
 
 -- the stock POI list: one station, its pumps as (area, icon) names
 local els = {}
@@ -273,5 +274,24 @@ G.onRows(2, '2:6_9', { moved }); G.update(gov)
 T.check(count('TSStatic') == 2, 'made again from the new frame: ' .. count('TSStatic'))
 T.near(scenetree.findObject('bne_fuel_rs_a1').pos.x, 502, 1e-9, 'at the new place')
 G.reset()
+
+-- an EV charger (evchargers.py, the user 2026-10-29: "real life ev stations ... real recharging in the game"): its
+-- record's energy handed to the stock POI (the charge prompt, the bolt icon); unnamed: 'EV charger'
+do
+  local evr = rec('evx', 50)
+  evr.name, evr.energy = '', { 'electricEnergy' }
+  G.onRows(1, '1:1_0', { evr, rec('gas1', 90) })
+  G.update(gov)
+  local got = {}
+  G.pois('beamng_earth', got)
+  local byId = {}
+  for _, e in ipairs(got) do byId[e.id] = e end
+  local f = byId['bne_fuel_evx'] and byId['bne_fuel_evx'].data.facility
+  T.check(f ~= nil and f.energyTypes[1] == 'electricEnergy' and #f.energyTypes == 1, 'a charger: electric energy only')
+  T.check(f ~= nil and f.name == 'EV charger', 'an unnamed charger: EV charger')
+  T.check(byId['bne_fuel_gas1'] ~= nil and byId['bne_fuel_gas1'].data.facility.energyTypes[1] == 'gasoline',
+    'a gas station beside it: gasoline')
+  G.reset()
+end
 
 T.done('test_gasstations')

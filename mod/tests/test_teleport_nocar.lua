@@ -141,6 +141,10 @@ local function answer(groundZ, extra)
   return req
 end
 
+-- (the modding API's rebased event, api.lua 1.7: what core says at each move of the origin)
+local rebased = {}
+beamngEarth_api = { _event = function(event, info) if event == 'rebased' then rebased[#rebased + 1] = info end end }
+
 core.onExtensionLoaded()
 local st = core._state()       -- (the level's state: made fresh on load)
 frames(3)
@@ -156,6 +160,9 @@ groundAt = function() return 1176 end
 local req = answer(1180)
 local commits = #received('commit_anchor')
 T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit with no car')
+T.check(#rebased == 1 and rebased[1].purpose == 'teleport' and rebased[1].oldLat == nil
+  and rebased[1].lat == st.anchor.lat and rebased[1].lon == st.anchor.lon and rebased[1].anchorId == st.anchorId,
+  'the API hears the first origin (rebased: a teleport, no origin before it)')
 local put = cam.puts[#cam.puts]
 T.check(put and near(put.x, req.px or 0) and near(put.y, req.py or 0) and near(put.z, 1181 + 5),
   string.format('commit frame: the camera over the target (%.1f, %.1f, %.1f)', put and put.x or 0 / 0, put and put.y or 0 / 0, put and put.z or 0 / 0))
@@ -274,11 +281,16 @@ commits = #received('commit_anchor')
 T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit (held again)')
 T.check(pumpUntil(function() return st.placeFrames == nil end, 10) and st.camAt ~= nil, 'held')
 local nPrep = #received('prepare_anchor')
+local nRebased, latBefore, lonBefore = #rebased, st.anchor.lat, st.anchor.lon
 T.check(core.rebaseTo(st.anchor.lat + 0.01, st.anchor.lon), 'a rebase asked while held')
 T.check(pumpUntil(function() return #received('prepare_anchor') == nPrep + 1 end, 5), 'its anchor asked')
 answer(905)
 commits = #received('commit_anchor')
 T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end, 60), 'the rebase committed')
+local rbd = rebased[#rebased]
+T.check(#rebased == nRebased + 1 and rbd.purpose ~= 'teleport' and rbd.oldLat == latBefore and rbd.oldLon == lonBefore
+  and rbd.lat == st.anchor.lat and rbd.lat ~= latBefore and rbd.anchorId == st.anchorId,
+  'the API hears the rebase: the origin before and the new one (' .. tostring(rbd and rbd.purpose) .. ')')
 T.check(st.camAt == nil, 'a rebase lets the held target go (it was in the old frame)')
 core_camera.setPosRot = ignore
 
@@ -328,6 +340,33 @@ for _, flyOff in ipairs({ false, true }) do
     T.check(#cam.puts == before + 1 and near(cam.pos.z, 1100 + 1 + core.CAM_ABOVE_M),
       string.format('still there: down onto the floor of the tube (%.1f)', cam.pos.z))
   end
+end
+-- 4c. the floor sent after anchor_ready ('tunnel_floor'), at a snapped spot off the origin (px, py): down at that spot
+do
+  floorIn = false
+  local rays = {}
+  groundAt = function(x, y, fromZ)
+    rays[#rays + 1] = { x = x, y = y }
+    return tunnelGround(x, y, fromZ)
+  end
+  core.teleport(44.3, 6.0)
+  answer(1180, { px = 30, py = -20 })
+  commits = #received('commit_anchor')
+  T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit (a tunnel, snapped)')
+  T.check(pumpUntil(function() return st.placeFrames == nil end, 10), 'placed (snapped)')
+  T.check(st.floorZ == nil, 'no floor yet (it comes after)')
+  serverSend({ type = 'tunnel_floor', anchorId = st.anchorId, floorZ = 1100, x = 30, y = -20 })
+  frames(2)
+  T.check(st.floorZ == 1100, 'the late floor waited for')
+  floorIn = true
+  rays = {}
+  frames(3)
+  T.check(st.floorZ == nil and near(cam.pos.z, 1100 + 1 + core.CAM_ABOVE_M) and near(cam.pos.x, 30)
+    and near(cam.pos.y, -20), string.format('down onto the floor at the spot (%.1f, %.1f, %.1f)', cam.pos.x,
+    cam.pos.y, cam.pos.z))
+  serverSend({ type = 'tunnel_floor', anchorId = st.anchorId + 7, floorZ = 900 })
+  frames(1)
+  T.check(st.floorZ == nil, 'another anchor\'s floor: ignored')
 end
 roadsMod.settledFor = settled
 

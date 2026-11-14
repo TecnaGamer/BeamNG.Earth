@@ -24,7 +24,7 @@ local M = {}
 
 M.NAME = 'bngEarthTerrain'
 M.SIZE = lattice.N              -- samples per side (configure); the layer map has the same size
-M.SQUARE_SIZE = lattice.SQUARE  -- 2.0 m
+M.SQUARE_SIZE = lattice.SQUARE  -- m (configure: the server's hello.squareSize)
 M.MATERIAL = 'beamngEarthDirt'
 M.TEXTURE_SET = 'beamngEarthTerrainMaterialTextureSet'
 M.BASE_TEX_SIZE = 2048   -- = the level texture set's base slot (tools/make_level_assets.py BASE_TEX): the size in use
@@ -41,8 +41,10 @@ local TERRAIN_DIR_BASE = TERRAIN_DIR .. 'bngEarth_base_b.png'   -- the level's f
 local FLAT_H = TERRAIN_DIR .. 'bngEarth_flat_h_1024.png'          -- neutral height (detail / macro slots)
 local MATERIALS_FILE = TERRAIN_DIR .. 'main.materials.json'
 -- per block size (tools/make_level_assets.py): all white = material 0 everywhere; all zero, 16-bit
-local LAYER_MAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
-local FLAT_HEIGHTMAPS = { [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png', [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
+local LAYER_MAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_layer_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_layer_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_layer_512.png' }
+local FLAT_HEIGHTMAPS = { [2048] = TERRAIN_DIR .. 'beamngEarth_flat_2048.png', [1024] = TERRAIN_DIR .. 'beamngEarth_flat_1024.png',
+  [512] = TERRAIN_DIR .. 'beamngEarth_flat_512.png' }
 local LAYER_MAP, FLAT_HEIGHTMAP = LAYER_MAPS[1024], FLAT_HEIGHTMAPS[1024]
 
 -- Surface materials (server --surface on, server/surface.py): runtime clones of M.MATERIAL with other
@@ -85,6 +87,23 @@ local function look(detail, dsize, macro, msize, strength)
   l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
   return l
 end
+local function golfLook(detail, dsize, macro, msize, near, far)
+  local l = look(detail, dsize, macro, msize, near)
+  l.baseColorDetailStrength = near .. ' ' .. far
+  return l
+end
+-- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
+-- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
+-- no DDS), the asphalt's roughness, ao off
+local TL = '/temp/beamngEarth/terraintex/'
+local function tileLook(color, normal, dsize, near, far)
+  local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
+  l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
+  l.baseColorDetailStrength, l.aoDetailStrength = near .. ' ' .. far, '0 0'
+  -- (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
+  l.detailDistances = '0 0 150 250'
+  return l
+end
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
@@ -93,13 +112,28 @@ M.LOOKS = {
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
   bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
+  -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
+  -- GroundCover layer, so the 3D grass does not grow on them.
+  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/t_macro_grass/t_macro_grass', 64, 0.72, 0.28),
+  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
+  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
+  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
+  bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
+  bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
+  bngEarthGroundCobble = tileLook('bne_cobble_b.png', 'bne_cobble_nm.png', 2, 0.6, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
-M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, size = '256' }
+-- The tile layers' stand-ins when the server could not write their PNGs (terraintex.py: no game folder, a failed
+-- decode): the stock asphalt grain they had before, not a missing texture (a cobbled street plainer than before)
+M.TILE_FALLBACK = {
+  bngEarthGroundPavers = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
+  bngEarthGroundBrick = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
+  bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
+}
+M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
-M.square = 2.0   -- the block's square size (m per sample), from the last load
+M.square = lattice.SQUARE   -- the block's square size (m per sample), from the last load
 -- surface materials made here (other levels: our level defines them in main.materials.json, made by
 -- tools/make_level_assets.py, because runtime TerrainMaterials made every updateMaterial cost ~1 s,
 -- in-game 2026-10-12)
@@ -124,12 +158,46 @@ local function applyLook(m, name)
 end
 
 local function baseFields(path, size)
-  return path or M.LEVEL_BASE.tex, path and tostring(toSamples(size or 1024)) or M.LEVEL_BASE.size
+  return path or M.LEVEL_BASE.tex, tostring(toSamples(path and (size or 1024) or M.LEVEL_BASE.sizeM))
+end
+
+-- The level's materials (main.materials.json, tools/make_level_assets.py) give their detail and macro texture sizes in
+-- samples of LEVEL_SQUARE m. On another square (the lighter 2 m ground of the Low and Medium presets: the server's
+-- hello.squareSize) the same repeat in metres is that many samples fewer: set once per square, from the level's values.
+M.LEVEL_SQUARE = 1.0
+M.levelSizes = {}       -- material name -> { field = the level's value }
+local SIZE_FIELDS = { 'baseColorDetailTexSize', 'normalDetailTexSize', 'roughnessDetailTexSize', 'aoDetailTexSize',
+  'heightDetailTexSize', 'baseColorMacroTexSize', 'normalMacroTexSize', 'roughnessMacroTexSize', 'aoMacroTexSize',
+  'heightMacroTexSize' }
+-- Pure-ish: the level value v (samples at LEVEL_SQUARE) at the square sq.
+function M.levelSizeAt(v, sq)
+  v = tonumber(v)
+  if not v or v <= 0 then return nil end
+  return math.max(1, math.floor(v * M.LEVEL_SQUARE / sq + 0.5))
+end
+local function rescaleLevel(m, name)
+  local orig = M.levelSizes[name]
+  if not orig then
+    orig = {}
+    for _, f in ipairs(SIZE_FIELDS) do
+      local ok, v = pcall(function() return m:getField(f, 0) end)
+      if ok and tonumber(v) then orig[f] = tonumber(v) end
+    end
+    M.levelSizes[name] = orig
+  end
+  for f, v in pairs(orig) do
+    local nv = M.levelSizeAt(v, M.square)
+    if nv then pcall(function() m:setField(f, 0, tostring(nv)) end) end
+  end
 end
 
 local function setMaterialBase(m, name, path, tex, size)
-  -- Runtime-made layers need their look once per square size. Level materials carry theirs.
+  -- Runtime-made layers need their look once per square size. Level materials carry theirs, at LEVEL_SQUARE.
   if path and M.runtimeMade[name] and M.looked[name] ~= M.square then applyLook(m, name); M.looked[name] = M.square end
+  if not M.runtimeMade[name] and M.looked[name] ~= M.square and (M.levelSizes[name] or M.square ~= M.LEVEL_SQUARE) then
+    rescaleLevel(m, name)
+    M.looked[name] = M.square
+  end
   m:setField('baseColorBaseTex', 0, tex)
   m:setField('baseColorBaseTexSize', 0, size)
 end
@@ -192,6 +260,7 @@ end
 function M.configure(size)
   local n = LAYER_MAPS[size] and size or 1024
   M.SIZE, LAYER_MAP, FLAT_HEIGHTMAP = n, LAYER_MAPS[n], FLAT_HEIGHTMAPS[n]
+  M.SQUARE_SIZE = lattice.SQUARE
   return n
 end
 
@@ -201,10 +270,33 @@ end
 -- block drawn (detail mode), screenshots after a forced redraw were pixel-identical with and without, the redraw
 -- itself as dear (PC 8.4 / 7.7 ms vs 8.4 / 7.5), the floor of Yosemite Valley sunlit near sunset either way; trees,
 -- roads, buildings and the far meshes cast the shadows.
+local tilesChecked = false
+-- Each tile layer (M.TILE_FALLBACK) whose PNG copy is missing gets its stand-in look, once, before the block's first
+-- material build. Returns the names given one.
+function M.checkTileTextures()
+  if tilesChecked then return {} end
+  tilesChecked = true
+  local fell = {}
+  for name, fb in pairs(M.TILE_FALLBACK) do
+    local want = M.LOOKS[name] and M.LOOKS[name].baseColorDetailTex
+    local m = scenetree.findObject(name)
+    if m and want and not FS:fileExists(want) then
+      for k, v in pairs(fb) do
+        if k:sub(-7) == 'TexSize' then v = toSamples(v) end
+        pcall(function() m:setField(k, 0, tostring(v)) end)
+      end
+      fell[#fell + 1] = name
+    end
+  end
+  if #fell > 0 then log('W', 'beamngEarth', 'terrain tile textures missing (' .. table.concat(fell, ', ') .. '): stock asphalt instead') end
+  return fell
+end
+
 local function getOrCreate()
   local tb = M.get()
   if tb then return tb end
   ensureMaterials()
+  M.checkTileTextures()
   M.applyBaseSize(wantBase)      -- (the settings' ground photo size, before the block: it sizes its base textures)
   tb = TerrainBlock()
   tb:setName(M.NAME)
@@ -284,6 +376,24 @@ function M.applyBaseSize(n)
   return changed
 end
 
+-- The texture set's base slot and the layers' base maps must be at the size of the photos the server builds
+-- (BASE_TEX_SIZE). Our fields were set before the engine re-read the level's materials in some starts (a race at the
+-- level's start): the set and the maps went back to 2048 while the photos were 4096, and every block swap then packed
+-- its photo again once per material on the render thread (24 times, 2.6-3.5 s a swap; "dont have required size of
+-- 2048-2048", the game's log 2026-11-07). Cheap (one field read) at every block load and swap; sets it all again when it
+-- differs.
+-- Returns whether it had to.
+function M.checkBaseSize()
+  local set = scenetree.findObject(M.TEXTURE_SET)
+  if not set then return false end
+  local ok, cur = pcall(function() return set:getField('baseTexSize', 0) end)
+  if ok and tostring(cur) == tostring(M.BASE_TEX_SIZE) .. ' ' .. tostring(M.BASE_TEX_SIZE) then return false end
+  log('W', 'beamngEarth', string.format('terrain: texture set base size %s, the photos are %d px: set again', tostring(cur), M.BASE_TEX_SIZE))
+  M.applyBaseSize(M.BASE_TEX_SIZE)
+  pcall(function() set:postApply() end)
+  return true
+end
+
 -- Apply the render flag to the block. Terrain mode never calls the engine unless the flag was off
 -- before (keeps the v1.2 path untouched).
 local function applyRender(tb, force)
@@ -332,9 +442,11 @@ end
 -- layers (optional, server --surface on): { masks = { path, ... }, materials = { { name, gm }, ... } }
 -- base / baseSize (optional, detail mode): the block's aerial photo (setBase)
 function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
+  require('beamngEarth/texdbg').log('load', path, base)
   if not FS:fileExists(path) then return false, 'heightmap not found: ' .. tostring(path) end
   M.square = tonumber(squareSize) or M.square
   local tb = getOrCreate()
+  M.checkBaseSize()
   if layers then
     local okL = type(layers.masks) == 'table' and type(layers.materials) == 'table' and #layers.masks == #layers.materials
       and #layers.masks > 0 and ensureSurfaceMaterials(layers.materials)
@@ -368,11 +480,13 @@ end
 -- (nothing changed) otherwise, and the caller imports. The .ter names its materials (server
 -- surface.write_ter: layers.materials, or M.MATERIAL alone). The caller does NOT rebuild collision.
 function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
+  require('beamngEarth/texdbg').log('swap', terPath, base)
   local tb = M.get()
   local sq = tonumber(squareSize)
   if not tb or not M.slots or not sq or math.abs(sq - M.square) > 1e-9 then return false end
   if type(terPath) ~= 'string' or not FS:fileExists(terPath) then return false end
   if tb:getField('terrainFile', 0) == terPath then return false end -- no reload: the caller must import/rebind
+  M.checkBaseSize()
   local slots = { M.MATERIAL }
   if layers then
     if type(layers.materials) ~= 'table' or #layers.materials == 0 or not ensureSurfaceMaterials(layers.materials) then
@@ -437,6 +551,7 @@ end
 -- block from its SW corner, converted to samples); nil = the level's flat base. Also gives the level's own material its look (once). The engine
 -- re-reads a material on updateMaterial (index = the block's material slot); ~6 ms for a 2048² PNG.
 function M.setBase(path, size)
+  require('beamngEarth/texdbg').log('setBase', path, size)
   local tb = M.get()
   if not tb then return false end
   local tex, sz = baseFields(path, size)

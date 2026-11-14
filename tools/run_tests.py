@@ -75,8 +75,10 @@ class Runner:
         st = self.state[m] = {"start": time.time(), "current": None, "t_test": time.time(), "n": 0, "bad": [],
                               "proc": None, "killed": False}
         # the stacks only: the timer kills the tree (an exit here would leave the module's servers behind)
+        # --durations was introduced in Python 3.12; the companion supports 3.10+.
         code = ("import faulthandler,sys,unittest;faulthandler.dump_traceback_later(%d);"
-                "sys.exit(not unittest.main(module=None,argv=['run_tests','-v',%r,'--durations=5'],exit=False)"
+                "sys.exit(not unittest.main(module=None,argv=['run_tests','-v',%r]"
+                "+(['--durations=5'] if sys.version_info >= (3,12) else []),exit=False)"
                 ".result.wasSuccessful())" % (max(1, self.timeout - 10), m))
         with open(os.path.join(self.logs, f"{m}.log"), "w", encoding="utf-8") as log:
             p = st["proc"] = subprocess.Popen(
@@ -176,6 +178,18 @@ class Runner:
         bad = [(m, r) for m, r, _ in res if r != "OK"]
         self.say(f"done: {len(res) - len(bad)} OK, {len(bad)} not OK"
                  + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else ""))
+        # Each failed module's log tail in the ordinary CI log too: a failure stays diagnosable when the
+        # artifact download is unavailable (Windows cleanup errors especially). PR #1214.
+        for m, r in bad:
+            try:
+                with open(os.path.join(self.logs, m + '.log'), encoding='utf-8', errors='replace') as fh:
+                    tail = fh.readlines()[-100:]
+            except OSError as e:
+                self.say(f"--- {m} ({r}): no log ({e}) ---")
+                continue
+            self.say(f"--- {m} ({r}): last {len(tail)} log lines ---")
+            for line in tail:
+                self.say(line.rstrip())
         return 1 if bad else 0
 
 

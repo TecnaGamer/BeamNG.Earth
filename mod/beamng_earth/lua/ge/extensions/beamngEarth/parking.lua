@@ -49,6 +49,24 @@ local scatterPending = false
 
 function M.onRows(aid, key, rows)
   if type(rows) ~= 'table' then return end
+  -- the bus stations' bays ({x, y, z, heading, 2}: server busstationpark.py) are the buses' (busparked.lua), not spots
+  local bus, cars = nil, nil
+  for i, r in ipairs(rows) do
+    if r[5] == 2 then
+      bus = bus or {}
+      bus[#bus + 1] = r
+      if not cars then cars = {} for j = 1, i - 1 do cars[j] = rows[j] end end
+    elseif cars then
+      cars[#cars + 1] = r
+    end
+  end
+  if bus then
+    require('beamngEarth/busparked').onRows(aid, key, bus)
+    rows = cars
+  else
+    require('beamngEarth/busparked').dropKey(key)
+  end
+  if #rows == 0 then spots[key] = nil dirty = true return end
   -- (its box: rebuild passes over a tile whose box lies beyond KEEP_M without looking at its rows)
   local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
   for _, r in ipairs(rows) do
@@ -65,6 +83,7 @@ function M.onRows(aid, key, rows)
 end
 
 function M.dropKey(key)
+  require('beamngEarth/busparked').dropKey(key)
   if spots[key] then
     spots[key] = nil
     dirty = true
@@ -75,6 +94,7 @@ end
 -- new place's spots once it has them.
 local heldActive = nil
 function M.onTeleport()
+  require('beamngEarth/busparked').onTeleport()
   scatterPending = true
   local gp = gameplay_parking
   if gp and gp.getState() and not heldActive then
@@ -105,7 +125,7 @@ local function makeSpot(r)
   local ps = sites.parkingSpots.objectConstructor(sites)
   local h = math.rad(r[4])
   ps:set(vec3(r[1], r[2], r[3]), quatFromDir(vec3(math.cos(h), math.sin(h), 0), vec3(0, 0, 1)),
-    vec3(M.SPOT_SCL[1], M.SPOT_SCL[2], M.SPOT_SCL[3]))
+    vec3(r[6] or M.SPOT_SCL[1], r[7] or M.SPOT_SCL[2], M.SPOT_SCL[3]))
   if r[5] ~= 1 then                       -- curbside (lot stalls: either way in, not on a street)
     ps.customFields:addTag('street')      -- mapmgr tracks the car (traffic dodges it)
     ps.customFields:addTag('forwards')    -- parallel parking: nose in the direction of travel
@@ -123,7 +143,7 @@ local newAnchor = false   -- the next rebuild is the first of an anchor
 local function rebuild(player)
   sites = sites or newSites()
   local list = sites.parkingSpots
-  local keep, near = {}, 0
+  local keep, near, mappedNear = {}, 0, 0
   local k2, s2 = M.KEEP_M * M.KEEP_M, M.START_M * M.START_M
   local kx, ky = M.KEEP_M, M.KEEP_M
   local cand, nc = {}, 0           -- rows within KEEP_M on the block, then the MAX_SPOTS nearest of them
@@ -136,7 +156,10 @@ local function rebuild(player)
         if d2 < k2 and M.inside(box, r[1], r[2], M.EDGE_M) then
           nc = nc + 1
           cand[nc] = { d2, r }
-          if d2 < s2 then near = near + 1 end
+          if d2 < s2 then
+            near = near + 1
+            if r[6] and r[7] then mappedNear = mappedNear + 1 end
+          end
         end
       end
     end
@@ -169,7 +192,7 @@ local function rebuild(player)
     end
   end
   newAnchor = false
-  return near
+  return near, mappedNear
 end
 
 -- Pure: a parked car at p is off its spot ps (none, gone with its anchor or tile, or more than OFF_SPOT_M away)
@@ -274,6 +297,7 @@ function M.update(aid, player, blk, gov)
     if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(errG)) end
   end
   if player then lastPlayer = player end
+  require('beamngEarth/busparked').update(aid, player, os.clock(), gov)
   hookSetup()
   if not M.enabled or not player or not dirty or not next(spots) then return end
   -- no parked cars (the player's choice, or removed): the sites only every REBUILD_OFF_S (a rebuild cost 24 ms every
@@ -290,20 +314,25 @@ function M.update(aid, player, blk, gov)
   waited = 0
   lastBuild, dirty = t, false
   local sw = stopwatch.new()
-  local ok, near = pcall(rebuild, player)
+  local ok, near, mappedNear = pcall(rebuild, player)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if not ok then
     log('W', 'beamngEarth', 'parking: ' .. tostring(near))
     return
   end
   local gp = gameplay_parking
-  if not gp or near < M.START_MIN then return end
+  if not gp or (near < M.START_MIN and mappedNear == 0) then return end
   if not started then
     started = true
     -- the player's level-start choice (navgraph.choice; the radial menu works at any time)
     local c = require('beamngEarth/navgraph').choice
     if c.parked and not gp.getState() then
       local amount = (c.parkedAmount and c.parkedAmount > 0) and c.parkedAmount or -1
+      -- A small village can have just a few known driveways. Start within their actual capacity.
+      if near < M.START_MIN then
+        local small = math.max(1, math.floor(near * 0.6))
+        amount = amount > 0 and math.min(amount, small) or small
+      end
       local okS, err = pcall(gp.setupVehicles, amount, { pos = vec3(player.x, player.y, player.z) })
       if not okS then log('W', 'beamngEarth', 'parking: setupVehicles: ' .. tostring(err)) end
     end
@@ -327,6 +356,7 @@ end
 
 -- The level ended: the stock system forgets our sites with it.
 function M.reset()
+  require('beamngEarth/busparked').reset()
   spots, objs, anchorId, dirty, lastBuild, sites = {}, {}, nil, false, -math.huge, nil
   hidden = {}
   box, lastGuard, heldActive = nil, -math.huge, nil

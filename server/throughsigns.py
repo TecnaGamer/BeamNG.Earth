@@ -10,6 +10,8 @@ import json
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import exitsigns as signs
 
@@ -97,8 +99,8 @@ def index_records(main_ways, coords, exits=(), relations=None):
     for obj in exits:
         extra = obj['ways'][0]
         path = np.asarray(extra.get('approach', ()), float)
-        scale = [111320.*math.cos(math.radians(float(obj['lat']))), 111320.]
-        length = np.linalg.norm(np.diff(path, axis=0)*scale, axis=1).sum() if len(path) > 1 else 0.
+        scale = [111320.*dmath.cos(math.radians(float(obj['lat']))), 111320.]
+        length = dnp.norm(np.diff(path, axis=0)*scale, axis=1).sum() if len(path) > 1 else 0.
         if (extra.get('through_label') and length >= 825. and
                 signs.sign_style(extra['label']) == 'exit'):
             for wid in extra.get('main_ids', ()):
@@ -141,9 +143,9 @@ def index_records(main_ways, coords, exits=(), relations=None):
             i = next_edge(i)
         nodes = [edges[chain[0]][0]] + [edges[i][1] for i in chain]
         path = np.array([coords[n] for n in nodes], float)
-        scale = np.array([111320.*math.cos(math.radians(float(path[:, 1].mean()))), 111320.])
+        scale = np.array([111320.*dmath.cos(math.radians(float(path[:, 1].mean()))), 111320.])
         xy = (path-path[0])*scale
-        arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+        arc = np.r_[0., np.cumsum(dnp.norm(np.diff(xy, axis=0), axis=1))]
         if arc[-1] < 60.:
             continue
         for station in np.arange(min(150., arc[-1]/2.), arc[-1]-10., SPACING_M):
@@ -153,7 +155,7 @@ def index_records(main_ways, coords, exits=(), relations=None):
             # Exit approaches receive their paired gantry at the half-mile station.
             # Suppress only the standalone sign on that same directed source way.
             wid = edges[chain[k]][2]
-            if any(np.linalg.norm((np.asarray(p)-point)*scale) < 2000. for p in exit_points[wid]):
+            if any(dnp.norm((np.asarray(p)-point)*scale) < 2000. for p in exit_points[wid]):
                 continue
             # Keep only 80 m on each side even when a source way has long edges.
             start, end = max(0., station-80.), min(arc[-1], station+80.)
@@ -192,7 +194,7 @@ def _candidate(pavements, q, direction, ids):
         if near is None or near[0] > 30.:
             continue
         travel = near[7]*(sp.dir or 1)
-        if travel@direction >= .8:
+        if dnp.matmul(travel, direction) >= .8:
             choices.append((near[0], fid, near, travel, width))
     return min(choices, key=lambda v: (v[0], v[1])) if choices else None
 
@@ -206,7 +208,7 @@ def dimensions(content):
 
 
 def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
-              exit_label=None, side=1, distance='', allow_outside=False):
+              exit_label=None, side=1, distance='', allow_outside=False, branch_panels=None):
     import signroads
     extra = obj.get('through', obj.get('exit'))
     found = _candidate(pavements, q, direction, extra['main_ids'])
@@ -221,13 +223,21 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
         return None
     right = np.array([travel[1], -travel[0]])
     cross = signroads.cross(line)
-    edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*width/2.
+    edge = abs(dnp.matmul(cross[k]*(1.-t)+cross[k+1]*t, right))*width/2.
     lat, lon, _ = frame.enu_to_geodetic(float(at_xy[0]), float(at_xy[1]), 0.)
     import signstates
     state = str(signstates.states(lat, lon).item())
-    w, h = dimensions(content)
-    panels = [dict(label=content, width=w, height=h, offset=0., exit=False)]
-    if exit_label:
+    if branch_panels is not None:
+        panels = [dict(p) for p in branch_panels]
+        total = sum(p['width'] for p in panels)+.4*(len(panels)-1)
+        cursor = -total/2.
+        for panel in panels:
+            panel['offset'] = cursor+panel['width']/2.
+            cursor += panel['width']+.4
+    else:
+        w, h = dimensions(content)
+        panels = [dict(label=content, width=w, height=h, offset=0., exit=False)]
+    if exit_label and branch_panels is None:
         ew, eh = signs.dimensions(exit_label, 'advance', state)
         panels[0]['offset'] = -side*(ew+.25)/2.
         panels.append(dict(label=exit_label, width=ew, height=eh,
@@ -257,6 +267,23 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
                 travel=travel.tolist(), panels=panels, bottom=bottom, bases=bases,
                 poles=[v[0] for v in poles], side=side, distance=distance,
                 state=state)
+
+
+def branches(frame, objects, panels, pavements, box, elev, chunks=()):
+    """Distinct destinations at one directed junction, together above the approach."""
+    import signlayout
+    if len({signlayout.label_key(s['label']) for s in panels}) < 2:
+        return None
+    panels = sorted(panels, key=lambda s: (s['side'], signlayout.label_key(s['label']), s['id']))
+    first = panels[0]
+    q, travel = np.asarray(first['road_point']), np.asarray(first['travel'])
+    if any(dnp.dot(s['travel'], travel) < .98 or dnp.norm(np.asarray(s['road_point'])-q) > 25.
+           for s in panels):
+        return None
+    boards = [dict(label=s['label'], width=s['width'], height=s['height'], exit=True,
+                   side=s['side'], kind=s['kind']) for s in panels]
+    return _assembly(frame, objects[first['id']], pavements, q, travel, box, elev, chunks, None,
+                     distance=first['distance'], allow_outside=True, branch_panels=boards)
 
 
 def place(frame, objects, pavements, box, elev, chunks=(), mph=True, allow_outside=False):
@@ -304,15 +331,15 @@ class Mesh(signs.Mesh):
         """A six-sided metal tube for diagonal lattice braces."""
         a, b = np.asarray(a, float), np.asarray(b, float)
         axis = b-a
-        norm = np.linalg.norm(axis)
+        norm = dnp.norm(axis)
         if norm < 1e-6:
             return
         axis /= norm
         up = np.array([0., 0., 1.]) if abs(axis[2]) < .9 else np.array([1., 0., 0.])
         u = np.cross(axis, up)
-        u /= np.linalg.norm(u)
+        u /= dnp.norm(u)
         v = np.cross(axis, u)
-        ring = [radius*(u*math.cos(t)+v*math.sin(t)) for t in np.linspace(0, 2*math.pi, 7)]
+        ring = [radius*(u*dmath.cos(t)+v*dmath.sin(t)) for t in np.linspace(0, 2*math.pi, 7)]
         for p, q in zip(ring[:-1], ring[1:]):
             self.quad([a+p, a+q, b+q, b+p], 2)
 
@@ -348,15 +375,16 @@ class Mesh(signs.Mesh):
             self.centre = anchor+self.right*panel['offset']
             w, h, content = panel['width'], panel['height'], panel['label']
             if panel['exit']:
+                panel_side = panel.get('side', sign['side'])
                 # Reuse the established exit panel and tab layout without its posts.
                 self.rounded_panel(w,bottom,h,0)
                 if content['ref']:
                     tw = min(w, max(2.2, signs.guide_width('EXIT '+content['ref'], .36)+.5))
-                    ty = sign['side']*(w-tw)/2
+                    ty = panel_side*(w-tw)/2
                     self.rounded_panel(tw,bottom+h,.66,0,ty)
                     self.guide_text('EXIT '+content['ref'],ty,bottom+h+.16,.36,tw-.3)
                 layout = signs.advance_layout(dict(label=content, width=w, height=h,
-                    side=sign['side'], kind='advance', distance=sign['distance'], state=sign['state']))
+                    side=panel_side, kind=panel.get('kind', 'advance'), distance=sign['distance'], state=sign['state']))
                 for row in layout['lines']:
                     self.guide_text(row['value'],row['y'],bottom+row['baseline'],row['height'],row['max_width'])
                 for row in layout.get('directions', ()):
@@ -364,6 +392,8 @@ class Mesh(signs.Mesh):
                 for route in layout['routes']:
                     self.route_shield(route,bottom)
                 self.distance_text(layout['distance'],bottom,signs.portrait(sign['state']))
+                if layout['arrow']:
+                    self.arrow(layout['arrow_y'], bottom+layout['arrow_bottom'], panel_side < 0, layout['arrow_size'])
             else:
                 self.rounded_panel(w,bottom,h,0)
                 routes = signs.route_symbols(content['routes'], sign['state'])

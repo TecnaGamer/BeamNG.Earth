@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import os
+import ioprofiler
 import queue
 import socket
 import socketserver
@@ -47,9 +48,11 @@ import struct
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dmath
 
 log = logging.getLogger("earthd.peerwork")
 
@@ -93,7 +96,8 @@ def source_id(server_dir=None):
     for name in sorted(os.listdir(here)):
         if name.endswith(".py"):
             with open(os.path.join(here, name), "rb") as f:
-                h.update(name.encode() + b"\0" + f.read())
+                # Git's Windows CRLF checkout must identify the same generator as the LF Linux checkout.
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n"))
     return h.hexdigest()[:16]
 
 
@@ -132,6 +136,7 @@ def _recv_exact(sock, n):
         if not chunk:
             raise ConnectionError("closed")
         buf += chunk
+        ioprofiler.peer_received(len(chunk))
     return bytes(buf)
 
 
@@ -144,7 +149,9 @@ def encode_msg(header, blobs=()):
 
 
 def send_msg(sock, header, blobs=()):
-    sock.sendall(encode_msg(header, blobs))
+    data = encode_msg(header, blobs)
+    sock.sendall(data)
+    ioprofiler.peer_sent(len(data))
 
 
 class _Bytes:
@@ -170,6 +177,7 @@ def recv_msg(sock):
     if n > MAX_HEADER:
         raise ValueError("header too large")
     header = json.loads(_recv_exact(sock, n).decode())
+    ioprofiler.peer_headers()
     if not isinstance(header, dict):
         raise ValueError("bad header")
     k = struct.unpack("<H", _recv_exact(sock, 2))[0]
@@ -201,7 +209,8 @@ def built_msg(built):
     """(header dict, blobs) of a farfield.Built."""
     d = {"pos": [float(v) for v in built.pos], "err": float(built.err),
          "sink": None if built.sink is None else float(built.sink), "skirt": float(built.skirt),
-         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None]}
+         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None],
+         "err_n": None if built.err_n is None else float(built.err_n)}
     return d, [_npy(getattr(built, n)) for n in d["arrays"]]
 
 
@@ -211,7 +220,7 @@ def built_from(d, blobs):
     return farfield.Built(pos=list(d["pos"]), positions=arrays.get("positions"), normals=arrays.get("normals"),
                           uvs=arrays.get("uvs"), planar=arrays.get("planar"), tris=arrays.get("tris"),
                           grid=arrays.get("grid"), err=float(d["err"]), sink=d["sink"], skirt=float(d["skirt"]),
-                          size=float(d["size"]))
+                          size=float(d["size"]), err_n=d.get("err_n"))
 
 
 def job_key(header):
@@ -266,7 +275,7 @@ def owner_of(key, ids, weights=None):
     for i in ids:
         w = float((weights or {}).get(i, 1.0))
         u = (int(hashlib.sha256((key + "/" + i).encode()).hexdigest()[:13], 16) + 0.5) / float(1 << 52)
-        score = -w / math.log(u)
+        score = -w / dmath.log(u)
         if score > best_s:
             best, best_s = i, score
     return best
@@ -275,7 +284,7 @@ def owner_of(key, ids, weights=None):
 def share_weight():
     """This machine's capacity for its group (owner_of): its CPU threads, half on the small profile."""
     import budget
-    return round((os.cpu_count() or 4) * (0.5 if budget.small() else 1.0), 1)
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
 
 
 class ReplyCache:
@@ -473,16 +482,23 @@ def _anchor_id(lat, lon):
 
 
 # --- the helper ----------------------------------------------------------------------------------------------------
+def _require_unpinned_helper():
+    if os.environ.get("BNGE_WORLD_BUNDLE"):
+        raise ValueError("Legacy compute helpers do not negotiate BNGE_WORLD_BUNDLE; unset it before serving")
+
+
 class Helper:
     """A helper's worker pools, one per settings combination (made on first use), and its TCP service."""
 
     def __init__(self, cache_dir, workers, out_dir):
+        _require_unpinned_helper()
         self.cache_dir, self.workers, self.out_dir = cache_dir, workers, out_dir
         self.pools = {}
         self.lock = threading.Lock()
         self.done = 0
 
     def pool(self, settings):
+        _require_unpinned_helper()
         import multiprocessing
         import blockworker
         import pools
@@ -500,6 +516,7 @@ class Helper:
             return p
 
     def hello(self):
+        _require_unpinned_helper()
         return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": self.workers}
 
     def handle(self, sock, addr):
@@ -535,6 +552,7 @@ class Helper:
                 pass
 
     def serve(self, host, port):
+        _require_unpinned_helper()
         helper = self
 
         class H(socketserver.BaseRequestHandler):
@@ -614,6 +632,7 @@ class _Conn:
         self.host, self.port = host, port
         self.sock = None
 
+    @ioprofiler.peer_operation
     def open(self):
         s = socket.create_connection((self.host, self.port), timeout=CONNECT_S)
         s.settimeout(JOB_TIMEOUT_S)
@@ -627,6 +646,7 @@ class _Conn:
         self.sock = s
         return int(h.get("workers") or 1)
 
+    @ioprofiler.peer_operation
     def call(self, header):
         if self.sock is None:
             self.open()
@@ -959,6 +979,7 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
     ap.add_argument("--cache-dir", default=os.path.expanduser("~/.cache/beamng-earth"))
     a = ap.parse_args(argv)
+    _require_unpinned_helper()  # before directories, sockets, locks or worker processes exist
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     out = os.path.join(a.cache_dir, "peer-out")
     os.makedirs(out, exist_ok=True)

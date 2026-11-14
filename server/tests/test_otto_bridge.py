@@ -97,8 +97,9 @@ class OttoBridgeTest(TestCase):
             self.assertLess(float(np.abs(np.diff(slopes)).max()), 0.014, fid)
             approach = self.bridges._ground(self.data[f"approach{i}.xy"])
             # Fixed before/after reference: the motorway approaches are not lifted.
-            # (1 cm: the banking's joined-road context, PR #410, moves the far approach point by ~5 mm)
-            np.testing.assert_allclose(approach, self.data[f"approach{i}.z"], atol=0.01, rtol=0)
+            # (1 cm: the banking's joined-road context, PR #410, moves the far approach point by ~5 mm; 2.5 cm since the
+            # segments' lines are carried on past their joints, grading.EXTRAP_M: 1.9 cm at this junction)
+            np.testing.assert_allclose(approach, self.data[f"approach{i}.z"], atol=0.025, rtol=0)
             np.testing.assert_allclose(z[[0, -1]], approach[[0, 5]], atol=1e-6, rtol=0)
             entering = (approach[0] - approach[1]) / 4.0
             leaving = (approach[6] - approach[5]) / 4.0

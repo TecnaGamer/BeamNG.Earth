@@ -4,10 +4,11 @@ class has a 64-cell subclass):
   - selection down to the exact level with the min-level radii and no block forcing: no gaps, no
     overlaps; with 64 cells the vertex spacing at a distance is v1.3.1's (never coarser);
   - hysteresis band >= 25 % of every switch distance;
-  - exact-level vertices are exactly the terrain PNG's heights (same lattice, same quantum), also
-    as the engine computes them in float32; the next level's vertices are every 2nd sample;
-  - the triangle diagonals are the Torque TerrainBlock's, checked against an independent port of
-    TerrainBlock::getHeight + TerrainFile::_buildGridMap's level-0 split rule;
+  - exact-level vertices are exactly the terrain PNG's heights at every second sample (the far field's 2 m
+    lattice, heightmap.FAR_SQUARE, on the 1 m block; same quantum), also as the engine computes them in float32;
+    the next level's vertices are every 4th sample;
+  - the triangle diagonals are the Torque TerrainBlock's on that 2 m lattice, checked against an independent port
+    of TerrainBlock::getHeight + TerrainFile::_buildGridMap's level-0 split rule;
   - textured shapes: UV0 = footprint, UV1 = world-locked detail coordinates (continuous across
     tiles), in the engine's convention (verified against a stock two-UV-set .cdae if the game is
     installed).
@@ -189,8 +190,8 @@ class LatticeTest(unittest.TestCase):
     """Exact-level tiles are the TerrainBlock's surface at their vertices, with its diagonals (§B;
     L-2 with 32 cells, L-1 with 64)."""
     LAYOUT = ff.V131
-    # exact-level tiles (i, j) inside the block centred at (256, -512)
-    EXACT_TILES = {32: ((3, -5), (-10, -23), (18, 3)), 64: ((1, -3), (-5, -11), (8, 1))}
+    # exact-level tiles (i, j) inside the 1 km block centred at (256, -512): one inside, the SW-most, the NE-most
+    EXACT_TILES = {32: ((3, -5), (-4, -16), (10, -2)), 64: ((1, -3), (-2, -8), (4, -2))}
     NEXT_TILE = {32: (1, -3), 64: (0, -2)}
 
     @classmethod
@@ -210,6 +211,8 @@ class LatticeTest(unittest.TestCase):
         half = heightmap.half_extent(cls.LAYOUT.block)
         cls.x0, cls.y0 = cls.cx - half, cls.cy - half
         cls.c, cls.ex = cls.LAYOUT.cells, cls.LAYOUT.exact_level
+        cls.st = int(heightmap.FAR_SQUARE / heightmap.SQUARE)      # block samples per far-lattice square (2)
+        cls.h2 = cls.h[::cls.st, ::cls.st]                           # the far field's 2 m lattice, block-local
 
     @classmethod
     def tearDownClass(cls):
@@ -227,14 +230,14 @@ class LatticeTest(unittest.TestCase):
             self.assertEqual(ff.level_size(lvl) / heightmap.SQUARE % 2, 0)
 
     def test_exact_vertices_equal_terrain_png(self):
-        m = self.c + 1
+        m, st = self.c + 1, self.st
         for i, j in self.EXACT_TILES[self.c]:
             tile = ff.Tile(self.ex, i, j)
             with self.subTest(tile=tile.key):
                 b = self.build(tile)
                 gx0 = int((tile.bbox[0] - self.x0) / heightmap.SQUARE)
                 gy0 = int((tile.bbox[1] - self.y0) / heightmap.SQUARE)
-                want = self.h[gy0:gy0 + m, gx0:gx0 + m]
+                want = self.h[gy0:gy0 + st * (m - 1) + 1:st, gx0:gx0 + st * (m - 1) + 1:st]
                 self.assertEqual(want.shape, (m, m))
                 rel = b.positions[:m * m, 2].reshape(m, m)
                 got = rel.astype(np.float32).astype(np.float64) + b.pos[2]      # as written to the .cdae
@@ -243,7 +246,8 @@ class LatticeTest(unittest.TestCase):
                 # as the engine computes both in float32: zBase + q16 * (maxHeight / 65536) for the
                 # terrain, object position + vertex for the TSStatic
                 f32 = np.float32
-                eng = f32(self.info["zBase"]) + self.q16[gy0:gy0 + m, gx0:gx0 + m].astype(f32) * f32(
+                q16 = self.q16[gy0:gy0 + st * (m - 1) + 1:st, gx0:gx0 + st * (m - 1) + 1:st]
+                eng = f32(self.info["zBase"]) + q16.astype(f32) * f32(
                     self.info["maxHeight"] / 65536)
                 mesh = f32(b.pos[2]) + rel.astype(f32)
                 self.assertTrue((eng == mesh).all())
@@ -252,19 +256,20 @@ class LatticeTest(unittest.TestCase):
                 self.assertTrue((xy[:, 0] % 2 == 0).all() and (xy[:, 1] % 2 == 0).all())
 
     def test_next_level_vertices_are_every_second_sample(self):
-        m = self.c + 1
+        m, st = self.c + 1, 2 * self.st                         # every 2nd far-lattice sample: every 4th block one
         tile = ff.Tile(self.ex + 1, *self.NEXT_TILE[self.c])
         b = self.build(tile)
-        gx0 = int((tile.bbox[0] - self.x0) / 2)
-        gy0 = int((tile.bbox[1] - self.y0) / 2)
-        want = self.h[gy0:gy0 + 2 * self.c + 1:2, gx0:gx0 + 2 * self.c + 1:2]
+        gx0 = int((tile.bbox[0] - self.x0) / heightmap.SQUARE)
+        gy0 = int((tile.bbox[1] - self.y0) / heightmap.SQUARE)
+        want = self.h[gy0:gy0 + st * self.c + 1:st, gx0:gx0 + st * self.c + 1:st]
         self.assertEqual(want.shape, (m, m))
         got = b.positions[:m * m, 2].reshape(m, m).astype(np.float32).astype(np.float64) + b.pos[2]
         self.assertTrue((got == want).all())
 
     def test_diagonals_match_torque(self):
-        """The exact-level surface equals Torque's TerrainBlock::getHeight everywhere (not only at
-        the vertices), and every cell of the built mesh uses the TerrainBlock's diagonal."""
+        """The exact-level surface equals Torque's TerrainBlock::getHeight on the far field's 2 m lattice
+        everywhere (not only at the vertices), and every cell of the built mesh uses that block's diagonal (the
+        1 m physics block is finer than the far tiles since 2026-11-01)."""
         c, m = self.c, self.c + 1
         tile = ff.Tile(self.ex, *self.EXACT_TILES[c][0])
         b = self.build(tile)
@@ -273,9 +278,9 @@ class LatticeTest(unittest.TestCase):
         pts = rng.random((4000, 2)) * tile.size
         pts[:20] = [[2 * k + 0.5, 2 * k + 1.5] for k in range(20)]        # upper triangles near the diagonal
         ours = ff.surface_at(grid, 2.0, pts[:, 0], pts[:, 1])
-        bx = (tile.bbox[0] - self.x0 + pts[:, 0]) / heightmap.SQUARE
-        by = (tile.bbox[1] - self.y0 + pts[:, 1]) / heightmap.SQUARE
-        theirs = np.array([torque_height(self.h, x, y) for x, y in zip(bx, by)])
+        bx = (tile.bbox[0] - self.x0 + pts[:, 0]) / heightmap.FAR_SQUARE
+        by = (tile.bbox[1] - self.y0 + pts[:, 1]) / heightmap.FAR_SQUARE
+        theirs = np.array([torque_height(self.h2, x, y) for x, y in zip(bx, by)])
         np.testing.assert_allclose(ours, theirs, atol=1e-9)
         # v1.2's uniform SE-NW split would differ on this rough ground (the test has teeth).
         i, j = np.minimum((pts // 2.0).astype(int), c - 1).T
@@ -304,23 +309,24 @@ class LatticeTest(unittest.TestCase):
         self.assertTrue((n[:, 2] > 0).all())
 
     def test_bilinear_tolerance(self):
-        """The exact surface against the engine's collision, which is bilinear per 2 m square (probe
-        p_diag): between vertices they differ by at most |twist|/4 (the Targets' tolerance), and by
-        exactly that at a square's centre."""
+        """The exact surface against the engine's collision rule, bilinear per square (probe p_diag), on the
+        far field's 2 m lattice (the 1 m block's every second sample): between vertices they differ by at most
+        |twist|/4 (the Targets' tolerance), and by exactly that at a square's centre."""
         c = self.c
         tile = ff.Tile(self.ex, *self.EXACT_TILES[c][0])
         grid = self.build(tile).grid.astype(np.float64)
         rng = np.random.default_rng(11)
         pts = rng.random((3000, 2)) * tile.size
         mesh = ff.surface_at(grid, 2.0, pts[:, 0], pts[:, 1])
-        args = (self.q16, self.info["zBase"], self.info["maxHeight"], self.cx, self.cy)
-        bil = np.array([heightmap.height_at(*args, tile.bbox[0] + x, tile.bbox[1] + y) for x, y in pts])
+        args = (self.q16[::self.st, ::self.st], self.info["zBase"], self.info["maxHeight"], self.cx, self.cy)
+        sq = heightmap.FAR_SQUARE
+        bil = np.array([heightmap.height_at(*args, tile.bbox[0] + x, tile.bbox[1] + y, square=sq) for x, y in pts])
         i, j = np.minimum((pts // 2.0).astype(int), c - 1).T
         twist = np.abs(grid[j, i] - grid[j, i + 1] - grid[j + 1, i] + grid[j + 1, i + 1])
         self.assertTrue((np.abs(mesh - bil) <= twist / 4 + 1e-9).all())
         centre = ff.surface_at(grid, 2.0, 2.0 * i + 1.0, 2.0 * j + 1.0)
-        bil_c = np.array([heightmap.height_at(*args, tile.bbox[0] + 2.0 * a + 1.0, tile.bbox[1] + 2.0 * b + 1.0)
-                          for a, b in zip(i, j)])
+        bil_c = np.array([heightmap.height_at(*args, tile.bbox[0] + 2.0 * a + 1.0, tile.bbox[1] + 2.0 * b + 1.0,
+                                              square=sq) for a, b in zip(i, j)])
         np.testing.assert_allclose(np.abs(centre - bil_c), twist / 4, atol=1e-9)
 
     def test_err_and_no_sink(self):

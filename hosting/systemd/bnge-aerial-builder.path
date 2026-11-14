@@ -1,0 +1,11 @@
+# Starts bnge-aerial-builder.service once the credentials file exists. Enable this unit, not the service:
+#   systemctl --user enable --now bnge-aerial-builder.path
+[Unit]
+Description=Start the BeamNG.Earth aerial builder once %h/bnge-builder/r2.env exists
+
+[Path]
+PathExists=%h/bnge-builder/r2.env
+Unit=bnge-aerial-builder.service
+
+[Install]
+WantedBy=default.target

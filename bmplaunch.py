@@ -198,16 +198,34 @@ def find(data_dir, env=None):
     return max(found, key=lambda p: os.path.getmtime(p))
 
 
-VERSION_RE = re.compile(r"BeamMP Launcher v([0-9][0-9.]*)")
+VERSION_RE = re.compile(r"(?:BeamMP Launcher v|Launcher Version\s*:\s*)([0-9][0-9.]*)")
 TOO_OLD = "Invalid lua communication"     # its log, again and again: the launcher cannot talk to BeamMP's mod
 
 
-def read_log(log_path):
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except OSError:
-        return ""
+def read_log(log_path, launcher_exe=None):
+    """Bounded current-attempt output, including BeamMP's own Windows log.
+
+    Windows BeamMP writes Launcher.log beside its executable while redirected
+    stdout can be empty. Do not report an older attempt's errors as current.
+    """
+    paths = [log_path]
+    if launcher_exe:
+        native = os.path.join(os.path.dirname(launcher_exe), "Launcher.log")
+        try:
+            if os.path.getmtime(native) >= os.path.getmtime(log_path):
+                paths.append(native)
+        except OSError:
+            pass
+    parts = []
+    for path in dict.fromkeys(paths):
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 65536))
+                parts.append(f.read(65536).decode("utf-8", errors="replace"))
+        except OSError:
+            pass
+    return "\n".join(parts)
 
 
 def log_version(text):
@@ -221,13 +239,59 @@ def log_too_old(text, at_least=3):
     return (text or "").count(TOO_OLD) >= at_least
 
 
-def running(port=CORE_PORT):
-    """A BeamMP launcher already listens (started by the player, or left over)."""
+def windows_listening(port, table=None):
+    """Windows: does a process listen on TCP port (IPv4, any address)? From the system's TCP table
+    (iphlpapi GetExtendedTcpTable), at once; None when it could not be asked. A connection attempt to a port nobody
+    listens on takes Windows ~1 s on localhost (it retries the refused SYN), and the launcher asked twice before the
+    game started (its own server's port, BeamMP's: measured 2026-11-12 on the Windows test PC, 1.0 s and 0.5 s of a
+    ten-second start). table: the raw MIB_TCPTABLE_OWNER_PID bytes (tests)."""
+    import struct
+    if table is None:
+        if not IS_WIN:
+            return None
+        try:
+            import ctypes
+            iphlp = ctypes.WinDLL("iphlpapi")
+            size = ctypes.c_ulong(0)
+            # (AF_INET 2, TCP_TABLE_OWNER_PID_LISTENER 3: rows of state, local address, port, remote, port, pid)
+            iphlp.GetExtendedTcpTable(None, ctypes.byref(size), False, 2, 3, 0)
+            for _ in range(3):
+                buf = ctypes.create_string_buffer(size.value + 4096)
+                size = ctypes.c_ulong(len(buf))
+                if iphlp.GetExtendedTcpTable(buf, ctypes.byref(size), False, 2, 3, 0) == 0:
+                    table = buf.raw[:size.value]
+                    break
+            else:
+                return None
+        except (OSError, AttributeError, ValueError):
+            return None
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+        n = struct.unpack_from("<I", table, 0)[0]
+        for i in range(n):
+            local_port = struct.unpack_from("<6I", table, 4 + 24 * i)[2]
+            if socket.ntohs(local_port & 0xFFFF) == port:
+                return True
+        return False
+    except struct.error:
+        return None
+
+
+def listening(port, timeout=0.5):
+    """Does something listen on 127.0.0.1:port? Windows: its TCP table (windows_listening); else, or when that could not
+    be asked, a connection attempt."""
+    seen = windows_listening(port) if IS_WIN else None
+    if seen is not None:
+        return seen
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True
     except OSError:
         return False
+
+
+def running(port=CORE_PORT):
+    """A BeamMP launcher already listens (started by the player, or left over)."""
+    return listening(port)
 
 
 def _get(url, user_agent, timeout=60):
@@ -407,20 +471,78 @@ def start(exe, user_dir, log_path):
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    log = open(log_path, "w", encoding="utf-8", errors="replace")
-    kw = {"cwd": os.path.dirname(exe), "stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+    # (it writes Launcher.cfg, Launcher.log and its key in its working folder: a system package's /usr/bin is not
+    # writable, "Failed to write config on disk!" and it quit, 2026-11-04; then the log's folder)
+    cwd = os.path.dirname(exe)
+    if not os.access(cwd, os.W_OK):
+        cwd = os.path.dirname(log_path)
+    kw = {"cwd": cwd, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
     if IS_WIN:
         kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     else:
         kw["start_new_session"] = True
         kw["env"] = dict(child_env(), TERM=os.environ.get("TERM") or "xterm")
-    return subprocess.Popen(args, **kw)
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        proc = subprocess.Popen(args, stdout=log, **kw)
+    if IS_WIN:
+        tie_to_app(proc)
+    return proc
+
+
+_JOB = None     # Windows: the job BeamMP's launcher runs in (its handle open for the app's life, closed at its end)
+
+
+def tie_to_app(proc):
+    """Windows: BeamMP's launcher (and whatever it starts) in a job object that ends it when this app ends, however it
+    ends: a closed console window gives the app no time for its own stop. It kept running after BeamNG.Earth was
+    closed, Steam showing the game as running and the cache's files held open (GitHub #727). True when tied."""
+    global _JOB
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.OpenProcess.restype = wintypes.HANDLE
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rb", "wb", "ob")]
+
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", IoCounters),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        if _JOB is None:
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                return False
+            info = Extended()
+            info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(wintypes.HANDLE(job), 9, ctypes.byref(info), ctypes.sizeof(info)):
+                k32.CloseHandle(wintypes.HANDLE(job))
+                return False                                        # (9: JobObjectExtendedLimitInformation)
+            _JOB = job
+        h = k32.OpenProcess(0x0001 | 0x0100, False, proc.pid)      # PROCESS_TERMINATE | PROCESS_SET_QUOTA
+        if not h:
+            return False
+        try:
+            return bool(k32.AssignProcessToJobObject(wintypes.HANDLE(_JOB), wintypes.HANDLE(h)))
+        finally:
+            k32.CloseHandle(wintypes.HANDLE(h))
+    except Exception:           # (never the start's business: the app's own stop still ends it)
+        return False
 
 
 def wait_ready(proc, timeout=READY_S):
     """Until it listens for the game (its mod updated); False if it ended or took too long."""
-    end = time.time() + timeout
-    while time.time() < end:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
         if running():
             return True
         if proc.poll() is not None:
@@ -433,11 +555,15 @@ def stop(proc):
     if proc is None or proc.poll() is not None:
         return
     try:
-        proc.terminate()
+        if IS_WIN:      # (with what it started: a self-updated launcher runs on as its child, GitHub #727)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            proc.terminate()
         proc.wait(timeout=10)
     except Exception:
         try:
             proc.kill()
+            proc.wait(timeout=5)
         except Exception:
             pass
 

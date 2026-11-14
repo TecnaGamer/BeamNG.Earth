@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.gasstations")
 
@@ -101,6 +103,48 @@ class Station:
     pins: tuple
     confirmed: bool     # a gas_station pin or a fuel brand; else a convenience brand that needs a canopy
     trusted: bool = True    # its records current (TRUST_CONF): a station mapped as one building needs it
+    osm: bool = False       # OpenStreetMap has a fuel station here (with_osm): confirmed, and named for fuel by it
+
+
+def _candidates(f):
+    """[(feature index, classify's result, confidence)] of a places layer's fuel-station candidates, made once per layer
+    (kept on it): classify over every place of a city cell was ~0.3 s of each of its road tiles (47k places, 2026-11-02).
+    Pure given the layer."""
+    got = f.__dict__.get("_fuel_candidates")
+    if got is not None:
+        return got
+    cid = f.__dict__.get("_bnge_cell")
+    import roads
+    mk = (cid, "fuel_candidates") if cid is not None else None
+    if mk is not None:          # (this process's, for another copy of the layer: the map data reloads them)
+        with roads._FACTS_LOCK:
+            got = roads._FACTS_MEM.get(mk)
+        if got is not None:
+            f.__dict__["_fuel_candidates"] = got
+            return got
+    a = f.attrs
+
+    def col(k, i):
+        v = a[k][i] if k in a else None
+        return "" if v is None else str(v)
+    out = []
+    for i in range(len(f)):
+        c = classify(col("basic_category", i), col("taxonomy", i), col("brand_wikidata", i),
+                     col("operating_status", i) or None, col("brand_name", i))
+        if c is None:
+            continue
+        try:
+            conf = float(col("confidence", i) or 1.0)
+        except ValueError:
+            conf = 1.0
+        out.append((i, c, conf, col("name", i), col("brand_name", i), col("brand_wikidata", i), col("src_dataset", i)))
+    f.__dict__["_fuel_candidates"] = out
+    if mk is not None:
+        with roads._FACTS_LOCK:
+            roads._FACTS_MEM[mk] = out
+            while len(roads._FACTS_MEM) > roads.FACTS_MEM_KEPT:
+                roads._FACTS_MEM.popitem(last=False)
+    return out
 
 
 def pins(frame, layers):
@@ -110,30 +154,18 @@ def pins(frame, layers):
     for f in layers:
         if f is None or len(f) == 0:
             continue
-        a = f.attrs
-
-        def col(k, i):
-            v = a[k][i] if k in a else None
-            return "" if v is None else str(v)
         xy = None
-        for i in range(len(f)):
+        for i, c, conf, name, brand, wikidata, src in _candidates(f):
             fid = str(f.ids[i])
             if fid in seen:
                 continue
-            c = classify(col("basic_category", i), col("taxonomy", i), col("brand_wikidata", i),
-                         col("operating_status", i) or None, col("brand_name", i))
-            if c is None:
-                continue
+            if _is_ev(name) or _is_ev(brand):
+                continue        # (a charger filed as a gas station is a charger site: evchargers.charger_pins)
             seen.add(fid)
             if xy is None:
                 xy = f.xy_in(frame)
             k = f.coord_off[f.ring_off[f.part_off[i]]]
-            try:
-                conf = float(col("confidence", i) or 1.0)
-            except ValueError:
-                conf = 1.0
-            out.append(Pin(fid, float(xy[k, 0]), float(xy[k, 1]), col("name", i), col("brand_name", i),
-                           col("brand_wikidata", i), *c, conf, col("src_dataset", i)))
+            out.append(Pin(fid, float(xy[k, 0]), float(xy[k, 1]), name, brand, wikidata, *c, conf, src))
     return out
 
 
@@ -181,8 +213,8 @@ def merge(ps, merge_m=MERGE_M):
     compatible with every pin of the other (an unbranded pin between a Shell and a Sunoco across a street joins one of
     them, not both: review I2)."""
     ps = sorted(ps, key=lambda p: p.id)
-    pairs = sorted(((a.x - b.x) ** 2 + (a.y - b.y) ** 2, i, j) for i, a in enumerate(ps) for j, b in enumerate(ps)
-                   if i < j and (a.x - b.x) ** 2 + (a.y - b.y) ** 2 <= merge_m ** 2)
+    pairs = sorted((dnp.sq(a.x - b.x) + dnp.sq(a.y - b.y), i, j) for i, a in enumerate(ps) for j, b in enumerate(ps)
+                   if i < j and dnp.sq(a.x - b.x) + dnp.sq(a.y - b.y) <= merge_m * merge_m)
     group = {i: [i] for i in range(len(ps))}
     of = list(range(len(ps)))
     for _, i, j in pairs:
@@ -206,6 +238,33 @@ def merge(ps, merge_m=MERGE_M):
                            any(p.confidence >= TRUST_CONF or p.src in TRUST_SOURCES for p in g)
                            or len({p.src for p in g}) >= 2))
     return sorted(out, key=lambda s: s.id)
+
+
+OSM_CONFIRM_M = 60.0    # an OpenStreetMap fuel station this near a listing is that station (as MERGE_M)
+
+
+def with_osm(stations, osm):
+    """The stations with OpenStreetMap's fuel stations (osm: [{"id", "x", "y", "name", "brand"}] in the stations' frame,
+    from osmfuel.py) folded in: a listing within OSM_CONFIRM_M of one is confirmed, trusted and marked osm (a single
+    old listing, or a convenience store's, that OSM tags as a fuel station); one with no listing near is a station of
+    its own ("osm" + its id, the same in every road tile), named from OSM (the user, 2026-10-28: "lets test OSM if it
+    is too laggy we will revert": 142 of 600 OSM fuel stations in the 54 test places were not listed at all)."""
+    if not osm:
+        return list(stations)
+    out, used = [], set()
+    for st in stations:
+        near = [o for o in osm if math.hypot(o["x"] - st.x, o["y"] - st.y) <= OSM_CONFIRM_M]
+        if near:
+            used.update(o["id"] for o in near)
+            st = Station(st.id, st.x, st.y, st.name, st.brand, st.pins, True, True, True)
+        out.append(st)
+    for o in osm:
+        if o["id"] in used or any(math.hypot(o["x"] - s.x, o["y"] - s.y) <= OSM_CONFIRM_M for s in out):
+            continue
+        name = o.get("name") or o.get("brand") or "Gas station"
+        out.append(Station("osm%x" % int(o["id"]), float(o["x"]), float(o["y"]), name, o.get("brand") or "",
+                           ("osm:%d" % int(o["id"]),), True, True, True))
+    return out
 
 
 # --- the shop and the canopy -------------------------------------------------------------------------------------
@@ -244,7 +303,7 @@ ROAD_SLACK_M = 20.0         # a canopy may face any public road this much farthe
 
 def _area(ring):
     x, y = ring[:, 0], ring[:, 1]
-    return 0.5 * abs(float(np.dot(x[:-1], y[1:]) - np.dot(y[:-1], x[1:])))
+    return 0.5 * abs(float(dnp.dot(x[:-1], y[1:]) - dnp.dot(y[:-1], x[1:])))
 
 
 def _centre(ring):
@@ -266,7 +325,7 @@ def _nearest_on(lines, p):
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
         q = a + d * t[:, None]
-        dist = np.hypot(*(q - p).T)
+        dist = dnp.hypot(*(q - p).T)
         i = int(np.argmin(dist))
         if dist[i] < best[1]:
             best = (q[i], float(dist[i]), k)
@@ -278,18 +337,29 @@ def _named(b, st):
     return bool(words) and bool(_tokens(b.name) & words)
 
 
+TRAVEL_STORE_M2 = 2000.0    # a shop this big may be found by its wall (find_shop): a travel centre's store
+
+
 def find_shop(st, blds):
     """The station's shop: among the buildings (not roofs) within SHOP_SEARCH_M of the station, one named like the
     station, else the nearest a mapper drew, else the nearest imagery outline (one of those next to a station is often
-    its canopy: a Sunoco near Pittsburgh, its pin on the road, 2026-10-23); None without one."""
+    its canopy: a Sunoco near Pittsburgh, its pin on the road, 2026-10-23); None without one. With none by its centre, a
+    travel centre's store (TRAVEL_STORE_M2 or more: an ordinary building near a pin-only station is a neighbour's) whose
+    nearest wall is within SHOP_SEARCH_M (the Buc-ee's at Mount Crawford,
+    Virginia, its pin on the forecourt 39 m from the store's wall, 74 m from its centre, was two small pump pairs; the
+    user, 2026-10-27)."""
     p = np.array([st.x, st.y])
-    near = []
+    near, by_wall = [], []
     for b in blds:
         if b.cls in ROOF_CLASSES or b.cls in NOT_SHOP_CLASSES:
             continue
-        d = float(np.hypot(*(_centre(b.ring) - p)))
+        d = float(dnp.hypot(*(_centre(b.ring) - p)))
         if d <= SHOP_SEARCH_M:
             near.append((not _named(b, st), b.src in ML_SOURCES, d, b.id, b))
+        elif (not near and _area(b.ring) >= TRAVEL_STORE_M2
+              and float(_seg_dist(p[None], b.ring[:-1], b.ring[1:])[0]) <= SHOP_SEARCH_M):
+            by_wall.append((not _named(b, st), b.src in ML_SOURCES, d, b.id, b))
+    near = near or by_wall
     return min(near, key=lambda r: r[:4])[4] if near else None
 
 
@@ -376,7 +446,7 @@ def _home_shop(st, blds, roads):
         if b.cls not in HOME_CLASSES or (b.height is not None and np.isfinite(b.height)
                                          and b.height > CANOPY_MAX_H_M):
             continue
-        d = float(np.hypot(*(_centre(b.ring) - p)))
+        d = float(dnp.hypot(*(_centre(b.ring) - p)))
         if d <= SHOP_SEARCH_M and any(_gap(r.ring, b.ring) <= CANOPY_GAP_M
                                       and not _across(_centre(b.ring), _centre(r.ring), roads) for r in roofs):
             near.append((d, b.id, b))
@@ -464,7 +534,7 @@ def find_canopy(st, shop, blds, roads):
         if b.height is not None and np.isfinite(b.height) and b.height > CANOPY_MAX_H_M:
             continue
         c = _centre(b.ring)
-        if float(np.hypot(*(c - sc))) > CANOPY_SEARCH_M:
+        if float(dnp.hypot(*(c - sc))) > CANOPY_SEARCH_M:
             continue
         area = _area(b.ring)
         if not CANOPY_AREA_M2[0] <= area <= CANOPY_AREA_M2[1]:
@@ -477,7 +547,7 @@ def find_canopy(st, shop, blds, roads):
         v = c - sc
         for q, dist in fronts:
             axis = (q - sc) / dist
-            t = float(v @ axis) / dist
+            t = float(dnp.matmul(v, axis)) / dist
             lateral = abs(float(v[0] * axis[1] - v[1] * axis[0]))
             if 0.0 < t <= 1.1 and lateral <= shl + 10.0:
                 found.append(b)
@@ -536,7 +606,7 @@ class Site:
 
 
 def _yaw(u):
-    return float(np.degrees(np.arctan2(u[1], u[0])))
+    return float(np.degrees(dnp.arctan2(u[1], u[0])))
 
 
 def _pump(props, areas, kit, x, y, yaw, dz, shapes=None):
@@ -549,7 +619,7 @@ def _pump(props, areas, kit, x, y, yaw, dz, shapes=None):
 def _area_pts(x, y, yaw):
     """The corners and centre of a refuel area (AREA_HALF along / across its island) at (x, y), its yaw in degrees."""
     a = np.radians(yaw)
-    ex, ey = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+    ex, ey = np.array([dnp.cos(a), dnp.sin(a)]), np.array([-dnp.sin(a), dnp.cos(a)])
     return np.array([(x, y)] + [(x, y) + ex * (sx * AREA_HALF[0]) + ey * (sy * AREA_HALF[1])
                                 for sx in (-1, 1) for sy in (-1, 1)], np.float64)
 
@@ -560,7 +630,7 @@ def _seg_dist(pts, a, b):
     L2 = np.maximum((d * d).sum(1), 1e-12)
     t = np.clip(((pts[:, None, :] - a[None]) * d[None]).sum(2) / L2[None], 0.0, 1.0)
     q = a[None] + d[None] * t[:, :, None]
-    return np.hypot(*(q - pts[:, None, :]).transpose(2, 0, 1)).min(1)
+    return dnp.hypot(*(q - pts[:, None, :]).transpose(2, 0, 1)).min(1)
 
 
 def _clear(pts, blds, roads):
@@ -594,12 +664,12 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
             return None
         front = (q0 - c0) / d0                  # the shop's front: toward its road
         _, su, shl, shw = _obox(shop.ring)
-        back = -float(abs(su @ front) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)   # its back wall
+        back = -float(abs(dnp.matmul(su, front)) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)   # its back wall
         site = _pair_site(st, None, blds, roads, kit)
         if site is None:
             return None
         for p in site.props:
-            if np.hypot(p["x"] - st.x, p["y"] - st.y) > PIN_NEAR_M or float((np.array([p["x"], p["y"]]) - c0) @ front) < back:
+            if dnp.hypot(p["x"] - st.x, p["y"] - st.y) > PIN_NEAR_M or float(dnp.matmul(np.array([p["x"], p["y"]]) - c0, front)) < back:
                 return None
         return site
     sc = _centre(shop.ring) if shop is not None else pin
@@ -610,7 +680,7 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
     r = np.array([-a[1], a[0]])                 # along the row
     if shop is not None:
         _, su, shl, shw = _obox(shop.ring)
-        reach = float(abs(su @ a) * shl + abs(su[0] * a[1] - su[1] * a[0]) * shw)    # its half depth toward the road
+        reach = float(abs(dnp.matmul(su, a)) * shl + abs(su[0] * a[1] - su[1] * a[0]) * shw)    # its half depth toward the road
     else:
         reach = -(PAIR_HALF[1] + BLD_CLEAR_M)   # (from the pin itself)
     kit = kit or PUMP_KIT
@@ -621,7 +691,7 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
         steps = sorted(np.arange(-30.0, dist, 1.0), key=abs)
     # only what a candidate can touch, once (the search's _clear calls were most of a city cell's pads: 0.35 of 0.48 s)
     R = max(abs(float(steps[0])) if len(steps) else 0.0, abs(float(steps[-1])) if len(steps) else 0.0, 30.0) \
-        + 8.0 + float(np.hypot(*PAIR_HALF))
+        + 8.0 + float(dnp.hypot(*PAIR_HALF))
     lo_, hi_ = sc - R - BLD_CLEAR_M, sc + R + BLD_CLEAR_M
     blds = [b for b in blds if (b.ring.max(0) >= lo_).all() and (b.ring.min(0) <= hi_).all()]
     roads = [(ln, h) for ln, h in roads
@@ -631,18 +701,149 @@ def _pair_site(st, shop, blds, roads, kit=None, at_pin=False):
             c = sc + a * t + r * lat
             if not _clear(c + grid[:, :1] * r + grid[:, 1:] * a, blds, roads):
                 continue
-            props, areas = [], []
-            yaw = _yaw(r)                       # a pump's x along its row (fs_4)
-            for s in (-0.5, 0.5):
-                p = c + r * (s * PAIR_GAP_M)
-                _pump(props, areas, kit, float(p[0]), float(p[1]), yaw, 0.0)
-            for s in (-1.0, 1.0):
-                for o in (-0.3, 0.3):
-                    p = c + r * (s * (PAIR_GAP_M / 2 + 1.2)) + a * o
-                    props.append(dict(shape=BOLLARD, x=float(p[0]), y=float(p[1]), dz=0.0, yaw=_yaw(r) % 360.0,
-                                      scale=[1.5, 1.5, 1.0], collide=True))
-            return Site(st, props, areas, ())
+            return _pair_at(st, c, a, r, kit)
     return None
+
+
+def _pair_at(st, c, a, r, kit):
+    """The Site of a pump pair centred at c, its row along r, a toward its road: two pumps PAIR_GAP_M apart and a pair of
+    bollards at each end."""
+    props, areas = [], []
+    yaw = _yaw(r)                       # a pump's x along its row (fs_4)
+    for s in (-0.5, 0.5):
+        p = c + r * (s * PAIR_GAP_M)
+        _pump(props, areas, kit, float(p[0]), float(p[1]), yaw, 0.0)
+    for s in (-1.0, 1.0):
+        for o in (-0.3, 0.3):
+            p = c + r * (s * (PAIR_GAP_M / 2 + 1.2)) + a * o
+            props.append(dict(shape=BOLLARD, x=float(p[0]), y=float(p[1]), dz=0.0, yaw=_yaw(r) % 360.0,
+                              scale=[1.5, 1.5, 1.0], collide=True))
+    return Site(st, props, areas, ())
+
+
+# --- the wider pump-pair search (coverage, 2026-10-27: of the real stations missed, 123 of 131 had a shop, no canopy
+# and no room for a pair straight between the shop and its one nearest road; a search around the pin fits 90) ------
+WIDE_REACH_M = 40.0         # candidate pair centres this near the pin
+WIDE_STEP_M = 2.0           # ... on a grid this fine
+
+
+def _wide_pair_site(st, shop, blds, roads, kit=None):
+    """A pump pair anywhere open within WIDE_REACH_M of the pin, when _pair_site finds none: candidate centres on a
+    WIDE_STEP_M grid, nearest to the shop first (else to the pin), each pair facing its own nearest road and clear as
+    _pair_site's (_clear), with no building between it and that road (_walled), never behind the shop's back wall
+    (its front: toward its nearest road), on its own lot (nearer the shop than any other building: _own_lot) and
+    not across a public road from the shop (or the pin). Only for a station sure enough for pumps without a canopy to
+    show it: a gas station (st.confirmed) with a current record (st.trusted), named for fuel (_fuel_named) and no EV
+    charger (_is_ev); else None (the 40 m reach would put pumps by an office filed as a gas station, or by a charger:
+    phase two's EV part). The candidates are screened together on a raster of the obstacles (_obstacle_raster: a
+    failing search tried every one, 38 -> 221 ms of layouts a road tile in Athens), and only the ones left are checked
+    exactly, in order."""
+    if not (st.confirmed and st.trusted and (st.osm or _fuel_named(st.name) or _fuel_named(st.brand)))             or _is_ev(st.name) or _is_ev(st.brand):
+        return None
+    kit = kit or PUMP_KIT
+    pin = np.array([st.x, st.y])
+    sc = _centre(shop.ring) if shop is not None else pin
+    R = WIDE_REACH_M + float(dnp.hypot(*PAIR_HALF)) + BLD_CLEAR_M
+    blds = [b for b in blds if (b.ring.max(0) >= pin - R).all() and (b.ring.min(0) <= pin + R).all()]
+    near_roads = [(ln, h) for ln, h in roads if _seg_dist(pin[None], ln[:-1], ln[1:])[0] <= R + h + ROAD_CLEAR_M + 60.0]
+    if not near_roads:
+        return None
+    g = np.arange(-WIDE_REACH_M, WIDE_REACH_M + 1e-9, WIDE_STEP_M)
+    cand = pin + np.stack(np.meshgrid(g, g), -1).reshape(-1, 2)
+    cand = cand[dnp.hypot(*(cand - pin).T) <= WIDE_REACH_M]
+    cand = cand[np.argsort(dnp.hypot(*(cand - sc).T), kind="stable")]
+    # each candidate's nearest road point (all segments at once, in chunks)
+    A = np.concatenate([ln[:-1] for ln, _ in near_roads]); B = np.concatenate([ln[1:] for ln, _ in near_roads])
+    D = B - A
+    L2 = np.maximum((D * D).sum(1), 1e-12)
+    q = np.empty_like(cand); dq = np.empty(len(cand))
+    for i in range(0, len(cand), 256):
+        c = cand[i:i + 256]
+        t = np.clip(((c[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0.0, 1.0)
+        Q = A[None] + D[None] * t[:, :, None]
+        dist = dnp.hypot(*(Q - c[:, None, :]).transpose(2, 0, 1))
+        k = dist.argmin(1)
+        q[i:i + 256] = Q[np.arange(len(c)), k]; dq[i:i + 256] = dist[np.arange(len(c)), k]
+    ok = dq >= 1.0
+    av = (q - cand) / np.maximum(dq, 1e-9)[:, None]
+    rv = np.stack([-av[:, 1], av[:, 0]], 1)
+    gr, ga = np.meshgrid(np.linspace(-PAIR_HALF[0], PAIR_HALF[0], 11), np.linspace(-PAIR_HALF[1], PAIR_HALF[1], 9))
+    grid = np.c_[gr.ravel(), ga.ravel()]
+    foot = cand[:, None, :] + grid[None, :, :1] * rv[:, None, :] + grid[None, :, 1:] * av[:, None, :]    # (N, 99, 2)
+    front, back = None, 0.0
+    if shop is not None:                        # (its front: toward its nearest road; nothing behind its back wall)
+        q0, d0, _ = _nearest_on(near_roads, sc)
+        if q0 is not None and d0 >= 1.0:
+            front = (q0 - sc) / d0
+            _, su, shl, shw = _obox(shop.ring)
+            back = -float(abs(dnp.matmul(su, front)) * shl + abs(su[0] * front[1] - su[1] * front[0]) * shw)
+            ok &= (dnp.matmul(foot - sc, front)).min(1) >= back
+    blocked, o, res = _obstacle_raster(pin, R, blds, near_roads)
+    ij = np.floor((foot - o) / res).astype(np.int64)
+    inside = ((ij >= 0) & (ij < blocked.shape[0])).all(2)
+    ij = np.clip(ij, 0, blocked.shape[0] - 1)
+    ok &= inside.all(1) & ~blocked[ij[..., 1], ij[..., 0]].any(1)
+    for i in np.flatnonzero(ok):
+        c, qi, a, r = cand[i], q[i], av[i], rv[i]
+        if not _clear(foot[i], blds, near_roads):
+            continue
+        if _across(sc, c, roads) or _walled(c, qi, blds) or (shop is not None and not _own_lot(c, shop, blds)):
+            continue
+        return _pair_at(st, c, a, r, kit)
+    return None
+
+
+def _obstacle_raster(pin, R, blds, roads, res=0.5):
+    """(blocked (n, n) bool [row y, col x], origin, res): the cells around pin (R each way) a pump pair's footprint may
+    not touch, conservatively (each cell whose centre is within the clearance plus 0.75 res: no point of it can be in
+    a building, within BLD_CLEAR_M of one, or within ROAD_CLEAR_M of a carriageway). _clear has the last word."""
+    import polygon
+    n = int(math.ceil(2 * R / res))
+    o = pin - R
+    xs = o[0] + (np.arange(n) + 0.5) * res
+    ys = o[1] + (np.arange(n) + 0.5) * res
+    blocked = np.zeros((n, n), bool)
+    slack = 0.75 * res
+
+    def mark(lo, hi, test):
+        i0, j0 = np.clip(np.floor((lo - o) / res).astype(int), 0, n - 1)
+        i1, j1 = np.clip(np.ceil((hi - o) / res).astype(int), 0, n - 1)
+        if i1 < i0 or j1 < j0:
+            return
+        X, Y = np.meshgrid(xs[i0:i1 + 1], ys[j0:j1 + 1])
+        pts = np.c_[X.ravel(), Y.ravel()]
+        hit = test(pts).reshape(X.shape)
+        blocked[j0:j1 + 1, i0:i1 + 1] |= hit
+    for b in blds:
+        m = BLD_CLEAR_M + slack
+        mark(b.ring.min(0) - m, b.ring.max(0) + m,
+             lambda p, b=b, m=m: polygon.contains_points(b.ring, p) | (_seg_dist(p, b.ring[:-1], b.ring[1:]) < m))
+    for ln, h in roads:
+        m = h + ROAD_CLEAR_M + slack
+        for k in range(len(ln) - 1):
+            a2, b2 = ln[k:k + 1], ln[k + 1:k + 2]
+            mark(np.minimum(a2[0], b2[0]) - m, np.maximum(a2[0], b2[0]) + m,
+                 lambda p, a2=a2, b2=b2, m=m: _seg_dist(p, a2, b2) < m)
+    return blocked, o, res
+
+
+def _own_lot(c, shop, blds):
+    """Whether c is nearer the shop than any other building (the station's own ground, not a neighbour's lot)."""
+    d = lambda b: float(_seg_dist(c[None], b.ring[:-1], b.ring[1:])[0])      # noqa: E731
+    mine = d(shop)
+    return all(d(b) >= mine for b in blds if b is not shop and b.id != shop.id
+               and (np.abs(b.ring - c).min(0) <= mine).all())
+
+
+def _walled(c, q, blds):
+    """Whether a building stands on the straight way from c to its road's point q (pumps in a yard behind a block are
+    no forecourt)."""
+    import polygon
+    ts = np.linspace(0.0, 1.0, max(2, int(dnp.hypot(*(q - c)) / 1.0) + 1))
+    pts = c[None] + (q - c)[None] * ts[:, None]
+    lo, hi = pts.min(0), pts.max(0)
+    return any(polygon.contains_points(b.ring, pts).any() for b in blds
+               if (b.ring.max(0) >= lo).all() and (b.ring.min(0) <= hi).all())
 
 
 # --- stations by region (the user, 2026-10-23: "I want to use them based on region so we should take advantage of the
@@ -694,7 +895,7 @@ def _italy_site(st, boxes, others, roads):
                         _pump(props, areas, ITA_KIT, float(p[0]), float(p[1]), yaw, 0.0,
                               shapes=(ITA_PUMPS[(j + i) % 2],))
         q, _, _ = _nearest_on(roads, c) if len(roads) else (None, 0.0, -1)
-        end = ul if q is None or float((q - c) @ ul) >= 0 else -ul
+        end = ul if q is None or float(dnp.matmul(q - c, ul)) >= 0 else -ul
         sign = c + end * (hl + 2.5)
         if _clear(np.array([sign]), others, roads):
             props.append(dict(shape=ITA_SIGN, x=float(sign[0]), y=float(sign[1]), dz=0.0, yaw=yaw % 360.0,
@@ -734,7 +935,7 @@ def _eca_site(st, lanes, others, roads):
     it is clear of roads and buildings. None without an area."""
     c, u = lanes.centre, lanes.u
     x = np.array([u[1], -u[0]])                 # the units' x: across the islands (their y along them, u)
-    sign = 1.0 if float(x @ lanes.n) >= 0 else -1.0
+    sign = 1.0 if float(dnp.matmul(x, lanes.n)) >= 0 else -1.0
     offs = lanes.offsets
     mids = [sign * (o0 + o1) / 2 for o0, o1 in zip(offs[:-1], offs[1:])]      # the islands along x
     if sign < 0:
@@ -790,12 +991,14 @@ def _eca_site(st, lanes, others, roads):
 def style_shapes(style):
     """Every shape a station of that style (style_of) can use: the ones the mod preloads for the anchor's region
     (earthd anchor_ready fuelShapes; only that region's: a Steam Deck's memory, the user, 2026-10-23)."""
+    import evchargers                           # (and the style's EV chargers: evchargers.CHARGER_SHAPES)
+    ev = list(dict.fromkeys(evchargers.CHARGER_SHAPES.get(style, evchargers.CHARGER_SHAPES["default"])))
     west = [*PUMP_KIT["pump"], _ROOF, _PILLAR, BOLLARD]
     if style == "europe":
-        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD]
+        return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD, *ev]
     if style == "us_east":
-        return [ECA_UNIT, *west]                # (West Coast's islands under a small canopy, and the pump pairs)
-    return west
+        return [ECA_UNIT, *west, *ev]           # (West Coast's islands under a small canopy, and the pump pairs)
+    return west + ev
 
 
 def _lanes_box(lanes):
@@ -843,19 +1046,19 @@ def find_lanes(shop, lines):
     """The forecourt's drive lanes among service road polylines (anchor frame) near the shop, or None: the longest
     run of at least LANE_MIN short, straight, parallel ones LANE_GAP_M apart, overlapping along their length."""
     sc = _centre(shop.ring)
-    cos_max = np.cos(np.radians(LANE_ANGLE_DEG))
+    cos_max = dnp.cos(np.radians(LANE_ANGLE_DEG))
     segs = []
     for line in lines:
         line = np.asarray(line, np.float64)[:, :2]
         if len(line) < 2:
             continue
-        length = float(np.hypot(*np.diff(line, axis=0).T).sum())
+        length = float(dnp.hypot(*np.diff(line, axis=0).T).sum())
         d = line[-1] - line[0]
-        chord = float(np.hypot(*d))
+        chord = float(dnp.hypot(*d))
         if not LANE_LEN_M[0] <= length <= LANE_LEN_M[1] or chord < LANE_STRAIGHT * length:
             continue
         mid = (line[0] + line[-1]) / 2
-        if float(np.hypot(*(mid - sc))) > LANE_SEARCH_M:
+        if float(dnp.hypot(*(mid - sc))) > LANE_SEARCH_M:
             continue
         u = d / chord
         if u[0] < 0 or (u[0] == 0 and u[1] < 0):
@@ -867,10 +1070,10 @@ def find_lanes(shop, lines):
         n = np.array([-u[1], u[0]])
         rows = []
         for m2, u2, p0, p1 in segs:
-            if abs(float(u2 @ u)) < cos_max:
+            if abs(float(dnp.matmul(u2, u))) < cos_max:
                 continue
-            a = sorted((float((p0 - mid) @ u), float((p1 - mid) @ u)))
-            rows.append((float((m2 - mid) @ n), a[0], a[1]))
+            a = sorted((float(dnp.matmul(p0 - mid, u)), float(dnp.matmul(p1 - mid, u))))
+            rows.append((float(dnp.matmul(m2 - mid, n)), a[0], a[1]))
         seed = next(r for r in rows if abs(r[0]) < 1e-9)
         rows = [r for r in rows if min(r[2], seed[2]) - max(r[1], seed[1])
                 >= 0.5 * min(r[2] - r[1], seed[2] - seed[1])]
@@ -915,7 +1118,7 @@ def _lane_site(st, lanes, others, roads, kit):
     props, areas = [], []
     if length <= SHORT_ISLAND_M:
         q, _, _ = _nearest_on(roads, c) if len(roads) else (None, 0.0, -1)
-        back = -u if q is not None and float((q - c) @ u) > 0 else u          # away from the road
+        back = -u if q is not None and float(dnp.matmul(q - c, u)) > 0 else u          # away from the road
         for o0, o1 in zip(lanes.offsets[:-1], lanes.offsets[1:]):
             m = c + n * ((o0 + o1) / 2) + u * ((lanes.a0 + lanes.a1) / 2)
             if _clear(_area_pts(float(m[0]), float(m[1]), yaw), others, roads):
@@ -979,7 +1182,7 @@ LANES_UNDER_M = 5.0             # mapped lanes beside a canopy: their centre thi
 def _under(p, canopy):
     c, ul, hl, hw = _obox(canopy.ring)
     d = p - c
-    return abs(float(d @ ul)) <= hl + LANES_UNDER_M and abs(float(d[0] * ul[1] - d[1] * ul[0])) <= hw + LANES_UNDER_M
+    return abs(float(dnp.matmul(d, ul))) <= hl + LANES_UNDER_M and abs(float(d[0] * ul[1] - d[1] * ul[0])) <= hw + LANES_UNDER_M
 
 
 def layout(st, blds, roads, service=(), style="default"):
@@ -1032,7 +1235,7 @@ def _dense(ring, step=1.0):
     ring = np.asarray(ring, np.float64)
     out = [ring[:1]]
     for a, b in zip(ring[:-1], ring[1:]):
-        n = max(1, int(math.ceil(float(np.hypot(*(b - a))) / step)))
+        n = max(1, int(math.ceil(float(dnp.hypot(*(b - a))) / step)))
         out.append(a + (b - a) * (np.arange(1, n + 1) / n)[:, None])
     return np.vstack(out)
 
@@ -1060,7 +1263,7 @@ def forecourt_pad(site, blds, roads, service=()):
     others = [b for b in blds if b is not shop and b not in canopies]
     margin = {(0, 1): PAD_MARGIN_M, (0, -1): PAD_MARGIN_M, (1, 1): PAD_MARGIN_M, (1, -1): PAD_MARGIN_M}
     half = (hl, hw)
-    reach = float(np.hypot(hl, hw)) + PAD_MARGIN_M + 2.0      # (only what can meet the box with its margins)
+    reach = float(dnp.hypot(hl, hw)) + PAD_MARGIN_M + 2.0      # (only what can meet the box with its margins)
     lo_, hi_ = c - reach, c + reach
     obstacles = [(_dense(b.ring), PAD_BLD_GAP_M) for b in others
                  if (b.ring.max(0) >= lo_).all() and (b.ring.min(0) <= hi_).all()]
@@ -1068,7 +1271,7 @@ def forecourt_pad(site, blds, roads, service=()):
                   if (line.max(0) >= lo_ - h).all() and (line.min(0) <= hi_ + h).all()]
     for q, gap in obstacles:
         d = q - c
-        a = np.stack([d @ u, d @ v], axis=1)
+        a = np.stack([dnp.matmul(d, u), dnp.matmul(d, v)], axis=1)
         for ax in (0, 1):
             other = 1 - ax
             for sg in (1, -1):
@@ -1097,7 +1300,7 @@ def _dir_at(line, p):
              for i in range(len(line) - 1)]
         k = int(np.argmin(d))
     t = line[k + 1] - line[k]
-    return t / max(float(np.hypot(*t)), 1e-9)
+    return t / max(float(dnp.hypot(*t)), 1e-9)
 
 
 def _driveways(pad, centre, others, roads, service):
@@ -1122,9 +1325,9 @@ def _driveways(pad, centre, others, roads, service):
         if float(gaps[k].min()) > DRIVEWAY_CORNER_M:
             break
         uk = _dir_at(roads[k][0], edge[int(np.argmin(gaps[k]))])
-        crossing = math.degrees(math.acos(min(1.0, abs(float(u0 @ uk)))))
+        crossing = math.degrees(dmath.acos(min(1.0, abs(float(dnp.matmul(u0, uk))))))
         if crossing >= DRIVEWAY_CORNER_DEG and all(
-                math.degrees(math.acos(min(1.0, abs(float(_dir_at(roads[j][0], edge[int(np.argmin(gaps[j]))]) @ uk)))))
+                math.degrees(dmath.acos(min(1.0, abs(float(dnp.matmul(_dir_at(roads[j][0], edge[int(np.argmin(gaps[j]))]), uk))))))
                 >= DRIVEWAY_CORNER_DEG for j in want):
             want.append(k)
             break                               # (one more: the corner)
@@ -1182,11 +1385,11 @@ def _drive_to(pad, centre, edge, gap, road, others, service):
         if near_pad and (_seg_dist(q, line_r[:-1], line_r[1:]) <= h + DRIVEWAY_MAPPED_M).any():
             return None
     cand = np.flatnonzero(gap <= dmin + 0.5)
-    p = edge[cand[int(np.argmin(np.hypot(*(edge[cand] - centre).T)))]]
+    p = edge[cand[int(np.argmin(dnp.hypot(*(edge[cand] - centre).T)))]]
     q, _, _ = _nearest_on([road], p)
-    dirn = (q - p) / max(float(np.hypot(*(q - p))), 1e-9)
+    dirn = (q - p) / max(float(dnp.hypot(*(q - p))), 1e-9)
     side = np.array([-dirn[1], dirn[0]]) * (DRIVEWAY_W_M / 2)
-    a, b = p - dirn * 1.0, p + dirn * (float(np.hypot(*(q - p))) - h + PAD_BLD_GAP_M)
+    a, b = p - dirn * 1.0, p + dirn * (float(dnp.hypot(*(q - p))) - h + PAD_BLD_GAP_M)
     strip = np.array([a - side, b - side, b + side, a + side])
     probe = _dense(np.vstack([strip, strip[:1]]), 0.5)
     core = a + (b - a) * np.linspace(0, 1, 9)[:, None]
@@ -1221,17 +1424,31 @@ ONE_BLD_ROAD_M = ONE_BLD_CLEAR_M + 2.0      # a side whose middle a road's edge 
 # a fuel station's name (as well as STATION_WORDS): its brands and words in the map data's languages, whole words; a
 # Japanese service station's "SS" after its place name (南森町SS); never a bare "gas" (a union of gas fitters is no station).
 # Russia's, Eastern and Northern Europe's brands and words too (the user, 2026-10-27: "it needs to work for around the
-# world, we have players in Russia all over Europe")
-FUEL_WORDS = re.compile(r"\b(oil|petrol\w*|petro|gasolina|gasoline|service[- ]station|pemex|ipiranga|petrobras|br|ypf|"
+# world, we have players in Russia all over Europe"). A word ends where no Latin letter is next to it, not at \b, which
+# sees Japanese and digits as word (ENEOSフロンティア, 123tanken).
+FUEL_WORDS = re.compile(r"(?<![A-Za-z])(oil|petrol\w*|petro|gasolina|gasoline|service[- ]station|pemex|ipiranga|petrobras|br|ypf|"
                         r"repsol|galp|cepsa|moeve|q8|omv|ömv|lukoil|rosneft|gazprom\w*|tatneft|bashneft|petronas|caltex|"
                         r"ampol|engen|sasol|puma|kobil|hidrosina|cosmo|idemitsu|apollostation|eneos|ptt|orlen|lotos|mol|"
                         r"circle k|neste|okq8|preem|st1|uno-x|ingo|statoil|teboil|petrom|rompetrol|slovnaft|benzina|ina|"
                         r"opet|tamoil|wog|okko|socar|čerpací stanice|benzinárna|huoltoasema|bensinstasjon|bensinstation|"
-                        r"akaryakıt|jetoil|silkoil|revoil|elin|eko|aegean|avin|prio|retitalia)\b|"
-                        r"石油|日石|ガソリン|スタンド|エネオス|コスモ|出光|ปตท|азс|агзс|заправ|нефт|бензин|лукойл|"
+                        r"akaryakıt|jetoil|silkoil|revoil|elin|eko|aegean|avin|prio|retitalia|ip|api|keropetrol|stom|"
+                        r"rubis|amoco|atlantsol[ií]a|turm[öo]l|oz energia|pt|tanken)(?![A-Za-z])|"
+                        r"石油|日石|ガソリン|スタンド|エネオス|コスモ|出光|セルフ|ปตท|азс|агзс|заправ|нефт|бензин|лукойл|"
                         r"καυσίμ|πρατήριο|βενζιν|ελιν",
                         re.IGNORECASE)
 SS_WORD = re.compile(r"(?<![A-Za-z])(SS|Ss|ＳＳ)(?![A-Za-z])")
+
+# an EV charger filed as a gas station (Shell Recharge, BP Pulse, a Supercharger): no fuel station, so the wider pump
+# search leaves it (_wide_pair_site); phase two's EV chargers take it (the user, 2026-10-27: "don't forget we are
+# planning on adding ev chargers for phase 2")
+EV_WORDS = re.compile(r"\b(recharge|supercharger|ionity|electrify|chargepoint|evgo|ladestation|ladepark|borne de recharge|"
+                      r"punto de recarga|ev charging|ev charger|charging station|allego|fastned|bp pulse|pulse)\b|"
+                      r"зарядн|充電", re.IGNORECASE)
+
+
+def _is_ev(text):
+    """Whether a name says EV charger, not fuel (EV_WORDS)."""
+    return bool(text) and bool(EV_WORDS.search(text))
 
 
 def _fuel_named(text):
@@ -1305,7 +1522,7 @@ def _one_building_site(st, blds, roads, service=(), style="default"):
     roof or across a public road), else the station is keyed by its own outline (one station per shop, _one_per_shop:
     a block farther off is no shop of its, and two stations near it must not hide each other). The canopy stands back
     from the sides that face a public road (_off_the_sidewalk)."""
-    if not st.confirmed or not st.trusted or not (_fuel_named(st.name) or _fuel_named(st.brand)):
+    if not st.confirmed or not st.trusted or not (st.osm or _fuel_named(st.name) or _fuel_named(st.brand)):
         return None
     b = _pin_building(st, blds)
     if b is None:
@@ -1315,7 +1532,7 @@ def _one_building_site(st, blds, roads, service=(), style="default"):
     c = _centre(b.ring)
     shops = [(_gap(o.ring, b.ring), o.id, o) for o in others
              if o.cls not in ROOF_CLASSES and o.cls not in NOT_SHOP_CLASSES
-             and float(np.hypot(*(_centre(o.ring) - c))) <= SHOP_SEARCH_M]
+             and float(dnp.hypot(*(_centre(o.ring) - c))) <= SHOP_SEARCH_M]
     shops = [s for s in shops if s[0] <= PAD_SHOP_LINK_M and not _across(c, _centre(s[2].ring), roads)]
     shop = min(shops, key=lambda s: s[:2])[2] if shops else None
     if style == "europe":
@@ -1331,12 +1548,28 @@ def _one_building_site(st, blds, roads, service=(), style="default"):
     return site
 
 
+def _station_shop(st, blds, roads):
+    """find_shop's shop, but a travel centre's store found only by its wall (beyond SHOP_SEARCH_M by its centre) only
+    with the station's canopy mapped beside it (find_canopies): else a big city building near a pin-only station
+    became its shop (Paris, Berlin in the 968-station comparison, 2026-10-27)."""
+    shop = find_shop(st, blds)
+    if shop is not None and float(dnp.hypot(*(_centre(shop.ring) - np.array([st.x, st.y])))) > SHOP_SEARCH_M             and not find_canopies(st, shop, blds, roads):
+        return None
+    return shop
+
+
 def _layout(st, blds, roads, service=(), style="default"):
     """The station's forecourt (_layout_core); failing that, a station mapped as one building around its pin
-    (_one_building_site): only where nothing else is laid out, so no station that has a forecourt today changes."""
+    (_one_building_site); failing that, a pump pair anywhere open near the pin (_wide_pair_site): each only where
+    nothing before it is laid out, so no station that has a forecourt today changes."""
     site = _layout_core(st, blds, roads, service, style)
     if site is None:
         site = _one_building_site(st, blds, roads, service, style)
+    if site is None:
+        shop = _station_shop(st, blds, roads) or _home_shop(st, blds, roads)
+        site = _wide_pair_site(st, shop, blds, roads, ITA_KIT if style == "europe" else PUMP_KIT)
+        if site is not None:
+            site.shop_id = shop.id if shop is not None else "pin:" + st.id
     return site
 
 
@@ -1346,7 +1579,7 @@ def _layout_core(st, blds, roads, service=(), style="default"):
     _outline_lanes): islands between them under a roof slab (_lane_site); else a pump pair clear of roads and
     buildings. A canopy outline found is dropped from the buildings either way. A convenience brand alone (not
     st.confirmed) needs the lanes or the canopy."""
-    shop = find_shop(st, blds)
+    shop = _station_shop(st, blds, roads)
     if shop is None:                            # (a shop mapped as a home, beside its canopy: _home_shop)
         shop = _home_shop(st, blds, roads)
     if shop is None:                            # (a kiosk not mapped: the pin is on the forecourt)
@@ -1418,13 +1651,43 @@ def buildings_near(frame, layers, x, y, r):
         a = f.attrs
         xy = f.xy_in(frame)
         cx, cy = f.outer_centres(frame)         # (vectorised: a city cell has tens of thousands, review I6)
-        near = np.flatnonzero((cx - x) ** 2 + (cy - y) ** 2 <= (r + 1.0) ** 2)
+        near = np.flatnonzero(dnp.sq(cx - x) + dnp.sq(cy - y) <= dnp.sq(r + 1.0))
         for i in near.tolist():
             fid = str(f.ids[i])
             if fid in seen or f.part_off[i + 1] == f.part_off[i]:
                 continue
             ring = np.asarray(_outer(f, i, xy), np.float64)
-            if len(ring) < 4 or np.hypot(*(ring[:-1].mean(0) - (x, y))) > r:
+            if len(ring) < 4 or dnp.hypot(*(ring[:-1].mean(0) - (x, y))) > r:
+                continue
+            seen.add(fid)
+
+            def txt(k):
+                v = a[k][i] if k in a else None
+                return "" if v is None else str(v)
+            h = a["height"][i] if "height" in a else None
+            out.append(Bld(fid, ring, txt("class"), txt("name"), txt("src_dataset"),
+                           float(h) if h is not None and np.isfinite(h) else None))
+    return out
+
+
+def buildings_touching(frame, layers, x, y, r):
+    """Bld of the buildings whose outline's bounding box comes within r of (x, y) in frame, each once: buildings_near
+    by the outline, not its centre (EV chargers, in game in Berlin, 2026-10-29: chargers drawn inside a long block whose
+    centre was far off; the stations keep buildings_near, their layouts unchanged)."""
+    out, seen = [], set()
+    for f in layers:
+        if f is None or len(f) == 0:
+            continue
+        a = f.attrs
+        xy = f.xy_in(frame)
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 0] <= x + r) & (bb[:, 2] >= x - r) & (bb[:, 1] <= y + r) & (bb[:, 3] >= y - r))
+        for i in near.tolist():
+            fid = str(f.ids[i])
+            if fid in seen or f.part_off[i + 1] == f.part_off[i]:
+                continue
+            ring = np.asarray(_outer(f, i, xy), np.float64)
+            if len(ring) < 4:
                 continue
             seen.add(fid)
 
@@ -1488,6 +1751,18 @@ def service_lines(frame, layers, x, y, r):
 
 
 REACH_M = SHOP_SEARCH_M + CANOPY_SEARCH_M + 10.0    # a station's canopy is within this of its position
+# (the user, 2026-10-29: "bucees is cooked, one canopy spawns fine the second of the three spawns but the building draws
+# over it and the third canopy is a building") a travel centre's rows of canopies reach farther (Mount Crawford's
+# Buc-ee's: its third 134 m from the pin): its brands are laid out with TRAVEL_REACH_M, by every road tile it reaches
+TRAVEL_REACH_M = 200.0
+TRAVEL_WORDS = re.compile(r"(?<![A-Za-z])(buc-?ee['’]?s|love['’]?s travel|pilot travel|flying j|travelcenters? of america|"
+                          r"petro stopping|sapp bros)(?![A-Za-z])", re.I)
+
+
+def reach_of(st):
+    """How far from its position a station's buildings are looked for, and which road tiles lay it out (tile_sites):
+    TRAVEL_REACH_M for a travel centre's brand or name, else REACH_M."""
+    return TRAVEL_REACH_M if TRAVEL_WORDS.search(f"{st.brand or ''} {st.name or ''}") else REACH_M
 
 
 def _cells_near(frame, x, y, r):
@@ -1518,43 +1793,76 @@ def _record(site, frame, elev):
                       for k, a in enumerate(site.areas)]}
 
 
-def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
+def station_cells(frame, tx, ty):
+    """The map cells of the stations a road tile lays out (tile_sites): round the tile by the farthest reach and the
+    merge distance. Also the cells whose OpenStreetMap fuel stations it reads (earthd osm_fuel_cells)."""
+    import roads
+    return roads.cells_of_tile(frame, tx, ty, margin=TRAVEL_REACH_M + MERGE_M)
+
+
+def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
     """(records of the stations whose position lies in road tile (tx, ty), ids of the canopy outlines to leave out of
-    its buildings): every station within REACH_M of the tile is laid out, so a canopy whose centroid (buildings.py's
+    its buildings): every station within its reach_of of the tile is laid out, so a canopy whose centroid (buildings.py's
     owner rule) is in this tile is dropped here even when its station is the neighbour's. md: mapdata.MapData;
     elev(lat, lon) the physics ground. cuts: a list that gets every laid-out station's made-up driveways
     (Site.drives: roads.build_tile walk_cuts, the sidewalks they cross cut; a neighbour tile's station's too). pads: a
     list that gets (station id, [(lat (k,), lon (k,))]) of this tile's stations' forecourt pads (forecourt_pad; the
-    ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations."""
+    ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations.
+    The EV chargers near the tile (evchargers.py) are laid out after the stations: their records carry "energy":
+    ["electricEnergy"], a charger by a laid-out station stands off its forecourt's edge (_beside_station).
+    tried: a list that gets (kind "fuel" | "ev", lat, lon, laid out) of every station and charger whose position the tile
+    owns (the station finder, stationindex.StationIndex.mark: the user, 2026-11-09, a listing the world built nothing
+    for leaves the map)."""
+    import evchargers
     import roads
     box = roads.tile_bbox(tx, ty)
     x0, y0, x1, y1 = box
     try:
-        keys = roads.cells_of_tile(frame, tx, ty, margin=REACH_M + MERGE_M)
-        places = [md.cell(k, layers=("places",), kind="demand").layers.get("places") for k in keys]
+        keys = station_cells(frame, tx, ty)
+        import mapdata              # (the rows read here only: mapdata.places_slim)
+        places = [mapdata.places_of(md, k) for k in keys]
         stations = merge(pins(frame, places))
+        osm = []
+        osm_cached = getattr(md, "osm_fuel_cached", None)       # (OpenStreetMap's: cached cells only, never waited for)
+        if osm_cached is not None:
+            osm = [osm_cached(k) for k in keys]
+            if any(rows is None for rows in osm):   # (a cell not fetched yet: this tile is built again when it comes,
+                import revisit                      # and this build is not kept for the next visit)
+                revisit.fault()
+            stations = with_osm(stations, _osm_points(frame, osm))
+        chargers = evchargers.merge(evchargers.charger_pins(frame, places),
+                                    _osm_points(frame, osm, amenity="charging_station"))
     except Exception as e:      # an unreachable source costs the stations, not the tile
         log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
-    sites = []
+    chargers = _with_shard(frame, md, box, chargers)
+    sites, owned = [], []
     for st in stations:
-        if not (x0 - REACH_M <= st.x < x1 + REACH_M and y0 - REACH_M <= st.y < y1 + REACH_M):
+        r = reach_of(st)
+        if not (x0 - r <= st.x < x1 + r and y0 - r <= st.y < y1 + r):
             continue
         try:
             cds = [md.cell(k, layers=("buildings", "roads"), kind="demand")
-                   for k in _cells_near(frame, st.x, st.y, REACH_M)]
+                   for k in _cells_near(frame, st.x, st.y, r)]
             rls = [c.layers.get("roads") for c in cds]
             la, lo, _ = frame.enu_to_geodetic(st.x, st.y, 0.0)
-            site = layout(st, buildings_near(frame, [c.layers.get("buildings") for c in cds], st.x, st.y, REACH_M),
-                          drive_lines(frame, rls, st.x, st.y, REACH_M + 50.0),
-                          service_lines(frame, rls, st.x, st.y, REACH_M), style_of(float(la), float(lo)))
+            site = layout(st, buildings_near(frame, [c.layers.get("buildings") for c in cds], st.x, st.y, r),
+                          drive_lines(frame, rls, st.x, st.y, r + 50.0),
+                          service_lines(frame, rls, st.x, st.y, r), style_of(float(la), float(lo)))
         except Exception as e:
             log.debug("gas station %s: %s", st.id, e)
-            continue
+            continue            # (an error is no report: the listing stays on the finder's map)
+        if roads.box_owns(box, st.x, st.y):
+            owned.append(st)
         if site is not None:
             sites.append(site)
     recs, skip = [], set()
-    for site in _one_per_shop(sites):
+    kept = list(_one_per_shop(sites))      # (twice: the stations, then the chargers beside them)
+    if tried is not None:
+        laid = {site.station.id for site in kept}
+        for st in owned:
+            tried.append(("fuel",) + _ll_of(frame, st.x, st.y) + (st.id in laid,))
+    for site in kept:
         skip.update(site.drop_ids)
         if cuts is not None:
             cuts.extend(site.drives)
@@ -1563,7 +1871,105 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
             recs.append(_record(site, frame, elev))
             if pads is not None and site.pad:
                 pads.append((st.id, _pad_ll(site.pad, frame)))
+    for ch in chargers:
+        r = evchargers.reach_of(ch)
+        if not (x0 - r <= ch.x < x1 + r and y0 - r <= ch.y < y1 + r) or not roads.box_owns(box, ch.x, ch.y):
+            continue            # (a charger's record is its own position's tile's: one record, no ghost)
+        try:
+            site = _charger_site(frame, md, ch, kept, elev)
+        except Exception as e:
+            log.debug("EV charger %s: %s", ch.id, e)
+            continue
+        if tried is not None:
+            tried.append(("ev",) + _ll_of(frame, ch.x, ch.y) + (site is not None,))
+        if site is None:
+            continue
+        rec = _record(site, frame, elev)
+        rec["energy"] = list(evchargers.ENERGY)
+        recs.append(rec)
+        if pads is not None and site.pad:
+            pads.append((site.station.id, _pad_ll(site.pad, frame)))
     return recs, frozenset(skip)
+
+
+def _ll_of(frame, x, y):
+    """(lat, lon) of a frame position, as floats."""
+    la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
+    return float(la), float(lo)
+
+
+def _with_shard(frame, md, box, chargers):
+    """The chargers with OSM's capacity and charge points from the weekly shards (md.station_tags; evchargers.with_shard)
+    round the tile's box; as they were when the shards are off, not there or unreachable."""
+    import evchargers
+    st = getattr(md, "station_tags", None)
+    if st is None or not chargers:
+        return chargers
+    try:
+        # (a pin's shard station up to MERGE_M away, and that station's charge points up to MERGE_M from it: two
+        # MERGE_M round the reach, Codex on #1111, 2026-11-10)
+        r = max(evchargers.reach_of(ch) for ch in chargers) + 2 * MERGE_M
+        x0, y0, x1, y1 = box
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - r, x1 + r]), np.array([y0 - r, y1 + r]), 0.0)
+        box_ll = (float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
+        sts, pts = st.stations_in(*box_ll), st.points_in(*box_ll)
+        if sts is None or pts is None:
+            return chargers
+        return evchargers.with_shard(chargers, sts, pts, frame)
+    except Exception as e:      # (the shards cost their extras, never the chargers)
+        log.debug("station shards: %s: %s", type(e).__name__, e)
+        return chargers
+
+
+def _charger_site(frame, md, ch, stations, elev=None):
+    """An EV charger's site (evchargers.layout) among its buildings and roads; a charger within MERGE_M of a laid-out
+    station's forecourt is laid out from the forecourt's edge (_beside_station), the forecourt kept clear."""
+    import evchargers
+    beside = _beside_station(ch, stations)
+    at, pads = (beside if beside is not None else (ch, []))
+    r = evchargers.reach_of(at)
+    import mapcells
+    cds = mapcells.load_cells(md, _cells_near(frame, at.x, at.y, r), ("buildings", "roads"))
+    rls = [c.layers.get("roads") for c in cds]
+    blds = buildings_touching(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
+    la, lo, _ = frame.enu_to_geodetic(at.x, at.y, 0.0)
+    height = None
+    if elev is not None:                # (the ground under a row: kept level, evchargers.FLAT_M)
+        def height(xs, ys):
+            gla, glo, _ = frame.enu_to_geodetic(np.asarray(xs, np.float64), np.asarray(ys, np.float64), 0.0)
+            return np.asarray(elev(gla, glo), np.float64)
+    return evchargers.layout(at, blds, drive_lines(frame, rls, at.x, at.y, r + 50.0),
+                             service_lines(frame, rls, at.x, at.y, r), style_of(float(la), float(lo)), height)
+
+
+BESIDE_OUT_M = 5.0          # a charger by a station: this far out from the nearest point of its forecourt
+
+
+def _beside_station(ch, sites):
+    """(the charger moved off the edge of the nearest laid-out station's forecourt, that forecourt as obstacles (Bld))
+    when ch is within MERGE_M of one, else None (the user, 2026-10-29: a charger by a gas station stands at its
+    forecourt's edge, its own site and POI)."""
+    import dataclasses
+    p = np.array([ch.x, ch.y], np.float64)
+    best = None
+    for site in sites:
+        for ring in site.pad:
+            d = float(_seg_dist(p[None], ring[:-1], ring[1:])[0])
+            if d <= MERGE_M and (best is None or d < best[0]):
+                best = (d, ring, site)
+    if best is None:
+        return None
+    _, ring, site = best
+    a, b = ring[:-1], ring[1:]
+    seg = b - a
+    t = np.clip(((p - a) * seg).sum(1) / np.maximum((seg * seg).sum(1), 1e-12), 0.0, 1.0)
+    q = a + seg * t[:, None]
+    q = q[int(np.argmin(dnp.hypot(*(q - p).T)))]
+    out = q - ring[:-1].mean(0)
+    out = out / max(float(dnp.hypot(*out)), 1e-9)
+    at = q + out * BESIDE_OUT_M
+    pads = [Bld(f"pad:{site.station.id}:{k}", rg, "pad", "", "", None) for k, rg in enumerate(site.pad)]
+    return dataclasses.replace(ch, x=float(at[0]), y=float(at[1])), pads
 
 
 def _pad_ll(polys, frame):
@@ -1575,16 +1981,52 @@ def _pad_ll(polys, frame):
     return out
 
 
+def _osm_points(frame, cells, amenity="fuel"):
+    """[{"id", "x", "y", "name", "brand"}] in frame of the cached OSM cells' rows of that amenity (osmfuel rows: fuel
+    or charging stations; a row without one is fuel; None: a cell not fetched yet), each once (a station in two
+    cells), at its bbox's centre."""
+    out, seen = [], set()
+    for rows in cells:
+        for r in rows or ():
+            if r.get("amenity", "fuel") != amenity or r["id"] in seen:
+                continue
+            seen.add(r["id"])
+            x0, y0, x1, y1 = r["bbox"]
+            e, n, _ = frame.geodetic_to_enu((y0 + y1) / 2, (x0 + x1) / 2, 0.0)
+            out.append({"id": r["id"], "x": float(e), "y": float(n), "name": r.get("name") or "",
+                        "brand": r.get("brand") or ""})
+    return out
+
+
 def _one_per_shop(sites):
     """The sites kept: one forecourt per shop and per canopy, a confirmed station first (the same wherever they are
-    all laid out: every road tile)."""
-    shops, canopies = set(), set()
-    for site in sorted(sites, key=lambda s: (not s.station.confirmed, s.station.id)):
+    all laid out: every road tile). A station laid out at its pin (no shop of its own: "pin:") with a kept station's
+    brand within PIN_SAME_M of it, or its pumps on any kept station's forecourt, is left out: that station's other pin
+    (the Buc-ee's at Mount Crawford, Virginia: a second pin 96 m from the first, on the same huge lot, was its own pump
+    pair; the user, 2026-10-27). Another brand there (a Shell across the street) stays."""
+    import polygon
+    shops, canopies, pads = set(), set(), []
+    sites = sorted(sites, key=lambda s: (s.shop_id.startswith("pin:"), not s.station.confirmed, s.station.id))
+    for site in sites:
         if site.shop_id in shops or canopies.intersection(site.drop_ids):
             continue
+        if site.shop_id.startswith("pin:") and site.areas:
+            pts = np.array([[a["x"], a["y"]] for a in site.areas], np.float64)
+            words = _tokens(site.station.name + " " + site.station.brand) - GENERIC_WORDS
+            here = np.array([site.station.x, site.station.y])
+            if any(polygon.contains_points(np.vstack([p, p[:1]]), pts).any() for p, _, _ in pads) or any(
+                    words & w and float(dnp.hypot(*(here - at))) <= PIN_SAME_M for _, w, at in pads):
+                continue
         shops.add(site.shop_id)
         canopies.update(site.drop_ids)
+        words = _tokens(site.station.name + " " + site.station.brand) - GENERIC_WORDS
+        at = np.array([site.station.x, site.station.y])
+        pads.extend((np.asarray(p, np.float64), words, at) for p in (site.pad or [np.zeros((0, 2))]))
         yield site
+
+
+PIN_SAME_M = 120.0      # a pin's pump pair this near a station of its brand that has a shop is that station's other pin
+                        # (a travel centre's lot: the Buc-ee's at Mount Crawford, its two pins 96 m apart)
 
 
 PARK_CLEAR_M = 3.0      # a parked car's spot centre this far from every refuel area's edge and every prop
@@ -1596,4 +2038,4 @@ def clear_park(park, recs):
     pts += [(a["pos"][0], a["pos"][1], max(a["half"][0], a["half"][1]) + PARK_CLEAR_M) for r in recs for a in r["areas"]]
     if not pts or not park:
         return park
-    return [s for s in park if all((s[0] - x) ** 2 + (s[1] - y) ** 2 > d * d for x, y, d in pts)]
+    return [s for s in park if all(dnp.sq(s[0] - x) + dnp.sq(s[1] - y) > d * d for x, y, d in pts)]

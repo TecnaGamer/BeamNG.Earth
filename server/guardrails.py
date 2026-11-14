@@ -6,12 +6,15 @@ for every road tile. medians.py adds the median barriers where none is mapped, i
 """
 import hashlib
 import json
+import os
 
 import geotiles
 import logging
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import mapgeom
@@ -23,9 +26,18 @@ BBOX_PAD_M = 2.0
 
 # The Forest groups of the rows (trees.lua's CATALOG): Italy's rail, its caps and the reverse-facing three; the stock
 # jersey barrier and its sloped end (they run along their model's y axis: the rows' first two columns swapped); the
-# mod's cable barrier (tools/build_median_props.py). medians.py's rows use the same groups.
+# mod's cable barrier and Sweden's roadside post (tools/build_median_props.py). medians.py's rows use the same groups.
 GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "guardrail_back_start",
-          "guardrail_back_end", "jersey", "jersey_end", "cable")
+          "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
+          "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
+          "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+STOCK_GROUPS = GROUPS
+import euguardrails
+ALL_GROUPS = GROUPS + euguardrails.GROUPS
+
+
+def groups_for(rows):
+    return ALL_GROUPS if any(int(r[0])>=len(STOCK_GROUPS)for r in rows) else STOCK_GROUPS
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
@@ -113,7 +125,7 @@ def _at(line, arc, distance):
     span = max(float(arc[k + 1] - arc[k]), 1e-9)
     t = float(np.clip((distance - arc[k]) / span, 0.0, 1.0))
     d = line[k + 1] - line[k]
-    length = max(float(np.hypot(d[0], d[1])), 1e-9)
+    length = max(float(dnp.hypot(d[0], d[1])), 1e-9)
     return line[k] + t * d, d / length
 
 
@@ -157,7 +169,7 @@ def _surface_info(frame, points, elev, decks, deck_preference=None):
         v = points[:, None, :] - a[None, :, :]
         t = np.clip(np.sum(v * d[None, :, :], axis=2) / l2[None, :], 0.0, 1.0)
         near = a[None, :, :] + t[:, :, None] * d[None, :, :]
-        dist = np.hypot(points[:, None, 0] - near[:, :, 0],
+        dist = dnp.hypot(points[:, None, 0] - near[:, :, 0],
                         points[:, None, 1] - near[:, :, 1])
         k = np.argmin(dist, axis=1)
         row = np.arange(len(points))
@@ -231,28 +243,44 @@ PARAPET_MATCH_SAMPLES = 7
 OUTER_DECK_SEARCH_M = 30.0
 
 
-def _deck_is_outward_of_parapet(mid, tangent, outward, z, decks):
-    """True when another same-level, parallel bridge deck lies outside this concrete parapet."""
+def _parapet_deck_lines(decks):
+    """(a, v, l2, unit, z0, z1) of every deck's centre line segments together (_deck_is_outward_of_parapet: made once
+    per parapet set, not for every parapet segment and deck: ~0.4 s of a Manhattan tile set, 2026-11-02), or None."""
+    parts = []
     for deck in decks or ():
         line = np.asarray(deck.get("n", ()), np.float64)
-        if len(line) < 2 or line.shape[1] < 3:
+        if len(line) < 2 or line.ndim != 2 or line.shape[1] < 3:
             continue
-        a, b = line[:-1, :2], line[1:, :2]
-        v = b - a
-        l2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
-        t = np.clip(np.sum((mid - a) * v, axis=1) / l2, 0.0, 1.0)
-        near = a + t[:, None] * v
-        delta = near - mid
-        signed = delta @ outward
-        dist = np.hypot(delta[:, 0], delta[:, 1])
-        length = np.maximum(np.linalg.norm(v, axis=1), 1e-9)
-        parallel = np.abs((v / length[:, None]) @ tangent) >= PARAPET_PARALLEL_DOT
-        deck_z = line[:-1, 2] + t * (line[1:, 2] - line[:-1, 2])
-        level_ok = np.abs(deck_z - z) <= PARAPET_LEVEL_TOLERANCE_M
-        if np.any(parallel & level_ok & (signed >= 1.0) &
-                  (signed <= OUTER_DECK_SEARCH_M) & (dist <= OUTER_DECK_SEARCH_M)):
-            return True
-    return False
+        parts.append(line)
+    if not parts:
+        return None
+    a = np.concatenate([ln[:-1, :2] for ln in parts])
+    b = np.concatenate([ln[1:, :2] for ln in parts])
+    z0 = np.concatenate([ln[:-1, 2] for ln in parts])
+    z1 = np.concatenate([ln[1:, 2] for ln in parts])
+    v = b - a
+    l2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
+    length = np.maximum(dnp.norm(v, axis=1), 1e-9)
+    return a, v, l2, v / length[:, None], z0, z1
+
+
+def _deck_is_outward_of_parapet(mid, tangent, outward, z, decks, segs=None):
+    """True when another same-level, parallel bridge deck lies outside this concrete parapet. segs: _parapet_deck_lines of
+    decks (made here when not given)."""
+    segs = _parapet_deck_lines(decks) if segs is None else segs
+    if segs is None:
+        return False
+    a, v, l2, unit, z0, z1 = segs
+    t = np.clip(np.sum((mid - a) * v, axis=1) / l2, 0.0, 1.0)
+    near = a + t[:, None] * v
+    delta = near - mid
+    signed = dnp.matmul(delta, outward)
+    dist = dnp.hypot(delta[:, 0], delta[:, 1])
+    parallel = np.abs(dnp.matmul(unit, tangent)) >= PARAPET_PARALLEL_DOT
+    deck_z = z0 + t * (z1 - z0)
+    level_ok = np.abs(deck_z - z) <= PARAPET_LEVEL_TOLERANCE_M
+    return bool(np.any(parallel & level_ok & (signed >= 1.0) &
+                       (signed <= OUTER_DECK_SEARCH_M) & (dist <= OUTER_DECK_SEARCH_M)))
 
 
 def _parapet_segments(parapets, decks=()):
@@ -264,6 +292,7 @@ def _parapet_segments(parapets, decks=()):
     that were mapped a little farther from the wall than its centre line.
     """
     starts, ends, z_starts, z_ends, outer_segments = [], [], [], [], []
+    deck_segs = _parapet_deck_lines(decks)
     for parapet in parapets or ():
         line = np.asarray(parapet.get("line", ()) if isinstance(parapet, dict) else parapet,
                           np.float64).reshape(-1, 2)
@@ -278,22 +307,23 @@ def _parapet_segments(parapets, decks=()):
             out = np.zeros_like(line)
         a, b = line[:-1], line[1:]
         d = b - a
-        length = np.hypot(d[:, 0], d[:, 1])
+        length = dnp.hypot(d[:, 0], d[:, 1])
         keep = length > 1e-6
         if not keep.any():
             continue
         unit = d[keep] / length[keep, None]
         mids = (a[keep] + b[keep]) * 0.5
         normals = out[:-1][keep] + out[1:][keep]
-        nl = np.linalg.norm(normals, axis=1)
+        nl = dnp.norm(normals, axis=1)
         normals[nl > 1e-9] /= nl[nl > 1e-9, None]
         is_outer = []
         segment_z = (z[:-1][keep] + z[1:][keep]) * 0.5
         for mid, tangent, outward, level in zip(mids, unit, normals, segment_z):
-            if np.linalg.norm(outward) < 1e-9 or not np.isfinite(level):
+            if dnp.norm(outward) < 1e-9 or not np.isfinite(level):
                 is_outer.append(False)
                 continue
-            inner = _deck_is_outward_of_parapet(mid, tangent, outward, float(level), decks)
+            inner = deck_segs is not None and _deck_is_outward_of_parapet(mid, tangent, outward, float(level), decks,
+                                                                          deck_segs)
             is_outer.append(not inner)
         starts.append(a[keep])
         ends.append(b[keep])
@@ -304,7 +334,7 @@ def _parapet_segments(parapets, decks=()):
         return None
     a, b = np.concatenate(starts), np.concatenate(ends)
     d = b - a
-    length = np.hypot(d[:, 0], d[:, 1])
+    length = dnp.hypot(d[:, 0], d[:, 1])
     return {
         "a": a,
         "b": b,
@@ -324,7 +354,7 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
         return False
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
-    length = float(np.hypot(d[0], d[1]))
+    length = float(dnp.hypot(d[0], d[1]))
     if length < 1e-6:
         return False
     tangent = d / length
@@ -341,12 +371,14 @@ def _overlaps_bridge_parapet(a, b, segments, level=None, distance_limit=PARAPET_
     v2 = np.maximum(np.sum(v * v, axis=1), 1e-12)
     samples = a[None, :] + np.linspace(0.1, 0.9, PARAPET_MATCH_SAMPLES)[:, None] * d[None, :]
     delta = samples[:, None, :] - pa[None, :, :]
-    t = np.clip(np.sum(delta * v[None, :, :], axis=2) / v2[None, :], 0.0, 1.0)
+    t_raw = np.sum(delta * v[None, :, :], axis=2) / v2[None, :]
+    on_segment = (t_raw >= -1e-4) & (t_raw <= 1.0 + 1e-4)
+    t = np.clip(t_raw, 0.0, 1.0)
     nearest = pa[None, :, :] + t[:, :, None] * v[None, :, :]
-    dist = np.hypot(samples[:, None, 0] - nearest[:, :, 0],
+    dist = dnp.hypot(samples[:, None, 0] - nearest[:, :, 0],
                     samples[:, None, 1] - nearest[:, :, 1])
-    parallel = np.abs(unit @ tangent) >= PARAPET_PARALLEL_DOT
-    matches = (dist <= distance_limit) & parallel[None, :]
+    parallel = np.abs(dnp.matmul(unit, tangent)) >= PARAPET_PARALLEL_DOT
+    matches = (dist <= distance_limit) & parallel[None, :] & on_segment
     if level is not None:
         parapet_z = segments["za"][box][None, :] + t * (segments["zb"][box] - segments["za"][box])[None, :]
         matches &= np.isfinite(parapet_z) & (np.abs(parapet_z - float(level)) <= PARAPET_LEVEL_TOLERANCE_M)
@@ -363,7 +395,7 @@ def _overlaps_bridge_approach(a, b, run):
     line = np.asarray(run.get("line", ()), np.float64).reshape(-1, 2)
     a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
     d = b - a
-    length = float(np.hypot(d[0], d[1]))
+    length = float(dnp.hypot(d[0], d[1]))
     if len(line) < 2 or length < 1e-6:
         return False
     tangent = d / length
@@ -371,14 +403,14 @@ def _overlaps_bridge_approach(a, b, run):
     for at, inside in ((0, 1), (-1, -2)):
         edge = line[at]
         outward = edge - line[inside]
-        edge_length = float(np.hypot(outward[0], outward[1]))
+        edge_length = float(dnp.hypot(outward[0], outward[1]))
         if edge_length < 1e-6:
             continue
         outward /= edge_length
-        if abs(float(np.dot(tangent, outward))) < PARAPET_PARALLEL_DOT:
+        if abs(float(dnp.dot(tangent, outward))) < PARAPET_PARALLEL_DOT:
             continue
         delta = samples - edge
-        along = delta @ outward
+        along = dnp.matmul(delta, outward)
         lateral = np.abs(delta[:, 0] * outward[1] - delta[:, 1] * outward[0])
         near = ((along >= -SPAN_TOL_M) & (along <= JOIN_LENGTH_M) &
                 (lateral <= JOIN_LATERAL_M))
@@ -403,6 +435,9 @@ JOIN_LATERAL_M = 2.5            # m: only rails this near the bridge rail's line
 JOIN_MAX_GRADE = 0.08           # the deck's grade carried on past its end (while the ground takes over)
 JOIN_AXIS_TOL_M = 2.0           # m: the road's height beyond the end (ground on the deck's axis) is trusted this near the deck's own
 END_JOIN_SKIP_M = 2.5           # a deck end this near another deck's end is a joint, not an end
+GAP_CLOSE_ON = os.environ.get("BNE_RAIL_GAP", "on") != "off"
+GAP_CLOSE_M = 10.0              # m: a mapped approach rail that stops this far (or less) short of a deck's end is run on to it
+GAP_LATERAL_M = 3.5             # m: ... when its end stands this near (or less) the bridge rail's line
 
 
 def _deck_segments(decks):
@@ -414,7 +449,7 @@ def _deck_segments(decks):
             continue
         a, b = line[:-1, :2], line[1:, :2]
         d = b - a
-        length = np.hypot(d[:, 0], d[:, 1])
+        length = dnp.hypot(d[:, 0], d[:, 1])
         keep = length > 1e-6
         if not keep.any():
             continue
@@ -432,6 +467,159 @@ def _deck_segments(decks):
     return {key: np.concatenate(val) for key, val in cols.items()}
 
 
+# A rail placed on the ground never stands across a ground road's lanes (GitHub #463): a bridge's rail mapped farther
+# off its deck than the deck as drawn (Stanley Street over CT 9 in New Britain: barrier=guard_rail, layer=1, 7-9 m
+# past the 8 m deck's edge, the bridge wider than its carriageway), or by a bridge not drawn at all (the CTfastrak
+# busway's), was related to no deck and laid on the ground, a wall across the motorway under it (rebuilt offline
+# 2026-10-30: 242 of 794 modules round downtown, none left). Real rails cross no carriageway. The whole module is
+# checked (CROSS_SAMPLES points along it, against the carriageway's outline round its bends): its middle alone left the
+# ends of 65 modules up to 1.5 m and more in the lanes. No rail across a road's end is kept either: where a road is
+# split at a bridge (CT 72 under High Street, its lower part layer=-1 and not among the ground roads) its piece's end
+# looks like a dead end, and two modules stood in its lanes.
+RAIL_CLEAR_M = 0.25             # m a rail across a road's line keeps clear of its carriageway's edge
+LANE_CENTER_M = 1.5             # m of the centre line that stays put: a median, not a side rail drawn in the lane
+CROSS_SAMPLES = 7               # points along a module checked
+
+
+def _road_segments(roads):
+    """Ground carriageway segments (build_tile roads_out: (fid, spec, centreline (k, >= 2), ...)): start, unit,
+    length, half width."""
+    cols = {"a": [], "unit": [], "len": [], "half": []}
+    for item in roads or ():
+        spec, line = item[1], np.asarray(item[2], np.float64)
+        if spec is None or line.ndim != 2 or len(line) < 2:
+            continue
+        a, d = line[:-1, :2], np.diff(line[:, :2], axis=0)
+        length = dnp.hypot(d[:, 0], d[:, 1])
+        keep = length > 1e-6
+        if not keep.any():
+            continue
+        cols["a"].append(a[keep])
+        cols["unit"].append(d[keep] / length[keep, None])
+        cols["len"].append(length[keep])
+        cols["half"].append(np.full(int(keep.sum()), float(spec.width) / 2.0))
+    if not cols["a"]:
+        return None
+    return {key: np.concatenate(val) for key, val in cols.items()}
+
+
+def _across_road(a, b, rsegs):
+    """Whether a rail module (from a to b) reaches across a ground carriageway's lanes: any of CROSS_SAMPLES points
+    along it within the carriageway's half width + RAIL_CLEAR_M of a segment it is not parallel to."""
+    if rsegs is None:
+        return False
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    direction = b - a
+    tangent_len = float(dnp.hypot(direction[0], direction[1]))
+    if tangent_len < 1e-6:
+        return False
+    across = np.abs(dnp.matmul(rsegs["unit"], direction / tangent_len)) < PARAPET_PARALLEL_DOT
+    if not across.any():
+        return False
+    sa, su, sl, sh = rsegs["a"][across], rsegs["unit"][across], rsegs["len"][across], rsegs["half"][across]
+    pts = a + np.linspace(0.0, 1.0, CROSS_SAMPLES)[:, None] * direction           # (s, 2)
+    v = pts[:, None, :] - sa[None]                                              # (s, m, 2)
+    along = np.clip(np.sum(v * su[None], axis=2), 0.0, sl[None])               # (on the segment: round its ends)
+    d = dnp.hypot(*(v - along[..., None] * su[None]).transpose(2, 0, 1))
+    return bool(np.any(d < sh[None] + RAIL_CLEAR_M))
+
+
+def _along_road(a, b, rsegs):
+    """The ground carriageway a module runs along, or None.
+
+    A side rail mapped inside the generated width still follows that road (GitHub #680). The match is the
+    segment it is parallel to and beside. `median` is the deck test: the rail sits between two carriageways,
+    so it is not pushed out to either edge. `dot` is compared with a deck's alignment; the closer one owns
+    the rail, which keeps a lower road's rail off a bridge it only crosses at a shallow angle.
+    """
+    if rsegs is None:
+        return None
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    direction = b - a
+    tangent_len = float(dnp.hypot(direction[0], direction[1]))
+    if tangent_len < 1e-6:
+        return None
+    tangent = direction / tangent_len
+    mid = 0.5 * (a + b)
+    dots = np.abs(dnp.matmul(rsegs["unit"], tangent))
+    aligned = dots >= PARAPET_PARALLEL_DOT
+    if not aligned.any():
+        return None
+    v = mid - rsegs["a"]
+    along = np.sum(v * rsegs["unit"], axis=1)
+    lateral = v[:, 0] * rsegs["unit"][:, 1] - v[:, 1] * rsegs["unit"][:, 0]
+    span = (along >= -1e-4) & (along <= rsegs["len"] + 1e-4)
+    near = aligned & span & (np.abs(lateral) <= rsegs["half"] + ALONGSIDE_REACH_M)
+    if not near.any():
+        return None
+    cand = np.flatnonzero(near)
+    best = float(dots[cand].max())
+    tied = cand[dots[cand] >= best - 1e-6]
+    k = int(tied[np.argmin(np.abs(lateral[tied]))])
+    unit = rsegs["unit"][k]
+    other = aligned & (np.arange(len(dots)) != k)
+    median, gap = False, None
+    if other.any():
+        a2, u2, l2 = rsegs["a"][other], rsegs["unit"][other], rsegs["len"][other]
+        t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
+        n2 = a2 + t2[:, None] * u2
+        d2 = dnp.hypot(*(mid - n2).T) - rsegs["half"][other]
+        j = int(np.argmin(d2))
+        if float(d2[j]) <= MEDIAN_REACH_M:
+            t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
+            n1 = rsegs["a"][k] + t1 * unit
+            median = float(dnp.dot(mid - n1, mid - n2[j])) < 0.0
+            if median:
+                # (the gap between the two carriageways' edges, from this one's line toward the other: its middle,
+                # or the middle of their overlap; a mapped median barrier inside either goes there, _shift_to_edge)
+                v2 = n2[j] - n1
+                sep = abs(float(v2[0] * unit[1] - v2[1] * unit[0]))
+                h1, h2 = float(rsegs["half"][k]), float(rsegs["half"][other][j])
+                gap = (h1, sep - h2, d2[j])
+    return {"dot": float(dots[k]), "lat": float(lateral[k]), "half": float(rsegs["half"][k]),
+            "origin": np.asarray(rsegs["a"][k], np.float64), "unit": np.asarray(unit, np.float64),
+            "median": median, "gap": gap}
+
+
+def _shift_to_edge(a, b, road):
+    """Move both ends of a side rail out to its carriageway edge. A centre barrier, and a rail already outside the
+    edge stay where they were mapped; a median barrier too, unless it stands on either carriageway's lanes: then
+    it goes to the middle of the gap between their edges (the S7 at Gdansk: a mapped median's jersey barrier
+    1.2-1.6 m into the left lane, GitHub #1025)."""
+    if road is None:
+        return a, b
+    if road["median"]:
+        return _to_gap(a, b, road["gap"], road["lat"], road["origin"], road["unit"])
+    if abs(road["lat"]) <= LANE_CENTER_M or abs(road["lat"]) >= road["half"] - 0.05:
+        return a, b
+    target = math.copysign(road["half"] + RAIL_CLEAR_M, road["lat"])
+    return _moved(a, b, target, road["origin"], road["unit"])
+
+
+def _to_gap(a, b, gap, lat, origin, unit):
+    """A median barrier (a, b) on either carriageway's lanes moved to the middle of the gap between their edges, or of
+    their overlap (gap: (this one's half width, the other's edge from this one's line, the barrier's distance past the
+    other's edge); lat: its signed offset from this one's line). One between them already stays."""
+    if gap is None:
+        return a, b
+    e1, e2, d_other = gap
+    if abs(lat) >= e1 - 0.05 and d_other >= -0.05:
+        return a, b
+    return _moved(a, b, math.copysign(0.5 * (e1 + e2), lat), origin, unit)
+
+
+def _moved(a, b, target, origin, unit):
+    """(a, b) moved across the line (origin, unit) to the signed offset target."""
+    right = np.array([unit[1], -unit[0]], np.float64)
+
+    def move(p):
+        v = np.asarray(p, np.float64) - origin
+        cur = float(v[0] * unit[1] - v[1] * unit[0])
+        return np.asarray(p, np.float64) + (target - cur) * right
+
+    return move(a), move(b)
+
+
 def _relate(mid, segs, direction=None):
     """Relate a rail module to a nearby deck only when it runs along that deck.
 
@@ -442,34 +630,44 @@ def _relate(mid, segs, direction=None):
     v = mid - segs["a"]
     along = np.sum(v * segs["unit"], axis=1)
     lateral = v[:, 0] * segs["unit"][:, 1] - v[:, 1] * segs["unit"][:, 0]
-    span = (along >= -SPAN_TOL_M) & (along <= segs["len"] + SPAN_TOL_M)
+    span = (along >= -1e-4) & (along <= segs["len"] + SPAN_TOL_M)
     past = np.abs(lateral) - segs["half"]
+    tangent = None
     aligned = np.ones(len(segs["unit"]), bool)
     if direction is not None:
         tangent = np.asarray(direction, np.float64)
-        tangent_len = float(np.hypot(tangent[0], tangent[1]))
+        tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
         if tangent_len < 1e-6:
             return None
-        aligned = np.abs(segs["unit"] @ (tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
+        tangent = tangent / tangent_len
+        aligned = np.abs(dnp.matmul(segs["unit"], tangent)) >= PARAPET_PARALLEL_DOT
     near = span & aligned & (past <= BRIDGE_SIDE_CLEARANCE_M + ALONGSIDE_REACH_M)
     if not near.any():
         return None
     cand = np.flatnonzero(near)
     k = int(cand[np.argmin(past[cand])])
     deck = int(segs["idx"][k])
+    dot = 1.0 if tangent is None else float(abs(dnp.matmul(segs["unit"][k], tangent)))
     rel = {"past": float(past[k]), "lat": float(abs(lateral[k])), "half": float(segs["half"][k]),
-           "deck": deck, "median": False}
+           "deck": deck, "median": False, "dot": dot, "gap": None,
+           "slat": float(lateral[k]), "origin": np.asarray(segs["a"][k], np.float64),
+           "unit": np.asarray(segs["unit"][k], np.float64)}
     other = (segs["idx"] != deck) & aligned
     if other.any():
         a2, u2, l2 = segs["a"][other], segs["unit"][other], segs["len"][other]
         t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
         n2 = a2 + t2[:, None] * u2
-        d2 = np.hypot(*(mid - n2).T) - segs["half"][other]
+        d2 = dnp.hypot(*(mid - n2).T) - segs["half"][other]
         j = int(np.argmin(d2))
         if d2[j] <= MEDIAN_REACH_M:
             t1 = float(np.clip(along[k], 0.0, segs["len"][k]))
             n1 = segs["a"][k] + t1 * segs["unit"][k]
-            rel["median"] = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+            rel["median"] = float(dnp.dot(mid - n1, mid - n2[j])) < 0.0
+            if rel["median"]:               # (the gap between the decks' edges: _to_gap)
+                v2 = n2[j] - n1
+                u = segs["unit"][k]
+                sep = abs(float(v2[0] * u[1] - v2[1] * u[0]))
+                rel["gap"] = (float(segs["half"][k]), sep - float(segs["half"][other][j]), float(d2[j]))
     return rel
 
 
@@ -487,7 +685,7 @@ def _deck_ends(decks):
         line = np.asarray(deck.get("n", ()), np.float64)
         if line.ndim != 2 or len(line) < 2 or line.shape[1] < 3:
             continue
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
         if arc[-1] < 3.0:
             continue
         width = float(deck.get("w", 0.0))
@@ -496,11 +694,11 @@ def _deck_ends(decks):
             pts = line if at_start else line[::-1]
             dist = arc if at_start else arc[-1] - arc[::-1]
             e = pts[0]
-            if any(j != k and float(np.hypot(*(e[:2] - q))) < END_JOIN_SKIP_M for j, q in all_points):
+            if any(j != k and float(dnp.hypot(*(e[:2] - q))) < END_JOIN_SKIP_M for j, q in all_points):
                 continue
             i = min(int(np.searchsorted(dist, 3.0)), len(pts) - 1)
             inward = pts[i, :2] - e[:2]
-            length = float(np.hypot(*inward))
+            length = float(dnp.hypot(*inward))
             if length < 1e-6:
                 continue
             t = -inward / length
@@ -537,10 +735,10 @@ def _join_module(sa, sb, ends, direction=None):
     zone = (s >= 0.0) & (s <= JOIN_LENGTH_M) & (np.abs(lat) <= ends["half"] + BRIDGE_SIDE_CLEARANCE_M + JOIN_LATERAL_M)
     if direction is not None:
         tangent = np.asarray(direction, np.float64)
-        tangent_len = float(np.hypot(tangent[0], tangent[1]))
+        tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
         if tangent_len < 1e-6:
             return None
-        aligned = np.abs(ends["t"] @ (tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
+        aligned = np.abs(dnp.matmul(ends["t"], tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
         zone &= aligned
     if not zone.any():
         return None
@@ -552,14 +750,50 @@ def _join_module(sa, sb, ends, direction=None):
     out = []
     for q in (sa, sb, mid):
         dq = q - ends["e"][k]
-        sq = float(np.dot(dq, ends["t"][k]))
-        lq = float(np.dot(dq, ends["n"][k]))
+        sq = float(dnp.dot(dq, ends["t"][k]))
+        lq = float(dnp.dot(dq, ends["n"][k]))
         w = float(_smooth_weight(max(sq, 0.0)))
         shift = ends["n"][k] * ((target - lq) * w) if edge_type else np.zeros(2, np.float64)
         ze = float(ends["z"][k] + ends["g"][k] * max(sq, 0.0))
         axis = ends["e"][k] + ends["t"][k] * max(sq, 0.0)
         out.append((shift, w, ze, axis))
     return out
+
+
+def _close_gap_to_deck(line, ends):
+    """(line, run on at its start, run on at its end): a mapped approach rail (line (k, 2)) that ends short of a deck,
+    run on to the bridge rail's line at the deck's end.
+    OpenStreetMap's approach rails end a few metres before the bridge, where the real ones meet its parapet, so the
+    modules stopped there and the bridge's own rail began further on, on a line up to 2 m inside theirs (Jüri's overpass
+    over Tallinna ringtee: 7 m of nothing between them). Only an end that points at the deck (within PARAPET_PARALLEL_DOT
+    of its axis), stands GAP_CLOSE_M or less short of the end and GAP_LATERAL_M or less from the bridge rail's line
+    gets the point; the modules then lie along it, and _join_module draws them onto the deck's height. Pure."""
+    if ends is None or not GAP_CLOSE_ON or len(line) < 2:
+        return line, False, False
+    line = np.asarray(line, np.float64)
+    out, closed = line, [False, False]
+    for at_start in (True, False):
+        p, q = (line[0], line[1]) if at_start else (line[-1], line[-2])
+        v = p - q
+        vl = float(dnp.hypot(*v))
+        if vl < 1e-6:
+            continue
+        v = v / vl
+        d = p[None, :] - ends["e"]
+        s = np.sum(d * ends["t"], axis=1)
+        lat = np.sum(d * ends["n"], axis=1)
+        sign = np.where(lat >= 0.0, 1.0, -1.0)
+        target = sign * (ends["half"] + BRIDGE_EDGE_OFFSET_M)
+        ok = ((s > 0.5) & (s <= GAP_CLOSE_M) & (np.abs(lat) >= ends["half"])
+              & (np.abs(lat - target) <= GAP_LATERAL_M) & (-(dnp.matmul(ends["t"], v)) >= PARAPET_PARALLEL_DOT))
+        if not ok.any():
+            continue
+        k = int(np.flatnonzero(ok)[np.argmin(s[ok])])
+        meet = ends["e"][k] + ends["n"][k] * target[k]
+        out = np.vstack((meet[None, :], out)) if at_start else np.vstack((out, meet[None, :]))
+        line = out
+        closed[0 if at_start else 1] = True
+    return out, closed[0], closed[1]
 
 
 def _drop_doubles(rows, reference, dist=0.9, dot=0.8, dz=1.5):
@@ -601,8 +835,8 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 
-def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
-                supported_decks_out=None):
+def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+                supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
 
     Row layout matches trees.lua:
@@ -617,6 +851,9 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     ground level, and perpendicular crossings are not treated as bridge rails. Rails hanging far under a deck
     are dropped, and aligned approach rails join the bridge over JOIN_LENGTH_M.
     When supplied, supported_decks_out receives the indices of decks supported by mapped rails.
+    roads: the ground carriageways near the tile (build_tile roads_out): no rail on the ground stands across their lanes.
+    A rail that follows a ground road more closely than a deck stays on that road. A side rail standing in that
+    road's lanes is shifted out to the carriageway edge; a centre barrier and a median stay where they were mapped.
     """
     if supported_decks_out is not None:
         supported_decks_out.clear()
@@ -626,6 +863,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     if infra_fn is None:
         return []
     segs = _deck_segments(decks)
+    rsegs = _road_segments(roads)
     ends = _deck_ends(decks)
     parapet_segments = _parapet_segments(parapets, decks)
     support_segments = [_parapet_segments([run], decks) for run in parapets] if bridge_rails else []
@@ -676,11 +914,14 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                     continue
                 e, n = mapgeom.enu_xy(feats, frame, lonlat)
                 line = np.column_stack((e, n))
-                seglen = np.hypot(*np.diff(line, axis=0).T)
+                seglen = dnp.hypot(*np.diff(line, axis=0).T)
                 line = line[np.r_[True, seglen > 1e-4]]
                 if len(line) < 2:
                     continue
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+                closed_a = closed_b = False         # (an end run on to a deck: it joins the bridge's rail, no cap)
+                if rail and deck_hint is not False:
+                    line, closed_a, closed_b = _close_gap_to_deck(line, ends)
+                arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
                 total = float(arc[-1])
                 if total < 1.0:
                     continue
@@ -697,7 +938,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                     sb = sa + MODULE_LENGTH_M
                     a, _ = _at(line, arc, float(sa))
                     b, _ = _at(line, arc, float(sb))
-                    if float(np.hypot(*(b - a))) < 0.05:
+                    if float(dnp.hypot(*(b - a))) < 0.05:
                         continue
                     p = 0.5 * (a + b)
                     rank_bytes = hashlib.blake2b(f"{fid}:{part_no}:{k}".encode("utf-8"), digest_size=4).digest()
@@ -735,11 +976,11 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                 # cable barrier ends with its last module.)
                 if not rail:
                     pass
-                elif geotiles.box_owns(exact, first_a[0], first_a[1]):
+                elif not closed_a and geotiles.box_owns(exact, first_a[0], first_a[1]):
                     candidates.append((1, first_a, first_a, first_b, first_rank, False))
                     if two_sided:
                         candidates.append((4, first_a, first_a, first_b, first_rank, True))
-                if rail and geotiles.box_owns(exact, last_b[0], last_b[1]):
+                if rail and not closed_b and geotiles.box_owns(exact, last_b[0], last_b[1]):
                     candidates.append((2, last_b, last_a, last_b, last_rank, False))
                     if two_sided:
                         candidates.append((5, last_b, last_a, last_b, last_rank, True))
@@ -750,10 +991,15 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                     source_a, source_b = np.asarray(a, np.float64), np.asarray(b, np.float64)
                     mid = 0.5 * (source_a + source_b)
                     mode, shifts = "ground", None
+                    road = _along_road(source_a, source_b, rsegs)
                     if deck_hint is not False:
                         direction = source_b - source_a
                         rel = _relate(mid, segs, direction) if segs is not None else None
-                        if rel is not None:
+                        # An untagged rail belongs to the carriageway it actually follows. A shallow angle
+                        # still clears the deck's parallel test; the closer alignment keeps the rail on that road.
+                        road_claims = (road is not None and deck_hint is not True and
+                                       (rel is None or road["dot"] > rel["dot"]))
+                        if rel is not None and not road_claims:
                             edge_band = rel["lat"] > rel["half"] - INTERIOR_MARGIN_M
                             if rel["median"]:
                                 mode = "median"                # between two aligned decks: stays at deck height
@@ -763,10 +1009,23 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                                 continue                       # on the deck's edge: the bridge's own rail is there
                             else:
                                 mode = "beside"                # beside the deck: ground rail unless it hangs
-                        else:
+                        elif not road_claims:
                             shifts = _join_module(source_a, source_b, ends, direction)
                             if shifts is not None:
                                 mode = "join"
+                    if mode == "ground":
+                        source_a, source_b = _shift_to_edge(source_a, source_b, road)
+                    elif mode == "median":                 # (off either deck's lanes, #1025)
+                        source_a, source_b = _to_gap(source_a, source_b, rel["gap"], rel["slat"], rel["origin"],
+                                                     rel["unit"])
+                    if mode not in ("deck", "median") and _across_road(source_a, source_b, rsegs):
+                        continue                               # across a road's lanes: no real rail stands there
+                    # The span of a bridge is a deck, not a ground road, so a rail that cuts across it
+                    # and follows no carriageway is never caught above. Where the bank is at the road's
+                    # height that piece stands in the lane. A rail that does follow a road stays.
+                    if (mode not in ("deck", "median") and road is None and
+                            _across_road(source_a, source_b, segs)):
+                        continue
                     parapet_xy_match = _overlaps_bridge_parapet(source_a, source_b, parapet_segments)
                     if not parapet_xy_match:
                         parapet_xy_match = _overlaps_bridge_parapet(
@@ -807,7 +1066,7 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
             # The model's visible side is opposite its back axis. Keep the backs toward the centre
             # gap and the visible faces outward on both sides.
             tangent = b - a
-            tangent_len = float(np.hypot(tangent[0], tangent[1]))
+            tangent_len = float(dnp.hypot(tangent[0], tangent[1]))
             if tangent_len >= 1e-6:
                 normal = np.array([-tangent[1], tangent[0]], np.float64) / tangent_len
                 side = 1.0 if pl["reverse"] else -1.0
@@ -875,24 +1134,24 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
             continue
         p, a, b = pl["p"], pl["ma"], pl["mb"]
         forward = np.array([float(b[0] - a[0]), float(b[1] - a[1]), zb - za], np.float64)
-        length = float(np.linalg.norm(forward))
+        length = float(dnp.norm(forward))
         if length < 1e-6:
             continue
         forward /= length
         up = np.array([0.0, 0.0, 1.0], np.float64) - forward[2] * forward
-        up_len = float(np.linalg.norm(up))
+        up_len = float(dnp.norm(up))
         if up_len < 1e-6:
             up = np.array([0.0, 1.0, 0.0], np.float64)
         else:
             up /= up_len
         back = np.cross(up, forward)
-        back_len = float(np.linalg.norm(back))
+        back_len = float(dnp.norm(back))
         if back_len < 1e-6:
             continue
         back /= back_len
         if pl["reverse"]:
             forward, back = -forward, -back
-        yaw = math.degrees(math.atan2(float(forward[1]), float(forward[0])))
+        yaw = math.degrees(dmath.atan2(float(forward[1]), float(forward[0])))
         c0, c1 = forward, back
         if pl["group"] in (G_JERSEY, G_JERSEY_END):     # (the jersey model runs along its y axis)
             c0, c1 = -back, forward
@@ -931,7 +1190,7 @@ def bridge_rows(parapets, frame=None):
         out = np.asarray(run.get("out", ()), np.float64).reshape(-1, 2)
         if len(line) < 2 or len(z) != len(line) or len(out) != len(line) or not np.isfinite(z).all():
             continue
-        keep = np.r_[True, np.hypot(*np.diff(line, axis=0).T) > 1e-4]
+        keep = np.r_[True, dnp.hypot(*np.diff(line, axis=0).T) > 1e-4]
         line, z, out = line[keep], z[keep], out[keep]
         if len(line) < 2:
             continue
@@ -939,7 +1198,7 @@ def bridge_rows(parapets, frame=None):
         left = np.column_stack((-tang[:, 1], tang[:, 0]))
         if float(np.sum(left * (out[:-1] + out[1:]) * 0.5)) < 0.0:
             line, z, out = line[::-1], z[::-1], out[::-1]
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+        arc = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
         total = float(arc[-1])
         if total < 1.0:
             continue
@@ -955,7 +1214,7 @@ def bridge_rows(parapets, frame=None):
             sb = sa + length
             a, _ = _at(line, arc, sa)
             b, _ = _at(line, arc, sb)
-            if float(np.hypot(*(b - a))) < 0.05:
+            if float(dnp.hypot(*(b - a))) < 0.05:
                 continue
             za, zb = float(np.interp(sa, arc, z)), float(np.interp(sb, arc, z))
             p = 0.5 * (a + b)
@@ -967,23 +1226,41 @@ def bridge_rows(parapets, frame=None):
                 key = f"bridge:{p[0]:.1f}:{p[1]:.1f}"
             rank = int.from_bytes(hashlib.blake2b(key.encode("utf-8"), digest_size=4).digest(), "big") / 4294967296.0
             forward = np.array([float(b[0] - a[0]), float(b[1] - a[1]), zb - za], np.float64)
-            norm = float(np.linalg.norm(forward))
+            norm = float(dnp.norm(forward))
             if norm < 1e-6:
                 continue
             forward /= norm
             up = np.array([0.0, 0.0, 1.0], np.float64) - forward[2] * forward
-            up_len = float(np.linalg.norm(up))
+            up_len = float(dnp.norm(up))
             if up_len < 1e-6:
                 continue
             up /= up_len
             back = np.cross(up, forward)
-            back_len = float(np.linalg.norm(back))
+            back_len = float(dnp.norm(back))
             if back_len < 1e-6:
                 continue
             back /= back_len
-            yaw = math.degrees(math.atan2(float(forward[1]), float(forward[0])))
+            yaw = math.degrees(dmath.atan2(float(forward[1]), float(forward[0])))
             rows.append([0, float(p[0]), float(p[1]), zp, yaw, 0.0, MODULE_HEIGHT_M, rank,
                          float(forward[0]), float(forward[1]), float(forward[2]),
                          float(back[0]), float(back[1]), float(back[2]),
                          float(up[0]), float(up[1]), float(up[2])])
     return rows
+
+
+def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+                supported_decks_out=None, roads=()):
+    enabled = euguardrails.enabled()
+    context_box = exact
+    if enabled and any(euguardrails.is_motorway_mainline(spec) for _, spec, *_ in roads):
+        # Inspect mapped verges and terminals across the tile seam. Ownership
+        # remains local, even when the neighbouring rail suppresses a fallback.
+        pad = euguardrails.VERGE_CONTEXT_M
+        x0, y0, x1, y1 = exact
+        context_box = x0 - pad, y0 - pad, x1 + pad, y1 + pad
+    context = _mapped_forest_rows(frame, infra_fn, context_box, elev, decks, parapets, bridge_rails,
+                                  supported_decks_out, roads)
+    if not enabled:
+        return context
+    rows = context if context_box is exact else [r for r in context if geotiles.box_owns(exact, *r[1:3])]
+    return euguardrails.extend(frame, roads, exact, elev, rows, decks, context=context)

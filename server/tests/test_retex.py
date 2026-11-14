@@ -520,6 +520,9 @@ class SessionTest(MeshHarness):
         super().setUp()
         self.cm = install_colormatch(self)
         self.server.retex_rate = 200.0
+        # (one re-render at a time: the order checks below are of the starts, which with RETEX_INFLIGHT > 1 can end
+        # out of order)
+        self.server.retex_inflight = 1
 
     def pending_on(self, rk, aid):
         return {k for (a, k) in self.conn().shown if a == aid and rk in self.server.tiles[(a, k)].cm_pending}

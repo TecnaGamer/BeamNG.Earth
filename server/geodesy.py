@@ -8,6 +8,8 @@ import math
 import numpy as np
 
 import fast     # the conversions are Rust kernels (earthfast): ~2x numpy, without the interpreter lock
+import dmath
+import dnp
 
 A = 6378137.0                    # semi-major axis
 F = 1 / 298.257223563            # flattening
@@ -22,8 +24,13 @@ _EYE = np.eye(3)
 
 def _rust3(kernel, a, b, c, origin, rot):
     """kernel (earthfast's geodetic_to_enu / enu_to_geodetic) on broadcast scalars or arrays, shapes kept."""
-    fast.require(0, "geodesy")
+    fast.require(194, "geodesy")
     f64 = np.float64
+    if (type(a) is np.ndarray and type(b) is np.ndarray and a.ndim == 1 and a.dtype == f64 and b.dtype == f64
+            and a.shape == b.shape and type(c) is float):
+        # (the usual call: two point arrays and one height for all: the kernel takes the one value, no broadcast and
+        # no array of it; the same numbers. Most calls are a few points, their cost the wrapping: 2026-11-10)
+        return getattr(fast._ef, kernel + "_c")(a, b, c, origin, rot)
     A_, B_, C_ = np.broadcast_arrays(np.asarray(a, f64), np.asarray(b, f64), np.asarray(c, f64))
     shape = A_.shape
     got = getattr(fast._ef, kernel)(np.ascontiguousarray(A_.ravel()), np.ascontiguousarray(B_.ravel()),
@@ -42,6 +49,18 @@ def ecef_to_geodetic(x, y, z):
     return _rust3("enu_to_geodetic", x, y, z, _ZERO, _EYE)
 
 
+def segment_lengths(lonlat):
+    """WGS84 geodesic metres between consecutive lon/lat vertices (Vincenty's inverse; the mean sphere where it does not
+    converge, near antipodal: no road edge), the metric lanesections.py locates a merged highway's per-source lane
+    stretches in (from PR #880 by DerEifrige-f; earthfast.geodesic_lengths)."""
+    import fast
+    ll = np.ascontiguousarray(np.asarray(lonlat, np.float64)[:, :2])
+    if len(ll) < 2:
+        return np.empty(0, np.float64)
+    fast.require(233, "geodesic_lengths")
+    return fast._ef.geodesic_lengths(ll)
+
+
 class EnuFrame:
     """Local East-North-Up frame tangent to the ellipsoid at (lat0, lon0, h0)."""
 
@@ -49,7 +68,7 @@ class EnuFrame:
         self.lat0, self.lon0, self.h0 = float(lat0), float(lon0), float(h0)
         self.origin = np.array(geodetic_to_ecef(lat0, lon0, h0), np.float64)
         la, lo = np.radians(lat0), np.radians(lon0)
-        sla, cla, slo, clo = np.sin(la), np.cos(la), np.sin(lo), np.cos(lo)
+        sla, cla, slo, clo = dnp.sin(la), dnp.cos(la), dnp.sin(lo), dnp.cos(lo)
         # Rows are the E, N, U unit vectors expressed in ECEF.
         self.rot = np.array([
             [-slo, clo, 0.0],
@@ -92,5 +111,5 @@ def haversine_m(lat1, lon1, lat2, lon2):
     """Great-circle distance (m) on the WGS84 mean sphere between two points in degrees."""
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * 6371008.8 * math.asin(min(1.0, math.sqrt(a)))
+    a = dnp.sq(dmath.sin(dp / 2)) + dmath.cos(p1) * dmath.cos(p2) * dnp.sq(dmath.sin(dl / 2))
+    return 2 * 6371008.8 * dmath.asin(min(1.0, math.sqrt(a)))

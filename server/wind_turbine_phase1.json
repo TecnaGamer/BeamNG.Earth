@@ -1,0 +1,37 @@
+{
+  "phase": 1,
+  "selection": "Only this verified OSM node is enabled; wind-farm expansion requires separate approval.",
+  "source": {
+    "feature_url": "https://www.openstreetmap.org/node/1175681635",
+    "api_url": "https://api.openstreetmap.org/api/0.6/node/1175681635.json",
+    "retrieved_at_utc": "2026-11-01T22:36:24.963169+00:00",
+    "farm_name": "Happy Jack Windpower",
+    "farm_relation_id": 3792596,
+    "farm_relation_api_url": "https://api.openstreetmap.org/api/0.6/relation/3792596/full.json",
+    "copyright": "OpenStreetMap and contributors",
+    "license": "http://opendatacommons.org/licenses/odbl/1-0/",
+    "attribution": "http://www.openstreetmap.org/copyright"
+  },
+  "elements": [
+    {
+      "type": "node",
+      "id": 1175681635,
+      "lat": 41.1397814,
+      "lon": -104.9978882,
+      "timestamp": "2023-02-27T03:50:35Z",
+      "version": 4,
+      "changeset": 133067882,
+      "tags": {
+        "generator:method": "wind_turbine",
+        "generator:output:electricity": "2.1 MW",
+        "generator:source": "wind",
+        "manufacturer": "Suzlon",
+        "manufacturer:type": "S88-2.1 MW",
+        "operator": "Duke Energy",
+        "operator:wikidata": "Q1264404",
+        "power": "generator",
+        "source": "usgs"
+      }
+    }
+  ]
+}

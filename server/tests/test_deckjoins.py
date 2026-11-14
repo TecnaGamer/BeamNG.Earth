@@ -189,6 +189,66 @@ class GroundGapTest(unittest.TestCase):
         f = _feats(self.lines, [0, 2])
         self.assertEqual(roads.level_ranges(f, 1), [])
 
+    def test_as_the_python_it_was(self):
+        """_deck_gaps' answers are exactly those of the Python before its look round moved to earthfast
+        (tests/gradesep_reference.py)."""
+        import gradesep_reference
+        roadz.PROVIDER = None
+        for f in [_feats(self.lines, [0, 2]), _feats([[(0, -300), (0, -50)], [(0, -50), (0, 50)], [(0, 50), (0, 300)]],
+                                                     [0, 2]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0), (80, 0)], "residential")]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0.3), (80, 0)], "residential"),
+                                                    ([(0, -0.2), (-60, 0)], "residential")]),
+                  _feats([[(0, -300), (0, -20)], [(0.4, -20), (0, 20)], [(0, 20), (0, 300)]], [0, 2]),
+                  features([[(0, -300), (0, 300)]] + CROSS, ["motorway", "residential", "residential"],
+                           flags=[(0, "is_bridge", 0.0, 280 / 600), (0, "is_bridge", 320 / 600, 1.0)])]:
+            for i in range(len(f)):
+                rngs = roads._skew_decks(f, i, roads.raw_level_ranges(f, i))
+                with self.subTest(n=len(f), i=i):
+                    self.assertEqual(repr(roads._deck_gaps(f, i, list(rngs))),
+                                     repr(gradesep_reference.deck_gaps(f, i, list(rngs))))
+
+
+
+class JoinedAtTheEndTest(unittest.TestCase):
+    """The roads joined at a bridge's end node (the road going on, a side street through the node) are not roads
+    crossing under it: the bridge keeps its mapped range (earthfast levelrules END_EPS_M). The crossing's place along
+    the bridge and the bridge's end are the same number only to the last bit: 4 of these 60 bridges (glibc 2.44) took
+    a joined road for a crossing and grew up to 30 m (roads.SKEW_MAX_M) back along their road, which ones depending
+    on the C library's hypot (glibc 2.35 against 2.44: Vienna's S1 / Rautenweg built other decks on GitHub's Ubuntu
+    22.04 runner than on the PC, 2026-11-12)."""
+
+    def test_no_bridge_grows_over_a_road_joined_at_its_end(self):
+        import random
+        rnd = random.Random(11)
+        grown = []
+        for k in range(60):
+            line, x, y = [], rnd.uniform(-5, 5), -200.0
+            for _ in range(rnd.randint(4, 9)):
+                line.append((x, y))
+                x, y = x + rnd.uniform(-9, 9), y + rnd.uniform(20, 60)
+            end = line[-1]
+            on = [end, (end[0] + rnd.uniform(-6, 6), end[1] + rnd.uniform(40, 90))]
+            side = [(end[0] - rnd.uniform(30, 70), end[1] - rnd.uniform(-30, 30)), end,
+                    (end[0] + rnd.uniform(30, 70), end[1] + rnd.uniform(-30, 30))]
+            length = float(np.hypot(*np.diff(np.array(line), axis=0).T).sum())
+            f = features([line, on, side], ["secondary", "secondary", "residential"],
+                         flags=[(0, "is_bridge", round(1.0 - 12.0 / length, 6), 1.0)])    # (its last 12 m a bridge)
+            raw = roads.raw_level_ranges(f, 0)
+            got = roads._skew_decks(f, 0, list(raw))
+            self.assertEqual(len(got), 1)
+            if abs(got[0][0] - raw[0][0]) * length > 1e-3 or got[0][1:] != raw[0][1:]:
+                grown.append((k, raw, got))
+        self.assertEqual(grown, [])
+
+    def test_a_road_under_it_still_counts(self):
+        """... and a street crossing under the bridge 2 m before its end still lengthens it."""
+        line = [(0.0, -200.0), (3.0, -100.0), (1.0, 0.0)]
+        f = features([line, [(1.0, 0.0), (2.0, 80.0)], [(-60.0, -30.0), (60.0, 26.0)]],
+                     ["secondary", "secondary", "residential"], flags=[(0, "is_bridge", 0.94, 1.0)])
+        raw = roads.raw_level_ranges(f, 0)
+        got = roads._skew_decks(f, 0, list(raw))
+        self.assertLess(got[0][0], raw[0][0] - 0.01)
 
 
 @unittest.skipUnless(NATIVE, "earthfast 105")
@@ -223,12 +283,14 @@ class PinnedJointTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider(lambda xy, s: np.full(len(xy), FLAT + 6.0))
         self.check()
 
-    def test_unpinned_parts(self):
-        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]), np.array([[0.0, -50], [0, 0]])]
-        out, gfn = roads._unpinned(lines, lambda xy: np.asarray(xy, np.float64)[:, 0], [(0.0, 0.0)])
-        ends = [tuple(np.round(out[0][0], 2)), tuple(np.round(out[1][0], 2)), tuple(np.round(out[2][-1], 2))]
-        self.assertEqual(len(set(ends)), 3, "each part's own end")
-        np.testing.assert_allclose(gfn(np.array(ends)), 0.0, atol=1e-9, err_msg="the ground at the joint itself")
+    def test_pin_splits_connectivity_without_moving_geometry(self):
+        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]),
+                 np.array([[0.0, -50], [0, 0]])]
+        nodes, edges, adj = roads._curve_graph(lines, [(0.0, 0.0)])
+        ends = [edges[0][0], edges[1][0], edges[2][1]]
+        self.assertEqual(len(set(ends)), 3, "each incident part has its own abutment")
+        np.testing.assert_allclose(np.array(nodes)[ends], 0.0)
+        self.assertTrue(all(len(adj[nd]) == 1 for nd in ends))
 
 
 

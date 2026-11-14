@@ -1,0 +1,1652 @@
+{
+  "captured": "2026-11-01",
+  "release": "2026-09-23.1",
+  "pipeline": 2,
+  "extent_m": 450.0,
+  "source_cache": "mapdata/v2/overture/2026-09-23.1",
+  "source": "Original decoded local Overture mapdata; no network requests or source-cache writes.",
+  "cases": [
+    {
+      "id": "cheyenne_downtown",
+      "name": "Cheyenne downtown",
+      "latitude": 41.1335,
+      "longitude": -104.815,
+      "expected_pattern": "rich",
+      "road_name": "Capitol Avenue",
+      "road_id": "4cdaeace-dee5-4929-995e-8755c53ed19a",
+      "road_distance_m": 61.09736095321346,
+      "query_xy": [
+        -54.538907733741596,
+        -27.538973449598192
+      ],
+      "outward": [
+        -0.8926557036646127,
+        -0.4507391648337596
+      ],
+      "road_half_width": 3.1,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "cheyenne_downtown/buildings/0/"
+        ],
+        "land_use": [
+          "cheyenne_downtown/land_use/0/"
+        ],
+        "places": [
+          "cheyenne_downtown/places/0/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.9/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2313,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "TomTom",
+                "features": 17,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3421/6134",
+          "rows": 304,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 1870,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2183,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3421/6134",
+          "rows": 7,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 101,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3421/6134",
+          "rows": 1568,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 7,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 1099,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "DAC",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 110,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 292,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 2403,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 1067,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 894,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cheyenne_residential",
+      "name": "Cheyenne residential",
+      "latitude": 41.1477,
+      "longitude": -104.829,
+      "expected_pattern": "limited",
+      "road_name": "Bent Avenue",
+      "road_id": "6c0f93f8-2eef-4238-827c-34ebba858be7",
+      "road_distance_m": 21.50334862157641,
+      "query_xy": [
+        21.502237088108163,
+        -0.21863702302650978
+      ],
+      "outward": [
+        -0.9999483088198119,
+        0.010167580262691515
+      ],
+      "road_half_width": 3.0,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "cheyenne_residential/buildings/0/",
+          "cheyenne_residential/buildings/1/",
+          "cheyenne_residential/buildings/2/",
+          "cheyenne_residential/buildings/3/"
+        ],
+        "land_use": [
+          "cheyenne_residential/land_use/0/",
+          "cheyenne_residential/land_use/1/",
+          "cheyenne_residential/land_use/2/",
+          "cheyenne_residential/land_use/3/"
+        ],
+        "places": [
+          "cheyenne_residential/places/0/",
+          "cheyenne_residential/places/1/",
+          "cheyenne_residential/places/2/",
+          "cheyenne_residential/places/3/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.9/14/3421/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 1189,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "TomTom",
+                "features": 3,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3420/6133",
+          "rows": 223,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3420/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 683,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 766,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3421/6133",
+          "rows": 525,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3421/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 1028,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 1115,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3420/6134",
+          "rows": 68,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3420/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 572,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 628,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3421/6134",
+          "rows": 209,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 1870,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2183,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3420/6133",
+          "rows": 6,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3420/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 155,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3421/6133",
+          "rows": 6,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3421/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 39,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3420/6134",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3420/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 21,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3421/6134",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 101,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3420/6133",
+          "rows": 9,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3420/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 1,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 5,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 5,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 48,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 25,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 36,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3421/6133",
+          "rows": 12,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3421/6133.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 4,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 39,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 7,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 21,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 151,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 90,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 80,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3420/6134",
+          "rows": 4,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3420/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "BrightQuery",
+                "features": 24,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 2,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 8,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 62,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 35,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 28,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3421/6134",
+          "rows": 8,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3421/6134.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 7,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 1099,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "DAC",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 110,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 292,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 2403,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 1067,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 894,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        }
+      ]
+    },
+    {
+      "id": "laramie_downtown",
+      "name": "Laramie downtown",
+      "latitude": 41.311,
+      "longitude": -105.594,
+      "expected_pattern": "rich",
+      "road_name": "South 2nd Street",
+      "road_id": "108a4499-1f89-4b1b-990a-441448a4f2ba",
+      "road_distance_m": 78.3355183035998,
+      "query_xy": [
+        -78.12033259823482,
+        5.8023325167373585
+      ],
+      "outward": [
+        -0.9972530250641733,
+        0.07407026394144278
+      ],
+      "road_half_width": 3.1,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "laramie_downtown/buildings/0/",
+          "laramie_downtown/buildings/1/"
+        ],
+        "land_use": [
+          "laramie_downtown/land_use/0/",
+          "laramie_downtown/land_use/1/"
+        ],
+        "places": [
+          "laramie_downtown/places/0/",
+          "laramie_downtown/places/1/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.9/14/3386/6123.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 1221,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "TomTom",
+                "features": 11,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3386/6123",
+          "rows": 361,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3386/6123.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 1345,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2528,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3386/6124",
+          "rows": 281,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3386/6124.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 1268,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2121,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3386/6123",
+          "rows": 11,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3386/6123.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 107,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3386/6124",
+          "rows": 12,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3386/6124.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 70,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3386/6123",
+          "rows": 373,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3386/6123.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 11,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 190,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "DAC",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 42,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 68,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 732,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 461,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "PinMeTo",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 419,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3386/6124",
+          "rows": 216,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3386/6124.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "AllThePlaces",
+                "features": 9,
+                "license": "CC0-1.0"
+              },
+              {
+                "dataset": "BrightQuery",
+                "features": 80,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "DAC",
+                "features": 2,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Foursquare",
+                "features": 24,
+                "license": "Apache-2.0"
+              },
+              {
+                "dataset": "Microsoft",
+                "features": 53,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 374,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 241,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "PinMeTo",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 205,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        }
+      ]
+    },
+    {
+      "id": "horse_creek",
+      "name": "Horse Creek Road",
+      "latitude": 41.2183589,
+      "longitude": -104.833019,
+      "expected_pattern": "rural",
+      "road_name": "Horse Creek Road",
+      "road_id": "b41164c5-263b-41d5-9732-d2c5325b10d2",
+      "road_distance_m": 0.004963984831385153,
+      "query_xy": [
+        -1.1206952024167549e-05,
+        -0.004963972180668241
+      ],
+      "outward": [
+        -0.00225765234921956,
+        -0.9999974514996876
+      ],
+      "road_half_width": 4.0,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "horse_creek/buildings/0/",
+          "horse_creek/buildings/1/"
+        ],
+        "land_use": [
+          "horse_creek/land_use/0/",
+          "horse_creek/land_use/1/"
+        ],
+        "places": [
+          "horse_creek/places/0/",
+          "horse_creek/places/1/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.9/14/3420/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 112,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3420/6129",
+          "rows": 20,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3420/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 38,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 49,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3421/6129",
+          "rows": 17,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3421/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 153,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 206,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3420/6129",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3420/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 5,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3421/6129",
+          "rows": 6,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3421/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 6,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3420/6129",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3420/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Overture",
+                "features": 3,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 2,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 3,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3421/6129",
+          "rows": 2,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3421/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft",
+                "features": 2,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture",
+                "features": 7,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 5,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 5,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        }
+      ]
+    },
+    {
+      "id": "round_top",
+      "name": "Round Top Road",
+      "latitude": 41.2182404,
+      "longitude": -104.9002486,
+      "expected_pattern": "rural",
+      "road_name": "Roundtop Road",
+      "road_id": "fc1dbf59-a7d7-47be-a24d-c80cb2a1565e",
+      "road_distance_m": 0.0007537836773012385,
+      "query_xy": [
+        0.00038132047801298086,
+        0.0006502188287136335
+      ],
+      "outward": [
+        -0.5058752126176045,
+        -0.8626066712349804
+      ],
+      "road_half_width": 3.1,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "round_top/buildings/0/",
+          "round_top/buildings/1/"
+        ],
+        "land_use": [
+          "round_top/land_use/0/",
+          "round_top/land_use/1/"
+        ],
+        "places": [
+          "round_top/places/0/",
+          "round_top/places/1/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.9/14/3417/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 92,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3417/6129",
+          "rows": 20,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3417/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 66,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 17,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3418/6129",
+          "rows": 11,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3418/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 114,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 63,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3417/6129",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3417/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 4,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3418/6129",
+          "rows": 3,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3418/6129.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 4,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3417/6129",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3417/6129.npz",
+          "provenance": null
+        },
+        {
+          "layer": "places",
+          "cell": "14/3418/6129",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3418/6129.npz",
+          "provenance": null
+        }
+      ]
+    },
+    {
+      "id": "happy_jack",
+      "name": "Happy Jack Road",
+      "latitude": 41.1931691,
+      "longitude": -105.2014728,
+      "expected_pattern": "rural",
+      "road_name": "Happy Jack Road",
+      "road_id": "93f33c99-a6bd-4261-9274-58c33042393a",
+      "road_distance_m": 0.0011275383539420419,
+      "query_xy": [
+        0.0006429012265485312,
+        -0.0009262940961232147
+      ],
+      "outward": [
+        0.5701812486454211,
+        -0.821518924732199
+      ],
+      "road_half_width": 4.0,
+      "box": [
+        -128.0,
+        -128.0,
+        128.0,
+        128.0
+      ],
+      "layers": {
+        "buildings": [
+          "happy_jack/buildings/0/",
+          "happy_jack/buildings/1/",
+          "happy_jack/buildings/2/",
+          "happy_jack/buildings/3/"
+        ],
+        "land_use": [
+          "happy_jack/land_use/0/",
+          "happy_jack/land_use/1/",
+          "happy_jack/land_use/2/",
+          "happy_jack/land_use/3/"
+        ],
+        "places": [
+          "happy_jack/places/0/",
+          "happy_jack/places/1/",
+          "happy_jack/places/2/",
+          "happy_jack/places/3/"
+        ]
+      },
+      "sources": [
+        {
+          "layer": "roads",
+          "path": "mapdata/v2/overture/2026-09-23.1/roads.7/14/3404/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 38,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:transportation",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from TomTom.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3403/6130",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3403/6130.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 3,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 12,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3404/6130",
+          "rows": 6,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3404/6130.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 5,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 15,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3403/6131",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3403/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 11,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 24,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "buildings",
+          "cell": "14/3404/6131",
+          "rows": 8,
+          "path": "mapdata/v2/overture/2026-09-23.1/buildings/14/3404/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Microsoft ML Buildings",
+                "features": 6,
+                "license": "ODbL-1.0"
+              },
+              {
+                "dataset": "OpenStreetMap",
+                "features": 16,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:buildings",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Esri Community Maps contributors. Available under CC BY 4.0. Global ML Building Footprints. Licensed by Microsoft under the Open Database License. Google Open Buildings. Available under CC BY 4.0. USGS 3D Elevation Program Digital Elevation Program. Qian Shi, et al. A First High-quality Vector Data of Buildings in East Asian Countries Based on a Comprehensive Large-scale Mapping Framework. Zenodo, 22 July 2023, doi:10.5281/zenodo.8174931. Available under CC BY 4.0. Work derived from BTN 2024 ign.es. Available under CC BY 4.0",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3403/6130",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3403/6130.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 3,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3404/6130",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3404/6130.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3403/6131",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3403/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 3,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "land_use",
+          "cell": "14/3404/6131",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/land_use/14/3404/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "OpenStreetMap",
+                "features": 2,
+                "license": "ODbL-1.0"
+              }
+            ],
+            "id": "overture:base",
+            "licence": "ODbL. \u00a9 OpenStreetMap contributors. Available under the Open Database License. Data from the Daylight Map Distribution. ESA WorldCover. \u00a9 ESA WorldCover project 2020 / Contains modified Copernicus Sentinel data (2020) processed by ESA WorldCover consortium. Available under CC BY 4.0 DEED. Data products from ETOPO1. Available under Open Data Commons Public Domain Dedication and License. Data from GLOBathy. Available under CC0 1.0 (assumed).",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3403/6130",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3403/6130.npz",
+          "provenance": null
+        },
+        {
+          "layer": "places",
+          "cell": "14/3404/6130",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3404/6130.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Overture",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "Overture-signals",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3403/6131",
+          "rows": 0,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3403/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Overture",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        },
+        {
+          "layer": "places",
+          "cell": "14/3404/6131",
+          "rows": 1,
+          "path": "mapdata/v2/overture/2026-09-23.1/places/14/3404/6131.npz",
+          "provenance": {
+            "attribution": "\u00a9 OpenStreetMap contributors, Overture Maps Foundation",
+            "datasets": [
+              {
+                "dataset": "Overture",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              },
+              {
+                "dataset": "meta",
+                "features": 1,
+                "license": "CDLA-Permissive-2.0"
+              }
+            ],
+            "id": "overture:places",
+            "licence": "Data from Meta. Available under CDLA Permissive 2.0. Data from Microsoft. Available under CDLA Permissive 2.0. Data from PinMeTo. Available under CDLA Permissive 2.0. Data from Krick. Available under CDLA Permissive 2.0. Data from RenderSEO. Available under CDLA Permissive 2.0. Data from DAC. Available under CDLA Permissive 2.0. Data from BrightQuery. Available under CDLA Permissive 2.0. Data from Birdeye. Available under CDLA Permissive 2.0. Data from Uberall. Available under CDLA Permissive 2.0. Data from OpenTravel Alliance. Available under CDLA Permissive 2.0. Data from Foursquare. Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. Available under CC0 1.0.",
+            "name": "Overture Maps Foundation",
+            "release": "2026-09-23.1",
+            "url": "https://docs.overturemaps.org/attribution/"
+          }
+        }
+      ]
+    }
+  ]
+}

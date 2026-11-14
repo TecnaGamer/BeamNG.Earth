@@ -32,12 +32,13 @@ M.LATENCY_S = 1          -- anchor latency assumed until one is measured (s)
 M.LEAD_EXTRA_S = 1       -- a re-requested terrain leads the player by the latency plus this
 M.RETRY_S = 5            -- wait after an anchor_error before asking again
 
--- The session's block size (1024 or 512): the staleness distance and the stale-anchor rule.
-function M.configure(size)
-  local small = size == 512
+-- The session's block by its width (m: 1 km, the *_512 values (named for 512² at 2 m), or 2 km): the staleness
+-- distance and the stale-anchor rule.
+function M.configure(width)
+  local small = (tonumber(width) or 1024) < 2048
   M.STALE_DIST = small and M.STALE_DIST_512 or M.STALE_DIST_1024
   M.KEEP_EDGE = small and M.KEEP_EDGE_512 or M.KEEP_EDGE_1024
-  return small and 512 or 1024
+  return small and 1024 or 2048
 end
 
 function M.setDistance(m)
@@ -242,5 +243,7 @@ function M.recoupleTick(plan, now)
   if plan.next > #M.RECOUPLE_AT then return nil end
   return plan
 end
+
+M.configure(1024)  -- (the default block: 1 km)
 
 return M

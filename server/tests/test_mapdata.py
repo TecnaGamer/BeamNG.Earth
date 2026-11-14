@@ -36,6 +36,9 @@ import xproc  # noqa: E402
 import railtags  # noqa: E402
 
 railtags.LANES_ON = False       # (the lane shards are fetched per build: test_railtags; these count Overture's requests)
+import osmtagshards  # noqa: E402
+
+osmtagshards.ON = False         # (the OSM tag shards: test_osm_tag_shards; these count the Layercake file's requests)
 
 try:
     import duckdb  # noqa: F401 (only whether it is installed)
@@ -44,6 +47,16 @@ except ImportError:
     HAVE_DUCKDB = False
 needs_duckdb = unittest.skipUnless(HAVE_DUCKDB, "duckdb / fsspec not installed (server/requirements.txt)")
 REPO = Path(__file__).resolve().parents[2]
+# (these tests are the parquet path's: Overture's tiles have their own, tests/test_pmtiles.py)
+_SOURCE = mock.patch.object(mapdata, "MAP_SOURCE", "parquet")
+
+
+def setUpModule():
+    _SOURCE.start()
+
+
+def tearDownModule():
+    _SOURCE.stop()
 
 
 class SmallBlocks:
@@ -387,6 +400,14 @@ class RangeTest(SmallBlocks, unittest.TestCase):
         self.assertEqual(r3.read(48000, 50000), self.data[48000:])
         self.assertEqual(r3.size, len(self.data))
 
+    def test_mirrors_take_turns(self):
+        # Overture's AWS and Azure copies: reads spread over both (twice the connections), the same bytes
+        r = self.remote()
+        b = rangeread.BLOCK
+        self.assertEqual(r.read(0, 10), self.data[:10])
+        self.assertEqual(r.read(3 * b, 3 * b + 10), self.data[3 * b:3 * b + 10])
+        self.assertEqual({u for u, _ in self.t.log}, {self.URL, self.MIRROR})
+
     def test_mirror_failover(self):
         self.t.fail[netfetch.host_of(self.URL)] = 503
         r = self.remote()
@@ -526,6 +547,17 @@ class Sources:
 
 
 @needs_duckdb
+class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_station_tags_beside_rail_tags(self):
+        # the weekly station shards' reader (railtags.StationTags), made with the map data like the rail one
+        import railtags
+        md, _ = self.mapdata()
+        self.assertIsInstance(md.station_tags, railtags.StationTags)
+        # (the road tiles' chargers take its capacity and charge points: their cache keys follow its weekly build)
+        self.assertIn("stations", md.versions())
+
+
+@needs_duckdb
 class StacTest(Sources, SmallBlocks, unittest.TestCase):
     def test_files_for_cell(self):
         md, t = self.mapdata()
@@ -575,6 +607,9 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
                                                   "secondary"])               # seg-03 v1, not the old v0
         self.assertEqual(r.attrs["subclass"][2], "sidewalk")
         self.assertEqual(r.attrs["name"][0], "Street 0")
+        self.assertEqual(r.attrs["src_record"][0], "w1@1")
+        self.assertEqual(r.attrs["src_record"][1], "w3@1",
+                         "the road's own way (the one covering most of it), not the route relation listed first")
         self.assertEqual(r.own.tolist(), [True] * 5 + [False])               # seg-edge is the east cell's
         self.assertEqual(r.rules["surface"].for_feature(1), [("paved", 0.0, 0.5), ("gravel", 0.5, 1.0)])
         self.assertEqual(r.rules["flags"].for_feature(0), [("is_bridge", 0.25, 0.5), ("is_link", 0.25, 0.5)])
@@ -587,6 +622,10 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(speed.for_feature(0)), 1)
         self.assertAlmostEqual(speed.for_feature(1)[0][0], 50.0)
         self.assertEqual([v for v, a, b in r.rules["connectors"].for_feature(0)], ["con-a", "con-b"])
+        # each segment's OpenStreetMap way, past a numbered road's relation; of several the one covering most of it
+        self.assertEqual(r.attrs["src_record"].tolist()[:5], ["w1@1", "w3@1", "w1@1", "w4@1", "r67531@98"])
+        self.assertEqual(r.rules["src_ways"].for_feature(1), [("w2@1", 0.0, 0.25), ("w3@1", 0.25, 1.0)])
+        self.assertEqual(r.rules["src_ways"].for_feature(3), [], "one way: src_record says it all")
         # geometry: lon/lat and local metres (north-south line ~0.6 of the cell long)
         line = r.parts(0, r.en)[0][0]
         self.assertAlmostEqual(abs(line[1, 1] - line[0, 1]), 0.6 * mf.CELL.size_m()[1], delta=15)
@@ -640,6 +679,31 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
                           p.attrs["src_dataset"][0]),
                          ("convenience_store", "convenience_store", "Q7492551", "Sheetz", "Sheetz", "open", "meta"))
         self.assertAlmostEqual(float(p.attrs["confidence"][0]), 0.92, places=5)
+
+    def test_town_areas_layer_reads_the_communes_and_counties(self):
+        """Overture divisions' areas (an optional layer: the town entry signs, 2026-10-28): the land communes, whole
+        (not cut at the cell's edge), with their names and their names in France's regional languages, and the county
+        around them, its outline simplified; the region and a maritime part are left out."""
+        self.assertNotIn("town_areas", mapdata.LAYERS)
+        md, t = self.mapdata()
+        d = md.cell(mf.CELL, ("town_areas",)).layers["town_areas"]
+        self.assertEqual(list(d.ids), ["div-county", "div-east", "div-west"])
+        self.assertEqual(d.kind.tolist(), [mg.POLYGON] * 3)
+        self.assertEqual([str(v) for v in d.attrs["name"]], ["Gard", "Est", "Ouest"])
+        self.assertEqual([str(v) for v in d.attrs["subtype"]], ["county", "locality", "locality"])
+        self.assertEqual([str(v) for v in d.attrs["name_oc"]], ["", "", "Oèst"])
+        self.assertEqual([str(v) for v in d.attrs["name_ca"]], ["", "", "Oest"])
+        # (the English name read for a Cyrillic or Greek name's Latin form only: townsigns.latin_name)
+        self.assertEqual([str(v) for v in d.attrs["name_en"]], ["", "", "West"])
+        self.assertEqual({str(v) for v in d.attrs["country"]}, {"FR"})
+        self.assertFalse(d.clipped.any())
+        county = d.parts(0)[0][0]
+        self.assertLess(len(county), 100, "the county's thousand vertices simplified")
+        self.assertTrue(np.array_equal(county[0], county[-1]), "its ring still closed")
+        west = d.parts(2)[0][0]
+        lon0, _, lon1, _ = mf.CELL.bounds()
+        self.assertEqual(len(west), 5, "a commune's outline as it is")
+        self.assertLess(float(west[:, 0].min()), lon0, "the west commune reaches past the cell, whole")
 
     def test_build_owned_covers_every_feature_once(self):
         """'Build the owned features of every cell' builds each whole feature once and every piece
@@ -887,6 +951,32 @@ class CacheTest(Sources, SmallBlocks, unittest.TestCase):
         left = [d for d, _, f in os.walk(root) if "ok" in f]
         self.assertEqual(left, [])
 
+    def test_old_mirror_folders_are_read_and_packed(self):
+        """A mirror folder from before the pack (one .npy per array) is still read, the same arrays, and on Linux
+        packed into one file for the next read (mapdata.PACK_FILE)."""
+        cache = os.path.join(self.tmp, "cache")
+        md, _ = self.mapdata(cache=cache)
+        digest = md.cell(mf.CELL).digest()
+        p = md.path(mf.CELL, "roads")
+        d = md._mirror_dir(p)
+        packed = md._mirror_load(p)
+        self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)))
+        for n in os.listdir(d):             # the folder as an older version wrote it
+            os.remove(os.path.join(d, n))
+        for n, a in packed.items():
+            np.save(os.path.join(d, n + ".npy"), np.asarray(a), allow_pickle=False)
+        with open(os.path.join(d, "ok"), "w") as fh:
+            fh.write(md._stamp(p) + "\n" + "\n".join(packed) + "\n")
+        old = md._mirror_load(p)
+        self.assertEqual(sorted(old), sorted(packed))
+        for n in packed:
+            self.assertEqual(old[n].dtype, packed[n].dtype)
+            self.assertEqual(np.asarray(old[n]).tobytes(), np.asarray(packed[n]).tobytes())
+        if os.name != "nt":
+            self.assertTrue(os.path.exists(os.path.join(d, mapdata.PACK_FILE)), "packed again")
+        md2, _ = self.mapdata(cache=cache)
+        self.assertEqual(md2.cell(mf.CELL).digest(), digest)
+
     def test_corrupt_layer_files_are_rebuilt(self):
         """A damaged layer file (truncated, a flipped byte in the deflate stream, an old layout without
         provenance) is a miss: rebuilt from the raw blocks, same digest, not a permanent error."""
@@ -960,8 +1050,10 @@ class KindsTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(len(cd.layers["roads"]), 6)
 
     def test_policies(self):
-        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net",
-                  "esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
+        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com", "overturemapswestus2.blob.core.windows.net"):
+            p = netfetch.POLICIES[h]
+            self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (40.0, 80.0, 8, True, None))
+        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com", "dataforgood-fb-data.s3.amazonaws.com"):
             p = netfetch.POLICIES[h]
             self.assertEqual((p.rate, p.burst, p.max_conc, p.allow_prefetch, p.miss_ttl), (20.0, 40.0, 4, True, None))
         self.assertTrue(netfetch.POLICIES["stac.overturemaps.org"].allow_prefetch)
@@ -980,7 +1072,8 @@ class ProvenanceTest(Sources, SmallBlocks, unittest.TestCase):
         self.assertEqual(tr["attribution"], "© OpenStreetMap contributors, Overture Maps Foundation")
         self.assertEqual(tr["release"], mf.RELEASE)
         self.assertIn("Open Database License", tr["licence"])
-        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 8}])
+        # sources counted: seg-01, seg-03 and seg-04 list their route relation as another OpenStreetMap source (GitHub #683)
+        self.assertEqual(tr["datasets"], [{"dataset": "OpenStreetMap", "license": "ODbL-1.0", "features": 11}])
         bl = next(p for p in cd.provenance if p["id"] == "overture:buildings")
         self.assertIn({"dataset": "Microsoft ML Buildings", "license": "ODbL-1.0", "features": 1}, bl["datasets"])
         wc = next(p for p in cd.provenance if p["id"] == "esa-worldcover")
@@ -1043,3 +1136,34 @@ class CliTest(Sources, SmallBlocks, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShedTest(unittest.TestCase):
+    def test_shed_clears_the_station_shards(self):
+        # Codex on #1111 (2026-11-10): MapData.clear_memory (budget.maybe_shed) let go of the rail and lane shards
+        # only; the station shards stayed in memory on small-memory clients
+        import threading
+        from types import SimpleNamespace
+        cleared = []
+        spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
+        md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+        mapdata.MapData.clear_memory(md)
+        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
+
+
+class StoreLevelTest(unittest.TestCase):
+    def test_a_cell_file_holds_the_same_arrays_as_savez_compressed(self):
+        # MapData._store writes at STORE_LEVEL (cheaper than numpy's level 6): the same members and arrays
+        arrays = {"ids": np.array(["a", "bb", ""]), "xy": np.arange(3000, dtype=np.float64).reshape(-1, 2) * 0.37,
+                  "kind": np.array([1, 2, 3], np.uint8), "provenance": np.array(json.dumps({"id": "x"})),
+                  "empty": np.zeros(0, np.int32)}
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "a.npz"), os.path.join(d, "b.npz")
+            mapdata._savez_deflated(a, arrays, mapdata.STORE_LEVEL)
+            np.savez_compressed(b, **arrays)
+            with np.load(a, allow_pickle=False) as za, np.load(b, allow_pickle=False) as zb:
+                self.assertEqual(za.files, zb.files)
+                for k in za.files:
+                    self.assertEqual(za[k].dtype, zb[k].dtype)
+                    np.testing.assert_array_equal(za[k], zb[k])

@@ -3,16 +3,18 @@
 -- unload them. If a player gets near enough or switches back to that car load the state and load and resume the map
 -- around it").
 --
--- A player's own car (not traffic, not parked, in BeamMP not another player's) more than UNLOAD_M from the active car
--- for UNLOAD_AFTER_S is saved with the game's own state save (vehicle Lua beamstate.save: every node, beam deformation
+-- A player's unoccupied own car (not traffic, not parked, in BeamMP not another player's) more than UNLOAD_M from
+-- the active car for UNLOAD_AFTER_S is saved with the game's own state save (vehicle Lua beamstate.save: every node, beam deformation
 -- and break, the hydros and the Lua state), its place kept as latitude / longitude / height (anchors change on the
 -- way), and deleted. Within NEAR_M of the active car again it is a collision focus first (foci(), collisionfoci.lua:
 -- the roads, trees and ground under it are made, terrainpatch.lua); within LOAD_M and with the static ground under its
 -- place it is spawned there (model, parts, paint) and its state loaded (beamstate.load). switchTo(uid) puts the player
 -- in one: near, once it is back; far, the car driven until then is saved where it is, then taken there by a teleport
--- and taken out when the stored car is back and entered. A teleport leaves the other cars where they are (onTeleport).
+-- and taken out when the stored car is back and entered. A teleport saves the unoccupied other cars (onTeleport).
 -- The records live as long as the level.
 local M = {}
+local localplayers = require('beamngEarth/localplayers')
+local controlled, otherControlled = {}, {}
 
 M.UNLOAD_M = 2500
 M.LOAD_M = 1500
@@ -68,14 +70,15 @@ local function inTrain(id, aid)
   return ok and ok2 and a ~= nil and a == b
 end
 
--- The vehicles update may save: this player's own cars other than the active one aid and its train, not being
--- saved or spawned, not the switch's car while it carries the player. [{ id, x, y }]
+-- This player's unoccupied cars, other than the active one's train, not being saved or spawned and not carrying a
+-- switching player. Reset a car's far timer as soon as a local player enters it.
 local function candidates(aid)
   local out = {}
   local cf = require('beamngEarth/collisionfoci')
   for _, v in ipairs(cf.vehicles()) do
     local id = v.id
-    if v.kind == 'player' and id ~= aid and not saving[id] and not loading[id] and own(id)
+    if v.controlled then farFor[id] = nil end
+    if v.kind == 'player' and not v.controlled and id ~= aid and not saving[id] and not loading[id] and own(id)
       and not (switch and switch.oldId == id) and not inTrain(id, aid) then
       out[#out + 1] = v
     end
@@ -127,6 +130,16 @@ end
 -- Spawn a stored car at its place and load its state LOAD_DELAY_S later (update). enter: the switch's car: the car
 -- that carried the player there goes first (it may stand where this one comes back), this one is entered.
 local function startLoad(rec, enter)
+  if enter and switch and switch.oldId then
+    localplayers.snapshot(controlled, otherControlled)
+    if otherControlled[switch.oldId] then
+      -- Another local player entered the car being used for the switch. It must not be deleted or duplicated.
+      if switch.oldUid then stored[switch.oldUid] = nil end
+      farFor[switch.oldId] = nil
+      switch = nil
+      return false
+    end
+  end
   local x, y, z = toXYZ(rec)
   if not x then return false end
   local r = rec.rot
@@ -195,11 +208,22 @@ function M.update(dt)
   local active = getPlayerVehicle and getPlayerVehicle(0)
   if not active or not anchorOf() then return end
   local ap = active:getPosition()
+  if next(saving) or switch then
+    localplayers.snapshot(controlled, otherControlled)
+    if switch and switch.oldId and otherControlled[switch.oldId] then
+      saving[switch.oldId], farFor[switch.oldId] = nil, nil
+      if switch.oldUid then stored[switch.oldUid] = nil end
+      switch = nil
+    end
+  end
   -- saves written: the car goes (the switch's car: taken to the stored one); too slow: it stays as it is
   for id, s in pairs(saving) do
     local veh = scenetree.findObjectById(id)
     if not veh then
       saving[id] = nil
+    elseif (not s.keep and localplayers.controlled(id, veh, controlled)) or (s.keep and not switch) then
+      -- A player entered while beamstate.save was in flight, or a kept-car switch was cancelled.
+      saving[id], farFor[id] = nil, nil
     elseif FS:fileExists(s.rec.path) then
       stored[s.rec.uid] = s.rec
       saving[id], farFor[id] = nil, nil
@@ -259,9 +283,9 @@ function M.update(dt)
   end
 end
 
--- A teleport (core.lua teleportTo, before the anchor changes): the player's other cars stay where they are, saved
--- with their place in the old frame and taken out (the new anchor keeps every vehicle's local place: they would come
--- along, in the air or under the ground). The active car's trailer comes along.
+-- A teleport (core.lua teleportTo, before the anchor changes): unoccupied own cars stay where they are, saved
+-- with their place in the old frame and taken out. Locally occupied cars are never taken out; the active car's trailer
+-- comes along.
 function M.onTeleport()
   local active = getPlayerVehicle and getPlayerVehicle(0)
   if not active or not anchorOf() then return end
@@ -291,8 +315,13 @@ function M.switchTo(uid)
   local x, y = toXYZ(rec)
   if not x then return false end
   local ap = active:getPosition()
+  local near = (x - ap.x) ^ 2 + (y - ap.y) ^ 2 <= M.LOAD_M * M.LOAD_M
+  if not near then
+    localplayers.snapshot(controlled, otherControlled)
+    if otherControlled[active:getId()] then return false end
+  end
   switch = { uid = uid, t = clock }
-  if (x - ap.x) ^ 2 + (y - ap.y) ^ 2 <= M.LOAD_M * M.LOAD_M then return true end
+  if near then return true end
   if not startSave(active, true) then switch = nil; return false end
   switch.oldId = active:getId()
   return true

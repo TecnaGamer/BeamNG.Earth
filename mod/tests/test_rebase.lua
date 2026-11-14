@@ -2,6 +2,8 @@
 local T = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/testlib.lua')
 local rebase = require('beamngEarth/rebase')
 local d = rebase.decide
+T.check(rebase.STALE_DIST == 192 and rebase.KEEP_EDGE == 150, 'default: the 1 km block (1024 x 1 m)')
+rebase.configure(2048)     -- (the v1.3.1 2 km block, the rules below first)
 
 T.check(rebase.distance == 15000, 'default rebase distance 15 km')
 rebase.setDistance(10000) -- the rules below are written for 10 km
@@ -34,7 +36,7 @@ rebase.setDistance(10000)
 -- M4 (docs/V1_4_SPEC.md 3.5): STALE_DIST per block size, and the stale-anchor rule (512² only)
 T.check(rebase.STALE_DIST == 450 and rebase.KEEP_EDGE == 0, '1024: STALE_DIST 450, stale anchors discarded (v1.3.1)')
 T.check(d(10050, { purpose = 'rebase', ready = true }, 451, 0, 0, 500) == 'discard', '1024: stale is discarded however far inside')
-T.check(rebase.configure(512) == 512 and rebase.STALE_DIST == 192 and rebase.KEEP_EDGE == 150, '512: STALE_DIST 192, keep edge 150 m')
+T.check(rebase.configure(1024) == 1024 and rebase.STALE_DIST == 192 and rebase.KEEP_EDGE == 150, '512: STALE_DIST 192, keep edge 150 m')
 T.check(d(10000, { purpose = 'rebase', ready = true }, 192, 0, 0, 318) == 'commit', '512: at 192 m: commit')
 T.check(d(10000, { purpose = 'rebase', ready = true }, 250, 0, 0, 260) == 'commit',
   '512: stale (250 m) but 260 m inside every edge: commit (terrain-follow prepares next)')
@@ -45,7 +47,7 @@ T.check(d(10000, { purpose = 'rebase', ready = true }, 300, 0, 0, nil) == 'disca
 T.check(d(9900, { purpose = 'rebase', ready = true }, 300, 0, 0, 200) == nil, '512: below the distance: hold')
 T.check(rebase.aheadLead(nil) == rebase.LATENCY_S + rebase.LEAD_EXTRA_S and rebase.aheadLead(3) == 4,
   're-request lead = measured anchor latency + 1 s')
-T.check(rebase.configure(1024) == 1024 and rebase.STALE_DIST == 450 and rebase.KEEP_EDGE == 0, 'configure(1024) restores v1.3.1')
-T.check(rebase.configure(nil) == 1024, 'no size: 1024')
+T.check(rebase.configure(2048) == 2048 and rebase.STALE_DIST == 450 and rebase.KEEP_EDGE == 0, 'configure(2048) restores v1.3.1')
+T.check(rebase.configure(nil) == 1024, 'no width: 1 km')
 
 T.done('test_rebase')

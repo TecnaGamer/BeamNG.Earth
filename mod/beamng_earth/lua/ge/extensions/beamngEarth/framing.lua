@@ -43,14 +43,21 @@ function Reassembler:pop()
   elseif have < 4 + self.need then
     return nil
   end
+  -- Every copy here is paid for by the bytes already read past (amortised O(n)): the rest of the buffer cut off only
+  -- once over half of it is read, the new chunks joined behind it in one concat. Before (2026-11-08) the rest was
+  -- copied again after every 32 KB read and joined twice: a burst of small frames allocated 40-60x its size, much of
+  -- the game's GE Lua garbage on a drive (300+ MB/min, the "net" part) and its collector's hitches.
   if self.pending > 0 then
-    if self.pos > 1 then
-      self.buf = self.buf:sub(self.pos)
-      self.pos = 1
+    local parts = self.parts
+    if self.pos > #self.buf then
+      self.buf = table.concat(parts)
+    else
+      table.insert(parts, 1, self.pos > 1 and self.buf:sub(self.pos) or self.buf)
+      self.buf = table.concat(parts)
     end
-    self.buf = self.buf .. table.concat(self.parts)
+    self.pos = 1
     self.parts, self.pending = {}, 0
-  elseif self.pos > 32768 then
+  elseif self.pos > 32768 and self.pos > #self.buf / 2 then
     self.buf = self.buf:sub(self.pos)
     self.pos = 1
   end

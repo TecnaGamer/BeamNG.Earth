@@ -101,6 +101,18 @@ do
 end
 T.check(#called('trees', 'onGeoRows', 'FLF' .. K) == 1, 'its lamps a trees geotile of its key')
 T.check(#called('trees', 'onGeoRows', 'FLS' .. K2) == 1, 'the skyline lamps per road geotile key')
+do      -- the lamps' rows as the trees get them: kept as flat arrays, the same rows (glow phase by the lamp's index)
+  local c = called('trees', 'onGeoRows', 'FLF' .. K)[1]
+  local rows = c and c[5]
+  local function ph(i) return ((i * 7919) % 997) / 997 * 0.19 end
+  T.check(type(rows) == 'table' and #rows == 2 and rows[1][2] == 1 and rows[1][3] == 2 and rows[1][4] == 30
+    and rows[2][2] == 5 and rows[2][4] == 31 and math.abs(rows[1][8] - ph(1)) < 1e-12 and math.abs(rows[2][8] - ph(2)) < 1e-12,
+    'lamp rows: positions and phases')
+end
+local fl = require('beamngEarth/roads').flatLamps({ a = { pivot = 3, rows = { { 1, 2, 3 }, 'x', { 4, 5, 6 } } }, b = { rows = {} } })
+T.check(fl.a.pivot == 3 and table.concat(fl.a.flat, ',') == '1,2,3,1,4,5,6,3' and fl.b == nil,
+  'flatLamps: a bad lamp left out, its index kept; a key without lamps none')
+T.check(require('beamngEarth/roads').flatLamps({}) == nil and require('beamngEarth/roads').flatLamps(nil) == nil, 'flatLamps: none')
 
 -- the other 15 far tiles of the square (no buildings): the skyline hides, its lamps go
 for j = 0, 3 do
@@ -187,13 +199,34 @@ for k, v in pairs(fdata) do fdata2[k] = v end
 fdata2.h, fdata2.shape = 'f2', '/s/bf2_' .. K .. '.cdae'
 roads.onFarTile(farMsg(K, { clat, clon }, fdata2), 1)
 run(1, B)
-T.check(#objsWith('bf_' .. K) == 0 and #objsWith('bf2_' .. K) == 1, 'new content: the old object gone, the new made')
+-- (LAZY_FAR_PARTS: K's road geotile shows its own buildings, so the new far part is not made while it would be hidden)
+T.check(#objsWith('bf_' .. K) == 0 and #objsWith('bf2_' .. K) == 0, 'new content: the old object gone, the new one waits (hidden)')
+T.check((roads.geoStats.farDeferred or 0) >= 1, 'the hidden part counted as deferred')
+roads.LAZY_FAR_PARTS = false
+roads.onFarTile(farMsg(K, { clat, clon }, fdata), 1)
+run(1, B)
+roads.onFarTile(farMsg(K, { clat, clon }, fdata2), 1)
+run(1, B)
+T.check(#objsWith('bf2_' .. K) == 1 and objsWith('bf2_' .. K)[1].hidden == true, 'lazy off: made at once, hidden')
+roads.LAZY_FAR_PARTS = true
+-- a deferred part is made once it would show: K's road geotile goes
+local fdata3 = {}
+for k, v in pairs(fdata) do fdata3[k] = v end
+fdata3.h, fdata3.shape = 'f3', '/s/bf3_' .. K .. '.cdae'
+roads.onFarTile(farMsg(K, { clat, clon }, fdata3), 1)
+run(1, B)
+T.check(#objsWith('bf3_' .. K) == 0, 'deferred while K shows its own buildings')
+roads.onDrop({ anchorId = 1, key = K })
+for _ = 1, 5 do run(1, B) end
+T.check(#objsWith('bf3_' .. K) == 1 and objsWith('bf3_' .. K)[1].hidden == false,
+  'K\'s road geotile gone: the deferred far buildings made and shown')
 
 -- drops
 roads.onFarDrop({ anchorId = 1, key = SK }, 'B')
 roads.onFarDrop({ anchorId = 1, key = SK }, true)
 roads.onFarDrop({ anchorId = 1, key = K })
 run(1, B)
-T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0, 'dropped: their objects gone')
+T.check(#objsWith('bb_') == 0 and #objsWith('bs_') == 0 and #objsWith('bf2_') == 0 and #objsWith('bf3_') == 0,
+  'dropped: their objects gone')
 
 T.done('test_fargeo')

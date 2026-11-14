@@ -28,7 +28,7 @@ pub fn geo_owns<'py>(py: Python<'py>, lat0: f64, lon0: f64, z: u32, gx: i64, gy:
     let f = Frame::new(lat0, lon0);
     let (xs, ys) = (x.as_array(), y.as_array());
     let n = xs.len().min(ys.len());
-    let out: Vec<bool> = py.allow_threads(|| {
+    let out: Vec<bool> = py.detach(|| {
         (0..n).map(|i| {
             let (la, lo, _) = f.world_to_geodetic(xs[i], ys[i], 0.0);
             tile_of(la, lo, z) == (gx, gy)
@@ -157,7 +157,7 @@ pub fn clip_tris_convex<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, uv:
         return Err(PyValueError::new_err("clip_tris_convex: a triangle's index is out of range"));
     }
     let qv: Vec<[f64; 2]> = (0..qa.nrows()).map(|i| [qa[[i, 0]], qa[[i, 1]]]).collect();
-    let c = py.allow_threads(|| clip_convex(&pv, &uvv, &tv, &qv));
+    let c = py.detach(|| clip_convex(&pv, &uvv, &tv, &qv));
     let (np_, nt) = (c.p.len(), c.t.len());
     let p2 = numpy::ndarray::Array2::from_shape_vec((np_, 3), c.p.into_iter().flatten().collect()).unwrap();
     let u2 = numpy::ndarray::Array2::from_shape_vec((np_, 2), c.uv.into_iter().flatten().collect()).unwrap();
@@ -378,6 +378,8 @@ fn vert(b: &[u8], at: usize, k: usize) -> [f32; 3] {
 /// (0, 0, 0, 0) without vertices.
 #[pyfunction]
 pub fn cdae_zstats(data: &[u8]) -> PyResult<(usize, f64, f64, f64)> {
+    let plain = crate::cdaez::plain(data).map_err(PyValueError::new_err)?;     // (a compressed shape: cdaez.rs)
+    let data: &[u8] = &plain;
     let blocks = vert_blocks(data).map_err(PyValueError::new_err)?;
     let mut zs: Vec<f64> = Vec::new();
     for (at, n) in blocks {
@@ -401,6 +403,9 @@ pub fn cdae_zstats(data: &[u8]) -> PyResult<(usize, f64, f64, f64)> {
 #[pyfunction]
 pub fn cdae_shear<'py>(py: Python<'py>, data: &[u8], oz: f64, sx: f64, sy: f64, sz: f64, pz: f64)
                        -> PyResult<Bound<'py, PyBytes>> {
+    let was_packed = crate::cdaez::is_packed(data).map_err(PyValueError::new_err)?;
+    let plain = crate::cdaez::plain(data).map_err(PyValueError::new_err)?;     // (a compressed shape: cdaez.rs)
+    let data: &[u8] = &plain;
     let blocks = vert_blocks(data).map_err(PyValueError::new_err)?;
     let mut out = data.to_vec();
     for (at, n) in blocks {
@@ -413,6 +418,9 @@ pub fn cdae_shear<'py>(py: Python<'py>, data: &[u8], oz: f64, sx: f64, sy: f64, 
                 out[o + 4 * j..o + 4 * j + 4].copy_from_slice(&w[j].to_le_bytes());
             }
         }
+    }
+    if was_packed {         // (written as it came)
+        out = crate::cdaez::packed(&out, crate::cdaez::LEVEL).map_err(PyValueError::new_err)?;
     }
     Ok(PyBytes::new(py, &out))
 }

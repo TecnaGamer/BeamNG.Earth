@@ -26,6 +26,7 @@ M.FAR_M = 30000
 
 local myLat, myLon = nil, nil            -- our own current anchor (core.lua: announceOwn)
 local remote = {}                        -- [playerId] = { lat, lon }, the plugin's latest (setRemote)
+local expired = {}                       -- previously known Earth peers awaiting a fresh valid anchor
 M.ownChanged = false                     -- our anchor changed since mpsession last sent a pose (it sends one at once)
 local xfCache = {}                       -- [playerId] = { myLat, myLon, rLat, rLon, xf } (lazy, see transformFor)
 local installed = false
@@ -61,14 +62,22 @@ local lastAt = {}                        -- [serverVehicleString] = os.clock() o
 M.clock = os.clock                       -- (tests)
 
 -- mpsession.lua: player pid's anchor, from the plugin's bngeAnchors.
+function M.coordinates(lat, lon)
+  lat, lon = tonumber(lat), tonumber(lon)
+  if lat and lon and math.abs(lat) <= 90 and math.abs(lon) <= 180 then return lat, lon end
+end
+
 function M.setRemote(pid, lat, lon)
-  pid, lat, lon = tonumber(pid), tonumber(lat), tonumber(lon)
-  if not pid or not lat or not lon then return end
+  pid = tonumber(pid)
+  lat, lon = M.coordinates(lat, lon)
+  if not pid or not (pid >= 0 and pid < math.huge and pid % 1 == 0) or not lat then return false end
   local old = remote[pid]
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
   end
   remote[pid] = { lat = lat, lon = lon }
+  expired[pid] = nil
+  return true
 end
 
 -- Do we know player pid's anchor (its cars' positions can be converted)?
@@ -77,6 +86,22 @@ function M.knows(pid) return remote[tonumber(pid)] ~= nil end
 -- Was this remote car's last position (BeamMP's serverVehicleString "pid-vid") beyond FAR_M?
 function M.isFar(sid) return far[sid] == true end
 local nearSince = {}                     -- [serverVehicleString] = M.clock() its packets came in again after far
+-- bngeAnchors is a complete live snapshot, not a delta. Expire origins and vehicle
+-- history together, so a reconnect reusing a player id cannot inherit old state.
+function M.retainRemote(players)
+  for pid in pairs(remote) do
+    if not players[tostring(pid)] then
+      remote[pid], xfCache[pid], settleUntil[pid] = nil, nil, nil
+      expired[pid] = true
+    end
+  end
+  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince }) do
+    for sid in pairs(records) do
+      local pid = tostring(sid):match('^(%d+)%-')
+      if not players[pid] then records[sid] = nil end
+    end
+  end
+end
 -- Seconds since a car that was far sent packets in reach again (math.huge: never far, or long since).
 function M.nearFor(sid)
   local t = nearSince[sid]
@@ -93,7 +118,9 @@ function M.lastPos(sid)
 end
 
 -- (the session's end) the remote anchors forgotten
-function M.reset() remote, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {} end
+function M.reset()
+  remote, expired, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {}, {}
+end
 
 -- A log line once per car and kind every NOTE_S (the session's log tells what happened to a car before an instability)
 M.NOTE_S = 10
@@ -159,12 +186,13 @@ end
 M.MAX_SPEED = 2000          -- m/s
 local function finite(v) return type(v) == 'number' and v == v and v > -math.huge and v < math.huge end
 function M.sanitize(decoded)
+  if type(decoded) ~= 'table' then return false end
   for _, k in ipairs({ 'pos', 'vel', 'rvel', 'rot' }) do
     local t = decoded[k]
     if t ~= nil then
       if type(t) ~= 'table' then return false end
       for i = 1, (k == 'rot' and 4 or 3) do
-        if t[i] ~= nil and not finite(t[i]) then return false end
+        if not finite(t[i]) then return false end
       end
     end
   end
@@ -184,6 +212,10 @@ local function wrapHandle(original)
     local code, serverVehicleID, data = string.match(rawData, '^(%a)%:(%d+%-%d+)%:({.*})')
     if code ~= 'p' or not serverVehicleID then return original(rawData) end
     local pid = tonumber(serverVehicleID:match('^(%d+)%-'))
+    -- A known Earth peer's coordinates require its origin. After expiry, never
+    -- use the legacy no-transform path: the car may still be active until the
+    -- next mpsession hide update. A fresh valid setRemote releases quarantine.
+    if pid and expired[pid] then return end
     local now = M.clock()
     if pid and settleUntil[pid] then
       if now < settleUntil[pid] then
@@ -199,21 +231,24 @@ local function wrapHandle(original)
     local xf = pid and transformFor(pid) or nil
     local ok, decoded = pcall(jsonDecode, data)
     if not ok or type(decoded) ~= 'table' then return original(rawData) end
+    -- Coordinate arithmetic needs every component of each present vector.
+    -- Validate before transforming, then again after to catch numeric overflow.
+    local sane, changed = M.sanitize(decoded)
+    if not sane then return end
     if not xf then                          -- (no conversion: the packet as sent, if it is sane)
-      local sane, changed = M.sanitize(decoded)
-      if not sane then return end
       if type(decoded.pos) == 'table' then lastPos[serverVehicleID] = decoded.pos end
       if not changed then return original(rawData) end
       local okE, enc = pcall(jsonEncode, decoded)
       return original(okE and (code .. ':' .. serverVehicleID .. ':' .. enc) or rawData)
     end
     applyTransform(decoded, xf)
-    local sane, changed = M.sanitize(decoded)
+    local afterChanged
+    sane, afterChanged = M.sanitize(decoded)
     if not sane then
       note(serverVehicleID, 'insane', 'BeamMP: a position packet of car ' .. serverVehicleID .. ' with a non-finite number dropped')
       return
     end
-    if changed then
+    if changed or afterChanged then
       note(serverVehicleID, 'fast', 'BeamMP: car ' .. serverVehicleID .. ' reported over MAX_SPEED: its speeds zeroed')
     end
     local p = decoded.pos

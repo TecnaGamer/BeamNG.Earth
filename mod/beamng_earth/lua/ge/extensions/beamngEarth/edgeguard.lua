@@ -74,9 +74,14 @@ function M.cap(d)
   return -min(M.PULL_MAX, M.PULL * (M.STOP_M - d))
 end
 
--- Distance from the nearest edge at which a vehicle at `speed` is warned.
-function M.warnDistance(speed)
-  return max(M.WARN_M, M.STOP_M + speed * speed / (2 * M.DECEL) + M.WARN_LEAD)
+-- Distance from the nearest edge at which a vehicle at `speed` is warned. cap (core.lua, a healthy server: the block
+-- follows the car; follow.warnCap): no farther than the car gets from the edge when the next block is on time. The
+-- braking distance alone passed that above ~130 mph, and the warning showed on every block of a drive whose blocks
+-- were all on time (nyc_speed.py 2026-11-02, 150 mph down Midtown: 70 % of the drive).
+function M.warnDistance(speed, cap)
+  local w = max(M.WARN_M, M.STOP_M + speed * speed / (2 * M.DECEL) + M.WARN_LEAD)
+  if cap then w = min(w, max(M.WARN_M, cap)) end
+  return w
 end
 
 local function clamp(v, a, b) return min(max(v, a), b) end
@@ -116,7 +121,7 @@ function M.step(g, inp)
     return 'hold', nil, nil, true
   end
   if d <= M.STOP_M + 1 then return 'hold' end -- resting at the line
-  if d < M.warnDistance(sqrt(vx * vx + vy * vy)) then return 'warn' end
+  if d < M.warnDistance(sqrt(vx * vx + vy * vy), inp.warnCap) then return 'warn' end
   return 'clear'
 end
 
@@ -175,12 +180,12 @@ function M.update(g, veh, box, clock)
       return g.mode
     end
   end
-  if d > M.warnDistance(sqrt(v.x * v.x + v.y * v.y)) + M.RAY_MARGIN then
+  if d > M.warnDistance(sqrt(v.x * v.x + v.y * v.y), g.warnCap) + M.RAY_MARGIN then
     g.mode = 'clear'
     return g.mode
   end
   local mode, _, rescue, pause = M.step(g, { clock = clock, x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, box = box,
-    ground = M.groundBelow(p) })
+    ground = M.groundBelow(p), warnCap = g.warnCap })
   if pause and not simPaused() and clock - (g.resumedAt or -math.huge) >= M.RESUME_GRACE_S then
     simPause(true)
     g.pausedByUs = true

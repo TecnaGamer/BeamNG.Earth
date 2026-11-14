@@ -103,9 +103,32 @@ def stored_png(rgb):
             + chunk(b"IDAT", zlib.compress(raw.tobytes(), 0)) + chunk(b"IEND", b""))
 
 
+# The base photo's own file: a JPEG (4:4:4, PHOTO_QUALITY), the game's packed cache entry made from the exact pixels
+# (base_entry). A stored PNG was 12.6 MB a 2048² photo, two or three a block (the stand-in, the photo, a refresh): ~3.4 GB
+# of a warm 8 min drive at 150 mph; this ~1.2 MB in 19 ms (the PNG 13 ms). BNGE_PHOTO_PNG=1: the PNG (A/B)
+PHOTO_PNG = os.environ.get("BNGE_PHOTO_PNG") == "1"
+PHOTO_QUALITY = 92
+PHOTO_EXT = ".png" if PHOTO_PNG else ".jpg"
+# (tests: BNGE_NO_BASE_PACK=1 writes no cache entry, so the game packs the photo file itself)
+NO_PACK = os.environ.get("BNGE_NO_BASE_PACK") == "1"
+
+
+def stored_photo(rgb):
+    """The base photo's file bytes (PHOTO_EXT): a JPEG, or stored_png with BNGE_PHOTO_PNG=1."""
+    if PHOTO_PNG:
+        return stored_png(rgb)
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.fromarray(np.ascontiguousarray(rgb, np.uint8), "RGB").save(b, "JPEG", quality=PHOTO_QUALITY, subsampling=0)
+    return b.getvalue()
+
+
 def base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value):
     """Write the packed base texture (RGB = the photo, A = the flat AO value) into the game's cache, atomically.
     Call after the photo file itself is written (the cache must be the newer one)."""
+    if NO_PACK:
+        return None
     d = cache_dir(user_dir)
     os.makedirs(d, exist_ok=True)
     rgb = np.asarray(rgb, np.uint8)

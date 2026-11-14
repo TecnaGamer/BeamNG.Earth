@@ -31,7 +31,7 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 1
+M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -43,20 +43,36 @@ M.SCHEMA = {
     label = 'Quality' },
   -- tree density (trees.lua QUALITY_LEVELS: ranks and tile caps) and draw distance (DISTANCES: the rings and the
   -- server's tree tile reach), split 2026-10-28 (the user: "give player much more control in the graphics settings")
-  trees = { kind = 'enum', default = 'normal', values = { 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
+  trees = { kind = 'enum', default = 'normal', values = { 'lowest', 'low', 'medium', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Tree density' },
-  treeDistance = { kind = 'enum', default = 'normal', values = { 'near', 'medium', 'normal', 'far', 'farther', 'max' },
+  treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
+  -- the road surface's wear (server roadwear.py, the message road_wear): off; basic (tyre polish in the lanes, a concrete
+  -- road's joints, grassy edges on country roads: three materials at most); full (also cracks, sealed cracks, patches, potholes, manholes, oil spots, autumn leaves). Part of the
+  -- road mesh: no objects of their own
+  roadDetail = { kind = 'enum', default = 'full', values = { 'off', 'basic', 'full' }, label = 'Road surface detail' },
+  distantTraffic = { kind = 'bool', default = false, label = 'Distant traffic lights' },    -- (off by default: its fps cost, PR #641)
+  distantTrafficWithoutTraffic = { kind = 'bool', default = false, label = 'Distant lights without traffic' },
+  distantTrafficQuality = { kind = 'enum', default = 'high', values = { 'low', 'medium', 'high' },
+    label = 'Distant traffic quality' },
   -- the far field's terrain detail: the server's K table times M.TERRAIN_DETAIL (the 'graphics' message's lodScale)
   terrainDetail = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Terrain detail' },
+  -- the far field's screen-space LOD (the 'graphics' message's lodPx; server farfield.View): the largest jump of the
+  -- distant ground allowed on screen when a piece switches detail, in pixels of this screen and field of view. 0: off
+  -- (the distance rule above alone); with it on, smooth ground stays coarser and rough ground finer to keep under it
+  lodPx = { kind = 'number', default = 0, min = 0, max = 8, label = 'Terrain pixel error (px, 0: off)' },
   -- how far the far buildings, the skyline and the far bridges reach (M.BUILDING_DISTANCE: buildingScale)
   buildingDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' },
     label = 'Building draw distance' },
   -- the drawn terrain block's aerial photo (px over the 1 km block; terrain.setPhotoSize, the server's photoPx):
   -- from the next level load
   groundPhoto = { kind = 'enum', default = '2048', values = { '1024', '2048', '4096' }, label = 'Ground photo resolution' },
+  -- the physics ground's grid (m between the terrain block's samples; GitHub #943): '2' the lighter ground of the Low and
+  -- Medium presets (512² samples a km, a quarter of the data at each block swap), '1' the stock maps' resolution. The
+  -- server reads it when it starts (launcher.start_server: BNGE_GROUND_SQUARE), so it holds from the next start
+  groundGrid = { kind = 'enum', default = '1', values = { '2', '1' }, label = 'Ground grid (m)' },   -- (least to most)
   -- the grass's reach (groundcover.lua DISTANCE)
   grassDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far' }, label = 'Grass draw distance' },
   -- the engine's shape detail in our level (enginepref.lua: $pref::TS::detailAdjust; 'game': the game's Mesh Quality)
@@ -73,6 +89,8 @@ M.SCHEMA = {
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
+  -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
+  lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -81,15 +99,46 @@ M.SCHEMA = {
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
-  -- signstream.py, from cody196's PR #363); needs Roads
+  -- signstream.py, from cody196's PR #363), and the German Autobahn signs (server deautobahn.py); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
+  -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
+  -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
+  models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
+  directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
+  -- the town entry and exit signs where a road enters a town's built-up land, each country's own (server townentry.py;
+  -- the message town_signs; BNE_TOWNSIGNS=on / off forces it)
+  townSigns = { kind = 'bool', default = true, label = 'Town signs' },
+  -- the traffic's amount by the place (navgraph.lua M.ADAPTIVE, server traffic.py; PR #728 / #773, ProxyFirewall202):
+  -- more cars in cities, fewer in the country, never more than the player's own amount
+  adaptiveTraffic = { kind = 'bool', default = false, label = 'Adaptive traffic amount' },
+  -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
+  -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
+  telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
+  -- ... its parts (TELEMETRY.md): performance, system and error data; the per-map-service request counts. Nothing at all
+  -- is sent before the welcome page's choice (telemetryChoice: the consent version the player answered)
+  telemetryPerf = { kind = 'bool', default = true, label = 'Performance data' },
+  telemetryNet = { kind = 'bool', default = true, label = 'Network load' },
+  telemetryChoice = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Telemetry choice made (version)' },
+  -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
+  mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
+  -- ordinary road signs (server roadsigns.py, needs BNE_ROADSIGNS=on on the server)
+  roadSigns = { kind = 'bool', default = true, label = 'Road signs' },
+  -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
+  -- accordingly (server designs.py; the message german_junctions)
+  germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
+  -- approximation: the mapped rumble-strip installation corridors are not available globally
+  rumbleStrips = { kind = 'bool', default = true, label = 'Rumble strip sound' },
+  -- GTA-style: a little drag instead of the edge guard's stop when the world is behind (softdrag.lua; off by default)
+  softDrag = { kind = 'bool', default = false, label = 'Soft slow-down when the world is behind' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
   -- the status bar at the top (statusbar.lua): street, town / state / country, loading, fps
+  profilerMode = { kind = 'enum', default = 'essential', values = { 'essential', 'full' }, label = 'Profiler mode' },
+  runtimeProfiler = { kind = 'bool', default = false, label = 'Detailed performance profiler' },
   statusBar = { kind = 'bool', default = true, label = 'Status bar' },
   -- town / state / country names from Photon (komoot), sent the position rounded to ~1 km
-  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar (online)' },
+  placeNamesOnline = { kind = 'bool', default = true, label = 'Place names in the status bar' },
   -- BeamMP started by the BeamNG.Earth app with the game (launcher.py reads this file: bmplaunch.on_launch; its
   -- "don't ask again" writes it off)
   beammpOnLaunch = { kind = 'bool', default = true, label = 'Start BeamMP with BeamNG.Earth' },
@@ -101,8 +150,19 @@ M.SCHEMA = {
   -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
   -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
   cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
-  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
-  framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- the world server's share of the CPU (server cpupin.player_settings reads them from this file when it starts;
+  -- GitHub #529: an i5-3470 loaded the map in a few seconds instead of 10-20 with 2 of its 4 cores at normal priority)
+  serverCores = { kind = 'enum', default = 'auto', values = { 'auto', '1', '2', '3', '4', '6', '8' },
+    label = 'World server CPU cores' },
+  serverPriority = { kind = 'enum', default = 'low', values = { 'low', 'normal' }, label = 'World server priority' },
+  -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
+  -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
+  teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
+  -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
+  -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
+  maxRamGb = { kind = 'enum', default = 'auto', values = { 'auto', '3', '4', '6', '8', '12', '16', '24', '32' },
+    label = 'Max RAM for BeamNG.Earth' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
@@ -113,40 +173,50 @@ M.SCHEMA = {
   welcomeSeen = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Welcome page seen (version)' },
   -- not on the page: the newer version whose update notice the player dismissed (core.lua drawUpdateNotice)
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
+  devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
-  'grassDistance', 'nightLights', 'rebaseDistance', 'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'dashboardSatellite',
-  'hudVisible', 'statusBar',
-  'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'devOutlineKm', 'devMapKm' }
+M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+  'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
+  'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'townSigns', 'adaptiveTraffic', 'models3dmr',
+  'dashboardSatellite',
+  'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
+  'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
+  'devMapKm' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true, qualityDetected = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
 
 -- The quality presets: each sets these knobs at once ('high' = the defaults before presets existed, 2026-10-28). A
 -- Steam Deck on Handheld in a forest (Patapsco, 2026-10-28): low 37.0 fps, high 31.5, ultra 30.9; 'medium' (its first-run
 -- pick) thins the trees too: the same trees as 'high' gave it only 32.2. 'extreme' (the user, 2026-10-28: "an extreme
 -- quality setting that puts everything at max quality to the real horizon"): every knob at its most, never picked by
 -- the first run (M.detectQuality).
-M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights',
-  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail' }
+M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
+  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail',
+  'groundGrid' }
 M.PRESETS = {
   low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
-    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game' },
+    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off',
+    groundGrid = '2' },
   medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
+    roadDetail = 'basic', groundGrid = '2' },
   high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
+    roadDetail = 'full', groundGrid = '1' },
   ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
-    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game' },
+    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full',
+    groundGrid = '1' },
   extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme' },
+    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
+    roadDetail = 'full', groundGrid = '1' },
 }
 M.PRESET_ORDER = { 'low', 'medium', 'high', 'ultra', 'extreme' }
 
@@ -159,11 +229,21 @@ M.BUILDING_DISTANCE = { near = 0.6, normal = 1.0, far = 1.5, max = 2.0 }
 -- A file saved before the tree distance had its own setting: the distance its tree level had (trees.lua, before)
 M.TREE_DISTANCE_OF = { low = 'near', medium = 'medium', normal = 'normal', high = 'far', ultra = 'farther' }
 
--- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }) and why.
--- A Steam Deck (its APU: "AMD Custom GPU 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low.
-function M.detectQuality(gpu)
+-- A computer with less memory than this (GB of 10^9 bytes, the server's budget.LEAN_GB: an 8 GB PC) starts on Low,
+-- whatever its GPU: the game alone holds ~6.5-7.5 GB there and the world server runs its lean tier (2026-11-12: 8 GB
+-- machines had 1,493 hitches over 100 ms an hour in the players' reports, 16 GB ones 540). LOW_RAM_GB = 0: off.
+M.LOW_RAM_GB = 10
+
+-- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }; ramBytes: the
+-- machine's memory, Engine.Platform.getMemoryInfo().osPhysAvailable) and why. A Steam Deck (its APU: "AMD Custom GPU
+-- 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low; under LOW_RAM_GB of memory: low.
+function M.detectQuality(gpu, ramBytes)
   local name = type(gpu) == 'table' and tostring(gpu.name or '') or ''
   local mem = type(gpu) == 'table' and tonumber(gpu.memoryMB) or nil
+  local ram = tonumber(ramBytes)
+  if ram and ram > 0 and M.LOW_RAM_GB > 0 and ram / 1e9 < M.LOW_RAM_GB then
+    return 'low', string.format('%.0f GB of memory', ram / 1073741824)
+  end
   local up = name:upper()
   if up:find('VANGOGH', 1, true) or up:find('CUSTOM GPU 0405', 1, true) or up:find('CUSTOM GPU 0932', 1, true) then
     return 'medium', 'Steam Deck'
@@ -193,8 +273,9 @@ M.defaults = defaults
 values = defaults() -- until load(): the defaults (= today's behaviour)
 
 -- Settings no longer on the page, left in older files: ignored without a warning (gasStations: gas stations are
--- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle")
-M.RETIRED = { gasStations = true }
+-- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle"; framePacing: the
+-- engine patch dtsmooth keeps game speed steady instead, 2026-11-11 "make consistent performance the default")
+M.RETIRED = { gasStations = true, framePacing = true }
 
 -- A valid value for key, or nil + error. Numbers are clamped to the range; strings that read as a
 -- number or boolean are accepted (the page sends what its controls hold).
@@ -230,12 +311,15 @@ function M.load(path)
   if read and (not FS or not FS.fileExists or FS:fileExists(path or M.FILE)) then ok, data = pcall(read, path or M.FILE) end
   if ok and type(data) == 'table' then
     for k, v in pairs(data) do
-      if k ~= 'version' and not M.RETIRED[k] then
+      if k ~= 'version' and k ~= 'runtimeProfiler' and k ~= 'profilerMode' and not M.RETIRED[k] then
         local val, err = M.validate(k, v)
         if val ~= nil then values[k] = val else warnings[#warnings + 1] = err end
       end
     end
     M.fillNewKnobs(data)
+    -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
+    -- old default, not as a choice; once saved as version 2 the player's own setting stands)
+    if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
@@ -273,15 +357,19 @@ end
 
 -- The first run (quality 'auto'): the hardware's preset, unless the player changed one of its knobs before presets
 -- existed (then 'custom', theirs kept). Saved by the caller's next save (and here, when the file can be written).
-function M.resolveAuto(gpu)
+function M.resolveAuto(gpu, ramBytes)
+  local P = rawget(_G, 'Engine') and Engine.Platform
   if gpu == nil then
-    local P = rawget(_G, 'Engine') and Engine.Platform
     if P and P.getGPUInfo then
       local ok, g = pcall(P.getGPUInfo)
       if ok then gpu = g end
     end
   end
-  local pick, why = M.detectQuality(gpu)
+  if ramBytes == nil and P and P.getMemoryInfo then     -- (osPhysAvailable is the total: ge_utils.lua's RAM size)
+    local ok, m = pcall(P.getMemoryInfo)
+    if ok and type(m) == 'table' then ramBytes = tonumber(m.osPhysAvailable) end
+  end
+  local pick, why = M.detectQuality(gpu, ramBytes)
   values.qualityDetected = why .. ': ' .. pick
   local changed = false
   for _, k in ipairs(M.PRESET_KEYS) do
@@ -313,6 +401,8 @@ function M.save(path)
   if not write then return false end
   local out = { version = M.VERSION }
   for k, v in pairs(values) do out[k] = v end
+  -- Profiling requires a fresh opt-in after restarting/reloading the extension.
+  out.runtimeProfiler = false
   local ok, err = pcall(write, path or M.FILE, out, true)
   if not ok then log('W', 'beamngEarth', 'settings: write failed: ' .. tostring(err)) end
   return ok and err ~= false
@@ -322,6 +412,22 @@ function M.get(key) return values[key] end
 
 -- The download cache's cap for the server: GB, 0 = unlimited.
 function M.cacheCapGb() return math.max(0, tonumber(values.cacheCapGb) or 0) end
+-- The world server's memory limit in GB (0: Auto)
+function M.maxRamGb() return math.max(0, tonumber(values.maxRamGb) or 0) end
+
+-- The page's "World server memory" line from the server's 'memory' message (core.memoryState()).
+function M.memoryLine(m)
+  if type(m) ~= 'table' then return 'no information from the server' end
+  local function gb(mb) return string.format('%.1f GB', (tonumber(mb) or 0) / 1024) end
+  local line = gb(m.usedMB) .. ' of ' .. gb(m.limitMB)
+  if (tonumber(m.setting) or 0) > 0 then line = line .. ' (set)' else line = line .. ' (Auto)' end
+  if (tonumber(m.effMB) or 0) > 0 and (tonumber(m.effMB) or 0) < (tonumber(m.limitMB) or 0) - 1 then
+    line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
+  end
+  line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
+  return line
+end
 
 -- bytes as the page shows them: "350 MB", "1.2 GB", "20 GB" (decimal units, as the cap)
 local function size(b, whole)
@@ -380,13 +486,14 @@ local function applyViewDistance()
   appliedView = m
 end
 
--- The server's graphics knobs now ({ lodScale, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
+-- The server's graphics knobs now ({ lodScale, lodPx, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
 -- ground photo size of the block in the level now, or of the next one (terrain.photoSize).
 function M.serverGraphics()
   local okT, trees = pcall(require, 'beamngEarth/trees')
   local okR, terrain = pcall(require, 'beamngEarth/terrain')
   return {
     lodScale = M.TERRAIN_DETAIL[values.terrainDetail] or 1.0,
+    lodPx = tonumber(values.lodPx) or 0,
     treeScale = okT and trees.distanceScale and trees.distanceScale(values.treeDistance) or 1.0,
     buildingScale = M.BUILDING_DISTANCE[values.buildingDistance] or 1.0,
     photoPx = okR and terrain.photoSize and terrain.photoSize() or tonumber(values.groundPhoto),
@@ -439,6 +546,7 @@ M.APPLY = {
     sendGraphics()          -- (the server's tree tiles reach as far)
   end,
   terrainDetail = sendGraphics,
+  lodPx = sendGraphics,
   buildingDistance = sendGraphics,
   groundPhoto = function(v)
     require('beamngEarth/terrain').setPhotoSize(tonumber(v))
@@ -447,6 +555,9 @@ M.APPLY = {
   grassDistance = function(v) require('beamngEarth/groundcover').setDistance(v) end,
   objectDetail = function(v) require('beamngEarth/enginepref').setLevel(v, inOurLevel()) end,
   nightLights = function(v) require('beamngEarth/nightlights').setLightCount(v) end,
+  distantTraffic = function(v) require('beamngEarth/trafficvisuals').setEnabled(v) end,
+  distantTrafficWithoutTraffic = function(v) require('beamngEarth/trafficvisuals').setWithoutTraffic(v) end,
+  distantTrafficQuality = function(v) require('beamngEarth/trafficvisuals').setQuality(v) end,
   groundCover = function(v) require('beamngEarth/groundcover').setEnabled(v) end,
   groundCoverDensity = function(v) require('beamngEarth/groundcover').setDensity(v) end,
   rocks = function(v) require('beamngEarth/trees').setGroupEnabled({ 'rock', 'desert_rock' }, v) end,
@@ -454,6 +565,29 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end
   end,
+  directionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setDirectionSigns then core.setDirectionSigns(v) end
+  end,
+  roadSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setRoadSigns then core.setRoadSigns(v) end
+  end,
+  germanJunctionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setGermanJunctionSigns then core.setGermanJunctionSigns(v) end
+  end,
+  roadDetail = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setRoadWear then core.setRoadWear(v) end
+  end,
+  townSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setTownSigns then core.setTownSigns(v) end
+  end,
+  adaptiveTraffic = function(v) require('beamngEarth/navgraph').setAdaptive(v) end,
+  rumbleStrips = function(v) require('beamngEarth/rumble').setEnabled(v) end,
+  softDrag = function(v) require('beamngEarth/softdrag').setEnabled(v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -466,12 +600,18 @@ M.APPLY = {
     if M.pageExists() then ui.visible = v end
   end,
   creditsVisible = function(v) credits.setEnabled(v) end,
+  profilerMode = function(v) require('beamngEarth/profiler').setMode(v) end,
+  runtimeProfiler = function(v) require('beamngEarth/profiler').setEnabled(v) end,
   statusBar = function(v) require('beamngEarth/statusbar').enabled = v and true or false end,
   creditsCorner = function(v) credits.setCorner(v) end,
   creditsSize = function(v) credits.setSize(v) end,
   cacheCapGb = function()
     local core = ext('beamngEarth_core')
     if core and core.cacheSetCap then core.cacheSetCap(M.cacheCapGb()) end
+  end,
+  maxRamGb = function()
+    local core = ext('beamngEarth_core')
+    if core and core.memorySetLimit then core.memorySetLimit(M.maxRamGb()) end
   end,
   devOutlineKm = function(v)
     local dev = ext('beamngEarth_dev')
@@ -567,12 +707,10 @@ function M.uiState()
     banner = core and core.banner and core.banner() or nil,
     update = core and core.updateInfo and core.updateInfo() or nil,  -- a newer version on GitHub
   }
-  -- server features (status only): weather, gravity, imagery de-shadowing and colour seams
+  -- server features (status only): weather and gravity
   local w = ext('beamngEarth_weather')
   status.weather = w and w.statusLine and w.statusLine() or nil
   status.gravity = w and w.gravityLine and w.gravityLine() or nil
-  status.deshadow = st and st.deshadow or 'off'
-  status.colormatch = st and st.colormatch or 'off'
   -- the download cache: the server's last numbers, fresh ones asked every CACHE_POLL-th call (the page
   -- polls every 2 s while it is open)
   cachePolls = cachePolls + 1
@@ -580,6 +718,10 @@ function M.uiState()
   local c = core and core.cacheState and core.cacheState() or nil
   status.cache = { line = M.cacheLine(c), clears = c and c.clears or 0, clearedBytes = c and c.clearedBytes or nil,
     clearedText = c and c.clearedBytes and size(c.clearedBytes) or nil }
+  -- the world server's memory and its limit (the server's 'memory' message), asked with the cache numbers
+  if core and core.memoryQuery and cachePolls % M.CACHE_POLL == 1 then core.memoryQuery() end
+  local mem = core and core.memoryState and core.memoryState() or nil
+  status.memory = { line = M.memoryLine(mem) }
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
@@ -594,6 +736,7 @@ function M.uiState()
 end
 
 function M.uiSet(key, v) return M.set(key, v) end
+
 
 function M.uiReset()
   values = defaults()
@@ -659,6 +802,30 @@ function M.uiPlaceGo(id) return placesCall(places.uiGo, id) end
 function M.uiPlaceGoText(text) return placesCall(places.uiGoText, text) end
 function M.uiPlaceGoRecent(i, lat, lon) return placesCall(places.uiGoRecent, i, lat, lon) end
 
+-- The Add-ons page (EarthAddons.vue; addons.lua through beamngEarth_core._addons). Each answers a table; an error inside
+-- answers { ok = false, error }.
+function M.addonsCall(name, ...)
+  local core = ext('beamngEarth_core')
+  local a = core and core._addons
+  if not a then return { ok = false, error = 'BeamNG.Earth is not loaded' } end
+  local ok, res, why = pcall(a[name], ...)
+  if not ok then
+    log('W', 'beamngEarth', 'add-ons: ' .. tostring(res))
+    return { ok = false, error = 'Add-ons: ' .. tostring(res) }
+  end
+  if type(res) == 'table' then return res end
+  return { ok = res == true, error = why }
+end
+function M.uiAddons() return M.addonsCall('uiState') end
+function M.uiAddonsRefresh() return M.addonsCall('request', true) end
+function M.uiAddonOpen(id, refresh) return M.addonsCall('requestDetail', id, refresh) end
+function M.uiAddonDetail(id) return M.addonsCall('uiDetail', id) end
+function M.uiAddonInstall(id, agreed) return M.addonsCall('install', id, agreed) end
+function M.uiAddonManage(id, op) return M.addonsCall('manage', id, op) end
+function M.uiAddonAdd(repo) return M.addonsCall('add', repo) end
+function M.uiAddonForget(id) return M.addonsCall('forget', id) end
+function M.uiAddonOptions(id, values) return M.addonsCall('setOptions', id, values) end
+
 ------------------------------------------------------------------------------------------
 -- The world map (ui/ui-vue/mods/beamngEarth/EarthMap.vue: a route of its own, and a pause-menu
 -- button; tiles from the server's 127.0.0.1 endpoint, server/maptiles.py, port in hello.mapPort).
@@ -703,12 +870,16 @@ end
 -- whole missing list whenever it changes, and again every MAP_ASK_S while some are missing. The server builds the
 -- newest list first and drops what it no longer has (server/maptiles.py TileFiles), so a list that became empty
 -- goes out too (it cancels).
+-- A 'sat' tile with only its stand-in there (server maptiles.PROV_DIR: a later source standing in for a better one
+-- that could not be read yet) comes back as "satp/z/x/y" (its file: mapTilePath('satp', ...)) and is still asked for:
+-- the server builds it again now and then, and the real one's own path makes the screens load it.
 M.MAP_ASK_S = 4
 M.MAP_TILES_DIR = '/temp/beamngEarth/maptiles/'
 M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png' }   -- server maptiles.LAYERS
 function M.mapTilePath(layer, z, x, y)
   local zxy = string.format('%d/%d/%d', z, x, y)
   if layer == 'sat' then return M.MAP_TILES_DIR .. zxy .. '.jpg' end   -- (where it always was)
+  if layer == 'satp' then return M.MAP_TILES_DIR .. 'prov/' .. zxy .. '.jpg' end
   return M.MAP_TILES_DIR .. layer .. '/' .. zxy .. M.MAP_LAYERS[layer]
 end
 local mapSent, mapSentAt = '', nil
@@ -722,6 +893,9 @@ function M.mapTiles(list)
       if FS:fileExists(M.mapTilePath(layer, z, x, y)) then
         ready[#ready + 1] = key
       else
+        if layer == 'sat' and FS:fileExists(M.mapTilePath('satp', z, x, y)) then
+          ready[#ready + 1] = string.format('satp/%d/%d/%d', z, x, y)
+        end
         missing[#missing + 1] = { z, x, y, layer }
         keys[#keys + 1] = key
       end
@@ -745,7 +919,8 @@ local function otherPlayers()
   local okB, inMP = pcall(function() return require('beamngEarth/beammp').inSession() end)
   if not okB or not inMP then return nil end
   local ok, list = pcall(function() return require('beamngEarth/mpsession').others() end)
-  return ok and list or nil
+  -- (none: nil, an empty Lua table reaches the map as {} and not [])
+  return ok and type(list) == 'table' and next(list) ~= nil and list or nil
 end
 
 -- The map's weather + local-time badge (the player's spot): sky.lua's real local clock for the lat/lon, and the
@@ -757,9 +932,14 @@ local function localWeatherBadge()
   local okW, weather = pcall(require, 'beamngEarth/weather')
   local m = okW and weather.current and weather.current()
   if not (sst and sst.localTime) and not m then return nil end
+  -- night: the game's sun under the horizon (its own clock: Real or Manual), else the weather message's isDay
+  local night = nil
+  if sst and sst.sunElev then night = sst.sunElev < sky.NIGHT_ELEV_DEG
+  elseif m and m.isDay ~= nil then night = not m.isDay end
   return {
     localTime = sst and sst.localTime or nil,
     code = m and m.code or nil,
+    night = night,
     tempC = m and (m.tempC or m.slTempC) or nil,
     metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's °C or °F)
   }
@@ -795,6 +975,14 @@ function M.uiDrivenLines()
 end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
+-- The map's "Teleport here?" box opened (or a search result picked): load the place ahead (core.preloadPlace).
+-- hover: a search result, saved or recent place the pointer rests on (the light part).
+function M.uiMapPreload(lat, lon, hover)
+  local core = ext('beamngEarth_core')
+  return { ok = core ~= nil and core.preloadPlace ~= nil
+    and core.preloadPlace(tonumber(lat), tonumber(lon), hover == true) or false }
+end
+
 function M.uiMapTeleport(lat, lon, name)
   local ok, why = places.goTo(lat, lon, name)
   return { ok = ok and true or false, error = (not ok) and why or nil }
@@ -817,16 +1005,36 @@ function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
 end
 
+-- The station finder's map layers (finder.lua, server stationindex.py): ask (lat, lon, rKm, kinds {'fuel', 'ev'}, mode
+-- 'map' | 'near' -> { id } or { error }) and poll (id -> nil while waiting, else { items = {{lat, lon, name, brand,
+-- kind, km}...}, partial, error }); Nearest for the car (the GPS set to it, a message saying where).
+function M.uiStations(lat, lon, rKm, kinds, mode)
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  local id, err = f.send(tonumber(lat), tonumber(lon), tonumber(rKm), kinds, mode == 'near' and 'near' or 'map')
+  return id and { id = id } or { error = err }
+end
+function M.uiStationsResult(id)
+  local f = ext('beamngEarth_finder')
+  return f and f.take(tonumber(id)) or nil
+end
+function M.uiNearest()
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  f.nearest()
+  return { ok = true }
+end
+
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
 -- { results = {{name, detail, kind, lat, lon}...}, error }). Biased toward the player.
 local geocodeId = 0
-function M.uiGeocode(q)
+function M.uiGeocode(q, full)
   local core = ext('beamngEarth_core')
   if not core or not core.requestGeocode then return { error = 'BeamNG.Earth is not loaded' } end
   local st = core._state and core._state() or nil
   local pl = st and st.player
   geocodeId = geocodeId + 1
-  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon) then
+  if not core.requestGeocode(geocodeId, tostring(q or ''), pl and pl.lat, pl and pl.lon, full) then
     return { error = 'Companion server not connected' }
   end
   return { id = geocodeId }
@@ -873,15 +1081,17 @@ function M.uiAreaPlanResult(id)
   local core = ext('beamngEarth_core')
   return core and core.takeAreaPlan and core.takeAreaPlan(tonumber(id)) or nil
 end
-function M.uiAreaAdd(s, w, n, e, name, mode)
-  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode))
+-- fast: the fast pre-cache (the game paused, every core: server areas.py fast mode)
+function M.uiAreaAdd(s, w, n, e, name, mode, fast)
+  return areaSend('areaAdd', tonumber(s), tonumber(w), tonumber(n), tonumber(e), tostring(name or ''), areaMode(mode),
+    fast == true)
 end
 -- A saved route: the GPS's planned route with half m each side (the estimate, then the download, as an area's).
 function M.uiRoutePlan(half, mode)
   return areaSend('requestRoutePlan', tonumber(half), areaMode(mode))
 end
-function M.uiRouteAdd(half, name, mode)
-  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode))
+function M.uiRouteAdd(half, name, mode, fast)
+  return areaSend('routeAdd', tonumber(half), tostring(name or ''), areaMode(mode), fast == true)
 end
 function M.uiAreaCmd(area, op)
   return areaSend('areaCmd', tostring(area or ''), tostring(op or ''))
@@ -893,7 +1103,7 @@ end
 function M.uiAreas()
   local core = ext('beamngEarth_core')
   local a = core and core.areasState and core.areasState()
-  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil }
+  return { areas = a and a.areas or {}, pinnedBytes = a and a.pinnedBytes or nil, fast = a and a.fast or '' }
 end
 
 -- "lat, lon" typed in the map's search box -> { lat, lon } or { error }.
@@ -997,10 +1207,18 @@ function M.mapControls(on)
     end
     pcall(pushActionMap, 'BigMap')
     local am = scenetree.findObject('BigMapActionMap')
-    if am then am.trapHandledEvents = false end      -- (as the stock map: nothing else gets stuck behind it)
+    if am then
+      -- A handled zoom must not reach the menu action map too: its filter bindings can change the cache view.
+      -- Unhandled menu navigation still passes through. Restore the map's previous policy on close.
+      mapCtl.actionMap, mapCtl.trapHandledEvents = am, am.trapHandledEvents
+      am.trapHandledEvents = true
+    end
   elseif not on and mapCtl then
     if mapCtl.vt then mapCtl.vt.onActionEvent = mapCtl.vtOrig end
-    for f, fn in pairs(mapCtl) do if f ~= 'bm' and f ~= 'vt' and f ~= 'vtOrig' then mapCtl.bm[f] = fn end end
+    -- (pcall: the action map may be gone by now, a level unload)
+    if mapCtl.actionMap then pcall(function() mapCtl.actionMap.trapHandledEvents = mapCtl.trapHandledEvents end) end
+    for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom',
+        'onControllerSelect', 'onChangeUiFilter' }) do mapCtl.bm[f] = mapCtl[f] end
     mapCtl = nil
     pcall(popActionMap, 'BigMap')
     if filter and filter.addAction then pcall(filter.addAction, 0, 'beamngEarthMapBlocked', false) end
@@ -1029,12 +1247,29 @@ end
 
 -- The key binding (actions/beamngEarth.json; M and the pause menu Map via redirectBigMap): open the map, or close it back to driving.
 function M.toggleMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and (m3.isActive() or (not mapOpen and M.get and M.get('mapStyle') == '3d')) then
+    m3.toggle()
+    return
+  end
   if mapOpen then
     M.navigate('play')
     mapOpen = false
   else
     M.navigate(M.MAP_ROUTE)
   end
+end
+
+-- The 2D map's "3D map" button: the 3D map instead, remembered as the map key's style from now on (the user,
+-- 2026-11-07: "have the game remember which map mode the player last switched to")
+function M.uiOpen3d()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if not m3 or not m3.enter then return { ok = false, error = 'the 3D map is not loaded' } end
+  pcall(M.set, 'mapStyle', '3d')
+  M.navigate('play')
+  mapOpen = false
+  m3.enter()
+  return { ok = true }
 end
 
 ------------------------------------------------------------------------------------------
@@ -1076,9 +1311,46 @@ function M.showWelcome()
   M.navigate(M.WELCOME_ROUTE)
 end
 
--- EarthWelcome.vue's buttons: seen.
-function M.uiWelcomeDone()
+-- The telemetry choice (TELEMETRY.md; the user, 2026-11-08: "give all players a popup and let them choose before
+-- playing"): the server sends nothing until telemetryChoice reaches the consent version its hello names. The defaults
+-- the welcome page shows are its region's (server privacyregion.py, from this computer's time zone): 'neutral' (nothing
+-- ticked: the EU / EEA, China, Russia, India, unknown), 'perf_off' (performance unticked), 'all'.
+M.privacyRegion = 'neutral'
+M.privacyKnown = false            -- (the hello came: before it, the page shows nothing ticked and asks again)
+M.telemetryConsent = 1
+function M.serverPrivacy(region, consent)
+  if region == 'neutral' or region == 'perf_off' or region == 'all' then M.privacyRegion = region; M.privacyKnown = true end
+  if type(consent) == 'number' and consent >= 1 then M.telemetryConsent = math.floor(consent) end
+  -- (a newer consent version than the one answered, learnt after the level started: the welcome page once more, once a
+  -- session; a player who chose under version 1 is asked again when the performance data starts, version 2)
+  local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
+  if M.privacyNeeded() and not M._privacyAsked and level == M.LEVEL_ID and not welcomeAt then
+    M._privacyAsked = true
+    welcomeAt = os.clock() + M.WELCOME_DELAY_S
+  end
+end
+function M.privacyNeeded() return (values.telemetryChoice or 0) < M.telemetryConsent end
+
+-- { region, needed, telemetry, perf, net } for the welcome page: before a choice, the region's defaults
+function M.uiPrivacy()
+  if M.privacyNeeded() and (values.telemetryChoice or 0) == 0 then     -- (asked again: the boxes as they chose before)
+    local r = M.privacyRegion
+    local on = r ~= 'neutral' and values.telemetry ~= false       -- (a player who had switched it off: still off)
+    return { region = r, known = M.privacyKnown, needed = true, telemetry = on, net = on, perf = on and r == 'all' }
+  end
+  return { region = M.privacyRegion, known = M.privacyKnown, needed = M.privacyNeeded(), telemetry = values.telemetry ~= false,
+    net = values.telemetryNet ~= false, perf = values.telemetryPerf ~= false }
+end
+
+-- EarthWelcome.vue's buttons: seen, and the telemetry choice it shows (choice: { telemetry, perf, net }) made.
+function M.uiWelcomeDone(choice)
   if (values.welcomeSeen or 0) < M.WELCOME_VERSION then M.set('welcomeSeen', M.WELCOME_VERSION) end
+  if type(choice) == 'table' then
+    M.set('telemetry', choice.telemetry == true)
+    M.set('telemetryPerf', choice.telemetry == true and choice.perf == true)
+    M.set('telemetryNet', choice.telemetry == true and choice.net == true)
+    M.set('telemetryChoice', M.telemetryConsent)
+  end
   return { ok = true }
 end
 
@@ -1147,8 +1419,9 @@ function M.onClientPostStartMission()
   appliedView = nil
   M.applyAll()
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
-  if level == M.LEVEL_ID and (values.welcomeSeen or 0) < M.WELCOME_VERSION then
-    welcomeAt = os.clock() + M.WELCOME_DELAY_S
+  if level == M.LEVEL_ID and ((values.welcomeSeen or 0) < M.WELCOME_VERSION or M.privacyNeeded()) then
+    welcomeAt = os.clock() + M.WELCOME_DELAY_S       -- (and until the telemetry choice is made: before playing)
+    M._privacyAsked = M.privacyNeeded() or nil
   end
 end
 

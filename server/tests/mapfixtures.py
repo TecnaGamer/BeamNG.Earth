@@ -13,6 +13,7 @@ Everything a cell of the map-data pipeline reads, generated deterministically at
 Pixel values follow formulas (worldcover_class, canopy_value) so tests can check any window.
 """
 import json
+import math
 import os
 import re
 import struct
@@ -181,7 +182,7 @@ def chm_tiff(parent, cells, predictor=1):
 # --- Overture --------------------------------------------------------------------------------------
 SEG_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, subclass VARCHAR,
     names STRUCT("primary" VARCHAR), sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
-    record_id VARCHAR)[], road_surface STRUCT("value" VARCHAR, "between" DOUBLE[])[],
+    record_id VARCHAR, "between" DOUBLE[])[], road_surface STRUCT("value" VARCHAR, "between" DOUBLE[])[],
     road_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[],
     rail_flags STRUCT("values" VARCHAR[], "between" DOUBLE[])[], width_rules STRUCT("value" DOUBLE,
     "between" DOUBLE[])[], level_rules STRUCT("value" INTEGER, "between" DOUBLE[])[],
@@ -205,7 +206,22 @@ PLACE_SCHEMA = """id VARCHAR, version INTEGER, names STRUCT("primary" VARCHAR), 
     taxonomy STRUCT("primary" VARCHAR), brand STRUCT(wikidata VARCHAR, names STRUCT("primary" VARCHAR)),
     sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[], operating_status VARCHAR,
     confidence DOUBLE"""
+# the divisions theme (placenames.py): names with their common (per language) names
+# (and the alternate names the town signs read for a Latin form, townsigns.latin_name)
+DIV_NAMES = """names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR),
+                 rules STRUCT(variant VARCHAR, language VARCHAR, value VARCHAR)[])"""
+DIV_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, country VARCHAR, region VARCHAR,
+    population INTEGER, {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR,
+    record_id VARCHAR)[]"""
+DIV_AREA_SCHEMA = f"""id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, country VARCHAR, region VARCHAR,
+    division_id VARCHAR,
+    {DIV_NAMES}, sources STRUCT(property VARCHAR, dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
+DIV_BOUNDARY_SCHEMA = """id VARCHAR, version INTEGER, subtype VARCHAR, class VARCHAR, sources STRUCT(property VARCHAR,
+    dataset VARCHAR, license VARCHAR, record_id VARCHAR)[]"""
 SCHEMAS = {
+    ("divisions", "division"): DIV_SCHEMA,
+    ("divisions", "division_boundary"): DIV_BOUNDARY_SCHEMA,
+    ("divisions", "division_area"): DIV_AREA_SCHEMA,
     ("transportation", "segment"): SEG_SCHEMA,
     ("transportation", "connector"): CON_SCHEMA,
     ("buildings", "building"): BLD_SCHEMA,
@@ -215,6 +231,8 @@ SCHEMAS = {
     ("places", "place"): PLACE_SCHEMA,
 }
 OSM = {"property": "", "dataset": "OpenStreetMap", "license": "ODbL-1.0", "record_id": "w1@1"}
+ROUTE = dict(OSM, property="/routes", record_id="r67531@98")      # a numbered road's relation comes first in its sources
+# (seg-01: its relation, then its own ways, GitHub #683)
 MSFT_H = {"property": "/properties/height", "dataset": "Microsoft ML Buildings", "license": "ODbL-1.0",
           "record_id": None}
 
@@ -244,8 +262,12 @@ def features():
     for i, (cls, sub) in enumerate([("residential", None), ("primary", None), ("footway", "sidewalk"),
                                     ("service", "alley"), ("track", None)]):
         seg.append(dict(id=f"seg-{i:02d}", version=1, subtype="road", **{"class": cls}, subclass=sub,
-                        names={"primary": f"Street {i}"}, sources=[OSM],
+                        names={"primary": f"Street {i}"}, sources=[dict(OSM, between=None)],
                         wkt=_wkt_line([_cell_xy(0.1 + 0.15 * i, 0.2), _cell_xy(0.1 + 0.15 * i, 0.8)])))
+    seg[1]["sources"] = [dict(ROUTE, between=None), dict(OSM, record_id="w2@1", between=[0.0, 0.25]),
+                         dict(OSM, record_id="w3@1", between=[0.25, 1.0])]
+    seg[3]["sources"] = [dict(ROUTE, between=None), dict(OSM, record_id="w4@1", between=None)]
+    seg[4]["sources"] = [dict(ROUTE, between=None)]
     seg[0].update(road_surface=[{"value": "paved", "between": None}],
                   road_flags=[{"values": ["is_bridge", "is_link"], "between": [0.25, 0.5]}],
                   width_rules=[{"value": 9.5, "between": None}],
@@ -262,10 +284,10 @@ def features():
                                        {"access_type": "denied", "when": {"heading": "forward", "using": ["as_customer"]},
                                         "between": None}])
     # crosses the east edge: listed here, owned by the east neighbour
-    seg.append(dict(id="seg-edge", version=1, subtype="road", **{"class": "secondary"}, sources=[OSM],
+    seg.append(dict(id="seg-edge", version=1, subtype="road", **{"class": "secondary"}, sources=[dict(OSM, between=None)],
                     wkt=_wkt_line([_cell_xy(0.9, 0.5), _cell_xy(1.6, 0.5)])))
     # an older version of seg-03 in the same file: dropped
-    seg.append(dict(id="seg-03", version=0, subtype="road", **{"class": "motorway"}, sources=[OSM],
+    seg.append(dict(id="seg-03", version=0, subtype="road", **{"class": "motorway"}, sources=[dict(OSM, between=None)],
                     wkt=_wkt_line([_cell_xy(0.5, 0.5), _cell_xy(0.6, 0.6)])))
     con = [dict(id=f"con-{c}", version=1, sources=[OSM], wkt=f"POINT({x!r} {y!r})")
            for c, (x, y) in (("a", _cell_xy(0.1, 0.2)), ("b", _cell_xy(0.1, 0.8)))]
@@ -299,9 +321,53 @@ def features():
                 taxonomy={"primary": "convenience_store"}, brand={"wikidata": "Q7492551", "names": {"primary": "Sheetz"}},
                 sources=[dict(OSM, dataset="meta", record_id="m1")], operating_status="open", confidence=0.92,
                 wkt="POINT({!r} {!r})".format(*_cell_xy(0.6, 0.3)))]
+    # the status bar's place names (placenames.py): the city, a neighbourhood (not a town: left out by the layer's
+    # filter) and the state's and country's areas, their boxes round the cell (the geometry is never read)
+    div = [dict(id="div-baltimore", version=1, subtype="locality", **{"class": "city"}, country="US", region="US-MD",
+                population=585708, names={"primary": "Baltimore", "common": {"key": ["en", "it"],
+                                                                             "value": ["Baltimore", "Baltimora"]}},
+                sources=[OSM], wkt="POINT({!r} {!r})".format(*_cell_xy(0.5, 0.5))),
+           dict(id="div-fells", version=1, subtype="neighborhood", country="US", region="US-MD",
+                names={"primary": "Fells Point"}, sources=[OSM], wkt="POINT({!r} {!r})".format(*_cell_xy(0.4, 0.4)))]
+    area = [dict(id="area-md", version=1, subtype="region", country="US", region="US-MD", division_id="d-md",
+                 names={"primary": "Maryland"}, sources=[OSM], wkt=_wkt_poly([_box(-20, -20, 20, 20)])),
+            dict(id="area-us", version=1, subtype="country", country="US", division_id="d-us",
+                 names={"primary": "United States", "common": {"key": ["de"], "value": ["Vereinigte Staaten"]}},
+                 sources=[OSM], wkt=_wkt_poly([_box(-200, -100, 200, 100)])),
+            dict(id="area-county", version=1, subtype="county", country="US", region="US-MD", division_id="d-c",
+                 names={"primary": "Baltimore County"}, sources=[OSM], wkt=_wkt_poly([_box(-5, -5, 5, 5)]))]
+    # a country border across the cell's far corner (placenames.pick: towns across it left out), and a region's
+    # border, which the layer's filter leaves out
+    bnd = [dict(id="bnd-us-ca", version=1, subtype="country", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.9, 0.0), *_cell_xy(1.0, 0.1))),
+           dict(id="bnd-md-pa", version=1, subtype="region", **{"class": "land"}, sources=[OSM],
+                wkt="LINESTRING({!r} {!r}, {!r} {!r})".format(*_cell_xy(0.0, 0.9), *_cell_xy(1.0, 0.9)))]
+    # two communes meeting in the middle of the cell (the town entry signs, 2026-10-28), one with names in other
+    # languages, the county around them (its outline a thousand vertices: simplified), and what the town_areas layer's
+    # `where` leaves out: a commune's maritime part (and the state's and country's areas above)
+    n = 1000
+    t = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    lon0, lat0, lon1, lat1 = CELL.bounds()
+    wavy = [(lon0 + (0.5 + (2.5 + 0.0001 * math.sin(40 * a)) * math.cos(a)) * (lon1 - lon0),
+             lat0 + (0.5 + 2.5 * math.sin(a)) * (lat1 - lat0)) for a in t]
+    area += [dict(id="div-west", version=1, subtype="locality", **{"class": "land"},
+                  names={"primary": "Ouest", "common": {"key": ["oc", "ca", "en"], "value": ["Oèst", "Oest", "West"]}},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-west",
+                  wkt=_wkt_poly([_box(-0.5, -0.5, 0.5, 1.5)])),
+             dict(id="div-east", version=1, subtype="locality", **{"class": "land"}, names={"primary": "Est"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                  wkt=_wkt_poly([_box(0.5, -0.5, 1.5, 1.5)])),
+             dict(id="div-county", version=1, subtype="county", **{"class": "land"}, names={"primary": "Gard"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-county",
+                  wkt=_wkt_poly([wavy + wavy[:1]])),
+             dict(id="div-sea", version=1, subtype="locality", **{"class": "maritime"}, names={"primary": "Est"},
+                  sources=[OSM], country="FR", region="FR-OCC", division_id="d-east",
+                  wkt=_wkt_poly([_box(1.0, -0.5, 1.5, 1.5)]))]
     return {("transportation", "segment"): seg, ("transportation", "connector"): con,
             ("buildings", "building"): bld, ("base", "water"): wat, ("base", "land_use"): lu,
-            ("base", "infrastructure"): inf, ("places", "place"): pla}
+            ("base", "infrastructure"): inf, ("places", "place"): pla,
+            ("divisions", "division"): div, ("divisions", "division_area"): area,
+            ("divisions", "division_boundary"): bnd}
 
 
 def _coords(wkt):

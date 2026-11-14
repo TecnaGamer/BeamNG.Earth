@@ -5,7 +5,8 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 local lattice = require('beamngEarth/lattice')
-lattice.configure(512)
+lattice.configure(512, 2.0)
+require('beamngEarth/follow').configure()
 local terrain = require('beamngEarth/terrain')
 terrain.REBIND_AFTER_SWAP = false   -- (the 1.5.5 path first; the rebind at the end)
 terrain.configure(512)
@@ -70,7 +71,7 @@ T.check(not terrain.swap('/t/e.ter', 2, 512, 128, 0, 0, { materials = otherMats 
   'same file path falls back to import: its setter would skip loading the prepared fields')
 T.check(terrain.swap('/t/f.ter', 2, 512, 256, 0, 0, { materials = otherMats }, false)
   and terrain.base() == nil and grass.fields.baseColorBaseTex == terrain.LEVEL_BASE.tex
-  and grass.fields.baseColorBaseTexSize == terrain.LEVEL_BASE.size, 'false prepares the flat level base before the swap')
+  and grass.fields.baseColorBaseTexSize == tostring(terrain.LEVEL_BASE.sizeM / 2), 'false prepares the flat level base before the swap')
 T.check(calls.updateMaterial == updates, 'all successful swaps rely on the file setter material binding')
 local oldSlots, oldSwaps = terrain.slots, terrain.swaps
 T.check(not terrain.swap('/t/wrong-square.ter', 1, 512, 256, 0, 0, { materials = mats }, '/t/wrong.png', 512)
@@ -80,7 +81,7 @@ local failMats = { mats[1], otherMats[1] }
 T.check(not terrain.swap('/t/fail.ter', 2, 512, 256, 0, 0, { materials = failMats }, '/t/fail.png', 1024),
   'file setter failure returns to the caller import fallback')
 T.check(asphalt.fields.baseColorBaseTex == '/t/c_base.png' and asphalt.fields.baseColorBaseTexSize == '512'
-  and grass.fields.baseColorBaseTex == terrain.LEVEL_BASE.tex and grass.fields.baseColorBaseTexSize == terrain.LEVEL_BASE.size,
+  and grass.fields.baseColorBaseTex == terrain.LEVEL_BASE.tex and grass.fields.baseColorBaseTexSize == tostring(terrain.LEVEL_BASE.sizeM / 2),
   'failed file setter restores every prepared material base field')
 T.check(terrain.base() == nil and terrain.slots == oldSlots and terrain.swaps == oldSwaps,
   'failed swap does not publish its base, incoming slot list, or successful-swap count')
@@ -94,7 +95,7 @@ local beforeFile = tb.fields.terrainFile
 T.check(not terrain.swap('/t/prep-fail.ter', 2, 512, 256, 0, 0, { materials = failMats }, '/t/prep-fail.png', 1024)
   and tb.fields.terrainFile == beforeFile, 'material preparation failure never reaches the file setter')
 T.check(asphalt.fields.baseColorBaseTex == '/t/c_base.png' and grass.fields.baseColorBaseTex == terrain.LEVEL_BASE.tex
-  and grass.fields.baseColorBaseTexSize == terrain.LEVEL_BASE.size, 'partial material preparation is rolled back')
+  and grass.fields.baseColorBaseTexSize == tostring(terrain.LEVEL_BASE.sizeM / 2), 'partial material preparation is rolled back')
 grass.setField = grassSetField
 T.check(terrain.load('/t/fallback.png', 2, 512, 256, 0, 0,
   { materials = failMats, masks = { '/t/a.png', '/t/b.png' } }, '/t/fallback_base.png', 1024),

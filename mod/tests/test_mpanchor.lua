@@ -29,6 +29,14 @@ ma.announceOwn(36.5, -118.1)
 T.check(ma.ownChanged == true, 'our anchor changed: mpsession sends a pose at once')
 ma.setRemote(4, 36.52, -118.08)
 T.check(ma.knows(4) and not ma.knows(5), 'knows the anchors it was told')
+for _, bad in ipairs({ 0 / 0, math.huge, -math.huge, 181, {}, false }) do
+  ma.setRemote(99, 0, bad)
+  T.check(not ma.knows(99), 'invalid remote longitude rejected: ' .. tostring(bad))
+end
+ma.setRemote(99, 91, 0)
+T.check(not ma.knows(99), 'invalid remote latitude rejected')
+T.check(pcall(ma.setRemote, 0 / 0, 0, 0), 'NaN player id rejected without throwing')
+ma.setRemote(4, 0 / 0, 0)
 
 positionGE.handle('p:4-0:{"pos":[100,200,30]}')
 local out = enc[#enc]
@@ -85,6 +93,30 @@ positionGE.handle('p:9-0:{"pos":[1,2,3]}')      -- (a player with no anchor know
 jsonDecode = saved
 T.check(#got == before, 'a NaN packet never reaches BeamMP, converted or not')
 
+-- Present vectors must be complete numeric tuples before coordinate arithmetic.
+-- A missing optional field is supported, but a missing component is malformed.
+for _, field in ipairs({ 'pos', 'vel', 'rvel', 'rot' }) do
+  for _, malformed in ipairs({ {}, { 1 }, { 1, 2 }, { [1] = 1, [3] = 3 },
+      { 1, '2', 3, 1 }, { 1, false, 3, 1 }, 'not a vector', { 1, math.huge, 3, 1 } }) do
+    for _, pid in ipairs({ 4, 99 }) do
+      jsonDecode = function() return { [field] = malformed } end
+      local countBefore = #got
+      local ok = pcall(positionGE.handle, 'p:' .. pid .. '-0:{"test":1}')
+      T.check(ok and #got == countBefore, 'malformed ' .. field .. ' dropped without throwing, peer ' .. pid)
+    end
+  end
+end
+jsonDecode = function() return { rot = { 0, 0, 0 } } end
+local quaternionBefore = #got
+T.check(pcall(positionGE.handle, 'p:4-0:{"test":1}') and #got == quaternionBefore,
+  'incomplete quaternion never reaches transform arithmetic or BeamMP')
+local optionalBefore = #got
+jsonDecode = function() return {} end
+positionGE.handle('p:99-0:{"test":1}')
+T.check(#got == optionalBefore + 1 and got[#got] == 'p:99-0:{"test":1}',
+  'absent optional fields preserve valid unknown-peer compatibility')
+jsonDecode = saved
+
 -- a player's anchor changes: its packets are dropped for SETTLE_S (packets from its old place can still come, and
 -- converted with the new anchor they would put the car under the ground), then pass again
 local tnow = 1000
@@ -116,6 +148,34 @@ positionGE.handle('p:4-0:{"pos":[8125,200,30]}')
 T.check(#got == n2 + 2, '... and it moves on from there')
 ma.clock = os.clock
 
+-- A departed/stale peer loses its transform and history; the same numeric player
+-- id can then reconnect elsewhere without inheriting a settle or jump timer.
+ma._noteFar('4-0')
+ma.retainRemote({ ['6'] = true })
+T.check(not ma.knows(4) and ma.knows(6), 'snapshot expires only missing peers')
+T.check(not ma.wasFar('4-0') and not ma.isFar('4-0') and ma.lastPos('4-0') == nil,
+  'expired peer loses vehicle history')
+local expiredBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore and ma.lastPos('4-0') == nil,
+  'expired Earth peer packets dropped before the next vehicle hide update')
+ma.setRemote(4, 0 / 0, 0)
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore, 'invalid reacquisition keeps expired peer quarantined')
+positionGE.handle('p:99-0:{"pos":[100,200,30]}')
+T.check(#got == expiredBefore + 1 and got[#got] == 'p:99-0:{"pos":[100,200,30]}',
+  'a never-known peer retains legacy packet behavior')
+ma.setRemote(4, 36.52, -118.08)
+local reconnectBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == reconnectBefore + 1, 'reused player id starts without old settle or jump state')
+T.check(got[#got] == 'p:4-0:ENC' .. #enc and math.abs(enc[#enc].pos[1] - ex) < 1e-6,
+  'valid reacquisition resumes conversion into our frame')
+
+ma.retainRemote({})
 ma.reset()
 T.check(not ma.knows(4), 'reset: the anchors forgotten')
+local resetBefore = #got
+positionGE.handle('p:4-0:{"pos":[100,200,30]}')
+T.check(#got == resetBefore + 1, 'session reset clears expired-peer quarantine')
 T.done('test_mpanchor')

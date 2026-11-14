@@ -10,13 +10,16 @@ both APIs (v1.4 adds `layout=`); regenerate it from a tree with
 
 Only do that from v1.3.1 code: the point of the file is that the current code reproduces it. Floats are
 rounded before hashing (1e-4 m for geometry, 1e-6 for err / skirt / deltas), so a last-bit change in
-numpy cannot fail the test, but any real change does. (The message level: test_server and
+numpy cannot fail the test, but any real change does. (The uvs at 1e-5: with the deterministic maths of
+GitHub #1169 one uv of tile 0_1_-2, 0.3739225 to 3e-10, sat on a 1e-6 rounding boundary; their digests were rewritten
+at 5 decimals from the tree that reproduced the 6-decimal ones, 2026-11-12.) (The message level: test_server and
 test_protocol_agreement check that a 32-cell hello and far_tile carry no v1.4 field; status.backlog
 is the one additive field of M0.)
 """
 import hashlib
 import inspect
 import json
+import math
 import os
 import sys
 import tempfile
@@ -58,6 +61,7 @@ def compute(server_dir):
     sys.path.insert(0, str(server_dir))
     import earthd
     import farfield as ff
+    import cdae
     import geodesy as g
     import heightmap
     out = {}
@@ -97,13 +101,16 @@ def compute(server_dir):
                 built[t.key] = (t, b)
                 rec = {"pos": [_r(v, 4) for v in b.pos], "err": _r(b.err), "skirt": _r(b.skirt), "sink": _r(b.sink),
                        "tris": _h(np.ascontiguousarray(b.tris, np.int64).tobytes()),
-                       "positions": _hr(b.positions, 4), "normals": _hr(b.normals, 4), "uvs": _hr(b.uvs, 6),
+                       "positions": _hr(b.positions, 4), "normals": _hr(b.normals, 4), "uvs": _hr(b.uvs, 5),
                        "planar": _hr(b.planar, 6), "grid": _hr(b.grid, 4)}
                 for name, kw in (("cdae_tex", dict(material="bngEarthSat_1_x", textured=True, tex_px=256)),
                                  ("cdae", {}), ("dae", {})):
                     p = os.path.join(tmp, "t." + name.split("_")[0])
                     ff.write_built(p, b, name.split("_")[0], **kw)
-                    rec[name + "_bytes"] = os.path.getsize(p)
+                    with open(p, "rb") as fh:       # (the plain shape: they are written compressed, cdae.PACKED)
+                        data = fh.read()
+                    plain = getattr(cdae, "plain", lambda d: d)     # (an older tree: written plain)
+                    rec[name + "_bytes"] = len(plain(data)) if p.endswith(".cdae") else len(data)
                 geo[t.key] = rec
             out["tiles"] = geo
             par, kids = ff.Tile(2, 0, 0), [ff.Tile(1, i, j) for i in (0, 1) for j in (0, 1)]
@@ -113,12 +120,29 @@ def compute(server_dir):
             (t0, b0), (t1, b1) = built["-2_3_-5"], built["-1_1_-3"]
             out["deltas_near"] = [_r(v) for v in ff.group_deltas(([(t0, b0.grid)], [(t1, b1.grid)]))]
             p = os.path.join(tmp, "hm.png")
+            # The v1.3.1 block: 1024² at 2 m. Since 2026-11-01 the block lattice is 1 m (heightmap.SQUARE): the same
+            # 2 km is the 2048² block, and its every second sample (odd rows from the north, even columns) is the
+            # v1.3.1 sample, bit for bit.
+            sub = int(round(2.0 / getattr(heightmap, "SQUARE", 2.0)))
             info = heightmap.generate(frame, lambda la, lo: dem.sample(la, lo, 15), p, 256.0, -512.0, (300.0, -400.0),
-                                      1 / 64)
+                                      1 / 64, **({"size": 1024 * sub} if sub > 1 else {}))
+            # Since 2026-11-12 zBase sits on an 8 m step (heightmap.ZBASE_STEP; v1.3.1: 64 m, whose base 1/1024's 64 m
+            # range could not hold): the same heights, written from a higher base. Moved back to v1.3.1's base (the
+            # 64 m floor of the 8 m one) the PNG's values must be v1.3.1's bit for bit.
+            step = getattr(heightmap, "ZBASE_STEP", 64.0)
+            shift = 0
+            if step != 64.0:
+                zb = info["zBase"]
+                old = math.floor(zb / 64.0) * 64.0
+                shift = int(round((zb - old) / info["q"]))
+                info = dict(info, zBase=old)
             out["heightmap"] = {k: _r(v) for k, v in sorted(info.items()) if k != "seconds"}
             from PIL import Image
             with Image.open(p) as im:
-                out["heightmap_png"] = [im.size[0], im.mode, _h(np.asarray(im).tobytes())]
+                px = np.asarray(im)[sub - 1::sub, ::sub]
+                if shift:
+                    px = (px.astype(np.int64) + shift).astype(px.dtype)
+                out["heightmap_png"] = [px.shape[1], im.mode, _h(px.tobytes())]
         finally:
             s.hm_pool.shutdown(wait=True)
             s.tile_pool.shutdown(wait=True)

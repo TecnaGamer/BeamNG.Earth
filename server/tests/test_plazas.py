@@ -30,9 +30,11 @@ class PavingTest(unittest.TestCase):
         self.assertEqual(plazas.paving("asphalt", 48.86, 2.32)[0], plazas.ASPHALT[0])
         self.assertEqual(plazas.paving("sett", 48.86, 2.32)[0], plazas.STONE[0])
         self.assertIsNone(plazas.paving("compacted", 48.86, 2.32), "the Tuileries' sand: the terrain's photo")
-        self.assertEqual(plazas.paving(None, 48.86, 2.32)[0], plazas.STONE[0], "not mapped, in Europe: stone")
-        self.assertEqual(plazas.paving(None, 39.28, -76.59)[0], plazas.BRICK, "... in the US: brick")
-        self.assertEqual(plazas.paving("paving_stones", 39.28, -76.59)[0], plazas.BRICK, "Fells Point's squares")
+        self.assertEqual(plazas.paving(None, 48.86, 2.32)[0], plazas.PAVERS[0], "not mapped, in Europe: pavers")
+        self.assertEqual(plazas.paving(None, 39.28, -76.59), plazas.US_AMBIGUOUS, "... in the US: by the photo")
+        self.assertEqual(plazas.paving("paving_stones", 39.28, -76.59), plazas.US_AMBIGUOUS, "Fells Point's squares")
+        self.assertEqual(plazas.paving("bricks", 40.71, -74.01)[0], plazas.BRICK, "mapped brick stays brick")
+        self.assertEqual(plazas.paving("paving_stones", 48.86, 2.32)[0], plazas.PAVERS[0], "flat pavers, not cobbles")
 
     def test_holes_left_out(self):
         outer = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
@@ -46,6 +48,26 @@ class PavingTest(unittest.TestCase):
 
 
 class PlazaMeshTest(unittest.TestCase):
+    def test_us_squares_by_the_photo(self):
+        """A US square mapped paving_stones is red brick where the orthophoto shows brick red (Fells Point), stone where
+        it shows grey or tan (the World Trade Center's granite, warm in the NYS photo); with no photo, grey pavers."""
+        sq = (ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)]), [], "paving_stones")
+        flat = lambda la, lo: np.full(np.shape(la), 5.0)     # noqa: E731
+
+        class Photo:
+            def __init__(self, rgb):
+                self.rgb = rgb
+
+            def colours(self, rings):
+                return np.array([self.rgb] * len(rings), np.float64)
+        box, o = (0.0, 0.0, 256.0, 256.0), (0.0, 0.0, 0.0)
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.62, 0.42, 0.36)))[3], [plazas.BRICK])
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.55, 0.54, 0.52)))[3],
+                         [plazas.PAVERS[0]])
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.68, 0.58, 0.40)))[3],
+                         [plazas.PAVERS[0]], "the WTC's granite, warm tan in the photo")
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.PAVERS[0]], "no photo: grey pavers")
+
     def test_paved_and_draped(self):
         sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
         elev = lambda la, lo: 5.0 + (np.asarray(lo) - (-76.5929)) * 10000.0    # noqa: E731 (a slope east)
@@ -61,6 +83,49 @@ class PlazaMeshTest(unittest.TestCase):
         n = np.cross(e[:, 1] - e[:, 0], e[:, 2] - e[:, 0])
         self.assertTrue((n[:, 2] > 0).all(), "faces up")
         self.assertGreater(P[:, 2].max() - P[:, 2].min(), 1.0, "draped on the slope")
+
+    def test_block_looks_kept_once_read(self):
+        """blockworker._us_square_looks (the side agent's note, 2026-11-11: the photo reads slowed the blocks): a read
+        square's answer is kept for the process; one the photo could not read (not fetched yet) is read again later."""
+        import buildings
+        import blockworker
+
+        class Red:
+            def colours(self, rings):
+                return np.array([(0.62, 0.42, 0.36)] * len(rings))
+        sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
+        calls = []
+        orig = buildings.roof_photo
+        blockworker._us_looks_kept.clear()
+        try:
+            buildings.roof_photo = lambda *a, **k: calls.append(1)        # (None: nothing on disk)
+            looks = blockworker._us_square_looks(FRAME)
+            self.assertEqual(looks([sq]), [plazas.PAVERS], "unread: grey")
+            self.assertEqual(looks([sq]), [plazas.PAVERS])
+            self.assertEqual(len(calls), 2, "unread: asked again")
+            buildings.roof_photo = lambda *a, **k: calls.append(1) or Red()
+            self.assertEqual(looks([sq]), [(plazas.BRICK, plazas.BRICK_REPEAT_M)])
+            self.assertEqual(looks([sq]), [(plazas.BRICK, plazas.BRICK_REPEAT_M)])
+            self.assertEqual(len(calls), 3, "read once, then kept")
+        finally:
+            buildings.roof_photo = orig
+            blockworker._us_looks_kept.clear()
+
+    def test_off_the_humps(self):
+        """The user, 2026-11-11 at the WTC ("the texture mesh is very broken"): the elevation's hump where a building
+        stands (a pyramid 8 m tall) is left to the terrain, not paved up and down in streaks."""
+        sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
+        cx, cy = 35.0, 25.0
+
+        def elev(la, lo):
+            x, y, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            r = np.maximum(np.abs(np.asarray(x) - cx), np.abs(np.asarray(y) - cy))
+            return np.clip(8.0 - 1.6 * r, 0.0, None)
+        P, T, UV, mats, M = plazas.mesh(FRAME, (0.0, 0.0, 256.0, 256.0), [sq], elev, (0.0, 0.0, 0.0))
+        e = P[T]
+        n = np.cross(e[:, 1] - e[:, 0], e[:, 2] - e[:, 0])
+        self.assertTrue((np.hypot(n[:, 0], n[:, 1]) <= plazas.MAX_SLOPE * n[:, 2] + 1e-9).all(), "no steep face")
+        self.assertGreater(_area(e), 50 * 30 - 12 * 12, "the rest paved")
 
     def test_split_between_tiles(self):
         sq = ring([(-20, 10), (20, 10), (20, 30), (-20, 30)])

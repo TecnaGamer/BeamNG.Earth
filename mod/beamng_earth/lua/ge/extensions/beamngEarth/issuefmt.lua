@@ -6,6 +6,9 @@ local M = {}
 
 M.REPO = 'TecnaGamer/BeamNG.Earth'
 M.URL_MAX = 7000        -- characters of the whole new-issue URL (GitHub refuses ~8 KB)
+-- ... on Windows less: the game opens the browser through the shell, which takes ~2083 characters of a URL; a longer
+-- one opened nothing (GitHub #743, Windows 11: neither the command nor the in-game report opened the issue)
+M.URL_MAX_WINDOWS = 2000
 
 -- The kinds the user picks from (order = the window's radio buttons). label = the GitHub label.
 M.KINDS = {
@@ -51,6 +54,24 @@ function M.framesLine(s)
   if num(s.maxMs) then parts[#parts + 1] = string.format('worst frame %.0f ms', s.maxMs) end
   if num(s.over50) then parts[#parts + 1] = string.format('%d frames over 50 ms', s.over50) end
   return table.concat(parts, ', ')
+end
+
+local HELD_WHY = { edge = 'at the edge of the ground', ground = 'until the ground under it loaded',
+  loading = 'loading after a teleport' }
+-- The car held still while the world loaded (report.lua stats(): s.held, s.playing) as one line, or nil: waiting for the
+-- world to be built, which is not the same as slow frames (players' "freezes" reports mixed the two).
+function M.heldLine(s)
+  local h = type(s) == 'table' and s.held
+  if type(h) ~= 'table' or not num(h.s) or (h.frames or 0) == 0 then return nil end
+  local why, top = nil, 0
+  for k, v in pairs(type(h.why) == 'table' and h.why or {}) do if num(v) and v > top then why, top = k, v end end
+  local line = string.format('car held still while the world loaded for %.1f s (%s): waiting, not slow frames',
+    h.s, HELD_WHY[why] or tostring(why or 'held'))
+  local p = type(s.playing) == 'table' and s.playing or nil
+  if p and num(p.fps) then
+    line = line .. string.format('; while not held %.1f fps avg, %d frames over 50 ms', p.fps, num(p.over50) or 0)
+  end
+  return line
 end
 
 local function gb(bytes)
@@ -244,14 +265,23 @@ function M.buildIssue(data, hw)
   p('**Time:** ' .. (str(data.time) or '?'))
   local fr = M.framesLine(data.recentFrames)
   if fr then p('**Performance (last ~10 s):** ' .. fr) end
+  local hl = M.heldLine(data.recentFrames)
+  if fr and hl then p('- ' .. hl) end
   local b = data.bench
   if type(b) == 'table' then
     local line = M.framesLine(b)
     if line then
       p(string.format('**Performance profiler (%.0f s):** %s', num(b.seconds) or 0, line))
-      local hitches = type(b.hitches) == 'table' and #b.hitches or 0
-      p(string.format('- median frame %.1f ms, 95th %.1f ms, 99th %.1f ms; %d hitches over 50 ms',
-        num(b.p50) or 0, num(b.p95) or 0, num(b.p99) or 0, hitches))
+      local hitches, whileHeld = 0, 0
+      for _, h in ipairs(type(b.hitches) == 'table' and b.hitches or {}) do
+        hitches = hitches + 1
+        if type(h) == 'table' and h.held then whileHeld = whileHeld + 1 end
+      end
+      p(string.format('- median frame %.1f ms, 95th %.1f ms, 99th %.1f ms; %d hitches over 50 ms%s',
+        num(b.p50) or 0, num(b.p95) or 0, num(b.p99) or 0, hitches,
+        whileHeld > 0 and string.format(' (%d of them while the car was held)', whileHeld) or ''))
+      local bh = M.heldLine(b)
+      if bh then p('- ' .. bh) end
     end
   end
   local mod = type(data.mod) == 'table' and data.mod or {}
@@ -294,8 +324,13 @@ M.TRUNCATED = '\n\n_(Truncated: paste the rest from issue.md in the report folde
 
 -- The GitHub new-issue URL with title, body and label, the body cut (at a UTF-8 character boundary)
 -- so the whole URL stays under maxLen.
+function M.urlMax(os_)
+  os_ = os_ or (jit and jit.os)
+  return os_ == 'Windows' and M.URL_MAX_WINDOWS or M.URL_MAX
+end
+
 function M.issueUrl(title, body, label, maxLen, repo)
-  maxLen = maxLen or M.URL_MAX
+  maxLen = maxLen or M.urlMax()
   local base = 'https://github.com/' .. (repo or M.REPO) .. '/issues/new?title=' .. M.urlEncode(title)
     .. (label and ('&labels=' .. M.urlEncode(label)) or '') .. '&body='
   local enc = M.urlEncode(body)

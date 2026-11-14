@@ -43,12 +43,14 @@ do
   scenetree = { findObject = function(n) return n == name and mat or nil end,
     findClassObjects = function() return { name } end }
   S.setMode('fall')
+  S.IMPOSTERS = true            -- (off by default since 1.7.3: GitHub #535)
   S.update(true, 39.2)
   local r = tonumber(col:match('^(%S+)'))
   T.check(math.abs(r - S.SPECIES[1].tint[1]) < 1e-3, 'an imposter takes the full fall tint once: ' .. col)
   S.restore()
   T.check(col == '1.000 1.000 1.000 1.000', 'leaving the level: its own colour back: ' .. col)
   S.setMode(nil)
+  S.IMPOSTERS = false
   scenetree = saved
 end
 

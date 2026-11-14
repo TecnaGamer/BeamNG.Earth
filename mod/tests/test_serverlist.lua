@@ -25,6 +25,12 @@ local addr = next(sl.OFFICIAL)
 local oip, oport = addr:match('^(.*):(%d+)$')
 local o = sl.toServers({ { ip = oip, port = tonumber(oport), name = 'x' }, { ip = '1.1.1.1', port = 1, name = 'Official BeamNG.Earth' } })
 T.check(o[1].official == true and o[2].official == false, 'official by address only')
+local full = sl.toServers({ { ip = 'a', port = 1, tags = 'Freeroam', modlist = '/a;', modstotal = 1, modstotalsize = 9,
+  playerslist = 'x;', pass = true } })[1]
+T.check(full.tags == 'Freeroam' and full.modlist == '/a;' and full.modstotal == 1 and full.modstotalsize == 9 and
+  full.playerslist == 'x;' and full.pass == true, 'toServers: what BeamMP\'s list carries')
+T.check(sl.toServers({ { ip = 'a', port = 1, desc = 'Drive anywhere' } })[1].desc == 'Drive anywhere' and
+  sl.toServers({ { ip = 'a', port = 1 } })[1].desc == '', 'toServers: the description')
 local loc = sl.toServers({ { ip = 'a', port = 1, location = 'de' }, { ip = 'b', port = 1, location = '<img>' }, { ip = 'c', port = 1 } })
 T.check(loc[1].location == 'DE' and loc[2].location == '' and loc[3].location == '', 'location: a country code or none')
 sl.refresh()

@@ -12,7 +12,9 @@ import time
 import sys
 import urllib.request
 
-URL = os.environ.get("BNGE_MCP_URL", "http://127.0.0.1:29292/mcp")   # (a second game: -mcpport)
+# (a second game: -mcpport; BNGE_MCP_PORT=<port> picks it on this machine, BNGE_MCP_URL any address. From PR #711 by
+# Madderose, without its probing of nearby ports: with two games running that could talk to the wrong one)
+URL = os.environ.get("BNGE_MCP_URL") or f"http://127.0.0.1:{int(os.environ.get('BNGE_MCP_PORT') or 29292)}/mcp"
 
 
 def rpc(method, params=None, timeout=120):
@@ -34,6 +36,11 @@ def call(tool, args=None):
     if res.get("isError"):
         raise SystemExit(f"TOOL ERROR: {text}")
     return text
+
+
+def lua(code):
+    """GE Lua code's result as text (the run_lua tool; from PR #711)."""
+    return call("run_lua", {"code": code})
 
 
 def quiet_ui():

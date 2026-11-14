@@ -11,10 +11,15 @@ Planning frames (grading's plans, bridge / tunnel chain profiles) are the frames
 the same way: one plan per region whatever the anchor.
 """
 import functools
+import math
+import threading
+from collections import OrderedDict
 
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import geodesy
 
 Z = 17                  # content tiles (the mod's hello cap geoTiles = Z)
@@ -83,9 +88,9 @@ class WorldFrame(geodesy.EnuFrame):
             return super().enu_to_geodetic(e, n, u)
         E, N = np.broadcast_arrays(np.asarray(e, np.float64), np.asarray(n, np.float64))
         shape = E.shape
-        p = np.zeros((E.size, 3))
-        p[:, 0], p[:, 1] = E.ravel(), N.ravel()
-        la, lo, _ = _ef().geo_world_to_geodetic(float(self.lat0), float(self.lon0), p)
+        fast.require(242, "geo_world_to_latlon")      # (lat / lon only: the heights it threw away were 1/3 of the work)
+        la, lo = _ef().geo_world_to_latlon(float(self.lat0), float(self.lon0), np.ascontiguousarray(E.ravel()),
+                                           np.ascontiguousarray(N.ravel()))
         if shape == ():
             return np.float64(la[0]), np.float64(lo[0]), np.float64(0.0)
         return la.reshape(shape), lo.reshape(shape), np.zeros(shape)
@@ -108,9 +113,56 @@ def quad_dist(q, x, y):
     return float(_ef().geo_quad_dist(np.ascontiguousarray(q, np.float64), float(x), float(y)))
 
 
-def tiles_near(anchor, x, y, r, z=Z):
-    """[(tx, ty, m)] of the tiles whose quad in anchor's world comes within r of (x, y), nearest first."""
-    return _ef().geo_tiles_near(float(anchor.lat0), float(anchor.lon0), int(z), float(x), float(y), float(r))
+def dists(anchor, keys, z, points):
+    """(len(keys), len(points)) m from each point (x, y) to each zoom-z tile's quad in anchor's world: quad_dist(quad(..))
+    of every pair in one call (earthfast.geo_tiles_dist; the trackers' per-pose passes asked tile by tile)."""
+    import fast
+    fast.require(165, "geo_tiles_dist")
+    k = np.asarray(keys, np.int64).reshape(-1, 2)
+    p = np.asarray(points, np.float64).reshape(-1, 2)
+    return _ef().geo_tiles_dist(float(anchor.lat0), float(anchor.lon0), int(z), np.ascontiguousarray(k[:, 0]),
+                                np.ascontiguousarray(k[:, 1]), np.ascontiguousarray(p[:, 0]),
+                                np.ascontiguousarray(p[:, 1]))
+
+
+NEAR_Q_M = 16.0         # tiles_near's points snapped to a grid of this many metres on the ground (its memo)
+NEAR_MEMO = 4096        # tiles_near answers kept
+_near_memo = OrderedDict()
+_near_lock = threading.Lock()
+
+
+def tiles_near(anchor, x, y, r, z=Z, exact=False):
+    """[(tx, ty, m)] of the tiles whose quad in anchor's world comes within r of (x, y), nearest first. Kept
+    (NEAR_MEMO): exact, for the point itself; else for the place snapped to a NEAR_Q_M grid of latitude and longitude
+    (the same place whatever the anchor: a rebase asks for the same tiles) with r grown by the snap (every tile within
+    r of (x, y) is in it; m from the snapped place). The trackers asked it again at every pose, for every spot and tile
+    round the car: ~1/3 of a Steam Deck's event loop (96 of 292 s, 2026-10-30)."""
+    lat0, lon0, z = float(anchor.lat0), float(anchor.lon0), int(z)
+    if exact:
+        key = (lat0, lon0, z, float(x), float(y), float(r), False)
+    else:
+        la, lo, _ = world_to_geodetic(anchor, np.array([[float(x), float(y), 0.0]]))
+        dla = NEAR_Q_M / 111320.0
+        qla = round(float(la[0]) / dla) * dla
+        dlo = dla / max(0.05, dmath.cos(math.radians(qla)))
+        qlo = round(float(lo[0]) / dlo) * dlo
+        key = (lat0, lon0, z, qla, qlo, float(r), True)
+    with _near_lock:
+        got = _near_memo.get(key)
+        if got is not None:
+            _near_memo.move_to_end(key)
+            return got
+    if exact:
+        got = _ef().geo_tiles_near(lat0, lon0, z, float(x), float(y), float(r))
+    else:
+        qx, qy, _ = geodetic_to_world(anchor, np.array([key[3]]), np.array([key[4]]))
+        # (the snap's largest offset on the ground: one answer for every point of the cell)
+        got = _ef().geo_tiles_near(lat0, lon0, z, float(qx[0]), float(qy[0]), float(r) + NEAR_Q_M * 0.7072)
+    with _near_lock:
+        _near_memo[key] = got
+        while len(_near_memo) > NEAR_MEMO:
+            _near_memo.popitem(last=False)
+    return got
 
 
 def _pts(p):
@@ -161,7 +213,7 @@ def place(src, dst, pivot, pts):
     """pts (n, 3) of src's world by placement (the mod's way: geotile.lua M.apply)."""
     r, t, c = placement(src, dst, pivot)
     p = _pts(pts)
-    return p @ r.T + t + np.outer(p[:, 2] - float(pivot[2]), c)
+    return dnp.matmul(p, r.T) + t + np.outer(p[:, 2] - float(pivot[2]), c)
 
 
 # --- planning regions ---------------------------------------------------------------------------------------------
@@ -256,6 +308,18 @@ class GeoBox:
     def owns(self, x, y):
         """Whether each point (x, y) of this frame's world (h = 0) lies in the tile: scalars in, a bool out; arrays in,
         a bool array."""
+        if isinstance(x, float) and isinstance(y, float):
+            # (one point, the far buildings' centre test per building: the same tests on plain floats, the kernel only
+            # in the edges' band; the arrays' path cost ~5 % of a first visit's far building tiles)
+            i0, j0, i1, j1 = self.inner
+            if x >= i0 and x <= i1 and y >= j0 and y <= j1:
+                return True
+            b = self.box
+            if x < b[0] - OWN_EDGE_M or x > b[2] + OWN_EDGE_M or y < b[1] - OWN_EDGE_M or y > b[3] + OWN_EDGE_M:
+                return False
+            fast.require(NEED_CONTENT, "geo_owns")
+            return bool(fast._ef.geo_owns(float(self.frame.lat0), float(self.frame.lon0), self.z, self.gx, self.gy,
+                                          np.array([x], np.float64), np.array([y], np.float64))[0])
         scalar = np.ndim(x) == 0 and np.ndim(y) == 0
         X, Y = np.broadcast_arrays(np.atleast_1d(np.asarray(x, np.float64)), np.atleast_1d(np.asarray(y, np.float64)))
         X, Y = X.ravel(), Y.ravel()

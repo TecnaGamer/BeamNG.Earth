@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -97,8 +98,9 @@ class LinuxBuild(unittest.TestCase):
 
         def run(cmd, **kw):
             cmds.append(cmd)
-            out = [v.split(":")[0] for v in cmd if v.endswith(":/out:Z")][0]
-            src = [v.split(":")[0] for v in cmd if v.endswith(":/src:ro,Z")][0]
+            # Strip the known mount suffix, preserving a Windows drive letter.
+            out = [v.removesuffix(":/out:Z") for v in cmd if v.endswith(":/out:Z")][0]
+            src = [v.removesuffix(":/src:ro,Z") for v in cmd if v.endswith(":/src:ro,Z")][0]
             self.assertTrue(os.path.isfile(os.path.join(src, "CMakeLists.txt")), "BeamMP's source in the container")
             Path(out, "BeamMP-Launcher").write_bytes(b"\x7fELF built")
 
@@ -263,6 +265,22 @@ class Finding(unittest.TestCase):
         self.assertTrue(bmplaunch.log_too_old(log))
         self.assertFalse(bmplaunch.log_too_old("[INFO] Game Connected!"))
 
+    def test_native_windows_log_is_current_and_bounded(self):
+        with tempfile.TemporaryDirectory() as d:
+            redirected = Path(d, "stdout.log")
+            native = Path(d, "Launcher.log")
+            exe = Path(d, "BeamMP-Launcher.exe")
+            redirected.write_text("")
+            native.write_text("old failure")
+            os.utime(native, (100, 100))
+            os.utime(redirected, (200, 200))
+            self.assertNotIn("old failure", bmplaunch.read_log(redirected, exe))
+            native.write_text("x" * 100000 + "\n[DEBUG] Launcher Version : 2.8.1\n")
+            os.utime(native, (201, 201))
+            text = bmplaunch.read_log(redirected, exe)
+            self.assertLessEqual(len(text), 65537)
+            self.assertEqual(bmplaunch.log_version(text), "2.8.1")
+
     def test_running(self):
         s = socket.socket()
         s.bind(("127.0.0.1", 0))
@@ -272,6 +290,102 @@ class Finding(unittest.TestCase):
         finally:
             s.close()
 
+
+class ProcessCleanup(unittest.TestCase):
+    def test_spawn_closes_parent_log_even_on_failure(self):
+        for failed in (False, True):
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as d:
+                handles = []
+
+                def spawn(*args, **kw):
+                    handles.append(kw["stdout"])
+                    self.assertFalse(handles[-1].closed)
+                    if failed:
+                        raise OSError("could not spawn")
+                    return mock.sentinel.child
+
+                with mock.patch.object(bmplaunch.subprocess, "Popen", side_effect=spawn):
+                    if failed:
+                        with self.assertRaises(OSError):
+                            bmplaunch.start(os.path.join(d, bmplaunch.EXE), d, os.path.join(d, "output.log"))
+                    else:
+                        self.assertIs(bmplaunch.start(os.path.join(d, bmplaunch.EXE), d,
+                                                     os.path.join(d, "output.log")), mock.sentinel.child)
+                self.assertTrue(handles[0].closed)
+
+    def test_read_only_launcher_folder_runs_in_the_log_folder(self):
+        # (tie_to_app too: on Windows it hands the mocked process's handle to the job object API, and the test run
+        # stopped there on the CI's Windows runner, 2026-11-05)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bmplaunch.os, "access", return_value=False), \
+                mock.patch.object(bmplaunch, "tie_to_app"), \
+                mock.patch.object(bmplaunch.subprocess, "Popen") as popen:
+            log = os.path.join(d, "logs", "output.log")
+            bmplaunch.start(os.path.join("/usr/bin", bmplaunch.EXE), d, log)
+        self.assertEqual(popen.call_args.kwargs["cwd"], os.path.dirname(log))
+
+    def test_forced_stop_reaps_owned_child(self):
+        child = mock.Mock()
+        child.poll.return_value = None
+        child.wait.side_effect = [subprocess.TimeoutExpired("fixture", 10), 0]
+        with mock.patch.object(bmplaunch, "IS_WIN", False):     # (Windows ends the tree: StopTiedTest)
+            bmplaunch.stop(child)
+        child.terminate.assert_called_once_with()
+        child.kill.assert_called_once_with()
+        self.assertEqual(child.wait.call_args_list, [mock.call(timeout=10), mock.call(timeout=5)])
+
+    def test_completed_process_is_not_signaled(self):
+        child = mock.Mock()
+        child.poll.return_value = 0
+        bmplaunch.stop(child)
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
+    def test_readiness_deadline_uses_monotonic_clock(self):
+        child = mock.Mock()
+        child.poll.return_value = None
+        with mock.patch.object(bmplaunch.time, "monotonic", side_effect=[1, 1.1, 2.1]), \
+                mock.patch.object(bmplaunch.time, "time", side_effect=AssertionError("wall clock")), \
+                mock.patch.object(bmplaunch.time, "sleep"), \
+                mock.patch.object(bmplaunch, "running", return_value=False):
+            self.assertFalse(bmplaunch.wait_ready(child, timeout=1))
+
+
+
+class StopTiedTest(unittest.TestCase):
+    """GitHub #727: BeamMP's launcher kept running after BeamNG.Earth closed. Windows: stopped with its process tree
+    (taskkill /T), and tied to the app by a job object; a job that can't be made never stops the start."""
+
+    def test_windows_stop_kills_the_tree(self):
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        with mock.patch.object(bmplaunch, "IS_WIN", True), mock.patch.object(bmplaunch.subprocess, "run") as run:
+            bmplaunch.stop(proc)
+        self.assertEqual(run.call_args[0][0], ["taskkill", "/T", "/F", "/PID", "4242"])
+        proc.terminate.assert_not_called()
+        proc.wait.assert_called()
+
+    def test_other_systems_terminate(self):
+        proc = mock.Mock(pid=4242)
+        proc.poll.return_value = None
+        with mock.patch.object(bmplaunch, "IS_WIN", False), mock.patch.object(bmplaunch.subprocess, "run") as run:
+            bmplaunch.stop(proc)
+        run.assert_not_called()
+        proc.terminate.assert_called_once()
+
+    def test_tie_without_windows_is_false(self):
+        if os.name == "nt":
+            self.skipTest("Windows: the real job object")
+        self.assertFalse(bmplaunch.tie_to_app(mock.Mock(pid=1)))      # (no kernel32: never raises)
+
+    def test_start_ties_on_windows(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(bmplaunch, "IS_WIN", True), \
+                mock.patch.object(bmplaunch.subprocess, "Popen") as popen, \
+                mock.patch.object(bmplaunch, "tie_to_app") as tie, \
+                mock.patch.object(bmplaunch.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+            p = bmplaunch.start(os.path.join(d, "BeamMP-Launcher.exe"), d, os.path.join(d, "logs", "l.log"))
+        tie.assert_called_once_with(popen.return_value)
+        self.assertIs(p, popen.return_value)
 
 if __name__ == "__main__":
     unittest.main()

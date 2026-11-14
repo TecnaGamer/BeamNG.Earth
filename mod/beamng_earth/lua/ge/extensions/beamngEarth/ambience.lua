@@ -338,6 +338,12 @@ M.POINTS = { [4] = M.PORTAL_EVENT, [5] = WC .. 'Refinery_Tower_Engines', [6] = W
 M.POINT_VOLUME = { [8] = 0.35 }
 local spaces = {}       -- road tile key -> { { id, row }, ... }
 M.spacesMade = 0
+-- SFXSpaces are never deleted: parked out of reach and used again (2026-11-01: a teleport dropped a road tile's tunnel
+-- spaces and the game crashed in the sound world's next update, a virtual call on a freed space: the engine's SFX
+-- world still listed it). The point emitters are deleted as before.
+local parked = {}       -- ambience name -> { space id, ... }
+M.PARK_Z = -100000
+M.spacesParked = 0
 
 local function placeSpace(o, r)
   if M.POINTS[r[1]] then o:setPosition(vec3(r[2], r[3], r[4])); return end
@@ -356,23 +362,34 @@ function M.onSpaces(key, flat)
     local r = { flat[i], flat[i + 1], flat[i + 2], flat[i + 3], flat[i + 4], flat[i + 5], flat[i + 6], flat[i + 7] }
     local amb = M.SPACES[r[1]]
     local ev = M.POINTS[r[1]]
-    local o = (amb or ev) and Sim.upcast(createObject(ev and 'SFXEmitter' or 'SFXSpace'))
+    local o
+    local pool = not ev and amb and parked[amb]
+    while pool and #pool > 0 and not o do          -- a parked space of this ambience
+      o = scenetree.findObjectById(table.remove(pool))
+      if o then M.spacesParked = M.spacesParked - 1 end
+    end
     if o then
-      if ev then
-        o:setTransform(MatrixF(true))
-        o:setField('track', 0, ev)
-      else
-        o:setField('soundAmbience', 0, amb)
-      end
       placeSpace(o, r)
-      o.canSave = false
-      o:registerObject('bngEarthSpace_' .. (M.spacesMade + 1))
-      if ev then
-        o:play()
-        if M.POINT_VOLUME[r[1]] then o:setVolumePitchCT(M.POINT_VOLUME[r[1]], 1, 0, 0) end
-      end
       list[#list + 1] = { id = o:getId(), row = r }
-      M.spacesMade = M.spacesMade + 1
+    else
+      o = (amb or ev) and Sim.upcast(createObject(ev and 'SFXEmitter' or 'SFXSpace'))
+      if o then
+        if ev then
+          o:setTransform(MatrixF(true))
+          o:setField('track', 0, ev)
+        else
+          o:setField('soundAmbience', 0, amb)
+        end
+        placeSpace(o, r)
+        o.canSave = false
+        o:registerObject('bngEarthSpace_' .. (M.spacesMade + 1))
+        if ev then
+          o:play()
+          if M.POINT_VOLUME[r[1]] then o:setVolumePitchCT(M.POINT_VOLUME[r[1]], 1, 0, 0) end
+        end
+        list[#list + 1] = { id = o:getId(), row = r }
+        M.spacesMade = M.spacesMade + 1
+      end
     end
   end
   spaces[key] = list
@@ -395,7 +412,16 @@ end
 function M.dropSpaces(key)
   for _, s in ipairs(spaces[key] or {}) do
     local o = scenetree.findObjectById(s.id)
-    if o then o:delete() end
+    local amb = M.SPACES[s.row[1]]
+    if o and amb and not M.POINTS[s.row[1]] then        -- a space: parked (never deleted, above)
+      o:setPosition(vec3(0, 0, M.PARK_Z))
+      o:setScale(vec3(1, 1, 1))
+      parked[amb] = parked[amb] or {}
+      table.insert(parked[amb], s.id)
+      M.spacesParked = M.spacesParked + 1
+    elseif o then
+      o:delete()
+    end
   end
   spaces[key] = nil
 end

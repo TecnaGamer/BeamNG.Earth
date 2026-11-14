@@ -218,6 +218,19 @@ class QueryTest(unittest.TestCase):
     def test_helipads_near(self):
         self.assertEqual([h.id for _, h in self.db.helipads_near(45.0, 7.02, 100)], [401, 402])
 
+    def test_lean_grades_the_same(self):
+        """The workers' copy (lean(): runways only) answers the grading's queries as the full snapshot."""
+        lean = self.db.lean()
+        self.assertEqual(lean.airports, {})
+        self.assertEqual(lean.helipads, [])
+        for r in self.db.runways:
+            k = mapcells.cell_of(*r.center)
+            for kk in (k, mapcells.CellKey(14, k.x + 1, k.y), mapcells.CellKey(14, k.x, k.y - 1)):
+                for closed in (False, True):
+                    self.assertEqual([[x.id for x in g] for g in lean.groups_in_cell(kk, include_closed=closed)],
+                                     [[x.id for x in g] for g in self.db.groups_in_cell(kk, include_closed=closed)])
+        self.assertTrue(self.db.helipads)               # (the full one keeps them)
+
 
 class FakeTransport:
     def __init__(self, files, gz=True):

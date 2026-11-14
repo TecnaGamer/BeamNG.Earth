@@ -73,12 +73,40 @@ def mips(img):
     return imagery.mip_arrays(np.asarray(img, np.uint8))
 
 
+_GPU_FAILED = False
+
+
+def gpu_ok():
+    """True when this process encodes on the GPU (fast.gpu(), not failed yet): then a photo's encode costs ~0.05
+    CPU-s here, and sending it to a busy block process only queued it behind that process's block (a stand-in's
+    "cache" stage 3-8 s of its 9, nyc_speed.py --cold 2026-11-02)."""
+    return not _GPU_FAILED and fast.gpu()
+
+
+def _encode_gpu(chain):
+    """The chain's BC7 blocks encoded on the GPU (earthfast.bc7_encode_gpu: a 4096² photo's ~0.7 CPU-s on 8 threads ->
+    ~0.05 CPU-s, the same quality), or None: no GPU (fast.gpu()), not RGBA, or it failed (then the
+    CPU from there on)."""
+    global _GPU_FAILED
+    if _GPU_FAILED or not fast.gpu() or any(np.ndim(m) != 3 or np.shape(m)[2] != 4 for m in chain):
+        return None
+    try:
+        return b"".join(bytes(b) for b in fast._ef.bc7_encode_gpu([np.ascontiguousarray(m, np.uint8) for m in chain]))
+    except Exception as e:
+        _GPU_FAILED = True
+        import logging
+        logging.getLogger("earthd").info("bc7: the GPU encoder failed (%s); the CPU's from now on", e)
+        return None
+
+
 def dds(rgb):
     """A BC7_UNORM_SRGB DDS (DX10 header, the full mip chain) of a square power-of-two RGB image."""
     img = np.asarray(rgb, np.uint8)
     h, w = img.shape[:2]
     chain = mips(img)
-    body = b"".join(encode(m) for m in chain)
+    body = _encode_gpu(chain)
+    if body is None:
+        body = b"".join(encode(m) for m in chain)
     flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000      # CAPS HEIGHT WIDTH PIXELFORMAT MIPMAPCOUNT LINEARSIZE
     head = struct.pack("<4s7I", b"DDS ", 124, flags, h, w, max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * 16, 1, len(chain))
     head += b"\0" * 44                                                 # reserved

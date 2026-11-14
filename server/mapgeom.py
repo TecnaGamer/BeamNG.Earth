@@ -21,6 +21,11 @@ import struct
 from dataclasses import dataclass, field, replace
 
 import numpy as np
+import dnp
+
+import geodesy
+
+_ENU_G2E = geodesy.EnuFrame.geodetic_to_enu    # (Features.xy_in: frames converting as EnuFrame does)
 
 POINT, LINE, POLYGON = 1, 2, 3
 
@@ -65,6 +70,14 @@ class RuleTable:
                 maj[f[order][first]] = order[first]
             self._major = maj
         return int(self._major[i]) if 0 <= i < len(self._major) else -1
+
+    def majors(self, n):
+        """major(i) of features 0 .. n - 1 as one int64 array."""
+        self.major(0)
+        out = np.full(n, -1, np.int64)
+        k = min(n, len(self._major))
+        out[:k] = self._major[:k]
+        return out
 
     def for_feature(self, i):
         r = self.rows(i)
@@ -115,11 +128,21 @@ class Features:
         memo = self.__dict__.setdefault("_xy_in", {})
         got = memo.get(key)
         if got is None:
-            if len(self.lonlat):
+            if not len(self.lonlat):
+                got = np.zeros((0, 2), np.float64)
+            elif memo and type(frame).geodetic_to_enu is _ENU_G2E and self.lonlat.dtype == np.float64:
+                # (another frame than the one kept: the layer's ECEF made once and kept, each frame's (e, n) its
+                # rotation alone, the numbers geodetic_to_enu gives. gradesep reads a cell's roads in each of its eight
+                # neighbours' frames, each a full conversion before: 2026-11-10)
+                import fast
+                fast.require(194, "ecef_to_frame")
+                ecef = self.__dict__.get("_ecef")
+                if ecef is None:
+                    ecef = self.__dict__["_ecef"] = fast._ef.lonlat_to_ecef(self.lonlat)
+                got = fast._ef.ecef_to_frame(ecef, frame.origin, frame.rot)
+            else:
                 e, n, _ = frame.geodetic_to_enu(self.lonlat[:, 1], self.lonlat[:, 0], 0.0)
                 got = np.stack([e, n], axis=1)
-            else:
-                got = np.zeros((0, 2), np.float64)
             if len(memo) >= 2:                  # an anchor or two at a time
                 memo.pop(next(iter(memo)))
             memo[key] = got
@@ -182,6 +205,28 @@ class Features:
             got = memo[key] = got
         return got
 
+    def lonlat_boxes(self):
+        """(n, 4): per feature the [min lon, min lat, max lon, max lat] of all its coordinates (+inf / -inf without
+        any). Frame-free, kept: a test against a few points in many frames (busstations.items_from_layers) without
+        every coordinate of the cell in each frame (xy_in)."""
+        got = self.__dict__.get("_ll_boxes")
+        if got is None:
+            n = len(self.part_off) - 1
+            got = np.empty((max(n, 0), 4))
+            got[:, :2], got[:, 2:] = np.inf, -np.inf
+            if n > 0 and len(self.lonlat):
+                c = self.coord_off[self.ring_off[self.part_off]]
+                c0, c1 = c[:-1], c[1:]
+                ll = np.asarray(self.lonlat, np.float64)
+                has = c1 > c0
+                if has.any():
+                    got[has, 0] = _reduce(np.minimum, ll[:, 0], c0[has], c1[has])
+                    got[has, 1] = _reduce(np.minimum, ll[:, 1], c0[has], c1[has])
+                    got[has, 2] = _reduce(np.maximum, ll[:, 0], c0[has], c1[has])
+                    got[has, 3] = _reduce(np.maximum, ll[:, 1], c0[has], c1[has])
+            self.__dict__["_ll_boxes"] = got
+        return got
+
     def localize(self, frame):
         """Fill `en` from `lonlat` with an EnuFrame (the cell's)."""
         if len(self.lonlat):
@@ -235,19 +280,32 @@ def drop_huge(f, max_m2):
     n = len(f)
     if not n or not len(f.lonlat):
         return f
+    # every outer ring's area at once (a Python loop per building was ~0.14 s of each city layer's load, and the layers
+    # are loaded again and again: 2026-11-02)
+    part_off = np.asarray(f.part_off, np.int64)
+    ring_off = np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    ok = (np.asarray(f.kind)[:n] == POLYGON) & (part_off[1:n + 1] > part_off[:n])
+    cand = np.flatnonzero(ok)
+    r0 = ring_off[part_off[cand]]
+    a, b = coord_off[r0], coord_off[r0 + 1]
+    keep = (b - a) >= 3
+    cand, a, b = cand[keep], a[keep], b[keep]
     huge = []
-    for i in range(n):
-        if f.kind[i] != POLYGON or f.part_off[i + 1] == f.part_off[i]:
-            continue
-        r0 = f.ring_off[f.part_off[i]]
-        a, b = f.coord_off[r0], f.coord_off[r0 + 1]
-        if b - a < 3:
-            continue
-        ll = f.lonlat[a:b]
-        k = math.cos(math.radians(float(ll[:, 1].mean())))
-        x, y = ll[:, 0] * (111320.0 * k), ll[:, 1] * 110540.0
-        if 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) > max_m2:
-            huge.append(i)
+    if len(cand):
+        ln = b - a
+        first = np.concatenate([[0], np.cumsum(ln)[:-1]])
+        idx = np.repeat(a - first, ln) + np.arange(int(ln.sum()))
+        nxt = idx + 1
+        ends = np.cumsum(ln) - 1
+        nxt[ends] = a                               # (the ring's last point to its first)
+        ll = np.asarray(f.lonlat, np.float64)
+        lat_mean = np.add.reduceat(ll[idx, 1], first) / ln
+        k = np.repeat(dnp.cos(np.radians(lat_mean)) * 111320.0, ln)
+        x, y = ll[idx, 0] * k, ll[idx, 1] * 110540.0
+        xn, yn = ll[nxt, 0] * k, ll[nxt, 1] * 110540.0
+        area = 0.5 * np.abs(np.add.reduceat(x * yn - y * xn, first))
+        huge = [int(i) for i in cand[area > max_m2]]
     if not huge:
         return f
     lonlat = np.array(f.lonlat, np.float64, copy=True)
@@ -506,6 +564,37 @@ def clip_polygon_parts(parts, bounds):
                 new.append(c)
         out.append(new)
     return out, changed
+
+
+def simplify_ring(ring, tol):
+    """A closed ring (k, 2) with the vertices closer than tol to their neighbours' line dropped (Ramer-Douglas-Peucker,
+    iterative: sidewalks.simplify's), still closed; the ring itself when fewer than 4 vertices would be left. Pure."""
+    p = np.asarray(ring, np.float64)
+    k = len(p)
+    if k <= 4:
+        return p
+    keep = np.zeros(k, bool)
+    far = int(np.argmax((dnp.sq(p - p[0])).sum(1)))      # (a closed ring's ends are one point: split it at the far one)
+    keep[[0, far, k - 1]] = True
+    stack = [(0, far), (far, k - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        seg, rel = p[b] - p[a], p[a + 1:b] - p[a]
+        L2 = float(dnp.matmul(seg, seg))
+        d = rel - np.clip(dnp.matmul(rel, seg) / L2, 0.0, 1.0)[:, None] * seg if L2 > 0 else rel
+        d2 = (d * d).sum(1)
+        i = int(np.argmax(d2))
+        if d2[i] > tol * tol:
+            keep[a + 1 + i] = True
+            stack += [(a, a + 1 + i), (a + 1 + i, b)]
+    return p[keep] if keep.sum() >= 4 else p
+
+
+def simplify_polygon_parts(parts, tol):
+    """Polygon parts with each ring simplify_ring'd at tol (the parts' own units). Pure."""
+    return [[simplify_ring(r, tol) for r in rings] for rings in parts]
 
 
 def _reduce(ufunc, v, a, b):

@@ -12,6 +12,7 @@ import logging
 import threading
 
 import numpy as np
+import dnp
 
 import railtags
 
@@ -38,7 +39,7 @@ class Crossings:
 
     def prefetch(self, keys):
         """Start reading cells keys in the background (a road tile's at its start: alongside its other fetches)."""
-        from concurrent.futures import ThreadPoolExecutor
+        from runtimeprofiler import ThreadPoolExecutor
         with self.lock:
             if self.pool is None:
                 self.pool = ThreadPoolExecutor(1, thread_name_prefix="fra")
@@ -69,7 +70,7 @@ class Crossings:
         kit = [r[2] for r in pts]
 
         def look(p, _cls):
-            d = np.hypot(*(xy - np.asarray(p)[:2]).T)
+            d = dnp.hypot(*(xy - np.asarray(p)[:2]).T)
             j = int(np.argmin(d))
             return kit[j] if d[j] <= MATCH_M else None
         return look
