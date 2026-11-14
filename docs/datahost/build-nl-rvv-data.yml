@@ -1,3 +1,5 @@
+# Integration template for BeamNG.Earth-data, not an active application workflow.
+# Copy the producer and schema listed in README.md before enabling it there.
 name: Build public Dutch sign tiles
 
 on:
@@ -24,6 +26,5 @@ jobs:
           name: nl-rvv-public-tiles
           path: public/nl-rvv
           retention-days: 7
-# Publication is intentionally separate: the BeamNG.Earth-data maintainer can
-# add public/nl-rvv to that site's existing deployment. This workflow grants no
-# Pages/R2 write permissions and never publishes photographs or the source CSV.
+# Publication belongs to the data site's existing deployment. This template
+# grants no deployment permissions and contains no images or source CSV.

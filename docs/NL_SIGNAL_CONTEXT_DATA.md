@@ -57,8 +57,11 @@ unknown. Missing WKD data remains unknown unless the caller explicitly proves
 complete WKD coverage. This server API is tested but not yet wired into the
 live signal planner.
 
-The next integration step is native physical assembly planning, followed by a
-small client assembly reader and distant Forest instances. The old bundled
+The native physical support API (earthfast 293) now checks actual drawn surfaces
+and quantised terrain; its intermediate contract and remaining assembly work are
+documented in [NL_SIGNAL_SERVER_PLACEMENT.md](NL_SIGNAL_SERVER_PLACEMENT.md).
+The next integration step is expansion into complete mounted assemblies, followed
+by a small client assembly reader and distant Forest instances. The old bundled
 pack and Lua matching remain until that coordinated switch is tested.
 Performance and placement still require in-game measurement.
 

@@ -30,6 +30,7 @@ MODULES = (
     "test_host_package", "test_container",
     "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata", "test_bdtopo",
     "test_nlrvv", "test_nl_signal_context_data", "test_nlsignaldata", "test_nlsignalcontext",
+    "test_nlsignalassembly", "test_groenpol_forest_probe",
 )
 
 
