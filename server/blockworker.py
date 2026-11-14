@@ -138,6 +138,20 @@ class _State:
             for c in self.chunks.values():
                 c.clear()
 
+    def late_reset(self):
+        """A late process drops its whole planning state (late_job): the plan store with every planner's memory (cells'
+        plans, road stages, kept geometry, deck corrections, packs, plan sets, tunnel networks), the chain stores made
+        on its plans, the anchors' and the geotile frames' graders with their mapped copies. The next job starts
+        from the disk alone."""
+        with self.lock:
+            self.__dict__.pop("plan_store", None)
+            self.__dict__.get("chain_stores", {}).clear()
+            self.graders.clear()
+            self.chunks.clear()
+            self.late_resets = self.__dict__.get("late_resets", 0) + 1
+        with _geo_lock:
+            _geo_graders.clear()
+
     def anchor(self, aid, lat, lon):
         """(Grader or None, ChunkCache) of an anchor; only the last few anchors are kept."""
         with self.lock:
@@ -157,7 +171,7 @@ class _State:
                     grader.tunnel_raw = lambda la, lo: ground(None, la, lo,
                         self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                     grader.dem = self.dem          # (its urgent lane: _plan_missing)
-                    grader.shared = plancache.for_grader(self.cache_dir, grader, self.widths, grader.wet)
+                    grader.shared = _plan_cache(self.cache_dir, grader, self.widths)
                 self.graders[aid] = grader
                 self.chunks[aid] = heightmap.ChunkCache()    # no cached unpinned state after a failed setup
                 # (never the anchor just set up: a late job of an older anchor, after two newer ones, evicted its own
@@ -358,6 +372,38 @@ def init(cache_dir, offline, roads, grading, road_widths, surface, warm_q, log_l
 
 
 LATE_RUN = "-late"
+_LATE = [False]             # this is a process of the late pool (init_late)
+_LATE_JOB = [0]             # a late job is running in it (late_job; one job at a time in a pool's process)
+
+
+def _plan_cache(cache_dir, grader, widths):
+    """The grader's plan cache (plancache.for_grader); a late process's passes over its run's plans and road stages
+    made short of something (PlanCache.fresh: they are what it makes again; complete ones are read)."""
+    pc = plancache.for_grader(cache_dir, grader, widths, grader.wet)
+    if pc is not None and _LATE[0] and hasattr(pc, "fresh"):
+        pc.fresh = True
+    return pc
+
+
+def late_job(kept, fn, *a, **kw):
+    """fn(*a, **kw) as a late process's job: in a fault scope of its own, and unless nothing was read short and
+    kept() says its result is in the revisit cache, the process's whole planning state is dropped after it
+    (_State.late_reset). A first try that read something short left it in the planners' memory (short plans and road
+    stages, kept geometry on the lidar rule, deck corrections, mapped copies), and every later try of the cell or
+    geotile read it again, also after the cell's plans had been made complete and kept: memory is never read again
+    from the disk. Nothing is invalidated piece by piece: a state that saw a fault is not used again."""
+    import revisit
+    clean = False
+    _LATE_JOB[0] += 1
+    try:
+        with revisit.scope() as b:
+            out = fn(*a, **kw)
+            clean = not (b.n or b.lidar) and bool(kept())
+            return out
+    finally:
+        _LATE_JOB[0] -= 1
+        if not clean:
+            _s.late_reset()
 
 
 def init_late(*initargs):
@@ -366,6 +412,7 @@ def init_late(*initargs):
     none of the session's rule decisions nor what was planned short on them (its run's plan files, cell facts and
     carriageway regions); what they make complete is kept in the revisit cache, as any process's."""
     late_env()
+    _LATE[0] = True
     import revisit          # (why a late build was not kept, logged: blockworker._geo_content's "not kept" line)
     revisit.SITES = True
     init(*initargs)
@@ -386,9 +433,16 @@ def late_plan(z, x, y):
     g, _ = _s.anchor(LATE_AID, la, lo)
     if g is None or getattr(g, "store", None) is None or g.shared is None or g.shared.persist is None:
         return None
-    with roadz.precache_gaps_wait():
-        g.store.planner_of_cell(k)._cell_plans(k)
-    return revisit.has(_s.cache_dir, "plans", g.shared._revisit_key(k))
+    rk = g.shared._revisit_key(k)
+    if revisit.has(_s.cache_dir, "plans", rk):
+        return True
+
+    def plan():
+        with roadz.precache_gaps_wait():
+            g.store.planner_of_cell(k)._cell_plans(k)
+    # (a job of its own planning state: dropped whole after a try that read anything short, late_job)
+    late_job(lambda: revisit.has(_s.cache_dir, "plans", rk), plan)
+    return revisit.has(_s.cache_dir, "plans", rk)
 
 
 def late_env():
@@ -1898,7 +1952,7 @@ def _frame_grader(frame):
     gr.tunnel_raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
     gr.dem = _s.dem
     if getattr(_s.plan_store, "shared", None) is None:
-        gr.shared = plancache.for_grader(_s.cache_dir, gr, _s.widths, gr.wet)
+        gr.shared = _plan_cache(_s.cache_dir, gr, _s.widths)
     with _geo_lock:
         got = _geo_graders.setdefault(k, gr)
         while len(_geo_graders) > GEO_FRAMES_KEPT:
@@ -2061,7 +2115,13 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     tile_key = geotiles.geobox(gx, gy).key
     k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                          pole_profile=pole_profile, models_dir=os.path.dirname(scratch), de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    if not revisit.has(_s.cache_dir, "roadsg", k):
+    if _LATE[0] and not _LATE_JOB[0] and not revisit.has(_s.cache_dir, "roadsg", k):
+        # (the late pool's: a job of its own planning state, as late_plan; its geotile builds read the process's
+        # planners, whose memory kept a first try's short plans after the cells had been made complete and kept)
+        late_job(lambda: revisit.has(_s.cache_dir, "roadsg", k), prebuild_geo, gx, gy, zoom, scratch, buildings,
+                 left_hand, mph, gas_stations, buried, lamp_region, country, scratch_vfs, pole_profile, wait_gaps,
+                 de_junctions, towns_on, wear)
+    elif not revisit.has(_s.cache_dir, "roadsg", k):
         os.makedirs(scratch, exist_ok=True)
         try:
             if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)

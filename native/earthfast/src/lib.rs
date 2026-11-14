@@ -6429,6 +6429,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // PaintPolys, PaintFields, paint_photo, pil_raster; server/paintlist.py, surface.paint_square), roadtone's coverage
     // loop shared with it
     paintlist::register(m)?;
-    m.add("VERSION", 295)?;
+    // 296 (on 295; written as 294 on 290): the stage claims with an owner token, the process's start time and an
+    // uptime lease, changed only under the folder's lock; a damaged stage file written again (stage_claim / stage_wait
+    // repair; stage_put and stage_release take the token)
+    m.add("VERSION", 296)?;
     Ok(())
 }

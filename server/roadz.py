@@ -385,6 +385,11 @@ def name_ok(map_name, src_name, src_ref):
     return True
 
 
+class SurveyDataError(ValueError):
+    """A survey's arrays do not fit each other (a damaged or cut file, a source's malformed answer): its lines are
+    not used, and read again from the source (a ValueError, as the callers of Lines.load expect)."""
+
+
 class Lines:
     """3D road lines of one cell and source: lonlat (n, 2) and z (n,) (m; NaN: none) of every vertex, off (L + 1,) the
     lines' vertex ranges, level (L,) int8 (>0 bridge, 0 ground, <0 tunnel), ref / name (L,) text, corrected: the
@@ -402,6 +407,17 @@ class Lines:
         self.ref = np.asarray(ref, dtype=str).ravel() if len(ref) else np.zeros(0, "U1")
         self.name = np.asarray(name, dtype=str).ravel() if len(name) else np.zeros(0, "U1")
         self.corrected = bool(corrected)
+        # (checked where they come in: arrays that do not fit each other raised a ValueError or IndexError deep in
+        # observed() / _segments (np.repeat of negative counts, an index past the vertices), caught there as "the
+        # DEM's rather than no grading": a fallback that looked complete)
+        n, lines = len(self.lonlat), len(self.off) - 1
+        if len(self.z) != n:
+            raise SurveyDataError(f"road survey: {len(self.z)} heights for {n} vertices")
+        if lines < 0 or self.off[0] != 0 or self.off[-1] != n or (np.diff(self.off) < 0).any():
+            raise SurveyDataError("road survey: the lines' vertex ranges do not cover its vertices in order")
+        if len(self.level) != lines or len(self.ref) not in (0, lines) or len(self.name) not in (0, lines):
+            raise SurveyDataError(f"road survey: {lines} lines with {len(self.level)} levels, {len(self.ref)} refs, "
+                                  f"{len(self.name)} names")
 
     @classmethod
     def build(cls, rows, corrected=False):

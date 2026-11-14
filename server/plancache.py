@@ -43,11 +43,11 @@ STAGE_SLICE_MS = 200        # ms of that wait between two looks at the waiting j
 
 
 def _stage_ef():
-    """The native module's stage functions (earthfast 290), or None when the sharing is off."""
+    """The native module's stage functions (earthfast 296), or None when the sharing is off."""
     if not STAGE_ON:
         return None
     import fast
-    return fast.native(290, "shared road stages")
+    return fast.native(296, "shared road stages")
 
 
 def _pack(arrays, g, items):
@@ -141,6 +141,10 @@ class PlanCache:
         self._persist_at = time.monotonic()
         self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
+        self._stage_tokens = {}     # cell key -> the owner token of its road stage's claim held here (stage_claim)
+        # fresh: a late retry's own cache (blockworker.late_plan): this run's plans and road stages made short of
+        # something are not read (they are what is being made again); complete ones are
+        self.fresh = False
         self._lock = threading.Lock()
 
     def _path(self, key):
@@ -165,6 +169,8 @@ class PlanCache:
                 got = self._kept(key)
                 if got is not None:
                     src, final = got, True
+                elif self.fresh:
+                    return None
             self._note_final(key, final)
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
@@ -505,6 +511,9 @@ class PlanCache:
         ef = _stage_ef()
         if ef is None:
             return None, False
+        if self.fresh:  # (a late retry: a short stage of the run is not read, nor one kept over it here; a complete
+            got = self.stage_load(key)      # one is read)
+            return (got if got is not None and not got[2] else None), False
         path = self._stage_path(key)
         if not hold:
             got = self.stage_load(key)
@@ -513,37 +522,58 @@ class PlanCache:
         rank, prio = xproc._rank("demand")
         pid = os.getpid()
         t0 = time.monotonic()
-        st = ef.stage_claim(path, rank, prio, pid)
         waited = False
-        while st == ef.STAGE_HELD:
-            if time.monotonic() - t0 > (STAGE_WAIT_S if wait_s is None else wait_s):
-                return None, False
-            if not waited:
-                waited = True
-                with self._lock:
-                    self.stats["stage_waited"] = self.stats.get("stage_waited", 0) + 1
-            xproc.check_cancel()        # (a block / road tile of a place a teleport left)
-            st = ef.stage_wait(path, rank, prio, pid, STAGE_SLICE_MS)
+        # (a result that does not read, damaged or cut short, is asked for once more with repair: checked under the
+        # folder's lock it counts as none, so one process takes the claim and writes it again, the others wait for
+        # that; before, it stayed "ready" for the run and every process made the stage without keeping it)
+        for repair in (False, True):
+            st, token = ef.stage_claim(path, rank, prio, pid, repair)
+            while st == ef.STAGE_HELD:
+                if time.monotonic() - t0 > (STAGE_WAIT_S if wait_s is None else wait_s):
+                    return None, False
+                if not waited:
+                    waited = True
+                    with self._lock:
+                        self.stats["stage_waited"] = self.stats.get("stage_waited", 0) + 1
+                xproc.check_cancel()        # (a block / road tile of a place a teleport left)
+                st, token = ef.stage_wait(path, rank, prio, pid, STAGE_SLICE_MS, repair)
+            if st != ef.STAGE_READY:
+                break
+            got = self.stage_load(key)
+            if got is not None:
+                break
+            with self._lock:
+                self.stats["stage_damaged"] = self.stats.get("stage_damaged", 0) + 1
         if waited:
             with self._lock:
                 self.stats["stage_wait_s"] = self.stats.get("stage_wait_s", 0.0) + time.monotonic() - t0
         if st == ef.STAGE_READY:
-            return self.stage_load(key), False
+            return got, False
         if st == ef.STAGE_MINE and not hold:
-            ef.stage_release(path)
+            ef.stage_release(path, token)
             return None, False
+        if st == ef.STAGE_MINE:
+            with self._lock:            # (the claim's owner token: stage_store and stage_release act only as its owner)
+                self._stage_tokens[tuple(int(v) for v in key)] = token
         return None, st == ef.STAGE_MINE
 
     def stage_release(self, key):
         ef = _stage_ef()
-        if ef is not None:
-            ef.stage_release(self._stage_path(key))
+        with self._lock:
+            token = self._stage_tokens.pop(tuple(int(v) for v in key), 0)
+        if ef is not None and token:
+            ef.stage_release(self._stage_path(key), token)
 
-    def stage_store(self, key, plans, keeps, short):
-        """Cell key's road stage for the run's other processes (short: made short of something, read so). False when
-        it could not be written (they make it themselves)."""
+    def stage_store(self, key, plans, keeps, short, decks=None):
+        """Cell key's road stage for the run's other processes (short: made short of something, read so; decks: the
+        identity of the corrected decks it was made under, grading.deck_patches_id). False when it could not be
+        written, or the claim is no longer this process's (they make it themselves)."""
         ef = _stage_ef()
         if ef is None:
+            return False
+        with self._lock:
+            token = self._stage_tokens.get(tuple(int(v) for v in key), 0)
+        if not token:
             return False
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
                            "rid": int(p.rid), "rank": int(getattr(p, "rank", -1)),
@@ -551,7 +581,7 @@ class PlanCache:
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
-                "keeps": [float(hw) for _xy, hw in keeps], "short": bool(short)}
+                "keeps": [float(hw) for _xy, hw in keeps], "short": bool(short), "decks": decks}
         arrays = {}
         try:
             _pack(arrays, "p", [p.xy for _f, p in plans])
@@ -562,7 +592,8 @@ class PlanCache:
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             rows = [(n, a.dtype.str, [int(d) for d in a.shape], np.ascontiguousarray(a).tobytes())
                     for n, a in arrays.items()]
-            ok = bool(ef.stage_put(self._stage_path(key), json.dumps(meta).encode("utf-8"), rows, os.getpid()))
+            ok = bool(ef.stage_put(self._stage_path(key), json.dumps(meta).encode("utf-8"), rows, os.getpid(),
+                                   token))
         except (OSError, ValueError, TypeError):    # (plans of mixed arrays, a full disk: each process makes its own)
             return False
         if ok:
@@ -571,7 +602,8 @@ class PlanCache:
         return ok
 
     def stage_load(self, key):
-        """(plans, keeps, short) of cell key's road stage as a process of this run made it, or None."""
+        """(plans, keeps, short, the identity of the corrected decks it was made under) of cell key's road stage as
+        a process of this run made it, or None."""
         from grading import Plan, set_widen
         ef = _stage_ef()
         if ef is None:
@@ -601,7 +633,7 @@ class PlanCache:
             return None
         with self._lock:
             self.stats["stage_read"] = self.stats.get("stage_read", 0) + 1
-        return plans, keeps, bool(meta.get("short"))
+        return plans, keeps, bool(meta.get("short")), meta.get("decks")
 
 
     # ---- carriageway regions (grading._Planner._cw_region): solved once a run, read by every process ----
