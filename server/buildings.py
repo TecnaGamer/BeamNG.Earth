@@ -620,6 +620,8 @@ MAST_MAX_M2 = 100.0         # m2: a mast's footprint at most ...
 MAST_MIN_H = 20.0           # ... this tall ...
 MAST_MATERIALS = ("metal", "steel")     # ... of steel, or slender past MAST_SLENDER (height / sqrt(area))
 MAST_SLENDER = 8.0
+MAST_TOP_SHARE = 0.9        # a building part is a mast only reaching this share of its building's top (or mapped metal)
+CROWN_MIN_M = 60.0          # m: a part of a building this tall with a sloped or curved top and no roof material: metal
 MAST_RGB = (0.62, 0.64, 0.66)
 GREENHOUSE_CLASSES = {"greenhouse", "glasshouse"}
 GREENHOUSE_H = 6.0          # m to the gutter of a commercial block (no height mapped)
@@ -908,6 +910,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     cls = (attrs.get("class") or "").lower()
     name = str(attrs.get("name") or "").lower()
     terminal = any(w in name for w in ("terminal", "concourse"))
+    # a building part (tile_buildings passes the building's top with each): judged as a piece of its building, not by
+    # its own footprint (streets.gl comparison 2026-11-14: the Capitol's marble lantern rings under 40 m² came out sheds
+    # in vinyl siding, the Chrysler Building's 185 m wings on under 100 m² windowless steel masts)
+    part = attrs.get("building_height") is not None
     church = cls in CHURCH_CLASSES or any(w in name for w in ("church", "chapel", "cathedral"))
     if "hangar" in name:
         cls = "hangar"
@@ -917,9 +923,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         "garage" in name and area > 800) or (bool(attrs.get("garage")) and cls in GARAGE_TAG_CLASSES)
     narrow = hw < 4.2 and hl > 2.2 * hw                 # a row house: ~4-8 m wide, deep
     # in a dense core small buildings are row houses even where the footprints leave gaps (Fells Point)
-    row = cls in ROW_CLASSES or (not west_town and ((narrow and (neighbours >= 1 or dense)) or (
+    row = cls in ROW_CLASSES or (not west_town and not part and ((narrow and (neighbours >= 1 or dense)) or (
         dense and area < 260 and cls not in SHOP_CLASSES)))
-    shed = (cls in SHED_CLASSES and not garage) or (area < 40 and not row)
+    shed = (cls in SHED_CLASSES and not garage) or (area < 40 and not row and not part)
     shop = cls in SHOP_CLASSES
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
     # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches
@@ -953,7 +959,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                     pitch=math.degrees(dmath.atan2(max(h - PYRAMID_PLINTH_M, 0.1), hw)))
     if (town and style.name.startswith("us_") and cls in ELEVATOR_CLASSES and h is not None and h >= ELEVATOR_MIN_H
             and nf is None and area <= ELEVATOR_MAX_M2 and h / math.sqrt(max(area, 1.0)) >= ELEVATOR_SLENDER
-            and not (church or terminal or garage)):
+            and not (church or terminal or garage or part)):
         return Spec(ring=ring, floors=1, floor_h=h, height=h, roof="flat", roof_mat="bne_precast", facade="bne_precast",
                     band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None, windows=False, steeple=False,
                     porch=False, cls="elevator", deck=False, pitch=None)
@@ -1001,7 +1007,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             and ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower()) \
             not in ("skillion", "gabled", "hipped", "half-hipped") \
             and (str(attrs.get("facade_material") or "").lower() in MAST_MATERIALS
-                 or h / math.sqrt(max(area, 1.0)) >= MAST_SLENDER):
+                 or (h / math.sqrt(max(area, 1.0)) >= MAST_SLENDER
+                     and (not part or float(attrs.get("_part_min") or 0.0) + h
+                          >= MAST_TOP_SHARE * float(attrs["building_height"])))):
         look = custom_look(METALWALL, MAST_RGB)
         mroof = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
         rh_m = mapped_roof_h(mroof, attrs.get("roof_height")) if mroof == "pyramidal" else None
@@ -1113,7 +1121,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     mapped_hf = (roof == roof_given and roof in HF_FORMS and len(ring) <= HF_MAX_VERTS and hw >= 0.5
                  and (roof == "skillion" or mapped_roof_h(roof, attrs.get("roof_height")) is not None))
     if roof in DOME_ROOFS:
-        if hw < 1.0 or hw > DOME_MAX_HW:
+        if hw < DOME_MIN_HW or hw > DOME_MAX_HW:
             roof = "flat"
     elif roof != "flat" and (shw < 2.0 or shw > (18.0 if barn else 20.0 if church else 14.0)) \
             and not (holed and roof in SKEL_FORMS) and not mapped_hf:
@@ -1219,6 +1227,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         plain = False
     wall = None
     house = (cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)) and not row and not shed \
+        and not part \
         and neighbours == 0 and area < 300         # a long "residential" block is not a house (Fells Point)
     if house and band is not BAND_BRICK and nf <= 3:
         # detached houses: siding in the East and South, stucco in the West; windows laid over the wall
@@ -1349,6 +1358,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     elif roof == "flat" or barn or shed:
         roof_mat = ROOF_FLAT if roof == "flat" else ROOF_METAL
         roof_mat = f"{roof_mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[roof_mat]))}"
+    elif part and float(attrs.get("building_height") or 0.0) >= CROWN_MIN_M:
+        # a tall building's sloped or curved top with no roof material mapped: metal (the Chrysler Building's
+        # stainless-steel arches came out in the region's asphalt shingles; Overture drops OSM's stainless_steel)
+        roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
     else:       # the region's pitched roofs (the US: slate or shingle by the seed, their first four tints)
         mat, tints = style.roofs[min(int(seed * len(style.roofs)), len(style.roofs) - 1)]
         roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
@@ -1394,9 +1407,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         nf, floor_h = 1, h
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
-                windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS
+                windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS and not part
                                           and (STEEPLE_KIND.get(style.name, "spire") if
-                                               _hash01(seed, "tower") < STEEPLE_SHARE.get(style.name, 1.0) else False)),
+                                               _hash01(seed, "tower") < STEEPLE_SHARE.get(style.name, 1.0) else False))
+                or ((STEEPLE_TOP_LOW if STEEPLE_KIND.get(style.name) == "campanile" else STEEPLE_TOP)
+                    if attrs.get("_steeple_part") and roof == "flat" else False),
                 porch=porch, cls=cls,
                 deck=garage and roof == "flat",
                 pitch=math.degrees(dmath.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
@@ -1937,10 +1952,38 @@ def _box_tiled(m, c, u, hx, hy, z0, z1, mat, tile=1.0):
 # pyramid), on STEEPLE_SHARE of the churches.
 STEEPLE_KIND = {"mediterranean": "campanile", "latin_america": "campanile", "warm": "campanile"}
 STEEPLE_SHARE = {"mediterranean": 0.6, "warm": 0.6}
+# A church mapped in parts: no tower of our own on every part (Trinity Church, New York: ten slate spires on its nave,
+# aisles and tower parts, streets.gl comparison 2026-11-14), but a roof over its tower part, the tallest flat-topped
+# part standing on the ground (tile_buildings' _steeple_part): a slate spire STEEPLE_TOP_RISE times the tower's short
+# side, or around the Mediterranean (STEEPLE_KIND) the campanile's low tiled pyramid.
+STEEPLE_TOP, STEEPLE_TOP_LOW = "top", "top_low"
+STEEPLE_TOP_RISE = 3.0          # x the short side (Trinity's 45 m spire on its ~10 m tower: 4.5; gothic spires 2-5)
+STEEPLE_TOP_LOW_PITCH = 25.0    # degrees: a campanile's tiled pyramid
+
+
+def _steeple_top(m, spec, z_eave, mat_idx):
+    """A spire (or a campanile's low pyramid) over the whole of a church's tower part: its oriented box at the eave."""
+    c, u, hl, hw = oriented_box(spec.ring)
+    v = np.array([-u[1], u[0]])
+    k = [c + u * sx * hl + v * sy * hw for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    if spec.steeple == STEEPLE_TOP_LOW:
+        rise = hw * dmath.tan(math.radians(STEEPLE_TOP_LOW_PITCH))
+        rm = mat_idx[f"{ROOF_TILES}|{int(_hash01(spec.seed, 'tower roof') * len(ROOF_TINTS[ROOF_TILES]))}"]
+    else:
+        rise = STEEPLE_TOP_RISE * 2.0 * hw
+        rm = mat_idx[f"{ROOF_SLATE}|3"]
+    apex = (float(c[0]), float(c[1]), float(z_eave + rise))
+    for i in range(4):
+        a, b = k[i], k[(i + 1) % 4]
+        w = float(math.hypot(*(b - a))) / ROOF_UV_M
+        m.tri((a[0], a[1], z_eave), (b[0], b[1], z_eave), apex, (0, 0), (w, 0), (w / 2, rise / ROOF_UV_M), rm)
 
 
 def _steeple(m, spec, z_eave, mat_idx):
     """A church's square tower at one end of its nave (hashed): a slate spire on it, or a campanile (STEEPLE_KIND)."""
+    if spec.steeple in (STEEPLE_TOP, STEEPLE_TOP_LOW):
+        _steeple_top(m, spec, z_eave, mat_idx)
+        return
     if spec.steeple == "campanile":
         _campanile(m, spec, z_eave, mat_idx)
         return
@@ -2182,6 +2225,7 @@ def tank_rows(items, x0, y0):
 DOME_ROOFS = ("dome", "onion")
 DOME_RISE = {"dome": 1.0, "onion": 1.6}     # the rise over the footprint's half width when roof:height is not mapped
 DOME_MAX_HW = 80.0          # m: the largest half width drawn as a dome (St. Peter's is ~21 m, the Pantheon's 22 m)
+DOME_MIN_HW = 0.3           # m: the smallest (a lantern's cupola; under 1 m they went flat: 16 of Manhattan's domes)
 DOME_PROFILE = {
     "dome": tuple((dmath.cos(a), dmath.sin(a)) for a in np.linspace(0.0, math.pi / 2, 9)),
     "onion": ((1.0, 0.0), (1.18, 0.15), (1.22, 0.3), (1.1, 0.45), (0.8, 0.6), (0.45, 0.75), (0.2, 0.88),
@@ -2197,30 +2241,21 @@ def dome_rise(roof, hw, roof_height=None):
 
 
 def _dome(m, ring, z_eave, rise, mat, shape="dome", lite=False):
-    """A dome (or onion dome) of `rise` on the footprint ring at z_eave: the ring scaled toward its centre up
-    DOME_PROFILE (every other ring when lite). mat: a material index (or the skyline's (index, colour))."""
+    """A dome (or onion dome) of `rise` on the footprint ring at z_eave: every corner joined up DOME_PROFILE to the
+    dome's centre (every other level when lite), the centre the outline's centroid, or its pole of inaccessibility where
+    the centroid lies outside it (earthfast.dome_roof: Streets GL's CurvedRoofBuilder, MIT; a crescent's or an L's dome
+    was scaled toward its corners' mean, outside it). mat: a material index (or the skyline's (index, colour))."""
     ring = np.asarray(ring, np.float64)[:, :2]
     if len(ring) < 3 or rise <= 0:
         return
-    if _area2(ring) < 0:
-        ring = ring[::-1]
-    c = ring.mean(0)
     prof = DOME_PROFILE.get(shape, DOME_PROFILE["dome"])
     if lite:
         prof = prof[::2] if len(prof) % 2 else prof[::2] + prof[-1:]
-    n = len(ring)
-    levels = [[(float(c[0] + (p[0] - c[0]) * s), float(c[1] + (p[1] - c[1]) * s), float(z_eave + rise * t))
-               for p in ring] for s, t in prof]
-
-    def uv(q):
-        return (q[0] / ROOF_UV_M, q[1] / ROOF_UV_M)
-    for lo, hi in zip(levels[:-1], levels[1:]):
-        for i in range(n):
-            a, b, bu, au = lo[i], lo[(i + 1) % n], hi[(i + 1) % n], hi[i]
-            if au == bu:                    # (the apex)
-                m.tri(a, b, au, uv(a), uv(b), uv(au), mat)
-            else:
-                m.quad(a, b, bu, au, uv(a), uv(b), uv(bu), uv(au), mat)
+    fast.require(297, "dome_roof")
+    q, qu, t, tu = fast._ef.dome_roof(np.ascontiguousarray(ring), float(z_eave), float(rise),
+                                      np.ascontiguousarray(np.asarray(prof, np.float64)), float(ROOF_UV_M))
+    m.quads(q, qu, np.zeros(len(q), np.intp), [mat])
+    m.tris(np.asarray(t, np.float64).reshape(-1, 3), np.asarray(tu, np.float64).reshape(-1, 2), mat)
 
 
 # Pitched roofs on the footprint's own outline (heightfield_roof, research 2026-11-10): a footprint filling less than
@@ -3135,7 +3170,7 @@ def _part_heights(a, i):
     top = a["height"][i] if "height" in a else np.nan
     mh = a["min_height"][i] if "min_height" in a else np.nan
     mh = float(mh) if np.isfinite(mh) and mh > 0 else 0.0
-    if not np.isfinite(top) or top <= mh + 1.0:
+    if not np.isfinite(top) or top <= mh + PART_MIN_THICK_M:
         nf, f0 = (a[k][i] if k in a else np.nan for k in ("num_floors", "min_floor"))
         if np.isfinite(nf) and nf > 0:
             f0 = float(f0) if np.isfinite(f0) and f0 > 0 else 0.0
@@ -4451,7 +4486,7 @@ def _parts_tops(f):
             mh = np.where(np.isfinite(mh) & (mh > 0), mh, 0.0)
             f0 = np.where(np.isfinite(f0) & (f0 > 0), f0, 0.0)
             floors = np.maximum(FLOOR_M, (nf - f0) * FLOOR_M) + np.where(mh > 0, mh, f0 * FLOOR_M)
-            tops = np.where(np.isfinite(top) & (top > mh + 1.0), top,
+            tops = np.where(np.isfinite(top) & (top > mh + PART_MIN_THICK_M), top,
                             np.where(np.isfinite(nf) & (nf > 0), floors, np.nan))
         f.__dict__["_bnge_parts_tops"] = tops
     return tops
@@ -4556,6 +4591,101 @@ def _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy, reach=ships.PIER_REAC
             if r is not None and ships.is_ship(r, at, lambda: ships.on_water(r.mean(0), water_xy)):
                 out.append(r)
     return out
+
+
+# Building parts too thin, too small or seen from afar (streets.gl comparison 2026-11-14, against the OSM data of the
+# Empire State Building, the Chrysler Building, Trinity Church and the US Capitol):
+# - a part mapped a metre or less thick (a cornice band, a terrace, a slab) kept its height only from PART_MIN_THICK_M
+#   (was 1 m: 173 such parts in Manhattan were taken as heightless and drawn up to their building's top);
+# - a part under PART_MIN_M2 is left out unless it is PART_TINY_TALL_M tall (a needle, a statue; from PART_TINY_M2);
+# - the skyline draws a low building with parts (under SKY_PARTS_MIN_M) as its outline, but at its parts' mean height
+#   (by area) with the parts SKY_BODY_RISE times higher on it (sky_body): the Capitol was one 87.6 m box to its statue.
+PART_MIN_THICK_M = 0.05
+PART_MIN_M2 = 4.0
+PART_TINY_M2 = 0.25
+PART_TINY_TALL_M = 10.0
+SKY_BODY_RISE = 1.5             # a part this many times the body's height rises over it (and SKY_BODY_OVER_M more)
+SKY_BODY_OVER_M = 6.0
+STEEPLE_SPIRE_SHARE = 0.25      # a mapped pyramid on the tower part covering this share of it is the tower's spire
+STEEPLE_TOWER_ASPECT = 1.6      # a church's tower part: at most this long for its width ...
+STEEPLE_TOWER_OVER = 1.25       # ... and this many times its parts' mean top at least
+
+
+def _part_top(p):
+    return p[1][0] + p[1][1]
+
+
+def _local(ring):
+    """A ring (k, 2+) about its first corner (an anchor frame's kilometres off its areas' last digits)."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    return r - r[0]
+
+
+def sky_body(bparts, height):
+    """The skyline's parts of a building lower than SKY_PARTS_MIN_M: (the parts rising over its body, the body's
+    height) where its parts' mean top (by area) is that much lower than the parts over it or than its own mapped height;
+    ([], None) otherwise (the outline as mapped). bparts: tile_buildings' [(ring, (own height, bottom) or None,
+    ...)]."""
+    known = [p for p in bparts if p[1] is not None]
+    if not known:
+        return [], None
+    areas = [abs(_area2(_local(p[0]))) / 2 for p in known]
+    total = 0.0
+    weighted = 0.0
+    for p, a in zip(known, areas):              # (in the parts' order: the same sum everywhere)
+        total += a
+        weighted += a * _part_top(p)
+    if total <= 0.0:
+        return [], None
+    body = weighted / total
+    tall = [p for p in known if _part_top(p) > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M)]
+    if tall:
+        return tall, body
+    h = float(height) if height is not None and np.isfinite(height) else 0.0
+    if h > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M):
+        return [], body
+    return [], None
+
+
+def steeple_part(bparts):
+    """The index in bparts of a church's tower part that gets a spire of ours, or None. The tower: the tallest
+    flat-topped part standing on the ground, compact (its oriented box at most STEEPLE_TOWER_ASPECT long for its
+    width) and STEEPLE_TOWER_OVER times the parts' mean top (by area) at least. None too where the map already puts a
+    pyramid over most of that tower (its own spire)."""
+    best = None
+    for k, p in enumerate(bparts):
+        if p[1] is None or p[1][1] > PARTS_GROUND_M:
+            continue
+        own = p[2] if len(p) > 2 else {}
+        if str(own.get("roof_shape") or "flat").lower() != "flat":
+            continue
+        if best is None or _part_top(p) > _part_top(bparts[best]):
+            best = k
+    if best is None:
+        return None
+    _, _, hl, hw = oriented_box(np.asarray(bparts[best][0], np.float64)[:, :2])
+    total = weighted = 0.0
+    for p in bparts:
+        if p[1] is not None:
+            a = abs(_area2(_local(p[0]))) / 2
+            total += a
+            weighted += a * _part_top(p)
+    if hl > STEEPLE_TOWER_ASPECT * max(hw, 1e-6) or total <= 0.0 \
+            or _part_top(bparts[best]) < STEEPLE_TOWER_OVER * weighted / total:
+        return None
+    from polygon import Path
+    tower = np.asarray(bparts[best][0], np.float64)[:, :2]
+    t_area = abs(_area2(tower)) / 2
+    path = Path(tower)
+    for k, p in enumerate(bparts):
+        own = p[2] if len(p) > 2 else {}
+        if k == best or p[1] is None or str(own.get("roof_shape") or "").lower() not in ("pyramidal", "cone"):
+            continue
+        r = np.asarray(p[0], np.float64)[:, :2]
+        if p[1][1] >= _part_top(bparts[best]) - 1.0 and abs(_area2(r)) / 2 >= STEEPLE_SPIRE_SHARE * t_area \
+                and bool(path.contains_points(r.mean(0)[None, :])[0]):
+            return None
+    return best
 
 
 # A building is drawn as its parts (OSM's Simple 3D Buildings: the outline is not rendered where parts exist), but its
@@ -4807,10 +4937,16 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN:
                     bparts = [(p[0], (float(bh), 0.0)) + tuple(p[2:]) for p in bparts]
                     outline_h = float(nf) * FLOOR_M
+            sky_body_h, parts_all = None, bparts
             if bparts and parts_min_top is not None and max(
                     [p[1][0] + p[1][1] for p in bparts if p[1] is not None] + [float(at.get("height") or 0.0)]) \
                     < parts_min_top:
-                bparts = []             # (the skyline: a low building's parts add nothing seen from afar, SKY_PARTS_MIN_M)
+                # (the skyline: a low building's parts add nothing seen from afar, SKY_PARTS_MIN_M, but a body with a
+                # dome, a tower or a spire rising over it is drawn as that body and those parts: sky_body)
+                bparts, sky_body_h = sky_body(bparts, at.get("height"))
+                if not bparts and sky_body_h is not None:   # (no part over it: the outline at its parts' height)
+                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape=None)
+                    sky_body_h = None
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -4824,16 +4960,23 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 # order is the process's string hashing, and a tile's buildings changed from run to run, 2026-11-12)
                 sib = {}
                 for k_ in ("facade_material", "facade_color"):
-                    vals = [str(p[2].get(k_)) for p in bparts if len(p) > 2 and p[2].get(k_)]
-                    sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals else None
-                for ppart in bparts:
+                    vals = [str(p[2].get(k_)) for p in parts_all if len(p) > 2 and p[2].get(k_)]
+                    # (... when at least half the parts carry one: the Empire State Building's 17 m base part, mapped
+                    # concrete, made its whole 443 m tower bridge concrete, and the Capitol's two bronze parts dyed its
+                    # marble, streets.gl comparison 2026-11-14)
+                    sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals and 2 * len(vals) >= len(parts_all) \
+                        else None
+                steeple_k = steeple_part(bparts) if str(at.get("class") or "").lower() in CHURCH_CLASSES else None
+                for pk, ppart in enumerate(bparts):
                     pring, hh = ppart[0], ppart[1]
                     pat = ppart[2] if len(ppart) > 2 else {}
                     ph, pmh = hh if hh is not None else (fill, 0.0)
                     if ph + pmh < FLAT_FOOTPRINT_M:
                         continue        # (a part taking a flat area's height: FLAT_FOOTPRINT_M)
                     r = clean_ring(pring - np.array([x0, y0]))
-                    if r is None or _area2(r) / 2 < 4.0:
+                    # (small parts are left out, but not a tall slender one: a spire's needle, a statue on a dome; the
+                    # Chrysler Building's top 47 m on 0.8 m²)
+                    if r is None or _area2(r) / 2 < (PART_TINY_M2 if ph >= PART_TINY_TALL_M else PART_MIN_M2):
                         continue
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
@@ -4841,7 +4984,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None,
                                   "roof_shape": p_rshape,
-                                  "building_height": top,
+                                  "building_height": top, "_part_min": pmh, "_steeple_part": pk == steeple_k,
                                   "facade_material": pat.get("facade_material") or at.get("facade_material")
                                   or sib["facade_material"],
                                   "facade_color": p_fcol,
@@ -4861,11 +5004,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     mins.append(pmh)
                 if key is not None:
                     seen.add(key)
-                if not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
-                        and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
+                if sky_body_h is not None:      # (the skyline's body under its tall parts: sky_body)
+                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape=None)
+                elif not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
+                          and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
                     continue
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
-                if outline_h is not None:
+                elif outline_h is not None:
                     at = dict(at, height=outline_h, roof_height=None)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
