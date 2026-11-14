@@ -1161,6 +1161,7 @@ def _proc_writer():
 SHARED_ENV = "BNGE_NET_SHARED"
 SHARED_DIR = os.environ.get(SHARED_ENV) or None
 SHARED_POLL_S = 0.02                # s between tries for a request slot another process holds
+GATE_LOG = os.environ.get("BNGE_GATE_LOG") or None      # (measuring: a line per gate admission that waited)
 _SHARED_FMT = "<3d"                 # the gate file: tokens, their time (monotonic), blocked until (monotonic)
 _SHARED_SIZE = 24
 IS_WIN = os.name == "nt"
@@ -1266,8 +1267,10 @@ class SharedGate:
             self.sleep(SHARED_POLL_S)
 
     def acquire(self, kind, max_wait, url=None, host=None):
-        """A slot and a token for one request: the slot (release() it after the request). Raises HostUnavailable
-        (blocked), RateLimited (a demand that would wait past max_wait), Deferred (prefetch / background: busy)."""
+        """A slot and a token for one request: (the slot: release() it after the request, the seconds waited for
+        them). Raises HostUnavailable (blocked), RateLimited (a demand that would wait past max_wait), Deferred
+        (prefetch / background: busy); OSError (the gate's files: a full disk) with nothing held."""
+        t_start = self.clock()
         wait = kind in ("demand", "urgent")
         b = self.blocked()
         if b > 0:
@@ -1302,14 +1305,24 @@ class SharedGate:
         except BaseException:
             self.release(fd)
             raise
-        return fd
+        waited = self.clock() - t_start
+        if GATE_LOG and waited >= WAIT_MS_MIN / 1000:
+            try:
+                with open(GATE_LOG, "a") as fh:
+                    fh.write(f"{time.time():.3f} {os.getpid()} {host} {kind} {waited:.3f}\n")
+            except OSError:
+                pass
+        return fd, waited
 
     @staticmethod
     def release(fd):
         if fd is None:
             return
         _funlock(fd)
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 _GATES = {}
@@ -1596,13 +1609,11 @@ class Fetcher:
                                               h.name, retry_after=wait)
                     probe = probe or probe2
                 sem = self._acquire(h, url, kind)
-                gate = shared_gate(h.name.split("#", 1)[0], p)
+                gate, slot = shared_gate(h.name.split("#", 1)[0], p), None
                 try:
-                    slot = gate.acquire(kind, p.max_wait, url, h.name) if gate is not None else None
-                except FetchError as e:
-                    sem.release()
-                    self._bump(h, "deferred" if isinstance(e, Deferred) else "unavailable"
-                               if isinstance(e, HostUnavailable) else "limit_fail")
+                    slot = self._gate_admit(h, gate, url, kind)
+                except BaseException:
+                    sem.release()       # (every way out without the request: the slot is this process's again)
                     raise
                 try:
                     self._count(h, "requests")
@@ -1638,9 +1649,9 @@ class Fetcher:
                 probe = False               # the breaker has its verdict
                 if gate is not None:        # (the others hold off too: its Retry-After, its breaker opened here)
                     if isinstance(res, RateLimited) and res.retry_after:
-                        gate.block(res.retry_after)
+                        self._gate_block(gate, res.retry_after)
                     elif h.breaker.is_open() and h.breaker.open_until > self.clock():
-                        gate.block(h.breaker.open_until - self.clock())
+                        self._gate_block(gate, h.breaker.open_until - self.clock())
                 if isinstance(res, Response):
                     return res
                 if isinstance(res, (NotFound, BadResponse)) or (isinstance(res, RateLimited) and res.retry_after):
@@ -1696,12 +1707,39 @@ class Fetcher:
         self._failed(h)
         return FetchFailed(f"{url}: HTTP {status}", url, h.name, status=status)
 
+    def _gate_admit(self, h, gate, url, kind):
+        """The shared gate's slot for one attempt (None: no gate, or its files failed: this process's own limits
+        alone, the request not refused for a full disk); its wait counted with the others' (waited, wait_ms)."""
+        if gate is None:
+            return None
+        try:
+            fd, waited = gate.acquire(kind, h.policy.max_wait, url, h.name)
+        except FetchError as e:
+            self._bump(h, "deferred" if isinstance(e, Deferred) else "unavailable"
+                       if isinstance(e, HostUnavailable) else "limit_fail")
+            raise
+        except OSError as e:
+            log.debug("net: %s's shared gate: %s (this process's limits alone)", h.name, e)
+            return None
+        ms = int(waited * 1000)
+        if kind in ("demand", "urgent") and ms >= WAIT_MS_MIN:
+            self._bump(h, "waited")
+            self._bump(h, "wait_ms", ms)
+        return fd
+
+    @staticmethod
+    def _gate_block(gate, seconds):
+        try:
+            gate.block(seconds)
+        except OSError as e:
+            log.debug("net: shared gate: %s", e)
+
     def _failed(self, h, gate=None):
         if h.breaker.failure():
             self._count(h, "trips")
             log.warning("net: %s: circuit open for %.0f s", h.name, h.breaker.open_s)
             if gate is not None:
-                gate.block(h.breaker.open_s)
+                self._gate_block(gate, h.breaker.open_s)
 
     def _succeeded(self, h):
         if h.breaker.success():

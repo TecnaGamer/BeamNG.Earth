@@ -259,6 +259,9 @@ if _AERIAL_HOST not in netfetch.POLICIES:          # (BNGE_AERIAL_BASE: a test s
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
 REGIONAL_XYZ_MIN_ZOOM = 16
+# s an expired "nothing there" answer reused while its host cannot be asked (offline, breaker open) holds what is built
+# on it (lazy_state's expiry): asked again after that
+UNAVAILABLE_RETRY_S = 3600.0
 for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items():
     if _kind == "xyz":          # a tile cache: also on the nearer far rings (REGIONAL_XYZ_MIN_ZOOM+)
         SOURCES[_n] = Source(_n, _url, 17, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
@@ -1474,24 +1477,28 @@ class Imagery:
 
     def _child_state(self, src, z, tx, ty):
         """One lazy source tile, as a render would read it: ("data", None) on disk; ("none", expiry) known to hold
-        nothing (a miss within its host's miss_ttl, or one the host cannot be asked about now: expiry None then, as
-        for a coverage probe's "outside"); ("todo", None) neither (never fetched, evicted by the cache cap, or a miss
-        that expired: asked again)."""
+        nothing: a miss within its host's miss_ttl (expiry: when it ends; None: a host whose misses never do), an
+        expired one while the host cannot be asked (offline, its breaker open: expiry UNAVAILABLE_RETRY_S from now,
+        asked again then), a coverage probe's "outside" (expiry a miss_ttl from now: the probes are cached tiles too);
+        ("todo", None) neither (never fetched, evicted by the cache cap, or a miss that expired: asked again). Every
+        "none" but the never-expiring kind carries its expiry, so what is built on it is kept only that long
+        (buildings.roof_photo_final: the photo of a later source too)."""
         path, miss = self._paths(src, z, tx, ty)
         if os.path.exists(path):
             return "data", None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        now = self.fetcher.wall()
         t = missindex.when(miss)
         if t is not None:
-            ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
             if ttl is None:
                 return "none", None
-            if self.fetcher.wall() - t < ttl:
+            if now - t < ttl:
                 return "none", t + ttl
             if self.fetcher.miss_alive(miss, src.url):      # (expired, but the host cannot be asked now)
-                return "none", None
+                return "none", now + UNAVAILABLE_RETRY_S
         with self._lock:
             if self._probe_status((src, z, tx, ty)) == "outside":
-                return "none", None
+                return "none", (None if ttl is None else now + ttl)
         return "todo", None
 
     def lazy_state(self, frame, x0, y0, size, px):

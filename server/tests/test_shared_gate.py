@@ -107,7 +107,7 @@ class SharedGateTest(unittest.TestCase):
         with self.assertRaises(nf.HostUnavailable):
             g2.acquire("demand", 1.0, URL, HOST)
         g3 = nf.SharedGate(os.path.join(self.tmp.name, "other"), HOST, policy(100.0, burst=10))
-        slot = g3.acquire("demand", 1.0, URL, HOST)     # (the one slot held: a request in flight)
+        slot, _w = g3.acquire("demand", 1.0, URL, HOST)     # (the one slot held: a request in flight)
         try:
             with self.assertRaises(nf.Deferred):
                 g3.acquire("prefetch", 1.0, URL, HOST)
@@ -117,7 +117,37 @@ class SharedGateTest(unittest.TestCase):
             self.assertGreaterEqual(time.monotonic() - t0, 0.15)
         finally:
             nf.SharedGate.release(slot)
-        nf.SharedGate.release(g3.acquire("prefetch", 1.0, URL, HOST))     # (free again)
+        nf.SharedGate.release(g3.acquire("prefetch", 1.0, URL, HOST)[0])     # (free again)
+
+    def test_a_gate_that_fails_never_keeps_this_process_s_slot(self):
+        # (review of 172d8032: the local slot was given back only for a FetchError; an OSError from the gate's files,
+        # a full disk, kept it, and with max_conc 1 every later request to the host waited forever)
+        from unittest import mock
+        nf.SHARED_DIR = self.tmp.name
+        t = _Transport(0.0)
+        f = nf.Fetcher(transport=t, policies={HOST: replace(policy(100.0, burst=10), max_wait=0.5)})
+        with mock.patch.object(nf.SharedGate, "_state", side_effect=OSError(28, "No space left on device")):
+            self.assertEqual(f.get(URL, kind="demand").status, 200, "a full disk: this process's limits alone")
+        with mock.patch.object(nf.SharedGate, "_slot", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                f.get(URL, kind="demand")
+        self.assertEqual(f.get(URL, kind="demand").status, 200, "the slot given back")
+        self.assertEqual(f.get(URL, kind="demand").status, 200)
+        self.assertEqual(len(t.times), 3)
+
+    def test_the_gate_s_wait_is_counted_and_logged(self):
+        from unittest import mock
+        nf.SHARED_DIR = self.tmp.name
+        log = os.path.join(self.tmp.name, "gate.log")
+        # (two fetchers, as two processes: each one's own bucket has room, the shared one makes them wait)
+        fs = [nf.Fetcher(transport=_Transport(0.0), policies={HOST: policy(5.0, burst=1.0)}) for _ in range(2)]
+        with mock.patch.object(nf, "GATE_LOG", log):
+            for f in fs * 2:
+                f.get(URL, kind="demand")
+        lines = open(log).read().splitlines()
+        self.assertGreaterEqual(len(lines), 3, "all but the first waited for the shared token")
+        self.assertTrue(all(float(ln.split()[-1]) > 0.1 for ln in lines))
+        self.assertGreaterEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 450, "counted as our own limits' wait")
 
     def test_only_shared_hosts_and_only_with_a_folder(self):
         nf.SHARED_DIR = self.tmp.name

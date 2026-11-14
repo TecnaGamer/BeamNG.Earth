@@ -1209,6 +1209,36 @@ class LazyStateTest(unittest.TestCase):
         self.assertTrue(os.path.exists(im._paths(src, z, tx, ty)[0]))
         self.assertTrue(im.lazy_state(*self.square())[0])
 
+    def test_an_expired_miss_reused_while_its_host_is_down_bounds_a_later_source_s_photo(self):
+        # (review of 172d8032: an expired preferred miss reused while its host could not be asked decided with no expiry,
+        # so a later source's photo was kept for good and the preferred source's return never seen)
+        from unittest import mock
+        import buildings
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
+        missindex.reset_memo()
+        br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
+        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        t0 = time.time()
+        st = im._child_state(src, z, *kids[0])
+        self.assertEqual(st[0], "none")
+        self.assertAlmostEqual(st[1], t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        im.fetch_lazy(*self.square())
+        self.assertFalse(self.exports("naipusda"), "not asked while down")
+        self.assertTrue(self.exports("naip"), "the later source fills in")
+        resolved, expiry, _todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved)
+        self.assertAlmostEqual(expiry, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        with mock.patch.object(buildings, "_photo_sources", return_value=("naipusda", "naip")), \
+                mock.patch.object(buildings, "_photo_reader_live", return_value=im):
+            ph, final, until = buildings.roof_photo_final(self.frame, 8.0, 8.0, 248.0, 248.0, self.tmp.name, True)
+        self.assertIsNotNone(ph, "the later source's photo")
+        self.assertTrue(final)
+        self.assertIsNotNone(until, "kept only until the preferred source is asked again")
+        self.assertLessEqual(until, time.time() + imagery.UNAVAILABLE_RETRY_S + 60)
+
     def test_an_expired_miss_is_asked_again(self):
         im = self.make()
         src, z, kids = im._lazy_children(*self.square())[0]
