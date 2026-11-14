@@ -167,10 +167,6 @@ fn unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn clean(s: Option<String>, max: usize) -> String {
-    s.unwrap_or_default().chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(max).collect::<String>().trim().to_string()
-}
-
 /// A version or system name as a report may give it: letters, digits and . _ + - only (anything else dropped; they were
 /// any printable ASCII, and the advanced page put them into its HTML: Codex review 2026-11-14).
 fn clean_name(s: Option<String>, max: usize) -> String {
