@@ -9235,8 +9235,7 @@ class ChainView:
         for _r, (st, todo) in sorted(self._todo(cells_feats, box).items()):
             if self.prefer is not None:
                 pst = self.prefer.store(st.region)
-                with pst.lock:
-                    solved = [t for t in todo if pst._has(t[0])]
+                solved = [t for t in todo if pst._has(t[0])]    # (_has takes pst.lock itself: a Lock, not reentrant)
                 out += self._map(pst, pst.parts_todo(solved, solved_only=True, **kw))
                 todo = [t for t in todo if t not in solved]
             out += self._map(st, st.parts_todo(todo, **kw))
