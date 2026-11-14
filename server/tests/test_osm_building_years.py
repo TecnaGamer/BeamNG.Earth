@@ -129,6 +129,48 @@ class DecodeTest(unittest.TestCase):
             self.assertEqual(k.tolist(), keys.tolist())
             self.assertEqual(y.tolist(), years.tolist())
 
+    def test_allocation_bombs_raise_before_allocating(self):
+        """A tiny deflated tile claiming tens of millions of rows (Codex review: 62 KB for 32 M one-byte rows, ~300 MB
+        of keys and years asked for) is refused before its rows are allocated; a count past MAX_ROWS (2 M; the
+        published build's largest tile has 105,421) too."""
+        import zlib
+        def peak_rss_kib():
+            if sys.platform == 'win32':
+                import ctypes
+                from ctypes import wintypes
+                class Counters(ctypes.Structure):
+                    _fields_ = [('cb', wintypes.DWORD), ('faults', wintypes.DWORD)] + [
+                        (name, ctypes.c_size_t) for name in ('peak_ws', 'ws', 'peak_paged', 'paged',
+                                                          'peak_nonpaged', 'nonpaged', 'pagefile', 'peak_pagefile')]
+                counters = Counters()
+                counters.cb = ctypes.sizeof(counters)
+                get = ctypes.WinDLL('psapi', use_last_error=True).GetProcessMemoryInfo
+                get.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+                get.restype = wintypes.BOOL
+                if not get(wintypes.HANDLE(-1), ctypes.byref(counters), counters.cb):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return counters.peak_ws / 1024
+            import resource
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            return peak / 1024 if sys.platform == 'darwin' else peak
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        n = (32 << 20) - 8                  # (one-byte deltas and years: 2 n bytes, inside the old 64 MiB cap; the old
+        z = [c.compress(b"OBY1" + by.ots.uv1(n))]     # decoder took 33.5 M rows from these 65 KB, +416 MB)
+        chunk = b"\x01" * (1 << 20)
+        z += [c.compress(chunk) for _ in range(63)] + [c.compress(chunk[:2 * n - (63 << 20)])]
+        z = b"".join(z) + c.flush()
+        self.assertLess(len(z), 200_000)
+        rss0 = peak_rss_kib()
+        with self.assertRaisesRegex(ValueError, "inflates past"):
+            fast._ef.oby_decode(z)
+        n = 2_000_001
+        with self.assertRaisesRegex(ValueError, "rows, past"):
+            fast._ef.oby_decode(by.ots.deflate(b"OBY1" + by.ots.uv1(n) + b"\x01" * (2 * n)))
+        grown_mb = (peak_rss_kib() - rss0) / 1024
+        self.assertLess(grown_mb, 64, "no rows allocated")
+        k, y = fast._ef.oby_decode(by.ots.deflate(b"OBY1" + by.ots.uv1(n - 1) + b"\x01" * (2 * (n - 1))))
+        self.assertEqual(len(k), n - 1, "MAX_ROWS itself decodes")
+
     def test_damaged_tiles_raise(self):
         blob = by.encode_tile(np.array([4, 10], np.uint64), np.array([1913, 1999]))
         for bad in (b"", b"OBY1", blob[:-1], b"XXXX" + blob[4:], by.ots.deflate(blob)[:-3],

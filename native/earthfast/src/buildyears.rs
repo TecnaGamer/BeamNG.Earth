@@ -6,7 +6,9 @@
 //! deflate (the builder's), or plain (starting with the magic). Bytes after the years are left for later sections.
 //!
 //! The tiles come from the network: every count is checked against the bytes left, the inflated size is capped
-//! (MAX_BLOB), and a bad tile is an error, never a panic.
+//! (MAX_BLOB), the rows (MAX_ROWS) and what they decode to (MAX_DECODED) are bounded before anything is allocated for
+//! them, and a bad tile is an error, never a panic (Codex review: a 62 KB deflated tile of 32 M one-byte rows passed
+//! the bytes-left check inside the old 64 MiB MAX_BLOB and asked for ~300 MB of keys and years).
 
 use numpy::IntoPyArray;
 use pyo3::exceptions::PyValueError;
@@ -15,8 +17,13 @@ use std::io::Read;
 
 pub const MAGIC: &[u8; 4] = b"OBY1";
 pub const YEAR_BASE: i64 = 1900;
-const MAX_BLOB: usize = 64 << 20; // a tile inflated (or plain) at most (a dense European z12 tile is ~1 MB)
+// The published build of 2026-11-14 (59,521 tiles, 17.5 M rows): its largest tile 105,421 rows, 219 KB inflated,
+// 104 KB stored. The bounds leave ~19x (rows) and ~75x (bytes) over it.
+const MAX_BLOB: usize = 16 << 20; // a tile inflated (or plain) at most
 const MAX_STORED: usize = 16 << 20; // a tile as stored at most (oby_decode refuses a longer one before copying it)
+pub const MAX_ROWS: u64 = 2_000_000; // a tile's rows at most
+const MAX_DECODED: u64 = 32 << 20; // bytes a tile's decoded rows may take (keys u64 + years i16: 10 a row)
+const ROW_BYTES: u64 = 8 + 2;
 
 fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
     if raw.len() > MAX_STORED {
@@ -77,6 +84,9 @@ pub fn parse(raw: &[u8]) -> Result<(Vec<u64>, Vec<i16>), String> {
     }
     let mut r = R { b: &b, i: MAGIC.len() };
     let n = r.uv()?;
+    if n > MAX_ROWS || n.saturating_mul(ROW_BYTES) > MAX_DECODED {
+        return Err(format!("{n} rows, past the {MAX_ROWS} a tile may have"));
+    }
     if n > (r.left() / 2) as u64 {
         return Err(format!("{n} rows past the tile's {} bytes", r.left()));
     }
@@ -198,6 +208,39 @@ mod tests {
         b.extend_from_slice(&[0xff; 10]);
         b.push(0x01);
         assert!(parse(&b).is_err());
+    }
+
+    #[test]
+    fn allocation_bombs_are_refused_before_allocating() {
+        use flate2::write::DeflateEncoder;
+        use std::io::Write;
+        let deflate = |b: &[u8]| {
+            let mut e = DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            e.write_all(b).unwrap();
+            e.finish().unwrap()
+        };
+        // (the review's bomb: 32 M rows of one-byte deltas and years, ~62 KB deflated; it inflates past MAX_BLOB)
+        let mut big = MAGIC.to_vec();
+        uv(32 << 20, &mut big);
+        big.resize(big.len() + (64 << 20) - 16, 1);
+        let z = deflate(&big);
+        assert!(z.len() < 200_000, "{}", z.len());
+        drop(big);
+        assert!(parse(&z).unwrap_err().contains("inflates past"));
+        // one row past MAX_ROWS with the bytes for every row, inside MAX_BLOB: refused by its count
+        let mut b = MAGIC.to_vec();
+        uv(MAX_ROWS + 1, &mut b);
+        b.resize(b.len() + 2 * (MAX_ROWS as usize + 1), 1);
+        assert!(b.len() < MAX_BLOB);
+        let z = deflate(&b);
+        assert!(parse(&z).unwrap_err().contains("past the"), "refused by the row count");
+        // MAX_ROWS itself decodes
+        let mut b = MAGIC.to_vec();
+        uv(MAX_ROWS, &mut b);
+        b.resize(b.len() + 2 * MAX_ROWS as usize, 1);
+        let (k, y) = parse(&deflate(&b)).unwrap();
+        assert_eq!((k.len(), y.len(), k[k.len() - 1]), (MAX_ROWS as usize, MAX_ROWS as usize, MAX_ROWS));
+        assert!(MAX_ROWS * ROW_BYTES <= MAX_DECODED);
     }
 
     #[test]

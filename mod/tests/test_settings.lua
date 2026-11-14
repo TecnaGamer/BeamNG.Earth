@@ -248,6 +248,29 @@ settings.set('viewDistanceKm', 200)
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 2, 'horizon after fixed: the level\'s 100 km back once')
 settings.set('viewDistanceMode', 'fixed')
 T.check(scenetree.theLevelInfo.visibleDistance == 200000 and post == 3, 'fixed again: 200 km')
+do  -- the 3D map open: no fixed distance (its view reaches as far as its eye), the fixed one back when it closes
+  local post0, active = post, true
+  beamngEarth_map3d = { isActive = function() return active end }
+  settings.set('viewDistanceKm', 1)
+  T.check(settings.fixedViewM() == nil, 'map open: no fixed view distance')
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map open: the level\'s distance, not 1 km')
+  active = false
+  T.check(settings.fixedViewM() == 1000, 'map closed: 1 km')
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it meanwhile)
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 1000, 'map closed: the fixed 1 km back, whatever was set meanwhile')
+  settings.set('viewDistanceKm', 100)                 -- (the default value, fixed)
+  active = true
+  settings.reapplyView()
+  scenetree.theLevelInfo.visibleDistance = 900000     -- (a globe view raised it)
+  active = false
+  settings.reapplyView()
+  T.check(scenetree.theLevelInfo.visibleDistance == 100000, 'map closed: a fixed 100 km (the default value) back too')
+  beamngEarth_map3d = nil
+  settings.set('viewDistanceKm', 200)
+  post = post0                                        -- (the checks below count postApply calls from here)
+end
 settings.uiReset()
 T.check(scenetree.theLevelInfo.visibleDistance == 100000 and post == 4, 'reset (horizon): back to 100 km (applied, it had changed)')
 settings.onClientPostStartMission()

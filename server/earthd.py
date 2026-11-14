@@ -434,7 +434,8 @@ LOD_PPR_WINDOW_S = 5.0
 LOD_BASE_FOV_DEG = 60.0
 LOD_PPR_ZOOM = 2.0
 LOD_ERRS_MAX = 400000           # known tile errors kept (Server.lod_errs / glod_errs, oldest dropped first)
-VIEW_CAP_MIN_M = 10000.0        # ... and its fixed view distance (viewM, the far field's radius cap) to at least this
+VIEW_CAP_MIN_M = 1000.0         # ... and its fixed view distance (viewM, the far field's radius cap) to at least this
+                                # (1 km, the settings' least: players asked for under 20 km, 2026-11-14)
 DETAIL_ROAD_LIFT = 0.025        # detail mode: road surfaces over the drawn block, within roadmesh.FOLLOW_TOL of it (0.05
                                 # before, over a coarser surface it still cut through on hills: the tyres sank into it,
                                 # the user 2026-10-20)
@@ -10935,7 +10936,7 @@ class Connection:
             radius = farfield.HORIZON_MIN if grid is None else grid.radius(*focus, eye)[0]
             extra = {"max_level": self.s.max_level, "disc": True,
                      "horizon": None if grid is None else farfield.Horizon(eye, grid)}
-        if self.view_cap is not None:
+        if self.view_cap is not None and not (self.map_view or self.map_open):     # (the 3D map: its own reach)
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
         # (the far PVS's rings are made at the commit, not here: beside the first block they held it 2.3 -> 7 s at a
         # cold Zermatt, their DEM fetches and this interpreter, 2026-11-11)
@@ -10965,7 +10966,9 @@ class Connection:
         self.retired = {ck: t for ck, t in self.retired.items() if now - t < self.s.retired_keep}
         self.node_changed = {n: t for n, t in self.node_changed.items() if now - t < farfield.HOLD_S}
         radius, extra = (self.horizon_select() if self.s.horizon else (self.s.radius, {}))
-        if self.view_cap is not None:       # (a fixed view distance: nothing past it is drawn; a disc, as the horizon)
+        if self.view_cap is not None and not (self.map_view or self.map_open):
+            # (a fixed view distance: nothing past it is drawn; a disc, as the horizon. Not for the 3D map, whose view
+            # reaches as far as its eye: a 1 km driving distance would leave it a 1 km map)
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
         anchor = self.s.anchors[self.active]
         t_sel = time.perf_counter()
