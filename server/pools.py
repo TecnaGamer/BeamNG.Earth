@@ -14,6 +14,7 @@ import sys
 import runtimeprofiler
 import threading
 import time
+import weakref
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
@@ -40,14 +41,130 @@ class Abandoned(Exception):
     """A queued job its caller no longer wants (result_running's abandon: a teleport left its place), cancelled."""
 
 
-def result_running(fut, timeout, waited=None, abandon=None):
+# Busy or hung (central London's first visit, 2026-11-13: road processes planning big cells for minutes, burning CPU,
+# were taken for hung at 300 s and restarted, every tile in flight thrown away). A job past its time is waited for on
+# while its pool's processes still use CPU: one of them at CPU_BUSY_FRAC of a core or more over the last CPU_WINDOW_S
+# (a hung process, deadlocked or waiting for an answer that never comes, uses ~none). Not per job: the processes do
+# not say which job each runs, and a tile waiting for a plan another process is making (plancache's lock) is as
+# much busy as that process. Past HUNG_CEILING_X times its time a job is hung whatever the CPU (a process spinning
+# without end). CPU read every CPU_SAMPLE_S at most, only while a job runs.
+CPU_WINDOW_S = 60.0
+CPU_BUSY_FRAC = 0.05
+CPU_SAMPLE_S = 5.0
+HUNG_CEILING_X = 3.0
+
+
+def _clk_tck():
+    try:
+        return float(os.sysconf("SC_CLK_TCK"))
+    except (AttributeError, ValueError, OSError):
+        return 100.0
+
+
+_CLK_TCK = _clk_tck()
+_K32 = []
+
+
+def _win_cpu_s(pid):
+    """A Windows process's CPU seconds (kernel + user: GetProcessTimes), or None."""
+    import ctypes
+    from ctypes import wintypes
+    if not _K32:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE      # (64-bit handles)
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        k32.GetProcessTimes.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        _K32.append(k32)
+    k32 = _K32[0]
+    h = k32.OpenProcess(0x1000, False, int(pid))       # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]     # creation, exit, kernel, user
+        if not k32.GetProcessTimes(h, *[ctypes.byref(x) for x in t]):
+            return None
+        return sum((x.dwHighDateTime << 32 | x.dwLowDateTime) for x in t[2:]) / 1e7     # (100 ns units)
+    finally:
+        k32.CloseHandle(h)
+
+
+def process_cpu_s(pid):
+    """Another process's CPU time in seconds (user + system), or None (gone, unreadable, or neither Linux nor
+    Windows). Linux: /proc/<pid>/stat; Windows: GetProcessTimes (no psutil in the server's requirements)."""
+    try:
+        if sys.platform == "win32":
+            return _win_cpu_s(pid)
+        with open(f"/proc/{int(pid)}/stat", "rb") as fh:
+            f = fh.read().rsplit(b")", 1)[1].split()       # (after the name, which may hold spaces)
+        if f[0] == b"Z":
+            return None                 # (ended, not reaped yet)
+        return (int(f[11]) + int(f[12])) / _CLK_TCK      # utime + stime, clock ticks
+    except Exception:
+        return None
+
+
+class CpuWatch:
+    """The CPU times of a pool's processes sampled over the last `window` s (at most every `every` s): whether one of
+    them is still working (progress)."""
+
+    def __init__(self, read=None, every=CPU_SAMPLE_S, window=CPU_WINDOW_S):
+        self.read = read or process_cpu_s
+        self.every, self.window = every, window
+        self._lock = threading.Lock()
+        self._last = -float("inf")
+        self._hist = {}                 # pid -> deque of (time, CPU s), the oldest at or before the window's start
+
+    def sample(self, now, pids):
+        """The processes pids read at now (time.monotonic()), unless read less than `every` ago. True when read."""
+        with self._lock:
+            if now - self._last < self.every:
+                return False
+            self._last = now
+            seen = set()
+            for pid in pids:
+                c = self.read(pid)
+                if c is None:
+                    continue
+                seen.add(pid)
+                h = self._hist.setdefault(pid, collections.deque())
+                h.append((now, c))
+                while len(h) > 2 and h[1][0] <= now - self.window:
+                    h.popleft()
+            for pid in [p for p in self._hist if p not in seen]:
+                del self._hist[pid]         # (gone: a recycled pool's, an exited one's)
+            return True
+
+    def progress(self):
+        """(pid, CPU s, over s, its CPU s in all) of the process that used most of a core over the samples kept;
+        "short" when none was read twice yet; None when none could be read."""
+        with self._lock:
+            if not self._hist:
+                return None
+            best = None
+            for pid, h in self._hist.items():
+                if len(h) < 2:
+                    continue
+                (t0, c0), (t1, c1) = h[0], h[-1]
+                if t1 <= t0:
+                    continue
+                if best is None or (c1 - c0) / (t1 - t0) > best[1] / best[2]:
+                    best = (pid, max(0.0, c1 - c0), t1 - t0, c1)
+            return best if best is not None else "short"
+
+
+def result_running(fut, timeout, waited=None, abandon=None, pool=None, what=None):
     """fut's result, its timeout counted from when it left the pool's queue (running: in the executor's call queue,
     at most the pool's size + 1 jobs before the worker takes it), not from its submit: a road tile behind a long
     queue (a first visit's backlog, a slow machine) was taken for a hung worker after 300 s of waiting and the pool
     restarted, failing every tile in flight (GitHub #663). TimeoutError (concurrent.futures') when it runs longer.
     waited (a list): its time in the queue appended (to QUEUED_POLL_S) when it ran past it. abandon (a callable): while
     the job is still queued, abandon() true cancels it and raises Abandoned (a teleport left its place: the user,
-    2026-11-11, "if the server is still building one city but initiates a teleport, stop generating the old city")."""
+    2026-11-11, "if the server is still building one city but initiates a teleport, stop generating the old city").
+    pool (the RespawningPool fut came from): past its timeout the job is waited for on while the pool's processes
+    still use CPU (RespawningPool.overdue: busy, not hung), up to HUNG_CEILING_X times it; the TimeoutError's message
+    says why it was given up on. what: the job in the one warning that says it is waited for on ("road tile 3_4")."""
     t0 = time.perf_counter()
     while not fut.running() and not fut.done():
         if abandon is not None and abandon() and fut.cancel():
@@ -58,7 +175,21 @@ def result_running(fut, timeout, waited=None, abandon=None):
             continue
     if waited is not None:          # (the caller's log: its time in the queue)
         waited.append(time.perf_counter() - t0)
-    return fut.result(timeout=timeout)
+    if timeout is None or pool is None or not hasattr(pool, "overdue"):
+        return fut.result(timeout=timeout)
+    t_run = time.monotonic()
+    while True:                     # (woken every CPU_SAMPLE_S at most: the pool's CPU sampled, rate-limited per pool)
+        ran = time.monotonic() - t_run
+        try:
+            return fut.result(timeout=max(0.01, min(pool.cpu.every, timeout - ran) if ran < timeout
+                                          else pool.cpu.every))
+        except concurrent.futures.TimeoutError:
+            pass
+        now = time.monotonic()
+        pool.cpu_sample(now)
+        why = pool.overdue(now - t_run, timeout, now, fut, what)
+        if why:
+            raise concurrent.futures.TimeoutError(why)
 
 
 def proc_name(name):
@@ -166,6 +297,10 @@ class RespawningPool:
         self.hung_s = hung_s
         self._live = {}             # in-flight future -> when the watchdog first saw it running (None: still queued)
         self._live_lock = threading.Lock()
+        # busy or hung (overdue): its processes' CPU, read by the watchdog and result_running(pool=) while jobs run
+        self.cpu = CpuWatch(every=min(CPU_SAMPLE_S, self.WATCH_S) if hung_s else CPU_SAMPLE_S)
+        self._warned = weakref.WeakSet()    # jobs past their time whose waiting on was logged (once each)
+        self._retired = collections.deque(maxlen=4)     # rotated executors, their processes finishing their jobs
         if hung_s:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
         # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate)
@@ -356,8 +491,9 @@ class RespawningPool:
                 log.debug("%s watchdog: %s: %s", self.name, type(e).__name__, e)
 
     def _watch_step(self, now):
-        """One watchdog check at now (time.monotonic()): True when it recycled the pool."""
-        oldest = None
+        """One watchdog check at now (time.monotonic()): True when it recycled the pool (a job running for hung_s or
+        more while the processes use no CPU, or for HUNG_CEILING_X times it: overdue)."""
+        oldest, oldest_fut = None, None
         with self._live_lock:
             for fut, t in list(self._live.items()):
                 if fut.done():
@@ -366,15 +502,69 @@ class RespawningPool:
                     if fut.running():
                         self._live[fut] = now
                 elif oldest is None or t < oldest:
-                    oldest = t
-        if oldest is None or now - oldest < self.hung_s:
+                    oldest, oldest_fut = t, fut
+        if oldest is None:
             return False
-        if not self.recycle(f"a job running for {now - oldest:.0f} s, no answer from its process"):
+        self.cpu_sample(now)            # (only while a job runs)
+        why = self.overdue(now - oldest, self.hung_s, now, oldest_fut)
+        if not why:
+            return False
+        if not self.recycle(f"a job {why}"):
             return False
         with self._live_lock:
             for fut in self._live:
                 self._live[fut] = None      # (the rest start again, counted afresh)
         return True
+
+    def _pids(self):
+        """The process ids of the pool's processes: the current executor's and those of rotated ones still finishing
+        their jobs."""
+        with self._lock:
+            execs = [self._pool] + list(self._retired)
+        pids = []
+        for ex in execs:
+            live = [pid for pid, p in list((getattr(ex, "_processes", None) or {}).items())
+                    if getattr(getattr(p, "_popen", None), "returncode", None) is None]     # (no wait: no reaping)
+            if not live and ex is not execs[0]:
+                try:
+                    self._retired.remove(ex)    # (its processes all ended)
+                except ValueError:
+                    pass
+            pids.extend(live)
+        return pids
+
+    def cpu_sample(self, now=None):
+        """The processes' CPU times read for overdue (at most every cpu.every s). True when read."""
+        now = time.monotonic() if now is None else now
+        if now - self.cpu._last < self.cpu.every:
+            return False                # (before the process list: most calls end here)
+        return self.cpu.sample(now, self._pids())
+
+    def overdue(self, ran_s, limit_s, now=None, fut=None, what=None):
+        """Why a job running for ran_s s with limit_s s to run is to be given up on (and the processes restarted:
+        recycle), or "" while it is waited for on: within its time, or past it while one of the pool's processes still
+        uses CPU (CpuWatch; one WARNING per job, fut). Past HUNG_CEILING_X times limit_s given up on whatever the CPU;
+        where no process's CPU can be read (neither Linux nor Windows), at limit_s as before."""
+        if ran_s < limit_s:
+            return ""
+        if ran_s >= limit_s * HUNG_CEILING_X:
+            return f"running for {ran_s:.0f} s, past {HUNG_CEILING_X:g}x its {limit_s:.0f} s"
+        got = self.cpu.progress()
+        if got is None:
+            return f"running for {ran_s:.0f} s, no answer from its process"
+        if got == "short":
+            return ""                   # (read once so far: decided at the next look, cpu.every s on)
+        pid, used, over, total = got
+        if used < CPU_BUSY_FRAC * over:
+            return f"running for {ran_s:.0f} s, its processes idle ({used:.1f} s CPU at most in the last {over:.0f} s)"
+        if fut is None or fut not in self._warned:
+            if fut is not None:
+                self._warned.add(fut)
+            log.warning("%s: %s running for %.0f s, past its %.0f s, but its processes are busy, not hung (pid %s: "
+                        "%.1f s CPU in the last %.0f s, %.0f s in all): waited for, not restarted (given up at %.0f s "
+                        "or once they idle)", self.name, what or "a job", ran_s, limit_s, pid, used, over, total,
+                        limit_s * HUNG_CEILING_X)
+        return ""
 
     def recycle(self, why):
         """The pool's processes killed and the pool made again: for a worker that is alive but never answers (a
@@ -440,6 +630,7 @@ class RespawningPool:
             self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
             self._last_rotate = time.monotonic() if now is None else now
             self.rotations += 1
+            self._retired.append(old)       # (its processes' CPU still counted while they finish: overdue)
         log.info("%s worker processes replaced (%s; %d so far): the old ones finish their jobs and exit",
                  self.name, why, self.rotations)
         try:
