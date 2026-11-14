@@ -1,7 +1,8 @@
 """pools.py: a job past its time whose pool's processes still use CPU is busy, not hung (central London's first visit,
 2026-11-13: road processes planning big cells for minutes were restarted at 300 s, every tile in flight thrown away).
-CPU readings faked; no worker process is started."""
+CPU readings faked, except RotatedPoolTest's (a real pool of one process)."""
 import concurrent.futures
+import multiprocessing
 import os
 import sys
 import time
@@ -12,6 +13,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import pools  # noqa: E402
 
 HUNG_S = 300.0
+SPAWN = multiprocessing.get_context("spawn")       # (as the server's pools and test_pools)
+
+
+def spin(cpu_s):
+    """A CPU-bound job: cpu_s s of this process's CPU."""
+    t = time.process_time()
+    while time.process_time() - t < cpu_s:
+        pass
+    return "done"
 
 
 class FakeCpu:
@@ -155,10 +165,67 @@ class ResultRunningCpuTest(unittest.TestCase):
         with self.assertLogs("earthd.pools", "WARNING"):
             self.assertEqual(pools.result_running(fut, 0.3, pool=self.pool), 42)
 
+    def test_the_jobs_own_timeout_error_is_raised_at_once(self):
+        """A TimeoutError raised by the job in its worker (its future done) is the caller's, at once: not taken for the
+        wait running out and retried in a busy loop until the deadline (Codex review, 2026-11-13)."""
+        reads = []
+        self.pool.cpu.read = lambda pid: reads.append(pid) or 1.0
+        fut = running_future()
+        fut.set_exception(TimeoutError("the worker's own"))
+        with self.assertRaises(TimeoutError) as cm:
+            pools.result_running(fut, 5.0, pool=self.pool)
+        self.assertEqual(str(cm.exception), "the worker's own")
+        self.assertLess(time.monotonic() - self.t0, 1.0)
+        self.assertLessEqual(len(reads), 1)
+
     def test_without_a_pool_as_before(self):
         fut = running_future()
         with self.assertRaises(concurrent.futures.TimeoutError):
             pools.result_running(fut, 0.1)
+
+
+class RotatedPoolTest(unittest.TestCase):
+    """A job that outlives a rotation (budget.ROTATE_MB) runs in the old executor's process, which its shutdown no
+    longer lists: its CPU still counts, and a restart kills it too (Codex review, 2026-11-13)."""
+
+    @unittest.skipUnless(sys.platform == "win32" or sys.platform.startswith("linux"), "CPU readable")
+    def test_busy_job_in_a_rotated_process_is_waited_for(self):
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        p.cpu.every = 0.1
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)        # (the process started)
+            old_pids = {pr.pid for pr in pools._procs(p._pool)}
+            fut = p.submit(spin, 2.0)
+            while not fut.running():
+                time.sleep(0.01)
+            time.sleep(0.3)
+            self.assertTrue(p.rotate("test"))
+            self.assertTrue(old_pids <= set(p._pids()))                    # (still sampled after its shutdown)
+            with unittest.mock.patch.object(pools, "HUNG_CEILING_X", 100.0):     # (no ceiling on a slow runner)
+                with self.assertLogs("earthd.pools", "WARNING") as logs:
+                    self.assertEqual(pools.result_running(fut, 0.5, pool=p, what="spin"), "done")
+            self.assertIn("busy", logs.output[0])
+        finally:
+            p.shutdown()
+
+    def test_recycle_kills_a_rotated_process(self):
+        from concurrent.futures.process import BrokenProcessPool
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            self.assertEqual(p.submit(abs, -1).result(timeout=60), 1)
+            fut = p.submit(time.sleep, 3600)
+            while not fut.running():
+                time.sleep(0.01)
+            time.sleep(0.3)
+            self.assertTrue(p.rotate("test"))
+            with self.assertLogs("earthd.pools", "WARNING"):
+                self.assertTrue(p.recycle("test"))
+            with self.assertRaises(BrokenProcessPool):
+                fut.result(timeout=30)                  # (its process killed: not left running for good)
+            self.assertEqual(p._retired, [])
+            self.assertEqual(p.submit(abs, -2).result(timeout=60), 2)
+        finally:
+            p.shutdown()
 
 
 class ProcessCpuTest(unittest.TestCase):

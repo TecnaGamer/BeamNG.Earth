@@ -184,7 +184,8 @@ def result_running(fut, timeout, waited=None, abandon=None, pool=None, what=None
             return fut.result(timeout=max(0.01, min(pool.cpu.every, timeout - ran) if ran < timeout
                                           else pool.cpu.every))
         except concurrent.futures.TimeoutError:
-            pass
+            if fut.done():
+                raise                   # (the job's own TimeoutError, raised in its worker: not a wait running out)
         now = time.monotonic()
         pool.cpu_sample(now)
         why = pool.overdue(now - t_run, timeout, now, fut, what)
@@ -253,6 +254,18 @@ def _call(fn, args, kwargs):
                 pass
 
 
+def _procs(executor):
+    """An executor's worker processes (multiprocessing.Process) as it lists them now; [] once shut down."""
+    return list((getattr(executor, "_processes", None) or {}).values())
+
+
+def _running(proc):
+    """Whether a worker process has not been seen to end: its exit code not collected yet (read without waiting:
+    the executor's own thread reaps it)."""
+    return getattr(proc, "pid", None) is not None and \
+        getattr(getattr(proc, "_popen", None), "returncode", None) is None
+
+
 def _shedding(submit):
     """pool.submit with every job wrapped in _call."""
     return lambda fn, *args, **kwargs: submit(_call, fn, args, kwargs)
@@ -300,7 +313,9 @@ class RespawningPool:
         # busy or hung (overdue): its processes' CPU, read by the watchdog and result_running(pool=) while jobs run
         self.cpu = CpuWatch(every=min(CPU_SAMPLE_S, self.WATCH_S) if hung_s else CPU_SAMPLE_S)
         self._warned = weakref.WeakSet()    # jobs past their time whose waiting on was logged (once each)
-        self._retired = collections.deque(maxlen=4)     # rotated executors, their processes finishing their jobs
+        # rotated executors' processes (multiprocessing.Process), finishing their jobs: their CPU counted (overdue),
+        # killed with the rest (recycle). Taken at the rotation: the executor's shutdown drops its own list of them
+        self._retired = []
         if hung_s:
             threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
         # the memory watch (budget.ROTATE_MB: small machines): a worker over it has its pool rotated (rotate)
@@ -520,18 +535,9 @@ class RespawningPool:
         """The process ids of the pool's processes: the current executor's and those of rotated ones still finishing
         their jobs."""
         with self._lock:
-            execs = [self._pool] + list(self._retired)
-        pids = []
-        for ex in execs:
-            live = [pid for pid, p in list((getattr(ex, "_processes", None) or {}).items())
-                    if getattr(getattr(p, "_popen", None), "returncode", None) is None]     # (no wait: no reaping)
-            if not live and ex is not execs[0]:
-                try:
-                    self._retired.remove(ex)    # (its processes all ended)
-                except ValueError:
-                    pass
-            pids.extend(live)
-        return pids
+            self._retired = [p for p in self._retired if _running(p)]
+            procs = _procs(self._pool) + self._retired
+        return [p.pid for p in procs if _running(p)]
 
     def cpu_sample(self, now=None):
         """The processes' CPU times read for overdue (at most every cpu.every s). True when read."""
@@ -579,8 +585,12 @@ class RespawningPool:
             self.respawns += 1
             old = self._pool
             self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
+            # (the rotated executors' processes too: the job given up on may be running in one of them)
+            procs, self._retired = _procs(old) + self._retired, []
         log.warning("%s worker processes restarted (%s; %d so far)", self.name, why, self.respawns)
-        for p in list((getattr(old, "_processes", None) or {}).values()):
+        for p in procs:
+            if not _running(p):
+                continue                # (ended and reaped: its pid may be another process's by now)
             try:
                 p.kill()
             except Exception:           # (gone already)
@@ -630,7 +640,9 @@ class RespawningPool:
             self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
             self._last_rotate = time.monotonic() if now is None else now
             self.rotations += 1
-            self._retired.append(old)       # (its processes' CPU still counted while they finish: overdue)
+            # (its processes' CPU still counted while they finish (overdue), and they are killed by recycle: taken
+            # now, its shutdown below drops the executor's own list of them while their jobs run on)
+            self._retired = [p for p in self._retired if _running(p)] + _procs(old)
         log.info("%s worker processes replaced (%s; %d so far): the old ones finish their jobs and exit",
                  self.name, why, self.rotations)
         try:
