@@ -7377,7 +7377,6 @@ def _sky_simplify(items, copy=False):
             spec = copymod.copy(spec)
         ring = np.asarray(spec.ring, np.float64)
         n0 = len(ring)
-        ring0 = ring
         if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
             c, u, hl, hw = oriented_box(ring)
             v = np.array([-u[1], u[0]])
@@ -7397,12 +7396,7 @@ def _sky_simplify(items, copy=False):
             # top: a mapped 20 m gable on 40 m came out 20 m, an L-shaped hip 3.4 m over, Codex review 2026-11-14)
             rise = getattr(spec, "rise", None)      # (plan()'s drawn rise: its own span, skeleton, ridge and pitch)
             if rise is None:
-                # (a spec plan() returned early with a sloped roof: a greenhouse's gable, a pyramid, a mast's mapped
-                # top: its mapped height, else its own pitch over its unsimplified outline's half span; Codex round 6)
                 rise = spec.roof_h
-                if not rise and len(ring0) >= 3:
-                    _c, _u, hl0, hw0 = oriented_box(ring0)
-                    rise = roof_rise(spec.roof, min(hl0, hw0), spec.pitch or PITCH.get(spec.roof, PITCH["gabled"]))
             if rise and math.isfinite(rise) and rise > 0:
                 spec.height = float(spec.height or 0.0) + float(rise)
         spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
