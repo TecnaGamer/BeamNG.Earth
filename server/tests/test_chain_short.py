@@ -42,10 +42,17 @@ class _Store(roads.BridgeProfiles):
             revisit.fault(lidar=True)
         return [np.zeros(2) for _ in comp]
 
-    def _commit(self, k, ground=None):
+    def _precommit(self, k, part, ground=None):
+        if self.fault == "commit":      # (a part's piers: the ground under them read short)
+            revisit.fault()
+        return []
+
+    def _commit(self, k, ground=None, pre=None):
         pass
 
     def _structure(self, chain):
+        if self.fault == "structure":   # (the chain's structure: a cell round it read short)
+            revisit.fault()
         return [], []
 
 
@@ -113,40 +120,78 @@ class ChainShortTest(unittest.TestCase):
             mine._chain_of(("f", 0), ENDS)
         self.assertFalse(b.complete, "short again at its reuse")
 
-    def test_a_reader_in_another_thread_never_takes_a_short_solve_as_complete(self):
-        """The part and its note are published under one hold of the lock: a reader that finds the part in `done`
-        while the solving thread is still at work (paused here in _structure, right after the parts are published)
-        is short too. It read the part as complete before: the note came only after the solve's scope had ended."""
-        st = _Store("plain")
-        in_structure, go_on = threading.Event(), threading.Event()
+    def test_an_unfinished_chain_is_not_there_for_a_reader_or_an_adopter(self):
+        """A chain is published only when everything it depends on is read: its parts' piers (_precommit) and its
+        structure (_structure) can still read something short after the solve. While the solving thread is at either
+        of them nothing of the chain is in `done` (a reader does not find it, an adopter cannot take it), and once it
+        is published its note has those late faults: a later build that takes it is short. Before, the part was in
+        `done` with a note taken before them: a reader in that window took the fallback as complete."""
+        for where in ("commit", "structure"):
+            st = _Store(where)                      # (the solve itself reads nothing short: only the late step does)
+            reached, go_on = threading.Event(), threading.Event()
+            real = getattr(st, "_precommit" if where == "commit" else "_structure")
 
-        def structure(chain):
-            in_structure.set()
-            self.assertTrue(go_on.wait(10))
-            return [], []
-        st._structure = structure
-        got = {}
+            def paused(*a, _real=real, **kw):
+                out = _real(*a, **kw)               # (the fault first, then the pause: the note must still get it)
+                reached.set()
+                self.assertTrue(go_on.wait(10))
+                return out
+            setattr(st, "_precommit" if where == "commit" else "_structure", paused)
+            got = {}
 
-        def writer():
-            with revisit.scope() as w:
-                st._chain_of(("f", 0), ENDS)
-            got["writer"] = w.complete
-        th = threading.Thread(target=writer)
-        th.start()
-        try:
-            self.assertTrue(in_structure.wait(10))
-            self.assertIn(("f", 0), st.done, "published, the solving thread still in its structure")
-            with revisit.scope() as reader:
-                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
-            self.assertFalse(reader.complete, "the reader took a short solve: it must be short")
-            with revisit.scope() as reader2:
+            def writer():
+                with revisit.scope() as w:
+                    st._chain_of(("f", 0), ENDS)
+                got["writer"] = w.complete
+            th = threading.Thread(target=writer)
+            th.start()
+            try:
+                self.assertTrue(reached.wait(10))
+                # the writer is still at work: a reader finds nothing to take
+                self.assertNotIn(("f", 0), st.done, f"{where}: nothing published before the chain is finished")
                 st.keys_of = st.parts_of = None
-                self.assertEqual(len(st.parts_todo([(("f", 0), None, 0)], solved_only=True)), 1)
-            self.assertFalse(reader2.complete)
-        finally:
-            go_on.set()
-            th.join(10)
-        self.assertIs(got["writer"], False)
+                with revisit.scope() as reader:
+                    self.assertEqual(st.parts_todo([(("f", 0), None, 0)], solved_only=True), [])
+                self.assertTrue(reader.complete, "it took nothing, so it is not short for it")
+                # ... and an adopter cannot take it either (the owner's parts are not there to copy)
+                with st.lock:
+                    self.assertEqual([k for k in [("f", 0)] if k in st.done], [])
+            finally:
+                go_on.set()
+                th.join(10)
+            self.assertIs(got["writer"], False, f"{where}: the build that made it is short")
+            self.assertIn(("f", 0), st.done)
+            self.assertIn(("f", 0), st.short, f"{where}: the late fault is in the part's note")
+            with revisit.scope() as later:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertFalse(later.complete, f"{where}: a build that takes the chain after is short")
+            # and an adopter after the writer finished is short too
+            mine = _Store(None)
+            mine.owner_of = lambda me, comp, pool, _o=st: _o
+            mine._ends_ll = lambda xy: ENDS
+            st.frame = mine.frame = types.SimpleNamespace()
+            with mock.patch.object(roads.ChainView, "mapper", staticmethod(lambda a, b: _Same())):
+                with revisit.scope() as adopter:
+                    self.assertIsNotNone(mine._chain_of(("f", 0), ENDS))
+            self.assertFalse(adopter.complete, f"{where}: adopted with its note")
+            self.assertIn(("f", 0), mine.short)
+
+    def test_the_note_is_final_when_the_part_appears(self):
+        """Watched from inside the lock: the moment a part is put into `done`, its note already holds what its piers
+        and its structure read short (nothing of the chain is read after its publication)."""
+        for where in ("plain", "commit", "structure"):
+            st = _Store(where)
+            seen = []
+
+            class Watch(dict):
+                def __setitem__(w, k, v, _st=st, _seen=seen):
+                    _seen.append((k, _st.__dict__.get("short", {}).get(k)))
+                    dict.__setitem__(w, k, v)
+            st.done = Watch()
+            with revisit.scope() as b:
+                st._chain_of(("f", 0), ENDS)
+            self.assertEqual(seen, [(("f", 0), (1, 0))], where)
+            self.assertEqual(st.short[("f", 0)], (b.n, b.lidar), f"{where}: nothing was added after")
 
     def test_adopted_parts_are_published_with_their_note(self):
         """As above for a chain adopted from its owner: checked from inside the adopting store's lock, the moment

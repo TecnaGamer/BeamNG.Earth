@@ -8015,17 +8015,13 @@ class BridgeProfiles:
         # again to every later build that takes them from `done`, _replay. The solves are kept for the session; one
         # made short (an underwater bore unsolved, a cell that could not be read, the lidar rule) faulted only the
         # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13.
-        # A part and its note are published TOGETHER, under one hold of the lock (_chain_solve, _adopt): a reader in
+        # A chain is published only when everything it depends on is read, its parts, piers and structure TOGETHER
+        # with their final notes, under one hold of the lock (_chain_solve, _adopt): a reader or an adopter in
         # another thread never finds a part in `done` whose note is still to come)
         import revisit
         comp = []
         with revisit.scope() as short:
-            got = self._chain_solve(key, ends, adopt, comp, short)
-        if comp and (short.n or short.lidar):   # (what its structure read short after the parts were published)
-            with self.lock:
-                for k in comp:
-                    self._note_short(k, short.n, short.lidar)
-        return got
+            return self._chain_solve(key, ends, adopt, comp, short)
 
     def _note_short(self, k, n, lidar):
         """Under self.lock: part k's solve read n things short (lidar: built on the lidar rule)."""
@@ -8071,29 +8067,38 @@ class BridgeProfiles:
         zs = self._solve(comp, pool, ground)
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
                          [k in tl.measured for k in comp])
+        # STAGED until every read the chain depends on is done: the parts' piers (_precommit: the ground under them)
+        # and the chain's structure (_structure: the cells round it) can still read something short, and a part
+        # published before them was taken by a reader or an adopter in another thread as complete (review,
+        # 2026-11-13). Nothing of the chain is in `done`, `piers` or `trusses` until then; then all of it with its
+        # final notes, in one hold of the lock.
         with self.lock:
-            n_short, n_lidar = short.n, short.lidar     # (everything the parts were made from is read by now)
-            for k, z in zip(comp, zs):
-                spec, xy, lon = pool[k][:3]
-                old = self.done.get(k)
-                if n_short or n_lidar:                  # (before the part itself: never a part without its note)
-                    self._note_short(k, n_short, n_lidar)
-                # the first solve of a part is kept, and what goes with it, unless this one saw more of it
-                if old is None or len(xy) > len(old[1]):
-                    self.done[k] = (spec, xy, z, lon)
-                    self._commit(k, ground)
-            chain = [(self.done[k][1], self.done[k][2], self.done[k][0].width) for k in comp
-                     if k in self.done]
+            before = {k: self.done.get(k) for k in comp}
             ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
-            if fresh:
-                self.trusses[ck] = []
-            got = self.done.get(key)
+        # the first solve of a part is kept, and what goes with it, unless this one saw more of it
+        keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
+                if before[k] is None or len(pool[k][1]) > len(before[k][1])}
+        pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
+        beams = tpiers = None
         if fresh:
+            chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain)
-            with self.lock:
+        with self.lock:
+            n_short, n_lidar = short.n, short.lidar     # (final: nothing of this chain is read after this)
+            for k in comp:
+                v = keep.get(k)
+                old = self.done.get(k)
+                if v is None or not (old is None or len(v[1]) > len(old[1])):
+                    continue                            # (another thread published a copy at least as long meanwhile)
+                if n_short or n_lidar:                  # (before the part itself: never a part without its note)
+                    self._note_short(k, n_short, n_lidar)
+                self.done[k] = v
+                self._commit(k, ground, pre.get(k))
+            if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
+            got = self.done.get(key)
         return got
 
     def _ends_ll(self, xy):
@@ -8148,16 +8153,22 @@ class BridgeProfiles:
     def _adopt_take(self, extra):
         """Under self.lock: _adopt_extra's from another store."""
 
-    def _commit(self, k, ground=None):
-        """Under self.lock: part k's solve was kept: its piers (pier_sites; TunnelProfiles keeps its sections)."""
-        spec, xy, z, _lon = self.done[k]
+    def _precommit(self, k, part, ground=None):
+        """Before part k (spec, xy, z, lon) is published, outside the lock: what its commit reads (its piers:
+        pier_sites samples the ground under them; TunnelProfiles: nothing). Handed to _commit."""
+        spec, xy, z, _lon = part
         lines = [ln for v in (ground or {}).values() for ln in v]
         try:
-            self.piers[k] = pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
-                                       self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
+            return pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
+                              self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
         except Exception as ex:             # no piers rather than no bridge
             log.debug("piers of %s: %s: %s", k, type(ex).__name__, ex)
-            self.piers[k] = []
+            return []
+
+    def _commit(self, k, ground=None, pre=None):
+        """Under self.lock: part k's solve was kept: its piers (pre: _precommit's; TunnelProfiles keeps its
+        sections). Nothing is read here: the part's note is final when it is published."""
+        self.piers[k] = pre if pre is not None else []
 
     def _wet_at(self, xy):
         if self.wet is None:
@@ -8417,7 +8428,10 @@ class TunnelProfiles(BridgeProfiles):
         # 45 m and 30 m pieces, the shorter one's sections cut the longer one's terrain 15 m short, 2026-10-17)
         return f"{key[0]}.{key[1]}"
 
-    def _commit(self, k, ground=None):
+    def _precommit(self, k, part, ground=None):
+        return None                 # (a tunnel part has no piers: its sections were staged by its solve)
+
+    def _commit(self, k, ground=None, pre=None):
         staged = getattr(self._tls, "staged", {}).pop(k, None)
         if staged is None:
             return
