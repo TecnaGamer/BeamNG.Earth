@@ -83,7 +83,7 @@ M.SCHEMA = {
   rebaseDistance = { kind = 'number', default = rebase.DEFAULT_DISTANCE, min = rebase.MIN_DISTANCE,
     max = rebase.MAX_DISTANCE, label = 'Rebase distance (m)' },
   viewDistanceMode = { kind = 'enum', default = 'horizon', values = { 'fixed', 'horizon' }, label = 'View distance' },
-  viewDistanceKm = { kind = 'number', default = 100, min = 20, max = 1000, label = 'Fixed view distance (km)' },
+  viewDistanceKm = { kind = 'number', default = 100, min = 1, max = 1000, label = 'Fixed view distance (km)' },   -- (1 km: players asked for under 20, 2026-11-14)
   hazeStrength = { kind = 'number', default = 0, min = 0, max = 1, label = 'Distance haze (placeholder)' },
   skyMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Sky' },
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
@@ -159,6 +159,11 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
+  -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
+  -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
+  maxRamGb = { kind = 'enum', default = 'auto', values = { 'auto', '3', '4', '6', '8', '12', '16', '24', '32' },
+    label = 'Max RAM for BeamNG.Earth' },
   -- the GPS route's data fetched ahead (the server's route_download; sent with each route): none, the next 12 miles
   -- (20 km), or the whole route (up to 300 miles)
   routeDownload = { kind = 'enum', default = 'ahead', values = { 'off', 'ahead', 'route' },
@@ -178,7 +183,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
-  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
+  'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
   'devMapKm' }
 
 -- Stored but not on the settings page
@@ -225,11 +230,21 @@ M.BUILDING_DISTANCE = { near = 0.6, normal = 1.0, far = 1.5, max = 2.0 }
 -- A file saved before the tree distance had its own setting: the distance its tree level had (trees.lua, before)
 M.TREE_DISTANCE_OF = { low = 'near', medium = 'medium', normal = 'normal', high = 'far', ultra = 'farther' }
 
--- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }) and why.
--- A Steam Deck (its APU: "AMD Custom GPU 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low.
-function M.detectQuality(gpu)
+-- A computer with less memory than this (GB of 10^9 bytes, the server's budget.LEAN_GB: an 8 GB PC) starts on Low,
+-- whatever its GPU: the game alone holds ~6.5-7.5 GB there and the world server runs its lean tier (2026-11-12: 8 GB
+-- machines had 1,493 hitches over 100 ms an hour in the players' reports, 16 GB ones 540). LOW_RAM_GB = 0: off.
+M.LOW_RAM_GB = 10
+
+-- Pure: the preset a first run picks for this hardware (Engine.Platform.getGPUInfo: { name, memoryMB }; ramBytes: the
+-- machine's memory, Engine.Platform.getMemoryInfo().osPhysAvailable) and why. A Steam Deck (its APU: "AMD Custom GPU
+-- 0405 / 0932 (RADV VANGOGH)") or a GPU with under 3 GB: medium / low; under LOW_RAM_GB of memory: low.
+function M.detectQuality(gpu, ramBytes)
   local name = type(gpu) == 'table' and tostring(gpu.name or '') or ''
   local mem = type(gpu) == 'table' and tonumber(gpu.memoryMB) or nil
+  local ram = tonumber(ramBytes)
+  if ram and ram > 0 and M.LOW_RAM_GB > 0 and ram / 1e9 < M.LOW_RAM_GB then
+    return 'low', string.format('%.0f GB of memory', ram / 1073741824)
+  end
   local up = name:upper()
   if up:find('VANGOGH', 1, true) or up:find('CUSTOM GPU 0405', 1, true) or up:find('CUSTOM GPU 0932', 1, true) then
     return 'medium', 'Steam Deck'
@@ -343,15 +358,19 @@ end
 
 -- The first run (quality 'auto'): the hardware's preset, unless the player changed one of its knobs before presets
 -- existed (then 'custom', theirs kept). Saved by the caller's next save (and here, when the file can be written).
-function M.resolveAuto(gpu)
+function M.resolveAuto(gpu, ramBytes)
+  local P = rawget(_G, 'Engine') and Engine.Platform
   if gpu == nil then
-    local P = rawget(_G, 'Engine') and Engine.Platform
     if P and P.getGPUInfo then
       local ok, g = pcall(P.getGPUInfo)
       if ok then gpu = g end
     end
   end
-  local pick, why = M.detectQuality(gpu)
+  if ramBytes == nil and P and P.getMemoryInfo then     -- (osPhysAvailable is the total: ge_utils.lua's RAM size)
+    local ok, m = pcall(P.getMemoryInfo)
+    if ok and type(m) == 'table' then ramBytes = tonumber(m.osPhysAvailable) end
+  end
+  local pick, why = M.detectQuality(gpu, ramBytes)
   values.qualityDetected = why .. ': ' .. pick
   local changed = false
   for _, k in ipairs(M.PRESET_KEYS) do
@@ -394,6 +413,22 @@ function M.get(key) return values[key] end
 
 -- The download cache's cap for the server: GB, 0 = unlimited.
 function M.cacheCapGb() return math.max(0, tonumber(values.cacheCapGb) or 0) end
+-- The world server's memory limit in GB (0: Auto)
+function M.maxRamGb() return math.max(0, tonumber(values.maxRamGb) or 0) end
+
+-- The page's "World server memory" line from the server's 'memory' message (core.memoryState()).
+function M.memoryLine(m)
+  if type(m) ~= 'table' then return 'no information from the server' end
+  local function gb(mb) return string.format('%.1f GB', (tonumber(mb) or 0) / 1024) end
+  local line = gb(m.usedMB) .. ' of ' .. gb(m.limitMB)
+  if (tonumber(m.setting) or 0) > 0 then line = line .. ' (set)' else line = line .. ' (Auto)' end
+  if (tonumber(m.effMB) or 0) > 0 and (tonumber(m.effMB) or 0) < (tonumber(m.limitMB) or 0) - 1 then
+    line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
+  end
+  line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
+  return line
+end
 
 -- bytes as the page shows them: "350 MB", "1.2 GB", "20 GB" (decimal units, as the cap)
 local function size(b, whole)
@@ -429,10 +464,20 @@ local function ext(name) return rawget(_G, name) end
 -- LevelInfo.visibleDistance only takes effect after postApply (in-game, 2026-10-10). Only in our
 -- level, and the default (the level file's 100 km) never touches the engine: nothing changes until
 -- the player picks another distance.
-local function applyViewDistance()
+-- The fixed view distance (m) in force now: the setting's while driving, none with the real horizon or the 3D map open
+-- (the map reaches as far as its eye: a 1 km driving distance must not make a 1 km map; core.applyHorizon drives the
+-- distance then, and closing the map puts the fixed one back: M.reapplyView).
+function M.fixedViewM()
+  if values.viewDistanceMode ~= 'fixed' then return nil end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then return nil end
+  return values.viewDistanceKm * 1000
+end
+
+local function applyViewDistance(force)
   local li = scenetree and scenetree.theLevelInfo
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
-  if values.viewDistanceMode ~= 'fixed' then
+  if not M.fixedViewM() then
     -- 'horizon' (the default): v1.4 M1h drives it. Coming back from a fixed distance we set, the
     -- level's own distance is put back once (M1h's next status sets its own).
     if li and level == M.LEVEL_ID and appliedView ~= nil then
@@ -444,12 +489,19 @@ local function applyViewDistance()
     end
     return
   end
-  local m = values.viewDistanceKm * 1000
-  if not li or level ~= M.LEVEL_ID or appliedView == m then return end
-  if appliedView == nil and m == M.SCHEMA.viewDistanceKm.default * 1000 then return end
+  local m = M.fixedViewM()
+  if not li or level ~= M.LEVEL_ID or (appliedView == m and not force) then return end
+  -- (the default untouched at a level's start; force: the 3D map closed, a globe view may have raised it)
+  if not force and appliedView == nil and m == M.SCHEMA.viewDistanceKm.default * 1000 then return end
   li.visibleDistance = m
   if li.postApply then li:postApply() end
   appliedView = m
+end
+
+-- The 3D map opened or closed (core's onUpdate): the view distance as fixedViewM says now (a globe view may have raised
+-- it meanwhile: set again whatever it was).
+function M.reapplyView()
+  applyViewDistance(M.fixedViewM() ~= nil)
 end
 
 -- The server's graphics knobs now ({ lodScale, lodPx, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
@@ -575,6 +627,10 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.cacheSetCap then core.cacheSetCap(M.cacheCapGb()) end
   end,
+  maxRamGb = function()
+    local core = ext('beamngEarth_core')
+    if core and core.memorySetLimit then core.memorySetLimit(M.maxRamGb()) end
+  end,
   devOutlineKm = function(v)
     local dev = ext('beamngEarth_dev')
     if dev and dev.setParam then dev.setParam('outlineKm', v) end
@@ -680,6 +736,10 @@ function M.uiState()
   local c = core and core.cacheState and core.cacheState() or nil
   status.cache = { line = M.cacheLine(c), clears = c and c.clears or 0, clearedBytes = c and c.clearedBytes or nil,
     clearedText = c and c.clearedBytes and size(c.clearedBytes) or nil }
+  -- the world server's memory and its limit (the server's 'memory' message), asked with the cache numbers
+  if core and core.memoryQuery and cachePolls % M.CACHE_POLL == 1 then core.memoryQuery() end
+  local mem = core and core.memoryState and core.memoryState() or nil
+  status.memory = { line = M.memoryLine(mem) }
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
@@ -828,12 +888,16 @@ end
 -- whole missing list whenever it changes, and again every MAP_ASK_S while some are missing. The server builds the
 -- newest list first and drops what it no longer has (server/maptiles.py TileFiles), so a list that became empty
 -- goes out too (it cancels).
+-- A 'sat' tile with only its stand-in there (server maptiles.PROV_DIR: a later source standing in for a better one
+-- that could not be read yet) comes back as "satp/z/x/y" (its file: mapTilePath('satp', ...)) and is still asked for:
+-- the server builds it again now and then, and the real one's own path makes the screens load it.
 M.MAP_ASK_S = 4
 M.MAP_TILES_DIR = '/temp/beamngEarth/maptiles/'
 M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png' }   -- server maptiles.LAYERS
 function M.mapTilePath(layer, z, x, y)
   local zxy = string.format('%d/%d/%d', z, x, y)
   if layer == 'sat' then return M.MAP_TILES_DIR .. zxy .. '.jpg' end   -- (where it always was)
+  if layer == 'satp' then return M.MAP_TILES_DIR .. 'prov/' .. zxy .. '.jpg' end
   return M.MAP_TILES_DIR .. layer .. '/' .. zxy .. M.MAP_LAYERS[layer]
 end
 local mapSent, mapSentAt = '', nil
@@ -847,6 +911,9 @@ function M.mapTiles(list)
       if FS:fileExists(M.mapTilePath(layer, z, x, y)) then
         ready[#ready + 1] = key
       else
+        if layer == 'sat' and FS:fileExists(M.mapTilePath('satp', z, x, y)) then
+          ready[#ready + 1] = string.format('satp/%d/%d/%d', z, x, y)
+        end
         missing[#missing + 1] = { z, x, y, layer }
         keys[#keys + 1] = key
       end
@@ -920,9 +987,11 @@ end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
 -- The map's "Teleport here?" box opened (or a search result picked): load the place ahead (core.preloadPlace).
-function M.uiMapPreload(lat, lon)
+-- hover: a search result, saved or recent place the pointer rests on (the light part).
+function M.uiMapPreload(lat, lon, hover)
   local core = ext('beamngEarth_core')
-  return { ok = core ~= nil and core.preloadPlace ~= nil and core.preloadPlace(tonumber(lat), tonumber(lon)) or false }
+  return { ok = core ~= nil and core.preloadPlace ~= nil
+    and core.preloadPlace(tonumber(lat), tonumber(lon), hover == true) or false }
 end
 
 function M.uiMapTeleport(lat, lon, name)

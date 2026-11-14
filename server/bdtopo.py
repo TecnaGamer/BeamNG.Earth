@@ -40,6 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 import fast
+import dmath
 import mapcells
 
 log = logging.getLogger("earthd.bdtopo")
@@ -492,7 +493,7 @@ def credited_near(cache_dir, lat, lon, near_m):
         return False
     d = os.path.join(cache_dir, "bdtopo", f"v{VERSION}")
     dlat = near_m / 110540.0
-    dlon = near_m / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+    dlon = near_m / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
     try:
         keys = mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon, max_cells=64)
     except ValueError:

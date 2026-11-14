@@ -753,16 +753,25 @@ pub fn season_img<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, xm: PyRe
 }
 
 /// imagery.encode_dds' payload in one call (one GIL hand-over a texture: each was a wait of up to the interpreter's
-/// switch interval behind its busy threads, 2026-10-29): rgb (h, w, 3) and its mip chain (mip_levels: linear light
-/// by lut, sharpened) as BC1 blocks, level after level; on the GPU when gpu is set (gpu.rs; float32 maths, ~1 block
-/// in 1000 differs) and it works, else bc1_encode's. Returns (the blocks, the level count, the GPU's error if it
-/// failed: the CPU encoded them).
+/// switch interval behind its busy threads, 2026-10-29): rgb (h, w, 3) and its mip chain (linear light by lut,
+/// sharpened) as BC1 blocks, level after level.
+/// 287 (on 285): on the CPU by bc1fast.rs (the mips in integers, ISPC's BC1 kernels: a 1024² texture with its mips
+/// ~4 ms of CPU against 64 ms, and against a GPU round trip of 24 ms that the game's frames paid for on a Steam Deck).
+/// gpu: the GPU's encoder (gpu.rs; float32 mips and maths) only in a build without the ISPC kernels. Returns (the
+/// blocks, the level count, the GPU's error if it failed: the CPU encoded them).
 #[pyfunction]
 pub fn dds_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReadonlyArray1<'py, f32>, sharpen: f32,
                        gpu: bool) -> PyResult<(Bound<'py, PyBytes>, usize, Option<String>)> {
     let (a, lut) = (rgb.as_array(), lut.as_array());
     if a.shape()[2] != 3 || lut.len() != 256 {
         return Err(PyValueError::new_err("dds_levels: rgb (h, w, 3), lut of 256"));
+    }
+    if !gpu || crate::bc1fast::ispc_linked() {
+        let (data, n) = py.detach(|| {
+            let blobs = crate::bc1fast::dds_levels(a, lut, sharpen);
+            (blobs.concat(), blobs.len())
+        });
+        return Ok((PyBytes::new(py, &data), n, None));
     }
     let (data, n, err) = py.detach(|| {
         let mut levels = vec![a.as_standard_layout().into_owned()];

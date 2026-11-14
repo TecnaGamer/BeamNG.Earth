@@ -63,7 +63,21 @@ from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
 
-SERVER_VERSION = "0.4.0"
+def _app_version():
+    """This copy's VERSION (the folder above server/, or the packaged app's bundle: updates.local_version's place), for
+    the User-Agent the data hosts see and the hello's serverVersion; it said "0.4.0" since October (Cloudflare's
+    analytics, 2026-11-11)."""
+    import sys
+    root = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+            v = f.read().strip()
+    except OSError:
+        v = ""
+    return "".join(c for c in v if c.isalnum() or c in ".-+")[:40] or "unknown"
+
+
+SERVER_VERSION = _app_version()
 PROJECT_URL = "https://github.com/TecnaGamer/BeamNG.Earth"
 USER_AGENT = f"BeamNG.Earth/{SERVER_VERSION} (+{PROJECT_URL})"
 KINDS = ("demand", "prefetch", "background", "predownload", "urgent")
@@ -159,12 +173,15 @@ class HostPolicy:
     breaker_max: float = 900.0              # ... up to this
     slow_ms: float | None = None            # a slower response counts as a failure (WMS / export hosts)
     timeout: float = 20.0                   # s per HTTP request
+    connect_timeout: float | None = None    # s to open a new connection (None: timeout): a source with a fallback
+                                            # gives up on a host that does not answer at once
     max_wait: float = 30.0                  # s a demand request may wait for a token
     redirect_limited: bool = False          # a 3xx means "rate limited" (tile hosts never redirect)
     binary: bool = False                    # a 200 with an HTML page is an error page
     referer: bool = False                   # send PROJECT_URL as Referer (hosts that ask for one)
     optional: bool = False                  # the world builds without it (gravity, weather, search, routing,
                                             # updates): left out of the player's "Degraded" status (GitHub #23)
+    shared: bool = False                    # admitted across the server's processes (SharedGate: SHARED_DIR)
 
 
 TILE_HOST = dict(redirect_limited=True, binary=True)
@@ -180,17 +197,17 @@ POLICIES = {
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):
     # one at a time, only imagery.warm()'s look-ahead (never on a render's critical path)
-    "imagery.nationalmap.gov": HostPolicy(rate=0.5, burst=4.0, max_conc=1, daily_budget=3000,
+    "imagery.nationalmap.gov": HostPolicy(rate=0.5, burst=4.0, max_conc=1, daily_budget=3000, shared=True,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                           binary=True, timeout=40.0, max_attempts=2, base_delay=2.0,
                                           breaker_threshold=6, breaker_window=120.0),
     # USDA FPAC's NAIP ImageServer (imagery.py "naipusda"): 1.6-4 s a 1024² image in-game 2026-10-13
-    "apps.geo.fpac.usda.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000,
+    "apps.geo.fpac.usda.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, shared=True,
                                          allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                          binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                          breaker_threshold=6, breaker_window=120.0),
     # MD iMAP six-inch MapServer export (imagery.py "md6in"): ~1.3 s a 1024² image in-game 2026-10-13
-    "mdgeodata.md.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000,
+    "mdgeodata.md.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, shared=True,
                                    allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                    binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                    breaker_threshold=6, breaker_window=120.0),
@@ -324,8 +341,14 @@ POLICIES = {
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
-    # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
-    "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
+    # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
+    "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                   cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
+                                   interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    "query.wikidata.org": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                     cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,
+                                     interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    # Never at runtime (OSMF vector tiles, Protomaps builds).
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
@@ -352,16 +375,47 @@ def _regional_policies():
                                    miss_ttl=30 * DAY, timeout=20.0, optional=True, **TILE_HOST)
         else:
             out[host] = HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, allow_prefetch=True,
-                                   miss_ttl=30 * DAY, binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
-                                   breaker_threshold=6, breaker_window=120.0, optional=True)
+                                   shared=True, miss_ttl=30 * DAY, binary=True, timeout=30.0, max_attempts=2,
+                                   base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True)
     return out
 
 
 POLICIES.update(_regional_policies())
+# swisstopo's WMTS (SWISSIMAGE, the "swiss" photos): the FSDI's General Terms of Use (geo.admin.ch/en/general-terms-of-use-
+# fsdi, §2.3's table, read 2026-11-13) allow wmts.geo.admin.ch 1'200 requests / minute (20/s; 631 M a year in all;
+# doubled on 2025-01-01, geo.admin.ch/en/change-limits-fair-use) as fair use, and desktop applications are fair use. The
+# regional tile hosts' 6/s x4 held a cold Stelvio far field 168 s on its 1,175 tiles (expo baseline, 2026-11-12): 15/s
+# (3/4 of the limit), 8 at once.
+POLICIES["wmts.geo.admin.ch"] = replace(POLICIES["wmts.geo.admin.ch"], rate=15.0, burst=30.0, max_conc=8,
+                                        daily_budget=40000)
+# New York State's orthoimagery (orthos.its.ny.gov ArcGIS export, NYS ITS Geospatial Services): no request limit is
+# published (the service's metadata and licence, gis.ny.gov/orthoimagery and its FAQs, read 2026-11-13: free, "Users
+# can use web services"; the server's own caps: 4096 px images). One request at a time (~1.4 s each) kept a cold
+# Manhattan's photos fetching for 177 s: 3 at once at 2/s, still a few times under what one map viewer asks for.
+POLICIES["orthos.its.ny.gov"] = replace(POLICIES["orthos.its.ny.gov"], rate=2.0, burst=6.0, max_conc=3)
 # The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
                                  offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
+# A self-hosted BeamMP collector gets the server list's limits too (keep existing policies for known hosts).
+_SERVER_LIST_HOST = urlsplit(os.environ.get("BNGE_SERVER_LIST_URL", "https://earth.tgforever.net/servers")).hostname
+if _SERVER_LIST_HOST:
+    POLICIES.setdefault(_SERVER_LIST_HOST, POLICIES["earth.tgforever.net"])
+# Our prebaked input tiles (bnwt.py, BNGE_BNWT_URL: off when unset): range reads of a few archives on a CDN, like the
+# project's tile host (which they will likely share); a host of its own gets the same policy
+_BNWT_URL = (os.environ.get("BNGE_BNWT_URL") or "").strip()
+_BNWT_HOST = (urlsplit(_BNWT_URL).hostname or "") if _BNWT_URL.startswith(("http://", "https://")) else ""
+if _BNWT_HOST:
+    # (their own lane, "host#bnwt", whatever else the host serves: the server falls back to the sources themselves, so
+    # a host that does not answer is given up quickly: 2 s to connect, 2 tries)
+    POLICIES[_BNWT_HOST + "#bnwt"] = replace(POLICIES.get(_BNWT_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                             timeout=10.0, max_attempts=2, base_delay=0.25)
+# The shared decision archives (decisions.py: the CDN's dec/, or BNGE_DECISIONS_URL): a lane of their own, given up
+# quickly like the BNWT archives' (the server plans the cell itself when they do not answer)
+_DEC_URL = (os.environ.get("BNGE_DECISIONS_URL") or "").strip()
+_DEC_HOST = (urlsplit(_DEC_URL).hostname or "") if _DEC_URL.startswith(("http://", "https://")) else _CDN_HOST
+POLICIES[_DEC_HOST + "#dec"] = replace(POLICIES.get(_DEC_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                       timeout=15.0, max_attempts=2, base_delay=0.25)
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
@@ -382,8 +436,11 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
-    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
+    _CDN_HOST: "satellite photos of the distant land, road tags and the weekly railway, lane and sign data (the "
+               "project's own tile host); the other photo sources, Pages' copy of the data meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
+    **({_BNWT_HOST: "map data prebaked (our own tiles: water, land use, roads, buildings, places); Overture's files "
+                    "meanwhile"} if _BNWT_HOST and _BNWT_HOST != _CDN_HOST else {}),
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
     "tiles.maps.eox.at": "worldwide satellite photos; new ground outside the detailed-photo regions may stay plain",
@@ -423,6 +480,8 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
+    "overpass-api.de": "nearby category search on Enter",
+    "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
@@ -611,10 +670,6 @@ class TokenBucket:
                 return True
             return False
 
-    def give_back(self):
-        with self.lock:
-            self.tokens = min(self.burst, self.tokens + 1.0)
-
     def pause(self, until):
         """No tokens until `until` (clock time); the bucket is emptied."""
         with self.lock:
@@ -660,6 +715,17 @@ class CircuitBreaker:
                 return False, False, 1.0
             self.probing = True
             return True, True, 0.0
+
+    def may_try(self):
+        """Would a request be let through now (allow()): closed, or its open time over with no probe out. An open
+        breaker closes only through a request's probe, so a caller waiting for is_open() to clear would wait for
+        ever when nothing else asks the host."""
+        with self.lock:
+            if self.state == "closed":
+                return True
+            if self.state == "open" and self.clock() < self.open_until:
+                return False
+            return not self.probing
 
     def is_open(self):
         """Not closed: open, or half-open and not yet proven."""
@@ -881,7 +947,9 @@ class HttpsTransport:
             return got
 
     def _request_once(self, url, headers, timeout, proxy):
-        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None). timeout: s, or (s to
+        connect, s for each read after)."""
+        connect_timeout, timeout = timeout if isinstance(timeout, tuple) else (timeout, timeout)
         u = urlsplit(url)
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         if proxy is None:
@@ -904,7 +972,7 @@ class HttpsTransport:
             else:
                 if proxy is not None and u.scheme == "https":
                     phost, pport, puser, ppass = proxy
-                    kwargs = {"timeout": timeout}
+                    kwargs = {"timeout": connect_timeout}
                     if self._tls_context is not None:
                         kwargs["context"] = self._tls_context
                     conn = http.client.HTTPSConnection(phost, pport, **kwargs)
@@ -916,19 +984,23 @@ class HttpsTransport:
                         conn.set_tunnel(u.hostname, u.port or 443)
                 elif proxy is not None:
                     phost, pport, puser, ppass = proxy
-                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    conn = http.client.HTTPConnection(phost, pport, timeout=connect_timeout)
                     if puser is not None:
                         creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
                         conn._proxy_auth = f"Basic {creds}"
                 else:
                     if u.scheme == "https":
-                        kwargs = {"timeout": timeout}
+                        kwargs = {"timeout": connect_timeout}
                         if self._tls_context is not None:
                             kwargs["context"] = self._tls_context
                         conn = http.client.HTTPSConnection(u.netloc, **kwargs)
                     else:
-                        conn = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                        conn = http.client.HTTPConnection(u.netloc, timeout=connect_timeout)
             try:
+                if not reused and connect_timeout != timeout:   # (connected within connect_timeout; reads: timeout)
+                    conn.connect()
+                    conn.timeout = timeout
+                    conn.sock.settimeout(timeout)
                 req_headers = dict(headers, Connection="keep-alive")
                 if proxy is not None and u.scheme == "http":
                     phost, pport, puser, ppass = proxy
@@ -1093,6 +1165,202 @@ def _proc_writer():
         st["lock"].release()
 
 
+# --- one host's admission shared by the server's processes ------------------------------------------------------------
+# A host whose policy is shared (the one-at-a-time export services: Maryland's md6in, NAIP, the regional WMS / ArcGIS
+# exports) is admitted across every process of the server, not each process alone: the road-tile processes fetch the
+# roofs' photos from the same hosts as the main process's warm (buildings.roof_photo, imagery.fetch_lazy), and each
+# process's own bucket, request slots and breaker let four of them ask md6in (1 request/s, one at a time) four times as
+# fast, and none saw another's Retry-After or outage (2026-11-13 review). BNGE_NET_SHARED (earthd sets it before its
+# worker processes start, so they inherit it): the folder of the gates; unset (tests, tools, a process alone), each
+# process's limits as before. Not BNE_: those are part of the revisit cache's code key.
+SHARED_ENV = "BNGE_NET_SHARED"
+SHARED_DIR = os.environ.get(SHARED_ENV) or None
+SHARED_POLL_S = 0.02                # s between tries for a request slot another process holds
+GATE_LOG = os.environ.get("BNGE_GATE_LOG") or None      # (measuring: a line per gate admission that waited)
+_SHARED_FMT = "<3d"                 # the gate file: tokens, their time (monotonic), blocked until (monotonic)
+_SHARED_SIZE = 24
+IS_WIN = os.name == "nt"
+
+
+def _flock(fd, blocking=True):
+    """An exclusive lock on fd's file (byte 0 on Windows); True when held. Released by the system when the process
+    ends, so a dead process never holds a gate."""
+    if IS_WIN:
+        import msvcrt
+        while True:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                if not blocking:
+                    return False
+                time.sleep(SHARED_POLL_S)
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        return True
+    except BlockingIOError:
+        return False
+
+
+def _funlock(fd):
+    try:
+        if IS_WIN:
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+class SharedGate:
+    """One host's admission for every process that opens the same folder: a token bucket (rate, burst) and a
+    blocked-until time in <dir>/<host>.gate, read and written under its lock, and max_conc request slots, files
+    <host>.<i>.slot each locked while a request runs. Times are time.monotonic (one clock for the machine's
+    processes). A demand / urgent request waits for a slot and a token (up to max_wait: RateLimited); prefetch and
+    background ones take them only when free (Deferred). blocked(): a Retry-After or an open breaker another process
+    saw."""
+
+    def __init__(self, d, host, policy, clock=time.monotonic, sleep=time.sleep):
+        self.rate, self.burst = float(policy.rate), float(policy.burst)
+        self.max_conc = max(1, int(policy.max_conc))
+        self.clock, self.sleep = clock, sleep
+        safe = "".join(c if c.isalnum() or c in "-." else "_" for c in host)
+        os.makedirs(d, exist_ok=True)
+        self.path = os.path.join(d, safe + ".gate")
+        self.slots = [os.path.join(d, f"{safe}.{i}.slot") for i in range(self.max_conc)]
+
+    def _state(self, fn):
+        """fn(tokens, t, blocked, now) -> (tokens, t, blocked, result) under the gate's lock; result."""
+        import struct
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+        try:
+            _flock(fd)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                raw = os.read(fd, _SHARED_SIZE)
+                now = self.clock()
+                if len(raw) == _SHARED_SIZE:
+                    tokens, t, blocked = struct.unpack(_SHARED_FMT, raw)
+                    if t > now + 1.0:           # (written before a restart of the clock: the machine's reboot)
+                        tokens, t, blocked = self.burst, now, 0.0
+                else:
+                    tokens, t, blocked = self.burst, now, 0.0
+                tokens = min(self.burst, tokens + max(0.0, now - t) * self.rate)
+                tokens, t, blocked, res = fn(tokens, max(t, now), blocked, now)
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, struct.pack(_SHARED_FMT, tokens, t, blocked))
+                return res
+            finally:
+                _funlock(fd)
+        finally:
+            os.close(fd)
+
+    def blocked(self):
+        """Seconds the host is blocked for (another process's Retry-After or open breaker), 0 when not."""
+        return self._state(lambda tk, t, b, now: (tk, t, b, max(0.0, b - now)))
+
+    def block(self, seconds):
+        """The host blocked for every process for seconds (at least: a longer block stands)."""
+        self._state(lambda tk, t, b, now: (tk, t, max(b, now + float(seconds)), None))
+
+    def _slot(self, wait_s):
+        """A request slot (its open fd, locked), or None when none came free within wait_s."""
+        deadline = self.clock() + max(0.0, wait_s)
+        while True:
+            for p in self.slots:
+                fd = os.open(p, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+                if _flock(fd, blocking=False):
+                    return fd
+                os.close(fd)
+            if self.clock() >= deadline:
+                return None
+            self.sleep(SHARED_POLL_S)
+
+    def acquire(self, kind, max_wait, url=None, host=None):
+        """A slot and a token for one request: (the slot: release() it after the request, the seconds waited for
+        them). Raises HostUnavailable (blocked), RateLimited (a demand that would wait past max_wait), Deferred
+        (prefetch / background: busy); OSError (the gate's files: a full disk) with nothing held."""
+        t_start = self.clock()
+        wait = kind in ("demand", "urgent")
+        b = self.blocked()
+        if b > 0:
+            raise HostUnavailable(f"{host}: unavailable for {b:.0f} s (another process's answer)", url, host,
+                                  retry_after=b)
+        fd = self._slot(max_wait if wait else 0.0)
+        if fd is None:
+            if wait:
+                raise RateLimited(f"{host}: no free request slot within {max_wait:.0f} s (shared)", url, host)
+            raise Deferred(f"{host}: busy (shared), {kind} dropped", url, host)
+
+        def take(tk, t, blocked, now):
+            if blocked > now:
+                return tk, t, blocked, ("blocked", blocked - now)
+            if tk >= 1.0 - TOKEN_EPS:
+                return tk - 1.0, t, blocked, ("go", 0.0)
+            need = (1.0 - tk) / self.rate
+            if not wait or need > max_wait:
+                return tk, t, blocked, ("full", need)
+            return tk - 1.0, t, blocked, ("go", need)    # (reserved: the debt is paid by the refill while it sleeps)
+        try:
+            what, s = self._state(take)
+            if what == "blocked":
+                raise HostUnavailable(f"{host}: unavailable for {s:.0f} s (another process's answer)", url, host,
+                                      retry_after=s)
+            if what == "full":
+                if wait:
+                    raise RateLimited(f"{host}: rate limited for {s:.1f} s (shared)", url, host, retry_after=s)
+                raise Deferred(f"{host}: bucket low (shared), {kind} dropped", url, host)
+            if s > 0:
+                self.sleep(s)
+        except BaseException:
+            self.release(fd)
+            raise
+        waited = self.clock() - t_start
+        if GATE_LOG and waited >= WAIT_MS_MIN / 1000:
+            try:
+                with open(GATE_LOG, "a") as fh:
+                    fh.write(f"{time.time():.3f} {os.getpid()} {host} {kind} {waited:.3f}\n")
+            except OSError:
+                pass
+        return fd, waited
+
+    @staticmethod
+    def release(fd):
+        if fd is None:
+            return
+        _funlock(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+_GATES = {}
+_GATES_LOCK = threading.Lock()
+
+
+def shared_gate(host, policy, d=None):
+    """The process's SharedGate of host (policy.shared, a folder set: SHARED_DIR), or None."""
+    d = d or SHARED_DIR
+    if not d or not getattr(policy, "shared", False):
+        return None
+    key = (d, host)
+    with _GATES_LOCK:
+        g = _GATES.get(key)
+        if g is None:
+            try:
+                g = _GATES[key] = SharedGate(d, host, policy)
+            except OSError as e:
+                log.debug("net: %s's shared gate: %s", host, e)
+                return None
+        return g
+
+
 class Fetcher:
     """See the module docstring. clock / sleep / rng / transport / wall are injectable (tests)."""
 
@@ -1105,6 +1373,7 @@ class Fetcher:
         self.policies = dict(POLICIES if policies is None else policies)
         self.default_policy = default_policy
         self.offline_flag = bool(offline)
+        self.on_circuit_closed = None
         self._hosts = {}
         self._chains = {}               # name -> hosts of a failover chain (imagery, dem)
         self._lock = threading.Lock()
@@ -1150,6 +1419,11 @@ class Fetcher:
         with self._lock:
             self._chains[name] = hosts
 
+    def chain_hosts(self, name):
+        """The host names registered for failover chain `name`."""
+        with self._lock:
+            return self._chains.get(name, ())
+
     @property
     def offline(self):
         """--offline, or every host of the registered chains has its breaker open."""
@@ -1168,6 +1442,10 @@ class Fetcher:
 
     def available(self, host):
         return not self.offline_flag and not self.host(host).breaker.is_open()
+
+    def may_try(self, host):
+        """Could a request to host go out now (closed, or its breaker due a probe)? CircuitBreaker.may_try."""
+        return not self.offline_flag and self.host(host).breaker.may_try()
 
     def miss_alive(self, path, url):
         """A 404 remembered for url at marker path (missindex.py) is valid: within the host's miss_ttl, or the host
@@ -1356,16 +1634,24 @@ class Fetcher:
                                               h.name, retry_after=wait)
                     probe = probe or probe2
                 sem = self._acquire(h, url, kind)
+                gate, slot = shared_gate(h.name.split("#", 1)[0], p), None
+                try:
+                    slot = self._gate_admit(h, gate, url, kind)
+                except BaseException:
+                    sem.release()       # (every way out without the request: the slot is this process's again)
+                    raise
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
                     netstate.begin(h.name)  # (the loading line's "downloading" part, across the server's processes)
                     body = None
                     try:
-                        status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
+                        status, rh, body = ioprofiler.request(
+                            self.transport, url, hd,
+                            p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
-                        self._failed(h)
+                        self._failed(h, gate)
                         probe = False
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
@@ -1382,9 +1668,15 @@ class Fetcher:
                         _netlog(url, hd, status, body)
                 finally:
                     netstate.end(len(body) if body else 0, h.name)
+                    SharedGate.release(slot)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict
+                if gate is not None:        # (the others hold off too: its Retry-After, its breaker opened here)
+                    if isinstance(res, RateLimited) and res.retry_after:
+                        self._gate_block(gate, res.retry_after)
+                    elif h.breaker.is_open() and h.breaker.open_until > self.clock():
+                        self._gate_block(gate, h.breaker.open_until - self.clock())
                 if isinstance(res, Response):
                     return res
                 if isinstance(res, (NotFound, BadResponse)) or (isinstance(res, RateLimited) and res.retry_after):
@@ -1440,14 +1732,49 @@ class Fetcher:
         self._failed(h)
         return FetchFailed(f"{url}: HTTP {status}", url, h.name, status=status)
 
-    def _failed(self, h):
+    def _gate_admit(self, h, gate, url, kind):
+        """The shared gate's slot for one attempt (None: no gate, or its files failed: this process's own limits
+        alone, the request not refused for a full disk); its wait counted with the others' (waited, wait_ms)."""
+        if gate is None:
+            return None
+        try:
+            fd, waited = gate.acquire(kind, h.policy.max_wait, url, h.name)
+        except FetchError as e:
+            self._bump(h, "deferred" if isinstance(e, Deferred) else "unavailable"
+                       if isinstance(e, HostUnavailable) else "limit_fail")
+            raise
+        except OSError as e:
+            log.debug("net: %s's shared gate: %s (this process's limits alone)", h.name, e)
+            return None
+        ms = int(waited * 1000)
+        if kind in ("demand", "urgent") and ms >= WAIT_MS_MIN:
+            self._bump(h, "waited")
+            self._bump(h, "wait_ms", ms)
+        return fd
+
+    @staticmethod
+    def _gate_block(gate, seconds):
+        try:
+            gate.block(seconds)
+        except OSError as e:
+            log.debug("net: shared gate: %s", e)
+
+    def _failed(self, h, gate=None):
         if h.breaker.failure():
             self._count(h, "trips")
             log.warning("net: %s: circuit open for %.0f s", h.name, h.breaker.open_s)
+            if gate is not None:
+                self._gate_block(gate, h.breaker.open_s)
 
     def _succeeded(self, h):
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
+            cb = getattr(self, "on_circuit_closed", None)
+            if cb is not None:
+                try:
+                    cb(h.name)
+                except Exception:
+                    log.exception("on_circuit_closed callback failed")
 
     @ioprofiler.session_request
     @contextmanager

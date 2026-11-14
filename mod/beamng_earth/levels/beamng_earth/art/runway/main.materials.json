@@ -7,7 +7,7 @@
   "persistentId": "7b1d0c4e-2f63-4a8b-9e51-3c6d8a0f1b21",
   "Stages": [
    {
-    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_white_b.color.png",
+    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_white_b.color.dds",
     "normalMap": "/assets/materials/decalroad/lines/line_white/t_line_white_nm.normal.dds",
     "opacityMap": "/assets/materials/decalroad/lines/line_white/t_line_white_o.data.dds",
     "roughnessFactor": 0.45
@@ -32,7 +32,7 @@
   "persistentId": "7b1d0c4e-2f63-4a8b-9e51-3c6d8a0f1b22",
   "Stages": [
    {
-    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_yellow_b.color.png",
+    "baseColorMap": "/levels/beamng_earth/art/runway/t_paint_yellow_b.color.dds",
     "normalMap": "/assets/materials/decalroad/lines/line_white/t_line_white_nm.normal.dds",
     "opacityMap": "/assets/materials/decalroad/lines/line_white/t_line_white_o.data.dds",
     "roughnessFactor": 0.45

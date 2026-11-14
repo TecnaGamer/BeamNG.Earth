@@ -6,6 +6,7 @@
 //! (|ln ratio|); a record claimed by several footprints goes to the closest in area (ties: the first), the others get
 //! none. -1 none. Run once per buildings layer of a tile, on the tiles' path: a grid of the records' points (32 m
 //! bins), then an even-odd test against the few records under each footprint's box. Pure.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -104,7 +105,7 @@ pub fn match_rings(xy: &[[f64; 2]], start: &[i64], end: &[i64], rec: &[[f64; 2]]
                         if !(lo..=hi).contains(&ratio) || !inside(&xs, &ys, p[0], p[1]) {
                             continue;
                         }
-                        let s = ratio.ln().abs();
+                        let s = ratio.dln().abs();
                         if s < best.1 || (s == best.1 && (k as i32) < best.0) {
                             best = (k as i32, s);
                         }

@@ -52,6 +52,7 @@ from concurrent.futures import Future
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dmath
 
 log = logging.getLogger("earthd.peerwork")
 
@@ -274,7 +275,7 @@ def owner_of(key, ids, weights=None):
     for i in ids:
         w = float((weights or {}).get(i, 1.0))
         u = (int(hashlib.sha256((key + "/" + i).encode()).hexdigest()[:13], 16) + 0.5) / float(1 << 52)
-        score = -w / math.log(u)
+        score = -w / dmath.log(u)
         if score > best_s:
             best, best_s = i, score
     return best
@@ -283,7 +284,7 @@ def owner_of(key, ids, weights=None):
 def share_weight():
     """This machine's capacity for its group (owner_of): its CPU threads, half on the small profile."""
     import budget
-    return round((os.cpu_count() or 4) * (0.5 if budget.small() else 1.0), 1)
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
 
 
 class ReplyCache:

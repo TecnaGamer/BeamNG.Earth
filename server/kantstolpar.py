@@ -8,6 +8,8 @@ Tile independence: they stand on a grid of arc length along a whole ground part,
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import guardrails
 import medians
@@ -32,17 +34,17 @@ def wanted(spec):
 
 def stations(xy):
     """(points (k, 2), unit tangents (k, 2)) along polyline xy (k, >=2) where posts stand, before they move aside."""
-    seg = np.hypot(*np.diff(xy, axis=0).T)
+    seg = dnp.hypot(*np.diff(xy, axis=0).T)
     keep = np.r_[True, seg > 1e-6]
     xy = xy[keep]
-    cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    cum = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     s = np.arange(0.0, cum[-1], TIGHT_M)
     if len(s) < 2:
         return np.zeros((0, 2)), np.zeros((0, 2))
     p = np.c_[np.interp(s, cum, xy[:, 0]), np.interp(s, cum, xy[:, 1])]
     d = np.diff(np.vstack([p, xy[-1:]]), axis=0)
-    t = d / np.maximum(np.hypot(*d.T), 1e-9)[:, None]
-    turn = np.abs(np.arctan2(t[:-1, 0] * t[1:, 1] - t[:-1, 1] * t[1:, 0], (t[:-1] * t[1:]).sum(1)))
+    t = d / np.maximum(dnp.hypot(*d.T), 1e-9)[:, None]
+    turn = np.abs(dnp.arctan2(t[:-1, 0] * t[1:, 1] - t[:-1, 1] * t[1:, 0], (t[:-1] * t[1:]).sum(1)))
     tight = np.r_[False, turn > TIGHT_M / TIGHT_RADIUS_M]
     pick = tight | (np.arange(len(s)) % int(SPACING_M / TIGHT_M) == 0)
     return p[pick], t[pick]
@@ -78,7 +80,7 @@ def tile_rows(frame, near_roads, box, elev, country, mapped=()):
                 la, lo, _ = frame.enu_to_geodetic(q[k:k + 1, 0], q[k:k + 1, 1], np.zeros(1))
                 z = float(np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]).ravel()[0])
                 out.append([GROUP, round(float(q[k, 0]), 3), round(float(q[k, 1]), 3), round(z, 3),
-                            round(math.degrees(math.atan2(fy, fx)), 2), 0.0, HEIGHT_M,
+                            round(math.degrees(dmath.atan2(fy, fx)), 2), 0.0, HEIGHT_M,
                             round((k * 0.6180339887) % 1.0, 4),
                             float(fx), float(fy), 0.0, float(-fy), float(fx), 0.0, 0.0, 0.0, 1.0])
     return out

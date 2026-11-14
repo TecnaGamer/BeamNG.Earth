@@ -39,6 +39,8 @@ import time
 import zipfile
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.germanroads")
 
@@ -90,7 +92,7 @@ def _local():
 def tile_of(lat, lon, zoom=ZOOM):
     n = 1 << zoom
     r = math.radians(lat)
-    return int((lon + 180.0) / 360.0 * n), int((1.0 - math.asinh(math.tan(r)) / math.pi) / 2.0 * n)
+    return int((lon + 180.0) / 360.0 * n), int((1.0 - dmath.asinh(dmath.tan(r)) / math.pi) / 2.0 * n)
 
 
 def tiles_over(south, west, north, east):
@@ -177,26 +179,44 @@ def _fetched(x, y):
     return body
 
 
+def _segments(d):
+    """A shard's segments as (a, b) lon/lat points, their line index and the lines' attribute rows, made once and kept
+    on the shard (it is cached per process): every cell of a z10 tile asked for all of it again, 92 ms a call in Berlin."""
+    got = d.get("_seg")
+    if got is None:
+        off = d["off"]
+        lid = np.repeat(np.arange(len(off) - 1), np.diff(off))
+        same = lid[1:] == lid[:-1]
+        ll = np.column_stack([d["lon"], d["lat"]])
+        at = np.column_stack([d["width"], d["lanes"], d["surf"], d["cls"], d["flags"]]).astype(np.int32)
+        got = d["_seg"] = (ll[:-1][same], ll[1:][same], lid[:-1][same], at)
+    return got
+
+
 class Axes:
     """The axes of some shards in local metres round (lat0, lon0), their segments in a grid."""
 
     def __init__(self, shards, lat0, lon0, half=None):
         self.lat0, self.lon0 = lat0, lon0
-        self.kx, self.ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
+        self.kx, self.ky = 111320.0 * dmath.cos(math.radians(lat0)), 110540.0
         seg_a, seg_b, line, attrs = [], [], [], []
         base = 0
         for d in shards:
-            off = d["off"]
-            n = len(off) - 1
+            n = len(d["off"]) - 1
             if n <= 0:
                 continue
-            xy = np.column_stack([(d["lon"] - lon0) * self.kx, (d["lat"] - lat0) * self.ky])
-            lid = np.repeat(np.arange(n), np.diff(off))
-            same = lid[1:] == lid[:-1]
-            seg_a.append(xy[:-1][same])
-            seg_b.append(xy[1:][same])
-            line.append(lid[:-1][same] + base)
-            attrs.append(np.column_stack([d["width"], d["lanes"], d["surf"], d["cls"], d["flags"]]).astype(np.int32))
+            la, lb, lid, at = _segments(d)
+            if half is not None and len(lid):     # (a shard is ~25 km across: only the segments near the roads, cut in
+                hx, hy = half                     # degrees first so the metres are made for those alone; the exact
+                m = REACH_MAX_M + 50.0            # test below is the old one on the same floats)
+                dx, dy = (hx + m) / self.kx, (hy + m) / self.ky
+                near = ((np.maximum(la[:, 0], lb[:, 0]) >= lon0 - dx) & (np.minimum(la[:, 0], lb[:, 0]) <= lon0 + dx)
+                        & (np.maximum(la[:, 1], lb[:, 1]) >= lat0 - dy) & (np.minimum(la[:, 1], lb[:, 1]) <= lat0 + dy))
+                la, lb, lid = la[near], lb[near], lid[near]
+            seg_a.append(np.column_stack([(la[:, 0] - lon0) * self.kx, (la[:, 1] - lat0) * self.ky]))
+            seg_b.append(np.column_stack([(lb[:, 0] - lon0) * self.kx, (lb[:, 1] - lat0) * self.ky]))
+            line.append(lid + base)
+            attrs.append(at)
             base += n
         if not seg_a:
             self.a = np.zeros((0, 2))
@@ -212,7 +232,7 @@ class Axes:
             if not len(self.a):
                 return
         d = self.b - self.a
-        self.len = np.hypot(d[:, 0], d[:, 1])
+        self.len = dnp.hypot(d[:, 0], d[:, 1])
         self.dir = d / np.maximum(self.len, 1e-9)[:, None]
         lo = np.floor(np.minimum(self.a, self.b) / CELL_M - REACH_MAX_M / CELL_M).astype(np.int64)
         hi = np.floor(np.maximum(self.a, self.b) / CELL_M + REACH_MAX_M / CELL_M).astype(np.int64)
@@ -222,12 +242,26 @@ class Axes:
         k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
         gx = lo[sid, 0] + k // ny[sid]
         gy = lo[sid, 1] + k % ny[sid]
-        order = np.lexsort((gy, gx))
-        gx, gy, sid = gx[order], gy[order], sid[order]
-        cut = np.flatnonzero((np.diff(gx) != 0) | (np.diff(gy) != 0)) + 1
-        starts = np.concatenate([[0], cut])
-        ends = np.concatenate([cut, [len(sid)]])
-        self.grid = {(int(gx[a]), int(gy[a])): sid[a:b] for a, b in zip(starts, ends)} if len(sid) else {}
+        # the grid as sorted packed cell keys (a dict of ~400k cells took 100-150 ms a call: a cell is a whole block's roads)
+        self.g0 = (int(gx.min()), int(gy.min())) if len(sid) else (0, 0)
+        self.gny = int(gy.max()) - self.g0[1] + 1 if len(sid) else 1
+        key = (gx - self.g0[0]) * self.gny + (gy - self.g0[1])
+        order = np.argsort(key, kind="stable")
+        self.gsid, key = sid[order], key[order]
+        cut = np.flatnonzero(key[1:] != key[:-1]) + 1
+        self.gkey = key[np.concatenate([[0], cut])] if len(key) else key
+        self.gcut = np.concatenate([[0], cut, [len(key)]])
+
+    def _candidates(self, cells):
+        """The segments in any of the grid cells (an (n, 2) array of cell coordinates), sorted, once each."""
+        cx, cy = cells[:, 0] - self.g0[0], cells[:, 1] - self.g0[1]
+        ok = (cx >= 0) & (cy >= 0) & (cy < self.gny)
+        key = np.unique(cx[ok] * self.gny + cy[ok])
+        at = np.searchsorted(self.gkey, key)
+        inside = at < len(self.gkey)
+        at = at[inside][self.gkey[at[inside]] == key[inside]]
+        parts = [self.gsid[self.gcut[i]:self.gcut[i + 1]] for i in at]
+        return np.unique(np.concatenate(parts)) if parts else None
 
     def __bool__(self):
         return len(self.a) > 0
@@ -242,7 +276,7 @@ class Axes:
         against the segments in their grid cells (one per sample was ~4x the specs' own time in Berlin)."""
         p = self.local(lonlat)
         seg = np.diff(p, axis=0)
-        L = np.hypot(seg[:, 0], seg[:, 1])
+        L = dnp.hypot(seg[:, 0], seg[:, 1])
         keep = L > 0
         if not keep.any():
             return np.zeros(0, np.int64), 0
@@ -254,11 +288,9 @@ class Axes:
         dirs = seg[k] / L[k][:, None]
         got = np.full(len(pts), -1, np.int64)
         cells = np.floor(pts / CELL_M).astype(np.int64)
-        parts = [self.grid.get(key) for key in set(map(tuple, cells.tolist()))]
-        parts = [q for q in parts if q is not None]
-        if not parts:
+        c = self._candidates(cells)
+        if c is None:
             return got, len(pts)
-        c = np.unique(np.concatenate(parts))
         if carriageway is not None:
             is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
             c = c[is_cw] if carriageway else c[~is_cw]
@@ -266,10 +298,10 @@ class Axes:
                 return got, len(pts)
         a, d, ln = self.a[c], self.dir[c], self.len[c]
         rel = pts[:, None, :] - a[None, :, :]                       # (samples, candidates, 2)
-        along = np.clip(np.einsum("sck,ck->sc", rel, d), 0.0, ln[None, :])
+        along = np.clip(dnp.vecdot(rel, d), 0.0, ln[None, :])
         off = rel - along[:, :, None] * d[None, :, :]
-        dist = np.hypot(off[:, :, 0], off[:, :, 1])
-        dist[np.abs(dirs @ d.T) < math.cos(math.radians(MATCH_DEG))] = np.inf
+        dist = dnp.hypot(off[:, :, 0], off[:, :, 1])
+        dist[np.abs(dnp.matmul(dirs, d.T)) < dmath.cos(math.radians(MATCH_DEG))] = np.inf
         best = np.argmin(dist, axis=1)
         ok = dist[np.arange(len(pts)), best] <= reach
         got[ok] = self.line[c[best[ok]]]
@@ -314,7 +346,7 @@ def _axes_for(feats):
     if not got:
         return None
     lat0, lon0 = (s + n) / 2.0, (w + e) / 2.0
-    half = ((e - w) / 2.0 * 111320.0 * math.cos(math.radians(lat0)), (n - s) / 2.0 * 110540.0)
+    half = ((e - w) / 2.0 * 111320.0 * dmath.cos(math.radians(lat0)), (n - s) / 2.0 * 110540.0)
     ax = Axes(got, lat0, lon0, half)
     return ax if ax else None
 

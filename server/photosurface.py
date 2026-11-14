@@ -18,6 +18,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import imagery_regional
 
@@ -85,7 +87,7 @@ def tile_of(lat, lon, z=ZOOM):
     n = 2.0 ** z
     lat = np.asarray(lat, np.float64)
     x = (np.asarray(lon, np.float64) + 180.0) / 360.0 * n
-    y = (1.0 - np.arcsinh(np.tan(np.radians(lat))) / math.pi) / 2.0 * n
+    y = (1.0 - dnp.arcsinh(dnp.tan(np.radians(lat))) / math.pi) / 2.0 * n
     return x, y
 
 
@@ -146,10 +148,10 @@ def _along(ring, step=SAMPLE_M):
     if len(ring) < 2:
         return np.zeros((0, 2)), np.zeros((0, 2))
     lat0 = float(ring[:, 1].mean())
-    sc = np.array([111320.0 * math.cos(math.radians(lat0)), 110540.0])
+    sc = np.array([111320.0 * dmath.cos(math.radians(lat0)), 110540.0])
     xy = (ring - ring[0]) * sc
     seg = np.diff(xy, axis=0)
-    ln = np.hypot(seg[:, 0], seg[:, 1])
+    ln = dnp.hypot(seg[:, 0], seg[:, 1])
     keep = ln > 1e-6
     if not keep.any():
         return np.zeros((0, 2)), np.zeros((0, 2))

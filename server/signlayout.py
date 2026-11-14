@@ -1,5 +1,6 @@
 """Resolve guide-sign records and panel conflicts before assigning tile ownership."""
 import numpy as np
+import dnp
 
 import exitsigns
 
@@ -32,8 +33,8 @@ def groups(frame, objects):
     candidates.sort(key=lambda row: (-row[4], row[0]['id']))
     clusters = []
     def related(a, b):
-        return (a[2]@b[2] > .98 and np.linalg.norm(a[1]-b[1]) < 25. and
-                abs(float((a[3]-b[3])@np.array([a[2][1], -a[2][0]]))) < 3.)
+        return (dnp.matmul(a[2], b[2]) > .98 and dnp.norm(a[1]-b[1]) < 25. and
+                abs(float(dnp.matmul(a[3]-b[3], np.array([a[2][1], -a[2][0]])))) < 3.)
     for row in candidates:
         cluster = next((c for c in clusters if all(related(row, other) for other in c)), None)
         if cluster is None:
@@ -72,8 +73,8 @@ def overlap(a, b, clearance=.5):
     ra, rb = np.array([da[1], -da[0]]), np.array([db[1], -db[0]])
     delta = np.asarray(a['centre'][:2])-b['centre'][:2]
     for axis in (da, db, ra, rb):
-        reach = wa*abs(ra@axis)+wb*abs(rb@axis)+.25*(abs(da@axis)+abs(db@axis))+clearance
-        if abs(delta@axis) > reach:
+        reach = wa*abs(dnp.matmul(ra, axis))+wb*abs(dnp.matmul(rb, axis))+.25*(abs(dnp.matmul(da, axis))+abs(dnp.matmul(db, axis)))+clearance
+        if abs(dnp.matmul(delta, axis)) > reach:
             return False
     return True
 
@@ -92,8 +93,8 @@ def arrange(frame, roadside, overheads, contexts, objects, elev, chunks):
     gantries = []
     for sign in overheads:
         signature = sign['distance'], tuple(board_key(p, sign) for p in sign['panels'])
-        if any(signature == key and np.linalg.norm(np.asarray(sign['centre'])-other['centre']) < 25.
-               and np.dot(sign['travel'], other['travel']) > .98 for key, other in gantries):
+        if any(signature == key and dnp.norm(np.asarray(sign['centre'])-other['centre']) < 25.
+               and dnp.dot(sign['travel'], other['travel']) > .98 for key, other in gantries):
             continue
         collided = next((i for i, (_, other) in enumerate(gantries) if overlap(sign, other)), None)
         if collided is not None:
@@ -105,7 +106,7 @@ def arrange(frame, roadside, overheads, contexts, objects, elev, chunks):
             compatible_distance = (sign['distance'] == other['distance'] or
                 not any(p['exit'] for p in sign['panels']) or not any(p['exit'] for p in other['panels']))
             distance = other['distance'] if any(p['exit'] for p in other['panels']) else sign['distance']
-            if (np.dot(sign['travel'], travel) > .98 and abs(delta@lateral) < 3.
+            if (dnp.dot(sign['travel'], travel) > .98 and abs(dnp.matmul(delta, lateral)) < 3.
                     and compatible_distance):
                 for assembly in (other, sign):
                     for p in assembly['panels']:
@@ -142,8 +143,8 @@ def arrange(frame, roadside, overheads, contexts, objects, elev, chunks):
         # Small gore panels display only EXIT/ref and the arrow, not destination names.
         key = (sign['label']['ref'], sign['side']) if sign['kind'] == 'ramp' else label_key(sign['label'])
         if any(key == k and sign['kind'] == other['kind'] and sign['distance'] == other['distance']
-               and sign['side'] == other['side'] and np.dot(sign['travel'], other['travel']) > .98
-               and np.linalg.norm(np.asarray(sign['centre'])-other['centre']) < 25. for k, other in out):
+               and sign['side'] == other['side'] and dnp.dot(sign['travel'], other['travel']) > .98
+               and dnp.norm(np.asarray(sign['centre'])-other['centre']) < 25. for k, other in out):
             continue
         trial = sign
         if any(overlap(trial, other) for other in fixed):

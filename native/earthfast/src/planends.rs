@@ -4,6 +4,7 @@
 //! Fells Point planning spent ~4 % of all its samples there (_junction_lift, 2026-11-10), most ends with none near.
 //! The same numbers here: numpy's round (x * 1000, rint, / 1000), its row order (x, then y) and the C library's hypot
 //! (numpy's np.hypot), each query's own cells (the caller gives each point's cell box, as cells_for_points makes it).
+use crate::dm::Dm;
 
 use std::collections::HashMap;
 
@@ -69,13 +70,13 @@ pub fn plan_ends_near<'py>(py: Python<'py>, qxy: PyReadonlyArray2<'py, f64>, ix0
                     break 'cells;
                 }
                 for p in &ce[off[c] as usize..off[c + 1] as usize] {
-                    let d = (p[0] - px).hypot(p[1] - py_);
+                    let d = (p[0] - px).dhypot(p[1] - py_);
                     if !(d > rmin && d <= rmax) {
                         continue;
                     }
                     if has_o {
                         let (ox, oy) = (o[[i, 0]], o[[i, 1]]);
-                        if !ox.is_nan() && (ox - p[0]).hypot(oy - p[1]) <= rother {
+                        if !ox.is_nan() && (ox - p[0]).dhypot(oy - p[1]) <= rother {
                             continue;
                         }
                     }
@@ -139,7 +140,7 @@ pub fn plan_bridges_joined<'py>(bridges: Vec<PyReadonlyArray2<'py, f64>>, own: P
     }).collect();
     (0..e.nrows()).map(|i| {
         let (x, y) = (e[[i, 0]], e[[i, 1]]);
-        tips.iter().flatten().any(|(f, l)| (f[0] - x).hypot(f[1] - y).min((l[0] - x).hypot(l[1] - y)) < tol)
+        tips.iter().flatten().any(|(f, l)| (f[0] - x).dhypot(f[1] - y).min((l[0] - x).dhypot(l[1] - y)) < tol)
     }).collect()
 }
 
@@ -175,8 +176,8 @@ pub fn plan_bridge_chain<'py>(bridges: Vec<PyReadonlyArray2<'py, f64>>, line: Py
     while let Some(e) = frontier.pop() {
         for k in 0..idx.len() {
             // (np.minimum of the two hypots: a NaN either way is NaN, never < tol)
-            let a = (first[k][0] - e[0]).hypot(first[k][1] - e[1]);
-            let b = (last[k][0] - e[0]).hypot(last[k][1] - e[1]);
+            let a = (first[k][0] - e[0]).dhypot(first[k][1] - e[1]);
+            let b = (last[k][0] - e[0]).dhypot(last[k][1] - e[1]);
             let d = if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) };
             if d < tol && !used[k] {
                 used[k] = true;

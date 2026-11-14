@@ -85,6 +85,32 @@ class LruTest(Base):
         self.assertEqual(c.usage(), (7 * MB, 7))
         self.assertEqual(c.evict(), (0, 0), "under the cap: nothing")
 
+    def test_elevation_tiles_outlast_the_rest_up_to_their_share(self):
+        """The raw elevation tiles (KEEP_PREFIXES) are passed over while they are at most KEEP_SHARE of the low-water
+        target: older than every photo, they stay and the photos go; beyond the share their own oldest go."""
+        for i in range(4):
+            put(self.root, f"dem/mapterhorn/15/1/{i}.webp", MB, T0 - (20 - i) * DAY)      # the oldest of all
+        for i in range(8):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.010)         # 12 MB in use, cap 10 MB -> 9 MB; the share 25 % of 9 MB = 2.25 MB
+        n, b = c.evict()
+        self.assertEqual((n, b), (3, 3 * MB))
+        # the 4 MB of tiles are above the share: their two oldest go first (down to 2 MB), then the oldest photo
+        self.assertEqual([exists(self.root, f"dem/mapterhorn/15/1/{i}.webp") for i in range(4)],
+                         [False, False, True, True])
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(8)], [False] + [True] * 7)
+        # a smaller cap: a photo goes before the tiles left (2 MB, within 25 % of the 8.06 MB target)
+        c.set_cap(0.00895)
+        c.evict()
+        self.assertTrue(exists(self.root, "dem/mapterhorn/15/1/3.webp"))
+        self.assertTrue(exists(self.root, "dem/mapterhorn/15/1/2.webp"))
+        self.assertEqual(c.usage()[0], 8 * MB)
+        with unittest.mock.patch.object(cachemod, "KEEP_SHARE", 0.0):     # (as before: plain LRU)
+            c.set_cap(0.004)
+            c.evict()
+        self.assertFalse(exists(self.root, "dem/mapterhorn/15/1/2.webp"))
+
     def test_a_disk_short_of_its_reserve_cuts_the_cache_back(self):
         """A cap larger than the disk's free space (or unlimited): when the disk has less than its reserve free, the
         tick evicts the least recently used files whatever the cap; files of this session's last hour stay."""

@@ -31,6 +31,8 @@ import threading
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 
 import geocode
 import mapcells
@@ -63,8 +65,8 @@ BORDER_MARGIN_DEG = 0.5         # a cell keeps the country borders this far past
 def zoom_at(lat):
     """The cells' zoom at latitude lat: ZOOM, one less for each halving of cos(lat) (a Web-Mercator tile's ground size
     shrinks with it: the cells stay ~35-80 km wide from the equator to the Arctic, a few per lookup). Pure."""
-    c = max(0.01, math.cos(math.radians(max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat))))))
-    return max(2, ZOOM - int(math.floor(math.log2(1.0 / c))))
+    c = max(0.01, dmath.cos(math.radians(max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat))))))
+    return max(2, ZOOM - int(math.floor(dmath.log2(1.0 / c))))
 
 
 def cells_for(lat, lon, search_m=SEARCH_M, z=None):
@@ -72,7 +74,7 @@ def cells_for(lat, lon, search_m=SEARCH_M, z=None):
     lat = max(-mapcells.MAX_LAT, min(mapcells.MAX_LAT, float(lat)))
     z = zoom_at(lat) if z is None else z
     dlat = search_m / M_PER_DEG
-    dlon = min(179.0, search_m / (M_PER_DEG * max(0.05, math.cos(math.radians(lat)))))
+    dlon = min(179.0, search_m / (M_PER_DEG * max(0.05, dmath.cos(math.radians(lat)))))
     lon = ((float(lon) + 180.0) % 360.0) - 180.0
     lon0 = ((lon - dlon + 180.0) % 360.0) - 180.0
     lon1 = ((lon + dlon + 180.0) % 360.0) - 180.0
@@ -89,7 +91,7 @@ def reach_km(population, klass):
     klass = np.asarray(klass).astype(str)
     dflt = np.array([CLASS_POP.get(c, UNCLASSED_POP) for c in klass], np.float64)
     pop = np.where(np.isfinite(pop) & (pop > 0), pop, dflt)
-    return np.clip(REACH_K * REACH_R_KM * (pop / 1000.0) ** REACH_EXP, REACH_MIN_KM, REACH_MAX_KM)
+    return np.clip(REACH_K * REACH_R_KM * dnp.power(pop / 1000.0, REACH_EXP), REACH_MIN_KM, REACH_MAX_KM)
 
 
 def _name(table, i, lang):
@@ -100,9 +102,9 @@ def _name(table, i, lang):
 
 def _dist_km(lat, lon, lats, lons):
     dlon = ((np.asarray(lons, np.float64) - lon + 180.0) % 360.0) - 180.0
-    dx = dlon * M_PER_DEG * math.cos(math.radians(lat))
+    dx = dlon * M_PER_DEG * dmath.cos(math.radians(lat))
     dy = (np.asarray(lats, np.float64) - lat) * M_PER_DEG
-    return np.hypot(dx, dy) / 1000.0
+    return dnp.hypot(dx, dy) / 1000.0
 
 
 def _crossed(lat, lon, tlat, tlon, borders):
@@ -113,7 +115,7 @@ def _crossed(lat, lon, tlat, tlon, borders):
         return np.zeros(m, bool)
     import fast
     fast.require(76, "segment_crossings_g")
-    kx, ky = M_PER_DEG * math.cos(math.radians(lat)) / 1000.0, M_PER_DEG / 1000.0
+    kx, ky = M_PER_DEG * dmath.cos(math.radians(lat)) / 1000.0, M_PER_DEG / 1000.0
     dlon = ((np.asarray(tlon, np.float64) - lon + 180.0) % 360.0) - 180.0
     lines = np.zeros((2 * m, 2))
     lines[1::2, 0], lines[1::2, 1] = dlon * kx, (np.asarray(tlat, np.float64) - lat) * ky

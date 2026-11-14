@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
 from build_rail_crossing_props import Mesh, write_dae
+from mod_textures_dds import open_texture
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic"
@@ -37,7 +38,7 @@ def font_atlas():
     Atlas UVs/metrics and glyph pixels are already part of the regional kit.
     """
     meta = json.loads((ROOT / "server/data/sign_font.json").read_text(encoding="utf-8"))
-    with Image.open(OUT.parent / "regional_signs/sign_font_opacity.data.png") as im:
+    with open_texture(OUT.parent / "regional_signs/sign_font_opacity.data.png") as im:   # (shipped as .dds)
         mask = im.convert("L")
     return meta["glyphs"], mask
 

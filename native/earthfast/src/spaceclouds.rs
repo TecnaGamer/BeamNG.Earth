@@ -9,6 +9,7 @@
 //! shell_lonlat(lat0, lon0, radius_m, rings, segs) -> (lonlat (n, 2) f64, tris (m, 3) u32): a disc of `rings` rings
 //! (denser near the centre: r = radius (i / rings)^1.5) by `segs` segments round (lat0, lon0) on the sphere (great-circle
 //! destinations), the centre a vertex of its own; triangles counter-clockwise seen from above.
+use crate::dm::Dm;
 use numpy::{PyArray2, PyArray3, PyReadonlyArray3};
 use pyo3::prelude::*;
 
@@ -47,11 +48,11 @@ pub fn shell(lat0: f64, lon0: f64, radius: f64, rings: usize, segs: usize) -> (V
     let (p1, l1) = (lat0.to_radians(), lon0.to_radians());
     let mut pts = vec![[lon0, lat0]];
     for i in 1..=rings {
-        let d = radius * (i as f64 / rings as f64).powf(1.5) / R_EARTH;
+        let d = radius * (i as f64 / rings as f64).dpowf(1.5) / R_EARTH;
         for j in 0..segs {
             let th = 2.0 * std::f64::consts::PI * j as f64 / segs as f64;
-            let p2 = (p1.sin() * d.cos() + p1.cos() * d.sin() * th.cos()).clamp(-1.0, 1.0).asin();
-            let l2 = l1 + (th.sin() * d.sin() * p1.cos()).atan2(d.cos() - p1.sin() * p2.sin());
+            let p2 = (p1.dsin() * d.dcos() + p1.dcos() * d.dsin() * th.dcos()).clamp(-1.0, 1.0).dasin();
+            let l2 = l1 + (th.dsin() * d.dsin() * p1.dcos()).datan2(d.dcos() - p1.dsin() * p2.dsin());
             let mut lon = l2.to_degrees();
             lon = (lon + 540.0).rem_euclid(360.0) - 180.0;
             pts.push([lon, p2.to_degrees()]);
@@ -87,22 +88,22 @@ const WARM: [f32; 3] = [1.0, 0.72, 0.38];
 pub fn lights(rgb: &[u8], lat: &[f64], lon: &[f64], sun_lat: f64, sun_lon: f64) -> Vec<u8> {
     let (h, w) = (lat.len(), lon.len());
     let mut out = vec![0u8; h * w * 3];
-    let (sd, cd) = (sun_lat.to_radians().sin(), sun_lat.to_radians().cos());
+    let (sd, cd) = (sun_lat.to_radians().dsin(), sun_lat.to_radians().dcos());
     for r in 0..h {
-        let (sl, cl) = (lat[r].to_radians().sin(), lat[r].to_radians().cos());
+        let (sl, cl) = (lat[r].to_radians().dsin(), lat[r].to_radians().dcos());
         for c in 0..w {
             let i = r * w + c;
             if 3 * i + 2 >= rgb.len() {
                 break;
             }
-            let el = (sl * sd + cl * cd * (lon[c] - sun_lon).to_radians().cos()).clamp(-1.0, 1.0).asin().to_degrees();
+            let el = (sl * sd + cl * cd * (lon[c] - sun_lon).to_radians().dcos()).clamp(-1.0, 1.0).dasin().to_degrees();
             let night = 1.0 - smooth(el as f32, N0 as f32, N1 as f32);
             if night <= 0.0 {
                 continue;
             }
             let (pr, pg, pb) = (rgb[3 * i] as f32 / 255.0, rgb[3 * i + 1] as f32 / 255.0, rgb[3 * i + 2] as f32 / 255.0);
             let lum = (pr + pg + pb) / 3.0;
-            let k = ((lum - L0) / (1.0 - L0)).clamp(0.0, 1.0).powf(LGAMMA) * night;
+            let k = ((lum - L0) / (1.0 - L0)).clamp(0.0, 1.0).dpowf(LGAMMA) * night;
             for (j, v) in [pr, pg, pb].iter().enumerate() {
                 let c = 0.5 * v + 0.5 * lum * WARM[j];
                 out[3 * i + j] = (c * k * 255.0).round().min(255.0) as u8;

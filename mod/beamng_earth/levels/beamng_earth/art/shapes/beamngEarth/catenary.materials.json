@@ -30,9 +30,9 @@
     "Stages": [
       {
         "metallicFactor": 0.75,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_r.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_r.data.dds",
         "baseColorFactor": [
           0.62,
           0.64,
@@ -62,9 +62,9 @@
           1.0
         ],
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_r.data.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_r.data.dds"
       },
       {},
       {},
@@ -80,9 +80,9 @@
     "Stages": [
       {
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_r.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_r.data.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -158,9 +158,9 @@
           1.0
         ],
         "metallicFactor": 0.85,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_r.data.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v3_r.data.dds"
       },
       {},
       {},
@@ -184,9 +184,9 @@
           1.0
         ],
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_r.data.png"
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_porcelain_v3_r.data.dds"
       },
       {},
       {},
@@ -204,9 +204,9 @@
     "Stages": [
       {
         "metallicFactor": 0.3,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_r.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_paint_v3_r.data.dds",
         "baseColorFactor": [
           1.0,
           1.0,
@@ -228,9 +228,9 @@
     "Stages": [
       {
         "metallicFactor": 0.0,
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_b.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_nm.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_r.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_b.color.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_nm.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_foundation_v3_r.data.dds",
         "baseColorFactor": [
           1.0,
           1.0,

@@ -1,5 +1,6 @@
 //! Lane tapers (server roads.py road_tapers): where a road goes on as one of another width, or onto its own deck, the
 //! joint and the width it runs to there. See roads.py TAPER_* for the rules; this is their kernel.
+use crate::dm::Dm;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -32,7 +33,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             }
         }
         let lat0 = lat_sum / cnt;
-        let (mx, my) = (111320.0 * lat0.to_radians().cos(), 110540.0);
+        let (mx, my) = (111320.0 * lat0.to_radians().dcos(), 110540.0);
         let key = |lon: f64, lat: f64| ((lon * 1e6).round() as i64, (lat * 1e6).round() as i64);
         let mut ends: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
         for i in 0..n {
@@ -51,7 +52,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (mut s, mut dir, mut px, mut py_) = (0.0, None, 0.0, 0.0);
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 if dir.is_none() && s >= 10.0 {
@@ -59,10 +60,10 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 }
             }
             let v = dir.unwrap_or([px, py_]);
-            let l = v[0].hypot(v[1]);
+            let l = v[0].dhypot(v[1]);
             (if l > 1e-6 { Some([v[0] / l, v[1] / l]) } else { None }, s)
         };
-        let cos_max = max_turn.to_radians().cos();
+        let cos_max = max_turn.to_radians().dcos();
         let span = |dw: f64, length: f64| (dw * m_per_m).clamp(min_l, max_l).min(share * length);
         for i in 0..n {
             let w = if decks { at[[i, 4]] } else { at[[i, 0]] };
@@ -131,7 +132,7 @@ pub fn road_tapers<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (a, b) = (off[i] as usize, off[i + 1] as usize);
             let mut s = vec![0.0f64; b - a];
             for k in 1..(b - a) {
-                s[k] = s[k - 1] + ((ll[[a + k, 0]] - ll[[a + k - 1, 0]]) * mx).hypot((ll[[a + k, 1]] - ll[[a + k - 1, 1]]) * my);
+                s[k] = s[k - 1] + ((ll[[a + k, 0]] - ll[[a + k - 1, 0]]) * mx).dhypot((ll[[a + k, 1]] - ll[[a + k - 1, 1]]) * my);
             }
             let total = s[b - a - 1];
             let t = f * total;
@@ -335,7 +336,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 cnt += 1.0;
             }
         }
-        let (mx, my) = (111320.0 * (lat_sum / cnt).to_radians().cos(), 110540.0);
+        let (mx, my) = (111320.0 * (lat_sum / cnt).to_radians().dcos(), 110540.0);
         let key = |k: usize| ((ll[[k, 0]] * 1e6).round() as i64, (ll[[k, 1]] * 1e6).round() as i64);
         // per node: roads arriving and leaving (by traffic), with the end of each at it
         let mut ins: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -362,7 +363,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let (mut s, mut dir, mut px, mut py_) = (0.0, None, 0.0, 0.0);
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 if dir.is_none() && s >= 15.0 {
@@ -370,7 +371,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                 }
             }
             let v = dir.unwrap_or([px, py_]);
-            let l = v[0].hypot(v[1]);
+            let l = v[0].dhypot(v[1]);
             if l < 1e-6 {
                 return (None, s);
             }
@@ -391,7 +392,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
             let mut out = vec![(0.0, 0.0)];
             for k in 1..(b - a) {
                 let (x, y) = ((ll[[idx(k), 0]] - x0) * mx, (ll[[idx(k), 1]] - y0) * my);
-                s += (x - px).hypot(y - py_);
+                s += (x - px).dhypot(y - py_);
                 px = x;
                 py_ = y;
                 out.push((s, di[0] * y - di[1] * x));
@@ -428,7 +429,7 @@ pub fn lane_shifts<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, off
                     let mut fits = true;
                     for &r in others.iter() {
                         let (Some(dr), _) = travel(r, !at_tail) else { fits = false; break };
-                        if di[0] * dr[0] + di[1] * dr[1] < (40.0f64).to_radians().cos() {
+                        if di[0] * dr[0] + di[1] * dr[1] < (40.0f64).to_radians().dcos() {
                             fits = false;       // (a road meeting at an angle: a junction, not a merge / split)
                             break;
                         }

@@ -22,9 +22,13 @@ import os
 import numpy as np
 
 import fast
+import dnp
 
-VERSION = 4                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
-ON = os.environ.get("BNE_ROAD_SMOOTH", "off") == "on"       # off unless asked: it changes every road
+VERSION = 5                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
+# On by default since 2026-11-12 (the user: "the road don't smoothly curve in some places ... most obvious with
+# racetracks with sloped turns because the car has a bumpy ride with these low res turns"; Daytona's oval is mapped as
+# 19 m chords turning 2-7 degrees each). BNE_ROAD_SMOOTH=off: the roads as mapped.
+ON = os.environ.get("BNE_ROAD_SMOOTH", "on") not in ("off", "0", "false")
 # roads.simplify's RDP tolerance while on: its own 0.25 m put a vertex back every ~16-20 m of a R 130 m arc, turning
 # 5-7 degrees, the corners again (the user, 2026-11-08, near Korostivtsi: "still corners"; on three cells the visible
 # corners, > 3 degrees between pieces >= 5 m, were 2024 with the arcs against 2013 without; 1291 at 0.03 m, +10 % nodes)
@@ -34,10 +38,38 @@ SIMPLIFY_M = 0.03
 # classes: a motorway's curves are gentle, a lane's tight)
 RADIUS_M = {"motorway": 300.0, "trunk": 250.0, "primary": 150.0, "secondary": 100.0, "tertiary": 50.0,
             "unclassified": 30.0, "residential": 25.0, "unknown": 25.0, "track": 15.0, "living_street": 12.0,
-            "service": 12.0}
+            "raceway": 30.0, "busway": 50.0}
+# (no "service": driveways and parking aisles are most of a cell's lines, and their rounded corners (at 12 m) made
+# 4.5x the points, every road tile ~20 % slower to build, for corners nobody drives fast; 2026-11-12)
+# Curvature continuous (G2, roadsmooth.rs road_smooth_g2): the arcs above meet their straights and each other with a
+# step in curvature (a car's lateral pull jumps there: on a mapped curve whose vertices turn unevenly, at every vertex),
+# so each vertex's turn is spread over a triangle of half length up to the class's G2_WINDOW_M (transition spirals,
+# 2 x the window long), at most what moves the line G2_SHIFT_M at a curve's end or corner, within G2_MAX_DEV_M of the
+# arcs. The vertices where another road joins the line (its interior connectors, Overture's) stay where they are, as
+# its ends do. BNE_ROAD_G2=off: the arcs alone.
+G2_ON = os.environ.get("BNE_ROAD_G2", "on") not in ("off", "0", "false")
+G2_WINDOW_M = {"motorway": 40.0, "trunk": 35.0, "raceway": 40.0, "primary": 25.0, "secondary": 20.0, "busway": 15.0,
+               "tertiary": 15.0, "unclassified": 10.0, "residential": 8.0, "unknown": 8.0, "track": 6.0,
+               "living_street": 5.0, "service": 5.0}
+G2_LINK_WINDOW_M = 20.0         # a ramp's
+G2_SHIFT_M = 0.4                # m the spreading may move a curve's end or a corner
+G2_CELL_M = 1.0                 # m: the integration step
+G2_OUT_TOL_M = 0.02             # m: the points kept on a curve are as few as stay this close to it ...
+# (... the fast classes' closer: at 0.02 m a R 300 m curve's points are 7 m apart and turn 1.3 degrees each, felt at
+# speed and read by the banking; the slow classes' are most of a cell's lines)
+G2_FAST_TOL_M = 0.005
+G2_FAST = {"motorway", "trunk", "raceway", "primary"}
+G2_OUT_M = 20.0                 # ... at most this far apart ...
+G2_OUT_DEG = 6.0                # ... and turning at most this between two
+G2_MAX_DEV_M = 1.0              # m from the arcs' line, else smaller windows (twice), then the arcs alone
+G2_PARAMS = np.array([G2_SHIFT_M, G2_CELL_M, G2_OUT_M, G2_OUT_DEG, G2_MAX_DEV_M, G2_OUT_TOL_M], np.float64)
+PIN_M = 1.0                     # m: an interior connector this near a vertex pins it (else the piece's two vertices)
 # a railway's bend (plan 035: a train's flange panels strike a rail at every corner of the mapped polyline; the sharpest in
-# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=off leaves the rails as mapped.
-RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "on") not in ("off", "0", "false")
+# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=on rounds them.
+# (Off unless asked since the roads' smoothing is on by default, 2026-11-12: the rails were only ever rounded under
+# BNE_ROAD_SMOOTH=on, and their switch pins (pinned_vertices, every rail end against every line in Python) cost ~1 s
+# a cell in Chicago's rail yards.)
+RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "off") in ("on", "1", "true")
 RAIL_RADIUS_M = {"standard_gauge": 250.0, "narrow_gauge": 80.0, "light_rail": 80.0}
 # A switch: another rail line's end lying on a line (the map has it a few tenths of a metre off its vertex, a cell's
 # lines are not split at every switch) keeps the line's vertices beside it as mapped, else the arc moved the line up to
@@ -67,6 +99,21 @@ def smooth_line(xy, radius):
     return fast._ef.road_smooth_line(np.ascontiguousarray(xy, np.float64), float(radius), PARAMS)
 
 
+def smooth_lines_g2(xy, off, radius, window, pin_off, pins, tol=None):
+    """smooth_line's arcs, then curvature continuous (G2_*), for many lines at once: xy (N, 2) their points, off
+    (n + 1) into it, radius (n) each line's arc radius (NaN: left as it is), window (n) its spirals' half length,
+    pin_off (n + 1) into pins (each line's interior vertex indices kept where they are), tol (n) each line's
+    tolerance of the points kept (NaN or None: G2_OUT_TOL_M). Returns (points (M, 2), their
+    offsets (n + 1), knot offsets (n + 1), old and new distances at the knots); a line without knots did not change.
+    Ends and pins keep their coordinates bit for bit. The geometry is native/earthfast/src/roadsmooth.rs."""
+    fast.require(230, "road_smooth_g2")
+    tol = np.full(len(radius), np.nan) if tol is None else tol
+    return fast._ef.road_smooth_g2(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(off, np.int64),
+                                   np.ascontiguousarray(radius, np.float64), np.ascontiguousarray(window, np.float64),
+                                   np.ascontiguousarray(tol, np.float64), np.ascontiguousarray(pin_off, np.int64),
+                                   np.ascontiguousarray(pins, np.int64), PARAMS, G2_PARAMS)
+
+
 def pinned_vertices(xy, ends):
     """The interior vertex indices of the line xy (k, 2) not to be rounded: both ends of every segment that a point of
     ends (m, 2: the ends of the other rail lines) lies within SWITCH_PIN_M of, but for those at the line's own ends. Pure."""
@@ -79,10 +126,10 @@ def pinned_vertices(xy, ends):
     den = np.maximum((ab * ab).sum(1), 1e-12)
     pins = set()
     for p in ends:
-        if min(float(np.hypot(*(p - xy[0]))), float(np.hypot(*(p - xy[-1])))) < SWITCH_PIN_M:
+        if min(float(dnp.hypot(*(p - xy[0]))), float(dnp.hypot(*(p - xy[-1])))) < SWITCH_PIN_M:
             continue                # (a junction at the line's own end: a node, nothing to keep)
         t = np.clip(((p - a) * ab).sum(1) / den, 0.0, 1.0)
-        d = np.hypot(*(a + t[:, None] * ab - p).T)
+        d = dnp.hypot(*(a + t[:, None] * ab - p).T)
         for k in np.flatnonzero(d < SWITCH_PIN_M):
             pins.update(v for v in (int(k), int(k) + 1) if 0 < v < len(xy) - 1)
     return sorted(pins)
@@ -99,7 +146,7 @@ def smooth_pinned(xy, radius, pins):
         seg = np.asarray(xy[c0:c1 + 1], np.float64)
         got = smooth_line(seg, radius) if len(seg) >= 3 else None
         if got is None:
-            d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(seg, axis=0).T))]
+            d = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(seg, axis=0).T))]
             got = (seg, d, d)
         else:
             any_change = True
@@ -115,103 +162,152 @@ def smooth_pinned(xy, radius, pins):
     return np.concatenate(pts), np.concatenate(old_s), np.concatenate(new_s)
 
 
-def _radius(feats, i, rules):
-    """The arc radius of road feature i, or None for a feature that is not smoothed."""
-    sub = feats.attrs.get("subtype")
-    if sub is not None and str(sub[i]) == "rail":
-        return RAIL_RADIUS_M.get(str(feats.attrs["class"][i])) if RAIL_ON and "class" in feats.attrs else None
-    if sub is not None and str(sub[i]) != "road":
-        return None
-    cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-    r = RADIUS_M.get(cls)
-    if r is None:
-        return None
-    sc = rules.get("subclass")
-    if sc is not None and any(v == "link" for v, _, _ in sc.for_feature(i)):
-        r = min(r, LINK_RADIUS_M)
-    return r
+def _connector_runs(con, feats_of):
+    """(at_off (n + 1), at (m,)): the fractions of the interior connectors (not at its ends) of each feature of
+    feats_of (n,) in a "connectors" rule table, one run per feature (the pins' kernel's input)."""
+    off = np.zeros(len(feats_of) + 1, np.int64)
+    if con is None or not len(con.feature) or not len(feats_of):
+        return off, np.zeros(0)
+    at = np.asarray(con.start, np.float64)
+    m = (at > 1e-4) & (at < 1.0 - 1e-4)
+    cf, ca = np.asarray(con.feature, np.int64)[m], at[m]
+    order = np.argsort(cf, kind="stable")
+    cf, ca = cf[order], ca[order]
+    lo = np.searchsorted(cf, feats_of, "left")
+    hi = np.searchsorted(cf, feats_of, "right")
+    np.cumsum(hi - lo, out=off[1:])
+    return off, ca[_runs(lo, hi - lo)]
+
+
+def _runs(start, length):
+    """The indices start[j] .. start[j] + length[j] - 1 of every run j, one after another."""
+    length = np.asarray(length, np.int64)
+    total = int(length.sum())
+    if not total:
+        return np.zeros(0, np.int64)
+    first = np.cumsum(length) - length
+    return np.repeat(np.asarray(start, np.int64) - first, length) + np.arange(total)
+
+
+def _strs(col, n, default="unknown"):
+    """str() of each value of an attribute column (n of default without it)."""
+    return np.array([str(v) for v in col], dtype=object) if col is not None else np.full(n, default, object)
+
+
+def _lookup(strs, table, default):
+    """table.get(s, default) of each string, as float64."""
+    u, inv = np.unique(strs.astype(str), return_inverse=True) if len(strs) else (np.zeros(0, str), np.zeros(0, int))
+    return np.array([table.get(str(s), default) for s in u], np.float64)[inv.reshape(-1)] if len(u) else np.zeros(0)
 
 
 def smooth(feats, frame):
     """feats (the roads layer, mapgeom.Features with lonlat, en and rules, localized in frame) with its bends rounded,
-    in place; returns it. Without roads, or unless BNE_ROAD_SMOOTH=on, nothing changes."""
+    in place; returns it. Without roads, or with BNE_ROAD_SMOOTH=off, nothing changes. The lines' choice is vectorised
+    here; their pins, the new coordinates and the rules' fractions are native (roadsmooth.rs, kernel 235)."""
     if not ON or feats is None or not len(feats) or feats.en is None or not len(feats.en):
         return feats
-    po, ro, co = feats.part_off, feats.ring_off, feats.coord_off
-    changed = {}                                    # feature -> (new en (m, 2), old knots, new knots, old length)
-    sub = feats.attrs.get("subtype")
-    ends = []                                       # (the ends of the rail lines: where a switch's branch begins)
-    if SWITCH_PIN_ON and RAIL_ON and sub is not None:
-        for i in range(len(feats)):
-            if str(sub[i]) == "rail" and po[i + 1] - po[i] == 1 and ro[po[i] + 1] - ro[po[i]] == 1:
-                a, b = co[ro[po[i]]], co[ro[po[i]] + 1]
+    fast.require(235, "road_smooth_rebuild")
+    po = np.asarray(feats.part_off, np.int64)
+    ro = np.asarray(feats.ring_off, np.int64)
+    co = np.asarray(feats.coord_off, np.int64)
+    n = len(feats)
+    if len(ro) < 2:
+        return feats
+    # the lines: one part of one ring
+    fp = np.minimum(po[:-1], len(ro) - 2)
+    line = (np.diff(po) == 1) & (ro[fp + 1] - ro[fp] == 1)
+    ring = ro[fp]
+    a_all, b_all = co[ring], co[np.minimum(ring + 1, len(co) - 1)]
+    cls = _strs(feats.attrs.get("class"), n)
+    sub_col = feats.attrs.get("subtype")
+    sub = _strs(sub_col, n, "road") if sub_col is not None else None
+    rail = (sub == "rail") if sub is not None else np.zeros(n, bool)
+    sc = feats.rules.get("subclass")
+    link = np.zeros(n, bool)
+    if sc is not None and len(sc.feature):
+        lf = np.asarray(sc.feature, np.int64)[np.asarray(sc.value) == "link"]
+        link[lf[(lf >= 0) & (lf < n)]] = True
+    radius = _lookup(cls, RADIUS_M, np.nan)
+    radius = np.where(link, np.minimum(radius, LINK_RADIUS_M), radius)
+    if sub is not None:
+        radius[(sub != "road") & ~rail] = np.nan
+        radius[rail] = _lookup(cls[rail], RAIL_RADIUS_M, np.nan) if RAIL_ON else np.nan
+    sel = line & np.isfinite(radius)
+    g2 = sel & ~rail if G2_ON else np.zeros(n, bool)
+    changed = []                                    # (feature, points (m, 2), old knots, new knots)
+    other = np.flatnonzero(sel & ~g2)               # (the arcs alone: BNE_ROAD_G2=off, the railways)
+    if len(other):
+        ends = []                                   # (the ends of the rail lines: where a switch's branch begins)
+        if SWITCH_PIN_ON and RAIL_ON and sub is not None:
+            for i in np.flatnonzero(rail & line).tolist():
+                a, b = int(a_all[i]), int(b_all[i])
                 if b - a >= 2:
                     ends.append((i, feats.en[a], feats.en[b - 1]))
-    for i in range(len(feats)):
-        if po[i + 1] - po[i] != 1 or ro[po[i] + 1] - ro[po[i]] != 1:
-            continue
-        r = _radius(feats, i, feats.rules)
-        if r is None:
-            continue
-        a, b = co[ro[po[i]]], co[ro[po[i]] + 1]
-        pins = []
-        if ends and sub is not None and str(sub[i]) == "rail":
-            pins = pinned_vertices(feats.en[a:b], [e for j, p, q in ends if j != i for e in (p, q)])
-        got = smooth_pinned(feats.en[a:b], r, pins) if pins else smooth_line(feats.en[a:b], r)
-        if got is not None:
-            changed[i] = got
-    if not changed:
+        for i in other.tolist():
+            a, b = int(a_all[i]), int(b_all[i])
+            pins = (pinned_vertices(feats.en[a:b], [e for j, p, q in ends if j != i for e in (p, q)])
+                    if ends and rail[i] else [])
+            got = smooth_pinned(feats.en[a:b], float(radius[i]), pins) if pins else smooth_line(feats.en[a:b],
+                                                                                                float(radius[i]))
+            if got is not None:
+                changed.append((i,) + tuple(got))
+    lines = np.flatnonzero(g2)
+    if len(lines):
+        # (one kernel call for all of them. OpenStreetMap's raceways and busways carry no connectors: their joins
+        # move with the line, by at most the arcs' and the spirals' shifts. Pins from the other roads' ends in the
+        # cell would not be pure: the cells a line crosses hold different roads.)
+        la, lb = a_all[lines], b_all[lines]
+        off = np.r_[0, np.cumsum(lb - la)].astype(np.int64)
+        xy = np.ascontiguousarray(feats.en[_runs(la, lb - la)], np.float64)
+        at_off, at = _connector_runs(feats.rules.get("connectors"), lines)
+        pin_off, pins = fast._ef.road_connector_pins(xy, off, at_off, np.ascontiguousarray(at, np.float64),
+                                                     float(PIN_M))
+        window = _lookup(cls[lines], G2_WINDOW_M, 8.0)
+        window = np.where(link[lines], np.minimum(window, G2_LINK_WINDOW_M), window)
+        tols = np.where(np.isin(cls[lines].astype(str), list(G2_FAST)), G2_FAST_TOL_M, np.nan)
+        pts, po_, ko, old_s, new_s = smooth_lines_g2(xy, off, radius[lines], window, pin_off, pins, tols)
+        moved = np.flatnonzero(ko[1:] > ko[:-1])
+    else:
+        moved = np.zeros(0, np.int64)
+    if not len(moved) and not changed:
         return feats
-    ring_len = np.diff(co).astype(np.int64)
-    lines = {}                                      # ring -> feature
-    for i, (pts, _, _) in changed.items():
-        ring = int(ro[po[i]])
-        ring_len[ring] = len(pts)
-        lines[ring] = i
-    new_co = np.concatenate([[0], np.cumsum(ring_len)])
-    en = np.empty((int(new_co[-1]), 2), np.float64)
-    lonlat = np.empty((int(new_co[-1]), 2), np.float64)
-    for ring in range(len(ring_len)):
-        a0, b0 = co[ring], co[ring + 1]
-        a1, b1 = new_co[ring], new_co[ring + 1]
-        i = lines.get(ring)
-        if i is None:
-            en[a1:b1] = feats.en[a0:b0]
-            lonlat[a1:b1] = feats.lonlat[a0:b0]
-            continue
-        pts = changed[i][0]
-        en[a1:b1] = pts
-        # the line's own coordinates stay exact (the ends, every vertex not rounded): only new points are converted
-        lonlat[a1:b1] = _lonlat(pts, feats.en[a0:b0], feats.lonlat[a0:b0], frame)
+    # the changed lines' points and knots, the G2 batch's first
+    feat_ch = np.r_[lines[moved], [c[0] for c in changed]].astype(np.int64)
+    parts_p = [pts[_runs(po_[moved], po_[moved + 1] - po_[moved])]] if len(moved) else []
+    parts_o = [old_s[_runs(ko[moved], ko[moved + 1] - ko[moved])]] if len(moved) else []
+    parts_n = [new_s[_runs(ko[moved], ko[moved + 1] - ko[moved])]] if len(moved) else []
+    p_len = list((po_[moved + 1] - po_[moved]).tolist()) if len(moved) else []
+    k_len = list((ko[moved + 1] - ko[moved]).tolist()) if len(moved) else []
+    for _i, p, o, s in changed:
+        parts_p.append(np.asarray(p, np.float64).reshape(-1, 2))
+        parts_o.append(np.asarray(o, np.float64))
+        parts_n.append(np.asarray(s, np.float64))
+        p_len.append(len(parts_p[-1]))
+        k_len.append(len(parts_o[-1]))
+    ch_pts = np.ascontiguousarray(np.concatenate(parts_p), np.float64)
+    ch_old = np.ascontiguousarray(np.concatenate(parts_o), np.float64)
+    ch_new = np.ascontiguousarray(np.concatenate(parts_n), np.float64)
+    p_off = np.r_[0, np.cumsum(p_len)].astype(np.int64)
+    k_off = np.r_[0, np.cumsum(k_len)].astype(np.int64)
+    # the layer's coordinates with the new lines: the lines' own vertices kept keep their lon / lat (an end, every
+    # vertex kept where it was: exact), only new points are converted, in one call
+    new_co, en, lonlat, new_pt = fast._ef.road_smooth_rebuild(
+        np.ascontiguousarray(feats.en, np.float64), np.ascontiguousarray(feats.lonlat, np.float64), co,
+        np.ascontiguousarray(ring[feat_ch], np.int64), ch_pts, p_off)
+    if new_pt.any():
+        lat, lon, _ = frame.enu_to_geodetic(en[new_pt, 0], en[new_pt, 1], 0.0)
+        lonlat[new_pt, 0], lonlat[new_pt, 1] = lon, lat
     # the rules' fractions of the line's length
     for name, rt in feats.rules.items():
         if not len(rt.feature):
             continue
-        start, end = np.array(rt.start, copy=True), np.array(rt.end, copy=True)
-        for row in np.nonzero(np.isin(np.asarray(rt.feature), np.fromiter(changed, np.int64, len(changed))))[0]:
-            _, old_s, new_s = changed[int(rt.feature[row])]
-            for arr in (start, end):
-                f = float(arr[row])
-                arr[row] = np.interp(f * old_s[-1], old_s, new_s) / new_s[-1] if new_s[-1] > 0 else f
+        rf = np.ascontiguousarray(rt.feature, np.int64)
+        start, end = (fast._ef.road_smooth_fractions(rf, np.ascontiguousarray(v, np.float64), feat_ch, k_off, ch_old,
+                                                     ch_new) for v in (rt.start, rt.end))
         rt.start, rt.end = start.astype(rt.start.dtype, copy=False), end.astype(rt.end.dtype, copy=False)
         rt.__dict__["_rows"] = None
         rt.__dict__["_major"] = None
     feats.coord_off, feats.en, feats.lonlat = new_co, en, lonlat
-    for key in ("_xy_in", "_centres", "_boxes", "_lonlat_boxes"):
+    for key in ("_xy_in", "_centres", "_boxes", "_boxes_in", "_ll_boxes", "_lonlat_boxes", "_feature_boxes"):
         feats.__dict__.pop(key, None)
     return feats
-
-
-def _lonlat(pts, old_en, old_ll, frame):
-    """lon / lat (m, 2) of the new points: the old vertices' own values where a point is one of them, else converted."""
-    out = np.empty((len(pts), 2), np.float64)
-    lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-    out[:, 0], out[:, 1] = lon, lat
-    out[0], out[-1] = old_ll[0], old_ll[-1]
-    # an unrounded vertex is a point of both lines: find it by its exact coordinates
-    index = {(float(e), float(n)): j for j, (e, n) in enumerate(old_en)}
-    for m in range(1, len(pts) - 1):
-        j = index.get((float(pts[m, 0]), float(pts[m, 1])))
-        if j is not None:
-            out[m] = old_ll[j]
-    return out

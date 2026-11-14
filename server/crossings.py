@@ -25,6 +25,7 @@ import math
 import os
 
 import numpy as np
+import dnp
 
 ON = os.environ.get("BNE_INTERCHANGE", "0").lower() in ("1", "on", "yes", "true")
 
@@ -135,25 +136,25 @@ def trusted_over(end, u_out, z_at):
         return None
     far = ok & (d >= d[0] + (d[-1] - d[0]) / 2)
     if far.sum() >= 3:
-        bf, _af = np.polyfit(d[far], z[far], 1)
+        bf, _af = dnp.polyfit(d[far], z[far], 1)
         if abs(bf) <= LEVEL_GRADE:
             # (level past the slope: an embankment's top, the end on its slope comes up to it. The Mitchell
             # Freeway's bridge over Roe Street: its end 3 m down the slope, the fit through the slope read 1 m)
             return float(np.median(z[far]))
-    b, a = np.polyfit(d[ok], z[ok], 1)
+    b, a = dnp.polyfit(d[ok], z[ok], 1)
     return float(min(a, np.median(z[ok])))
 
 
 def end_dirs(line):
     """Unit directions out of a polyline's first and last points (away from it), over its first / last ~10 m."""
     line = np.asarray(line, np.float64)[:, :2]
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line, axis=0).T))]
     L = s[-1]
     a = min(10.0, L / 2)
     p0 = np.array([np.interp(a, s, line[:, 0]), np.interp(a, s, line[:, 1])])
     p1 = np.array([np.interp(L - a, s, line[:, 0]), np.interp(L - a, s, line[:, 1])])
     u0, u1 = line[0] - p0, line[-1] - p1
-    return u0 / max(np.hypot(*u0), 1e-9), u1 / max(np.hypot(*u1), 1e-9)
+    return u0 / max(dnp.hypot(*u0), 1e-9), u1 / max(dnp.hypot(*u1), 1e-9)
 
 
 def dir_at(line, p):
@@ -162,9 +163,9 @@ def dir_at(line, p):
     a, b = line[:-1], line[1:]
     ab = b - a
     t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-    j = int(np.argmin(np.hypot(*(a + t[:, None] * ab - p).T)))
+    j = int(np.argmin(dnp.hypot(*(a + t[:, None] * ab - p).T)))
     v = ab[j]
-    return v / max(np.hypot(*v), 1e-9)
+    return v / max(dnp.hypot(*v), 1e-9)
 
 
 def ties(p, lines, own, reach=TIE_M, touch=3.0):
@@ -174,7 +175,7 @@ def ties(p, lines, own, reach=TIE_M, touch=3.0):
     p = np.asarray(p, np.float64)
     ls = [np.asarray(ln, np.float64)[:, :2] for ln in lines if len(ln) >= 2]
     own = np.asarray(own, np.float64)[:, :2]
-    ends = [(k, e) for k, ln in enumerate(ls) for e in (ln[0], ln[-1]) if np.hypot(*(e - p)) <= reach + touch]
+    ends = [(k, e) for k, ln in enumerate(ls) for e in (ln[0], ln[-1]) if dnp.hypot(*(e - p)) <= reach + touch]
     if not ends:
         return 0
     pts = np.array([e for _k, e in ends])
@@ -185,7 +186,7 @@ def ties(p, lines, own, reach=TIE_M, touch=3.0):
     for i in range(len(pts)):
         if gid[i] >= 0:
             continue
-        m = (np.hypot(pts[:, 0] - pts[i, 0], pts[:, 1] - pts[i, 1]) <= touch) & (gid < 0)
+        m = (dnp.hypot(pts[:, 0] - pts[i, 0], pts[:, 1] - pts[i, 1]) <= touch) & (gid < 0)
         gid[m] = len(groups)
         groups.append(np.flatnonzero(m))
 
@@ -193,7 +194,7 @@ def ties(p, lines, own, reach=TIE_M, touch=3.0):
         a, b = ln[:-1], ln[1:]
         ab = b - a
         t = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
-        return float(np.hypot(*(a + t[:, None] * ab - q).T).min())
+        return float(dnp.hypot(*(a + t[:, None] * ab - q).T).min())
     # the road: own and the parts continuing it (two ends together, one of them the road's)
     own_k = next((k for k, ln in enumerate(ls) if len(ln) == len(own) and np.allclose(ln, own)), None)
     road = {own_k} if own_k is not None else set()
@@ -210,7 +211,7 @@ def ties(p, lines, own, reach=TIE_M, touch=3.0):
     n = 0
     for g in groups:
         q = pts[g].mean(0)
-        if np.hypot(*(q - p)) > reach:
+        if dnp.hypot(*(q - p)) > reach:
             continue
         ks = set(who[g].tolist())
         on_end = bool(ks & road)

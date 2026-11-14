@@ -11,6 +11,8 @@ Lambert conic: Snyder's ellipsoidal formulas. Checked against PROJ in tests/test
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 A = 6378137.0
 F = 1 / 298.257222101
@@ -25,38 +27,38 @@ LAMBERT = {3979}
 
 # --- Transverse Mercator (Krueger series) -------------------------------------------------------------------------
 _n = F / (2 - F)
-_A1 = A / (1 + _n) * (1 + _n ** 2 / 4 + _n ** 4 / 64 + _n ** 6 / 256)
+_A1 = A / (1 + _n) * (1 + (_n * _n) / 4 + dnp.power(_n, 4) / 64 + dnp.power(_n, 6) / 256)
 _ALPHA = (
-    _n / 2 - 2 * _n ** 2 / 3 + 5 * _n ** 3 / 16 + 41 * _n ** 4 / 180 - 127 * _n ** 5 / 288 + 7891 * _n ** 6 / 37800,
-    13 * _n ** 2 / 48 - 3 * _n ** 3 / 5 + 557 * _n ** 4 / 1440 + 281 * _n ** 5 / 630 - 1983433 * _n ** 6 / 1935360,
-    61 * _n ** 3 / 240 - 103 * _n ** 4 / 140 + 15061 * _n ** 5 / 26880 + 167603 * _n ** 6 / 181440,
-    49561 * _n ** 4 / 161280 - 179 * _n ** 5 / 168 + 6601661 * _n ** 6 / 7257600,
-    34729 * _n ** 5 / 80640 - 3418889 * _n ** 6 / 1995840,
-    212378941 * _n ** 6 / 319334400,
+    _n / 2 - 2 * (_n * _n) / 3 + 5 * dnp.power(_n, 3) / 16 + 41 * dnp.power(_n, 4) / 180 - 127 * dnp.power(_n, 5) / 288 + 7891 * dnp.power(_n, 6) / 37800,
+    13 * (_n * _n) / 48 - 3 * dnp.power(_n, 3) / 5 + 557 * dnp.power(_n, 4) / 1440 + 281 * dnp.power(_n, 5) / 630 - 1983433 * dnp.power(_n, 6) / 1935360,
+    61 * dnp.power(_n, 3) / 240 - 103 * dnp.power(_n, 4) / 140 + 15061 * dnp.power(_n, 5) / 26880 + 167603 * dnp.power(_n, 6) / 181440,
+    49561 * dnp.power(_n, 4) / 161280 - 179 * dnp.power(_n, 5) / 168 + 6601661 * dnp.power(_n, 6) / 7257600,
+    34729 * dnp.power(_n, 5) / 80640 - 3418889 * dnp.power(_n, 6) / 1995840,
+    212378941 * dnp.power(_n, 6) / 319334400,
 )
 
 
 def utm(lat, lon, zone, k0=0.9996, fe=500000.0, fn=0.0):
     phi = np.radians(np.asarray(lat, np.float64))
     lam = np.radians(np.asarray(lon, np.float64) - (zone * 6 - 183))
-    t = np.sinh(np.arctanh(np.sin(phi)) - E * np.arctanh(E * np.sin(phi)))
-    xi = np.arctan2(t, np.cos(lam))
-    eta = np.arctanh(np.sin(lam) / np.sqrt(1 + t * t))
+    t = dnp.sinh(dnp.arctanh(dnp.sin(phi)) - E * dnp.arctanh(E * dnp.sin(phi)))
+    xi = dnp.arctan2(t, dnp.cos(lam))
+    eta = dnp.arctanh(dnp.sin(lam) / np.sqrt(1 + t * t))
     x, y = eta.copy(), xi.copy()
     for j, a in enumerate(_ALPHA, 1):
-        x += a * np.cos(2 * j * xi) * np.sinh(2 * j * eta)
-        y += a * np.sin(2 * j * xi) * np.cosh(2 * j * eta)
+        x += a * dnp.cos(2 * j * xi) * dnp.sinh(2 * j * eta)
+        y += a * dnp.sin(2 * j * xi) * dnp.cosh(2 * j * eta)
     return fe + k0 * _A1 * x, fn + k0 * _A1 * y
 
 
 # --- Albers equal-area conic (BC Albers) --------------------------------------------------------------------------
 def _q(phi):
-    s = np.sin(phi)
-    return (1 - E2) * (s / (1 - E2 * s * s) - (1 / (2 * E)) * np.log((1 - E * s) / (1 + E * s)))
+    s = dnp.sin(phi)
+    return (1 - E2) * (s / (1 - E2 * s * s) - (1 / (2 * E)) * dnp.log((1 - E * s) / (1 + E * s)))
 
 
 def _m(phi):
-    return np.cos(phi) / np.sqrt(1 - E2 * np.sin(phi) ** 2)
+    return dnp.cos(phi) / np.sqrt(1 - E2 * dnp.sq(dnp.sin(phi)))
 
 
 def albers(lat, lon, lat1=50.0, lat2=58.5, lat0=45.0, lon0=-126.0, fe=1000000.0, fn=0.0):
@@ -70,27 +72,27 @@ def albers(lat, lon, lat1=50.0, lat2=58.5, lat0=45.0, lon0=-126.0, fe=1000000.0,
     lam = np.radians(np.asarray(lon, np.float64))
     r = A * np.sqrt(c - n * _q(phi)) / n
     th = n * (lam - math.radians(lon0))
-    return fe + r * np.sin(th), fn + r0 - r * np.cos(th)
+    return fe + r * dnp.sin(th), fn + r0 - r * dnp.cos(th)
 
 
 # --- Lambert conformal conic, 2 standard parallels (Canada Atlas Lambert) ----------------------------------------
 def _t(phi):
-    s = np.sin(phi)
-    return np.tan(np.pi / 4 - phi / 2) / ((1 - E * s) / (1 + E * s)) ** (E / 2)
+    s = dnp.sin(phi)
+    return dnp.tan(np.pi / 4 - phi / 2) / dnp.power((1 - E * s) / (1 + E * s), E / 2)
 
 
 def lambert(lat, lon, lat1=49.0, lat2=77.0, lat0=49.0, lon0=-95.0, fe=0.0, fn=0.0):
     p1, p2, p0 = map(math.radians, (lat1, lat2, lat0))
     m1, m2 = float(_m(p1)), float(_m(p2))
     t1, t2, t0 = float(_t(p1)), float(_t(p2)), float(_t(p0))
-    n = (math.log(m1) - math.log(m2)) / (math.log(t1) - math.log(t2))
-    ff = m1 / (n * t1 ** n)
-    r0 = A * ff * t0 ** n
+    n = (dmath.log(m1) - dmath.log(m2)) / (dmath.log(t1) - dmath.log(t2))
+    ff = m1 / (n * dnp.power(t1, n))
+    r0 = A * ff * dnp.power(t0, n)
     phi = np.radians(np.asarray(lat, np.float64))
     lam = np.radians(np.asarray(lon, np.float64))
-    r = A * ff * _t(phi) ** n
+    r = A * ff * dnp.power(_t(phi), n)
     th = n * (lam - math.radians(lon0))
-    return fe + r * np.sin(th), fn + r0 - r * np.cos(th)
+    return fe + r * dnp.sin(th), fn + r0 - r * dnp.cos(th)
 
 
 def supported(epsg):

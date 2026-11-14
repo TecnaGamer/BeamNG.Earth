@@ -118,6 +118,9 @@ M.DELETE_PRESSURE = 64  -- deletes wait for the import queue unless this many ob
 M.VIEW_PENALTY = 3      -- import order: outside the camera's view cone a tile counts this many times as far
 M.VIEW_MARGIN_DEG = 15  -- the cone: half the horizontal field of view plus this ...
 M.VIEW_MAX_DEG = 80     -- ... at most this far off the camera's heading
+M.SCREEN_ORDER = true   -- import order by size on screen (distance / edge), not distance (peekImport; false: the old),
+                        -- where the block is the near ground ('terrain' / 'detail')
+M.COVERED_PENALTY = 4   -- ... a tile under the shown block counts this many times as far
 M.SPARE_MAX = 400
 M.SPARE_S = 120
 M.MAX_DT = 0.1          -- s; longest step of the transition clock per frame
@@ -1281,6 +1284,8 @@ local function peekImport(cam)
       cosmax = math.cos(rad(min(half, M.VIEW_MAX_DEG)))
     end
     local pen2 = M.VIEW_PENALTY * M.VIEW_PENALTY
+    local cov2 = M.COVERED_PENALTY * M.COVERED_PENALTY
+    local screen = M.SCREEN_ORDER and blockShown()   -- (mesh mode: the tiles are the near ground, nearest first)
     local best, bd = nil, huge
     for i = mH, mT do
       local inst = mainQ[i]
@@ -1288,6 +1293,15 @@ local function peekImport(cam)
         local dx = max(inst.x0 - cam.x, 0, cam.x - inst.x1)
         local dy = max(inst.y0 - cam.y, 0, cam.y - inst.y1)
         local d = dx * dx + dy * dy
+        if screen then
+          -- by its size on screen (2026-11-13): distance over edge, so the coarse tiles of the horizon come with the
+          -- near ones of the same apparent size instead of after every near tile; a tile under the shown block
+          -- (hidden or sunk there) after the seen ones
+          local s = max(inst.x1 - inst.x0, inst.y1 - inst.y0, 1)
+          d = d / (s * s)
+          if d == 0 then d = 1e-6 * (s * s) / 65536 end   -- (tiles round the camera: finest first, as by distance)
+          if coverOf(inst) == 'interior' then d = (d + 1) * cov2 end
+        end
         if cosmax and d > 0 then
           local cx, cy = (inst.x0 + inst.x1) / 2 - cam.x, (inst.y0 + inst.y1) / 2 - cam.y
           local r = sqrt(cx * cx + cy * cy)
@@ -1308,6 +1322,16 @@ end
 
 local function hasWaitingGroups()
   for _, g in ipairs(groups) do if g.state == 'wait' then return true end end
+  return false
+end
+
+-- Group tiles wait to be imported (the governor's lanes: core sets gov.farWait from it each frame). Prefetch tiles do
+-- not count: they load only when nothing else waits.
+function M.importWaiting()
+  for i = mH, mT do
+    local inst = mainQ[i]
+    if inst and pending[inst.key] == inst and inst.queued then return true end
+  end
   return false
 end
 
@@ -1467,12 +1491,12 @@ function M.update(gov, dt, cam, player)
     if not inst then break end
     if inst.material and not inst.mat and not inst.matFailed then
       if not satmat.exists(inst.material) then
-        if not gov:try('material') then break end
+        if not gov:try('material', 'far') then break end
         local t1 = now()
         local ok, err = pcall(satmat.create, inst.material, inst.texture, inst.detail)
         if not ok then log('E', 'beamngEarth', 'far tile material failed: ' .. tostring(err)) end
         local ms = now() - t1
-        gov:charge('material', ms)
+        gov:charge('material', ms, 'far')
         slowUnit('material', ms, tostring(inst.material))
         units = units + 1
         if satmat.exists(inst.material) then counters.materials = counters.materials + 1 end
@@ -1484,7 +1508,7 @@ function M.update(gov, dt, cam, player)
       end
     else
       local kind = kindOf(inst)
-      if not gov:try(kind) then break end
+      if not gov:try(kind, 'far') then break end
       local t1 = now()
       local ok, err = pcall(spawn, inst)
       if not ok then
@@ -1498,7 +1522,7 @@ function M.update(gov, dt, cam, player)
       inst.queued = false
       nQueued = nQueued - 1
       inst.importMs = now() - t1 -- shown by the dev tools' mini-map
-      gov:charge(kind, inst.importMs)
+      gov:charge(kind, inst.importMs, 'far')
       slowUnit('spawn', inst.importMs, string.format('%s %s, material %s', kind, tostring(inst.key), tostring(inst.mat or inst.material)))
       units = units + 1
       imported = true

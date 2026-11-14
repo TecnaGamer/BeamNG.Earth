@@ -85,4 +85,63 @@ T.check(hs.held and hs.held.frames == 2 and math.abs(hs.held.s - 0.316) < 1e-9 a
 T.check(hs.playing.frames == 3 and hs.playing.over50 == 1 and hs.over50 == 2, 'frames while playing apart; all as before')
 T.check(report.stats({ 16, 16 }, { false, false }).held == nil, 'never held: no held part')
 
+-- The saved-report button uses the same companion/browser route as the settings links (GitHub #1109).
+local pages, browserPages = {}, {}
+beamngEarth_core.openPage = function(url) pages[#pages + 1] = url end
+openWebBrowser = function(url) browserPages[#browserPages + 1] = url end
+ui_imgui = {
+  ImVec2 = function() return {} end,
+  SetNextWindowPos = function() end, SetNextWindowSize = function() end,
+  Begin = function(name) return name:find('report saved', 1, true) ~= nil end,
+  End = function() end, TextUnformatted = function() end,
+  PushTextWrapPos = function() end, PopTextWrapPos = function() end, SameLine = function() end,
+  Button = function(name) return name == 'Open GitHub issue page' end,
+  Cond_Always = 0, Cond_FirstUseEver = 0, WindowFlags_NoDecoration = 0,
+  WindowFlags_AlwaysAutoResize = 0, WindowFlags_NoInputs = 0,
+}
+report.onUpdate()
+T.check(#pages == 1 and pages[1]:find('https://github.com/TecnaGamer/BeamNG.Earth/issues/new?', 1, true) == 1,
+  'the saved issue URL goes through core.openPage')
+T.check(#browserPages == 0, 'the report does not bypass the companion with the game browser')
+beamngEarth_core = nil
+report.onUpdate()
+T.check(#browserPages == 1 and browserPages[1] == pages[1], 'without core, the game browser is the fallback')
+
+-- 2026-11-12: no full path in report.json (the account name), the extra parts there, and the send window: nothing goes
+-- before its Send; the choices go to send.json, the server's report_status shows the id
+local rj = folder and files[folder .. 'report.json'] or ''
+T.check(not rj:find('/u/', 1, true), 'report.json holds no full path')
+T.check(rj:find('"frames60"', 1, true) and rj:find('"environment"', 1, true) and rj:find('"config"', 1, true),
+  'the extra parts in report.json')
+local netSent = {}
+package.loaded['beamngEarth/net'] = { send = function(m) netSent[#netSent + 1] = m; return true end }
+FS.fileExists = function(_, p) return files[p] ~= nil end
+FS.fileSize = function(_, p) return files[p] and #files[p] or -1 end
+jsonDecode = function() return { kind = 'map', title = 'Trees in the water', lat = 39.28, lon = -76.59 } end
+files[folder .. 'screenshot.jpg'] = '\255\216\255'
+local clicks = {}
+local im2 = ui_imgui
+
+im2.Begin = function() return true end
+im2.Button = function(name) return clicks[name] == true end
+im2.BoolPtr = function(v) return { [0] = v } end
+im2.Checkbox = function(label, p) if clicks[label] ~= nil then p[0] = clicks[label] end return false end
+im2.Separator = function() end
+im2.CollapsingHeader1 = function() return false end
+
+report.openSend(folder)
+report.onUpdate()
+T.check(report.status().sendOpen and #netSent == 0 and not files[folder .. 'send.json'], 'nothing is sent before Send')
+clicks['Exact location: 39.28000, -76.59000##bngeSendLoc'] = false
+clicks['Send##bngeSendGo'] = true
+report.onUpdate()
+clicks = {}
+local name = folder:match('([^/]+)/$')
+T.check(#netSent == 1 and netSent[1].type == 'report_send' and netSent[1].folder == name, 'Send: report_send')
+local sj = files[folder .. 'send.json'] or ''
+T.check(sj:find('"exactLocation":false', 1, true) and sj:find('"screenshot":true', 1, true), 'the choices in send.json: ' .. sj)
+report.onServerMessage({ type = 'report_status', folder = name, state = 'sent', id = 'ABCD-EFGH' })
+local st = require('beamngEarth/reportsend').status(name)
+T.check(st and st.state == 'sent' and st.id == 'ABCD-EFGH', 'the id from the server')
+
 T.done('test_report')

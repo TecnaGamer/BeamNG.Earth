@@ -41,6 +41,8 @@ import numpy as np
 
 import dem as demmod
 import fast
+import dmath
+import dnp
 
 NEED = 218                  # earthfast farpvs.rs (far_pvs)
 ENABLED = os.environ.get("BNGE_FAR_PVS", "1") != "0"
@@ -102,7 +104,7 @@ UP_ON = os.environ.get("BNGE_FAR_PX_UP", "1") != "0"
 UP_PX_MAX = int(os.environ.get("BNGE_FAR_PX_MAX", "2048"))
 SLOPE_MIN_LEVEL = 2
 SLOPE_NEAR_M = 1000.0
-PPR_MIN = 1080 / (2 * math.tan(math.radians(30.0)))     # pixels per radian at least (1080 lines, 60 deg fov)
+PPR_MIN = 1080 / (2 * dmath.tan(math.radians(30.0)))     # pixels per radian at least (1080 lines, 60 deg fov)
 
 
 def _spread(a, f):
@@ -146,7 +148,7 @@ class Rings:
             gx = np.abs(a[:, 2:] - a[:, :-2]) / (2 * cell)
             gy = np.abs(a[2:, :] - a[:-2, :]) / (2 * cell)
             g[:, 1:-1] = gx
-            g[1:-1, :] = np.hypot(g[1:-1, :], gy)
+            g[1:-1, :] = dnp.hypot(g[1:-1, :], gy)
             if SLOPE_RELIEF:
                 g = np.maximum(g, (hi - lo - np.float32(pad)) / np.float32(3 * cell))
             sl = np.minimum(_spread(g, np.maximum) * np.float32(SLOPE_SAFETY) + np.float32(SLOPE_FLOOR),
@@ -287,7 +289,7 @@ class Set:
         # nearest the player always
         lo = rings.ground_lo_many(xs, ys)
         hi = rings.ground_hi_many(xs, ys)
-        d = np.hypot(xs - px, ys - py)
+        d = dnp.hypot(xs - px, ys - py)
         reach = (GRADE if grade is None else grade) * d + (SLACK_M if slack is None else slack)
         ok = np.isfinite(lo) & (lo - reach <= ground) & (hi + reach >= ground)
         ok[int(np.argmin(d))] = True

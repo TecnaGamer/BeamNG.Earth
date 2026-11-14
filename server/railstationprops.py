@@ -10,6 +10,8 @@ the track, never nearer than FAR_EDGE_M to the platform's other edges.
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 import busfurniture as bf
 import busstations as bs
@@ -34,7 +36,7 @@ def _run_points(pl, step, inset, start=0.0):
         if len(run) < 3:
             continue
         pts = pl.ring[run]
-        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+        s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
         if s[-1] < step * 0.5:
             continue
         for at in np.arange(start + step / 2.0, s[-1], step):
@@ -42,7 +44,7 @@ def _run_points(pl, step, inset, start=0.0):
             k = min(int(np.searchsorted(s, at)), len(pts) - 1)
             a, b = pts[max(0, k - 1)], pts[min(len(pts) - 1, k)]
             d = b - a
-            dl = float(np.hypot(*d))
+            dl = float(dnp.hypot(*d))
             if dl < 1e-6:
                 continue
             t = d / dl
@@ -59,7 +61,7 @@ def _length(pl):
     best = 0.0
     for run in rm._runs(pl.snapped, pl.ring, pl.tidx):
         pts = pl.ring[run]
-        best = max(best, float(np.hypot(*np.diff(pts, axis=0).T).sum()))
+        best = max(best, float(dnp.hypot(*np.diff(pts, axis=0).T).sum()))
     return best if best > 0.0 else float(np.ptp(pl.ring, axis=0).max())
 
 
@@ -98,7 +100,7 @@ def rows(frame, md, box, elev, country_at=None):
                 continue
             z = rm.surface(frame, elev, st, pl)(np.array([[it[1], it[2]] for it in items]))
             for (group, x, y, fx, fy, kind), zz in zip(items, z):
-                yaw = math.degrees(math.atan2(fy, fx)) + (bf.BENCH_YAW if group == bf.BENCH else 0.0)
+                yaw = math.degrees(dmath.atan2(fy, fx)) + (bf.BENCH_YAW if group == bf.BENCH else 0.0)
                 row = [group, round(x, 2), round(y, 2), round(float(zz), 2), round(yaw % 360.0, 1), 1.0,
                        {"bench": bf.BENCH_H, "bin": bf.BIN_H, "lamp": bf.LAMP_H}[kind], 0.0]
                 (lamp_rows if kind == "lamp" else out).append(row)

@@ -19,6 +19,7 @@ import busstations as bs
 import busstationsign as bsg
 import dirsigns
 import fast
+import dnp
 import imagery
 import railstationmesh as rm
 import railstations as rs
@@ -63,18 +64,18 @@ def _runs_of(pl):
         if len(run) < 3:
             continue
         pts = pl.ring[run]
-        out.append((pts, float(np.hypot(*np.diff(pts, axis=0).T).sum())))
+        out.append((pts, float(dnp.hypot(*np.diff(pts, axis=0).T).sum())))
     return sorted(out, key=lambda r: -r[1])
 
 
 def _at(pts, frac, inset):
     """(x, y, nx, ny) the point `frac` along a run, `inset` m in from the edge, and the inward unit normal there."""
-    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+    s = np.concatenate(([0.0], np.cumsum(dnp.hypot(*np.diff(pts, axis=0).T))))
     at = s[-1] * frac
     x, y = np.interp(at, s, pts[:, 0]), np.interp(at, s, pts[:, 1])
     k = min(max(int(np.searchsorted(s, at)), 1), len(pts) - 1)
     d = pts[k] - pts[k - 1]
-    dl = float(np.hypot(*d))
+    dl = float(dnp.hypot(*d))
     t = d / dl if dl > 1e-9 else np.array([1.0, 0.0])
     n = np.array([-t[1], t[0]])                     # (the platform is to the left of its counter-clockwise ring)
     return float(x + n[0] * inset), float(y + n[1] * inset), float(n[0]), float(n[1])
@@ -109,19 +110,19 @@ def facade_spot(st):
     ring = bs._open(np.asarray(hall[1], float))
     if bs.area(ring) < 150.0:
         return None
-    ccw = ring if float(np.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - np.dot(ring[:, 1], np.roll(ring[:, 0], -1))) >= 0 else ring[::-1]
+    ccw = ring if float(dnp.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - dnp.dot(ring[:, 1], np.roll(ring[:, 0], -1))) >= 0 else ring[::-1]
     pc = np.asarray([bs.centroid(pl.ring) for pl in st.platforms])
     best = None
     for a, b in zip(ccw, np.roll(ccw, -1, axis=0)):
         d = b - a
-        ln = float(np.hypot(*d))
+        ln = float(dnp.hypot(*d))
         if ln < 6.0:
             continue
         t = d / ln
         o = np.array([t[1], -t[0]])                 # (outward: the right of a counter-clockwise ring)
         mid = (a + b) / 2.0
-        near = float(np.min(np.hypot(*(pc - mid).T)))
-        facing = float(np.max((pc - mid) @ o))      # a platform lies on the wall's outer side
+        near = float(np.min(dnp.hypot(*(pc - mid).T)))
+        facing = float(np.max(dnp.matmul(pc - mid, o)))      # a platform lies on the wall's outer side
         if facing <= 0.0:
             continue
         score = near - 0.05 * ln

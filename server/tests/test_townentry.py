@@ -248,6 +248,128 @@ class RoadsTest(unittest.TestCase):
         self.assertAlmostEqual(rows[ts.G_EXIT][4], 90.0, places=1)
 
 
+def poly_road(fid, pts, cls="tertiary", width=7.0, oneway=False):
+    pts = np.array([(x, y, 0.0) for x, y in pts])
+    return (fid, roads.Spec(width, "paved", False, cls, oneway, dir=0, link=False), pts, 0.0)
+
+
+class JunctionTest(unittest.TestCase):
+    """The boundary of two communes runs through a fork at (0, 0): the stem comes from the west (commune X's side), two
+    branches leave to the east (commune Y's). Broumov / Hejtmankovice, 2026-11-11: two roads gave four posts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.X = commune("X", -2000, -1500, 6, 1500, lambda x, y: np.ones(np.shape(x), bool))
+        cls.Y = commune("Y", 6, -1500, 2000, 1500, lambda x, y: np.ones(np.shape(x), bool))
+
+    def fork(self, stem=True, stem_pts=((-300.0, 0.0), (0.0, 0.0)), branches=None):
+        rs = [poly_road("b1", [(0, 0), (300, 60)], "secondary"), poly_road("b2", [(0, 0), (300, -60)], "residential")]
+        if branches is not None:
+            rs = branches
+        if stem:
+            rs.append(poly_road("stem", stem_pts, "secondary"))
+        return rs
+
+    def pairs(self, rows):
+        return {(r[0], round(r[1]), round(r[2]), r[8]) for r in rows}
+
+    def test_a_fork_has_one_pair_each_way_not_one_a_road(self):
+        rows = signs(self.fork(), [self.X, self.Y])
+        names = sorted((r[0], r[8]) for r in rows)
+        self.assertEqual(names, sorted([(ts.G_ENTRY, "X"), (ts.G_EXIT, "X"), (ts.G_ENTRY, "Y"), (ts.G_EXIT, "Y")]))
+        for r in rows:
+            self.assertAlmostEqual(r[1], -ts.JUNCTION_STEM_M, delta=0.5, msg="on the stem, before the node")
+            self.assertLess(abs(r[2]), 7.0, "beside the stem, not on a branch")
+
+    def test_without_the_merge_each_branch_has_its_own(self):
+        """(What the merge replaces: the same fork's changes, each road's pair.)"""
+        rs = self.fork(stem=False, branches=[poly_road("b1", [(0, 0), (300, 60)], "secondary"),
+                                             poly_road("b2", [(0, 0), (300, -60)], "secondary")])
+        with mock.patch.object(ts, "merge_junctions", lambda lines, changes, *a: (lines, changes)):
+            self.assertGreater(len(signs(rs, [self.X, self.Y])), 4)
+
+    def test_the_entry_faces_the_traffic_of_the_stem(self):
+        rows = signs(self.fork(), [self.X, self.Y])
+        entry_y = next(r for r in rows if r[0] == ts.G_ENTRY and r[8] == "Y")
+        entry_x = next(r for r in rows if r[0] == ts.G_ENTRY and r[8] == "X")
+        self.assertLess(entry_y[2], 0.0, "eastbound traffic into Y: the south kerb")
+        self.assertGreater(entry_x[2], 0.0, "westbound traffic into X: the north kerb")
+        self.assertAlmostEqual(entry_y[4], 270.0, places=1)
+        self.assertAlmostEqual(entry_x[4], 90.0, places=1)
+
+    def test_a_short_stem_is_lengthened_by_its_continuation(self):
+        """The stem in two segments, the first 7 m (Broumov's b3de426c): the sign still stands 8 m before the node."""
+        rs = self.fork(stem=False) + [poly_road("s1", [(-7.0, 0.0), (0.0, 0.0)], "secondary"),
+                                      poly_road("s2", [(-300.0, 0.0), (-7.0, 0.0)], "secondary")]
+        rows = signs(rs, [self.X, self.Y])
+        self.assertEqual(len(rows), 4)
+        for r in rows:
+            self.assertAlmostEqual(r[1], -ts.JUNCTION_STEM_M, delta=0.5)
+
+    def test_no_stem_the_higher_class_keeps_its_pair(self):
+        """No road with the node's own side to stand on: the secondary branch keeps its pair, the residential one's goes."""
+        rs = self.fork(stem=False)
+        rows = signs(rs, [self.X, self.Y])
+        alone = signs([rs[0]], [self.X, self.Y])
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(sorted(map(tuple, rows)), sorted(map(tuple, alone)))
+
+    def test_a_single_road_is_not_touched(self):
+        rows = signs([poly_road("r", [(-300, 0), (300, 0)])], [self.X, self.Y])
+        self.assertEqual(len(rows), 4)
+
+    def test_parallel_streets_apart_stay_separate(self):
+        """Two roads across the boundary 40 m apart share no node: a pair each."""
+        rs = [poly_road("a", [(-300, 0), (300, 0)]), poly_road("b", [(-300, 40), (300, 40)])]
+        self.assertEqual(len(signs(rs, [self.X, self.Y])), 8)
+
+    def test_a_one_way_stem_is_not_one(self):
+        rs = [poly_road("b1", [(0, 0), (300, 60)], "secondary"), poly_road("b2", [(0, 0), (300, -60)], "secondary"),
+              poly_road("stem", [(-300, 0), (0, 0)], "secondary", oneway=True)]
+        rows = signs(rs, [self.X, self.Y])
+        self.assertTrue(all(r[1] > -ts.JUNCTION_STEM_M + 1 for r in rows), "kept on a branch")
+
+    def test_the_same_signs_whichever_tile_draws_them(self):
+        rs = self.fork()
+        whole = signs(rs, [self.X, self.Y])
+        tiles = (signs(rs, [self.X, self.Y], box=(-1000, -1000, -4, 1000))
+                 + signs(rs, [self.X, self.Y], box=(-4, -1000, 1000, 1000)))
+        self.assertEqual(sorted(map(tuple, tiles)), sorted(map(tuple, whole)))
+
+    def test_between_grown_together_towns_the_branches_classes_count(self):
+        """(X and Y are built up everywhere: grown together.) A residential stem with a secondary branch keeps the
+        fork's pair, on the stem; residential branches onto a secondary stem have none."""
+        rows = signs(self.fork(stem=False) +
+                     [poly_road("stem", [(-300.0, 0.0), (0.0, 0.0)], "residential")], [self.X, self.Y])
+        self.assertEqual(len(rows), 4)
+        for r in rows:
+            self.assertAlmostEqual(r[1], -ts.JUNCTION_STEM_M, delta=0.5, msg="on the stem")
+        rs = self.fork(branches=[poly_road("b1", [(0, 0), (300, 60)], "residential"),
+                                 poly_road("b2", [(0, 0), (300, -60)], "residential")])
+        self.assertEqual(signs(rs, [self.X, self.Y]), [])
+
+
+class IntertownTest(unittest.TestCase):
+    """Two towns grown together: their boundary has its signs on the through roads, not on every residential street."""
+
+    @classmethod
+    def setUpClass(cls):
+        built = lambda x, y: np.ones(np.shape(x), bool)      # noqa: E731
+        cls.A = commune("A", -2000, -1500, 6, 1500, built)
+        cls.B = commune("B", 6, -1500, 2000, 1500, built)
+
+    def test_residential_streets_between_two_towns_have_none(self):
+        self.assertEqual(signs([road("r", "residential", x0=-300, x1=300)], [self.A, self.B]), [])
+
+    def test_through_roads_have_them(self):
+        for cls in ts.INTERTOWN_CLASSES:
+            self.assertEqual(len(signs([road("r", cls, x0=-300, x1=300)], [self.A, self.B])), 4, cls)
+
+    def test_a_residential_street_into_open_land_still_has_its_sign(self):
+        village = commune("V", 0, -1500, 2000, 1500, east_of(200.0))
+        self.assertEqual(len(signs([road("r", "residential")], [village])), 2)
+
+
 class PiecesTest(unittest.TestCase):
     def test_the_same_pieces_as_a_cell_by_cell_walk(self):
         """_pieces (runs joined by a union-find) labels as a flood fill does: 8-connected, numbered in scan order."""
@@ -1292,6 +1414,43 @@ class InStepTest(unittest.TestCase):
             self.assertTrue(ts.face_group("X", ts.G_ENTRY, "", cc).startswith(f"townin_{cc.lower()}_"))
             img = ts.face_image("X", ts.G_ENTRY, "", cc)
             self.assertEqual(img.size, (round(ts.PLATES[cc] * ts.FACE_PX_PER_M), round(ts.PLATE_H * ts.FACE_PX_PER_M)))
+
+
+class BodyGeometryTest(unittest.TestCase):
+    """The body every town sign shares (tools/generate_town_signs.py). Broumov, 2026-11-11: the crossed-out boards (the
+    exit face, the entry face's twin 12 mm behind the plate) were washed out; the plate's metal back lay 6 mm under it."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "tools"))
+        import generate_town_signs as gen
+        import generate_kmh_speed_signs as kmh
+        cls.gen, cls.kmh = gen, kmh
+
+    def spans(self, lod):
+        """(min y, max y) of each metal triangle."""
+        m = self.gen.build_town_body(lod)
+        ids = m.tri["metal"]
+        out = []
+        for i in range(0, len(ids), 3):
+            ys = [m.pos[3 * v + 1] for v in ids[i:i + 3]]
+            out.append((min(ys), max(ys)))
+        return out
+
+    def test_no_metal_in_the_plane_of_either_face(self):
+        """Neither the plate's front (under the entry face) nor its back (under the exit face) is built: no triangle
+        lies flat in either of the plate's y planes."""
+        for lod in self.kmh.SIGN_LODS:
+            flat = {round(lo, 4) for lo, hi in self.spans(lod) if abs(hi - lo) < 1e-6}
+            self.assertFalse(flat & {self.gen.PLATE_Y_FRONT, self.gen.PLATE_Y_BACK}, (lod, flat))
+
+    def test_nothing_crosses_the_exit_faces_plane(self):
+        """The clamps begin behind the exit face (its plane y = -FACE_Y): no triangle of the body reaches through it."""
+        face_y = -ts.FACE_Y
+        for lod in self.kmh.SIGN_LODS:
+            spans = self.spans(lod)
+            self.assertTrue(spans)
+            self.assertEqual([s for s in spans if s[0] < face_y < s[1]], [], lod)
 
 
 if __name__ == "__main__":

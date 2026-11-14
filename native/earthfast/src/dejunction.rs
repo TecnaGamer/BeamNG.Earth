@@ -78,6 +78,7 @@
 //! have (e.g. the pair straight on from this view). An arm behind (within 45 degrees of this arm itself) is no plate
 //! either, not left or right by the nearest 90 degrees: forced into left or right, the plate would draw at a right
 //! angle a road that runs back beside the approach, a wrong picture of the junction, which is worse than no plate.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -130,7 +131,7 @@ fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 fn unit(v: [f64; 2]) -> [f64; 2] {
-    let l = v[0].hypot(v[1]);
+    let l = v[0].dhypot(v[1]);
     if l.is_finite() && l > 1e-12 { [v[0] / l, v[1] / l] } else { [0.0, 0.0] }    // (no NaN in the comparisons)
 }
 
@@ -172,7 +173,7 @@ fn plate_of(u: &[[f64; 2]], i: usize, (p, q): (usize, usize)) -> i8 {
         if j == i {
             continue;
         }
-        let s = match (dot(v, right).atan2(dot(v, inc)) / std::f64::consts::FRAC_PI_2).round() as i32 {
+        let s = match (dot(v, right).datan2(dot(v, inc)) / std::f64::consts::FRAC_PI_2).round() as i32 {
             0 => A,
             1 => R,
             -1 => L,
@@ -326,7 +327,7 @@ mod tests {
     }
 
     fn unit(x: f64, y: f64) -> [f64; 2] {
-        let l = x.hypot(y);
+        let l = x.dhypot(y);
         [x / l, y / l]
     }
 

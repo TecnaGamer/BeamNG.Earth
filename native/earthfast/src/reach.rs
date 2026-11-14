@@ -12,6 +12,7 @@
 //! junction: by the time the turn would cost and by the road class, a GPS route's way strongly preferred). Where the
 //! loaded cells end the tree goes on straight (the frontier: the next map data to fetch). The most probable path (at
 //! each junction the likeliest way) is returned too (the terrain blocks and data downloads ahead follow it).
+use crate::dm::Dm;
 
 use numpy::{ndarray::Array2, IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -170,7 +171,17 @@ pub struct Params {
     pub max_states: usize,
     pub route_m: f64,
     pub route_share: f64,
+    // the driver's intent (server/reach.py intent(): from the car's own motion), at the junctions reached within
+    // intent_s of the car: turn (-1 right .. 1 left: the car already turning that way) makes the ways turning that
+    // way likelier, brake (0 .. 1: slowing down hard for it) every turn likelier than going on straight
+    pub intent_turn: f64,
+    pub intent_brake: f64,
+    pub intent_s: f64,
 }
+
+const INTENT_TURN_K: f64 = 1.5;     // a way turning the car's way: e^(1.5 turn) likelier (the other way e^-1.5 turn)
+const INTENT_BRAKE_K: f64 = 1.2;    // every turn e^(1.2 brake) likelier
+const INTENT_MIN_THETA: f64 = 0.35; // rad (20 deg): a way turning less than this is straight on
 
 struct Route {
     segs: Vec<([f64; 2], [f64; 2])>,
@@ -208,7 +219,7 @@ impl Route {
                     if l2 < 1e-9 { continue; }
                     let t = (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
                     let q = [a[0] + d[0] * t, a[1] + d[1] * t];
-                    if (q[0] - p[0]).hypot(q[1] - p[1]) <= r {
+                    if (q[0] - p[0]).dhypot(q[1] - p[1]) <= r {
                         let u = norm(d);
                         if u[0] * dir[0] + u[1] * dir[1] >= 0.7 {
                             return true;
@@ -284,7 +295,7 @@ impl RoadReach {
 
     fn grow_impl(&mut self, x: f64, y: f64, vx: f64, vy: f64, pr: &Params, route: Option<&Route>)
                      -> Option<(Vec<[f64; 4]>, Vec<[f64; 3]>, Vec<[f64; 4]>, usize)> {
-        let s = vx.hypot(vy);
+        let s = vx.dhypot(vy);
         if s < 0.5 || !(x.is_finite() && y.is_finite()) {
             return None;
         }
@@ -305,7 +316,7 @@ impl RoadReach {
                         if l2 < 1e-9 { continue; }
                         let t = (((x - a[0]) * d[0] + (y - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
                         let q = [a[0] + d[0] * t, a[1] + d[1] * t];
-                        let dist = (q[0] - x).hypot(q[1] - y);
+                        let dist = (q[0] - x).dhypot(q[1] - y);
                         if dist > pr.snap_m { continue; }
                         let tl = l2.sqrt();
                         let cf = (d[0] * u[0] + d[1] * u[1]) / tl;
@@ -336,7 +347,7 @@ impl RoadReach {
         // road, a ramp) less likely)
         let rank_of = |de: u32| (self.edges[(de / 2) as usize].rank & 0x7f) as i32;
         let top = roots.iter().map(|r| rank_of(r.0)).max().unwrap_or(0);
-        let mut ws: Vec<f64> = roots.iter().map(|r| (-(r.1 - best) / 3.0).exp()
+        let mut ws: Vec<f64> = roots.iter().map(|r| (-(r.1 - best) / 3.0).dexp()
             * pr.class_k.powi((top - rank_of(r.0)).clamp(0, 4))).collect();
         if let Some(r) = route {
             // (on a GPS route: the edge along it the likeliest)
@@ -434,12 +445,19 @@ impl RoadReach {
                 // first metres show)
                 let t_on = o.dir_at(ofwd, TURN_M);
                 let c2 = (t_in[0] * t_on[0] + t_in[1] * t_on[1]).clamp(-1.0, 1.0);
-                let theta = c.acos().max(c2.acos());
+                let theta = c.dacos().max(c2.dacos());
                 if theta > 2.6 {
                     continue;           // (~150 deg: a U-turn)
                 }
                 let delay = Self::turn_delay(theta, s, pr);
-                let mut w = (-delay / pr.t_p).exp();
+                let mut w = (-delay / pr.t_p).dexp();
+                if eta_end <= pr.intent_s && theta >= INTENT_MIN_THETA
+                    && (pr.intent_turn != 0.0 || pr.intent_brake > 0.0) {
+                    // (the driver's intent: a junction close ahead, the car turning or braking for it)
+                    let side = if t_in[0] * t_out[1] - t_in[1] * t_out[0] >= 0.0 { 1.0 } else { -1.0 };
+                    w *= (INTENT_TURN_K * pr.intent_turn.clamp(-1.0, 1.0) * side
+                          + INTENT_BRAKE_K * pr.intent_brake.clamp(0.0, 1.0)).dexp();
+                }
                 let (ri, ro) = (rank_in & 0x7f, o.rank & 0x7f);
                 if ro < ri {
                     w *= pr.class_k.powi((ri - ro).min(4) as i32);
@@ -520,21 +538,21 @@ pub fn reach_tile_keys<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lo
             }
             let fx = (lo[i] + 180.0) / 360.0 * nt;
             let lr = la[i].to_radians();
-            let fy = (1.0 - (lr.tan() + 1.0 / lr.cos()).ln() / std::f64::consts::PI) / 2.0 * nt;
-            let m_tile = 40075016.686 * lr.cos() / nt;
+            let fy = (1.0 - (lr.dtan() + 1.0 / lr.dcos()).dln() / std::f64::consts::PI) / 2.0 * nt;
+            let m_tile = 40075016.686 * lr.dcos() / nt;
             if !(m_tile > 0.0) {
                 continue;
             }
             let reach = (corridor_m / m_tile).ceil() as i64;
             let (tx0, ty0) = (fx.floor() as i64, fy.floor() as i64);
-            let pri = et[i] / ch[i].max(p_min).powf(gamma);
+            let pri = et[i] / ch[i].max(p_min).dpowf(gamma);
             let want = ch[i] >= p_want;
             for dx in -reach..=reach {
                 for dy in -reach..=reach {
                     let (gx, gy) = (tx0 + dx, ty0 + dy);
                     let ex = ((gx as f64 - fx).max(fx - (gx + 1) as f64)).max(0.0);
                     let ey = ((gy as f64 - fy).max(fy - (gy + 1) as f64)).max(0.0);
-                    let gap = ex.hypot(ey) * m_tile;
+                    let gap = ex.dhypot(ey) * m_tile;
                     if gap > corridor_m {
                         continue;
                     }
@@ -761,7 +779,7 @@ impl RoadReach {
         self.rebuild();
         let mut out = Vec::new();
         for (i, e) in self.edges.iter().enumerate() {
-            if !e.alive || !e.pts.iter().any(|p| (p[0] - x).hypot(p[1] - y) <= r) {
+            if !e.alive || !e.pts.iter().any(|p| (p[0] - x).dhypot(p[1] - y) <= r) {
                 continue;
             }
             out.push((i, e.a, e.b, e.len, e.rank, e.dir, self.adj[e.a as usize].len(), self.adj[e.b as usize].len(),
@@ -779,20 +797,25 @@ impl RoadReach {
     /// no road of the graph (none within snap_m going its way). {"pts": (n, 4) x, y, eta s, chance; "mpp": (k, 3)
     /// x, y, eta of the most probable path; "frontier": (m, 4) x, y, eta, chance where the loaded data ends;
     /// "states": directed edges walked}. route: a GPS route's line (k, 2) in the frame: at a junction the ways
-    /// along it (within route_m) take route_share of the chance.
+    /// along it (within route_m) take route_share of the chance. intent_turn / intent_brake / intent_s: the driver's
+    /// intent at the junctions within intent_s (s) of the car (Params; 293).
     #[pyo3(signature = (x, y, vx, vy, horizon_s, p_min=0.03, step_m=32.0, snap_m=30.0, snap_cos=0.7, a_turn=6.0,
                         v90=12.0, t_p=2.0, class_k=0.6, link_k=0.5, max_states=20000, route=None, route_m=20.0,
-                        route_share=0.9))]
+                        route_share=0.9, intent_turn=0.0, intent_brake=0.0, intent_s=0.0))]
     #[allow(clippy::too_many_arguments)]
     fn grow(&mut self, py: Python<'_>, x: f64, y: f64, vx: f64, vy: f64, horizon_s: f64, p_min: f64, step_m: f64,
             snap_m: f64, snap_cos: f64, a_turn: f64, v90: f64, t_p: f64, class_k: f64, link_k: f64,
-            max_states: usize, route: Option<PyReadonlyArray2<'_, f64>>, route_m: f64, route_share: f64)
+            max_states: usize, route: Option<PyReadonlyArray2<'_, f64>>, route_m: f64, route_share: f64,
+            intent_turn: f64, intent_brake: f64, intent_s: f64)
             -> PyResult<Option<Py<PyDict>>> {
         if !(step_m > 0.1) || !(horizon_s >= 0.0) || !(a_turn > 0.0) || !(t_p > 0.0) {
             return Err(PyValueError::new_err("step_m, a_turn and t_p must be positive, horizon_s not negative"));
         }
+        if !(intent_turn.is_finite() && intent_brake.is_finite() && intent_s.is_finite()) {
+            return Err(PyValueError::new_err("intent_turn, intent_brake and intent_s must be finite"));
+        }
         let pr = Params { horizon_s, p_min, step_m, snap_m, snap_cos, a_turn, v90, t_p, class_k, link_k, max_states,
-                          route_m, route_share };
+                          route_m, route_share, intent_turn, intent_brake, intent_s };
         let rxy: Option<Vec<[f64; 2]>> = match route {
             Some(r) => {
                 let a = r.as_array();

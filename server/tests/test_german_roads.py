@@ -184,9 +184,9 @@ class GermanRoadsTest(unittest.TestCase):
 
     def test_parking_only_where_the_lanes_still_fit(self):
         sp = roads.Spec(6.0, "paved", True, "secondary", True, lanes=2)       # (a divided avenue's 6 m half)
-        self.assertGreater(roads.assumed_parking(sp), 0)
+        self.assertGreater(roads.assumed_parking(sp._replace(width=12.0)), 0)     # (6 m: none fits, WIDTH_TABLE's rule)
         got = germanroads._fit_parking(sp)
-        self.assertFalse(got.parking)
+        self.assertFalse(got.parking and roads.parking_width(got))     # (no parking lane: WIDTH_TABLE's width rule)
         self.assertEqual(roads.parking_width(got), 0.0)
         wide = roads.Spec(12.0, "paved", True, "secondary", True, lanes=2)
         self.assertTrue(germanroads._fit_parking(wide).parking)

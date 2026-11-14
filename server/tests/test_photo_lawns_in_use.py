@@ -28,6 +28,7 @@ class PhotoLawnsInUseTest(unittest.TestCase):
         got = []
         fake = SimpleNamespace(hm_committed=deque([(1, 0.0, 384.0)]), base_rev=itertools.count(1),
                                imagery=SimpleNamespace(urgent=contextlib.nullcontext),
+                               base_revisit_key=lambda a, cx, cy: None,
                                write_base=lambda a, cx, cy, rev=0, photo=None, quick=False: got.append(rev) or "x")
         earthd.Server._base_photo(fake, SimpleNamespace(id=1), 0.0, 384.0)       # in use: a new revision
         earthd.Server._base_photo(fake, SimpleNamespace(id=1), 0.0, 0.0)         # not: r0

@@ -2,6 +2,7 @@
 terrain block's holes at the portals."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -167,8 +168,10 @@ class LowArch(unittest.TestCase):
         P, T, UV, mats, M = roadmesh.tunnel(tube, (0.0, 0.0, 0.0))
         self.assertIn(roadmesh.TUNNEL_STONE, mats)
         self.assertNotIn(1, set(M.tolist()), "no lamps under an arch")
-        # its face to just over the ground over the portal (15 m here), its top stone under that
-        self.assertLess(P[:, 2].max(), 15.0 + roads.PORTAL_GROUND_M + 0.01)
+        # its face to just over the ground over the portal (15 m here; the entrance's headwall a parapet over it,
+        # portals.LOOKS), its top stone under that
+        import portals
+        self.assertLess(P[:, 2].max(), 15.0 + max(roads.PORTAL_GROUND_M, portals.LOOKS[3][4] if portals.ON else 0) + 0.01)
 
 
     def test_a_motorway_s_low_arch_is_concrete(self):
@@ -201,6 +204,18 @@ class PortalCover(unittest.TestCase):
         park = Spec(7.0, "paved", False, "secondary")
         self.assertEqual(roads.portal_cover(kinds, cover, park).tolist(), kinds.tolist())
         self.assertEqual(roads.portal_cover(np.zeros(5, np.int64), np.full(5, 3.0), trunk).tolist(), [0] * 5)
+
+    def test_a_ramp_out_of_a_street_is_covered_only_where_the_ground_over_it_is(self):
+        # I-395's ramp in Washington: it leaves a street at grade, the ground over it rising to the tube; covered whole
+        # (the run's median) its box stood 5 m out of the street it leaves
+        trunk = Spec(9.0, "paved", False, "motorway")
+        kinds = np.array([0, 0, 0, 0, 0, 0, 0, 0, 1, 1])
+        cover = np.array([0.0, 0.5, 1.0, 1.6, 1.8, 2.0, 2.4, 3.0, 5.0, 6.0])
+        s = np.arange(10) * 4.0
+        with mock.patch.object(roads, "PORTAL_RUN_ON", True):
+            self.assertEqual(roads.portal_cover(kinds, cover, trunk, s).tolist(), [0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
+        with mock.patch.object(roads, "PORTAL_RUN_ON", False):
+            self.assertEqual(roads.portal_cover(kinds, cover, trunk, s).tolist(), [1] * 10)
 
     def test_a_short_end_run_is_the_tube_it_leads_into(self):
         # CA-1's northbound Tom Lantos bore: a 4 m low arch before the full tube, a notch of sky over its short face
@@ -566,3 +581,54 @@ class SplitRanges(unittest.TestCase):
     def test_a_long_gap_inside_one_way_is_joined_too(self):
         f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.6), ("w9@3", 0.6, 1.0)], tunnels=((0.0, 0.1), (0.3, 0.5)))
         self.assertEqual(self.ranges(f), [(0.0, 0.5, "tunnel")])         # (40 m: the way's tag covers it all)
+
+
+class ChainPins(unittest.TestCase):
+    """A tunnel mapped as several parts: its joints inside the hill at the floor of the whole tunnel, not at the
+    ground over them (GitHub #1160 #1161; Tromsø's roundabouts inside the mountain)."""
+
+    def _profiles(self):
+        import geodesy
+        fr = geodesy.EnuFrame(46.6, 8.6)
+        t = roads.TunnelProfiles(fr, lambda key: None, None)
+
+        def raw(la, lo):
+            e, n, _ = fr.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return hill(np.c_[np.asarray(e), np.asarray(n)])
+        t.raw = raw
+        return t
+
+    def test_a_split_tunnel_s_joint_is_at_its_floor(self):
+        t = self._profiles()
+        trunk = Spec(8.0, "paved", False, "trunk")
+        a, b = line(0.0, 400.0), line(400.0, 1000.0)
+        pool = {("A", 0): (trunk, a, 8.6, -1.0, len(a), ""), ("B", 0): (trunk, b, 8.6, -1.0, len(b), "")}
+        ground = {("R1", "g"): [line(-60.0, 0.0)], ("R2", "g"): [line(1000.0, 1060.0)]}
+        pins = t._chain_pins(sorted(pool), pool, ground)
+        za = pins[("A", 0)]
+        self.assertTrue(np.isnan(za[0]), "a portal keeps its own ground")
+        # the hull through the portals (100 m and 110 m): 104 m at 400 m (the frame's z, curvature aside)
+        self.assertAlmostEqual(za[1], 104.0, delta=0.1)
+        self.assertAlmostEqual(pins[("B", 0)][0], za[1], places=6)
+        self.assertTrue(np.isnan(pins[("B", 0)][1]))
+        h0, h1 = t.part_pins(("A", 0), None)
+        self.assertTrue(np.isnan(h0))
+        self.assertAlmostEqual(h1, 104.0, delta=0.1)
+        with mock.patch.object(roads, "CHAIN_PINS", False):
+            self.assertEqual(t._chain_pins(sorted(pool), pool, ground), {})
+
+    def test_a_part_alone_keeps_its_ends(self):
+        t = self._profiles()
+        trunk = Spec(8.0, "paved", False, "trunk")
+        a = line(0.0, 1000.0)
+        pool = {("A", 0): (trunk, a, 8.6, -1.0, len(a), "")}
+        self.assertEqual(t._chain_pins([("A", 0)], pool, {}), {})
+
+    def test_sections_read_the_cover_on_the_real_ground_at_a_pinned_end(self):
+        s = np.arange(0.0, 400.1, 4.0)
+        g = hill(np.c_[s, np.zeros(len(s))])
+        gp = g.copy()
+        gp[-1] = 104.0              # (the joint's floor)
+        floor, kinds = roads.tunnel_sections(s, gp, cover_g=g)
+        self.assertAlmostEqual(floor[-1], 104.0)
+        self.assertEqual(int(kinds[-1]), 2, "deep in the hill at the joint: the tube goes on")

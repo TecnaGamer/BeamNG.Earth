@@ -33,6 +33,7 @@ import os
 import threading
 
 import numpy as np
+import dnp
 
 import hklidar
 import hrdem
@@ -56,27 +57,27 @@ _WA, _WF = 6378137.0, 1 / 298.257223563
 _WE2 = _WF * (2 - _WF)
 _T = np.array([-162.619, -276.959, -161.764])
 _RX, _RY, _RZ = (math.radians(v / 3600) for v in (-0.067753, 2.243648, 1.158828))
-_R_INV = np.linalg.inv((1 - 1.094246e-6) * np.array([[1, _RZ, -_RY], [-_RZ, 1, _RX], [_RY, -_RX, 1]]))
+_R_INV = dnp.inv((1 - 1.094246e-6) * np.array([[1, _RZ, -_RY], [-_RZ, 1, _RX], [_RY, -_RX, 1]]))
 # Transverse Mercator by Krueger's series to n^4 (EPSG Guidance Note 7-2)
 _N = _F / (2 - _F)
-_B = _A / (1 + _N) * (1 + _N ** 2 / 4 + _N ** 4 / 64)
-_H = (_N / 2 - 2 * _N ** 2 / 3 + 5 * _N ** 3 / 16 + 41 * _N ** 4 / 180,
-      13 * _N ** 2 / 48 - 3 * _N ** 3 / 5 + 557 * _N ** 4 / 1440,
-      61 * _N ** 3 / 240 - 103 * _N ** 4 / 140,
-      49561 * _N ** 4 / 161280)
+_B = _A / (1 + _N) * (1 + (_N * _N) / 4 + dnp.power(_N, 4) / 64)
+_H = (_N / 2 - 2 * (_N * _N) / 3 + 5 * dnp.power(_N, 3) / 16 + 41 * dnp.power(_N, 4) / 180,
+      13 * (_N * _N) / 48 - 3 * dnp.power(_N, 3) / 5 + 557 * dnp.power(_N, 4) / 1440,
+      61 * dnp.power(_N, 3) / 240 - 103 * dnp.power(_N, 4) / 140,
+      49561 * dnp.power(_N, 4) / 161280)
 
 
 def _tm(phi, dlam):
     """(northing from the equator, easting from the central meridian), m, of HK1980 latitude phi, longitude dlam
     from the central meridian (radians)."""
-    s = np.sin(phi)
-    t = np.sinh(np.arctanh(s) - _E * np.arctanh(_E * s))
-    xi = np.arctan2(t, np.cos(dlam))
-    eta = np.arctanh(np.sin(dlam) / np.sqrt(1 + t * t))
+    s = dnp.sin(phi)
+    t = dnp.sinh(dnp.arctanh(s) - _E * dnp.arctanh(_E * s))
+    xi = dnp.arctan2(t, dnp.cos(dlam))
+    eta = dnp.arctanh(dnp.sin(dlam) / np.sqrt(1 + t * t))
     n, e = xi, eta
     for j, h in enumerate(_H, 1):
-        n = n + h * np.sin(2 * j * xi) * np.cosh(2 * j * eta)
-        e = e + h * np.cos(2 * j * xi) * np.sinh(2 * j * eta)
+        n = n + h * dnp.sin(2 * j * xi) * dnp.cosh(2 * j * eta)
+        e = e + h * dnp.cos(2 * j * xi) * dnp.sinh(2 * j * eta)
     return _B * n, _B * e
 
 
@@ -88,15 +89,15 @@ def grid(lat, lon):
     phi, lam = np.radians(np.asarray(lat, np.float64)), np.radians(np.asarray(lon, np.float64))
     shape = np.broadcast(phi, lam).shape
     phi, lam = np.broadcast_to(phi, shape).ravel(), np.broadcast_to(lam, shape).ravel()
-    nu = _WA / np.sqrt(1 - _WE2 * np.sin(phi) ** 2)
-    xyz = np.stack([nu * np.cos(phi) * np.cos(lam), nu * np.cos(phi) * np.sin(lam), nu * (1 - _WE2) * np.sin(phi)])
-    x, y, z = _R_INV @ (xyz - _T[:, None])
-    lam = np.arctan2(y, x)
-    p = np.hypot(x, y)
-    phi = np.arctan2(z, p * (1 - _E2))
+    nu = _WA / np.sqrt(1 - _WE2 * dnp.sq(dnp.sin(phi)))
+    xyz = np.stack([nu * dnp.cos(phi) * dnp.cos(lam), nu * dnp.cos(phi) * dnp.sin(lam), nu * (1 - _WE2) * dnp.sin(phi)])
+    x, y, z = dnp.matmul(_R_INV, xyz - _T[:, None])
+    lam = dnp.arctan2(y, x)
+    p = dnp.hypot(x, y)
+    phi = dnp.arctan2(z, p * (1 - _E2))
     for _ in range(4):
-        nu = _A / np.sqrt(1 - _E2 * np.sin(phi) ** 2)
-        phi = np.arctan2(z + _E2 * nu * np.sin(phi), p)
+        nu = _A / np.sqrt(1 - _E2 * dnp.sq(dnp.sin(phi)))
+        phi = dnp.arctan2(z + _E2 * nu * dnp.sin(phi), p)
     n, e = _tm(phi, lam - _LON0)
     return (_FE + e).reshape(shape), (_FN + n - _M0).reshape(shape)
 

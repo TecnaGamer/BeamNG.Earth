@@ -7,6 +7,8 @@ its drivable approaches and adjacent buildings; actual mounts are not mapped.
 import math
 import hashlib
 import numpy as np
+import dmath
+import dnp
 import geotiles
 import frroadmesh
 
@@ -33,7 +35,7 @@ def place(frame, roads, box, country_at, mesh, names=None, ground=None, obstacle
         return (
             geotiles.box_owns(box, *p[:2])
             and country_at(*p) == "FR"
-            and not any(np.linalg.norm(p[:2] - other) < 3.0 for other in corners)
+            and not any(dnp.norm(p[:2] - other) < 3.0 for other in corners)
         )
 
     for arms in f._arms(roads).values():
@@ -115,10 +117,10 @@ def place(frame, roads, box, country_at, mesh, names=None, ground=None, obstacle
         if ground is not None:
             p[2] = float(np.asarray(ground(np.array([p[0]]), np.array([p[1]]))).ravel()[0])
         inward = phone["roadpoint"][:2] - p[:2]
-        inward /= max(np.linalg.norm(inward), 1e-9)
+        inward /= max(dnp.norm(inward), 1e-9)
         # The asset faces -local Y, with a separate near-field collision box.
         travel = -inward
-        yaw = math.degrees(math.atan2(-travel[0], travel[1]))
+        yaw = math.degrees(dmath.atan2(-travel[0], travel[1]))
         posts.append(["fr_sos_phone", *map(float, p), yaw, 1.0, 1.825, 0.0])
         records.append(
             {

@@ -2,6 +2,227 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## 1.10.0 beta (2026-11-DD)
+
+> **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
+> develop the mod.** For help, that includes multiplayer:
+> BeamNG.Earth isn't like a normal BeamNG mod (it runs its own app next to the game), so if something isn't working
+> with BeamMP, it's almost certainly a BeamNG.Earth problem, not a BeamMP one. Please don't contact the BeamMP team or
+> open BeamMP support tickets about it. BeamNG.Earth servers are hidden from players who don't run BeamNG.Earth
+> (BeamMP can't install it for them: it needs its own app), so they only show in the BeamNG.Earth tab of BeamMP's
+> server browser.
+
+Works with BeamNG.drive 0.40.5.
+
+> **The first drive in each place is slower once after updating**: many road, tunnel, bridge, railway and building
+> changes in this release change how things are planned, so the plans saved from earlier visits are worked out again on
+> your first visit to each place. Later visits are fast again.
+
+### Highlights
+- **Steadier game speed by default** on Linux and Windows (the "Even frame pacing" setting is gone: it is no longer needed).
+- **A lot faster first visits**: the whole horizon is drawn within a few seconds of a teleport, places you have been to
+  come back from disk, and the server uses far less CPU per road tile.
+- **Computers with 8 GB or 4 GB of memory** now get a lean mode, and everyone gets a **Max RAM for BeamNG.Earth** setting.
+- **Tunnels** are planned as whole networks and get proper entrances; **roads** have smoother bends and follow the
+  photos' pavement colours.
+- **Buildings**: roofs follow their outlines (hips, gables, barrel roofs), open courtyards, measured roofs in more countries,
+  and better landmarks such as New York's skyline.
+- **Find a gas station or EV charger**: a station finder on the map, a "Nearest station" key and a low-fuel prompt
+  (PR #1056, FluffyProgramming).
+- **Distant skylines**: tall buildings beyond the far tiles now stand on the horizon, and far buildings are much cheaper
+  to draw (in our Windows test at 45 mph through Midtown, far building work per tile went from 48.5 to 7.4 ms).
+- **Search for kinds of places**: type "race track", "rally", "off-road", "peak", "forest", "beach" ... in the map's
+  search for real places near you and famous ones worldwide, or tap a category under the search box.
+- **Fixed view distance now goes down to 1 km** (0.6 miles).
+- **Send a report to the developers** from inside the game.
+
+### New
+- **Category search on the map**: "race tracks", "karting", "drag strip", "rally", "off-road", "rock crawling", "peaks",
+  "mountain pass", "forest", "lake", "beach", "desert", "airport", "bridge", "tunnel", "dam", "canyon", "scenic drive"
+  (plurals, typos and "near <place>" / "in <country>" work too) list nearby places from OpenStreetMap and famous ones from
+  Wikidata, with their distance in miles and country. Quick category buttons under the search box, a marker on the map
+  for the highlighted result, and keyboard and controller navigation as before. The nearby search asks OpenStreetMap's
+  Overpass service once when you press Enter (never while typing), with your position rounded to about 0.7 miles.
+- **Station finder** (PR #1056, FluffyProgramming): gas stations and EV chargers on the world map, a "Nearest station"
+  button, the radial menu's Other ring and a key (Ctrl+Shift+Q), and a low fuel prompt (Settings: Low fuel prompt).
+  Station data comes from weekly shards, so the finder works even where no map data is downloaded yet; EV chargers get
+  OpenStreetMap's capacity and charge points.
+- **Report to the developers**: a "Send to the developers" window lets you send a report with a screenshot, your exact
+  location and logs. Nothing is sent until you press Send; home folders, user names, e-mail and IP addresses are removed
+  first. Reports are private.
+- **Max RAM for BeamNG.Earth** (Settings): caps the world server's memory (Auto: a third of your RAM, 60 % on machines
+  with 22 GB or more, at most 24 GB). The page shows how much it uses.
+- **Road surface detail** setting (off / basic / full): road wear painted into the road: tyre polish, concrete joints,
+  grassy edges on country roads, and on full also cracks, patches, potholes, manholes, oil spots and autumn leaves.
+  Low and Medium presets use less of it.
+- **Ground grid** setting (2 m or 1 m): the Low and Medium presets use a lighter 2 m physics ground (PR #943 request).
+- **Rumble strip sound** (PR #1123, ProxyFirewall202): a sound when you drift out of your lane on motorways and rural
+  main roads in Australia, New Zealand and the US.
+- **Terrain pixel error** setting (0 = off, default): keeps the distant ground's detail jumps under a number of screen pixels.
+- **Soft slow-down when the world is behind** (off by default): a GTA-style drag instead of a hard stop when the next
+  ground block is late at speed.
+- **Adaptive traffic amount** (off by default; PR #728 and #773, ProxyFirewall202): more cars in cities, fewer in the country.
+- **German junction signs** (off by default, Settings > World; PR #878, Yukuhu): right-of-way signs, markings and traffic
+  that gives way as the German rules say. **German Autobahn signs** (PR #999, Yukuhu) come with Highway signs, and
+  **German town signs** (PR #892, Yukuhu) with Town signs.
+- **Town signs are on by default** now, with Europe's regional scenery (poles, delineators, chevrons) as well.
+  Town signs at forks and between grown-together towns (PR #1143, Robitnik); left-hand traffic signal booms and stop
+  lines (PR #1134, zolaski333); US state welcome boards.
+- **Modding API 1.3 to 1.8** for add-on authors: in-tunnel checks, posted speed limits, places and buildings round a point
+  (PR #1053, SwimmingRemy; cached-only requests), the planned GPS route and its turn steps, `toGame` / `toGeo`, a
+  "rebased" event (see docs/ADDONS.md).
+- **GPS route through several stops** (PR #1004, zolaski333).
+- **More scenery from the map**: solar farms, container terminals, vineyards in rows, round bales after the harvest,
+  camp site caravans, marinas, obstruction lights on tall buildings, jet fans in road tunnels, mapped street lamps
+  (PR #981, wyo-backroads), power poles where a line's supports are mapped (PR #919, wyo-backroads), mapped benches,
+  bins, hydrants and post boxes, dry stone walls (PR #1003, zolaski333), tower cranes at construction sites, and
+  region-appropriate bus shelters.
+- **Roundabouts** with a granite truck apron, a planted island, curbs, give-way lines and splitter islands (PR #1048, Robitnik).
+- **Mediterranean look**: ochre and salmon facades, campanili church towers, Italian clay tiles, holm and cork oaks,
+  olives and cypresses.
+
+### Faster world generation
+- **Far scenery after a teleport**: the whole horizon is drawn from coarse photo tiles within a few seconds, then refined;
+  far tiles hidden behind terrain get smaller textures; far tiles in view get sharper ones where the screen needs it
+  (e.g. mountain faces). In our tests a warm far field went from 95-141 s to 7-9 s after the coarse cover.
+- **Places you have visited come back from disk**: graded terrain blocks, the far field and ground photos are kept
+  and restored in bulk instead of built again.
+- **Teleport destination preload**: a place picked on the world map is loaded before you teleport.
+- **First ground sooner**: in our tests a fresh place's first ground went from 5.2 s to 2.5 s (Spokane, Billings).
+- **Road tags in a fraction of a second** once the weekly tag archive is published: 0.2-0.4 s instead of 8-10 s in our tests.
+- **Streaming ordered by time to reach** along the road graph at speed, so what the car will reach first is built first;
+  work it can no longer reach is dropped. A teleport also drops the old place's queued work.
+- **Much more of the road planning is native code** (roads, junctions, bridges, rail beds, stations, signs, roofs): in our
+  tests road tiles used roughly 15-20 % less CPU in two rounds, and plan merging about 10x less. Plans are now
+  identical on Windows and Linux (deterministic maths).
+- **Map data from Overture's own vector tiles** by default, our own prebaked tile packs, and Sentinel-2 photo packs to zoom 13.
+- **Fewer photo requests** per cold teleport, shared connections, and per-host limits that follow each provider's terms.
+- **Busy machines**: the road-process watchdog tells busy from hung by CPU, so slow first visits (central London) are
+  no longer restarted; efficiency cores count for less in the CPU split (PR #1256, crunchdomo); an unlimited number of
+  cached areas is allowed (PR #1264, H4ckerxx44).
+- **Hong Kong**: government LiDAR for road heights and 0.5 m terrain, and LandsD aerial photos (PR #1104, #1105, #1124, glki6).
+
+### Smoother game
+- **Steady game speed is the default**: a hitch's time is paid back slowly instead of in a burst. In our tests on a Manhattan
+  drive, game speed over a quarter second stayed within about 1.1x (p95 1.23 to 1.11, p99 1.37 to 1.16). Windows gets it too.
+- **Shorter ground block swaps** on Windows and Linux (terrain scans without per-sample divisions; unchanged ground
+  textures kept). In our tests on Linux a 45 mph swap's median frame went from 42.1 to 33.1 ms.
+- **Fewer long frames**: Lua garbage collection kept out of play, less garbage from server messages, server
+  messages decoded over several frames, tree shapes loaded out of play, the engine's stock police spike strips left out
+  of the collision work, fewer colliders behind a moving car (in our tests Steam Deck frames over 100 ms per Fells Point
+  drive 27.5 to 13), and no collision rebuilds while you roll slowly.
+- **Parked cars cost less** on weak CPUs (at most 2 active on Low and Medium, cars behind you hidden only out of view).
+- **Small details keep up** with the car: sidewalks, furniture and lights appear earlier at speed (in our tests with
+  a 70 mph Fells Point drive, street lights went from 2.4 s of warning to 20.9 s).
+- **Low-memory machines** (8 GB: lean mode; 4 GB: emergency mode): the server runs in fewer processes with smaller caches
+  and a coarser far field; a computer under 10 GB starts on the Low preset. Worker processes give memory back when idle.
+- **Windows memory**: the worker memory ceiling now works on Windows.
+
+### Buildings and landmarks
+- **Roofs**: pitched roofs follow the footprint's own outline (L, T, U), hipped and gabled roofs over any outline, barrel
+  vaults for roof:shape=round, skillions keep their slope, open canopies, mapped roof data used as mapped, domes bounded
+  on any outline, chimneys on pitched houses and roof colour taken from the aerial photo.
+- **Courtyards stay open** instead of a solid city block; the same building mapped twice is drawn once.
+- **Measured roofs and heights**: Germany (LoD2, PR #872, Henner4746), the Netherlands (3DBAG, PR #977, Vabian124),
+  Switzerland, Liechtenstein, Estonia and Vienna (once their data is published), France's BD TOPO and New York's measured
+  massing.
+- **Landmarks**: parts dressed as parts of their building (one spire per church, domes on their drums, metal crowns,
+  no bare steel masts, stone-coloured towers in masonry), pre-war towers in masonry from their construction years, a
+  tower's lobby of glass doors, mapped water tower heights and New York's rooftop water tanks (PR #1005, zolaski333).
+- **Rooftop kit** worldwide: penthouses, stair and lift bulkheads, rooftop units; obstruction lights on buildings 150 m and taller.
+- **Horizon skyline**: buildings 60 m and taller are drawn out to the horizon (from a weekly index of Overture's tall
+  buildings), replaced by the real far buildings as you get closer.
+- **Far buildings**: flat-roofed far buildings are drawn as simple walls with day windows, which is much cheaper to
+  make (sloped, domed and steepled ones keep their shape); far building tiles and packs now stay under the engine's
+  16-bit limit, which should reduce the "spiderweb" triangles some players saw in dense cities.
+- **Building colours** mapped in OpenStreetMap (building and roof colours) are used where the map has them.
+- **Greenhouses are glass**, storage tanks and silos are drawn, wind turbine bases are not buildings, buildings keep off
+  roads and railway beds, passages through buildings (Estonia: PR #875 and #1001, mitzracing; London mews arches).
+- **More stock roof and wall textures** (fish-scale slate, shingles, rubble stone, cinder block), night windows with
+  individual brightness (PR #916, S-moreo), and a street lamp glow that fades with distance (PR #912, S-moreo).
+- **Rail stations** from map data with platforms, roofs, footbridges, underpasses, name boards; **bus stations**
+  (PR #1106 and #1023, Robitnik).
+
+### Roads, traffic, Autodrive and GPS
+- **Smoother roads**: bends use curvature-continuous transition curves by default; roads side by side share one height;
+  road bumps reduced at level crossings, mountains and short overpasses; lane tapers where road classes change.
+- **Road colours from the photos**: roads, lots, squares and curb corners are painted in the pavement's own tone;
+  concrete roads keep their light tone; untagged minor roads are judged paved or unpaved from the aerial; squares and
+  cobbles are painted into the ground with their own textures.
+- **Bridges**: suspension and cable-stayed spans between their towers, tower parts as one pylon, bridges without steps at
+  their seams, pylon passages through towers, parapets along the whole deck, road signs and noise walls kept on their
+  bridge, and 3dmr.eu model bridges that meet their roads (PR #854, rootyandex-ux).
+- **Overpasses and junctions** (several reports from GitHub, Vienna, Paris, Andalusia): lid junctions as one surface, raised
+  junctions as a height, ramps up to overpasses smoothed.
+- **Tunnels as networks**: a tunnel mapped in several parts gets joints at the floor of the whole network (GitHub #1160, #1161);
+  new tunnel entrances with headwalls, collars and wing walls, shorter raked concrete hoods on lesser roads, tunnels in the
+  shade by day, underpasses in a cutting (PR #1008, chateau86; PR #927, maartenvd).
+- **Railways**: rail beds from a lattice of node profiles, the same in every tile; switches and crossovers without steps;
+  rails collide again (PR #957, zolaski333); trains' buffer stops; rail trails draw no track; roads dip under rail bridges
+  to the sign's height limit (PR #1193, Robitnik), and road bridges keep a road's posted height limit
+  underneath them (PR #1267, S-moreo).
+- **Germany's surveyed roads** (ATKIS Basis-DLM: width, lanes, surface; PR #1036, Henner4746) and one-way carriageways
+  where OpenStreetMap places their lanes (PR #1014, Yukuhu).
+- **Traffic**: rough mapped roads slow traffic (PR #1122, ProxyFirewall202), speeding traffic where it is common (US), regional
+  traffic vehicles, a traffic cut guard that catches a car stopped at the graph's cut
+  (PR #1102, SwimmingRemy), traffic signals in the Netherlands go from red straight to green (PR #1214, svenegaming-glitch).
+- **Autodrive**: Autodrive no longer spins out after streamed-map updates (PR #1120, Madlykeanu); stops caused by disconnected
+  local paths, duplicate roads in the AI graph and recovery while the game is paused were reduced (PR #1233, #1234, #1235,
+  Madlykeanu); it keeps to the planned road through forks and brakes at the destination, and no longer stops at sharp
+  bends or where its projected path ends (PR #1274, Madlykeanu).
+- **GPS**: route arrows at speed follow the route's line, a route across the date line is sampled the short way, and a
+  failed re-plan keeps the route. **Car navigation screens** draw the road graph over the satellite photo (PR #472,
+  iambobab).
+- **Loading line** comes back while driving when the world is behind you.
+
+### Windows, Steam Deck and Linux
+- **Windows**: steady game speed and shorter block swaps are applied by the launcher; a game-folder file held for a
+  moment is tried again instead of failing the block (PR #1243, crunchdomo); the worker memory ceiling works; revisit packs
+  open without blocking deletes. The launcher starts the game first, and a crashed game left in the background is noticed.
+- **Steam Deck**: road surfaces, sidewalks and buildings keep up at 45 mph, parked cars and colliders cost less (see above).
+- **Linux**: texture keeping is on by default after our teleport soaks; builds target glibc 2.35.
+- **Docker image** of the BeamMP server, published with each release (PR #858, ReinderN).
+- Old updater copies are cleaned up (PR #947, zolaski333); the BeamNG.Earth tab of BeamMP's server browser no longer
+  leaves extra copies after UI reloads (PR #1165, iambobab).
+
+### Multiplayer
+- **BeamMP leave**: your own BeamNG.Earth is switched back on once BeamMP's session is over.
+- **BeamMP 1-2 fps** after joining: the server's copy of the mod now gets its own code, which should reduce the chance of the slowdown.
+- A server host can set the server list address (`BNGE_SERVER_LIST_URL`); see docs/HOSTING.md.
+
+### Fixed
+- **Reduced the chance of a game freeze after cold teleports**: station boards and town signs were written as PNG,
+  which the engine's texture cooker could hang on; all mod textures are now DDS.
+- **Reduced the chance of "stuck" road tiles**: road processes are no longer restarted on slow first visits; lock handling
+  and abandoned work are cleaned up.
+- **Reduced the chance of floating or bare buildings and road dips** at several GitHub-reported places (floating
+  buildings over roads, parapets on bridges, buildings blocking roads).
+- **Reduced the chance of flickering road paint**: markings and wear sit a few millimetres above the road.
+- **Reduced the chance of glitches with very long buildings, sparse bridge elements and sharp corners in bridge decks** (PR #863 and #852, chateau86; PR #879, teddante).
+- **Map weather badge** shows the moon at night under a clear sky (PR #1002, zolaski333).
+- **3D map**: the labels' window stays in the game's window (a ReShade / DirectX 12 crash report).
+- **Traffic U-turns at the graph's edge**: reduced the chance of cars turning around where the world ends.
+- **Memory**: a cache shed also drops the street widths' reframed wall segments (PR #1223, josh-abrams).
+- **Damaged cache files** in more places are rebuilt instead of failing tiles.
+- **Far scenery after a connection drop**: far tiles built without photos during an outage now get their photos once
+  the imagery services are back, without a teleport (PR #1260, OmdevShastri).
+- **Server stalls** moved off the main loop on slow or external disks (GitHub #1054).
+- **Reduced the chance of slow world building** on some machines: the "what will the car reach first" planning ran
+  on the server's main loop and could hold up everything else (a player's log); it now runs on its own thread.
+
+### Settings
+- **Fixed view distance** now goes down to 1 km (0.6 miles; was 20 km), with 1 km steps. A fixed distance gets the fog it
+  needs so there is no hard edge, and neither the cap nor the fog applies while the 3D map is open. Players asked for
+  this.
+- New settings: Max RAM for BeamNG.Earth, Road surface detail, Ground grid, Terrain pixel error, Low fuel prompt,
+  Rumble strip sound, Soft slow-down, Adaptive traffic amount, German junction signs. Even frame pacing is removed.
+- A first run on a computer with under 10 GB of memory picks the Low preset.
+
+### Behind the scenes
+- Telemetry (only what you chose to share): hitch and 1 % low statistics, slow-frame causes and session length in the performance data.
+- A new public hosting guide for running your own CDN and backend (docs/HOSTING.md).
+- Dependencies updated (PyO3 0.30); GitHub Actions moved to Node 24.
+
 ## 1.9.1 beta (2026-11-09)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

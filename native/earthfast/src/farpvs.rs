@@ -9,6 +9,7 @@
 //! than the ground), the targets from the max rasters with the refracted earth's (higher), so a cell is hidden only when
 //! terrain that is surely there hides all the ground that may be there; a cell outside every ring is never hidden (the
 //! caller treats a tile not wholly inside them as visible).
+use crate::dm::Dm;
 
 use numpy::ndarray::Array3;
 use numpy::{IntoPyArray, PyArray3, PyReadonlyArray2};
@@ -68,7 +69,7 @@ fn run(rs: &[Ring], views: &[[f64; 3]], azimuths: usize, gran: usize, d0: f64, r
     let (ko, kt) = (0.5 / r_occ, 0.5 / r_tgt);
     let dirs: Vec<(f64, f64)> = (0..azimuths).map(|k| {
         let a = (k as f64 + 0.5) * std::f64::consts::TAU / azimuths as f64;
-        (a.cos(), a.sin())
+        (a.dcos(), a.dsin())
     }).collect();
     let last = rs.len() - 1;
     for (vi, &[px, py, eye]) in views.iter().enumerate() {

@@ -10,6 +10,7 @@ updateAdaptiveTraffic). The drivers' speeds are speeding.lua's (by country), not
 from __future__ import annotations
 
 import math
+import dnp
 
 SAMPLE_RADIUS_M = 750.0
 SERVER_TARGET_MAX = 999  # Lua applies the actual user's native traffic limit after receiving the graph.
@@ -121,7 +122,7 @@ def calculate(total_m, urban_m, major_m, local_m, settlement=None, road_class="u
     urban = _clamp(float(urban_m), 0.0, total)
     major = _clamp(float(major_m), 0.0, total)
     local = max(0.0, float(local_m))
-    area = math.pi * (radius / 1000.0) ** 2
+    area = math.pi * dnp.sq(radius / 1000.0)
     density = total / 1000.0 / area
     local_density = local / 1000.0 / area
     urban_share = urban / total if total > 1.0 else 0.0

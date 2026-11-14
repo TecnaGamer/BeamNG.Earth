@@ -1,6 +1,7 @@
 //! Mapped OpenStreetMap street lamps (highway=street_lamp, PR #981 by wyo-backroads): which way each lamp's arm faces,
 //! and how many mapped points (lamps, utility poles) stand along each road, so a road with its own mapped ones guesses
 //! none (furniture.place). Both were per-point numpy loops in Python over every road line near the tile.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -95,7 +96,7 @@ pub fn lamp_road_yaw<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, laye
                 dy = -dy;
             }
         }
-        let target = dy.atan2(dx).to_degrees();
+        let target = dy.datan2(dx).to_degrees();
         let yaw = (target + if k == 1 { 90.0 } else { 0.0 }).rem_euclid(360.0);
         out[p] = if k == 2 { yaw.rem_euclid(180.0) } else { yaw };
     }

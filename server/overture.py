@@ -339,6 +339,26 @@ SIMPLIFY_DEG = 0.002            # degrees (~200 m): a `simplify` layer's toleran
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344
+_LENGTH_M = {"m": 1.0, "km": 1000.0, "cm": 0.01, "ft": 0.3048, "in": 0.0254, "yd": 0.9144, "mi": 1609.344}
+
+
+def height_limit_m(access_type, heading, during, using, recognized, vehicle):
+    """m: the height limit an access restriction is (denied to vehicles over a height, without a heading, time, use or
+    recognised-as condition: a "maxheight" sign), None for any other. The same test as pmtiles.rs's. `vehicle`: the
+    "when.vehicle" list of {dimension, comparison, value, unit}."""
+    if access_type != "denied" or heading or during or using or recognized or not vehicle:
+        return None
+    for v in vehicle:
+        if not isinstance(v, dict) or v.get("dimension") != "height" or \
+                v.get("comparison") not in ("greater_than", "greater_than_equal"):
+            continue
+        try:
+            h = float(v["value"]) * _LENGTH_M[str(v.get("unit") or "m").lower()]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 1.0 <= h <= 8.0:             # (a sign for a clearance: not a unit slip)
+            return h
+    return None
 
 
 class OvertureError(IOError):
@@ -1013,8 +1033,11 @@ class Reader:
                 r."when"."using", r."when".recognized, r."when".vehicle, r."between" FROM
             (SELECT fi, unnest(access_restrictions) AS r, generate_subscripts(access_restrictions, 1) AS k FROM t)
             ORDER BY fi, k""").fetchall()
-        ow = []
+        ow, mh = [], []
         for fi, typ, heading, mode, during, using, recognized, vehicle, b in rows:
+            h = height_limit_m(typ, heading, during, using, recognized, vehicle)
+            if h is not None and keep[fi]:
+                mh.append((int(fmap[fi]), h, b))
             if not keep[fi] or typ != "denied" or heading not in ("forward", "backward"):
                 continue
             if during or using or recognized or vehicle:
@@ -1023,6 +1046,7 @@ class Reader:
                 continue
             ow.append((int(fmap[fi]), 1.0 if heading == "backward" else -1.0, b))
         feats.rules["oneway"] = mg.rule_table(ow, "float")
+        feats.rules["max_height_m"] = mg.rule_table(mh, "float")
         rows = con.execute("""SELECT fi, c.connector_id, c."at" FROM
             (SELECT fi, unnest(connectors) AS c, generate_subscripts(connectors, 1) AS k FROM t)
             ORDER BY fi, k""").fetchall()
@@ -1080,6 +1104,7 @@ def empty(layer):
         f.rules["max_speed_kmh"] = mg.rule_table([], "float")
         f.rules["connectors"] = mg.rule_table([], "text")
         f.rules["oneway"] = mg.rule_table([], "float")
+        f.rules["max_height_m"] = mg.rule_table([], "float")
         f.rules["src_ways"] = mg.rule_table([], "text")
     return f
 

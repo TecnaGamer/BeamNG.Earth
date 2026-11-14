@@ -35,6 +35,8 @@ import os
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import colormatch as colormatchmod
 import dem as demmod
@@ -56,8 +58,8 @@ MAX_DEM_KEYS = 64               # DEM tiles looked up per far tile (a footprint 
 IMAGERY = {
     "md6in": "State of Maryland, MD iMAP / DoIT",
     "naipusda": "USDA NAIP",
-    "naip": "USDA NAIP via USGS The National Map",
-    "usgs": "USGS The National Map",
+    "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
+    "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
     "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
@@ -67,8 +69,9 @@ IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.item
 IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
 # (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
 IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
+IMAGERY["bngaer"] = "BeamNG.Earth aerial packs: USDA NAIP (public domain) and open national orthophotos"
 ELEVATION = {
-    demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
+    demmod.MAPTERHORN["name"]: "Mapterhorn (https://mapterhorn.com/attribution)",     # (z0-12 from the project's tile host: still Mapterhorn's)
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
     "lidarbc": "Contains information licensed under the Open Government Licence - British Columbia (LidarBC)",
     "hrdem": "Contains information licensed under the Open Government Licence - Canada "
@@ -239,7 +242,7 @@ def feature_ids(conn):
         and veg.sent
     if md is not None and hasattr(md, "layer_provenance"):
         dlat = FEATURE_NEAR_M / 110540.0
-        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
         for key in mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
             layers = (("roads", "buildings", "water") if roads_on else ()) \
                 + (("landcover",) if getattr(s, "surface", None) is not None else ()) \
@@ -340,7 +343,7 @@ def dem_keys(frame, bbox, zoom):
     n = 2 ** zoom
     fx = (lon / 360.0 + 0.5) * n
     fx = fx - n * np.round((fx - fx[0]) / n)                # unwrap across the antimeridian
-    fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * n
+    fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * n
     tx0, tx1 = int(math.floor(fx.min())), int(math.floor(fx.max()))
     ty0, ty1 = max(0, int(math.floor(fy.min()))), min(n - 1, int(math.floor(fy.max())))
     if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_DEM_KEYS:

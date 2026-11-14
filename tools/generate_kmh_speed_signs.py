@@ -164,6 +164,7 @@ class RoundSignGeometry:
 ROUND_SIGN = RoundSignGeometry()
 METAL_TILE = 0.5            # metres of sign metal covered by one tile of the metal textures
 METAL_TEX_SIZE = 512
+FACE_TEX_PX = 512               # the faces' texture size (drawn at 1024 px, then halved)
 
 
 def planar_uv(p, n):
@@ -702,6 +703,9 @@ def write_signs(speeds: Iterable[int | str] | None = None) -> None:
         # would otherwise let the pole behind it show faintly through. Every pixel is fully opaque or fully clear.
         img = img.convert('RGBA')
         img.putalpha(img.getchannel('A').point(lambda v: 255 if v >= 128 else 0))
+        # shipped at 512 px (drawn at 1024): a 0.9 m plate at 512 px out-resolves a 1080p screen from 1.6 m out, and
+        # the 1024 px DDS were 1.4 MB each (2026-11-13; the committed sources are the 1024 px faces' first mip)
+        img = img.resize((FACE_TEX_PX, FACE_TEX_PX), Image.BOX)
         png = OUT / f'{name}.png'
         img.save(png)
         dae = OUT / f'{name}.dae'

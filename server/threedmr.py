@@ -44,6 +44,8 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 
 import numpy as np
+import dmath
+import dnp
 from PIL import Image
 
 import cdae
@@ -269,7 +271,7 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
         return []
     i, j = math.floor(float(lat) / REGION_DEG), math.floor(float(lon) / REGION_DEG)
     clat, clon = (i + 0.5) * REGION_DEG, (j + 0.5) * REGION_DEG
-    half = math.hypot(REGION_DEG / 2 * 111320.0 * math.cos(math.radians(min(abs(clat) + REGION_DEG / 2, 89.9))),
+    half = math.hypot(REGION_DEG / 2 * 111320.0 * dmath.cos(math.radians(min(abs(clat) + REGION_DEG / 2, 89.9))),
                       REGION_DEG / 2 * 110540.0)
     rng = int(math.ceil(half + SEARCH_CORRECT_R_M))
     path = os.path.join(cache_dir, "threedmr_cache", f"region_{i}_{j}.json")
@@ -410,7 +412,7 @@ def _load_stl(path, factor):
     e0 = positions[1::3] - positions[0::3]
     e1 = positions[2::3] - positions[0::3]
     face_normals = np.cross(e0, e1)
-    lengths = np.linalg.norm(face_normals, axis=1, keepdims=True)
+    lengths = dnp.norm(face_normals, axis=1, keepdims=True)
     lengths[lengths == 0] = 1.0
     normals = np.repeat(face_normals / lengths, 3, axis=0)
 
@@ -533,7 +535,7 @@ def desc_position(info):
 
 def _latlon_dist_m(lat1, lon1, lat2, lon2):
     """Equirectangular approximation, metres - fine over the few km this is ever used to measure."""
-    coslat = math.cos(math.radians((lat1 + lat2) / 2.0))
+    coslat = dmath.cos(math.radians((lat1 + lat2) / 2.0))
     de = (lon2 - lon1) * 111320.0 * coslat
     dn = (lat2 - lat1) * 111132.0
     return math.hypot(de, dn)
@@ -669,8 +671,8 @@ def _edge_histogram(points_xy):
     length: the longer, straighter runs of a building's own walls outweigh a few short jogs."""
     p = np.asarray(points_xy, np.float64)
     d = np.roll(p, -1, axis=0) - p
-    lengths = np.hypot(d[:, 0], d[:, 1])
-    angles = np.degrees(np.arctan2(d[:, 1], d[:, 0]))
+    lengths = dnp.hypot(d[:, 0], d[:, 1])
+    angles = np.degrees(dnp.arctan2(d[:, 1], d[:, 0]))
     return _angle_histogram(angles, lengths)
 
 
@@ -689,7 +691,7 @@ def _knn_edge_histogram(
     if len(p) < 2:
         return _angle_histogram([], [])
     diff = p[:, None, :] - p[None, :, :]
-    dist = np.hypot(diff[:, :, 0], diff[:, :, 1])
+    dist = dnp.hypot(diff[:, :, 0], diff[:, :, 1])
     np.fill_diagonal(dist, np.inf)
     nearest = np.argmin(dist, axis=1)
     nearest_dist = dist[np.arange(len(p)), nearest]
@@ -697,7 +699,7 @@ def _knn_edge_histogram(
     if not keep.any():
         return _angle_histogram([], [])
     d = p[nearest[keep]] - p[keep]
-    angles = np.degrees(np.arctan2(d[:, 1], d[:, 0]))
+    angles = np.degrees(dnp.arctan2(d[:, 1], d[:, 0]))
     return _angle_histogram(angles, nearest_dist[keep])
 
 
@@ -791,7 +793,7 @@ def _osm_building_ring(lat, lon, model_id, iface, timeout):
         ring = ring[:-1]
     if len(ring) < 4:
         return None, False
-    coslat = math.cos(math.radians(lat))
+    coslat = dmath.cos(math.radians(lat))
     e = [(rlon - lon) * 111320.0 * coslat for _rlat, rlon in ring]
     n = [(rlat - lat) * 111132.0 for rlat, _rlon in ring]
     return np.array(list(zip(e, n)), np.float64), is_tagged
@@ -902,7 +904,7 @@ def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0
             dist,
         )
         return None
-    coslat = math.cos(math.radians(lat))
+    coslat = dmath.cos(math.radians(lat))
     clat = lat + cn / 111132.0
     clon = lon + ce / (111320.0 * coslat)
     _seed_ring_cache(cache_dir, clat, clon, ring_xy, tagged)
@@ -970,7 +972,7 @@ def rotate_xz(positions, yaw_deg):
     if not yaw_deg:
         return np.asarray(positions, np.float64)
     rad = math.radians(yaw_deg)
-    c, s = math.cos(rad), math.sin(rad)
+    c, s = dmath.cos(rad), dmath.sin(rad)
     p = np.array(positions, np.float64, copy=True)
     x, y = p[:, 0].copy(), p[:, 1].copy()
     p[:, 0] = x * c - y * s
@@ -1086,13 +1088,13 @@ def _node_matrix(node):
     T[:3, 3] = t
     R[:3, :3] = _quat_to_mat3(r)
     S[0, 0], S[1, 1], S[2, 2] = s
-    return T @ R @ S
+    return dnp.matmul(dnp.matmul(T, R), S)
 
 
 def _walk(nodes, idx, parent_mat, out):
     """Depth-first node walk; out collects (mesh index, world matrix) of every node with a mesh."""
     node = nodes[idx]
-    mat = parent_mat @ _node_matrix(node)
+    mat = dnp.matmul(parent_mat, _node_matrix(node))
     if "mesh" in node:
         out.append((node["mesh"], mat))
     for child in node.get("children", ()):
@@ -1110,7 +1112,7 @@ def _linear_to_srgb(c):
     baseColorFactor is defined in linear space (spec), but BeamNG materials.json diffuseColor is read as
     sRGB like any other colour picker value - without this, a dark linear factor (e.g. the Eiffel Tower's
     bronze, 3dmr.eu id 4: linear ~0.06,0.04,0.03) bakes in almost black instead of its intended colour."""
-    return 12.92 * c if c <= 0.0031308 else 1.055 * (c ** (1 / 2.4)) - 0.055
+    return 12.92 * c if c <= 0.0031308 else 1.055 * (dnp.power(c, 1 / 2.4)) - 0.055
 
 
 def _texture_has_alpha(data):
@@ -1272,7 +1274,7 @@ def _wedge_mask(positions, tris):
     flat = (tri_pos[:, :, 2].max(1) - tri_pos[:, :, 2].min(1)) < _WEDGE_MAX_FLAT_M
     e0 = tri_pos[:, 1] - tri_pos[:, 0]
     e1 = tri_pos[:, 2] - tri_pos[:, 0]
-    area = 0.5 * np.linalg.norm(np.cross(e0, e1), axis=1)
+    area = 0.5 * dnp.norm(np.cross(e0, e1), axis=1)
     candidate = flat & (area > _WEDGE_MIN_AREA_M2)
     if not candidate.any():
         return candidate
@@ -1325,7 +1327,7 @@ def carve_bridge_deck_mask(
         return np.zeros(len(T), bool)
     v0, v1, v2 = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
     cross = np.cross(v1 - v0, v2 - v0)
-    mag = np.linalg.norm(cross, axis=1)
+    mag = dnp.norm(cross, axis=1)
     flat = np.abs(cross[:, 2]) / np.maximum(mag, 1e-9) > flat_ratio
     e1 = v1[:, :2] - v0[:, :2]
     e2 = v2[:, :2] - v0[:, :2]
@@ -1358,7 +1360,7 @@ def deck_level_z(
     v0, v1, v2 = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
     cross = np.cross(v1 - v0, v2 - v0)
     flat = (
-        np.abs(cross[:, 2]) / np.maximum(np.linalg.norm(cross, axis=1), 1e-9)
+        np.abs(cross[:, 2]) / np.maximum(dnp.norm(cross, axis=1), 1e-9)
         > flat_ratio
     )
     tz = (v0[:, 2] + v1[:, 2] + v2[:, 2]) / 3.0
@@ -1392,7 +1394,7 @@ def deck_ends_z(positions, tris, band=0.05, flat_ratio=0.85, min_area=5.0):
     v0, v1, v2 = P[T[:, 0]], P[T[:, 1]], P[T[:, 2]]
     cross = np.cross(v1 - v0, v2 - v0)
     flat = (
-        np.abs(cross[:, 2]) / np.maximum(np.linalg.norm(cross, axis=1), 1e-9)
+        np.abs(cross[:, 2]) / np.maximum(dnp.norm(cross, axis=1), 1e-9)
         > flat_ratio
     )
     tx = (v0[:, 0] + v1[:, 0] + v2[:, 0]) / 3.0
@@ -1505,8 +1507,8 @@ def deck_axis(xy):
     if len(xy) > BRIDGE_AXIS_POINTS:
         xy = xy[:: int(np.ceil(len(xy) / BRIDGE_AXIS_POINTS))]
     th = np.radians(np.arange(0.0, 90.0, BRIDGE_AXIS_STEP_DEG))
-    a = xy @ np.stack([np.cos(th), np.sin(th)])          # (k, m): along each direction ...
-    b = xy @ np.stack([-np.sin(th), np.cos(th)])         # ... and across it
+    a = dnp.matmul(xy, np.stack([dnp.cos(th), dnp.sin(th)]))          # (k, m): along each direction ...
+    b = dnp.matmul(xy, np.stack([-dnp.sin(th), dnp.cos(th)]))         # ... and across it
     ea, eb = np.ptp(a, axis=0), np.ptp(b, axis=0)
     k = int(np.argmin(ea * eb))
     ang, major, minor = float(th[k]), float(ea[k]), float(eb[k])
@@ -1525,7 +1527,7 @@ def deck_uv(s, xy):
     if ang is None:
         ax = int(s["ax"])
         return xy[:, ax], xy[:, 1 - ax]
-    c, sn = np.cos(ang), np.sin(ang)
+    c, sn = dnp.cos(ang), dnp.sin(ang)
     return xy[:, 0] * c + xy[:, 1] * sn, -xy[:, 0] * sn + xy[:, 1] * c
 
 
@@ -1535,7 +1537,7 @@ def deck_xy(s, u, v):
     ang = s.get("ang")
     if ang is None:
         return (u, v) if int(s["ax"]) == 0 else (v, u)
-    c, sn = np.cos(ang), np.sin(ang)
+    c, sn = dnp.cos(ang), dnp.sin(ang)
     return u * c - v * sn, u * sn + v * c
 
 
@@ -1623,7 +1625,7 @@ def bridge_deck_surface(positions, tris):
     Q = np.c_[u, v, P[:, 2]]
     A, B, C = Q[T[:, 0]], Q[T[:, 1]], Q[T[:, 2]]
     n = np.cross(B - A, C - A)          # (a rotation: a floor's normal still points up in z)
-    nz = n[:, 2] / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
+    nz = n[:, 2] / np.maximum(dnp.norm(n, axis=1), 1e-12)
     keep = np.abs(nz) > 0.05            # (walls: no height of their own seen from above)
     A, B, C, nz = A[keep], B[keep], C[keep], nz[keep]
     upf = nz > BRIDGE_UP_NZ
@@ -1669,7 +1671,7 @@ def bridge_deck_surface(positions, tris):
     Z[~cols] = np.nan
     if not cols.any():
         return None
-    return {"ang": ang, "ax": 0 if abs(np.cos(ang)) >= abs(np.sin(ang)) else 1, "u0": u0, "du": du, "v0": v0,
+    return {"ang": ang, "ax": 0 if abs(dnp.cos(ang)) >= abs(dnp.sin(ang)) else 1, "u0": u0, "du": du, "v0": v0,
             "dv": dv, "z": Z}
 
 
@@ -1792,7 +1794,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
 
     def face(a, b, c, outward):
         n = np.cross(verts[b] - verts[a], verts[c] - verts[a])
-        out.append((a, b, c) if float(n @ outward) >= 0 else (a, c, b))
+        out.append((a, b, c) if float(dnp.matmul(n, outward)) >= 0 else (a, c, b))
     up = np.array([0.0, 0.0, 1.0])
     for i, j in zip(*np.nonzero(cell)):
         q = (idx[i, j], idx[i + 1, j], idx[i + 1, j + 1], idx[i, j + 1])
@@ -1897,7 +1899,7 @@ def _tri_sides(positions, tris):
     T = tri_q.astype(np.float64)
     ns = np.cross(S[:, 1] - S[:, 0], S[:, 2] - S[:, 0])
     n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
-    side = np.sign(np.einsum("ij,ij->i", n, ns)).astype(np.int8)
+    side = np.sign(dnp.vecdot(n, ns)).astype(np.int8)
     return keys, side
 
 
@@ -2104,9 +2106,9 @@ def gltf_mesh(glb, model_id=None):
                 )
                 continue
 
-            world_pos = pos @ rot.T + mat[:3, 3]
+            world_pos = dnp.matmul(pos, rot.T) + mat[:3, 3]
             if norm_raw is not None:
-                norm = norm_raw @ rot.T
+                norm = dnp.matmul(norm_raw, rot.T)
                 have_normals = True
             else:
                 norm = np.zeros((len(pos), 3))
@@ -2115,7 +2117,7 @@ def gltf_mesh(glb, model_id=None):
             )
             n_dropped_verts += dropped
 
-            if np.linalg.det(rot) < 0:  # a mirroring node: glTF flips the front face's winding with it
+            if dnp.det(rot) < 0:  # a mirroring node: glTF flips the front face's winding with it
                 idx = idx[:, ::-1]
 
             mat_idx = prim.get("material")

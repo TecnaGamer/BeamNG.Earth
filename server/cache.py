@@ -16,6 +16,8 @@ Layout of the cache root (~/.cache/beamng-earth by default):
                       offline use; airports.py replaces it weekly and deletes the old generation itself)
   revisit/ seacarve/ peercache/ roadwidth/   MANAGED as well (since 2026-11-03), besides their own limits
                       (revisit's, seacarve.RAW_MB, peerwork.CACHE_BYTES, roadwidth.STORE_MB, cut back at server start)
+  blocks/             MANAGED too (blockcache.py: the graded terrain blocks' chunks and entries), besides its own
+                      limit (blockcache.budget_mb: a share of this cap, cut back at start and by the writers)
   mapdata-mirror/     counted and cleared (MIRRORED), not evicted file by file: pruned whole by mapdata (MIRROR_MB)
   netstats/ (and anything else)           not tracked: the daily request budgets must survive a clear
 
@@ -26,7 +28,8 @@ per request: one dict update under a lock. At start a background thread walks th
 this module) and merges it with the index; until then ready is False and nothing is evicted.
 
 Eviction (a background thread): when the tracked bytes exceed the cap, least recently used files go
-until LOW_WATER (90 %) of the cap is left, at most every EVICT_S. Never evicted: gravity/, files this
+until LOW_WATER (90 %) of the cap is left, at most every EVICT_S; the raw elevation tiles (KEEP_PREFIXES) are passed over
+while they are at most KEEP_SHARE of that (dear to download again, small beside the rest). Never evicted: gravity/, files this
 server process used within PROTECT_S (an hour: the area around the player), and markers (_marker: empty files such
 as "no seams", and the tile columns' miss indexes, missindex.py: they save requests; clear() removes them).
 The start-up walk also hands the old per-tile 404 marker files (<y>.404) to missindex (migrate_misses, a thread of
@@ -70,8 +73,15 @@ INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
 MANAGED = ("dem", "imagery", "colormatch", "deshadow", "mapdata", "revisit", "seacarve", "roadwidth", "peercache",
-           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn")
+           "raw", "plans", "roadz", "vegetation", "pagesdata", "decoded", "mapterhorn", "blocks", "decisions")
 CLEAR_KEEP_S = 600.0        # "Clear cache" keeps the files used this recently (the place around the player now)
+# Downloads that are dear to fetch again and small beside what is made from them: the elevation tiles (Mapterhorn: one
+# maintainer on donations, 53 M requests a day from players, 2026-11-11). A cold place's are ~160 MB of its ~2.8 GB in
+# the cache (the decoded mirror, revisit, map data, sea floor, photos), so plain least-recently-used eviction under the
+# 20 GB default cap dropped them after ~7 other places and a return downloaded every one again. Eviction now passes
+# over them while they are at most KEEP_SHARE of what it cuts down to (their own oldest go first beyond that).
+KEEP_PREFIXES = ("dem/mapterhorn/", "dem/aws-terrarium/")
+KEEP_SHARE = 0.25
 MIRRORED = ("mapdata-mirror",)      # counted and cleared, never evicted file by file (a cell's files and its "ok" go
                                     # together: mapdata prunes it whole, MIRROR_MB)
 KEPT = ("gravity", "airports")                              # counted only
@@ -496,7 +506,22 @@ class Cache(NoCache):
         order = self._unpinned(order, lambda item: item[1])
         self._last_evict = self.now()
         n = b = 0
-        for _, key in order:
+        kept = self._kept_bytes()
+        held = []
+        for item in order:
+            key = item[1]
+            if self._used <= target:
+                break
+            keep = key.startswith(KEEP_PREFIXES)
+            if keep and kept <= KEEP_SHARE * target:
+                held.append(item)               # (taken only if the rest is not enough)
+                continue
+            got = self._remove(key, floor, empty_too=False)
+            if got is not None:
+                n, b = n + 1, b + got
+                if keep:
+                    kept -= got
+        for _, key in held:
             if self._used <= target:
                 break
             got = self._remove(key, floor, empty_too=False)
@@ -509,16 +534,37 @@ class Cache(NoCache):
                      _gb(self._used), _gb(cap) if cap else "unlimited")
         return n, b
 
+    def _kept_bytes(self):
+        """Bytes of the tracked KEEP_PREFIXES files."""
+        with self._lock:
+            return sum(e[0] or 0 for k, e in self._entries.items() if k.startswith(KEEP_PREFIXES))
+
     def _unpinned(self, items, key_of):
         """items without the ones whose key is in a saved area (pinned; outside the lock: a batch call)."""
         pinned = self.pinned
-        if pinned is None or not items:
+        if not items:
             return items
-        try:
-            mask = pinned([key_of(it) for it in items])
-        except Exception as e:      # (no pins rather than no eviction)
-            log.warning("cache: saved areas not checked: %s", e)
-            return items
+        keys = [key_of(it) for it in items]
+        mask = [False] * len(keys)
+        if pinned is not None:
+            try:
+                mask = list(pinned(keys))
+            except Exception as e:      # (no pins rather than no eviction)
+                log.warning("cache: saved areas not checked: %s", e)
+        try:                            # (and the prebaked input tiles' downloaded regions: bnwt.download_region)
+            import bnwt
+            got = bnwt.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded regions not checked: %s", e)
+        try:                            # (the shared decision archives' downloaded regions: decisions.download_region)
+            import decisions
+            got = decisions.pinned_keys(self.root, keys)
+            if got is not None:
+                mask = [a or b for a, b in zip(mask, got)]
+        except Exception as e:
+            log.warning("cache: downloaded decision regions not checked: %s", e)
         return [it for it, p in zip(items, mask) if not p]
 
     def keys(self):

@@ -34,16 +34,43 @@ LINUX_TARGET = "x86_64-unknown-linux-gnu"
 LINUX_GLIBC = "2.35"           # the oldest glibc the Linux module runs on (the AppImage's own limit too)
 
 
+def ispc_gnu_env():
+    """The environment for a windows-gnu build with intel_tex_2 (the far textures' BC1 kernels, bc1fast.rs): the crate
+    ships its prebuilt ISPC libraries for Windows as MSVC .lib files only and asks the linker for <name><target>, so
+    copies of the same COFF archives go under the gnu target's names into a folder of our own, which rustc searches
+    (CARGO_TARGET_..._RUSTFLAGS -L) when it bundles them into the crate's rlib. The files come from the crate as cargo
+    fetched it (its checksum in Cargo.lock)."""
+    import json
+    meta = json.loads(subprocess.run(["cargo", "metadata", "--format-version", "1", "--filter-platform", WIN_TARGET],
+                                     cwd=CRATE, check=True, capture_output=True, text=True).stdout)
+    pkg = [p for p in meta["packages"] if p["name"] == "intel_tex_2"]
+    env = dict(os.environ)
+    if not pkg:
+        return env
+    src = os.path.join(os.path.dirname(pkg[0]["manifest_path"]), "src", "ispc")
+    out = os.path.join(CRATE, "target", "ispc-" + WIN_TARGET)
+    os.makedirs(out, exist_ok=True)
+    msvc = "x86_64-pc-windows-msvc"
+    for lib, gnu in ((f"kernel{msvc}.lib", f"libkernel{WIN_TARGET}.a"),
+                     (f"kernel_astc{msvc}.lib", f"libkernel_astc{WIN_TARGET}.a"),
+                     (f"ispc_texcomp_astc{msvc}-MD.lib", f"libispc_texcomp_astc{WIN_TARGET}-MD.a")):
+        shutil.copyfile(os.path.join(src, lib), os.path.join(out, gnu))
+    key = "CARGO_TARGET_" + WIN_TARGET.upper().replace("-", "_") + "_RUSTFLAGS"
+    env[key] = (env.get(key, "") + " -L native=" + out).strip()
+    return env
+
+
 def windows():
     """Cross-build the Windows module. pyo3 makes python3.dll's import library as python3.dll.a; zig's linker
     looks for libpython3.a, so the first build fails at the link, gets a copy and builds again."""
     cmd = ["cargo", "zigbuild", "--release", "--target", WIN_TARGET]
-    if subprocess.run(cmd, cwd=CRATE).returncode != 0:
+    env = ispc_gnu_env()
+    if subprocess.run(cmd, cwd=CRATE, env=env).returncode != 0:
         libs = glob.glob(os.path.join(CRATE, "target", WIN_TARGET, "release", "build", "pyo3-ffi-*", "out", "lib"))
         for d in libs:
             if os.path.isfile(os.path.join(d, "python3.dll.a")):
                 shutil.copyfile(os.path.join(d, "python3.dll.a"), os.path.join(d, "libpython3.a"))
-        subprocess.run(cmd, cwd=CRATE, check=True)
+        subprocess.run(cmd, cwd=CRATE, check=True, env=env)
     dst = os.path.join(ROOT, "server", "earthfast.pyd")
     install(os.path.join(CRATE, "target", WIN_TARGET, "release", "earthfast.dll"), dst)
     print("built", dst)

@@ -22,9 +22,9 @@ import netfetch  # noqa: E402
 import tilepack  # noqa: E402
 
 
-def jpeg(colour):
+def jpeg(colour, fmt="JPEG"):
     buf = io.BytesIO()
-    Image.fromarray(np.full((256, 256, 3), colour, np.uint8)).save(buf, "JPEG", quality=90)
+    Image.fromarray(np.full((256, 256, 3), colour, np.uint8)).save(buf, fmt, quality=90)
     return buf.getvalue()
 
 
@@ -48,6 +48,10 @@ class PackSourceTest(unittest.TestCase):
         os.makedirs(os.path.dirname(p))
         with open(p, "wb") as fh:
             fh.write(tilepack.build(12, 10, 20, 3, {0: jpeg(120), 9: jpeg(60)}))
+        p13 = os.path.join(self.root, "s2wc", "v1", tilepack.path(13, 20, 40))   # (zoom 13: WebP tiles)
+        os.makedirs(os.path.dirname(p13))
+        with open(p13, "wb") as fh:
+            fh.write(tilepack.build(13, 20, 40, 3, {0: jpeg(90, "WEBP"), 63: jpeg(200, "WEBP")}))
         root = self.root
         self.hits = []
         hits = self.hits
@@ -65,8 +69,8 @@ class PackSourceTest(unittest.TestCase):
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.addCleanup(self.srv.shutdown)
         base = f"http://127.0.0.1:{self.srv.server_address[1]}"
-        self.src = imagery.Source("packtest", base + "/s2wc/v1/{z}/{px}/{py}.bngp", 12, "test", pack=3,
-                                  max_view_zoom=12)
+        self.src = imagery.Source("packtest", base + "/s2wc/v1/{z}/{px}/{py}.bngp", 13, "test", pack=3,
+                                  max_view_zoom=13)
         imagery.SOURCES["packtest"] = self.src
         self.addCleanup(imagery.SOURCES.pop, "packtest", None)
         self.cache = tempfile.mkdtemp(prefix="packcache_")
@@ -84,6 +88,14 @@ class PackSourceTest(unittest.TestCase):
         got = self.im.tiles([b, c])
         self.assertTrue(abs(int(got[b].rgb.mean()) - 60) < 4)
         self.assertIsNone(got[c])
+        self.assertEqual(len([h for h in self.hits if h.endswith(".bngp")]), 1)
+
+    def test_webp_tiles(self):
+        a = (self.src, 13, 160, 320)         # index 0 of pack (13, 20, 40)
+        b = (self.src, 13, 167, 327)         # index 63
+        got = self.im.tiles([a, b])
+        self.assertTrue(abs(int(got[a].rgb.mean()) - 90) < 4)
+        self.assertTrue(abs(int(got[b].rgb.mean()) - 200) < 4)
         self.assertEqual(len([h for h in self.hits if h.endswith(".bngp")]), 1)
 
     def test_missing_pack_is_a_miss_for_every_tile(self):
@@ -104,6 +116,25 @@ class SwitchTest(unittest.TestCase):
             with open(os.path.join(d, "cdn", "cdn.json"), "w") as fh:
                 json.dump(doc, fh)
             self.assertEqual(list(cdn.chain(names, None, d)), want)
+
+    def test_max_zoom_by_switch(self):
+        d = tempfile.mkdtemp(prefix="cdnsw_")
+        os.makedirs(os.path.join(d, "cdn"))
+        self.addCleanup(os.environ.pop, imagery.S2_MAX_ZOOM_ENV, None)
+        self.addCleanup(imagery.set_s2_max_zoom, 12)
+        names = ["naip", "usgs", "eox2023"]
+        for doc, want in (({"enabled": True}, 12), ({"enabled": True, "max_zoom": 13}, 13),
+                          ({"enabled": True, "max_zoom": 99}, 14), ({"enabled": True, "max_zoom": "x"}, 12)):
+            imagery.set_s2_max_zoom(12)
+            with open(os.path.join(d, "cdn", "cdn.json"), "w") as fh:
+                json.dump({"imagery": {"bngs2": doc}}, fh)
+            self.assertIn("bngs2", cdn.chain(names, None, d))
+            s = imagery.SOURCES["bngs2"]
+            self.assertEqual((s.max_zoom, s.max_view_zoom), (want, want))
+            self.assertEqual(os.environ.get(imagery.S2_MAX_ZOOM_ENV), "12" if want == 12 else str(want))
+            # an Imagery made now (a spawned block worker imports imagery afresh: the environment) asks zoom want
+            im = imagery.Imagery(d, ["bngs2"], fetcher=netfetch.Fetcher(offline=True))
+            self.assertEqual(im.chain[0].max_view_zoom, want)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ import hashlib
 import math
 import re
 import numpy as np
+import dmath
+import dnp
 import exitsigns
 import signstates
 import throughsigns
@@ -106,9 +108,9 @@ def index_records(ways, coords, relations=None):
             refs.extend(rr if not refs else rr[1:])
             owners.extend([i]*(len(rr)-1))
         path = np.asarray([coords[n] for n in refs])
-        scale = np.array([111320.*math.cos(math.radians(float(path[:, 1].mean()))), 111320.])
+        scale = np.array([111320.*dmath.cos(math.radians(float(path[:, 1].mean()))), 111320.])
         xy = (path-path[0])*scale
-        arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(xy, axis=0), axis=1))]
+        arc = np.r_[0., np.cumsum(dnp.norm(np.diff(xy, axis=0), axis=1))]
         if arc[-1] < 5:
             continue
 
@@ -131,7 +133,7 @@ def index_records(ways, coords, relations=None):
             if not ground(tags):
                 continue
             axis = (path[k+1]-path[k])*scale
-            axis /= max(np.linalg.norm(axis), 1e-9)
+            axis /= max(dnp.norm(axis), 1e-9)
             if kind == 'shield':
                 if not routes:
                     continue

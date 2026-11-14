@@ -22,6 +22,8 @@ import os
 import re
 
 import numpy as np
+import dmath
+import dnp
 
 log = logging.getLogger("earthd.worldprops")
 
@@ -479,7 +481,7 @@ def _billboards(frame, feats, rows, box, roads_xy, placed):
             yaw = furniture._yaw(float(delta[0]), float(delta[1])) - 90.0
         ox, oy = _local_offset(yaw, BILL_OX, BILL_OY)
         x, y = x - ox, y - oy
-        if any(p["group"] == "billboard" and (p["x"] - x) ** 2 + (p["y"] - y) ** 2 < 9.0 for p in placed):
+        if any(p["group"] == "billboard" and dnp.sq(p["x"] - x) + dnp.sq(p["y"] - y) < 9.0 for p in placed):
             continue
         la, lo = _ll(frame, x, y)
         placed.append({"group": "billboard", "x": x, "y": y, "lat": la, "lon": lo, "lift": BILL_LIFT,
@@ -506,7 +508,7 @@ def _centres(frame, feats, rows, least=1):
 def _local_offset(yaw_deg, ox, oy):
     """World offset of local (ox, oy) at yaw (trees.lua: local +x turns toward yaw, +y is +x rotated 90° CCW)."""
     t = math.radians(yaw_deg)
-    c, s = math.cos(t), math.sin(t)
+    c, s = dmath.cos(t), dmath.sin(t)
     return ox * c + oy * -s, ox * s + oy * c
 
 
@@ -560,7 +562,7 @@ def _containers(frame, feats, rows, box, bld_rings, roads_xy, placed):
         pxy = pxy[keep]
         if len(pxy) == 0:
             continue
-        order = np.argsort(np.sum((pxy - c) ** 2, axis=1))
+        order = np.argsort(np.sum(dnp.sq(pxy - c), axis=1))
         pxy = pxy[order[:CONT_YARD_MAX[kind]]]
         for p in pxy:
             la, lo = _ll(frame, float(p[0]), float(p[1]))
@@ -621,7 +623,7 @@ def _yards(frame, feats):
 
 def _area(xy):
     x, y = xy[:, 0], xy[:, 1]
-    return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
 
 
 def _building_rings(frame, layers):
@@ -757,10 +759,10 @@ def _near_roads(pts, lines, dist):
                  | (np.maximum(a[:, 1], b[:, 1]) < py0 - m) | (np.minimum(a[:, 1], b[:, 1]) > py1 + m))
         for i in np.flatnonzero(near).tolist():
             ab = b[i] - a[i]
-            L2 = float(np.dot(ab, ab)) or 1e-9
-            t = np.clip(((pts - a[i]) @ ab) / L2, 0.0, 1.0)
+            L2 = float(dnp.dot(ab, ab)) or 1e-9
+            t = np.clip((dnp.matmul(pts - a[i], ab)) / L2, 0.0, 1.0)
             proj = a[i] + t[:, None] * ab
-            hit |= np.sum((pts - proj) ** 2, axis=1) < lim
+            hit |= np.sum(dnp.sq(pts - proj), axis=1) < lim
             if hit.all():
                 return hit
     return hit

@@ -63,6 +63,12 @@ def build(frame, feats_list, elev, box, urban_fn=None, widths=None, left_hand=Fa
         feats, i = sources[source]
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         shifts = roads.shift_at(roads.lane_shifts(feats, urban_fn, widths, left_hand)[i], lo, la)
+        import lanesections
+        prof = lanesections.profile(feats, i)
+        if prof and prof["extra"]:
+            # Through traffic stays on its original lane grid as an auxiliary
+            # lane opens outside it; a four-lane centre is between two lanes.
+            shifts = -prof["shift"] * lanesections.growth(prof, lo, la)
         lane = planner.lane_points(np.ascontiguousarray(shifts, np.float64) if shifts is not None else None)
         heights = planner.deck_heights()
         if heights is None:

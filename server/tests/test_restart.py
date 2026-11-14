@@ -357,8 +357,10 @@ class RestartDriveTest(unittest.TestCase):
         self._drive(teleports=1)
 
     def _drive(self, teleports):
+        import revisitpack
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(revisitpack.reset)  # after the servers stop, before their temporary cache is removed
         user = tmp.name
         fs = (lambda vfs: os.path.join(user, vfs.lstrip("/")))
         srv1 = _Running(user)

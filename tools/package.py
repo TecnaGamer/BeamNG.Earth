@@ -19,7 +19,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md", "TELEMETRY.md",
+FILES = ["install.py", "modtextures.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md", "TELEMETRY.md",
          "VERSION", "docs/QUICKSTART.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
          "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",
          "docs/INITIAL_LOADING_VALIDATION.md",
@@ -29,7 +29,7 @@ FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py",
          "docs/research/2026-11-02-range-cache.md", "docs/research/2026-11-02-world-bundle.md",
          "docs/research/2026-11-02-world-bundle.json", "docs/research/2026-11-02-release-1.8.1-world-bundle.json",
          "beammp/MODERNIZATION.md"]
-TREES = ["mod/beamng_earth", "server"]
+TREES = ["mod/beamng_earth", "mod/texture_sources", "server"]     # (the DDS made from texture_sources at install)
 TOOLS = ["tools/reports.py", "tools/sketchfab_assets.py", "tools/world_cache.py"]  # no stored credentials
 SKIP_DIRS = {"__pycache__", "tests", ".git", "backups", "probes", "research", ".venv", "dist"}
 SKIP_EXT = {".pyc", ".pyo", ".log", ".swp"}
@@ -47,26 +47,48 @@ def collect():
         if not os.path.isfile(os.path.join(ROOT, rel)):
             sys.exit(f"missing: {rel}")
         out.append(rel)
+    made = {"mod/beamng_earth/" + r for r in made_at_install()}
     for tree in TREES:
         for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, tree)):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for name in sorted(filenames):
                 if os.path.splitext(name)[1] in SKIP_EXT or name == ".DS_Store":
                     continue
-                out.append(os.path.relpath(os.path.join(dirpath, name), ROOT).replace(os.sep, "/"))
+                rel = os.path.relpath(os.path.join(dirpath, name), ROOT).replace(os.sep, "/")
+                if rel not in made:
+                    out.append(rel)
     return out
+
+
+def made_at_install():
+    """The mod's files (relative to mod/beamng_earth) made from mod/texture_sources at install (modtextures.py): never
+    packed from the tree (a developer's leftover copy), the BeamMP client zip gets them made (beammp_zip)."""
+    sys.path.insert(0, ROOT)
+    import modtextures
+    return modtextures.generated(modtextures.manifest())
+
+
+def client_files():
+    """The files of the mod as the game gets it (relative to mod/beamng_earth): the tree's and the DDS made at install
+    (modtextures.py; the BeamMP client zip holds them made)."""
+    sys.path.insert(0, ROOT)
+    import modtextures
+    return sorted(set(tree_files("mod/beamng_earth")) | set(modtextures.manifest()))
 
 
 def tree_files(tree):
     """The files of a folder of the repo (relative to it), as collect() skips them."""
     out = []
+    made = made_at_install() if tree.rstrip("/") == "mod/beamng_earth" else set()
     base = os.path.join(ROOT, tree)
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for name in sorted(filenames):
             if os.path.splitext(name)[1] in SKIP_EXT or name == ".DS_Store":
                 continue
-            out.append(os.path.relpath(os.path.join(dirpath, name), base).replace(os.sep, "/"))
+            rel = os.path.relpath(os.path.join(dirpath, name), base).replace(os.sep, "/")
+            if rel not in made:
+                out.append(rel)
     return out
 
 
@@ -83,19 +105,34 @@ def past_stamp(mtime):
 def beammp_zip(out_dir, ver):
     """The BeamMP server's drop-in zip: the mod as Resources/Client/beamng_earth.zip, the plugin, the README."""
     import io
-    mod = io.BytesIO()
-    with zipfile.ZipFile(mod, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for rel in tree_files("mod/beamng_earth"):
-            src = os.path.join(ROOT, "mod/beamng_earth", rel)
-            info = zipfile.ZipInfo(rel, past_stamp(os.path.getmtime(src)))
+    import shutil
+    import tempfile
+    sys.path.insert(0, ROOT)
+    import modtextures
+    # the textures the players' install makes from mod/texture_sources: the game loads this zip as it is (never a PNG:
+    # its TextureCooker deadlocked the game, 2026-11-11), so they are made here (build/modtextures: kept by key)
+    todo = modtextures.plan()
+    made = tempfile.mkdtemp(prefix="bne-modtex-", dir=os.path.join(ROOT, "build") if os.path.isdir(
+        os.path.join(ROOT, "build")) else None)
+    try:
+        n, r, secs = modtextures.build(made, todo, cache_dir=os.path.join(ROOT, "build", "modtextures"))
+        print(f"mod textures: {n} encoded, {r} from build/modtextures, {secs:.1f} s")
+        files = [(rel, os.path.join(ROOT, "mod/beamng_earth", rel)) for rel in tree_files("mod/beamng_earth")]
+        files += [(rel, os.path.join(made, *rel.split("/"))) for rel in sorted(todo)]
+        mod = io.BytesIO()
+        with zipfile.ZipFile(mod, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for rel, src in sorted(files):
+                info = zipfile.ZipInfo(rel, past_stamp(os.path.getmtime(src)))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with open(src, "rb") as f:
+                    z.writestr(info, f.read())
+            # (the release this copy is: its hello names it, and a player's app whose version differs says so: a BeamMP
+            # server's mod replaces the players' own, and a mismatch loaded the world the slow way unseen, 2026-11-07)
+            info = zipfile.ZipInfo("lua/ge/extensions/beamngEarth/release.lua", past_stamp(time.time()))
             info.compress_type = zipfile.ZIP_DEFLATED
-            with open(src, "rb") as f:
-                z.writestr(info, f.read())
-        # (the release this copy is: its hello names it, and a player's app whose version differs says so: a BeamMP
-        # server's mod replaces the players' own, and a mismatch loaded the world the slow way unseen, 2026-11-07)
-        info = zipfile.ZipInfo("lua/ge/extensions/beamngEarth/release.lua", past_stamp(time.time()))
-        info.compress_type = zipfile.ZIP_DEFLATED
-        z.writestr(info, f"return {ver!r}\n")
+            z.writestr(info, f"return {ver!r}\n")
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
     path = os.path.join(out_dir, f"BeamNG.Earth-BeamMP-Server-{ver}.zip")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("Resources/Client/beamng_earth.zip", mod.getvalue(), zipfile.ZIP_STORED)

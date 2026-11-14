@@ -17,6 +17,7 @@ import numpy as np
 
 import exitsigns
 import fast
+import dnp
 import mapcells
 import navgraph
 import roads
@@ -250,7 +251,7 @@ def sweden_mesh(table, origin):
     speed_sign_mesh's (x, y, ground z, road z, travel x, travel y, value, size class, urban). In a sign's frame, as
     the kernel's: x towards the driver, y to the driver's right, z up."""
     ang = np.arange(C31_SEGS) * 2.0 * np.pi / C31_SEGS
-    cos, sin = np.cos(ang), np.sin(ang)
+    cos, sin = dnp.cos(ang), dnp.sin(ang)
     P, T, UV, M = [], [], [], []
     n = 0
 
@@ -270,7 +271,7 @@ def sweden_mesh(table, origin):
         value = int(round(value))
         if not (30 <= value <= 120 and np.isfinite([x, y, zg, zr]).all()):
             continue
-        tl = max(np.hypot(tx, ty), 1e-9)
+        tl = max(dnp.hypot(tx, ty), 1e-9)
         row = (x, y, zg, tx / tl, ty / tl)
         size = int(np.clip(size, 0, 3))
         d = C31_D[size]
@@ -289,7 +290,7 @@ def sweden_mesh(table, origin):
         add(quads, np.zeros((C31_SEGS * 4, 2)), [(i, j, k + 4 * q) for q in range(C31_SEGS)
                                                  for i, j, k in ((4 * q, 4 * q + 1, 2), (4 * q, 4 * q + 2, 3))], 1, row)
         a = np.arange(9) * np.pi / 4.0
-        around = np.column_stack([C31_POLE_X + C31_POLE * np.cos(a), C31_POLE * np.sin(a)])
+        around = np.column_stack([C31_POLE_X + C31_POLE * dnp.cos(a), C31_POLE * dnp.sin(a)])
         top = zc + r - 0.05
         pole = np.vstack([[(px, py, -0.3), (px, py, top)] for px, py in around])
         add(pole, np.zeros((18, 2)), [t for k in range(8) for t in ((2 * k, 2 * k + 2, 2 * k + 3),

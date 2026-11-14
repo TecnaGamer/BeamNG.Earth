@@ -114,6 +114,7 @@ def compute(server_dir):
             hello = dict(w.msgs[-1])
             hello.pop("sessionId")
             hello.pop("appVersion", None)     # the release (VERSION): changes every release
+            hello.pop("serverVersion", None)  # (the release's VERSION too since 2026-11-12: netfetch.SERVER_VERSION)
             # since 2026-11-01 hello always names the block (M1's: 2 km, no field = the 1024² block at 2 m)
             if sub > 1 and (hello.get("blockSize"), hello.get("squareSize")) == (1024 * sub, 2.0 / sub):
                 del hello["blockSize"], hello["squareSize"]
@@ -200,6 +201,20 @@ class CliDefaultTest(unittest.TestCase):
         # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
         # be higher; its lowest, zBase and q are M1's here.
         self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))
+        # Since 2026-11-12 (the road-bump work: heightmap.Q_LADDER to 1/1024, zBase on an 8 m step, earthd.survey_q on
+        # block-sized windows) the block may round finer than M1's: its q at most M1's, zBase a multiple of 8 m,
+        # maxHeight q * 65536, the ground within M1's quantum, the PNG the same size and mode (its values finer).
+        gt, wt = got["terrain"], want["terrain"]
+        q, wq = gt.pop("q"), wt.pop("q")
+        self.assertLessEqual(q, wq)
+        self.assertAlmostEqual(gt.pop("maxHeight"), q * 65536, delta=0.1)     # (q is rounded to 1e-6 here)
+        wt.pop("maxHeight")
+        zb = gt.pop("zBase")
+        self.assertEqual(zb % 8.0, 0.0)
+        self.assertGreaterEqual(zb, wt.pop("zBase"))
+        self.assertAlmostEqual(gt.pop("groundZ"), wt.pop("groundZ"), delta=wq)
+        self.assertEqual(got["terrain_png"][:2], want["terrain_png"][:2])
+        got["terrain_png"], want["terrain_png"] = got["terrain_png"][:2], want["terrain_png"][:2]
         for k in want:
             self.assertEqual(got[k], want[k], k)
 

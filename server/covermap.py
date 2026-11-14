@@ -18,6 +18,7 @@ import os
 import threading
 
 import fast
+import dmath
 import missindex
 import revisit
 
@@ -369,7 +370,7 @@ class CoverMap:
         self._drain()
         self._sidecars()
         self._caps()
-        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y0 + h / 2) / n))))
+        lat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y0 + h / 2) / n))))
         hm = demmod.zoom_for(lat, 1.25, demmod.FINE_ZOOM)
         world = self.world_classes() if m == MODES["world"] else []
         with self.lock:

@@ -53,7 +53,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
 - High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
   (on wooden poles where the line's voltage is low or its mapped supports are poles).
-- The satellite map on cars' own navigation screens.
+- The satellite map with the real roads drawn over it on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
   and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
@@ -63,8 +63,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
   mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
-  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; bridges show out to about 3
-  miles too.
+  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; the tallest towers (200 ft and
+  up) go on to about 12 miles (22 at Far, the horizon at Max); bridges show out to about 3 miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
   give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
@@ -73,7 +73,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
   barriers down divided highways (concrete walls, cable barriers or steel rails by the median's width and the
   country's practice, open at crossovers and ramps); street lights, utility poles with wires, traffic signals,
-  stop signs, traffic lights and sidewalks where OpenStreetMap maps them;
+  stop signs, traffic lights and sidewalks where OpenStreetMap maps them (where traffic drives on the left, the
+  signal poles stand on the left kerb with their arm over the road and the stop lines across the incoming lanes);
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
@@ -83,7 +84,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
   A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
   smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
-  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  track at grade lies flush with it; a road under a short rail bridge dips to clear it (to the height limit its sign
+  gives, `maxheight`, when the map has one), and the bridges of a long rail line stand where the map puts them.
+  Railway stations are built from the map: platforms at the country's height
   beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
@@ -100,6 +103,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
   OpenStreetMap (rebuilt weekly). Settings > World > Highway signs turns them off.
+- US state welcome and recreation boards (from wyo-backroads' contribution): a "Welcome to ..." board where an
+  Interstate, US or numbered state route crosses into a state (the state's sign as photographed where a photo with
+  clear reuse terms exists, else a lettered blue board), brown park guide boards before exits posted to a state or
+  national park, and entrance boards where a road enters a named park, campground, national forest or grassland.
+  `BNE_WELCOME_SIGNS=0` / `BNE_RECREATION_SIGNS=0` turn them off.
 - Autobahn signs in Germany: the German chain at every exit, Kreuz and Dreieck, with the sign text as mapped in
   OpenStreetMap (rebuilt weekly). The 2000 / 1000 m announcement board with the junction's number and name, the 1000 /
   500 m advance boards with the destinations over their lanes, the A, B and E plates and pictograms, the 300 / 200 /
@@ -123,6 +131,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
   Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
   OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
+  Where a town boundary runs through a fork, one pair stands on the road all its branches share; between two towns
+  grown together only the through roads carry them.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
   Autobahn signs above), with each way's road numbers (national
@@ -145,7 +155,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
-  tunnels through hills, with portals, lights and low arches where little is over them.
+  tunnels through hills, with portals, lights and low arches where little is over them; a tunnel mapped in several
+  pieces (or as a network with junctions and roundabouts inside the mountain) kept at one level inside the hill, and
+  city tunnels under level streets dug down under them, their portals where the ramps reach that depth
+  (`BNE_TUNNEL_CHAINS=off`, `BNE_TUNNEL_BURY=off` for the old behaviour).
 - Water: the sea with real depth (cars sink), lakes, and rivers kept beside the roads.
 - Airports with graded, marked runways; racetracks (circuits, ovals and pit lanes, with their real banking);
   landmarks such as the pyramids of Giza.
@@ -193,10 +206,24 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
-- Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
-  corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
-  gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
-  ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
+- Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
+  straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
+  bumps. Each bend of a drivable road and racetrack is an arc tangent to both pieces (a motorway's gentle, a lane's
+  tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m), joined by transition
+  spirals so the curvature has no steps (`BNE_ROAD_G2=off`: the arcs alone). The road's ends and the points where
+  another road joins it stay where the map has them. The road mesh, the ground's grading, the markings and the AI's
+  routes all follow the same line. Driveways and parking aisles keep their mapped corners; railways are rounded only
+  with `BNE_RAIL_CURVES=on`.
+- Lane changes inside a highway stretch (from PR #880 by DerEifrige-f; `BNE_LANE_SECTIONS=off` turns it off): where
+  the map's ways between two junctions hold different lane counts (an auxiliary lane opening before an exit, a lane
+  dropping after an entrance), the road gets each part's own lane count and width. Where OpenStreetMap places the
+  added lane beside the through lanes, the through lanes run straight and only the added lane's edge tapers; its lane
+  line is a wide, short-dashed line, and the slip road leaves from that lane.
+- Street widths measured against aerial photos: where the map gives a road no width, its default width comes from
+  measurements of each road's visible paved width on high-resolution aerials in US towns and suburbs, European cities
+  and Japan (narrower small-town streets in the US, one-way town streets as wide as their parking), no parking lanes
+  are added on top of a mapped lane count, and winding rural roads (touge, alpine roads) are narrow
+  (`BNE_WIDTH_MODEL=off` / `BNE_WINDING_ROADS=off`: the old widths).
 - Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
   downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
@@ -217,6 +244,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
   update changes how that part of the world is built.
+- Experimental, off by default (`BNE_STALE_REVISIT=on` turns it on): after an app update, a place you've been to is
+  shown as it was last built (its ground, roads, sidewalks, street furniture, trees and signs, all of that one version
+  together) while the new version is built in the background, then swapped in: the ground and road surfaces that
+  changed are prepared out of sight and switched in one frame with the car held for a moment, and only the parts the
+  update changed are loaded again. Versions older than 30 days are not used (`BNE_STALE_DAYS`); never in BeamMP
+  sessions.
 - **AI support**: the mod builds BeamNG's road graph (the AI's map) from the real roads around you, with
   lanes, one-way streets, speed limits (mapped, or the country's defaults), the country's driving side and
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
@@ -295,6 +328,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Easy setup: one download per system (Windows .exe, Linux AppImage) that installs the mod and starts the server
   and the game; from the source, `install.py` installs everything and `start.py` keeps the mod in sync.
 - Runs on a Steam Deck (aim: 30 fps on the Handheld graphics preset).
+- Computers with little memory: BeamNG.drive itself asks for 16 GB. On an 8 GB computer the app says so at start,
+  the world server runs in fewer processes with smaller caches and a coarser distant land, and the first start picks
+  the Low preset; expect some stutter while the world loads. With about 4 GB the game alone does not fit: the app
+  warns clearly (in its window and in the game) and runs its smallest server. (`BNGE_LEAN=off` turns the low-memory
+  server off.) The same low-memory server runs on any computer whose **Max RAM for BeamNG.Earth** is set low.
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
@@ -313,7 +351,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     small bumps and road edges; from the next start of BeamNG.Earth.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
-    and 3 miles).
+    and 3 miles), and the tallest towers past them (none at Near, 12 miles at Normal, 22 at Far, the horizon at Max).
   - **Object detail**: how far out objects keep their detailed models (Game setting = the game's Mesh Quality).
   - **Distant traffic lights**: moving headlights and taillights on distant roads (needs Roads and nighttime).
     **Distant lights without traffic** keeps them on even when game traffic is off; otherwise they follow traffic.
@@ -341,12 +379,22 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
   and the game keeps two until it has loaded.
+- **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
+  processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
+  memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
+  (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
+  page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
+  helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
+  processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the
+  world load more slowly, not crash. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the
+  watchdog off.)
 - Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
   NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
-  keep working).
+  keep working). Older copies the updater downloaded itself are removed at start, except the previous version and
+  the one your shortcut starts; a copy you downloaded by hand is never touched.
 - **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
   Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
   from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
@@ -363,6 +411,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - The **mod** (`mod/beamng_earth/`) loads the tiles as meshes, keeps an invisible physics terrain
   under the car, moves the world origin as you drive (floating origin), and blends level-of-detail
   changes so nothing pops.
+- The project's CDN, data builds and backend services, and how to run your own: [docs/HOSTING.md](docs/HOSTING.md).
 - Design and measurements: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
   [docs/V1_4_SPEC.md](docs/V1_4_SPEC.md), research notes in [docs/research/](docs/research/).
 
@@ -379,8 +428,9 @@ connection (the map is downloaded while you play).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
-     steady game speed (dtsmooth: no catch-up burst after a hitch), texkeep opt-in for testing) already applied, no
-     Steam launch options needed.
+     steady game speed (dtsmooth: no catch-up burst after a hitch), shorter ground block swaps (terfast), lighter
+     frames after a swap (texkeep: unchanged ground textures kept)) already applied, no Steam launch options needed.
+     On Windows the launcher applies dtsmooth and terfast to the running game.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).
@@ -578,14 +628,40 @@ other places). Change it any time in BeamNG.Earth's settings page, Interface (fr
 environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in offline mode
 (`--offline`). Every field, why we want it and what happens to it: [TELEMETRY.md](TELEMETRY.md).
 
+## Sending a report to the developers
+
+The in-game reporter (Ctrl+Shift+E; Ctrl+Shift+Y records a 30 s performance profile) saves each report in your BeamNG
+user folder (`beamngEarth/reports/`). After saving, **Send to the developers** opens a window that lists exactly what
+would be sent, with the files to read, and nothing is sent until you click **Send** there:
+
+- your title and description, the kind of report, and the screenshot (a box leaves it out);
+- the location: exact, or rounded to about 1 km with a box (the map ids, street names and the roads and buildings near
+  the spot are then left out too; the screenshot can still show where you are);
+- the view: camera, heading, the point and object under the screen's centre, the car's position and speed;
+- game and PC: game and mod versions, graphics settings, CPU / GPU / memory, BeamNG.Earth's settings, the names of
+  enabled mods, the last 60 s of frame times, weather and time of day;
+- the world server's state: its version and settings (`BNE_*` / `BNGE_*` overrides; secret ones only as "set"),
+  memory, loading backlog, the data sources and the map features at the spot;
+- logs (a box leaves them out): the world server's last 300 lines and the game's warnings and errors of the last 10
+  minutes.
+
+User names, home folders, e-mail and IP addresses are removed from all of it, also from the copy kept on your
+computer. Reports are sent **privately** to the BeamNG.Earth developers (the project's own server,
+`earth.tgforever.net`) and are **not published**; they are kept 90 days. A random install id (no name or account)
+goes with each report so reports from one computer can be told apart. Sending is your choice each time, so it works
+with the usage statistics off too. The send runs in the background, is retried, and a report not sent yet goes at the
+next start; the window then shows a short report id (like `K7QD-3M9X`) to quote on Discord or GitHub. **Open GitHub
+issue page** still opens a ready-to-post public issue if you prefer that. Details: [TELEMETRY.md](TELEMETRY.md#reports-you-send).
+
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
   states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
-  Canada, and more), USDA NAIP and USGS The National Map (public domain) in the US, and Sentinel-2
+  Canada, and more), USDA NAIP and USGS The National Map (public domain; "Map services and data available from U.S. Geological Survey, National Geospatial Program") in the US, and Sentinel-2
   cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
   data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
-- Elevation: Mapterhorn (see https://mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen; the polar caps from
+- Elevation: Mapterhorn (https://mapterhorn.com/attribution; zooms 0-12 served from BeamNG.Earth's own tile host,
+  repacked from Mapterhorn's archive as Mapterhorn allows), AWS Terrain Tiles / Mapzen; the polar caps from
   85 deg on: Copernicus DEM GLO-30 (produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus
   Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA).
 - Canada: HRDEM (contains information licensed under the Open Government Licence - Canada, Natural Resources

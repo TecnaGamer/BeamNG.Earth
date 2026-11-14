@@ -53,7 +53,7 @@ class UrbanSamplingTest(unittest.TestCase):
         f = features([[(0., 0.), (400., 0.)]], ["residential"])
         sp = roads.road_specs(f, lambda lat, lon: np.ones(np.shape(lat), bool))[0]
         self.assertTrue(sp.urban)
-        self.assertEqual(sp.width, roads.carriageway("residential", "paved", True))
+        self.assertEqual(sp.width, roads.default_width("residential", "paved", True, region="US"))
 
     def test_mapped_width_does_not_force_a_city_street_rural(self):
         f = features([[(0., 0.), (100., 0.)]], ["residential"], widths=[(0, 7.25)])
@@ -96,7 +96,7 @@ class UrbanSamplingTest(unittest.TestCase):
         ready = roads.road_specs(f, arriving_cover)[0]
         self.assertFalse(initial.urban)
         self.assertTrue(ready.urban)
-        self.assertEqual(ready.width, roads.carriageway("residential", "paved", True))
+        self.assertEqual(ready.width, roads.default_width("residential", "paved", True, region="US"))
         self.assertEqual(len(calls), 2)
 
 
@@ -145,7 +145,7 @@ class ActualHorseCreekTest(unittest.TestCase):
             with mock.patch.object(roads, "URBAN_BESIDE_SHARE", .35):
                 conservative = roads._road_specs(f, s.urban, False)[0]
             self.assertTrue(permissive.urban)
-            self.assertEqual(permissive.width, 10.8)
+            self.assertEqual(permissive.width, min(10.8, roads.WIDTH_TABLE["US"]["tertiary"][0]))   # (2 lanes: the street's width)
             self.assertFalse(conservative.urban)
             self.assertEqual(conservative.width, 6.2)
             self.assertFalse(roads.has_sidewalks(conservative))

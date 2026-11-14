@@ -14,6 +14,7 @@ squares (1 m: the cut is by the engine's squares) that the structure itself does
 Pure given the ground function: the same on every tile, process and peer.
 """
 import numpy as np
+import dnp
 
 import busstationmesh as bm
 import busstations as bs
@@ -57,7 +58,7 @@ def flights(link, path):
     out = {}
     for e, fl in rb._end_flights(link, path).items():
         end = path[0 if e == 0 else -1]
-        if float(np.hypot(*(fl[0] - end))) > 0.05:
+        if float(dnp.hypot(*(fl[0] - end))) > 0.05:
             fl = np.vstack((end[None], fl))
         out[e] = np.asarray(fl, float)
     return out

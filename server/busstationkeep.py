@@ -6,6 +6,7 @@ shelter and a white post beside every one of our bays). One answer to "is this p
 keepout(md, frame, box) -> Keepout (empty without a station): contains(pts, margin), push_out(pts, margin).
 """
 import numpy as np
+import dnp
 
 import busstations as bs
 
@@ -49,7 +50,7 @@ class Keepout:
             cands = []
             for r in self.rings:
                 q, inward = _nearest_edge(r, pts[i])
-                cands.append((float(np.hypot(*(q - pts[i]))), q, inward))
+                cands.append((float(dnp.hypot(*(q - pts[i]))), q, inward))
             cands.sort(key=lambda c: c[0])
             for _d, q, inward in cands:
                 for grow in (margin, margin + 3.0, margin + 8.0):
@@ -68,12 +69,12 @@ def _nearest_edge(ring, p):
     ring = bs._open(np.asarray(ring, float))
     a, b = ring, np.roll(ring, -1, axis=0)
     ab = b - a
-    t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / np.maximum((ab ** 2).sum(1), 1e-9), 0.0, 1.0)
+    t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / np.maximum((ab * ab).sum(1), 1e-9), 0.0, 1.0)
     q = a + ab * t[:, None]
-    k = int(np.argmin(np.hypot(*(q - p).T)))
-    edge = ab[k] / max(float(np.hypot(*ab[k])), 1e-9)
+    k = int(np.argmin(dnp.hypot(*(q - p).T)))
+    edge = ab[k] / max(float(dnp.hypot(*ab[k])), 1e-9)
     normal = np.array([-edge[1], edge[0]])                   # (left of a counter-clockwise ring: inward)
-    area = float(np.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - np.dot(np.roll(ring[:, 0], -1), ring[:, 1]))
+    area = float(dnp.dot(ring[:, 0], np.roll(ring[:, 1], -1)) - dnp.dot(np.roll(ring[:, 0], -1), ring[:, 1]))
     if area < 0:
         normal = -normal
     return q[k], normal

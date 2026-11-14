@@ -35,6 +35,13 @@ WORKERS = 1                     # sign tiles in flight per connection (Tracker):
 WORLD = os.environ.get("BNE_SIGNS_WORLD") == "1"
 
 
+def _short():
+    """A part of a sign tile failed (the tile goes on without it): its build is short, not kept in the revisit cache
+    (blockworker.signs_tile)."""
+    import revisit
+    revisit.fault(here=True)
+
+
 def shape_files(aid, tx, ty):
     return {kind: f'{kind}_{aid}_{tx}_{ty}.cdae' for kind in KINDS}
 
@@ -111,7 +118,8 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
         # (not the US: no guide signs)
         return write_tile(out_dir, vfs_dir, aid, tx, ty,
                           (None, None, None, speeds, dir_mesh, rsign_mesh, autobahn, streets), dir_faces)
-    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths, french=french)
+    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths, french=french,
+                                         out_dir=out_dir, vfs_dir=vfs_dir, faces=dir_faces)
     merges = None if french else mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
     return write_tile(out_dir, vfs_dir, aid, tx, ty,
                       (exits, miles, merges, speeds, dir_mesh, rsign_mesh, autobahn, streets), dir_faces)
@@ -128,6 +136,7 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=Fal
         return speedsigns.build_tile(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=de_on,
                                      towns=towns)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned >= 60.:
             _warned = now
@@ -141,6 +150,7 @@ def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country):
     try:
         return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_rsigns >= 60.:
             _warned_rsigns = now
@@ -173,6 +183,7 @@ def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_
         return dirsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid=aid,
                                    autobahn=autobahn)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_dirs >= 60.:
             _warned_dirs = now
@@ -189,6 +200,7 @@ def _optional(what, build, *args, **kw):
     try:
         return build(*args, **kw)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_optional >= 60.:
             _warned_optional = now
@@ -207,6 +219,7 @@ def _german(source, frame, tx, ty):
     try:
         return deautobahn.german_tile(frame, tx, ty) and deautobahn.data_here(source, frame, tx, ty)
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_de >= 60.:
             _warned_de = now
@@ -223,6 +236,7 @@ def _autobahn(md, frame, tx, ty, elev, context, left_hand):
             log.debug('autobahn signs %s,%s: %d boards', tx, ty, len(boards))
         return mesh
     except Exception as error:
+        _short()
         now = time.monotonic()
         if now - _warned_de >= 60.:
             _warned_de = now

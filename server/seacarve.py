@@ -26,6 +26,8 @@ import time
 from collections import OrderedDict
 
 import numpy as np
+import dmath
+import dnp
 from polygon import Path
 
 import mapcells
@@ -48,6 +50,11 @@ BATHY_URL = ("https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_glo
 BATHY_DOWN = 4              # ~7.5 m pixels
 BATHY_MIN, BATHY_MAX = 1.0, 80.0    # m: a sea floor this deep at least / at most
 BATHY_RETRY_S = 120.0       # s: a cell built without bathymetry is built again after this (in memory)
+# NOAA's answers kept on disk as they came (seacarve/bathy/, outside the version folders: the mosaic does not change
+# with our code) and asked by one process at a time (xproc.once): the block, road and main processes each asked for the
+# same cells, 43 % of a coastal first visit's NOAA requests twice or more at NOAA's 1/s (expo baseline, 2026-11-12)
+BATHY_DIR = "bathy"
+BATHY_WAIT_S = 70.0         # s a process waits for another's request of the same cell (NOAA's timeout 60 s + some)
 SHORE_SLOPE = 0.3           # m/m: with bathymetry, the floor reaches its depth from the shore this steeply
 RAW_MB = 1536               # the uncompressed rasters (memory-mapped; up to ~9.5 MB a cell) kept at most (earthd's start-up
                             # prune: they grew to 13.7 GB on a Steam Deck beside 0.15 GB of the compressed ones they repeat)
@@ -208,13 +215,13 @@ def _merc(lat, lon, z=PX_ZOOM):
     lat = np.clip(np.asarray(lat, np.float64), -mapcells.MAX_LAT, mapcells.MAX_LAT)
     n = 256.0 * (1 << z)
     x = (np.asarray(lon, np.float64) + 180.0) / 360.0 * n
-    s = np.sin(np.radians(lat))
-    y = (0.5 - np.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
+    s = dnp.sin(np.radians(lat))
+    y = (0.5 - dnp.log((1 + s) / (1 - s)) / (4 * math.pi)) * n
     return x, y
 
 
 def _px_m(lat):
-    return 2 * math.pi * 6378137.0 / (256 << PX_ZOOM) * math.cos(math.radians(lat))
+    return 2 * math.pi * 6378137.0 / (256 << PX_ZOOM) * dmath.cos(math.radians(lat))
 
 
 def shore_steps(water, kmax):
@@ -280,7 +287,7 @@ def _lonlat(mx, my, z=PX_ZOOM):
     """The inverse of _merc."""
     n = 256.0 * (1 << z)
     lon = np.asarray(mx, np.float64) / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * np.asarray(my, np.float64) / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * np.asarray(my, np.float64) / n))))
     return lat, lon
 
 
@@ -317,6 +324,15 @@ def _near_sea(level, i0, j0):
         return bool(np.any([np.abs(v - SEA_E) < LAKE_NOT_SEA_M / 2 for v in q]))
 
 
+def _short(hit):
+    """A raster() entry's raster; one without its bathymetry (the generic floor, built again later) makes what reads it
+    short (revisit.fault, the reader's builds alone: it may have been built by a prefetch thread)."""
+    if not hit[1]:
+        import revisit
+        revisit.fault(here=True)
+    return hit[0]
+
+
 class SeaCarver:
     """The water of the map-data cells near the player: the sea (level SEA_E) and lakes (each at its own
     level, measured from the DEM), with their floors carved from the shore."""
@@ -325,6 +341,8 @@ class SeaCarver:
         self.md = md
         self.dem = dem                  # dem.Dem for the lakes' levels (None: no lakes)
         self.dir = os.path.join(cache_dir, "seacarve", f"v{VERSION}") if cache_dir else None
+        self.bathy_dir = os.path.join(cache_dir, "seacarve", BATHY_DIR) if cache_dir else None
+        self._bathy_locks = {}
         self._mem = OrderedDict()       # (x, y) -> ((depth, level) or None, complete, built at)
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -360,14 +378,16 @@ class SeaCarver:
             hit = self._mem.get(k)
             if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
                 self._mem.move_to_end(k)
-                return hit[0]
+                return _short(hit)
             lock = self._cell_locks.setdefault(k, threading.Lock())
         with lock:
             with self._lock:
                 hit = self._mem.get(k)
                 if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
-                    return hit[0]
+                    return _short(hit)
             r, complete = self._load(x, y)
+            if not complete:
+                _short((r, False))
             with self._lock:
                 self._mem[k] = (r, complete, time.monotonic())
                 self._mem.move_to_end(k)
@@ -389,7 +409,7 @@ class SeaCarver:
             hit = self._mem.get(k)
             if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
                 self._mem.move_to_end(k)
-                return hit[0], True
+                return hit[0], bool(hit[1])     # (without its bathymetry: not full, water() asks raster() by the sea)
             got = self._land.get(k)
             if got is not None:
                 self._land.move_to_end(k)
@@ -404,7 +424,7 @@ class SeaCarver:
             with self._lock:
                 hit = self._mem.get(k)
                 if hit is not None and (hit[1] or time.monotonic() - hit[2] < BATHY_RETRY_S):
-                    return hit[0], True
+                    return hit[0], bool(hit[1])
                 got = self._land.get(k)
                 if got is not None:
                     return got, False
@@ -442,6 +462,17 @@ class SeaCarver:
         for x, y in new:
             self._prefetch_ex.submit(self._full_bg, x, y)
         return len(new)
+
+    def prefetch_points(self, lat, lon):
+        """prefetch_full of the cells holding the points (a terrain block's grid, blockworker.sea_ahead): their sea
+        floors (NOAA's bathymetry, 1-22 s a request) built while the block's roads are planned, not one cell after
+        another as its grading reaches each (the coastal first block's "sea" stage came after its grading: 11-17 s,
+        expo baseline 2026-11-12). Returns how many were queued."""
+        mx, my = _merc(lat, lon)
+        cx = np.floor(np.asarray(mx) / CELL_PX).astype(np.int64)
+        cy = np.floor(np.asarray(my) / CELL_PX).astype(np.int64)
+        keys = [(int(kx), int(ky)) for kx, ky in _cells_of(cx.ravel(), cy.ravel())]
+        return self.prefetch_full([k for k in keys if not self.ready(*k)])
 
     def _full_bg(self, x, y):
         try:
@@ -550,7 +581,7 @@ class SeaCarver:
                         m = np.zeros((n, n), bool)
                         self._rasterise(f, i, m, ox, oy)
                         lake[m] = lake_ids.index(gid)
-        lat_c = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / (1 << mapcells.ZOOM)))))
+        lat_c = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 0.5) / (1 << mapcells.ZOOM)))))
         px = _px_m(lat_c)
         level = np.full((n, n), np.nan, np.float32)
         depth = np.zeros((n, n), np.float32)
@@ -646,26 +677,71 @@ class SeaCarver:
 
     def _bathy(self, ox, oy, n):
         """NOAA's elevations (m, negative below the sea) on the n x n raster at z16 pixel (ox, oy), or None
-        when it can't be had now."""
+        when it can't be had now. Its answer kept on disk (BATHY_DIR), asked by one process at a time."""
         fetcher = getattr(self.md, "fetcher", None)
-        if fetcher is None:
-            return None
         res = 2 * math.pi * 6378137.0 / (256 << PX_ZOOM)
         half = math.pi * 6378137.0
         x0, x1 = ox * res - half, (ox + n) * res - half
         y1, y0 = half - oy * res, half - (oy + n) * res
         m = n // BATHY_DOWN
         url = BATHY_URL.format(x0=round(x0, 2), y0=round(y0, 2), x1=round(x1, 2), y1=round(y1, 2), n=m)
+        p = os.path.join(self.bathy_dir, f"{ox}_{oy}_{m}.tif") if self.bathy_dir else None
+        if p is None:
+            return self._bathy_at(p, url, fetcher, m, n, ox, oy)
+        with self._lock:                # (one request a cell in this process too: xproc's lock is the process's)
+            lock = self._bathy_locks.setdefault(p, threading.Lock())
+        with lock:
+            return self._bathy_at(p, url, fetcher, m, n, ox, oy)
+
+    def _bathy_at(self, p, url, fetcher, m, n, ox, oy):
+        body, mine, fresh = None, False, False
+        if p is not None:
+            import xproc
+
+            def kept():
+                try:
+                    with open(p, "rb") as fh:
+                        got = fh.read()
+                except OSError:
+                    return None
+                if got:
+                    cachemod.touch_once(p)
+                return got or None
+            body, mine = xproc.once(p + ".lock", kept, BATHY_WAIT_S)
         try:
-            body = fetcher.get(url).body
+            if body is None:
+                if fetcher is None:
+                    return None
+                body = fetcher.get(url).body
+                fresh = True
+            else:
+                fresh = False
             from PIL import Image
             im = Image.open(io.BytesIO(body))
             if im.mode != "F" or im.size != (m, m):
                 raise ValueError(f"unexpected bathymetry image {im.mode} {im.size}")
             a = np.array(im.resize((n, n), Image.BILINEAR), np.float32)
+            if fresh and p is not None:     # (a good answer alone kept: a bad one is asked again later)
+                try:
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
+                    tmp = staging.tmp_for(p)
+                    with open(tmp, "wb") as fh:
+                        fh.write(body)
+                    staging.replace_cached(tmp, p)
+                except OSError as e:
+                    log.debug("sea: bathymetry %s not kept: %s", p, e)
         except Exception as e:          # netfetch.FetchError, a bad image: later
             log.info("sea: no bathymetry for the cell at %d,%d (%s)", ox, oy, e)
+            if body is not None and not fresh and p is not None:
+                try:
+                    os.remove(p)        # (a damaged kept answer: asked again next time)
+                except OSError:
+                    pass
             return None
+        finally:
+            if mine:
+                import xproc
+                xproc.release(p + ".lock")
         a[(a < -11000) | (a > 9000)] = np.nan     # nodata
         return a
 
@@ -752,7 +828,7 @@ class SeaCarver:
                         for ring in part:
                             mx, my = _merc(ring[:, 1], ring[:, 0])
                             q = np.stack([mx - ox, my - oy], -1)
-                            seg = np.hypot(*np.diff(q, axis=0).T)
+                            seg = dnp.hypot(*np.diff(q, axis=0).T)
                             t = np.r_[0.0, np.cumsum(seg)]
                             if t[-1] <= 0:
                                 continue
@@ -770,7 +846,7 @@ class SeaCarver:
         if (len(pts) < 2 or pts[:, 0].max() < -wmax or pts[:, 1].max() < -wmax or pts[:, 0].min() > n + wmax
                 or pts[:, 1].min() > n + wmax):
             return []
-        seg = np.hypot(*np.diff(pts, axis=0).T)
+        seg = dnp.hypot(*np.diff(pts, axis=0).T)
         s = np.r_[0.0, np.cumsum(seg)]
         if s[-1] <= 0:
             return []
@@ -805,8 +881,8 @@ class SeaCarver:
         # the level: the lowest DEM at the point and 8 around it at half the width (<= LINE_PROBE_MAX_M)
         r = np.clip(w / 2, 2.0, LINE_PROBE_MAX_M) / px
         ang = np.arange(8) * (np.pi / 4)
-        pxs = np.concatenate([q[:, 0]] + [q[:, 0] + r * math.cos(a) for a in ang])
-        pys = np.concatenate([q[:, 1]] + [q[:, 1] + r * math.sin(a) for a in ang])
+        pxs = np.concatenate([q[:, 0]] + [q[:, 0] + r * dmath.cos(a) for a in ang])
+        pys = np.concatenate([q[:, 1]] + [q[:, 1] + r * dmath.sin(a) for a in ang])
         la, lo = _lonlat(ox + pxs + 0.5, oy + pys + 0.5)
         return w, np.asarray(la, np.float64), np.asarray(lo, np.float64)
 
@@ -1158,9 +1234,9 @@ class SeaCarver:
         k = int(radius_m // step_m)
         o = np.arange(-k, k + 1) * step_m
         E, N = np.meshgrid(o, o)
-        inside = np.hypot(E, N) <= radius_m
+        inside = dnp.hypot(E, N) <= radius_m
         la = lat + N[inside] / 111320.0
-        lo = lon + E[inside] / (111320.0 * math.cos(math.radians(lat)))
+        lo = lon + E[inside] / (111320.0 * dmath.cos(math.radians(lat)))
         d, lv = self.water(la, lo)
         return bool(((d > 0) & (np.abs(lv - SEA_E) < 0.01)).any())
 
@@ -1213,7 +1289,7 @@ def cell_shores(carver, x, y):
     if not kind.any():
         return []
     lat_c = float(_lonlat((x + 0.5) * CELL_PX, (y + 0.5) * CELL_PX)[0])
-    min_px = int(SHORE_MIN_M2 / _px_m(lat_c) ** 2)
+    min_px = int(SHORE_MIN_M2 / dnp.sq(_px_m(lat_c)))
     fast.require(79, "shore_lines")
     pts, off, wpx, kinds = fast._ef.shore_lines(kind, min_px, SHORE_EPS_PX, SHORE_MIN_LEN_PX, 1, CELL_PX + 1, 1,
                                                 CELL_PX + 1)

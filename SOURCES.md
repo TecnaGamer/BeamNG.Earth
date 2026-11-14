@@ -43,7 +43,8 @@ For the OpenStreetMap keys read by the server and weekly data builders, see the
 
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
-| Mapterhorn terrain tiles | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data (as fine as 1 m in parts of Europe and the US) with global data elsewhere. | New places use the coarser backup below. | named |
+| Mapterhorn terrain tiles ([attribution](https://mapterhorn.com/attribution)) | `tiles.mapterhorn.com` | The shape of the ground everywhere: hills, valleys, road cuttings. Mapterhorn combines the best national elevation data (as fine as 1 m in parts of Europe and the US) with global data elsewhere. | New places use the coarser backup below. | named |
+| Mapterhorn terrain tiles, zooms 0-12, on BeamNG.Earth's own tile host | `tiles.tgforever.net` | The same tiles as above for the coarser zooms (the distant terrain, and the ground every deeper zoom starts from), repacked from Mapterhorn's planet archive into packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on; the deeper zooms always come from Mapterhorn. | Mapterhorn's own tile server, as before. | named |
 | Mapterhorn coverage list | `download.mapterhorn.com` | Which areas have detailed heights, so the server does not ask for tiles that do not exist. Fetched about once a week. | New places may load a little slower. | named |
 | AWS Terrain Tiles (backup) | `s3.amazonaws.com` | Coarser heights (SRTM and similar) where Mapterhorn has none or does not answer. | Only matters while Mapterhorn is down too; with both down, new places have no terrain. | named |
 | Copernicus DEM GLO-30 | `copernicus-dem-30m.s3.amazonaws.com` | Heights near the North and South Poles, where the other sources stop. | No terrain past about 85° north or south. | named |
@@ -64,11 +65,12 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 
 | Source | Address | Where | If it does not answer | Status line |
 |---|---|---|---|---|
+| BeamNG.Earth's own 1 m aerial photo packs (USDA NAIP, public domain; open national orthophotos) | `tiles.tgforever.net` | Metro areas and main road corridors (prebaked), and places other players drove before (built once by the project's server, then kept): ~1 m per pixel near you and the nearer distant land, one request per ~2 km. Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. A place not built yet asks the project's server (`earth.tgforever.net`) to build its ~15 km square: only the square's number is sent. | The live sources below, as before. | named |
 | Regional aerial photos (state and national mapping agencies) | see the list below | the regions below, mostly 10-30 cm per pixel | Coarser photos from the next source (US national photos or Sentinel-2). | optional |
 | Maryland six-inch photos (MD iMAP) | `mdgeodata.md.gov` | Maryland, 15 cm per pixel | Coarser photos meanwhile. | named |
-| USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
+| USGS / USDA NAIP aerial photos (Map services and data available from U.S. Geological Survey, National Geospatial Program) | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
-| USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
+| USGS The National Map photos (Map services and data available from U.S. Geological Survey, National Geospatial Program) | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
 | BeamNG.Earth's own tile host (Sentinel-2, ESA WorldCover 2021 composite, CC BY 4.0) | `tiles.tgforever.net` | the whole land to ~40 m per pixel, the distant land; packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. | The sources below, as before. | named |
 | Sentinel-2 cloudless (EOX) | `tiles.maps.eox.at` | the whole world, 10 m per pixel; the distant land everywhere and the near ground outside the regions above. Also the world map's base layers. | New ground outside the regions above may stay plain (the land cover's colours). | named |
 
@@ -100,13 +102,13 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | OpenStreetMap wind turbines, distributed by GMWID / Geomermaids | Bundled index; no gameplay requests | Mapped individual turbines worldwide, with installed stock animated shapes. OSM snapshot 2026-10-31; source, license and refresh details in `server/wind_turbines.provenance.json`. | Gameplay uses the bundled copy offline. If the index is missing or damaged, only the verified Happy Jack fallback remains and the server logs a warning. | no runtime host |
-| BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
-| Measured roofs (GitHub Pages) | `tecnagamer.github.io` | The shape and height of each building in Germany (the states' LoD2 models), Switzerland and Liechtenstein (swissBUILDINGS3D) Estonia (the Land and Spatial Development Board's LoD2 models) and Vienna (the city's roof model), reduced by this project to a small file per ~25 km and country. Fetched once per area, in those countries only. | The roofs are predicted, as everywhere else. | named |
-| New York's measured building massing (GitHub Pages) | `tecnagamer.github.io` | In New York City, the setbacks of the city's taller buildings (each roof level a part: podiums, towers, bulkheads), from the city's 2014 3-D Building Model checked against its live Building Footprints, reduced by this project to a small file per map cell (~2 km). Fetched once per area, in New York City only. Off with `BNE_NYC_MASSING=off`. | Buildings keep the map's outline and height. | optional |
-| New York's rooftop water tanks (GitHub Pages) | `tecnagamer.github.io` | In New York City, where the rooftop water tanks are: points found by this project on the state's 2024 aerial photo, a small file per map cell (~2 km). Fetched once per area, in New York City only, and only once published. Off with `BNE_NYC_TANKS=off`. | The tanks are placed by a rule (a share of the mid-rise flat roofs). | optional |
+| BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` (the lists), `tiles.tgforever.net` (the files; Pages when it fails) | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
+| Measured roofs (GitHub Pages) | `tecnagamer.github.io` (the lists), `tiles.tgforever.net` (the files; Pages when it fails) | The shape and height of each building in Germany (the states' LoD2 models), Switzerland and Liechtenstein (swissBUILDINGS3D) Estonia (the Land and Spatial Development Board's LoD2 models) and Vienna (the city's roof model), reduced by this project to a small file per ~25 km and country. Fetched once per area, in those countries only. | The roofs are predicted, as everywhere else. | named |
+| New York's measured building massing (GitHub Pages) | `tecnagamer.github.io` (the lists), `tiles.tgforever.net` (the files; Pages when it fails) | In New York City, the setbacks of the city's taller buildings (each roof level a part: podiums, towers, bulkheads), from the city's 2014 3-D Building Model checked against its live Building Footprints, reduced by this project to a small file per map cell (~2 km). Fetched once per area, in New York City only. Off with `BNE_NYC_MASSING=off`. | Buildings keep the map's outline and height. | optional |
+| New York's rooftop water tanks (GitHub Pages) | `tecnagamer.github.io` (the lists), `tiles.tgforever.net` (the files; Pages when it fails) | In New York City, where the rooftop water tanks are: points found by this project on the state's 2024 aerial photo, a small file per map cell (~2 km). Fetched once per area, in New York City only, and only once published. Off with `BNE_NYC_TANKS=off`. | The tanks are placed by a rule (a share of the mid-rise flat roofs). | optional |
 | OurAirports | `davidmegginson.github.io` | Airports and their runways (position, length, width, surface), for paved runways and levelled airfields. Fetched about once a week. | The copy on disk is used. | named |
 | 3D Model Repository | `3dmr.eu` | 3D models of landmarks (the Eiffel Tower, the Dragon Bridge in Da Nang, ...) where the map links one: the models near you are looked up and downloaded once, then kept in the cache. Off on the settings page ("3D models from 3dmr.eu"). | The usual buildings and bridges stay there; asked again on a later visit. | optional |
-| OpenStreetMap API | `api.openstreetmap.org` | The outline of the building a 3dmr.eu model stands on, read once per model to turn the model the way the building faces. | The model is placed as downloaded. | optional |
+| OpenStreetMap API | `api.openstreetmap.org` | The outline of the building a 3dmr.eu model stands on, read once per model to turn the model the way the building faces. Only with `BNE_OSM_API_SIGNS=1` (off by default): mapped state welcome boards' tags and posted park exits, in small batches cached for a week. | The model is placed as downloaded. | optional |
 
 ## Live services (used only when you use the feature)
 
@@ -147,5 +149,27 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 ## Never contacted
 
-The server never asks OpenStreetMap's own servers (the Overpass API, OSM's vector tiles) or Protomaps at runtime: they
-are run by volunteers for other uses, and the data above already covers what they would give.
+The server never asks OSM's vector tiles or Protomaps at runtime. Overpass is used only for category searches,
+never for terrain streaming or bulk downloads.
+
+## Category search on Enter
+
+`overpass-api.de` supplies named OSM category matches within 15 km for line/area categories and 50 km for peaks, race tracks, airports and dams.
+Small named regions are restricted by both the category radius and their bounds. Each query has a
+5-second query timeout (4-second HTTP timeout), an 8 MiB memory budget, and returns at most 200 centers and tags. This is a bounded sample,
+not an exhaustive nearest-neighbor database. `query.wikidata.org` supplies up to 24 notable instances of
+reviewed class families (P31/P279*), ordered by Wikipedia sitelinks (at least 20). Both use the project's descriptive User-Agent,
+one concurrent request, at most one request per 10 seconds and 100/day/host, no automatic retries or prefetch.
+Answers, including empty answers, are cached in memory for an hour. Re-asks share in-flight work; admission failures (rate limit, budget, open breaker) cool down
+for at most 10 seconds; other failures for a minute. Named anchors are resolved by Nominatim on Enter, cached and shared across both category sources.
+Nominatim remains limited to one request per second with no autocomplete; see its
+[usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+
+Nearby named places come first, then up to two notable distant suggestions; duplicates are removed. Strong ordinary
+name matches still appear. Distances are great-circle miles from the unrounded player position (or the named origin if no player is known),
+recomputed after the candidate cache on every search, not road distances. Country is shown when supplied by
+the source; no extra reverse-geocoding requests are made. Broad `in <country/state>` searches use Wikidata within
+approximate bounding-box limits only, so border matches may be imperfect. Small `in` regions also query Overpass;
+`near` searches use the named location as their origin. Large regions may have few results for sparsely mapped classes.
+Rally/gravel, off-road and rock crawling use terrain/sport tag proxies, not verified routes or access guarantees.
+OSM object centers and Wikidata coordinates identify the destination, not a verified drivable entrance.

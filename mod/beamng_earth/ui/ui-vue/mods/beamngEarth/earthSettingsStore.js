@@ -44,7 +44,7 @@ export const settingsSchema = [
         options: [ { label: "Low", value: "low" }, { label: "Medium", value: "medium" }, { label: "High", value: "high" } ] },
       { id: "viewDistanceMode", type: "select", default: "horizon", name: "View distance", desc: "Real horizon (the default): the land reaches the true horizon. Fixed: the view ends at the distance below (cheaper on weak hardware).",
         options: [ { label: "Real horizon", value: "horizon" }, { label: "Fixed distance", value: "fixed" } ] },
-      { id: "viewDistanceKm", type: "float", min: 20, max: 1000, step: 10, default: 100, name: "Fixed view distance (km)", desc: "How far you can see with a fixed view distance.", showIf: c => c.viewDistanceMode === "fixed" },
+      { id: "viewDistanceKm", type: "float", min: 1, max: 1000, step: 1, default: 100, name: "Fixed view distance (km)", desc: "How far you can see with a fixed view distance.", showIf: c => c.viewDistanceMode === "fixed" },
     ],
   },
   {
@@ -64,7 +64,7 @@ export const settingsSchema = [
       { id: "models3dmr", type: "bool", default: true, name: "3D models from 3dmr.eu", desc: "Landmarks such as the Eiffel Tower or the Dragon Bridge in Da Nang as real 3D models from the open library 3dmr.eu, downloaded when you first drive near them. Off: the usual generated buildings and bridges there. Your own models (local_models.json) stay.",
         note: "Takes effect the next time you start BeamNG.Earth." },
       { id: "directionSigns", type: "bool", default: true, name: "Direction signs", desc: "Blue or green direction boards before junctions with the road numbers, the places ahead and their distances (cities also in English), from the road network and Overture's places. Needs Roads and Highway signs." },
-      { id: "roadSigns", type: "bool", default: true, name: "Road signs", desc: "Ordinary signs where the road data implies them: no entry, dead end, crossings, bends, roundabouts, give way and stop, tunnels, bus stops. Ukraine, Czechia, Poland and Germany for now. Needs Roads, and the server started with BNE_ROADSIGNS=on." },
+      { id: "roadSigns", type: "bool", default: true, name: "Road signs", desc: "Ordinary signs where the road data implies them: no entry, dead end, crossings, bends, roundabouts, give way and stop, tunnels, bus stops. Ukraine, Czechia, Poland and Germany; an experimental Dutch subset when enabled by the server. Needs Roads, and the server started with BNE_ROADSIGNS=on." },
       { id: "germanJunctionSigns", type: "bool", default: false, name: "German junction signs", desc: "In Germany: German right-of-way signs and road markings at junctions, 30-zone signs, and traffic that gives way accordingly." },
       { id: "softDrag", type: "bool", default: false, name: "Soft slow-down when the world is behind", desc: "Experimental. When the ground ahead is still loading at high speed, the car loses a little speed (at most about 4 % a second, ramped in smoothly) instead of being stopped at the edge. The stop stays as the last resort." },
       { id: "rumbleStrips", type: "bool", default: true, name: "Rumble strip sound", desc: "Plays a brief rumble when your car drifts onto a likely lane-departure strip on selected Australian, New Zealand and US highway types. Internal lane dividers are ignored. Corridor coverage is approximate because these strips are not mapped consistently." },
@@ -113,7 +113,7 @@ export const settingsSchema = [
   },
   {
     name: "Performance",
-    intro: "How much of your CPU the BeamNG.Earth app may use to build the world around you. Takes effect the next time you start BeamNG.Earth.",
+    intro: "How much of your CPU and memory the BeamNG.Earth app may use to build the world around you.",
     items: [
       { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
         note: "Takes effect the next time you start BeamNG.Earth.",
@@ -122,6 +122,10 @@ export const settingsSchema = [
         note: "Takes effect the next time you start BeamNG.Earth.",
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" } ] },
       { id: "teleportPriority", type: "bool", default: false, name: "Full priority loading", desc: "When you join the world and after a teleport, the app builds the place on every CPU core and the game keeps only two, until the place around you has finished loading. The new place loads much faster; the game runs at a lower frame rate meanwhile. Takes effect at your next teleport or the next time you join." },
+      { id: "memoryUsage", type: "info", name: "World server memory", desc: "The memory the BeamNG.Earth app holds now to build the world (all its processes together), and its limit. The game's own memory is not counted." },
+      { id: "maxRamGb", type: "select", default: "auto", name: "Max RAM for BeamNG.Earth", desc: "The most memory the BeamNG.Earth app may use to build the world, all its processes together; the game's own memory is not counted. Auto: a third of your computer's memory below 24 GB (5 GB on a 16 GB PC, at least 1.5 GB), and 60 % of it on a bigger computer, at most 24 GB (19 GB on a 32 GB PC). Near the limit the app drops its caches and restarts its busiest helper processes, and it uses less while your computer is short of memory. Lower it if the game stutters while other programs are open; the world then loads more slowly. More than Auto rarely loads faster.",
+        note: "The limit takes effect at once; the app's caches and helper processes are sized for it the next time you start BeamNG.Earth.",
+        options: [ { label: "Auto", value: "auto" }, { label: "3 GB", value: "3" }, { label: "4 GB", value: "4" }, { label: "6 GB", value: "6" }, { label: "8 GB", value: "8" }, { label: "12 GB", value: "12" }, { label: "16 GB", value: "16" }, { label: "24 GB", value: "24" }, { label: "32 GB", value: "32" } ] },
     ],
   },
   {
@@ -185,8 +189,8 @@ export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEar
 
 // The quality presets' cards (settings.lua PRESETS: what each sets)
 export const qualityPresets = [
-  { id: "low", name: "Low", short: "Thin forests, no grass, 40 km view", desc: "For older laptops and weak GPUs: fewer, nearer trees and buildings, no grass, coarser distant terrain, a lighter ground photo (1024), the lighter 2 m ground grid, few lamp lights at night and a 40 km view distance." },
-  { id: "medium", name: "Medium", short: "Lighter forests, light grass", desc: "Somewhat thinner and nearer forests, light grass, the lighter 2 m ground grid and few lamp lights at night, the real horizon. The Steam Deck's preset." },
+  { id: "low", name: "Low", short: "Thin forests, no grass, 40 km view", desc: "For older laptops and weak GPUs: fewer, nearer trees and buildings, no grass, coarser distant terrain, a lighter ground photo (1024), the lighter 2 m ground grid, few lamp lights at night, a 40 km view distance and at most 2 parked cars out at once while the game's parked-car amount is at its default (an amount you set yourself is kept)." },
+  { id: "medium", name: "Medium", short: "Lighter forests, light grass", desc: "Somewhat thinner and nearer forests, light grass, the lighter 2 m ground grid and few lamp lights at night, the real horizon, and at most 2 parked cars out at once while the game's parked-car amount is at its default (an amount you set yourself is kept). The Steam Deck's preset." },
   { id: "high", name: "High", short: "The full look", desc: "Normal trees, buildings, terrain and grass, all lamp lights, the real horizon (BeamNG.Earth's look before presets existed)." },
   { id: "ultra", name: "Ultra", short: "Denser, farther forests", desc: "Denser and farther forests, buildings farther out, finer distant terrain, thick grass and more lamp lights at night. For strong GPUs." },
   { id: "extreme", name: "Extreme", short: "Everything at its most", desc: "Every setting at its most, out to the real horizon: the finest distant terrain, the sharpest ground photo (4096), the densest forests and buildings as far as they go, far grass and the most detailed objects. For the strongest PCs only: new places take longer to build and the frame rate drops." },
@@ -275,6 +279,7 @@ export function infoValue(item) {
   if (item.id === "weather") return s.weather || "-"
   if (item.id === "gravity") return s.gravity || "-"
   if (item.id === "cacheUsage") return (s.cache && s.cache.line) || "-"
+  if (item.id === "memoryUsage") return (s.memory && s.memory.line) || "-"
   return ""
 }
 

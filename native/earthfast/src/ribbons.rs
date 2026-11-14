@@ -1,6 +1,7 @@
 //! roadmesh.ribbons' resampling and mitred normals for many chunks at once (roadmesh._resample + _normals: numpy
 //! calls per chunk were ~0.9 s of 8 Bratislava road tiles, 2026-10-28). The same float64 operations as numpy's, in
 //! its order: the results equal the numpy version's bit for bit.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -16,7 +17,7 @@ fn bevel_rows(xs: &[f64], ys: &[f64], nx: &[f64], ny: &[f64], s: &[f64], half: f
     let mut normals = Vec::with_capacity(n - 1);
     for i in 0..n - 1 {
         let (dx, dy) = (xs[i + 1] - xs[i], ys[i + 1] - ys[i]);
-        let len = dx.hypot(dy);
+        let len = dx.dhypot(dy);
         if len < 1e-9 { return None; }
         normals.push([-dy / len, dx / len]);
     }
@@ -121,7 +122,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                  (a..b).map(|i| pts[[i, 2]]).collect());
             let mut s = vec![0.0f64; k];
             for i in 1..k {
-                s[i] = s[i - 1] + (px[i] - px[i - 1]).hypot(py_[i] - py_[i - 1]);
+                s[i] = s[i - 1] + (px[i] - px[i - 1]).dhypot(py_[i] - py_[i - 1]);
             }
             let (xs, ys, ts, zs): (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
             if k == 0 {
@@ -141,7 +142,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                 for i in 1..k - 1 {
                     let (ax, ay) = (px[i] - px[i - 1], py_[i] - py_[i - 1]);
                     let (bx, by) = (px[i + 1] - px[i], py_[i + 1] - py_[i]);
-                    let lengths = ax.hypot(ay) * bx.hypot(by);
+                    let lengths = ax.dhypot(ay) * bx.dhypot(by);
                     if lengths > 1e-12 && (ax * bx + ay * by) / lengths < -0.5 - 1e-12 {
                         t.retain(|v| (*v - s[i]).abs() > 1e-8);
                         t.push(s[i]);
@@ -164,7 +165,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                 let mut sny = vec![0.0f64; m - 1];
                 for i in 0..m - 1 {
                     let (dx, dy) = (xs[i + 1] - xs[i], ys[i + 1] - ys[i]);
-                    let mut len = dx.hypot(dy);
+                    let mut len = dx.dhypot(dy);
                     if len < 1e-9 { len = 1e-9; }
                     let (tx, ty) = (dx / len, dy / len);
                     snx[i] = -ty;
@@ -174,7 +175,7 @@ pub fn ribbon_edges<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: 
                 nx[m - 1] = snx[m - 2]; ny[m - 1] = sny[m - 2];
                 for i in 1..m - 1 {
                     let (mx, my) = (snx[i - 1] + snx[i], sny[i - 1] + sny[i]);
-                    let mut ml = mx.hypot(my);
+                    let mut ml = mx.dhypot(my);
                     if ml < 1e-9 { ml = 1.0; }
                     let (mx, my) = (mx / ml, my / ml);
                     let raw_cos = mx * snx[i] + my * sny[i];

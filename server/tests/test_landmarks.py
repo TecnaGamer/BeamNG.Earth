@@ -222,7 +222,7 @@ class TileTest(unittest.TestCase):
         iron = drawn[4].index(bld.LANDMARK_IRON)
         self.assertGreater(int((drawn[3] == iron).sum()), 3000, "the tower in the iron material")
         self.assertIsNotNone(bld.collision_mesh(items))
-        sky = bld._sky_mesh(items)
+        (sky,) = bld._sky_mesh(items)
         self.assertLess(len(sky[2]), len(drawn[2]), "far away: its lite model, not a 330 m box")
         self.assertEqual(bld.collider_boxes([(s, g0, g1) for s, g0, g1 in items if s.cls == landmarks.LANDMARK],
                                             0, 0), [], "(no box round it: driven under)")

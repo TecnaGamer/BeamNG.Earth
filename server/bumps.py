@@ -40,6 +40,7 @@ import logging
 import os
 
 import numpy as np
+import dnp
 
 log = logging.getLogger("earthd.bumps")
 _said = []
@@ -140,7 +141,7 @@ def cells(X, Y, size, salt):
             cx, cy = ix + dx, iy + dy
             px = cx + _hash01(cx, cy, salt + 1)
             py = cy + _hash01(cx, cy, salt + 2)
-            dist.append(np.hypot(x - px, y - py) * size)
+            dist.append(dnp.hypot(x - px, y - py) * size)
             rnd.append(_hash01(cx, cy, salt + 3))
     return np.array(dist), np.array(rnd)
 
@@ -158,7 +159,7 @@ def _metres(lat, lon):
     """Metric coordinates of no anchor or region (a continuous function of the place)."""
     lat = np.asarray(lat, np.float64)
     lon = np.asarray(lon, np.float64)
-    return lon * _M_PER_DEG * np.cos(np.radians(lat)), lat * _M_PER_DEG
+    return lon * _M_PER_DEG * dnp.cos(np.radians(lat)), lat * _M_PER_DEG
 
 
 def _group(spec):
@@ -242,7 +243,7 @@ def apply(frame, plan, spec, abut=(False, False)):
         xy = np.asarray(plan.xy, np.float64)
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         dz, roll = offsets(la, lo, _gain(spec), _group(spec))
-        seg = np.hypot(np.diff(xy[:, 0]), np.diff(xy[:, 1]))
+        seg = dnp.hypot(np.diff(xy[:, 0]), np.diff(xy[:, 1]))
         s = np.r_[0.0, np.cumsum(seg)]
         w = np.ones_like(s)
         if abut[0]:

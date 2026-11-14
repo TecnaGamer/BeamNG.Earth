@@ -13,6 +13,15 @@
 -- the machine and the graphics settings, collectHardware()) and issue.md (a ready-to-post GitHub issue
 -- the user edits: issuefmt.lua; tools/reports.py issue N opens it and the new-issue page).
 -- reports/index.jsonl gets one line per report. Kinds before 2026-10-14: 'note', 'bench'.
+--
+-- 2026-11-12 (the user: "send reports directly to our mini pc server" and "update the reporter with any info and data
+-- that would be useful to us"): a report also holds the exact view (camera, the point and object under the screen's
+-- centre), the environment, the mod's settings and the enabled mods, the last 60 s of frames (reportsend.lua), and the
+-- world server writes its part into the folder when the report is taken: server.json (build, settings, memory,
+-- backlog, the map's ids and features at the spot, data sources) and logs.json (server/reportsend.py), user names and
+-- home folders scrubbed out (also from report.json / hardware.json: report_saved). The saved window's "Send to the
+-- developers" opens reportsend's window: what is sent, with boxes to leave out the screenshot, the exact location and
+-- the logs; nothing is sent before its Send. Reports are private (never published); "Open GitHub issue page" stays.
 local M = {}
 M.dependencies = { 'ui_imgui' }
 
@@ -31,12 +40,15 @@ M.DIR = 'beamngEarth/reports/'
 M.SAVED_S = 30          -- the "report saved" window closes itself after this long
 
 local fmt = require('beamngEarth/issuefmt')
+local sender = require('beamngEarth/reportsend')
+M.RING60 = 12000        -- frames kept for the last 60 s (reportsend.frames: 200 fps for 60 s)
 local im = nil
 local ffi = require('ffi')
 local form = nil        -- the open report window: { dir, data, kind, titleBuf, noteBuf, frames }
 local prof = nil        -- the running profiler: { t0, dur, dts, track, hitches, dir, start, form }
 local saved = nil       -- the "report saved" window: { folder, dir, url, untilT }
 local ring, ringN = {}, 0
+local ring60, ring60N = {}, 0
 local heldRing = {}     -- (beside ring: why the car was held in that frame, or false: stats)
 local toast, toastUntil = nil, 0
 local count = 0
@@ -196,6 +208,16 @@ local function capture()
   local recentHeld = {}
   for i = 1, math.min(ringN, M.RING) do recent[#recent + 1] = ring[i]; recentHeld[#recentHeld + 1] = heldRing[i] or false end
   d.recentFrames = stats(recent, recentHeld)
+  -- (reportsend.lua: the exact view, the environment, the settings and mods, the last 60 s)
+  local okV, view = pcall(sender.view)
+  d.view = okV and view or { error = tostring(view) }
+  local okE, env = pcall(sender.environment)
+  d.environment = okE and env or { error = tostring(env) }
+  local okC, cfg = pcall(sender.config)
+  d.config = okC and cfg or { error = tostring(cfg) }
+  local okF, f60 = pcall(sender.frames, ring60, ring60N, M.RING60, stats)
+  d.frames60 = okF and f60 or nil
+  if d.vehicle and d.lat then d.vehicle.lat, d.vehicle.lon = d.lat, d.lon end
   return d
 end
 
@@ -206,10 +228,11 @@ local function newDir(kind)
   return rel
 end
 
+-- (the file's name only: a full path holds the player's account name)
 local function screenshot(rel)
   if type(createScreenshot2) ~= 'function' then return nil end
   local ok = pcall(createScreenshot2, { filename = rel .. 'screenshot', writeJPG = true, superSampling = 1 })
-  return ok and (FS:getUserPath() .. rel .. 'screenshot.jpg'):gsub('\\', '/') or nil
+  return ok and 'screenshot.jpg' or nil
 end
 
 local function encode(t)
@@ -219,7 +242,9 @@ local function encode(t)
 end
 
 local function write(rel, data, quiet)
-  data.folder = (FS:getUserPath() .. rel):gsub('\\', '/')
+  -- (the folder inside the user folder: a full path holds the player's account name; the saved window shows it all)
+  local full = (FS:getUserPath() .. rel):gsub('\\', '/')
+  data.folder = rel
   writeFile(rel .. 'report.json', encode(data))
   local okH, hw = pcall(M.collectHardware)
   if not okH then hw = { error = tostring(hw) } end
@@ -228,14 +253,15 @@ local function write(rel, data, quiet)
   if okI then pcall(writeFile, rel .. 'issue.md', issue) else log('W', 'beamngEarth', 'issue.md: ' .. tostring(issue)) end
   if not indexed[rel] then
     indexed[rel] = true
-    local line = jsonEncode({ time = data.time, kind = data.kind, folder = data.folder, lat = data.lat, lon = data.lon,
+    local line = jsonEncode({ time = data.time, kind = data.kind, folder = full, lat = data.lat, lon = data.lon,
       title = data.title, note = data.note,
       fps = data.bench and data.bench.fps or (data.recentFrames and data.recentFrames.fps) })
     local idx = M.DIR .. 'index.jsonl'
     local old = readFile(idx) or ''
     writeFile(idx, old .. line .. '\n')
   end
-  log('I', 'beamngEarth', 'report saved: ' .. data.folder)
+  log('I', 'beamngEarth', 'report saved: ' .. rel)
+  pcall(sender.saved, rel)       -- (the server scrubs the files: user names, home folders)
   if quiet then return end
   local url = nil
   if okI then
@@ -243,7 +269,8 @@ local function write(rel, data, quiet)
     local title, body = fmt.splitIssue(issue)
     url = fmt.issueUrl(title, body, k.label)
   end
-  saved = { folder = data.folder, dir = rel, url = url, untilT = now() + M.SAVED_S, kind = fmt.kind(data.kind).name }
+  saved = { folder = full, dir = rel, url = url, untilT = now() + M.SAVED_S, kind = fmt.kind(data.kind).name,
+    data = data }
 end
 
 local function openForm(rel, data, kind)
@@ -257,6 +284,7 @@ function M.note()
   local rel = newDir('report')
   local data = capture()
   data.screenshot = screenshot(rel)       -- the view the player saw (the window opens next frame)
+  pcall(sender.askContext, rel, data)     -- (the world server's part of the moment: server.json, logs.json)
   saved = nil
   openForm(rel, data)
 end
@@ -274,6 +302,7 @@ function M.profiler(seconds)
     rel = newDir('profile')
     start = capture()
     start.screenshot = screenshot(rel)
+    pcall(sender.askContext, rel, start)
   end
   prof = { t0 = now(), dur = tonumber(seconds) or M.BENCH_S, dts = {}, held = {}, track = {}, hitches = {}, dir = rel,
     lastSample = -1, start = start, form = pending }
@@ -360,8 +389,10 @@ function M.saveNote(text, kind, title)
 end
 
 function M.status()
+  local name = saved and saved.dir and saved.dir:match('([^/]+)/?$')
   return { formOpen = form ~= nil, noteOpen = form ~= nil, profilerRunning = prof ~= nil,
-    benchRunning = prof ~= nil, saved = count, lastFolder = saved and saved.folder }
+    benchRunning = prof ~= nil, saved = count, lastFolder = saved and saved.folder, lastDir = saved and saved.dir,
+    sendOpen = sender.isOpen(), send = name and sender.status(name) or nil }
 end
 
 function M.onPreRender(dtReal)
@@ -369,6 +400,8 @@ function M.onPreRender(dtReal)
   local ms = dtReal * 1000
   ringN = ringN + 1
   ring[(ringN - 1) % M.RING + 1] = ms
+  ring60N = ring60N + 1
+  ring60[(ring60N - 1) % M.RING60 + 1] = ms
   heldRing[(ringN - 1) % M.RING + 1] = heldNow()
   if prof then profFrame(ms) end
 end
@@ -381,6 +414,7 @@ end
 
 local function drawSaved()
   if not saved then return end
+  if sender.isOpen() then saved.untilT = now() + M.SAVED_S end
   if now() > saved.untilT then saved = nil return end
   im.SetNextWindowSize(im.ImVec2(560, 0), im.Cond_FirstUseEver)
   if im.Begin('BeamNG.Earth report saved##bngeSaved', nil, im.WindowFlags_AlwaysAutoResize) then
@@ -388,8 +422,21 @@ local function drawSaved()
     im.TextUnformatted(saved.folder)
     -- (no "python3 tools/reports.py" here: the packaged app has no Python or tools folder for players to run, and
     -- one tried to and asked how to fix Python, GitHub #744)
-    wrapped('issue.md there is a ready-to-post GitHub issue: "Open GitHub issue page" fills in the text; drag '
-      .. 'screenshot.jpg from the folder into it. If the page opens empty, paste issue.md\'s text into it.')
+    wrapped('"Send to the developers" sends it privately to the BeamNG.Earth developers (not published; you see '
+      .. 'what is sent first). Or post it yourself: issue.md there is a ready-to-post GitHub issue: "Open GitHub '
+      .. 'issue page" fills in the text; drag screenshot.jpg from the folder into it. If the page opens empty, paste '
+      .. 'issue.md\'s text into it.')
+    local st = sender.status(saved.dir:match('([^/]+)/?$'))
+    if st and st.state == 'sent' then
+      im.TextUnformatted('Sent to the developers. Report id: ' .. tostring(st.id or '?'))
+    elseif st and st.state and st.state ~= '' then
+      im.TextUnformatted('Send: ' .. st.state .. (st.text and (' (' .. st.text .. ')') or ''))
+    end
+    if im.Button('Send to the developers') then
+      sender.open(saved.dir, saved.data)
+      saved.untilT = now() + M.SAVED_S
+    end
+    im.SameLine()
     if im.Button('Open folder') then
       pcall(Engine.Platform.exploreFolder, '/' .. saved.dir)
       saved.untilT = now() + M.SAVED_S
@@ -397,7 +444,9 @@ local function drawSaved()
     if saved.url then
       im.SameLine()
       if im.Button('Open GitHub issue page') then
-        pcall(openWebBrowser, saved.url)
+        local core = rawget(_G, 'beamngEarth_core')
+        if core and core.openPage then pcall(core.openPage, saved.url)
+        else pcall(openWebBrowser, saved.url) end
         saved.untilT = now() + M.SAVED_S
       end
     end
@@ -473,6 +522,17 @@ function M.onUpdate()
   end
   drawSaved()
   if form then drawForm() end
+  sender.draw(im)
+end
+
+-- The world server's answers about reports (core.lua passes them): report_status, report_context_done.
+function M.onServerMessage(msg) sender.onMessage(msg) end
+
+-- The send window for a saved report folder (tests, the console): rel 'beamngEarth/reports/<name>/'.
+function M.openSend(rel)
+  local t = readFile(rel .. 'report.json')
+  local ok, data = pcall(jsonDecode, t or '')
+  sender.open(rel, ok and type(data) == 'table' and data or {})
 end
 
 return M

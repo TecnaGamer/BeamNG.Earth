@@ -1,6 +1,7 @@
 //! The German Autobahn boards and what carries them as render-only triangles (speedsigns::Mesh: x toward the driver,
 //! y to the driver's right, z up; front faces counter-clockwise as the driver sees them, lettering TEXT_DEPTH in front
 //! of the face, UVs v-up). Material ids index server/deautobahnfont.py MATERIALS.
+use crate::dm::Dm;
 use super::layout::{Arrow, Assembly, Font, Item, Panel, Shape, WHITE_INK_BELOW};
 use super::stations::Mount;
 use crate::speedsigns::{rounded, Mesh};
@@ -122,7 +123,7 @@ fn draw_arrow(m: &mut Mesh, kind: Arrow, cy: f64, cz: f64, size: f64) {
             thick_line(m, [cy, z0], [cy, z1 - 0.25], w, x);
             let pts: Vec<[f64; 2]> = (0..=6).map(|k| {
                 let a = std::f64::consts::FRAC_PI_2 * k as f64 / 6.0;
-                [cy + s * 0.35 * (1.0 - a.cos()), z1 - 0.25 + 0.35 * a.sin()]
+                [cy + s * 0.35 * (1.0 - a.dcos()), z1 - 0.25 + 0.35 * a.dsin()]
             }).collect();
             for v in pts.windows(2) {
                 thick_line(m, v[0], v[1], w, x);
@@ -203,7 +204,7 @@ fn oval(m: &mut Mesh, font: &Font, code: &str, cy: f64, cz: f64, h: f64) {
     let w = (0.9 * h + font.width(code, 0, 0.5 * h)).max(1.4 * h);
     let pts: Vec<[f64; 2]> = (0..24).map(|k| {
         let a = k as f64 * std::f64::consts::TAU / 24.0;
-        [cy + w / 2.0 * a.cos(), cz + h / 2.0 * a.sin()]
+        [cy + w / 2.0 * a.dcos(), cz + h / 2.0 * a.dsin()]
     }).collect();
     m.fill(&pts, INLAY_DEPTH, M_WHITE, false);
     text_centred(m, font, code, 0.5 * h, cy, cz, M_LETTERS_BLACK);

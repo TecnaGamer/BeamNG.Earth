@@ -16,6 +16,7 @@ import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
+import dnp
 
 import gasstations as gs
 
@@ -200,7 +201,7 @@ def with_shard(chargers, stations, points, frame):
     for ch in chargers:
         cap, at = None, (ch.x, ch.y)
         if len(sxy):
-            d = np.hypot(sxy[:, 0] - ch.x, sxy[:, 1] - ch.y)
+            d = dnp.hypot(sxy[:, 0] - ch.x, sxy[:, 1] - ch.y)
             k = int(np.argmin(d))
             if d[k] <= gs.MERGE_M:
                 cap, at = evs[k].get("cap"), (float(sxy[k, 0]), float(sxy[k, 1]))
@@ -210,7 +211,7 @@ def with_shard(chargers, stations, points, frame):
     A = np.array(anchors, np.float64)
     for la, lo in points or ():
         x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
-        d = np.hypot(A[:, 0] - float(x), A[:, 1] - float(y))
+        d = dnp.hypot(A[:, 0] - float(x), A[:, 1] - float(y))
         k = int(np.argmin(d))
         if d[k] <= gs.MERGE_M:
             own[k].append((float(x), float(y)))
@@ -227,7 +228,7 @@ def _nearest(lines, p):
         L2 = np.maximum((d * d).sum(1), 1e-12)
         t = np.clip(((p - a) * d).sum(1) / L2, 0.0, 1.0)
         q = a + d * t[:, None]
-        dist = np.hypot(*(q - p).T)
+        dist = dnp.hypot(*(q - p).T)
         k = int(np.argmin(dist))
         if best is None or dist[k] < best[2]:
             best = (q[k], d[k] / np.sqrt(L2[k]), float(dist[k]))
@@ -271,7 +272,7 @@ def _placements(ch, roads, service):
     if aisle is not None and aisle[2] <= AISLE_REACH_M:
         q, u, dist = aisle
         nrm = np.array([-u[1], u[0]])
-        if np.dot(p - q, nrm) < 0:
+        if dnp.dot(p - q, nrm) < 0:
             nrm = -nrm
         centre = q + nrm * (AISLE_HALF_M + STALL_M + CHARGER_BACK_M)
         aisle_tries.append(("row", (centre, u, -nrm)))     # (the stalls toward the aisle, the chargers behind them)
@@ -284,7 +285,7 @@ def _placements(ch, roads, service):
     if best is not None and best[0][2] - best[1] <= KERB_REACH_M:
         (q, u, dist), half = best
         nrm = np.array([-u[1], u[0]])
-        if np.dot(p - q, nrm) < 0:
+        if dnp.dot(p - q, nrm) < 0:
             nrm = -nrm
         kerb_tries += [("kerb", (q + u * (k * KERB_GAP_M), u, nrm, half)) for k in KERB_SLIDE]
     road = _nearest([r[0] for r in roads], p)
