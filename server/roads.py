@@ -7308,27 +7308,30 @@ def _clearance_deficits(lines, zs, crossings, depth=None):
     return out
 
 
-def _measured_too_low(line, o, z, crossings, depth):
-    """m under the girders of measured deck heights o (line's points) over the lowest of crossings ((part, arc, road z[,
-    own clearance]): BridgeProfiles._solve's, a road's own clearance its sign's: signed_road_clear) where that is less
-    than the road needs (its sign, else OBS_MIN_UNDER_M) and OBS_CLEAR_SOLVE_OVER_M less than the solve z leaves; else
-    None. A crossing by an
-    abutment (a junction at grade) is left out. Pure."""
-    if not crossings or len(o) != len(z) or len(line) < 2:
+def measured_too_low(line, o, crossings, depth):
+    """m under the girders of measured deck heights o (line's points, NaN where none) over the lowest of crossings
+    ((part, arc, road z[, own clearance]): a road's own clearance its sign's, signed_road_clear) where that is less than
+    the road needs (its sign, else OBS_MIN_UNDER_M); else None. A crossing by an abutment (a junction at grade) is left
+    out. The bridge solve (BridgeProfiles._observed) and the grading (its approach lifts and dips under a measured
+    deck) both ask it, so a measurement one rejects the other does too. Pure."""
+    o = np.asarray(o, np.float64)
+    line = np.asarray(line, np.float64)
+    if not crossings or len(o) != len(line) or len(line) < 2 or not np.isfinite(o).any():
         return None
     s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
+    ok = np.isfinite(o)
+    o = np.interp(s, s[ok], o[ok])
     worst = None
     for cr in crossings:
         sc, zc = float(cr[1]), float(cr[2])
         if min(sc, s[-1] - sc) <= AT_GRADE_REACH_M or not np.isfinite(zc):
             continue
-        lo, hi = max(0.0, sc - DECK_CLEAR_REACH_M), min(s[-1], sc + DECK_CLEAR_REACH_M)
+        lo, hi = max(0.0, sc - OBS_CLEAR_REACH_M), min(s[-1], sc + OBS_CLEAR_REACH_M)
         at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
-        under_o = float(np.nanmin(np.interp(at, s, o))) - zc - depth
-        under_z = float(np.nanmin(np.interp(at, s, z))) - zc - depth
+        under = float(np.min(np.interp(at, s, o))) - zc - depth
         need = (float(cr[3]) - depth) if len(cr) > 3 and isinstance(cr[3], RoadClear) else OBS_MIN_UNDER_M
-        if under_o < need - 1e-6 and under_z > under_o + OBS_CLEAR_SOLVE_OVER_M and (worst is None or under_o < worst):
-            worst = under_o
+        if under < need - 1e-6 and (worst is None or under < worst):
+            worst = under
     return worst
 
 
@@ -7475,7 +7478,8 @@ OBS_CLEAR_ON = os.environ.get("BNE_OBS_CLEAR", "on") != "off"
 OBS_MIN_UNDER_M = 3.5       # m under the girders over a road crossing under a measured deck with no height limit: less is
                             # the lidar's points of the road below taken for the deck (the Bowker Overpass over Storrow
                             # Drive in Boston, 1.4 m, 2026-11-13); a road's sign: that, as the solve
-OBS_CLEAR_SOLVE_OVER_M = 0.5   # ... and only where the solve leaves at least this much more (else the measurement stands)
+OBS_CLEAR_REACH_M = 8.0     # ... read this far either side of the crossing (over the road itself, not the solve's
+                            # DECK_CLEAR_REACH_M: a deck rising from an abutment near the road is measured right)
 OBS_UNDER_SHARE = 0.7       # a sample this share of the two half widths from a higher deck's line is under it
 
 
@@ -7998,12 +8002,12 @@ class BridgeProfiles:
                               "the solve kept", comp[i], over_o, over_z)
                     obs[i] = None
         # a measured deck too low over a road crossing under it (less than the road's sign, or OBS_MIN_UNDER_M with
-        # none, under its girders) where the solve stands higher: the lidar took the road below for the deck
+        # none, under its girders): the lidar took the road below for the deck (grading rejects it alike)
         if OBS_CLEAR_ON and required:
             for i, o in enumerate(obs):
                 if o is not None:
-                    bad = _measured_too_low(np.asarray(lines[i], np.float64), o, np.asarray(zs[i], np.float64),
-                                            [r for r in required if r[0] == i], self._depth_of_chain(comp))
+                    bad = measured_too_low(np.asarray(lines[i], np.float64), o, [r for r in required if r[0] == i],
+                                           self._depth_of_chain(comp))
                     if bad is not None:
                         log.debug("observed deck %s: %.1f m under it over a road, the solve kept", comp[i], bad)
                         obs[i] = None

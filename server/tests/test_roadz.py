@@ -488,7 +488,10 @@ class BridgeOverrideTest(unittest.TestCase):
             la, lo, h = FRAME.enu_to_geodetic(xy_[:, 0], xy_[:, 1], zu)
             return np.asarray(h, np.float64)
         roadz.PROVIDER = StubProvider(fn)
-        _xy, z1 = solve_overpass()
+        # the stub's abutments sit on the flat ground, so no deck here clears the motorway under it: the clearance
+        # check (test_deck_measured_on_the_road_under_it_refused) would refuse any measurement
+        with mock.patch.object(roads, "OBS_CLEAR_ON", False):
+            _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0 + bump, atol=0.02)
         self.assertAlmostEqual(z1[0], z0[0], places=6, msg="the abutments keep the graded road's height")
         self.assertAlmostEqual(z1[-1], z0[-1], places=6)
@@ -543,13 +546,12 @@ class BridgeOverrideTest(unittest.TestCase):
 
     def test_measured_too_low_uses_the_sign(self):
         line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
-        z = np.full(51, FLAT + 9.0)
         o = np.full(51, FLAT + 5.0)
         d = roads.DECK_FULL_DEPTH
-        self.assertIsNone(roads._measured_too_low(line, o + d, z + d, [(0, 100.0, FLAT)], d))     # 5 m: plenty
-        bad = roads._measured_too_low(line, o + d, z + d, [(0, 100.0, FLAT, roads.signed_road_clear(5.5, d))], d)
+        self.assertIsNone(roads.measured_too_low(line, o + d, [(0, 100.0, FLAT)], d))     # 5 m: plenty
+        bad = roads.measured_too_low(line, o + d, [(0, 100.0, FLAT, roads.signed_road_clear(5.5, d))], d)
         self.assertAlmostEqual(bad, 5.0)                                                          # under a 5.5 m sign
-        self.assertIsNone(roads._measured_too_low(line, o + d, z + d, [(0, 5.0, FLAT)], d))      # at an abutment
+        self.assertIsNone(roads.measured_too_low(line, o + d, [(0, 5.0, FLAT)], d))      # at an abutment
 
     def test_short_deck_spike_refused(self):
         # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
@@ -602,10 +604,12 @@ class GradingOverrideTest(unittest.TestCase):
         roadz.PROVIDER = None
         self.assertIsNotNone(g._end_lift(line[0]), "the inference raises it")
         g2 = grading._Planner(FRAME, FakeMD(f), flat_elev)
-        roadz.PROVIDER = StubProvider(lambda xy, s: FLAT + 7.0 * np.sin(np.pi * s / s[-1]))
+        roadz.PROVIDER = StubProvider(lambda xy, s: FLAT + 9.0 * np.sin(np.pi * s / s[-1]))
         self.assertIsNone(g2._end_lift(line[0]), "measured at the ground there: no ramp")
         g3 = grading._Planner(FRAME, FakeMD(f), flat_elev)
-        roadz.PROVIDER = StubProvider(lambda xy, s: np.full(len(xy), FLAT + 2.0))
+        # (a deck measured 2 m up at its ends, clear of the motorway in the middle: flat at 2 m it would be the lidar's
+        # points of the motorway, measured_too_low)
+        roadz.PROVIDER = StubProvider(lambda xy, s: FLAT + 2.0 + 6.0 * np.sin(np.pi * s / s[-1]))
         got = g3._end_lift(line[0])
         self.assertAlmostEqual(got[0], 2.0, places=6, msg="measured 2 m up: raised 2 m")
 
@@ -659,7 +663,8 @@ class MeasuredRampFromPlanTest(unittest.TestCase):
             e, n, _ = FRAME.geodetic_to_enu(np.asarray(la_, np.float64), np.asarray(lo_, np.float64), 0.0)
             return np.where(np.abs(np.asarray(e) + 35.0) < 1.0, FLAT - 3.0, FLAT)
         g = grading._Planner(FRAME, FakeMD(f), cut_elev)
-        roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), measured))
+        # (clear of the motorway in the middle, measured_too_low)
+        roadz.PROVIDER = StubProvider(lambda xy_, s: measured + 9.0 * np.sin(np.pi * s / s[-1]))
         plans = [("cross", plan)]
         g._lift_approaches(mapcells.cell_of(float(FRAME.lat0), float(FRAME.lon0)), plans, [spec])
         return float(plans[0][1].z[-1])
