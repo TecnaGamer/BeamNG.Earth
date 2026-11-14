@@ -132,6 +132,7 @@ MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimo
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
+SKY_WALL_DAY = "bne_bld_skywin"     # ... with windows by day too (the far packs' sky style, PACK_STYLE: bne_sky_day_b)
 LANDMARK_IRON = "bne_lm_iron"   # a landmark's painted iron (landmarks.py; vertex colours), lit at night (nightlights.lua)
 LANDMARK_STONE = "bne_lm_stone"     # ... its stone (vertex colours), dark at night (lit by its lamps: the Colosseum)
 LANDMARK_FLOODLIT = "bne_lm_floodlit"   # ... its floodlit stone, glowing at night (the Arc de Triomphe, Big Ben)
@@ -140,7 +141,8 @@ LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behi
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
-                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER)
+                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER,
+                                                                  SKY_WALL_DAY)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -5780,6 +5782,20 @@ FAR_PER_POSE = 4
 FAR_PACK = 1
 PACK_ON = os.environ.get("BNE_BLDPACK", "on") != "off"
 PACK_INNER_M = float(os.environ.get("BNE_BLDPACK_INNER_M", "1000"))
+# A pack's buildings drawn as the skyline's walls (2026-11-14, Windows DX11 import A/B): the lite mesh takes one quad a
+# floor a wall (a floor is a band of the window sheet), ~1,000 vertices a Midtown tower, and the engine's shape load
+# grows with the vertices (~0.115 ms per 1,000 there): a Midtown pack (1,523 buildings, 728k vertices) 86.5 ms to make,
+# a Fells Point pack (322k) 44.3 ms; the same buildings as the skyline's walls (a quad a wall, vertex colours) 34k /
+# 70k vertices. "sky": every building so, its walls in SKY_WALL_DAY (the skyline's cells with day windows); "tall": only
+# those past PACK_SKY_FLOORS floors (the many-vertex ones; the low ones keep the lite mesh's textured walls); "lite":
+# the lite mesh (build_parts) as before. In the far geotiles' revisit key (blockworker.far_geo) when not "lite".
+# "sky" by default (2026-11-14, Windows DX11 drive A/B at 45 mph): Midtown's pack made in 7.4 ms on average (17 at most)
+# against 48.5 (166), frames over 50 ms 27 against 64, over 100 ms 0 against 5; the look at 0.6-1 mi close to the lite
+# mesh's (day windows). "tall" saves nothing in a low-rise city (Fells Point: no building past 8 floors).
+PACK_STYLE = os.environ.get("BNE_FARPACK_STYLE", "sky")
+if PACK_STYLE not in ("lite", "sky", "tall"):
+    PACK_STYLE = "sky"
+PACK_SKY_FLOORS = 8
 PACK_PER_POSE = 2
 FAR_GEO = 1                 # the far geotiles' protocol (hello.farGeo, the mod's roads.lua M.FAR_GEO): far buildings,
                             # skyline and far bridges in the global tiles' frames (blockworker.far_geo)
@@ -7220,6 +7236,8 @@ SKY_UV = (0.5, 0.5)
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")
 SKY_BAY_M = 3.5
 SKY_WIN_BAYS = SKY_WIN_FLOORS = 16
+SKY_DAY_GAIN = 1.0 / 0.8125     # 1 / the day map's mean (tools/build_sky_windows.py --day): a wall's mean colour is its
+                                # facade's (MAT_MEAN: windows and all)
 
 
 def _sky_colour(look, f):
@@ -7231,14 +7249,15 @@ def _sky_colour(look, f):
     return tuple(int(max(0, min(255, round(255 * m * t * f)))) for m, t in zip(mean, tint)) + (255,)
 
 
-def _sky_mesh(items):
+def _sky_mesh(items, day=False):
     """The skyline meshes of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
     texel, coloured per vertex (~4 per corner + the roof's corners: a row house is 20 vertices, the lite mesh ~72).
     [(positions, uvs, tris, tri material indices, MATERIALS, colours)] as build_parts (whole buildings, each mesh
-    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None."""
+    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None. day: the walls with
+    windows in SKY_WALL_DAY (the far packs' sky style), their colours raised by SKY_DAY_GAIN."""
     m = Mesh()
     mi = MATERIALS.index(MARBLE)
-    ms = MATERIALS.index(SKY_WALL)
+    ms = MATERIALS.index(SKY_WALL_DAY if day else SKY_WALL)
     uv = SKY_UV
     starts = []                 # each building's first vertex (the cuts between meshes: _cut_buildings)
     for spec, gmin, gmax in items:
@@ -7253,7 +7272,7 @@ def _sky_mesh(items):
             ring = ring[::-1]
         f = 1.0 + JITTER * (2.0 * _hash01(spec.seed, "jit") - 1.0)
         windows = spec.windows is not False
-        wall = (ms if windows else mi, _sky_colour(spec.facade, f))
+        wall = (ms if windows else mi, _sky_colour(spec.facade, f * SKY_DAY_GAIN if day and windows else f))
         roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
         z0 = gmin - SKIRT_LITE_M
         z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
@@ -7339,6 +7358,56 @@ def _cut_buildings(P, UV, T, M, C, starts, limit):
     return out
 
 
+def _sky_simplify(items, copy=False):
+    """Each item's Spec made the skyline's simplest shape (a box or a few corners, a flat roof, nothing on it); in place,
+    or (copy) on copies of the specs: [(Spec, gmin, gmax)]."""
+    import copy as copymod
+    out = []
+    for spec, gmin, gmax in items:
+        if copy:
+            spec = copymod.copy(spec)
+        ring = np.asarray(spec.ring, np.float64)
+        if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
+            c, u, hl, hw = oriented_box(ring)
+            v = np.array([-u[1], u[0]])
+            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+        elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
+            ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
+        spec.ring = ring
+        # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
+        keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
+        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
+        out.append((spec, gmin, gmax))
+    return out
+
+
+def pack_meshes(items, style=None):
+    """A far pack's meshes (build_parts' list: one shape, an object each) of its items in PACK_STYLE (style): "lite" the
+    lite mesh; "sky" every building as the skyline's walls with day windows (_sky_mesh day); "tall" those past
+    PACK_SKY_FLOORS floors so, the others lite. Landmarks keep their own far model either way."""
+    style = style or PACK_STYLE
+    if style == "lite":
+        return build_parts(items, lite=True)
+
+    def boxy(s):        # (a closed block: not a landmark's model, a French house, an open frame, a ship, a canopy,
+        # nor a mapped dome: _sky_simplify flattens its roof, and plan() took the dome's rise off its height, so it lost
+        # its top half at the pack's hand-over: it keeps the lite mesh, Codex review 2026-11-14)
+        # Only a flat roof without a steeple: the skyline's simplify keeps a sloped roof as drawn only in some cases
+        # and the dome's / gable's / skillion's rise came off the walls' height in plan(), so every sloped form needed
+        # its own height rule (nine review rounds, each a new form 2-350 m off: mapped skillions, skeleton pyramids,
+        # greenhouses, steeples ...): sloped, domed and steepled buildings keep the lite mesh, flat ones lose nothing.
+        return (s.cls != landmarks.LANDMARK and not s.fr_house and s.cls not in BRIDGE_CLASSES and s.cls != "ship"
+                and s.cls not in CANOPY_CLASSES and s.cls != "toll_booth" and s.roof in (None, "flat")
+                and not s.steeple)
+    sky = [it for it in items if boxy(it[0]) and (style == "sky" or int(it[0].floors or 0) > PACK_SKY_FLOORS)]
+    ids = {id(it) for it in sky}
+    rest = [it for it in items if id(it) not in ids]
+    out = build_parts(rest, lite=True) if rest else []
+    if sky:
+        out += _sky_mesh(_sky_simplify(sky, copy=True), day=True) or []
+    return out
+
+
 def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     """The skyline's buildings of box (x0, y0, x1, y1) in frame over map cells keys: (picked items, lamps), or None when
     the cells are not at hand (fetched in the background: asked again later). own: a geotile's box (its own buildings
@@ -7362,18 +7431,7 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
-    for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
-        ring = np.asarray(spec.ring, np.float64)
-        if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
-            c, u, hl, hw = oriented_box(ring)
-            v = np.array([-u[1], u[0]])
-            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
-        elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
-            ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
-        spec.ring = ring
-        # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
-        keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
-        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
+    _sky_simplify(items)
     items.sort(key=lambda it: (-(float(it[0].height or 0.0) + float(it[0].min_h or 0.0)), str(it[0].seed)))
     picked, n = [], 0
     for it in items:                        # (the tallest first, up to the 16-bit vertex budget: 5 per corner)

@@ -3260,7 +3260,9 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
-        mesh = buildingsmod.build_parts(items, lite=True) or None   # (meshes under the 16-bit indices, one shape)
+        # (meshes under the 16-bit indices, one shape; a pack's in buildings.PACK_STYLE)
+        mesh = (buildingsmod.pack_meshes(items) if kind == "bldpack" else buildingsmod.build_parts(items, lite=True)) \
+            or None
         n = len(items)
     elif kind == "bldsky":
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
@@ -3328,13 +3330,16 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     <prefix>_<key>.json (+ its shapes); returns (vfs path of the JSON, count, frame (lat, lon), pivot, {what: shape
     file name}) or None when its cells are not at hand yet."""
     import json
+    import buildings as buildingsmod
     import geotiles
     import revisit
     z = far_geo_zoom(kind)
     tile = geotiles.geobox(gx, gy, z)
     names = far_geo_names(kind, tile.key)
+    style = buildingsmod.PACK_STYLE if kind == "bldpack" else "lite"
     k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(kind != "brfar"), lamp_region,
-                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None)
+                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None,
+                    *((f"style={style}",) if style != "lite" else ()))     # (the lite packs' keys as before)
     frame_ll = (float(tile.frame.lat0), float(tile.frame.lon0))
     got = revisit.load(_s.cache_dir, kind, k)
     if got is not None:
