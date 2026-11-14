@@ -1093,9 +1093,53 @@ class Imagery:
     def _covered(probe):
         return probe is not None and not probe.uniform
 
+    def _miss_until(self, key):
+        """(unix s) when the remembered "nothing there" of a tile kept in memory as None ends: its miss marker's time
+        plus its host's miss_ttl; None when it never ends (no TTL) or nothing on disk says when (kept as before)."""
+        src, z, x, y = key
+        t = missindex.when(self._paths(src, z, x, y)[1])
+        if t is None:
+            return None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        return None if ttl is None else t + ttl
+
+    def _lru_fresh(self, key):
+        """Is key's memory copy usable (caller holds the lock)? A None (a 404) is not once its miss has expired and
+        its host can be asked again: dropped, so the next look fetches it afresh (a probe's "outside" was kept in
+        memory for the process's life, and recovered coverage never seen: review of 6cbcfd2b)."""
+        if key not in self._lru:
+            return False
+        if self._lru[key] is not None:
+            return True
+        src, z, x, y = key
+        until = self._miss_until(key)
+        if until is None or self.fetcher.wall() < until or \
+                self.fetcher.miss_alive(self._paths(src, z, x, y)[1], src.url):
+            return True
+        del self._lru[key]
+        return False
+
+    def _probe_until(self, key):
+        """(unix s, or None: never) when the coverage probe that says key's source holds nothing there may say
+        otherwise: the expiry of its remembered 404 (_miss_until), or its tile's host cache_ttl from now for a blank
+        probe tile (data: None when the host's tiles are kept for good). Caller holds the lock."""
+        src, z, x, y = key
+        if src.coverage or not in_bounds(*key):
+            return None
+        psrc = SOURCES[src.probe_source] if src.probe_source else src
+        for pz in sorted(p for p in src.probe_zooms if p < z):
+            p = (psrc, pz, x >> (z - pz), y >> (z - pz))
+            if p in self._lru and not self._covered(self._lru[p]):
+                if self._lru[p] is None:
+                    return self._miss_until(p)
+                ttl = self.fetcher.policy(netfetch.host_of(psrc.url)).cache_ttl
+                return None if ttl is None else self.fetcher.wall() + ttl
+        return None
+
     def _probe_status(self, key):
         """'covered' / 'outside' / 'unknown' from the key's coverage probes, coarsest first;
-        starts the fetch of the first unknown one. Caller holds the lock."""
+        starts the fetch of the first unknown one (or of one whose remembered 404 has expired: _lru_fresh). Caller
+        holds the lock."""
         src, z, x, y = key
         if not in_bounds(*key):
             return "outside"                # (never ask a source about a place outside its area)
@@ -1105,7 +1149,7 @@ class Imagery:
         psrc = SOURCES[src.probe_source] if src.probe_source else src
         for pz in sorted(p for p in src.probe_zooms if p < z):
             p = (psrc, pz, x >> (z - pz), y >> (z - pz))
-            if p not in self._lru:
+            if not self._lru_fresh(p):
                 self._future(p, "prefetch")
                 return "unknown"
             if not self._covered(self._lru[p]):
@@ -1166,7 +1210,7 @@ class Imagery:
             for k in keys:
                 if probes[k] is not None and not self._covered(known[probes[k]]):
                     out[k] = None           # the source has nothing in this area
-                elif k in self._lru:
+                elif self._lru_fresh(k):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
                 elif not in_bounds(*k):
@@ -1479,7 +1523,8 @@ class Imagery:
         """One lazy source tile, as a render would read it: ("data", None) on disk; ("none", expiry) known to hold
         nothing: a miss within its host's miss_ttl (expiry: when it ends; None: a host whose misses never do), an
         expired one while the host cannot be asked (offline, its breaker open: expiry UNAVAILABLE_RETRY_S from now,
-        asked again then), a coverage probe's "outside" (expiry a miss_ttl from now: the probes are cached tiles too);
+        asked again then), a coverage probe's "outside" (expiry: that probe's own, _probe_until; an expired one is
+        fetched again and the tile undecided meanwhile);
         ("todo", None) neither (never fetched, evicted by the cache cap, or a miss that expired: asked again). Every
         "none" but the never-expiring kind carries its expiry, so what is built on it is kept only that long
         (buildings.roof_photo_final: the photo of a later source too)."""
@@ -1498,7 +1543,7 @@ class Imagery:
                 return "none", now + UNAVAILABLE_RETRY_S
         with self._lock:
             if self._probe_status((src, z, tx, ty)) == "outside":
-                return "none", (None if ttl is None else now + ttl)
+                return "none", self._probe_until((src, z, tx, ty))
         return "todo", None
 
     def lazy_state(self, frame, x0, y0, size, px):

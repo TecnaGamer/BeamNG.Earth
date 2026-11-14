@@ -1239,6 +1239,63 @@ class LazyStateTest(unittest.TestCase):
         self.assertIsNotNone(until, "kept only until the preferred source is asked again")
         self.assertLessEqual(until, time.time() + imagery.UNAVAILABLE_RETRY_S + 60)
 
+    def test_an_expired_outside_probe_is_asked_again_and_recovered_coverage_used(self):
+        # (review of 6cbcfd2b: a probe's 404 kept in memory as None for the process's life, and "outside" renewed with
+        # a fresh deadline at every look; now its own deadline, and once past it the probe is fetched again)
+        state = {"usgs": 404, "now": time.time()}
+
+        def serve_export(z, x, y, size, name):
+            a = np.zeros((size, size, 3), np.uint8) + np.array((90, 120, 60), np.uint8)
+            a[::2, ::2] += 3
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            if state["usgs"] != 200:
+                return state["usgs"], b""
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST, wall=lambda: state["now"])
+        im = imagery.Imagery(self.tmp.name, ("naip", "usgs"), fetcher=net, tone=0.0)
+
+        def settle():
+            for _ in range(200):
+                with im._lock:
+                    if not im._inflight:
+                        return
+                time.sleep(0.02)
+        src, z, kids = im._lazy_children(*self.square())[0]
+        tx, ty = kids[0]
+        for _ in range(4):                      # (the probes fetched: z10, then z12)
+            st = im._child_state(src, z, tx, ty)
+            settle()
+        st = im._child_state(src, z, tx, ty)
+        self.assertEqual(st[0], "none", "the probe says outside")
+        ttl = FAST["basemap.nationalmap.gov"].miss_ttl
+        self.assertAlmostEqual(st[1], time.time() + ttl, delta=120, msg="the probe's own deadline")
+        first = st[1]
+        state["now"] += ttl / 2
+        self.assertEqual(im._child_state(src, z, tx, ty), ("none", first), "not renewed at a later look")
+        probes = len([r for r in self.requests if r[0] == "usgs"])
+        state["usgs"], state["now"] = 200, first + 10       # (coverage there now, and the 404 expired)
+        st = im._child_state(src, z, tx, ty)
+        self.assertEqual(st[0], "todo", "undecided while the probe is asked again")
+        for _ in range(4):
+            settle()
+            im._child_state(src, z, tx, ty)
+        settle()
+        self.assertGreater(len([r for r in self.requests if r[0] == "usgs"]), probes, "the probe asked again")
+        self.assertEqual(im._child_state(src, z, tx, ty)[0], "todo", "covered: the tile itself to fetch")
+        im.fetch_lazy(*self.square())
+        self.assertTrue([r for r in self.requests if r[0] == "naip"], "the recovered source asked")
+        self.assertEqual(im._child_state(src, z, tx, ty), ("data", None))
+        _, used = im.render(*self.square())
+        self.assertIn("naip", used)
+
     def test_an_expired_miss_is_asked_again(self):
         im = self.make()
         src, z, kids = im._lazy_children(*self.square())[0]
