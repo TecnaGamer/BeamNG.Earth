@@ -8085,15 +8085,23 @@ class BridgeProfiles:
             chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain)
         with self.lock:
-            n_short, n_lidar = short.n, short.lidar     # (final: nothing of this chain is read after this)
+            publish = []
             for k in comp:
                 v = keep.get(k)
                 old = self.done.get(k)
-                if v is None or not (old is None or len(v[1]) > len(old[1])):
-                    continue                            # (another thread published a copy at least as long meanwhile)
+                if v is not None and (old is None or len(v[1]) > len(old[1])):
+                    publish.append(k)
+                elif old is not None:
+                    # a part this solve does not publish but its build takes: one kept from before, or one another
+                    # thread published while this solve was staged (the winner's, perhaps made short): its note is
+                    # this build's too, before the final counts (a clean solve that lost to a short publisher
+                    # returned the fallback and stayed complete: review, 2026-11-13)
+                    self._replay(k)
+            n_short, n_lidar = short.n, short.lidar     # (final: nothing of this chain is read after this)
+            for k in publish:
                 if n_short or n_lidar:                  # (before the part itself: never a part without its note)
                     self._note_short(k, n_short, n_lidar)
-                self.done[k] = v
+                self.done[k] = keep[k]
                 self._commit(k, ground, pre.get(k))
             if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams

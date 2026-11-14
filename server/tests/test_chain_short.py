@@ -176,6 +176,69 @@ class ChainShortTest(unittest.TestCase):
             self.assertFalse(adopter.complete, f"{where}: adopted with its note")
             self.assertIn(("f", 0), mine.short)
 
+    def test_a_clean_solve_that_loses_to_a_short_publisher_is_short_too(self):
+        """Two threads solve the same chain. The clean one is paused in its staging (its structure); meanwhile the
+        other, whose solve read something short, publishes the part with its note. The clean solve then finds the part
+        published, does not publish its own, and returns the winner's: the fallback. Its build must be short too (it
+        returned the winner's part without its note before, and stayed complete)."""
+        st = _Store(None)
+        real_solve = st._solve
+
+        def solve(comp, pool, ground):
+            if threading.current_thread().name == "short":
+                revisit.fault()
+            return real_solve(comp, pool, ground)
+        st._solve = solve
+        reached, go_on = threading.Event(), threading.Event()
+
+        def structure(chain):
+            if threading.current_thread().name == "clean":
+                reached.set()
+                self.assertTrue(go_on.wait(10))
+            return [], []
+        st._structure = structure
+        got = {}
+
+        def build(name):
+            with revisit.scope() as b:
+                got[name + " part"] = st._chain_of(("f", 0), ENDS)
+            got[name] = b.complete
+        clean = threading.Thread(target=build, args=("clean",), name="clean")
+        clean.start()
+        try:
+            self.assertTrue(reached.wait(10))
+            self.assertNotIn(("f", 0), st.done)
+            short = threading.Thread(target=build, args=("short",), name="short")
+            short.start()
+            short.join(10)
+            self.assertIn(("f", 0), st.done, "the short solve published while the clean one was staged")
+            self.assertIn(("f", 0), st.short)
+        finally:
+            go_on.set()
+            clean.join(10)
+        self.assertIs(got["short"], False)
+        self.assertIs(got["clean part"], got["short part"], "the clean solve returned the winner's part")
+        self.assertIs(got["clean"], False, "... so its build is short too")
+        self.assertEqual(st.solves, 2)
+
+    def test_a_part_kept_from_before_brings_its_note(self):
+        """A solve whose chain holds a part published before (kept: this solve saw no more of it) builds on that part:
+        its note is this build's."""
+        st = _Store("plain")
+        with revisit.scope():
+            st._chain_of(("f", 0), ENDS)                # (published, short)
+        st.fault = None
+
+        def load(key, pool, ground):                    # (the chain now has a second part)
+            pool[("f", 0)] = (types.SimpleNamespace(width=7.0), np.array([[0.0, 0.0], [10.0, 0.0]]), 0.0, 0, 2)
+            pool[("f", 1)] = (types.SimpleNamespace(width=7.0), np.array([[10.0, 0.0], [20.0, 0.0]]), 0.0, 0, 2)
+        st._load = load
+        st._resolve = lambda start, pool, ground, loaded: [("f", 0), ("f", 1)]
+        with revisit.scope() as b:
+            self.assertIsNotNone(st._chain_of(("f", 1), ENDS))
+        self.assertFalse(b.complete, "built beside a part made short")
+        self.assertIn(("f", 1), st.short, "and the part it published says so")
+
     def test_the_note_is_final_when_the_part_appears(self):
         """Watched from inside the lock: the moment a part is put into `done`, its note already holds what its piers
         and its structure read short (nothing of the chain is read after its publication)."""
