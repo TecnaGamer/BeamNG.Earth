@@ -7566,8 +7566,8 @@ class BridgeProfiles:
     def _cell_entries(self, key):
         """([((fid, j), (spec, deck line, lon, level, ring points))], [((fid, "g"), [ground lines])]) of cell key, made
         once (every chain solved gathered its cells again: each a loop over all their roads, 2026-10-25). Not to be
-        changed by the caller. Kept only when the cell was read complete: a read made short (a fault in this thread
-        or the process's while cell_fn ran: revisit.mark) is answered for this call alone, so the next chain solve reads the cell again and
+        changed by the caller. Kept only when the cell was read complete: a read made short (any fault while cell_fn ran in
+        a revisit scope of its own: this thread's, the pool workers' it took, the process's) is answered for this call alone, so the next chain solve reads the cell again and
         faults again, rather than taking an empty copy without the fault and calling its network final
         (subsea._final, review 2026-11-13)."""
         import revisit
@@ -7577,9 +7577,9 @@ class BridgeProfiles:
         if got is not None:
             return got
         parts, roads_ = [], []
-        m0 = revisit.mark()
-        feats = self.cell_fn(key)
-        complete = revisit.mark() == m0
+        with revisit.scope() as read:   # (its own Build: the pool workers' faults it took count too)
+            feats = self.cell_fn(key)
+        complete = read.complete
         if feats is not None and len(feats):
             bs = self.specs_of(feats)
             rs = road_specs(feats)
@@ -8889,9 +8889,9 @@ class TunnelProfiles(BridgeProfiles):
         if str(key) in done:            # (the same half widths each time: once per cell)
             return
         import revisit
-        m0 = revisit.mark()
-        feats = self.cell_fn(key)
-        if revisit.mark() == m0:
+        with revisit.scope() as read:
+            feats = self.cell_fn(key)
+        if read.complete:
             done.add(str(key))          # (once read complete: a short read is read again by the next solve)
         if feats is None or len(feats) == 0:
             return

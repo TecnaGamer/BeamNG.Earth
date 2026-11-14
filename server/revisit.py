@@ -291,12 +291,6 @@ def scope_short():
     return bool(st) and not st[-1].complete
 
 
-def mark():
-    """This thread's faults, its lidar rule faults and the process's so far: a read was complete when mark() is the
-    same after it as before (a memo of it may be kept: roads.BridgeProfiles._cell_entries)."""
-    return getattr(_tl, "n", 0), getattr(_tl, "lidar", 0), _orphans[0]
-
-
 _PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")
 _IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([^#\n]+))", re.M)
 

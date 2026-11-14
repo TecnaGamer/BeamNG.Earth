@@ -309,5 +309,64 @@ class CellEntriesShortTest(unittest.TestCase):
         self.assertTrue(final)
 
 
+class CellEntriesWorkerFaultTest(unittest.TestCase):
+    """A cell read whose layer is loaded by a pool worker (MapData: runtimeprofiler.ThreadPoolExecutor, revisit.task /
+    bind) that faults there and hands back fallback data (a PMTiles failure, then the parquet fallback): the fault
+    reaches the reader's scopes through revisit.take, not this thread's counters, and the read is still short: not kept
+    by the cell memo, read again by the next chain solve, never final (review, 2026-11-13)."""
+
+    def setUp(self):
+        import runtimeprofiler
+        self.pool = runtimeprofiler.ThreadPoolExecutor(max_workers=2)
+        self.addCleanup(self.pool.shutdown)
+        self.frame = geodesy.EnuFrame(LAT, LON)
+        self.key = mapcells.cell_of(LAT, LON)
+        self.calls = 0
+        self.shared = None
+
+    def owner(self, cell_fn):
+        tp = roads.TunnelProfiles(self.frame, cell_fn, None)
+        tp._tls.read = frozenset({str(self.key)})
+        return tp
+
+    def faulting_layer(self):
+        revisit.fault()                 # (the first source failed; the fallback's data comes back all the same)
+        return None
+
+    def chain_solve(self, tp):
+        with revisit.scope() as b:
+            tp._load(self.key, {}, {})
+            final = subsea._final(tp, [[0.0, 0.0]], "test")
+        return b, final
+
+    def check(self, cell_fn):
+        tp = self.owner(cell_fn)
+        b1, final1 = self.chain_solve(tp)
+        b2, final2 = self.chain_solve(tp)
+        self.assertFalse(b1.complete)
+        self.assertFalse(b2.complete, "the second chain solve read the cell short too")
+        self.assertFalse(final1)
+        self.assertFalse(final2, "the second chain solve must stay non-final")
+        self.assertGreaterEqual(self.calls, 2, "the read is tried again")
+
+    def test_a_worker_submitted_by_the_read(self):
+        def cell_fn(key):
+            self.calls += 1
+            return self.pool.submit(self.faulting_layer).result()
+        self.check(cell_fn)
+
+    def test_a_shared_load_another_caller_started(self):
+        # (MapData shares a layer's load already under way: submitted outside this read's scopes, its fault handed
+        # over only by take() to whoever takes the result)
+        def cell_fn(key):
+            self.calls += 1
+            if self.shared is None:
+                self.shared = self.pool.submit(self.faulting_layer)
+            return self.shared.result()
+        self.shared = self.pool.submit(self.faulting_layer)     # (no scope: a background prefetch's)
+        self.shared.result()
+        self.check(cell_fn)
+
+
 if __name__ == "__main__":
     unittest.main()
