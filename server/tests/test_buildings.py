@@ -547,6 +547,16 @@ class PackStyleTest(unittest.TestCase):
         self.assertAlmostEqual(top(sky), top(lite), places=3)
         self.assertGreater(top(sky), 39.0)
 
+    def test_a_flattened_pitched_roof_keeps_the_buildings_height(self):
+        """A mapped gabled / hipped roof flattened in the sky style puts its rise back on the walls (plan() took it off
+        the height: 40 m with a 20 m roof came out 20 m, Codex 2026-11-14)."""
+        top = lambda meshes: max(float(np.asarray(m[0])[:, 2].max()) for m in meshes)
+        for roof in ("gabled", "hipped"):
+            b = [(bld.plan(rect(0.0, 0.0, 40, 40), {"class": "civic", "height": 40, "roof_shape": roof,
+                                                    "roof_height": 20}), 0.0, 0.0)]
+            self.assertGreater(top(bld.pack_meshes(b, "sky")), 39.0, roof)
+            self.assertLessEqual(top(bld.pack_meshes(b, "sky")), top(bld.pack_meshes(b, "lite")) + 0.01, roof)
+
     def test_revisit_key_lite_unchanged(self):
         import blockworker
         import geotiles
