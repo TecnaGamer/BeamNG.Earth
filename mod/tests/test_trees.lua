@@ -48,6 +48,11 @@ for _,name in ipairs({'nl_signals','nl_signal_scene','nl_groenpol_catalog','nl_c
   T.check(package.loaded['beamngEarth/'..name]==nil,'stock trees never load '..name)
 end
 T.check(trees.setSignalFrame({})==false,'stock frame changes do not rebuild Dutch static signals')
+-- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
+-- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
+T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2
+  and trees.NEW_SHAPES_PER_FRAME == 2, 'detail keep-up defaults on')
+trees.PROP_LEAD_S, trees.NEAR_URGENT_MS, trees.POOL_SPARE_DRIVE, trees.NEW_SHAPES_PER_FRAME = 0, 0, 0, 1
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
@@ -869,4 +874,42 @@ do -- the switch: COUNT_ITEMS false counts them again (the old way)
   trees.COUNT_ITEMS = true
 end
 
+do -- the keep-up recorder's view (keepup.lua): rows that should stand near a spot and are not made, and the hooks
+  T.check(#trees.keepupMissing(50, 10, 20) == 0, 'keepupMissing: nothing missing round a made tile')
+  local made, tiles_ = {}, {}
+  trees.onKeepupItem = function(t, i, g, x, y) made[#made + 1] = { t.id, i, g, x, y } end
+  trees.onKeepupTile = function(key) tiles_[#tiles_ + 1] = key end
+  local r2 = {}
+  for i = 0, 9 do r2[#r2 + 1] = string.format('{0, %d, 300, 5, 0, 1, 12, %.2f}', i, i / 10) end
+  files['/t/k.json'] = '{ groups = {}, items = { ' .. table.concat(r2, ', ') .. ' } }'
+  trees.onTile({ anchorId = 1, key = '0_1', path = '/t/k.json', n = 10 }, 1)
+  local miss = trees.keepupMissing(5, 300, 20)
+  T.check(#miss == 10 and miss[1].key == '1:0_1' and miss[1].group == '?' and tiles_[1] == '1:0_1',
+    'keepupMissing: a tile not made yet near the spot: its rows (' .. #miss .. ' ' .. tostring(miss[1] and miss[1].key)
+    .. ' ' .. tostring(miss[1] and miss[1].group) .. ' ' .. tostring(tiles_[1]) .. ')')
+  T.check(#trees.keepupMissing(5, 300, 3) == 7, 'keepupMissing: only the rows within r')
+  trees.update(1, { x = 5, y = 300 })
+  T.check(#trees.keepupMissing(5, 300, 20) == 0 and #made == 10 and made[1][1] == '1:0_1' and made[1][5] == 300,
+    'keepup hooks: each item made reported with its tile, row and spot')
+  trees.onKeepupItem, trees.onKeepupTile = nil, nil
+  trees.onDrop({ anchorId = 1, key = '0_1' })
+  trees.update(1, { x = 50, y = 50 })
+end
+do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the groups' caps (a door's 120 m)
+  trees.onRows(7, 'p1_0', { { 0, 300, 128, 0, 0, 1, 2.2, 0.0 } }, { 'door' })
+  local function doors() local n = 0; for it in pairs(items) do if it.m.p.x == 300 and it.m.p.y == 128 then n = n + 1 end end; return n end
+  local fast = { x = 100, y = 128, vx = 30, vy = 0, speed = 30 }
+  trees.update(7, fast)
+  T.check(doors() == 0, 'PROP_LEAD_S off: a door 156 m out (its tile) is not shown')
+  trees.PROP_LEAD_S = 4
+  trees.update(7, { x = 110, y = 128, vx = 30, vy = 0, speed = 30 })
+  T.check(doors() == 1, 'PROP_LEAD_S 4 at 30 m/s: shown (120 m nearer)')
+  trees.update(7, { x = 120, y = 128, vx = -30, vy = 0, speed = 30 })
+  T.check(doors() == 0, '... not for a tile behind the car')
+  trees.PROP_LEAD_S = 0
+  trees.dropKey('7:p1_0')
+  trees.update(7, { x = 130, y = 128 })
+end
+T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
+  'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
 T.done('test_trees')

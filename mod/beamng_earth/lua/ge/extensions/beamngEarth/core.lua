@@ -2898,6 +2898,10 @@ local function onUpdate(dtReal, dtSim)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
     t = mark('parking', t)
+    -- (the detail keep-up recorder, a debug switch: tools/keepup.py starts it; nothing loads it otherwise)
+    if package.loaded['beamngEarth/keepup'] and package.loaded['beamngEarth/keepup'].on then
+      pcall(package.loaded['beamngEarth/keepup'].tick, st)
+    end
     navgraph.update(st.anchorId, pb, gov, st.anchor)
     t = mark('navgraph', t)
     do

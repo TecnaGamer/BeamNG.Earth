@@ -476,10 +476,10 @@ launcher or `run_server.sh` / `run_server.bat`. With the launcher you can also p
 | `BNE_OSMTAGS_BASE` | `<BNE_DATA_PAGES>/osmtags` | the OSM road tags manifest's folder (a staged build) |
 | `BNE_NYC_MASSING_URL`, `BNE_NYC_TANKS_URL` | the data repo's Pages | New York building massing and rooftop tanks |
 | `BNE_TELEMETRY_URL` | `https://earth.tgforever.net/telemetry` | where anonymous telemetry goes (`BNE_TELEMETRY=off` sends nothing) |
+| `BNGE_SERVER_LIST_URL` | `https://earth.tgforever.net/servers` | the BeamMP server list shown in the game; a custom host gets the server-list rate limits unless it already has a network policy |
 | `BNGE_REPORT_URL` | `https://earth.tgforever.net/report` | where in-game reports go |
 
-The BeamMP server list address is fixed in `server/earthd.py` (`SERVER_LIST_URL`). The collector's own settings are
-listed in [hosting/README.md](../hosting/README.md).
+The collector's own settings are listed in [hosting/README.md](../hosting/README.md).
 
 ## Run your own CDN, step by step
 
@@ -539,6 +539,7 @@ export BNE_DATA_PAGES=https://<you>.github.io/BeamNG.Earth-data   # only if your
 export BNGE_AERIAL_REQUEST_URL=https://collector.example.org/aerial/request    # or "off"
 export BNE_TELEMETRY_URL=https://collector.example.org/telemetry
 export BNGE_REPORT_URL=https://collector.example.org/report
+export BNGE_SERVER_LIST_URL=https://collector.example.org/servers
 # only if you sign your own decision archives
 export BNGE_DECISIONS_PUBKEY=<your public key hex>
 ```

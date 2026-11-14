@@ -934,6 +934,7 @@ function M.onGeoTile(msg, currentAnchor, a)
   end
   geoRows(key, t, data)
   queueGeoParts(key, t, data)
+  if M.onKeepupTile then M.onKeepupTile(t, false) end
   M.geoStats.tiles = M.geoStats.tiles + 1
   return true
 end
@@ -996,6 +997,7 @@ function M.onSkin(msg, currentAnchor)
     t.queued = #data.chunks
   end
   if t.skin.pending == 0 then M.dropOldSkin(t) end
+  if M.onKeepupTile then M.onKeepupTile(t, true) end
   M.geoStats.skins = M.geoStats.skins + 1
   sinceChange = stopwatch.new()
   return true
@@ -2002,6 +2004,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local ok, id = pcall(createChunk, q.chunk)
       if ok then t.objs[#t.objs + 1] = id else lastError = tostring(id) end
+      if ok and M.onKeepupPart then M.onKeepupPart('road', t) end
       t.queued = t.queued - 1
       local ms = now() - t0
       gov:charge('roadChunk', ms)
@@ -2058,6 +2061,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         t.oldPart[q.what] = nil
         if t.oldPartSlot and t.oldPartSlot[q.what] then slotDrop(t.oldPartSlot[q.what]); t.oldPartSlot[q.what] = nil end
       end
+      if ok and M.onKeepupPart then M.onKeepupPart(q.what, t) end     -- (keepup.lua: a debug recorder)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
@@ -2253,6 +2257,10 @@ function M.reloadLog() return reloadLog end
 -- buildings, wires), each by the distance to its tile's centre (behind a fast car counting three times): the tiles
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
 -- mesh by its distance to the camera instead when that is nearer (viewAt: what is drawn follows the camera).
+-- SURFACE_FIRST: the drawn ground surfaces (a skin's road mesh with its markings, its sidewalks) rank with the colliders
+-- by the same distance, not after every one of them (a building's collision mesh 600 m ahead came before the sidewalk
+-- the car was about to reach: keep-up measure 2026-11-13, tools/keepup.py). false: as before.
+M.SURFACE_FIRST = true
 function M.nextWalk(q)
   if #q == 0 then return 1 end
   local p, dir = playerNow()
@@ -2275,7 +2283,9 @@ function M.nextWalk(q)
         k = math.min(k, math.sqrt(vx * vx + vy * vy))
       end
     end
-    if e.renderOnly or e.what == 'wire' then k = k + 1e6 end
+    if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
+      k = k + 1e6
+    end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
@@ -2793,6 +2803,31 @@ function M.allHeldSessions()
     for _, f in ipairs(list) do if not seen[f] then seen[f] = true; out[#out + 1] = f end end
   end
   table.sort(out)
+  return out
+end
+
+-- keepup.lua (a debug recorder): what geotile gkey shows now ({ tile, skin, road, walkWant, walk, signsWant, signs,
+-- props }), its old skin's meshes counting as shown (kept until the new ones are made).
+function M.keepupTile(gkey)
+  local t = tiles[geoKey(gkey)]
+  if not t then return {} end
+  local old = t.oldSkin or {}
+  return { tile = true, skin = t.skin ~= nil, road = t.road ~= nil or old.road ~= nil or #(t.objs or {}) > 0,
+    walkWant = t.skin ~= nil and t.skin.walk ~= nil, walk = t.walk ~= nil or old.walk ~= nil,
+    signsWant = t.parts ~= nil and t.parts.signs ~= nil, signs = t.signs ~= nil, props = t.props == true }
+end
+-- ... and every geotile part made now ({ what, gkey }: shown before a recording starts)
+function M.keepupSeen()
+  local out = {}
+  for _, t in pairs(tiles) do
+    if t.geo then
+      for _, list in ipairs({ M.SKIN_WHATS, M.CONTENT_WHATS }) do
+        for _, what in ipairs(list) do
+          if t[what] or (what == 'road' and #(t.objs or {}) > 0) then out[#out + 1] = { what = what, gkey = tostring(t.gkey) } end
+        end
+      end
+    end
+  end
   return out
 end
 

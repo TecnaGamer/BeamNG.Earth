@@ -33,6 +33,8 @@ package.loaded['beamngEarth/windturbines'] = {
   dropKey = function(key) turbineDrops[#turbineDrops + 1] = key end,
 }
 local roads = require('beamngEarth/roads')
+T.check(roads.SURFACE_FIRST == true, 'drawn road surfaces ranked with the colliders by default (2026-11-13)')
+roads.SURFACE_FIRST = false     -- (the tests below: the base order; SURFACE_FIRST's own tests turn it on)
 local update = roads.update
 roads.update = function(...)
   elapsedMs = elapsedMs + 16
@@ -362,6 +364,14 @@ do
         { key = '2:-2_0', what = 'deck' } }
   T.check(roads.urgentWalk(q) == 3, 'urgent: the deck ahead within reach (not beside first, not behind)')
   T.check(roads.urgentWalk({ { key = '2:2_0', what = 'walkcol' } }) == nil, 'urgent: decks and tunnels only')
+  -- the drawn surfaces after every collider (as before), or by the same distance with SURFACE_FIRST
+  q = { { key = '2:0_2', what = 'bldcol' }, { key = '2:2_0', what = 'walk', renderOnly = true } }
+  T.check(q[roads.nextWalk(q)].what == 'bldcol', 'render-only sidewalks after the colliders')
+  roads.SURFACE_FIRST = true
+  T.check(q[roads.nextWalk(q)].what == 'walk', 'SURFACE_FIRST: the sidewalk ahead before a collider beside')
+  q[2].what = 'bld'
+  T.check(q[roads.nextWalk(q)].what == 'bldcol', 'SURFACE_FIRST: drawn buildings still after the colliders')
+  roads.SURFACE_FIRST = false
   function car:getVelocity() return vec3(0, 0, 0) end
   roads.update(gov, 2)
   q = { { key = '2:2_0' }, { key = '2:0_1' } }
