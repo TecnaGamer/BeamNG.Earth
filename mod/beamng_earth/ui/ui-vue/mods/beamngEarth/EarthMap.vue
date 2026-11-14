@@ -171,7 +171,7 @@
           </div>
           <div v-if="!query && !searching" class="search-hint">Near you + notable places worldwide</div>
           <div v-if="searching || searchMsg" class="search-status" role="status" aria-live="polite">
-            <span v-if="searching" class="search-spinner" aria-hidden="true" />
+            <span v-if="searching" class="search-spinner" aria-hidden="true"></span>
             <span>{{ searching ? (searchWide ? 'Searching wider… Finding category places and addresses.' : 'Searching places…') : searchMsg }}</span>
           </div>
           <div v-if="results.length" id="earth-search-results" ref="resultsEl" class="search-results" role="listbox" aria-label="Search results" :aria-busy="searching">
@@ -1502,7 +1502,7 @@ function askRoute(half) {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlanResult(${r.id}) or nil`, res => {
         if (seq !== areaSeq || !areaAsk.value) return
         if (!res) {
-          if (++tries < 200) searchPollTimer = setTimeout(poll, 150)
+          if (++tries < 200) setTimeout(poll, 150)
           else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
           return
         }
@@ -1529,7 +1529,7 @@ function askArea(again) {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaPlanResult(${r.id}) or nil`, res => {
         if (seq !== areaSeq || !areaAsk.value) return
         if (!res) {
-          if (++tries < 100) searchPollTimer = setTimeout(poll, 150)
+          if (++tries < 100) setTimeout(poll, 150)
           else areaAsk.value = { ...areaAsk.value, error: "No answer from the companion server" }
           return
         }
@@ -1556,7 +1556,7 @@ function confirmArea() {
     let tries = 0
     const poll = () => {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiAreaResult(${r.id}) or nil`, res => {
-        if (!res) { if (++tries < 60) searchPollTimer = setTimeout(poll, 150); else areaAsk.value = { ...a, busy: false, error: "No answer from the companion server" }; return }
+        if (!res) { if (++tries < 60) setTimeout(poll, 150); else areaAsk.value = { ...a, busy: false, error: "No answer from the companion server" }; return }
         if (!res.ok) { areaAsk.value = { ...a, busy: false, error: String(res.error || "Not saved") }; return }
         cancelSelect()
         panelOpen.value = true
