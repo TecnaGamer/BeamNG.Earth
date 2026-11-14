@@ -5789,9 +5789,12 @@ PACK_INNER_M = float(os.environ.get("BNE_BLDPACK_INNER_M", "1000"))
 # 70k vertices. "sky": every building so, its walls in SKY_WALL_DAY (the skyline's cells with day windows); "tall": only
 # those past PACK_SKY_FLOORS floors (the many-vertex ones; the low ones keep the lite mesh's textured walls); "lite":
 # the lite mesh (build_parts) as before. In the far geotiles' revisit key (blockworker.far_geo) when not "lite".
-PACK_STYLE = os.environ.get("BNE_FARPACK_STYLE", "lite")
+# "sky" by default (2026-11-14, Windows DX11 drive A/B at 45 mph): Midtown's pack made in 7.4 ms on average (17 at most)
+# against 48.5 (166), frames over 50 ms 27 against 64, over 100 ms 0 against 5; the look at 0.6-1 mi close to the lite
+# mesh's (day windows). "tall" saves nothing in a low-rise city (Fells Point: no building past 8 floors).
+PACK_STYLE = os.environ.get("BNE_FARPACK_STYLE", "sky")
 if PACK_STYLE not in ("lite", "sky", "tall"):
-    PACK_STYLE = "lite"
+    PACK_STYLE = "sky"
 PACK_SKY_FLOORS = 8
 PACK_PER_POSE = 2
 FAR_GEO = 1                 # the far geotiles' protocol (hello.farGeo, the mod's roads.lua M.FAR_GEO): far buildings,

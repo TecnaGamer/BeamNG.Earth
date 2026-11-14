@@ -448,10 +448,12 @@ class FarIndexLimitTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
                     mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
-                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)):
+                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)), \
+                    mock.patch.object(bld, "PACK_STYLE", "lite"):      # (the lite mesh: past the 16-bit indices)
                 data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
                 self.assertEqual(n, len(items))
                 self.check(os.path.join(d, shapes["shape"]), items)
+        self.assertEqual(bld.PACK_STYLE, "sky", "the packs as the skyline's walls by default")
 
     def test_skyline_meshes_cut_between_buildings(self):
         items = _dense_items(120, corners=200)     # (~1k skyline vertices each)
