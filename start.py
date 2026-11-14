@@ -88,9 +88,16 @@ def main():
             skipped.append(flag)
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     cmd += extra
+    # anonymous usage reports (server/telemetry.py), as the app's launcher: BNE_TELEMETRY=off turns them off
+    telemetry = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no") \
+        and not os.environ.get("CI")        # (never the CI's or a test's servers: they are not players)
+    if telemetry and has_flag(help_text, "--telemetry") and "--offline" not in extra and "--telemetry" not in extra:
+        cmd += ["--telemetry", "on"]
 
     install.say(f"BeamNG.Earth {install.version()}: starting the world server")
     install.say(f"  BeamNG.drive user folder: {user_dir}")
+    install.say("  Telemetry: " + ("on: anonymous player count and data-source load, no location "
+                                    "(BNE_TELEMETRY=off turns it off)" if "--telemetry" in cmd else "off"))
     if skipped:
         install.say(f"  (this server version has no {', '.join(skipped)}; left out)")
     install.say("  Leave this window open while you play; close it (or press Ctrl+C) to stop the server.")

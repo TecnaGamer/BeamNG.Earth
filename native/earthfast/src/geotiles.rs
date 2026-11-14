@@ -9,6 +9,7 @@
 //!
 //! The grid's arithmetic is mirrored in the mod (geotile.lua); the keys and the tile corners agree bit for bit (the
 //! same IEEE operations; tests/test_geotiles.py runs both).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -24,10 +25,10 @@ const EARTH_CIRC: f64 = 40075016.686;
 
 pub fn geo_to_ecef(lat: f64, lon: f64, h: f64) -> [f64; 3] {
     let (phi, lam) = (lat.to_radians(), lon.to_radians());
-    let (sl, cl) = (phi.sin(), phi.cos());
+    let (sl, cl) = (phi.dsin(), phi.dcos());
     let nr = A / (1.0 - E2 * sl * sl).sqrt();
     let rr = (nr + h) * cl;
-    [rr * lam.cos(), rr * lam.sin(), (nr * (1.0 - E2) + h) * sl]
+    [rr * lam.dcos(), rr * lam.dsin(), (nr * (1.0 - E2) + h) * sl]
 }
 
 /// Heikkinen's closed form, as lib.rs enu_to_geodetic (the polar axis handled).
@@ -43,7 +44,7 @@ pub fn ecef_to_geo(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
         let f_ = 54.0 * B * B * z2;
         let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
         let c = E2 * E2 * f_ * p2 / (g * g * g);
-        let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
+        let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).dcbrt();
         let k = s + 1.0 + 1.0 / s;
         let pp = f_ / (3.0 * k * k * g * g);
         let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
@@ -54,9 +55,9 @@ pub fn ecef_to_geo(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
         let vv = (t + (1.0 - E2) * z2).sqrt();
         let z0 = B * B * z / (A * vv);
         h = uu * (1.0 - B * B / (A * vv));
-        la = (z + EP2 * z0).atan2(p).to_degrees();
+        la = (z + EP2 * z0).datan2(p).to_degrees();
     }
-    (la, y.atan2(x).to_degrees(), h)
+    (la, y.datan2(x).to_degrees(), h)
 }
 
 /// An ENU frame tangent to the ellipsoid at (lat, lon, 0): origin in ECEF, rows E, N, U.
@@ -69,7 +70,7 @@ pub struct Frame {
 impl Frame {
     pub fn new(lat: f64, lon: f64) -> Frame {
         let (la, lo) = (lat.to_radians(), lon.to_radians());
-        let (sla, cla, slo, clo) = (la.sin(), la.cos(), lo.sin(), lo.cos());
+        let (sla, cla, slo, clo) = (la.dsin(), la.dcos(), lo.dsin(), lo.dcos());
         Frame {
             o: geo_to_ecef(lat, lon, 0.0),
             r: [[-slo, clo, 0.0], [-sla * clo, -sla * slo, cla], [cla * clo, cla * slo, sla]],
@@ -102,6 +103,24 @@ impl Frame {
     /// point (x, y, 0) lies d^2 / 2R over the ellipsoid: three corrections), h whose up is z (Newton on the up, whose
     /// rate is the cosine between the frame's up and the place's normal).
     pub fn world_to_geodetic(&self, x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+        let (lat, lon) = self.world_to_latlon(x, y);
+        let (phi, lam) = (lat.to_radians(), lon.to_radians());
+        let nrm = [phi.dcos() * lam.dcos(), phi.dcos() * lam.dsin(), phi.dsin()];
+        let rate = self.r[2][0] * nrm[0] + self.r[2][1] * nrm[1] + self.r[2][2] * nrm[2];
+        let mut h = {
+            let p = self.from_enu([x, y, z]);
+            ecef_to_geo(p[0], p[1], p[2]).2
+        };
+        for _ in 0..2 {
+            let u = self.to_enu(geo_to_ecef(lat, lon, h))[2];
+            h += (z - u) / rate;
+        }
+        (lat, lon, h)
+    }
+
+    /// world_to_geodetic's lat / lon alone (the same numbers: its height, two more conversions each way, left out):
+    /// a WorldFrame's enu_to_geodetic at h = 0 asked for every point and threw the heights away, ~1/3 of its work.
+    pub fn world_to_latlon(&self, x: f64, y: f64) -> (f64, f64) {
         let (mut qx, mut qy) = (x, y);
         let (mut lat, mut lon, _) = {
             let p = self.from_enu([qx, qy, 0.0]);
@@ -116,18 +135,7 @@ impl Frame {
             lat = got.0;
             lon = got.1;
         }
-        let (phi, lam) = (lat.to_radians(), lon.to_radians());
-        let nrm = [phi.cos() * lam.cos(), phi.cos() * lam.sin(), phi.sin()];
-        let rate = self.r[2][0] * nrm[0] + self.r[2][1] * nrm[1] + self.r[2][2] * nrm[2];
-        let mut h = {
-            let p = self.from_enu([x, y, z]);
-            ecef_to_geo(p[0], p[1], p[2]).2
-        };
-        for _ in 0..2 {
-            let u = self.to_enu(geo_to_ecef(lat, lon, h))[2];
-            h += (z - u) / rate;
-        }
-        (lat, lon, h)
+        (lat, lon)
     }
 
     /// The rigid ENU move into other: p_other = R p + t (R = E_o E_s^T, t = E_o (O_s - O_o)).
@@ -185,7 +193,7 @@ pub fn tile_of(lat: f64, lon: f64, z: u32) -> (i64, i64) {
     let n = (1u64 << z) as f64;
     let la = lat.max(-MAX_LAT).min(MAX_LAT) * PI / 180.0;
     let xf = (lon + 180.0) / 360.0 * n;
-    let yf = (1.0 - (la.tan() + 1.0 / la.cos()).ln() / PI) / 2.0 * n;
+    let yf = (1.0 - (la.dtan() + 1.0 / la.dcos()).dln() / PI) / 2.0 * n;
     let top = n - 1.0;
     (xf.floor().max(0.0).min(top) as i64, yf.floor().max(0.0).min(top) as i64)
 }
@@ -193,7 +201,7 @@ pub fn tile_of(lat: f64, lon: f64, z: u32) -> (i64, i64) {
 /// Latitude of the tile row edge yf (0 = the north edge) at zoom z.
 pub fn lat_of(yf: f64, z: u32) -> f64 {
     let n = (1u64 << z) as f64;
-    (PI * (1.0 - 2.0 * yf / n)).sinh().atan() * 180.0 / PI
+    (PI * (1.0 - 2.0 * yf / n)).dsinh().datan() * 180.0 / PI
 }
 
 pub fn lon_of(xf: f64, z: u32) -> f64 {
@@ -240,7 +248,7 @@ pub fn quad_dist(q: &[[f64; 2]; 4], px: f64, py: f64) -> f64 {
         }
         let l2 = (dx * dx + dy * dy).max(1e-12);
         let t = (((px - a[0]) * dx + (py - a[1]) * dy) / l2).clamp(0.0, 1.0);
-        best = best.min((px - (a[0] + t * dx)).hypot(py - (a[1] + t * dy)));
+        best = best.min((px - (a[0] + t * dx)).dhypot(py - (a[1] + t * dy)));
     }
     if inside { 0.0 } else { best }
 }
@@ -250,7 +258,7 @@ pub fn near(f: &Frame, z: u32, x: f64, y: f64, r: f64) -> Vec<(i64, i64, f64)> {
     let (la, lo, _) = f.world_to_geodetic(x, y, 0.0);
     let (kx, ky) = tile_of(la, lo, z);
     let n = 1i64 << z;
-    let side = EARTH_CIRC * la.to_radians().cos().max(0.01) / n as f64;
+    let side = EARTH_CIRC * la.to_radians().dcos().max(0.01) / n as f64;
     let rings = (r / side).ceil() as i64 + 1;
     let mut out = Vec::new();
     for dy in -rings..=rings {
@@ -278,7 +286,7 @@ pub fn geo_tile_of<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
                         -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>) {
     let (la, lo) = (lat.as_array(), lon.as_array());
     let m = la.len();
-    let (xs, ys): (Vec<i64>, Vec<i64>) = py.allow_threads(|| (0..m).map(|i| tile_of(la[i], lo[i], z)).unzip());
+    let (xs, ys): (Vec<i64>, Vec<i64>) = crate::release(py, m * 40, || (0..m).map(|i| tile_of(la[i], lo[i], z)).unzip());
     (xs.into_pyarray(py), ys.into_pyarray(py))
 }
 
@@ -297,6 +305,35 @@ pub fn geo_tile_quad<'py>(py: Python<'py>, lat0: f64, lon0: f64, z: u32, x: i64,
     numpy::ndarray::Array2::from_shape_vec((4, 2), q.iter().flatten().copied().collect()).unwrap().into_pyarray(py)
 }
 
+/// geotiles.dists: (n, m) m from each point (px, py) to each zoom-z tile (xs, ys)'s quad in the world of the frame at
+/// (lat0, lon0): quad + quad_dist for every pair in one call (the trackers' per-pose drop pass called them once per
+/// tile and spot from Python, 2026-11-07).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn geo_tiles_dist<'py>(py: Python<'py>, lat0: f64, lon0: f64, z: u32, xs: PyReadonlyArray1<'py, i64>,
+                           ys: PyReadonlyArray1<'py, i64>, px: PyReadonlyArray1<'py, f64>,
+                           pyy: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (xs, ys, px, pyy) = (xs.as_array(), ys.as_array(), px.as_array(), pyy.as_array());
+    if xs.len() != ys.len() || px.len() != pyy.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geo_tiles_dist: xs/ys or px/py lengths differ"));
+    }
+    let (n, m) = (xs.len(), px.len());
+    let (xv, yv): (Vec<i64>, Vec<i64>) = (xs.iter().copied().collect(), ys.iter().copied().collect());
+    let (pv, qv): (Vec<f64>, Vec<f64>) = (px.iter().copied().collect(), pyy.iter().copied().collect());
+    let out = crate::release(py, n * (m + 4) * 60, || {
+        let f = Frame::new(lat0, lon0);
+        let mut out = Vec::with_capacity(n * m);
+        for i in 0..n {
+            let q = quad(&f, z, xv[i], yv[i]);
+            for j in 0..m {
+                out.push(quad_dist(&q, pv[j], qv[j]));
+            }
+        }
+        out
+    });
+    Ok(numpy::ndarray::Array2::from_shape_vec((n, m), out).unwrap().into_pyarray(py))
+}
+
 /// geotiles.quad_dist: m from (x, y) to a quad (4, 2) (0 inside).
 #[pyfunction]
 pub fn geo_quad_dist(q: PyReadonlyArray2<'_, f64>, x: f64, y: f64) -> f64 {
@@ -312,7 +349,10 @@ pub fn geo_quad_dist(q: PyReadonlyArray2<'_, f64>, x: f64, y: f64) -> f64 {
 #[pyfunction]
 pub fn geo_tiles_near(py: Python<'_>, lat0: f64, lon0: f64, z: u32, x: f64, y: f64, r: f64) -> Vec<(i64, i64, f64)> {
     let f = Frame::new(lat0, lon0);
-    py.allow_threads(|| near(&f, z, x, y, r))
+    // (a few tiles round a point: released only for a big radius; the call itself cost 5-28 ms waiting for the GIL
+    // back behind the server's busy threads, .claude/work/rust_port_plan.md 1b)
+    let n_est = ((r / (40_075_016.0 / (1u64 << z) as f64)).powi(2) * 4.0 + 1.0) as usize;
+    crate::release(py, n_est * 400, || near(&f, z, x, y, r))
 }
 
 /// geotiles.world_map: points (n, 3) of the world of the frame (slat, slon) in that of (dlat, dlon), exactly.
@@ -322,7 +362,7 @@ pub fn geo_world_map<'py>(py: Python<'py>, slat: f64, slon: f64, dlat: f64, dlon
     let (s, d) = (Frame::new(slat, slon), Frame::new(dlat, dlon));
     let p = pts.as_array();
     let (m, k) = (p.nrows(), p.ncols());
-    let out: Vec<f64> = py.allow_threads(|| {
+    let out: Vec<f64> = crate::release(py, m * 300, || {
         let mut out = Vec::with_capacity(m * 3);
         for i in 0..m {
             let z = if k > 2 { p[[i, 2]] } else { 0.0 };
@@ -343,7 +383,7 @@ pub fn geo_world_to_geodetic<'py>(py: Python<'py>, lat0: f64, lon0: f64, pts: Py
     let f = Frame::new(lat0, lon0);
     let p = pts.as_array();
     let (m, k) = (p.nrows(), p.ncols());
-    let (la, lo, h) = py.allow_threads(|| {
+    let (la, lo, h) = crate::release(py, m * 300, || {
         let (mut la, mut lo, mut h) = (Vec::with_capacity(m), Vec::with_capacity(m), Vec::with_capacity(m));
         for i in 0..m {
             let g = f.world_to_geodetic(p[[i, 0]], p[[i, 1]], if k > 2 { p[[i, 2]] } else { 0.0 });
@@ -354,6 +394,29 @@ pub fn geo_world_to_geodetic<'py>(py: Python<'py>, lat0: f64, lon0: f64, pts: Py
         (la, lo, h)
     });
     (la.into_pyarray(py), lo.into_pyarray(py), h.into_pyarray(py))
+}
+
+/// geo_world_to_geodetic's lat / lon of points (m, 2+) of the frame's world at h = 0 (Frame::world_to_latlon: the
+/// heights not made), as WorldFrame.enu_to_geodetic(e, n, 0) gives them (version 242).
+#[pyfunction]
+pub fn geo_world_to_latlon<'py>(py: Python<'py>, lat0: f64, lon0: f64, e: PyReadonlyArray1<'py, f64>,
+                                n: PyReadonlyArray1<'py, f64>) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let f = Frame::new(lat0, lon0);
+    let (e, n) = (e.as_array(), n.as_array());
+    if e.len() != n.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geo_world_to_latlon: as many e as n"));
+    }
+    let m = e.len();
+    let (la, lo) = crate::release(py, m * 200, || {
+        let (mut la, mut lo) = (Vec::with_capacity(m), Vec::with_capacity(m));
+        for i in 0..m {
+            let g = f.world_to_latlon(e[i], n[i]);
+            la.push(g.0);
+            lo.push(g.1);
+        }
+        (la, lo)
+    });
+    Ok((la.into_pyarray(py), lo.into_pyarray(py)))
 }
 
 /// geotiles.placement: (R as 9 numbers row-major, t (3), c (3)) placing the world of the frame (slat, slon) in that of

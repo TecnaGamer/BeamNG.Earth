@@ -24,6 +24,26 @@ On Windows, BeamMP's detailed output is usually `Launcher.log` beside its execut
 redirected `beammp-launcher.log` can be empty. Earth's companion log is
 `%LOCALAPPDATA%\beamng-earth\logs\server.log`.
 
+## The starting map stays at "Loading the ground"
+
+The loading bar shows the current preparation phase when the companion supports
+it. A cold location can take longer than a cached one. The mod allows five minutes
+in total, including retries. It retries reported preparation failures up to five
+attempts with backoff. If the game cannot import files the companion already
+prepared, it tries those same files up to three times, without rebuilding them.
+
+After the limit, the loading bar and a game message explain the failure. Save the
+companion log (and the game log for an import failure), then select the location
+again on the map. A timeout does not start more generation jobs automatically;
+the server may still be finishing the abandoned request. Selecting an uncached
+place in offline mode requires downloading its data first.
+
+If the companion fails before the game opens, the launcher distinguishes an exit
+from a startup timeout and displays the last startup step and error when present,
+plus the full log's path. A semaphore cleanup warning alone does not identify why
+the process stopped. See [initial-loading validation](INITIAL_LOADING_VALIDATION.md)
+for the automated coverage and remaining game checks.
+
 ## The world server is already running
 
 Close the previous Earth window first. The companion normally listens on loopback

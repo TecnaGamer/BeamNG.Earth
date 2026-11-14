@@ -25,7 +25,6 @@ release files this is used with (an Overture release, WorldCover v200, CHMv2), s
 needs revalidating; the caller puts the release id into cache_dir.
 """
 import datetime
-import io
 import logging
 import os
 import re
@@ -493,8 +492,3 @@ class MemoryRange:
 
     def blocks(self, i0, i1, kind="demand"):
         return {}
-
-
-def read_all(remote, kind="demand"):
-    """A whole (small) remote file as a BytesIO."""
-    return io.BytesIO(remote.read(0, remote.size, kind))

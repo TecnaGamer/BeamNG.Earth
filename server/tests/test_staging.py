@@ -94,6 +94,52 @@ class StagingTest(unittest.TestCase):
             staging.os.replace = real
             staging.REPLACE_WAITS = old_waits
 
+    def test_game_file_held_for_a_moment(self):
+        """Windows: a file in the game's folder the game (or a virus scanner) has open cannot be replaced for a moment;
+        a block's surface mask failed the whole block (PermissionError, 2026-11-13). Tried again, then the error."""
+        from unittest import mock
+        real, calls = os.replace, []
+
+        def held(n):
+            def fake(a, b):
+                calls.append(a)
+                if len(calls) <= n:
+                    raise PermissionError(13, "Access is denied")
+                real(a, b)
+            return fake
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(staging, "GAME_WAITS", (0.0, 0.0, 0.0)):
+            session = os.path.join(root, "BeamNG.drive", "current", "temp", "beamngEarth", "s1")
+            target = os.path.join(session, "hm_2_0_0_m8.png")
+            os.makedirs(session)
+            Path(target).write_bytes(b"old")
+            tmp = staging.tmp_for(target)
+            Path(tmp).write_bytes(b"new")
+            with mock.patch.object(staging.os, "replace", held(2)), self.assertLogs("earthd.staging", "INFO"):
+                staging.replace(tmp, target)                # freed after two tries: it goes in
+            self.assertEqual(Path(target).read_bytes(), b"new")
+            self.assertEqual(len(calls), 3)
+            calls.clear()
+            Path(tmp).write_bytes(b"newer")
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                staging.replace(tmp, target)                # held throughout: the error stands
+            self.assertEqual(len(calls), len(staging.GAME_WAITS) + 1)
+            self.assertEqual(Path(target).read_bytes(), b"new")
+            calls.clear()
+            cache, ctmp = os.path.join(root, "t.webp"), os.path.join(root, "t.webp.tmp")
+            Path(ctmp).write_bytes(b"x")
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                staging.replace(ctmp, cache)                # a cache file: one try (replace_cached has its own)
+            self.assertEqual(len(calls), 1)
+            calls.clear()
+            Path(tmp).write_bytes(b"newest")
+
+            async def on_loop():        # (the server's event loop, Server.reslot: one try, no sleep)
+                staging.replace(tmp, target)
+            import asyncio
+            with mock.patch.object(staging.os, "replace", held(99)), self.assertRaises(PermissionError):
+                asyncio.run(on_loop())
+            self.assertEqual(len(calls), 1)
+
 
 
 class WarmTest(unittest.TestCase):
@@ -143,6 +189,29 @@ class ReadHeldTest(unittest.TestCase):
                 raise FileNotFoundError(2, "gone")
             with self.assertRaises(FileNotFoundError):
                 staging.read_held(gone)
+
+
+class ReadNpzTest(unittest.TestCase):
+    def test_damaged_files_removed_good_ones_read(self):
+        """read_npz: a good file read; an empty, cut short, zeroed or member-less one None and removed (built again by
+        the caller), never an exception at every ask (telemetry 2026-11-08: far tiles' EOFError / BadZipFile)."""
+        import numpy as np
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "c.npz")
+            np.savez_compressed(p, a=np.arange(1000.0))
+            with open(p, "rb") as f:
+                body = f.read()
+            self.assertEqual(float(staging.read_npz(p, lambda f: f["a"].sum())), 499500.0)
+            for name, bad in (("empty", b""), ("cut short", body[:len(body) // 2]), ("zeroed", b"\0" * len(body))):
+                with open(p, "wb") as f:
+                    f.write(bad)
+                with self.assertLogs("earthd.staging", "WARNING"):
+                    self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), name)
+                self.assertFalse(os.path.exists(p), name)
+            np.savez_compressed(p, b=np.zeros(3))
+            with self.assertLogs("earthd.staging", "WARNING"):
+                self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "a member missing")
+            self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "missing: None, quietly")
 
 
 if __name__ == "__main__":

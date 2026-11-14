@@ -80,5 +80,83 @@ class JunctionCorridorTest(unittest.TestCase):
             np.testing.assert_allclose(side.z, side0.z, atol=1e-9, err_msg=name)
 
 
+class TrimmedBankTest(unittest.TestCase):
+    """A side road trimmed at its mouth (merge_plan_set) has its bank and widen cut with its line: left as long as the
+    untrimmed line, every later plan in the pack read shifted bank values (2026-11-11)."""
+
+    def plans(self, reverse=False):
+        main = main_road()
+        y = np.array([0.0, 3.0, 5.0, 8.0, 20.0, 40.0])
+        side = side_road(y, 10.0)
+        side.bank = np.array([0.01, 0.02, 0.03, 0.04, 0.05, 0.06])
+        grading.set_widen(side, np.array([0.5, 0.4, 0.3, 0.2, 0.1, 0.0]))
+        if reverse:
+            q = grading.Plan(side.xy[::-1].copy(), side.z[::-1].copy(), 2, road_half=1.75)
+            q.bank = side.bank[::-1].copy()
+            grading.set_widen(q, side.widen[::-1].copy())
+            side = q
+        far = side_road(np.arange(0.0, 30.0, 5.0) + 100.0, 12.0, x=150.0)
+        far.bank = np.full(len(far.xy), 0.5)
+        main.rank, side.rank, far.rank = grading.grade_rank(TRUNK), grading.grade_rank(TRACK), grading.grade_rank(TRACK)
+        main.rid, side.rid, far.rid = 1, 2, 3
+        return [main, side, far]
+
+    def test_bank_and_widen_follow_the_trimmed_line(self):
+        for reverse in (False, True):
+            ps = self.plans(reverse)
+            n0 = len(ps[1].xy)
+            pack = grading.merge_plan_set(ps)
+            side = ps[1]
+            self.assertLess(len(side.xy), n0, "the side road's mouth trimmed")
+            self.assertEqual(len(side.bank), len(side.xy))
+            self.assertEqual(len(side.widen), len(side.xy))
+            ys = side.xy[:, 1]
+            # (the bank / widen at each vertex where the untrimmed line had it there, interpolated at the new end)
+            np.testing.assert_allclose(side.bank, np.interp(ys, [0, 3, 5, 8, 20, 40], [.01, .02, .03, .04, .05, .06]),
+                                       atol=1e-12, err_msg=f"reverse={reverse}")
+            np.testing.assert_allclose(side.widen, np.interp(ys, [0, 3, 5, 8, 20, 40], [.5, .4, .3, .2, .1, 0]),
+                                       atol=1e-12)
+            pad = side.half + float(np.max(side.widen)) + grading.T_MAX
+            self.assertAlmostEqual(side.bbox[1], float(ys.min()) - pad)
+            # the plan after it reads its own bank in the pack
+            far = pack.rid == 3
+            self.assertTrue(far.any())
+            np.testing.assert_allclose(pack.ba[far], 0.5)
+            np.testing.assert_allclose(pack.bb[far], 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+class WeldContinuationsTest(unittest.TestCase):
+    """Pieces of one road meet at one height (grading.weld_continuations): no dip across a junction."""
+
+    def test_the_lower_piece_rises_to_its_neighbour_at_the_joint(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        ps = [("a", a), ("b", b)]
+        grading.weld_continuations(ps, [roads.Spec(6.0, "paved", False, "residential"),
+                                        roads.Spec(6.0, "paved", False, "residential")])
+        a, b = [p for _f, p in ps]
+        self.assertAlmostEqual(float(a.z[-1]), 100.2, places=6)
+        self.assertAlmostEqual(float(b.z[0]), 100.2, places=6)
+        self.assertAlmostEqual(float(a.z[0]), 100.0, places=6, msg="the far end keeps its profile")
+        self.assertAlmostEqual(float(b.z[-1]), 100.2, places=6)
+
+    def test_different_classes_are_not_welded(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        ps = [("a", a), ("b", b)]
+        grading.weld_continuations(ps, [roads.Spec(10.0, "paved", False, "primary"),
+                                        roads.Spec(6.0, "paved", False, "residential")])
+        self.assertAlmostEqual(float(ps[0][1].z[-1]), 100.0, places=6)
+        self.assertAlmostEqual(float(ps[1][1].z[0]), 100.2, places=6)
+
+    def test_a_plan_set_is_welded_in_place(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        a.rank = b.rank = 114
+        plans = [a, b]
+        grading.weld_continuations(plans)
+        self.assertAlmostEqual(float(plans[0].z[-1]), 100.2, places=6)
+        self.assertAlmostEqual(float(plans[1].z[0]), 100.2, places=6)

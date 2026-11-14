@@ -240,14 +240,19 @@ local function selection(anchor, focus, box, density)
   stats.populationScans = (stats.populationScans or 0) + 1
 end
 
+-- (one table, refilled each frame: a closure and five tables a frame made this the mod's largest per-frame garbage,
+-- 3.2 MB in 40 s, 2026-11-07)
+local viewT = { cam = {}, forward = {}, right = {}, up = {} }
+local function fill(t, v) t.x, t.y, t.z = v.x, v.y, v.z end
 local function viewOf(cam, forward)
   local io = ui_imgui and ui_imgui.GetIO()
   local size = io and io.DisplaySize
   local aspect = size and size.y > 0 and size.x / size.y or 16 / 9
   local tanV = math.tan(math.rad(core_camera.getFovDeg()) * 0.5)
-  local function copy(v) return { x = v.x, y = v.y, z = v.z } end
-  return { cam = copy(cam), forward = copy(forward), right = copy(core_camera.getRight()), up = copy(core_camera.getUp()),
-    tanV = tanV, tanH = tanV * aspect, pix = 2 * tanV / math.max(240, size and size.y or 1080) }
+  local t = viewT
+  fill(t.cam, cam); fill(t.forward, forward); fill(t.right, core_camera.getRight()); fill(t.up, core_camera.getUp())
+  t.tanV, t.tanH, t.pix = tanV, tanV * aspect, 2 * tanV / math.max(240, size and size.y or 1080)
+  return t
 end
 
 local function pair(create)
@@ -405,6 +410,8 @@ function M.update(dtReal, dtSim, state, box, gov)
     end
   end
   if not state.anchor or not box then return end
+  -- (off, by day or by choice, with no car shown or fading and no pair kept: nothing to look at this frame)
+  if not requested and next(actors) == nil and #pool == 0 and not scan then return end
   local cam, f = core_camera.getPosition(), core_camera.getForward()
   local player = state.player
   local focus = player or { x = (box[1] + box[3]) / 2, y = (box[2] + box[4]) / 2, z = 0 }

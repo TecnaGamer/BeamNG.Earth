@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import shutil
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 import unittest
@@ -12,11 +13,13 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import netfetch  # noqa: E402
 import revisit  # noqa: E402
+import revisitpack  # noqa: E402
 
 
 class RevisitTest(unittest.TestCase):
     def test_an_item_comes_back_and_names_swap(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)  # close pack handles before removing the directory on Windows
             text = json.dumps({"road": {"shape": "/temp/s1/road_3_1_-2.cdae"},
                                "bld": {"shape": "/temp/s1/bld_3_1_-2.cdae"}}, separators=(",", ":"))
             self.assertEqual(revisit.shapes_in(text, "/temp/s1"), ["bld_3_1_-2.cdae", "road_3_1_-2.cdae"])
@@ -46,7 +49,8 @@ class RevisitTest(unittest.TestCase):
     def test_a_cells_road_facts_are_shared(self):
         import roads
         from test_roads import features
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)
             old = revisit.CACHE_DIR
             revisit.CACHE_DIR = d
             try:
@@ -59,7 +63,7 @@ class RevisitTest(unittest.TestCase):
                 b_feats = cell()            # (another process: its own decoded cell)
                 from unittest import mock
                 with mock.patch.object(roads, "_road_specs", side_effect=AssertionError("made again")), \
-                        mock.patch.object(roads, "_level_ranges", side_effect=AssertionError("made again")):
+                        mock.patch.object(roads, "_level_ranges_many", side_effect=AssertionError("made again")):
                     self.assertEqual(roads.road_specs(b_feats), a)
                     self.assertEqual([roads.level_ranges(b_feats, i) for i in range(2)], ra)
                 self.assertEqual(b_feats.__dict__["_road_specs"][(None, None, False)], a)
@@ -72,7 +76,8 @@ class RevisitTest(unittest.TestCase):
         """store(where=...) appends one line to this process's sidecar; compact() folds older files into one, the
         last line per item, without the items whose zip is gone; a file written after `before` stays as it is."""
         import time
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, ExitStack() as cleanup:
+            cleanup.callback(revisitpack.reset)
             sig = revisit.sig(sidewalks=True, md={"overture": "2026-09-23.1"})
             ks = [revisit.key("roads", 39.28, -76.56, i) for i in range(3)]
             for i, k in enumerate(ks):
@@ -116,6 +121,45 @@ class RevisitTest(unittest.TestCase):
         self.assertFalse(revisit.sig_current(revisit.sig(lanes=1), cur), "a setting the server does not name")
         self.assertTrue(revisit.sig_current("", cur))
         self.assertEqual(revisit.sig(b=1, a=2), revisit.sig(a=2, b=1))
+
+    def test_sidecar_descriptor_is_closed_on_success_and_write_error(self):
+        from unittest import mock
+        real_open = os.open
+        opened = []
+
+        def record_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        with tempfile.TemporaryDirectory() as d:
+            wh = revisit.where(39.28, -76.56, 39.28, -76.56, 39.29, -76.55, "")
+            with mock.patch.object(revisit.os, "open", side_effect=record_open):
+                revisit._note(d, "roads", "first", wh)
+                self.assertEqual(len(opened), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[-1])
+                with mock.patch.object(revisit.os, "write", side_effect=OSError("disk write failed")):
+                    revisit._note(d, "roads", "failed", wh)
+                self.assertEqual(len(opened), 2)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[-1])
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0]), encoding="utf-8") as f:
+                self.assertEqual([revisit.parse_where(line)[3] for line in f], ["first"])
+
+    def test_concurrent_sidecar_appends_keep_every_row(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as d:
+            wh = revisit.where(39.28, -76.56, 39.28, -76.56, 39.29, -76.55, "")
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda i: revisit._note(d, "roads", str(i), wh), range(100)))
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0]), encoding="utf-8") as f:
+                rows = [revisit.parse_where(line) for line in f]
+            self.assertEqual(len(rows), 100)
+            self.assertTrue(all(r is not None for r in rows))
+            self.assertEqual({r[3] for r in rows}, {str(i) for i in range(100)})
 
     def test_sidecar_reopens_after_cache_directory_is_replaced(self):
         wh = revisit.where(39, -76, 39, -76, 40, -75, "")

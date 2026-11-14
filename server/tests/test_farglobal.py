@@ -510,3 +510,31 @@ class RebaseTest(test_server.ServerHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ViewConeTest(unittest.TestCase):
+    """The 3D map's view cone (farfield.out_of_view / earthfast farglobal.rs): nodes off the screen are chosen as if
+    farther, so the selection behind the camera is coarser and smaller; the same rule in Python and Rust."""
+
+    def test_cone_coarser_behind_and_rules_agree(self):
+        fr = geodesy.EnuFrame(LAT, LON)
+        eye = 4000.0
+        cam = {"x": 0.0, "y": -5000.0, "z": eye, "fx": 0.0, "fy": 0.77, "fz": -0.64, "tx": 0.0, "ty": 0.0, "tz": 0.0,
+               "fovDeg": 60}
+        cone = list(ff.view_cone(cam)) + [3.0]
+        args = dict(layout=ff.V131, max_level=9, min_level=-1, radius=150000.0, disc=True, forced_level=-1, eye_h=eye)
+        plain, _ = ff.select_global(fr, 0.0, 0.0, ff.global_zoom(LAT), **args)
+        coned, _ = ff.select_global(fr, 0.0, 0.0, ff.global_zoom(LAT), cone=cone, **args)
+        self.assertLess(len(coned), len(plain))
+
+        def behind(out):            # the finest level south of the camera (looking north)
+            return min((t.level for t in out.values() if (t.bbox[1] + t.bbox[3]) / 2 < -30000.0), default=99)
+        self.assertGreater(behind(coned), behind(plain))
+        # in front (north, on screen) as fine as without it
+        front = [t.level for t in coned.values() if 2000.0 < (t.bbox[1] + t.bbox[3]) / 2 < 8000.0
+                 and abs((t.bbox[0] + t.bbox[2]) / 2) < 2000.0]
+        front0 = [t.level for t in plain.values() if 2000.0 < (t.bbox[1] + t.bbox[3]) / 2 < 8000.0
+                  and abs((t.bbox[0] + t.bbox[2]) / 2) < 2000.0]
+        self.assertEqual(min(front), min(front0))
+        self.assertEqual(ff.out_of_view(cone, -100.0, -60000.0, 100.0, -59800.0, 59800.0), 3.0)
+        self.assertEqual(ff.out_of_view(cone, -100.0, 3000.0, 100.0, 3200.0, 3000.0), 1.0)

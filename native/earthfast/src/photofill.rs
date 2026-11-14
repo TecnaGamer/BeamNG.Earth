@@ -241,7 +241,7 @@ pub fn fill_photo<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, mask: Py
     }
     let src: Vec<u8> = img.iter().copied().collect();
     let msk: Vec<bool> = m.iter().copied().collect();
-    let out = py.allow_threads(move || {
+    let out = py.detach(move || {
         if !msk.iter().any(|&v| !v) {
             return src;
         }

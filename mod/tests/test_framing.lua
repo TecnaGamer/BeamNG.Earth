@@ -101,6 +101,31 @@ do
   T.check(r:pop() == nil, 'drained')
 end
 
+-- a burst of small frames in 64 KB receives: the reassembler's own copies stay a few times the data, not the 60x of
+-- the rest of the buffer copied after every 32 KB read (2026-11-08: much of the game's GE Lua garbage on a drive)
+do
+  local parts = {}
+  for i = 1, 6000 do parts[#parts + 1] = framing.encode(string.rep(string.char(65 + i % 26), 100 + (i * 37) % 800)) end
+  local s = table.concat(parts)
+  local chunks = {}
+  for p = 1, #s, 65536 do chunks[#chunks + 1] = s:sub(p, p + 65535) end
+  local r = framing.newReassembler()
+  collectgarbage(); collectgarbage('stop')
+  local before = collectgarbage('count')
+  for _, c in ipairs(chunks) do r:feed(c) end
+  local n, ok = 0, true
+  while true do
+    local m = r:pop()
+    if not m then break end
+    n = n + 1
+    if m ~= parts[n]:sub(5) then ok = false end
+  end
+  local kb = collectgarbage('count') - before
+  collectgarbage('restart')
+  T.check(n == 6000 and ok, 'burst: every frame, in order')
+  T.check(kb < 4 * #s / 1024, string.format('burst: %.1fx the data allocated (under 4x)', kb * 1024 / #s))
+end
+
 -- oversized length header sets err and stops
 do
   local r = framing.newReassembler()

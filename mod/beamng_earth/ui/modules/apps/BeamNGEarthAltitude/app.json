@@ -1,0 +1,21 @@
+{
+  "domElement": "<beamng-earth-altitude></beamng-earth-altitude>",
+  "name": "BeamNG.Earth: Altitude",
+  "types": [
+    "ui.apps.categories.utility"
+  ],
+  "description": "Your height above sea level and above the ground, and how fast you climb or fall.",
+  "css": {
+    "top": "120px",
+    "right": "10px",
+    "height": "86px",
+    "width": "190px"
+  },
+  "author": "BeamNG.Earth",
+  "version": "1.0",
+  "directive": "beamngEarthAltitude",
+  "appName": "beamngEarthAltitude",
+  "category": "BeamNG.Earth",
+  "isAuxiliary": false,
+  "interactive": "no"
+}

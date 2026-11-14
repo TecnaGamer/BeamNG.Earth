@@ -188,6 +188,23 @@ function M.fogDensityFor(sigma, groundZ, height)
   return math.min(d, M.FOG_DENSITY_MAX)
 end
 
+-- The fog a fixed view distance needs (the settings' viewDistanceMode 'fixed'): the engine draws nothing past it, so
+-- the scene is VIEW_FOG_DEPTH optical depths into the fog there (exp(-3): ~95 %), not cut off against a clear sky; 0
+-- with the real horizon. 1 km: 0.003; 20 km: 1.5e-4; from 75 km the level's own 4e-5 is more.
+M.VIEW_FOG_DEPTH = 3.0
+-- The engine's density for that (groundZ, fogHeight: as fogDensityFor, the engine thins its fog with height: 2 km up
+-- under a 1 km fog height a raw 3 / D would give 0.4 optical depths, Codex 2026-11-14), at most FOG_DENSITY_MAX.
+function M.viewFogFloor(get, groundZ, fogHeight)
+  get = get or (function(k)
+    local st = rawget(_G, 'beamngEarth_settings')
+    return st and st.get and st.get(k)
+  end)
+  if get('viewDistanceMode') ~= 'fixed' then return 0 end
+  local km = tonumber(get('viewDistanceKm'))
+  if not km or km <= 0 then return 0 end
+  return M.fogDensityFor(M.VIEW_FOG_DEPTH / (km * 1000), groundZ, tonumber(fogHeight) or 1000)
+end
+
 -- Pure: the share of the fog kept with the camera h m over the ground (1 low down, 0 high up; FOG_FADE_*).
 function M.fogAltitudeShare(h)
   h = tonumber(h)
@@ -469,6 +486,8 @@ local function readEngine(e, tgt)
   c.cirrusDensity = num(e.getCloudCirrusDensity and e.getCloudCirrusDensity(), tgt.cirrusDensity)
   c.cloudWindSpeed = num(e.getWindSpeed and e.getWindSpeed(), tgt.cloudWindSpeed)
   local d = e.getFogDensity and num((e.getFogDensity()), nil)
+  -- (the fog a fixed view distance's floor wrote is not the weather's: the density underneath it, viewFog's base)
+  if d and S.viewFogSet and S.viewFogBase and math.abs(d - S.viewFogSet) <= 1e-9 * math.max(1, d) then d = S.viewFogBase end
   local h = e.getFogAtmosphereHeight and num(e.getFogAtmosphereHeight(), nil)
   if d and h and h > 0 then
     c.fogHeight = h
@@ -554,7 +573,8 @@ local function applyPrecip(e, c)
   local alt = e.getCloudAltitudeKm and tonumber(e.getCloudAltitudeKm())
   local cz = cameraZ()
   if alt and cz and cz > alt * 1000 then rain, snow = 0, 0 end
-  M.rainNow = rain                          -- (its sound: ambience.lua)
+  M.rainNow = rain                          -- (its sound: ambience.lua; api.weather)
+  M.snowNow = snow
   drivePrecip(M.RAIN_NAME, rain, M.RAIN_POOL)
   drivePrecip(M.SNOW_NAME, snow, M.SNOW_POOL)
 end
@@ -596,6 +616,15 @@ M._restoreSun = function() restoreSun() end -- tests
 -- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
 local function cameraOverGround()
   local cam = rawget(_G, 'core_camera')
+  -- (the 3D map: its camera's height over its target, not the world z: over the far side of the earth from the
+  -- origin the camera lies thousands of km under z = 0, the fog took it for deep underground and the screen went grey,
+  -- the user 2026-11-07: "If i rotate the globe under the horizon line while zoomed all the way out the screen turns
+  -- gray")
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() and cam and cam.getGlobalCameras then
+    local g = cam.getGlobalCameras()[m3.CAMERA]
+    if g and g.dist and g.pitch then return g.dist * math.sin(g.pitch) end
+  end
   local p = cam and cam.getPosition and cam.getPosition()
   if not p or not S.groundZ then return nil end
   return p.z - S.groundZ
@@ -604,7 +633,16 @@ end
 local cloudsHidden = false
 local function hideCloudsHigh(h)
   local want = M.cloudsHiddenAt(h, cloudsHidden)
-  if want == cloudsHidden then return end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then want = true end      -- (no clouds over the 3D map, the user 2026-11-07)
+  if want == cloudsHidden and not want then return end
+  if want == cloudsHidden then        -- (hidden: any cloud layer made since, an origin move's weather, hidden too)
+    for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')) or {}) do
+      local o = scenetree.findObject(nm)
+      if o and o.setHidden and not o:isHidden() then o:setHidden(true) end
+    end
+    return
+  end
   local names = scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')
   for _, nm in ipairs(names or {}) do
     local o = scenetree.findObject(nm)
@@ -615,6 +653,20 @@ local function hideCloudsHigh(h)
 end
 M._cloudsHidden = function() return cloudsHidden end -- tests
 
+-- No rain or snow over the 3D map either (its streaks fell across the whole view from miles up, 2026-11-07)
+local rainHidden = false
+local function hideRainInMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local want = (m3 and m3.isActive and m3.isActive()) and true or false
+  if want == rainHidden then return end
+  for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('Precipitation')) or {}) do
+    local o = scenetree.findObject(nm)
+    if o and o.setHidden then o:setHidden(want) end
+  end
+  rainHidden = want
+end
+
+local viewFog       -- (below: a fixed view distance's fog)
 local function apply(e)
   local c = S.cur
   setIf(e.getCloudCover, e.setCloudCover, c.coverage, 0.005)
@@ -630,10 +682,25 @@ local function apply(e)
   setIf(e.getWindSpeed, e.setWindSpeed, c.cloudWindSpeed, 0.005)
   local camH = cameraOverGround()
   hideCloudsHigh(camH)
-  if S.groundZ then
-    local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight) * M.fogAltitudeShare(camH)
+  hideRainInMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local mapHigh = m3 and m3.isActive and m3.isActive() and camH and camH >= M.FOG_FADE_TO_M
+  if mapHigh then
+    -- (the 3D map high up: no fog at all, whatever the ground's height is known: the engine fogs by distance, and the
+    -- level's own 4e-5 over thousands of km turned the whole screen grey after a view's origin move, 2026-11-07)
     local have = e.getFogDensity and tonumber((e.getFogDensity()))
-    if not have or math.abs(have - want) > 0.02 * want then envCall(e.setFogDensity, want) end
+    if not have or have ~= 0 then envCall(e.setFogDensity, 0) end
+  elseif S.groundZ then
+    local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight) * M.fogAltitudeShare(camH)
+    local floor = (m3 and m3.isActive and m3.isActive()) and 0 or M.viewFogFloor(nil, S.groundZ, c.fogHeight)
+    local have = e.getFogDensity and tonumber((e.getFogDensity()))
+    if floor > want then        -- (a fixed view distance's fog: owned, the weather's own density its base: viewFog)
+      if not have or math.abs(have - floor) > 0.02 * floor then envCall(e.setFogDensity, floor) end
+      S.viewFogBase, S.viewFogSet = want, (e.getFogDensity and tonumber((e.getFogDensity()))) or floor
+    else
+      S.viewFogBase, S.viewFogSet = nil, nil
+      if not have or math.abs(have - want) > 0.02 * want then envCall(e.setFogDensity, want) end
+    end
     setIf(e.getFogAtmosphereHeight, e.setFogAtmosphereHeight, c.fogHeight, 1)
   end
   local sk = sky()
@@ -695,6 +762,7 @@ end
 local function hidePrecip()
   for name in pairs(S.precip) do pcall(drivePrecip, name, 0, 0) end
   M.rainNow = 0
+  M.snowNow = 0
   pcall(restoreSun)
 end
 
@@ -739,6 +807,36 @@ local function switchToManual()
     .. '. Choose Real in the BeamNG.Earth settings to go back.')
 end
 
+-- A fixed view distance's fog in every weather mode (real weather's apply takes it into its own density too; manual or
+-- paused weather never runs apply): raised to the floor while driving, the density it replaced put back when the floor
+-- goes (the setting, or the 3D map open), unless something else set the fog meanwhile.
+viewFog = function(e, mapOn)
+  if not (e.getFogDensity and e.setFogDensity) then return end
+  local have = tonumber((e.getFogDensity()))
+  if not have then return end
+  -- (owned: the density now is the one written for the floor, by here or by apply; anything else set the fog since)
+  if S.viewFogSet and math.abs(have - S.viewFogSet) > 1e-9 * math.max(1, have) then S.viewFogBase, S.viewFogSet = nil, nil end
+  local h = e.getFogAtmosphereHeight and tonumber((e.getFogAtmosphereHeight())) or nil
+  local floor = mapOn and 0 or M.viewFogFloor(nil, S.groundZ, h)
+  local base = S.viewFogBase
+  if base == nil then
+    if floor > 0 and have < floor * 0.98 then base = have else return end    -- (not owned and nothing to raise)
+  end
+  local target = math.max(base, floor)          -- (up or down with the floor; the base again when it goes)
+  if math.abs(have - target) > 1e-9 * math.max(1, target) then envCall(e.setFogDensity, target) end
+  if floor > base then
+    S.viewFogBase, S.viewFogSet = base, tonumber((e.getFogDensity())) or target
+  else
+    S.viewFogBase, S.viewFogSet = nil, nil      -- (released: the base is the fog again)
+  end
+end
+
+M._viewFog = function(e, mapOn, groundZ)       -- tests (groundZ: the ground under the car)
+  if groundZ ~= nil then S.groundZ = groundZ end
+  viewFog(e, mapOn)
+end
+M._viewFogOwned = function() return S.viewFogBase, S.viewFogSet end    -- tests
+
 local function update(dt)
   if not S.inOurLevel or not scenetree.MissionGroup then return end
   local e = env()
@@ -749,6 +847,23 @@ local function update(dt)
     S.groundTimer = 0
     local p = playerPos()
     if p then S.groundZ = groundUnder(p) or S.groundZ end
+  end
+  -- the 3D map high up: no fog, no clouds, whatever the weather mode or the map's own pause (apply below may not run:
+  -- the fog stayed at the level's 4e-5 and the screen went grey from orbit, 2026-11-07)
+  S.mapTimer = (S.mapTimer or 0) + dt
+  if S.mapTimer >= 0.25 then
+    S.mapTimer = 0
+    local m3 = rawget(_G, 'beamngEarth_map3d')
+    local mapOn = m3 and m3.isActive and m3.isActive()
+    if mapOn then
+      local camH = cameraOverGround()
+      hideCloudsHigh(camH)
+      if camH and camH >= M.FOG_FADE_TO_M then
+        local have = e.getFogDensity and tonumber((e.getFogDensity()))
+        if not have or have ~= 0 then envCall(e.setFogDensity, 0) end
+      end
+    end
+    viewFog(e, mapOn)
   end
   if S.clock < S.graceUntil or S.mission then return end
   S.gravTimer = S.gravTimer + dt

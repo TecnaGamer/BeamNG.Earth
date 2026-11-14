@@ -17,6 +17,8 @@ import math
 import numpy as np
 
 import fast
+import dmath
+import dnp
 import mapcells
 import mapgeom
 
@@ -122,7 +124,7 @@ def _area(ring):
     if len(ring) < 3:
         return 0.0
     x, y = ring[:, 0], ring[:, 1]
-    return abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+    return abs(float(dnp.dot(x, np.roll(y, -1)) - dnp.dot(y, np.roll(x, -1)))) * 0.5
 
 
 def _yaw_of(fid, salt):
@@ -140,7 +142,7 @@ def _phase(fid):
 def _grill_origin(cx, cy, yaw):
     """World origin of eca_BBQ so its footprint centre sits at (cx, cy)."""
     rad = math.radians(yaw)
-    c, s = math.cos(rad), math.sin(rad)
+    c, s = dmath.cos(rad), dmath.sin(rad)
     return cx - (GRILL_CX * c - GRILL_CY * s), cy - (GRILL_CX * s + GRILL_CY * c)
 
 
@@ -243,8 +245,8 @@ def _emit(fid, x, y, table, grill, covers):
     if grill:
         if table:
             rad = math.radians(_yaw_of(fid, "table"))
-            gx = x + GRILL_OFF * -math.sin(rad)
-            gy = y + GRILL_OFF * math.cos(rad)
+            gx = x + GRILL_OFF * -dmath.sin(rad)
+            gy = y + GRILL_OFF * dmath.cos(rad)
         else:
             gx, gy = x, y
         if not _covered(covers, gx, gy):
@@ -319,8 +321,8 @@ def _furniture(fid, x, y, table, grill):
         out.append((G_TABLE, x, y, yaw))
     if grill:
         rad = math.radians(yaw)
-        gx = x + (GRILL_OFF * -math.sin(rad) if table else 0.0)
-        gy = y + (GRILL_OFF * math.cos(rad) if table else 0.0)
+        gx = x + (GRILL_OFF * -dmath.sin(rad) if table else 0.0)
+        gy = y + (GRILL_OFF * dmath.cos(rad) if table else 0.0)
         gyaw = (yaw + 90.0) % 360.0 if table else yaw
         ox, oy = _grill_origin(gx, gy, gyaw)
         out.append((G_GRILL, ox, oy, gyaw))
@@ -455,7 +457,7 @@ def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None):
         for x, y in _scatter(ring, box, _phase(fid), SITE_MAX):
             if not _in_park(parks, x, y):
                 continue
-            if any((x - tx) ** 2 + (y - ty) ** 2 < NEAR_TABLE_M ** 2 for tx, ty in taken):
+            if any(dnp.sq(x - tx) + dnp.sq(y - ty) < NEAR_TABLE_M * NEAR_TABLE_M for tx, ty in taken):
                 continue
             got = _emit(fid, x, y, True, True, covers)
             if not got:

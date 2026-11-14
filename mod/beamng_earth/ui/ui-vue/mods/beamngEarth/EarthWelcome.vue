@@ -56,6 +56,28 @@
         </div>
       </div>
 
+      <!-- The telemetry choice (the user, 2026-11-08: "give all players a popup and let them choose before playing";
+           TELEMETRY.md): nothing is sent until a button below saves it. The boxes start as this computer's region says
+           (settings.uiPrivacy: nothing ticked in the EU / EEA and a few other places, performance unticked in some). -->
+      <div class="privacy" :class="{ ask: privacy.needed }">
+        <div class="h">Anonymous statistics<span v-if="privacy.needed" class="badge">your choice</span></div>
+        <p class="small">BeamNG.Earth can send small anonymous reports to our server every 5 minutes. They never say who
+          or where you are: no name, account, address, coordinates or places. They show how many people play, keep the
+          free map services from being overloaded, and tell us what makes the game slow or crash. Choose what to send;
+          you can change it any time in settings.
+          <a href="#" @click.prevent="openLink(DOC_URL)">Everything we collect and why</a></p>
+        <label class="tick"><input type="checkbox" @change="touch" v-model="privacy.telemetry"/>
+          <span><b>Usage statistics</b>: a random install id, the app version, your operating system, whether the game
+            and BeamMP are running. Unticked: nothing at all is sent.</span></label>
+        <label class="tick sub" :class="{ off: !privacy.telemetry }">
+          <input type="checkbox" @change="touch" v-model="privacy.perf" :disabled="!privacy.telemetry"/>
+          <span><b>Performance data</b>: frame rate and hitches, world-building speed, your CPU / GPU model and
+            settings, the kind of area (city, rural, ...) and error codes.</span></label>
+        <label class="tick sub" :class="{ off: !privacy.telemetry }">
+          <input type="checkbox" @change="touch" v-model="privacy.net" :disabled="!privacy.telemetry"/>
+          <span><b>Network load</b>: how many requests went to each map-data service.</span></label>
+      </div>
+
       <div class="btns">
         <button class="btn" @click="openMap">Open the map</button>
         <button class="btn primary" @click="done">Start driving</button>
@@ -65,23 +87,43 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from "vue"
+import { ref, reactive, onMounted, onUnmounted, nextTick } from "vue"
+import { openLink } from "./earthSettingsStore.js"
 
+const DOC_URL = "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/TELEMETRY.md"
 const rootEl = ref(null)
 const connected = ref(null)
+const privacy = reactive({ needed: false, telemetry: false, perf: false, net: false })
 let timer = null
 
 function engineLua(script, cb) {
   if (window.bngApi && window.bngApi.engineLua) window.bngApi.engineLua(script, cb)
+}
+// the boxes as settings.uiPrivacy says; asked again each second until the server's hello named the region, unless
+// the player already clicked one
+let privacyKnown = false, privacyTouched = false
+function touch() { privacyTouched = true }
+function loadPrivacy() {
+  if (privacyKnown || privacyTouched) return
+  engineLua("beamngEarth_settings and beamngEarth_settings.uiPrivacy and beamngEarth_settings.uiPrivacy() or nil", p => {
+    if (!p || privacyTouched) return
+    privacyKnown = !!p.known
+    privacy.needed = !!p.needed
+    privacy.telemetry = p.telemetry === true
+    privacy.perf = p.perf === true
+    privacy.net = p.net === true
+  })
 }
 function poll() {
   engineLua("beamngEarth_settings and beamngEarth_settings.uiMapState and beamngEarth_settings.uiMapState() or nil", s => {
     connected.value = s ? !!s.connected : false
   })
 }
-// marks the welcome seen and goes back to driving (or to the map)
+// marks the welcome seen, saves the telemetry choice and goes back to driving (or to the map)
 function finish(state) {
-  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiWelcomeDone then beamngEarth_settings.uiWelcomeDone() end; ` +
+  const t = privacy.telemetry === true
+  const choice = `{telemetry = ${t}, perf = ${t && privacy.perf === true}, net = ${t && privacy.net === true}}`
+  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiWelcomeDone then beamngEarth_settings.uiWelcomeDone(${choice}) end; ` +
             `if beamngEarth_settings and beamngEarth_settings.navigate then beamngEarth_settings.navigate('${state}') ` +
             `else guihooks.trigger('ChangeState', {state = '${state}'}) end`)
 }
@@ -90,7 +132,8 @@ function openMap() { finish("beamngEarthMap") }
 
 onMounted(() => {
   poll()
-  timer = setInterval(poll, 1000)
+  loadPrivacy()
+  timer = setInterval(() => { poll(); loadPrivacy() }, 1000)
   nextTick(() => rootEl.value && rootEl.value.focus())
 })
 onUnmounted(() => clearInterval(timer))
@@ -127,6 +170,16 @@ ul { margin: 0 0 8px; padding-left: 18px; font-size: 14px; line-height: 1.45; }
 li { margin-bottom: 4px; }
 .small { font-size: 12px; color: #aab6c2; }
 .preview { color: #ffc28a; }
+.privacy { margin-top: 16px; padding: 12px 14px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); }
+.privacy.ask { border: 1px solid rgba(224, 118, 28, 0.55); }
+.privacy .h { margin-top: 0; }
+.privacy a { color: #9fd3ff; }
+.badge { margin-left: 8px; padding: 1px 6px; border-radius: 3px; background: #e0761c; color: #fff; font-size: 10px; }
+.tick { display: flex; gap: 9px; align-items: flex-start; margin: 0 0 7px; font-size: 13px; line-height: 1.4;
+  cursor: pointer; }
+.tick input { margin-top: 3px; flex: none; }
+.tick.sub { margin-left: 24px; }
+.tick.off { opacity: 0.45; }
 .btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .btn {
   padding: 9px 18px; font-size: 14px; color: #fff; background: rgba(255, 255, 255, 0.08);

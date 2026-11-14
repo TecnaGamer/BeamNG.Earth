@@ -5,6 +5,98 @@ local N = require('beamngEarth/navgraph')
 
 T.check(N.lanes(2, 1, false) == '-++' and N.lanes(2, 1, true) == '++-' and N.lanes(1, 0, false) == '+',
   'lanes: against first for right-hand traffic')
+-- A sub-metre seam on the same carriageway must not force a separate lane adjustment.
+do
+  local function seam()
+    return { nodes = { a = { 0, 0, 0, 10 }, b = { 50, 0, 0, 10 }, c = { 50.34, 0, 0, 10 },
+      d = { 100, 0, 0, 10 } }, edges = { { 'a', 'b', 1, 5, 0, 20.62, 1, 10, 10, 30.6 },
+      { 'b', 'c', 1, 5, 0, 19.44, 1, 10, 10 }, { 'c', 'd', 1, 5, 0, 19.44, 1, 10, 10 } } }
+  end
+  local g = seam()
+  local ns, count, edges = N.toNodes(g, nil, 0, false)
+  T.check(count == 3 and edges == 2 and not ns.b and ns.a.links.c == ns.c.links.a,
+    'an isolated short same-lane seam is contracted without disconnecting the road')
+  local e = ns.a.links.c
+  T.check(e and e.inNode == 'a' and e.outNode == 'c' and e.outPos == ns.c.pos
+    and e.outRadius == 10 and e.posted == 30.6 and e.speedLimit == 20.62,
+    'the joined incoming edge retains its direction, widths and speed metadata')
+  T.check(g.nodes.b ~= nil and g.edges[1][2] == 'b', 'compaction leaves the cached raw graph unchanged')
+  local variants = {
+    { 'a real junction', function(g) g.nodes.x = { 50, 50, 0, 4 }; g.edges[4] = { 'b', 'x', 1, 1, 0, 10, 1, 4 } end },
+    { 'a clipped junction arm', function(g) g.nodes.x = { 500, 50, 0, 4 }; g.edges[4] = { 'b', 'x', 1, 1, 0, 10, 1, 4 } end },
+    { 'a signalled junction', function(g) g.signals = { { j = 'b', app = {} } } end },
+    { 'a signal approach', function(g) g.signals = { { j = 'd', app = { { 'c' } } } } end },
+    { 'a lane-count change', function(g) g.edges[3][4] = 4 end },
+    { 'a tapered seam', function(g) g.edges[2][9] = 8 end },
+    { 'an isolated speed restriction', function(g) g.edges[2][6] = 5 end },
+    { 'an isolated posted limit', function(g) g.edges[2][10] = 5 end },
+    { 'a rough segment', function(g) g.edges[2][11] = true end },
+    { 'a blocked segment', function(g) g.edges[2][7] = 0 end },
+    { 'opposed one-way edges', function(g) g.edges[3][1], g.edges[3][2] = 'd', 'c' end },
+    { 'a one-way restriction change', function(g) g.edges[3][3] = 1 - g.edges[3][3] end },
+    { 'a genuine corner', function(g) g.nodes.d[2] = 50 end },
+    { 'a longer segment', function(g) g.nodes.c[1] = 51.1 end },
+  }
+  for _, twoWay in ipairs({false, true}) do
+    for _, case in ipairs(variants) do
+      local g = seam()
+      if twoWay then for _, e in ipairs(g.edges) do e[3], e[4], e[5] = 0, 3, 2 end end
+      case[2](g)
+      local ns = N.toNodes(g, { -100, -100, 200, 200 }, 0, false)
+      T.check(ns.b and ns.c and ns.b.links.c, 'preserve ' .. case[1] .. (twoWay and ' on a two-way road' or ''))
+    end
+  end
+  local reversed = seam()
+  reversed.edges[1], reversed.edges[3] = reversed.edges[3], reversed.edges[1]
+  local ns = N.toNodes(reversed, nil, 0, false)
+  T.check(not ns.b and ns.a.links.c and ns.c.links.d, 'edge input order does not change the retained node')
+  -- Both driving directions remain legal, including asymmetric lane counts and reversed stored edge direction.
+  for _, reverse in ipairs({false, true}) do
+    for _, leftHand in ipairs({false, true}) do
+      local g = seam()
+      for _, e in ipairs(g.edges) do
+        e[3], e[4], e[5], e[6], e[10] = 0, 3, 2, 20, nil
+        if reverse then e[1], e[2], e[4], e[5] = e[2], e[1], e[5], e[4] end
+      end
+      local ns, count, edges = N.toNodes(g, nil, 0, leftHand)
+      local middle = reverse and 'b' or 'c'
+      local e = ns.a and ns.a.links[middle]
+      T.check(count == 3 and edges == 2 and e and ns[middle].links.a == e and ns[middle].links.d,
+        'a two-way seam preserves connections in both driving directions')
+      T.check(e and not e.oneWay and e.lanes == N.lanes(reverse and 2 or 3, reverse and 3 or 2, leftHand)
+        and e.inNode == (reverse and middle or 'a') and e.outNode == (reverse and 'a' or middle),
+        'two-way lane orientation and stored edge direction survive compaction')
+    end
+  end
+  -- Recorded natural stop: a 1.4 cm rounded seam made the stock AI plan a 0.33 m/s corner on a clear highway.
+  local tiny = { nodes = { a = {-2098.96,-2504.48,654.36,3.8}, b = {-2129.23,-2527.20,652.39,3.8},
+      c = {-2129.24,-2527.21,652.39,3.8}, d = {-2176.95,-2561.65,649.75,3.8} },
+    edges = {{'a','b',0,1,1,27.75,1,3.8},{'b','c',0,1,1,27.78,1,3.8},{'c','d',0,1,1,27.78,1,3.8}} }
+  local ns, count, edges = N.toNodes(tiny, nil, 0, false)
+  T.check(count == 3 and edges == 2 and not ns.b and ns.a.links.c and ns.c.links.d,
+    'the captured two-way rounding seam no longer reaches the vehicle AI')
+  -- Changing origin can round that seam to coincident points or an arbitrary centimetre-scale heading.
+  for _, twoWay in ipairs({false, true}) do
+    for _, offset in ipairs({{0,0,0}, {0,0.01,0}, {0,0.04,0}, {0.01,-0.01,0.01}}) do
+      local g = seam(); g.nodes.c = {50+offset[1],offset[2],offset[3],10}
+      if twoWay then for _, e in ipairs(g.edges) do e[3],e[4],e[5] = 0,3,2 end end
+      local ns, count = N.toNodes(g, nil, 0, false)
+      T.check(count == 3 and not ns.b and ns.a.links.c and ns.c.links.d,
+        'centimetre-scale rounding cannot turn a continuous road into an AI corner')
+    end
+    local g = seam(); g.nodes.c = {50,0.06,0,10}
+    if twoWay then for _, e in ipairs(g.edges) do e[3],e[4],e[5] = 0,3,2 end end
+    T.check(N.toNodes(g,nil,0,false).b ~= nil, 'larger lateral geometry retains the existing heading checks')
+    g.nodes.c = {50,0,0,10}; g.nodes.d[2] = 50
+    T.check(N.toNodes(g,nil,0,false).b ~= nil, 'coincident points do not remove a genuine road corner')
+  end
+end
+do
+  local rg = { nodes = { a = { 0, 0, 0, 4 }, b = { 40, 0, 0, 4 } },
+    edges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, nil, nil, false, true } } }
+  local rn = N.toNodes(rg, nil, 60, false)
+  T.check(rn.a.links.b.rumble == true, 'rumble-line eligibility survives graph decoding')
+end
 
 local g = {
   nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 }, far = { 5000, 0, 1, 3 } },
@@ -79,11 +171,42 @@ T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, 
 T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }, 31),
+  'ahead, as fast: follows')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 25, y = 0 }, 31),
+  'ahead and faster: outruns the graph, not following (GitHub #855)')
+T.check(N.stopReach(31) > 200 and N.stopReach(10) < 60 + 1, 'a dead end seen as far as the car needs to stop')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
 T.check(not N.headingToCut(-20, 0, 1, 0, cuts, 60), '... 120 m from it: not yet')
 T.check(N.headingToCut(-20, 0, 1, 0, cuts, 30 * N.CUT_S), '... at 67 mph: from 120 m')
+-- GitHub #855: a car that reached the cut no longer heads for it — stopped at the dead end at an angle, or turning
+-- round across the road — and is respawned at once, not after STUCK_S
+T.check(N.nearCut(95, 3, cuts, N.CUT_NEAR_M), 'a car 6 m from the cut is near it, whichever way it points')
+T.check(not N.nearCut(0, 0, cuts, N.CUT_NEAR_M), '... 100 m away: not')
+T.check(N.cutStopped(0.2, 0, 0.98, false, true), 'stopped facing the dead end')
+T.check(N.cutStopped(0.2, 0, 0.1, false, false), 'stopped mid-turn, across its road')
+T.check(N.cutStopped(0.3, 0, -0.9, true, false), 'stood turned round on a one-way road')
+T.check(not N.cutStopped(0.2, 0, 0.98, false, false),
+  'stopped aligned with its road, facing past the cut (a red light on a through road): left alone')
+T.check(not N.cutStopped(0.2, 0, nil, nil, false), 'stopped off any road the map knows, not facing a cut: left alone')
+T.check(not N.cutStopped(0.3, 0, -0.9, false, false),
+  'stood turned round on a two-way road: reads as ordinary oncoming traffic (uncaught, by design)')
+T.check(N.cutStopped(2.0, 1.9, 0.2, false, false), 'crawling through the turn, across its road')
+T.check(N.cutStopped(4, -3.8, nil, nil, false), 'backing through it')
+T.check(N.cutStopped(6, 5.5, 0.2, false, false), 'turning across the road at speed (78 degrees off its axis)')
+T.check(N.cutStopped(6, 5.5, -0.9, true, false), 'driving along a one-way road against it')
+T.check(not N.cutStopped(8, 7.9, 0.95, false, false), 'driving on along the road: left alone')
+T.check(not N.cutStopped(8, 7.9, -0.95, false, false), 'back the other way on a two-way road: left alone')
+-- a long frame (0.3-5 s hitches in session logs) widens the window by the missed time at the car's speed
+T.near(N.cutReach(15, false, 0), 75, 1e-9, 'reach at 15 m/s: the stopping distance')
+T.near(N.cutReach(15, false, 4.5), 142.5, 1e-9, 'a 5 s frame: widened by the missed 4.5 s at 15 m/s')
+T.near(N.cutReach(0, true, 0), N.CUT_FRESH_M, 1e-9, 'a fresh car standing: CUT_FRESH_M as before')
+T.check(not N.headingToCut(-40, 0, 1, 0, cuts, N.cutReach(20, false, 0)),
+  'a car 140 m from the cut at 20 m/s: outside the normal window')
+T.check(N.headingToCut(-40, 0, 1, 0, cuts, N.cutReach(20, false, 2)),
+  '... after a 2.5 s frame: the widened window still catches it')
 -- built over several frames (navgraph's buildNodes: a coroutine pausing every yieldEvery items): the same tables
 do
   local co = coroutine.create(function() return { N.toNodes(g, { -500, -500, 500, 500 }, 60, false, 2) } end)
@@ -176,6 +299,216 @@ do
     'its tunnel lines (the minimap) too')
   T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
   jsonDecode, readFile = jd, rf
+end
+
+-- adaptive traffic amount (PR #728 / #773): the graph's trafficProfile kept through a rebase; the target capped at the
+-- player's amount, whole cars, one car a step; off by default
+do
+  T.check(N.ADAPTIVE == false, 'adaptive traffic off by default')
+  T.check(N.adaptiveTarget(4.4, 10) == 4 and N.adaptiveTarget(4.6, 10) == 5 and N.adaptiveTarget(64, 12) == 12
+    and N.adaptiveTarget(-1, 10) == 0 and N.adaptiveTarget(nil, 10) == nil and N.adaptiveTarget(0 / 0, 10) == nil,
+    'adaptive target: rounded, capped at the player\'s amount, never negative')
+  T.check(N.adaptiveStep(12, 7) == 11 and N.adaptiveStep(3, 8) == 4 and N.adaptiveStep(5, 5) == 5,
+    'adaptive step: one car at a time')
+  local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
+  jsonDecode = function() return { nodes = { a = { 0, 0, 5, 3 }, b = { 50, 0, 5, 3 } },
+    edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3, nil, nil, true } }, trafficProfile = { target = 6.5, band = 'suburban' } } end
+  readFile = function() return '{}' end
+  T.check(N.onMessage({ anchorId = 3, path = 'x', serial = 2 }, 3) and N.currentGraph().trafficProfile.target == 6.5,
+    'the graph keeps its traffic profile')
+  local roughNodes = N.toNodes(jsonDecode(), nil, 60, false)
+  T.check(roughNodes.a.links.b.rough == true, 'the graph keeps the rough-road traffic speed flag')
+  N.transform({ apply = function(_, x, y, z) return x, y, z end }, 4)
+  T.check(N.currentGraph().trafficProfile.band == 'suburban', '... through a rebase')
+  local st = N.trafficStatus()
+  T.check(st.enabled == false and st.profile and st.profile.target == 6.5, 'traffic status: off, the profile shown')
+  N.setAdaptive(true)
+  T.check(N.ADAPTIVE == true and N.trafficStatus().enabled, 'the setting turns it on')
+  N.setAdaptive(false)
+  -- the stock traffic's ceiling moved toward the profile's 6.5 -> 7 cars, one every ADAPTIVE_STEP_S
+  local gt0, log0 = rawget(_G, 'gameplay_traffic'), rawget(_G, 'log')
+  local vars = { activeAmount = 10 }
+  gameplay_traffic = { getState = function() return 'on' end, getTrafficVars = function() return vars end,
+    getNumOfTraffic = function() return 10 end, setActiveAmount = function(n) vars.activeAmount = n end,
+    getTrafficData = function() return {} end }
+  if not log0 then log = function() end end
+  N.takeChoice({ trafficMode = 'enabled', trafficParked = 'disabled' })
+  N._startTraffic()
+  N._adaptiveTick(100)
+  T.check(vars.activeAmount == 10, 'off: the player\'s amount untouched')
+  N.setAdaptive(true)
+  N._adaptiveTick(101)
+  T.check(vars.activeAmount == 9, 'on: one car down toward the target: ' .. tostring(vars.activeAmount))
+  N._adaptiveTick(103)
+  T.check(vars.activeAmount == 9, '... not again within ADAPTIVE_STEP_S')
+  for t = 106, 140, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 7 and N.trafficStatus().target == 7, 'settled at the target: ' .. tostring(vars.activeAmount))
+  vars.activeAmount = 0                       -- (the player toggled the traffic off)
+  for t = 146, 170, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 0 and N.trafficStatus().paused, 'toggled off: left off')
+  vars.activeAmount = 4                       -- (on again with another amount: theirs now, under the target)
+  for t = 176, 200, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 4 and N.trafficStatus().base == 4, 'the player\'s new amount caps it: ' ..
+    tostring(vars.activeAmount))
+  vars.activeAmount = 10
+  for t = 206, 230, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 7, 'raised again: back down to the target')
+  N.setAdaptive(false)
+  N._adaptiveTick(240)
+  T.check(vars.activeAmount == 10, 'off again: the player\'s amount back: ' .. tostring(vars.activeAmount))
+  N._adaptiveTick(245)
+  T.check(vars.activeAmount == 10 and N.trafficStatus().base == nil, 'and left alone')
+  N.reset()
+  gameplay_traffic = gt0
+  if not log0 then log = nil end
+  jsonDecode, readFile = jd, rf
+end
+
+-- regional traffic vehicles: the road rules' country -> the stock levels' region, the game's own filters; none
+-- elsewhere or without smart selections (the game's own group then)
+do
+  T.check(N.regionOf('US') == 'northAmerica' and N.regionOf('de') == 'europe' and N.regionOf('JP') == 'asiaPacific'
+    and N.regionOf('BR') == nil and N.regionOf(nil) == nil, 'regions by country')
+  local set = { trafficSmartSelections = true, trafficSimpleVehicles = false, trafficAllowMods = false }
+  local get = function(k) return set[k] end
+  local p, region = N.regionalGroupParams('DE', get)
+  T.check(region == 'europe' and p.filters.Region.europe == 1 and p.filters.Region.default == 1
+    and p.filters['Config Type'].Police == 0 and p.country == 'Germany' and p.minPop == 50, 'europe group params')
+  T.check(N.regionalGroupParams('NL', get).country == 'default', 'a country the game has no name for: default')
+  T.check(N.regionalGroupParams('BR', get) == nil, 'no region: the game\'s own group')
+  set.trafficSmartSelections = false
+  T.check(N.regionalGroupParams('US', get) == nil, 'smart selections off: the game\'s own group')
+  set.trafficSmartSelections, set.trafficSimpleVehicles = true, true
+  local ps, rs = N.regionalGroupParams('US', get)
+  T.check(rs == 'northAmerica' and ps.filters.Type.proptraffic == 1 and ps.filters.Type.car == nil
+    and ps.filters.Region.northAmerica == 1 and ps.minPop == 0 and ps.allConfigs, 'simple vehicles: of the region too')
+  set.trafficSimpleVehicles, set.trafficAllowMods = false, true
+  local pm = N.regionalGroupParams('US', get)
+  T.check(pm.allMods and pm.filters.Type.automation == 1 and pm.minPop == 0, 'mods allowed: as the game')
+end
+
+-- GitHub #855 / #72 / #279 end to end: the guard respawns a car stopped or turning at a cut at once, honours
+-- COOLDOWN_S, leaves cars far from cuts alone, and a long frame cannot carry a car past the catch window
+do
+  N.reset()
+  N.takeChoice(nil)
+  N.enabled = true
+  local names = { 'jsonDecode', 'readFile', 'writeFile', 'jsonEncode', 'map', 'be', 'path',
+                  'getObjectByID', 'gameplay_traffic' }
+  local sg = {}
+  for _, k in ipairs(names) do sg[k] = rawget(_G, k) end
+  local log0 = rawget(_G, 'log')
+  if not log0 then log = function() end end
+  local clock0 = os.clock
+  local now = 1000
+  os.clock = function() return now end
+  local function v(x, y, z)
+    return { x = x, y = y, z = z or 0, length = function(s) return math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z) end }
+  end
+  -- c is a junction: the a-b-c road loses its leg to `far` (the cut), and the c-s road runs through north
+  jsonDecode = function() return { nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 },
+      far = { 5000, 0, 1, 3 }, s = { 100, 200, 1, 4 } },
+    edges = { { 'a', 'b', 0, 1, 1, 11.2, 0.8, 4 }, { 'b', 'c', 0, 1, 1, 11.2, 0.8, 3 },
+              { 'c', 'far', 0, 1, 1, 11.2, 1, 3 }, { 'c', 's', 0, 1, 1, 11.2, 0.8, 4 } } } end
+  readFile = function() return '{}' end
+  writeFile = function() end
+  jsonEncode = function() return '{}' end
+  path = { getPathLevelInfo = function() return '' end }
+  local world = {}
+  map = { reset = function(n) world.nodes = n end, getMap = function() return world end,
+          findClosestRoad = function(p) if p.x > 97 and p.y > 5 then return 'c', 's' end return 'b', 'c' end }
+  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function() end,
+         sendToMailbox = function() end }
+  local cars, ports = {}, {}
+  getObjectByID = function(id)
+    local c = cars[id]
+    if not c then return nil end
+    return { getActive = function() return true end, getPosition = function() return c.pos end,
+             getVelocity = function() return c.vel end, getDirectionVector = function() return c.dir end }
+  end
+  gameplay_traffic = {
+    getState = function() return 'on' end,
+    getTrafficData = function()
+      local d = {}
+      for id in pairs(cars) do d[id] = { isAi = true } end
+      return d
+    end,
+    getTrafficList = function()
+      local l = {}
+      for id in pairs(cars) do l[#l + 1] = id end
+      return l
+    end,
+    forceTeleport = function(id) ports[id] = (ports[id] or 0) + 1 end,
+  }
+  local box = { -500, -500, 500, 500 }
+  T.check(N.onMessage({ anchorId = 1, path = 'x', serial = 1 }, 1), 'guard: a graph whose clip cuts c at (100, 0)')
+  N.update(1, box)              -- applies the graph; the guard runs from the next frame on
+  T.check(N.status().cuts == 1, 'guard: applied, one cut')
+  cars[101] = { pos = v(95, 2), vel = v(0, 0), dir = v(0, 1) }      -- stopped at the dead end, turned off it
+  cars[102] = { pos = v(92, -2), vel = v(-3, 0), dir = v(1, 0) }    -- backing through its turn, nose at the cut
+  cars[103] = { pos = v(0, 0), vel = v(0, 0), dir = v(1, 0) }       -- stopped far from any cut (a signal queue)
+  now = 1001
+  N.update(1, box)
+  T.check(ports[101] == nil and ports[102] == nil, 'guard: both just placed (FRESH_S): not yet')
+  now = 1007                    -- past FRESH_S; stood 6 s, far less than STUCK_S = 45
+  N.update(1, box)
+  T.check(ports[101] == 1, 'guard: stopped at the cut, turned off it: respawned at once, not after STUCK_S')
+  T.check(ports[102] == 1, 'guard: turning round at the cut (backing): respawned at once')
+  T.check(ports[103] == nil, 'guard: a car stopped far from any cut: untouched')
+  now = 1009                    -- within COOLDOWN_S of those respawns
+  N.update(1, box)
+  T.check(ports[101] == 1 and ports[102] == 1, 'guard: the same car within COOLDOWN_S: not again')
+  now = 1016                    -- past COOLDOWN_S, still wedged at the cut
+  N.update(1, box)
+  T.check(ports[101] == 2, 'guard: still at the cut past COOLDOWN_S: again')
+  -- a long frame: a car outside the window drives to the cut, stops and turns during the 5 s the guard missed.
+  -- Before the lag widening, the 110 m it covered read as a respawn's jump (JUMP_M = 30): seenAt reset, the car
+  -- "fresh" and uncaught for FRESH_S more, and headingToCut false once turned — it stood blocking the road.
+  cars[104] = { pos = v(-30, 0), vel = v(20, 0), dir = v(1, 0) }
+  now = 1017
+  N.update(1, box)              -- first seen: 130 m from the cut, outside cutReach(20 m/s) = 110 m (+ a frame's lag)
+  T.check(ports[104] == nil, 'guard: a car 130 m from the cut at 20 m/s: outside the window')
+  cars[104].pos, cars[104].vel, cars[104].dir = v(80, 0), v(0.3, 0.4), v(0, 1)
+  now = 1022                    -- one 5 s frame later: it reached the cut, stopped and began its turn meanwhile
+  N.update(1, box)
+  T.check(ports[104] == 1, 'guard: a 5 s frame carried it to the cut, stopped and turning: still caught at once')
+  -- a car braking for a red light on the THROUGH road of the cut junction, aligned with its road and facing past
+  -- the dead end, is not the cut's and stays put
+  cars[105] = { pos = v(100, 25), vel = v(0, 8), dir = v(0, 1) }   -- northbound on the c -> s road, at the stop line
+  now = 1023
+  N.update(1, box)              -- first seen
+  now = 1029                    -- past FRESH_S
+  N.update(1, box)
+  T.check(ports[105] == nil, 'guard: driving the through road past the cut junction: untouched')
+  cars[105].vel = v(0, 2)       -- braking for the light, under CUT_NEAR_MS
+  now = 1030
+  N.update(1, box)
+  cars[105].vel = v(0, 0)       -- stopped at the light, 25 m from the cut node
+  now = 1031
+  N.update(1, box)
+  T.check(ports[105] == nil, 'guard: stopped at a red light on the through road, facing past the dead end: stays')
+  -- a car stopped FACING the dead end is still taken at once (headingToCut's facing fallback, as before)
+  cars[106] = { pos = v(93, 0), vel = v(0, 0), dir = v(1, 0) }
+  now = 1032
+  N.update(1, box)
+  T.check(ports[106] == 1, 'guard: stopped facing the dead end: respawned at once')
+  -- paused: nothing is taken while the player sits in the menu (as the stuck and launch paths)
+  local tc0 = rawget(table, 'clear')
+  table.clear = tc0 or function(t) for k in pairs(t) do t[k] = nil end end
+  simTimeAuthority = { getPause = function() return true end }
+  local p101 = ports[101]
+  now = 1047                    -- car 101 still wedged at the cut, past COOLDOWN_S of its last respawn
+  N.update(1, box)
+  T.check(ports[101] == p101, 'guard: paused: the car wedged at the cut is left alone')
+  simTimeAuthority = nil
+  now = 1048
+  N.update(1, box)
+  T.check(ports[101] == p101 + 1, 'guard: unpaused: taken again')
+  table.clear = tc0
+  for _, k in ipairs(names) do _G[k] = sg[k] end
+  if not log0 then log = nil end
+  os.clock = clock0
+  N.reset()
 end
 
 T.done('test_navgraph')

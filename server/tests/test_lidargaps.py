@@ -193,7 +193,7 @@ class CellFactsTest(unittest.TestCase):
         from unittest import mock
         first = [roads.level_ranges(self.feats(), i) for i in range(2)]
         self.assertTrue(os.path.isdir(os.path.join(self.tmp, "plans", "test_run", "facts")), "kept for the run")
-        with mock.patch.object(roads, "_level_ranges", side_effect=AssertionError("made again")):
+        with mock.patch.object(roads, "_level_ranges_many", side_effect=AssertionError("made again")):
             self.assertEqual([roads.level_ranges(self.feats(), i) for i in range(2)], first, "this process's")
             roads._FACTS_MEM.clear()        # (another process: the run's file)
             f0 = revisit.faults()

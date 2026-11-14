@@ -63,6 +63,19 @@ class BridgeLiftsTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertAlmostEqual(float(out[0][0][0]), 0.0)
 
+    def test_junction_at_grade_near_the_abutment(self):
+        # (a road meeting a deck 10 m from its free end where the deck cannot get roads.AT_GRADE_M over it is the
+        # junction the deck profile treats at grade: no approach fill on its account. A track sharing a bridge's
+        # mapped node came under an end skewed onto that junction and the fill rose 8 m over its own ground)
+        line = np.c_[np.linspace(0, 70, 36), np.zeros(36)]
+        near = [np.array([[10.0, -50], [10, 50]])]
+        flat = lambda xy: np.full(len(xy), FLAT)        # noqa: E731
+        self.assertEqual(grading.bridge_lifts(line, [line], near, flat), [])
+        # (the same crossing, low enough under the deck for the deck to clear it, is still a road under it)
+        low = lambda xy: np.where(np.abs(xy[:, 0] - 10.0) < 4.0, FLAT - 5.0, FLAT)     # noqa: E731
+        out = grading.bridge_lifts(line, [line], near, low)
+        self.assertEqual(len(out), 2)
+
     def test_short_part_of_a_chain_raises_its_free_end(self):
         # (GitHub #306, BR-343 at Teresina: the deck carried 5 m onto the road joined at its end; that short part no
         # road crosses under must still raise its free end for the carriageways under the rest of the chain, or the
@@ -86,6 +99,35 @@ class BridgeLiftsTest(unittest.TestCase):
         near = [lift for end, lift in out if end[0] < 1][0]
         clear = roads.deck_road_clear(roads.deck_depth(roads.geom_span([line])))     # (its depth from its span)
         self.assertAlmostEqual(near, clear + grading.APPROACH_MARGIN_M, places=6)
+
+    def test_deck_in_the_elevation_read_beside_it(self):
+        # (GitHub #1077, the A-334 at Albox: the elevation keeps the overpass's deck, a band at the abutments' height
+        # across the motorway's cut. Read on the crossing, the motorway stood 7 m over its cut and the abutments were
+        # raised 8 m; read beside the deck, as the motorway's own plan reads it, the deck clears the cut as it is)
+        line = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
+        ground = [np.array([[-12.0, -500], [-12, 500]]), np.array([[12.0, 500], [12, -500]])]
+        cut = FLAT - 8.0
+
+        def z(xy):          # (a cut 30 m wide under the deck, the deck 8 m wide at the ground's height)
+            out = np.where(np.abs(xy[:, 0]) < 30.0, cut, FLAT)
+            return np.where((np.abs(xy[:, 1]) <= 4.0) & (np.abs(xy[:, 0]) < 30.0), FLAT, out)
+        on_deck = grading.bridge_lifts(line, [line], ground, z)
+        self.assertEqual(len(on_deck), 2)                   # (the old reading: the cut taken for the deck's height)
+        self.assertGreater(min(lift for _e, lift in on_deck), 5.0)
+        self.assertEqual(grading.bridge_lifts(line, [line], ground, z, half=4.0), [])
+        # (a real road under at the ground's height is still cleared: nothing beside the deck to read lower)
+        flat = lambda xy: np.full(len(xy), FLAT)        # noqa: E731
+        self.assertEqual(len(grading.bridge_lifts(line, [line], ground, flat, half=4.0)), 2)
+
+    def test_ground_under_deck_never_higher(self):
+        deck = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
+        road = np.array([[0.0, -100], [0, 100]])
+        hump = lambda xy: np.where(np.abs(xy[:, 1]) < 30.0, FLAT - 3.0, FLAT)       # noqa: E731 (a dip under it)
+        got = grading.ground_under_deck(deck, 4.0, [(np.array([0.0, 0.0]), road)], hump)
+        self.assertAlmostEqual(float(got[0]), FLAT - 3.0)
+        band = lambda xy: np.where(np.abs(xy[:, 1]) <= 4.0, FLAT + 6.0, FLAT)       # noqa: E731 (the deck)
+        got = grading.ground_under_deck(deck, 4.0, [(np.array([0.0, 0.0]), road)], band)
+        self.assertAlmostEqual(float(got[0]), FLAT)
 
     def test_long_viaduct_not_raised(self):
         line = np.c_[np.linspace(-400, 400, 201), np.zeros(201)]
@@ -133,6 +175,52 @@ class ApproachAddTest(unittest.TestCase):
         self.assertLess(float(add[10]), 0.5, "low where the side road joins")
         self.assertGreater(float(add[0]), 3.0, "the abutment still raised")
 
+    def test_fill_to_a_surface_not_an_offset(self):
+        # a diverging diamond's crossover: 25 m from a junction raised 9.9 m over a pond to the next junction, 8.6 m up
+        # the bank (Wesley Chapel, GitHub #1043): never over the raised end's height, offset on top of the bank as before
+        xy = np.c_[np.zeros(11), np.arange(0.0, 25.1, 2.5)]
+        z = 26.0 + np.arange(11) * 0.86
+        off = grading.approach_add(xy, False, 9.9, 4.0)
+        fill = grading.approach_add(xy, False, 9.9, 4.0, fill_z=z)
+        self.assertAlmostEqual(float(fill[0]), 9.9, places=6)
+        self.assertGreater(float(off[-1] + z[-1]), 26.0 + 9.9 + 7.0, "(as an offset it stood 18 m over the pond)")
+        self.assertLessEqual(float((fill + z).max()), 26.0 + 9.9 + 1e-9)
+        down = 26.0 - np.arange(11) * 0.3          # a road falling away from its raised end: the offset, as before
+        np.testing.assert_allclose(grading.approach_add(xy, False, 9.9, 4.0, fill_z=down), off)
+
+
+class UnderDeckReachTest(unittest.TestCase):
+    def test_a_deck_climbs_from_its_ends_for_the_dips_under_it(self):
+        import fast
+        reach = fast._ef.under_deck_reach
+        # (ends 35 m and 37 m, 96 m long; the crossing 34 m from the lower end, its corridor +-8 m)
+        straight = reach(35.0, 37.0, 96.0, 26.0, 42.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, False)
+        self.assertAlmostEqual(straight, 35.0 + 2.0 * 26.0 / 96.0, places=9)
+        self.assertAlmostEqual(reach(35.0, 37.0, 96.0, 26.0, 42.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True),
+                               straight, places=9, msg="the straight line is higher there already")
+        # (level ends, the crossing in the middle: it climbs from both, the corridor's lowest point counts)
+        climbed = reach(35.0, 35.0, 96.0, 40.0, 56.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True)
+        self.assertAlmostEqual(climbed, 35.0 + roads.DECK_GRADE * (40.0 - grading.APPROACH_FLAT_M), places=9)
+        # a short deck: within both ends' flat run it is the straight line
+        self.assertAlmostEqual(reach(35.0, 35.5, 30.0, 10.0, 20.0, roads.DECK_GRADE, grading.APPROACH_FLAT_M, True),
+                               35.0 + 0.5 * 10.0 / 30.0, places=9)
+
+    def test_junction_arm_raise_is_a_height(self):
+        import fast
+        jar = fast._ef.junction_arm_raise
+        args = (grading.APPROACH_GRADE, grading.APPROACH_MIN_RUN, grading.APPROACH_MAX_RUN, grading.APPROACH_MIN_LIFT)
+        one = (np.array([9.9]), np.array([8.0]), np.array([26.0]), np.array([26.0]))     # (lift, stub, z_b, z_far)
+        level = jar(*one, 26.0, *args)
+        up = jar(*one, 34.6, *args)
+        down = jar(*one, 20.0, *args)
+        self.assertAlmostEqual(up[0], level[0] - 8.6, places=9, msg="an arm end 8.6 m higher: only to the junction")
+        self.assertAlmostEqual(down[0], level[0], places=9, msg="a lower arm end: the ramp's offset, as before")
+        self.assertIsNone(jar(*one, 36.0, *args))
+        # an abutment mapped down in a cut (Vienna's S1 under Rautenweg): the stub's climb out of it is taken off
+        cut = jar(np.array([10.0]), np.array([10.0]), np.array([153.9]), np.array([160.5]), 160.5, *args)
+        flat = jar(np.array([10.0]), np.array([10.0]), np.array([160.5]), np.array([160.5]), 160.5, *args)
+        self.assertAlmostEqual(cut[0], flat[0] - 6.6, places=9)
+
 
 class OverpassIntegrationTest(unittest.TestCase):
     def deck_over_lanes(self, on):
@@ -179,6 +267,120 @@ class OverpassIntegrationTest(unittest.TestCase):
         la, lo, _ = FRAME.enu_to_geodetic(np.array([-100.0, -60.0, 100.0]), np.zeros(3), 0.0)
         z = g.apply(la, lo, flat_elev(la, lo))
         self.assertLess(np.abs(z - FLAT).max(), 0.05, "the motorway's approaches stay on the ground")
+
+
+class JunctionRaiseTest(unittest.TestCase):
+    """GitHub #1043 / #1045: an overpass over a freeway mapped right up to a junction at each end (an 8 m stub, then a
+    cross street): the junction's roads capped the stub's ramp to nothing and the deck stood 1-2 m over the interstate.
+    The junction rises with the approach and the roads leaving it ramp down (grading JUNCTION_RAISE_ON)."""
+
+    def deck_over_lanes(self, on):
+        old = grading.JUNCTION_RAISE_ON
+        grading.JUNCTION_RAISE_ON = on
+        try:
+            a, b = (43 - 35) / 86, (43 + 35) / 86
+            f = features([[(-43, 0), (43, 0)], [(-400, 0), (-43, 0)], [(43, 0), (400, 0)],
+                          [(-12, -500), (-12, 500)], [(12, 500), (12, -500)],
+                          [(43, -300), (43, 300)], [(-43, -300), (-43, 300)]],
+                         ["secondary", "secondary", "secondary", "motorway", "motorway", "tertiary", "tertiary"],
+                         flags=[(0, "is_bridge", a, b)], ids=["deck", "west", "east", "fwn", "fws", "xe", "xw"])
+            g = grading.Grader(FRAME, FakeMD(f), flat_elev)
+
+            def elev(la, lo):
+                return g.apply(la, lo, flat_elev(la, lo), grading.ROAD_LIFT)
+            bp = roads.BridgeProfiles(FRAME, lambda key: f, elev)
+            parts = bp.parts([f], (-100, -100, 100, 100))
+            _fid, _spec, xy, z, _lon = parts[0]
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(xy)[:, :2], axis=0).T))]
+            at = [float(np.interp(x, np.asarray(xy)[:, 0], s)) for x in (-12.0, 12.0)]
+            lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([30.0, -30.0]), 0.0)[:2])
+            return np.interp(at, s, z) - lanes, lanes - FLAT
+        finally:
+            grading.JUNCTION_RAISE_ON = old
+
+    def test_the_junction_rises_and_the_deck_clears_the_freeway(self):
+        before, _ = self.deck_over_lanes(False)
+        after, lanes = self.deck_over_lanes(True)
+        depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
+        # (the real cases' slip lanes and twin carriageway capped the stub's ramp; this plain junction already
+        # clears without the raise: the raise must keep it so, and never lower it)
+        self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.3, (before, after))
+        self.assertGreaterEqual(after.min(), before.min() - 0.05)
+        self.assertLess(np.abs(lanes).max(), 0.2, "the freeway is not raised")
+
+
+class JunctionRaiseFalseLiftTest(unittest.TestCase):
+    """GitHub #1077 (Andalusia, the A-334 and A-7): the junction raise (#1043) went off where no lift was needed. The
+    elevation model held the decks over the motorway in its cut (a roundabout's two decks 7 m over the A-334: 8.5 m
+    asked, 1.5 m clears it), and a motorway's own deck asked its abutment's lift (never applied: the road under dips)
+    and raised the links at the gore past it. The roundabouts, their links and the roads round them stood 5-8 m (one
+    track 21 m) over the ground for 400 m, the slip roads climbing onto them from the motorway."""
+
+    def graded(self, elev_fn, f, pts, **knobs):
+        old = {k: getattr(grading, k) for k in knobs}
+        for k, v in knobs.items():
+            setattr(grading, k, v)
+        try:
+            g = grading.Grader(FRAME, FakeMD(f), elev_fn)
+            la, lo, _ = FRAME.enu_to_geodetic(np.asarray(pts, float)[:, 0], np.asarray(pts, float)[:, 1], 0.0)
+            base = elev_fn(la, lo)
+            return np.asarray(g.apply(la, lo, base, grading.ROAD_LIFT)) - base
+        finally:
+            for k, v in old.items():
+                setattr(grading, k, v)
+
+    def test_a_deck_the_elevation_holds_over_a_cut_raises_no_junction(self):
+        # (JunctionRaiseTest's overpass and junctions, the motorway in a 6.5 m cut; the elevation holds the deck: the
+        # ground at the overpass's level across the cut under it)
+        def cut_elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la, float), np.asarray(lo, float), 0.0)
+            e, n = np.asarray(e), np.asarray(n)
+            z = np.full(np.shape(e), FLAT)
+            z = np.where(np.minimum(np.abs(e + 12), np.abs(e - 12)) < 10, FLAT - 6.5, z)
+            return np.where((np.abs(e) < 24) & (np.abs(n) < 8), FLAT + 0.5, z)
+        a, b = (43 - 35) / 86, (43 + 35) / 86
+        f = features([[(-43, 0), (43, 0)], [(-400, 0), (-43, 0)], [(43, 0), (400, 0)],
+                      [(-12, -500), (-12, 500)], [(12, 500), (12, -500)],
+                      [(43, -300), (43, 300)], [(-43, -300), (-43, 300)]],
+                     ["secondary", "secondary", "secondary", "motorway", "motorway", "tertiary", "tertiary"],
+                     flags=[(0, "is_bridge", a, b)], ids=["deck", "west", "east", "fwn", "fws", "xe", "xw"])
+        # (the junction's roads: the cross streets 20-60 m off it, the road on past it)
+        pts = [(x, y) for x in (-43.0, 43.0) for y in (-60.0, -40.0, -20.0, 20.0, 40.0, 60.0)] + \
+              [(x, 0.0) for x in (-100.0, -70.0, 70.0, 100.0)]
+        before = self.graded(cut_elev, f, pts, JR_TRUSTED=False, LIFT_UNDER_BESIDE=False)
+        after = self.graded(cut_elev, f, pts)
+        self.assertGreater(before.max(), 2.0, "the case raised its junction before the fix")
+        self.assertLess(after.max(), 0.5, (before.round(1), after.round(1)))
+        # (either alone: the junction raise asking the road under's own ground, or the abutment's lift reading it)
+        for knobs in ({"JR_TRUSTED": False}, {"LIFT_UNDER_BESIDE": False}):
+            self.assertLess(self.graded(cut_elev, f, pts, **knobs).max(), 0.5, knobs)
+
+    def test_a_freeways_own_deck_is_no_raised_junctions(self):
+        # (a motorway on the ground over a street on its own deck, 20 m on to the gore where a link leaves: its
+        # abutment asks a lift that is never applied, and the gore is no junction to raise)
+        f = features([[(0, -500), (0, -20)], [(0, -20), (0, 20)], [(0, 20), (0, 40)], [(0, 40), (0, 500)],
+                      [(0, 40), (150, 150)], [(-300, 0), (300, 0)]],
+                     ["motorway"] * 5 + ["secondary"],
+                     flags=[(1, "is_bridge", 0.0, 1.0), (4, "is_link", 0.0, 1.0)],
+                     ids=["mws", "deck", "stub", "mwn", "link", "street"])
+        got = {}
+        for own in (False, True):
+            old = grading.JR_OWN_CLASS
+            grading.JR_OWN_CLASS = own
+            try:
+                g = grading.Grader(FRAME, FakeMD(f), flat_elev)
+                la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 0.0]), np.array([20.0, 40.0]), 0.0)
+                g.plans(la[:1], lo[:1])
+                pl = g.store.planners_of(la[:1], lo[:1])[0][0]
+                e = np.stack([np.asarray(v) for v in pl.frame.geodetic_to_enu(la, lo, 0.0)[:2]], 1)
+                lift = pl._end_lift(e[0])
+                got[own] = (lift is not None and float(lift[0]) >= grading.JUNCTION_MIN_LIFT, pl._jr_at(e[0]),
+                            pl._junction_lift(e[1], e[1] + (150.0, 110.0)))
+            finally:
+                grading.JR_OWN_CLASS = old
+        self.assertEqual(got[False][:2], (True, True), "the case: the deck's end asks a big lift, read as a raise's")
+        self.assertIsNotNone(got[False][2], "... and the gore's link would rise from it")
+        self.assertEqual(got[True][1:], (False, None), got)
 
 
 class EmbankmentApproachTest(unittest.TestCase):
@@ -246,6 +448,43 @@ class UnderwaterTunnelTest(unittest.TestCase):
         g2 = grading.Grader(FRAME, FakeMD(f), dem)
         g2.wet = lambda la, lo: np.where(np.asarray(dem(la, lo)) < 1.0, 6.0, 0.0)
         self.assertTrue(np.allclose(g2.apply(la, lo, raw), raw), "under water: none")
+
+
+class EndsNearTest(unittest.TestCase):
+    """_Planner._ends_near (planends.rs): the bridge ends of a point's own cells, rounded to the mm, each once in (x, y)
+    order, in the distance band, the approach's own other end left out; None where a cell of its own is unreadable."""
+
+    def planner(self, ends_of, bad=()):
+        import threading
+        import geodesy
+        import mapcells
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(40.754, -73.984)
+
+        def cell_enu(k, ground=True):
+            if (k.x, k.y) in bad:
+                raise OSError("unreadable")
+            return {"ends": ends_of.get((k.x, k.y), np.zeros((0, 2)))}
+        g._cell_enu = cell_enu
+        self.home = mapcells.cell_of(40.754, -73.984)
+        return g
+
+    def test_band_round_unique_order(self):
+        self.planner({})
+        k = (self.home.x, self.home.y)
+        ends = np.array([[30.0004, 5.0], [30.0, 5.0], [-20.0, 1.0], [1.0, 1.0], [150.0, 0.0], [-20.0, -3.0]])
+        g = self.planner({k: ends})
+        got = g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0)[0]
+        # (30.0004 rounds to 30.0: one; 1, 1 too near; 150 too far; sorted by x then y)
+        self.assertEqual(got.tolist(), [[-20.0, -3.0], [-20.0, 1.0], [30.0, 5.0]])
+        got = g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0, [np.array([-21.0, 1.5])])[0]
+        self.assertEqual(got.tolist(), [[-20.0, -3.0], [30.0, 5.0]], "the other end's abutment left out")
+
+    def test_unreadable_cell(self):
+        self.planner({})
+        g = self.planner({}, bad={(self.home.x, self.home.y)})
+        self.assertIsNone(g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0)[0])
 
 
 if __name__ == "__main__":

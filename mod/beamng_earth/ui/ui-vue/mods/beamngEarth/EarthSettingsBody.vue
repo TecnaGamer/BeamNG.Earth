@@ -25,6 +25,9 @@
       </div>
     </template>
 
+    <!-- Add-ons: the page is the add-ons' own view (EarthAddons.vue) -->
+    <EarthAddons v-if="category.addons" />
+
     <BngRow
       v-for="item in rows"
       :key="item.id"
@@ -140,6 +143,7 @@ import {
   confirmClearCache, askClearCache, usePath, sendPath, pathNote, typing, applyDevPreset,
 } from "./earthSettingsStore.js"
 import { CONTRIBUTORS } from "./contributors.js"
+import EarthAddons from "./EarthAddons.vue"
 
 const props = defineProps({
   page: { type: String, default: "Graphics" },     // the page's name (settingsSchema's)

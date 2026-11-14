@@ -1,0 +1,229 @@
+{
+  "source": "OpenStreetMap API 0.6, retrieved 2026-11-03 UTC",
+  "url": "https://api.openstreetmap.org/api/0.6/map?bbox=7.779,48.810,7.790,48.820",
+  "license": "ODbL 1.0; © OpenStreetMap contributors",
+  "description": "Real outlines/tags: one small untyped building and three explicit non-house buildings. The positive residential-land context is synthetic in the test; these data do not prove the untyped building is an individual house.",
+  "features": [
+    {
+      "id": "48397355",
+      "tags": {
+        "building": "yes",
+        "source": "Direction Générale des Finances Publiques - Cadastre ; mise à jour : 2010"
+      },
+      "lonlat": [
+        [
+          7.7824524,
+          48.8101908
+        ],
+        [
+          7.7822836,
+          48.8101996
+        ],
+        [
+          7.7822892,
+          48.8102495
+        ],
+        [
+          7.7822951,
+          48.8103019
+        ],
+        [
+          7.7824623,
+          48.810292
+        ],
+        [
+          7.7824524,
+          48.8101908
+        ]
+      ]
+    },
+    {
+      "id": "48423442",
+      "tags": {
+        "addr:city": "Haguenau",
+        "addr:housenumber": "39-37",
+        "addr:postcode": "67500",
+        "addr:street": "Rue de la Redoute",
+        "building": "apartments",
+        "description": "Bâtiment de logements, avec services tertiaires ou d'entreprises (bureaux) au RDC.\nLes numéros d'adresse (39, 37) correspondent aux entrées et/ou aux emplacements dans le bâtiment (entrée Ouest : n°39, entrée Est : n°37).",
+        "loc_name": "Bâtiment n°2 (anct° dénomination caserne militaire)",
+        "name": "Renaissance",
+        "source": "Direction Générale des Finances Publiques - Cadastre;mise à jour : 2010",
+        "wheelchair": "yes"
+      },
+      "lonlat": [
+        [
+          7.7884106,
+          48.8102226
+        ],
+        [
+          7.7882745,
+          48.8102178
+        ],
+        [
+          7.788266,
+          48.8102954
+        ],
+        [
+          7.7882147,
+          48.8102919
+        ],
+        [
+          7.7882133,
+          48.8102955
+        ],
+        [
+          7.7878559,
+          48.8102786
+        ],
+        [
+          7.7878328,
+          48.8102757
+        ],
+        [
+          7.7878109,
+          48.8102769
+        ],
+        [
+          7.7876454,
+          48.810268
+        ],
+        [
+          7.7876439,
+          48.8102663
+        ],
+        [
+          7.7875929,
+          48.8102639
+        ],
+        [
+          7.7876014,
+          48.8101875
+        ],
+        [
+          7.7874659,
+          48.8101813
+        ],
+        [
+          7.7874437,
+          48.810394
+        ],
+        [
+          7.7875775,
+          48.8103999
+        ],
+        [
+          7.78758,
+          48.8103841
+        ],
+        [
+          7.7882559,
+          48.8104138
+        ],
+        [
+          7.7882537,
+          48.8104299
+        ],
+        [
+          7.7883862,
+          48.8104355
+        ],
+        [
+          7.7884106,
+          48.8102226
+        ]
+      ]
+    },
+    {
+      "id": "48572112",
+      "tags": {
+        "brand": "Maison de la Presse",
+        "brand:wikidata": "Q62085960",
+        "building": "retail",
+        "check_date": "2028-08-31",
+        "contact:housenumber": "27",
+        "contact:street": "Grand'Rue",
+        "name": "Maison de la Presse",
+        "opening_hours": "Mo-Sa 09:00-18:30",
+        "payment:cash": "yes",
+        "payment:credit_cards": "yes",
+        "payment:debit_cards": "yes",
+        "phone": "+33 3 88 93 92 88",
+        "ref:FR:SIRET": "33087202900013",
+        "ref:vatin": "FR64330872029",
+        "shop": "newsagent",
+        "source": "Direction Générale des Finances Publiques - Cadastre;mise à jour : 2010",
+        "toilets:wheelchair": "yes",
+        "website": "https://www.maisondelapresse-haguenau.fr/",
+        "wheelchair": "yes"
+      },
+      "lonlat": [
+        [
+          7.7864545,
+          48.8125063
+        ],
+        [
+          7.7862667,
+          48.8125963
+        ],
+        [
+          7.7863063,
+          48.8126252
+        ],
+        [
+          7.7863332,
+          48.8126448
+        ],
+        [
+          7.7863267,
+          48.8126492
+        ],
+        [
+          7.7863693,
+          48.8126796
+        ],
+        [
+          7.7865627,
+          48.8125835
+        ],
+        [
+          7.786507,
+          48.8125438
+        ],
+        [
+          7.7864545,
+          48.8125063
+        ]
+      ]
+    },
+    {
+      "id": "48452731",
+      "tags": {
+        "building": "garages",
+        "source": "Direction Générale des Finances Publiques - Cadastre ; mise à jour : 2010"
+      },
+      "lonlat": [
+        [
+          7.7863201,
+          48.8107651
+        ],
+        [
+          7.7866508,
+          48.8107737
+        ],
+        [
+          7.7866539,
+          48.8107219
+        ],
+        [
+          7.7863232,
+          48.8107133
+        ],
+        [
+          7.7863201,
+          48.8107651
+        ]
+      ]
+    }
+  ]
+}

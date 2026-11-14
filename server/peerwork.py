@@ -52,6 +52,7 @@ from concurrent.futures import Future
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dmath
 
 log = logging.getLogger("earthd.peerwork")
 
@@ -208,7 +209,8 @@ def built_msg(built):
     """(header dict, blobs) of a farfield.Built."""
     d = {"pos": [float(v) for v in built.pos], "err": float(built.err),
          "sink": None if built.sink is None else float(built.sink), "skirt": float(built.skirt),
-         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None]}
+         "size": float(built.size), "arrays": [n for n in BUILT_ARRAYS if getattr(built, n) is not None],
+         "err_n": None if built.err_n is None else float(built.err_n)}
     return d, [_npy(getattr(built, n)) for n in d["arrays"]]
 
 
@@ -218,7 +220,7 @@ def built_from(d, blobs):
     return farfield.Built(pos=list(d["pos"]), positions=arrays.get("positions"), normals=arrays.get("normals"),
                           uvs=arrays.get("uvs"), planar=arrays.get("planar"), tris=arrays.get("tris"),
                           grid=arrays.get("grid"), err=float(d["err"]), sink=d["sink"], skirt=float(d["skirt"]),
-                          size=float(d["size"]))
+                          size=float(d["size"]), err_n=d.get("err_n"))
 
 
 def job_key(header):
@@ -273,7 +275,7 @@ def owner_of(key, ids, weights=None):
     for i in ids:
         w = float((weights or {}).get(i, 1.0))
         u = (int(hashlib.sha256((key + "/" + i).encode()).hexdigest()[:13], 16) + 0.5) / float(1 << 52)
-        score = -w / math.log(u)
+        score = -w / dmath.log(u)
         if score > best_s:
             best, best_s = i, score
     return best
@@ -282,7 +284,7 @@ def owner_of(key, ids, weights=None):
 def share_weight():
     """This machine's capacity for its group (owner_of): its CPU threads, half on the small profile."""
     import budget
-    return round((os.cpu_count() or 4) * (0.5 if budget.small() else 1.0), 1)
+    return round((os.cpu_count() or 4) * (0.5 if budget.small_machine() else 1.0), 1)
 
 
 class ReplyCache:

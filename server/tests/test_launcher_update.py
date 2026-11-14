@@ -56,6 +56,18 @@ class UpdateAtStart(unittest.TestCase):
         self.assertFalse(r)
         self.assertEqual(asked, [])
 
+    def test_a_slow_github_does_not_hold_the_start(self):
+        import threading
+        gate = threading.Event()
+        with mock.patch.object(launcher, "UPDATE_CHECK_S", 0.2):
+            r = launcher.update_at_start(argparse.Namespace(no_update_check=False), ask=lambda q: "y",
+                                         popup=lambda text: True, packaged=True,
+                                         check=lambda current, net: gate.wait(5) and {"current": "1", "latest": "2"},
+                                         download=lambda *a: self.fail("asked"), start=lambda: True)
+        gate.set()
+        self.assertFalse(r)
+        self.assertEqual(launcher.bounded(lambda: 7, 1), 7)
+
     def test_a_source_copy_or_the_switch_asks_nothing(self):
         self.assertEqual(self.go(packaged=False), (False, []))
         self.assertEqual(self.go(args=argparse.Namespace(no_update_check=True)), (False, []))
@@ -101,6 +113,7 @@ class HandOver(unittest.TestCase):
         dropped = []
         with mock.patch.object(launcher, "FROZEN", True), \
                 mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
+                mock.patch.object(selfupdate, "packaged_path", lambda: "/x/BeamNG.Earth-old.exe"), \
                 mock.patch.object(selfupdate, "drop_staged",
                                   lambda path=None, blocked_by=None: dropped.append(blocked_by or 1)), \
                 mock.patch.object(launcher, "smart_app_control_on", lambda: sac), \
@@ -118,6 +131,9 @@ class HandOver(unittest.TestCase):
         self.assertTrue(r)
         self.assertEqual(dropped, [])
         self.assertEqual(popen.call_args[0][0][0], "/x/BeamNG.Earth-new.exe")
+        import selfupdate
+        self.assertEqual(popen.call_args[1]["env"].get(selfupdate.HANDED_OVER_FROM), "/x/BeamNG.Earth-old.exe",
+                         "the new copy is told which file started it (kept: the player's shortcut, GitHub #900)")
 
     def test_a_new_copy_that_dies_at_once_is_dropped_and_this_one_runs(self):
         r, dropped, _ = self.go(wait=1)
@@ -178,12 +194,50 @@ class GameStillRunning(unittest.TestCase):
         self.assertFalse(launcher.game_still_running(alive=lambda: False, sleep=lambda s: None))
 
 
+class WindowlessGame(unittest.TestCase):
+    """GitHub #1038: a game process hanging in the background (no window) kept the app saying "already running"."""
+
+    def test_no_window_now_and_later_is_stuck(self):
+        self.assertTrue(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: False, sleep=lambda s: None))
+
+    def test_a_window_or_no_game_is_not(self):
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: True, sleep=lambda s: None))
+        seq = iter([False, True])           # (its window came while it started)
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: next(seq),
+                                                  sleep=lambda s: None))
+        self.assertIsNone(launcher.windowless_game(pids_fn=lambda: [], window_fn=lambda p: False, sleep=lambda s: None))
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: None, sleep=lambda s: None))
+
+    def test_not_windows(self):
+        self.assertIsNone(launcher.windows_visible_window([1]) if not launcher.IS_WIN else None)
+
+
 class Popup(unittest.TestCase):
     def test_linux_zenity_yes_no_and_none_installed(self):
-        run = lambda code: (lambda cmd, timeout: mock.Mock(returncode=code))
+        run = lambda code, err=b"": (lambda cmd, timeout, **kw: mock.Mock(returncode=code, stderr=err))
         self.assertTrue(launcher.update_popup("t", run=run(0), which=lambda n: n == "zenity", windows=False))
         self.assertFalse(launcher.update_popup("t", run=run(1), which=lambda n: n == "kdialog", windows=False))
         self.assertIsNone(launcher.update_popup("t", run=run(0), which=lambda n: None, windows=False))
+
+    def test_a_tool_that_cannot_load_is_not_a_no(self):
+        """kdialog under the AppImage's library path: "version `CXXABI_1.3.15' not found", exit 1 (2026-11-07)."""
+        err = b"kdialog: /tmp/.mount_x/libstdc++.so.6: version `CXXABI_1.3.15' not found (required by kdialog)"
+        self.assertIsNone(launcher.update_popup("t", run=run_err(1, err), which=lambda n: n == "kdialog", windows=False))
+        seen = []
+
+        def run(cmd, timeout, **kw):
+            seen.append(kw.get("env"))
+            return mock.Mock(returncode=0, stderr=b"")
+        with mock.patch.object(launcher, "FROZEN", True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/.mount_x/_internal", "APPIMAGE": "/a.AppImage"}):
+            os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+            self.assertTrue(launcher.update_popup("t", run=run, which=lambda n: n == "zenity", windows=False))
+        self.assertNotIn("LD_LIBRARY_PATH", seen[0])     # the tool runs with the system's libraries
+        self.assertNotIn("APPIMAGE", seen[0])
+
+
+def run_err(code, err):
+    return lambda cmd, timeout, **kw: mock.Mock(returncode=code, stderr=err)
 
 
 if __name__ == "__main__":

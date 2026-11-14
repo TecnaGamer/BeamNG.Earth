@@ -18,6 +18,15 @@ import surface
 from test_roads import FRAME, features
 
 
+def _beside(ll, d):
+    """The points d m left and right of each vertex of a lon/lat line (the old vertex rule's, for comparison)."""
+    m = np.array([111320.0 * np.cos(np.radians(ll[:, 1].mean())), 110540.0])
+    t = np.gradient(ll * m, axis=0)
+    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    off = np.stack([-t[:, 1], t[:, 0]], axis=1) * d / m
+    return ll + off, ll - off
+
+
 class UrbanSamplingTest(unittest.TestCase):
     def cover_with_isolated_endpoint_sites(self, lat, lon):
         east, north, _ = FRAME.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.)
@@ -44,7 +53,7 @@ class UrbanSamplingTest(unittest.TestCase):
         f = features([[(0., 0.), (400., 0.)]], ["residential"])
         sp = roads.road_specs(f, lambda lat, lon: np.ones(np.shape(lat), bool))[0]
         self.assertTrue(sp.urban)
-        self.assertEqual(sp.width, roads.carriageway("residential", "paved", True))
+        self.assertEqual(sp.width, roads.default_width("residential", "paved", True, region="US"))
 
     def test_mapped_width_does_not_force_a_city_street_rural(self):
         f = features([[(0., 0.), (100., 0.)]], ["residential"], widths=[(0, 7.25)])
@@ -87,7 +96,7 @@ class UrbanSamplingTest(unittest.TestCase):
         ready = roads.road_specs(f, arriving_cover)[0]
         self.assertFalse(initial.urban)
         self.assertTrue(ready.urban)
-        self.assertEqual(ready.width, roads.carriageway("residential", "paved", True))
+        self.assertEqual(ready.width, roads.default_width("residential", "paved", True, region="US"))
         self.assertEqual(len(calls), 2)
 
 
@@ -114,7 +123,7 @@ class ActualHorseCreekTest(unittest.TestCase):
         f, s = self.load_fixture("horse_creek_urban.npz")
         try:
             ll = f.lonlat
-            left, right = roads._beside(ll, [len(ll)], roads.URBAN_BESIDE_M)
+            left, right = _beside(ll, roads.URBAN_BESIDE_M)
             original = np.concatenate([ll, left, right])
             votes = s.urban(original[:, 1], original[:, 0])
             n = len(ll)
@@ -136,7 +145,7 @@ class ActualHorseCreekTest(unittest.TestCase):
             with mock.patch.object(roads, "URBAN_BESIDE_SHARE", .35):
                 conservative = roads._road_specs(f, s.urban, False)[0]
             self.assertTrue(permissive.urban)
-            self.assertEqual(permissive.width, 10.8)
+            self.assertEqual(permissive.width, min(10.8, roads.WIDTH_TABLE["US"]["tertiary"][0]))   # (2 lanes: the street's width)
             self.assertFalse(conservative.urban)
             self.assertEqual(conservative.width, 6.2)
             self.assertFalse(roads.has_sidewalks(conservative))

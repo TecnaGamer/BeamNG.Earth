@@ -107,4 +107,12 @@ do
       'the folder line has no account name')
   end
 end
+
+-- the car held while the world loads: a line of its own, not slow frames (2026-11-11)
+local hl = fmt.heldLine({ fps = 40, frames = 600, held = { s = 4.2, frames = 250, over50 = 0, why = { edge = 4.0, loading = 0.2 } },
+  playing = { frames = 350, fps = 58.6, over50 = 2 } })
+T.check(hl and hl:find('held still while the world loaded for 4.2 s', 1, true) and hl:find('edge of the ground', 1, true)
+  and hl:find('58.6 fps', 1, true) and hl:find('2 frames over 50 ms', 1, true), 'held line: seconds, why, the frames while not held')
+T.check(fmt.heldLine({ fps = 60, frames = 10 }) == nil and fmt.heldLine(nil) == nil, 'not held: no line')
+
 T.done('test_issuefmt')

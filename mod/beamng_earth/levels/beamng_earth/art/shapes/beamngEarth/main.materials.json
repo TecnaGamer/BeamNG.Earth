@@ -7,7 +7,7 @@
     "persistentId": "6f1c2a3e-4b5d-4e6f-8a9b-0c1d2e3f4a5b",
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/far_palette.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/far_palette.dds",
         "metallicFactor": 0,
         "roughnessFactor": 1
       },

@@ -261,6 +261,27 @@ def tearDownModule():
 
 
 # --- 1. the cut blur -------------------------------------------------------------------------
+class DamagedFileTest(unittest.TestCase):
+    """A region file cut short or emptied (a crash, a full disk) is a miss, removed so it is computed again: unread it
+    failed every far tile over it for good (telemetry 2026-11-09: far tiles' BadZipFile ~1.1 M times in a week)."""
+
+    def test_damaged_region_file_is_a_miss_and_removed(self):
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            c = cm.ColorMatch(os.path.join(tmp, "c"), "s2", region_z=RZ)
+            rk = (RZ, 123)
+            npz, _none = c._paths(rk, "field")
+            os.makedirs(os.path.dirname(npz), exist_ok=True)
+            np.savez_compressed(npz, a=np.arange(1000.0))
+            with open(npz, "rb") as f:
+                body = f.read()
+            for bad in (b"", body[:len(body) // 2]):
+                with open(npz, "wb") as f:
+                    f.write(bad)
+                self.assertIsNone(c._load(rk, "field"))
+                self.assertFalse(os.path.exists(npz), "removed, so it is computed again")
+
+
 class DtBlurTest(unittest.TestCase):
     def test_constants_kept_and_cuts_block(self):
         X = np.full((64, 80, 2), 0.37, np.float32)

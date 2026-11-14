@@ -110,4 +110,23 @@ local n = #tb.updated
 terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, { masks = { 'a.png', 'b.png', 'c.png' }, materials = mats })
 T.check(#tb.updated == n, 'nil (other modes): the base is not touched')
 
+-- A level material (its sizes in samples of the level's 1 m: main.materials.json) on the lighter 2 m ground: the same
+-- repeats in metres, set once per square from the level's values (GitHub #943)
+local lawn = createObject('TerrainMaterial'); lawn:registerObject('bngEarthGroundLawn')
+lawn:setField('baseColorDetailTexSize', 0, '2'); lawn:setField('baseColorMacroTexSize', 0, '64')
+lawn:setField('normalDetailTexSize', 0, '1')
+local mats2 = { mats[1], mats[2], mats[3], { 'bngEarthGroundLawn', 'GRASS' } }
+local masks2 = { masks = { 'a.png', 'b.png', 'c.png', 'd.png' }, materials = mats2 }
+terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '1' and lawn.fields.baseColorMacroTexSize == '32'
+  and lawn.fields.normalDetailTexSize == '1', "level material on 2 m squares: half the samples (at least 1)")
+terrain.load('/temp/hm.png', 2, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '1' and lawn.fields.baseColorMacroTexSize == '32', 'set once (from the level values)')
+terrain.load('/temp/hm.png', 1, 64, -512, -512, 0, masks2, '/temp/beamngEarth/s/hm_1_0_0_base.png', 1024)
+T.check(lawn.fields.baseColorDetailTexSize == '2' and lawn.fields.baseColorMacroTexSize == '64',
+  "back on 1 m squares: the level's own values")
+T.check(dirt.fields.baseColorDetailTexSize == nil, "a level size left unset stays unset")
+T.check(terrain.levelSizeAt('64', 2) == 32 and terrain.levelSizeAt('1', 2) == 1 and terrain.levelSizeAt('', 2) == nil,
+  'levelSizeAt')
+
 T.done('test_detail_mode')

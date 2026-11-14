@@ -211,8 +211,9 @@ class GlueTest(unittest.TestCase):
     def test_c31_cells_hold_their_signs(self):
         from PIL import Image
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
-                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.png")
-        sheet = np.asarray(Image.open(path).convert("RGB")).astype(int)
+                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.dds")
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        sheet = np.asarray(_mt.open_texture(path).convert("RGB")).astype(int)
         self.assertEqual(sheet.shape[:2], (int(speedsigns.C31_SHEET),) * 2)
         at = lambda value, c, s: sheet[(lambda uv: (int((1 - uv[1]) * 1024), int(uv[0] * 1024)))(   # noqa: E731
             speedsigns.c31_uv(value, c, s))]
@@ -257,6 +258,35 @@ class ClassTest(unittest.TestCase):
         got = speedsigns._cell_rows(f, FRAME, None, None, False, True)
         self.assertEqual(sorted(got), [str(f.ids[0])])
 
+
+
+
+class GermanGeneralLimitsTest(unittest.TestCase):
+    """speedsigns.general (earthfast speed_sign_general): with the town signs on, Germany's general limits are not
+    posted (StVO § 3 Abs. 3, § 39 Abs. 1): no 50 at a town's Ortstafel or in it, no 100 out of town but the end of a
+    lower limit; outside Germany and on motorways every sign stays."""
+
+    def rows(self, *signs):
+        # [x, y, travel x, travel y, value, size, road x, road y, urban, kind, before, rank]
+        return np.array([[x, 0.0, 1.0, 0.0, v, 0, x, 0.0, 0, k, b, r] for x, v, k, b, r in signs], np.float64)
+
+    def towns(self, xy):
+        # a German town east of x = 1000 m, Germany west of x = 5000 m
+        xy = np.asarray(xy, np.float64)
+        return np.c_[(xy[:, 0] >= 1000.0) & (xy[:, 0] < 5000.0), xy[:, 0] < 5000.0]
+
+    def test_general_limits(self):
+        signs = self.rows((850.0, 50, 0, 100, 4),        # 150 m before the town: its Ortstafel's
+                          (2000.0, 50, 3, 0, 4),         # a reminder in town
+                          (2000.0, 50, 0, 30, 4),        # the end of a 30
+                          (500.0, 100, 0, 50, 4),        # a town's end
+                          (300.0, 100, 2, 0, 4),         # out of town past a junction
+                          (300.0, 100, 0, 70, 4),        # the end of a 70
+                          (300.0, 100, 2, 0, 7),         # a motorway's
+                          (300.0, 50, 2, 0, 4),          # a 50 of its own out of town
+                          (6000.0, 100, 2, 0, 4))        # outside Germany
+        self.assertEqual(speedsigns.general(signs, self.towns).tolist(),
+                         [False, False, True, False, False, True, True, True, True])
 
 if __name__ == "__main__":
     unittest.main()

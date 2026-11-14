@@ -4,6 +4,7 @@ BridgeProfiles / TunnelProfiles / grading with today's inference as the fallback
 import os
 import struct
 import sys
+import time
 import unittest
 
 import numpy as np
@@ -244,6 +245,111 @@ class PartsTest(unittest.TestCase):
             provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
             self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
 
+    def test_a_node_two_cells_share_is_read_once(self):
+        """Neighbouring cells' boxes share EPT nodes: a node this process read for one cell is not downloaded again for
+        the next (RoadZ._node_bytes), each cell's points its own boxes'."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            a = rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1010.0, 2010.0)],
+                         mapcells.CellKey(14, 4683, 6266))
+            b = rz._read("USGS_X", ["1-0-0-0", "2-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)],
+                         mapcells.CellKey(14, 4684, 6266))
+            self.assertEqual(sorted(u.rsplit("/", 1)[-1] for u in asked), ["0-0-0-0.laz", "1-0-0-0.laz", "2-0-0-0.laz"])
+            self.assertEqual(rz.stats.get("shared"), 1)
+            self.assertEqual(len(a[0]), 2)              # (one point a node in the first cell's box)
+            self.assertEqual(len(b[0]), 4)              # (both in the second's)
+
+    def _parts(self, d, key, name="USGS_X"):
+        import glob
+        return sorted(glob.glob(os.path.join(d, "roadz", f"v{roadz.VERSION}", "eptparts", str(key).replace("/", "_"),
+                                             name, "*", "*.npz")))
+
+    def test_a_node_another_process_reads_is_waited_for(self):
+        """The main process's warm and a block process read the same cell: a node the other one has claimed (its
+        lock file) is not downloaded again; its part file is taken once written."""
+        import shutil
+        import subprocess
+        import tempfile
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            key = mapcells.CellKey(14, 4683, 6266)
+            boxes = [(1000.0, 2000.0, 1060.0, 2010.0)]
+            nodes = ["0-0-0-0", "1-0-0-0"]
+            a = rz._read("USGS_X", nodes, boxes, key)
+            p0, p1 = self._parts(d, key)
+            keep = os.path.join(d, "keep.npz")
+            shutil.copy(p1, keep)
+            os.remove(p0)
+            os.remove(p1)
+            with open(p1 + ".lock", "w") as fh:         # (held by a live process: this one's parent)
+                fh.write(f"1 0 {os.getppid()}")
+
+            def other():
+                time.sleep(0.3)
+                shutil.copy(keep, p1 + ".tmp")
+                os.replace(p1 + ".tmp", p1)
+                os.remove(p1 + ".lock")
+            t = threading.Thread(target=other)
+            t.start()
+            import xproc
+            xproc._cancel_proc[0] = lambda: True    # (a job's cancel check: not the read's business)
+            rz._raw.clear()                         # (as another process: nothing of this one's memory)
+            try:
+                b = rz._read("USGS_X", nodes, boxes, key)
+            finally:
+                xproc._cancel_proc[0] = None
+            t.join()
+            self.assertEqual(len(asked), 3, "node 1 waited for, not read again")
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[1], b[1])
+            # a holder that died: its claim taken over at once
+            os.remove(p1)
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()
+            with open(p1 + ".lock", "w") as fh:
+                fh.write(f"1 0 {dead.pid}")
+            t0 = time.monotonic()
+            rz._raw.clear()
+            c = rz._read("USGS_X", nodes, boxes, key)
+            self.assertLess(time.monotonic() - t0, 5.0)
+            self.assertEqual(len(asked), 4)
+            np.testing.assert_array_equal(a[0], c[0])
+            self.assertFalse(os.path.exists(p1 + ".lock"))
+
+    def test_a_cell_another_process_built_is_taken_from_disk(self):
+        """Another process wrote the cell's file (and removed its parts) while this one read its nodes: the cell is
+        read from that file, not built again."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            rz = roadz.RoadZ(d, None)
+            key = mapcells.CellKey(14, 4683, 6266)
+            final = rz._path("lidar", key)
+            os.makedirs(os.path.dirname(final), exist_ok=True)
+            done = roadz.Lines.build([], corrected=True)
+
+            def fetch(url, headers=None, lane=None):
+                with open(final + ".gaps.json", "w") as fh:
+                    fh.write("[]")
+                done.save(final)                        # (the other process's, mid-read)
+                return las_bytes([(100, 200, 550, 2)])
+            rz._fetch = fetch
+            rz._lidar = lambda k: rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1060.0, 2010.0)], k)
+            roadz.LIDAR_FETCH_THREADS, old = 1, roadz.LIDAR_FETCH_THREADS
+            try:
+                got = rz.lines("lidar", key)
+            finally:
+                roadz.LIDAR_FETCH_THREADS = old
+            self.assertEqual(len(got), 0)
+            self.assertEqual(got.gaps, [])
+
 class FakeDem:
     def __init__(self, z):
         self.z = z
@@ -297,6 +403,33 @@ class ObservedTest(unittest.TestCase):
         xy = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
         self.assertIsNone(rz.observed(FRAME, xy, 4.0, 1), "a ground road gives no deck height")
         self.assertIsNotNone(rz.observed(FRAME, xy, 4.0, 0))
+
+    def test_deck_of_another_tier_crossing_overhead(self):
+        """A deck one tier up crosses this sloping bridge at a shallow angle, and hides its own line's heights under
+        it: the stations nearest the upper line do not take its heights (a 10 m tent on the lower deck, whose own
+        heights the grade rule dropped for it)."""
+        x = np.linspace(-300, 300, 121)
+        own = self.src_line(x, np.full(121, 2.0), np.where(np.abs(x) < 30, np.nan, FLAT + 12.0 - 0.02 * x), 1)
+        upper = self.src_line(np.linspace(-150, 150, 31), np.linspace(-40, 40, 31), np.full(31, FLAT + 22.0), 2)
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build([own, upper, ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        self.assertIsNotNone(z)
+        ok = np.isfinite(z)
+        np.testing.assert_allclose(z[ok], FLAT + 12.0 - 0.02 * q[ok], atol=0.05)
+        self.assertGreater(ok.mean(), 0.85, "the deck's own heights either side of the crossing stay")
+
+    def test_road_that_changes_tier_keeps_both(self):
+        """A road up to a higher tier and down again over 150 m is its own: nothing is dropped."""
+        xs = (np.linspace(-300, -75, 46), np.linspace(-75, 75, 31), np.linspace(75, 300, 46))
+        zs = (np.linspace(FLAT + 6.0, FLAT + 12.0, 46), np.full(31, FLAT + 12.0), np.linspace(FLAT + 12.0, FLAT + 6.0, 46))
+        decks = [self.src_line(x, np.full(len(x), 2.0), z, t) for x, z, t in zip(xs, zs, (1, 2, 1))]
+        ground = self.src_line(np.linspace(-500, -300, 20), np.full(20, 2.0), np.full(20, FLAT), 0)
+        rz = provider_with(roadz.Lines.build(decks + [ground]))
+        q = np.linspace(-300, 300, 201)
+        z = rz.observed(FRAME, np.c_[q, np.zeros(201)], 4.0, 1)
+        np.testing.assert_allclose(z, np.interp(q, np.concatenate(xs), np.concatenate(zs)), atol=0.05)
 
     def test_off(self):
         bridge = self.src_line(np.linspace(-35, 35, 15), np.zeros(15), np.full(15, 20.0), 1)
@@ -368,6 +501,36 @@ class BridgeOverrideTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider(fn)
         _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0, atol=1e-9, err_msg="steeper than OBS_MAX_GRADE: the solve stays")
+
+    def test_lower_deck_under_a_higher_one_keeps_its_solve(self):
+        # the lidar sees the upper deck's top: a lower deck under it took that height and lay inside it (the Bay
+        # Bridge's two decks both 61.9 m, solved 52.3 / 60.7, Discord 2026-11-10); a deck beside it keeps its measurement
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
+        spec = types.SimpleNamespace(width=18.0)
+        lower, upper, beside = ("lo", 0), ("up", 0), ("bs", 0)
+        pool = {lower: (spec, line, 0.0, 1.0, 51, ""), upper: (spec, line + [0.4, 0.0], 0.0, 2.0, 51, ""),
+                beside: (spec, line + [0.0, 40.0], 0.0, 1.0, 51, "")}
+        z = np.full(51, FLAT + 4.0)
+        roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), FLAT + 6.0))
+        out = bp._observed([lower], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=1e-9, err_msg="under the upper deck: the solve")
+        out2 = bp._observed([beside], pool, [line + [0.0, 40.0]], [z])
+        self.assertGreater(float(np.median(out2[0])), FLAT + 5.0, "a deck beside it: measured (off its solve, FLAT + 4)")
+
+    def test_short_deck_spike_refused(self):
+        # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
+        # the grade check skipped parts this short, and the spike stood across the road as a tent (GitHub #1066)
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        k = ("culvert", 0)
+        pool = {k: (types.SimpleNamespace(width=9.0), None, 0.0, 1.0, 3, "")}
+        line = np.c_[[0.0, 2.2, 4.4], [0.0, 0.0, 0.0]]
+        z = np.array([FLAT, FLAT - 0.2, FLAT - 0.4])
+        roadz.PROVIDER = StubProvider(lambda xy_, s: FLAT + np.where(np.abs(s - 2.2) < 0.1, 5.2, 0.0) - 0.2 * s / 2.2)
+        out = bp._observed([k], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=0.05)
 
 
 @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
@@ -502,3 +665,171 @@ class SlowGapsTest(unittest.TestCase):
         self.assertEqual(list(second.values()), [None])
         self.assertGreaterEqual(t1 - t0, 0.55)
         self.assertLess(t2 - t1, 0.4, "the second cell waited the full time again")
+
+
+class PrefetchWantsTest(unittest.TestCase):
+    """The server's lidar prefetch (RoadZ.prefetch) and the cells planning asked for: read, and kept used, so a place
+    visited again plans on its lidar and is kept (the terrain blocks, the plans, the road tiles: revisit.py)."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from unittest import mock
+        self.mock = mock
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        p = mock.patch.dict(os.environ, {roadz.SESSION_ENV: f"w{time.monotonic_ns()}"})
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(roadz, "sources_at", lambda la, lo, lidar=None: ["lidar"])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def provider(self):
+        rz = roadz.RoadZ(self.tmp, object())
+        rz.enabled = rz.lidar = True
+        return rz
+
+    def wait_idle(self, rz, n, timeout=5.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            st = rz._pf()
+            with st["cv"]:
+                if len(st["done"]) + len(st["failed"]) >= n and not st["busy"]:
+                    return
+            time.sleep(0.02)
+        self.fail("the prefetch did not finish")
+
+    def test_cells_planning_asked_for_read_past_the_far_limit(self):
+        """A cell a planning process asked for (a want file) is read up to PREFETCH_WANT_FAR_M from the player, not
+        dropped at PREFETCH_FAR_M with the cells queued round the player: planning near the player asks for the deck
+        ends' cells 8-16 km out, and those were never read, so the place was never kept (Fells Point, a 16 GB Windows
+        PC with no late pool, 2026-11-14). A want past PREFETCH_WANT_FAR_M still goes (a teleport far away)."""
+        rz = self.provider()
+        read = []
+        rz.lines = lambda src, key: read.append((key.x, key.y)) or roadz.Lines.build([])
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        dist = {1: 10.0, 2: mid, 3: mid, 4: roadz.PREFETCH_WANT_FAR_M * 2}
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05):
+            rz._want("lidar", mapcells.CellKey(14, 2, 0))     # (asked by planning, past PREFETCH_FAR_M)
+            rz._want("lidar", mapcells.CellKey(14, 4, 0))     # (asked by planning, past PREFETCH_WANT_FAR_M)
+            rz.prefetch([mapcells.CellKey(14, 1, 0), mapcells.CellKey(14, 3, 0)], where=lambda k: dist[k.x])
+            self.wait_idle(rz, 2)
+            time.sleep(0.2)
+        self.assertEqual(sorted(read), [(1, 0), (2, 0)])
+        self.assertEqual(rz.prefetch_state(mapcells.CellKey(14, 2, 0)), "done", "the cell planning asked for")
+        self.assertIsNone(rz.prefetch_state(mapcells.CellKey(14, 3, 0)), "past PREFETCH_FAR_M, not asked: dropped")
+        self.assertIsNone(rz.prefetch_state(mapcells.CellKey(14, 4, 0)), "past PREFETCH_WANT_FAR_M: dropped")
+
+    def test_a_wanted_cell_whose_read_failed_is_tried_again(self):
+        """A wanted cell keeps its far limit when queued again after a failed read (no planning process asks twice:
+        its decision for the run is made)."""
+        rz = self.provider()
+        tries = []
+
+        def lines(src, key):
+            tries.append(key.x)
+            return None if tries.count(2) == 1 and key.x == 2 else roadz.Lines.build([])
+        rz.lines = lines
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0):
+            rz._want("lidar", mapcells.CellKey(14, 2, 0))
+            rz.prefetch([mapcells.CellKey(14, 1, 0)], where=lambda k: 10.0 if k.x == 1 else mid)
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end and rz.prefetch_state(mapcells.CellKey(14, 2, 0)) != "done":
+                time.sleep(0.02)
+        self.assertEqual(rz.prefetch_state(mapcells.CellKey(14, 2, 0)), "done")
+        self.assertEqual(tries.count(2), 2, "read again after the failed read")
+
+    def _failing_want(self, fail):
+        """A wanted cell 8-24 km out whose every read fails (fail(): what the stub does); -> (provider, reads)."""
+        rz = self.provider()
+        reads = []
+
+        def lines(src, key):
+            reads.append(key.x)
+            if key.x != 2:          # (the cells round the player: read)
+                return roadz.Lines.build([])
+            fail()
+            return None
+        rz.lines = lines
+        return rz, reads
+
+    def _run_want(self, rz, reads, cell, until, timeout=5.0):
+        mid = (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2
+        rz._want("lidar", cell)
+        rz.prefetch([mapcells.CellKey(14, 1, 0)], where=lambda k: 10.0 if k.x == 1 else mid)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end and not until():
+            time.sleep(0.02)
+        time.sleep(0.3)         # (no more reads after it)
+
+    def test_a_wanted_cell_that_keeps_failing_is_left_until_asked_again(self):
+        """A wanted cell whose read keeps failing is read PREFETCH_WANT_TRIES times, then left (dropped past
+        PREFETCH_FAR_M as any cell): with no limit it was read again every minute while the player stayed within
+        24 km (Codex review of 99cf7113). A planning process asking again renews the want."""
+        rz, reads = self._failing_want(lambda: None)
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0), \
+                self.mock.patch.object(roadz, "PREFETCH_WANT_TRIES", 3):
+            self._run_want(rz, reads, cell, lambda: rz.prefetch_state(cell) is None and reads.count(2) >= 3)
+            self.assertEqual(reads.count(2), 3, "read PREFETCH_WANT_TRIES times, then left")
+            self.assertIsNone(rz.prefetch_state(cell), "dropped past PREFETCH_FAR_M once the want ended")
+            rz._want("lidar", cell)         # (asked again: renewed)
+            rz.prefetch([mapcells.CellKey(14, 3, 0)], where=lambda k: 10.0 if k.x == 3 else
+                        (roadz.PREFETCH_FAR_M + roadz.PREFETCH_WANT_FAR_M) / 2)
+            end = time.monotonic() + 5.0
+            while time.monotonic() < end and reads.count(2) < 6:
+                time.sleep(0.02)
+            time.sleep(0.3)
+        self.assertEqual(reads.count(2), 6, "a renewed want is read again, as many times")
+
+    def test_a_404_ends_the_want_at_once(self):
+        """A read that found no data there (netfetch.NotFound) ends the want: not read again."""
+        import netfetch
+
+        def fail():
+            roadz._tl.failed = netfetch.NotFound("no such node")
+        rz, reads = self._failing_want(fail)
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_RETRY_S", 0.0):
+            self._run_want(rz, reads, cell, lambda: reads.count(2) >= 1 and rz.prefetch_state(cell) is None)
+        self.assertEqual(reads.count(2), 1)
+        self.assertIsNone(rz.prefetch_state(cell))
+
+    def test_a_want_not_asked_again_expires(self):
+        """A want older than PREFETCH_WANT_KEEP_S is a cell like the rest: dropped past PREFETCH_FAR_M unread."""
+        rz = self.provider()
+        reads = []
+        rz.lines = lambda src, key: reads.append(key.x) or roadz.Lines.build([])
+        cell = mapcells.CellKey(14, 2, 0)
+        with self.mock.patch.object(roadz, "PREFETCH_CELLS", 1), \
+                self.mock.patch.object(roadz, "PREFETCH_POLL_S", 0.05), \
+                self.mock.patch.object(roadz, "PREFETCH_WANT_KEEP_S", -1.0):
+            self._run_want(rz, reads, cell, lambda: 1 in reads and rz.prefetch_state(cell) is None)
+        self.assertEqual(reads, [1])
+        self.assertIsNone(rz.prefetch_state(cell))
+
+    def test_a_cell_read_from_disk_is_marked_used(self):
+        """A lidar cell read from disk (in a worker: the download cache's index never hears of it) gets its mtime
+        now, the cache's last use for files this server's own process did not read (cache.Cache.scan): one read on
+        every visit was as old as its download and among the first evicted when the disk ran short."""
+        rz = self.provider()
+        ln = roadz.Lines.build([], corrected=True)
+        p = rz._path("lidar", mapcells.CellKey(14, 1, 2))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        ln.save(p)
+        with open(p + ".gaps.json", "w", encoding="utf-8") as fh:
+            fh.write("[]")
+        old = time.time() - 30 * 86400
+        for f in (p, p + ".gaps.json"):
+            os.utime(f, (old, old))
+        got = rz.lines("lidar", mapcells.CellKey(14, 1, 2))
+        self.assertIsNotNone(got)
+        for f in (p, p + ".gaps.json"):
+            self.assertGreater(os.path.getmtime(f), time.time() - 600, f"{os.path.basename(f)} not marked used")
