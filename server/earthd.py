@@ -11788,6 +11788,11 @@ async def main_async(args):
         proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
         os.environ["BNE_NETSTATS_PROC"] = proc_dir
         netfetch._PROC_DIR = proc_dir
+    # (the one-at-a-time export hosts admitted across every process of the server, netfetch.SharedGate: set before the
+    # workers start so they inherit it)
+    if not os.environ.get(netfetch.SHARED_ENV):
+        os.environ[netfetch.SHARED_ENV] = os.path.join(args.cache_dir, "netgate")
+    netfetch.SHARED_DIR = os.environ[netfetch.SHARED_ENV]
     log.info("startup: preparing worker processes")
     block_pools, far_pool, photo_pool = [], None, None
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)

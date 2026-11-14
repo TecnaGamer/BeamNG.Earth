@@ -1442,26 +1442,110 @@ class Imagery:
                             want.append(key)
         return want
 
+    def _lazy_children(self, frame, x0, y0, size, px):
+        """[(src, z, [(tx, ty), ...])] in chain order: each lazy source's tiles a render(frame, x0, y0, size, px) would
+        read (its own zoom range and bounds; the render's footprint and its one-texel margin)."""
+        lazy = [s for s in self.chain if s.lazy]
+        if not lazy:
+            return []
+        c = np.array([0.0, 0.5, 1.0]) * size
+        E, N = np.meshgrid(x0 + c, y0 + c)
+        lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+        if np.abs(lat).max() > MAX_LAT:
+            return []
+        zw = zoom_for(float(lat[1, 1]), size / px)
+        out = []
+        for src in lazy:
+            if zw > src.max_view_zoom:
+                continue
+            z = min(zw, src.max_zoom)
+            if z < src.min_zoom:
+                continue
+            if src.bounds:
+                bs, bw, bn, be = src.bounds
+                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                    continue
+            fx, fy = mercator_px(lat.ravel(), lon.ravel(), z)
+            ty0, ty1 = int(math.floor(fy.min() - 1)) // TILE, int(math.floor(fy.max() + 1)) // TILE
+            tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
+            kids = [(tx, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1) if in_bounds(src, z, tx, ty)]
+            out.append((src, z, kids))
+        return out
+
+    def _child_state(self, src, z, tx, ty):
+        """One lazy source tile, as a render would read it: ("data", None) on disk; ("none", expiry) known to hold
+        nothing (a miss within its host's miss_ttl, or one the host cannot be asked about now: expiry None then, as
+        for a coverage probe's "outside"); ("todo", None) neither (never fetched, evicted by the cache cap, or a miss
+        that expired: asked again)."""
+        path, miss = self._paths(src, z, tx, ty)
+        if os.path.exists(path):
+            return "data", None
+        t = missindex.when(miss)
+        if t is not None:
+            ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+            if ttl is None:
+                return "none", None
+            if self.fetcher.wall() - t < ttl:
+                return "none", t + ttl
+            if self.fetcher.miss_alive(miss, src.url):      # (expired, but the host cannot be asked now)
+                return "none", None
+        with self._lock:
+            if self._probe_status((src, z, tx, ty)) == "outside":
+                return "none", None
+        return "todo", None
+
+    def lazy_state(self, frame, x0, y0, size, px):
+        """(resolved, expiry, todo) of the lazy tiles a render(frame, x0, y0, size, px) would read: resolved when each
+        is decided (on disk, or every lazy source that could fill it known to hold nothing there), decided per tile, not
+        by an export parent's last child (an export mixes tiles with data and nodata ones, and the cache cap evicts
+        tiles one by one); expiry: the earliest time (unix s) one of the deciding "nothing there" answers expires, None
+        when none does; todo: [(src, z, tx, ty)] the tiles still to fetch (a later source's only where no earlier
+        one has data)."""
+        covered, waiting = set(), set()     # (a later source's tile only once the earlier ones hold nothing there)
+        expiry, todo = None, []
+        for src, z, kids in self._lazy_children(frame, x0, y0, size, px):
+            for tx, ty in kids:
+                if (z, tx, ty) in covered or (z, tx, ty) in waiting:
+                    continue
+                st, until = self._child_state(src, z, tx, ty)
+                if st == "data":
+                    covered.add((z, tx, ty))
+                elif st == "todo":
+                    todo.append((src, z, tx, ty))
+                    waiting.add((z, tx, ty))
+                elif until is not None:
+                    expiry = until if expiry is None else min(expiry, until)
+        return not todo, expiry, todo
+
     def fetch_lazy(self, frame, x0, y0, size, px):
-        """Fetch now, in the calling thread, the lazy sources' tiles a render(frame, x0, y0, size, px) would use and
-        that are not on disk (nor known missing, nor under an earlier lazy source's data: _warm_done), as demand
-        requests (netfetch "urgent" within urgent()): a render that must not skip them (render reads a lazy tile only
-        from disk; warm() fetches the ones round the player). The roofs' photo (buildings.roof_photo): a road tile read
-        Maryland's md6in only where the ground photo's warm had fetched it first, so its roofs were drawn procedural
-        and the tile was never kept (2026-11-13). The number fetched; raises ImageryError (a fetch failed)."""
+        """Fetch now, in the calling thread, the lazy sources' tiles a render(frame, x0, y0, size, px) would read that
+        are not decided yet (lazy_state: per tile, an expired miss asked again), as demand requests (netfetch "urgent"
+        within urgent()), source by source in chain order (a later one only where no earlier one has data): a render
+        that must not skip them (render reads a lazy tile only from disk; warm() fetches the ones round the player).
+        The roofs' photo (buildings.roof_photo_final): a road tile read Maryland's md6in only where the ground photo's
+        warm had fetched it first (2026-11-13). One request per export parent; the hosts' limits are the server's
+        processes' together (netfetch.SharedGate). The number fetched; raises ImageryError (a fetch failed)."""
         kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
         old = getattr(self._local, "kind", None)
         self._local.kind = kind
-        n = 0
+        n, asked = 0, set()
         try:
-            for key in self.lazy_keys(frame, x0, y0, size, px):
-                if self._warm_done(key):
-                    continue
-                src, z, x, y = key
-                last = (1 << src.export) - 1
-                self._download(src, z, x | last, y | last)
-                self._count(src.name + ":photo")
-                n += 1
+            for _ in range(len(self.chain) + 1):        # (each pass fetches one source's missing parents at most)
+                _ok, _exp, todo = self.lazy_state(frame, x0, y0, size, px)
+                todo = [k for k in todo if (k[0].name, k[1], k[2] >> k[0].export, k[3] >> k[0].export) not in asked]
+                if not todo:
+                    break
+                src = todo[0][0]
+                for s_, z, tx, ty in todo:
+                    if s_ is not src:
+                        continue
+                    parent = (src.name, z, tx >> src.export, ty >> src.export)
+                    if parent in asked:
+                        continue
+                    asked.add(parent)
+                    self._download(src, z, tx, ty)      # (the parent's every tile written: data, or a miss)
+                    self._count(src.name + ":photo")
+                    n += 1
         finally:
             self._local.kind = old if old is not None else "demand"
         return n

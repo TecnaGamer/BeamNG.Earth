@@ -1115,6 +1115,129 @@ def bc1_decode(data, w, h):
     return img[:h, :w]
 
 
+class LazyStateTest(unittest.TestCase):
+    """imagery.lazy_state / fetch_lazy (the roofs' photo, buildings.roof_photo_final): each lazy tile decided by itself
+    (on disk, or known to hold nothing), not by its export parent's last child; an evicted tile and an expired miss
+    asked again; the expiry of the "nothing there" answers that decide."""
+    LAT, LON = 39.2834, -76.5934
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.frame = g.EnuFrame(self.LAT, self.LON)
+        missindex.reset_memo()
+
+    def tearDown(self):
+        missindex.reset_memo()
+        self.tmp.cleanup()
+
+    def make(self, usda_black=lambda i, j: False, naip_black=lambda i, j: False):
+        """naipusda then naip (both lazy exports, 4 x 4 tiles a parent) then usgs; usda_black(i, j) / naip_black: the
+        parent's child (i, j) black (no flights there: a miss)."""
+        def serve_export(z, x, y, size, name):
+            n = size // 256
+            a = np.zeros((size, size, 3), np.uint8) + np.array((90, 120, 60) if name == "naip" else (60, 90, 120),
+                                                               np.uint8)
+            a[::2, ::2] += 3
+            black = usda_black if name == "naipusda" else naip_black
+            for j in range(n):
+                for i in range(n):
+                    if black(i, j):
+                        a[j * 256:(j + 1) * 256, i * 256:(i + 1) * 256] = 0
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        return imagery.Imagery(self.tmp.name, ("naipusda", "naip", "usgs"), fetcher=net, tone=0.0)
+
+    def exports(self, name=None):
+        return [r for r in self.requests if r[1] == 15 and (name is None or r[0] == name)]
+
+    def square(self):
+        return self.frame, 0.0, 0.0, 256.0, 256
+
+    def test_mixed_children_decided_one_by_one(self):
+        # USDA's parents hold data in their east half only, the last child among them: by the last child the parent
+        # looked done and NAIP was never asked for the west half; per tile, NAIP is asked where USDA has nothing
+        im = self.make(usda_black=lambda i, j: i < 2)
+        im.fetch_lazy(*self.square())
+        self.assertTrue(self.exports("naipusda"))
+        kids = [k for s, z, k in im._lazy_children(*self.square()) if s.name == "naipusda"][0]
+        if any(tx % 4 < 2 for tx, ty in kids):
+            self.assertTrue(self.exports("naip"), "NAIP for USDA's empty tiles")
+        resolved, expiry, todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved)
+        self.assertEqual(todo, [])
+        _, used = im.render(*self.square())
+        self.assertNotIn("usgs", {k for k, v in used.items() if v > 0.01 * 256 * 256})
+
+    def test_nothing_there_decides_with_its_expiry(self):
+        im = self.make(usda_black=lambda i, j: True, naip_black=lambda i, j: True)
+        t0 = time.time()
+        im.fetch_lazy(*self.square())
+        resolved, expiry, todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved, todo)
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        self.assertIsNotNone(expiry)
+        self.assertAlmostEqual(expiry, t0 + ttl, delta=120)
+        n = len(self.requests)
+        self.assertEqual(im.fetch_lazy(*self.square()), 0, "decided: nothing asked again")
+        self.assertEqual(len(self.requests), n)
+
+    def test_an_evicted_tile_is_fetched_again(self):
+        im = self.make()
+        im.fetch_lazy(*self.square())
+        self.assertTrue(im.lazy_state(*self.square())[0])
+        src, z, kids = im._lazy_children(*self.square())[0]
+        tx, ty = kids[0]
+        last = (1 << src.export) - 1
+        if (tx | last, ty | last) == (tx, ty):
+            tx, ty = kids[-1]
+        os.remove(im._paths(src, z, tx, ty)[0])         # (the cache cap: one tile, not its parent's last)
+        resolved, _e, todo = im.lazy_state(*self.square())
+        self.assertFalse(resolved)
+        self.assertEqual(todo, [(src, z, tx, ty)])
+        n = len(self.exports())
+        self.assertEqual(im.fetch_lazy(*self.square()), 1)
+        self.assertEqual(len(self.exports()), n + 1)
+        self.assertTrue(os.path.exists(im._paths(src, z, tx, ty)[0]))
+        self.assertTrue(im.lazy_state(*self.square())[0])
+
+    def test_an_expired_miss_is_asked_again(self):
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        old = time.time() - ttl - 3600
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=old)
+        missindex.reset_memo()
+        resolved, _e, todo = im.lazy_state(*self.square())
+        self.assertFalse(resolved, "an expired miss decides nothing")
+        self.assertEqual({k[0].name for k in todo}, {"naipusda"})
+        im.fetch_lazy(*self.square())
+        self.assertTrue(self.exports("naipusda"), "asked again")
+        self.assertTrue(all(os.path.exists(im._paths(src, z, tx, ty)[0]) for tx, ty in kids), "its photo now")
+        self.assertTrue(im.lazy_state(*self.square())[0])
+        # (a miss within its time decides, with its expiry)
+        im2_dir = tempfile.TemporaryDirectory()
+        try:
+            self.tmp, keep = im2_dir, self.tmp
+            im2 = self.make()
+            recent = time.time() - 3600
+            missindex.record([im2._paths(src, z, tx, ty)[1] for tx, ty in kids], t=recent)
+            missindex.reset_memo()
+            st = [im2._child_state(src, z, tx, ty) for tx, ty in kids]
+            self.assertTrue(all(s == "none" and abs(e - (recent + ttl)) < 2 for s, e in st), st)
+        finally:
+            self.tmp = keep
+            im2_dir.cleanup()
+
+
 class DdsTest(unittest.TestCase):
     def test_mips_linear_light(self):
         # a black / white checker averages to the linear mid grey (186 in sRGB), not 128

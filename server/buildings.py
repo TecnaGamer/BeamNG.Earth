@@ -288,7 +288,8 @@ def parse_color(val):
 # started as the tile begins (RoofPhotoFuture), while its footprints are put together, the lazy sources' tiles too
 # (imagery.fetch_lazy: a render reads those from disk only); a failed or slow fetch faults the tile (revisit: built
 # again, coloured, on a later visit) and keeps the procedural roofs. A tile the sources hold too little of once all
-# was asked for (a state's edge, a remembered nodata answer: roof_photo_final) keeps them without a fault.
+# was decided (a state's edge, a remembered nodata answer: roof_photo_final) keeps them without a fault, kept only
+# until the first of those answers expires (revisit.expires).
 ROOF_PHOTO_ON = os.environ.get("BNE_ROOF_PHOTO", "on") != "off"
 ROOF_PHOTO_INSET_M = 1.0
 ROOF_PHOTO_MIN_PX = 6
@@ -326,6 +327,7 @@ class RoofPhoto:
 
 
 ROOF_PHOTO_WAIT_S = 8.0     # s the buildings wait for the tile's photo at most (then the procedural roofs, a fault)
+NEG_RECHECK_S = 86400.0     # s a tile built where the sources hold no photo is kept at most (roof_photo_final)
 _PHOTO_READERS = {}
 _PHOTO_LOCK = __import__("threading").Lock()
 _PHOTO_POOL = None
@@ -379,14 +381,19 @@ class RoofPhotoFuture:
         if self.fut is None:
             return None
         try:
-            ph, final = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
+            ph, final, until = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
         except Exception:
-            ph, final = None, False
+            ph, final, until = None, False, None
         if ph is None:
+            import revisit
             if not final:           # (could not be had, or not yet: a later visit builds it again, with the photo)
-                import revisit
                 revisit.fault()
-            return None             # (none there for good: the procedural roofs are the tile's answer)
+            elif until is not None:     # (none there on answers that expire: kept until the first one does)
+                revisit.expires(until)
+            return None             # (none there: the procedural roofs are the tile's answer)
+        if until is not None:       # (a later source's photo where an earlier one's "nothing there" expires)
+            import revisit
+            revisit.expires(until)
         return ph.colours(rings)
 
 
@@ -425,22 +432,27 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=F
 
 
 def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
-    """(roof_photo's RoofPhoto or None, final): final when a None is the answer for good (no regional photo covers
-    the box, ROOF_PHOTO_ON is off, or every source tile it could use was asked for and the sources hold too little
-    of it: a state's edge, its nodata), not when the photo could not be had (a fetch failed, a lazy source's tile
-    not on disk where it was not fetched: online=False, an error): RoofPhotoFuture's revisit fault only then. Before
-    2026-11-13 any None was a fault: where Maryland's md6in was remembered missing (its service's white, kept as a
-    miss for 90 days) no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the
-    tiles round the car at every visit); and online the lazy sources (md6in, New York's, the German states') were
-    read from disk only, so a tile built before the ground photo's warm had fetched its photo faulted too."""
+    """(roof_photo's RoofPhoto or None, final, until). A photo's until: when an earlier lazy source's "nothing there"
+    that handed some of its tiles to a later source expires (None: none did). A None is final when it is the answer:
+    no regional photo covers the box or ROOF_PHOTO_ON is off (until None: for good), or every lazy source tile it
+    could use is decided
+    (imagery.lazy_state: on disk, or known to hold nothing there) and the sources still hold too little of it (a
+    state's edge, a remembered nodata answer); those answers expire (a miss's host miss_ttl; the non-lazy sources'
+    misses, not looked at one by one, within NEG_RECHECK_S), so until (unix s) is when the first may: what was built
+    on it is kept only until then (revisit.expires). Not final when the photo could not be had (a fetch failed, a
+    lazy tile not decided: online=False, an error): RoofPhotoFuture's revisit fault only then. Before 2026-11-13 any
+    None was a fault: where Maryland's md6in was remembered missing (its service's white, kept as a miss for 90 days)
+    no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the tiles round the car at
+    every visit); and online the lazy sources (md6in, New York's, the German states') were read from disk only, so a
+    tile built before the ground photo's warm had fetched its photo faulted too."""
     if not ROOF_PHOTO_ON or cache_dir is None:
-        return None, True
+        return None, True, None
     try:
         import imagery
         import streetfront
         sources = _photo_sources(frame, x0, y0, x1, y1)
         if not sources:
-            return None, True
+            return None, True, None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
         # (a whole number of the render's cells: any other size raised in imagery's tile_warp and read no photo, the
@@ -454,16 +466,23 @@ def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, ur
                 reader.fetch_lazy(frame, x0 - pad, y0 - pad, size, px)
             rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
         if sum(used.get(name, 0) for name in sources) < px * px * 0.95:
-            # (too little of it: for good when every lazy tile it could use is on disk or known missing; render raised
-            # where a non-lazy source's fetch failed)
-            return None, bool(reader.lazy_ready(frame, x0 - pad, y0 - pad, size, px))
-        return RoofPhoto(rgb, x0 - pad, y0 - pad, size), True
+            # (too little of it: the answer when every lazy tile it could use is decided; render raised where a
+            # non-lazy source's fetch failed)
+            resolved, expiry, _todo = reader.lazy_state(frame, x0 - pad, y0 - pad, size, px)
+            if not resolved:
+                return None, False, None
+            cap = __import__("time").time() + NEG_RECHECK_S
+            return None, True, cap if expiry is None else min(expiry, cap)
+        # (the photo; where an earlier lazy source's "nothing there" gave a tile to a later one, kept until that expires.
+        # Offline, roof_photo's callers: the photo alone)
+        expiry = reader.lazy_state(frame, x0 - pad, y0 - pad, size, px)[1] if online else None
+        return RoofPhoto(rgb, x0 - pad, y0 - pad, size), True, expiry
     except imagery.ImageryError:
-        return None, False
+        return None, False, None
     except Exception as ex:             # (the procedural roofs rather than none)
         import logging
         logging.getLogger("earthd.buildings").debug("roof photo: %s: %s", type(ex).__name__, ex)
-        return None, False
+        return None, False, None
 
 
 def photo_tint(mat, rgb):

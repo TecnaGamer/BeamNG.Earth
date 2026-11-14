@@ -2790,6 +2790,10 @@ class RoofPhotoTest(unittest.TestCase):
                 asked.append("render")
                 return np.zeros((px, px, 3), np.uint8), {"france": px * px}
 
+            @staticmethod
+            def lazy_state(frame, x0, y0, size, px):
+                return True, None, []
+
         frame = geodesy.EnuFrame(46.17, 1.87)
         with mock.patch.object(bld, "_photo_sources", return_value=("france",)), \
                 mock.patch.object(bld, "_photo_reader_live", return_value=Reader()):
@@ -2803,10 +2807,11 @@ class RoofPhotoTest(unittest.TestCase):
             self.assertEqual(asked, ["fetch_lazy", "render"])
 
     class _Reader:
-        """A stand-in photo reader: render's texel counts (used), lazy_ready's answer, an ImageryError to raise."""
+        """A stand-in photo reader: render's texel counts (used), lazy_state's answer (ready, the deciding answers'
+        expiry), an ImageryError to raise."""
 
-        def __init__(self, used_share=1.0, ready=True, error=False):
-            self.used_share, self.ready, self.error = used_share, ready, error
+        def __init__(self, used_share=1.0, ready=True, error=False, expiry=None):
+            self.used_share, self.ready, self.error, self.expiry = used_share, ready, error, expiry
             self.asked = []
 
         def urgent(self):
@@ -2825,8 +2830,8 @@ class RoofPhotoTest(unittest.TestCase):
             n = int(px * px * self.used_share)
             return np.zeros((px, px, 3), np.uint8), {"md6in": n, "none": px * px - n}
 
-        def lazy_ready(self, frame, x0, y0, size, px):
-            return self.ready
+        def lazy_state(self, frame, x0, y0, size, px):
+            return self.ready, self.expiry, ([] if self.ready else [("md6in", 17, 0, 0)])
 
     def photo_final(self, reader, online=True):
         import geodesy
@@ -2836,43 +2841,60 @@ class RoofPhotoTest(unittest.TestCase):
             return bld.roof_photo_final(geodesy.EnuFrame(39.2833, -76.5967), 0.0, 0.0, 100.0, 100.0,
                                         tempfile.gettempdir(), online)
 
-    def test_a_photo_too_short_for_good_is_final_one_not_had_yet_is_not(self):
-        # 2026-11-13: every road tile of a Fells Point session faulted on its roofs' photo (797 not kept): md6in is a
-        # lazy source, read from disk only. Online the lazy tiles are fetched first; a None is a fault only when the
-        # photo could not be had (a fetch failed, a lazy tile not on disk yet), not where the sources hold too little
-        # of the tile after everything was asked (a state's edge: the procedural roofs are its answer)
+    def test_a_photo_too_short_once_decided_is_final_until_its_answers_expire(self):
+        # 2026-11-13: every road tile of a Fells Point session faulted on its roofs' photo (797 not kept): md6in was
+        # remembered missing there. Online the lazy tiles are fetched first; a None is a fault only when the photo
+        # could not be had (a fetch failed, a lazy tile not decided yet); where the sources hold too little of the tile
+        # once all is decided it is final, but only until the first "nothing there" answer expires (a miss's TTL, and
+        # within NEG_RECHECK_S for the non-lazy sources' misses)
+        import time as _time
         r = self._Reader()
-        ph, final = self.photo_final(r)
+        ph, final, until = self.photo_final(r)
         self.assertIsNotNone(ph)
-        self.assertTrue(final)
+        self.assertEqual((final, until), (True, None))
         self.assertEqual(r.asked, ["fetch_lazy", "render"])
-        ph, final = self.photo_final(self._Reader(used_share=0.5, ready=True))
-        self.assertEqual((ph, final), (None, True), "every tile asked for, too little there: for good")
-        ph, final = self.photo_final(self._Reader(used_share=0.5, ready=False))
-        self.assertEqual((ph, final), (None, False), "a lazy tile still missing: not yet")
-        ph, final = self.photo_final(self._Reader(error=True))
+        now = _time.time()
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True))
+        self.assertEqual((ph, final), (None, True))
+        self.assertAlmostEqual(until, now + bld.NEG_RECHECK_S, delta=60)
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True, expiry=now + 600))
+        self.assertEqual((ph, final, until), (None, True, now + 600), "the miss that decides expires first")
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=False))
+        self.assertEqual((ph, final), (None, False), "a lazy tile not decided: not yet")
+        ph, final, until = self.photo_final(self._Reader(error=True))
         self.assertEqual((ph, final), (None, False), "a failed fetch: not had")
+        ph, final, until = self.photo_final(self._Reader(expiry=now + 900))
+        self.assertIsNotNone(ph)
+        self.assertEqual(until, now + 900, "a later source's photo where an earlier one's miss expires")
         r = self._Reader(used_share=0.0, ready=False)
-        ph, final = self.photo_final(r, online=False)
+        ph, final, until = self.photo_final(r, online=False)
         self.assertEqual((ph, final), (None, False))
         self.assertEqual(r.asked, ["render"], "offline: nothing fetched")
         import geodesy
         with mock.patch.object(bld, "_photo_sources", return_value=()):
             self.assertEqual(bld.roof_photo_final(geodesy.EnuFrame(10.0, 10.0), 0, 0, 10, 10, "/nowhere", True),
-                             (None, True), "no regional photo there: for good")
+                             (None, True, None), "no regional photo there: for good")
 
-    def test_only_a_photo_not_had_faults_the_tile(self):
+    def test_only_a_photo_not_had_faults_the_tile_and_an_expiring_answer_bounds_its_keep(self):
+        import time as _time
         import geodesy
         import revisit
         frame = geodesy.EnuFrame(39.2833, -76.5967)
-        for reader, faults in ((self._Reader(), 0), (self._Reader(used_share=0.3, ready=True), 0),
-                               (self._Reader(used_share=0.3, ready=False), 1), (self._Reader(error=True), 1)):
+        soon = _time.time() + 600
+        ring = [np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)]
+        for reader, faults, until in ((self._Reader(), 0, None),
+                                      (self._Reader(used_share=0.3, ready=True, expiry=soon), 0, soon),
+                                      (self._Reader(expiry=soon), 0, soon),
+                                      (self._Reader(used_share=0.3, ready=False), 1, None),
+                                      (self._Reader(error=True), 1, None)):
             with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
                     mock.patch.object(bld, "_photo_reader_live", return_value=reader):
                 f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
                 with revisit.scope() as b:
-                    f.colours([np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)])
-                self.assertEqual(b.n, faults, (reader.used_share, reader.ready, reader.error))
+                    f.colours(ring)
+                self.assertEqual((b.n, b.until), (faults, until), (reader.used_share, reader.ready, reader.error))
+                self.assertEqual(b.complete, faults == 0 and until is None)
+                self.assertEqual(b.kept_until(), (faults == 0, until))
 
     def test_a_photo_late_past_the_wait_faults_the_tile(self):
         import concurrent.futures

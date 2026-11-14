@@ -1265,7 +1265,8 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
         return result_of(f"{vfs_dir}/{name}", extra or {})
     with revisit.scope() as f0:         # (this build's faults alone: revisit.scope)
         res = build()
-    if res is not None and revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
+    keep, until = f0.kept_until()      # (keep: nothing it read failed or was missing; until: an answer it read expires)
+    if res is not None and revisit.ON and keep:
         try:
             with open(os.path.join(out_dir, name), encoding="utf-8") as f:
                 text = f.read()
@@ -1275,7 +1276,7 @@ def _revisit_tile(kind, k, aid, tx, ty, out_dir, vfs_dir, name, build, extra_of,
                     continue
                 with open(os.path.join(out_dir, n), "rb") as f:
                     blobs[revisit.swap(n, mine)] = f.read()
-            revisit.store(_s.cache_dir, kind, k, blobs, extra_of(res), where=where)
+            revisit.store(_s.cache_dir, kind, k, blobs, extra_of(res), where=where, until=until)
         except Exception as e:          # (not kept rather than no tile)
             log.debug("revisit: %s tile %d_%d not kept: %s: %s", kind, tx, ty, type(e).__name__, e)
     return res
@@ -2223,9 +2224,10 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
     info = dict(info or {}, fuel_tried=[list(t) for t in getattr(P, "fuel_tried", ())])     # (the station finder)
     mark("write")
     _geo_stats["content_built"] += 1
-    if revisit.ON and not f0.complete and revisit.SITES:
+    keep, until = f0.kept_until()      # (keep: nothing it read failed or was missing; until: an answer it read expires)
+    if revisit.ON and not keep and revisit.SITES:
         log.info("revisit: road geotile %s not kept: %s", tile.key, f0.why_not())
-    if revisit.ON and f0.complete:     # (complete: nothing it read failed or was missing)
+    if revisit.ON and keep:
         try:
             blobs = {}
             for what, name in names.items():
@@ -2253,7 +2255,7 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
             revisit.store(_s.cache_dir, "roadsg", k, blobs,
                           {"n": int(n), "info": info,
                            "pads": [[sid, [[np.asarray(la).tolist(), np.asarray(lo).tolist()] for la, lo in rs]]
-                                    for sid, rs in P.fuel_pads]}, where=wh)
+                                    for sid, rs in P.fuel_pads]}, where=wh, until=until)
         except Exception as ex:          # (not kept rather than no tile)
             log.debug("revisit: geotile %s not kept: %s: %s", tile.key, type(ex).__name__, ex)
     return path, n, info, P.fuel_pads

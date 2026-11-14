@@ -63,22 +63,31 @@ _orphan_sites = {}
 
 class Build:
     """One build's faults (scope / begin): fault() in the thread it runs in and in the pool tasks it submitted or whose
-    results it took (task). complete: none, and no fault of the process's (an uncovered thread's) meanwhile."""
-    __slots__ = ("n", "lidar", "orphans0", "sites")
+    results it took (task). complete: none, and no fault of the process's (an uncovered thread's) meanwhile, and
+    nothing it read expires (expires: until); kept_until() for a store that keeps an item only until then."""
+    __slots__ = ("n", "lidar", "orphans0", "sites", "until")
 
     def __init__(self):
         self.n = self.lidar = 0
         self.orphans0 = _orphans[0]
         self.sites = {} if SITES else None
+        self.until = None
 
     @property
     def complete(self):
-        return self.n == 0 and self.lidar == 0 and _orphans[0] == self.orphans0
+        return self.n == 0 and self.lidar == 0 and _orphans[0] == self.orphans0 and self.until is None
+
+    def kept_until(self):
+        """(keep, until): keep when nothing it read failed or was missing; until (unix s, or None) the time the first
+        answer it was built on expires (expires()): store(..., until=until) keeps it only until then."""
+        return self.n == 0 and self.lidar == 0 and _orphans[0] == self.orphans0, self.until
 
     def why_not(self):
         """Why it is not complete (BNGE_REVISIT_SITES: the sites), or "" when it is."""
         if self.complete:
             return ""
+        if self.kept_until()[0]:
+            return f"built on answers that expire at {self.until:.0f}"
         parts = [f"{k} x{v}" for k, v in sorted((self.sites or {}).items(), key=lambda kv: -kv[1])[:6]]
         if _orphans[0] != self.orphans0:
             parts.append(f"process x{_orphans[0] - self.orphans0}")
@@ -190,11 +199,29 @@ def fault(lidar=False, here=False):
 
 class _Task:
     """A pool task's own faults (task): handed to the threads that take its result."""
-    __slots__ = ("n", "lidar", "sites")
+    __slots__ = ("n", "lidar", "sites", "until")
 
     def __init__(self):
         self.n = self.lidar = 0
         self.sites = {} if SITES else None
+        self.until = None
+
+
+def _min_until(a, b):
+    return b if a is None else a if b is None else min(a, b)
+
+
+def expires(until):
+    """What the builds whose scope this thread is in read is an answer that holds until `until` (unix s: a remembered
+    miss, imagery's "nothing there", buildings.roof_photo_final): they are kept only until then (Build.kept_until,
+    store(until=), load: an item past it is not there). In a thread no scope covers: a fault (fault(); nothing could
+    carry the time)."""
+    st = getattr(_tl, "stack", None)
+    if not st:
+        fault()
+        return
+    for b in st:
+        b.until = _min_until(b.until, float(until))
 
 
 def task(fn):
@@ -220,8 +247,8 @@ def task(fn):
 
 
 def take(own):
-    """This thread took a result of a task with faults own (task): its scopes have them too."""
-    if not (own.n or own.lidar):
+    """This thread took a result of a task with faults own (task): its scopes have them too (and its expiry)."""
+    if not (own.n or own.lidar or own.until is not None):
         return
     st = getattr(_tl, "stack", None)
     if not st:
@@ -231,6 +258,7 @@ def take(own):
             continue
         b.n += own.n
         b.lidar += own.lidar
+        b.until = _min_until(b.until, own.until)
         if b.sites is not None and own.sites:
             for k, v in own.sites.items():
                 b.sites[k] = b.sites.get(k, 0) + v
@@ -904,12 +932,20 @@ def _write_sides(path, kind, blobs):
     return side
 
 
-def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
+UNTIL_KEY = "_until"         # (an item's extra: the time it is kept until, store's until)
+
+
+def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None, until=None):
     """Keep an item under key k: blobs {name: bytes, or Side(path): a file linked in}, extra JSON data; where (where()):
     the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
-    format-keyed item, else code_key). Never raises; False when not kept."""
+    format-keyed item, else code_key); until (unix s): kept only until then (Build.kept_until: built on an answer that
+    expires), load finds none after it. Never raises; False when not kept."""
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
+    if until is not None:
+        if until <= time.time():
+            return False
+        extra = dict(extra or {}, **{UNTIL_KEY: float(until)})
     path = _path(cache_dir, kind, k)
     try:
         if kind in SIDE_KINDS and any(n in blobs for n in SIDE_NAMES):
@@ -1039,6 +1075,9 @@ def _locate(cache_dir, kind, k):
 def _with_sides(path, blobs, meta):
     """(blobs with the item's side files as Side, extra), or None when one of them is gone (cut back alone: built
     again). The side files are touched (used: kept longest when cut back)."""
+    extra = meta.get("extra")
+    if isinstance(extra, dict) and extra.get(UNTIL_KEY) is not None and time.time() >= float(extra[UNTIL_KEY]):
+        return None             # (built on an answer that has expired since: built again)
     side = meta.get("side") or ()
     for n in side:
         sp = _side(path, n)
