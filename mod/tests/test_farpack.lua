@@ -128,4 +128,35 @@ T.check(fk ~= nil and fk.dropWait ~= nil, 'a far tile\'s drop waits while its sq
 for _ = 1, 3 do run(1, A) end
 T.check(#objsWith('bp2_' .. PK) == 1 and objsWith('bp2_' .. PK)[1].hidden == false, 'the new pack made and shown')
 T.check(#objsWith('bf2_' .. K) == 0 and roads.debugFar()[roads.farGeoKey('F', K)] == nil, 'then the far tile went')
+-- the horizon ring (kind 'H', server bldhz.py): a zoom-12 tile's pieces, one a skyline square; a piece hides while its
+-- square has its skyline tile made, its pack made, or a far buildings tile under it seen
+roads.onFarDrop({ anchorId = 1, key = PK }, 'P')
+roads.onFarDrop({ anchorId = 1, key = SK }, true)
+run(1, A)
+local hx, hy = math.floor(gx / 32), math.floor(gy / 32)
+local HK = geotile.key(hx, hy, 12)
+local hlat, hlon = geotile.centre(12, hx, hy)
+local OK = geotile.key(sx + 1, sy, 15)          -- (another square under the same tile, nothing of its own there)
+local hdata = { v = 1, key = HK, frame = { hlat, hlon }, h = 'h1', parts = {
+  [SK] = { shape = '/s/bh_' .. HK .. '_' .. SK .. '.cdae', pos = { -3700, -3700, 0 }, pivot = 40 },
+  [OK] = { shape = '/s/bh_' .. HK .. '_' .. OK .. '.cdae', pos = { -3700, -3700, 0 }, pivot = 40 } } }
+T.check(roads.onFarTile(farMsg(HK, { hlat, hlon }, hdata), 1, 'H'), 'horizon tile accepted')
+for _ = 1, 3 do run(1, A) end
+local hf = roads.debugFar()[roads.farGeoKey('H', HK)]
+T.check(hf ~= nil and hf.parts[SK] ~= nil and hf.parts[OK] ~= nil, 'a piece per skyline square')
+T.check(roads.farGeoHidden(hf, SK) == false and roads.farGeoHidden(hf, OK) == false, 'nothing covers either square yet')
+T.check(#objsWith('bh_' .. HK .. '_' .. OK) == 1 and objsWith('bh_' .. HK .. '_' .. OK)[1].hidden == false,
+  'the uncovered piece made and shown')
+roads.onFarTile(farMsg(SK, { slat, slon }, sdata), 1, true)
+for _ = 1, 3 do run(1, A) end
+T.check(roads.farGeoHidden(hf, SK) == true, 'a piece hides under its square\'s made skyline tile')
+T.check(roads.farGeoHidden(hf, OK) == false, 'the other square\'s piece stays')
+roads.onFarDrop({ anchorId = 1, key = SK }, true)
+run(1, A)
+T.check(roads.farGeoHidden(hf, SK) == false, 'the skyline tile gone: the piece shows again')
+roads.onFarTile(farMsg(keys[1], centreOf(keys[1]), { v = 1, key = keys[1], frame = centreOf(keys[1]), h = 'e3' }), 1)
+T.check(roads.farGeoHidden(hf, SK) == true, 'a far buildings tile under its square: hidden')
+roads.onFarDrop({ anchorId = 1, key = HK }, 'H')
+run(1, A)
+T.check(roads.debugFar()[roads.farGeoKey('H', HK)] == nil and #objsWith('bh_' .. HK) == 0, 'the horizon tile dropped')
 T.done('test_farpack')

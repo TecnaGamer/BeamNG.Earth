@@ -160,10 +160,10 @@ class Meta:
               max(CASE WHEN path_in_schema = 'height' THEN TRY_CAST(stats_max AS DOUBLE) END) hmax,
               max(CASE WHEN path_in_schema = 'num_floors' THEN TRY_CAST(stats_max AS DOUBLE) END) fmax,
               min(CASE WHEN split_part(path_in_schema, ',', 1) IN ({tops})
-                  THEN CASE WHEN dictionary_page_offset > 4 THEN least(dictionary_page_offset, data_page_offset)
+                  THEN CASE WHEN dictionary_page_offset > 0 THEN least(dictionary_page_offset, data_page_offset)
                        ELSE data_page_offset END END) a,
               max(CASE WHEN split_part(path_in_schema, ',', 1) IN ({tops})
-                  THEN CASE WHEN dictionary_page_offset > 4 THEN least(dictionary_page_offset, data_page_offset)
+                  THEN CASE WHEN dictionary_page_offset > 0 THEN least(dictionary_page_offset, data_page_offset)
                        ELSE data_page_offset END + total_compressed_size END) b
             FROM parquet_metadata('{os.path.join(footers, typ)}/*.parquet') GROUP BY ALL ORDER BY f, rg""").fetchall()
         self.rgs = {}           # name -> [(rg, first row, last row, x0, x1, y0, y1, hmax, fmax, a, b)]
@@ -197,6 +197,7 @@ class Sparse:
         self.work, self.meta = work, meta
         self.lock = threading.Lock()
         self.bytes = self.requests = 0
+        self.bad = []               # (file, row group) DuckDB could not read even fetched again (left out, reported)
 
     def path(self, f):
         return os.path.join(self.work, self.meta.typ, f)
@@ -232,8 +233,9 @@ class Sparse:
                     raise
                 time.sleep(2 ** k)
 
-    def fill(self, pairs):
-        """The row groups [(name, rg)] fetched where not yet (their needed columns' span, one request each)."""
+    def fill(self, pairs, again=False):
+        """The row groups [(name, rg)] fetched where not yet (their needed columns' span, one request each); again:
+        fetched whatever the note says (a copy DuckDB could not read)."""
         by = {}
         for f, rg in pairs:
             by.setdefault(f, set()).add(rg)
@@ -241,7 +243,7 @@ class Sparse:
         for f, rgs in sorted(by.items()):
             p, got = self._open(f)
             for rg, _a, _b, *_s, o, e in self.meta.rgs[f]:
-                if rg in rgs and rg not in got:
+                if rg in rgs and (again or rg not in got):
                     jobs.append((f, p, rg, o, e))
 
         def one(job):
@@ -274,9 +276,25 @@ class Sparse:
         for f, rgs in sorted(by.items()):
             p = self.path(f)
             rr = {r[0]: r for r in self.meta.rgs[f]}
-            cond = " OR ".join(f"file_row_number BETWEEN {rr[rg][1]} AND {rr[rg][2]}" for rg in sorted(rgs))
-            q = f"SELECT {proj} FROM read_parquet('{p}', file_row_number = true) WHERE {cond}"
-            con.execute(f"CREATE TEMP TABLE {table} AS {q}" if first else f"INSERT INTO {table} {q}")
+
+            def run(sel):
+                cond = " OR ".join(f"file_row_number BETWEEN {rr[rg][1]} AND {rr[rg][2]}" for rg in sorted(sel))
+                q = f"SELECT {proj} FROM read_parquet('{p}', file_row_number = true) WHERE {cond}"
+                con.execute(f"CREATE TEMP TABLE {table} AS {q}" if first else f"INSERT INTO {table} {q}")
+            try:
+                run(rgs)
+            except Exception as e:      # (a copy with a row group not as fetched: fetched again, then each alone)
+                print(f"  {f}: {type(e).__name__}: {str(e)[:80]}; its row groups fetched again", flush=True)
+                self.fill([(f, rg) for rg in rgs], again=True)
+                for rg in sorted(rgs):
+                    try:
+                        run([rg])
+                        first = False
+                    except Exception as e2:
+                        self.bad.append((f, rg))
+                        print(f"  {f} row group {rg} left out: {type(e2).__name__}", flush=True)
+                if first:
+                    continue
             first = False
         return not first
 
