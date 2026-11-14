@@ -115,6 +115,16 @@ class PartRulesTest(unittest.TestCase):
         self.assertEqual(sum(base(s.facade) == "bne_bridge_concrete" for s, _, _ in items), 4, "half of them: all")
 
     @city
+    def test_siblings_stone_from_any_share(self):
+        """The Palais de Justice, Paris: a sixth of its parts mapped stone, the rest bare: all stone (only the stones
+        spread from a minority; the Empire State Building's concrete base does not, above)."""
+        parts = [(-20, -20, 40, 40, {"height": 20.0, "facade_material": "stone"})] + \
+            [(-20 + 8 * i, 20, 8, 10, {"height": 18.0}) for i in range(5)]
+        items = tile(*self._building(parts, height=20.0, cls="civic"))
+        self.assertTrue(all(base(s.facade) in (bld.STONE, bld.STONE_RUBBLE) for s, _, _ in items),
+                        [s.facade for s, _, _ in items])
+
+    @city
     def test_siblings_colour_only_from_a_majority(self):
         parts = [(-20, -20, 40, 40, {"height": 20.0}), (-15, -15, 30, 30, {"height": 40.0, "min_height": 20.0}),
                  (-2, -2, 4, 4, {"height": 50.0, "min_height": 40.0, "facade_color": "#40484A"})]
@@ -348,6 +358,47 @@ class InGameCheckTest(unittest.TestCase):
         items = tile(*self._building(parts, height=360.0))
         self.assertEqual(sum(base(s.facade) == bld.OFFICE for s, _, _ in items), 3, "the glass one and the bare ones")
 
+    @city
+    def test_no_spire_under_a_mapped_roof_over_a_step(self):
+        """A 48 m 10 x 10 m tower under a centred 8 x 8 m mapped dome (or spire) from 50 to 60 m: a 2 m gap, still
+        the map's own top, no spire of ours through it (Codex review of 3be5f78e)."""
+        for shape in ("dome", "pyramidal"):
+            parts = [(-20, -8, 40, 16, {"height": 21.0}), (20, -5, 10, 10, {"height": 48.0}),
+                     (21, -4, 8, 8, {"height": 60.0, "min_height": 50.0, "roof_shape": shape})]
+            self.assertFalse([s for s, _, _ in tile(*self._building(parts, height=None, cls="church")) if s.steeple],
+                             shape)
+
+    @city
+    def test_stone_colour_by_area_before_the_siblings_count(self):
+        """A 900 m² pale part, two 16 m² dark ones, three bare ones on a 200 m tower: the bare ones take the pale
+        part's stone colour (by area), not the dark one the most parts carry (Codex review of 3be5f78e)."""
+        parts = [(-15, -15, 30, 30, {"height": 120.0, "facade_color": "#DFD4D0"}),
+                 (15, -15, 4, 4, {"height": 60.0, "facade_color": "#2F4F6F"}),
+                 (15, 11, 4, 4, {"height": 60.0, "facade_color": "#2F4F6F"}),
+                 (-10, -10, 20, 20, {"height": 160.0, "min_height": 120.0}),
+                 (-6, -6, 12, 12, {"height": 190.0, "min_height": 160.0}),
+                 (-4, -4, 8, 8, {"height": 200.0, "min_height": 190.0})]
+        items = tile(*self._building(parts, height=200.0))
+        glass = sorted(round(abs(bld._area2(s.ring)) / 2) for s, _, _ in items if base(s.facade) == bld.OFFICE)
+        self.assertEqual(glass, [16, 16], "the dark parts alone")
+        self.assertEqual(sum(base(s.facade) == bld.FACADE and s.band == bld.BAND_TALL for s, _, _ in items), 4)
+
+    def test_stone_colour_judged_as_mapped(self):
+        """Overture's name hexes are drawn in muted shades (#D3D3D3 is lightgrey at 0.75): the masonry test reads the
+        mapped value, so a hex, its neighbour, its shorthand and its name agree (Codex review of 3be5f78e)."""
+        groups = ((True, ("#D3D3D3", "#d3d3d4", "#D2D3D3", "lightgrey", "lightgray", "Light Grey")),
+                  (True, ("#F5F5DC", "#F5F5DD", "beige")),
+                  (True, ("#DDDDDD", "#ddd", "#DDDDDDFF")),
+                  (False, ("#C0C0C0", "#C0C0C1", "silver")),
+                  (False, ("#808080", "grey", "gray", "#777")),
+                  (False, ("#000", "black", "#000000", "#010101")))
+        ring = bld.clean_ring(np.array([(0, 0), (30, 0), (30, 30), (0, 30)], np.float64))
+        for stone, cols in groups:
+            for c in cols:
+                self.assertEqual(bld.masonry_colour(bld.source_rgb(c)), stone, c)
+                s = bld.plan(ring, {"class": "office", "height": 200.0, "facade_color": c}, lat=40.7, lon=-74.0)
+                self.assertEqual(base(s.facade) != bld.OFFICE, stone, (c, s.facade))
+
     def test_a_dome_takes_its_walls_light_look(self):
         ring = np.array([(10 * math.cos(a), 10 * math.sin(a)) for a in np.linspace(0, 2 * math.pi, 16, endpoint=False)])
         ring = bld.clean_ring(ring)
@@ -465,8 +516,10 @@ class LandmarkRegressionTest(unittest.TestCase):
         self.assertGreaterEqual(lum(dome.roof_mat), 150, "its marble dome (Overture: slate) light, not dark slate")
         sky_dome = max((s for s, _, _ in sky if s.roof == "dome"), key=lambda s: abs(bld._area2(s.ring)))
         self.assertEqual(sky_dome.roof_mat, dome.roof_mat)
-        self.assertTrue([s for s, _, _ in sky if abs(float(s.min_h or 0) - 27.0) < 0.1],
-                        "far away: the drum's lowest ring under the dome (it floated over a gap)")
+        tops = [top(s) for s, _, _ in sky]
+        for s, _, _ in sky:     # (far away: nothing floats; the drum's lowest ring, not tall, left a gap under it)
+            if float(s.min_h or 0) > 0.1:
+                self.assertTrue(any(abs(t - float(s.min_h)) <= 1.0 for t in tops), (s.min_h, top(s)))
 
     def test_chrysler(self):
         items = self._items("chrysler")

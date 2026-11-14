@@ -271,6 +271,35 @@ def dome_look(facade, band):
     return custom_look(ROOF_METAL, DOME_PALE_RGB)
 
 
+# The colour names' own hexes (the CSS / X11 one where Overture writes several for a name): source_rgb.
+NAME_HEX = {name: h for h, name in OVERTURE_HEX.items()}
+NAME_HEX.update({"grey": "#808080", "brown": "#a52a2a", "maroon": "#800000", "darkgrey": "#a9a9a9"})
+for _a, _b in (("gray", "grey"), ("lightgray", "lightgrey"), ("darkgray", "darkgrey")):
+    NAME_HEX.setdefault(_a, NAME_HEX.get(_b))
+
+
+def source_rgb(val):
+    """A mapped colour as mapped, (r, g, b) in [0, 1] or None: a hex as its digits (not the muted shade parse_color
+    draws an Overture name hex in), a name as its own hex (NAME_HEX), else its COLOR_NAMES shade. masonry_colour
+    judges this: #D3D3D3, lightgrey and #D3D3D4 alike."""
+    if not val or not isinstance(val, str):
+        return None
+    s = val.strip().lower().replace(" ", "").replace("-", "_")
+    if not s.startswith("#"):
+        s = NAME_HEX.get(s) or s
+    if s.startswith("#"):
+        h = s[1:]
+        try:
+            if len(h) in (3, 4):
+                return tuple(int(h[i] * 2, 16) / 255.0 for i in range(3))
+            if len(h) in (6, 8):
+                return tuple(int(h[2 * i:2 * i + 2], 16) / 255.0 for i in range(3))
+        except ValueError:
+            return None
+        return None
+    return COLOR_NAMES.get(s)
+
+
 def masonry_colour(rgb):
     """Is rgb (0..1) a stone's colour (MASONRY_WARM / MASONRY_PALE) rather than a curtain wall's?"""
     if rgb is None:
@@ -1315,8 +1344,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
     tall_ = (nf or 0) >= TOWER_METAL_FLOORS or top_ >= TOWER_METAL_FLOORS * FLOOR_M
     if not fm and top_ >= SUPERTALL_M and not (church or barn or shed or industrial):
-        own_c = parse_color(attrs.get("facade_color"))
-        stone_c = own_c if masonry_colour(own_c) else attrs.get("_masonry_colour") if own_c is None else None
+        # (judged on the colour as mapped, source_rgb, not the muted shade a named one is drawn in; a colour taken
+        # from the siblings' most common is no part's own: tile_buildings' _facade_color_inherited)
+        own_v = None if attrs.get("_facade_color_inherited") else attrs.get("facade_color")
+        own_src = source_rgb(own_v)
+        stone_v = own_v if masonry_colour(own_src) else attrs.get("_masonry_colour") if own_src is None else None
+        stone_c = parse_color(stone_v)
         if stone_c is not None:
             # (a stone colour: the plaster window sheet in it, its tall windows, MASONRY_*; the mapped colour is laid
             # on below)
@@ -4729,27 +4762,22 @@ def sky_body(bparts, height):
     body = weighted / total
     tall = [p for p in known if _part_top(p) > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M)]
     if tall:
-        # (and the parts over the body they stand on: the Capitol's lowest drum ring, 27-39.3 m, was left out under its
-        # dome, the drum floating over a gap from the 26.3 m body, the 2026-11-14 in-game check)
+        # (a tall part standing on no other tall one reaches down to the body: the Capitol's drum, its lowest ring
+        # 27-39.3 m not tall, floated over a gap from the 26.3 m body, the 2026-11-14 in-game check; drawing the parts
+        # under it instead cost Midtown's skyline 26 % more vertices, Codex review of 3be5f78e)
         from polygon import Path
-        keep = {id(p) for p in tall}
-        grew = True
-        while grew:
-            grew = False
-            for p in known:
-                if id(p) in keep or _part_top(p) <= body:
-                    continue
-                path = None
-                for q in known:
-                    if id(q) not in keep or abs(q[1][1] - _part_top(p)) > 1.0:
-                        continue
-                    if path is None:
-                        path = Path(np.asarray(p[0], np.float64)[:, :2])
-                    if bool(path.contains_points(np.asarray(q[0], np.float64)[:, :2].mean(0)[None, :])[0]):
-                        keep.add(id(p))
-                        grew = True
-                        break
-        return [p for p in known if id(p) in keep], body
+
+        def holds(outer, inner):
+            return bool(Path(np.asarray(outer[0], np.float64)[:, :2]).contains_points(
+                np.asarray(inner[0], np.float64)[:, :2].mean(0)[None, :])[0])
+        out = []
+        for p in tall:
+            b = p[1][1]
+            if b > body and not any(q is not p and abs(_part_top(q) - b) <= 1.0 and (holds(q, p) or holds(p, q))
+                                    for q in tall):
+                p = (p[0], (float(p[1][0]) + b - body, body)) + tuple(p[2:])
+            out.append(p)
+        return out, body
     h = float(height) if height is not None and np.isfinite(height) else 0.0
     if h > max(SKY_BODY_RISE * body, body + SKY_BODY_OVER_M):
         return [], body
@@ -4757,7 +4785,8 @@ def sky_body(bparts, height):
 
 
 def parts_masonry_colour(bparts, at):
-    """A building's stone colour for its parts that carry none (plan's MASONRY_*): where the facade colours it and
+    """A building's stone colour (as mapped: a part's facade_color value) for its parts that carry none (plan's
+    MASONRY_*, before the siblings' most common colour): where the facade colours it and
     its parts carry are, by the parts' area, mostly stone's, the largest such part's (else the building's); None where
     any carries a curtain wall's material (MASONRY_NOT: a masonry one on some, the Empire State Building's concrete
     base, agrees), or none a colour."""
@@ -4768,19 +4797,20 @@ def parts_masonry_colour(bparts, at):
     stone = other = 0.0
     best, best_a = None, -1.0
     for p in bparts:                            # (in the parts' order: the same sums everywhere)
-        c = parse_color(p[2].get("facade_color")) if len(p) > 2 else None
+        v = p[2].get("facade_color") if len(p) > 2 else None
+        c = source_rgb(v)
         if c is None:
             continue
         a = abs(_area2(_local(p[0]))) / 2
         if masonry_colour(c):
             stone += a
             if a > best_a:
-                best, best_a = c, a
+                best, best_a = v, a
         else:
             other += a
-    bc = parse_color(at.get("facade_color"))
-    if bc is not None and best is None:
-        return bc if masonry_colour(bc) and other == 0.0 else None
+    bv = at.get("facade_color")
+    if source_rgb(bv) is not None and best is None:
+        return bv if masonry_colour(source_rgb(bv)) and other == 0.0 else None
     return best if best is not None and stone >= other else None
 
 
@@ -4806,9 +4836,11 @@ def steeple_parts(bparts, height=None):
         return str(own.get("roof_shape") or "flat").lower() or "flat"
 
     def on_top(k):
-        """The parts standing on part k covering STEEPLE_SPIRE_SHARE of it (their bottom at its top, centre in it)."""
+        """The parts over part k covering STEEPLE_SPIRE_SHARE of it (their bottom at its top or higher, centre in it):
+        a mapped roof on it, its spire or dome over a step (a 2 m gap under a mapped dome drew our spire through it,
+        Codex review of 3be5f78e), or a higher column."""
         t = _part_top(bparts[k])
-        return [j for j in known if j != k and abs(bparts[j][1][1] - t) <= 1.0
+        return [j for j in known if j != k and bparts[j][1][1] >= t - 1.0
                 and areas[j] >= STEEPLE_SPIRE_SHARE * areas[k] and inside(k, rings[j].mean(0))]
 
     cands = []
@@ -4831,9 +4863,12 @@ def steeple_parts(bparts, height=None):
     for k in tops:
         if on_top(k):               # (its own spire, dome or flat top mapped: the map's, or a higher column's)
             return (), None
+    # (not the parts in a tower's footprint: the column under it, and over it only pinnacles, under
+    # STEEPLE_SPIRE_SHARE of it: a larger one there, a mapped roof or a higher column, is on_top's and no spire)
     rest = [_part_top(bparts[j]) for j in known
             if j not in tops and not any(inside(k, rings[j].mean(0)) and areas[j] <= areas[k] * 1.05 + 1.0
-                                         for k in tops)]       # (not the column under a tower)
+                                         and (_part_top(bparts[j]) <= t + 1e-6
+                                              or areas[j] < STEEPLE_SPIRE_SHARE * areas[k]) for k in tops)]
     over = t - max(rest) if rest else t
     h = float(height) if height is not None and np.isfinite(height) else 0.0
     spire = h >= t + STEEPLE_OUTLINE_OVER_M
@@ -5118,8 +5153,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     # (... when at least half the parts carry one: the Empire State Building's 17 m base part, mapped
                     # concrete, made its whole 443 m tower bridge concrete, and the Capitol's two bronze parts dyed its
                     # marble, streets.gl comparison 2026-11-14)
-                    sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals and 2 * len(vals) >= len(parts_all) \
-                        else None
+                    # (... or a stone one, from any share, where only stones are mapped: the Palais de Justice, Paris,
+                    # 43 of its 264 parts mapped stone, the rest went brick once a minority stopped spreading; the
+                    # parts' look compared with 014d435b, Codex review of 3be5f78e)
+                    sib[k_] = max(dict.fromkeys(vals), key=vals.count) if vals and (
+                        2 * len(vals) >= len(parts_all) or (k_ == "facade_material" and all(
+                            v.lower() in STONE_FACADES for v in vals))) else None
                 masonry_c = parts_masonry_colour(parts_all, at)
                 steeple_k, steeple_rise = steeple_parts(bparts, at.get("height")) \
                     if str(at.get("class") or "").lower() in CHURCH_CLASSES else ((), None)
@@ -5136,11 +5175,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         continue
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
-                    p_fcol = pat.get("facade_color") or at.get("facade_color") or sib["facade_color"]
+                    # (its own colour or the building's; else a stone colour its parts carry by area, plan's
+                    # MASONRY_*, before the siblings' most common: three small dark parts outvoted a 900 m² pale one;
+                    # Codex review of 3be5f78e)
+                    p_fcol = pat.get("facade_color") or at.get("facade_color") or masonry_c
+                    p_finh = not p_fcol and bool(sib["facade_color"])
+                    p_fcol = p_fcol or sib["facade_color"]
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None,
                                   "roof_shape": p_rshape,
                                   "building_height": top, "_part_min": pmh, "_masonry_colour": masonry_c,
+                                  "_facade_color_inherited": p_finh,
                                   "_steeple_part": (steeple_rise or True) if pk in steeple_k else False,
                                   "facade_material": pat.get("facade_material") or at.get("facade_material")
                                   or sib["facade_material"],
