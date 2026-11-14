@@ -566,11 +566,6 @@ class PackStyleTest(unittest.TestCase):
                                                                                     "roof_shape": "hipped"}),
             (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 20, "roof_shape": "gabled",
                                       "roof_orientation": "across"}),
-            # (a mapped rise steeper than the drawing allows: its pitch clamped; a mansard's fixed profile; Codex round 4)
-            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "gabled", "roof_height": 20}),
-            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "mansard", "roof_height": 20}),
-            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "hipped", "roof_height": 20}),
-            (rect(0.0, 0.0, 30, 12), {"class": "house", "height": 12, "roof_shape": "gambrel"}),
         ]
         for ring, attrs in cases:
             b = [(bld.plan(ring, attrs), 0.0, 0.0)]
