@@ -386,4 +386,62 @@ do
   g.farWait = false
   T.check(g:try('roadWalk', 'mid'), 'no far tile waiting: mid runs')
 end
+
+-- due work (2026-11-14, the Steam Deck's road queue): a caller's setDue raises the target to DUE_TARGET_MS while it says
+-- so (ramped at RAMP_UP_DUE, lapsing a frame after it stops), and a due unit waiting for tokens reserves them: the rest
+-- of the frame no other kind takes the bucket below its cost (cheap units excepted)
+do
+  now = 0
+  local g = governor.new({ clock = clock })
+  for _ = 1, 100 do frame(g, { cost = 1e9 }) end         -- (work waits, nothing affordable: b at the target)
+  T.check(math.abs(g.b - 2) < 1e-9 and not g:isDue(), 'not due: the default target')
+  local steps = 0
+  for _ = 1, 100 do
+    g:setDue(true)
+    local b0 = g.b
+    frame(g, { cost = 1e9 })
+    T.check(g.b - b0 <= governor.RAMP_UP_DUE + 1e-9, 'due: b ramps by at most RAMP_UP_DUE')
+    steps = steps + 1
+    if g.b >= governor.DUE_TARGET_MS then break end
+  end
+  T.check(math.abs(g.b - governor.DUE_TARGET_MS) < 1e-9 and steps < 30,
+    'due: b reaches DUE_TARGET_MS within ' .. steps .. ' frames')
+  T.check(g:snapshot().due == true and g:targetNow() == governor.DUE_TARGET_MS, 'the snapshot and target say due')
+  frame(g, { cost = 1e9 })     -- (setDue is said during a frame and sets the next one's target; none in the last)
+  T.check(not g:isDue() and g:targetNow() == 2, 'not said in the frame before: lapsed, the default target again')
+  T.check(g.b < governor.DUE_TARGET_MS, '... b ramps back down')
+  -- reserve: a due road mesh of 8 ms waits; a far tile of 4 ms cannot take the bucket below it, a reveal can
+  local g2 = governor.new({ clock = clock })
+  for _ = 1, 50 do frame(g2, { cost = 1e9 }) end
+  g2.est.roadSurf, g2.est.cdaeTex256 = 8, 4
+  g2:beginFrame(true); g2.tokens = 6
+  T.check(not g2:try('roadSurf', 'near'), '6 ms of tokens: the 8 ms mesh waits')
+  g2:reserve('roadSurf')
+  T.check(not g2:try('cdaeTex256', 'far'), 'reserved: the far tile may not take the bucket below it')
+  T.check(g2:try('reveal'), 'a cheap unit still runs')
+  T.check(g2:snapshot().reserveYields == 1, 'the yield counted')
+  g2:beginFrame(true); g2.tokens = 6
+  T.check(g2:try('cdaeTex256', 'far'), 'the reservation lasts one frame')
+  g2:beginFrame(true); g2.tokens = 14
+  g2:reserve('roadSurf')
+  T.check(g2:try('cdaeTex256', 'far'), 'enough tokens for both: the far tile runs')
+  -- the far field no longer starves a due mesh: an 8 ms mesh and 4 ms far tiles every frame, the mesh first
+  local g3 = governor.new({ clock = clock })
+  g3.est.roadSurf, g3.est.cdaeTex256 = 8, 4
+  local meshes = { plain = 0, due = 0 }
+  for _, mode in ipairs({ 'plain', 'due' }) do
+    g3 = governor.new({ clock = clock })
+    g3.est.roadSurf, g3.est.cdaeTex256 = 8, 4
+    for _ = 1, 600 do
+      g3:beginFrame(true)
+      if mode == 'due' then g3:setDue(true) end
+      if g3:try('roadSurf', 'near') then now = now + 8; g3:charge('roadSurf', 8, 'near'); meshes[mode] = meshes[mode] + 1
+      elseif mode == 'due' then g3:reserve('roadSurf') end
+      while g3:try('cdaeTex256', 'far') do now = now + 4; g3:charge('cdaeTex256', 4, 'far') end
+      now = now + BASE
+    end
+  end
+  T.check(meshes.due > 4 * math.max(1, meshes.plain), 'due + reserve: the meshes keep coming beside the far tiles ('
+    .. meshes.plain .. ' -> ' .. meshes.due .. ' in 600 frames)')
+end
 T.done('test_governor')
