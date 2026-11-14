@@ -116,3 +116,19 @@ class CorridorUnderDeckTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PiersBesideLimitsTest(unittest.TestCase):
+    def test_a_chain_with_height_limits_keeps_its_piers(self):
+        # the chain's ground holds its cells' height limits too (("lim", cell): (xy, m) pairs, no lines): its piers
+        # read only the roads and railways (they raised on the limits, and the Bowker Overpass lost every pier)
+        import types
+        bp = object.__new__(roads.BridgeProfiles)
+        bp._ground, bp.wet = flat, None
+        xy = line(200.0)
+        part = (types.SimpleNamespace(width=10.0), xy, np.full(len(xy), FLAT + 10.0), None)
+        road = np.array([[100.0, -50.0], [100.0, 50.0]])
+        plain = bp._precommit("k", part, {("r1", "g"): [road]})
+        self.assertGreaterEqual(len(plain), 3)
+        signed = bp._precommit("k", part, {("r1", "g"): [road], ("lim", "c"): [limit(100.0, 3.5)]})
+        self.assertEqual(signed, plain)

@@ -8321,7 +8321,9 @@ class BridgeProfiles:
         """Before part k (spec, xy, z, lon) is published, outside the lock: what its commit reads (its piers:
         pier_sites samples the ground under them; TunnelProfiles: nothing). Handed to _commit."""
         spec, xy, z, _lon = part
-        lines = [ln for v in (ground or {}).values() for ln in v]
+        # (its ground roads and railways: the chain's ground also holds its cells' height limits, ("lim", cell), which
+        # are no lines: pier_sites raised on them and the bridge lost every pier, the Bowker Overpass 2026-11-14)
+        lines = [ln for gk, v in (ground or {}).items() if gk[1] in ("g", "r") for ln in v]
         try:
             return pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
                               self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
