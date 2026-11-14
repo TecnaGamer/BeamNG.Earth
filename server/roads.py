@@ -7307,43 +7307,6 @@ def _clearance_deficits(lines, zs, crossings, depth=None):
     return out
 
 
-def measured_raised(line, o, crossings, depth):
-    """(o, worst): measured deck heights o (line's points, NaN where none; filled along the line) raised where they
-    leave a road crossing under the deck ((part, arc, road z[, own clearance]): a road's own clearance its sign's,
-    signed_road_clear) less than it needs under its girders within OBS_CLEAR_REACH_M of it (its sign, else
-    OBS_MIN_UNDER_M): the lidar took the road below for the deck there. Over such a crossing the deck is raised to the
-    solve's own requirement (that clearance, else deck_road_clear, over DECK_CLEAR_REACH_M either side, falling
-    DECK_GRADE beyond), and left as measured where it already stands higher: a part's far end, measured right, keeps
-    its height (the Bowker Overpass's north deck: refused whole, its end at grade 100 m from Storrow Drive rose 2-4 m
-    over the lanes it lands on, 2026-11-14). worst: the least m under the girders of a crossing so raised, None when
-    none was (o then unchanged but filled). A crossing by an abutment (a junction at grade) is left out. The bridge solve
-    (BridgeProfiles._observed) and the grading (its approach lifts) both ask it, so the deck and its approaches agree.
-    Pure."""
-    o = np.asarray(o, np.float64)
-    line = np.asarray(line, np.float64)
-    if len(o) != len(line) or len(line) < 2 or not np.isfinite(o).any():
-        return o, None
-    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(line[:, :2], axis=0).T))]
-    ok = np.isfinite(o)
-    o = np.interp(s, s[ok], o[ok])
-    worst, req = None, None
-    for cr in crossings:
-        sc, zc = float(cr[1]), float(cr[2])
-        if min(sc, s[-1] - sc) <= AT_GRADE_REACH_M or not np.isfinite(zc):
-            continue
-        lo, hi = max(0.0, sc - OBS_CLEAR_REACH_M), min(s[-1], sc + OBS_CLEAR_REACH_M)
-        at = np.r_[lo, s[(s > lo) & (s < hi)], hi]
-        under = float(np.min(np.interp(at, s, o))) - zc - depth
-        signed = len(cr) > 3 and isinstance(cr[3], RoadClear)
-        if under >= (float(cr[3]) - depth if signed else OBS_MIN_UNDER_M) - 1e-6:
-            continue
-        worst = under if worst is None else min(worst, under)
-        r = zc + (float(cr[3]) if signed else deck_road_clear(depth)) \
-            - DECK_GRADE * np.maximum(np.abs(s - sc) - DECK_CLEAR_REACH_M, 0.0)
-        req = r if req is None else np.maximum(req, r)
-    return (o if req is None else np.maximum(o, req)), worst
-
-
 def _lines64(lines):
     """lines as float64 arrays (the crossing kernel's argument: it reads their first two columns)."""
     f64 = np.float64
@@ -7483,12 +7446,6 @@ DECK_Z_HOOK = None      # grading sets it (BNE_INTERCHANGE + carriageways): hook
 
 
 OBS_UNDER_ON = os.environ.get("BNE_OBS_UNDER", "on") != "off"
-OBS_CLEAR_ON = os.environ.get("BNE_OBS_CLEAR", "on") != "off"
-OBS_MIN_UNDER_M = 3.5       # m under the girders over a road crossing under a measured deck with no height limit: less is
-                            # the lidar's points of the road below taken for the deck (the Bowker Overpass over Storrow
-                            # Drive in Boston, 1.4 m, 2026-11-13); a road's sign: that, as the solve
-OBS_CLEAR_REACH_M = 8.0     # ... read this far either side of the crossing (over the road itself, not the solve's
-                            # DECK_CLEAR_REACH_M: a deck rising from an abutment near the road is measured right)
 OBS_UNDER_SHARE = 0.7       # a sample this share of the two half widths from a higher deck's line is under it
 
 
@@ -7886,7 +7843,7 @@ class BridgeProfiles:
         # _observed) (_end_ons)
         over = {}
         ons = self._end_ons_of(lines, [pool[c][0].width / 2 for c in comp], levels, ground)
-        final = self._observed(comp, pool, lines, zs, pins=pins, required=required) if ons else zs
+        final = self._observed(comp, pool, lines, zs, pins=pins) if ons else zs
         for k, at, j, arc in ons:
             lj = np.asarray(lines[j], np.float64)[:, :2]
             sj = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(lj, axis=0).T))]
@@ -7911,7 +7868,7 @@ class BridgeProfiles:
             # filled players' consoles, GitHub #391, TGForever Discord 2026-10-28)
             log.debug("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                       MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
-        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=pins, required=required)
+        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=pins)
         hook = DECK_Z_HOOK
         if hook is not None:
             # (a carriageway's deck: the height its roads and decks were solved for together, grading's
@@ -7925,7 +7882,7 @@ class BridgeProfiles:
                 out = [g if g is not None else z for g, z in zip(got, out)]
         return out
 
-    def _observed(self, comp, pool, lines, zs, level=1, pins=None, required=()):
+    def _observed(self, comp, pool, lines, zs, level=1, pins=None):
         """The chain's deck heights where a source measured them (roadz.py: IGN BD TOPO, NVDB, US lidar), the solved
         ones (the inference) elsewhere. Each joint ends up at one height: an abutment (a joint no other part of the
         chain shares) at the solved one (the graded road it meets), a joint between parts at the mean of their measured
@@ -8010,15 +7967,6 @@ class BridgeProfiles:
                     log.debug("observed deck %s: %.1f m over the ground, the solve %.1f m: from before the bridge, "
                               "the solve kept", comp[i], over_o, over_z)
                     obs[i] = None
-        # a measured deck too low over a road crossing under it (less than the road's sign, or OBS_MIN_UNDER_M with
-        # none, under its girders): the lidar took the road below for the deck there, raised over it (grading alike)
-        if OBS_CLEAR_ON and required:
-            for i, o in enumerate(obs):
-                if o is not None:
-                    obs[i], bad = measured_raised(np.asarray(lines[i], np.float64), o,
-                                                  [r for r in required if r[0] == i], self._depth_of_chain(comp))
-                    if bad is not None:
-                        log.debug("observed deck %s: %.1f m under it over a road, raised there", comp[i], bad)
         if all(o is None for o in obs):
             return zs
         measured = self.__dict__.setdefault("_obs_tl", threading.local()).__dict__.setdefault("measured", set())
