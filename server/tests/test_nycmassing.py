@@ -255,9 +255,8 @@ class Site:
 
 
 def pinned_source(tmp, site, base="https://example.invalid/nyc"):
-    """A Source whose manifest is pinned on disk (pin: the background fetch) and frozen (identity: a tile's key)."""
+    """A Source whose build is decided (identity: a tile's key; the manifest fetched then and pinned)."""
     src = nm.Source(tmp, fetcher=site, base=base)
-    src.pin()
     src.identity()
     return src
 
@@ -300,6 +299,8 @@ class SourceTest(unittest.TestCase):
         other = mapcells.CellKey(14, KEY.x, KEY.y + 1)
         self.assertEqual(src.shard(other), {})
         self.assertEqual(len(site.asked), 2, "the manifest and the one listed shard")
+        before = nm.Source(self.tmp.name, fetcher=None)
+        self.assertEqual(before.shard(KEY), {}, "before its key decides: none, and not kept as the build's")
         again = nm.Source(self.tmp.name, fetcher=None)
         again.identity()
         self.assertEqual(again.shard(KEY)["bin"].tolist(), [9], "from disk")
@@ -317,7 +318,6 @@ class SourceTest(unittest.TestCase):
     def test_nothing_asked_or_kept_before_publishing(self):
         site = Site({})
         src = nm.Source(self.tmp.name, fetcher=site, base="https://example.invalid/nyc")
-        self.assertFalse(src.pin())
         self.assertEqual(src.identity(), "none")
         self.assertEqual(src.shard(KEY), {})
         self.assertEqual(src.shard(mapcells.CellKey(14, KEY.x + 1, KEY.y)), {})

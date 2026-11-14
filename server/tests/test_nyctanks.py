@@ -76,7 +76,6 @@ class GateTest(unittest.TestCase):
                 raise netfetch.NotFound(url)
         with tempfile.TemporaryDirectory() as tmp:
             src = nt.Source(tmp, fetcher=F(), base="https://example.invalid/nyctanks/v1")
-            self.assertFalse(src.pin())
             self.assertEqual(src.identity(), "none")
             self.assertIs(src.cells(), False)
             self.assertEqual(asked, ["https://example.invalid/nyctanks/v1/manifest.json"])

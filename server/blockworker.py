@@ -1221,7 +1221,10 @@ def _nyc_key(frame, box, cache_dir=None):
     x0, y0, x1, y1 = (float(v) for v in tuple(box)[:4])
     la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64), np.array([y0, y0, y1, y1], np.float64),
                                       0.0)
-    return nycshards.identity_near(cd, float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
+    # (cache_dir given: the main process's guess of a worker's key, earthd.Server.geo_content_key: never deciding the
+    # build there, nor waiting for a manifest)
+    return nycshards.identity_near(cd, float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)),
+                                   peek=cache_dir is not None)
 
 
 def _ground_rules():

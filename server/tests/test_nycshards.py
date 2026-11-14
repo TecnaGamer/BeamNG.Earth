@@ -74,17 +74,70 @@ class FrozenBuildTest(unittest.TestCase):
     def src(self, host):
         return nt.Source(self.tmp, fetcher=host, base=BASE)
 
-    def test_none_until_pinned_then_frozen(self):
+    def test_the_first_ask_fetches_a_missing_manifest(self):
         host = site({REL: tanks_shard(1)})
         s = self.src(host)
-        with mock.patch.object(nycshards.Shards, "_pin_later", lambda self: None):
-            self.assertEqual(s.identity(), "none", "nothing pinned: none, no data")
-            self.assertIs(s.cells(), False)
-            self.assertEqual(s.body(KEY), b"")
-        self.assertTrue(s.pin())                    # (the background fetch)
-        ident = s.identity()
+        self.assertEqual(s.shard(KEY), {}, "before a key decides: no data")
+        self.assertEqual(host.asked, [], "nothing asked before a key")
+        ident = s.identity()                        # (a tile's key: the manifest fetched now, decided)
         self.assertRegex(ident, r"^2026-11-10-[0-9a-f]{12}$")
-        self.assertEqual(len(s.shard(KEY)["d"]), 1)
+        self.assertEqual(len(s.shard(KEY)["d"]), 1, "the same cell after the decision: not the earlier empty one")
+
+    def test_none_is_for_the_whole_process(self):
+        """Not published at the first ask: "none" for the process, even once it is published and pinned (a tile keyed
+        "none" never reads a build); the next process takes the build."""
+        host = Host({})
+        s = self.src(host)
+        self.assertEqual(s.identity(), "none")
+        host.files.update(site({REL: tanks_shard(2)}).files)
+        self.assertTrue(s.pin())
+        self.assertEqual(s.identity(), "none")
+        self.assertEqual(s.shard(KEY), {})
+        self.assertEqual(len(self.src(host).shard(KEY) or {}), 0, "(another process: not decided before its key)")
+        nxt = self.src(host)
+        self.assertNotEqual(nxt.identity(), "none")
+        self.assertEqual(len(nxt.shard(KEY)["d"]), 2)
+
+    def test_a_slow_first_manifest_is_none(self):
+        host = site({REL: tanks_shard(1)})
+        s = self.src(host)
+
+        def slow_pin(self_):
+            import time as _t
+            _t.sleep(0.5)
+            return False
+        with mock.patch.object(nycshards, "FIRST_WAIT_S", 0.05), mock.patch.object(nt.Source, "pin", slow_pin):
+            self.assertEqual(s.identity(), "none")
+
+    def test_overlapping_tiles_across_the_decision(self):
+        """Tiles whose builds overlap the first ask: one decision for all, each tile's data the build its key names."""
+        import threading
+        host = site({REL: tanks_shard(3)})
+        s = self.src(host)
+        gate = threading.Event()
+        real_get = host.get
+
+        def slow_get(url, kind="demand"):
+            gate.wait(2.0)
+            return real_get(url, kind)
+        host.get = slow_get
+        early = s.shard(KEY)                        # (a Fetch before any key: nothing)
+        out = {}
+
+        def tile(name):
+            ident = s.identity()
+            out[name] = (ident, s.shard(KEY))
+        ts = [threading.Thread(target=tile, args=(n,)) for n in ("a", "b", "c")]
+        for t in ts:
+            t.start()
+        gate.set()
+        for t in ts:
+            t.join(5.0)
+        self.assertEqual(early, {})
+        idents = {v[0] for v in out.values()}
+        self.assertEqual(len(idents), 1, out)
+        self.assertNotEqual(idents.pop(), "none")
+        self.assertTrue(all(len(v[1]["d"]) == 3 for v in out.values()))
 
     def test_an_in_place_rebuild_is_the_next_process_s(self):
         """A rebuild (same URLs, another shard, the same day): this process keeps its build and never reads the new
@@ -161,7 +214,8 @@ class TileKeyTest(unittest.TestCase):
         import blockworker
         tmp = tempfile.mkdtemp(prefix="nycshards-key-")
         with mock.patch.object(blockworker, "_s", SimpleNamespace(md=SimpleNamespace(cache_dir=tmp))), \
-                mock.patch.object(nycshards.Shards, "_pin_later", lambda self: None):
+                mock.patch.object(nycshards.Shards, "_pin_later", lambda self: None), \
+                mock.patch.object(nycshards.Shards, "pin", lambda self: False):
             nm._SOURCES.clear()
             nt._SOURCES.clear()
             self.assertIsNone(blockworker._nyc_key(geodesy.EnuFrame(39.28, -76.59), (-500, -500, 500, 500)))
@@ -172,6 +226,14 @@ class TileKeyTest(unittest.TestCase):
                 os.makedirs(d, exist_ok=True)
                 with open(os.path.join(d, "manifest.json"), "wb") as f:
                     f.write(manifest({REL: b"x"}, built="2026-11-14"))
+            self.assertEqual(blockworker._nyc_key(geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500)),
+                             ("none", "none"), "decided at the first key: none for this process")
+            nm._SOURCES.clear()                     # (the main process: its own sources, never deciding)
+            nt._SOURCES.clear()
+            self.assertTrue(all(v.startswith("2026-11-14-") for v in blockworker._nyc_key(
+                geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500), cache_dir=tmp)), "the main process's peek")
+            nm._SOURCES.clear()                     # (the next process)
+            nt._SOURCES.clear()
             got = blockworker._nyc_key(geodesy.EnuFrame(LAT, LON), (-500, -500, 500, 500))
             self.assertTrue(all(v.startswith("2026-11-14-") for v in got), got)
             self.assertEqual(blockworker._nyc_key(geodesy.EnuFrame(LAT, LON), (0, 0, 10, 10)), got, "frozen")

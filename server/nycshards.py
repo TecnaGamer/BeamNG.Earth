@@ -7,11 +7,12 @@ in-place rebuild has replaced, kept its look under the same key for good; and th
 cached on disk with no build in their names) could mix two builds.
 
 Now:
-- The build in use is the manifest pinned on disk when the process first asks for its identity (Shards.frozen, at a
-  tile's key: blockworker._nyc_key, only for tiles near BOX), the same for the whole process. Its identity, "<built>-
-  <the manifest's sha256, 12 hex>", is in the keys of those tiles; "none" without one, "off" when off. Nothing pinned
-  yet: "none" for now and the manifest fetched in the background (pin), frozen at a later ask once it is on disk. A
-  pinned one older than MANIFEST_TTL_S is fetched again in the background for the next process; a 404 unpins it.
+- The build in use is decided once per process, at the first ask for its identity (Shards.frozen, at a tile's key:
+  blockworker._nyc_key, only for tiles near BOX): the manifest pinned on disk, else one fetched then (FIRST_WAIT_S at
+  most). Its identity, "<built>-<the manifest's sha256, 12 hex>", is in the keys of those tiles; "none" without one
+  (not published, offline, slow: for the whole process, so no tile keyed "none" ever reads a build), "off" when off.
+  A pinned one older than MANIFEST_TTL_S is fetched again in the background for the next process; a 404 unpins it.
+  Decoded shards are held in memory under the build's identity, and only once a build is decided.
 - The data of a frozen build only: cells it lists (others: none there), fetched from the host its manifest names
   ("data": the mirror's folder of that build, immutable) else Pages, each checked against the manifest's entry for it
   (its sha256 when the builder wrote one, else its bytes); one that does not match, or a listed cell gone (404), is not
@@ -34,16 +35,22 @@ BOX = (40.47, -74.28, 40.94, -73.68)    # south, west, north, east: the five bor
 NEAR_DEG = 0.01                         # a tile this close to BOX is keyed on the datasets (records reach past a tile)
 MANIFEST_TTL_S = 86400                  # a pinned manifest older than this is fetched again (for the next process)
 MANIFEST_RETRY_S = 3600                 # a manifest fetch that failed (or a 404): asked again after this long
+FIRST_WAIT_S = 10.0                     # s the first ask waits for a manifest when none is pinned (then none)
 SHARD_RETRY_S = 600                     # a shard that could not be had (or did not match): asked again after this long
 PRUNE_S = 7 * 86400                     # an older build's folder of shards is deleted once untouched this long
 _UNSET = object()
 
 
 class Shards:
-    """A dataset's manifest and shards (subclasses: NAME, VERSION, ON, local_dir, base_url)."""
+    """A dataset's manifest and shards (subclasses: NAME, VERSION, on, _decode)."""
 
     NAME = None
     VERSION = "v1"
+    MEM = 32
+
+    @staticmethod
+    def _decode(body):
+        raise NotImplementedError
 
     def __init__(self, cache_dir, fetcher=None, local=None, base=None):
         self.root = os.path.join(cache_dir, "pagesdata", self.NAME, self.VERSION) if cache_dir else None
@@ -54,6 +61,7 @@ class Shards:
         self.mem = {}
         self.failed = {}
         self._frozen = _UNSET
+        self._first = threading.Lock()
         self._pin_at = -1e18
         self._pinning = False
 
@@ -74,52 +82,96 @@ class Shards:
         ident = f"local-{sha}" if local else f"{re.sub(r'[^0-9A-Za-z_.-]+', '_', str(j.get('built') or 'x'))[:40]}-{sha}"
         return {"id": ident, "cells": cells, "data": None if local else railtags.data_url(j)}
 
-    def frozen(self):
-        """{"id", "cells" ({"z/x/y": entry} or None: every cell, a local folder without one), "data"} of the build this
-        process uses, or None (none pinned yet: asked for in the background, frozen at a later ask)."""
-        with self.lock:
-            if self._frozen is not _UNSET:
-                return self._frozen
-        got, pinned_at = None, None
+    def _read_pin(self):
+        """(the pinned manifest parsed, or None; its age in s, or None)."""
         if self.local:
             try:
                 with open(os.path.join(self.local, "manifest.json"), "rb") as fh:
-                    got = self._parse(fh.read(), local=True)
+                    return self._parse(fh.read(), local=True), 0.0
             except OSError:
-                got = {"id": "local", "cells": None, "data": None}
-        elif self.root:
-            path = os.path.join(self.root, "manifest.json")
-            try:
-                with open(path, "rb") as fh:
-                    body = fh.read()
-                pinned_at = os.path.getmtime(path)
-                got = self._parse(body)
-            except OSError:
-                got = None
-        if not self.local and (got is None or time.time() - (pinned_at or 0.0) > MANIFEST_TTL_S):
-            self._pin_later()
-        if got is None:
-            return None                 # (not frozen: a later ask may find it pinned)
+                return {"id": "local", "cells": None, "data": None}, 0.0
+        if not self.root:
+            return None, None
+        path = os.path.join(self.root, "manifest.json")
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+            return self._parse(body), time.time() - os.path.getmtime(path)
+        except OSError:
+            return None, None
+
+    def frozen(self):
+        """{"id", "cells" ({"z/x/y": entry} or None: every cell, a local folder without one), "data"} of the build this
+        process uses, or None (none: no data for the whole process). Decided once, at the first ask (a tile's key):
+        the manifest pinned on disk, else one fetched now (FIRST_WAIT_S at most; a 404, a failure or a slow answer:
+        none, for the whole process: Codex review of 869c2a9b, a tile keyed "none" read a build frozen after its key
+        by another tile). A pinned one older than MANIFEST_TTL_S is fetched again in the background for the next
+        process."""
         with self.lock:
-            if self._frozen is _UNSET:
+            if self._frozen is not _UNSET:
+                return self._frozen
+        with self._first:                   # (one thread decides; the others wait for its answer)
+            with self.lock:
+                if self._frozen is not _UNSET:
+                    return self._frozen
+            got, age = self._read_pin()
+            if got is None and not self.local and self.root:
+                t = threading.Thread(target=self.pin, name=f"{self.NAME}-manifest", daemon=True)
+                t.start()
+                t.join(FIRST_WAIT_S)
+                got, age = self._read_pin() if not t.is_alive() else (None, None)
+            elif got is not None and not self.local and age is not None and age > MANIFEST_TTL_S:
+                self._pin_later()
+            with self.lock:
                 self._frozen = got
+            if got is not None:
                 threading.Thread(target=self._prune, args=(got["id"],), daemon=True).start()
-            return self._frozen
+            return got
+
+    def peek(self):
+        """The frozen build, else the one pinned on disk (not frozen: no wait, no fetch), else None: the main process's
+        guess of the workers' keys (earthd.Server.geo_content_key)."""
+        with self.lock:
+            if self._frozen is not _UNSET:
+                return self._frozen
+        return self._read_pin()[0]
 
     def current(self):
-        """The build frozen so far (frozen's), or None, without freezing one: only a tile's key freezes it (identity),
-        so a tile's data is never a build its key does not name."""
+        """The build frozen so far (frozen's), or None, without deciding one: only a tile's key decides it
+        (identity), so a tile's data is never a build its key does not name."""
         if self.local:                  # (a local folder: static, no key needed first)
             return self.frozen()
         with self.lock:
             return None if self._frozen is _UNSET else self._frozen
 
-    def identity(self):
-        """The tiles' key for this dataset: "off", "none" (no build frozen) or the frozen build's id."""
+    def identity(self, peek=False):
+        """The tiles' key for this dataset: "off", "none" (no build, for the whole process) or the build's id (peek:
+        without deciding, peek())."""
         if not self.on() or not (self.root or self.local):
             return "off"
-        got = self.frozen()
+        got = self.peek() if peek else self.frozen()
         return got["id"] if got is not None else "none"
+
+    def decoded(self, key):
+        """The frozen build's decoded shard of cell key ({} none there, or no build), or None (not had); held in
+        memory (MEM) under the build's identity, and only once a build is decided."""
+        got = self.current()
+        if got is None:
+            return {}                   # (not decided yet, or none: no data, nothing kept)
+        k = (got["id"], key)
+        with self.lock:
+            hit = self.mem.get(k)
+        if hit is not None:
+            return hit
+        body = self.body(key)
+        if body is None:
+            return None
+        out = self._decode(body)
+        with self.lock:
+            self.mem[k] = out
+            while len(self.mem) > self.MEM:
+                self.mem.pop(next(iter(self.mem)))
+        return out
 
     def _pin_later(self):
         with self.lock:
@@ -273,11 +325,11 @@ def near(lat0, lon0, lat1, lon1):
         and lon1 >= BOX[1] - NEAR_DEG
 
 
-def identity_near(cache_dir, lat0, lon0, lat1, lon1):
+def identity_near(cache_dir, lat0, lon0, lat1, lon1, peek=False):
     """The New York datasets' identities for a tile's key over that lat / lon box: None far from BOX (the key as
-    before), else (nycmassing's, nyctanks')."""
+    before), else (nycmassing's, nyctanks'); peek: guessed without deciding (Shards.peek)."""
     if not near(lat0, lon0, lat1, lon1):
         return None
     import nycmassing
     import nyctanks
-    return (nycmassing.identity(cache_dir), nyctanks.identity(cache_dir))
+    return (nycmassing.identity(cache_dir, peek), nyctanks.identity(cache_dir, peek))

@@ -98,6 +98,10 @@ class Source(nycshards.Shards):
     def __init__(self, cache_dir, fetcher=None, local=None, base=None):
         super().__init__(cache_dir, fetcher, local, base or base_url())
 
+    @staticmethod
+    def _decode(body):
+        return decode(body)
+
     def on(self):
         return ON
 
@@ -105,21 +109,9 @@ class Source(nycshards.Shards):
         return self.path(key)
 
     def shard(self, key):
-        """The arrays of cell key ({}: none there), or None: not had (offline, the site failing, not the manifest's:
-        asked again later)."""
-        with self.lock:
-            got = self.mem.get(key)
-        if got is not None:
-            return got
-        body = self.body(key)
-        if body is None:
-            return None
-        got = decode(body)
-        with self.lock:
-            self.mem[key] = got
-            while len(self.mem) > self.MEM:
-                self.mem.pop(next(iter(self.mem)))
-        return got
+        """The arrays of cell key ({} none there, or no build decided), or None: not had (offline, the site failing,
+        not the manifest's: asked again later). Held in memory under the build's identity (nycshards.decoded)."""
+        return self.decoded(key)
 
 
 _SOURCES = {}
@@ -136,11 +128,11 @@ def source(cache_dir):
         return got
 
 
-def identity(cache_dir):
-    """This dataset's identity for the tiles' keys (nycshards.Shards.identity; "off" when off)."""
+def identity(cache_dir, peek=False):
+    """This dataset's identity for the tiles' keys (nycshards.Shards.identity; "off" when off; peek: not deciding)."""
     if not ON or not (cache_dir or local_dir()):
         return "off"
-    return source(cache_dir).identity()
+    return source(cache_dir).identity(peek)
 
 
 class Fetch:
