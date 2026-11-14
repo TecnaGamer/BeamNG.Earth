@@ -165,6 +165,19 @@ class ResultRunningCpuTest(unittest.TestCase):
         with self.assertLogs("earthd.pools", "WARNING"):
             self.assertEqual(pools.result_running(fut, 0.3, pool=self.pool), 42)
 
+    def test_done_just_as_the_wait_ran_out_is_its_result(self):
+        class Late(concurrent.futures.Future):
+            """Its timed wait runs out, and the job finishes before the done check."""
+            def result(self, timeout=None):
+                if timeout is not None and not self.done():
+                    self.set_result("finished")
+                    raise concurrent.futures.TimeoutError()
+                return super().result(timeout)
+        fut = Late()
+        fut.set_running_or_notify_cancel()
+        self.assertEqual(pools.result_running(fut, 5.0, pool=self.pool), "finished")
+        self.assertLess(time.monotonic() - self.t0, 1.0)
+
     def test_the_jobs_own_timeout_error_is_raised_at_once(self):
         """A TimeoutError raised by the job in its worker (its future done) is the caller's, at once: not taken for the
         wait running out and retried in a busy loop until the deadline (Codex review, 2026-11-13)."""

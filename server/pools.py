@@ -184,8 +184,8 @@ def result_running(fut, timeout, waited=None, abandon=None, pool=None, what=None
             return fut.result(timeout=max(0.01, min(pool.cpu.every, timeout - ran) if ran < timeout
                                           else pool.cpu.every))
         except concurrent.futures.TimeoutError:
-            if fut.done():
-                raise                   # (the job's own TimeoutError, raised in its worker: not a wait running out)
+            if fut.done():          # (done since: its own value or exception, the job's TimeoutError raised in its
+                return fut.result()     # worker too; a wait that ran out just as it finished is not a hung job)
         now = time.monotonic()
         pool.cpu_sample(now)
         why = pool.overdue(now - t_run, timeout, now, fut, what)
