@@ -112,6 +112,44 @@ M.NEAR_FIRST_M = 400
 -- still charged: what follows waits), one every URGENT_EVERY_FRAMES at most: at ~20 ms an import on a Steam Deck, the
 -- 2-4 ms budget let ~3 a second through, fewer than a city's tiles bring at 80 mph
 M.URGENT_EVERY_FRAMES = 3
+-- The road import queue on a Steam Deck (2026-11-14, 45 mph drives in Fells Point and Des Moines: the road surface
+-- missing under the car in 23 % of checks with its tile's data in, parts drawn a median 4.3 s (p90 13.8 s) after their
+-- data, the queue at 37-106; ~1.2 meshes a second made, waiting on the governor's bucket in 98 % of the frames they
+-- waited, while the whole drive's road meshes cost ~3 s of Lua):
+--  * KIND_SPLIT: each class of mesh its own governor kind (walkKind: estimate and engine share): one 'roadWalk' estimate
+--    for all, dragged to 8-17 ms by the drawn buildings and the far geotiles' 30-100 ms parts, held a 5 ms sidewalk
+--    collider back as if it cost that much;
+--  * DUE: what the car reaches within DUE_S (DUE_MIN_M at least) is due: the governor's target goes up for it and a due
+--    mesh that waits for tokens reserves them against the far tiles' units (governor.lua setDue / reserve);
+--  * ORDER_MS: from this speed up nextWalk ranks by the way ahead (behind the car last), not only when fast (FAST_MS:
+--    at 45 mph the tiles behind ranked with those ahead);
+--  * RENDER_AFTER_M: a render-only mesh (drawn buildings, rails, wires) ranks like a collider this much farther, no
+--    longer after every collider of the place (a building beside the car waited for a collider 500 m off); nil: after
+--    them all, as before;
+--  * URGENT_SURFACES: the drawn road and sidewalks of the tile the car is in, and of those it reaches within
+--    URGENT_SURFACE_S (URGENT_SURFACE_MIN_M at least), are made at once like an urgent deck (urgentWalk).
+M.KIND_SPLIT = true
+M.WALK_KIND = { road = 'roadSurf', walk = 'roadSurf', walkcol = 'roadCol', bldcol = 'roadCol', railcol = 'roadCol',
+  railcol2 = 'roadCol', railcol3 = 'roadCol', buscol = 'roadCol', barrier = 'roadCol', deck = 'roadDrive',
+  tunnel = 'roadDrive' }
+M.DUE = true
+M.DUE_S = 10
+M.DUE_MIN_M = 150
+M.ORDER_MS = 5
+M.RENDER_AFTER_M = 200
+M.URGENT_SURFACES = true
+M.URGENT_SURFACE_S = 4
+M.URGENT_SURFACE_MIN_M = 40
+-- The governor kind of a walkQ mesh (KIND_SPLIT above), and the far geotiles' parts'.
+function M.walkKind(what)
+  if not M.KIND_SPLIT then return 'roadWalk' end
+  return M.WALK_KIND[what] or 'roadWalk'
+end
+local function farKind() return M.KIND_SPLIT and 'roadFar' or 'roadWalk' end
+-- The distance (m) within which a queued mesh is due at speed v (m/s).
+function M.dueReach(v)
+  return math.max(M.DUE_MIN_M, (v or 0) * M.DUE_S)
+end
 -- No be:reloadCollision for SWAP_QUIET_FRAMES frames and SWAP_QUIET_MS after a terrain .ter swap (M.terrainSwapped): the
 -- swapped block's collision follows by itself a frame later, and a rebuild in between took the block before its
 -- heights were in: flat ground at z 0 for a second, and a ball at 180 mph sank under the real ground and fell through
@@ -500,6 +538,7 @@ local lastSpeed = 0
 local holdActive = false
 local swapQuiet = nil       -- { frames left, stopwatch } after a terrain swap (M.terrainSwapped)    -- core's drop hold: the game paused, the car frozen where it was dropped (M.setHold)
 local lastDir = nil         -- unit { x, y } of the player's motion at FAST_MS or more, else nil
+local orderDir = nil        -- ... at ORDER_MS or more (nextWalk, urgentWalk)
 -- The collision radius towards tile centre (cx, cy) from the player at p: lastRadius ahead of a fast car (within 45
 -- degrees of its heading, and its own tile), COLLIDE_M min beside and behind it; lastRadius all round when slow.
 function M.radiusToward(p, cx, cy, radius, dir)
@@ -545,6 +584,7 @@ local function updateCollideRange()
   lastRadius = M.collideRadius(sp)
   lastSpeed = sp
   lastDir = sp >= M.FAST_MS and { x = v.x / sp, y = v.y / sp } or nil
+  orderDir = sp >= math.min(M.ORDER_MS or M.FAST_MS, M.FAST_MS) and sp > 0 and { x = v.x / sp, y = v.y / sp } or nil
   if #parked > 0 then
     local keep = {}
     for _, q in ipairs(parked) do
@@ -1906,7 +1946,7 @@ local function updateFar(gov)
     farCursor = key
     key, f = next(far, key)
   end
-  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk', 'mid') do
+  while #farQ > 0 and #walkQ == 0 and gov:try(farKind(), 'mid') do
     local key = table.remove(farQ, 1)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
@@ -1926,7 +1966,7 @@ local function updateFar(gov)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms, 'mid')
+      gov:charge(farKind(), ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
     elseif f and not f.geo and not f.id then
       local t0 = now()
@@ -1934,7 +1974,7 @@ local function updateFar(gov)
       local ok, id = pcall(createWalk, { shape = f.shape, pos = f.pos }, false)
       if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms, 'mid')
+      gov:charge(farKind(), ms, 'mid')
       noteUnit('bldfar', ms, f.shape)
     end
   end
@@ -2204,16 +2244,28 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   step('collideRange')
   local forced = nil
   if #walkQ > 0 and sinceUrgent >= M.URGENT_EVERY_FRAMES and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
-    forced = M.urgentWalk(walkQ)
+    local surface
+    forced, surface = M.urgentWalk(walkQ, gov.blocked)
+    -- (a drawn surface: only into a frame with room for it, governor.lua tryUrgent; else it waits its turn as any mesh)
+    if forced and surface and gov.tryUrgent and not gov:tryUrgent(M.walkKind(walkQ[forced].what)) then forced = nil end
   end
   sinceUrgent = sinceUrgent + 1
+  local dueSaid = false
   while #walkQ > 0 do
     -- (lanes, governor.lua: a mesh within NEAR_FIRST_M of the car, or a forced one, is 'near'; the rest 'mid', which
     -- shares with the far tiles while they wait)
-    local idx, key = forced, nil
-    if not idx then idx, key = M.nextWalk(walkQ) end
+    local idx, key, nearest = forced, nil, nil
+    if not idx then idx, key, nearest = M.nextWalk(walkQ) end
     local lane = (key and key > M.NEAR_FIRST_M) and 'mid' or 'near'     -- (no car: as before, unrestricted)
-    if not forced and not gov:try('roadWalk', lane) then break end
+    local kind = M.walkKind(walkQ[idx].what)
+    -- (DUE: the queue's nearest mesh within the due reach raises the governor's target; the next one, waiting for
+    -- tokens while due work waits, keeps them from the far tiles)
+    local due = M.DUE and nearest ~= nil and nearest <= M.dueReach(lastSpeed)
+    if due and not dueSaid and gov.setDue then gov:setDue(true); dueSaid = true end
+    if not forced and not gov:try(kind, lane) then
+      if due and gov.reserve then gov:reserve(kind) end
+      break
+    end
     local q = table.remove(walkQ, idx)
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
@@ -2271,7 +2323,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms, lane)
+      gov:charge(kind, ms, lane)
       noteUnit(tostring(q.what), ms, walk and walk.shape)
       sinceChange = stopwatch.new()
     end
@@ -2471,41 +2523,73 @@ function M.reloadLog() return reloadLog end
 -- by the same distance, not after every one of them (a building's collision mesh 600 m ahead came before the sidewalk
 -- the car was about to reach: keep-up measure 2026-11-13, tools/keepup.py). false: as before.
 M.SURFACE_FIRST = true
+-- Also returns the key, and the queue's nearest mesh (m: its key before RENDER_AFTER_M, nil for those left behind; the
+-- DUE test).
 function M.nextWalk(q)
   if #q == 0 then return 1 end
-  local p, dir = playerNow()
+  local p = playerNow()
   if not p then return 1 end
-  local best, bestKey = 1, math.huge
+  local dir = orderDir
+  local best, bestKey, nearest = 1, math.huge, nil
   for i, e in ipairs(q) do
     local t = tiles[e.key]
     local k = 1e9
+    local behind = false
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
       k = math.sqrt(dx * dx + dy * dy)
-      if dir then         -- fast: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
+      if dir then         -- moving: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
         local along = dx * dir.x + dy * dir.y               -- roads.path_key); behind the car after all of those
         local side = math.abs(dx * dir.y - dy * dir.x)
-        if along < -M.TILE_M / 2 then k = k * 3 + M.LEAD_MAX_M     -- (its centre half a tile behind: left behind)
+        if along < -M.TILE_M / 2 then k, behind = k * 3 + M.LEAD_MAX_M, true     -- (its centre half a tile behind: left behind)
         else k = math.max(0, along) + M.SIDE_PENALTY * math.max(0, side - M.TILE_M / 2) end
       end
       if viewAt and (e.renderOnly or e.what == 'wire') then
         local vx, vy = t.cx - viewAt.x, t.cy - viewAt.y
-        k = math.min(k, math.sqrt(vx * vx + vy * vy))
+        local kv = math.sqrt(vx * vx + vy * vy)
+        if kv < k then k, behind = kv, false end
       end
     end
+    if not behind and (not nearest or k < nearest) then nearest = k end
     if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
-      k = k + 1e6
+      k = k + (M.RENDER_AFTER_M or 1e6)
     end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
-  return best, bestKey
+  return best, bestKey, nearest
 end
 
--- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
-function M.urgentWalk(q)
-  local p, dir = playerNow()
+-- The road tiles whose drawn surfaces are urgent (URGENT_SURFACES): the one under the car at p and those it reaches
+-- within URGENT_SURFACE_S along dir (a set of tile keys; geotiles and anchor tiles alike).
+local function surfaceKeys(p, dir, v)
+  local keys = {}
+  local function add(x, y)
+    if anchorObj then
+      local g = M.geoKeyAt(x, y)
+      if g then keys[geoKey(g)] = true end
+    end
+    if anchorId then keys[tileKey(anchorId, math.floor(x / M.TILE_M) .. '_' .. math.floor(y / M.TILE_M))] = true end
+  end
+  add(p.x, p.y)
+  if dir then
+    local d = math.max(M.URGENT_SURFACE_MIN_M, (v or 0) * M.URGENT_SURFACE_S)
+    add(p.x + dir.x * d * 0.5, p.y + dir.y * d * 0.5)
+    add(p.x + dir.x * d, p.y + dir.y * d)
+  end
+  return keys
+end
+M._surfaceKeys = surfaceKeys
+
+-- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading; else (URGENT_SURFACES)
+-- the drawn road or sidewalks of the tile under the car or just ahead (the roads before the sidewalks, the nearer tile
+-- first) - not in the governor's quiet frames round a heavy op (quiet: a heavy frame must stay a lone spike, and
+-- what is only drawn can wait the two frames). Also returns whether it is such a surface: those still ask the governor
+-- (tryUrgent: never into a frame already busy or a bucket deep in debt), the decks, tunnels and sidewalk colliders not.
+function M.urgentWalk(q, quiet)
+  local p = playerNow()
   if not p then return nil end
+  local dir = orderDir
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
@@ -2528,7 +2612,20 @@ function M.urgentWalk(q)
       end
     end
   end
-  return best
+  if best or not M.URGENT_SURFACES or quiet then return best, false end
+  local keys = nil
+  for i, e in ipairs(q) do
+    if (e.what == 'road' or e.what == 'walk') and e.stage == nil then
+      keys = keys or surfaceKeys(p, dir, lastSpeed)
+      local t = keys[e.key] and tiles[e.key]
+      if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
+        local dx, dy = t.cx - p.x, t.cy - p.y
+        local d = math.sqrt(dx * dx + dy * dy) + (e.what == 'road' and 0 or 1e4)
+        if d < bd then best, bd = i, d end
+      end
+    end
+  end
+  return best, best ~= nil
 end
 
 -- A made object's world box { x0, y0, z0, x1, y1, z1 } (nil: none)
