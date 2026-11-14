@@ -31,15 +31,23 @@
 -- A wide search over what is already on disk (1.8, has('cachedPlaces')): opts.cachedOnly takes the map cells the app
 -- has and asks for no others, with no second answer, so opts.radius may go to 25 km; it must name opts.categories,
 -- and result.truncated says the reach was cut back to the app's cell cap.
+-- Shapes (1.9, has('shapes')): api.registerShapes(owner, groups) gives the vegetation and street-furniture groups the
+-- app's tiles name (a region's tree species, a group the mod draws nothing for yet) another mod's shapes, with their
+-- draw distance and collision: groups = { group = { shapes = { { shape path, height m }, ... }, maxM = m,
+-- noCollide = bool } }; api.unregisterShapes(owner) puts back what was there. Register from the
+-- onBeamNGEarthShapesCatalog(info) event (api.on('shapesCatalog', fn)): it comes when the vegetation module loads and
+-- again whenever it is loaded afresh, before the world's tiles; the api keeps the registrations and applies them again
+-- itself after such a reload. Tiles already shown keep their shapes.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 8
+M.MAJOR, M.MINOR = 1, 9
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true }
+  routeGeometry = true, transform = true, routeSteps = true, rebase = true, cachedPlaces = true, shapes = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
-  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased' }
+  waypointReached = 'onBeamNGEarthWaypointReached', rebased = 'onBeamNGEarthRebased',
+  shapesCatalog = 'onBeamNGEarthShapesCatalog' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -443,9 +451,43 @@ function M._event(event, info)
   if extensions and extensions.hook then pcall(extensions.hook, hook, info) end
 end
 
+------------------------------------------------------------------------------------------
+-- shapes (1.9)
+
+local shapeRegs = {}        -- owner -> groups, as registered (applied again to a fresh vegetation module)
+local seenTrees             -- the vegetation module the registrations were last applied to
+
+function M.registerShapes(owner, groups)
+  local trees = mod('trees')
+  if not trees then return false, 'no vegetation module' end
+  local ok, why = trees.register(owner, groups)
+  if ok then shapeRegs[owner] = groups end
+  return ok, why
+end
+
+function M.unregisterShapes(owner)
+  shapeRegs[owner] = nil
+  local trees = mod('trees')
+  return trees and trees.unregister(owner) or false
+end
+
+-- (each frame: a vegetation module this api has not seen yet, the first or a codeswap's fresh one, gets the kept
+-- registrations and the event, so mods that keep their own state register again)
+local function shapesCheck()
+  local trees = package.loaded['beamngEarth/trees']
+  if type(trees) ~= 'table' or trees == seenTrees then return end
+  seenTrees = trees
+  for owner, groups in pairs(shapeRegs) do
+    local ok, why = trees.register(owner, groups)
+    if not ok and log then log('W', 'beamngEarth', 'api: shapes of ' .. tostring(owner) .. ': ' .. tostring(why)) end
+  end
+  M._event('shapesCatalog', {})
+end
+
 local wasReady, teleporting = false, false
 
 function M.onUpdate(dtReal)
+  shapesCheck()
   if next(placeReqs) then placesTimeouts(dtReal) end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
@@ -460,6 +502,6 @@ function M.onUpdate(dtReal)
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
+function M._reset() listeners, wasReady, teleporting, placeReqs, clock, shapeRegs, seenTrees = {}, false, false, {}, 0, {}, nil end
 
 return M

@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 8) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8) |
+| `version()` | `major, minor` (1, 9) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5), `'routeGeometry'`, `'transform'` (1.6), `'routeSteps'`, `'rebase'` (1.7), `'cachedPlaces'` (1.8), `'shapes'` (1.9) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -173,6 +173,7 @@ end
 | `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
+| `registerShapes(owner, groups)`, `unregisterShapes(owner)` | 1.9: your shapes for vegetation and street-furniture groups (see "Shapes" below). True, or `false, why` |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 ### Route maneuvers (1.7)
@@ -219,6 +220,29 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
 | `onBeamNGEarthRebased` | `rebased` | `{lat, lon, oldLat, oldLon, anchorId, purpose}` (1.7): the world's origin moved to `lat, lon` from `oldLat, oldLon` (nil at the first one), in the frame that moved the world. `purpose` is `'rebase'` (driving on), `'teleport'`, or another of the mod's own moves. Every game coordinate an add-on kept is stale: convert again with `toGame` |
+| `onBeamNGEarthShapesCatalog` | `shapesCatalog` | `{}` (1.9): the vegetation module loaded, the first time or afresh (a code reload): register your shapes here |
+
+### Shapes (1.9)
+
+The app's tiles name a group for every tree, bush, rock and piece of street furniture (`deciduous`, `eucalyptus`, `shrub`, `bench`, ...), and the mod draws each group with the shapes of its catalog, the variant nearest the item's height, scaled to it. `registerShapes` gives groups your shapes instead: a region's tree species, or a group the mod draws nothing for yet (a newer app's).
+
+```lua
+local api = rawget(_G, 'beamngEarth_api')
+local function register()
+  api.registerShapes('my_flora', {
+    street_brushbox = { shapes = { { '/art/shapes/my_flora/brushbox_a', 12.0 }, { '/art/shapes/my_flora/brushbox_b', 18.0 } },
+                        maxM = 900 },                 -- drawn out to 900 m
+    garden_hedge = { shapes = { { '/art/shapes/my_flora/hedge_2m', 2.0 } }, maxM = 250, noCollide = true },
+  })
+end
+function M.onBeamNGEarthShapesCatalog() register() end
+```
+
+- `shapes`: `{ { shape path, its height in m }, ... }`: one or more variants, each a shape of its own (LODs as the mod's own shapes have them, `<name><pixelsize>`). Keep the variants few: each shape's first item in a session costs a load.
+- `maxM`: the draw distance (optional: the group's own, if the catalog has the group).
+- `noCollide`: true for items the car drives through (optional: the group's own; otherwise items near the player collide).
+- The latest registration of a group wins; `unregisterShapes` puts back the one under it, another add-on's or the catalog's own. Registering again under the same owner replaces your earlier registration.
+- Tiles already shown keep the shapes they picked; tiles that arrive after take yours. Register from `onBeamNGEarthShapesCatalog` (it comes before the world's tiles, and again after a code reload, when the api also applies your kept registration itself).
 
 ### Places (1.4)
 
