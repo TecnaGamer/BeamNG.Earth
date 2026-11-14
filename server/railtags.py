@@ -20,46 +20,16 @@ import numpy as np
 
 import fast
 import netfetch
+import pagesdata
 import signshards
+from pagesdata import FETCH_WAIT_S, MANIFEST_TTL_S, PAGES, RETRY_S, data_url, fetch_data   # (re-exported: nycmassing, nyctanks)
 
 log = logging.getLogger("earthd.railtags")
 
-PAGES = os.environ.get("BNE_DATA_PAGES", "https://tecnagamer.github.io/BeamNG.Earth-data")
 ON = os.environ.get("BNE_RAILTAGS", "on") != "off"
 SHARD_ZOOM = 7
-MANIFEST_TTL_S = 24 * 3600      # the build in use is checked again after this long
-RETRY_S = 3600                  # unreachable: asked again after this long
 SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
-FETCH_WAIT_S = 90.0             # s a caller waits for another thread's manifest fetch (then goes on without the data)
 COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
-
-
-def data_url(m):
-    """A dataset manifest's "data": the https folder its build's files are served from (the data repo's workflow puts
-    them on the project's tile host, R2 behind Cloudflare's cache, data/<dataset>/<build>/, the same paths as on
-    Pages), or None: the files beside the manifest on Pages. (2026-11-11: ~1.15 TB a month of players' reads against
-    Pages' 100 GB soft limit.)"""
-    d = m.get("data") if isinstance(m, dict) else None
-    return d.rstrip("/") if isinstance(d, str) and d.startswith("https://") and len(d) > 8 else None
-
-
-def fetch_data(fetcher, data, pages, rel, kind="demand"):
-    """rel's bytes from a dataset's data host (data: data_url's, or None) else its Pages folder (pages). The data
-    host failing (not a 404: that answers for the build) is asked of Pages as well, while Pages still has the files
-    (old clients read them there); that failing too raises the data host's error, never a NotFound (no "none
-    there" from a copy that may be gone)."""
-    if not data:
-        return fetcher.get(f"{pages}/{rel}", kind=kind).body
-    try:
-        return fetcher.get(f"{data}/{rel}", kind=kind).body
-    except (netfetch.NotFound, netfetch.Deferred):
-        raise
-    except Exception as e:
-        first = e
-    try:
-        return fetcher.get(f"{pages}/{rel}", kind=kind).body
-    except Exception:
-        raise first from None
 
 
 _WAY_ID = re.compile(r"^w(\d+)")
@@ -183,138 +153,66 @@ PIN_RECHECK_S = 1.0         # s between looks for a manifest another process may
 class Shards:
     """A dataset of BeamNG.Earth-data's GitHub Pages (name: its folder, e.g. "rail", "fra"): z7 shards
     <PAGES>/<name>/<x>/<y>.json.gz and its manifest, each shard fetched once and kept on disk per build. The manifest
-    stays on Pages; the shards come from its "data" folder when it names one (data_url, fetch_data)."""
+    stays on Pages; the shards come from its "data" folder when it names one (pagesdata.Manifest)."""
 
     def __init__(self, cache_dir, fetcher, name):
         self.name = name
-        self.base = f"{PAGES}/{name}"
-        self.dir = os.path.join(cache_dir, "pagesdata", name) if cache_dir else None
         self.fetcher = fetcher
-        self.lock = threading.Lock()
-        self.built = None           # the manifest's build in use
-        self.data = None            # its "data" folder (data_url), None: the files on Pages
-        self.checked = 0.0
+        self.lock = threading.Lock()        # self.shards
+        self.manifest = pagesdata.Manifest(cache_dir, fetcher, name, base=f"{PAGES}/{name}", retry_s=RETRY_S,
+                                           on_change=self._build_changed)
+        self.base = self.manifest.base
+        self.dir = self.manifest.dir
         self.shards = {}            # (x, y) -> dict
-        self.down_at = 0.0
-        self.fetching = None        # threading.Event while a manifest fetch runs (the others wait for its answer)
         self.shard_down = {}        # (x, y) -> when it could not be had (SHARD_RETRY_S)
+
+    @property
+    def built(self):
+        """The manifest's build in use (the shards' cache keys; the tests set it to stand in for a run that asked)."""
+        return self.manifest.built
+
+    @built.setter
+    def built(self, value):
+        self.manifest.built = value
+
+    @property
+    def data(self):
+        """The build's "data" host (pagesdata.data_url), None: the files beside the manifest on Pages."""
+        return self.manifest.data
+
+    @data.setter
+    def data(self, value):
+        self.manifest.data = value
+
+    @property
+    def fetching(self):
+        """The Event of a manifest fetch in progress, while the other callers wait for its answer."""
+        return self.manifest.fetching
+
+    def _build_changed(self):
+        """Another build is in use (called under the Manifest's lock): the shards decoded from the old one are not
+        it."""
+        with self.lock:
+            self.shards.clear()
 
     def known(self):
         """The build in use as far as known without asking the network (versions(): every tile's cache key); before
         this run has asked for it, the last build pinned on disk. (None until the manifest came: the tiles built in
         a run's first minutes had other keys than the same tiles built later, in the revisit cache: a warm drive
         rebuilt and stored again ~1.5 GB of far tiles, 2026-11-04.)"""
-        if self.built is not None or not ON:
-            return self.built
-        got = getattr(self, "_pinned", False)
-        # (none pinned yet: looked for again, at most every PIN_RECHECK_S: another process pins it a few seconds into a
-        # first run, and a process that had looked once kept None in its keys for the whole run while the others had
-        # the build, the next run's keys: a first visit's plans, cell facts and tiles were never found again, 2026-11-13)
-        if got is False or (got is None and time.monotonic() - getattr(self, "_pin_at", 0.0) > PIN_RECHECK_S):
-            got = None
-            self._pin_at = time.monotonic()
-            pin = os.path.join(self.dir, "manifest.json") if self.dir else None
-            if pin and os.path.exists(pin):
-                try:
-                    with open(pin, encoding="utf-8") as fh:
-                        got = json.load(fh).get("built")
-                except (OSError, ValueError):
-                    got = None
-            self._pinned = got
-        return self.built if self.built is not None else got
+        return self.manifest.built if not ON else self.manifest.known(PIN_RECHECK_S)
 
     def version(self):
-        """The build in use ("built" of its manifest), or None (none reachable yet).
-
-        The manifest pinned on disk is used whatever its age: a stale one (MANIFEST_TTL_S) is refreshed in the
-        background, one fetch at a time, and kept if that fails. Without one (a first run) one thread fetches it and
-        the others wait for its answer. (2026-11-09, the night of 1.9.0: GitHub answered 504s for hours; every road
-        worker process asked each dataset's manifest for itself, 2 tries x 20 s, two at a time, and dropped the data it
-        had on disk once a day's manifest was due: world gen hung at 15 % for players; a test with 10 s 504s cost a
-        first tile 17 s.)"""
+        """The build in use ("built" of its manifest), or None (none reachable yet). The pinned/refresh policy is
+        pagesdata.Manifest.current's (the night of 1.9.0: see pagesdata)."""
         if not ON or self.fetcher is None:
             return None
-        now = time.time()
-        with self.lock:
-            if self.built is not None and now - self.checked < MANIFEST_TTL_S:
-                return self.built
-        pin = os.path.join(self.dir, "manifest.json") if self.dir else None
-        pinned, age, pdata = None, None, None
-        if pin and os.path.exists(pin):
-            try:
-                age = now - os.path.getmtime(pin)
-                with open(pin, encoding="utf-8") as fh:
-                    j = json.load(fh)
-                pinned, pdata = j.get("built"), data_url(j)
-            except (OSError, ValueError, AttributeError):
-                pinned = None
-        if pinned is not None:
-            refresh = False
-            with self.lock:
-                if pinned != self.built and (self.built is None or age < MANIFEST_TTL_S):
-                    self.shards.clear()
-                    self.built = pinned
-                if pinned == self.built:
-                    self.data = pdata
-                if age < MANIFEST_TTL_S:
-                    self.checked = now - age
-                elif self.fetching is None and now - self.down_at >= RETRY_S:
-                    self.fetching = threading.Event()
-                    self.checked = now          # (asked once; the next check after MANIFEST_TTL_S or a failure)
-                    refresh = True
-                built = self.built
-            if refresh:
-                threading.Thread(target=self._refresh, name=f"{self.name}-manifest", daemon=True).start()
-            return built
-        with self.lock:
-            if self.built is None and now - self.down_at < RETRY_S:
-                return None
-            ev = self.fetching
-            mine = ev is None
-            if mine:
-                ev = self.fetching = threading.Event()
-        if not mine:
-            ev.wait(FETCH_WAIT_S)
-            with self.lock:
-                return self.built
-        return self._refresh(now)
-
-    def _refresh(self, now=None):
-        """Fetch the manifest (this thread holds self.fetching), pin it, and take its build; the build in use when it
-        cannot be had."""
-        now = time.time() if now is None else now
-        pin = os.path.join(self.dir, "manifest.json") if self.dir else None
-        try:
-            try:
-                body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
-                j = json.loads(body.decode("utf-8"))
-                built, data = j.get("built"), data_url(j)
-                if pin:
-                    os.makedirs(self.dir, exist_ok=True)
-                    tmp = _part(pin)
-                    with open(tmp, "wb") as fh:
-                        fh.write(body)
-                    os.replace(tmp, pin)
-            except Exception as e:      # (offline, not published yet: without it, or with the build pinned before)
-                log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
-                with self.lock:
-                    self.down_at = now
-                    return self.built   # (a build learnt before stays in use)
-            with self.lock:
-                if built != self.built:
-                    self.shards.clear()
-                self.built, self.data, self.checked = built, data, now
-            return built
-        finally:
-            with self.lock:
-                ev, self.fetching = self.fetching, None
-            if ev is not None:
-                ev.set()
+        return self.manifest.build()
 
     def get(self, rel, kind="demand"):
         """The bytes of the dataset's file rel (path in its folder) for the build in use: from the manifest's "data"
-        host, else (or that failing) Pages (fetch_data)."""
-        return fetch_data(self.fetcher, self.data, self.base, rel, kind)
+        host, else (or that failing) Pages (pagesdata.fetch_data)."""
+        return self.manifest.fetch(rel, kind)
 
     def clear_memory(self):
         """Drop the decoded shards kept in memory (budget.maybe_shed through MapData.clear_memory; ~20 MB a zoom-7
