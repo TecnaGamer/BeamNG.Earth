@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -71,14 +72,14 @@ class BldhzTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.TemporaryDirectory()
         self.addCleanup(self.d.cleanup)
-        bldhz._index.clear()
+        bldhz._local.clear()
 
     def _with(self, arrays, sha=None):
         gx, gy, real = _index(self.d.name, arrays, sha)
         p = mock.patch.object(bldhz, "DIR", self.d.name)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(bldhz._index.clear)
+        self.addCleanup(bldhz._local.clear)
         return gx, gy, real
 
     def test_pieces_per_skyline_square(self):
@@ -99,7 +100,7 @@ class BldhzTest(unittest.TestCase):
     def test_shard_checked(self):
         gx, gy, _ = self._with(_shard(), sha="0" * 40)
         with self.assertRaises(ValueError):
-            bldhz.index().load(gx, gy)
+            bldhz.source().load(gx, gy)
 
     def test_malformed_shard(self):
         a = _shard(parts=False)
@@ -107,17 +108,51 @@ class BldhzTest(unittest.TestCase):
         a["b_ring_off"][1] = 99
         gx, gy, _ = self._with(a)
         with self.assertRaises(ValueError):
-            bldhz.index().load(gx, gy)
+            bldhz.source().load(gx, gy)
 
     def test_cache_key_follows_the_shard(self):
         import blockworker
         gx, gy, real = self._with(_shard())
-        k1 = blockworker._bldhz_key(gx, gy)
-        self.assertIn(real, k1[2])
-        bldhz._index.clear()
-        _index(self.d.name, _shard(n_b=3))
-        k2 = blockworker._bldhz_key(gx, gy)
+        with mock.patch.object(blockworker, "_s", mock.Mock(md=None)):
+            k1 = blockworker._bldhz_key(gx, gy)
+            self.assertIn(real, k1)
+            bldhz._local.clear()
+            _index(self.d.name, _shard(n_b=3))
+            k2 = blockworker._bldhz_key(gx, gy)
         self.assertNotEqual(k1, k2)
+
+    def test_reach_by_setting(self):
+        """near none, normal 20 km, far 35 km, max to the horizon (or the fixed view distance)."""
+        self.assertEqual([bldhz.reach(s) for s in (0.6, 1.0, 1.5, 2.0)], [0.0, 20000.0, 35000.0, bldhz.HORIZON_M])
+        self.assertEqual(bldhz.reach(2.0, 50000.0), 50000.0)
+        self.assertEqual(bldhz.reach(1.0, 50000.0), 20000.0)
+
+    def test_from_the_data_site(self):
+        """The published layout (build_tall_index.write_pages: PMTiles parts in the build's folder, a manifest) read
+        through a fake host as osmyears is: pieces as from the local index; the frozen build in the cache key."""
+        import build_tall_index as T
+        from tests.test_osm_building_years import FakeFetcher
+        from types import SimpleNamespace
+        gx, gy = geotiles.tile_of(LAT, LON, bldhz.Z)
+        out = os.path.join(self.d.name, "pages")
+        m = T.write_pages(out, {(gx, gy): T.npz_bytes(_shard())}, "test", 60.0)
+        base = "https://tall.test/tallbld"
+        files = {f"{base}/manifest.json": Path(out, "manifest.json").read_bytes()}
+        for p in m["parts"]:
+            files[f"{base}/{p['archive']}"] = Path(out, p["archive"]).read_bytes()
+        md = SimpleNamespace(fetcher=FakeFetcher(files), cache_dir=os.path.join(self.d.name, "cache"))
+        with mock.patch.object(bldhz, "DIR", None), mock.patch.object(bldhz, "BASE", base), \
+                mock.patch.dict(bldhz._pages, clear=True):
+            src = bldhz.source(md)
+            self.assertIsInstance(src, bldhz.PagesIndex)
+            src.version()                   # (pinned: MapData.warm_manifests)
+            self.assertTrue(bldhz.on(md))
+            tile = geotiles.geobox(gx, gy, bldhz.Z)
+            sq = bldhz.squares(tile, lambda la, lo: np.zeros(np.shape(la)), md)
+            self.assertTrue(sq and sum(len(v) for v in sq.values()) >= 2)
+            self.assertEqual(src.sig(gx, gy)[:2], ("pages", m["built"]))
+            empty = geotiles.geobox(gx + 5, gy, bldhz.Z)
+            self.assertEqual(bldhz.squares(empty, lambda la, lo: np.zeros(np.shape(la)), md), {})
 
     def test_off_without_dir(self):
         with mock.patch.object(bldhz, "DIR", None):

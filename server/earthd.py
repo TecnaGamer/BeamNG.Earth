@@ -8436,7 +8436,7 @@ class Connection:
             # (the horizon ring past the skyline: the tall buildings' index, bldhz.py; its pieces hidden by the mod
             # where a skyline square, a pack or far tiles show)
             if getattr(self, "far_hz", False) and sky:
-                hz_m = bldhzmod.SEND_M * bld
+                hz_m = bldhzmod.reach(bld, getattr(self, "view_cap", None))
                 self.bldhz = vegetationmod.Tracker(hz_m, hz_m + bldhzmod.DROP_EXTRA_M, bldhzmod.PER_POSE, "bldhz",
                                                    geo=True, z=bldhzmod.Z)
             return
@@ -8646,7 +8646,7 @@ class Connection:
             # FAR_GEO; a far tile and the road geotile of the same key hold the same buildings: one shows them)
             far_geo = road_geo and msg.get("farGeo") == buildingsmod.FAR_GEO and self.s.far_geo_ok()
             far_pack = bool(far_geo and msg.get("farPack") == buildingsmod.FAR_PACK and buildingsmod.PACK_ON)
-            far_hz = bool(far_geo and msg.get("farHz") == bldhzmod.PROTO and bldhzmod.on())
+            far_hz = bool(far_geo and msg.get("farHz") == bldhzmod.PROTO and bldhzmod.on(self.s.mapdata))
             if far_geo != self.far_geo or far_pack != self.far_pack or far_hz != self.far_hz:
                 self.far_pack, self.far_hz = far_pack, far_hz
                 self.make_far_trackers(far_geo)
@@ -8893,7 +8893,7 @@ class Connection:
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
                 self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
             if self.bldhz is not None:
-                self.bldhz.send_m = bldhzmod.SEND_M * bld
+                self.bldhz.send_m = bldhzmod.reach(bld, getattr(self, "view_cap", None))
                 self.bldhz.drop_m = self.bldhz.send_m + bldhzmod.DROP_EXTRA_M
             if self.brfar is not None:
                 self.brfar.send_m = buildingsmod.BRIDGE_FAR_SEND_M * bld
@@ -8910,6 +8910,9 @@ class Connection:
             cap = max(VIEW_CAP_MIN_M, float(v)) if v > 0 else None
             far = far or cap != self.view_cap
             self.view_cap = cap
+            if self.bldhz is not None:      # (the horizon ring's "max": to the fixed view distance when shorter)
+                self.bldhz.send_m = bldhzmod.reach(self.building_scale, cap)
+                self.bldhz.drop_m = self.bldhz.send_m + bldhzmod.DROP_EXTRA_M
         log.info("graphics: terrain detail x%.2f, trees to %.0f m, far buildings to %.0f m, ground photo %d px, view %s, "
                  "pixel error %s", self.lod_scale, self.veg.send_m, self.bldfar.send_m, self.s.base_px,
                  "to the horizon" if self.view_cap is None else f"{self.view_cap / 1000:.0f} km",
@@ -10012,7 +10015,8 @@ class Connection:
                                     self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
                                     view=self.view_at, frame=frame)
                 # (the horizon ring last, once the skyline round the car is there)
-                if self.bldhz is not None and self.bldsky.progress()[0] >= self.bldsky.progress()[1]:
+                if self.bldhz is not None and self.bldhz.send_m > 0 \
+                        and self.bldsky.progress()[0] >= self.bldsky.progress()[1]:
                     self.bldhz.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldhz"),
                                        view=self.view_at, frame=frame)
             if self.brfar is not None and later and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:

@@ -38,7 +38,7 @@ import overture  # noqa: E402
 FORMAT = 1
 Z = 12
 UA = "bnge-tall-index"
-FETCH_THREADS = 8
+FETCH_THREADS = 16
 FETCH_TRIES = 5
 
 B_SPEC = overture.LAYERS["buildings"]
@@ -96,7 +96,7 @@ class Meta:
 
     def select(self, box, hmin=None, fmin=None):
         """[(name, rg)] whose bbox statistics meet box (lon0, lat0, lon1, lat1) and, with hmin / fmin, whose height
-        reaches hmin or storeys fmin (statistics missing: taken)."""
+        reaches hmin or storeys fmin (no statistics: all missing, not taken)."""
         lon0, lat0, lon1, lat1 = box
         out = []
         for f, lst in self.rgs.items():
@@ -104,8 +104,8 @@ class Meta:
                 if None in (x0, x1, y0, y1) or (x0 <= lon1 and x1 >= lon0 and y0 <= lat1 and y1 >= lat0):
                     if hmin is None and fmin is None:
                         out.append((f, rg))
-                    elif (hmin is not None and (hmax is None or hmax >= hmin)) or (
-                            fmin is not None and (fmax is None or fmax >= fmin)):
+                    elif (hmin is not None and hmax is not None and hmax >= hmin) or (
+                            fmin is not None and fmax is not None and fmax >= fmin):
                         out.append((f, rg))
         return out
 
@@ -247,150 +247,271 @@ def _columns(prefix, rows, names, spec):
     return out
 
 
-def write_npz(path, arrays):
-    """arrays as an .npz with fixed zip entries (byte-identical for the same arrays)."""
-    tmp = path + ".tmp"
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
-        for k in sorted(arrays):
-            buf = io.BytesIO()
-            np.lib.format.write_array(buf, np.ascontiguousarray(arrays[k]), allow_pickle=False)
-            zi = zipfile.ZipInfo(k + ".npy", date_time=(2026, 1, 1, 0, 0, 0))
-            zi.compress_type = zipfile.ZIP_DEFLATED
-            z.writestr(zi, buf.getvalue())
-    os.replace(tmp, path)
+def _by_file(pairs):
+    by = {}
+    for f, rg in pairs:
+        by.setdefault(f, []).append((f, rg))
+    return [by[f] for f in sorted(by)]
 
 
 def build_region(con, metas, sparses, box, min_h, log):
-    """(buildings rows, names, parts rows, names) of the region's tall buildings and all their parts."""
+    """(buildings rows, names, parts rows, names) of the box's tall buildings and all their parts, one Overture file
+    at a time (the planet's 7.5k candidate row groups never in DuckDB at once)."""
     mb, mp = metas
     sb, sp = sparses
     lon0, lat0, lon1, lat1 = box
     inbox = f"bbox.xmin <= {lon1!r} AND bbox.xmax >= {lon0!r} AND bbox.ymin <= {lat1!r} AND bbox.ymax >= {lat0!r}"
     fmin = math.ceil(min_h / 3.2)
-    # 1. the parts: every part row group in the region (the parts' data is small), the tall ones' buildings
-    pp = mp.select(box)
     t0 = time.time()
-    sp.fill(pp)
-    log(f"  parts: {len(pp)} row groups, {sp.requests} requests {sp.bytes / 1e6:.1f} MB, {time.time() - t0:.0f} s")
-    tall_parts = []
-    if sp.load(con, "pall", "building_id, height, min_height, bbox, (bbox.xmin + bbox.xmax) / 2 AS cx, "
-                            "(bbox.ymin + bbox.ymax) / 2 AS cy", pp):
-        tall_parts = con.execute(f"""SELECT building_id, min(cx), max(cx), min(cy), max(cy) FROM pall
-                                     WHERE {inbox} AND coalesce(height, 0) >= {min_h}
-                                     GROUP BY building_id ORDER BY 1""").fetchall()
-    # 2. the buildings tall themselves (height, or storeys where no height)
+    # 1. the buildings tall themselves (height, or storeys where no height)
     bp = mb.select(box, hmin=min_h, fmin=fmin)
-    t0 = time.time()
     r0, b0 = sb.requests, sb.bytes
     sb.fill(bp)
     log(f"  buildings: {len(bp)} row groups, {sb.requests - r0} requests {(sb.bytes - b0) / 1e6:.1f} MB, "
         f"{time.time() - t0:.0f} s")
-    rows, names = _rows(con, B_SPEC, sb, bp, f"{inbox} AND (height >= {min_h} OR (height IS NULL AND "
-                                              f"num_floors >= {fmin}))")
+    rows, names = [], None
+    for grp in _by_file(bp):
+        got, names = _rows(con, B_SPEC, sb, grp, f"{inbox} AND (height >= {min_h} OR (height IS NULL AND "
+                                                 f"num_floors >= {fmin}))")
+        rows += got
+    log(f"  {len(rows)} tall buildings, {time.time() - t0:.0f} s")
+    # 2. the parts, a file at a time: the tall ones' buildings, then every part of a tall building
+    pp = mp.select(box)
+    r0, b0 = sp.requests, sp.bytes
+    sp.fill(pp)
+    log(f"  parts: {len(pp)} row groups, {sp.requests - r0} requests {(sp.bytes - b0) / 1e6:.1f} MB")
     have = {r[0] for r in rows}
+    con.execute("DROP TABLE IF EXISTS want")
+    con.execute("CREATE TEMP TABLE want (id VARCHAR)")
+    con.executemany("INSERT INTO want VALUES (?)", [(b,) for b in sorted(have)])
+    tall_parts, prows, pnames = [], [], None
+    for grp in _by_file(pp):
+        if not sp.load(con, "pall", "building_id, height, bbox, (bbox.xmin + bbox.xmax) / 2 AS cx, "
+                                    "(bbox.ymin + bbox.ymax) / 2 AS cy", grp):
+            continue
+        tp = con.execute(f"""SELECT building_id, min(cx), max(cx), min(cy), max(cy) FROM pall
+                             WHERE {inbox} AND coalesce(height, 0) >= {min_h} GROUP BY building_id""").fetchall()
+        tall_parts += tp
+        con.executemany("INSERT INTO want VALUES (?)", [(t[0],) for t in tp if t[0] not in have])
+        have.update(t[0] for t in tp)
+        got, pnames = _rows(con, P_SPEC, sp, grp, f"{inbox} AND building_id IN (SELECT id FROM want)")
+        prows += got
     # 3. the buildings tall only through their parts: each from the row groups round its parts
-    miss = [t for t in tall_parts if t[0] not in have]
+    tall_ids = {r[0] for r in rows}
+    miss = sorted({t[0]: t for t in tall_parts if t[0] not in tall_ids}.values())
     extra = set()
     for bid, x0, x1, y0, y1 in miss:
         extra.update(mb.select((x0 - 1e-4, y0 - 1e-4, x1 + 1e-4, y1 + 1e-4)))
-    extra -= set(bp)
     r0, b0 = sb.requests, sb.bytes
     sb.fill(sorted(extra))
-    log(f"  {len(miss)} buildings tall by their parts: {len(extra)} more row groups, {sb.requests - r0} requests "
-        f"{(sb.bytes - b0) / 1e6:.1f} MB")
+    log(f"  {len(miss)} buildings tall by their parts: {len(extra - set(bp))} more row groups, {sb.requests - r0} "
+        f"requests {(sb.bytes - b0) / 1e6:.1f} MB")
     if miss:
-        ids = ", ".join("'" + m[0].replace("'", "''") + "'" for m in miss)
-        more, _names = _rows(con, B_SPEC, sb, sorted(set(bp) | extra), f"id IN ({ids})")
-        got = {r[0] for r in more}
-        rows = sorted({r[0]: r for r in rows + more}.values(), key=lambda r: r[0])
-        lost = len(miss) - len(got)
-        if lost:
-            log(f"  {lost} part-tall buildings not found round their parts")
-    # 4. every part of those buildings
-    bids = sorted({r[0] for r in rows})
-    con.execute("DROP TABLE IF EXISTS want")
-    con.execute("CREATE TEMP TABLE want (id VARCHAR)")
-    con.executemany("INSERT INTO want VALUES (?)", [(b,) for b in bids])
-    prows, pnames = _rows(con, P_SPEC, sp, pp, f"{inbox} AND building_id IN (SELECT id FROM want)")
+        con.execute("DROP TABLE IF EXISTS miss")
+        con.execute("CREATE TEMP TABLE miss (id VARCHAR)")
+        con.executemany("INSERT INTO miss VALUES (?)", [(m[0],) for m in miss])
+        more = []
+        for grp in _by_file(sorted(extra)):
+            got, names = _rows(con, B_SPEC, sb, grp, "id IN (SELECT id FROM miss)")
+            more += got
+        found = {r[0] for r in more}
+        if len(miss) - len(found):
+            log(f"  {len(miss) - len(found)} part-tall buildings not found round their parts")
+        rows += more
+    rows = sorted({r[0]: r for r in rows}.values(), key=lambda r: r[0])
+    keep = {r[0] for r in rows}
+    prows = sorted({r[0]: r for r in prows if r[(pnames or []).index("building_id")] in keep}.values(),
+                   key=lambda r: r[0]) if pnames else []
+    if names is None:
+        names = ["id", "wkb", "cx", "cy"] + [c for k in ("text", "float", "bool") for c in B_SPEC.get(k, ())]
     return rows, names, prows, pnames
+
+
+def tile_blobs(rows, names, prows, pnames, log):
+    """{(x, y): npz bytes} of zoom-Z tiles: each building in the tile of its bbox centre, its parts with it."""
+    import geotiles
+    at = {c: i for i, c in enumerate(names)}
+    rows = [r for r in rows if _ring(r[at["wkb"]]) is not None]
+    if not rows:
+        return {}
+    bx, by = geotiles.tile_of(np.array([r[at["cy"]] for r in rows], np.float64),
+                              np.array([r[at["cx"]] for r in rows], np.float64), Z)
+    tile = {r[0]: (int(x), int(y)) for r, x, y in zip(rows, np.atleast_1d(bx), np.atleast_1d(by))}
+    pat = {c: i for i, c in enumerate(pnames)} if pnames else {}
+    bt, pt = {}, {}
+    for r in rows:
+        bt.setdefault(tile[r[0]], []).append(r)
+    for r in prows:
+        k = tile.get(r[pat["building_id"]])
+        if k is not None and _ring(r[pat["wkb"]]) is not None:
+            pt.setdefault(k, []).append(r)
+    out = {}
+    for k in sorted(bt):
+        arrays = _columns("b_", bt[k], names, B_SPEC)
+        if pt.get(k):
+            arrays.update(_columns("p_", pt[k], pnames, P_SPEC))
+        out[k] = npz_bytes(arrays)
+    log(f"  {len(rows)} buildings, {len(prows)} parts in {len(out)} tiles")
+    return out
+
+
+def npz_bytes(arrays):
+    """arrays as .npz bytes with fixed zip entries (byte-identical for the same arrays)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for k in sorted(arrays):
+            b = io.BytesIO()
+            np.lib.format.write_array(b, np.ascontiguousarray(arrays[k]), allow_pickle=False)
+            zi = zipfile.ZipInfo(k + ".npy", date_time=(2026, 1, 1, 0, 0, 0))
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(zi, b.getvalue())
+    return buf.getvalue()
+
+
+def write_npz(path, arrays):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(npz_bytes(arrays))
+    os.replace(tmp, path)
+
+
+def write_local(out, blobs, release, min_h, regions):
+    """The local layout (server BNE_BLDHZ_DIR): <out>/12/<x>_<y>.npz + manifest.json (each tile's SHA-1)."""
+    import geotiles
+    os.makedirs(os.path.join(out, str(Z)), exist_ok=True)
+    tiles = {}
+    for (x, y), b in sorted(blobs.items()):
+        p = os.path.join(out, str(Z), f"{x}_{y}.npz")
+        with open(p + ".tmp", "wb") as f:
+            f.write(b)
+        os.replace(p + ".tmp", p)
+        tiles[geotiles.key(x, y, Z)] = {"sha1": hashlib.sha1(b).hexdigest(), "bytes": len(b)}
+    m = {"format": FORMAT, "release": release, "z": Z, "min_height": min_h, "regions": regions, "tiles": tiles}
+    with open(os.path.join(out, "manifest.json.tmp"), "w") as f:
+        json.dump(m, f, indent=1, sort_keys=True)
+    os.replace(os.path.join(out, "manifest.json.tmp"), os.path.join(out, "manifest.json"))
+    return m
+
+
+PAGES_NAME = "tallbld"           # the dataset's folder on the data site (server bldhz.PAGES_NAME)
+PART_BYTES = 256 << 20
+HEAD_BYTES = 16384
+
+
+def write_pages(out, blobs, release, min_h, bbox=None):
+    """The published layout (server bldhz.TallShards, as osmyears): <out>/<key>/tallbld-NNN.pmtiles (the tiles in
+    tile-id order, each part a whole PMTiles archive, tiles stored as their npz bytes) and <out>/manifest.json
+    {format, zoom, built, key, release, min_height, parts [{archive, first, last, bytes, tiles, head_sha256,
+    sha256}], bytes, tiles, license}. <key>: the build time and a digest of its parts (its files never change once
+    published: publish the folder before the manifest)."""
+    import shutil
+    import tempfile
+    import build_osm_tag_shards as ots
+    os.makedirs(out, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="tallbld-build-", dir=out)
+    try:
+        data_path = os.path.join(tmp, "tiles.bin")
+        entries, at = [], 0
+        with open(data_path, "wb") as data:
+            for (x, y) in sorted(blobs, key=lambda t: ots.tile_id(Z, *t)):
+                b = blobs[(x, y)]
+                data.write(b)
+                entries.append((ots.tile_id(Z, x, y), at, len(b), 1))
+                at += len(b)
+        built = time.gmtime()
+        work = os.path.join(tmp, "parts")
+        os.makedirs(work)
+        lo = bbox or (-180.0, -85.0511, 180.0, 85.0511)
+        parts = ots.write_parts(work, entries, data_path, lo, len(entries), Z, 16384 - 127, PART_BYTES,
+                                prefix=PAGES_NAME, title="BeamNG.Earth tall buildings", fmt=f"tallnpz{FORMAT}")
+        digest = hashlib.sha256()
+        for p in parts:
+            with open(os.path.join(work, p["archive"]), "rb") as f:
+                b = f.read()
+            p["head_sha256"] = hashlib.sha256(b[:HEAD_BYTES]).hexdigest()
+            p["sha256"] = hashlib.sha256(b).hexdigest()
+            digest.update(p["sha256"].encode())
+        key = f"{time.strftime('%Y%m%dT%H%M%SZ', built)}-{digest.hexdigest()[:8]}"
+        os.replace(work, os.path.join(out, key))
+        for p in parts:
+            p["archive"] = f"{key}/{p['archive']}"
+        m = {"format": FORMAT, "zoom": Z, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", built), "key": key,
+             "release": release, "min_height": min_h, "parts": parts, "bytes": sum(p["bytes"] for p in parts),
+             "tiles": len(entries),
+             "license": "ODbL 1.0 (Overture Maps buildings: OpenStreetMap contributors and others, see Overture)"}
+        if bbox is not None:
+            m["bbox"] = list(bbox)
+        with open(os.path.join(out, "manifest.json.tmp"), "w", encoding="utf-8") as f:
+            json.dump(m, f)
+        os.replace(os.path.join(out, "manifest.json.tmp"), os.path.join(out, "manifest.json"))
+        return m
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--footers", required=True)
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--work", default=None, help="sparse copies (default <out>/../tall_index_work)")
-    ap.add_argument("--region", action="append", required=True, help="NAME:LAT,LON,KM (a square of 2 KM)")
+    ap.add_argument("--out", default=None, help="the local layout (server BNE_BLDHZ_DIR)")
+    ap.add_argument("--pages", default=None, help="the published layout (PMTiles parts + manifest)")
+    ap.add_argument("--work", required=True, help="the sparse copies (kept: a second run fetches nothing again)")
+    ap.add_argument("--region", action="append", default=[], help="NAME:LAT,LON,KM (a square of 2 KM)")
+    ap.add_argument("--world", action="store_true", help="the whole planet")
     ap.add_argument("--min-height", type=float, default=60.0)
     ap.add_argument("--stac", default=None)
+    ap.add_argument("--prefetch", action="store_true", help="only fetch the whole planet's candidate row groups")
     a = ap.parse_args()
     import duckdb
-    import geotiles
     stac_path = a.stac or overture.BUNDLED.format(release=overture.RELEASE)
     stac = json.load(gzip.open(stac_path))
     release = stac["release"]
-    work = a.work or os.path.join(os.path.dirname(os.path.abspath(a.out)), "tall_index_work")
-    os.makedirs(os.path.join(a.out, str(Z)), exist_ok=True)
     con = duckdb.connect()
     con.execute("SET threads = 4")
     metas = (Meta(con, a.footers, "building", B_TOP, stac["collections"]["buildings/building"]["files"]),
              Meta(con, a.footers, "building_part", P_TOP, stac["collections"]["buildings/building_part"]["files"]))
-    sparses = (Sparse(work, metas[0]), Sparse(work, metas[1]))
-    mpath = os.path.join(a.out, "manifest.json")
-    manifest = json.load(open(mpath)) if os.path.exists(mpath) else {}
-    if manifest and (manifest.get("release") != release or manifest.get("min_height") != a.min_height
-                     or manifest.get("format") != FORMAT):
-        raise SystemExit(f"{mpath}: another release / threshold / format: use a new --out")
-    manifest.update({"format": FORMAT, "release": release, "z": Z, "min_height": a.min_height})
-    tiles = manifest.setdefault("tiles", {})
-    regions = manifest.setdefault("regions", {})
+    sparses = (Sparse(a.work, metas[0]), Sparse(a.work, metas[1]))
+    world = (-180.0, -90.0, 180.0, 90.0)
+    t0 = time.time()
+    if a.prefetch:
+        sparses[1].fill(metas[1].select(world))
+        print(f"parts: {sparses[1].requests} requests {sparses[1].bytes / 1e9:.2f} GB, {time.time() - t0:.0f} s", flush=True)
+        pairs = metas[0].select(world, hmin=a.min_height, fmin=math.ceil(a.min_height / 3.2))
+        for k in range(0, len(pairs), 400):         # (in slices: progress)
+            sparses[0].fill(pairs[k:k + 400])
+            print(f"buildings: {min(k + 400, len(pairs))}/{len(pairs)} row groups, {sparses[0].bytes / 1e9:.2f} GB, "
+                  f"{time.time() - t0:.0f} s", flush=True)
+        return
+    boxes = [("world", world)] if a.world else []
     for spec in a.region:
         name, rest = spec.split(":", 1)
         lat, lon, km = map(float, rest.split(","))
-        box = region_box(lat, lon, km)
-        t0 = time.time()
-        print(f"{name}: box {tuple(round(v, 4) for v in box)}", flush=True)
-        rows, names, prows, pnames = build_region(con, metas, sparses, box, a.min_height,
-                                                  lambda s: print(s, flush=True))
-        at = {c: i for i, c in enumerate(names)}
-        bx, by = geotiles.tile_of(np.array([r[at["cy"]] for r in rows], np.float64),
-                                  np.array([r[at["cx"]] for r in rows], np.float64), Z)
-        tile_of = {r[0]: (int(x), int(y)) for r, x, y in zip(rows, np.atleast_1d(bx), np.atleast_1d(by))}
-        pat = {c: i for i, c in enumerate(pnames)} if pnames else {}
-        nb = np_ = 0
-        for key in sorted(set(tile_of.values())):
-            brs = [r for r in rows if tile_of[r[0]] == key and _ring(r[at["wkb"]]) is not None]
-            mine = {r[0] for r in brs}
-            prs = [r for r in prows if r[pat["building_id"]] in mine and _ring(r[pat["wkb"]]) is not None]
-            arrays = _columns("b_", brs, names, B_SPEC)
-            if prs:
-                arrays.update(_columns("p_", prs, pnames, P_SPEC))
-            kx, ky = key
-            path = os.path.join(a.out, str(Z), f"{kx}_{ky}.npz")
-            if os.path.exists(path):        # (a tile two regions share: kept when it holds this region's already)
-                with np.load(path, allow_pickle=False) as old:
-                    if set(old["b_id"].tolist()) >= mine:
-                        continue
-                print(f"  {kx}_{ky}: rewritten with this region's buildings (regions overlap: give one larger "
-                      f"region instead)", flush=True)
-            write_npz(path, arrays)
-            with open(path, "rb") as fh:
-                sha = hashlib.sha1(fh.read()).hexdigest()
-            tiles[geotiles.key(kx, ky, Z)] = {"n": len(brs), "parts": len(prs), "sha1": sha,
-                                              "bytes": os.path.getsize(path)}
-            nb += len(brs)
-            np_ += len(prs)
-        regions[name] = {"lat": lat, "lon": lon, "km": km, "buildings": len(rows), "parts": len(prows),
-                         "fetched_MB": round((sparses[0].bytes + sparses[1].bytes) / 1e6, 1),
-                         "requests": sparses[0].requests + sparses[1].requests, "s": round(time.time() - t0)}
-        print(f"{name}: {len(rows)} buildings, {len(prows)} parts in {len(set(tile_of.values()))} tiles "
-              f"({nb} / {np_} written), {time.time() - t0:.0f} s", flush=True)
-        sparses[0].bytes = sparses[0].requests = sparses[1].bytes = sparses[1].requests = 0
-    with open(mpath + ".tmp", "w") as fh:
-        json.dump(manifest, fh, indent=1, sort_keys=True)
-    os.replace(mpath + ".tmp", mpath)
-    tot = sum(t["bytes"] for t in tiles.values())
-    print(f"manifest: {len(tiles)} tiles, {tot / 1e3:.0f} KB")
+        boxes.append((name, region_box(lat, lon, km)))
+    if not boxes:
+        raise SystemExit("--world or --region")
+    blobs, regions = {}, {}
+    log = lambda s: print(s, flush=True)       # noqa: E731
+    rows_all, prows_all, names, pnames = {}, {}, None, None
+    for name, box in boxes:
+        t1 = time.time()
+        log(f"{name}: box {tuple(round(v, 4) for v in box)}")
+        rows, names_, prows, pnames_ = build_region(con, metas, sparses, box, a.min_height, log)
+        names, pnames = names_ or names, pnames_ or pnames
+        rows_all.update((r[0], r) for r in rows)
+        prows_all.update((r[0], r) for r in prows)
+        regions[name] = {"box": [round(v, 5) for v in box], "buildings": len(rows), "parts": len(prows),
+                         "s": round(time.time() - t1)}
+    rows = sorted(rows_all.values(), key=lambda r: r[0])
+    prows = sorted(prows_all.values(), key=lambda r: r[0])
+    blobs = tile_blobs(rows, names, prows, pnames, log)
+    fetched = round((sparses[0].bytes + sparses[1].bytes) / 1e6, 1)
+    log(f"fetched {fetched} MB in {sparses[0].requests + sparses[1].requests} requests, {time.time() - t0:.0f} s")
+    if a.out:
+        m = write_local(a.out, blobs, release, a.min_height, regions)
+        log(f"local: {len(m['tiles'])} tiles, {sum(t['bytes'] for t in m['tiles'].values()) / 1e6:.2f} MB")
+    if a.pages:
+        m = write_pages(a.pages, blobs, release, a.min_height, None if a.world else boxes[0][1] if len(boxes) == 1
+                        else None)
+        log(f"pages: {m['tiles']} tiles, {m['bytes'] / 1e6:.2f} MB in {len(m['parts'])} part(s), key {m['key']}")
 
 
 if __name__ == "__main__":

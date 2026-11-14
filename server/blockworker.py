@@ -3279,7 +3279,10 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     elif kind == "bldhz":               # the horizon ring: the tall buildings' index, a piece per skyline square (bldhz)
         import bldhz
         pieces, n = {}, 0
-        for sub, picked in bldhz.squares(tile, raw).items():
+        sq = bldhz.squares(tile, raw, _s.md)
+        if sq is None:                  # (its index tile not had now: asked again later)
+            return None
+        for sub, picked in sq.items():
             m = buildingsmod._sky_mesh(picked) if picked else None
             if not m:
                 continue
@@ -3329,12 +3332,11 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
 
 
 def _bldhz_key(gx, gy):
-    """A horizon tile's inputs for its revisit key: the index's format and threshold and its shard (release, SHA-1)."""
+    """A horizon tile's inputs for its revisit key: the index's format and its source's identity (bldhz sig: the data
+    site's frozen build, or the local tile's SHA-1)."""
     import bldhz
-    import geotiles
-    ix = bldhz.index()
-    return (f"hz={bldhz.FORMAT}", ix.min_height if ix else None,
-            ix.sig(geotiles.key(gx, gy, bldhz.Z)) if ix else None)
+    src = bldhz.source(_s.md)
+    return (f"hz={bldhz.FORMAT}",) + (tuple(src.sig(gx, gy)) if src is not None else ("none",))
 
 
 def traffic_geo(gx, gy, gzoom, out_dir, vfs_dir, left_hand=False, mph=True, far=False):
