@@ -8014,12 +8014,14 @@ class BridgeProfiles:
         # (the solve in a revisit scope of its own: what it read short is noted with its parts, _note_short, and said
         # again to every later build that takes them from `done`, _replay. The solves are kept for the session; one
         # made short (an underwater bore unsolved, a cell that could not be read, the lidar rule) faulted only the
-        # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13)
+        # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13.
+        # A part and its note are published TOGETHER, under one hold of the lock (_chain_solve, _adopt): a reader in
+        # another thread never finds a part in `done` whose note is still to come)
         import revisit
         comp = []
         with revisit.scope() as short:
-            got = self._chain_solve(key, ends, adopt, comp)
-        if comp and (short.n or short.lidar):
+            got = self._chain_solve(key, ends, adopt, comp, short)
+        if comp and (short.n or short.lidar):   # (what its structure read short after the parts were published)
             with self.lock:
                 for k in comp:
                     self._note_short(k, short.n, short.lidar)
@@ -8039,8 +8041,9 @@ class BridgeProfiles:
             import revisit
             revisit.carry(got[0], got[1])
 
-    def _chain_solve(self, key, ends, adopt, comp_out):
-        """_chain_of's work (comp_out: the chain's parts, for its caller)."""
+    def _chain_solve(self, key, ends, adopt, comp_out, short):
+        """_chain_of's work (comp_out: the chain's parts, for its caller; short: the solve's revisit scope, whose
+        faults so far are noted with the parts in the same hold of the lock that publishes them)."""
         pool, ground, loaded = {}, {}, set()
         for la_, lo_ in ends:
             ck = mapcells.cell_of(la_, lo_)
@@ -8056,7 +8059,7 @@ class BridgeProfiles:
             try:
                 # (the owner's solve runs, or is replayed, in this thread: its faults are this scope's too, and are
                 # noted with the parts adopted here)
-                if self._adopt(owner, comp, pool):
+                if self._adopt(owner, comp, pool, short):
                     with self.lock:
                         got = self.done.get(key)
                     if got is not None:
@@ -8069,9 +8072,12 @@ class BridgeProfiles:
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
                          [k in tl.measured for k in comp])
         with self.lock:
+            n_short, n_lidar = short.n, short.lidar     # (everything the parts were made from is read by now)
             for k, z in zip(comp, zs):
                 spec, xy, lon = pool[k][:3]
                 old = self.done.get(k)
+                if n_short or n_lidar:                  # (before the part itself: never a part without its note)
+                    self._note_short(k, n_short, n_lidar)
                 # the first solve of a part is kept, and what goes with it, unless this one saw more of it
                 if old is None or len(xy) > len(old[1]):
                     self.done[k] = (spec, xy, z, lon)
@@ -8095,9 +8101,10 @@ class BridgeProfiles:
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0][0], xy[-1][0]]), np.array([xy[0][1], xy[-1][1]]), 0.0)
         return [(float(la[0]), float(lo[0])), (float(la[1]), float(lo[1]))]
 
-    def _adopt(self, owner, comp, pool):
+    def _adopt(self, owner, comp, pool, short=None):
         """Chain comp solved by owner (from its first part), its parts, piers, trusses and depths taken into this
-        frame. False when owner's solve did not cover comp's parts."""
+        frame. False when owner's solve did not cover comp's parts. short: the adopting solve's revisit scope: what
+        it and the owner's solve read short is noted with each part as it is taken in (the same hold of the lock)."""
         first = min(comp)
         if owner._chain_of(first, self._ends_ll(pool[first][1]), adopt=False) is None:
             return False
@@ -8112,13 +8119,18 @@ class BridgeProfiles:
             beams = owner.trusses.get(ck)
             tpiers = owner.piers.get(("truss", ck))
             depth = {k: owner.__dict__.get("depth", {}).get(k) for k in mine}
+            theirs = {k: owner.__dict__.get("short", {}).get(k) for k in mine}
             extra = owner._adopt_extra(comp)
         mp = ChainView.mapper(owner.frame, self.frame)
         with self.lock:
+            mine_n, mine_l = (short.n, short.lidar) if short is not None else (0, 0)
             for k, (spec, xy, z, lon) in done.items():
                 if k in self.done:
                     continue
                 xyz = mp.pts(np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)])
+                n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
+                if n_s or n_l:                          # (before the part itself: never a part without its note)
+                    self._note_short(k, n_s, n_l)
                 self.done[k] = (spec, xyz[:, :2].copy(), xyz[:, 2].copy(), lon)
                 self.piers[k] = [mp.pier(q) for q in piers[k]]
                 if depth.get(k) is not None:

@@ -9,6 +9,8 @@ import threading
 import types
 import unittest
 
+from unittest import mock
+
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -50,6 +52,19 @@ class _Store(roads.BridgeProfiles):
 ENDS = [(40.0, -74.0)]
 
 
+class _Same:
+    """ChainView.mapper's stand-in between two stores of one frame."""
+
+    def pts(self, xyz):
+        return np.asarray(xyz, np.float64)
+
+    def pier(self, q):
+        return q
+
+    def beam(self, b):
+        return b
+
+
 class ChainShortTest(unittest.TestCase):
     def test_a_short_solve_is_short_again_for_a_later_scope(self):
         for kind, field in (("plain", "n"), ("lidar", "lidar")):
@@ -87,25 +102,84 @@ class ChainShortTest(unittest.TestCase):
         mine.owner_of = lambda me, comp, pool: owner
         mine._ends_ll = lambda xy: ENDS
 
-        def adopt(own, comp, pool):                     # (BridgeProfiles._adopt's first step and its copy)
-            if own._chain_of(min(comp), ENDS, adopt=False) is None:
-                return False
-            with mine.lock:
-                for k in comp:
-                    mine.done[k] = own.done[k]
-            return True
-        mine._adopt = adopt
-        with revisit.scope() as a:
-            self.assertIsNotNone(mine._chain_of(("f", 0), ENDS))
+        mine.frame = owner.frame
+        with mock.patch.object(roads.ChainView, "mapper", staticmethod(lambda a, b: _Same())):
+            with revisit.scope() as a:
+                self.assertIsNotNone(mine._chain_of(("f", 0), ENDS))    # (the real BridgeProfiles._adopt)
         self.assertEqual(mine.solves, 0, "adopted, not solved here")
         self.assertFalse(a.complete, "the owner's short solve replayed into the adopting build")
+        self.assertIn(("f", 0), mine.short, "noted with the adopted part")
         with revisit.scope() as b:
             mine._chain_of(("f", 0), ENDS)
-        self.assertFalse(b.complete, "and noted with the adopted parts: short again at their reuse")
+        self.assertFalse(b.complete, "short again at its reuse")
 
-    def test_the_real_adopt_goes_through_the_owners_chain_of(self):
-        import inspect
-        self.assertIn("owner._chain_of(first", inspect.getsource(roads.BridgeProfiles._adopt))
+    def test_a_reader_in_another_thread_never_takes_a_short_solve_as_complete(self):
+        """The part and its note are published under one hold of the lock: a reader that finds the part in `done`
+        while the solving thread is still at work (paused here in _structure, right after the parts are published)
+        is short too. It read the part as complete before: the note came only after the solve's scope had ended."""
+        st = _Store("plain")
+        in_structure, go_on = threading.Event(), threading.Event()
+
+        def structure(chain):
+            in_structure.set()
+            self.assertTrue(go_on.wait(10))
+            return [], []
+        st._structure = structure
+        got = {}
+
+        def writer():
+            with revisit.scope() as w:
+                st._chain_of(("f", 0), ENDS)
+            got["writer"] = w.complete
+        th = threading.Thread(target=writer)
+        th.start()
+        try:
+            self.assertTrue(in_structure.wait(10))
+            self.assertIn(("f", 0), st.done, "published, the solving thread still in its structure")
+            with revisit.scope() as reader:
+                self.assertIsNotNone(st._chain_of(("f", 0), ENDS))
+            self.assertFalse(reader.complete, "the reader took a short solve: it must be short")
+            with revisit.scope() as reader2:
+                st.keys_of = st.parts_of = None
+                self.assertEqual(len(st.parts_todo([(("f", 0), None, 0)], solved_only=True)), 1)
+            self.assertFalse(reader2.complete)
+        finally:
+            go_on.set()
+            th.join(10)
+        self.assertIs(got["writer"], False)
+
+    def test_adopted_parts_are_published_with_their_note(self):
+        """As above for a chain adopted from its owner: checked from inside the adopting store's lock, the moment
+        each part appears in `done`."""
+        owner = _Store("lidar")
+        owner.frame = types.SimpleNamespace()
+        with revisit.scope():
+            owner._chain_of(("f", 0), ENDS)
+        mine = _Store(None)
+        mine.owner_of = lambda me, comp, pool: owner
+        mine._ends_ll = lambda xy: ENDS
+        mine.frame = owner.frame
+        seen = []
+
+        class Watch(dict):
+            def __setitem__(w, k, v):
+                seen.append((k, k in mine.__dict__.get("short", {})))
+                dict.__setitem__(w, k, v)
+        mine.done = Watch()
+        with mock.patch.object(roads.ChainView, "mapper", staticmethod(lambda a, b: _Same())):
+            mine._chain_of(("f", 0), ENDS)
+        self.assertEqual(seen, [(("f", 0), True)], "its note was there when the part was published")
+        # and the solving store's own publication
+        st = _Store("plain")
+        seen2 = []
+
+        class Watch2(dict):
+            def __setitem__(w, k, v):
+                seen2.append((k, k in st.__dict__.get("short", {})))
+                dict.__setitem__(w, k, v)
+        st.done = Watch2()
+        st._chain_of(("f", 0), ENDS)
+        self.assertEqual(seen2, [(("f", 0), True)])
 
 
 if __name__ == "__main__":
