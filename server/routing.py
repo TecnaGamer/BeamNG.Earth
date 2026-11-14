@@ -9,9 +9,13 @@ which draws it on the map and steers the stock route arrows along it on its loca
 """
 import json
 import math
+import urllib.parse
 
 import netfetch
 
+# "Avoid highways" (GitHub #330): FOSSGIS's OSRM has no exclude=motorway, its Valhalla has use_highways=0 (a trip over
+# 1500 km crow-fly is refused there: the normal route is used, like for any other failure)
+VALHALLA_URL = "https://valhalla1.openstreetmap.de/route?json="
 OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{lon0:.6f},{lat0:.6f};{lon1:.6f},{lat1:.6f}" \
            "?overview=full&geometries=geojson&steps=false"
 SIMPLIFY_M = 4.0
@@ -118,10 +122,61 @@ def parse(data):
             "dur": float(r.get("duration") or 0)}
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None):
+def valhalla_url(lat0, lon0, lat1, lon1, heading=None):
+    a = {"lat": lat0, "lon": lon0} if heading is None else {"lat": lat0, "lon": lon0, "heading": int(heading) % 360}
+    q = {"locations": [a, {"lat": lat1, "lon": lon1}], "costing": "auto", "costing_options": {"auto": {"use_highways": 0}}}
+    return VALHALLA_URL + urllib.parse.quote(json.dumps(q, separators=(",", ":")))
+
+
+def decode_polyline(s, precision=6):
+    """[(lat, lon)] of an encoded polyline (Valhalla's shape). Raises ValueError when it is cut short."""
+    pts, i, lat, lon = [], 0, 0, 0
+    while i < len(s):
+        for axis in (0, 1):
+            shift = v = 0
+            while True:
+                if i >= len(s):
+                    raise ValueError("bad shape")
+                b = ord(s[i]) - 63
+                i += 1
+                v |= (b & 0x1F) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+            d = ~(v >> 1) if v & 1 else v >> 1
+            lat, lon = (lat + d, lon) if axis == 0 else (lat, lon + d)
+        pts.append((lat / 10.0 ** precision, lon / 10.0 ** precision))
+    return pts
+
+
+def parse_valhalla(data):
+    """parse()'s answer for a Valhalla route ({"trip": {"legs": [{"shape"}], "summary": {"length" km, "time" s}}}), or
+    raises ValueError. Pure."""
+    trip = data.get("trip") if isinstance(data, dict) else None
+    if not isinstance(trip, dict) or trip.get("status", 0) != 0 or not trip.get("legs"):
+        raise ValueError("no route (valhalla)")
+    sm = trip.get("summary") or {}
+    pts = decode_polyline(trip["legs"][0]["shape"])
+    return parse({"code": "Ok", "routes": [{"distance": float(sm.get("length") or 0) * 1000, "duration": sm.get("time"),
+                                            "geometry": {"coordinates": [[lo, la] for la, lo in pts]}}]})
+
+
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, avoid_highways=False):
     """The road route from (lat0, lon0) to (lat1, lon1) (blocking), starting the way bearing points if it can (else
-    without it). Raises netfetch.FetchError or ValueError."""
+    without it). avoid_highways: Valhalla's route without motorways, {..., "avoided": True}; without its answer the
+    normal route, "avoided": False. Raises netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
+    for b in ([bearing, None] if bearing is not None else [None]) if avoid_highways else []:
+        try:
+            r = parse_valhalla(json.loads(net.get(valhalla_url(lat0, lon0, lat1, lon1, b), kind="demand").body.decode("utf-8")))
+            return dict(r, avoided=True)
+        except (ValueError, netfetch.FetchError):
+            pass
+    r = _osrm(lat0, lon0, lat1, lon1, net, bearing)
+    return dict(r, avoided=False) if avoid_highways else r
+
+
+def _osrm(lat0, lon0, lat1, lon1, net, bearing):
     if bearing is not None:
         try:
             return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing), kind="demand").body.decode("utf-8")))

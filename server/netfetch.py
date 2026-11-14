@@ -307,6 +307,7 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+POLICIES["valhalla1.openstreetmap.de"] = POLICIES["routing.openstreetmap.de"]     # (routing.py: "Avoid highways", #330)
 # The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
 _CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
 POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
@@ -355,6 +356,7 @@ ROLES = {
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
     "routing.openstreetmap.de": "GPS routes",
+    "valhalla1.openstreetmap.de": "GPS routes without highways (the normal route meanwhile)",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
     "api.github.com": "one-click updates",

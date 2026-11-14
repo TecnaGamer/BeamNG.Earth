@@ -1393,7 +1393,7 @@ local function onMessage(msg)
     end
   elseif t == 'route_result' then
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error,
-      elev = msg.elev } end
+      elev = msg.elev, avoided = msg.avoided } end
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
@@ -3124,7 +3124,7 @@ end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    download = settings.get('routeDownload'), avoid = settings.get('routeAvoidHighways') and true or nil })
   return true
 end
 function M.takeRoute(id)
