@@ -13,6 +13,7 @@ in its own frame (the ENU heights, railways.point_ground), the grader as the DEM
 frame's), so the mesh's bed is the bed the ground is graded to to within the nodes' blending. Pure given its inputs; BNE_RAIL_PROFILE=off keeps the per-window beds."""
 import math
 import os
+import threading
 from collections import OrderedDict
 
 import numpy as np
@@ -32,11 +33,14 @@ JOIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false
 JOIN_M = 2.0                        # m: a ground part's end this near another part's line (not near its ends) is a switch
 JOIN_INTERIOR_M = 3.0               # m: ... farther than this from the other part's own ends (that is a joint: profile's)
 JOIN_REACH_M = 60.0                 # m along the part the bed is brought to the other's (to nothing, smoothly)
-NODE_MEMO_MAX = 48                  # nodes kept (~24 bytes a point: _node's arrays). Not more: a node made again after it
-                                    # was let go reads the ground as it is then (the graded ground changes as plans are
-                                    # made), so the number kept changes the beds (16 tiles at Brno: 147 nodes, 116 made
-                                    # twice; 256 kept moved 16 nodes' beds by up to 0.34 m), a plans format change
+NODE_MEMO_POINTS = 3_000_000        # points kept in the nodes (~16 bytes a point: _node's arrays), least recently used
+                                    # let go. A node is pure in (anchor, node) since its ground is the DEM's (the deck
+                                    # ground order-free: grading._deck_ground), so the number kept no longer changes a
+                                    # bed. 48 nodes were fewer than one tile asks (a whole viaduct's nodes): Berlin-Mitte,
+                                    # 25 tiles: 290 nodes made 3579 times, ~3 of a tile's ~5 s
 _NODES = OrderedDict()              # (anchor key, ix, iy) -> {(fid, kind): (packed keys, heights)}
+_NODES_LOCK = threading.Lock()      # (road tiles are built on several threads)
+_NODES_PTS = [0]
 _PACK = np.int64(1) << 31           # (a centimetre key (a, b) as one int64: (a + 2^31) << 32 | (b + 2^31))
 
 
@@ -134,10 +138,11 @@ def _node(frame, akey, load, ground, ix, iy):
     MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in the same window). A point
     two parts of a feature share has the later part's height."""
     ck = (akey, ix, iy)
-    got = _NODES.get(ck)
-    if got is not None:
-        _NODES.move_to_end(ck)
-        return got
+    with _NODES_LOCK:
+        got = _NODES.get(ck)
+        if got is not None:
+            _NODES.move_to_end(ck)
+            return got
     cx, cy = ix * NODE_M, iy * NODE_M
     box = (cx - NODE_M, cy - NODE_M, cx + NODE_M, cy + NODE_M)
     reach = MARGIN_M
@@ -165,9 +170,15 @@ def _node(frame, akey, load, ground, ix, iy):
             v = np.concatenate([z[off[n]:off[n + 1]] for n in ns])
             uk, first = np.unique(k[::-1], return_index=True)     # (the last of equal keys, as a dict's update)
             out[fk] = (uk, v[::-1][first])
-    _NODES[ck] = out
-    while len(_NODES) > NODE_MEMO_MAX:
-        _NODES.popitem(last=False)
+    with _NODES_LOCK:
+        if ck in _NODES:            # (made meanwhile on another thread: the same node)
+            return _NODES[ck]
+        if not _NODES:              # (cleared from outside: the tests)
+            _NODES_PTS[0] = 0
+        _NODES[ck] = out
+        _NODES_PTS[0] += sum(len(k) for k, _z in out.values())
+        while _NODES_PTS[0] > NODE_MEMO_POINTS and len(_NODES) > 1:
+            _NODES_PTS[0] -= sum(len(k) for k, _z in _NODES.popitem(last=False)[1].values())
     return out
 
 

@@ -631,20 +631,26 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
 
 
 def _underpass_distance(xy, line):
-    """Distance to a finite tunnel centreline, and fraction along it, per point."""
+    """Distance to a finite tunnel centreline, and fraction along it, per point. Every segment at once (points x
+    segments) and the first nearest taken, as the loop over segments did, the same products per point."""
     s = _arc(line)
+    a, d = line[:-1], np.diff(line, axis=0)
+    length = dnp.hypot(d[:, 0], d[:, 1])
+    keep = np.flatnonzero(length >= 1e-6)
     dist = np.full(len(xy), np.inf)
     along = np.zeros(len(xy))
-    for j, (a, b) in enumerate(zip(line[:-1], line[1:])):
-        d = b - a
-        length = float(dnp.hypot(*d))
-        if length < 1e-6:
-            continue
-        t = np.clip(dnp.matmul(xy - a, d) / (length * length), 0.0, 1.0)
-        dd = dnp.norm(xy - (a + t[:, None] * d), axis=1)
-        take = dd < dist
-        dist[take] = dd[take]
-        along[take] = (s[j] + t[take] * length) / max(s[-1], 1e-6)
+    if not len(keep) or not len(xy):
+        return dist, along
+    a, d, length = a[keep], d[keep], length[keep]
+    p = xy[:, None, :] - a[None]
+    t = np.clip((p[..., 0] * d[:, 0] + p[..., 1] * d[:, 1]) / (length * length), 0.0, 1.0)
+    dd = dnp.norm(xy[:, None, :] - (a[None] + t[..., None] * d[None]), axis=2)
+    dd[np.isnan(dd)] = np.inf                   # (never taken by the loop's dd < dist)
+    j = np.argmin(dd, axis=1)
+    i = np.arange(len(xy))
+    got = dd[i, j] < np.inf
+    dist[got] = dd[i, j][got]
+    along[got] = (s[keep[j[got]]] + t[i, j][got] * length[j[got]]) / max(s[-1], 1e-6)
     return dist, along
 
 
@@ -1113,12 +1119,17 @@ def bed_heights(z):
 
 def _envelope(s, req, grade=GRADE):
     """max over k of req[k] - grade * |s - s[k]|: the lowest line over every req that climbs at most grade."""
-    out = np.array(req, np.float64)
-    for k in range(1, len(s)):                  # forward then backward pass (s ascending)
-        out[k] = max(out[k], out[k - 1] - grade * (s[k] - s[k - 1]))
-    for k in range(len(s) - 2, -1, -1):
-        out[k] = max(out[k], out[k + 1] - grade * (s[k + 1] - s[k]))
-    return out
+    out = np.array(req, np.float64).tolist()    # (Python floats: the same arithmetic, 5x faster than numpy's scalars)
+    rise = (grade * np.diff(np.asarray(s)[:len(out)])).tolist()
+    for k in range(1, len(rise) + 1):           # forward then backward pass (s ascending)
+        v = out[k - 1] - rise[k - 1]
+        if v > out[k]:                          # (max(out[k], v): out[k] on a tie or a NaN)
+            out[k] = v
+    for k in range(len(rise) - 1, -1, -1):
+        v = out[k + 1] - rise[k]
+        if v > out[k]:
+            out[k] = v
+    return np.array(out, np.float64)
 
 
 DECK_RAISE_MAX_M = 15.0   # m a bridge deck may rise over the straight chord between its ends to clear high
@@ -1274,9 +1285,9 @@ def profile(rails, ground, underpasses=()):
         for (line, _half, masks), (z0, z1) in zip(crossings, mouth_z):
             over = masks[n]
             if over.any():
-                _distance, t = _underpass_distance(xy, line)
+                _distance, t = _underpass_distance(xy[over], line)
                 req = zb[n].copy()
-                req[over] = np.maximum(req[over], z0 + (z1 - z0) * t[over]
+                req[over] = np.maximum(req[over], z0 + (z1 - z0) * t
                                        + UNDERPASS_CLEAR_M + DECK_D - BALLAST_H)
                 zb[n] = _envelope(_arc(xy), req)
         for node, h in ((a, zb[n][0]), (b, zb[n][-1])):
@@ -2367,18 +2378,27 @@ def _foot_limits(xy, side, foot, others, crossers):
         line = np.asarray(line, np.float64)[:, :2]
         if len(line) < 2:
             return
+        # Only the points within their limit (+ 1 m) of the line's box: no other one clips (edge < lim), and each
+        # point's own sums are the same (Munich's tiles measured every vertex against every road of the tile).
+        r = lim + (extra + 1.0)
+        lo, hi = line.min(0), line.max(0)
+        i = np.flatnonzero((p[:, 0] >= lo[0] - r) & (p[:, 0] <= hi[0] + r) & (p[:, 1] >= lo[1] - r)
+                           & (p[:, 1] <= hi[1] + r))
+        if not len(i):
+            return
+        pi = p[i]
         a, b = line[:-1], line[1:]
         ab = b - a
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-        t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
+        t = np.clip(((pi[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
         q = a[None] + t[:, :, None] * ab[None]
-        d = dnp.hypot(q[:, :, 0] - p[:, None, 0], q[:, :, 1] - p[:, None, 1])
+        d = dnp.hypot(q[:, :, 0] - pi[:, None, 0], q[:, :, 1] - pi[:, None, 1])
         k = np.argmin(d, axis=1)
-        near = d[np.arange(len(p)), k]
-        on = ((q[np.arange(len(p)), k] - p) * sd).sum(1) > 0.0
+        near = d[np.arange(len(pi)), k]
+        on = ((q[np.arange(len(pi)), k] - pi) * sd[i]).sum(1) > 0.0
         edge = near - extra
-        ok = on & (edge > 0.0) & (edge < lim)
-        lim[ok] = edge[ok]
+        ok = on & (edge > 0.0) & (edge < lim[i])
+        lim[i[ok]] = edge[ok]
 
     for line, half, _z in crossers:
         clip(line, float(half) + ROAD_FOOT_CLEAR_M)
