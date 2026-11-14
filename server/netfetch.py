@@ -1400,6 +1400,11 @@ class Fetcher:
         with self._lock:
             self._chains[name] = hosts
 
+    def chain_hosts(self, name):
+        """The host names registered for failover chain `name`."""
+        with self._lock:
+            return self._chains.get(name, ())
+
     @property
     def offline(self):
         """--offline, or every host of the registered chains has its breaker open."""
