@@ -6,6 +6,7 @@ mod devctx;
 mod reach;
 mod devraster;
 mod roofs;
+mod domes;
 mod roofphoto;
 mod gravity;
 mod polyproject;
@@ -6432,6 +6433,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 296 (on 295; written as 294 on 290): the stage claims with an owner token, the process's start time and an
     // uptime lease, changed only under the folder's lock; a damaged stage file written again (stage_claim / stage_wait
     // repair; stage_put and stage_release take the token)
-    m.add("VERSION", 296)?;
+    // 297: domes::dome_roof (a dome over any outline from its centroid or pole of inaccessibility: Streets GL's
+    // CurvedRoofBuilder, MIT; server/buildings.py _dome)
+    domes::register(m)?;
+    m.add("VERSION", 297)?;
     Ok(())
 }
