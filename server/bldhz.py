@@ -46,6 +46,7 @@ HORIZON_M = 120000.0
 DROP_EXTRA_M = 4000.0
 PER_POSE = 1
 MAX_TILE_BYTES = 16 << 20
+DEM_ZOOM = 12               # the DEM zoom of the buildings' feet at most (~30 m: their skirts reach 10 m under)
 MIN_SIZE = (0.0, 0.0)       # (every indexed building: the index holds only tall ones; a part-tall one's outline is low)
 
 _lock = threading.Lock()

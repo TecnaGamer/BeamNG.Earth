@@ -3279,7 +3279,11 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     elif kind == "bldhz":               # the horizon ring: the tall buildings' index, a piece per skyline square (bldhz)
         import bldhz
         pieces, n = {}, 0
-        sq = bldhz.squares(tile, raw, _s.md)
+        hz_zoom = min(int(gzoom), bldhz.DEM_ZOOM)
+
+        def hz_ground(la, lo):          # (a coarser DEM: the buildings' feet 5-120 km off, no fine tiles fetched there)
+            return ground(None, la, lo, _s.dem.sample(la, lo, hz_zoom))
+        sq = bldhz.squares(tile, hz_ground, _s.md)
         if sq is None:                  # (its index tile not had now: asked again later)
             return None
         for sub, picked in sq.items():

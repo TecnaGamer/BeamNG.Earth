@@ -121,6 +121,23 @@ class BldhzTest(unittest.TestCase):
             k2 = blockworker._bldhz_key(gx, gy)
         self.assertNotEqual(k1, k2)
 
+    def test_far_geotile_pieces(self):
+        """blockworker's bldhz kind: a piece a skyline square, each a shape at the tile's corner in its frame."""
+        import blockworker
+        gx, gy, _ = self._with(_shard())
+        tile = geotiles.geobox(gx, gy, bldhz.Z)
+        dem = mock.Mock(sample=lambda la, lo, z: np.zeros(np.shape(la)))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(blockworker, "_s", mock.Mock(md=None, dem=dem)), \
+                mock.patch.object(blockworker, "ground", lambda _a, la, lo, h: h):
+            data, shapes, n = blockworker._far_geo_build("bldhz", tile, 15, d, "/x", None)
+            self.assertGreaterEqual(n, 2)
+            sx, sy = geotiles.tile_of(LAT, LON, geotiles.SKY_Z)
+            sq = geotiles.key(sx, sy, geotiles.SKY_Z)
+            self.assertIn(sq, data["parts"])
+            self.assertEqual(data["parts"][sq]["pos"], [tile.box[0], tile.box[1], 0.0])
+            self.assertTrue(all(os.path.exists(os.path.join(d, f)) for f in shapes.values()))
+            self.assertEqual(shapes[sq], blockworker.far_geo_piece(tile.key, sq, "bldhz"))
+
     def test_reach_by_setting(self):
         """near none, normal 20 km, far 35 km, max to the horizon (or the fixed view distance)."""
         self.assertEqual([bldhz.reach(s) for s in (0.6, 1.0, 1.5, 2.0)], [0.0, 20000.0, 35000.0, bldhz.HORIZON_M])
