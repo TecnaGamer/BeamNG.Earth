@@ -7376,16 +7376,6 @@ def _sky_simplify(items, copy=False):
         spec.ring = ring
         # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
         keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
-        if keep == "flat" and spec.roof not in (None, "flat") and spec.roof not in DOME_ROOFS:
-            # (a pitched roof flattened: its rise back on the walls, whose height plan() took it off, so the block
-            # still reaches the building's top: a mapped 20 m gable on 40 m came out 20 m, Codex review 2026-11-14)
-            rise = spec.roof_h
-            if not rise:
-                _c, _u, hl, hw = oriented_box(np.asarray(spec.ring, np.float64))
-                pitch = spec.pitch if isinstance(spec.pitch, (int, float)) else PITCH.get(spec.roof, 30.0)
-                rise = roof_rise(spec.roof, min(hl, hw), pitch)
-            if rise and math.isfinite(rise) and rise > 0:
-                spec.height = float(spec.height or 0.0) + float(rise)
         spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
         out.append((spec, gmin, gmax))
     return out
