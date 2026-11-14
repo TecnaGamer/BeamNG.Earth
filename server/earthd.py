@@ -140,6 +140,7 @@ import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
+import terrainprefill  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
@@ -1200,8 +1201,10 @@ class Server:
         self.orphan_s = SESSION_ORPHAN_S
         self.heartbeat_at = time.monotonic()
         self._scan_sessions()
-        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), off the start's path
-        threading.Thread(target=terraintexmod.ensure, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
+        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), then every ground
+        # material's packed textures in the game's terrain cache (terrainprefill.py: the game packs a missing one on its
+        # main thread, ~3 s a texture, mid-drive), off the start's path, one paced thread
+        threading.Thread(target=self._ground_textures, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
                          name="terraintex", daemon=True).start()
         self.out_dir = os.path.join(root, self.sid)
         self.cdae_dir = os.path.join(user_dir, *CDAE_ROOT, self.sid.lower())
@@ -1731,6 +1734,12 @@ class Server:
             if getattr(c, "lease", None) is None:
                 out |= c.sessions
         return out
+
+    @staticmethod
+    def _ground_textures(user_dir, game_dir):
+        """(a thread) terraintex.ensure, then terrainprefill.prefill: the squares' PNGs exist before their packs."""
+        terraintexmod.ensure(user_dir, game_dir)
+        terrainprefill.prefill(user_dir, game_dir)
 
     def check_user_dir(self, conn, game_path):
         """The game's own user folder (hello.userPath) against the one this server writes into: a game whose user
