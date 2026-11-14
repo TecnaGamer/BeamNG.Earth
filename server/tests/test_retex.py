@@ -19,6 +19,7 @@ import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -28,6 +29,7 @@ import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import imagery  # noqa: E402
+import netfetch  # noqa: E402
 import test_server  # noqa: E402
 from netclient import FarState  # noqa: E402
 
@@ -461,6 +463,35 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(len(self.conn.msgs), 1)
         self.assertEqual(self.conn.msgs[0]["type"], "far_retex")
         self.assertEqual(self.conn.msgs[0]["key"], "0_1_0")
+        self.assertNotIn(ck, s.degraded)
+
+    def test_full_outage_recovers_once_the_breakers_are_due_a_probe(self):
+        """Real breakers on a real Fetcher (fake clock): every imagery host's breaker open, nothing else asking those
+        hosts. Once the open time is over, the periodic recovery re-renders the degraded tile (its request is the
+        probe) instead of waiting for breakers that only a request can close."""
+        import random
+        from test_netfetch import FakeClock, FakeSleep
+        clock = FakeClock()
+        net = netfetch.Fetcher(clock=clock, sleep=FakeSleep(clock), rng=random.Random(7), transport=mock.Mock(),
+                               wall=clock)
+        s = self.s
+        s.net = net
+        hosts = s.imagery_hosts()
+        self.assertTrue(hosts)
+        for h in hosts:
+            net.host(h).breaker.trip(60.0)
+        ck = self.add("0_1_0")
+        s.degraded.add(ck)
+        s.tiles[ck].stale = True
+        self.assertTrue(s.imagery_down())
+        clock.advance(61.0)
+        self.assertFalse(s.imagery_down())
+        self.assertTrue(all(net.host(h).breaker.is_open() for h in hosts))    # (still open: nothing probed yet)
+
+        async def body():
+            s.retex_degraded()
+        self.run_loop(body)
+        self.assertEqual([m["type"] for m in self.conn.msgs], ["far_retex"])
         self.assertNotIn(ck, s.degraded)
 
     def test_palette_fallback_rgb_has_water_and_height_tint(self):

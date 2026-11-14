@@ -6989,11 +6989,14 @@ class Server:
                                    for s in self.imagery.chain))
 
     def imagery_down(self):
-        """Is every host in the satellite imagery chain currently unreachable?"""
+        """Is every host in the satellite imagery chain currently unreachable? A host whose breaker is due a probe
+        counts as reachable: only a request closes an open breaker, so waiting for it to close stalled the recovery
+        of degraded tiles for ever after a full outage (Codex review of PR #1260)."""
         if self.net is None or getattr(self.net, "offline_flag", False):
             return True
         hosts = self.imagery_hosts()
-        return bool(hosts) and all(not self.net.available(h) for h in hosts)
+        may = getattr(self.net, "may_try", None) or self.net.available
+        return bool(hosts) and all(not may(h) for h in hosts)
 
     def _on_circuit_closed(self, host_name):
         """Netfetch callback: an imagery circuit breaker closed after a host became available again."""

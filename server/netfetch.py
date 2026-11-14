@@ -716,6 +716,17 @@ class CircuitBreaker:
             self.probing = True
             return True, True, 0.0
 
+    def may_try(self):
+        """Would a request be let through now (allow()): closed, or its open time over with no probe out. An open
+        breaker closes only through a request's probe, so a caller waiting for is_open() to clear would wait for
+        ever when nothing else asks the host."""
+        with self.lock:
+            if self.state == "closed":
+                return True
+            if self.state == "open" and self.clock() < self.open_until:
+                return False
+            return not self.probing
+
     def is_open(self):
         """Not closed: open, or half-open and not yet proven."""
         with self.lock:
@@ -1431,6 +1442,10 @@ class Fetcher:
 
     def available(self, host):
         return not self.offline_flag and not self.host(host).breaker.is_open()
+
+    def may_try(self, host):
+        """Could a request to host go out now (closed, or its breaker due a probe)? CircuitBreaker.may_try."""
+        return not self.offline_flag and self.host(host).breaker.may_try()
 
     def miss_alive(self, path, url):
         """A 404 remembered for url at marker path (missindex.py) is valid: within the host's miss_ttl, or the host

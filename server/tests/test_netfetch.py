@@ -579,6 +579,23 @@ class BreakerTest(unittest.TestCase):
         b.release_probe()                                       # it was dropped before the network
         self.assertEqual(b.allow()[:2], (True, True))
 
+    def test_may_try_once_the_open_time_is_over(self):
+        """may_try: false while open, true once a probe is due (is_open() stays true until a request probes),
+        false again while that probe is out."""
+        clock = FakeClock()
+        b = nf.CircuitBreaker(2, 30.0, 10.0, 900.0, clock)
+        self.assertTrue(b.may_try())
+        b.failure()
+        b.failure()
+        self.assertFalse(b.may_try())
+        clock.advance(10.0)
+        self.assertTrue(b.is_open())
+        self.assertTrue(b.may_try())
+        self.assertEqual(b.allow()[:2], (True, True))
+        self.assertFalse(b.may_try())                           # its probe is out
+        b.success()
+        self.assertTrue(b.may_try())
+
     def test_a_late_success_does_not_close_an_open_breaker(self):
         """A request sent before the host said Retry-After answers 200 afterwards: the breaker stays
         open (only its probe closes it), so demand keeps failing over at once instead of sleeping out
