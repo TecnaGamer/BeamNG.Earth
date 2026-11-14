@@ -8176,16 +8176,32 @@ class Connection:
         self.send(out)
 
     def _area_route(self, msg):
-        """A saved route's points (area_plan / area_add with "route": "current": the last planned GPS route) as
-        (lats, lons), or None (a box)."""
-        if msg.get("route") != "current":
-            return None
-        pts = self.route_points or []
-        return [p[0] for p in pts], [p[1] for p in pts]
+        """A saved area's route points as (lats, lons), or None (a box). Two forms:
+
+          "route": "current"                            the player's last planned GPS route (the 3D map's
+                                                        "Download along my route": the server keeps its points)
+          "route": {"lat": [...], "lon": [...]}         a line the caller names
+
+        The second is the shape areas.json already persists and areas.check_route already validates, so nothing
+        here converts or re-checks anything -- the one validation stays in the one place, which is also where the
+        store's own re-validation on load runs. Without it explicit points fell through to the box path and the
+        caller was answered "an area needs south, west, north and east in degrees", which is not an error a caller
+        holding a line can act on. ValueError when the form is there but malformed (both callers answer with it)."""
+        route = msg.get("route")
+        if route == "current":
+            pts = self.route_points or []
+            return [p[0] for p in pts], [p[1] for p in pts]
+        if isinstance(route, dict):
+            lats, lons = route.get("lat"), route.get("lon")
+            if not isinstance(lats, (list, tuple)) or not isinstance(lons, (list, tuple)):
+                raise ValueError('a route needs "lat" and "lon": a list of degrees each, a point per index')
+            return list(lats), list(lons)
+        return None
 
     async def area_plan(self, msg):
-        """{"id", "s", "w", "n", "e"} or {"id", "route": "current", "half"} -> area_plan_result {"id", "ok", km2, items,
-        missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, km? (a route's length), "error"?}
+        """{"id", "s", "w", "n", "e"} or {"id", "route": "current" | {"lat", "lon"}, "half"} -> area_plan_result
+        {"id", "ok", km2, items, missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, km? (a route's
+        length), layers? (the subset it would download, [] all of them), "error"?}
         (areas.Areas.plan / plan_route, in an executor thread: no network, but a box near Germany fetches Germany's
         border data once, geo_content_key)."""
         out = {"type": "area_plan_result", "id": msg.get("id"), "ok": False}
@@ -8206,8 +8222,8 @@ class Connection:
         self.send(out)
 
     async def area_add(self, msg):
-        """{"id", "s", "w", "n", "e", "name"?} or {"id", "route": "current", "half", "name"?} -> areas {..., "result":
-        {"id", "ok", "area" or "error"}}."""
+        """{"id", "s", "w", "n", "e", "name"?} or {"id", "route": "current" | {"lat", "lon"}, "half", "name"?} ->
+        areas {..., "result": {"id", "ok", "area" or "error"}}."""
         if self.s.areas is None:
             self.send({"type": "areas", "areas": [], "result": {"id": msg.get("id"), "ok": False,
                                                                 "error": "saved areas need the download cache"}})
@@ -8216,7 +8232,11 @@ class Connection:
         name = name if isinstance(name, str) else ""
         mode = msg.get("mode") if isinstance(msg.get("mode"), str) else areasmod.DEFAULT_MODE
         fast = msg.get("fast") is True      # (fast mode: areas.py; the mod pauses the game while it runs)
-        route = self._area_route(msg)
+        try:
+            route = self._area_route(msg)
+        except ValueError as e:     # (a malformed route form: an answer, not a task that dies with nothing sent)
+            self.send(self.s.areas_message({"id": msg.get("id"), "ok": False, "error": str(e)[:200]}))
+            return
         if route is not None:
             ok, info = await asyncio.get_running_loop().run_in_executor(
                 None, self.s.areas.add_route, route[0], route[1], msg.get("half"), name, mode, fast)
