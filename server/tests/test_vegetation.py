@@ -253,6 +253,38 @@ class VegetationTest(unittest.TestCase):
         self.assertGreater(int((veg.Vegetation(md, None).cell(KEY).kind == veg.KIND_TREE).sum()), 0, "on grass: kept")
 
 
+class ParkUnderstoryTest(unittest.TestCase):
+    """docs/new/036 step 1: a park, a garden or a cemetery keeps only PARK_BUSH_KEEP of the scattered bushes."""
+
+    def _scatter(self, calm):
+        class Tree(Raster):
+            def sample(self, lon, lat):
+                return np.full(np.shape(lon), 10, np.uint8)        # tree cover: the understory, 0.30 a cell
+        md = FakeMapData()
+        cd = md.cd
+        chm = cd.layers["canopy"]
+        hs = np.zeros((512, 512), np.float32)
+        blocked = np.zeros((512, 512), bool)
+        return veg.Vegetation(md, None)._scatter(cd, Tree(None, 0, 0, 1), blocked, chm, hs, calm)
+
+    def test_bushes_thin_out_inside_a_park(self):
+        free = self._scatter(None)
+        calm = np.zeros((512, 512), bool)
+        calm[:, :256] = True                              # the west half is a park
+        part = self._scatter(calm)
+        self.assertGreater(len(free), 500)
+        west = lambda it: int((it.lon < np.median(free.lon)).sum())
+        mid = float(np.median(free.lon))
+        self.assertAlmostEqual(west(part) / max(west(free), 1), veg.PARK_BUSH_KEEP, delta=0.06)
+        self.assertEqual(int((part.lon >= mid).sum()), int((free.lon >= mid).sum()), "the east half is as before")
+
+    def test_the_cache_folder_is_a_suffix_not_a_number(self):
+        import walkways
+        v = veg.Vegetation(FakeMapData(), "C:/c")
+        want = f"v{veg.VERSION}{veg.PARKS_KEY}" if walkways.ON else f"v{veg.VERSION}"
+        self.assertTrue(v.dir.replace("\\", "/").endswith("vegetation/" + want))
+
+
 class RegionalTest(unittest.TestCase):
     def g(self, group, h, lat, lon, lcls, u=0.9):
         return int(veg.regional(np.array([group]), np.array([h]), np.array([lat]), np.array([lon]),

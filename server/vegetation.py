@@ -36,6 +36,7 @@ import dnp
 import mapcells
 import pacer
 import staging
+import walkways
 
 log = logging.getLogger("earthd.vegetation")
 
@@ -46,7 +47,12 @@ VERSION = 27          # (the cached cells hold their groups: 14 for the regional
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
-                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023)
+                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items; 27: no bushes in a bus station's yard, PR #1023;
+                      # with BNE_PARKS on (default) the cells live in "v<VERSION>+parks": none on park paths and the calm
+                      # park understory, walkways.py (a suffix, so a bump of the number stays the owner's of the number))
+PARKS_KEY = "+parks"           # the cache folder's suffix while BNE_PARKS is on (v<VERSION>+parks)
+PARK_LAND = ("park", "garden", "village_green", "cemetery", "recreation_ground")   # land_use classes: a tended lawn
+PARK_BUSH_KEEP = 0.2           # of the scattered bushes (and the thicket) left inside such a polygon
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -254,7 +260,7 @@ class Vegetation:
         self.md = md
         self.dem = None                 # (set by the server: rocks on bare ground by slope, ROCK_SLOPE)
         self.surface = self.widths = None   # (set by the server: the roads' drawn widths, roads.road_specs)
-        self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
+        self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}{PARKS_KEY if walkways.ON else ''}") if cache_dir else None
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -501,6 +507,7 @@ class Vegetation:
         paved = np.zeros(h.shape, bool)
         orchard = np.zeros(h.shape, bool)
         vines = np.zeros(h.shape, bool)
+        park = np.zeros(h.shape, bool)
         lu = None
         try:
             cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
@@ -514,6 +521,8 @@ class Vegetation:
                 lclass = lu.attrs["class"].astype(str)
                 _mask_polys(lu, orchard, chm, 0.0, select=lclass == "orchard")
                 _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
+                if walkways.ON:
+                    _mask_polys(lu, park, chm, 0.0, select=np.isin(lclass, PARK_LAND))
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
         if orchard.any():
@@ -523,8 +532,8 @@ class Vegetation:
             keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
             tree, lcls = tree.take(keep), lcls[keep]
         tree = clumps(tree, lcls, (lat0 + lat1) / 2)
-        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
-        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs, park)
+        edge = self._edge(cd, lc, blocked | orchard | vines | park, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
@@ -589,8 +598,9 @@ class Vegetation:
             return None
         return dnp.hypot(z[0] - z[1], z[2] - z[3]) / (2 * ROCK_SLOPE_D)
 
-    def _scatter(self, cd, lc, blocked, chm, hs):
-        """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground."""
+    def _scatter(self, cd, lc, blocked, chm, hs, calm=None):
+        """Bushes and rocks on a hashed SCATTER_CELL_M grid over shrubland, grass and bare ground. calm (CHM-grid mask: a
+        park, a garden, a cemetery): only PARK_BUSH_KEEP of them stay there."""
         if lc is None:
             return _empty()
         lon0, lat0, lon1, lat1 = cd.bounds
@@ -619,6 +629,10 @@ class Vegetation:
         ok = (c_ >= 0) & (c_ < hs.shape[1]) & (r_ >= 0) & (r_ < hs.shape[0])
         free = np.zeros(len(px), bool)
         free[ok] = ~blocked[r_[ok], c_[ok]] & ((hs[r_[ok], c_[ok]] < BUSH_MIN_M) | (cls[ok] == UNDERSTORY))
+        if calm is not None and calm.any():
+            tame = np.zeros(len(px), bool)
+            tame[ok] = calm[r_[ok], c_[ok]]
+            free &= ~tame | (_hash01(GI, GJ, 21) < PARK_BUSH_KEEP)
         # bare land in a town is a square, a lot or a building site, not a rock field (desert rocks stood on
         # Mexico City's Zocalo, 2026-10-15): none where built-up land is around (2 of 4 points BUILT_NEAR_M away)
         bare = np.flatnonzero(free & (cls == WC["bare"]))
@@ -1319,7 +1333,10 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
     cls = f.attrs.get("class", np.full(len(f.kind), "", object))
     fast.require(63, "road_segments")
     sel = [i for i in np.flatnonzero(f.kind == 2) if str(cls[i]) not in PATH_CLASSES]
-    if not sel:
+    # park alleys, footpaths and cycleways (walkways.py): no tree or bush on them; the street trees (walks False)
+    # still stand in the sidewalk
+    wrows, whw = walkways.corridor(f) if walks else (np.zeros(0, np.int64), np.zeros(0))
+    if not sel and not len(wrows):
         return
     sp = specs(f) if specs is not None else [None] * len(f.kind)
     import roads as roadsmod
@@ -1330,6 +1347,9 @@ def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=F
         return s.width / 2 + (s.walk if walks and getattr(s, "walk", 0) and roadsmod.has_sidewalks(s) else 0.0)
     hw_m = np.array([max(ROAD_HALF_WIDTH_M.get(str(cls[i]), ROAD_HALF_DEFAULT_M), drawn(sp[i])) + clear
                      for i in sel], np.float64)
+    if len(wrows):
+        sel = list(sel) + [int(i) for i in wrows]
+        hw_m = np.concatenate([hw_m, whw])
     # every ring's segments on the CHM grid, its half width in grid pixels (a 3857 metre is 1 / cos(lat) of a ground
     # metre), rings off the grid left out (earthfast road_segments, 2026-10-23: the per-ring Python loop it
     # replaced gave the same segments); then the distances and the nearest road's push, without the GIL

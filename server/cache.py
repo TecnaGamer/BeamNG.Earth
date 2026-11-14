@@ -871,8 +871,9 @@ def prune_dir(root, max_bytes, keep_s=600.0, match=None, now=None):
 
 
 def prune_versions(root, keep):
-    """The version folders under root ("v<n>": vegetation/v18, seacarve/v19, roadwidth/v2) but keep removed: a
-    generator update writes a new folder and never reads the old one again. Anything else under root stays.
+    """The version folders under root ("v<n>" or "v<n>+suffix": vegetation/v18, vegetation/v27+parks, seacarve/v19) but
+    keep (a name or several) removed: a generator update writes a new folder and never reads the old one again.
+    Anything else under root stays.
     -> (folders removed, bytes freed)"""
     import re
     import shutil
@@ -881,9 +882,10 @@ def prune_versions(root, keep):
     except OSError:
         return 0, 0
     n = freed = 0
+    keep = (keep,) if isinstance(keep, str) else tuple(keep)
     for name in names:
         p = os.path.join(root, name)
-        if name == keep or not re.fullmatch(r"v\d+", name) or not os.path.isdir(p) or os.path.islink(p):
+        if name in keep or not re.fullmatch(r"v\d+(\+\w+)?", name) or not os.path.isdir(p) or os.path.islink(p):
             continue
         size = 0
         for dirpath, _dirs, files in os.walk(p):

@@ -113,6 +113,10 @@ def build(out=OUT):
     # PR #505's paved frontages (streetfront, roadmesh.FRONTAGE_ASPHALT): the stock asphalt's detail maps, faded at
     # their exposed edges by the dirt strips' opacity map; no texture of its own
     materials['bne_eu_frontage_asphalt']=FRONTAGE_ASPHALT
+    # the red-brown cycleways of Ukraine and Poland (server walkways.RED_CYCLE_COUNTRIES): the footway asphalt, tinted
+    red=json.loads(json.dumps(materials['bne_eu_asphalt_walk']));red['name']=red['mapTo']='bne_cycleway_red'
+    red['persistentId']=str(uuid.uuid5(uuid.NAMESPACE_URL,'beamng-earth:bne_cycleway_red'))
+    red['Stages'][0]['baseColorFactor']=[0.86,0.47,0.40,1];materials['bne_cycleway_red']=red
     (out/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n',encoding='utf-8')
 
 

@@ -91,6 +91,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
   collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
+- Park paths and promenades: footways, paths, cycleways and `highway=pedestrian` lines are drawn as strips of the ground
+  they lie on (surface from the tag, else from the tagged paths round them, else asphalt; mapped width, else the path's
+  usual one, a pedestrian street the width between its facades), with lamps, benches and bins along a park's alleys
+  by the park's size (Ukraine and Poland: metal benches and red cycleways), grass and bushes kept off the paths and
+  thinned in parks, and the ground under them painted so grass does not grow through. Mapped sports pitches get
+  their white lines (football, tennis, basketball, volleyball) and, on grass, mown turf. `BNE_PARKS=off` turns the
+  paths off, `BNE_PITCHES=off` the pitches.
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole

@@ -868,6 +868,11 @@ def _golf_rings(feats_list, classes):
         if feats is None or len(feats) == 0:
             continue
         sel = _golf_mask(feats, classes)
+        if classes is GOLF_FAIRWAY_CLASSES:
+            import pitches
+            turf = pitches.turf_mask(feats)
+            if turf is not None:
+                sel = turf if sel is None else sel | turf
         if sel is None:
             continue
         for i in np.flatnonzero(sel & (np.asarray(feats.kind) == 3)):
@@ -892,9 +897,14 @@ def paint_golf(idx, lat, lon, feats_list):
                 np.isin(sub, GOLF_SUBTYPES) if sub is not None else True)
             cols[k] = (cls, golf)
         cls, golf = cols[k]
-        if cls is None or not golf.any():
+        turf = None
+        if classes is GOLF_FAIRWAY_CLASSES:      # (the mown turf of the mapped football pitches: pitches.turf_mask)
+            import pitches
+            turf = pitches.turf_mask(feats)
+        if cls is None or not (golf.any() or turf is not None):
             return None
-        return golf & np.isin(cls, classes)
+        sel = golf & np.isin(cls, classes)
+        return sel | turf if turf is not None else sel
 
     for classes, material in GOLF_LAYERS:
         idx = _paint(idx, lat, lon, feats_list, lambda feats, c=classes: mask(feats, c), material)
@@ -1127,14 +1137,15 @@ def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
 
 # Gas station forecourts (gasstations.forecourt_pad: Surface.fuel_pads, from the road tiles), asphalt in the ground
 # models, the photo (the paved roads' colour, under the roads) and the near tiles' asphalt mask
+LOOSE_PADS = "walkg:"          # a pad id: the ground is loose, not asphalt (walkways.tile_pads)
 FUEL_PAD_STATIONS = 4096        # stations' pads kept (a few small rings each)
 FRONTAGE_PAD_TILES = 512
 FRONTAGE_PAD_PREFIX = "frontage:"
 FRONTAGE_GRASS_PREFIX = FRONTAGE_PAD_PREFIX + "grass:"
 
 
-def paint_pads(idx, lat, lon, pads):
-    """idx with the pads [(lat (k,), lon (k,))] drawn in as asphalt. Pure."""
+def paint_pads(idx, lat, lon, pads, material=None):
+    """idx with the pads [(lat (k,), lon (k,))] drawn in as asphalt (material: that layer instead). Pure."""
     if not pads:
         return idx
     h, w = idx.shape
@@ -1147,7 +1158,7 @@ def paint_pads(idx, lat, lon, pads):
             continue
         draw.polygon(list(zip(c.tolist(), r.tolist())), fill=255)
     out = idx.copy()
-    out[np.asarray(im) > 0] = ASPHALT
+    out[np.asarray(im) > 0] = ASPHALT if material is None else material
     return out
 
 
@@ -1823,6 +1834,7 @@ class Surface:
 
     def paint_ground_pads(self, idx, lat, lon):
         idx = paint_pads(idx, lat, lon, self.fuel_pads(lat, lon))
+        idx = paint_pads(idx, lat, lon, self.loose_pads(lat, lon), LOOSE)      # (the gravel and bare paths: walkways.py)
         hard, grass = [], []
         for sid, rings in self.frontage_pad_items(lat, lon):
             (grass if sid.startswith(FRONTAGE_GRASS_PREFIX) else hard).extend(rings)
@@ -1832,13 +1844,18 @@ class Surface:
     def fuel_pads(self, lat, lon):
         """[(lat (k,), lon (k,))] of the kept pads within the points' bounding box (the painters'; never waits), and
         extra_pads' (the runways)."""
-        out = [r for _, rings in self.fuel_pad_items(lat, lon) for r in rings]
+        out = [r for sid, rings in self.fuel_pad_items(lat, lon) if not str(sid).startswith(LOOSE_PADS) for r in rings]
         if self.extra_pads is not None:
             try:
                 out += self.extra_pads(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
             except Exception as e:      # (no runways rather than no ground)
                 log.debug("surface: extra pads: %s: %s", type(e).__name__, e)
         return out
+
+    def loose_pads(self, lat, lon):
+        """[(lat (k,), lon (k,))] of the kept walkway pads painted as loose ground (gravel and bare paths: walkways.py),
+        within the points' bounding box; never waits."""
+        return [r for sid, rings in self.fuel_pad_items(lat, lon) if str(sid).startswith(LOOSE_PADS) for r in rings]
 
     def lots(self, lat, lon):
         """The "infrastructure" and "land_use" Features of the cells around the points that are cached

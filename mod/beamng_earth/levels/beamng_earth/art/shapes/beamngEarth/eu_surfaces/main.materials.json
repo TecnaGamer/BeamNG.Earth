@@ -234,5 +234,26 @@
       }
     ],
     "doubleSided": false
+  },
+  "bne_cycleway_red": {
+    "name": "bne_cycleway_red",
+    "mapTo": "bne_cycleway_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9bcf92fc-5c35-55a7-85e3-e5a106b0d1d9",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/footway.color.png",
+        "baseColorFactor": [
+          0.86,
+          0.47,
+          0.4,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.98
+      }
+    ],
+    "doubleSided": false
   }
 }
