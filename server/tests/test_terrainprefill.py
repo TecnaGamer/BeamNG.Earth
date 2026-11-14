@@ -257,6 +257,34 @@ class PrefillTest(unittest.TestCase):
         self.assertEqual(sorted(w for _, w in r["skipped"]), ["source missing", "source not 32 px 8-bit",
                                                                "source not 32 px 8-bit"])
 
+    def test_sources_replaced_by_a_mod_or_the_user_folder_left_to_the_game(self):
+        """A stock texture a mounted mod (zip or unpacked) or a loose user-folder file replaces in the game's VFS: its
+        packs are not written (the key is the path alone: stock pixels would pass for the replacement's). Our own mod's
+        files do not count (Codex review 2026-11-14)."""
+        mods = self.user / "mods"
+        (mods / "repo").mkdir(parents=True)
+        with zipfile.ZipFile(mods / "repo" / "texturepack.zip", "w") as z:
+            z.writestr("assets/materials/terrain/d/t_d_b.png", _png(self.src["_b"]))
+        own = mods / "unpacked" / tp.MOD_NAME / "assets" / "materials" / "terrain" / "m"
+        own.mkdir(parents=True)
+        (own / "t_m_b.png").write_bytes(_png(self.src["_b"]))
+        (mods / "multiplayer").mkdir()
+        with zipfile.ZipFile(mods / "multiplayer" / "earth_mp.zip", "w") as z:    # (a BeamMP server's copy of ours)
+            z.writestr("lua/ge/extensions/beamngEarth/core.lua", "")
+            z.writestr("assets/materials/terrain/m/t_m_nm.png", _png(self.src["_nm"]))
+        r = self.run_prefill()
+        replaced = [k for k, w in r["skipped"] if "replaced" in w]
+        self.assertEqual(len(replaced), 1, r)                 # the detail colour pack (t_d_b); our mod's t_m_b counts not
+        self.assertEqual(len(r["written"]), 3, r)
+        loose = self.user / "assets" / "materials" / "terrain" / "m"
+        loose.mkdir(parents=True)
+        (loose / "t_m_r.png").write_bytes(_png(self.src["_r"]))
+        for f in self.cache.glob("*.dds"):
+            f.unlink()
+        r = self.run_prefill()
+        self.assertEqual(len([k for k, w in r["skipped"] if "replaced" in w]), 2, r)   # + the macro pack (t_m_r)
+        self.assertEqual(len(r["written"]), 2, r)
+
 
 if __name__ == "__main__":
     unittest.main()

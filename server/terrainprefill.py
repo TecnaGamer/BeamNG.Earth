@@ -60,6 +60,7 @@ log = logging.getLogger("earthd.terrainprefill")
 ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD_SRC = os.path.join(ROOT, "mod", "beamng_earth")     # (the build's copy; the installed one under <user>/mods)
 MOD_NAME = "beamng_earth"
+OUR_CODE = "lua/ge/extensions/beamngEarth/"     # (a mod holding this is a copy of ours: not an overlay)
 LEVEL_TERRAINS = "/levels/beamng_earth/art/terrains/"
 MATERIALS_VFS = LEVEL_TERRAINS + "main.materials.json"
 TERRAIN_LUA = os.path.join("lua", "ge", "extensions", "beamngEarth", "terrain.lua")
@@ -177,6 +178,57 @@ class Sources:
     def __init__(self, user_dir, game_dir, mod_src=MOD_SRC):
         self.user_dir, self.game_dir, self.mod_src = user_dir, game_dir, mod_src
         self._zips = {}
+        self._overlay = None
+
+    # Overlays (Codex review 2026-11-14): the game's VFS lets the user folder and mounted mods replace a stock or level
+    # file, and the cache key is the path alone, so a pack made here from the stock pixels would be taken by the game
+    # for the replacement's (newer than both). A source some other mod or a loose user-folder file provides is left to
+    # the game: the pack is not written. Every mod zip and unpacked mod counts (enabled or not: a disabled one only
+    # costs its packs' prefill), but our own.
+    OVERLAY_PREFIXES = ("assets/materials/", "levels/")
+
+    def _overlay_index(self):
+        if self._overlay is None:
+            found = set()
+            mods = os.path.join(self.user_dir or "", "mods")
+            for dirpath, dirnames, filenames in os.walk(mods):
+                rel_dir = os.path.relpath(dirpath, mods)
+                if rel_dir.split(os.sep)[:2] == ["unpacked", MOD_NAME]:
+                    dirnames[:] = []
+                    continue
+                if rel_dir.split(os.sep)[0] == "unpacked" and len(rel_dir.split(os.sep)) == 2:
+                    root = dirpath          # an unpacked mod: its files are VFS paths relative to it
+                    dirnames[:] = []
+                    if os.path.isdir(os.path.join(root, *OUR_CODE.split("/"))):
+                        continue            # (a copy of BeamNG.Earth under another name)
+                    for sub, _, files in os.walk(root):
+                        for name in files:
+                            vfs = os.path.relpath(os.path.join(sub, name), root).replace(os.sep, "/").lower()
+                            if vfs.startswith(self.OVERLAY_PREFIXES):
+                                found.add(vfs)
+                    continue
+                for name in filenames:
+                    if not name.lower().endswith(".zip") or name.lower() == MOD_NAME + ".zip":
+                        continue
+                    try:
+                        with zipfile.ZipFile(os.path.join(dirpath, name)) as z:
+                            names = [n.lower().lstrip("/") for n in z.namelist()]
+                            if any(n.startswith(OUR_CODE.lower()) for n in names):
+                                continue    # (a copy of BeamNG.Earth: a BeamMP server's download of it, a renamed zip)
+                            found.update(n for n in names if n.startswith(self.OVERLAY_PREFIXES))
+                    except (OSError, zipfile.BadZipFile):
+                        pass
+            self._overlay = found
+        return self._overlay
+
+    def overridden(self, vfs):
+        """Does a mod (not ours) or a loose file in the user folder replace this source in the game's VFS?"""
+        rel = vfs.lstrip("/")
+        if rel.lower() in self._overlay_index():
+            return True
+        if vfs.startswith("/assets/"):
+            return os.path.isfile(os.path.join(self.user_dir or "", rel.replace("/", os.sep)))
+        return False
 
     def close(self):
         for z, _, _ in self._zips.values():
@@ -335,6 +387,9 @@ def prefill(user_dir, game_dir, materials=None, lua_text=None, mod_src=MOD_SRC, 
         d = terraincache.cache_dir(user_dir)
         for k, p in sorted(wanted(materials, lua_text, base_sizes).items()):
             pacer.hold()
+            if any(src.overridden(v) for v in set(p.sources)):
+                out["skipped"].append((k, "source replaced by a mod or the user folder"))
+                continue
             times = [src.mtime(v) for v in set(p.sources)]
             if any(t is None for t in times):
                 out["skipped"].append((k, "source missing"))
