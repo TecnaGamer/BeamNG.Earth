@@ -19,6 +19,7 @@ import numpy as np
 import dmath
 import dnp
 
+import lanesections
 import roads
 import staging
 
@@ -376,7 +377,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way).
     The graph's "trafficProfile": the adaptive traffic amount's profile of its centre (_traffic_profile)."""
     cx, cy = centre
-    nodes, edges, edge_fids, seen = {}, [], [], set()
+    nodes, edges, edge_fids, seen = {}, [], [], lanesections.replaced_roads(feats_list)
     posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
     rough_edges = set()          # id(edge) -> OSM smoothness class says traffic should not overspeed
     rumble_edges = set()         # id(edge) -> likely ATLM/rural rumble strip corridor
@@ -439,7 +440,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             seg = dnp.hypot(*np.diff(p, axis=0).T)
             s = np.concatenate([[0.0], np.cumsum(seg)])
             L = float(s[-1])
-            if L < 1.0:
+            if L < 1e-6:
                 continue
             if rspecs[i] is not None:
                 tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
@@ -506,6 +507,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         sk = round(at * L, 2)
                         if 0 < at < 1 and not any(abs(sk - m) < 0.01 for m in marks):
                             marks[sk] = f"s{fid}_v{int(round(at * 1e6))}"
+            # Even a sub-metre source road can join distinct connectors. Only
+            # discard it when the marks collapse at the graph's centimetre precision.
+            if len(marks) < 2:
+                continue
             order = sorted(marks)
             full = []
             for a, b in zip(order[:-1], order[1:]):
@@ -530,7 +535,6 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if abs(offset) > 1e-6:
                 xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], offset)[:, :2]
             names = [marks[v] for v in full]
-            import lanesections
             section_width = None
             if lanesections.profile(feats, i):
                 la, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
