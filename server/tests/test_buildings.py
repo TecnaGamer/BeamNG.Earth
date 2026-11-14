@@ -571,6 +571,11 @@ class PackStyleTest(unittest.TestCase):
             (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "mansard", "roof_height": 20}),
             (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "hipped", "roof_height": 20}),
             (rect(0.0, 0.0, 30, 12), {"class": "house", "height": 12, "roof_shape": "gambrel"}),
+            # (a mapped barrel roof's own height; a pyramid over an L-shaped outline's skeleton: Codex round 5)
+            (rect(0.0, 0.0, 20, 10), {"class": "house", "height": 80, "roof_shape": "round", "roof_height": 20}),
+            (np.array([(0, 0), (20, 0), (20, 6), (6, 6), (6, 20), (0, 20)], float),
+             {"class": "house", "height": 40, "roof_shape": "pyramidal", "roof_height": 10}),
+            (rect(0.0, 0.0, 20, 20), {"class": "house", "height": 30, "roof_shape": "pyramidal", "roof_height": 8}),
         ]
         for ring, attrs in cases:
             b = [(bld.plan(ring, attrs), 0.0, 0.0)]

@@ -1571,6 +1571,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # pack's, puts it back on its walls so it reaches the building's top (_sky_simplify, Codex review 2026-11-14))
     if roof in DOME_ROOFS:
         spec.rise = dome_rise(roof, hw, rh)
+    elif roof == "round" and spec.roof_h:          # (a barrel roof is drawn with its mapped height: _roof)
+        spec.rise = spec.roof_h
     elif roof not in (None, "flat"):
         spec.rise = roof_rise(roof, shw, spec.pitch or PITCH.get(roof, PITCH["gabled"]))
     return francehouses.adapt(spec, attrs, lat, lon)
@@ -7374,6 +7376,7 @@ def _sky_simplify(items, copy=False):
         if copy:
             spec = copymod.copy(spec)
         ring = np.asarray(spec.ring, np.float64)
+        n0 = len(ring)
         if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
             c, u, hl, hw = oriented_box(ring)
             v = np.array([-u[1], u[0]])
@@ -7383,6 +7386,11 @@ def _sky_simplify(items, copy=False):
         spec.ring = ring
         # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
         keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
+        as_drawn = len(ring) == n0 and not spec.skel     # (the outline not simplified, no skeleton: its apex holds)
+        if keep == "pyramidal" and not as_drawn:
+            # (a pyramid over a skeleton or a simplified outline: its apex from the new box would stand over or under
+            # the building's own (an L-shaped house 13 m over, Codex review 2026-11-14): flat, its rise put back below)
+            keep = "flat"
         if keep == "flat" and spec.roof not in (None, "flat") and spec.roof not in DOME_ROOFS:
             # (a pitched roof flattened: its drawn rise back on the walls, so the block still reaches the building's
             # top: a mapped 20 m gable on 40 m came out 20 m, an L-shaped hip 3.4 m over, Codex review 2026-11-14)
