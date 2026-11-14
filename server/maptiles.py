@@ -244,6 +244,27 @@ def _sat_tiles_paths(root, visit):
                             continue
 
 
+def _marker_format(marker):
+    """The number in a format marker file, 0 when it is missing, unreadable or not a regular file: opened without
+    following a link or blocking on a FIFO (O_NOFOLLOW | O_NONBLOCK where the system has them), then checked on the
+    open descriptor, so a file swapped in between is never followed or waited on."""
+    if not hasattr(os, "O_NOFOLLOW") and _is_link(marker):
+        return 0
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(marker, flags)
+    except OSError:
+        return 0
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 0
+        return int(os.read(fd, 32).strip() or 0)
+    except (OSError, ValueError):
+        return 0
+    finally:
+        os.close(fd)
+
+
 def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
     """The "sat" tile files under root (<root>/<z>/<x>/<y>.jpg, digits: not the other layers' or PROV_DIR's) last
     written before `before` (unix s) deleted, a file at a time gap_s apart (the game's file watcher never sees a burst),
@@ -255,14 +276,8 @@ def sweep_sat(root, before, gap_s=PRUNE_GAP_S, sleep=time.sleep):
     if _is_link(root) or not os.path.isdir(root):
         return 0
     marker = os.path.join(root, FORMAT_FILE)
-    try:
-        st = os.lstat(marker)
-        if stat.S_ISREG(st.st_mode) and not _is_link(marker):
-            with open(marker) as f:
-                if int(f.read(32).strip() or 0) >= SAT_FORMAT:
-                    return 0
-    except (OSError, ValueError):
-        pass
+    if _marker_format(marker) >= SAT_FORMAT:
+        return 0
     n = 0
 
     def visit(name, st, dir_fd):

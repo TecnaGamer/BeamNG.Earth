@@ -571,7 +571,12 @@ class TileFilesTest(unittest.TestCase):
         def spy_open(path, *a, **k):
             opened.append(str(path))
             return real_open(path, *a, **k)
-        with mock.patch("os.lstat", lstat), mock.patch("builtins.open", spy_open):
+        real_os_open = os.open
+
+        def spy_os_open(path, *a, **k):
+            opened.append(str(path))
+            return real_os_open(path, *a, **k)
+        with mock.patch("os.lstat", lstat), mock.patch("builtins.open", spy_open), mock.patch("os.open", spy_os_open):
             self.assertEqual(maptiles.sweep_sat(self.root, time.time(), gap_s=0), 0)
         self.assertEqual([p for p in opened if os.path.abspath(p).startswith(os.path.abspath(self.root))], [])
 
@@ -579,6 +584,16 @@ class TileFilesTest(unittest.TestCase):
     def test_a_fifo_marker_never_blocks(self):
         os.mkfifo(os.path.join(self.root, maptiles.FORMAT_FILE))
         maptiles.sweep_sat(self.root, time.time(), gap_s=0)    # (would block forever reading the FIFO)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks")
+    def test_a_linked_marker_is_not_followed(self):
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        target = os.path.join(outside, "fmt")
+        with open(target, "w") as f:
+            f.write(str(maptiles.SAT_FORMAT))
+        os.symlink(target, os.path.join(self.root, maptiles.FORMAT_FILE))
+        self.assertEqual(maptiles._marker_format(os.path.join(self.root, maptiles.FORMAT_FILE)), 0)
 
     @unittest.skipUnless(os.name == "nt", "Windows junctions")
     def test_sweep_junctions_on_windows(self):
