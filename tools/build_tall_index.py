@@ -388,16 +388,20 @@ def build_region(con, metas, sparses, box, min_h, log):
     con.execute("DROP TABLE IF EXISTS want")
     con.execute("CREATE TEMP TABLE want (id VARCHAR)")
     _want(con, sorted(have))
+    # (two passes: every tall part's building first, then the parts of all wanted buildings from every file; one pass
+    # missed a tower's lower parts in a file read before the one holding its tall part, Codex review 2026-11-14)
     tall_parts, prows, pnames = [], [], None
-    for grp in _by_file(pp):
+    files = _by_file(pp)
+    for grp in files:
         if not sp.load(con, "pall", "building_id, height, bbox, (bbox.xmin + bbox.xmax) / 2 AS cx, "
                                     "(bbox.ymin + bbox.ymax) / 2 AS cy", grp):
             continue
         tp = con.execute(f"""SELECT building_id, min(cx), max(cx), min(cy), max(cy) FROM pall
                              WHERE {inbox} AND coalesce(height, 0) >= {min_h} GROUP BY building_id""").fetchall()
         tall_parts += tp
-        _want(con, [t[0] for t in tp if t[0] not in have])
+        _want(con, sorted({t[0] for t in tp} - have))
         have.update(t[0] for t in tp)
+    for grp in files:
         got, pnames = _rows(con, P_SPEC, sp, grp, f"{inbox} AND building_id IN (SELECT id FROM want)")
         prows += got
     # 3. the buildings tall only through their parts: each from the row groups round its parts

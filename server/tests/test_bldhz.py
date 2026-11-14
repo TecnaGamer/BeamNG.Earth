@@ -232,6 +232,57 @@ class BuilderWantTest(unittest.TestCase):
         self.assertEqual(sorted(r[0] for r in con.execute("SELECT id FROM want").fetchall()), ["b1", "b2"])
 
 
+class BuilderPartsAcrossFilesTest(unittest.TestCase):
+    def test_lower_part_in_an_earlier_file(self):
+        """A building tall only through a part in Overture file B keeps its lower part from file A, read before B (one
+        pass over the files missed it: the building was not wanted yet when A was read)."""
+        import duckdb
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+        import build_tall_index as T
+
+        def cols(spec, vals):
+            out = {"id": vals["id"], "version": 1, "wkb": b"x", "cx": 0.5, "cy": 0.5}
+            for k, typ in (("text", "VARCHAR"), ("float", "DOUBLE"), ("bool", "BOOLEAN")):
+                for c in spec.get(k, ()):
+                    out[c] = (vals.get(c), typ)
+            return out
+
+        class Meta:
+            def __init__(self, files): self.files = files
+            def select(self, box, hmin=None, fmin=None): return [(f, 0) for f in self.files]
+
+        class Fake:
+            requests, bytes = 0, 0
+            def __init__(self, spec, data): self.spec, self.data = spec, data
+            def fill(self, pairs, again=False): pass
+            def load(self, con, table, proj, pairs):
+                rows = [r for f, _ in pairs for r in self.data.get(f, ())]
+                con.execute(f"DROP TABLE IF EXISTS {table}")
+                if not rows:
+                    return False
+                sel = []
+                for r in rows:
+                    c = cols(self.spec, r)
+                    parts = [f"'{c['id']}' AS id", "1 AS version", "'x'::BLOB AS wkb", "0.5::DOUBLE AS cx", "0.5::DOUBLE AS cy",
+                             "{'xmin': 0.4::DOUBLE, 'xmax': 0.6::DOUBLE, 'ymin': 0.4::DOUBLE, 'ymax': 0.6::DOUBLE} AS bbox"]
+                    for k, v in c.items():
+                        if isinstance(v, tuple):
+                            val = "NULL" if v[0] is None else (f"'{v[0]}'" if v[1] == "VARCHAR" else repr(v[0]))
+                            parts.append(f"CAST({val} AS {v[1]}) AS {k}")
+                    sel.append("SELECT " + ", ".join(parts))
+                con.execute(f"CREATE TEMP TABLE {table} AS " + " UNION ALL ".join(sel))
+                return True
+
+        con = duckdb.connect()
+        sb = Fake(T.B_SPEC, {"b": [{"id": "B1", "height": 20.0}]})
+        sp = Fake(T.P_SPEC, {"a": [{"id": "P1", "building_id": "B1", "height": 30.0}],
+                             "z": [{"id": "P2", "building_id": "B1", "height": 200.0}]})
+        rows, names, prows, pnames = T.build_region(con, (Meta(["b"]), Meta(["a", "z"])), (sb, sp), (0, 0, 1, 1),
+                                                    60.0, lambda *_: None)
+        self.assertEqual([r[0] for r in rows], ["B1"])
+        self.assertEqual(sorted(r[0] for r in prows), ["P1", "P2"])
+
+
 class DecodeBoundsTest(unittest.TestCase):
     """bldhz.decode refuses a hostile tile before allocating for it (Codex review of the ring: a 199-byte npz whose
     member's header declared 1e9 float64 made np.load ask for 8 GB)."""
