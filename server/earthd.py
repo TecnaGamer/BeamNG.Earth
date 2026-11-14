@@ -8892,9 +8892,7 @@ class Connection:
                 self.bldsky.send_m = buildingsmod.SKY_SEND_M * bld
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
                 self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
-            if self.bldhz is not None:
-                self.bldhz.send_m = bldhzmod.reach(bld, getattr(self, "view_cap", None))
-                self.bldhz.drop_m = self.bldhz.send_m + bldhzmod.DROP_EXTRA_M
+            self.set_hz_reach()
             if self.brfar is not None:
                 self.brfar.send_m = buildingsmod.BRIDGE_FAR_SEND_M * bld
                 self.brfar.drop_m = self.brfar.send_m + (buildingsmod.BRIDGE_FAR_DROP_M - buildingsmod.BRIDGE_FAR_SEND_M)
@@ -8910,9 +8908,7 @@ class Connection:
             cap = max(VIEW_CAP_MIN_M, float(v)) if v > 0 else None
             far = far or cap != self.view_cap
             self.view_cap = cap
-            if self.bldhz is not None:      # (the horizon ring's "max": to the fixed view distance when shorter)
-                self.bldhz.send_m = bldhzmod.reach(self.building_scale, cap)
-                self.bldhz.drop_m = self.bldhz.send_m + bldhzmod.DROP_EXTRA_M
+            self.set_hz_reach()             # (the horizon ring's "max": to the fixed view distance when shorter)
         log.info("graphics: terrain detail x%.2f, trees to %.0f m, far buildings to %.0f m, ground photo %d px, view %s, "
                  "pixel error %s", self.lod_scale, self.veg.send_m, self.bldfar.send_m, self.s.base_px,
                  "to the horizon" if self.view_cap is None else f"{self.view_cap / 1000:.0f} km",
@@ -11058,6 +11054,18 @@ class Connection:
             self.dirty = True
             self.batch = [time.perf_counter(), 0, 0]
         self.wake.set()
+
+    def set_hz_reach(self):
+        """The horizon ring's reach for the building distance and the fixed view distance now (bldhz.reach); turned off
+        (Near), every horizon tile the mod has is dropped and the builds in flight left unwanted (Codex review: the
+        poses stop at reach 0, and the drops happen in them)."""
+        tr = getattr(self, "bldhz", None)
+        if tr is None:
+            return
+        tr.send_m = bldhzmod.reach(self.building_scale, getattr(self, "view_cap", None))
+        tr.drop_m = tr.send_m + bldhzmod.DROP_EXTRA_M
+        if tr.send_m <= 0:
+            tr.drop_all(self)
 
     def building_reach(self):
         """The far buildings' and the skyline's send distances: the graphics setting's, farther with the 3D map open as

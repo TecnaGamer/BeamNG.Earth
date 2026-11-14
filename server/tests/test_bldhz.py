@@ -197,5 +197,144 @@ class BldhzTest(unittest.TestCase):
         importlib.reload(bldhz)
 
 
+def _zip(members, method=None):
+    """npz-like bytes of {name: raw member bytes}."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", method or zipfile.ZIP_DEFLATED) as z:
+        for k, v in members.items():
+            z.writestr(k, v)
+    return buf.getvalue()
+
+
+def _npy_header(dtype, shape):
+    import io
+    from numpy.lib import format as npf
+    b = io.BytesIO()
+    npf.write_array_header_1_0(b, {"descr": npf.dtype_to_descr(np.dtype(dtype)), "fortran_order": False,
+                                   "shape": shape})
+    return npf.magic(1, 0) + b.getvalue()
+
+
+class DecodeBoundsTest(unittest.TestCase):
+    """bldhz.decode refuses a hostile tile before allocating for it (Codex review of the ring: a 199-byte npz whose
+    member's header declared 1e9 float64 made np.load ask for 8 GB)."""
+
+    def peak(self, b):
+        import tracemalloc
+        tracemalloc.start()
+        try:
+            with self.assertRaises(ValueError):
+                bldhz.decode(b)
+            return tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+
+    def test_the_real_tile_decodes(self):
+        import build_tall_index as T
+        a = _shard()
+        got = bldhz.decode(T.npz_bytes(a))
+        self.assertEqual(sorted(got), sorted(a))
+        for k in a:
+            self.assertTrue(np.array_equal(got[k], a[k]) or (a[k].dtype.kind == "f" and
+                                                           np.array_equal(got[k], a[k], equal_nan=True)), k)
+        b, p = bldhz.features(got)
+        self.assertEqual(len(b), 2)
+
+    def test_header_only_bombs(self):
+        for dt, shape in (("<f8", (1_000_000_000,)), ("<f4", (1_000_000_000,)), ("<f4", (bldhz.MAX_ROWS,)),
+                          ("<i4", (3, 2)), ("<i4", (10 ** 9, 2))):
+            name = "b_ll.npy" if dt == "<i4" else "b_f_height.npy"
+            b = _zip({name: _npy_header(dt, shape)})
+            self.assertLess(len(b), 400)
+            self.assertLess(self.peak(b), 4 << 20, (dt, shape))
+
+    def test_compressed_expansion_bombs(self):
+        import zipfile
+        big = _npy_header("<f4", (25_000_000,)) + bytes(100_000_000)        # (100 MB of zeros: ~100 KB deflated)
+        b = _zip({"b_f_height.npy": big})
+        self.assertLess(len(b), bldhz.MAX_TILE_BYTES)
+        self.assertLess(self.peak(b), 8 << 20, "refused by its declared size, nothing inflated")
+        part = _npy_header("<f4", (5_000_000,)) + bytes(20_000_000)         # (each within, together past the budget)
+        b = _zip({f"b_f_{c}.npy": part for c in ("height", "min_height", "num_floors", "level")})
+        self.assertLess(self.peak(b), 48 << 20)
+        # (a member longer than its zip entry says: read no further than declared)
+        raw = _npy_header("<f4", (4,)) + bytes(16)
+        b = bytearray(_zip({"b_f_height.npy": raw}, zipfile.ZIP_STORED))
+        i = b.rfind(b"PK\x01\x02")
+        size = len(raw)
+        b[i + 24:i + 28] = (size - 8).to_bytes(4, "little")                 # (the central entry's declared size)
+        with self.assertRaises(Exception):
+            bldhz.decode(bytes(b))
+
+    def test_wrong_members(self):
+        good = _npy_header("<f4", (2,)) + bytes(8)
+        for members in ({"evil.npy": good}, {"b_f_height.npy": good, "../b_f_height.npy": good},
+                        {"b_f_height.npy": _npy_header("<f8", (2,)) + bytes(16)},       # (not the column's dtype)
+                        {"b_id.npy": _npy_header("|O", (2,))},                           # (objects)
+                        {"b_t_name.npy": _npy_header(f"<U{bldhz.MAX_TEXT + 1}", (1,))},
+                        {"b_f_height.npy": good[:-1]},                                   # (a short payload)
+                        {"b_ll.npy": _npy_header("<i4", (2, 3)) + bytes(24)}):           # (not lon / lat pairs)
+            with self.assertRaises(ValueError, msg=str(list(members))):
+                bldhz.decode(_zip(members))
+        with self.assertRaises(ValueError):
+            bldhz.decode(b"not a zip")
+
+
+class NearDropsTheRingTest(unittest.TestCase):
+    """Building distance Near while horizon tiles show: every one dropped, and a build in flight lands unwanted (Codex
+    review: the poses stopped at reach 0, so the drops in them never came)."""
+
+    def test_near_drops_every_tile_and_ignores_a_late_build(self):
+        import asyncio
+        import concurrent.futures
+        import earthd
+        import vegetation
+
+        class W:
+            def write(self, data):
+                pass
+
+            def close(self):
+                pass
+
+            def get_extra_info(self, name):
+                return ("127.0.0.1", 0)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        s = earthd.Server(tmp.name, os.path.join(tmp.name, "cache"), imagery=None, cells=64, block=1024,
+                          near_visual="detail")
+        self.addCleanup(s.hm_pool.shutdown)
+        self.addCleanup(s.tile_pool.shutdown)
+
+        async def go():
+            c = earthd.Connection(s, None, W())
+            sent = []
+            c.send = sent.append
+            tr = c.bldhz = vegetation.Tracker(20000.0, 24000.0, 1, "bldhz", geo=True, z=bldhz.Z)
+            tr.aid = 1
+            tr.sent = {(1206, 1539), (1205, 1539)}
+            late = concurrent.futures.Future()
+            late.set_running_or_notify_cancel()         # (running: its result still comes after the drop)
+            e = tr.epoch
+            tr.building.add((1207, 1539))
+            tr.futs[(1207, 1539)] = late
+            late.add_done_callback(lambda f: tr._built_geo(c, (1207, 1539), f, e))
+            c.dispatch({"type": "graphics", "lodScale": 1, "treeScale": 1, "buildingScale": 0.6})
+            self.assertEqual(tr.send_m, 0.0)
+            drops = sorted(m["key"] for m in sent if m.get("type") == "bldhz_drop")
+            self.assertEqual(drops, ["g12_1205_1539", "g12_1206_1539"])
+            self.assertEqual((tr.sent, tr.building, tr.futs), (set(), set(), {}))
+            n = len(sent)
+            late.set_result(("/x/bh_g12_1207_1539.json", 3, (40.7, -74.0), 0.0, {}))
+            self.assertEqual(len(sent), n, "the build started before Near sends nothing")
+            self.assertEqual(tr.sent, set())
+            c.dispatch({"type": "graphics", "lodScale": 1, "treeScale": 1, "buildingScale": 1.0})
+            self.assertEqual(tr.send_m, 20000.0, "Normal again: the ring's reach back")
+        asyncio.run(go())
+
+
 if __name__ == "__main__":
     unittest.main()
