@@ -1199,6 +1199,110 @@ class LockTest(unittest.TestCase):
         self.assertTrue(xproc.alive(os.getpid()))
         self.assertTrue(xproc.alive(None))
 
+    def test_a_held_lock_is_kept_fresh(self):
+        # a holder still at work: its lock never STALE_S old (a London cell planned for 2+ minutes on a busy PC had its
+        # claim taken over by every process waiting for it, 2026-11-13); a released one is no longer touched
+        self.assertTrue(xproc.take(self.lock))
+        old = time.time() - xproc.STALE_S - 5
+        os.utime(self.lock, (old, old))
+        xproc._touch_held()
+        self.assertLess(time.time() - os.path.getmtime(self.lock), 5.0)
+        self.assertFalse(xproc.take(self.lock), "not stale: held")
+        xproc.release(self.lock)
+        with open(self.lock, "w") as f:      # (a lock left behind: a failed release on Windows)
+            f.write(f"{xproc.KIND_RANK['demand']} 0 {os.getpid()}")
+        os.utime(self.lock, (old, old))
+        xproc._touch_held()
+        self.assertGreater(time.time() - os.path.getmtime(self.lock), xproc.STALE_S, "not touched once released")
+        self.assertTrue(xproc.take(self.lock), "taken over")
+        xproc.release(self.lock)
+
+    def test_a_slow_live_holder_is_waited_for_past_stale_s(self):
+        # another process holding a lock longer than STALE_S while it works: waited for, its result read, not done
+        # here beside it (before: taken over at STALE_S, then the holder's own release removed the taker's lock)
+        import subprocess
+        result = os.path.join(self.dir, "result")
+        code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = 0.1; "
+                "assert xproc.take(%r); print('held', flush=True); time.sleep(1.5); "
+                "open(%r, 'w').write('done'); xproc.release(%r)") % (os.path.dirname(xproc.__file__), self.lock,
+                                                                     result, self.lock)
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(p.stdout.readline().strip(), "held")
+            with mock.patch.object(xproc, "STALE_S", 0.5):
+                got, mine = xproc.once(self.lock, lambda: (open(result).read() if os.path.exists(result) else None),
+                                       10.0, "demand")
+        finally:
+            p.wait(10)
+        self.assertEqual((got, mine), ("done", False), "the holder's result, waited for")
+        self.assertFalse(os.path.exists(self.lock))
+
+    def holder(self, seconds, heartbeat=0.1):
+        """A process holding self.lock for seconds (touching it every heartbeat s), then writing the result file."""
+        import subprocess
+        result = os.path.join(self.dir, "result")
+        code = ("import os, sys, time; sys.path.insert(0, %r); import xproc; xproc.HEARTBEAT_S = %r; "
+                "assert xproc.take(%r); print('held', flush=True); time.sleep(%r); "
+                "open(%r, 'w').write('done'); xproc.release(%r)") % (os.path.dirname(xproc.__file__), heartbeat,
+                                                                     self.lock, seconds, result, self.lock)
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        self.assertEqual(p.stdout.readline().strip(), "held")
+        return p, (lambda: open(result).read() if os.path.exists(result) else None)
+
+    def test_a_working_holder_is_waited_for_past_wait_s(self):
+        # live_s: a holder still at work is waited for by a thread holding no lock (London's cells planned again by
+        # every process that stopped waiting at WAIT_S, 2026-11-13)
+        p, ready = self.holder(1.2)
+        try:
+            got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+        finally:
+            p.wait(10)
+        self.assertEqual((got, mine), ("done", False))
+
+    def test_a_waiter_holding_a_lock_keeps_wait_s(self):
+        # (a thread holding a lock of its own could close a circle of waits: wait_s as before)
+        p, ready = self.holder(2.0)
+        other = os.path.join(self.dir, "other.lock")
+        try:
+            self.assertTrue(xproc.take(other))
+            self.assertFalse(xproc.holds_none())
+            t0 = time.monotonic()
+            got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+            self.assertEqual((got, mine), (None, False))
+            self.assertLess(time.monotonic() - t0, 1.5)
+        finally:
+            xproc.release(other)
+            p.wait(10)
+        self.assertTrue(xproc.holds_none())
+
+    def test_a_holder_without_heartbeat_keeps_wait_s(self):
+        # (a lock not touched lately: its holder not known to be at work)
+        p, ready = self.holder(2.0, heartbeat=60.0)
+        try:
+            with mock.patch.object(xproc, "LIVE_FRESH_S", 0.2):
+                time.sleep(0.3)
+                t0 = time.monotonic()
+                got, mine = xproc.once(self.lock, ready, 0.3, "demand", live_s=10.0)
+            self.assertEqual((got, mine), (None, False))
+            self.assertLess(time.monotonic() - t0, 1.5)
+        finally:
+            p.wait(10)
+
+    def test_release_leaves_another_live_holders_lock(self):
+        # this process's lock taken over meanwhile: its release must not remove the new holder's
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            with open(self.lock, "w") as f:
+                f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid}")
+            xproc.release(self.lock)
+            self.assertTrue(os.path.exists(self.lock), "a live holder's lock kept")
+        finally:
+            p.kill()
+            p.wait()
+        xproc.release(self.lock)
+        self.assertFalse(os.path.exists(self.lock), "a dead holder's lock removed")
+
     def test_waiter_reads_the_holders_urgency_once(self):
         self.assertTrue(xproc.take(self.lock, "demand"))
         with mock.patch.object(xproc, "_holder", wraps=xproc._holder) as lu:
