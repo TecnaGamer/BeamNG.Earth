@@ -880,6 +880,11 @@ def _landmark_token(spec):
     return (MATERIALS.index(LANDMARK_MATERIALS[landmarks.material(spec.facade)]), landmarks.colour(spec.facade))
 
 
+def _implausible_ml_height(height, floors, source):
+    return (height is not None and floors and source in ML_HEIGHT_SOURCES
+            and not ML_FLOOR_M[0] <= height / floors <= ML_FLOOR_M[1])
+
+
 @profile_step('Building plan')
 def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, dense=False, west_town=False,
          alpine=False):
@@ -939,8 +944,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         nf = 1                                          # a nave: one tall storey under a steep gable
     h = None if h is None or not np.isfinite(h) or h <= 0 else float(h)
     nf = None if nf is None or not np.isfinite(nf) or nf <= 0 else int(round(nf))
-    if h is not None and nf is not None and str(attrs.get("height_src") or "") in ML_HEIGHT_SOURCES \
-            and not (ML_FLOOR_M[0] <= h / nf <= ML_FLOOR_M[1]):
+    if _implausible_ml_height(h, nf, attrs.get("height_src")):
         h = None            # (an ML height, the footprint's average, against the map's own floors: the floors)
     rh = attrs.get("roof_height")
     rh = float(rh) if rh is not None and np.isfinite(rh) else None
@@ -3130,19 +3134,19 @@ def _shared_walls(rings, tol=0.6):
                                             np.ascontiguousarray(rads, np.float64), order.astype(np.int64),
                                             float(tol)), np.int64)
 
-def _part_heights(a, i):
-    """A building part's (own height, its bottom) from its attributes, or None without a height."""
-    top = a["height"][i] if "height" in a else np.nan
-    mh = a["min_height"][i] if "min_height" in a else np.nan
-    mh = float(mh) if np.isfinite(mh) and mh > 0 else 0.0
-    if not np.isfinite(top) or top <= mh + 1.0:
-        nf, f0 = (a[k][i] if k in a else np.nan for k in ("num_floors", "min_floor"))
-        if np.isfinite(nf) and nf > 0:
-            f0 = float(f0) if np.isfinite(f0) and f0 > 0 else 0.0
-            mh = mh or f0 * FLOOR_M
-            return max(FLOOR_M, (float(nf) - f0) * FLOOR_M), mh
-        return None
-    return float(top) - mh, mh
+def _part_heights(top, mh, nf, f0, roof_floor_m=None):
+    """A building part's (own height, bottom), using the roof's storey scale when supplied."""
+    f0 = float(f0) if f0 is not None and np.isfinite(f0) and f0 > 0 else 0.0
+    has_bottom = mh is not None and np.isfinite(mh) and mh >= 0
+    bottom = float(mh) if has_bottom else f0 * (roof_floor_m or 0.0)
+    if top is not None and np.isfinite(top) and top > bottom + 1.0:
+        return float(top) - bottom, bottom
+    if nf is not None and np.isfinite(nf) and nf > 0:
+        floor_m = roof_floor_m or FLOOR_M
+        if roof_floor_m is None and not bottom:
+            bottom = f0 * floor_m
+        return max(floor_m, (float(nf) - f0) * floor_m), bottom
+    return None
 
 
 ROAD_THROUGH_M = 15.0       # a footprint that public roads run through this far is a structure over them
@@ -4420,6 +4424,7 @@ CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulati
 
 PART_OWN = ("roof_shape", "facade_color", "roof_color", "roof_height", "facade_material", "roof_material",
             "roof_direction", "roof_orientation")
+PART_HEIGHTS = ("height", "min_height", "num_floors", "min_floor")
 
 
 def _parts_index(f):
@@ -4480,8 +4485,8 @@ class _PartsOf:
         # (its own roof shape and mapped colours: hudsontadams' PR #167)
         # (and its roof height, materials and roof direction where the layer has them: a part's own roof height was read
         # and dropped, research 2026-11-10)
-        own = {k: (a[k][i] if k in a else None) for k in PART_OWN}
-        return np.stack([e, n], 1), _part_heights(a, i), own
+        own = {k: (a[k][i] if k in a else None) for k in PART_OWN + PART_HEIGHTS}
+        return np.stack([e, n], 1), _part_heights(*(own[k] for k in PART_HEIGHTS)), own
 
     def get(self, bid, default=None):
         if bid not in self.memo:
@@ -4563,13 +4568,15 @@ def _hulls_nearby(frame, layers, x0, y0, x1, y1, water_xy, reach=ships.PIER_REAC
 # 452 m² part (height 5), and was drawn as that part alone, the rest of it bare ground. Of 409 buildings drawn as their
 # parts in a player's cache (Tallinn, Baltimore, ...), 63 had parts over less than half their outline. Under
 # PARTS_COVER_MIN the outline is drawn as well, the parts standing on it (one lower stays inside it), when it has a
-# height or levels of its own (PARTS_COVER_MIN_H) and every part stands on the ground: a part off the ground (min_height)
-# is a structure modelled in parts, its gaps open on purpose (a tower's legs, an arcade: its outline is its overall box).
+# height or levels of its own (PARTS_COVER_MIN_H) and every part stands on the ground. Elevated parts normally
+# leave open space below them (a tower's legs or an arcade). When the lowest part starts at a grounded outline's
+# roof height (mapped directly or derived from its storeys), the outline supplies the storeys below the rooftop parts.
 PARTS_COVER_ON = os.environ.get("BNE_PARTS_COVER", "on") != "off"
 PARTS_COVER_MIN = 0.5           # share of the outline the parts cover (grid samples inside it), below which it is drawn
 PARTS_COVER_SAMPLES = 400       # about this many samples inside an outline
 PARTS_COVER_MIN_H = 2.5         # m: an outline mapped lower than this is a base or an area, not drawn under its parts
 PARTS_GROUND_M = 0.5            # m: a part whose bottom is higher than this is off the ground
+PARTS_ROOF_TOL_M = 0.5          # m: slack between a mapped roof height and a rooftop part's base
 
 
 def parts_cover(outline, part_rings):
@@ -4591,14 +4598,40 @@ def parts_cover(outline, part_rings):
     return float(hit.mean())
 
 
-def _outline_under_parts(at, bparts):
-    """May a building drawn as its parts (bparts: [(ring, (own height, bottom) or None, ...)]) have its outline drawn
-    under them where they cover too little of it: its own height (or levels) mapped, PARTS_COVER_MIN_H or more, and
-    no part off the ground."""
+def _rooftop_parts(at, bparts):
+    """Return a roof height and the parts on that roof, using one storey scale for the building."""
+    for k, limit in (("min_height", PARTS_GROUND_M), ("min_floor", 0.0)):
+        bottom = at.get(k)
+        if bottom is not None and np.isfinite(bottom) and bottom > limit:
+            return None, bparts
+    h, floors = at.get("height"), at.get("num_floors")
+    h = float(h) if h is not None and np.isfinite(h) and h > 0 else None
+    floors = float(floors) if floors is not None and np.isfinite(floors) and floors >= 1 else None
+    if _implausible_ml_height(h, floors, at.get("height_src")):
+        h = None
+    if h is None and floors is not None:
+        h = floors * FLOOR_M
+    if h is None or h < PARTS_COVER_MIN_H:
+        return None, bparts
+
+    parts = bparts
+    if floors is not None:
+        parts = [(ring, _part_heights(*(attrs[k] for k in PART_HEIGHTS), roof_floor_m=h / floors), attrs)
+                 if "min_floor" in attrs else (ring, heights, attrs) for ring, heights, attrs in bparts]
+    # A part without its own height is drawn from the ground by tile_buildings.
+    lowest = min(heights[1] if heights is not None else 0.0 for _, heights, _ in parts)
+    if abs(lowest - h) <= PARTS_ROOF_TOL_M:
+        return h, parts
+    return None, bparts
+
+
+def _outline_under_parts(at, outline, bparts):
+    """Keep a mapped outline with ground-level parts that cover too little of it."""
     h, fl = at.get("height"), at.get("num_floors")
-    own = (h is not None and np.isfinite(h) and h >= PARTS_COVER_MIN_H) or \
-        (h is None or not np.isfinite(h)) and fl is not None and np.isfinite(fl) and fl >= 1
-    return bool(own) and all(p[1] is None or p[1][1] <= PARTS_GROUND_M for p in bparts)
+    has_height = h is not None and np.isfinite(h)
+    own = h >= PARTS_COVER_MIN_H if has_height else fl is not None and np.isfinite(fl) and fl >= 1
+    return (own and all(p[1] is None or p[1][1] <= PARTS_GROUND_M for p in bparts)
+            and parts_cover(outline, [p[0] for p in bparts]) < PARTS_COVER_MIN)
 
 
 @profile_step('Building site selection')
@@ -4756,7 +4789,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             if turbines and turbine_base(e, n, turbines):
                 continue                # (a turbine's base: TURBINE_BASE_M2)
             at = {k: (a[k][i] if k in a else None) for k in
-                  ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
+                  ("class", "subtype", "height", "num_floors", "min_height", "min_floor", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color", "roof_orientation",
                    "roof_direction", "height_src", "roof_rise")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
@@ -4807,6 +4840,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN:
                     bparts = [(p[0], (float(bh), 0.0)) + tuple(p[2:]) for p in bparts]
                     outline_h = float(nf) * FLOOR_M
+            rooftop_base = None
+            if PARTS_COVER_ON and bparts and nyc_group is None:
+                rooftop_base, bparts = _rooftop_parts(at, bparts)
+                if rooftop_base is not None:
+                    at = dict(at, height=rooftop_base)
             if bparts and parts_min_top is not None and max(
                     [p[1][0] + p[1][1] for p in bparts if p[1] is not None] + [float(at.get("height") or 0.0)]) \
                     < parts_min_top:
@@ -4861,10 +4899,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     mins.append(pmh)
                 if key is not None:
                     seen.add(key)
-                if not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
-                        and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
+                if rooftop_base is None and not (
+                        PARTS_COVER_ON and _outline_under_parts(at, np.stack([e, n], 1), bparts)):
                     continue
-                # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
                 if outline_h is not None:
                     at = dict(at, height=outline_h, roof_height=None)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
