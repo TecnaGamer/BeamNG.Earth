@@ -75,38 +75,47 @@ pub fn paint_lines_toned<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, s
     }
     let out = py.detach(|| {
         let (h, w) = (img.shape()[0], img.shape()[1]);
-        let mut cov = vec![0f32; k * h * w];
-        for s in 0..m {
-            let (ax, ay, bx, by, r) = (sg[[s, 0]], sg[[s, 1]], sg[[s, 2]], sg[[s, 3]], hw[s]);
-            if !(r > 0.0) || !ax.is_finite() || !ay.is_finite() || !bx.is_finite() || !by.is_finite() {
-                continue;
-            }
-            let pad = r + 1.0;
-            let c0 = (ax.min(bx) - pad).floor().max(0.0);
-            let c1 = (ax.max(bx) + pad).ceil().min(w as f64);
-            let r0 = (ay.min(by) - pad).floor().max(0.0);
-            let r1 = (ay.max(by) + pad).ceil().min(h as f64);
-            if c0 >= c1 || r0 >= r1 {
-                continue;
-            }
-            let (dx, dy) = (bx - ax, by - ay);
-            let l2 = dx * dx + dy * dy;
-            let base = kd[s] as usize * h * w;
-            for j in r0 as usize..r1 as usize {
-                let py_ = j as f64 + 0.5;
-                for i in c0 as usize..c1 as usize {
-                    let px_ = i as f64 + 0.5;
-                    let t = if l2 > 0.0 { (((px_ - ax) * dx + (py_ - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                    let (ex, ey) = (px_ - ax - t * dx, py_ - ay - t * dy);
-                    let c = (r - (ex * ex + ey * ey).sqrt() + 0.5).clamp(0.0, 1.0) as f32;
-                    let v = &mut cov[base + j * w + i];
-                    if c > *v { *v = c; }
-                }
-            }
-        }
+        let cov = line_cover(h, w, k, m, |s| (sg[[s, 0]], sg[[s, 1]], sg[[s, 2]], sg[[s, 3]], hw[s], kd[s]));
         tone_paint(img, &cov, k, col, tn, radius, sample_luma, sample_sat, green_margin)
     });
     Ok(out.into_pyarray(py))
+}
+
+/// Each kind's coverage (k planes of h x w) of m thick lines, seg(s) -> (ax, ay, bx, by, half width, kind) in pixels:
+/// the largest over the kind's segments of clamp(hw - distance + 0.5, 0, 1) (round ends and joints, a one-pixel
+/// antialiased edge). paint_lines_toned's loop, shared with paintlist.rs (one loop, the same bits).
+pub(crate) fn line_cover(h: usize, w: usize, k: usize, m: usize, seg: impl Fn(usize) -> (f64, f64, f64, f64, f64, u8))
+                         -> Vec<f32> {
+    let mut cov = vec![0f32; k * h * w];
+    for s in 0..m {
+        let (ax, ay, bx, by, r, kq) = seg(s);
+        if !(r > 0.0) || !ax.is_finite() || !ay.is_finite() || !bx.is_finite() || !by.is_finite() {
+            continue;
+        }
+        let pad = r + 1.0;
+        let c0 = (ax.min(bx) - pad).floor().max(0.0);
+        let c1 = (ax.max(bx) + pad).ceil().min(w as f64);
+        let r0 = (ay.min(by) - pad).floor().max(0.0);
+        let r1 = (ay.max(by) + pad).ceil().min(h as f64);
+        if c0 >= c1 || r0 >= r1 {
+            continue;
+        }
+        let (dx, dy) = (bx - ax, by - ay);
+        let l2 = dx * dx + dy * dy;
+        let base = kq as usize * h * w;
+        for j in r0 as usize..r1 as usize {
+            let py_ = j as f64 + 0.5;
+            for i in c0 as usize..c1 as usize {
+                let px_ = i as f64 + 0.5;
+                let t = if l2 > 0.0 { (((px_ - ax) * dx + (py_ - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let (ex, ey) = (px_ - ax - t * dx, py_ - ay - t * dy);
+                let c = (r - (ex * ex + ey * ey).sqrt() + 0.5).clamp(0.0, 1.0) as f32;
+                let v = &mut cov[base + j * w + i];
+                if c > *v { *v = c; }
+            }
+        }
+    }
+    cov
 }
 
 /// paint_lines_toned's toning for one surface given as a coverage mask: the photo rgb (h, w, 3) with cover (h, w;
@@ -136,7 +145,7 @@ pub fn paint_cover_toned<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, c
 
 /// The toning and painting shared by paint_lines_toned and paint_cover_toned: cov holds k coverage planes (h x w).
 #[allow(clippy::too_many_arguments)]
-fn tone_paint(img: numpy::ndarray::ArrayView3<u8>, cov: &[f32], k: usize, col: numpy::ndarray::ArrayView2<f32>,
+pub(crate) fn tone_paint(img: numpy::ndarray::ArrayView3<u8>, cov: &[f32], k: usize, col: numpy::ndarray::ArrayView2<f32>,
               tn: numpy::ndarray::ArrayView2<f32>, radius: usize, sample_luma: (f32, f32), sample_sat: f32,
               green_margin: f32) -> numpy::ndarray::Array3<u8> {
     let (h, w) = (img.shape()[0], img.shape()[1]);

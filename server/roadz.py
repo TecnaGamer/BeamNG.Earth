@@ -191,9 +191,29 @@ PREFETCHED_WAIT_S = float(os.environ.get("BNGE_LIDAR_PREFETCH_WAIT", "0"))
 PREFETCH_CELLS = int(os.environ.get("BNGE_LIDAR_PREFETCH_CELLS", "4"))     # cells read at once (each: the node pool)
 PREFETCH_POLL_S = 1.0       # s between the prefetch's looks at the cells the run's processes asked for
 PREFETCH_FAR_M = 8000.0     # m: a queued cell this far from the player when its turn comes is dropped (teleported away)
+# ... and a cell a planning process asked for (a want file): planning a cell near the player reads its neighbours'
+# roads, and their candidates' deck ends lie in the cells beyond, 8-16 km out at Fells Point (z14 cells ~1.9 km). Those
+# were dropped at PREFETCH_FAR_M, so they were never read, the rule stood for them on every visit, and no plan near
+# their edge, nor any block or road tile built on one, was ever kept (a 16 GB Windows PC, the small tier with no late
+# pool to read them: 0 blocks kept in four sessions, 2026-11-14)
+PREFETCH_WANT_FAR_M = 24000.0
+# A want lasts PREFETCH_WANT_KEEP_S after its last ask (a planning process asking again renews it) and
+# PREFETCH_WANT_TRIES failed reads (the retries PREFETCH_RETRY_S x 1, 2, 4 ... apart); a 404 (netfetch.NotFound: no data
+# there) ends it at once. An ended want is a queued cell like any other (dropped past PREFETCH_FAR_M): a cell 8-24 km out
+# whose read keeps failing was read again every minute for as long as the player stayed within 24 km
+PREFETCH_WANT_KEEP_S = 900.0
+PREFETCH_WANT_TRIES = 3
 PREFETCH_RETRY_S = 60.0     # s before a cell whose read failed is read again
 WANT_DIR = "want"
 _tl = threading.local()     # .prefetch: this thread reads for the prefetch (its reads never stop: _read)
+
+
+def _not_found(e):
+    """Is e (an error of a cell's read, or None) a host's 404 / 410 (netfetch.NotFound: no data there, final)?"""
+    if e is None:
+        return False
+    import netfetch
+    return isinstance(e, netfetch.NotFound)
 
 
 def prefetched():
@@ -238,7 +258,7 @@ def _await_part(lock, pp, wait_s=None):
     job's cancel check plays no part (as xproc.once's would: a teleport's abandoned block must not leave the cell to
     the rule for the session through its read's wait)."""
     end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
-    seen = None
+    seen = token = None
     pid, recheck = None, 0.0
     while True:
         if os.path.exists(pp):
@@ -256,15 +276,14 @@ def _await_part(lock, pp, wait_s=None):
         if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
             seen = now
             h = xproc._holder(lock)
+            token = xproc._token(lock)
             pid, recheck = (h[2] if h is not None else None), time.monotonic() + xproc.ALIVE_RECHECK_S
-            if h is not None and not xproc.alive(h[2]):
-                xproc.release(lock)
-                seen = None
+            if h is not None and not xproc.alive(h[2]) and xproc.break_dead(lock, token):
+                seen = None                         # (that holder's lock only; not broken now: the deadline below)
                 continue
         elif seen is not None and now == seen and pid is not None and time.monotonic() >= recheck:
             recheck = time.monotonic() + xproc.ALIVE_RECHECK_S       # (one that died since: xproc.once's)
-            if not xproc.alive(pid):
-                xproc.release(lock)
+            if not xproc.alive(pid) and xproc.break_dead(lock, token):
                 seen = None
                 continue
         if time.monotonic() > end:
@@ -385,6 +404,11 @@ def name_ok(map_name, src_name, src_ref):
     return True
 
 
+class SurveyDataError(ValueError):
+    """A survey's arrays do not fit each other (a damaged or cut file, a source's malformed answer): its lines are
+    not used, and read again from the source (a ValueError, as the callers of Lines.load expect)."""
+
+
 class Lines:
     """3D road lines of one cell and source: lonlat (n, 2) and z (n,) (m; NaN: none) of every vertex, off (L + 1,) the
     lines' vertex ranges, level (L,) int8 (>0 bridge, 0 ground, <0 tunnel), ref / name (L,) text, corrected: the
@@ -402,6 +426,17 @@ class Lines:
         self.ref = np.asarray(ref, dtype=str).ravel() if len(ref) else np.zeros(0, "U1")
         self.name = np.asarray(name, dtype=str).ravel() if len(name) else np.zeros(0, "U1")
         self.corrected = bool(corrected)
+        # (checked where they come in: arrays that do not fit each other raised a ValueError or IndexError deep in
+        # observed() / _segments (np.repeat of negative counts, an index past the vertices), caught there as "the
+        # DEM's rather than no grading": a fallback that looked complete)
+        n, lines = len(self.lonlat), len(self.off) - 1
+        if len(self.z) != n:
+            raise SurveyDataError(f"road survey: {len(self.z)} heights for {n} vertices")
+        if lines < 0 or self.off[0] != 0 or self.off[-1] != n or (np.diff(self.off) < 0).any():
+            raise SurveyDataError("road survey: the lines' vertex ranges do not cover its vertices in order")
+        if len(self.level) != lines or len(self.ref) not in (0, lines) or len(self.name) not in (0, lines):
+            raise SurveyDataError(f"road survey: {lines} lines with {len(self.level)} levels, {len(self.ref)} refs, "
+                                  f"{len(self.name)} names")
 
     @classmethod
     def build(cls, rows, corrected=False):
@@ -735,6 +770,14 @@ class RoadZ:
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                    # (used: the download cache's eviction takes a file's mtime for its last use when this server's
+                    # own process did not read it, and these are read in the workers; a cell read on every visit was
+                    # as old as its download, among the first evicted when the disk ran short of its reserve, and
+                    # the next visit read its ~5 MB again and planned on the rule meanwhile: Windows PC, 2026-11-14)
+                    import cache as cachemod
+                    cachemod.touch_once(p)
+                    if src == "lidar":
+                        cachemod.touch_once(p + ".gaps.json")
                 except Exception as e:
                     log.debug("roadz read %s: %s", p, e)
                     got = None
@@ -750,6 +793,7 @@ class RoadZ:
                         p = None
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
+                    _tl.failed = e          # (the prefetch's: a 404 ends a want, _pf_loop)
                     import revisit
                     revisit.fault()
                     return None
@@ -858,14 +902,16 @@ class RoadZ:
             if st is None:
                 st = self._pf_state = {"queue": {}, "seq": 0, "where": None, "done": {}, "failed": {}, "threads": 0,
                                        "busy": set(), "cv": threading.Condition(), "polled": 0.0,
-                                       "t0": None, "last": None, "n": 0, "logged": True}
+                                       "t0": None, "last": None, "n": 0, "logged": True,
+                                       "wanted": {}}    # (cell -> [last ask, failed reads]: asked by planning)
             return st
 
     def prefetch(self, keys, where=None):
         """Queue cells keys' road heights (every source at each: the lidar's first of all) to be read in the
         background, PREFETCH_CELLS at once, a prefetch's reads never stopped (_read); where(key) -> m from the player
         (the server's latest focus, kept for the next calls too): the nearest queued cell is read first, one past
-        PREFETCH_FAR_M dropped; without one, the newest call's cells first in their order. Returns at once."""
+        PREFETCH_FAR_M dropped (one a planning process asked for: past PREFETCH_WANT_FAR_M); without one, the newest
+        call's cells first in their order. Returns at once."""
         if not self.enabled or self.fetcher is None:
             return
         st = self._pf()
@@ -929,8 +975,10 @@ class RoadZ:
                 k = mapcells.CellKey(int(z), int(x), int(y))
             except (OSError, ValueError):
                 continue
-            if k not in st["done"] and k not in st["busy"]:
-                st["queue"].setdefault(k, st["seq"])
+            if k not in st["done"]:
+                st["wanted"][k] = [now, 0]  # (dropped only past PREFETCH_WANT_FAR_M: _pf_next; asked again: renewed)
+                if k not in st["busy"]:
+                    st["queue"].setdefault(k, st["seq"])
                 st["logged"] = False
                 if st["t0"] is None:
                     st["t0"] = now
@@ -939,9 +987,14 @@ class RoadZ:
         """The next cell to read (under st's lock), or None: the nearest the player (st["where"]), else the first."""
         where = st["where"]
         best, bd = None, None
+        now = time.monotonic()
         for k, seq in list(st["queue"].items()):
+            w = st["wanted"].get(k)
+            if w is not None and now - w[0] > PREFETCH_WANT_KEEP_S:
+                del st["wanted"][k]         # (asked for long ago and not since: a cell like the rest)
+                w = None
             f = st["failed"].get(k)
-            if f is not None and time.monotonic() - f < PREFETCH_RETRY_S:
+            if f is not None and now - f < PREFETCH_RETRY_S * (2 ** max(0, w[1] - 1) if w is not None else 1):
                 continue
             d = seq
             if where is not None:
@@ -949,13 +1002,15 @@ class RoadZ:
                     d = float(where(k))
                 except Exception:
                     d = float("inf")
-                if d > PREFETCH_FAR_M:
+                if d > (PREFETCH_WANT_FAR_M if w is not None else PREFETCH_FAR_M):
                     del st["queue"][k]      # (the player is far from it now: asked again when near)
+                    st["wanted"].pop(k, None)
+                    st["failed"].pop(k, None)   # (not queued for a later try any more: prefetch_state)
                     continue
             if bd is None or (d, str(k)) < bd:
                 best, bd = k, (d, str(k))
         if best is not None:
-            del st["queue"][best]
+            del st["queue"][best]       # (still wanted while read, and when queued again after a failed read)
         return best
 
     def _pf_loop(self):
@@ -978,22 +1033,31 @@ class RoadZ:
                                      self.stats["bytes"] / 1e6)
                         st["cv"].wait(PREFETCH_POLL_S)
                 st["busy"].add(k)
-            ok = True
+            ok, missing = True, False
             try:
                 la, lo = k.center()
                 for src in sources_at(la, lo, self.lidar):
+                    _tl.failed = None
                     if self.lines(src, k) is None:
                         ok = False
+                        missing = missing or _not_found(getattr(_tl, "failed", None))
             except Exception as e:      # (asked again after PREFETCH_RETRY_S, or by the planning processes)
                 log.debug("roadz prefetch %s: %s: %s", k, type(e).__name__, e)
                 ok = False
+                missing = missing or _not_found(e)
             with st["cv"]:
                 st["busy"].discard(k)
                 st["last"] = time.monotonic()
+                w = st["wanted"].get(k)
                 if ok:
                     st["done"][k] = st["last"]
                     st["failed"].pop(k, None)
+                    st["wanted"].pop(k, None)
                 else:
+                    if w is not None:
+                        w[1] += 1
+                        if missing or w[1] >= PREFETCH_WANT_TRIES:
+                            del st["wanted"][k]     # (a 404, or tried enough: the want ends)
                     st["failed"][k] = st["last"]
                     st["queue"].setdefault(k, st["seq"])    # (again once PREFETCH_RETRY_S is past)
 

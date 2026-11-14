@@ -60,7 +60,15 @@ def native_threads(server_cpus):
 
 
 def split(share=SERVER_SHARE):
-    """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server."""
+    """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server.
+
+    The share is counted in whole cores, a core being as many CPUs as the machine's widest core has. Where the cores
+    are not all alike (Intel since the 12th generation: efficiency cores of one thread, numbered after the performance
+    cores of two), the last cores are the single-thread ones, and a quarter of an i7-12700K's twelve cores was its
+    last three efficiency cores: 3 of 20 CPUs for the server and its worker processes (a recorded session 2026-11-13:
+    the event loop stalled 53 times, 555 s in all, a terrain block queued 812 s). So cores are taken from the end until
+    they hold that many CPUs, still never more than half of the cores: there the four efficiency cores and one
+    performance core. On a machine whose cores are alike this is the same split as before."""
     cores = _siblings()
     if len(cores) < 4:
         return None, None              # too few cores to split usefully
@@ -71,8 +79,13 @@ def split(share=SERVER_SHARE):
             k = max(1, min(len(cores) // 2, want))
     except ValueError:
         pass
-    server = {c for _, cpus in cores[-k:] for c in cpus}
-    game = {c for _, cpus in cores[:-k] for c in cpus}
+    need = k * max(len(cpus) for _, cpus in cores)
+    n = have = 0
+    while n < len(cores) // 2 and have < need:
+        n += 1
+        have += len(cores[-n][1])
+    server = {c for _, cpus in cores[-n:] for c in cpus}
+    game = {c for _, cpus in cores[:-n] for c in cpus}
     return server, game
 
 

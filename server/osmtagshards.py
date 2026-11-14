@@ -127,12 +127,42 @@ def _read(path):
 
 
 class TagShards:
+    # (another dataset in the same layout, its own blob: osmyears.YearShards overrides these)
+    NAME, FORMAT, NATIVE, LABEL = NAME, FORMAT, NATIVE, "osmtags shards"
+    # (a stored tile's / directory's length from the remote archive at most, checked before its range read; None: any)
+    MAX_TILE_BYTES = None
+    MAX_LEAF_BYTES = None
+
+    def _check_head(self, part, b):
+        """Raise ShardError when part's first read b is not the one its manifest names (osmyears: head_sha256)."""
+
+    def _check_size(self, url, total):
+        """Raise ShardError when the archive at url is not the size its manifest names (osmyears: the part's bytes)."""
+
+    def _bound(self, what, n, cap):
+        if cap is not None and not 0 <= n <= cap:
+            raise ShardError(f"{self.LABEL}: a {what} of {n} bytes (at most {cap})")
+
+    def _on(self):
+        return ON
+
+    def _base(self):
+        return BASE
+
+    def _valid(self, m):
+        """Whether this reads manifest m's tiles (its blob's columns)."""
+        return schema_ok(m.get("schema"))
+
+    def _decode(self, b, m):
+        return decode(b, m)
+
     def __init__(self, cache_dir, fetcher):
-        fast.require(NATIVE, "osmtagshards")
+        fast.require(self.NATIVE, self.NAME)
         self.fetcher = fetcher
-        self.pages = railtags.Shards(cache_dir, fetcher, NAME)
-        if BASE:
-            self.pages.base = BASE.rstrip("/")
+        self.pages = railtags.Shards(cache_dir, fetcher, self.NAME)
+        base = self._base()
+        if base:
+            self.pages.base = base.rstrip("/")
         self._lock = threading.Lock()
         self._man = None            # (build, manifest dict; its "_parts": parts_of)
         self._heads = {}            # (build, part subfolder) -> (header dict, root bytes, etag)
@@ -145,7 +175,7 @@ class TagShards:
     # --- the build in use ---------------------------------------------------------------------------------------
     def manifest(self):
         """(build, manifest) of the shards in use, or None (off, not published, unreachable a moment ago)."""
-        if not ON or self.fetcher is None or time.monotonic() - self._down < DOWN_S:
+        if not self._on() or self.fetcher is None or time.monotonic() - self._down < DOWN_S:
             return None
         built = self.pages.version()
         if built is None:
@@ -159,8 +189,8 @@ class TagShards:
         except (OSError, ValueError, TypeError):
             return None
         parts = parts_of(m) if isinstance(m, dict) else None
-        if parts is None or m.get("built") != built or m.get("format") != FORMAT \
-                or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not schema_ok(m.get("schema")):
+        if parts is None or m.get("built") != built or m.get("format") != self.FORMAT \
+                or not isinstance(m.get("zoom"), int) or not 0 < m["zoom"] <= 14 or not self._valid(m):
             return None
         m["_parts"] = parts
         m["_firsts"] = [p[0] for p in parts]
@@ -190,7 +220,7 @@ class TagShards:
         return p if p[1] is None or t <= p[1] else None
 
     def down(self, e):
-        log.warning("osmtags shards: %s: %s; the parquet file for %.0f min", type(e).__name__, e, DOWN_S / 60)
+        log.warning("%s: %s: %s; not asked for %.0f min", self.LABEL, type(e).__name__, e, DOWN_S / 60)
         self._down = time.monotonic()
 
     # --- the archive --------------------------------------------------------------------------------------------
@@ -200,6 +230,9 @@ class TagShards:
         if r.status != 206 or not (n == end - start or (short_ok and 127 <= n < end - start)):
             raise ShardError(f"{url}: HTTP {r.status}, {n} bytes for {start}-{end - 1}")
         tag = (r.headers.get("etag") or "").strip()
+        cr = str(r.headers.get("content-range") or "")
+        if "/" in cr and cr.rsplit("/", 1)[1].strip().isdigit():
+            self._check_size(url, int(cr.rsplit("/", 1)[1]))
         if etag and tag and tag != etag:
             raise Changed(f"{url}: ETag {tag}, its directories cached at {etag}")
         return r.body, tag
@@ -240,14 +273,23 @@ class TagShards:
                 etag = json.load(f).get("etag")
         except (OSError, ValueError):
             b = None
+        if b is not None:
+            try:
+                self._check_head(part, b)
+            except ShardError:              # (a copy of another archive on disk: read again, checked again)
+                import shutil
+                shutil.rmtree(d, ignore_errors=True)
+                b = None
         if b is None:
             b, etag = self._get(url, 0, HEAD_BYTES, kind, short_ok=True)
+            self._check_head(part, b)
             _write(os.path.join(d, "head.bin"), b)
             _write(os.path.join(d, "head.json"), json.dumps({"etag": etag}).encode())
         h = fast._ef.pmt_header(b)
         if h["internal_compression"] not in (1, 2) or h["tile_compression"] not in (1, 2):
             raise ShardError(f"unsupported archive (compression {h['internal_compression']}/{h['tile_compression']})")
         ro, rl = h["root_offset"], h["root_length"]
+        self._bound("root directory", rl, self.MAX_LEAF_BYTES)
         root = b[ro:ro + rl] if ro + rl <= len(b) else self._get(url, ro, ro + rl, kind, etag)[0]
         got = (h, root, etag or None)
         with self._lock:
@@ -266,6 +308,7 @@ class TagShards:
                 b = self._leaves.get(k)
             if b is not None:
                 return b
+            self._bound("leaf directory", ln, self.MAX_LEAF_BYTES)
             path = os.path.join(self._pdir(built, part), "leaf", f"{off}_{ln}")
             b = _read(path)
             if b is None or len(b) != ln:
@@ -291,6 +334,7 @@ class TagShards:
                     break
                 off, ln, leaf = e
                 if not leaf:
+                    self._bound("tile", ln, self.MAX_TILE_BYTES)
                     a = h["data_offset"] + off
                     body, _ = self._get(self._url(part), a, a + ln, kind, etag)
                     break
@@ -305,7 +349,7 @@ class TagShards:
         cell key, or raises (ShardError, netfetch's errors); NotInUse when the shards are not in use."""
         got = self.manifest()
         if got is None:
-            raise NotInUse("osmtags shards: none in use")
+            raise NotInUse(f"{self.LABEL}: none in use")
         built, m = got
         z = m["zoom"]
         if key.z < z:
@@ -331,9 +375,9 @@ class TagShards:
             t = None
             if b:
                 try:
-                    t = decode(b, m)
+                    t = self._decode(b, m)
                 except ValueError as e:         # (damaged on disk: read again)
-                    log.warning("osmtags shards: %s: %s; reading it again", path, e)
+                    log.warning("%s: %s: %s; reading it again", self.LABEL, path, e)
                     b = None
             if b is None:
                 try:
@@ -341,7 +385,7 @@ class TagShards:
                 except Changed:
                     self._forget(built)
                     raise
-                t = decode(b, m) if b else None
+                t = self._decode(b, m) if b else None
             with self._lock:
                 self._mem[k] = t
                 while len(self._mem) > MEM_TILES:

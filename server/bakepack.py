@@ -33,15 +33,6 @@ _packs = {}             # cache dir -> [Pack]
 _seen = {}              # cache dir -> the pack files' (name, size, mtime) when last listed
 
 
-def meta_for(md, signature, frames):
-    """The meta a pack made with map data md and plans signature / frames carries (and a reader expects)."""
-    import plancache
-    import roads
-    return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
-            "frames": frames, "signature": signature,
-            "versions": json.loads(json.dumps(md.versions(), sort_keys=True)) if md is not None else None}
-
-
 class Writer:
     """Items into a pack file (bake_area.py): add(key, bytes), then close(meta)."""
 

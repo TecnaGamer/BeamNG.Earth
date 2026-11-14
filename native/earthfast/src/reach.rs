@@ -171,7 +171,17 @@ pub struct Params {
     pub max_states: usize,
     pub route_m: f64,
     pub route_share: f64,
+    // the driver's intent (server/reach.py intent(): from the car's own motion), at the junctions reached within
+    // intent_s of the car: turn (-1 right .. 1 left: the car already turning that way) makes the ways turning that
+    // way likelier, brake (0 .. 1: slowing down hard for it) every turn likelier than going on straight
+    pub intent_turn: f64,
+    pub intent_brake: f64,
+    pub intent_s: f64,
 }
+
+const INTENT_TURN_K: f64 = 1.5;     // a way turning the car's way: e^(1.5 turn) likelier (the other way e^-1.5 turn)
+const INTENT_BRAKE_K: f64 = 1.2;    // every turn e^(1.2 brake) likelier
+const INTENT_MIN_THETA: f64 = 0.35; // rad (20 deg): a way turning less than this is straight on
 
 struct Route {
     segs: Vec<([f64; 2], [f64; 2])>,
@@ -441,6 +451,13 @@ impl RoadReach {
                 }
                 let delay = Self::turn_delay(theta, s, pr);
                 let mut w = (-delay / pr.t_p).dexp();
+                if eta_end <= pr.intent_s && theta >= INTENT_MIN_THETA
+                    && (pr.intent_turn != 0.0 || pr.intent_brake > 0.0) {
+                    // (the driver's intent: a junction close ahead, the car turning or braking for it)
+                    let side = if t_in[0] * t_out[1] - t_in[1] * t_out[0] >= 0.0 { 1.0 } else { -1.0 };
+                    w *= (INTENT_TURN_K * pr.intent_turn.clamp(-1.0, 1.0) * side
+                          + INTENT_BRAKE_K * pr.intent_brake.clamp(0.0, 1.0)).dexp();
+                }
                 let (ri, ro) = (rank_in & 0x7f, o.rank & 0x7f);
                 if ro < ri {
                     w *= pr.class_k.powi((ri - ro).min(4) as i32);
@@ -780,20 +797,25 @@ impl RoadReach {
     /// no road of the graph (none within snap_m going its way). {"pts": (n, 4) x, y, eta s, chance; "mpp": (k, 3)
     /// x, y, eta of the most probable path; "frontier": (m, 4) x, y, eta, chance where the loaded data ends;
     /// "states": directed edges walked}. route: a GPS route's line (k, 2) in the frame: at a junction the ways
-    /// along it (within route_m) take route_share of the chance.
+    /// along it (within route_m) take route_share of the chance. intent_turn / intent_brake / intent_s: the driver's
+    /// intent at the junctions within intent_s (s) of the car (Params; 293).
     #[pyo3(signature = (x, y, vx, vy, horizon_s, p_min=0.03, step_m=32.0, snap_m=30.0, snap_cos=0.7, a_turn=6.0,
                         v90=12.0, t_p=2.0, class_k=0.6, link_k=0.5, max_states=20000, route=None, route_m=20.0,
-                        route_share=0.9))]
+                        route_share=0.9, intent_turn=0.0, intent_brake=0.0, intent_s=0.0))]
     #[allow(clippy::too_many_arguments)]
     fn grow(&mut self, py: Python<'_>, x: f64, y: f64, vx: f64, vy: f64, horizon_s: f64, p_min: f64, step_m: f64,
             snap_m: f64, snap_cos: f64, a_turn: f64, v90: f64, t_p: f64, class_k: f64, link_k: f64,
-            max_states: usize, route: Option<PyReadonlyArray2<'_, f64>>, route_m: f64, route_share: f64)
+            max_states: usize, route: Option<PyReadonlyArray2<'_, f64>>, route_m: f64, route_share: f64,
+            intent_turn: f64, intent_brake: f64, intent_s: f64)
             -> PyResult<Option<Py<PyDict>>> {
         if !(step_m > 0.1) || !(horizon_s >= 0.0) || !(a_turn > 0.0) || !(t_p > 0.0) {
             return Err(PyValueError::new_err("step_m, a_turn and t_p must be positive, horizon_s not negative"));
         }
+        if !(intent_turn.is_finite() && intent_brake.is_finite() && intent_s.is_finite()) {
+            return Err(PyValueError::new_err("intent_turn, intent_brake and intent_s must be finite"));
+        }
         let pr = Params { horizon_s, p_min, step_m, snap_m, snap_cos, a_turn, v90, t_p, class_k, link_k, max_states,
-                          route_m, route_share };
+                          route_m, route_share, intent_turn, intent_brake, intent_s };
         let rxy: Option<Vec<[f64; 2]>> = match route {
             Some(r) => {
                 let a = r.as_array();

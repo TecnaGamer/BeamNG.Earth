@@ -59,6 +59,7 @@ Same pattern as MSFS "anchor space", Cesium origin-shifting, and KSP floating or
 | reloadCollision | 2 048 tris: 0.5 ms; 8 192 tris: 2.3 ms (in an otherwise empty smallgrid). |
 | Ray tools | `castRayStatic(pos, dir, len)` returns the physics-collision distance (use it to verify drivability). The MCP `raycast` tool only sees render geometry. |
 | **Collision rebuild scales linearly with ALL collidable tris, and it blocks the frame** | ProceduralMesh: 131k tris 41 ms, 524k 162 ms (**~0.31 ms per 1k tris**). TSStatic 'Visible Mesh' costs about half (~0.15 ms per 1k). `reloadStaticCollision()` and `reloadCollision(false,true)` cost the same. There is **no cheaper path**. Budget: keep collidable geometry around ~100k tris (≈20–30 ms per rebuild). |
+| **What a rebuild costs on a Steam Deck (2026-11-14)** | Two parts, both by geometry, not by object count: the frame's Lua (the engine gathering every collider's mesh) ~3 ms + ~4-5 ms per MB of unique collision mesh, and the physics thread's tree build (`Loaded Static Collision`) ~2 ms + ~0.2 ms per 1k triangles; the terrain is re-added every time. Forest items share their meshes: 866 solid trees and props off cost 3 ms of 27 (their 0.7 MB), the 48 road-tile colliders 16 ms (3 MB). `reloadCollision(a, b)` in all four forms and `reloadStaticCollision` cost the same (9 variants, 10 calls each, parked in Fells Point), and fresh colliders with `prebuildCollisionData` 1 rebuilt no faster than with 0 (26 ms median both, 3 rounds) while each cost ~1.7 ms more to make. So merging props into one mesh a tile would make rebuilds dearer (unique MB); fewer road-tile colliders round the car is what helps (roads.lua BEHIND). |
 | ProceduralMesh render-only? | **No.** `disableCollision()` does NOT remove it from physics (ray still hits, rebuild cost unchanged). It has no collisionType field. **Far/render-only tiles must be TSStatic with `collisionType='None'`.** |
 | TSStatic from runtime-written .dae | Works. A `.dae` written by an external process into `<user>/temp/beamngEarth/` loads immediately via `shapeName='/temp/beamngEarth/x.dae'`, with its PNG texture (relative `init_from`). 8 192 tris: 51 ms spawn; **131k tris: 415 ms** (XML parse, main thread). Large single meshes do NOT hang (unlike ProceduralMesh). **Its collision appears only on a reload in a later frame**, not in the same frame as the spawn. Writer: `server/dae.py`. |
 | Drivability | A car drives on ProceduralMesh tiles normally (follows the surface; ground clearance stays constant). |
@@ -977,8 +978,8 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   counts differences). Steam Deck: setFile's CPU 22.9 -> 1.9 ms a swap; Windows test PC: the swap call 53 -> 31 ms,
   driving frames over 50 ms 10.9 -> 6.2 a minute. What remains of a swap is the frame after it (the material
   texture rebuild: texkeep) and waits for the GPU device.
-- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; opt-in, BNGEARTH_TEXKEEP=1, until a
-  teleport soak: the review's deadlock paths went 2026-11-13): it hooks the texture manager's
+- The same library (tools/gcpatch/README.md) also carries texkeep (2026-11-03; on by default on Linux since the
+  2026-11-14 teleport soaks, off with BNGEARTH_TEXKEEP_OFF=1): it hooks the texture manager's
   createTexture (vtable slot 5) for the terrain pack loader and hands back the packed terrain textures it kept from
   the last material rebuild, so a block swap or setBase no longer re-creates the unchanged packs (swap frame Render
   21.6 -> 13.0 ms median, setBase 83 -> 58 ms on the PC); and dtsmooth, a 95-byte rewrite of FrameTime::update so

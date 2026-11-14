@@ -6,6 +6,7 @@ mod devctx;
 mod reach;
 mod devraster;
 mod roofs;
+mod domes;
 mod roofphoto;
 mod gravity;
 mod polyproject;
@@ -107,6 +108,8 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod osmtagshards;
+mod buildyears;
+mod buildcolours;
 mod gradebins;
 mod par;
 mod bc1fast;
@@ -122,6 +125,7 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod paintlist;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6421,6 +6425,25 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
     // grading._Planner._road_stage)
     stageshare::register(m)?;
-    m.add("VERSION", 290)?;
+    // 293 (291 and 292 are other branches'): RoadReach.grow takes the driver's intent (intent_turn, intent_brake,
+    // intent_s: server/reach.py intent())
+    // 295 (on 293; 294 is the stage-sharing fix branch's; written as 288 on 285, then 291 on 290): a ground photo's
+    // whole paint in one call from paint lists made once per set of map cells (paintlist: PaintStyle, PaintRoads,
+    // PaintPolys, PaintFields, paint_photo, pil_raster; server/paintlist.py, surface.paint_square), roadtone's coverage
+    // loop shared with it
+    paintlist::register(m)?;
+    // 296 (on 295; written as 294 on 290): the stage claims with an owner token, the process's start time and an
+    // uptime lease, changed only under the folder's lock; a damaged stage file written again (stage_claim / stage_wait
+    // repair; stage_put and stage_release take the token)
+    // 297: domes::dome_roof (a dome over any outline from its centroid or pole of inaccessibility: Streets GL's
+    // CurvedRoofBuilder, MIT; server/buildings.py _dome)
+    domes::register(m)?;
+    // 298: buildyears::oby_decode (a tile of the OSM building construction years, tools/build_osm_building_years.py,
+    // server/osmyears.py: the towers' facades by era, buildings.plan)
+    buildyears::register(m)?;
+    // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
+    // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
+    buildcolours::register(m)?;
+    m.add("VERSION", 301)?;
     Ok(())
 }

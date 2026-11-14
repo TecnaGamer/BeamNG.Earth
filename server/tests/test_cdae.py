@@ -216,6 +216,33 @@ class SplitCollisionTest(unittest.TestCase):
         self.assertEqual(len(d["meshes"]), 4)
 
 
+class DrawnPartsTest(unittest.TestCase):
+    def test_parts_are_objects_of_the_one_detail(self):
+        """parts=: further drawn meshes, each its own object ("<name>2", ...) with one mesh in the one detail: a shape
+        past the engine's 16-bit indices as several meshes under them (the far building packs, 2026-11-14)."""
+        P = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], float)
+        T = np.array([[0, 1, 2], [0, 2, 3]])
+        mats = ["a", "b", "c"]
+        parts = [{"positions": P + [20, 0, 0], "tris": T[:1], "tri_materials": [2]},
+                 {"positions": P + [0, 0, 5], "tris": T, "tri_materials": [0, 2], "uvs": np.zeros((4, 2))}]
+        d = cdae.decode(cdae.encode(P, T, material=mats, tri_materials=[0, 0], object_name="buildings", parts=parts))
+        self.assertEqual(d["names"], ["buildings", "buildings2", "buildings3", "detail2"])
+        self.assertEqual(d["header"]["objectNames"], ["buildings", "buildings2", "buildings3"])
+        self.assertEqual([m["type"] for m in d["meshes"]], [0, 0, 0])
+        self.assertEqual(d["objects"][0], 3)
+        self.assertEqual(d["details"][0], 1)
+        self.assertEqual([mt["name"] for mt in d["materials"]], ["a", "c"], "the materials the meshes use")
+        ms = [cdae.mesh_arrays(m) for m in d["meshes"]]
+        self.assertEqual([len(m["indices"]) // 3 for m in ms], [2, 1, 2])
+        self.assertEqual([len(m["verts"]) for m in ms], [4, 3, 4])
+        self.assertEqual([int(p[2]) & cdae.PRIM_MATERIAL_MASK for p in ms[1]["primitives"]], [1])
+        self.assertAlmostEqual(d["bounds"][3], 30.0)
+        self.assertAlmostEqual(d["bounds"][5], 5.0)
+        with self.assertRaises(cdae.CdaeError):
+            cdae.encode(P, T, material="m", parts=parts[:1], collision_only=True)
+        # without parts: the shape as before
+        self.assertEqual(cdae.encode(P, T, material="m", parts=None), cdae.encode(P, T, material="m"))
+
 
 class PackedTest(unittest.TestCase):
     """Shapes are written with their body as one zstd frame (the game reads them as its own compressed shapes,
