@@ -150,6 +150,7 @@ import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
+import bldhz as bldhzmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
 import geotiles as geotilesmod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
@@ -826,7 +827,7 @@ SESSION_ORPHAN_S = 600.0
 # geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
 GEO_FILES_GRACE_S = 120.0
 GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within this share one listing of the folder
-GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar", "bldpack": "bldpack"}  # kind -> Connection attr
+GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar", "bldpack": "bldpack", "bldhz": "bldhz"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
 LEASE_GRACE_S = 900.0       # a disconnected game's stream lease (PR #817) kept this long for it to reconnect
@@ -7371,7 +7372,8 @@ class Connection:
         self.gpolys = {}                        # (anchorId, key) -> a shown global tile's quad in that anchor's world
         self.ppolys = {}                        # piece key -> its polygon (pieces sent / shown under the active anchor)
         self.building_scale = 1.0
-        self.bldfar = self.bldsky = self.brfar = self.bldpack = None
+        self.bldfar = self.bldsky = self.brfar = self.bldpack = self.bldhz = None
+        self.far_hz = False                     # the horizon ring's tall buildings (hello.farHz, bldhz.py)
         self.far_pack = False                   # far building packs past PACK_INNER_M (hello.farPack, buildings.PACK_*)
         self.make_far_trackers(False)
         self.turbine_geo = False               # separate capability; no road/building radius increase
@@ -8366,7 +8368,7 @@ class Connection:
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None),
-                       getattr(self, "turbines", None), self.nav,
+                       getattr(self, "bldhz", None), getattr(self, "turbines", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -8392,10 +8394,10 @@ class Connection:
         geotiles (geo: far buildings in the road geotiles' grid sent as whole skyline squares, the skyline's and far
         bridges' squares at geotiles.SKY_Z / BRIDGE_Z), each at the building scale's reach (set_graphics)."""
         import geotiles
-        for tr in (self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None)):
+        for tr in (self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "bldhz", None)):
             if tr is not None:
                 tr.close()
-        self.bldpack = None
+        self.bldpack = self.bldhz = None
         self.far_geo = bool(geo)
         bld = self.building_scale
         far_m = buildingsmod.FAR_SEND_M * bld
@@ -8431,6 +8433,12 @@ class Connection:
             # mod hides each piece where its road geotile shows its own deck)
             self.brfar = (vegetationmod.Tracker(br_m, br_drop, buildingsmod.BRIDGE_FAR_PER_POSE, "brfar", geo=True,
                                                 z=geotiles.BRIDGE_Z) if bridges else None)
+            # (the horizon ring past the skyline: the tall buildings' index, bldhz.py; its pieces hidden by the mod
+            # where a skyline square, a pack or far tiles show)
+            if getattr(self, "far_hz", False) and sky:
+                hz_m = bldhzmod.SEND_M * bld
+                self.bldhz = vegetationmod.Tracker(hz_m, hz_m + bldhzmod.DROP_EXTRA_M, bldhzmod.PER_POSE, "bldhz",
+                                                   geo=True, z=bldhzmod.Z)
             return
         self.bldfar = vegetationmod.Tracker(far_m, far_drop, buildingsmod.FAR_PER_POSE, "bldfar",
                                             group=buildingsmod.SKY_UNIT if sky else None)
@@ -8451,7 +8459,8 @@ class Connection:
         self.roads = road_tracker(self)
         self.signs.close()
         self.signs = signstream.Tracker()
-        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "turbines", None),
+        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "bldhz", None),
+                   getattr(self, "turbines", None),
                    self.distant_traffic, self.distant_traffic_far):
             if tr is not None:
                 tr.forget()
@@ -8637,13 +8646,16 @@ class Connection:
             # FAR_GEO; a far tile and the road geotile of the same key hold the same buildings: one shows them)
             far_geo = road_geo and msg.get("farGeo") == buildingsmod.FAR_GEO and self.s.far_geo_ok()
             far_pack = bool(far_geo and msg.get("farPack") == buildingsmod.FAR_PACK and buildingsmod.PACK_ON)
-            if far_geo != self.far_geo or far_pack != self.far_pack:
-                self.far_pack = far_pack
+            far_hz = bool(far_geo and msg.get("farHz") == bldhzmod.PROTO and bldhzmod.on())
+            if far_geo != self.far_geo or far_pack != self.far_pack or far_hz != self.far_hz:
+                self.far_pack, self.far_hz = far_pack, far_hz
                 self.make_far_trackers(far_geo)
             if far_geo:
                 m["farGeo"] = buildingsmod.FAR_GEO
             if far_pack:
                 m["farPack"] = buildingsmod.FAR_PACK
+            if far_hz:
+                m["farHz"] = bldhzmod.PROTO
             self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
             if self.turbine_geo:
                 m["turbineGeo"] = TURBINE_GEO
@@ -8880,6 +8892,9 @@ class Connection:
                 self.bldsky.send_m = buildingsmod.SKY_SEND_M * bld
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
                 self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
+            if self.bldhz is not None:
+                self.bldhz.send_m = bldhzmod.SEND_M * bld
+                self.bldhz.drop_m = self.bldhz.send_m + bldhzmod.DROP_EXTRA_M
             if self.brfar is not None:
                 self.brfar.send_m = buildingsmod.BRIDGE_FAR_SEND_M * bld
                 self.brfar.drop_m = self.brfar.send_m + (buildingsmod.BRIDGE_FAR_DROP_M - buildingsmod.BRIDGE_FAR_SEND_M)
@@ -9996,6 +10011,10 @@ class Connection:
                 self.bldsky.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                     self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
                                     view=self.view_at, frame=frame)
+                # (the horizon ring last, once the skyline round the car is there)
+                if self.bldhz is not None and self.bldsky.progress()[0] >= self.bldsky.progress()[1]:
+                    self.bldhz.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldhz"),
+                                       view=self.view_at, frame=frame)
             if self.brfar is not None and later and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
                 self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                    self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
