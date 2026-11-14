@@ -1652,6 +1652,7 @@ class Tracker:
         # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
         # sent files' digests are kept for that, earthd's stale mode turns it on)
         self.redo, self.sent_h, self.digests = set(), {}, False
+        self.epoch = 0              # (drop_all: a build started before it lands unwanted)
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
@@ -1776,7 +1777,7 @@ class Tracker:
         for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((gx, gy))
             fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
-            fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
+            fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
             self.sent_h.pop(k, None)
@@ -1822,8 +1823,27 @@ class Tracker:
                 self._quads.clear()
         return geotiles.quad_dist(q, x, y)
 
-    def _built_geo(self, conn, key, fut):
+    def drop_all(self, conn):
+        """Every geotile sent dropped (a drop message each) and the builds in flight left unwanted (their results are
+        not sent): the kind turned off while its tiles show (the horizon ring at the Near building distance, Codex
+        review: with no more poses its tiles were never dropped)."""
         import geotiles
+        z = self.z or geotiles.Z
+        self.epoch += 1
+        for f in list(self.futs.values()):
+            f.cancel()
+        self.futs, self.building = {}, set()
+        gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
+        for k in sorted(self.sent):
+            conn.send({"type": f"{self.kind}_drop", "anchorId": self.aid, "key": geotiles.key(*k, z)})
+            if callable(gone):
+                gone(self.kind, k, geotiles.key(*k, z))
+        self.sent, self.sent_h, self.redo, self.car = set(), {}, set(), set()
+
+    def _built_geo(self, conn, key, fut, epoch=None):
+        import geotiles
+        if epoch is not None and epoch != self.epoch:
+            return                      # (started before drop_all: unwanted)
         self.building.discard(key)
         self.futs.pop(key, None)
         if fut.cancelled():

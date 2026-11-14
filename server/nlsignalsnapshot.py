@@ -1,8 +1,8 @@
-"""Connection-local ownership for the forthcoming native signal stream.
+"""Connection-local ownership for the opt-in native signal stream.
 
 No data imports, planning or engine calls. A caller captures a ticket before
 dispatching native work and offers its result only for that exact snapshot.
-This is not enabled by the current live protocol yet.
+The live tracker keeps stock ownership until the exact client acknowledgement.
 """
 from dataclasses import dataclass
 import copy

@@ -5,7 +5,7 @@ local reader,raw,queued,refs,owned=nil,nil,nil,{},{}
 local graphSerial,renderRevision,lastSignature,lastAck=nil,0,nil,nil
 local send,accepted
 local phaseAt,frameScope=0,nil
-M.stats={packets=0,accepted=0,errors=0,parts=0}
+M.stats={packets=0,accepted=0,errors=0,parts=0,liveOwners=0}
 local function receiver()
   if not reader then reader=consumer.new(require('beamngEarth/nl_signal_forest').new()) end
   return reader
@@ -93,6 +93,7 @@ function M.update(anchor,ground,budget)
     local token=tostring(raw.epoch)..':'..raw.revision
     if token~=lastAck then
       owned={};for _,name in ipairs(raw.owners)do owned[name]=true end
+      M.stats.liveOwners=#raw.owners
       -- Linked stock objects are detached only after every new item exists.
       if accepted then accepted(owned)end
       if send then send({type='nl_signals_ack',anchorId=anchor,epoch=raw.epoch,revision=raw.revision})end
@@ -106,5 +107,6 @@ function M.clear(levelGone)
     if levelGone then reader:forgetLevel()else reader:setEnabled(false)end
   end
   raw=nil;queued=nil;refs={};owned={};graphSerial=nil;lastSignature=nil;lastAck=nil;phaseAt=0;frameScope=nil
+  M.stats.liveOwners=0
 end
 return M

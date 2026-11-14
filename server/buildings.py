@@ -25,6 +25,7 @@ import dnp
 import landmarks
 import mapgeom
 import nycmassing
+import osmcolours
 import osmyears
 import ships
 import staging
@@ -131,6 +132,7 @@ MARBLE = "bne_bld_marble"   # cut white marble (the stock m_marble_cut): Baltimo
 BRICK_WALL = "bne_bld_brick"    # plain red brick (the stock brick_plain): a garage's skin
 CONCRETE = "bne_bridge_concrete"  # plain concrete (tunnel.materials.json): a precast garage's skin
 SKY_WALL = "bne_bld_sky"    # the skyline's walls: plain (vertex colours), their windows lit at night (_sky_mesh)
+SKY_WALL_DAY = "bne_bld_skywin"     # ... with windows by day too (the far packs' sky style, PACK_STYLE: bne_sky_day_b)
 LANDMARK_IRON = "bne_lm_iron"   # a landmark's painted iron (landmarks.py; vertex colours), lit at night (nightlights.lua)
 LANDMARK_STONE = "bne_lm_stone"     # ... its stone (vertex colours), dark at night (lit by its lamps: the Colosseum)
 LANDMARK_FLOODLIT = "bne_lm_floodlit"   # ... its floodlit stone, glowing at night (the Arc de Triomphe, Big Ben)
@@ -139,7 +141,8 @@ LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behi
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
-                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER)
+                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER,
+                                                                  SKY_WALL_DAY)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -4660,10 +4663,11 @@ class _PartsOf:
     (converting every part for every tile was half of tile_buildings' time in Manhattan, 2026-10-24). A part in two
     cells' layers is taken once (the first)."""
 
-    def __init__(self, frame, part_layers):
+    def __init__(self, frame, part_layers, colours=None):
         self.frame = frame
         self.layers = [f for f in part_layers if f is not None and len(f.kind)]
         self.memo = {}
+        self.colours = colours      # (osmcolours.Index: OSM's colours where the part's Overture ones are empty)
 
     def _part(self, f, i):
         pp = f.parts(i)
@@ -4678,6 +4682,8 @@ class _PartsOf:
         # (and its roof height, materials and roof direction where the layer has them: a part's own roof height was read
         # and dropped, research 2026-11-10)
         own = {k: (a[k][i] if k in a else None) for k in PART_OWN}
+        if self.colours is not None and "src_record" in a:
+            own = self.colours.fill(own, a["src_record"][i])
         return np.stack([e, n], 1), _part_heights(a, i), own
 
     def get(self, bid, default=None):
@@ -5038,7 +5044,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
-                   industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None):
+                   industrial=None, parts_min_top=None, nyc=None, carriageways=None, clear_stats=None, years=None,
+                   colours=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -5055,10 +5062,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     nyc: nycmassing.Fetch, New York's measured massing: a building without parts of its own that matches a record
     takes the record's parts (its setbacks), drawn as the map's parts are. carriageways: carriageway_segments' roads,
     the footprints kept off them (road_clearance; clear_stats its counts). years: osmyears.Fetch, OSM's construction
-    years by way (a building's _year, its parts' too: era, tower_era)."""
-    parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
-    nyc_idx = nyc.index() if nyc is not None else None
+    years by way (a building's _year, its parts' too: era, tower_era). colours: osmcolours.Fetch, OSM's colours by way
+    or relation, a building's or a part's facade_color / roof_color where Overture's is empty."""
     year_idx = years.years() if years is not None else None
+    col_idx = osmcolours.Index(colours.colours()) if colours is not None else None
+    # building id -> [(ring in the anchor frame, (own height, bottom), own attrs)]
+    parts_of = _PartsOf(frame, part_layers, col_idx if col_idx is not None and col_idx.c is not None else None)
+    nyc_idx = nyc.index() if nyc is not None else None
     seen = set()
     turbines = None                             # (turbine_points, looked up at the first building)
     # the decks' and the tunnels' floors at their heights (decks): a building such a floor runs through gets its way at
@@ -5093,6 +5103,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         # (OSM's construction years of the rows' ways: osmyears.py)
         row_years = dict(zip(rows, osmyears.lookup(year_idx, [a["src_record"][i] for i in rows]).tolist())) \
             if year_idx is not None and a.get("src_record") is not None else None
+        # (and OSM's colours where Overture dropped them: osmcolours.py)
+        row_cols = dict(zip(rows, col_idx.lookup([a["src_record"][i] for i in rows]))) \
+            if col_idx is not None and col_idx.c is not None and a.get("src_record") is not None else None
         for i in rows:
             if a.get("is_underground") is not None and bool(a["is_underground"][i]):
                 continue
@@ -5132,6 +5145,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                   ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color", "roof_orientation",
                    "roof_direction", "height_src", "roof_rise")}
+            if row_cols is not None and row_cols[i] != (None, None):
+                at = osmcolours.fill_from(at, row_cols[i])
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
             if row_years is not None and row_years.get(i):
@@ -5767,6 +5782,20 @@ FAR_PER_POSE = 4
 FAR_PACK = 1
 PACK_ON = os.environ.get("BNE_BLDPACK", "on") != "off"
 PACK_INNER_M = float(os.environ.get("BNE_BLDPACK_INNER_M", "1000"))
+# A pack's buildings drawn as the skyline's walls (2026-11-14, Windows DX11 import A/B): the lite mesh takes one quad a
+# floor a wall (a floor is a band of the window sheet), ~1,000 vertices a Midtown tower, and the engine's shape load
+# grows with the vertices (~0.115 ms per 1,000 there): a Midtown pack (1,523 buildings, 728k vertices) 86.5 ms to make,
+# a Fells Point pack (322k) 44.3 ms; the same buildings as the skyline's walls (a quad a wall, vertex colours) 34k /
+# 70k vertices. "sky": every building so, its walls in SKY_WALL_DAY (the skyline's cells with day windows); "tall": only
+# those past PACK_SKY_FLOORS floors (the many-vertex ones; the low ones keep the lite mesh's textured walls); "lite":
+# the lite mesh (build_parts) as before. In the far geotiles' revisit key (blockworker.far_geo) when not "lite".
+# "sky" by default (2026-11-14, Windows DX11 drive A/B at 45 mph): Midtown's pack made in 7.4 ms on average (17 at most)
+# against 48.5 (166), frames over 50 ms 27 against 64, over 100 ms 0 against 5; the look at 0.6-1 mi close to the lite
+# mesh's (day windows). "tall" saves nothing in a low-rise city (Fells Point: no building past 8 floors).
+PACK_STYLE = os.environ.get("BNE_FARPACK_STYLE", "sky")
+if PACK_STYLE not in ("lite", "sky", "tall"):
+    PACK_STYLE = "sky"
+PACK_SKY_FLOORS = 8
 PACK_PER_POSE = 2
 FAR_GEO = 1                 # the far geotiles' protocol (hello.farGeo, the mod's roads.lua M.FAR_GEO): far buildings,
                             # skyline and far bridges in the global tiles' frames (blockworker.far_geo)
@@ -6473,6 +6502,7 @@ def road_tile_items(
     bag3d = threedbag.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (the Dutch roofs, likewise)
     nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks, likewise)
     years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years, likewise)
+    colours = osmcolours.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's colours Overture dropped, likewise)
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
     keys = roads.cells_of_tile(frame, tx, ty, margin=0.0)
     measured_wait(md, keys)
@@ -6499,6 +6529,7 @@ def road_tile_items(
         bag3d=bag3d,
         nyc=nyc,
         years=years,
+        colours=colours,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
@@ -7009,11 +7040,13 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None, urban_fn=None, widt
     keys, layers = far_needs(frame, tile, ty)
     nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks)
     years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years)
+    colours = osmcolours.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's colours Overture dropped)
     measured_wait(md, keys)
     import mapcells
     cds = mapcells.load_cells(md, keys, layers)
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds], nyc=nyc, years=years,
+                           colours=colours,
                            house_land_layers=[c.layers.get("land_use") for c in cds],
                            roofs=measured_roofs(md, frame, x0, y0, x1, y1),
                            west_town=district_town(frame, tile, ty, md),
@@ -7203,6 +7236,8 @@ SKY_UV = (0.5, 0.5)
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")
 SKY_BAY_M = 3.5
 SKY_WIN_BAYS = SKY_WIN_FLOORS = 16
+SKY_DAY_GAIN = 1.0 / 0.8125     # 1 / the day map's mean (tools/build_sky_windows.py --day): a wall's mean colour is its
+                                # facade's (MAT_MEAN: windows and all)
 
 
 def _sky_colour(look, f):
@@ -7214,14 +7249,15 @@ def _sky_colour(look, f):
     return tuple(int(max(0, min(255, round(255 * m * t * f)))) for m, t in zip(mean, tint)) + (255,)
 
 
-def _sky_mesh(items):
+def _sky_mesh(items, day=False):
     """The skyline meshes of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
     texel, coloured per vertex (~4 per corner + the roof's corners: a row house is 20 vertices, the lite mesh ~72).
     [(positions, uvs, tris, tri material indices, MATERIALS, colours)] as build_parts (whole buildings, each mesh
-    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None."""
+    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None. day: the walls with
+    windows in SKY_WALL_DAY (the far packs' sky style), their colours raised by SKY_DAY_GAIN."""
     m = Mesh()
     mi = MATERIALS.index(MARBLE)
-    ms = MATERIALS.index(SKY_WALL)
+    ms = MATERIALS.index(SKY_WALL_DAY if day else SKY_WALL)
     uv = SKY_UV
     starts = []                 # each building's first vertex (the cuts between meshes: _cut_buildings)
     for spec, gmin, gmax in items:
@@ -7236,7 +7272,7 @@ def _sky_mesh(items):
             ring = ring[::-1]
         f = 1.0 + JITTER * (2.0 * _hash01(spec.seed, "jit") - 1.0)
         windows = spec.windows is not False
-        wall = (ms if windows else mi, _sky_colour(spec.facade, f))
+        wall = (ms if windows else mi, _sky_colour(spec.facade, f * SKY_DAY_GAIN if day and windows else f))
         roof = (mi, _sky_colour(spec.roof_mat or ROOF_FLAT, f))
         z0 = gmin - SKIRT_LITE_M
         z1 = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
@@ -7322,6 +7358,56 @@ def _cut_buildings(P, UV, T, M, C, starts, limit):
     return out
 
 
+def _sky_simplify(items, copy=False):
+    """Each item's Spec made the skyline's simplest shape (a box or a few corners, a flat roof, nothing on it); in place,
+    or (copy) on copies of the specs: [(Spec, gmin, gmax)]."""
+    import copy as copymod
+    out = []
+    for spec, gmin, gmax in items:
+        if copy:
+            spec = copymod.copy(spec)
+        ring = np.asarray(spec.ring, np.float64)
+        if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
+            c, u, hl, hw = oriented_box(ring)
+            v = np.array([-u[1], u[0]])
+            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
+        elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
+            ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
+        spec.ring = ring
+        # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
+        keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
+        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
+        out.append((spec, gmin, gmax))
+    return out
+
+
+def pack_meshes(items, style=None):
+    """A far pack's meshes (build_parts' list: one shape, an object each) of its items in PACK_STYLE (style): "lite" the
+    lite mesh; "sky" every building as the skyline's walls with day windows (_sky_mesh day); "tall" those past
+    PACK_SKY_FLOORS floors so, the others lite. Landmarks keep their own far model either way."""
+    style = style or PACK_STYLE
+    if style == "lite":
+        return build_parts(items, lite=True)
+
+    def boxy(s):        # (a closed block: not a landmark's model, a French house, an open frame, a ship, a canopy,
+        # nor a mapped dome: _sky_simplify flattens its roof, and plan() took the dome's rise off its height, so it lost
+        # its top half at the pack's hand-over: it keeps the lite mesh, Codex review 2026-11-14)
+        # Only a flat roof without a steeple: the skyline's simplify keeps a sloped roof as drawn only in some cases
+        # and the dome's / gable's / skillion's rise came off the walls' height in plan(), so every sloped form needed
+        # its own height rule (nine review rounds, each a new form 2-350 m off: mapped skillions, skeleton pyramids,
+        # greenhouses, steeples ...): sloped, domed and steepled buildings keep the lite mesh, flat ones lose nothing.
+        return (s.cls != landmarks.LANDMARK and not s.fr_house and s.cls not in BRIDGE_CLASSES and s.cls != "ship"
+                and s.cls not in CANOPY_CLASSES and s.cls != "toll_booth" and s.roof in (None, "flat")
+                and not s.steeple)
+    sky = [it for it in items if boxy(it[0]) and (style == "sky" or int(it[0].floors or 0) > PACK_SKY_FLOORS)]
+    ids = {id(it) for it in sky}
+    rest = [it for it in items if id(it) not in ids]
+    out = build_parts(rest, lite=True) if rest else []
+    if sky:
+        out += _sky_mesh(_sky_simplify(sky, copy=True), day=True) or []
+    return out
+
+
 def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     """The skyline's buildings of box (x0, y0, x1, y1) in frame over map cells keys: (picked items, lamps), or None when
     the cells are not at hand (fetched in the background: asked again later). own: a geotile's box (its own buildings
@@ -7335,27 +7421,17 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         md.warm([(k, layer) for k in keys for layer in sky_layers], kind="prefetch")
         return None
     years = osmyears.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's construction years: the towers' facades by era)
+    colours = osmcolours.Fetch(frame, x0, y0, x1, y1, md)   # (OSM's colours Overture dropped: the towers' tops)
     measured_wait(md, keys, wait=False)
     cds = [md.cell(k, layers=sky_layers, kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
     items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(SKY_SLENDER_H, SKY_MIN_AREA_M2), own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds] if SKY_PARTS else (),
-                           parts_min_top=SKY_PARTS_MIN_M, years=years)
+                           parts_min_top=SKY_PARTS_MIN_M, years=years, colours=colours)
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
-    for spec, _gmin, _gmax in items:        # (the simplest shape: a box or a few corners, a flat roof, nothing on it)
-        ring = np.asarray(spec.ring, np.float64)
-        if len(ring) > 4 and abs(_area2(ring)) / 2 < SKY_BOX_AREA_M2:
-            c, u, hl, hw = oriented_box(ring)
-            v = np.array([-u[1], u[0]])
-            ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
-        elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
-            ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
-        spec.ring = ring
-        # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
-        keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
-        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
+    _sky_simplify(items)
     items.sort(key=lambda it: (-(float(it[0].height or 0.0) + float(it[0].min_h or 0.0)), str(it[0].seed)))
     picked, n = [], 0
     for it in items:                        # (the tallest first, up to the 16-bit vertex budget: 5 per corner)

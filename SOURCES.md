@@ -149,5 +149,27 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 ## Never contacted
 
-The server never asks OpenStreetMap's own servers (the Overpass API, OSM's vector tiles) or Protomaps at runtime: they
-are run by volunteers for other uses, and the data above already covers what they would give.
+The server never asks OSM's vector tiles or Protomaps at runtime. Overpass is used only for category searches,
+never for terrain streaming or bulk downloads.
+
+## Category search on Enter
+
+`overpass-api.de` supplies named OSM category matches within 15 km for line/area categories and 50 km for peaks, race tracks, airports and dams.
+Small named regions are restricted by both the category radius and their bounds. Each query has a
+5-second query timeout (4-second HTTP timeout), an 8 MiB memory budget, and returns at most 200 centers and tags. This is a bounded sample,
+not an exhaustive nearest-neighbor database. `query.wikidata.org` supplies up to 24 notable instances of
+reviewed class families (P31/P279*), ordered by Wikipedia sitelinks (at least 20). Both use the project's descriptive User-Agent,
+one concurrent request, at most one request per 10 seconds and 100/day/host, no automatic retries or prefetch.
+Answers, including empty answers, are cached in memory for an hour. Re-asks share in-flight work; admission failures (rate limit, budget, open breaker) cool down
+for at most 10 seconds; other failures for a minute. Named anchors are resolved by Nominatim on Enter, cached and shared across both category sources.
+Nominatim remains limited to one request per second with no autocomplete; see its
+[usage policy](https://operations.osmfoundation.org/policies/nominatim/).
+
+Nearby named places come first, then up to two notable distant suggestions; duplicates are removed. Strong ordinary
+name matches still appear. Distances are great-circle miles from the unrounded player position (or the named origin if no player is known),
+recomputed after the candidate cache on every search, not road distances. Country is shown when supplied by
+the source; no extra reverse-geocoding requests are made. Broad `in <country/state>` searches use Wikidata within
+approximate bounding-box limits only, so border matches may be imperfect. Small `in` regions also query Overpass;
+`near` searches use the named location as their origin. Large regions may have few results for sparsely mapped classes.
+Rally/gravel, off-road and rock crawling use terrain/sport tag proxies, not verified routes or access guarantees.
+OSM object centers and Wikidata coordinates identify the destination, not a verified drivable entrance.

@@ -85,6 +85,26 @@ local function fixture(path, y, radius, configure)
   return f
 end
 
+-- A shortest local route can bypass a sharp bend between the regular 250 m pins.
+do
+  local f = fixture({ 'a', 'out', 'end' }, 2, 6, function(f)
+    local function n(x, y, links) return { pos = { x=x,y=y,z=0 },radius=6,links=links } end
+    f.nodes = { w=n(0,0,{a={}}), a=n(200,0,{j={},out={}}),
+      j=n(300,0,{out={}}), out=n(200,-80,{['end']={}}), ['end']=n(100,-80,{}) }
+    f.map.nodes = f.nodes
+    f.route = { points={{0,0},{0,.03},{-.008,.02},{-.008,.01}},dist=528,dur=60 }
+  end)
+  local function beforeBend()
+    for _, wp in ipairs(f.target) do
+      if type(wp)=='table' and wp.x>270 and math.abs(wp.y)<1 then return true end
+    end
+    return false
+  end
+  T.check(beforeBend(), 'the local planner must reach the planned bend instead of taking the shorter connector')
+  f.serial=2;f.map.buildSerial=2;f:mapArrives();f:step()
+  T.check(beforeBend(), 'a graph replacement keeps guidance through the sharp bend')
+end
+
 -- A nearby service road is not a continuation of a highway whose loaded graph ends first.
 local function diversionRoads(f)
   local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links, radius = 6 } end
@@ -710,6 +730,18 @@ do
     'an overlapping marker chain is replanned through exact nodes rather than driven as one short waypoint')
   T.check(pins and pins[1] == 'w' and pins[2] == 'j' and pins[#pins] == 't',
     'node planning retains the occupied directed edge and the confirmed route target')
+  pins = nil
+  local tail = fixture({ 'j', { pos = { x=500,y=0,z=0 }, linkCount=3 },
+    { pos = { x=900,y=0,z=0 }, linkCount=2 } }, 2, 6, function(f)
+    roads(f)
+    f.route = { points={{0,0},{0,.09}},dist=900,dur=60 }
+  end)
+  T.check(tail.drives[1] and table.concat(tail.drives[1], ',') == 'j,s,t',
+    'a valid prefix must retain the position-only turn and projected final edge')
+  T.check(pins and pins[#pins] == 't', 'a truncated connected prefix uses the confirmed target pins')
+  pins = nil
+  fixture({ 'j', 's', 't' }, 2, 6, roads)
+  T.check(not pins, 'a complete connected marker path needs no replacement plan')
   nativePath = { 'w', 'j' }
   local partial = fixture({ 'j', 'u', 's', 't' }, 2, 6, roads)
   T.check(not partial.gps.nodePlans, 'a native planner that omits an unreachable pin is not accepted as a continuation')

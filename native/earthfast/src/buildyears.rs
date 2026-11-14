@@ -19,17 +19,23 @@ pub const MAGIC: &[u8; 4] = b"OBY1";
 pub const YEAR_BASE: i64 = 1900;
 // The published build of 2026-11-14 (59,521 tiles, 17.5 M rows): its largest tile 105,421 rows, 219 KB inflated,
 // 104 KB stored. The bounds leave ~19x (rows) and ~75x (bytes) over it.
-const MAX_BLOB: usize = 16 << 20; // a tile inflated (or plain) at most
-const MAX_STORED: usize = 16 << 20; // a tile as stored at most (oby_decode refuses a longer one before copying it)
+pub const MAX_BLOB: usize = 16 << 20; // a tile inflated (or plain) at most
+pub const MAX_STORED: usize = 16 << 20; // a tile as stored at most (oby_decode refuses a longer one before copying it)
 pub const MAX_ROWS: u64 = 2_000_000; // a tile's rows at most
-const MAX_DECODED: u64 = 32 << 20; // bytes a tile's decoded rows may take (keys u64 + years i16: 10 a row)
+pub const MAX_DECODED: u64 = 32 << 20; // bytes a tile's decoded rows may take (keys u64 + years i16: 10 a row)
 const ROW_BYTES: u64 = 8 + 2;
 
 fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
+    inflate_magic(raw, MAGIC)
+}
+
+/// A tile's bytes as stored (raw deflate, or plain when it starts with magic) inflated, both capped (buildcolours'
+/// tiles too).
+pub fn inflate_magic(raw: &[u8], magic: &[u8]) -> Result<Vec<u8>, String> {
     if raw.len() > MAX_STORED {
         return Err(format!("tile of {} bytes stored, past {MAX_STORED}", raw.len()));
     }
-    if raw.starts_with(MAGIC) {
+    if raw.starts_with(magic) {
         if raw.len() > MAX_BLOB {
             return Err(format!("plain tile past {MAX_BLOB} bytes"));
         }

@@ -49,7 +49,7 @@ reader is disabled by default, performs no requests while disabled and returns
 no context when the dataset is unpublished. It does not suppress stock objects.
 
 `nlsignalcontext.match` now marshals local ENU coordinates into the native
-`nl_signal_context_match` kernel (earthfast 300). Direction and lane counts must
+`nl_signal_context_match` kernel (earthfast 302). Direction and lane counts must
 agree before turn arrows are returned; equally close conflicting arrows remain
 unknown. Missing WKD data remains unknown unless the caller explicitly proves
 complete WKD coverage. Matching feeds the live native junction planner.

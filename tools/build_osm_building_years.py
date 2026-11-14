@@ -180,27 +180,38 @@ def build(src, out, bbox=None, workers=4, log=print, z=SHARD_ZOOM, part_bytes=PA
     del got
     tiles = cut(keys, years, bb, z, clip)
     log(f"{len(keys):,} dated buildings in {len(tiles):,} tiles, {time.time() - t0:.0f} s")
-    tmp = tempfile.mkdtemp(prefix="osmyears-build-")
+    return write_build(tiles, encode_tile, out, z=z, part_bytes=part_bytes, bbox=bbox, prefix="osmyears",
+                       title="BeamNG.Earth OSM building years", fmt=f"oby{FORMAT}", fmt_num=FORMAT,
+                       source=src if src.startswith("http") else os.path.basename(src), source_etag=etag0,
+                       log=log, t0=t0)
+
+
+def write_build(tiles, encode, out, *, z, part_bytes, bbox, prefix, title, fmt, fmt_num, source, source_etag, log,
+                t0, extra=None):
+    """The build's parts in out/<key>/<prefix>-NNN.pmtiles and out/manifest.json (the module's docstring) from tiles
+    {(x, y): (keys, more columns ...)}, each tile's blob encode(*columns), stored raw deflated; the manifest returned
+    (extra: more of its fields, after "license"). tools/build_osm_building_colours.py writes its builds with it."""
+    tmp = tempfile.mkdtemp(prefix=f"{prefix}-build-")
     try:
         data_path = os.path.join(tmp, "tiles.bin")
         entries, at, n_rows = [], 0, 0
         with open(data_path, "wb") as data:
             for (x, y_) in sorted(tiles, key=lambda t: ots.tile_id(z, *t)):
-                k, yr = tiles[(x, y_)]
-                blob = ots.deflate(encode_tile(k, yr))
+                cols = tiles[(x, y_)]
+                blob = ots.deflate(encode(*cols))
                 data.write(blob)
                 entries.append((ots.tile_id(z, x, y_), at, len(blob), 1))
                 at += len(blob)
-                n_rows += len(k)
+                n_rows += len(cols[0])
         lo = bbox or (-180.0, -85.0511, 180.0, 85.0511)
         built = time.gmtime()
-        manifest = {"format": FORMAT, "zoom": z, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", built),
-                    "source": src if src.startswith("http") else os.path.basename(src), "source_etag": etag0}
+        manifest = {"format": fmt_num, "zoom": z, "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", built),
+                    "source": source, "source_etag": source_etag}
         work = os.path.join(out, ".parts-tmp")
         shutil.rmtree(work, ignore_errors=True)
         os.makedirs(work)
-        parts = ots.write_parts(work, entries, data_path, lo, n_rows, z, 16384 - 127, part_bytes, prefix="osmyears",
-                                title="BeamNG.Earth OSM building years", fmt=f"oby{FORMAT}")
+        parts = ots.write_parts(work, entries, data_path, lo, n_rows, z, 16384 - 127, part_bytes, prefix=prefix,
+                                title=title, fmt=fmt)
         digest = hashlib.sha256()
         for p in parts:
             with open(os.path.join(work, p["archive"]), "rb") as f:
@@ -215,6 +226,8 @@ def build(src, out, bbox=None, workers=4, log=print, z=SHARD_ZOOM, part_bytes=PA
         manifest["key"] = key
         manifest.update(parts=parts, bytes=sum(p["bytes"] for p in parts), tiles=len(entries), rows=n_rows,
                         license="ODbL 1.0, (c) OpenStreetMap contributors")
+        if extra:
+            manifest.update(extra)
         if bbox is not None:
             manifest["bbox"] = list(bbox)
         with open(os.path.join(out, "manifest.json"), "w", encoding="utf-8") as f:

@@ -67,7 +67,7 @@ def _bilinear(axis, z, x, y):
     return out, inside
 
 
-STRUCTURED = (".attr.osm_lane_parts",)     # object columns the capture keeps as text (Python literals: no pickles)
+STRUCTURED = (".attr.osm_lane_parts", ".attr.lane_section_profile")     # object columns the capture keeps as text (Python literals: no pickles)
 
 
 def _structured(key, values):

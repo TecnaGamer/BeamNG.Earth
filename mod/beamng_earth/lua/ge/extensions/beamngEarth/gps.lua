@@ -26,6 +26,7 @@ M.SAMPLE_M = 40         -- route points tried for the arrows' target at least th
 M.RETARGET_M = 150      -- the arrows' target is moved on in steps of this much route
 M.VIA_M = 250           -- the arrows' path is pinned to the route by a waypoint this often (else the stock planner takes
                         -- its own shortest way to the target: Fells Point 2026-10-14, a loop round a block)
+M.VIA_TURN_COS = math.cos(math.rad(30)) -- also pin both sides of sharper planned bends between distance-based pins
 M.OFF_ROUTE_M = 120     -- farther from the route: planned again ...
 M.REROUTE_S = 20        -- ... at most this often
 -- Driving back along the route (turned round on the same road: never OFF_ROUTE_M off it, GitHub #623): the route's
@@ -488,14 +489,25 @@ local function routeTarget(e, nodes, i, t)
       while #via > 0 and not M.routeConnected(segCache.links, via[#via].projection, bp,
         s - via[#via].s + 2 * M.ON_GRAPH_M) do table.remove(via) end
       lastVia = via[#via] and via[#via].s or s0
+      local corner = false
+      if best and best.routeIndex ~= k then
+        local j = best.routeIndex
+        local ax, ay = e.x[j + 1] - e.x[j], e.y[j + 1] - e.y[j]
+        local bx, by = e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k]
+        -- Use the planned line's turn, not projection flicker near a fork. An abandoned
+        -- branch must not become a new mandatory pin when a closer continuation wins.
+        corner = ax * bx + ay * by < M.VIA_TURN_COS * math.sqrt((ax * ax + ay * ay) * (bx * bx + by * by))
+          and M.routeConnected(segCache.links, best.projection, bp, s - best.s + 2 * M.ON_GRAPH_M)
+        if corner and via[#via] ~= best then via[#via + 1] = best end
+      end
       previous, previousS = bp, s
       previousDistanceSq = d * d
       -- the target / waypoint itself on that edge (not the route's point, which can lie nearer the other carriageway:
       -- the game's planner went for that one, the wrong way up a one-way road, and asked for a U-turn; GitHub #180)
       if bp and not final then x, y = bp.x, bp.y end
-      best = { s = s, x = x, y = y, z = z, final = final, projection = bp }
+      best = { s = s, x = x, y = y, z = z, final = final, projection = bp, routeIndex = k }
       misses = 0
-      if s - lastVia >= M.VIA_M then via[#via + 1] = best; lastVia = s end
+      if corner or s - lastVia >= M.VIA_M then via[#via + 1] = best; lastVia = s end
     elseif previous then
       misses = misses + 1                -- the route left the graph (a short gap, a junction's offset: not yet)
       if misses >= 3 then break end
@@ -875,8 +887,9 @@ local function driveArrowsPath(gm, nodes, target)
   -- route planned again at the next check
   local valid = M.validFrom(ids, 1, { nodes })
   local joined = M.connectedStart(valid, a, b, nodes)
-  if #valid < #ids or not joined then
-    local pins = M.targetNodes(a, b, target)
+  local pins = M.targetNodes(a, b, target)
+  -- A connected prefix may still omit a turn and final edge stored only as positions.
+  if #valid < #ids or not joined or (pins and valid[#valid] ~= pins[#pins]) then
     if pins then
       local ok, planner = pcall(require, '/lua/ge/extensions/gameplay/route/route')
       if ok then

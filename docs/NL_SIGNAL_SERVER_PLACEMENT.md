@@ -5,7 +5,7 @@ assembly consumer and Forest backend load lazily. Stock mode does not parse a
 country outline, refill fitting queues or refresh signal trees every frame.
 The old client planner, cdae reads, AI graph augmentation and 46 MiB pack are removed.
 
-## Live pipeline (earthfast 300)
+## Live pipeline (earthfast 302)
 
 The server captures a ready graph serial, exact road/skin versions, quantised
 terrain and material holes. Public z14 WKD/OSM shards provide motor-road signal
@@ -72,3 +72,12 @@ The actual Rotterdam/Amsterdam on/off frame-time and process-memory comparison
 is still pending: the user is testing the normal game and requested the measurement
 later. Offline/stubbed timings are not substituted. Public data deployment is a
 maintainer action.
+
+`python tools/benchmark_nl_signals.py` prints a plan without contacting the game.
+Later, `--run --pid GAME_PID --out result.json` records a parked Rotterdam or
+Amsterdam scene in off/on/on/off order with 60 s warm-up and 30 s capture per
+phase. It records real frame-time percentiles and sampled game working set,
+rejects moving/unsettled scenes, lost focus and an enabled feature without
+accepted native owners, then restores the original feature setting. Use a fixed
+sky/traffic setup and no concurrent builds for the actual comparison. Its PID
+must identify the same game as the explicitly configured MCP endpoint.

@@ -120,6 +120,7 @@ mod roadtone;
 mod railbeds;
 mod osmtagshards;
 mod buildyears;
+mod buildcolours;
 mod gradebins;
 mod par;
 mod bc1fast;
@@ -6456,7 +6457,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     domes::register(m)?;
     // 298: OSM building construction years, retained alongside Dutch roadside kernels.
     buildyears::register(m)?;
-    // 299: current dev plus Dutch signs, signal context and shared mounted assemblies.
-    m.add("VERSION", 300)?;
+    // 301: upstream building colours; 302: native Dutch roadside assemblies.
+    buildcolours::register(m)?;
+    m.add("VERSION", 302)?;
     Ok(())
 }

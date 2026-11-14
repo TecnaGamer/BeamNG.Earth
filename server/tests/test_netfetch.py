@@ -579,6 +579,23 @@ class BreakerTest(unittest.TestCase):
         b.release_probe()                                       # it was dropped before the network
         self.assertEqual(b.allow()[:2], (True, True))
 
+    def test_may_try_once_the_open_time_is_over(self):
+        """may_try: false while open, true once a probe is due (is_open() stays true until a request probes),
+        false again while that probe is out."""
+        clock = FakeClock()
+        b = nf.CircuitBreaker(2, 30.0, 10.0, 900.0, clock)
+        self.assertTrue(b.may_try())
+        b.failure()
+        b.failure()
+        self.assertFalse(b.may_try())
+        clock.advance(10.0)
+        self.assertTrue(b.is_open())
+        self.assertTrue(b.may_try())
+        self.assertEqual(b.allow()[:2], (True, True))
+        self.assertFalse(b.may_try())                           # its probe is out
+        b.success()
+        self.assertTrue(b.may_try())
+
     def test_a_late_success_does_not_close_an_open_breaker(self):
         """A request sent before the host said Retry-After answers 200 afterwards: the breaker stays
         open (only its probe closes it), so demand keeps failing over at once instead of sleeping out
@@ -616,6 +633,24 @@ class BreakerTest(unittest.TestCase):
             self.assertFalse(b.failure())
             clock.advance(31.0)
         self.assertEqual(b.state, "closed")
+
+    def test_on_circuit_closed_callback_fires_on_recovery(self):
+        closed_hosts = []
+        pol = nf.with_policy(nf.POLICIES, USGS, max_attempts=1)
+        f, clock, sleep, tr = fetcher({USGS: [(502, {}, b"", 0)]}, policies=pol)
+        f.on_circuit_closed = lambda name: closed_hosts.append(name)
+        p = pol[USGS]
+        for i in range(p.breaker_threshold):
+            with self.assertRaises(nf.FetchFailed):
+                f.get(url(USGS, i))
+        self.assertEqual(f.host(USGS).breaker.state, "open")
+        self.assertEqual(closed_hosts, [])
+
+        clock.advance(p.breaker_open)
+        tr.script[USGS] = [(200, {}, b"ok", 0)]
+        self.assertEqual(f.get(url(USGS, 100)).body, b"ok")
+        self.assertEqual(f.host(USGS).breaker.state, "closed")
+        self.assertEqual(closed_hosts, [USGS])
 
 
 def terrarium_png(elev, size):
@@ -751,9 +786,21 @@ class ClassifyTest(unittest.TestCase):
 
 
 class PolicyTest(unittest.TestCase):
+    def test_category_overpass_timeout_and_breaker(self):
+        f, clock, sleep, tr = fetcher()
+        with mock.patch.object(tr, "request", side_effect=TimeoutError("slow Overpass")) as request:
+            with self.assertRaises(nf.FetchFailed):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "no automatic retry")
+            self.assertEqual(request.call_args.args[2], 4.0, "Overpass alone has the shorter timeout")
+            with self.assertRaises(nf.HostUnavailable):
+                f.get("https://overpass-api.de/api/interpreter?data=offline-test")
+            self.assertEqual(request.call_count, 1, "the breaker still prevents another request")
+        self.assertEqual(nf.POLICIES["query.wikidata.org"].timeout, 7.0)
+
     def test_denied_hosts(self):
         f, clock, sleep, tr = fetcher()
-        for host in ("overpass-api.de", "vector.openstreetmap.org", "build.protomaps.com"):
+        for host in ("vector.openstreetmap.org", "build.protomaps.com"):
             for kind in nf.KINDS:
                 with self.assertRaises(nf.PolicyDenied):
                     f.get(f"https://{host}/x", kind=kind)

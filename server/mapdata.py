@@ -617,10 +617,12 @@ class MapData:
 
     def versions(self, buildings=False):
         """The map data's identity for cache keys; buildings: for a tile that draws buildings, with the OSM building
-        years' build too ("osmyears": osmyears.identity, frozen per process; "off" / "none" without one)."""
+        years' and colours' builds too ("osmyears": osmyears.identity, "osmcolours": osmcolours.identity, each frozen
+        per process; "off" / "none" without one)."""
         if buildings:
+            import osmcolours
             import osmyears
-            return dict(self.versions(), osmyears=osmyears.identity(self))
+            return dict(self.versions(), osmyears=osmyears.identity(self), osmcolours=osmcolours.identity(self))
         import europewalks
 
         rails = getattr(self, "rail_tags", None)
@@ -656,13 +658,22 @@ class MapData:
         server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
         ask, and none of those was found again by the next run (versions)."""
         def run():
+            import osmcolours
             import osmyears
+            got = []
+            for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
+                try:
+                    got.append(mod.shards(self))
+                except Exception:
+                    got.append(None)
             try:
-                years = osmyears.shards(self)  # (the building years: pinned now for the next start, osmyears.frozen)
+                import bldhz            # (the horizon ring's tall buildings, the same way)
+                tall = bldhz.source(self)
+                got.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
             except Exception:
-                years = None
+                got.append(None)
             for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
-                        getattr(self, "station_tags", None), years):
+                        getattr(self, "station_tags", None), *got):
                 if src is None:
                     continue
                 try:
@@ -938,7 +949,8 @@ class MapData:
         shards = self._osm_shards()
         got = shards.manifest() if shards is not None else None
         if got is not None:
-            shards.head(got[0], got[1], kind)
+            for part in got[1].get("_parts", ()):      # (each archive part's head: head() takes a part, not the
+                shards.head(got[0], part, kind)        # manifest, which failed with KeyError: 3 at every start)
 
     def _osm_geometry(self, key, kind, need):
         """{way id: lon/lat line} of the cell's tagged motorways and trunks (roadlanes.join's callback): from the tag

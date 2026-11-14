@@ -135,7 +135,6 @@ class YearShards(osmtagshards.TagShards):
 
 _SHARDS = {}
 _LOCK = threading.Lock()
-_POOL = None
 
 
 def shards(md):
@@ -171,10 +170,11 @@ def pinned_parts(m):
     return out
 
 
-def identity(md):
-    """The building tiles' key for the years of map data md: "off", "none" (nothing frozen), or the frozen build."""
+def identity(md, shards_of=None):
+    """The building tiles' key for the years of map data md: "off", "none" (nothing frozen), or the frozen build
+    (shards_of: another dataset's shards(), osmcolours.identity)."""
     try:
-        sh = shards(md)
+        sh = (shards_of or shards)(md)
     except Exception:
         return "off"
     if sh is None:
@@ -189,90 +189,108 @@ def key_of(record):
     return 2 * int(m.group(2)) + (1 if m.group(1) == "r" else 0) if m else None
 
 
-def tiles_of(sh, lat0, lon0, lat1, lon1):
-    """(keys ascending, years) of the year tiles over a lat / lon box; None: not had (a fault); _EMPTY: none in use."""
+def tiles_of(sh, lat0, lon0, lat1, lon1, empty=_EMPTY):
+    """(keys ascending, years) of the year tiles over a lat / lon box; None: not had (a fault); _EMPTY: none in use.
+    empty: another dataset's empty columns (keys, then its own: osmcolours'), whose dtypes its columns take."""
     import mapcells
     got = sh.usable()
     if not got:
-        return _EMPTY if got is False else None
+        return empty if got is False else None
     z = got[1]["zoom"]
     sh_ = max(0, CELL_ZOOM - z)
     tiles = sorted({(c.x >> sh_, c.y >> sh_) for c in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1, z=CELL_ZOOM)})
-    ks, ys = [], []
+    had = []
     for x, y in tiles:
         try:
             t = sh.tile(mapcells.CellKey(z, x, y))
         except osmtagshards.NotInUse:
             return None
         except Exception as e:      # (offline, limits, the host failing, a damaged tile: built again later)
-            log.debug("osm years tile %d/%d/%d: %s: %s", z, x, y, type(e).__name__, e)
+            log.debug("%s tile %d/%d/%d: %s: %s", sh.LABEL, z, x, y, type(e).__name__, e)
             if not isinstance(e, netfetch.Deferred):
                 sh.down(e)              # (not asked again for DOWN_S: the tiles meanwhile fault at once, no waits)
             return None
         if t is not None:
-            ks.append(np.asarray(t[0], np.uint64))
-            ys.append(np.asarray(t[1], np.int16))
-    if not ks:
-        return _EMPTY
-    k, y = np.concatenate(ks), np.concatenate(ys)
-    k, first = np.unique(k, return_index=True)          # (a building on a tile edge is in both: one year)
-    return k, y[first]
+            had.append(t)
+    if not had:
+        return empty
+    cols = [np.concatenate([np.asarray(t[c], empty[c].dtype) for t in had]) for c in range(len(empty))]
+    k, first = np.unique(cols[0], return_index=True)    # (a building on a tile edge is in both: one row)
+    return (k,) + tuple(c[first] for c in cols[1:])
 
 
 class Fetch:
-    """A tile's year tiles asked for on a thread as the tile starts; years() waits WAIT_S at most."""
+    """A tile's year tiles asked for on a thread as the tile starts; years() waits WAIT_S at most. Another dataset in
+    the same layout (osmcolours.Fetch) sets the class attributes: its shards, empty columns, label, and MARGIN_M (m
+    round the tile its tiles are asked for)."""
+    EMPTY, LABEL, MARGIN_M, WAIT_S = _EMPTY, "osm years", 0.0, WAIT_S
+    _POOLS = {}
+
+    @staticmethod
+    def _shards(md):
+        return shards(md)
 
     def __init__(self, frame, x0, y0, x1, y1, md):
-        global _POOL
         self.fut = None
         try:
-            sh = shards(md)
-        except Exception as e:          # (no native module at 298, a cache folder it cannot use: no years)
-            log.warning("osm years: %s: %s", type(e).__name__, e)
+            sh = self._shards(md)
+        except Exception as e:          # (no native module at its version, a cache folder it cannot use: none)
+            log.warning("%s: %s: %s", self.LABEL, type(e).__name__, e)
             return
         if sh is None:
             return
-        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64),
-                                         np.array([y0, y0, y1, y1], np.float64), 0.0)
+        m = float(self.MARGIN_M)
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m, x0 - m, x1 + m], np.float64),
+                                         np.array([y0 - m, y0 - m, y1 + m, y1 + m], np.float64), 0.0)
         box = (float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
         with _LOCK:
-            if _POOL is None:
+            pool = Fetch._POOLS.get(self.LABEL)
+            if pool is None:
                 from concurrent.futures import ThreadPoolExecutor
-                _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="osmyears")
-        self.fut = _POOL.submit(tiles_of, sh, *box)
+                pool = Fetch._POOLS[self.LABEL] = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix=self.LABEL.replace(" ", ""))
+        self.fut = pool.submit(tiles_of, sh, *box, self.EMPTY)
 
-    def years(self):
-        """Years (keys, years) of the tile's buildings, or None (none in use; one not had faults the tile)."""
+    def get(self):
+        """The tile's rows (keys, columns ...), or None (none in use; one not had faults the tile)."""
         if self.fut is None:
             return None
         try:
-            got = self.fut.result(timeout=WAIT_S)
+            got = self.fut.result(timeout=self.WAIT_S)
         except Exception as e:
-            log.debug("osm years: %s: %s", type(e).__name__, e)
+            log.debug("%s: %s: %s", self.LABEL, type(e).__name__, e)
             got = None
         if got is None:
             import revisit
-            revisit.fault()             # (a later visit builds it with the years)
+            revisit.fault()             # (a later visit builds it with them)
             return None
         return got if len(got[0]) else None
+
+    def years(self):
+        """Years (keys, years) of the tile's buildings, or None (none in use; one not had faults the tile)."""
+        return self.get()
+
+
+def rows_of(keys, records):
+    """(the records' indices that have a row, the rows' indices in keys) of src_record strings records in keys
+    (ascending: a Fetch's)."""
+    if keys is None or not len(keys) or not len(records):
+        return np.zeros(0, np.int64), np.zeros(0, np.int64)
+    q = [key_of(str(r)) if r is not None else None for r in records]
+    at = np.array([i for i, v in enumerate(q) if v is not None], np.int64)
+    if not len(at):
+        return at, at
+    qk = np.array([q[i] for i in at], np.uint64)
+    j = np.minimum(np.searchsorted(keys, qk), len(keys) - 1)
+    hit = keys[j] == qk
+    return at[hit], j[hit]
 
 
 def lookup(years, records):
     """The years (int, 0 where none) of src_record strings records, from years (Fetch.years's)."""
     out = np.zeros(len(records), np.int64)
-    if years is None or not len(records):
+    if years is None:
         return out
-    keys, ys = years
-    if not len(keys):
-        return out
-    q = np.array([key_of(str(r)) if r is not None else None for r in records], object)
-    ok = np.array([v is not None for v in q], bool)
-    if not ok.any():
-        return out
-    qk = np.array([int(v) for v in q[ok]], np.uint64)
-    j = np.minimum(np.searchsorted(keys, qk), len(keys) - 1)
-    hit = keys[j] == qk
-    sub = np.zeros(len(qk), np.int64)
-    sub[hit] = ys[j[hit]]
-    out[ok] = sub
+    at, j = rows_of(years[0], records)
+    out[at] = years[1][j]
     return out

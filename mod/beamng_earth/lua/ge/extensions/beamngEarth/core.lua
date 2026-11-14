@@ -1176,6 +1176,7 @@ local function onMessage(msg)
       swapGen = 1,                     -- (a generation swap's commit barrier: 'swap_begin', roads.swapCommit)
       farGeo = roads.FAR_GEO,          -- (and the far buildings, skyline and far bridges: roads.lua)
       farPack = roads.FAR_PACK,        -- (and the far buildings past the road geotiles' as a pack a square: roads.lua)
+      farHz = roads.FAR_HZ,            -- (and the horizon ring's tall buildings past the skyline: roads.lua 'H')
       turbineGeo = require('beamngEarth/turbinestream').PROTOCOL,
       globalFar = farfield.GLOBAL_FAR,    -- (and the far field from level 3 up as global tiles: farfield.lua)
       trafficVisuals = M._trafficvisuals.PROTO,
@@ -1560,6 +1561,11 @@ local function onMessage(msg)
     roads.onFarTile(msg, st.anchorId, 'P')
   elseif t == 'bldpack_drop' then
     roads.onFarDrop(msg, 'P')
+  elseif t == 'bldhz_tile' then
+    -- the horizon ring's tall buildings past the skyline (server bldhz.py), a piece per skyline square: roads.lua
+    roads.onFarTile(msg, st.anchorId, 'H')
+  elseif t == 'bldhz_drop' then
+    roads.onFarDrop(msg, 'H')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
   elseif t == 'map_labels_result' then       -- the 3D map's labels (map3d.lua; server maplabels.py)

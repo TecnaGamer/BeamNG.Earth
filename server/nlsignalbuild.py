@@ -32,7 +32,7 @@ def build(root, vfs, aid, frame, terrain, centre, tiles, graph_path, source, cat
         ll = np.asarray(points)
         x, y, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.)
         xy = np.column_stack((x, y)).tolist()
-    plan = json.loads(fast.native(300, 'native signal graph integration').nl_signal_graph_requests(dumps(graph), dumps(xy)))
+    plan = json.loads(fast.native(302, 'native signal graph integration').nl_signal_graph_requests(dumps(graph), dumps(xy)))
     if not context['complete'] and not plan['groups']:
         return dict(pending=True, reason='context_tiles_pending')
     scene = nlsignalinputs.session_scene(root, vfs, aid, frame, terrain, centre, tiles)

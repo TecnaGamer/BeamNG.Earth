@@ -31,7 +31,7 @@ MODULES = (
     "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata", "test_bdtopo",
     "test_nlrvv", "test_nl_signal_context_data", "test_nlsignaldata", "test_nlsignalcontext",
     "test_nlsignalassembly", "test_nlsignalsnapshot", "test_nlsignalinputs", "test_nlsignalbuild",
-    "test_nlsignalstream", "test_groenpol_forest_probe",
+    "test_nlsignalstream", "test_groenpol_forest_probe", "test_nl_signal_benchmark",
 )
 
 

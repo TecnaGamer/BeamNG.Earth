@@ -502,11 +502,13 @@ class BuildAndReadTest(unittest.TestCase):
             md.versions = lambda: {"pipeline": 1}
             with mock.patch.object(blockworker, "_s", SimpleNamespace(md=md)):
                 self.assertEqual(blockworker._md_versions(), {"pipeline": 1})
-                self.assertEqual(blockworker._md_versions(True), {"pipeline": 1, "osmyears": self.man["built"]})
+                self.assertEqual(blockworker._md_versions(True), {"pipeline": 1, "osmyears": self.man["built"],
+                                                                  "osmcolours": "none"})
             off = self.md(FakeFetcher({}))
             off.versions = lambda: {"pipeline": 1}
             with mock.patch.object(osmyears, "ON", False), mock.patch.object(blockworker, "_s", SimpleNamespace(md=off)):
-                self.assertEqual(blockworker._md_versions(True), {"pipeline": 1, "osmyears": "off"})
+                self.assertEqual(blockworker._md_versions(True), {"pipeline": 1, "osmyears": "off",
+                                                                  "osmcolours": "none"})
 
 
 if __name__ == "__main__":
