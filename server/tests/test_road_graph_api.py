@@ -40,15 +40,19 @@ def roads_cell(lines, classes=None):
     return f
 
 
+FETCHING_KINDS = ("demand", "urgent")       # mapdata: every other kind raises instead of downloading
+
+
 class FakeMapData:
-    """The map cells on disk, by layer: has() says whether a layer's file is there, layer_unkept reads it without
-    keeping it, and cell() is the fetching read the player's graph uses — recorded here so a test can show that a
-    cached-only build never reaches for it."""
+    """The map cells on disk, by layer. has() says whether a layer's file is there; cell() and cells() are the read
+    the player's own graph uses, recorded here with the kind they were asked at — which is what a test checks, since
+    a cached-only build reads through the same call and it is the *kind* that makes it unable to download. A cell
+    that is not on disk raises at a non-fetching kind, as mapdata does."""
 
     def __init__(self, layers=None, on_disk=()):
         self.layers = layers or {}
         self.on_disk = set(on_disk)
-        self.fetched = []
+        self.reads = []
         self.unkept = []
 
     def has(self, key, layer):
@@ -58,9 +62,20 @@ class FakeMapData:
         self.unkept.append((str(key), layer))
         return self.layers.get(layer, {}).get(str(key))
 
+    @property
+    def fetched(self):
+        """Only the reads that could have downloaded something."""
+        return [r for r in self.reads if r[2] in FETCHING_KINDS]
+
     def cell(self, key, layers=(), kind="demand"):
-        self.fetched.append((str(key), tuple(layers), kind))
+        self.reads.append((str(key), tuple(layers), kind))
+        for lr in layers:
+            if (str(key), lr) not in self.on_disk and kind not in FETCHING_KINDS:
+                raise RuntimeError("deferred: %s of %s is not on disk" % (lr, key))
         return types.SimpleNamespace(layers={lr: self.layers.get(lr, {}).get(str(key)) for lr in layers})
+
+    def cells(self, keys, layers=(), kind="demand"):
+        return [self.cell(k, layers, kind) for k in keys]
 
 
 def fake_anchor(aid=AID):
@@ -121,7 +136,10 @@ class RoadGraphDataTest(unittest.TestCase):
         self.assertEqual(not_read, len(keys) - 1)
         self.assertGreater(len(graph["nodes"]), 0, "the road of the cell on disk is in the graph")
         self.assertEqual(md.fetched, [], "nothing fetched for it")
-        self.assertEqual([k for k, lr in md.unkept if lr == "roads"], [keys[0]])
+        self.assertEqual([k for k, ls, _ in md.reads if "roads" in ls], [keys[0]],
+                         "the cell on disk read once, the others not reached for at all")
+        self.assertTrue(all(kind not in FETCHING_KINDS for _, _, kind in md.reads),
+                        "read at a kind that cannot download: %r" % (md.reads,))
 
     def test_every_cell_on_disk_is_complete(self):
         import earthd
@@ -133,6 +151,8 @@ class RoadGraphDataTest(unittest.TestCase):
                                                          window=300.0, cached_only=True)
         self.assertEqual(not_read, 0)
         self.assertEqual(md.fetched, [])
+        self.assertTrue(md.reads and all(kind not in FETCHING_KINDS for _, _, kind in md.reads),
+                        "every cell read, none of them at a fetching kind")
 
     def test_no_layer_of_the_window_is_ever_fetched(self):
         """signals_for, secrossings.read and blockworker._de_routes all read their cells through
@@ -143,9 +163,12 @@ class RoadGraphDataTest(unittest.TestCase):
         md = FakeMapData({"roads": {keys[0]: roads_cell([[(-200.0, 0.0), (200.0, 0.0)]])}},
                          on_disk=[(keys[0], "roads"), (keys[0], "infrastructure"), (keys[0], "road_routes")])
         earthd.Server.road_graph_data(fake_server(md, "."), AID, 0.0, 0.0, window=300.0, cached_only=True)
-        self.assertEqual(md.fetched, [], "no cell() read at all, so no download at any priority")
-        # the mapped signals still come from the cell that has them: read from disk, not fetched
-        self.assertIn((keys[0], "infrastructure"), md.unkept)
+        self.assertEqual(md.fetched, [], "no read at a kind that could download, for any layer")
+        # the mapped signals still come from the cell that has them: read, but never at a fetching kind
+        infra = [(k, kind) for k, ls, kind in md.reads if "infrastructure" in ls]
+        self.assertIn(keys[0], [k for k, _ in infra], "the infrastructure layer of the cell that has it was read")
+        self.assertTrue(infra and all(kind not in FETCHING_KINDS for _, kind in infra),
+                        "and not at a kind that downloads: %r" % (infra,))
 
     def test_the_window_asked_for_is_the_window_built(self):
         import earthd

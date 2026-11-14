@@ -2285,15 +2285,29 @@ class Server:
         missing = 0
 
         def on_disk(layer):
-            """One layer of the window's cells that are on disk already, read and not kept (MapData.layer_unkept):
-            nothing is fetched for a cell that is not there and no background job is queued for it."""
+            """One layer of the window's cells that are on disk already, read exactly as the session's own graph
+            reads them -- through load_cells, so a layer arrives with the same decoding, tag joins and neighbour
+            discovery -- but at a kind that will not fetch: a cell that is not there raises (DEFERRED) instead of
+            being downloaded, and no background job is queued for it.
+
+            Not layer_unkept, which exists for the API's cachedOnly *places* read. In a game (2026-11-13) that
+            returned road features the graph then found nothing drivable in, so a window over ground whose cells
+            were all present came back with 0 nodes while the player's own graph of the same anchor had 489 --
+            intermittently, because it answers from the MEM_MB cache when the player's path has just filled it and
+            decodes afresh when it has not. Reading the way the player's path reads removes the divergence rather
+            than trying to reproduce it."""
             out = []
             for k in keys:
                 if not self.mapdata.has(k, layer):
                     continue
                 try:
-                    out.append(self.mapdata.layer_unkept(k, layer))
-                except Exception as e:      # a cell being written, a damaged file: as if it were not there
+                    # (one cell at a time: a cell that is not on disk must not take the others down with it, and
+                    #  the window's cells are few enough that the side-by-side load buys little here)
+                    for cd in mapcells.load_cells(self.mapdata, [k], (layer,), kind="background"):
+                        got = cd.layers.get(layer)
+                        if got is not None:
+                            out.append(got)
+                except Exception as e:      # not on disk after all, a cell being written, a damaged file
                     log.debug("road graph: %s of %s: %s: %s", layer, k, type(e).__name__, e)
             return out
 
