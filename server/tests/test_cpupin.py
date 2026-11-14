@@ -228,3 +228,41 @@ class PlayerSettingsTest(unittest.TestCase):
         with open(os.path.join(mod, "ui", "ui-vue", "mods", "beamngEarth", "earthSettingsStore.js"),
                   encoding="utf-8") as f:
             self.assertTrue(re.search(r'\{ id: "models3dmr", type: "bool", default: true,', f.read()), "the page's row")
+
+
+class HybridCoresTest(unittest.TestCase):
+    """A machine whose cores do not all have the same number of threads (Intel 12th generation and later: performance
+    cores with two, efficiency cores with one, the efficiency cores numbered last)."""
+    # an i7-12700K: 8 performance cores (CPUs 0-15 in pairs) and 4 efficiency cores (CPUs 16-19)
+    I7_12700K = [((0, c), [2 * c, 2 * c + 1]) for c in range(8)] + [((0, 8 + e), [16 + e]) for e in range(4)]
+    # 8 performance and 12 efficiency cores, none with a second thread
+    NO_SECOND_THREADS = [((0, c), [c]) for c in range(20)]
+
+    def setUp(self):
+        self.old = os.environ.pop("BNGE_SERVER_CORES", None)
+
+    def tearDown(self):
+        os.environ.pop("BNGE_SERVER_CORES", None)
+        if self.old is not None:
+            os.environ["BNGE_SERVER_CORES"] = self.old
+
+    def split(self, cores, share=cpupin.SERVER_SHARE):
+        with mock.patch.object(cpupin, "_siblings", return_value=cores):
+            return cpupin.split(share)
+
+    def test_single_thread_cores_count_for_less(self):
+        # a quarter of 12 cores is 3; three whole cores are 6 CPUs, not the 3 CPUs of the last three efficiency cores
+        server, game = self.split(self.I7_12700K)
+        self.assertEqual(server, {14, 15, 16, 17, 18, 19}, "the four efficiency cores and one performance core")
+        self.assertEqual(game, set(range(14)))
+
+    def test_the_setting_counts_whole_cores_too(self):
+        os.environ["BNGE_SERVER_CORES"] = "2"
+        self.assertEqual(self.split(self.I7_12700K)[0], {16, 17, 18, 19})
+        os.environ["BNGE_SERVER_CORES"] = "8"            # never more than half of the cores
+        self.assertEqual(self.split(self.I7_12700K)[0], set(range(12, 20)))
+
+    def test_cores_of_one_width_split_as_before(self):
+        server, game = self.split(self.NO_SECOND_THREADS)
+        self.assertEqual(server, {15, 16, 17, 18, 19})
+        self.assertEqual(game, set(range(15)))
