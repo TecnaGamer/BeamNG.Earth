@@ -401,6 +401,79 @@ class SplitTest(unittest.TestCase):
             self.assertEqual(len(shape["meshes"]), 2)
 
 
+def _round(x, y, r=15.0, n=48):
+    a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    return np.stack([x + r * np.cos(a), y + r * np.sin(a)], 1)
+
+
+def _dense_items(count=40, corners=48):
+    """Round towers (~2k lite vertices each): 40 of them are past the 16-bit indices in one mesh."""
+    return [(bld.plan(_round((i % 8) * 40.0, (i // 8) * 40.0, n=corners), {"class": "", "height": 30, "num_floors": 10}),
+             0.0, 0.0) for i in range(count)]
+
+
+def _shape_meshes(path):
+    return [cdae.mesh_arrays(m) for m in cdae.read(path)["meshes"] if m["type"] == 0]
+
+
+class FarIndexLimitTest(unittest.TestCase):
+    """Players' "spiderweb" reports (2026-11-14): long thin triangles from buildings across the scene in dense cities.
+    The far building tiles and packs were one mesh of build(items, lite=True): a Manhattan pack 705k vertices, a far
+    tile 80k, past the engine's 16-bit indices. Every shape's mesh stays under them (several meshes in one shape)."""
+
+    def check(self, path, items):
+        ms = _shape_meshes(path)
+        self.assertTrue(all(len(m["verts"]) <= 65535 for m in ms), [len(m["verts"]) for m in ms])
+        self.assertGreater(len(ms), 1)
+        self.assertTrue(all(int(m["indices"].max()) < len(m["verts"]) for m in ms))
+        lite = bld.build(items, lite=True)
+        self.assertEqual(sum(len(m["indices"]) // 3 for m in ms), len(lite[2]), "every building drawn")
+
+    def test_far_tile(self):
+        items = _dense_items()
+        self.assertGreater(len(bld.build(items, lite=True)[0]), 65535)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            vfs, n = bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.assertEqual(n, len(items))
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
+    def test_far_geotile_and_pack(self):
+        import blockworker
+        import geotiles
+        items = _dense_items()
+        for kind in ("bldfar", "bldpack"):
+            z = blockworker.far_geo_zoom(kind)
+            tile = geotiles.geobox(*geotiles.tile_of(40.758, -73.985, z), z)
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
+                    mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
+                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)):
+                data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
+                self.assertEqual(n, len(items))
+                self.check(os.path.join(d, shapes["shape"]), items)
+
+    def test_skyline_meshes_cut_between_buildings(self):
+        items = _dense_items(120, corners=200)     # (~1k skyline vertices each)
+        meshes = bld._sky_mesh(items)
+        self.assertGreater(len(meshes), 1)
+        self.assertTrue(all(len(m[0]) <= bld.MAX_MESH_VERTS for m in meshes))
+        with tempfile.TemporaryDirectory() as d:
+            bld.write(os.path.join(d, "s.cdae"), meshes)
+            ms = _shape_meshes(os.path.join(d, "s.cdae"))
+        self.assertEqual([len(m["verts"]) for m in ms], [len(m[0]) for m in meshes])
+        self.assertEqual(sum(len(m["indices"]) for m in ms), sum(3 * len(m[2]) for m in meshes))
+        (one,) = bld._sky_mesh(items[:3])
+        self.assertLess(len(one[0]), bld.MAX_MESH_VERTS, "a small skyline stays one mesh")
+
+    def test_a_building_past_the_indices_is_left_out(self):
+        items = _dense_items(3)
+        n1 = len(bld.build(items[:1], lite=True)[0])
+        with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            self.assertEqual(bld.build_parts(items, lite=True), [])
+            self.assertEqual(bld.over_limit["buildings"], 3)
+
+
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
@@ -477,7 +550,7 @@ class MeshTest(unittest.TestCase):
 
     def test_a_dome_in_the_skyline(self):
         spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
-        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(spec, 0.0, 0.0)])
         self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
 
     def test_a_round_roof_is_a_barrel_not_a_dome(self):
@@ -659,7 +732,7 @@ class NightWindowsTest(unittest.TestCase):
         for seed in (0.1, 0.2, 0.3, 0.4, 0.5):
             sp = bld.Spec(ring=ring, floors=10, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", cls="office",
                           seed=seed, min_h=0.0, height=30.0, windows=None, roof_mat=None)
-            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[1])
+            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[0][1])
             starts.add((round(float(UV[0, 0]), 6), round(float(UV[0, 1] % 1.0), 6)))
             self.assertAlmostEqual(UV[0, 0] * bld.SKY_WIN_BAYS, round(UV[0, 0] * bld.SKY_WIN_BAYS), 6)
         self.assertGreater(len(starts), 3)
@@ -1792,7 +1865,7 @@ class FarLampTest(unittest.TestCase):
 
     def test_skyline_windows(self):
         spec = bld.plan(rect(0, 0, 30, 20), {"class": "", "height": 30.0}, 0)
-        P, UV, T, M, mats, C = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (P, UV, T, M, mats, C), = bld._sky_mesh([(spec, 0.0, 0.0)])
         wall = mats.index(bld.SKY_WALL)
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
@@ -1936,7 +2009,7 @@ class SpireTest(unittest.TestCase):
         ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
         sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
                              "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
-        P = bld._sky_mesh([(sp, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(sp, 0.0, 0.0)])
         self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
 
 
@@ -3181,6 +3254,6 @@ class MappedRoofTest(unittest.TestCase):
         self.assertAlmostEqual(float(rise.min()), 0.0)
         self.assertAlmostEqual(float(rise.max()), 362.0, delta=0.5)
         self.assertAlmostEqual(float(rise[0]), 0.0, msg="low at the corner it faces (south-west)")
-        mesh = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (mesh,) = bld._sky_mesh([(spec, 0.0, 0.0)])
         P = mesh[0]
         self.assertAlmostEqual(float(P[:, 2].max() - spec.height - spec.min_h), 362.0, delta=1.5)

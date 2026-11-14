@@ -2647,7 +2647,11 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
 
 # The engine draws a shape's mesh with 16-bit indices: past 65,535 vertices they wrap and triangles join far-apart
 # vertices (the user's report 2026-10-14: slabs across a Fells Point street; dense tiles had up to 81k vertices).
+# The far tiles and packs too (players' "spiderweb" reports 2026-11-14: a Manhattan pack was one mesh of 705k
+# vertices, a far tile 80k): every building shape is build_parts' meshes, several in one shape (write: an object each).
 MAX_MESH_VERTS = 60000
+VERTS_MAX = 65535           # cdae.VERTS_MAX: a single building past it is left out (build_parts; none near: ~11k most)
+over_limit = {"buildings": 0}   # buildings left out so by this process (build_parts)
 
 
 def _concat(meshes):
@@ -2664,7 +2668,8 @@ def _concat(meshes):
 def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
-    lite mesh of its buildings as a 7th element (write: the shape's coarse detail)."""
+    lite mesh of its buildings as a 7th element (write: the shape's coarse detail). A building alone past VERTS_MAX
+    (the engine's 16-bit indices: its triangles would join far-apart vertices) is left out, counted in over_limit."""
     parts, cur, cur_lite, n = [], [], [], 0
     if not isinstance(specs_and_ground, (list, tuple)):
         specs_and_ground = list(specs_and_ground)
@@ -2681,6 +2686,9 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
     for i, item in enumerate(specs_and_ground):
         one = prepared[i][0] if prepared is not None else build([item], lite)
         if one is None:
+            continue
+        if len(one[0]) > VERTS_MAX:
+            over_limit["buildings"] += 1
             continue
         if cur and n + len(one[0]) > max_verts:
             flush()
@@ -5282,8 +5290,27 @@ BLD_LOD_PX = 2700.0
 
 def write(path, mesh, collision_only=False):
     """The tile's .cdae (cdae.encode with one primitive per material; collision_only: a never-drawn collision detail).
-    A mesh with a 7th element (build_parts with_lod) gets that lite mesh as its coarse detail below BLD_LOD_PX."""
+    A mesh with a 7th element (build_parts with_lod) gets that lite mesh as its coarse detail below BLD_LOD_PX.
+    A list of meshes (build_parts' without lite meshes: a far tile's, a pack's, a skyline's): one shape, each mesh its
+    own object (cdae.encode's parts: under the engine's 16-bit indices each)."""
     import cdae
+    if isinstance(mesh, list):
+        if len(mesh) > 1:
+            if collision_only or any(len(m) > 6 and m[6] is not None for m in mesh):
+                raise ValueError("buildings.write: several meshes are drawn ones without lite meshes")
+            mats = list(mesh[0][4])
+            parts = []
+            for Pp, UVp, Tp, Mp, matsp, Cp in (m[:6] for m in mesh[1:]):
+                for m in matsp:
+                    if m not in mats:
+                        mats.append(m)
+                remap = np.array([mats.index(m) for m in matsp], np.int64)
+                parts.append({"positions": Pp, "tris": Tp, "uvs": UVp, "tri_materials": remap[np.asarray(Mp)],
+                              "colors": Cp})
+            P, UV, T, M, _mats, C = mesh[0][:6]
+            return cdae.write(path, P, T, uvs=UV, material=mats, tri_materials=M, object_name="buildings", colors=C,
+                              parts=parts)
+        mesh = mesh[0]
     P, UV, T, M, mats, C = mesh[:6]
     mats = list(mats)
     lods = None
@@ -6602,11 +6629,11 @@ def far_tile(frame, tx, ty, md, ground, out_dir, vfs_dir, aid, lamp_region=None,
     import json
     import os
     items, lamps, (x0, y0, _x1, _y1) = far_items(frame, tx, ty, md, ground, lamp_region, urban_fn, widths, left_hand)
-    mesh = build(items, lite=True)
+    mesh = build_parts(items, lite=True)      # (meshes under the 16-bit indices, one shape: write)
     data = {"v": 1}
     if lamps:
         data["lamps"] = lamps
-    if mesh is not None:
+    if mesh:
         shape = f"bldfar_{aid}_{tx}_{ty}.cdae"
         write(os.path.join(out_dir, shape), mesh)
         data["shape"] = f"{vfs_dir}/{shape}"
@@ -6777,14 +6804,17 @@ def _sky_colour(look, f):
 
 
 def _sky_mesh(items):
-    """The skyline mesh of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
+    """The skyline meshes of [(Spec, gmin, gmax)]: per building a quad per wall and its flat roof, in MARBLE at one
     texel, coloured per vertex (~4 per corner + the roof's corners: a row house is 20 vertices, the lite mesh ~72).
-    (positions, uvs, tris, tri material indices, MATERIALS, colours) as build, or None."""
+    [(positions, uvs, tris, tri material indices, MATERIALS, colours)] as build_parts (whole buildings, each mesh
+    under MAX_MESH_VERTS but a building past it alone: sky_items' budget only estimates), or None."""
     m = Mesh()
     mi = MATERIALS.index(MARBLE)
     ms = MATERIALS.index(SKY_WALL)
     uv = SKY_UV
+    starts = []                 # each building's first vertex (the cuts between meshes: _cut_buildings)
     for spec, gmin, gmax in items:
+        starts.append(m.n)
         if spec.cls == landmarks.LANDMARK:      # (its far-away model, not a box of its footprint's size)
             landmarks.build(m, spec, gmin, _landmark_token(spec), lite=True, tokens=_landmark_tokens())
             continue
@@ -6831,12 +6861,43 @@ def _sky_mesh(items):
                   lite=True)
     if not m.n:
         return None
-    P, UV, T, M, C = m.arrays()
     import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
-    if shells.ON:
-        P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (build_parts' vertex budget counts the closed
-                        # mesh; the walls already reach SKIRT_M under the ground: the bottom capped there)
-    return P, UV, T, M, MATERIALS, C
+    out = []
+    for P, UV, T, M, C in _cut_buildings(*m.arrays(), starts, MAX_MESH_VERTS):
+        if shells.ON:
+            P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (the walls already reach under the
+                                                                            # ground: the bottom capped there)
+        if len(P) <= VERTS_MAX:
+            out.append((P, UV, T, M, MATERIALS, C))
+        else:
+            over_limit["buildings"] += 1
+    return out or None
+
+
+def _cut_buildings(P, UV, T, M, C, starts, limit):
+    """A Mesh's arrays (positions, uvs, tris, materials, colours; each building's vertices and triangles after the
+    one before's, starts their first vertices) cut between buildings into pieces of at most limit vertices each (a
+    building past it: a piece alone), in order. [(P, UV, T, M, C)]; the arrays as they are when they fit."""
+    n = len(P)
+    if n <= limit:
+        return [(P, UV, T, M, C)]
+    cuts, prev = [0], 0
+    for b in sorted(set(int(k) for k in starts if 0 < k < n)) + [n]:
+        if b - cuts[-1] > limit and prev > cuts[-1]:
+            cuts.append(prev)
+        prev = b
+    cuts.append(n)
+    T = np.asarray(T, np.int64)
+    piece = np.searchsorted(np.asarray(cuts), T.min(1), side="right") - 1
+    out = []
+    for k in range(len(cuts) - 1):
+        a, b = cuts[k], cuts[k + 1]
+        sel = piece == k
+        Tk = T[sel] - a
+        if len(Tk) and Tk.max() >= b - a:
+            raise ValueError("_cut_buildings: a triangle across two buildings")
+        out.append((P[a:b], UV[a:b], Tk, np.asarray(M)[sel], C[a:b]))
+    return out
 
 
 def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):

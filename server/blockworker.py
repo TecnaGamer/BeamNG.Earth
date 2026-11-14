@@ -3228,7 +3228,7 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
         if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
             return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region, _urban_fn(), _s.widths)
-        mesh = buildingsmod.build(items, lite=True)
+        mesh = buildingsmod.build_parts(items, lite=True) or None   # (meshes under the 16-bit indices, one shape)
         n = len(items)
     elif kind == "bldsky":
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
