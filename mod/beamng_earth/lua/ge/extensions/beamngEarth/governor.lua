@@ -111,7 +111,29 @@ M.LANE_GRACE_MS = 4.0      -- ... a mid lane this far ahead of its share still r
 -- probe P3; 'roadDelete' 0.02-0.04 ms (P3); 'roadWalk' (a road tile's sidewalk TSStatic, a .cdae like a far tile) ~3 ms, a guess.
 -- 'fuel' (gasstations.lua: one station, ~12-30 TSStatics of cached West Coast shapes + its areas) ~3 ms, a guess until
 -- probes/fuel_pump.lua is timed in game.
-M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, material = 0.3, matDelete = 0.2, cdaeTex128 = 3.9, cdaeTex256 = 4.0, cdaeTex512 = 4.2, retex = 1.0, roadChunk = 0.5, roadDelete = 0.05, roadWalk = 3.0, fuel = 3.0 }
+-- 'roadSurf' / 'roadCol' / 'roadDrive' / 'roadFar' (roads.lua walkKind): a road tile's drawn surfaces, its lean collision
+-- meshes, its decks and tunnels, the far geotiles' parts, each its own estimate ('roadWalk': the rest, drawn buildings,
+-- rails, wires), started at roadWalk's guess.
+M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, material = 0.3, matDelete = 0.2, cdaeTex128 = 3.9, cdaeTex256 = 4.0, cdaeTex512 = 4.2, retex = 1.0, roadChunk = 0.5, roadDelete = 0.05, roadWalk = 3.0, roadSurf = 3.0, roadCol = 3.0, roadDrive = 3.0, roadFar = 3.0, fuel = 3.0 }
+-- Due work (setDue / reserve; 2026-11-14, Steam Deck 45 mph drives in Fells Point and Des Moines: the road surface was
+-- missing under the car in 23 % of checks with its tile's data in, parts drawn a median 4.3 s after their data; the
+-- road meshes waited on the bucket in 98 % of the frames they waited at all - 2 ms a frame, the far tiles' 4 ms units
+-- taking every few frames' worth first, an estimate a slow far part had dragged to 8-17 ms - so a 6.5 km drive made
+-- ~1.2 meshes a second while ~3 s of their Lua was all the drive's road meshes cost). A caller whose work the car
+-- reaches soon says so each frame (setDue): the target is then at least DUE_TARGET_MS, ramped at RAMP_UP_DUE, until
+-- it stops saying so (a frame without lapses it). And one whose due unit could not run for tokens reserves its cost
+-- (reserve): for the rest of the frame no other kind's unit (but those of RESERVE_FREE_MS or less: reveals, deletes)
+-- takes the bucket below it, so the far field's cheaper units no longer starve it. The frame cap and the far cap stand.
+M.DUE_TARGET_MS = 6.0
+M.RAMP_UP_DUE = 0.25
+M.RESERVE_FREE_MS = 0.5
+-- An urgent unit (tryUrgent: roads.lua's drawn road and sidewalks under the car) may run short of tokens, but only as
+-- the frame's first unit, with at most URGENT_ROOM_MS of the frame's other work (units charged, their engine share, the
+-- mod's noted work) before it, and not while the bucket is more than URGENT_DEBT_MS in debt (the engine's own tick
+-- after a slow frame, chargeEngine, or the urgent units before it): a busy frame is never made busier, and a run of
+-- urgent units is paced by the bucket again once they have overdrawn it.
+M.URGENT_ROOM_MS = 4.0
+M.URGENT_DEBT_MS = 10.0
 
 -- Unit kind of a textured .cdae import from its far_tile.tex (px): cdaeTex<px> for a size with a
 -- prior, else (FORMAT 3 tiles have no tex) 'cdaeTex'.
@@ -197,7 +219,23 @@ end
 
 function Gov:targetNow()
   if self.cover then return self:coverTarget() end
-  return self.loading and M.LOADING_TARGET_MS or self.target
+  local t = self.loading and M.LOADING_TARGET_MS or self.target
+  if self:isDue() then t = max(t, M.DUE_TARGET_MS) end
+  return t
+end
+
+-- Due work waits (DUE above): said every frame it does (the frame's target follows from the frame before).
+function Gov:setDue(on)
+  if on then self.dueFrame = self.frame end
+end
+
+-- Did a caller say its work is due this frame or the one before?
+function Gov:isDue() return self.dueFrame ~= nil and self.frame - self.dueFrame <= 1 end
+
+-- A due unit of this kind waits for tokens: the rest of the frame no other kind's unit takes the bucket below its cost.
+function Gov:reserve(kind)
+  local c = self:cost(kind)
+  if c > (self.reserved or 0) then self.reserved, self.reservedKind = c, kind end
 end
 
 -- The frame cap in force (ms of wall time a frame plans streaming up to).
@@ -256,6 +294,7 @@ function Gov:beginFrame(hasWork, wallMs)
   end
   self.prevHeavy = false
   self.frameSpent, self.frameUnits = 0, 0
+  self.reserved, self.reservedKind = nil, nil
   local decay = M.LANE_DECAY
   self.laneUse.mid, self.laneUse.far = self.laneUse.mid * decay, self.laneUse.far * decay
   -- a heavy request lives as long as the caller repeats it every frame
@@ -282,7 +321,9 @@ function Gov:beginFrame(hasWork, wallMs)
     self.b = max(0, self.b - M.RAMP_DOWN_HEAVY)
   elseif hasWork then
     if self.b < target then
-      self.b = min(target, self.b + (self.loading and M.RAMP_UP_LOADING or M.RAMP_UP))
+      local up = self.loading and M.RAMP_UP_LOADING or M.RAMP_UP
+      if self:isDue() then up = max(up, M.RAMP_UP_DUE) end
+      self.b = min(target, self.b + up)
     else
       self.b = max(target, self.b - M.RAMP_DOWN_IDLE)
     end
@@ -302,6 +343,11 @@ function Gov:try(kind, lane)
   local c = e + (self.def[kind] or 0)
   -- (in the cover the tokens are the frame's budget: a unit bigger than all of it still runs, as its frame's first)
   if self.tokens < c and not (self.cover and self.frameUnits == 0) then return false end
+  -- (a due unit's reservation: reserve)
+  if self.reserved and kind ~= self.reservedKind and c > M.RESERVE_FREE_MS and self.tokens - c < self.reserved then
+    self.stats.reserveYields = (self.stats.reserveYields or 0) + 1
+    return false
+  end
   if self.frameSpent + self.frameDef + c > self.b + self:maxUnit() then return false end
   if self.frameUnits > 0 then
     -- ... and past the first unit never more than the far cap: with every estimate at its prior, b + maxUnit is well
@@ -317,6 +363,16 @@ function Gov:try(kind, lane)
     self.stats.midYields = (self.stats.midYields or 0) + 1
     return false
   end
+  return true
+end
+
+-- May an urgent unit of this kind run now, tokens or not (URGENT_ROOM_MS above)? The caller charges it as any unit.
+function Gov:tryUrgent(kind)
+  self.used[kind] = true
+  if self.blocked or self.heavyFrame == self.frame or self.heavyPending then return false end
+  if self.frameUnits > 0 then return false end
+  if self.frameSpent + self.frameDef + self.frameOther > M.URGENT_ROOM_MS then return false end
+  if self.tokens < -M.URGENT_DEBT_MS then return false end
   return true
 end
 
@@ -423,7 +479,7 @@ function Gov:isHeavyFrame() return self.heavyFrame == self.frame end
 function Gov:snapshot()
   return { b = self.b, tokens = self.tokens, target = self:targetNow(), loading = self.loading, base = self.base,
     farCap = self.farCap, cover = self.cover, frameCap = self:frameCap(), def = self.def, laneUse = self.laneUse,
-    midYields = self.stats.midYields,
+    midYields = self.stats.midYields, due = self:isDue(), reserveYields = self.stats.reserveYields,
     heavyPending = self.heavyPending, estCdae = self.est.cdae, estDae = self.est.dae, estCdaeTex = self.est.cdaeTex,
     estCdaeTex128 = self.est.cdaeTex128, estCdaeTex256 = self.est.cdaeTex256, estCdaeTex512 = self.est.cdaeTex512,
     estMaterial = self.est.material, estMatDelete = self.est.matDelete, heavy = self.stats.heavy,

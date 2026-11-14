@@ -327,13 +327,23 @@ def keepup_save(d):
     import shutil
     n = lua("local k = require('beamngEarth/keepup') local n = k.save('/temp/bne_keepup.csv') k.stop() "
             "return n", timeout=120)
-    src = os.path.join(USER_DIR, "temp", "bne_keepup.csv")
-    for _ in range(20):
-        if os.path.exists(src):
-            break
-        time.sleep(0.5)
-    shutil.copy(src, os.path.join(d, "keepup.csv"))
-    os.remove(src)
+    dst = os.path.join(d, "keepup.csv")
+    if LOG_SSH and not LOG_WIN:     # (another machine's game, BNGE_LOG_SSH: the file is in ITS user folder)
+        rdir = os.environ.get("BNGE_REMOTE_USER_DIR", ".local/share/BeamNG/BeamNG.drive/current")
+        rsrc = f"{rdir}/temp/bne_keepup.csv"
+        for _ in range(20):
+            if subprocess.run(["scp", "-q", "-o", "BatchMode=yes", f"{LOG_SSH}:{rsrc}", dst]).returncode == 0:
+                break
+            time.sleep(0.5)
+        subprocess.run(["ssh", "-o", "BatchMode=yes", LOG_SSH, f"rm -f {rsrc}"], timeout=30)
+    else:
+        src = os.path.join(USER_DIR, "temp", "bne_keepup.csv")
+        for _ in range(20):
+            if os.path.exists(src):
+                break
+            time.sleep(0.5)
+        shutil.copy(src, dst)
+        os.remove(src)
     import keepup
     print(f"keepup: {n} lines", flush=True)
     print(keepup.table([dict(keepup.analyze(os.path.join(d, "keepup.csv")), label=os.path.basename(d))]), flush=True)

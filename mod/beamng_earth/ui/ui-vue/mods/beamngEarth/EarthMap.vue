@@ -154,7 +154,7 @@
         />
         <div v-if="results.length" class="search-results">
           <div v-for="(r, i) in results" :key="i" class="search-result" :class="{ active: i === resultIndex }"
-               @mousedown.stop @click="pickResult(r)">
+               @mousedown.stop @click="pickResult(r)" @mouseenter="hoverPreload(r)" @mouseleave="hoverEnd">
             <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
             <span class="result-coords">{{ r.detail || fmtLatLon(r.lat, r.lon) }}</span>
           </div>
@@ -387,7 +387,8 @@
             <button class="map-btn" @click="renamingId = null">Cancel</button>
           </div>
           <template v-else>
-            <div class="item-text" @click="showOnMap(p)" title="Show on the map">
+            <div class="item-text" @click="showOnMap(p)" title="Show on the map" @mouseenter="hoverPreload(p)"
+                 @mouseleave="hoverEnd">
               <div class="item-name">{{ p.name }}</div>
               <div class="item-sub">{{ p.text }}</div>
             </div>
@@ -425,7 +426,8 @@
 
         <div class="panel-sub">Recent places</div>
         <div v-for="r in recentList" :key="'r' + r.index + '_' + r.lat" class="panel-item">
-          <div class="item-text" @click="showOnMap(r)" title="Show on the map">
+          <div class="item-text" @click="showOnMap(r)" title="Show on the map" @mouseenter="hoverPreload(r)"
+               @mouseleave="hoverEnd">
             <div class="item-name">{{ r.name || r.text }}</div>
             <div class="item-sub">{{ recentDetail(r) }}</div>
           </div>
@@ -585,9 +587,17 @@ onUnmounted(() => { clearTimeout(askTimer); askTimer = null; clearTimeout(search
 
 const tileLayers = computed(() => activeLayers.value.map(L => {
   const ready = readySet(L)
+  // (a "sat" tile with only its stand-in there, "satp": shown from its own file until the real one comes, which is
+  // still asked for: missingTiles looks at "sat" alone)
+  const stand = L === "sat" ? readySet("satp") : NONE
+  const src = t => {
+    const k = `${t.z}/${t.x}/${t.y}`
+    return mm.tilePath(TILE_DIR, ready.has(k) || !stand.has(k) ? L : "satp", t.z, t.x, t.y)
+  }
   return {
     id: L, overlay: L === "labels",
-    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`)).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
+    tiles: wanted.value.filter(t => ready.has(`${t.z}/${t.x}/${t.y}`) || stand.has(`${t.z}/${t.x}/${t.y}`))
+      .map(t => ({ ...t, src: src(t) })),
     // loaded coarser tiles stretched over the ones still coming (mapmath.fallbackTiles)
     fallback: mm.fallbackTiles(wanted.value, ready).map(t => ({ ...t, src: mm.tilePath(TILE_DIR, L, t.z, t.x, t.y) })),
   }
@@ -1913,7 +1923,24 @@ function moveResult(d) {
   const n = results.value.length
   if (!n) return
   resultIndex.value = (resultIndex.value + d + n) % n
+  hoverPreload(results.value[resultIndex.value])
 }
+
+// A search result, saved or recent place the pointer rests on (or the arrow keys pick) for PRELOAD_HOVER_MS: the server
+// starts loading it (its signed road plans, elevation and the first block's map cells: earthd Server.preload "hover"),
+// a newer one replacing it. Leaving it before then sends nothing.
+const PRELOAD_HOVER_MS = 600
+let hoverTimer = null
+function hoverPreload(p) {
+  clearTimeout(hoverTimer)
+  hoverTimer = null
+  if (!p || !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lon))) return
+  hoverTimer = setTimeout(() => {
+    hoverTimer = null
+    engineLua(`if beamngEarth_settings and beamngEarth_settings.uiMapPreload then beamngEarth_settings.uiMapPreload(${Number(p.lat)}, ${Number(mm.wrapLon(p.lon))}, true) end`)
+  }, PRELOAD_HOVER_MS)
+}
+function hoverEnd() { clearTimeout(hoverTimer); hoverTimer = null }
 
 function onSearch() {
   const text = query.value.trim()

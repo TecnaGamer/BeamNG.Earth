@@ -15,9 +15,18 @@ straight corridor, built in order of their time to reach (a likely branch first,
 tree no longer reaches (an exit passed, a turn not taken) are dropped (GeoTracker.unwanted, beside Server.left_behind);
 the terrain blocks prefetched and the map cells, elevation tiles, road plans and photos fetched ahead follow its most
 probable path. Slower than MIN_V, with no road under the car, or with the 3D map: none of it (distance order as before).
+
+At city speeds (MIN_V 8 m/s, 18 mph, since 2026-11-13; 25 m/s before): a cold 40 mph drive through Midtown Manhattan
+held the car 57 % of the time, its road tiles built nearest first all round it (a disc) while the car only ever needed
+the ones along its avenue and the next turns. Below FAST_V the tree follows less likely ways too (P_MIN_CITY) and a turn
+onto a smaller street costs less of its chance (CLASS_K_CITY: in a town a driver turns off the avenue far more often than
+off a motorway); the trackers keep the tiles right round the car first whatever the tree says (roads.INSURE_M). The
+driver's intent (Intent: the car already turning, or braking hard, from its own poses) makes the ways at the junctions
+just ahead that it is turning or braking for likelier (earthfast >= INTENT_NEED).
 """
 import logging
 import math
+import os
 import threading
 import time
 
@@ -30,9 +39,18 @@ import dnp
 log = logging.getLogger("earthd.reach")
 
 NEED = 215                  # earthfast.RoadReach
-MIN_V = 25.0                # m/s (roads.FAST_MS, 56 mph): slower, the trackers' distance order as before
+INTENT_NEED = 293           # ... with the driver's intent (grow's intent_turn / intent_brake / intent_s)
+# m/s (18 mph): slower, the trackers' distance order as before. (25 m/s, roads.FAST_MS, until 2026-11-13: a car at
+# 40 mph in a city had its road tiles built in distance order, the ones behind and beside it as soon as those ahead)
+MIN_V = float(os.environ.get("BNE_REACH_MIN_V", "8.0"))
+FAST_V = 25.0               # m/s: from here up the tree's motorway parameters (P_MIN, CLASS_K) ...
+CITY_V = 12.0               # ... at this speed and below the city's (P_MIN_CITY, CLASS_K_CITY), in between a blend
+P_MIN_CITY = 0.01           # a branch less likely than this is not followed (a town's junctions every 80-200 m split
+                            # the chance fast: at P_MIN the tree stopped two or three blocks on)
+CLASS_K_CITY = 0.75         # each class step down this much less likely (a side street off an avenue: 0.42, not 0.22)
 HORIZON_S = 30.0            # s ahead the tree reaches (roads.LEAD_S) ...
-HORIZON_MAX_M = 5000.0      # ... and this far at most (roads.LEAD_MAX_M)
+HORIZON_MAX_M = 5000.0      # ... and this far at most (roads.LEAD_MAX_M) ...
+HORIZON_MIN_M = 900.0       # ... and this far at least (a slow car's: past the road tiles' disc, roads.SEND_M + a tile)
 STEP_M = 32.0               # m between the tree's points along a road
 P_MIN = 0.03                # a branch less likely than this is not followed
 P_WANT = 0.1                # a branch this likely or more is wanted (its tiles built); less likely ones only ordered
@@ -66,6 +84,16 @@ WINDOW_M = 750.0            # m of driving a tile matters for, from when the car
 LATE_KEEP = 0.6             # a tile done with less than this share of that time left counts as late ...
 LATE_S = 30.0               # ... and comes this much later (s)
 BUILD_EST_S = 2.0           # s a tile's build is taken to need before any was timed
+# The driver's intent (Intent, from the poses): at the junctions the car reaches within INTENT_S, the ways turning the
+# way the car already turns (its heading's rate over YAW_FULL rad/s: full) and, while it brakes (DECEL_MIN m/s^2 and
+# more, DECEL_FULL: full), every turn likelier (earthfast reach.rs INTENT_TURN_K / INTENT_BRAKE_K)
+INTENT_S = 6.0
+INTENT_WINDOW_S = 1.2       # s of poses the car's turning and braking are measured over
+INTENT_MIN_V = 3.0          # m/s: slower, no turn rate (a heading at a crawl is noise)
+YAW_MIN = 0.05              # rad/s: less is a road's own curve, not a turn (a 300 m bend at 15 m/s)
+YAW_FULL = 0.30
+DECEL_MIN = 1.0
+DECEL_FULL = 4.0
 
 RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, "unclassified": 2, "residential": 2,
         "living_street": 1, "service": 1, "unknown": 1, "busway": 0, "track": 0}
@@ -78,9 +106,70 @@ def available():
     return fast._ef is not None and getattr(fast._ef, "VERSION", 0) >= NEED
 
 
+def city_share(speed):
+    """1 at CITY_V and below, 0 at FAST_V and above, linear in between: how much of the city's parameters."""
+    return min(1.0, max(0.0, (FAST_V - speed) / (FAST_V - CITY_V)))
+
+
+def p_min_at(speed):
+    """The tree's P_MIN at this speed (P_MIN_CITY in a town's speeds)."""
+    c = city_share(speed)
+    return P_MIN + (P_MIN_CITY - P_MIN) * c
+
+
+def class_k_at(speed):
+    """The tree's CLASS_K at this speed (CLASS_K_CITY in a town's speeds)."""
+    c = city_share(speed)
+    return CLASS_K + (CLASS_K_CITY - CLASS_K) * c
+
+
+class Intent:
+    """The driver's intent from the car's own poses (feed each pose's time and velocity): turn (-1 right .. 1 left)
+    from its heading's rate, brake (0 .. 1) from its slowing down, over the last INTENT_WINDOW_S. No input or
+    indicator is read: what the car does is what the server sees."""
+
+    def __init__(self):
+        self.hist = []          # (t, vx, vy)
+
+    def feed(self, t, vx, vy):
+        h = self.hist
+        if h and t <= h[-1][0]:
+            if t < h[-1][0] - 5.0:      # (another clock: a new connection's)
+                h.clear()
+            else:
+                return
+        h.append((float(t), float(vx), float(vy)))
+        while len(h) > 2 and t - h[1][0] >= INTENT_WINDOW_S:
+            h.pop(0)
+
+    def reset(self):
+        self.hist = []
+
+    def value(self):
+        """(turn, brake)."""
+        h = self.hist
+        if len(h) < 2:
+            return 0.0, 0.0
+        t0, vx0, vy0 = h[0]
+        t1, vx1, vy1 = h[-1]
+        dt = t1 - t0
+        if dt < 0.2 or dt > 3.0 * INTENT_WINDOW_S:
+            return 0.0, 0.0
+        s0, s1 = math.hypot(vx0, vy0), math.hypot(vx1, vy1)
+        turn = 0.0
+        if min(s0, s1) >= INTENT_MIN_V:
+            yaw = dmath.atan2(vx0 * vy1 - vy0 * vx1, vx0 * vx1 + vy0 * vy1) / dt     # (+: to the left)
+            if abs(yaw) > YAW_MIN:
+                turn = math.copysign(min(1.0, (abs(yaw) - YAW_MIN) / (YAW_FULL - YAW_MIN)), yaw)
+        decel = (s0 - s1) / dt
+        brake = min(1.0, max(0.0, (decel - DECEL_MIN) / (DECEL_FULL - DECEL_MIN)))
+        return turn, brake
+
+
 def horizon_s(speed):
-    """The tree's horizon at this speed: HORIZON_S, HORIZON_MAX_M at most."""
-    return min(HORIZON_S, HORIZON_MAX_M / max(speed, 1.0))
+    """The tree's horizon at this speed (s): HORIZON_S, HORIZON_MIN_M at least, HORIZON_MAX_M at most."""
+    v = max(speed, 1.0)
+    return min(max(HORIZON_S, HORIZON_MIN_M / v), HORIZON_MAX_M / v)
 
 
 def priority(eta, p):
@@ -103,6 +192,34 @@ def order_key(eta, p, gap, speed, build_s):
     if left < LATE_KEEP:
         key += LATE_S * (2.0 if left <= 0.0 else 1.0)
     return key
+
+
+ORDER_NEAR_M = 128.0        # m: order_geotiles' tiles this close to the car first (roads.INSURE_M)
+ORDER_CORRIDOR_M = 160.0    # ... the tree's within this of its roads next (roads.CORRIDOR_M)
+
+
+def order_geotiles(tree, frame, keys, x, y, z=None):
+    """keys (zoom-z geotiles, the trackers' wanted ones round the car at (x, y)) in the order the car's tree reaches
+    them: those within ORDER_NEAR_M of the car first (by distance: the ground right round it whatever the tree says),
+    then the ones within ORDER_CORRIDOR_M of its roads by their priority (time to reach, a less likely way later), then
+    the rest by distance. The detail trackers' order (vegetation: the trees ahead along the way the car goes first)."""
+    import geotiles
+    keys = list(keys)
+    if not keys:
+        return keys
+    z = geotiles.Z if z is None else int(z)
+    tk = tree.geotile_keys(frame, ORDER_CORRIDOR_M, z=z, horizon=horizon_s(tree.speed))
+    d = geotiles.dists(frame, keys, z, [(x, y)])[:, 0].tolist()
+
+    def key(i):
+        k, dk = keys[i], d[i]
+        if dk <= ORDER_NEAR_M:
+            return (0, dk)
+        got = tk.get(tuple(k))
+        if got is not None:
+            return (1, got[0])
+        return (2, dk)
+    return [keys[i] for i in sorted(range(len(keys)), key=key)]
 
 
 def _ranges(arrays, n):
@@ -343,9 +460,10 @@ class Reach:
         with self.lock:
             self.net = net
 
-    def grow(self, x, y, vx, vy, route_xy=None, now=None):
+    def grow(self, x, y, vx, vy, route_xy=None, now=None, intent=None):
         """The tree from (x, y) going (vx, vy) (Tree), or None (slower than MIN_V, on no road of the graph). Kept for
-        GROW_EVERY_S / GROW_MOVE_M (the last one returned meanwhile)."""
+        GROW_EVERY_S / GROW_MOVE_M (the last one returned meanwhile). intent: the driver's (turn, brake) (Intent),
+        with earthfast >= INTENT_NEED."""
         now = time.monotonic() if now is None else now
         s = math.hypot(vx, vy)
         if s < MIN_V:
@@ -358,11 +476,14 @@ class Reach:
         route = None
         if route_xy is not None and len(route_xy) >= 2:
             route = np.ascontiguousarray(np.asarray(route_xy, np.float64)[:, :2])
+        kw = {}
+        if intent is not None and (intent[0] or intent[1]) and getattr(fast._ef, "VERSION", 0) >= INTENT_NEED:
+            kw = {"intent_turn": float(intent[0]), "intent_brake": float(intent[1]), "intent_s": INTENT_S}
         with self.lock:
-            got = self.net.grow(float(x), float(y), float(vx), float(vy), horizon_s(s), p_min=P_MIN, step_m=STEP_M,
-                                snap_m=SNAP_M, snap_cos=SNAP_COS, a_turn=A_TURN, v90=V90, t_p=T_P, class_k=CLASS_K,
-                                link_k=LINK_K, max_states=MAX_STATES, route=route, route_m=ROUTE_M,
-                                route_share=ROUTE_SHARE)
+            got = self.net.grow(float(x), float(y), float(vx), float(vy), horizon_s(s), p_min=p_min_at(s),
+                                step_m=STEP_M, snap_m=SNAP_M, snap_cos=SNAP_COS, a_turn=A_TURN, v90=V90, t_p=T_P,
+                                class_k=class_k_at(s), link_k=LINK_K, max_states=MAX_STATES, route=route,
+                                route_m=ROUTE_M, route_share=ROUTE_SHARE, **kw)
         self.stats["grow_s"] += time.perf_counter() - t0
         self.grown_at = (now, (x, y))
         if got is None:

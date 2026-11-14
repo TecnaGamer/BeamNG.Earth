@@ -181,6 +181,7 @@ class HostPolicy:
     referer: bool = False                   # send PROJECT_URL as Referer (hosts that ask for one)
     optional: bool = False                  # the world builds without it (gravity, weather, search, routing,
                                             # updates): left out of the player's "Degraded" status (GitHub #23)
+    shared: bool = False                    # admitted across the server's processes (SharedGate: SHARED_DIR)
 
 
 TILE_HOST = dict(redirect_limited=True, binary=True)
@@ -196,17 +197,17 @@ POLICIES = {
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):
     # one at a time, only imagery.warm()'s look-ahead (never on a render's critical path)
-    "imagery.nationalmap.gov": HostPolicy(rate=0.5, burst=4.0, max_conc=1, daily_budget=3000,
+    "imagery.nationalmap.gov": HostPolicy(rate=0.5, burst=4.0, max_conc=1, daily_budget=3000, shared=True,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                           binary=True, timeout=40.0, max_attempts=2, base_delay=2.0,
                                           breaker_threshold=6, breaker_window=120.0),
     # USDA FPAC's NAIP ImageServer (imagery.py "naipusda"): 1.6-4 s a 1024² image in-game 2026-10-13
-    "apps.geo.fpac.usda.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000,
+    "apps.geo.fpac.usda.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, shared=True,
                                          allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                          binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                          breaker_threshold=6, breaker_window=120.0),
     # MD iMAP six-inch MapServer export (imagery.py "md6in"): ~1.3 s a 1024² image in-game 2026-10-13
-    "mdgeodata.md.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000,
+    "mdgeodata.md.gov": HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, shared=True,
                                    allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY,
                                    binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
                                    breaker_threshold=6, breaker_window=120.0),
@@ -368,8 +369,8 @@ def _regional_policies():
                                    miss_ttl=30 * DAY, timeout=20.0, optional=True, **TILE_HOST)
         else:
             out[host] = HostPolicy(rate=1.0, burst=4.0, max_conc=1, daily_budget=4000, allow_prefetch=True,
-                                   miss_ttl=30 * DAY, binary=True, timeout=30.0, max_attempts=2, base_delay=2.0,
-                                   breaker_threshold=6, breaker_window=120.0, optional=True)
+                                   shared=True, miss_ttl=30 * DAY, binary=True, timeout=30.0, max_attempts=2,
+                                   base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True)
     return out
 
 
@@ -1149,6 +1150,202 @@ def _proc_writer():
         st["lock"].release()
 
 
+# --- one host's admission shared by the server's processes ------------------------------------------------------------
+# A host whose policy is shared (the one-at-a-time export services: Maryland's md6in, NAIP, the regional WMS / ArcGIS
+# exports) is admitted across every process of the server, not each process alone: the road-tile processes fetch the
+# roofs' photos from the same hosts as the main process's warm (buildings.roof_photo, imagery.fetch_lazy), and each
+# process's own bucket, request slots and breaker let four of them ask md6in (1 request/s, one at a time) four times as
+# fast, and none saw another's Retry-After or outage (2026-11-13 review). BNGE_NET_SHARED (earthd sets it before its
+# worker processes start, so they inherit it): the folder of the gates; unset (tests, tools, a process alone), each
+# process's limits as before. Not BNE_: those are part of the revisit cache's code key.
+SHARED_ENV = "BNGE_NET_SHARED"
+SHARED_DIR = os.environ.get(SHARED_ENV) or None
+SHARED_POLL_S = 0.02                # s between tries for a request slot another process holds
+GATE_LOG = os.environ.get("BNGE_GATE_LOG") or None      # (measuring: a line per gate admission that waited)
+_SHARED_FMT = "<3d"                 # the gate file: tokens, their time (monotonic), blocked until (monotonic)
+_SHARED_SIZE = 24
+IS_WIN = os.name == "nt"
+
+
+def _flock(fd, blocking=True):
+    """An exclusive lock on fd's file (byte 0 on Windows); True when held. Released by the system when the process
+    ends, so a dead process never holds a gate."""
+    if IS_WIN:
+        import msvcrt
+        while True:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                if not blocking:
+                    return False
+                time.sleep(SHARED_POLL_S)
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        return True
+    except BlockingIOError:
+        return False
+
+
+def _funlock(fd):
+    try:
+        if IS_WIN:
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+class SharedGate:
+    """One host's admission for every process that opens the same folder: a token bucket (rate, burst) and a
+    blocked-until time in <dir>/<host>.gate, read and written under its lock, and max_conc request slots, files
+    <host>.<i>.slot each locked while a request runs. Times are time.monotonic (one clock for the machine's
+    processes). A demand / urgent request waits for a slot and a token (up to max_wait: RateLimited); prefetch and
+    background ones take them only when free (Deferred). blocked(): a Retry-After or an open breaker another process
+    saw."""
+
+    def __init__(self, d, host, policy, clock=time.monotonic, sleep=time.sleep):
+        self.rate, self.burst = float(policy.rate), float(policy.burst)
+        self.max_conc = max(1, int(policy.max_conc))
+        self.clock, self.sleep = clock, sleep
+        safe = "".join(c if c.isalnum() or c in "-." else "_" for c in host)
+        os.makedirs(d, exist_ok=True)
+        self.path = os.path.join(d, safe + ".gate")
+        self.slots = [os.path.join(d, f"{safe}.{i}.slot") for i in range(self.max_conc)]
+
+    def _state(self, fn):
+        """fn(tokens, t, blocked, now) -> (tokens, t, blocked, result) under the gate's lock; result."""
+        import struct
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+        try:
+            _flock(fd)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                raw = os.read(fd, _SHARED_SIZE)
+                now = self.clock()
+                if len(raw) == _SHARED_SIZE:
+                    tokens, t, blocked = struct.unpack(_SHARED_FMT, raw)
+                    if t > now + 1.0:           # (written before a restart of the clock: the machine's reboot)
+                        tokens, t, blocked = self.burst, now, 0.0
+                else:
+                    tokens, t, blocked = self.burst, now, 0.0
+                tokens = min(self.burst, tokens + max(0.0, now - t) * self.rate)
+                tokens, t, blocked, res = fn(tokens, max(t, now), blocked, now)
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, struct.pack(_SHARED_FMT, tokens, t, blocked))
+                return res
+            finally:
+                _funlock(fd)
+        finally:
+            os.close(fd)
+
+    def blocked(self):
+        """Seconds the host is blocked for (another process's Retry-After or open breaker), 0 when not."""
+        return self._state(lambda tk, t, b, now: (tk, t, b, max(0.0, b - now)))
+
+    def block(self, seconds):
+        """The host blocked for every process for seconds (at least: a longer block stands)."""
+        self._state(lambda tk, t, b, now: (tk, t, max(b, now + float(seconds)), None))
+
+    def _slot(self, wait_s):
+        """A request slot (its open fd, locked), or None when none came free within wait_s."""
+        deadline = self.clock() + max(0.0, wait_s)
+        while True:
+            for p in self.slots:
+                fd = os.open(p, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+                if _flock(fd, blocking=False):
+                    return fd
+                os.close(fd)
+            if self.clock() >= deadline:
+                return None
+            self.sleep(SHARED_POLL_S)
+
+    def acquire(self, kind, max_wait, url=None, host=None):
+        """A slot and a token for one request: (the slot: release() it after the request, the seconds waited for
+        them). Raises HostUnavailable (blocked), RateLimited (a demand that would wait past max_wait), Deferred
+        (prefetch / background: busy); OSError (the gate's files: a full disk) with nothing held."""
+        t_start = self.clock()
+        wait = kind in ("demand", "urgent")
+        b = self.blocked()
+        if b > 0:
+            raise HostUnavailable(f"{host}: unavailable for {b:.0f} s (another process's answer)", url, host,
+                                  retry_after=b)
+        fd = self._slot(max_wait if wait else 0.0)
+        if fd is None:
+            if wait:
+                raise RateLimited(f"{host}: no free request slot within {max_wait:.0f} s (shared)", url, host)
+            raise Deferred(f"{host}: busy (shared), {kind} dropped", url, host)
+
+        def take(tk, t, blocked, now):
+            if blocked > now:
+                return tk, t, blocked, ("blocked", blocked - now)
+            if tk >= 1.0 - TOKEN_EPS:
+                return tk - 1.0, t, blocked, ("go", 0.0)
+            need = (1.0 - tk) / self.rate
+            if not wait or need > max_wait:
+                return tk, t, blocked, ("full", need)
+            return tk - 1.0, t, blocked, ("go", need)    # (reserved: the debt is paid by the refill while it sleeps)
+        try:
+            what, s = self._state(take)
+            if what == "blocked":
+                raise HostUnavailable(f"{host}: unavailable for {s:.0f} s (another process's answer)", url, host,
+                                      retry_after=s)
+            if what == "full":
+                if wait:
+                    raise RateLimited(f"{host}: rate limited for {s:.1f} s (shared)", url, host, retry_after=s)
+                raise Deferred(f"{host}: bucket low (shared), {kind} dropped", url, host)
+            if s > 0:
+                self.sleep(s)
+        except BaseException:
+            self.release(fd)
+            raise
+        waited = self.clock() - t_start
+        if GATE_LOG and waited >= WAIT_MS_MIN / 1000:
+            try:
+                with open(GATE_LOG, "a") as fh:
+                    fh.write(f"{time.time():.3f} {os.getpid()} {host} {kind} {waited:.3f}\n")
+            except OSError:
+                pass
+        return fd, waited
+
+    @staticmethod
+    def release(fd):
+        if fd is None:
+            return
+        _funlock(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+_GATES = {}
+_GATES_LOCK = threading.Lock()
+
+
+def shared_gate(host, policy, d=None):
+    """The process's SharedGate of host (policy.shared, a folder set: SHARED_DIR), or None."""
+    d = d or SHARED_DIR
+    if not d or not getattr(policy, "shared", False):
+        return None
+    key = (d, host)
+    with _GATES_LOCK:
+        g = _GATES.get(key)
+        if g is None:
+            try:
+                g = _GATES[key] = SharedGate(d, host, policy)
+            except OSError as e:
+                log.debug("net: %s's shared gate: %s", host, e)
+                return None
+        return g
+
+
 class Fetcher:
     """See the module docstring. clock / sleep / rng / transport / wall are injectable (tests)."""
 
@@ -1412,6 +1609,12 @@ class Fetcher:
                                               h.name, retry_after=wait)
                     probe = probe or probe2
                 sem = self._acquire(h, url, kind)
+                gate, slot = shared_gate(h.name.split("#", 1)[0], p), None
+                try:
+                    slot = self._gate_admit(h, gate, url, kind)
+                except BaseException:
+                    sem.release()       # (every way out without the request: the slot is this process's again)
+                    raise
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
@@ -1423,7 +1626,7 @@ class Fetcher:
                             p.timeout if p.connect_timeout is None else (p.connect_timeout, p.timeout))
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
-                        self._failed(h)
+                        self._failed(h, gate)
                         probe = False
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
@@ -1440,9 +1643,15 @@ class Fetcher:
                         _netlog(url, hd, status, body)
                 finally:
                     netstate.end(len(body) if body else 0, h.name)
+                    SharedGate.release(slot)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict
+                if gate is not None:        # (the others hold off too: its Retry-After, its breaker opened here)
+                    if isinstance(res, RateLimited) and res.retry_after:
+                        self._gate_block(gate, res.retry_after)
+                    elif h.breaker.is_open() and h.breaker.open_until > self.clock():
+                        self._gate_block(gate, h.breaker.open_until - self.clock())
                 if isinstance(res, Response):
                     return res
                 if isinstance(res, (NotFound, BadResponse)) or (isinstance(res, RateLimited) and res.retry_after):
@@ -1498,10 +1707,39 @@ class Fetcher:
         self._failed(h)
         return FetchFailed(f"{url}: HTTP {status}", url, h.name, status=status)
 
-    def _failed(self, h):
+    def _gate_admit(self, h, gate, url, kind):
+        """The shared gate's slot for one attempt (None: no gate, or its files failed: this process's own limits
+        alone, the request not refused for a full disk); its wait counted with the others' (waited, wait_ms)."""
+        if gate is None:
+            return None
+        try:
+            fd, waited = gate.acquire(kind, h.policy.max_wait, url, h.name)
+        except FetchError as e:
+            self._bump(h, "deferred" if isinstance(e, Deferred) else "unavailable"
+                       if isinstance(e, HostUnavailable) else "limit_fail")
+            raise
+        except OSError as e:
+            log.debug("net: %s's shared gate: %s (this process's limits alone)", h.name, e)
+            return None
+        ms = int(waited * 1000)
+        if kind in ("demand", "urgent") and ms >= WAIT_MS_MIN:
+            self._bump(h, "waited")
+            self._bump(h, "wait_ms", ms)
+        return fd
+
+    @staticmethod
+    def _gate_block(gate, seconds):
+        try:
+            gate.block(seconds)
+        except OSError as e:
+            log.debug("net: shared gate: %s", e)
+
+    def _failed(self, h, gate=None):
         if h.breaker.failure():
             self._count(h, "trips")
             log.warning("net: %s: circuit open for %.0f s", h.name, h.breaker.open_s)
+            if gate is not None:
+                self._gate_block(gate, h.breaker.open_s)
 
     def _succeeded(self, h):
         if h.breaker.success():

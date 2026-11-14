@@ -144,7 +144,7 @@ def place(records, frame, box, pavements, elev, decks=()):
         for a, b in zip(line, line[1:]):
             deck_rows.append([a[0], a[1], b[0], b[1], float(chunk.get('w', 0.)) / 2])
     rows = [[*r['point'], r['z'], *r['travel'], .22, 1.] for r in out]
-    kernel = fast.native(291, 'Dutch source sign placement')
+    kernel = fast.native(298, 'Dutch source sign placement')
     kept = kernel.nl_source_sign_place(
         [r['id'] for r in out], np.asarray(rows, np.float64),
         np.asarray(vertices, np.float64).reshape(-1, 2), np.asarray(offsets, np.int64),

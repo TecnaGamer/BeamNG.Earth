@@ -68,6 +68,10 @@ LEAD_S = float(os.environ.get("BNE_ROADS_LEAD_S", "30"))         # s of driving 
 LEAD_MAX_M = float(os.environ.get("BNE_ROADS_LEAD_M", "5000"))
 CORRIDOR_M = 160.0      # m either side of the path
 SIDE_PENALTY = 4.0      # a tile off the path counts this many times its sideways distance (path_key)
+# Below FAST_MS with the car's time-to-reach tree (reach.MIN_V up: GeoTracker.on_pose) the tiles within SEND_M are built
+# in the tree's order, but the ones within INSURE_M of the car first, by their distance (a wrong guess at a junction,
+# a U-turn: the ground right round the car is never left to the tree's chances)
+INSURE_M = TILE / 2
 
 # class -> (width m, paved by default). Classes not here (footway, path, steps, cycleway, ...) are
 # left out for now.
@@ -7562,50 +7566,59 @@ class BridgeProfiles:
     def _cell_entries(self, key):
         """([((fid, j), (spec, deck line, lon, level, ring points))], [((fid, "g"), [ground lines])]) of cell key, made
         once (every chain solved gathered its cells again: each a loop over all their roads, 2026-10-25). Not to be
-        changed by the caller."""
+        changed by the caller. Kept only when made complete: the read and the entries made from it run in a revisit
+        scope of their own, and any fault there (this thread's, the pool workers' it took, the process's, a spec rule's
+        fallback) answers this call alone, so the next chain solve reads the cell again and faults again, rather than
+        taking a short copy without the fault and calling its network final (subsea._final, review 2026-11-13)."""
+        import revisit
         cache = self.__dict__.setdefault("cell_entries", {})
         with self.lock:
             got = cache.get(str(key))
         if got is not None:
             return got
         parts, roads_ = [], []
-        feats = self.cell_fn(key)
-        if feats is not None and len(feats):
-            bs = self.specs_of(feats)
-            rs = road_specs(feats)
-            names = feats.attrs.get("name")
-            for i in range(len(feats)):
-                fid = str(feats.ids[i])
-                if bs[i] is not None:
-                    lvls = self.levels_of(feats, i)
-                    best = {}
-                    for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
-                        if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
-                            continue
-                        e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                        best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
-                                          float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
-                                          str(names[i]) if names is not None else "")     # (roadz: name matching)
-                    parts.extend(best.items())
-                if rs[i] is not None:
-                    lines = []
-                    for ring in ground_parts(feats, i):
-                        e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                        lines.append(np.stack([e, n], axis=1))
-                    roads_.append(((fid, "g"), lines))
-                elif _rail_drawn(feats, i):
-                    # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
-                    # lay on the tracks; only roads under a deck were counted)
-                    import railways
-                    lines = []
-                    for kind, rings in railways._pieces(feats, i):
-                        if kind == "ground":
-                            for ring in rings:
-                                e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                                lines.append(np.stack([e, n], axis=1))
-                    if lines:
-                        roads_.append(((fid, "r"), lines))
-        got = (parts, roads_)
+        # (the read AND everything made from it in a revisit scope of its own: the pool workers' faults it took,
+        # a spec rule's lookup that fell back (germanroads.adjust_specs in specs_of / road_specs) count too)
+        with revisit.scope() as read:
+            feats = self.cell_fn(key)
+            if feats is not None and len(feats):
+                bs = self.specs_of(feats)
+                rs = road_specs(feats)
+                names = feats.attrs.get("name")
+                for i in range(len(feats)):
+                    fid = str(feats.ids[i])
+                    if bs[i] is not None:
+                        lvls = self.levels_of(feats, i)
+                        best = {}
+                        for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
+                            if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
+                                continue
+                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                            best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
+                                              float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
+                                              str(names[i]) if names is not None else "")     # (roadz: name matching)
+                        parts.extend(best.items())
+                    if rs[i] is not None:
+                        lines = []
+                        for ring in ground_parts(feats, i):
+                            e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                            lines.append(np.stack([e, n], axis=1))
+                        roads_.append(((fid, "g"), lines))
+                    elif _rail_drawn(feats, i):
+                        # a railway on the ground: the decks over it keep their headroom too (GitHub #324: a road bridge
+                        # lay on the tracks; only roads under a deck were counted)
+                        import railways
+                        lines = []
+                        for kind, rings in railways._pieces(feats, i):
+                            if kind == "ground":
+                                for ring in rings:
+                                    e, n = mapgeom.enu_xy(feats, self.frame, ring)
+                                    lines.append(np.stack([e, n], axis=1))
+                        if lines:
+                            roads_.append(((fid, "r"), lines))
+            got = (parts, roads_)
+        if not read.complete:
+            return got
         with self.lock:
             if len(cache) > 64:
                 cache.clear()
@@ -7986,8 +7999,7 @@ class BridgeProfiles:
         solved_only: only those solved already; part_ids: return (fid, j) rather than fid."""
         out = []
         for key, feats, i in todo:
-            with self.lock:
-                got = self.done.get(key)
+            got = self._take(key)       # (with its note: whoever builds on a solve made short is short too)
             if got is None and not solved_only:
                 ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
@@ -8000,10 +8012,54 @@ class BridgeProfiles:
         """Solve the chain of part key (its ring's ends (lat, lon) say where to start loading): its parts into done.
         Returns done[key] or None. A chain another store owns (owner_of) is solved there and its result taken in, its
         geometry mapped into this frame (one deck profile per chain, whichever store a tile asks)."""
-        with self.lock:
-            got = self.done.get(key)
+        got = self._take(key)
         if got is not None:
             return got
+        # (the solve in a revisit scope of its own: what it read short is noted with its parts, _note_short, and said
+        # again to every later build that takes them from `done`, _take. The solves are kept for the session; one
+        # made short (an underwater bore unsolved, a cell that could not be read, the lidar rule) faulted only the
+        # build that made it, and a later one built on the same fallback was kept as complete: review, 2026-11-13.
+        # A chain is published only when everything it depends on is read, its parts, piers and structure TOGETHER
+        # with their final notes, under one hold of the lock (_chain_solve, _adopt): a reader or an adopter in
+        # another thread never finds a part in `done` whose note is still to come)
+        import revisit
+        comp = []
+        with revisit.scope() as short:
+            return self._chain_solve(key, ends, adopt, comp, short)
+
+    def _note_short(self, k, n, lidar):
+        """Under self.lock: part k's solve read n things short (lidar: built on the lidar rule)."""
+        table = self.__dict__.setdefault("short", {})
+        old = table.get(k, (0, 0))
+        table[k] = (max(old[0], int(n)), max(old[1], int(lidar)))
+
+    def _take(self, key):
+        """Part key from `done` (or None) WITH its note: when its solve was made short, the calling thread's builds
+        are short too (revisit.carry: its scopes, its thread's counts). The ONE way a part leaves `done` for use: a
+        direct read, parts_todo, a solve that keeps or loses to a published part, an adoption that takes the owner's
+        part or loses to a local one. Every path that read `done` itself was a path that could forget the note (four
+        were found one after the other, 2026-11-13)."""
+        with self.lock:
+            return self._take_locked(key)
+
+    def _take_locked(self, key):
+        """_take under self.lock (held by the caller)."""
+        got = self.done.get(key)
+        if got is not None:
+            note = self.__dict__.get("short", {}).get(key)
+            if note is not None:
+                import revisit
+                revisit.carry(note[0], note[1])
+        return got
+
+    def _has(self, key):
+        """Is part key published (nothing taken: no use of it)?"""
+        with self.lock:
+            return key in self.done
+
+    def _chain_solve(self, key, ends, adopt, comp_out, short):
+        """_chain_of's work (comp_out: the chain's parts, for its caller; short: the solve's revisit scope, whose
+        faults so far are noted with the parts in the same hold of the lock that publishes them)."""
         pool, ground, loaded = {}, {}, set()
         for la_, lo_ in ends:
             ck = mapcells.cell_of(la_, lo_)
@@ -8013,12 +8069,14 @@ class BridgeProfiles:
         if key not in pool:
             return None
         comp = self._resolve(key, pool, ground, loaded)
+        comp_out.extend(comp)
         owner = self.owner_of(self, comp, pool) if (adopt and self.owner_of is not None) else None
         if owner is not None and owner is not self:
             try:
-                if self._adopt(owner, comp, pool):
-                    with self.lock:
-                        got = self.done.get(key)
+                # (the owner's solve runs, or is replayed, in this thread: its faults are this scope's too, and are
+                # noted with the parts adopted here)
+                if self._adopt(owner, comp, pool, short):
+                    got = self._take(key)
                     if got is not None:
                         return got
             except Exception as ex:         # (solved here rather than not at all)
@@ -8028,57 +8086,83 @@ class BridgeProfiles:
         zs = self._solve(comp, pool, ground)
         zs = _tie_beside([pool[k][1] for k in comp], zs, [pool[k][0] for k in comp],     # (ramps beside their road)
                          [k in tl.measured for k in comp])
+        # STAGED until every read the chain depends on is done: the parts' piers (_precommit: the ground under them)
+        # and the chain's structure (_structure: the cells round it) can still read something short, and a part
+        # published before them was taken by a reader or an adopter in another thread as complete (review,
+        # 2026-11-13). Nothing of the chain is in `done`, `piers` or `trusses` until then; then all of it with its
+        # final notes, in one hold of the lock.
         with self.lock:
-            for k, z in zip(comp, zs):
-                spec, xy, lon = pool[k][:3]
-                old = self.done.get(k)
-                # the first solve of a part is kept, and what goes with it, unless this one saw more of it
-                if old is None or len(xy) > len(old[1]):
-                    self.done[k] = (spec, xy, z, lon)
-                    self._commit(k, ground)
-            chain = [(self.done[k][1], self.done[k][2], self.done[k][0].width) for k in comp
-                     if k in self.done]
+            before = {k: self._take_locked(k) for k in comp}    # (the structure is made from them: taken)
             ck = min(comp) if comp else None
             fresh = ck is not None and ck not in self.trusses
-            if fresh:
-                self.trusses[ck] = []
-            got = self.done.get(key)
+        # the first solve of a part is kept, and what goes with it, unless this one saw more of it
+        keep = {k: (pool[k][0], pool[k][1], z, pool[k][2]) for k, z in zip(comp, zs)
+                if before[k] is None or len(pool[k][1]) > len(before[k][1])}
+        pre = {k: self._precommit(k, v, ground) for k, v in keep.items()}
+        beams = tpiers = None
         if fresh:
+            chain = [(v[1], v[2], v[0].width) for v in (keep.get(k) or before[k] for k in comp) if v is not None]
             beams, tpiers = self._structure(chain)
-            with self.lock:
+        with self.lock:
+            publish = []
+            for k in comp:
+                v = keep.get(k)
+                # (taken: a part this solve does not publish but its build uses, one kept from before or one another
+                # thread published while this solve was staged, the winner's, perhaps made short, brings its note
+                # into this build before the final counts: a clean solve that lost to a short publisher returned
+                # the fallback and stayed complete, review 2026-11-13)
+                old = self._take_locked(k)
+                if v is not None and (old is None or len(v[1]) > len(old[1])):
+                    publish.append(k)
+            n_short, n_lidar = short.n, short.lidar     # (final: nothing of this chain is read after this)
+            for k in publish:
+                if n_short or n_lidar:                  # (before the part itself: never a part without its note)
+                    self._note_short(k, n_short, n_lidar)
+                self.done[k] = keep[k]
+                self._commit(k, ground, pre.get(k))
+            if fresh and ck not in self.trusses:
                 self.trusses[ck] = beams
                 self.piers[("truss", ck)] = tpiers
-        return got
+            return self._take_locked(key)
 
     def _ends_ll(self, xy):
         """(lat, lon) of a deck line's two ends (this frame's world)."""
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0][0], xy[-1][0]]), np.array([xy[0][1], xy[-1][1]]), 0.0)
         return [(float(la[0]), float(lo[0])), (float(la[1]), float(lo[1]))]
 
-    def _adopt(self, owner, comp, pool):
+    def _adopt(self, owner, comp, pool, short=None):
         """Chain comp solved by owner (from its first part), its parts, piers, trusses and depths taken into this
-        frame. False when owner's solve did not cover comp's parts."""
+        frame. False when owner's solve did not cover comp's parts. short: the adopting solve's revisit scope: what
+        it and the owner's solve read short is noted with each part as it is taken in (the same hold of the lock)."""
         first = min(comp)
         if owner._chain_of(first, self._ends_ll(pool[first][1]), adopt=False) is None:
             return False
         import geotiles
         with owner.lock:
-            mine = [k for k in comp if k in owner.done]
+            done = {k: owner._take_locked(k) for k in comp}     # (the owner's parts, with their notes)
+            mine = [k for k in comp if done[k] is not None]
             if len(mine) != len(comp):
                 return False
-            done = {k: owner.done[k] for k in mine}
             piers = {k: owner.piers.get(k, []) for k in mine}
             ck = min(comp)
             beams = owner.trusses.get(ck)
             tpiers = owner.piers.get(("truss", ck))
             depth = {k: owner.__dict__.get("depth", {}).get(k) for k in mine}
+            theirs = {k: owner.__dict__.get("short", {}).get(k) for k in mine}
             extra = owner._adopt_extra(comp)
         mp = ChainView.mapper(owner.frame, self.frame)
         with self.lock:
+            mine_n, mine_l = (short.n, short.lidar) if short is not None else (0, 0)
             for k, (spec, xy, z, lon) in done.items():
-                if k in self.done:
+                # (a part another thread published here meanwhile is kept, and TAKEN: its note, perhaps a short local
+                # solve's, is the adopting build's: a clean adoption that lost to a short local publisher returned
+                # the local fallback and stayed complete, review 2026-11-13)
+                if self._take_locked(k) is not None:
                     continue
                 xyz = mp.pts(np.c_[np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)])
+                n_s, n_l = max(mine_n, (theirs[k] or (0, 0))[0]), max(mine_l, (theirs[k] or (0, 0))[1])
+                if n_s or n_l:                          # (before the part itself: never a part without its note)
+                    self._note_short(k, n_s, n_l)
                 self.done[k] = (spec, xyz[:, :2].copy(), xyz[:, 2].copy(), lon)
                 self.piers[k] = [mp.pier(q) for q in piers[k]]
                 if depth.get(k) is not None:
@@ -8096,16 +8180,22 @@ class BridgeProfiles:
     def _adopt_take(self, extra):
         """Under self.lock: _adopt_extra's from another store."""
 
-    def _commit(self, k, ground=None):
-        """Under self.lock: part k's solve was kept: its piers (pier_sites; TunnelProfiles keeps its sections)."""
-        spec, xy, z, _lon = self.done[k]
+    def _precommit(self, k, part, ground=None):
+        """Before part k (spec, xy, z, lon) is published, outside the lock: what its commit reads (its piers:
+        pier_sites samples the ground under them; TunnelProfiles: nothing). Handed to _commit."""
+        spec, xy, z, _lon = part
         lines = [ln for v in (ground or {}).values() for ln in v]
         try:
-            self.piers[k] = pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
-                                       self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
+            return pier_sites(np.asarray(xy, np.float64), np.asarray(z, np.float64), spec.width,
+                              self._ground, lines, self._wet_at, self.__dict__.get("depth", {}).get(k))
         except Exception as ex:             # no piers rather than no bridge
             log.debug("piers of %s: %s: %s", k, type(ex).__name__, ex)
-            self.piers[k] = []
+            return []
+
+    def _commit(self, k, ground=None, pre=None):
+        """Under self.lock: part k's solve was kept: its piers (pre: _precommit's; TunnelProfiles keeps its
+        sections). Nothing is read here: the part's note is final when it is published."""
+        self.piers[k] = pre if pre is not None else []
 
     def _wet_at(self, xy):
         if self.wet is None:
@@ -8354,6 +8444,9 @@ class TunnelProfiles(BridgeProfiles):
                     canon.setdefault(gk, lines)
         ground.clear()
         ground.update(canon)
+        # (the cells this network was read from, for its solve in this thread: subsea._final tells a bore whose
+        # continuation is in a cell not read from one the map simply ends)
+        self._tls.read = frozenset(loaded)
         return comp
 
     @staticmethod
@@ -8362,7 +8455,10 @@ class TunnelProfiles(BridgeProfiles):
         # 45 m and 30 m pieces, the shorter one's sections cut the longer one's terrain 15 m short, 2026-10-17)
         return f"{key[0]}.{key[1]}"
 
-    def _commit(self, k, ground=None):
+    def _precommit(self, k, part, ground=None):
+        return None                 # (a tunnel part has no piers: its sections were staged by its solve)
+
+    def _commit(self, k, ground=None, pre=None):
         staged = getattr(self._tls, "staged", {}).pop(k, None)
         if staged is None:
             return
@@ -8793,14 +8889,18 @@ class TunnelProfiles(BridgeProfiles):
         done = self.__dict__.setdefault("hw_done", set())
         if str(key) in done:            # (the same half widths each time: once per cell)
             return
-        done.add(str(key))
-        feats = self.cell_fn(key)
-        if feats is None or len(feats) == 0:
-            return
-        rs = road_specs(feats)
-        for i in range(len(feats)):
-            if rs[i] is not None:
-                self._hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+        import revisit
+        hw = {}
+        with revisit.scope() as read:   # (the read and its specs: a spec rule's lookup that fell back counts too)
+            feats = self.cell_fn(key)
+            if feats is not None and len(feats):
+                rs = road_specs(feats)
+                for i in range(len(feats)):
+                    if rs[i] is not None:
+                        hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+        self._hw.update(hw)             # (this solve uses them either way)
+        if read.complete:
+            done.add(str(key))          # (only once made complete: a short one is made again by the next solve)
 
     def _cover_roads(self, xy, s, kinds, ground, cover=None):
         """kinds with each covered section carried on until the ground roads crossing over it are covered (their
@@ -9148,8 +9248,7 @@ class ChainView:
         for _r, (st, todo) in sorted(self._todo(cells_feats, box).items()):
             if self.prefer is not None:
                 pst = self.prefer.store(st.region)
-                with pst.lock:
-                    solved = [t for t in todo if t[0] in pst.done]
+                solved = [t for t in todo if pst._has(t[0])]    # (_has takes pst.lock itself: a Lock, not reentrant)
                 out += self._map(pst, pst.parts_todo(solved, solved_only=True, **kw))
                 todo = [t for t in todo if t not in solved]
             out += self._map(st, st.parts_todo(todo, **kw))
@@ -12385,8 +12484,33 @@ class GeoTracker:
         self.car = set()
         self.empty = set()      # (anchor tiles' interface: progress)
         self.stats = {"content": 0, "skins": 0, "exact": 0, "exact_base": 0, "anchors": 0,
-                      "content_cpu": 0.0, "skin_cpu": 0.0}
+                      "content_cpu": 0.0, "skin_cpu": 0.0, "redo": 0, "redo_same": 0}
         self.closed = False
+        self.redo = set()       # (gx, gy) sent, to be asked for again (redo_all): sent again only where they changed
+        self.swap, self.swap_held, self.swap_staged = None, [], 0      # (swap_begin)
+        self.skin_h = {}        # (gx, gy) -> the digest of the skin sent (blockworker._geo_skin's "h")
+
+    def redo_all(self):
+        """Every geotile sent is asked for again, content and skin (earthd Connection.stale_swap: they were an
+        older version's): nearest first as any tile; the content or skin that comes back the same is not sent."""
+        self.redo = set(self.sent)
+        self.retry = {}
+
+    def swap_begin(self, token):
+        """A generation swap runs (earthd Connection.stale_swap): until swap_end every skin sent carries "swap": token
+        (the mod stages it hidden and commits them all with the terrain: roads.lua swapCommit), and the content of
+        a tile the mod already has is held back (sent after the commit: a tile's content is replaced as one)."""
+        self.swap, self.swap_held, self.swap_staged = token, [], 0
+
+    def swap_end(self, ok):
+        """The swap is over: committed (ok: the held content sent now) or given up (dropped; the tiles are asked for
+        again by the next redo). -> the content messages sent."""
+        held, self.swap, self.swap_held = self.swap_held, None, []
+        if not ok:
+            return 0
+        for conn, m in held:
+            conn.send(m() if callable(m) else m)
+        return sum(1 for _c, m in held if not callable(m))
 
     def close(self):
         """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
@@ -12509,11 +12633,12 @@ class GeoTracker:
             self.pool = ThreadPoolExecutor(BUILD_PER_POSE, thread_name_prefix="roads-geo")
         vx, vy = (float(vel[0]), float(vel[1])) if vel else (0.0, 0.0)
         s = math.hypot(vx, vy)
-        if s < FAST_MS:
+        import reach
+        if s < reach.MIN_V:     # (the tree from reach.MIN_V up: below FAST_MS it orders the tiles round the car)
             tree = None
         car = geo_wanted(frame, x, y, vx, vy, tree)
-        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=min(LEAD_MAX_M, s * LEAD_S) / s) \
-            if tree is not None else {}
+        tkeys = tree.geotile_keys(frame, CORRIDOR_M, horizon=max(min(LEAD_MAX_M, s * LEAD_S), reach.HORIZON_MIN_M)
+                                  / s) if tree is not None else {}
         self.tree_on = tree is not None
         self.car_at = (x, y)
         self.car = set(car)
@@ -12533,10 +12658,11 @@ class GeoTracker:
             self.wanted_at = {k: t for k, t in wa.items() if now - t <= 60.0}
         start = {(a, b) for a, b, _ in geotiles.tiles_near(frame, x, y, SEND_M)} if ground_busy else wanted
         jobs = []
-        for k in start:
+        self.redo &= self.sent
+        for k in (set(start) | self.redo) if self.redo else start:
             if k in self.building or self.retry.get(k, 0.0) > now:
                 continue
-            if k not in self.sent:
+            if k not in self.sent or k in self.redo:
                 jobs.append((k, True, True, "auto"))
                 continue
             make = None
@@ -12560,7 +12686,10 @@ class GeoTracker:
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
-                    import reach
+                    if s < FAST_MS:     # (a slow car: the tiles right round it first, INSURE_M)
+                        qd = geotiles.quad_dist(geotiles.quad(frame, *k), x, y)
+                        if qd <= INSURE_M:
+                            return (0, qd)
                     got = tkeys.get(k)
                     if got is not None:
                         return (0, reach.order_key(got[2], got[3], got[4], s, build_s) * s)
@@ -12612,6 +12741,8 @@ class GeoTracker:
         for k in [k for k in self.sent if k not in wanted and k not in self.building and far(k)]:
             self.sent.discard(k)
             self.skins.discard(k)
+            self.skin_h.pop(k, None)
+            self.redo.discard(k)
             self.info.pop(k, None)
             self.shown.pop(k, None)
             self.need = {nk: v for nk, v in self.need.items() if nk[0] != k}
@@ -12664,6 +12795,16 @@ class GeoTracker:
         self.stats["skin_cpu"] += float(tm.get("skin_cpu", 0.0))
         c = res.get("content")
         ex = (res.get("exact") or {}) if aid == self.aid else {}
+        again = key in self.redo and not res.get("stale")
+        held_content = False
+        if again and c is not None:
+            self.redo.discard(key)
+            self.stats["redo"] += 1
+            h0 = (self.info.get(key) or {}).get("h")
+            if h0 is not None and h0 == (c[2] or {}).get("h") and key in self.sent:
+                # (the same content as the one the mod has: nothing sent, its exact variants stand)
+                self.stats["redo_same"] += 1
+                c, ex = None, {}
         if c is not None:
             path, n, info = c[0], c[1], c[2]
             self.sent.add(key)
@@ -12685,15 +12826,26 @@ class GeoTracker:
                 slots = pool(conn, files)
                 if slots:
                     m["slots"] = slots
-            conn.send(m)
+            if self.swap is not None and again:
+                self.swap_held.append((conn, m))    # (a tile the mod has: its content after the swap's commit)
+                held_content = True
+            else:
+                conn.send(m)
         if aid != self.aid:             # (an old anchor's skin and variants: the new anchor's come on their own)
             return
-        sk = res.get("skin")
+        sk = sk0 = res.get("skin")
         if skin and sk is not None:
-            self.skins.add(key)
-            self.stats["skins"] += 1
-            m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": sk[0]}
-            data = staging.inline_json(out_dir, sk[0]) if out_dir else None
+            h1 = (sk[1] or {}).get("h") if len(sk) > 1 else None
+            if again and h1 is not None and self.skin_h.get(key) == h1 and key in self.skins:
+                sk = None               # (the same skin as the one the mod has)
+            else:
+                self.skin_h[key] = h1
+
+        def skin_msg(path, token=None):
+            m = {"type": "roads_skin", "anchorId": aid, "key": gkey, "path": path}
+            if token is not None:       # (staged by the mod, committed with the swap's terrain)
+                m["swap"] = token
+            data = staging.inline_json(out_dir, path) if out_dir else None
             if data is not None:
                 m["data"] = data
             if pool is not None:
@@ -12702,7 +12854,18 @@ class GeoTracker:
                 slots = pool(conn, {w: n_ for w, n_ in names.items() if w != "json"})
                 if slots:
                     m["slots"] = slots
-            conn.send(m)
+            return m
+        if skin and sk is not None:
+            self.skins.add(key)
+            self.stats["skins"] += 1
+            if self.swap is not None:
+                self.swap_staged += 1
+            conn.send(skin_msg(sk[0], self.swap))
+        if held_content and skin and sk0 is not None:
+            # (the mod makes a tile anew for new content, its skin gone with the old one, roads.lua onGeoTile: this
+            # version's skin again right after the held content; the same skin the swap committed, or the one the mod
+            # had)
+            self.swap_held.append((conn, lambda path=sk0[0]: skin_msg(path)))
         for w in ex:
             self.shown.setdefault(key, {})[w] = aid
         self.stats["exact"] += len(ex)

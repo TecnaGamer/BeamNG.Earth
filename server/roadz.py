@@ -238,7 +238,7 @@ def _await_part(lock, pp, wait_s=None):
     job's cancel check plays no part (as xproc.once's would: a teleport's abandoned block must not leave the cell to
     the rule for the session through its read's wait)."""
     end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
-    seen = None
+    seen = token = None
     pid, recheck = None, 0.0
     while True:
         if os.path.exists(pp):
@@ -256,15 +256,14 @@ def _await_part(lock, pp, wait_s=None):
         if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
             seen = now
             h = xproc._holder(lock)
+            token = xproc._token(lock)
             pid, recheck = (h[2] if h is not None else None), time.monotonic() + xproc.ALIVE_RECHECK_S
-            if h is not None and not xproc.alive(h[2]):
-                xproc.release(lock)
-                seen = None
+            if h is not None and not xproc.alive(h[2]) and xproc.break_dead(lock, token):
+                seen = None                         # (that holder's lock only; not broken now: the deadline below)
                 continue
         elif seen is not None and now == seen and pid is not None and time.monotonic() >= recheck:
             recheck = time.monotonic() + xproc.ALIVE_RECHECK_S       # (one that died since: xproc.once's)
-            if not xproc.alive(pid):
-                xproc.release(lock)
+            if not xproc.alive(pid) and xproc.break_dead(lock, token):
                 seen = None
                 continue
         if time.monotonic() > end:
@@ -385,6 +384,11 @@ def name_ok(map_name, src_name, src_ref):
     return True
 
 
+class SurveyDataError(ValueError):
+    """A survey's arrays do not fit each other (a damaged or cut file, a source's malformed answer): its lines are
+    not used, and read again from the source (a ValueError, as the callers of Lines.load expect)."""
+
+
 class Lines:
     """3D road lines of one cell and source: lonlat (n, 2) and z (n,) (m; NaN: none) of every vertex, off (L + 1,) the
     lines' vertex ranges, level (L,) int8 (>0 bridge, 0 ground, <0 tunnel), ref / name (L,) text, corrected: the
@@ -402,6 +406,17 @@ class Lines:
         self.ref = np.asarray(ref, dtype=str).ravel() if len(ref) else np.zeros(0, "U1")
         self.name = np.asarray(name, dtype=str).ravel() if len(name) else np.zeros(0, "U1")
         self.corrected = bool(corrected)
+        # (checked where they come in: arrays that do not fit each other raised a ValueError or IndexError deep in
+        # observed() / _segments (np.repeat of negative counts, an index past the vertices), caught there as "the
+        # DEM's rather than no grading": a fallback that looked complete)
+        n, lines = len(self.lonlat), len(self.off) - 1
+        if len(self.z) != n:
+            raise SurveyDataError(f"road survey: {len(self.z)} heights for {n} vertices")
+        if lines < 0 or self.off[0] != 0 or self.off[-1] != n or (np.diff(self.off) < 0).any():
+            raise SurveyDataError("road survey: the lines' vertex ranges do not cover its vertices in order")
+        if len(self.level) != lines or len(self.ref) not in (0, lines) or len(self.name) not in (0, lines):
+            raise SurveyDataError(f"road survey: {lines} lines with {len(self.level)} levels, {len(self.ref)} refs, "
+                                  f"{len(self.name)} names")
 
     @classmethod
     def build(cls, rows, corrected=False):

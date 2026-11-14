@@ -5,7 +5,7 @@ client planner. It is not enabled by a setting or installed into a live game by
 the producer or tests. Do not remove the client pack until the complete assembly
 transport and renderer have replaced it.
 
-## Physical surface snapshot (earthfast 295)
+## Physical surface snapshot (earthfast 298)
 
 `nlsignalassembly.make_scene` marshals the actual drawn road and raised walk
 triangles, the decoded quantised terrain grid, its hole mask, and the rectangles
@@ -126,6 +126,13 @@ second isolated diagnostic using actual native mounted-part output and the
 new far consumer, with resource paths relocated to temporary files only.
 
 ## Work still required before switching runtime
+
+`server/nlsignalsnapshot.py` now supplies the connection-local ownership guard
+for that integration. Surface/context generations and anchor epochs reject late
+worker results. A successful build alone cannot suppress stock approaches: only
+the matching renderer acceptance can transfer ownership. Pending recalculations
+retain the last accepted generation, and disconnect/disable clears ownership.
+This guard is tested in isolation and is not yet connected to live messages.
 
 - Safe relocation/coalescing of merely nearby feet and clearance conflicts
   between complete neighbouring steel assemblies; the current bundle pass

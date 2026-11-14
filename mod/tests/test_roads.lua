@@ -364,13 +364,23 @@ do
         { key = '2:-2_0', what = 'deck' } }
   T.check(roads.urgentWalk(q) == 3, 'urgent: the deck ahead within reach (not beside first, not behind)')
   T.check(roads.urgentWalk({ { key = '2:2_0', what = 'walkcol' } }) == nil, 'urgent: decks and tunnels only')
-  -- the drawn surfaces after every collider (as before), or by the same distance with SURFACE_FIRST
-  q = { { key = '2:0_2', what = 'bldcol' }, { key = '2:2_0', what = 'walk', renderOnly = true } }
+  -- the drawn surfaces after the colliders of their distance (RENDER_AFTER_M; nil: after every collider, as before),
+  -- or by the same distance with SURFACE_FIRST
+  q = { { key = '2:2_0', what = 'bldcol' }, { key = '2:2_0', what = 'walk', renderOnly = true } }
   T.check(q[roads.nextWalk(q)].what == 'bldcol', 'render-only sidewalks after the colliders')
+  q = { { key = '2:0_2', what = 'bldcol' }, { key = '2:2_0', what = 'walk', renderOnly = true } }
   roads.SURFACE_FIRST = true
   T.check(q[roads.nextWalk(q)].what == 'walk', 'SURFACE_FIRST: the sidewalk ahead before a collider beside')
   q[2].what = 'bld'
+  T.check(q[roads.nextWalk(q)].what == 'bld', 'a drawn building ahead before a collider left behind (RENDER_AFTER_M)')
+  local after = roads.RENDER_AFTER_M
+  roads.RENDER_AFTER_M = nil
+  T.check(q[roads.nextWalk(q)].what == 'bldcol', 'RENDER_AFTER_M nil: drawn buildings after every collider')
+  roads.RENDER_AFTER_M = after
+  q = { { key = '2:2_0', what = 'bld', renderOnly = true }, { key = '2:2_0', what = 'bldcol' } }
   T.check(q[roads.nextWalk(q)].what == 'bldcol', 'SURFACE_FIRST: drawn buildings still after the colliders')
+  local _, _, nearest = roads.nextWalk({ { key = '2:0_2', what = 'bldcol' }, { key = '2:2_0', what = 'bld', renderOnly = true } })
+  T.check(nearest and math.abs(nearest - 340) < 1e-6, 'nearest: the way ahead before the render penalty, the tile behind left out')
   roads.SURFACE_FIRST = false
   function car:getVelocity() return vec3(0, 0, 0) end
   roads.update(gov, 2)
@@ -689,6 +699,272 @@ do
   T.check(S.calls.reloadCollision >= r0 + 1 and S.calls.reloadCollision <= r0 + 2, 'within hardReach: after URGENT_GAP_S')
   roads.clear()
   roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = every, check
+  getPlayerVehicle = nil
+end
+-- the road import queue on a Steam Deck (2026-11-14): each mesh class its own governor kind, due work said to the
+-- governor (setDue) and reserved against the far tiles (reserve), the drawn surfaces under the car made at once
+do
+  T.check(roads.walkKind('road') == 'roadSurf' and roads.walkKind('walk') == 'roadSurf'
+    and roads.walkKind('bldcol') == 'roadCol' and roads.walkKind('railcol2') == 'roadCol'
+    and roads.walkKind('deck') == 'roadDrive' and roads.walkKind('bld') == 'roadWalk', 'each mesh class its own kind')
+  roads.KIND_SPLIT = false
+  T.check(roads.walkKind('road') == 'roadWalk', 'KIND_SPLIT off: one kind, as before')
+  roads.KIND_SPLIT = true
+  T.check(roads.dueReach(0) == roads.DUE_MIN_M and roads.dueReach(30) == 30 * roads.DUE_S, 'the due reach')
+  local car = { pos = vec3(128, 128, 0.5) }
+  function car:getPosition() return self.pos end
+  function car:getVelocity() return vec3(20, 0, 0) end     -- (45 mph: under FAST_MS, over ORDER_MS)
+  getPlayerVehicle = function() return car end
+  local check = roads.COLLIDE_CHECK_S
+  roads.COLLIDE_CHECK_S = 0
+  -- a recording governor: denies every unit (tokens), takes due and reservations
+  local g = { kinds = {}, due = 0, reserved = {} }
+  function g:try(kind) self.kinds[#self.kinds + 1] = kind; return false end
+  function g:charge() end
+  function g:chargeMotion() end
+  function g:setDue(on) if on then self.due = self.due + 1 end end
+  function g:reserve(kind) self.reserved[#self.reserved + 1] = kind end
+  files['/t/dq.json'] = '{ chunks = { }, road = { shape = "/t/road_9_0_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'bld = { shape = "/t/bld_9_0_0.cdae", pos = { 0, 0, 0 } }, bldcol = { shape = "/t/bldcol_9_0_0.cdae", pos = { 0, 0, 0 } } }'
+  files['/t/dq2.json'] = '{ chunks = { }, bldcol = { shape = "/t/bldcol_9_5_0.cdae", pos = { 0, 0, 0 } } }'
+  roads.onTile({ anchorId = 9, key = '0_0', path = '/t/dq.json', n = 0 }, 9)
+  roads.onTile({ anchorId = 9, key = '5_0', path = '/t/dq2.json', n = 0 }, 9)
+  g.blocked = true          -- (quiet frames: no urgent surface)
+  roads.update(g, 9)
+  T.check(g.due == 1 and g.kinds[1] == 'roadSurf' and g.reserved[1] == 'roadSurf' and #g.kinds == 1,
+    'the tile under the car is due: said once, its road tried under its own kind and reserved')
+  -- 45 mph, ORDER_MS: a tile behind the car comes after one ahead
+  car.pos = vec3(1300, 128, 0.5)            -- (tile 0_0's centre 1172 m behind, 5_0's 108 m ahead)
+  g.kinds, g.reserved, g.due = {}, {}, 0
+  roads.update(g, 9)
+  T.check(g.kinds[1] == 'roadCol' and g.due == 1, 'the tile ahead first, due')
+  local q = { { key = '9:0_0', what = 'bldcol' }, { key = '9:5_0', what = 'bldcol' } }
+  local i, _, nearest = roads.nextWalk(q)
+  T.check(i == 2 and math.abs(nearest - 108) < 1e-6, 'moving (ORDER_MS): the way ahead first, behind left out of nearest')
+  -- nothing due far from the car
+  car.pos = vec3(-3000, 128, 0.5)
+  function car:getVelocity() return vec3(0, 0, 0) end
+  g.kinds, g.reserved, g.due = {}, {}, 0
+  roads.update(g, 9)
+  T.check(g.due == 0 and #g.reserved == 0 and #g.kinds > 0, 'nothing within the due reach: not due, nothing reserved')
+  -- the drawn road under the car: made at once (urgentWalk), but not in the quiet frames round a heavy op
+  car.pos = vec3(128, 128, 0.5)
+  function car:getVelocity() return vec3(20, 0, 0) end
+  roads.update(g, 9)
+  q = { { key = '9:5_0', what = 'bldcol' }, { key = '9:0_0', what = 'walk' }, { key = '9:0_0', what = 'road' } }
+  T.check(roads.urgentWalk(q) == 3, 'urgent surfaces: the road of the tile under the car')
+  T.check(roads.urgentWalk(q, true) == nil, 'not in quiet frames')
+  table.remove(q, 3)
+  T.check(roads.urgentWalk(q) == 2, 'then its sidewalks')
+  T.check(roads.urgentWalk({ { key = '9:5_0', what = 'road' } }) == nil, 'not a tile 1 km ahead')
+  car.pos = vec3(1200, 128, 0.5)            -- (tile 5_0 starts 80 m ahead: within URGENT_SURFACE_S at 20 m/s)
+  roads.update(g, 9)
+  T.check(roads.urgentWalk({ { key = '9:5_0', what = 'road' } }) == 1, 'the tile the car reaches within URGENT_SURFACE_S')
+  roads.URGENT_SURFACES = false
+  T.check(roads.urgentWalk({ { key = '9:5_0', what = 'road' } }) == nil, 'URGENT_SURFACES off: decks and tunnels only')
+  roads.URGENT_SURFACES = true
+  -- a forced surface is made whatever the governor says
+  local made0 = 0
+  for _, o in pairs(S.objects) do if o.class == 'TSStatic' then made0 = made0 + 1 end end
+  car.pos = vec3(128, 128, 0.5)
+  g.blocked = false
+  for _ = 1, roads.URGENT_EVERY_FRAMES + 1 do roads.update(g, 9) end
+  local made = 0
+  for _, o in pairs(S.objects) do if o.class == 'TSStatic' then made = made + 1 end end
+  T.check(made == made0 + 1, 'the road under the car made at once, the budget denied (' .. made .. ')')
+  -- with the real governor: an urgent surface skips token starvation, not a used-up frame or a deep debt
+  -- (governor.lua tryUrgent)
+  local function count()
+    local n = 0
+    for _, o in pairs(S.objects) do if o.class == 'TSStatic' then n = n + 1 end end
+    return n
+  end
+  roads.onDrop({ anchorId = 9, key = '0_0' })
+  for _ = 1, 3 do roads.update(gov, 9) end
+  local G = require('beamngEarth/governor')
+  local gv = G.new({ clock = function() return elapsedMs end })
+  local function frameWith(setup)
+    gv:beginFrame(true, 30)
+    setup(gv)
+    roads.update(gv, 9)
+  end
+  roads.onTile({ anchorId = 9, key = '0_0', path = '/t/dq.json', n = 0 }, 9)
+  local c0 = count()
+  for _ = 1, roads.URGENT_EVERY_FRAMES + 1 do
+    frameWith(function(x) x.tokens = -G.URGENT_DEBT_MS - 5 end)
+  end
+  T.check(count() == c0, 'urgent surface: not with the bucket deep in debt')
+  frameWith(function(x) x.tokens = -2; x:noteOther(G.URGENT_ROOM_MS + 2) end)
+  T.check(count() == c0, 'urgent surface: not into a frame already busy (its budget used up, tokens negative)')
+  frameWith(function(x) x.tokens = -2 end)
+  T.check(count() == c0 + 1, 'urgent surface: starved of tokens but the frame free: made at once')
+  roads.onDrop({ anchorId = 9, key = '0_0' }); roads.onDrop({ anchorId = 9, key = '5_0' })
+  roads.update(gov, 9)
+  roads.COLLIDE_CHECK_S = check
+  getPlayerVehicle = nil
+end
+-- BEHIND (2026-11-14): no colliders behind a moving car; its heading kept through a stop, dropped when it moves back
+do
+  local d = { x = 1, y = 0 }
+  T.check(roads.behindBy({ x = 0, y = 0 }, d, -300, 0, 128) == 172 and roads.behindBy({ x = 0, y = 0 }, d, 200, 0, 128) < 0,
+    'behindBy: the near edge along the heading')
+  T.check(math.abs(roads.behindBy({ x = 0, y = 0 }, { x = 0.6, y = 0.8 }, -300, -400, 100) - (500 - 140)) < 1e-9,
+    'behindBy: a diagonal heading takes the square\'s extent along it')
+  local st = {}
+  roads.behindStep(st, 0, 0, 20, 0, 250, false)
+  T.check(st.dir and st.dir.x == 1, 'heading set at speed')
+  roads.behindStep(st, 5, 0, 0, 0, 100000, false)
+  T.check(st.dir ~= nil, 'kept through a stop')
+  roads.behindStep(st, 5, 0, 0.5, 0.5, roads.BEHIND_SLOW_S * 1000, false)
+  T.check(st.dir == nil, 'all round again after BEHIND_SLOW_S slow')
+  roads.behindStep(st, 5, 0, 20, 0, 250, false)
+  roads.behindStep(st, 5, 0, -2, 0, 250, false)
+  T.check(st.dir == nil, 'dropped when the car moves back along it')
+  roads.behindStep(st, 5, 0, 20, 0, 250, false)
+  roads.behindStep(st, 5, 0, 1.5, 1, 250, false)
+  T.check(st.dir ~= nil, 'kept turning sideways at low speed')
+  roads.behindStep(st, 500, 0, 20, 0, 250, false)
+  T.check(st.dir == nil, 'dropped at a jump (a teleport)')
+  roads.behindStep(st, 505, 0, 20, 0, 250, false)
+  roads.behindStep(st, 510, 0, 20, 0, 250, true)
+  T.check(st.dir == nil, 'dropped under a drop hold')
+
+  roads.clear()
+  local function upd7() elapsedMs = elapsedMs + 16; roads.update(gov, 7) end   -- (the reloaded module: unwrapped)
+  local car = { pos = vec3(128, 128, 0.5), v = vec3(20, 0, 0) }
+  function car:getPosition() return self.pos end
+  function car:getVelocity() return self.v end
+  getPlayerVehicle = function() return car end
+  local check, jump = roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M
+  roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = 0, 1e9      -- (the test moves the car in steps of hundreds of m)
+  local function count()
+    local n = 0
+    for _, o in pairs(S.objects) do if o.class == 'TSStatic' then n = n + 1 end end
+    return n
+  end
+  local c0 = count()
+  files['/t/bh0.json'] = '{ chunks = { }, walk = { shape = "/t/walks_bh_0.cdae", pos = { 0, 0, 0 } } }'
+  files['/t/bh1.json'] = '{ chunks = { }, walk = { shape = "/t/walks_bh_1.cdae", pos = { -256, 0, 0 } } }'
+  upd7(); upd7()
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/bh0.json', n = 0 }, 7)
+  roads.onTile({ anchorId = 7, key = '-1_0', path = '/t/bh1.json', n = 0 }, 7)
+  upd7(); upd7()
+  T.check(count() == c0 + 1, 'moving east: the tile under the car collides, the one behind it (128 m) waits')
+  roads.collisionRebuilt()
+  car.pos = vec3(300, 128, 0.5)
+  upd7(); upd7()
+  T.check(count() == c0 + 1, '44 m past the tile: kept')
+  car.pos = vec3(420, 128, 0.5)
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c0, '164 m past it: dropped')
+  roads.collisionRebuilt()
+  local L = roads.reloadLog()
+  T.check(not (L[#L].src or {}).delete, 'its deletion no prompt rebuild (the stale collision is behind the car)')
+  car.v = vec3(0, 0, 0)
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c0, 'stopped: the heading kept, nothing made behind')
+  car.v = vec3(-3, 0, 0)
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c0 + 1, 'moving back: all round again, the tile behind made again')
+  roads.BEHIND = false
+  car.pos, car.v = vec3(128, 128, 0.5), vec3(20, 0, 0)
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c0 + 2 and roads.behindDir() == nil, 'BEHIND off: colliders all round, as before')
+  roads.BEHIND = true
+  roads.onDrop({ anchorId = 7, key = '0_0' }); roads.onDrop({ anchorId = 7, key = '-1_0' })
+  upd7()
+  -- a collider queued while its tile was near, the tile behind the car by the time the governor lets it through:
+  -- parked again, not made only to be dropped
+  local c1 = count()
+  local function walksMade() local u = roads.status().units.bldcol return u and u.n or 0 end
+  files['/t/bh2.json'] = '{ chunks = { }, bldcol = { shape = "/t/bldcol_bh_2.cdae", pos = { 0, 0, 0 } } }'
+  local w1 = walksMade()
+  gov.allow, gov.tries = 0, 0
+  car.pos, car.v = vec3(128, 128, 0.5), vec3(20, 0, 0)
+  upd7()
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/bh2.json', n = 0 }, 7)
+  upd7()
+  car.pos = vec3(420, 128, 0.5)
+  upd7()
+  gov.allow, gov.tries = nil, 0
+  upd7(); upd7()
+  T.check(count() == c1 and walksMade() == w1 and roads.status().queued == 0, 'queued, then behind the car: parked, not made')
+  car.v = vec3(-3, 0, 0)
+  upd7(); upd7()
+  T.check(count() == c1 + 1, '... made once the car turns back')
+  roads.onDrop({ anchorId = 7, key = '0_0' })
+  upd7()
+  -- AHEAD_LEAD_S: with the heading, the colliders ahead made farther out (not beside the car)
+  files['/t/ah1.json'] = '{ chunks = { }, bldcol = { shape = "/t/bldcol_ah_1.cdae", pos = { 512, 0, 0 } } }'
+  files['/t/ah2.json'] = '{ chunks = { }, bldcol = { shape = "/t/bldcol_ah_2.cdae", pos = { 0, 512, 0 } } }'
+  local c2 = count()
+  car.pos, car.v = vec3(0, 128, 0.5), vec3(20, 0, 0)   -- (tile 2_0's centre 640 m ahead, 0_2's 528 m off at 76 deg)
+  roads.onTile({ anchorId = 7, key = '2_0', path = '/t/ah1.json', n = 0 }, 7)
+  roads.onTile({ anchorId = 7, key = '0_2', path = '/t/ah2.json', n = 0 }, 7)
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c2, 'AHEAD_LEAD_S off: neither')
+  roads.AHEAD_LEAD_S = 30
+  for _ = 1, 3 do upd7() end
+  T.check(count() == c2 + 1, 'AHEAD_LEAD_S: the tile 640 m ahead collides, the one beside waits')
+  roads.AHEAD_LEAD_S = 0
+  for _, k in ipairs({ '2_0', '0_2' }) do roads.onDrop({ anchorId = 7, key = k }) end
+  upd7()
+  -- another module's colliders: urgent with a distance within needReach, else the throttled slot
+  roads.collisionRebuilt()
+  local r0 = S.calls.reloadCollision
+  local every = roads.RELOAD_EVERY_S
+  roads.RELOAD_EVERY_S = 1e9
+  for _ = 1, 80 do upd7() end       -- (past URGENT_GAP_S)
+  car.pos, car.v = vec3(128, 128, 0.5), vec3(20, 0, 0)
+  upd7()
+  roads.requestCollision({ 628, 100, 0, 640, 140, 0 })        -- (500 m ahead)
+  upd7()
+  T.check(S.calls.reloadCollision == r0, 'trees made 500 m off: no prompt rebuild')
+  roads.requestCollision({ 148, 100, 0, 160, 140, 0 })        -- (20 m ahead)
+  upd7()
+  T.check(S.calls.reloadCollision == r0 + 1, 'trees made 20 m off (the car turned back): rebuilt at once')
+  -- made 150 m ahead (beyond needReach): no rebuild; due as the car drives up to them, nothing asked again
+  for _ = 1, 80 do upd7() end
+  r0 = S.calls.reloadCollision
+  roads.requestCollision({ 278, 100, 0, 290, 140, 0 })
+  upd7()
+  T.check(S.calls.reloadCollision == r0, 'trees made 150 m ahead: not yet')
+  car.pos = vec3(240, 128, 0.5)
+  upd7()
+  T.check(S.calls.reloadCollision == r0 + 1, '... rebuilt once the car is within hardReach of them')
+  -- another player's car (a focus with trees) about to reach trees made again behind the active car: due for it too
+  for _ = 1, 80 do upd7() end
+  r0 = S.calls.reloadCollision
+  car.pos = vec3(3000, 128, 0.5)
+  upd7()
+  roads.requestCollision({ 148, 100, 0, 160, 140, 0 })
+  upd7()
+  T.check(S.calls.reloadCollision == r0, 'trees 2.8 km behind the active car: not due for it')
+  roads.setFoci({ { x = 128, y = 128, r = 320, trees = true, kind = 'player' } })
+  upd7()
+  T.check(S.calls.reloadCollision == r0 + 1, '... but due for the other player\'s car 20 m from them')
+  roads.setFoci({ { x = 128, y = 128, r = 80, trees = false, kind = 'traffic' } })
+  roads.requestCollision({ 148, 100, 0, 160, 140, 0 })
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0 + 1, 'traffic: not (no solid trees round it, its rebuilds as before)')
+  -- a road collider made again for an AI traffic car (its island) far behind the active car: due within hardReach of it
+  roads.collisionRebuilt()
+  r0 = S.calls.reloadCollision
+  roads.setFoci({ { x = 128 + 182 + 100, y = 128, r = 400, trees = false, kind = 'traffic' } })
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/bh2.json', n = 0 }, 7)
+  for _ = 1, 80 do upd7() end
+  T.check(S.calls.reloadCollision == r0, 'made for traffic 100 m off it: not yet (' .. S.calls.reloadCollision - r0 .. ')')
+  roads.setFoci({ { x = 128 + 182 + 20, y = 128, r = 400, trees = false, kind = 'traffic' } })
+  upd7()
+  T.check(S.calls.reloadCollision == r0 + 1, '... rebuilt with the traffic car 20 m from it')
+  roads.onDrop({ anchorId = 7, key = '0_0' })
+  upd7()
+  roads.setFoci({})
+  T.check(not roads.extDue(nil, 20, 1e6) and not roads.extDue(roads.needReach(20) + 1, 20, 1e6)
+    and roads.extDue(roads.hardReach(20), 20, 0) and not roads.extDue(roads.hardReach(20) + 1, 20, 0)
+    and roads.extDue(roads.hardReach(20) + 1, 20, roads.NEED_GAP_S * 1000), 'extDue: the NEED rule of the roads\' colliders')
+  roads.RELOAD_EVERY_S = every
+  roads.COLLIDE_CHECK_S, roads.BEHIND_JUMP_M = check, jump
   getPlayerVehicle = nil
 end
 T.done('test_roads')

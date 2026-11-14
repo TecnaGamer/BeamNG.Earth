@@ -259,6 +259,9 @@ if _AERIAL_HOST not in netfetch.POLICIES:          # (BNGE_AERIAL_BASE: a test s
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
 REGIONAL_XYZ_MIN_ZOOM = 16
+# s an expired "nothing there" answer reused while its host cannot be asked (offline, breaker open) holds what is built
+# on it (lazy_state's expiry): asked again after that
+UNAVAILABLE_RETRY_S = 3600.0
 for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items():
     if _kind == "xyz":          # a tile cache: also on the nearer far rings (REGIONAL_XYZ_MIN_ZOOM+)
         SOURCES[_n] = Source(_n, _url, 17, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
@@ -1090,9 +1093,53 @@ class Imagery:
     def _covered(probe):
         return probe is not None and not probe.uniform
 
+    def _miss_until(self, key):
+        """(unix s) when the remembered "nothing there" of a tile kept in memory as None ends: its miss marker's time
+        plus its host's miss_ttl; None when it never ends (no TTL) or nothing on disk says when (kept as before)."""
+        src, z, x, y = key
+        t = missindex.when(self._paths(src, z, x, y)[1])
+        if t is None:
+            return None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        return None if ttl is None else t + ttl
+
+    def _lru_fresh(self, key):
+        """Is key's memory copy usable (caller holds the lock)? A None (a 404) is not once its miss has expired and
+        its host can be asked again: dropped, so the next look fetches it afresh (a probe's "outside" was kept in
+        memory for the process's life, and recovered coverage never seen: review of 6cbcfd2b)."""
+        if key not in self._lru:
+            return False
+        if self._lru[key] is not None:
+            return True
+        src, z, x, y = key
+        until = self._miss_until(key)
+        if until is None or self.fetcher.wall() < until or \
+                self.fetcher.miss_alive(self._paths(src, z, x, y)[1], src.url):
+            return True
+        del self._lru[key]
+        return False
+
+    def _probe_until(self, key):
+        """(unix s, or None: never) when the coverage probe that says key's source holds nothing there may say
+        otherwise: the expiry of its remembered 404 (_miss_until), or its tile's host cache_ttl from now for a blank
+        probe tile (data: None when the host's tiles are kept for good). Caller holds the lock."""
+        src, z, x, y = key
+        if src.coverage or not in_bounds(*key):
+            return None
+        psrc = SOURCES[src.probe_source] if src.probe_source else src
+        for pz in sorted(p for p in src.probe_zooms if p < z):
+            p = (psrc, pz, x >> (z - pz), y >> (z - pz))
+            if p in self._lru and not self._covered(self._lru[p]):
+                if self._lru[p] is None:
+                    return self._miss_until(p)
+                ttl = self.fetcher.policy(netfetch.host_of(psrc.url)).cache_ttl
+                return None if ttl is None else self.fetcher.wall() + ttl
+        return None
+
     def _probe_status(self, key):
         """'covered' / 'outside' / 'unknown' from the key's coverage probes, coarsest first;
-        starts the fetch of the first unknown one. Caller holds the lock."""
+        starts the fetch of the first unknown one (or of one whose remembered 404 has expired: _lru_fresh). Caller
+        holds the lock."""
         src, z, x, y = key
         if not in_bounds(*key):
             return "outside"                # (never ask a source about a place outside its area)
@@ -1102,7 +1149,7 @@ class Imagery:
         psrc = SOURCES[src.probe_source] if src.probe_source else src
         for pz in sorted(p for p in src.probe_zooms if p < z):
             p = (psrc, pz, x >> (z - pz), y >> (z - pz))
-            if p not in self._lru:
+            if not self._lru_fresh(p):
                 self._future(p, "prefetch")
                 return "unknown"
             if not self._covered(self._lru[p]):
@@ -1163,7 +1210,7 @@ class Imagery:
             for k in keys:
                 if probes[k] is not None and not self._covered(known[probes[k]]):
                     out[k] = None           # the source has nothing in this area
-                elif k in self._lru:
+                elif self._lru_fresh(k):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
                 elif not in_bounds(*k):
@@ -1442,9 +1489,145 @@ class Imagery:
                             want.append(key)
         return want
 
+    def _lazy_children(self, frame, x0, y0, size, px):
+        """[(src, z, [(tx, ty), ...])] in chain order: each lazy source's tiles a render(frame, x0, y0, size, px) would
+        read (its own zoom range and bounds; the render's footprint and its one-texel margin)."""
+        lazy = [s for s in self.chain if s.lazy]
+        if not lazy:
+            return []
+        c = np.array([0.0, 0.5, 1.0]) * size
+        E, N = np.meshgrid(x0 + c, y0 + c)
+        lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+        if np.abs(lat).max() > MAX_LAT:
+            return []
+        zw = zoom_for(float(lat[1, 1]), size / px)
+        out = []
+        for src in lazy:
+            if zw > src.max_view_zoom:
+                continue
+            z = min(zw, src.max_zoom)
+            if z < src.min_zoom:
+                continue
+            if src.bounds:
+                bs, bw, bn, be = src.bounds
+                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                    continue
+            fx, fy = mercator_px(lat.ravel(), lon.ravel(), z)
+            ty0, ty1 = int(math.floor(fy.min() - 1)) // TILE, int(math.floor(fy.max() + 1)) // TILE
+            tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
+            kids = [(tx, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1) if in_bounds(src, z, tx, ty)]
+            out.append((src, z, kids))
+        return out
+
+    def _child_state(self, src, z, tx, ty):
+        """One lazy source tile, as a render would read it: ("data", None) on disk; ("none", expiry) known to hold
+        nothing: a miss within its host's miss_ttl (expiry: when it ends; None: a host whose misses never do), an
+        expired one while the host cannot be asked (offline, its breaker open: expiry UNAVAILABLE_RETRY_S from now,
+        asked again then), a coverage probe's "outside" (expiry: that probe's own, _probe_until; an expired one is
+        fetched again and the tile undecided meanwhile);
+        ("todo", None) neither (never fetched, evicted by the cache cap, or a miss that expired: asked again). Every
+        "none" but the never-expiring kind carries its expiry, so what is built on it is kept only that long
+        (buildings.roof_photo_final: the photo of a later source too)."""
+        path, miss = self._paths(src, z, tx, ty)
+        if os.path.exists(path):
+            return "data", None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        now = self.fetcher.wall()
+        t = missindex.when(miss)
+        if t is not None:
+            if ttl is None:
+                return "none", None
+            if now - t < ttl:
+                return "none", t + ttl
+            if self.fetcher.miss_alive(miss, src.url):      # (expired, but the host cannot be asked now)
+                return "none", now + UNAVAILABLE_RETRY_S
+        with self._lock:
+            if self._probe_status((src, z, tx, ty)) == "outside":
+                return "none", self._probe_until((src, z, tx, ty))
+        return "todo", None
+
+    def lazy_state(self, frame, x0, y0, size, px):
+        """(resolved, expiry, todo) of the lazy tiles a render(frame, x0, y0, size, px) would read: resolved when each
+        is decided (on disk, or every lazy source that could fill it known to hold nothing there), decided per tile, not
+        by an export parent's last child (an export mixes tiles with data and nodata ones, and the cache cap evicts
+        tiles one by one); expiry: the earliest time (unix s) one of the deciding "nothing there" answers expires, None
+        when none does; todo: [(src, z, tx, ty)] the tiles still to fetch (a later source's only where no earlier
+        one has data)."""
+        covered, waiting = set(), set()     # (a later source's tile only once the earlier ones hold nothing there)
+        expiry, todo = None, []
+        for src, z, kids in self._lazy_children(frame, x0, y0, size, px):
+            for tx, ty in kids:
+                if (z, tx, ty) in covered or (z, tx, ty) in waiting:
+                    continue
+                st, until = self._child_state(src, z, tx, ty)
+                if st == "data":
+                    covered.add((z, tx, ty))
+                elif st == "todo":
+                    todo.append((src, z, tx, ty))
+                    waiting.add((z, tx, ty))
+                elif until is not None:
+                    expiry = until if expiry is None else min(expiry, until)
+        return not todo, expiry, todo
+
+    def fetch_lazy(self, frame, x0, y0, size, px):
+        """Fetch now, in the calling thread, the lazy sources' tiles a render(frame, x0, y0, size, px) would read that
+        are not decided yet (lazy_state: per tile, an expired miss asked again), as demand requests (netfetch "urgent"
+        within urgent()), source by source in chain order (a later one only where no earlier one has data): a render
+        that must not skip them (render reads a lazy tile only from disk; warm() fetches the ones round the player).
+        The roofs' photo (buildings.roof_photo_final): a road tile read Maryland's md6in only where the ground photo's
+        warm had fetched it first (2026-11-13). One request per export parent; the hosts' limits are the server's
+        processes' together (netfetch.SharedGate). The number fetched; raises ImageryError (a fetch failed)."""
+        kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        old = getattr(self._local, "kind", None)
+        self._local.kind = kind
+        n, asked = 0, set()
+        try:
+            for _ in range(len(self.chain) + 1):        # (each pass fetches one source's missing parents at most)
+                _ok, _exp, todo = self.lazy_state(frame, x0, y0, size, px)
+                todo = [k for k in todo if (k[0].name, k[1], k[2] >> k[0].export, k[3] >> k[0].export) not in asked]
+                if not todo:
+                    break
+                src = todo[0][0]
+                for s_, z, tx, ty in todo:
+                    if s_ is not src:
+                        continue
+                    parent = (src.name, z, tx >> src.export, ty >> src.export)
+                    if parent in asked:
+                        continue
+                    asked.add(parent)
+                    self._download(src, z, tx, ty)      # (the parent's every tile written: data, or a miss)
+                    self._count(src.name + ":photo")
+                    n += 1
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return n
+
     def key_done(self, key):
         """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
         return self._warm_done(key)
+
+    def lazy_tile_state(self, key):
+        """A lazy source's tile (src, z, x, y) as a render would read it (_child_state): ("data", None) on disk,
+        ("none", until) known to hold nothing there (until: unix s when that answer ends, None never), ("todo", None)
+        not decided (never fetched, evicted, an expired miss)."""
+        return self._child_state(*key)
+
+    def fetch_lazy_tile(self, key):
+        """A lazy source's undecided tile (lazy_tile_state "todo") fetched now in the calling thread, as a demand
+        request (its export parent in one request: the parent's every tile written, data or a miss): the world map's
+        and the car screens' tiles (maptiles.MapTiles.tile), which tiles() alone passes on to the next source while
+        warm() has not fetched them yet. False: decided already, nothing fetched; raises ImageryError."""
+        src, z, x, y = key
+        if not src.lazy or self.lazy_tile_state(key)[0] != "todo":
+            return False
+        old = getattr(self._local, "kind", None)
+        self._local.kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        try:
+            self._download(src, z, x, y)
+            self._count(src.name + ":map")
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return True
 
     def fetch_key(self, key):
         """Fetch one route_keys key now in the calling thread at "prefetch" priority (the route download's thread).
@@ -1963,8 +2146,13 @@ class Imagery:
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, _ = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
+                ref, ref_used = None, {}
+            if ref is not None and ref_used.get("none"):
+                # (texels no source of the reference has, FALLBACK_RGB: none to match to. The roofs' photo, md6in
+                # then Virginia's service, blank in Maryland and finer than the reference's zoom: every roof's colour
+                # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
                 rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))

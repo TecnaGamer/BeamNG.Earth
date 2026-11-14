@@ -648,6 +648,9 @@ class FirstCellsTest(unittest.TestCase):
     def test_server_hands_each_cell_to_a_process(self):
         from unittest import mock
         import earthd
+        env = mock.patch.dict(os.environ, {"BNE_FIRST_FANOUT": "on"})   # (sharing is off by default, 2026-11-13)
+        env.start()
+        self.addCleanup(env.stop)
 
         class Pool:
             def __init__(self, workers):
@@ -710,7 +713,7 @@ class FirstCellsTest(unittest.TestCase):
                 self.assertTrue(earthd.sharing_machine(), "asked for")
                 os.environ.pop("BNE_FIRST_FANOUT")
             with mock.patch.object(os, "cpu_count", return_value=16), mock.patch.object(budget, "small", return_value=False):
-                self.assertTrue(earthd.sharing_machine())
+                self.assertFalse(earthd.sharing_machine(), "off by default (2026-11-13) until the share fixes are in")
             with mock.patch.object(os, "cpu_count", return_value=16), mock.patch.object(budget, "small", return_value=True):
                 self.assertFalse(earthd.sharing_machine())
 

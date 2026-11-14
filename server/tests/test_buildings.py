@@ -401,6 +401,105 @@ class SplitTest(unittest.TestCase):
             self.assertEqual(len(shape["meshes"]), 2)
 
 
+def _round(x, y, r=15.0, n=48):
+    a = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    return np.stack([x + r * np.cos(a), y + r * np.sin(a)], 1)
+
+
+def _dense_items(count=40, corners=48):
+    """Round towers (~2k lite vertices each): 40 of them are past the 16-bit indices in one mesh."""
+    return [(bld.plan(_round((i % 8) * 40.0, (i // 8) * 40.0, n=corners), {"class": "", "height": 30, "num_floors": 10}),
+             0.0, 0.0) for i in range(count)]
+
+
+def _shape_meshes(path):
+    return [cdae.mesh_arrays(m) for m in cdae.read(path)["meshes"] if m["type"] == 0]
+
+
+class FarIndexLimitTest(unittest.TestCase):
+    """Players' "spiderweb" reports (2026-11-14): long thin triangles from buildings across the scene in dense cities.
+    The far building tiles and packs were one mesh of build(items, lite=True): a Manhattan pack 705k vertices, a far
+    tile 80k, past the engine's 16-bit indices. Every shape's mesh stays under them (several meshes in one shape)."""
+
+    def check(self, path, items):
+        ms = _shape_meshes(path)
+        self.assertTrue(all(len(m["verts"]) <= 65535 for m in ms), [len(m["verts"]) for m in ms])
+        self.assertGreater(len(ms), 1)
+        self.assertTrue(all(int(m["indices"].max()) < len(m["verts"]) for m in ms))
+        lite = bld.build(items, lite=True)
+        self.assertEqual(sum(len(m["indices"]) // 3 for m in ms), len(lite[2]), "every building drawn")
+
+    def test_far_tile(self):
+        items = _dense_items()
+        self.assertGreater(len(bld.build(items, lite=True)[0]), 65535)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            vfs, n = bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.assertEqual(n, len(items))
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
+    def test_far_geotile_and_pack(self):
+        import blockworker
+        import geotiles
+        items = _dense_items()
+        for kind in ("bldfar", "bldpack"):
+            z = blockworker.far_geo_zoom(kind)
+            tile = geotiles.geobox(*geotiles.tile_of(40.758, -73.985, z), z)
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(blockworker, "_far_cells_ready", return_value=True), \
+                    mock.patch.object(blockworker, "_s", mock.Mock(md=None, widths=None, surface=None)), \
+                    mock.patch.object(bld, "far_items", return_value=(items, [], tile.box)):
+                data, shapes, n = blockworker._far_geo_build(kind, tile, 15, d, "/x", None)
+                self.assertEqual(n, len(items))
+                self.check(os.path.join(d, shapes["shape"]), items)
+
+    def test_skyline_meshes_cut_between_buildings(self):
+        items = _dense_items(120, corners=200)     # (~1k skyline vertices each)
+        meshes = bld._sky_mesh(items)
+        self.assertGreater(len(meshes), 1)
+        self.assertTrue(all(len(m[0]) <= bld.MAX_MESH_VERTS for m in meshes))
+        with tempfile.TemporaryDirectory() as d:
+            bld.write(os.path.join(d, "s.cdae"), meshes)
+            ms = _shape_meshes(os.path.join(d, "s.cdae"))
+        self.assertEqual([len(m["verts"]) for m in ms], [len(m[0]) for m in meshes])
+        self.assertEqual(sum(len(m["indices"]) for m in ms), sum(3 * len(m[2]) for m in meshes))
+        (one,) = bld._sky_mesh(items[:3])
+        self.assertLess(len(one[0]), bld.MAX_MESH_VERTS, "a small skyline stays one mesh")
+
+    def test_watertight_skyline_cut_by_its_closed_vertices(self):
+        """BNE_WATERTIGHT: closing adds each building's caps after the cut (Codex review of b2b87e51: 2900 boxes fit
+        sky_items' 60000-vertex estimate open, past 65535 closed, and the whole skyline was dropped)."""
+        import shells
+        items = [(bld.plan(rect((i % 60) * 25.0, (i // 60) * 25.0, 12, 10), {"class": "", "height": 12}), 0.0, 0.0)
+                 for i in range(2900)]
+        (opened,) = bld._sky_mesh(items)
+        self.assertLessEqual(len(opened[0]), bld.MAX_MESH_VERTS)
+        with mock.patch.object(shells, "ON", True), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            meshes = bld._sky_mesh(items)
+            self.assertIsNotNone(meshes)
+            self.assertGreater(sum(len(m[0]) for m in meshes), 65535, "(the case: past the indices once closed)")
+            self.assertTrue(all(len(m[0]) <= 65535 for m in meshes), [len(m[0]) for m in meshes])
+            self.assertEqual(bld.over_limit["buildings"], 0)
+            self.assertEqual(sum(len(m[2]) for m in meshes), len(shells.close(
+                *[np.asarray(a) for a in (opened[0], opened[2], opened[3])], (opened[1], opened[5]), skirt=False)[1]))
+
+    def test_watertight_far_tile(self):
+        """build_parts counts each building closed (build closes it) before its cut: the far tile under the indices."""
+        import shells
+        items = _dense_items()
+        with mock.patch.object(shells, "ON", True), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(bld, "far_items", return_value=(items, [], (0.0, 0.0, 256.0, 256.0))):
+            bld.far_tile(None, 0, 0, None, None, d, "/x", "a")
+            self.check(os.path.join(d, "bldfar_a_0_0.cdae"), items)
+
+    def test_a_building_past_the_indices_is_left_out(self):
+        items = _dense_items(3)
+        n1 = len(bld.build(items[:1], lite=True)[0])
+        with mock.patch.object(bld, "VERTS_MAX", n1 - 1), mock.patch.dict(bld.over_limit, {"buildings": 0}):
+            self.assertEqual(bld.build_parts(items, lite=True), [])
+            self.assertEqual(bld.over_limit["buildings"], 3)
+
+
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
@@ -477,7 +576,7 @@ class MeshTest(unittest.TestCase):
 
     def test_a_dome_in_the_skyline(self):
         spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
-        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(spec, 0.0, 0.0)])
         self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
 
     def test_a_round_roof_is_a_barrel_not_a_dome(self):
@@ -659,7 +758,7 @@ class NightWindowsTest(unittest.TestCase):
         for seed in (0.1, 0.2, 0.3, 0.4, 0.5):
             sp = bld.Spec(ring=ring, floors=10, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", cls="office",
                           seed=seed, min_h=0.0, height=30.0, windows=None, roof_mat=None)
-            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[1])
+            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[0][1])
             starts.add((round(float(UV[0, 0]), 6), round(float(UV[0, 1] % 1.0), 6)))
             self.assertAlmostEqual(UV[0, 0] * bld.SKY_WIN_BAYS, round(UV[0, 0] * bld.SKY_WIN_BAYS), 6)
         self.assertGreater(len(starts), 3)
@@ -1792,7 +1891,7 @@ class FarLampTest(unittest.TestCase):
 
     def test_skyline_windows(self):
         spec = bld.plan(rect(0, 0, 30, 20), {"class": "", "height": 30.0}, 0)
-        P, UV, T, M, mats, C = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (P, UV, T, M, mats, C), = bld._sky_mesh([(spec, 0.0, 0.0)])
         wall = mats.index(bld.SKY_WALL)
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
@@ -1936,7 +2035,7 @@ class SpireTest(unittest.TestCase):
         ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
         sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
                              "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
-        P = bld._sky_mesh([(sp, 0.0, 0.0)])[0]
+        (P, *_), = bld._sky_mesh([(sp, 0.0, 0.0)])
         self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
 
 
@@ -2781,21 +2880,129 @@ class RoofPhotoTest(unittest.TestCase):
                 return contextlib.nullcontext()
 
             @staticmethod
+            def fetch_lazy(frame, x0, y0, size, px):
+                asked.append("fetch_lazy")
+                return 0
+
+            @staticmethod
             def render(frame, x0, y0, size, px):
                 asked.append("render")
                 return np.zeros((px, px, 3), np.uint8), {"france": px * px}
+
+            @staticmethod
+            def lazy_state(frame, x0, y0, size, px):
+                return True, None, []
 
         frame = geodesy.EnuFrame(46.17, 1.87)
         with mock.patch.object(bld, "_photo_sources", return_value=("france",)), \
                 mock.patch.object(bld, "_photo_reader_live", return_value=Reader()):
             with bld.urgent_photos(True):
                 f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
-            self.assertIsNotNone(f.fut.result(5))
-            self.assertEqual(asked, ["urgent", "render"])
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["urgent", "fetch_lazy", "render"])
             asked.clear()
             f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
-            self.assertIsNotNone(f.fut.result(5))
-            self.assertEqual(asked, ["render"])
+            self.assertIsNotNone(f.fut.result(5)[0])
+            self.assertEqual(asked, ["fetch_lazy", "render"])
+
+    class _Reader:
+        """A stand-in photo reader: render's texel counts (used), lazy_state's answer (ready, the deciding answers'
+        expiry), an ImageryError to raise."""
+
+        def __init__(self, used_share=1.0, ready=True, error=False, expiry=None):
+            self.used_share, self.ready, self.error, self.expiry = used_share, ready, error, expiry
+            self.asked = []
+
+        def urgent(self):
+            import contextlib
+            return contextlib.nullcontext()
+
+        def fetch_lazy(self, frame, x0, y0, size, px):
+            self.asked.append("fetch_lazy")
+            if self.error:
+                import imagery
+                raise imagery.ImageryError("md6in: HTTP 503")
+            return 1
+
+        def render(self, frame, x0, y0, size, px):
+            self.asked.append("render")
+            n = int(px * px * self.used_share)
+            return np.zeros((px, px, 3), np.uint8), {"md6in": n, "none": px * px - n}
+
+        def lazy_state(self, frame, x0, y0, size, px):
+            return self.ready, self.expiry, ([] if self.ready else [("md6in", 17, 0, 0)])
+
+    def photo_final(self, reader, online=True):
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                mock.patch.object(bld, "_photo_reader_live", return_value=reader), \
+                mock.patch("streetfront._photo_reader", lambda *_a: reader):
+            return bld.roof_photo_final(geodesy.EnuFrame(39.2833, -76.5967), 0.0, 0.0, 100.0, 100.0,
+                                        tempfile.gettempdir(), online)
+
+    def test_a_photo_too_short_once_decided_is_final_until_its_answers_expire(self):
+        # 2026-11-13: every road tile of a Fells Point session faulted on its roofs' photo (797 not kept): md6in was
+        # remembered missing there. Online the lazy tiles are fetched first; a None is a fault only when the photo
+        # could not be had (a fetch failed, a lazy tile not decided yet); where the sources hold too little of the tile
+        # once all is decided it is final, but only until the first "nothing there" answer expires (a miss's TTL, and
+        # within NEG_RECHECK_S for the non-lazy sources' misses)
+        import time as _time
+        r = self._Reader()
+        ph, final, until = self.photo_final(r)
+        self.assertIsNotNone(ph)
+        self.assertEqual((final, until), (True, None))
+        self.assertEqual(r.asked, ["fetch_lazy", "render"])
+        now = _time.time()
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True))
+        self.assertEqual((ph, final), (None, True))
+        self.assertAlmostEqual(until, now + bld.NEG_RECHECK_S, delta=60)
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=True, expiry=now + 600))
+        self.assertEqual((ph, final, until), (None, True, now + 600), "the miss that decides expires first")
+        ph, final, until = self.photo_final(self._Reader(used_share=0.5, ready=False))
+        self.assertEqual((ph, final), (None, False), "a lazy tile not decided: not yet")
+        ph, final, until = self.photo_final(self._Reader(error=True))
+        self.assertEqual((ph, final), (None, False), "a failed fetch: not had")
+        ph, final, until = self.photo_final(self._Reader(expiry=now + 900))
+        self.assertIsNotNone(ph)
+        self.assertEqual(until, now + 900, "a later source's photo where an earlier one's miss expires")
+        r = self._Reader(used_share=0.0, ready=False)
+        ph, final, until = self.photo_final(r, online=False)
+        self.assertEqual((ph, final), (None, False))
+        self.assertEqual(r.asked, ["render"], "offline: nothing fetched")
+        import geodesy
+        with mock.patch.object(bld, "_photo_sources", return_value=()):
+            self.assertEqual(bld.roof_photo_final(geodesy.EnuFrame(10.0, 10.0), 0, 0, 10, 10, "/nowhere", True),
+                             (None, True, None), "no regional photo there: for good")
+
+    def test_only_a_photo_not_had_faults_the_tile_and_an_expiring_answer_bounds_its_keep(self):
+        import time as _time
+        import geodesy
+        import revisit
+        frame = geodesy.EnuFrame(39.2833, -76.5967)
+        soon = _time.time() + 600
+        ring = [np.array([[10, 10], [30, 10], [30, 30], [10, 30]], float)]
+        for reader, faults, until in ((self._Reader(), 0, None),
+                                      (self._Reader(used_share=0.3, ready=True, expiry=soon), 0, soon),
+                                      (self._Reader(expiry=soon), 0, soon),
+                                      (self._Reader(used_share=0.3, ready=False), 1, None),
+                                      (self._Reader(error=True), 1, None)):
+            with mock.patch.object(bld, "_photo_sources", return_value=("md6in",)), \
+                    mock.patch.object(bld, "_photo_reader_live", return_value=reader):
+                f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+                with revisit.scope() as b:
+                    f.colours(ring)
+                self.assertEqual((b.n, b.until), (faults, until), (reader.used_share, reader.ready, reader.error))
+                self.assertEqual(b.complete, faults == 0 and until is None)
+                self.assertEqual(b.kept_until(), (faults == 0, until))
+
+    def test_a_photo_late_past_the_wait_faults_the_tile(self):
+        import concurrent.futures
+        import revisit
+        f = bld.RoofPhotoFuture.__new__(bld.RoofPhotoFuture)
+        f.fut = concurrent.futures.Future()         # (never done)
+        with mock.patch.object(bld, "ROOF_PHOTO_WAIT_S", 0.05), revisit.scope() as b:
+            self.assertIsNone(f.colours([np.array([[0, 0], [5, 0], [5, 5]], float)]))
+        self.assertEqual(b.n, 1)
 
     def test_which_geotiles_are_near_the_car(self):
         import blockworker
@@ -3073,6 +3280,6 @@ class MappedRoofTest(unittest.TestCase):
         self.assertAlmostEqual(float(rise.min()), 0.0)
         self.assertAlmostEqual(float(rise.max()), 362.0, delta=0.5)
         self.assertAlmostEqual(float(rise[0]), 0.0, msg="low at the corner it faces (south-west)")
-        mesh = bld._sky_mesh([(spec, 0.0, 0.0)])
+        (mesh,) = bld._sky_mesh([(spec, 0.0, 0.0)])
         P = mesh[0]
         self.assertAlmostEqual(float(P[:, 2].max() - spec.height - spec.min_h), 362.0, delta=1.5)
