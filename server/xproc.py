@@ -15,6 +15,9 @@ long piece of work is never taken for a dead one's. A lock holds its taker's tok
 taken over (stale, or its holder gone) and released only under its guard (_guard, an OS file lock: one process
 at a time), and removed only while its token is the one expected, so two processes breaking the same dead
 holder's lock never remove the new holder's after it (as stageshare.rs's claims, its folder lock and owner tokens).
+The guard is polled, never waited on blindly (GUARD_WAIT_S): when it is not had nothing changes and the caller hears
+"not now" (take: not taken; break_dead: not broken; release: put off, retried by the heartbeat thread), so callers'
+deadlines and cancel checks still hold with a guard's holder stopped or stuck.
 """
 import json
 import logging
@@ -42,6 +45,7 @@ _FAVOURED = [0]             # jobs of this process running as favoured() now
 _HELD = {}                  # lock -> its token: the locks this process holds now (take, release), touched by _heartbeat
 _HELD_LOCK = threading.Lock()
 _HEART = [0]                # the pid whose _heartbeat thread runs (a forked child starts its own)
+_PENDING = {}               # lock -> token: this process's releases still to do (their guard was busy: _retry_pending)
 _MINE = threading.local()   # .held: the locks this thread took and holds (once's live_s: a waiter holding none)
 
 
@@ -53,6 +57,7 @@ def _hold(lock, token):
     with _HELD_LOCK:
         if _HEART[0] != os.getpid():
             _HELD.clear()
+            _PENDING.clear()
             _HEART[0] = os.getpid()
             threading.Thread(target=_heartbeat, name="xproc-heartbeat", daemon=True).start()
         _HELD[lock] = token
@@ -68,8 +73,36 @@ def holds_none():
 def _heartbeat():
     me = os.getpid()
     while _HEART[0] == me:
-        time.sleep(HEARTBEAT_S)
-        _touch_held()
+        _WAKE.wait(PENDING_RETRY_S if _PENDING else HEARTBEAT_S)
+        _WAKE.clear()
+        if _PENDING:
+            time.sleep(0.05)        # (a busy guard: a moment's grace before the first retry)
+        _retry_pending()
+        if time.monotonic() >= _NEXT_TOUCH[0]:
+            _NEXT_TOUCH[0] = time.monotonic() + HEARTBEAT_S
+            _touch_held()
+
+
+_NEXT_TOUCH = [0.0]
+_WAKE = threading.Event()   # set when a release is put off (_PENDING): retried soon, not at the next heartbeat
+PENDING_RETRY_S = 1.0       # s between tries of the releases whose guard was busy (_PENDING)
+
+
+def _retry_pending():
+    """The releases put off (their guard busy) tried again: each removed under its guard while its token is still
+    this process's. Not touched meanwhile (not in _HELD): one this process never gets back goes stale (STALE_S),
+    and once this process is gone it is a dead holder's (break_dead)."""
+    with _HELD_LOCK:
+        todo = list(_PENDING.items())
+    for lock, token in todo:
+        with _guard(lock) as g:
+            if not g.ok:
+                continue
+            done = _token(lock) != token or _remove(lock)
+        if done:
+            with _HELD_LOCK:
+                if _PENDING.get(lock) == token:
+                    del _PENDING[lock]
 
 
 def _touch_held():
@@ -87,7 +120,7 @@ def _touch_held():
 
 GUARD_SHARDS = 256          # guard files (_guard): a lock's is one of these by its path, in the temporary folder (not
                             # beside the locks: cache folders are listed, and a file there that is not theirs counts)
-GUARD_WAIT_S = 10.0         # s a guard is waited for (Windows' byte lock, polled) before going on without it
+GUARD_WAIT_S = 5.0          # s a guard is waited for (polled) before the step is given up: nothing changed, "not now"
 
 
 def _guard_path(lock):
@@ -99,14 +132,33 @@ def _guard_path(lock):
     return os.path.join(tempfile.gettempdir(), f"bnge-xproc-{user}", f"{shard}.guard")
 
 
+def _try_lock(fd):
+    """One non-blocking try at fd's OS lock: True when held now."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
 class _guard:
     """lock's guard held for this process alone (an OS lock on its guard file: fcntl.flock on Linux, msvcrt.locking on
     Windows) while lock is taken, taken over or released: a look at its holder and the change it decides are one step
-    for the other processes. Without a guard file (no temporary folder) the step runs as before, unguarded."""
+    for the other processes. Polled without blocking for up to GUARD_WAIT_S (a holder stopped or stuck with the
+    guard never holds its callers past their own deadlines and cancel checks); ok: held. Nothing is created, taken
+    over or removed without it: when it is not had, the caller changes nothing and says "not now". missing: no guard
+    file can be made at all (no temporary folder): take works unlocked then, making no lock file."""
 
     def __init__(self, lock):
         self.path = _guard_path(lock)
         self.fd = None
+        self.ok = self.missing = False
 
     def __enter__(self):
         try:
@@ -116,26 +168,17 @@ class _guard:
                 os.makedirs(os.path.dirname(self.path), exist_ok=True)
                 fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
         except OSError:
+            self.missing = True
             return self
-        try:
-            if sys.platform == "win32":
-                import msvcrt
-                end = time.monotonic() + GUARD_WAIT_S
-                while True:
-                    try:
-                        os.lseek(fd, 0, os.SEEK_SET)
-                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                        break
-                    except OSError:
-                        if time.monotonic() > end:
-                            raise
-                        time.sleep(0.002)
-            else:
-                import fcntl
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            self.fd = fd
-        except OSError:
-            os.close(fd)
+        end = time.monotonic() + GUARD_WAIT_S
+        pause = 0.001
+        while not _try_lock(fd):
+            if time.monotonic() >= end:
+                os.close(fd)
+                return self
+            time.sleep(pause)
+            pause = min(pause * 2, 0.02)
+        self.fd, self.ok = fd, True
         return self
 
     def __exit__(self, *exc):
@@ -198,7 +241,11 @@ def take(lock, kind="demand"):
         os.makedirs(os.path.dirname(lock), exist_ok=True)
     except OSError:
         return True
-    with _guard(lock):
+    with _guard(lock) as g:
+        if g.missing:
+            return True                     # (no guard to be had: unlocked, as when no lock file can be made)
+        if not g.ok:
+            return False                    # (its guard busy: not taken now, nothing changed; asked again)
         for _ in range(2):
             try:
                 fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -401,23 +448,27 @@ def release(lock):
     getattr(_MINE, "held", set()).discard(lock)
     if token is None:
         return
-    with _guard(lock):
-        if _token(lock) == token:
-            _remove(lock)
+    with _guard(lock) as g:
+        if g.ok and (_token(lock) != token or _remove(lock)):
+            return
+    with _HELD_LOCK:                # (its guard busy, or the remove failed: tried again by the heartbeat thread)
+        _PENDING[lock] = token
+    _WAKE.set()
 
 
 def break_dead(lock, seen=None):
     """Remove lock when its holder is gone, under its guard: its holder read again there (alive: kept), and
     with seen (the token the caller saw with the dead holder) only that same lock, never a new holder's that another
     waiter let in meanwhile. True when removed."""
-    with _guard(lock):
+    with _guard(lock) as g:
+        if not g.ok:
+            return False                    # (its guard busy: not now, nothing changed)
         h = _holder(lock)
         if h is None or h[2] is None or alive(h[2]):
             return False
         if seen is not None and _token(lock) != seen:
             return False
-        _remove(lock)
-        return True
+        return _remove(lock)
 
 
 def _remove(lock):
@@ -429,12 +480,12 @@ def _remove(lock):
     while True:
         try:
             os.remove(lock)
-            return
+            return True
         except FileNotFoundError:
-            return
+            return True
         except OSError:
             if time.monotonic() - t0 > RELEASE_S:
-                return
+                return False
             time.sleep(0.01)
 
 
