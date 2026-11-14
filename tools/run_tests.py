@@ -178,6 +178,18 @@ class Runner:
         bad = [(m, r) for m, r, _ in res if r != "OK"]
         self.say(f"done: {len(res) - len(bad)} OK, {len(bad)} not OK"
                  + (": " + ", ".join(f"{m} ({r})" for m, r in bad) if bad else ""))
+        # Each failed module's log tail in the ordinary CI log too: a failure stays diagnosable when the
+        # artifact download is unavailable (Windows cleanup errors especially). PR #1214.
+        for m, r in bad:
+            try:
+                with open(os.path.join(self.logs, m + '.log'), encoding='utf-8', errors='replace') as fh:
+                    tail = fh.readlines()[-100:]
+            except OSError as e:
+                self.say(f"--- {m} ({r}): no log ({e}) ---")
+                continue
+            self.say(f"--- {m} ({r}): last {len(tail)} log lines ---")
+            for line in tail:
+                self.say(line.rstrip())
         return 1 if bad else 0
 
 

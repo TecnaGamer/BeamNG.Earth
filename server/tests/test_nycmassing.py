@@ -21,6 +21,7 @@ import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import mapgeom  # noqa: E402
 import nycmassing as nm  # noqa: E402
+import nycshards  # noqa: E402
 import build_nyc_massing as builder  # noqa: E402
 
 NATIVE = fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= nm.NATIVE
@@ -226,9 +227,38 @@ class TileTest(unittest.TestCase):
         self.assertEqual(len(self._items(g, Stub(records([record(1)])))), 1)
 
 
-def manifest_bytes(keys):
+def manifest_bytes(keys, body=None, built="2026-11-10"):
+    """A manifest listing keys (each entry naming body's bytes and sha256 when given)."""
+    import hashlib
     import json
-    return json.dumps({"format": 1, "cells": {f"{k.z}/{k.x}/{k.y}": {"buildings": 1} for k in keys}}).encode()
+    ent = {"buildings": 1}
+    if body is not None:
+        ent = dict(ent, bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+    return json.dumps({"format": 1, "built": built, "cells": {f"{k.z}/{k.x}/{k.y}": ent for k in keys}}).encode()
+
+
+class Site:
+    """A host of files by URL suffix (manifest.json, <y>.npz, ...); anything else a 404; calls kept in asked."""
+
+    def __init__(self, files, fail=None):
+        self.files, self.fail, self.asked = files, fail, []
+
+    def get(self, url, kind="demand"):
+        import netfetch
+        self.asked.append(url)
+        if self.fail is not None:
+            raise self.fail
+        for suffix, body in self.files.items():
+            if url.endswith(suffix):
+                return mock.Mock(body=body)
+        raise netfetch.NotFound(url)
+
+
+def pinned_source(tmp, site, base="https://example.invalid/nyc"):
+    """A Source whose build is decided (identity: a tile's key; the manifest fetched then and pinned)."""
+    src = nm.Source(tmp, fetcher=site, base=base)
+    src.identity()
+    return src
 
 
 class SourceTest(unittest.TestCase):
@@ -244,83 +274,62 @@ class SourceTest(unittest.TestCase):
         src = nm.Source(None, local=self.tmp.name)
         self.assertEqual(src.shard(KEY)["bin"].tolist(), [5])
         self.assertEqual(src.shard(mapcells.CellKey(14, KEY.x + 1, KEY.y)), {})     # (none there)
+        self.assertEqual(src.identity(), "local")
 
     def test_failed_fetch_not_kept(self):
-        calls = []
-
-        class Down:
-            def get(self, url, kind="demand"):
-                calls.append(url)
-                raise OSError("offline")
-        src = nm.Source(self.tmp.name, fetcher=Down(), base="https://example.invalid/nyc")
+        site = Site({"/manifest.json": manifest_bytes([KEY])})
+        src = pinned_source(self.tmp.name, site)
+        site.fail = OSError("offline")
+        n = len(site.asked)
         self.assertIsNone(src.shard(KEY))
         self.assertIsNone(src.shard(KEY))
-        self.assertEqual(len(calls), 1, "not asked again by every tile meanwhile")
+        self.assertEqual(len(site.asked) - n, 1, "not asked again by every tile meanwhile")
         self.assertFalse(os.path.exists(src._path(KEY)))
-        with mock.patch.object(nm.time, "time", lambda: 1e12):
+        with mock.patch.object(nycshards.time, "time", lambda: 1e12):
             src.shard(KEY)
-        self.assertEqual(len(calls), 2, "asked again after SHARD_RETRY_S")
+        self.assertEqual(len(site.asked) - n, 2, "asked again after SHARD_RETRY_S")
 
-    def test_missing_shard_kept_empty_and_fetched_kept(self):
-        import netfetch
-
-        asked = []
-
-        class Site:
-            def get(self, url, kind="demand"):
-                asked.append(url)
-                if url.endswith("/manifest.json"):
-                    return mock.Mock(body=manifest_bytes([KEY]))
-                if url.endswith(f"/{KEY.y}.npz"):
-                    return mock.Mock(body=shard_bytes([record(9)]))
-                raise netfetch.NotFound(url)
-        src = nm.Source(self.tmp.name, fetcher=Site(), base="https://example.invalid/nyc")
+    def test_listed_shard_fetched_kept_unlisted_not_asked(self):
+        body = shard_bytes([record(9)])
+        site = Site({"/manifest.json": manifest_bytes([KEY], body), f"/{KEY.y}.npz": body})
+        src = pinned_source(self.tmp.name, site)
         self.assertEqual(src.shard(KEY)["bin"].tolist(), [9])
         self.assertGreater(os.path.getsize(src._path(KEY)), 0)
+        self.assertIn(src.identity(), src._path(KEY), "kept under the build's identity")
         other = mapcells.CellKey(14, KEY.x, KEY.y + 1)
         self.assertEqual(src.shard(other), {})
-        self.assertFalse(os.path.exists(src._path(other)), "a cell the manifest does not list: nothing asked or kept")
-        self.assertEqual(len(asked), 2, "the manifest and the one listed shard")
-        self.assertEqual(nm.Source(self.tmp.name, fetcher=None).shard(KEY)["bin"].tolist(), [9], "from disk")
+        self.assertEqual(len(site.asked), 2, "the manifest and the one listed shard")
+        before = nm.Source(self.tmp.name, fetcher=None)
+        self.assertEqual(before.shard(KEY), {}, "before its key decides: none, and not kept as the build's")
+        again = nm.Source(self.tmp.name, fetcher=None)
+        again.identity()
+        self.assertEqual(again.shard(KEY)["bin"].tolist(), [9], "from disk")
 
     def test_shards_from_the_host_the_manifest_names(self):
         import json
-        import netfetch
-        asked = []
-
-        class Site:
-            def get(self, url, kind="demand"):
-                asked.append(url)
-                if url.endswith("/manifest.json"):
-                    m = json.loads(manifest_bytes([KEY]))
-                    m["data"] = "https://tiles.test/data/nycmassing/v1/k1"
-                    return mock.Mock(body=json.dumps(m).encode())
-                if url.startswith("https://tiles.test/") and url.endswith(f"/{KEY.y}.npz"):
-                    return mock.Mock(body=shard_bytes([record(9)]))
-                raise netfetch.NotFound(url)
-        src = nm.Source(self.tmp.name, fetcher=Site(), base="https://example.invalid/nyc")
+        m = json.loads(manifest_bytes([KEY]))
+        m["data"] = "https://tiles.test/data/nycmassing/v1/k1"
+        site = Site({"/manifest.json": json.dumps(m).encode(),
+                     f"tiles.test/data/nycmassing/v1/k1/{KEY.z}/{KEY.x}/{KEY.y}.npz": shard_bytes([record(9)])})
+        src = pinned_source(self.tmp.name, site)
         self.assertEqual(src.shard(KEY)["bin"].tolist(), [9])
-        self.assertEqual(asked[1:], [f"https://tiles.test/data/nycmassing/v1/k1/{KEY.z}/{KEY.x}/{KEY.y}.npz"])
+        self.assertEqual(site.asked[1:], [f"https://tiles.test/data/nycmassing/v1/k1/{KEY.z}/{KEY.x}/{KEY.y}.npz"])
 
     def test_nothing_asked_or_kept_before_publishing(self):
-        import netfetch
-        asked = []
-
-        class Unpublished:
-            def get(self, url, kind="demand"):
-                asked.append(url)
-                raise netfetch.NotFound(url)
-        src = nm.Source(self.tmp.name, fetcher=Unpublished(), base="https://example.invalid/nyc")
+        site = Site({})
+        src = nm.Source(self.tmp.name, fetcher=site, base="https://example.invalid/nyc")
+        self.assertEqual(src.identity(), "none")
         self.assertEqual(src.shard(KEY), {})
         self.assertEqual(src.shard(mapcells.CellKey(14, KEY.x + 1, KEY.y)), {})
-        self.assertEqual(asked, ["https://example.invalid/nyc/manifest.json"], "the manifest only, once")
-        self.assertFalse(os.path.exists(src._path(KEY)))
+        self.assertEqual(site.asked, ["https://example.invalid/nyc/manifest.json"], "the manifest only, once")
+        self.assertIsNone(src._path(KEY))
 
     def test_fault_when_not_had(self):
         import revisit
+        site = Site({"/manifest.json": manifest_bytes([KEY])})
+        src = pinned_source(self.tmp.name, site)
+        site.fail = OSError("down")
         before = revisit.faults()
-        src = nm.Source(self.tmp.name, fetcher=mock.Mock(get=mock.Mock(side_effect=OSError("down"))),
-                        base="https://example.invalid/nyc")
         with mock.patch.object(nm, "source", lambda cache_dir: src):
             got = nm.Fetch(CELL, -100, -100, 100, 100, self.tmp.name).index()
         self.assertIsNone(got)
@@ -335,11 +344,11 @@ class SourceTest(unittest.TestCase):
         self.assertFalse(nm.credited_near(self.tmp.name, 39.28, -76.59, 2000.0))
 
     def test_credited_near_a_shard_on_disk(self):
-        def get(url, kind="demand"):
-            return mock.Mock(body=manifest_bytes([KEY]) if url.endswith("/manifest.json") else shard_bytes([record(3)]))
-        src = nm.Source(self.tmp.name, fetcher=mock.Mock(get=get), base="https://example.invalid/nyc")
+        body = shard_bytes([record(3)])
+        src = pinned_source(self.tmp.name, Site({"/manifest.json": manifest_bytes([KEY]), f"/{KEY.y}.npz": body}))
         src.shard(KEY)
-        self.assertTrue(nm.credited_near(self.tmp.name, LAT, LON, 2000.0))
+        with mock.patch.object(nm, "source", lambda cache_dir: src):
+            self.assertTrue(nm.credited_near(self.tmp.name, LAT, LON, 2000.0))
 
 
 class CreditTest(unittest.TestCase):

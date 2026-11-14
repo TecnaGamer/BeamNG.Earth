@@ -46,6 +46,12 @@ M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock 
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
+-- The caps above are for a car at rest. At speed (PROP_LEAD_MIN_MS and over) the furniture and guard-rail tiles ahead
+-- of the car count PROP_LEAD_S seconds of driving nearer (PROP_LEAD_MAX_M at most) for them: a door's 120 m is 2.4 s at
+-- 110 mph (keep-up measure, 2026-11-13, tools/keepup.py). 0: off.
+M.PROP_LEAD_S = 4
+M.PROP_LEAD_MIN_MS = 12
+M.PROP_LEAD_MAX_M = 400
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -60,6 +66,20 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
+-- ... but not behind a moving car (roads.lua BEHIND, its kept heading): a tile whose near edge is BEHIND_M or more behind
+-- it along the heading gets no solid items, and one solid already loses them BEHIND_HYST_M farther (2026-11-14, a Steam
+-- Deck 45 mph Fells Point drive: ~800 of ~1,250 solid trees and props were behind the car, a quarter of every
+-- collision rebuild's triangles). Solid items made again within roads.needReach of the car (it turned back) rebuild
+-- the collision at once (roads.requestCollision with their distance).
+M.BEHIND_M = 20
+M.BEHIND_HYST_M = 30
+-- An item made solid within CLOSE_M of the car (a pass behind on a slow machine), anywhere in a tile BEHIND had kept
+-- from solid while within SOLID_M (the car turned back to it), or in a tile solid only for another player's car (its
+-- focus; roads.focusDue measures from that car), is sent to roads.requestCollision in a box: due by the
+-- car's distance to it as it drives (the roads' NEED rule). Those made solid farther out (a tile coming within SOLID_M
+-- ahead) ride the next rebuild, as before: a deadline for each of them doubled a Steam Deck drive's rebuilds (52 against
+-- 23-27 in Fells Point at 45 mph).
+M.CLOSE_M = 120
 M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
@@ -75,6 +95,11 @@ M.SHAPE_ITEMS_PER_FRAME = 4000
 M.FRAME_MS = 4.0          -- (2.5 for an evening, 2026-10-29: no steadier game time, and the trees, poles and
                           -- signs fell 2,000+ items behind at 70-120 mph, their collision late)
 M.LOADING_FRAME_MS = 12.0
+-- ... and NEAR_URGENT_MS (0: off) in a pass whose nearest tile with work left is within NEAR_URGENT_M of the car (or
+-- the camera): a warm 110 mph Manhattan drive had trees, lamps and furniture within 50 m of the car still waiting in
+-- pending passes (keep-up measure 2026-11-13, tools/keepup.py)
+M.NEAR_URGENT_MS = 8
+M.NEAR_URGENT_M = 150
 local CHECK_ROWS = 256
 -- Registering a new Forest costs ~9 ms (in-game 2026-10-26: 8-10 ms each, named or not, whatever its data file), and
 -- the tiles that came at once made several in one frame: FORESTS_PER_FRAME at most, and POOL_SPARE kept ready in the
@@ -85,6 +110,10 @@ M.POOL_SPARE = 4
 -- the level's start, a stop): a drive through town took ~20 new Forests a minute, a ~9 ms frame every 3 s (the game's
 -- time then ran unevenly, 2026-10-29); while driving none is made for the pool, only one a tile needs at once.
 M.POOL_SPARE_CALM = 32
+-- ... and POOL_SPARE_DRIVE while driving (0: none, as before), made at the end of a pass that made no Forest and loaded
+-- no new shape even when it changed items: a new tile's first items then wait for no Forest of their own (~9 ms,
+-- FORESTS_PER_FRAME) in the pass that reaches them (keep-up measure 2026-11-13, tools/keepup.py)
+M.POOL_SPARE_DRIVE = 2
 -- The engine tells shapes apart by their path, so a tile's items use one of SHAPE_VARIANTS spellings of each shape's
 -- path ('dir/./name', 'dir/././name', ...: the same file, a shape of its own), which splits the big populations (one
 -- beech ~7.7k items: a frame touching it cost ~4-9 ms). A variant's first items cost one ~12 ms frame (its load).
@@ -592,7 +621,7 @@ end
 -- A tree pass's order (M.update): the keys, distances and targets of the tiles it changes, in arrays kept between passes, and their sort
 -- keys: the distance in quarter metres times ORDER_SLOTS plus the entry's index (plain numbers: the default sort)
 local ORDER_SLOTS = 2 ^ 20
-local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, n = 0 }
+local passOrder = { keys = {}, d = {}, sort = {}, want = {}, band = {}, near = {}, capd = {}, n = 0 }
 function M.orderKey(d, i) return math.floor(math.min(d, 1e7) * 4) * ORDER_SLOTS + i end
 local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.setFoci, collisionfoci.lua)
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
@@ -1029,6 +1058,7 @@ local function makeItem(fd, t, i, shape, sc, solid, group, variant)
     if pair then it = pair else M.errors = M.errors + 1 end
   end
   M.made = M.made + 1
+  if M.onKeepupItem then M.onKeepupItem(t, i, group, itemPos.x, itemPos.y) end   -- (keepup.lua, debug)
   pop[shape] = (pop[shape] or 0) + 1
   local b = spellBase[shape] or shape
   basePop[b] = (basePop[b] or 0) + 1
@@ -1054,7 +1084,7 @@ end
 -- (tools). A stop used to lift the cap too (the governor's loading frames cover standing still), and a parked player
 -- sees every hitch: the far clump shapes' first loads landed several in single frames while slow (a Napa session,
 -- 2026-11-10: repeated 104-356 ms hitches, tree passes of +24 items; PR #1128 by SwimmingRemy).
-M.NEW_SHAPES_PER_FRAME = 1
+M.NEW_SHAPES_PER_FRAME = 2
 -- ... and NEW_SHAPES_FILL a pass in a fill (it was any number: the Steam Deck's warm level load had passes of 4-7 new
 -- shapes, 100-384 ms of the engine's tick each, 2026-11-13); the cover's warm-up shares it (WARM_PER_PASS)
 M.NEW_SHAPES_FILL = 3
@@ -1099,8 +1129,11 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
     t.moved = old and old.moved or nil
     M.placeGeo(t)
   end
+  t.id = key
+  t.furn = tostring(tileKey):match('^[pg]g%d') ~= nil or tostring(tileKey):match('^p') ~= nil  -- (street furniture, rails)
   setTile(key, t)
   dirty = true
+  if M.onKeepupTile then M.onKeepupTile(key, t) end       -- (keepup.lua: a debug recorder, off unless a tool starts it)
 end
 
 -- Pure-ish: a geotile's centre and half size in the current placement (t.pl), for the distances.
@@ -1555,7 +1588,7 @@ end
 -- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
 function M.spareWanted(frameMs)
   if frameMs == nil then return M.POOL_SPARE end
-  return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
+  return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or M.POOL_SPARE_DRIVE
 end
 
 function M.update(anchorId, player, view, frameMs, fill)
@@ -1638,6 +1671,13 @@ function M.update(anchorId, player, view, frameMs, fill)
     local dy = math.max(math.abs(p.y - t.cy) - h, 0)
     return math.sqrt(dx * dx + dy * dy)
   end
+  -- behind the moving car (BEHIND_M above; the heading roads.lua keeps): no solid items
+  local okR, roadsM = pcall(require, 'beamngEarth/roads')
+  local bdir = okR and type(roadsM) == 'table' and roadsM.behindDir and roadsM.behindDir() or nil
+  local function behind(t)
+    if not bdir then return false end
+    return roadsM.behindBy(player, bdir, t.cx, t.cy, t.half or 128) >= M.BEHIND_M + (t.near and M.BEHIND_HYST_M or 0)
+  end
   -- solid round other players' cars too (collisionfoci.lua: the foci with trees; traffic has none)
   local function nearFocus(t)
     for _, f in ipairs(foci) do
@@ -1646,7 +1686,15 @@ function M.update(anchorId, player, view, frameMs, fill)
     return false
   end
   local oKeys, oD, oSort = passOrder.keys, passOrder.d, passOrder.sort
-  local oWant, oBand, oNear = passOrder.want, passOrder.band, passOrder.near
+  local oWant, oBand, oNear, oCapD = passOrder.want, passOrder.band, passOrder.near, passOrder.capd
+  -- the street furniture's lead at speed (PROP_LEAD_S): its tiles ahead of the car measured that much nearer for the
+  -- groups' caps (GROUP_MAX_M), so a door / hydrant / sign shows seconds ahead at any speed, not 120-200 m out
+  local leadM, lhx, lhy = 0, 0, 0
+  local psp = player.speed or 0
+  if M.PROP_LEAD_S > 0 and psp > M.PROP_LEAD_MIN_MS and psp < 150 then
+    leadM = math.min(M.PROP_LEAD_MAX_M, psp * M.PROP_LEAD_S)
+    lhx, lhy = (player.vx or 0) / psp, (player.vy or 0) / psp
+  end
   local nOrder = 0
   for li = 1, #tileList do
     local key = tileList[li]
@@ -1656,29 +1704,49 @@ function M.update(anchorId, player, view, frameMs, fill)
       local dCar = boxDist(player, t)
       local dist = view and math.min(boxDist(view, t), dCar) or dCar
       local want = tileThreshold(dist, t)
-      local band = groupBand(t, dist)
-      local near = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M) or nearFocus(t) or false
+      local capD = dist
+      if leadM > 0 and t.furn and (t.cx - player.x) * lhx + (t.cy - player.y) * lhy > -(t.half or 128) then
+        capD = math.max(0, dist - leadM)
+      end
+      local band = groupBand(t, capD)
+      local nearD = dCar <= M.SOLID_M or (t.near and dCar <= M.SOLID_M + M.SOLID_HYST_M)
+      local isBehind = nearD and behind(t)
+      -- (a tile within SOLID_M kept from solid only by BEHIND: its items made solid again are all sent with a box,
+      -- however far, until it leaves SOLID_M: the car turned back to it)
+      if isBehind then t.restore = true elseif not nearD then t.restore = nil end
+      local mine = nearD and not isBehind
+      local near = mine or nearFocus(t) or false
+      t.byFocus = (near and not mine) or nil      -- (solid for another player's car only: every item sent with a box)
       if t.moved or want ~= t.shown or band ~= t.band or near ~= t.near or t.pending then
         nOrder = nOrder + 1
         oKeys[nOrder], oD[nOrder] = key, dist
-        oWant[nOrder], oBand[nOrder], oNear[nOrder] = want, band, near
+        oWant[nOrder], oBand[nOrder], oNear[nOrder], oCapD[nOrder] = want, band, near, capD
         oSort[nOrder] = M.orderKey(dist, nOrder)
       end
     end
     ::continue::
   end
   for i = nOrder + 1, passOrder.n do
-    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i] = nil, nil, nil, nil, nil, nil
+    oKeys[i], oD[i], oSort[i], oWant[i], oBand[i], oNear[i], oCapD[i] = nil, nil, nil, nil, nil, nil, nil
   end
   passOrder.n = nOrder
   table.sort(oSort)
+  -- a tile near the car with work left (its rows not all made): the pass's time limit raised to NEAR_URGENT_MS (0: off)
+  if M.NEAR_URGENT_MS > 0 and nOrder > 0 and oD[oSort[1] % ORDER_SLOTS] <= M.NEAR_URGENT_M then
+    limit = math.max(limit, M.NEAR_URGENT_MS)
+  end
   local nearMade = false
+  local madeBoxes, cb = nil, nil            -- (boxes { x0, y0, x1, y1 } round the solid items made, one a tile)
   local rowsScanned = 0
   local function finish()
     M.lastRows = rowsScanned                -- (diagnostics)
     if nearMade then
       local ok, roads = pcall(require, 'beamngEarth/roads')
-      if ok and roads.requestCollision then roads.requestCollision() end
+      if ok and roads.requestCollision then
+        roads.requestCollision()
+        for _, b in ipairs(madeBoxes or {}) do roads.requestCollision({ b[1], b[2], 0, b[3], b[4], 0 }) end
+      end
+      nearMade, madeBoxes, cb = false, nil, nil
     end
   end
   -- a pass over a tile's rows stopped (its frame's time or items, or no Forest yet): the next pass for the same targets
@@ -1702,7 +1770,8 @@ function M.update(anchorId, player, view, frameMs, fill)
     local at = oSort[oi] % ORDER_SLOTS
     local dist = oD[at]
     local want, band, near = oWant[at], oBand[at], oNear[at]
-    t, fd = tiles[oKeys[at]], nil
+    local capDist = oCapD[at] or dist
+    t, fd, cb = tiles[oKeys[at]], nil, nil
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1735,12 +1804,12 @@ function M.update(anchorId, player, view, frameMs, fill)
           for _, limit in ipairs(M.TILE_CAP) do
             if dist <= limit[1] then rowCap = limit[2]; break end
           end
-          if cap and dist > cap then
+          if cap and capDist > cap then
             r = 2
           elseif not rowCap or t.n <= rowCap then
             r = 0
           end
-        elseif cap and dist > cap then
+        elseif cap and capDist > cap then
           r = 2     -- this group is not shown this far out
         end
         -- the far clumps beyond CLUMP_M, the trees they stand for within it
@@ -1770,7 +1839,23 @@ function M.update(anchorId, player, view, frameMs, fill)
             if t.made[i] then liveItems = liveItems + 1 end
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
-            if solid then nearMade = true end
+            if solid then
+              nearMade = true
+              local x, y = itemPos and itemPos.x, itemPos and itemPos.y   -- (where makeItem put it)
+              if t.made[i] and x and (t.restore or t.byFocus
+                  or (x - player.x) ^ 2 + (y - player.y) ^ 2 <= M.CLOSE_M * M.CLOSE_M) then
+                if not cb then
+                  cb = { x, y, x, y }
+                  madeBoxes = madeBoxes or {}
+                  madeBoxes[#madeBoxes + 1] = cb
+                else
+                  if x < cb[1] then cb[1] = x end
+                  if y < cb[2] then cb[2] = y end
+                  if x > cb[3] then cb[3] = x end
+                  if y > cb[4] then cb[4] = y end
+                end
+              end
+            end
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
           else skipped = skipped or i end          -- another frame (this one's shapes are full)
@@ -1799,7 +1884,8 @@ function M.update(anchorId, player, view, frameMs, fill)
   if fill and frameMs and M.WARM_PER_PASS > 0 and not warmShapes(player, limit, elapsed) then dirty = true end
   if frameMs and everN ~= savedN then M.saveShapes(false) end
   -- nothing changed this frame: a spare Forest made for the pool (its ~9 ms alone, not in a frame of items)
-  if budget == M.PER_FRAME * M.EVERY_N and newForests == 0 and #pool < M.spareWanted(frameMs) then
+  if (budget == M.PER_FRAME * M.EVERY_N or M.POOL_SPARE_DRIVE > 0 and newShapes == 0) and newForests == 0
+      and #pool < M.spareWanted(frameMs) then
     pool[#pool + 1] = newForest():getID()
   end
 end
@@ -1833,6 +1919,64 @@ function M.countItems()
   local items = 0
   for _, t in pairs(tiles) do for _ in pairs(t.made) do items = items + 1 end end
   return items
+end
+
+-- keepup.lua (a debug recorder): the rows within r of (px, py) a tree pass should show there now and are not made
+-- ({ key, i, group, x, y, reason }; reason: 'flush' a moved geotile being made again, 'pending' its pass not done,
+-- '' otherwise). The pass's own rules for a row (M.update), the car's distance for the tile's (no camera).
+function M.keepupMissing(px, py, r)
+  local out = {}
+  for li = 1, #tileList do
+    local key = tileList[li]
+    local t = tiles[key]
+    local h = t.half or 128
+    local bx = math.max(math.abs(px - t.cx) - h, 0)
+    local by = math.max(math.abs(py - t.cy) - h, 0)
+    local dist = math.sqrt(bx * bx + by * by)
+    if dist <= r and not t.drop and (t.geo or not t.ghost) then
+      local want = tileThreshold(dist, t)
+      local f, s, names = t.f, t.s, t.groups or GROUPS
+      local pl = t.geo and t.pl
+      local lx, ly, ax, ay = px, py, 1, 0
+      if pl then                      -- (the car in the tile's frame, for a quick test of each row)
+        local ox, oy = geotile.apply(pl, 0, 0, pl.pz)
+        local ex, ey = geotile.apply(pl, 1, 0, pl.pz)
+        ax, ay = ex - ox, ey - oy
+        lx = (px - ox) * ax + (py - oy) * ay
+        ly = -(px - ox) * ay + (py - oy) * ax
+      end
+      local r2 = (r + 5) * (r + 5)
+      for i = 1, t.n do
+        local b = (i - 1) * s
+        local x, y = f[b + F_X], f[b + F_Y]
+        if (x - lx) * (x - lx) + (y - ly) * (y - ly) <= r2 and not t.made[i] then
+          local g = names[f[b + F_GROUP] + 1]
+          local rk = f[b + F_RANK]
+          local cap = g and M.GROUP_MAX_M[g]
+          if M.isBarrier(g) then
+            local rowCap
+            for _, lim in ipairs(M.TILE_CAP) do if dist <= lim[1] then rowCap = lim[2]; break end end
+            if cap and dist > cap then rk = 2 elseif not rowCap or t.n <= rowCap then rk = 0 end
+          elseif cap and dist > cap then rk = 2 end
+          if g and M.FAR_ONLY[g] then
+            if dist <= M.CLUMP_M then rk = 2 end
+          elseif f[b + F_SCALE] < 0 and dist > M.CLUMP_M then rk = 2 end
+          if g and (M.groupOff[g] or not M.CATALOG[g]) then rk = 2 end
+          if rk < want and g and (M.suppress or next(M.hiders)) and hidden(g, x, y, t.anchor, t, f[b + F_Z]) then rk = 2 end
+          if rk < want then
+            local wx, wy = x, y
+            if pl then wx, wy = geotile.apply(pl, x, y, f[b + F_Z]) end
+            local ddx, ddy = wx - px, wy - py
+            if ddx * ddx + ddy * ddy <= r * r then
+              out[#out + 1] = { key = key, i = i, group = g or '?', x = wx, y = wy,
+                reason = t.flush and 'flush' or (t.moved and 'moved') or (t.pending and 'pending') or '' }
+            end
+          end
+        end
+      end
+    end
+  end
+  return out
 end
 
 function M.status()

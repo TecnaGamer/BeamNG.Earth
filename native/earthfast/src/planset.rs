@@ -20,6 +20,7 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::gradesep::np_interp;
 use crate::junctionsnap::np_sum;
+use crate::gradebins::STEEP;
 
 /// np.maximum / np.minimum: a NaN either side wins.
 #[inline]
@@ -611,7 +612,8 @@ impl Ord for Step {
 /// _dedupe_plan; plans under 2 vertices left out). Plans (xy, off, z); bank, widen: the plans' arrays, plan j's
 /// bank_off[j]..bank_off[j + 1] (has_bank[j] false: none, zeros), widen's the same. numpy's concatenation of them taken
 /// as it is: a plan's bank as long as it is (trim_side_mouths keeps the untrimmed plan's), read at the segments' vertex
-/// positions in the concatenated plans (as PlanPack's bk[ia]: one longer shifts the plans after it). half, road_half (plans,); rid (plans,): its road (-1: none); rank (plans,); abut (plans, 2); steep (plans,);
+/// positions in the concatenated plans (as PlanPack's bk[ia]: one longer shifts the plans after it). half, road_half (plans,); rid (plans,): its road (-1: none); rank (plans,); abut (plans, 2); steep (plans,): flags,
+/// STEEP (a pass road's) and OPEN_TUNNEL (a tunnel's open section: gradebins), the segments' st;
 /// bbox (plans, 4); cut (c, 6) the plans' cut rows, plan j's cut_off[j]..cut_off[j + 1] (has_cut[j] false: it has
 /// none); then grading's constants. Returns a dict of PlanPack's attributes.
 #[pyfunction]
@@ -623,7 +625,7 @@ pub fn plan_pack<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyRe
                       has_widen: PyReadonlyArray1<'py, bool>, half: PyReadonlyArray1<'py, f64>,
                       road_half: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>,
                       rank: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray2<'py, bool>,
-                      steep: PyReadonlyArray1<'py, bool>, bbox: PyReadonlyArray2<'py, f64>,
+                      steep: PyReadonlyArray1<'py, u8>, bbox: PyReadonlyArray2<'py, f64>,
                       cut: PyReadonlyArray2<'py, f64>, cut_off: PyReadonlyArray1<'py, i64>,
                       has_cut: PyReadonlyArray1<'py, bool>, dupe_m: f64,
                       cont_cos_min: f64, cont_join: f64, link_cos_min: f64, abut_near: f64, t_max: f64,
@@ -644,7 +646,7 @@ fn read_pack_in<'py>(np_: usize, bank: &PyReadonlyArray1<'py, f64>, bank_off: &P
                      widen_off: &PyReadonlyArray1<'py, i64>, has_widen: &PyReadonlyArray1<'py, bool>,
                      half: &PyReadonlyArray1<'py, f64>, road_half: &PyReadonlyArray1<'py, f64>,
                      rid: &PyReadonlyArray1<'py, i64>, rank: &PyReadonlyArray1<'py, i64>,
-                     abut: &PyReadonlyArray2<'py, bool>, steep: &PyReadonlyArray1<'py, bool>,
+                     abut: &PyReadonlyArray2<'py, bool>, steep: &PyReadonlyArray1<'py, u8>,
                      bbox: &PyReadonlyArray2<'py, f64>, cut: &PyReadonlyArray2<'py, f64>,
                      cut_off: &PyReadonlyArray1<'py, i64>, has_cut: &PyReadonlyArray1<'py, bool>)
                      -> PyResult<PackIn> {
@@ -701,7 +703,7 @@ struct PackIn {
     rid: Vec<i64>,
     rank: Vec<i64>,
     abut: Vec<[bool; 2]>,
-    steep: Vec<bool>,
+    steep: Vec<u8>,
     bbox: Vec<[f64; 4]>,
 }
 
@@ -899,7 +901,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         }
         // a pass road's legs between its hairpins' apexes count as roads of their own (roads.hairpin_apex_rows)
         for (r, row) in rows.iter().enumerate() {
-            if steep[row.k] && nseg[r] >= 2 && row.xy.len() >= 3 {
+            if steep[row.k] & STEEP != 0 && nseg[r] >= 2 && row.xy.len() >= 3 {
                 let v = numpy::ndarray::ArrayView2::from_shape((row.xy.len(), 2), row.xy.as_flattened()).unwrap();
                 let m = crate::tight_bends_core(v, span_m, turn_deg);
                 let mut apex = Vec::new();
@@ -1045,7 +1047,7 @@ fn pack_core(p: &Plans, inp: &PackIn, k: &PackConsts) -> Result<PackOut, String>
         let mut lastv = vec![false; ns];
         for r in 0..n {
             for _ in 0..nseg[r] {
-                st.push(steep[rows[r].k] as u8);
+                st.push(steep[rows[r].k]);
             }
             if nseg[r] > 0 {
                 first[s0[r]] = true;
@@ -1083,7 +1085,7 @@ pub fn plan_merge<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyR
                        has_widen: PyReadonlyArray1<'py, bool>, half: PyReadonlyArray1<'py, f64>,
                        road_half: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>,
                        rank: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray2<'py, bool>,
-                       steep: PyReadonlyArray1<'py, bool>, bbox: PyReadonlyArray2<'py, f64>,
+                       steep: PyReadonlyArray1<'py, u8>, bbox: PyReadonlyArray2<'py, f64>,
                        cut: PyReadonlyArray2<'py, f64>, cut_off: PyReadonlyArray1<'py, i64>,
                        has_cut: PyReadonlyArray1<'py, bool>, wmax: PyReadonlyArray1<'py, f64>, weld: bool, trim: bool,
                        join_m: f64, max_step: f64, taper: f64, reach: f64, ramp_m: f64, dupe_m: f64,

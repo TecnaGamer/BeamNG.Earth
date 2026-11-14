@@ -26,8 +26,12 @@ TINY_MAPDATA_MB = 128       # (a Baltimore road tile's cells: ~124 MB)
 SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with one the road tiles never caught up)
 # A desktop's road-tile processes by its threads and memory (each ~1-1.5 GB): driving off right after a teleport into
 # Manhattan at 50 mph, 2 had the road under the car for the first ~15 s and solid ~27 s after, 4 at ~6 s and ~15 s,
-# at the same frame rate (a 16-thread PC, 2026-10-25)
-ROAD_PROCESSES_BY_CPU = ((12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
+# at the same frame rate (a 16-thread PC, 2026-10-25). Six on a machine with 20+ threads and 32+ GB: a game-less cold
+# 40 mph Midtown drive on the 16-thread PC with 6 (the PC loaded by another game session): the road ahead median
+# 193 -> 361 m, on-route tiles late by 15.2 -> 3.8 s (median), the server's memory +1.9 GB (mean; peak 19.2 -> 21.9 GB),
+# its CPU the same; not on 16 threads, where the game's own frame rate beside them is not measured yet (2026-11-13).
+# The server's RAM limit caps them (earthd machine_profile: budget.desktop_sizes)
+ROAD_PROCESSES_BY_CPU = ((20, 32.0, 6), (12, 24.0, 4), (8, 16.0, 3))     # (threads at least, GB at least, processes)
 SMALL_FAR_K = 0.8           # the far field's refinement factors (farfield.K_TABLE) times this: 204 tiles for 332
 SMALL_FAR_TEX = 256         # px of the far tiles' textures at every level (512 from L2 on a desktop)
 ARENA_MAX = 2               # glibc malloc arenas a process (every profile): one per thread kept freed memory ...

@@ -41,6 +41,24 @@ def _siblings(usable=None):
     return sorted(groups.items())
 
 
+FEW_CORES = 4               # a machine of this many physical cores or fewer (a Steam Deck): native_threads' rule
+
+
+def native_threads(server_cpus):
+    """The cap on the native kernels' threads per call (earthfast par.rs, BNGE_NATIVE_THREADS) for the server's CPU set,
+    or None for no cap of its own (the kernels stop at the process's CPU set and at 8 anyway). On a machine of FEW_CORES
+    physical cores or fewer, one thread per physical core of the server's set: the hyperthread siblings are left to the
+    server's other processes, whose kernels may run at the same time (a Steam Deck: 2 a call)."""
+    if not server_cpus:
+        return None
+    try:
+        if len(_siblings()) > FEW_CORES:
+            return None
+        return max(1, len(_siblings(sorted(server_cpus))))
+    except (OSError, ValueError):
+        return None
+
+
 def split(share=SERVER_SHARE):
     """(server CPU set, game CPU set): the last cores (with their hyperthread siblings) for the server."""
     cores = _siblings()

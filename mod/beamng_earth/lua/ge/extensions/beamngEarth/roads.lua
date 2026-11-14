@@ -104,10 +104,52 @@ M.NEED_HARD_MIN_M = 30
 -- rest (on a Steam Deck at 80 mph in Phoenix the import queue grew to 140 behind ~20 ms imports, and an I-10 overpass's
 -- deck turned solid only as the car reached it, behind the sidewalks' and buildings' colliders of the same tiles)
 M.DRIVE_FIRST_M = 400
+-- A walk whose nextWalk key (m: distance, or along the path ahead when fast) is within this is a 'near' unit of the
+-- governor's lanes (always first); the rest of a place's meshes share with the far tiles while those wait (2026-11-13:
+-- a cached Fells Point's far field waited ~10 s behind every building and sidewalk of the place)
+M.NEAR_FIRST_M = 400
 -- ... and one the car reaches within URGENT_S (150 m at least) is made at once, whatever the governor's budget (its cost
 -- still charged: what follows waits), one every URGENT_EVERY_FRAMES at most: at ~20 ms an import on a Steam Deck, the
 -- 2-4 ms budget let ~3 a second through, fewer than a city's tiles bring at 80 mph
 M.URGENT_EVERY_FRAMES = 3
+-- The road import queue on a Steam Deck (2026-11-14, 45 mph drives in Fells Point and Des Moines: the road surface
+-- missing under the car in 23 % of checks with its tile's data in, parts drawn a median 4.3 s (p90 13.8 s) after their
+-- data, the queue at 37-106; ~1.2 meshes a second made, waiting on the governor's bucket in 98 % of the frames they
+-- waited, while the whole drive's road meshes cost ~3 s of Lua):
+--  * KIND_SPLIT: each class of mesh its own governor kind (walkKind: estimate and engine share): one 'roadWalk' estimate
+--    for all, dragged to 8-17 ms by the drawn buildings and the far geotiles' 30-100 ms parts, held a 5 ms sidewalk
+--    collider back as if it cost that much;
+--  * DUE: what the car reaches within DUE_S (DUE_MIN_M at least) is due: the governor's target goes up for it and a due
+--    mesh that waits for tokens reserves them against the far tiles' units (governor.lua setDue / reserve);
+--  * ORDER_MS: from this speed up nextWalk ranks by the way ahead (behind the car last), not only when fast (FAST_MS:
+--    at 45 mph the tiles behind ranked with those ahead);
+--  * RENDER_AFTER_M: a render-only mesh (drawn buildings, rails, wires) ranks like a collider this much farther, no
+--    longer after every collider of the place (a building beside the car waited for a collider 500 m off); nil: after
+--    them all, as before;
+--  * URGENT_SURFACES: the drawn road and sidewalks of the tile the car is in, and of those it reaches within
+--    URGENT_SURFACE_S (URGENT_SURFACE_MIN_M at least), are made at once like an urgent deck (urgentWalk).
+M.KIND_SPLIT = true
+M.WALK_KIND = { road = 'roadSurf', walk = 'roadSurf', walkcol = 'roadCol', bldcol = 'roadCol', railcol = 'roadCol',
+  railcol2 = 'roadCol', railcol3 = 'roadCol', buscol = 'roadCol', barrier = 'roadCol', deck = 'roadDrive',
+  tunnel = 'roadDrive' }
+M.DUE = true
+M.DUE_S = 10
+M.DUE_MIN_M = 150
+M.ORDER_MS = 5
+M.RENDER_AFTER_M = 200
+M.URGENT_SURFACES = true
+M.URGENT_SURFACE_S = 4
+M.URGENT_SURFACE_MIN_M = 40
+-- The governor kind of a walkQ mesh (KIND_SPLIT above), and the far geotiles' parts'.
+function M.walkKind(what)
+  if not M.KIND_SPLIT then return 'roadWalk' end
+  return M.WALK_KIND[what] or 'roadWalk'
+end
+local function farKind() return M.KIND_SPLIT and 'roadFar' or 'roadWalk' end
+-- The distance (m) within which a queued mesh is due at speed v (m/s).
+function M.dueReach(v)
+  return math.max(M.DUE_MIN_M, (v or 0) * M.DUE_S)
+end
 -- No be:reloadCollision for SWAP_QUIET_FRAMES frames and SWAP_QUIET_MS after a terrain .ter swap (M.terrainSwapped): the
 -- swapped block's collision follows by itself a frame later, and a rebuild in between took the block before its
 -- heights were in: flat ground at z 0 for a second, and a ball at 180 mph sank under the real ground and fell through
@@ -125,11 +167,38 @@ M.SWAP_QUIET_MS = 150
 -- pull-away. Urgent rebuilds (a collider reached within URGENT_S, the hold) still run at once.
 M.ROLL_MIN_MS = 0.1
 M.ROLL_DEFER_S = 30
+-- No colliders behind a moving car (BEHIND, 2026-11-14; Steam Deck 45 mph Fells Point drive, a census at each of 29
+-- rebuilds: 85 % of the tiles' colliders (28 of 33 sidewalk, 33 of 38 building meshes) and ~65 % of the solid trees
+-- and props were of tiles behind the car, kept until ~670 m behind by the all-round COLLIDE_M + UNCOLLIDE_M rule. A
+-- rebuild's cost on the Deck follows that geometry, not the object count: its Lua (the engine gathering the colliders)
+-- ~3 ms + ~4.4 ms per MB of unique collision mesh, the physics thread's tree build ~2 ms + ~0.19 ms per 1,000
+-- triangles, over the drive's 89 rebuilds; the colliding instances themselves ~0.2 ms per 1,000).
+-- With the car moving at BEHIND_MIN_MS or more (its heading then kept BEHIND_SLOW_S after it slows: red lights, a stop; dropped
+-- at once when it moves back along it at 1 m/s or more, jumps, or a drop hold starts), a tile whose near edge (along
+-- the heading) is BEHIND_M or more behind the car gets no colliders, and one made already goes once that is
+-- BEHIND_M + BEHIND_HYST_M (its deletion far: no prompt rebuild for it, its stale collision behind the car harms nobody).
+-- trees.lua takes the same heading for its solid trees and props (trees.BEHIND_M). Other cars' collision foci keep theirs.
+M.BEHIND = true
+M.BEHIND_MIN_MS = 8
+M.BEHIND_M = 100
+M.BEHIND_HYST_M = 60
+M.BEHIND_SLOW_S = 120
+M.BEHIND_JUMP_M = 40       -- the car this much farther in one COLLIDE_CHECK_S than its speed takes it: a jump
+-- ... and, with that heading, the colliders ahead (within 45 degrees of it) made AHEAD_LEAD_S of driving out
+-- (AHEAD_MAX_M at most; never less than COLLIDE_M / COLLIDE_LEAD_S give): every rebuild makes what is made solid, so
+-- the next one is due when a collider made after it comes within needReach, about (made reach - needReach) / speed
+-- later (13 s at 45 mph with COLLIDE_M's 320 m: 26 of a drive's 29 rebuilds). 0: off.
+M.AHEAD_LEAD_S = 0
+M.AHEAD_MAX_M = 600
 M.RELOAD_ROOM_MS = 8.0
 M.RELOAD_WAIT_FRAMES = 3
 local reloadWaits = 0
 
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
+local extBoxes = {}        -- boxes { x0, y0, z0, x1, y1, z1 } round other modules' colliders made since the last rebuild
+                           -- (M.requestCollision)
+local farDeletes = {}      -- ids of colliders dropped far from the car or behind it (updateCollideRange): their deletion
+                           -- waits for any later rebuild (deletesDirty), never a prompt one
 local CUSTOM_MATERIALS_PATH = '/levels/beamng_earth/art/shapes/beamngEarth/three_dmr.materials.json'
 local customMaterialsNeverLoaded = {}   -- sentinel: matches no readFile() result, so the very first spawnCustom always loads
 local customMaterialsContent = customMaterialsNeverLoaded   -- three_dmr.materials.json (3dmr custom meshes): its
@@ -139,7 +208,7 @@ local customMaterialsContent = customMaterialsNeverLoaded   -- three_dmr.materia
 local parked = {}          -- walkQ entries of colliders whose tile is not near enough yet
 local sinceCollideCheck = stopwatch.new()
 local held = {}            -- walkQ entries of colliding meshes held while the player is in their boxes
-local noteNewColliders, playerIn, releaseHeld, objectBox, logReload
+local noteNewColliders, playerIn, releaseHeld, objectBox, logReload, extGap
 local tiles = {}            -- key "a:tx_ty" -> { anchor, objs = { DecalRoad ids }, queued = n, walk = TSStatic id,
                             --   road = TSStatic id }
 local walkQ = {}            -- { key, walk = {shape, pos}, what = 'walk' | 'road' } FIFO
@@ -496,6 +565,7 @@ local lastSpeed = 0
 local holdActive = false
 local swapQuiet = nil       -- { frames left, stopwatch } after a terrain swap (M.terrainSwapped)    -- core's drop hold: the game paused, the car frozen where it was dropped (M.setHold)
 local lastDir = nil         -- unit { x, y } of the player's motion at FAST_MS or more, else nil
+local orderDir = nil        -- ... at ORDER_MS or more (nextWalk, urgentWalk)
 -- The collision radius towards tile centre (cx, cy) from the player at p: lastRadius ahead of a fast car (within 45
 -- degrees of its heading, and its own tile), COLLIDE_M min beside and behind it; lastRadius all round when slow.
 function M.radiusToward(p, cx, cy, radius, dir)
@@ -505,13 +575,58 @@ function M.radiusToward(p, cx, cy, radius, dir)
   if d <= M.TILE_M or (dx * dir.x + dy * dir.y) >= 0.7071 * d then return radius end
   return math.min(radius, M.COLLIDE_M[1])
 end
+-- Pure: how far (m) behind a car at p heading along unit dir the near edge of the square of half-side half centred on
+-- (cx, cy) is, along dir (<= 0: level with the car or ahead of it).
+function M.behindBy(p, dir, cx, cy, half)
+  local along = (cx - p.x) * dir.x + (cy - p.y) * dir.y
+  return -along - half * (math.abs(dir.x) + math.abs(dir.y))
+end
+
+-- Pure: the heading kept for the BEHIND rule after a COLLIDE_CHECK_S poll. st = { dir, slowMs, x, y } (updated in place);
+-- (x, y): the car now, (vx, vy): its velocity, dtMs since the last poll, hold: a drop hold is on.
+function M.behindStep(st, x, y, vx, vy, dtMs, hold)
+  local sp = math.sqrt(vx * vx + vy * vy)
+  local jumped = st.x ~= nil and dtMs > 0 and
+    math.sqrt((x - st.x) ^ 2 + (y - st.y) ^ 2) > sp * dtMs / 1000 + M.BEHIND_JUMP_M
+  st.x, st.y = x, y
+  if hold or jumped then st.dir, st.slowMs = nil, 0; return st end
+  if sp >= M.BEHIND_MIN_MS then
+    st.dir, st.slowMs = { x = vx / sp, y = vy / sp }, 0
+  elseif st.dir then
+    if sp >= 1 and vx * st.dir.x + vy * st.dir.y < -0.5 * sp then st.dir, st.slowMs = nil, 0   -- (back along it)
+    else
+      st.slowMs = (st.slowMs or 0) + dtMs
+      if st.slowMs > M.BEHIND_SLOW_S * 1000 then st.dir, st.slowMs = nil, 0 end
+    end
+  end
+  return st
+end
+local behindState = { dir = nil, slowMs = 0 }
+-- The player's kept heading for the BEHIND rule (unit { x, y }; nil: none, colliders all round). trees.lua reads it.
+function M.behindDir() return M.BEHIND and behindState.dir or nil end
+
+-- Is tile t behind the moving car (BEHIND: no colliders made; with extra, the drop and dirt tests, BEHIND_HYST_M more)?
+local function behindTile(p, t, extra)
+  local dir = M.behindDir()
+  if not dir then return false end
+  return M.behindBy(p, dir, t.cx, t.cy, M.TILE_M * 0.5) >= M.BEHIND_M + (((extra or 0) > 0) and M.BEHIND_HYST_M or 0)
+end
+
 -- Is tile t's centre within the collision radius of the player? (no car or no centre: yes)
 function M.collideNear(t, extra)
   if not t or not t.cx then return true end
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return true end
-  local r = M.radiusToward(veh:getPosition(), t.cx, t.cy, lastRadius, lastDir)
-  if M.nearPlayer(vec3(t.cx, t.cy, 0), r + (extra or 0) + M.TILE_M * 0.71) then return true end
+  local p = veh:getPosition()
+  local r = M.radiusToward(p, t.cx, t.cy, lastRadius, lastDir)
+  local bdir = (M.AHEAD_LEAD_S or 0) > 0 and M.behindDir()
+  if bdir then
+    local ahead = math.min(M.AHEAD_MAX_M, lastSpeed * M.AHEAD_LEAD_S)
+    if ahead > r then r = math.max(r, M.radiusToward(p, t.cx, t.cy, ahead, bdir)) end
+  end
+  if not behindTile(p, t, extra) and M.nearPlayer(vec3(t.cx, t.cy, 0), r + (extra or 0) + M.TILE_M * 0.71) then
+    return true
+  end
   -- or near another vehicle's collision island (collisionfoci.lua: other players' cars, traffic)
   return #foci > 0 and collisionfoci.near(foci, t.cx, t.cy, (extra or 0) + M.TILE_M * 0.71) or false
 end
@@ -533,14 +648,20 @@ end
 
 -- Every COLLIDE_CHECK_S: parked colliders whose tile came near queued; far tiles' colliders dropped.
 local function updateCollideRange()
-  if sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
+  local dtMs = sinceCollideCheck()
+  if dtMs < M.COLLIDE_CHECK_S * 1000 then return end
   sinceCollideCheck = stopwatch.new()
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   local v = veh and veh.getVelocity and veh:getVelocity()
   local sp = v and math.sqrt(v.x * v.x + v.y * v.y) or 0
+  if veh and v then
+    local pos = veh:getPosition()
+    M.behindStep(behindState, pos.x, pos.y, v.x, v.y, dtMs, holdActive)
+  else behindState.dir, behindState.slowMs, behindState.x = nil, 0, nil end
   lastRadius = M.collideRadius(sp)
   lastSpeed = sp
   lastDir = sp >= M.FAST_MS and { x = v.x / sp, y = v.y / sp } or nil
+  orderDir = sp >= math.min(M.ORDER_MS or M.FAST_MS, M.FAST_MS) and sp > 0 and { x = v.x / sp, y = v.y / sp } or nil
   if #parked > 0 then
     local keep = {}
     for _, q in ipairs(parked) do
@@ -555,6 +676,7 @@ local function updateCollideRange()
     if reloads >= d[1] then dirtyAt[sq] = nil
     elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; markDirty('spot') end
   end
+  local dropped = nil       -- ids of colliders dropped here (BEHIND / UNCOLLIDE_M): none of them is due any more
   for key, t in pairs(tiles) do
     if t.colDirty then      -- deferred collider dirt (markTileCollider): solid after any rebuild, promoted near
       if reloads >= t.colDirty then t.colDirty = nil
@@ -562,11 +684,19 @@ local function updateCollideRange()
     end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
-        if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
+        if t[what] then
+          farDeletes[t[what]] = true; dropped = dropped or {}; dropped[t[what]] = true
+          deleteQ[#deleteQ + 1] = t[what]; t[what] = nil
+        end
         if not t.ghost then parked[#parked + 1] = q end   -- a ghost's queue entries are the old frame's
       end
       t.cq = nil
     end
+  end
+  if dropped and #newColliders > 0 then
+    local keep = {}
+    for _, c in ipairs(newColliders) do if not dropped[c[1]] then keep[#keep + 1] = c end end
+    newColliders = keep
   end
 end
 
@@ -651,6 +781,9 @@ local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
 M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
+
+local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
+local swapBack = nil         -- a rollback's collision still to come: { reloaded, frames } (M.swapUndo)
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
 M.geoKey = geoKey
@@ -930,6 +1063,7 @@ function M.onGeoTile(msg, currentAnchor, a)
   end
   geoRows(key, t, data)
   queueGeoParts(key, t, data)
+  if M.onKeepupTile then M.onKeepupTile(t, false) end
   M.geoStats.tiles = M.geoStats.tiles + 1
   return true
 end
@@ -940,11 +1074,26 @@ function M.onSkin(msg, currentAnchor)
   local t = tiles[geoKey(msg.key)]
   local function release()
     if type(msg.slots) == 'table' then for w in pairs(msg.slots) do slotDrop(msgSlot(msg, w)) end end
+    -- (a skin of the running generation swap that cannot be staged: the swap must not commit without it)
+    if msg.swap ~= nil and swapState and swapState.gen == msg.swap then
+      swapState.failed = 'skin ' .. tostring(msg.key) .. ' could not be staged'
+    end
   end
   if not t or msg.anchorId ~= currentAnchor then release(); return false end
   local ok, data = true, msg.data
   if type(data) ~= 'table' then ok, data = pcall(jsonDecode, readFile(msg.path) or '') end
   if not ok or type(data) ~= 'table' then release(); lastError = 'unreadable road skin ' .. tostring(msg.path); return false end
+  -- a generation swap's skin (msg.swap, M.swapBegin): staged. Its parts are made hidden and without collision, the
+  -- old skin stays as it is, and M.swapCommit shows them all in the frame the swap's terrain is committed
+  local stage = msg.swap ~= nil and swapState ~= nil and swapState.gen == msg.swap
+  if msg.swap ~= nil and not stage then release(); return false end     -- (a swap given up meanwhile: not wanted)
+  if stage then
+    swapState.skins = swapState.skins + 1
+    if not swapState.tiles[t] then
+      swapState.tiles[t] = { skin = t.skin, walk = t.colliders.walk, walkcol = t.colliders.walkcol,
+        wantWalk = t.colWant.walk, wantWalkcol = t.colWant.walkcol }
+    end
+  end
   -- the previous skin: its objects kept as the old ones (swapped as the new are made), its queue entries gone
   t.oldSkin = t.oldSkin or {}
   for _, w in ipairs(M.SKIN_WHATS) do
@@ -979,10 +1128,12 @@ function M.onSkin(msg, currentAnchor)
       if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
       t.skin[what] = { shape = w.shape, pos = w.pos }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
-        renderOnly = what == 'road' or (leanWalk and what == 'walk') }
+        renderOnly = what == 'road' or (leanWalk and what == 'walk'), stage = stage and msg.swap or nil }
       if not q.renderOnly then t.colWant[what] = true end
       t.skin.pending = t.skin.pending + 1
-      if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
+      if stage then swapState.expect = swapState.expect + 1 end
+      -- (a staged part is always made now, far colliders too: all of the swap's ground is committed in one frame)
+      if stage or q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     else
       slotDrop(sl)
     end
@@ -991,11 +1142,177 @@ function M.onSkin(msg, currentAnchor)
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = geoKey(msg.key), chunk = c, skin = true, tile = t } end
     t.queued = #data.chunks
   end
-  if t.skin.pending == 0 then M.dropOldSkin(t) end
+  if t.skin.pending == 0 and not stage then M.dropOldSkin(t) end
+  if M.onKeepupTile then M.onKeepupTile(t, true) end
   M.geoStats.skins = M.geoStats.skins + 1
   sinceChange = stopwatch.new()
   return true
 end
+
+-- A generation swap (server earthd Connection.stale_swap; swapgen.lua, core.lua 'swap_begin' / 'swap_end' /
+-- 'swap_abort'): the server shows a place from its last version and, once this version is built, swaps the ground that
+-- changed. NOTHING of the new ground may show or collide beside the old:
+--   staged     skins sent with `swap = gen` (onSkin): their parts are made under the governor as ever, but hidden and
+--              with collisionType None, the old skin untouched. Every part expected is counted, every part made too,
+--              and anything that goes wrong (an unreadable skin, a tile gone, a shape that cannot be made) marks the
+--              swap failed: swapStaged -> ready, failed.
+--   committed  swapCommit, the frame swapgen commits the swap's terrain: the old parts hidden and out of the collision,
+--              the new ones shown and given theirs. The old objects are KEPT (swapUndo puts them back when the terrain
+--              import fails or the collision never comes), and a collision rebuild is forced as soon as the terrain
+--              swap's quiet frames are over: swapSettled says when it ran and a frame has passed (the static
+--              collision of the new skins and the terrain's are both in effect; the car is held meanwhile, swapgen).
+--   finished   swapFinish: the old objects go (under the governor: they are hidden already).
+-- swapAbort drops what was staged before a commit: the old skin is the tile's again.
+function M.swapBegin(gen)
+  if swapState then
+    if swapState.committed then M.swapUndo(swapState.gen) else M.swapAbort(swapState.gen) end
+  end
+  swapState = { gen = gen, parts = {}, tiles = {}, skins = 0, expect = 0, made = 0 }
+end
+
+-- (ready, failed): ready once every staged part of swap gen is made (the queues hold none, every part expected was
+-- made, and skins, when given, is the number of skins staged: the server's count); failed: why it cannot be committed.
+function M.swapStaged(gen, skins)
+  if not swapState or swapState.gen ~= gen then return false, 'no such swap' end
+  if swapState.failed then return false, swapState.failed end
+  for _, q in ipairs(walkQ) do if q.stage == gen then return false end end
+  for _, q in ipairs(held) do if q.stage == gen then return false end end
+  if swapState.made ~= swapState.expect then
+    swapState.failed = string.format('%d of %d parts made', swapState.made, swapState.expect)
+    return false, swapState.failed
+  end
+  if skins ~= nil and skins ~= swapState.skins then return false end     -- (some still on their way)
+  return true
+end
+
+-- The parts staged for swap gen (0: nothing of the skins changed).
+function M.swapCount(gen)
+  return (swapState and swapState.gen == gen) and #swapState.parts or 0
+end
+
+local function oldCollide(t, w)     -- the collisionType an old skin part had (as the creation loop gave it)
+  if w == 'walkcol' then return 'Collision Mesh' end
+  if w == 'walk' and not (t.oldSkin and t.oldSkin.walkcol) then return 'Visible Mesh Final' end
+  return 'None'
+end
+
+function M.swapCommit(gen)
+  if not swapState or swapState.gen ~= gen or swapState.committed then return false end
+  local sw = swapState
+  -- the old skins' objects out of sight and out of the collision first, then the new ones in
+  for t in pairs(sw.tiles) do
+    if t.oldSkin then
+      for _, w in ipairs(M.SKIN_WHATS) do
+        local o = t.oldSkin[w] and scenetree.findObjectById(t.oldSkin[w])
+        if o then o:setHidden(true); o:setField('collisionType', 0, 'None') end
+      end
+    end
+  end
+  for _, p in ipairs(sw.parts) do
+    local o = scenetree.findObjectById(p.id)
+    if o then
+      if p.collide then o:setField('collisionType', 0, p.collide) end
+      o:setHidden(false)
+    end
+    if p.collide and p.t[p.what] == p.id then
+      markTileCollider(p.t)
+      newColliders[#newColliders + 1] = { p.id, p.q, objectBox(p.id) }
+      p.t.colAt = p.t.colAt or {}; p.t.colAt[p.what] = now()
+    end
+  end
+  markDirty('swap')
+  sw.committed, sw.reloaded, sw.frames = true, false, 0     -- (the update forces a collision rebuild: swapSettled)
+  sinceChange = stopwatch.new()
+  return true
+end
+
+-- Has the collision rebuild after swap gen's commit run, and a frame passed since (it is in effect a frame later)?
+function M.swapSettled(gen)
+  return swapState ~= nil and swapState.gen == gen and swapState.committed == true and swapState.reloaded == true
+    and swapState.frames >= 1
+end
+
+-- The commit stands: the old skins' objects go.
+function M.swapFinish(gen)
+  if not swapState or swapState.gen ~= gen or not swapState.committed then return false end
+  local sw = swapState
+  swapState = nil
+  for t in pairs(sw.tiles) do M.dropOldSkin(t) end       -- (deleted under the governor: hidden already)
+  M.geoStats.swaps = (M.geoStats.swaps or 0) + 1
+  sinceChange = stopwatch.new()
+  return true
+end
+
+local function swapRestore(sw)      -- the staged parts go, each tile's skin is the one of before again
+  local function purge(list)
+    local keep = {}
+    for _, q in ipairs(list) do if q.stage ~= sw.gen then keep[#keep + 1] = q end end
+    return keep
+  end
+  walkQ, parked, held = purge(walkQ), purge(parked), purge(held)
+  for _, p in ipairs(sw.parts) do deleteQ[#deleteQ + 1] = p.id end
+  for t, undo in pairs(sw.tiles) do
+    for _, w in ipairs(M.SKIN_WHATS) do
+      if t.slots[w] then slotDrop(t.slots[w]); t.slots[w] = nil end
+      t[w] = t.oldSkin and t.oldSkin[w] or nil
+      if t.oldSkin and t.oldSkin['s:' .. w] then t.slots[w] = t.oldSkin['s:' .. w] end
+      if t.cq then t.cq[w] = nil end
+    end
+    t.oldSkin = nil
+    t.skin = undo.skin
+    t.colliders.walk, t.colliders.walkcol = undo.walk, undo.walkcol
+    t.colWant.walk, t.colWant.walkcol = undo.wantWalk, undo.wantWalkcol
+  end
+  sinceChange = stopwatch.new()
+end
+
+-- A commit taken back (the swap's terrain could not be imported, or its collision never came): the new parts out of
+-- sight and collision, the old ones shown and colliding again as they were, then all that was staged dropped.
+function M.swapUndo(gen)
+  if not swapState or (gen ~= nil and swapState.gen ~= gen) or not swapState.committed then return false end
+  local sw = swapState
+  swapState = nil
+  for _, p in ipairs(sw.parts) do
+    local o = scenetree.findObjectById(p.id)
+    if o then o:setHidden(true); o:setField('collisionType', 0, 'None') end
+  end
+  for t in pairs(sw.tiles) do
+    if t.oldSkin then
+      for _, w in ipairs(M.SKIN_WHATS) do
+        local o = t.oldSkin[w] and scenetree.findObjectById(t.oldSkin[w])
+        if o then o:setField('collisionType', 0, oldCollide(t, w)); o:setHidden(false) end
+      end
+    end
+  end
+  swapRestore(sw)
+  markDirty('swap')
+  -- (the restored skins' collision, and a restored terrain's: rebuilt as a commit's, after the quiet frames;
+  -- swapRolledBack says when it is in effect)
+  swapBack = { reloaded = false, frames = 0 }
+  return true
+end
+
+-- Is the collision of the last rollback (swapUndo) in effect: its rebuild ran, and a frame has passed? True when no
+-- rollback is waiting.
+function M.swapRolledBack()
+  if swapBack and swapBack.reloaded and swapBack.frames >= 1 then swapBack = nil end
+  return swapBack == nil
+end
+
+-- The level is ending (or the extension): whatever swap there is is forgotten, its objects are the level's to delete.
+function M.swapCancel()
+  swapState, swapBack = nil, nil
+end
+
+function M.swapAbort(gen)
+  if not swapState or (gen ~= nil and swapState.gen ~= gen) then return false end
+  if swapState.committed then return M.swapUndo(swapState.gen) end
+  local sw = swapState
+  swapState = nil
+  swapRestore(sw)
+  return true
+end
+M._swapState = function() return swapState end
 
 -- A geotile's old skin objects go (all, or only part what: its new one is made).
 function M.dropOldSkin(t, what)
@@ -1339,7 +1656,15 @@ end
 -- Server message `bldfar_drop` {anchorId, key} (`bldsky_drop` with sky).
 function M.onFarDrop(msg, kind)
   if kind == true then kind = 'S' end
-  if geotile.isKey(msg.key) then return M.dropFarGeo(M.farGeoKey(kind or 'F', msg.key)) end
+  if geotile.isKey(msg.key) then
+    local key = M.farGeoKey(kind or 'F', msg.key)
+    local f = far[key]
+    if f and f.geo and f.kind == 'F' and M.packPending(f) then
+      f.dropWait = f.dropWait or now()   -- (its square's pack not made yet: it stays until it is, updateFarGeo)
+      return true
+    end
+    return M.dropFarGeo(key)
+  end
   local key = tileKey(msg.anchorId, (kind or '') .. msg.key)
   if not kind then farSeen[key] = nil end
   local f = far[key]
@@ -1394,6 +1719,14 @@ end
 -- and road mesh are made; a skyline tile while all 16 far buildings tiles of its square are here. Their street lamps
 -- are trees.lua geotiles (one per road geotile key, placed and moved with the trees'), shown while their tile shows.
 M.FAR_GEO = 1
+-- Far building packs (hello.farPack, server buildings.PACK_*): past the road geotiles' own far tiles the far buildings
+-- of a whole skyline square (geotile.Z - 2) come as one shape, kind 'P' (a third of a town's shape files were far
+-- buildings tiles, 2026-11-13). A pack shows until its square's 16 far tiles are all here and made (or waiting hidden);
+-- a far tile dropped while its square's pack is not made yet stays until it is (PACK_HANDOVER_S at most), and a
+-- skyline square hides under its shown pack.
+M.FAR_PACK = 1
+M.PACK_HANDOVER_S = 15
+function M.debugFar() return far end       -- (tests)
 M.farGeo = false
 function M.setFarGeo(on) M.farGeo = on and true or false end
 local function farGeoKey(kind, gkey) return tostring(kind) .. ':' .. tostring(gkey) end
@@ -1495,7 +1828,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   local h = data.h
   if old and old.geo and h ~= nil and old.h == h and not filesGone(old.parts) then
     release()
-    old.orphan, old.anchor = nil, currentAnchor
+    old.orphan, old.anchor, old.dropWait = nil, currentAnchor, nil
     M.geoStats.farKept = (M.geoStats.farKept or 0) + 1
     return true
   end
@@ -1507,7 +1840,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
     lamps = M.flatLamps(data.lamps) }
-  if k == 'S' then
+  if k == 'S' or k == 'P' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
   end
@@ -1559,9 +1892,46 @@ function M.nearShowsDeck(gkey, tk)
   return t.skin ~= nil and t.skin.road == nil and (t.skin.pending or 0) <= 0
 end
 
+-- The pack (kind 'P') of far buildings tile f's skyline square, or nil.
+local function packOf(f)
+  local z, x, y = geotile.parse(f.gkey)
+  if not z then return nil end
+  local n = M.SKY_UNIT
+  return far[farGeoKey('P', geotile.key(math.floor(x / n), math.floor(y / n), z - 2))]
+end
+-- Is far tile f's square's pack here but its shape not made yet (f's drop waits for it)?
+function M.packPending(f)
+  local pk = packOf(f)
+  if not pk then return false end
+  for _, p in pairs(pk.parts) do if not p.id then return true end end
+  return false
+end
+-- Pack f's square: are its far tiles all here and made (or waiting hidden: their road geotile shows its own)?
+function M.packCovered(f)
+  if not f.packKeys then
+    local z, x, y = f.sky[1], f.sky[2], f.sky[3]
+    if not z then return false end
+    local n = 2 ^ (geotile.Z - z)
+    f.packKeys = {}
+    for j = 0, n - 1 do
+      for i = 0, n - 1 do f.packKeys[#f.packKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+    end
+  end
+  for _, k in ipairs(f.packKeys) do
+    local ff = far[k]
+    if not ff or ff.dropWait then return false end
+    for _, p in pairs(ff.parts) do if not p.id and not p.deferred then return false end end
+  end
+  return true
+end
+
 -- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
 function M.farGeoHidden(f, sub)
+  if f.kind == 'P' then return M.packCovered(f) end
   if f.kind == 'S' then
+    local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
+    local pp = pk and pk.parts.shape
+    if pp and pp.id and not pp.hidden then return true end
     if not f.skyKeys then           -- (its square's far buildings tiles' keys, once)
       local z, x, y = f.sky[1], f.sky[2], f.sky[3]
       if not z then return false end
@@ -1581,9 +1951,24 @@ function M.farGeoHidden(f, sub)
   return M.nearShowsBuildings(p.near, p.nearKey)
 end
 
+-- LAZY_FAR_PARTS: does far part sub of f wait (not made)? Only while it would be hidden now: a road geotile still
+-- being made keeps its far buildings as the quick stand-in (the user, 2026-10-25: "load simpler versions first then
+-- higher detail version later"). (LAZY_WAIT_MAX_S: a part waiting this long is made anyway, shown or hidden by the rule.)
+M.LAZY_WAIT_MAX_S = 20
+function M.farGeoWaits(f, sub) return M.farGeoHidden(f, sub) end
+
 local function updateFarGeo(key, f)
+  if f.dropWait then       -- (a far tile whose drop waits for its square's pack: M.onFarDrop)
+    if not M.packPending(f) or now() - f.dropWait > M.PACK_HANDOVER_S * 1000 then M.dropFarGeo(key); return end
+  end
   local shown = false
   for sub, p in pairs(f.parts) do
+    local waits = p.deferred and not p.id and M.farGeoWaits(f, sub)
+    if not p.id and p.deferred and (not waits or now() - p.deferred > M.LAZY_WAIT_MAX_S * 1000) then
+      p.deferred = nil          -- (LAZY_FAR_PARTS: it would show now; made next, ahead of the other far parts)
+      p.waitedOut = waits or nil      -- (waited too long for its road geotile: made, shown or hidden by the rule)
+      table.insert(farQ, 1, key .. '#' .. sub)
+    end
     if p.id then
       local hide = M.farGeoHidden(f, sub)
       if hide ~= (p.hidden or false) then
@@ -1600,6 +1985,11 @@ end
 -- The far tiles' hide checks, round-robin: at most FAR_CHECKS_PER_FRAME a frame (all ~600 of them every frame cost
 -- ~0.85 ms of every frame while driving, 2026-10-29; a far building shown or hidden a few frames later is not seen)
 M.FAR_CHECKS_PER_FRAME = 80
+-- A far geotile's part (far buildings, skyline, far bridge piece) that would be hidden the moment it is made (its
+-- road geotile already shows its own buildings / deck, every far buildings tile under a skyline square came) is not
+-- made until it would show (2026-11-13: each a shape file of its own, ~5 ms and a first draw, for an object never seen
+-- while the car stays in town)
+M.LAZY_FAR_PARTS = true
 local farCursor = nil
 local function updateFarOne(key, f)
     if f.geo then
@@ -1642,12 +2032,15 @@ local function updateFar(gov)
     farCursor = key
     key, f = next(far, key)
   end
-  while #farQ > 0 and #walkQ == 0 and gov:try('roadWalk') do
+  while #farQ > 0 and #walkQ == 0 and gov:try(farKind(), 'mid') do
     local key = table.remove(farQ, 1)
     local gk, sub = key:match('^(.-)#(.*)$')
     local f = far[gk or key]
     local p = f and f.geo and sub and f.parts[sub]
-    if p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
+    if p and not p.id and anchorObj and M.LAZY_FAR_PARTS and not p.waitedOut and M.farGeoWaits(f, sub) then
+      p.deferred = p.deferred or now()  -- (hidden the moment it would be made: made once it would show, updateFarGeo)
+      M.geoStats.farDeferred = (M.geoStats.farDeferred or 0) + 1
+    elseif p and not p.id and anchorObj then        -- (a far geotile's part: placed as its tile is now)
       local t0 = now()
       loadMaterials()
       farPartPlace(f, p, anchorObj)
@@ -1659,7 +2052,7 @@ local function updateFar(gov)
         if p.hidden then scenetree.findObjectById(id):setHidden(true) end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge(farKind(), ms, 'mid')
       noteUnit('far' .. f.kind, ms, p.shape)
     elseif f and not f.geo and not f.id then
       local t0 = now()
@@ -1667,7 +2060,7 @@ local function updateFar(gov)
       local ok, id = pcall(createWalk, { shape = f.shape, pos = f.pos }, false)
       if ok then f.id = id; slotMade(id, f.shape) else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge(farKind(), ms, 'mid')
       noteUnit('bldfar', ms, f.shape)
     end
   end
@@ -1904,11 +2297,13 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local o = scenetree.findObjectById(did)
     if o then
       if isCollider(o) then
-        if M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then markDirty('delete') else deletesDirty = true end
+        if not farDeletes[did] and M.nearPlayer(o:getPosition(), M.DELETE_NEAR_M) then markDirty('delete')
+        else deletesDirty = true end
       end
       o:delete()
     end
     slotObjGone(did)
+    farDeletes[did] = nil
     local ms = now() - t0
     gov:charge('roadDelete', ms)
     noteUnit('delete', ms)
@@ -1922,6 +2317,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local ok, id = pcall(createChunk, q.chunk)
       if ok then t.objs[#t.objs + 1] = id else lastError = tostring(id) end
+      if ok and M.onKeepupPart then M.onKeepupPart('road', t) end
       t.queued = t.queued - 1
       local ms = now() - t0
       gov:charge('roadChunk', ms)
@@ -1936,11 +2332,29 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   step('collideRange')
   local forced = nil
   if #walkQ > 0 and sinceUrgent >= M.URGENT_EVERY_FRAMES and not (gov.isHeavyFrame and gov:isHeavyFrame()) then
-    forced = M.urgentWalk(walkQ)
+    local surface
+    forced, surface = M.urgentWalk(walkQ, gov.blocked)
+    -- (a drawn surface: only into a frame with room for it, governor.lua tryUrgent; else it waits its turn as any mesh)
+    if forced and surface and gov.tryUrgent and not gov:tryUrgent(M.walkKind(walkQ[forced].what)) then forced = nil end
   end
   sinceUrgent = sinceUrgent + 1
-  while #walkQ > 0 and (forced or gov:try('roadWalk')) do
-    local q = table.remove(walkQ, forced or M.nextWalk(walkQ))
+  local dueSaid = false
+  while #walkQ > 0 do
+    -- (lanes, governor.lua: a mesh within NEAR_FIRST_M of the car, or a forced one, is 'near'; the rest 'mid', which
+    -- shares with the far tiles while they wait)
+    local idx, key, nearest = forced, nil, nil
+    if not idx then idx, key, nearest = M.nextWalk(walkQ) end
+    local lane = (key and key > M.NEAR_FIRST_M) and 'mid' or 'near'     -- (no car: as before, unrestricted)
+    local kind = M.walkKind(walkQ[idx].what)
+    -- (DUE: the queue's nearest mesh within the due reach raises the governor's target; the next one, waiting for
+    -- tokens while due work waits, keeps them from the far tiles)
+    local due = M.DUE and nearest ~= nil and nearest <= M.dueReach(lastSpeed)
+    if due and not dueSaid and gov.setDue then gov:setDue(true); dueSaid = true end
+    if not forced and not gov:try(kind, lane) then
+      if due and gov.reserve then gov:reserve(kind) end
+      break
+    end
+    local q = table.remove(walkQ, idx)
     if forced then forced, sinceUrgent, M.urgentWalks = nil, 0, (M.urgentWalks or 0) + 1 end
     local t = tiles[q.key]
     if t and q.tile and q.tile ~= t then t = nil end
@@ -1948,8 +2362,20 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     -- (only a colliding mesh waits: a render-only one (q.renderOnly: the drawn sidewalks and buildings beside their lean
     -- collision meshes) cannot catch the car, and holding it hid a whole tile's sidewalks while the car stood in their
     -- box: a roundabout's island band was never drawn, 2026-10-17 Harbor Point)
-    if t and q.what ~= 'road' and not q.renderOnly and playerIn(t.colliders[q.what], q.what, t) then
+    -- (a staged part of a generation swap is made without collision: nothing to hold it for)
+    local staged = q.stage ~= nil and swapState ~= nil and swapState.gen == q.stage
+    if q.stage ~= nil and not staged then t = nil end       -- (its swap was given up)
+    if staged and not t then                                -- (its tile is gone: the swap cannot be whole)
+      swapState.failed = 'the tile of a staged ' .. tostring(q.what) .. ' is gone'
+    end
+    if t and q.what ~= 'road' and not q.renderOnly and not staged and playerIn(t.colliders[q.what], q.what, t) then
       held[#held + 1] = q           -- the car is on it: made once the car is clear (playerIn)
+      t = nil
+    end
+    -- (BEHIND: a collider whose tile fell behind the moving car while it waited: parked again, not made only to go)
+    if t and q.what ~= 'road' and q.what ~= 'wire' and not q.renderOnly and not staged and M.behindDir()
+        and not M.collideNear(t) then
+      parked[#parked + 1] = q
       t = nil
     end
     local walk = q.walk
@@ -1959,10 +2385,20 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       loadMaterials()
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
-      local ok, id = pcall(createWalk, walk,
-        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad)
+      local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
+      local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
-      if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
+      if staged and not ok then                    -- (a shape that cannot be made: the swap must not commit)
+        swapState.failed = 'staged ' .. tostring(q.what) .. ': ' .. tostring(id)
+      end
+      if ok and staged then                        -- a generation swap's part: hidden until M.swapCommit
+        local o = scenetree.findObjectById(id)
+        if o then o:setHidden(true) end
+        swapState.made = swapState.made + 1
+        t.skin.pending = t.skin.pending - 1
+        swapState.parts[#swapState.parts + 1] = { t = t, what = q.what, id = id, q = q,
+          collide = collide and (type(collide) == 'string' and collide or 'Visible Mesh Final') or nil }
+      elseif ok and q.skin and t.skin then         -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
         M.dropOldSkin(t, q.what)
         if t.skin.pending <= 0 then M.dropOldSkin(t) end
@@ -1972,15 +2408,16 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         t.oldPart[q.what] = nil
         if t.oldPartSlot and t.oldPartSlot[q.what] then slotDrop(t.oldPartSlot[q.what]); t.oldPartSlot[q.what] = nil end
       end
+      if ok and M.onKeepupPart then M.onKeepupPart(q.what, t) end     -- (keepup.lua: a debug recorder)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
-        if isRoad then t[q.what] = id else
+        if isRoad or staged then t[q.what] = id else       -- (a staged collider: registered at the swap's commit)
           t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q, objectBox(id) }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
       local ms = now() - t0
-      gov:charge('roadWalk', ms)
+      gov:charge(kind, ms, lane)
       noteUnit(tostring(q.what), ms, walk and walk.shape)
       sinceChange = stopwatch.new()
     end
@@ -1992,7 +2429,8 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     swapQuiet.frames = swapQuiet.frames - 1
     if swapQuiet.frames <= 0 and swapQuiet.since() >= M.SWAP_QUIET_MS then swapQuiet = nil end
   end
-  local urgent = collisionDirty and (holdActive or M.urgentColliders()) and sinceReload() > M.URGENT_GAP_S * 1000
+  local urgent = collisionDirty and (holdActive or M.extDue(extGap(), lastSpeed, sinceReload()) or M.urgentColliders()
+      or (#extBoxes > 0 and M.focusDue(extGap))) and sinceReload() > M.URGENT_GAP_S * 1000
   local due = not swapQuiet and ((collisionDirty and sinceReload() > M.RELOAD_EVERY_S * 1000) or urgent
       or (deletesDirty and sinceReload() > M.RELOAD_DELETES_S * 1000))
   if due and not urgent and M.deferWhileRolling(lastSpeed, sinceReload()) then due = false end
@@ -2003,6 +2441,13 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     reloadWaits = reloadWaits + 1
     due = false
   end
+  -- a committed generation swap: its skins' collision rebuilt as soon as the terrain swap's quiet frames are over,
+  -- whatever else would wait (the car is held until it is in effect: swapgen.lua)
+  local swapWait = swapState ~= nil and swapState.committed == true
+  if swapWait and swapState.reloaded then swapState.frames = swapState.frames + 1 end
+  if swapWait and not swapState.reloaded and not swapQuiet then due = true end
+  if swapBack and swapBack.reloaded then swapBack.frames = swapBack.frames + 1 end        -- (a rollback's: swapUndo)
+  if swapBack and not swapBack.reloaded and not swapQuiet then due = true end
   if due then
     reloadWaits = 0
     local t0 = now()
@@ -2012,7 +2457,9 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     be:reloadCollision()
     require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
-    collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
+    collisionDirty, deletesDirty, sinceReload, extBoxes = false, false, stopwatch.new(), {}
+    if swapWait and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
+    if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
     local ms = now() - t0
     -- out of the frame's budget, not into the meshes' cost estimate (from PR #41: a ~40 ms rebuild in the roadWalk
     -- EMA held the next sidewalk and building meshes back as if each cost that much more)
@@ -2167,39 +2614,77 @@ function M.reloadLog() return reloadLog end
 -- buildings, wires), each by the distance to its tile's centre (behind a fast car counting three times): the tiles
 -- the car reaches first (the user, 2026-10-19: high speeds, the road texture struggling to keep up). A render-only
 -- mesh by its distance to the camera instead when that is nearer (viewAt: what is drawn follows the camera).
+-- SURFACE_FIRST: the drawn ground surfaces (a skin's road mesh with its markings, its sidewalks) rank with the colliders
+-- by the same distance, not after every one of them (a building's collision mesh 600 m ahead came before the sidewalk
+-- the car was about to reach: keep-up measure 2026-11-13, tools/keepup.py). false: as before.
+M.SURFACE_FIRST = true
+-- Also returns the key, and the queue's nearest mesh (m: its key before RENDER_AFTER_M, nil for those left behind; the
+-- DUE test).
 function M.nextWalk(q)
-  if #q <= 1 then return 1 end
-  local p, dir = playerNow()
+  if #q == 0 then return 1 end
+  local p = playerNow()
   if not p then return 1 end
-  local best, bestKey = 1, math.huge
+  local dir = orderDir
+  local best, bestKey, nearest = 1, math.huge, nil
   for i, e in ipairs(q) do
     local t = tiles[e.key]
     local k = 1e9
+    local behind = false
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
       k = math.sqrt(dx * dx + dy * dy)
-      if dir then         -- fast: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
+      if dir then         -- moving: by the way along the path ahead, sideways counting SIDE_PENALTY times (the server's
         local along = dx * dir.x + dy * dir.y               -- roads.path_key); behind the car after all of those
         local side = math.abs(dx * dir.y - dy * dir.x)
-        if along < -M.TILE_M / 2 then k = k * 3 + M.LEAD_MAX_M     -- (its centre half a tile behind: left behind)
+        if along < -M.TILE_M / 2 then k, behind = k * 3 + M.LEAD_MAX_M, true     -- (its centre half a tile behind: left behind)
         else k = math.max(0, along) + M.SIDE_PENALTY * math.max(0, side - M.TILE_M / 2) end
       end
       if viewAt and (e.renderOnly or e.what == 'wire') then
         local vx, vy = t.cx - viewAt.x, t.cy - viewAt.y
-        k = math.min(k, math.sqrt(vx * vx + vy * vy))
+        local kv = math.sqrt(vx * vx + vy * vy)
+        if kv < k then k, behind = kv, false end
       end
     end
-    if e.renderOnly or e.what == 'wire' then k = k + 1e6 end
+    if not behind and (not nearest or k < nearest) then nearest = k end
+    if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
+      k = k + (M.RENDER_AFTER_M or 1e6)
+    end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
     if k < bestKey then best, bestKey = i, k end
   end
-  return best
+  return best, bestKey, nearest
 end
 
--- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
-function M.urgentWalk(q)
-  local p, dir = playerNow()
+-- The road tiles whose drawn surfaces are urgent (URGENT_SURFACES): the one under the car at p and those it reaches
+-- within URGENT_SURFACE_S along dir (a set of tile keys; geotiles and anchor tiles alike).
+local function surfaceKeys(p, dir, v)
+  local keys = {}
+  local function add(x, y)
+    if anchorObj then
+      local g = M.geoKeyAt(x, y)
+      if g then keys[geoKey(g)] = true end
+    end
+    if anchorId then keys[tileKey(anchorId, math.floor(x / M.TILE_M) .. '_' .. math.floor(y / M.TILE_M))] = true end
+  end
+  add(p.x, p.y)
+  if dir then
+    local d = math.max(M.URGENT_SURFACE_MIN_M, (v or 0) * M.URGENT_SURFACE_S)
+    add(p.x + dir.x * d * 0.5, p.y + dir.y * d * 0.5)
+    add(p.x + dir.x * d, p.y + dir.y * d)
+  end
+  return keys
+end
+M._surfaceKeys = surfaceKeys
+
+-- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading; else (URGENT_SURFACES)
+-- the drawn road or sidewalks of the tile under the car or just ahead (the roads before the sidewalks, the nearer tile
+-- first) - not in the governor's quiet frames round a heavy op (quiet: a heavy frame must stay a lone spike, and
+-- what is only drawn can wait the two frames). Also returns whether it is such a surface: those still ask the governor
+-- (tryUrgent: never into a frame already busy or a bucket deep in debt), the decks, tunnels and sidewalk colliders not.
+function M.urgentWalk(q, quiet)
+  local p = playerNow()
   if not p then return nil end
+  local dir = orderDir
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
@@ -2222,7 +2707,20 @@ function M.urgentWalk(q)
       end
     end
   end
-  return best
+  if best or not M.URGENT_SURFACES or quiet then return best, false end
+  local keys = nil
+  for i, e in ipairs(q) do
+    if (e.what == 'road' or e.what == 'walk') and e.stage == nil then
+      keys = keys or surfaceKeys(p, dir, lastSpeed)
+      local t = keys[e.key] and tiles[e.key]
+      if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
+        local dx, dy = t.cx - p.x, t.cy - p.y
+        local d = math.sqrt(dx * dx + dy * dy) + (e.what == 'road' and 0 or 1e4)
+        if d < bd then best, bd = i, d end
+      end
+    end
+  end
+  return best, best ~= nil
 end
 
 -- A made object's world box { x0, y0, z0, x1, y1, z1 } (nil: none)
@@ -2301,8 +2799,8 @@ function M.colliderGap(c, p, cutoff)
 end
 
 -- The nearest collider made since the last rebuild (m; math.huge: none; beyond cutoff: any distance over it)
-function M.needDistance(cutoff)
-  local p = playerNow()
+function M.needDistance(cutoff, p)
+  p = p or playerNow()
   local best = math.huge
   for _, c in ipairs(newColliders) do
     local d = M.colliderGap(c, p, cutoff)
@@ -2327,8 +2825,8 @@ function M.urgentColliders()
   if M.NEED then
     local reach = M.needReach(lastSpeed)
     local d = M.needDistance(reach)
-    if d > reach then return false end
-    return d <= M.hardReach(lastSpeed) or sinceReload() >= M.NEED_GAP_S * 1000
+    if d <= reach and (d <= M.hardReach(lastSpeed) or sinceReload() >= M.NEED_GAP_S * 1000) then return true end
+    return M.focusDue(M.needDistance, true) -- (or another car about to reach one)
   end
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   for _, c in ipairs(newColliders) do
@@ -2336,6 +2834,28 @@ function M.urgentColliders()
     if t and t.cx then
       local dx, dy = t.cx - p.x, t.cy - p.y
       if dx * dx + dy * dy <= reach * reach then return true end
+    end
+  end
+  return false
+end
+
+-- Are colliders made since the last rebuild due for another vehicle (collisionfoci's foci)? gap(cutoff, p): the
+-- distance (m) from point p to the nearest of them. Their speed unknown: for another player's car (a focus with trees:
+-- other players' and player-spawned cars) due within needReach(FOCUS_NEED_MS) by the same NEED rule; with traffic
+-- set, for an AI traffic car too, within hardReach(FOCUS_NEED_MS) only (the roads' colliders: its island makes them
+-- again as it comes; the trees have none round traffic). (Codex review, 2026-11-14: BEHIND drops what lies behind the
+-- active car, a following car's island has it made again, and only the active car's distance made a rebuild due.)
+M.FOCUS_NEED_MS = 25
+function M.focusDue(gap, traffic)
+  if #foci == 0 then return false end
+  local reach, hard = M.needReach(M.FOCUS_NEED_MS), M.hardReach(M.FOCUS_NEED_MS)
+  local pz = nil
+  for _, f in ipairs(foci) do
+    if f.x and (f.trees or traffic) then
+      -- (a whole position: a geotile's pieces are placed by a 3D transform; far cars' foci (farcars.lua) carry no z)
+      if not f.z and not pz then local p = playerNow(); pz = p and p.z or 0 end
+      local d = gap(f.trees and reach or hard, { x = f.x, y = f.y, z = f.z or pz })
+      if d <= hard or (f.trees and d <= reach and sinceReload() >= M.NEED_GAP_S * 1000) then return true end
     end
   end
   return false
@@ -2385,8 +2905,38 @@ function M.readyAround(aid, x, y, r)
 end
 
 -- Something else made colliding objects near the player (trees.lua's Forest items): rebuild collision at the
--- next throttled slot.
-function M.requestCollision() markDirty('request') end
+-- next throttled slot. With box { x0, y0, z0, x1, y1, z1 } round them they are due like a collider of the roads, by the
+-- car's distance to the box as it drives (urgentColliders' NEED rule: within needReach, at once within hardReach, else
+-- NEED_GAP_S after the last rebuild): trees made solid again round a car that turned back to them (BEHIND), or late.
+-- EXT_BOXES kept at most (more: merged into the last).
+M.EXT_BOXES = 64
+function M.requestCollision(box)
+  markDirty('request')
+  if type(box) ~= 'table' or type(box[1]) ~= 'number' then return end
+  if #extBoxes >= M.EXT_BOXES then
+    local b = extBoxes[#extBoxes]
+    b[1], b[2], b[4], b[5] = math.min(b[1], box[1]), math.min(b[2], box[2]), math.max(b[4], box[4]), math.max(b[5], box[5])
+  else
+    extBoxes[#extBoxes + 1] = { box[1], box[2], 0, box[4], box[5], 0 }
+  end
+end
+-- The distance (m) from p (default: the car) to the nearest of those boxes (nil: none; 0: no car). (cutoff: unused)
+extGap = function(_, p)
+  if #extBoxes == 0 then return nil end
+  p = p or playerNow()
+  if not p then return 0 end
+  local best = math.huge
+  for _, b in ipairs(extBoxes) do
+    local d = M.boxGap2(b, p.x, p.y)
+    if d < best then best = d end
+  end
+  return best
+end
+-- Pure: are another module's colliders made dist m from the car due now (speed v m/s, sinceMs since the last rebuild)?
+function M.extDue(dist, v, sinceMs)
+  if not dist or dist > M.needReach(v) then return false end
+  return dist <= M.hardReach(v) or (sinceMs or 0) >= M.NEED_GAP_S * 1000
+end
 
 -- Collision rebuilds so far (be:reloadCollision, ours or the terrain commit's): what was made before one collides from
 -- the frame after it (terrainpatch.groundReady).
@@ -2406,7 +2956,10 @@ function M.collisionRebuilt()
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1
-  collisionDirty, deletesDirty, sinceReload = removed > 0, false, stopwatch.new()
+  collisionDirty, deletesDirty, sinceReload, extBoxes = removed > 0, false, stopwatch.new(), {}
+  -- (a generation swap committed in this frame, before the terrain's own rebuild: its skins' collision is in it)
+  if swapState and swapState.committed and not swapState.reloaded then swapState.reloaded, swapState.frames = true, 0 end
+  if swapBack and not swapBack.reloaded then swapBack.reloaded, swapBack.frames = true, 0 end
 end
 
 -- Every road removed now (setting off, mod unload).
@@ -2447,6 +3000,7 @@ function M.prewarm(path)
 end
 
 function M.clear()
+  M.swapCancel()            -- (a generation swap's tiles and parts go with everything else)
   for key in pairs(tiles) do dropTile(key) end
   speedtraps.clear()
   for key, f in pairs(far) do
@@ -2471,6 +3025,7 @@ end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  M.swapCancel()            -- (a generation swap's tiles and parts go with the level)
   for _, t in pairs(tiles) do sea.release(t.waterguard) end
   for _, token in pairs(objectWater) do sea.release(token) end
   for _, r in ipairs(waterReleases) do sea.release(r[1]) end
@@ -2488,7 +3043,8 @@ function M.reset()
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ, farSeen = {}, {}, {}
   held, parked, newColliders, swapQuiet = {}, {}, {}, nil     -- (walkQ entries of objects gone with the level)
-  collisionDirty, deletesDirty, dirtyAt = false, false, {}
+  collisionDirty, deletesDirty, dirtyAt, extBoxes, farDeletes = false, false, {}, {}, {}
+  behindState.dir, behindState.slowMs, behindState.x = nil, 0, nil
 end
 
 -- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles
@@ -2707,6 +3263,31 @@ function M.allHeldSessions()
     for _, f in ipairs(list) do if not seen[f] then seen[f] = true; out[#out + 1] = f end end
   end
   table.sort(out)
+  return out
+end
+
+-- keepup.lua (a debug recorder): what geotile gkey shows now ({ tile, skin, road, walkWant, walk, signsWant, signs,
+-- props }), its old skin's meshes counting as shown (kept until the new ones are made).
+function M.keepupTile(gkey)
+  local t = tiles[geoKey(gkey)]
+  if not t then return {} end
+  local old = t.oldSkin or {}
+  return { tile = true, skin = t.skin ~= nil, road = t.road ~= nil or old.road ~= nil or #(t.objs or {}) > 0,
+    walkWant = t.skin ~= nil and t.skin.walk ~= nil, walk = t.walk ~= nil or old.walk ~= nil,
+    signsWant = t.parts ~= nil and t.parts.signs ~= nil, signs = t.signs ~= nil, props = t.props == true }
+end
+-- ... and every geotile part made now ({ what, gkey }: shown before a recording starts)
+function M.keepupSeen()
+  local out = {}
+  for _, t in pairs(tiles) do
+    if t.geo then
+      for _, list in ipairs({ M.SKIN_WHATS, M.CONTENT_WHATS }) do
+        for _, what in ipairs(list) do
+          if t[what] or (what == 'road' and #(t.objs or {}) > 0) then out[#out + 1] = { what = what, gkey = tostring(t.gkey) } end
+        end
+      end
+    end
+  end
   return out
 end
 

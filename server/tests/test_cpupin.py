@@ -54,6 +54,21 @@ class BoostTest(unittest.TestCase):
             json.dump({"teleportPriority": False}, f)
         self.assertFalse(cpupin.player_settings(d).get("teleport_full"))
 
+    def test_native_threads(self):
+        # the native kernels' cap: none of its own on 8 cores (the CPU set caps them), one per physical server core on 4
+        with mock.patch.object(cpupin, "_siblings", side_effect=fake_siblings):
+            server, _game = cpupin.split()
+            self.assertIsNone(cpupin.native_threads(server))
+        deck = [((0, c), [c, c + 4]) for c in range(4)]
+
+        def deck_siblings(usable=None):
+            return [(k, c) for k, c in deck if usable is None or set(c) <= set(usable)]
+        with mock.patch.object(cpupin, "_siblings", side_effect=deck_siblings):
+            server, _game = cpupin.split(0.5)
+            self.assertEqual(server, {2, 3, 6, 7})
+            self.assertEqual(cpupin.native_threads(server), 2)
+            self.assertIsNone(cpupin.native_threads(None), "not split: no cap of its own")
+
     def test_nothing_to_lend(self):
         self.assertIsNone(cpupin.boosted(None, {1, 2}))
         self.assertIsNone(cpupin.boosted({1}, set()))

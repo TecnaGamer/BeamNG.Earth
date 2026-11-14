@@ -30,6 +30,7 @@ policy); detection ~25 s a chip on a free core, 49-63 s with 4 workers on a busy
 The downloads are untrusted data: keep ROOT apart from the code and run this with python -I. Licences: the NYS
 orthoimagery (NYS ITS Geospatial Services, public), NYC Open Data terms of use (free use, the source credited):
 CREDITS.md."""
+import hashlib
 import io
 import json
 import math
@@ -347,7 +348,9 @@ def build(root, out_dir, partial=False):
         p = os.path.join(d, f"{ck.y}.npz")
         np.savez_compressed(p, **arrs)
         total += os.path.getsize(p)
-        manifest["cells"][key] = {"tanks": len(ts), "bytes": os.path.getsize(p)}
+        # (sha256: the server reads only the shard its manifest names, nycshards.matches: no older or newer build's)
+        manifest["cells"][key] = {"tanks": len(ts), "bytes": os.path.getsize(p),
+                                  "sha256": hashlib.sha256(open(p, "rb").read()).hexdigest()}
     os.makedirs(out_dir, exist_ok=True)
     manifest["tanks"] = sum(len(v) for v in by.values())
     manifest["bytes"] = total

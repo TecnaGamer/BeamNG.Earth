@@ -69,6 +69,31 @@ M.ENGINE_MAX_DEBT_MS = 50.0
 -- Rollback switch: 0 (or nil) turns it off - core.lua hands this to Gov:setFarCap every frame, so setting it from the
 -- console (require('beamngEarth/governor').FAR_CAP_MS = 0) takes effect at once; trees.lua's stop rule follows it too.
 M.FAR_CAP_MS = 20.0
+-- Frame cap, engine share, loading cover and lanes (2026-11-13, the expo O work: a cached place's far field was back
+-- on the server 4-8 s after a teleport and complete in game only 8-15 s later, the roads taking the 8 ms budget first
+-- and the far tiles paced behind them at a few a frame while the screen was the loading cover anyway):
+--  * the engine's share of a unit (ENGINE SHARE): what the frame took beyond its streaming-free base, its units' Lua
+--    and the mod's other noted work (noteOther: net, trees) is the engine's work for what those units made (a new
+--    shape's material instancing, its first draw and shadow pass, the static collision's tick); split over the frame's
+--    units it is learned per kind (def, an EMA like est), and a unit's planned cost is est + def. Base is the frame
+--    without our streaming (wall - units' Lua - their engine share), so it never grows with the budget.
+--  * the frame cap: past its first unit a frame plans streaming only while base + spent + the next unit's planned
+--    cost (+ the other work noted) stays under FRAME_CAP_MS (33: 30 fps while driving) - in the cover COVER_FRAME_MS.
+--  * the loading cover (setCover: core's M._loadCover, the player standing after a teleport behind the loading line):
+--    the budget is what the cover frame leaves (COVER_FRAME_MS - base, at most COVER_TARGET_MS) from the first frame,
+--    the tokens fresh each frame (no ramp, no debt: the cap guards the frame), heavy ops granted at once.
+--  * lanes: try(kind, 'near' | 'mid' | 'far'). While far tiles wait (farWait, set by core each frame) the 'mid' units
+--    (road and building meshes beyond NEAR of the car, far buildings) take at most (1 - FAR_SHARE) of what the two
+--    lanes spent lately (laneUse, decayed LANE_DECAY a frame): the meshes round the car first, then the distant land
+--    and the rest of the town side by side instead of the land after every building of the place.
+M.FRAME_CAP_MS = 33.0
+M.COVER_FRAME_MS = 42.0
+M.COVER_TARGET_MS = 30.0
+M.DEF_ALPHA = 0.1          -- engine share EMA gain (per frame that ran units of the kind)
+M.DEF_MAX_MS = 40.0        -- a frame's excess counted at most this (a GC or a tree commit in the same frame)
+M.FAR_SHARE = 0.5
+M.LANE_DECAY = 0.97
+M.LANE_GRACE_MS = 4.0      -- ... a mid lane this far ahead of its share still runs (a lone unit, no ping-pong)
 -- Prior cost estimates (ms) per unit kind: in-game P5/P6 (2026-10-10): a 2k-tri .cdae first load
 -- 3.4 ms (8k-tri 1.5 ms; v1.2 drive EMA 1.93), a 2k-tri .dae 7.5-25 ms; unhide is free; setPosition
 -- ~0.006 ms (p6). v1.3 satellite imagery (lead probe p_sat.lua): a Lua-created per-tile Material
@@ -86,7 +111,29 @@ M.FAR_CAP_MS = 20.0
 -- probe P3; 'roadDelete' 0.02-0.04 ms (P3); 'roadWalk' (a road tile's sidewalk TSStatic, a .cdae like a far tile) ~3 ms, a guess.
 -- 'fuel' (gasstations.lua: one station, ~12-30 TSStatics of cached West Coast shapes + its areas) ~3 ms, a guess until
 -- probes/fuel_pump.lua is timed in game.
-M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, material = 0.3, matDelete = 0.2, cdaeTex128 = 3.9, cdaeTex256 = 4.0, cdaeTex512 = 4.2, retex = 1.0, roadChunk = 0.5, roadDelete = 0.05, roadWalk = 3.0, fuel = 3.0 }
+-- 'roadSurf' / 'roadCol' / 'roadDrive' / 'roadFar' (roads.lua walkKind): a road tile's drawn surfaces, its lean collision
+-- meshes, its decks and tunnels, the far geotiles' parts, each its own estimate ('roadWalk': the rest, drawn buildings,
+-- rails, wires), started at roadWalk's guess.
+M.PRIOR = { cdae = 3.0, dae = 8.0, reveal = 0.05, delete = 0.3, cdaeTex = 3.0, material = 0.3, matDelete = 0.2, cdaeTex128 = 3.9, cdaeTex256 = 4.0, cdaeTex512 = 4.2, retex = 1.0, roadChunk = 0.5, roadDelete = 0.05, roadWalk = 3.0, roadSurf = 3.0, roadCol = 3.0, roadDrive = 3.0, roadFar = 3.0, fuel = 3.0 }
+-- Due work (setDue / reserve; 2026-11-14, Steam Deck 45 mph drives in Fells Point and Des Moines: the road surface was
+-- missing under the car in 23 % of checks with its tile's data in, parts drawn a median 4.3 s after their data; the
+-- road meshes waited on the bucket in 98 % of the frames they waited at all - 2 ms a frame, the far tiles' 4 ms units
+-- taking every few frames' worth first, an estimate a slow far part had dragged to 8-17 ms - so a 6.5 km drive made
+-- ~1.2 meshes a second while ~3 s of their Lua was all the drive's road meshes cost). A caller whose work the car
+-- reaches soon says so each frame (setDue): the target is then at least DUE_TARGET_MS, ramped at RAMP_UP_DUE, until
+-- it stops saying so (a frame without lapses it). And one whose due unit could not run for tokens reserves its cost
+-- (reserve): for the rest of the frame no other kind's unit (but those of RESERVE_FREE_MS or less: reveals, deletes)
+-- takes the bucket below it, so the far field's cheaper units no longer starve it. The frame cap and the far cap stand.
+M.DUE_TARGET_MS = 6.0
+M.RAMP_UP_DUE = 0.25
+M.RESERVE_FREE_MS = 0.5
+-- An urgent unit (tryUrgent: roads.lua's drawn road and sidewalks under the car) may run short of tokens, but only as
+-- the frame's first unit, with at most URGENT_ROOM_MS of the frame's other work (units charged, their engine share, the
+-- mod's noted work) before it, and not while the bucket is more than URGENT_DEBT_MS in debt (the engine's own tick
+-- after a slow frame, chargeEngine, or the urgent units before it): a busy frame is never made busier, and a run of
+-- urgent units is paced by the bucket again once they have overdrawn it.
+M.URGENT_ROOM_MS = 4.0
+M.URGENT_DEBT_MS = 10.0
 
 -- Unit kind of a textured .cdae import from its far_tile.tex (px): cdaeTex<px> for a size with a
 -- prior, else (FORMAT 3 tiles have no tex) 'cdaeTex'.
@@ -125,6 +172,15 @@ function M.new(opts)
     prevHeavy = false,  -- the frame that just ended was heavy (its time is not part of base)
     frameSpent = 0,     -- ms charged this frame (units + motion)
     frameUnits = 0,     -- units run this frame
+    def = {},           -- per kind engine share estimate, ms (ENGINE SHARE above)
+    cover = false,      -- the loading cover is up (setCover)
+    farWait = false,    -- far tiles wait to be imported (core, each frame: the lanes)
+    laneUse = { mid = 0, far = 0 }, -- ms the lanes spent lately (decayed)
+    frameLua = 0,       -- this frame's units' + motion's Lua ms (base excludes it)
+    frameDef = 0,       -- this frame's units' planned engine share
+    frameOther = 0,     -- this frame's other mod work noted (noteOther: in the cap, not in the bucket)
+    frameKinds = {},    -- kinds run this frame -> units
+    prevLua = 0, prevDef = 0, prevOther = 0, prevUnits = 0, prevKinds = {},
     lastStreamFrame = -huge, -- last frame a unit ran in
     heavyPending = false, heavySince = nil, heavyReqFrame = nil,
     heavyFrame = -huge, -- last frame that ran a heavy op
@@ -151,12 +207,47 @@ function Gov:setFarCap(ms)
   self.farCap = (ms and ms > 0) and ms or nil
 end
 
-function Gov:targetNow() return self.loading and M.LOADING_TARGET_MS or self.target end
+-- The loading cover (see FRAME CAP above): on implies loading.
+function Gov:setCover(on) self.cover = on and true or false end
 
--- Largest estimated unit cost among the kinds in use.
+-- The budget the cover leaves a frame: COVER_FRAME_MS less the streaming-free base, between the loading target and
+-- COVER_TARGET_MS.
+function Gov:coverTarget()
+  local room = M.COVER_FRAME_MS - (self.base or (M.COVER_FRAME_MS - M.COVER_TARGET_MS))
+  return max(M.LOADING_TARGET_MS, min(M.COVER_TARGET_MS, room))
+end
+
+function Gov:targetNow()
+  if self.cover then return self:coverTarget() end
+  local t = self.loading and M.LOADING_TARGET_MS or self.target
+  if self:isDue() then t = max(t, M.DUE_TARGET_MS) end
+  return t
+end
+
+-- Due work waits (DUE above): said every frame it does (the frame's target follows from the frame before).
+function Gov:setDue(on)
+  if on then self.dueFrame = self.frame end
+end
+
+-- Did a caller say its work is due this frame or the one before?
+function Gov:isDue() return self.dueFrame ~= nil and self.frame - self.dueFrame <= 1 end
+
+-- A due unit of this kind waits for tokens: the rest of the frame no other kind's unit takes the bucket below its cost.
+function Gov:reserve(kind)
+  local c = self:cost(kind)
+  if c > (self.reserved or 0) then self.reserved, self.reservedKind = c, kind end
+end
+
+-- The frame cap in force (ms of wall time a frame plans streaming up to).
+function Gov:frameCap() return self.cover and M.COVER_FRAME_MS or M.FRAME_CAP_MS end
+
+-- A unit's planned cost: its Lua estimate plus its learned engine share.
+function Gov:cost(kind) return (self.est[kind] or 1) + (self.def[kind] or 0) end
+
+-- Largest planned unit cost among the kinds in use.
 function Gov:maxUnit()
   local m = 0
-  for k in pairs(self.used) do m = max(m, self.est[k] or 0) end
+  for k in pairs(self.used) do m = max(m, (self.est[k] or 0) + (self.def[k] or 0)) end
   return m
 end
 
@@ -181,16 +272,31 @@ function Gov:beginFrame(hasWork, wallMs)
   self.frameLog = {}
   self.frame = self.frame + 1
   self.lastStart = t
+  -- the frame that just ended: its units' engine share learned, base without its streaming (ENGINE SHARE above)
+  self.prevLua, self.prevDef, self.prevOther = self.frameLua, self.frameDef, self.frameOther
+  self.prevUnits, self.prevKinds = self.frameUnits, self.frameKinds
+  self.frameLua, self.frameDef, self.frameOther, self.frameKinds = 0, 0, 0, {}
   if wallMs then
     if not self.prevHeavy then
+      if self.prevUnits > 0 and self.base then
+        local excess = min(M.DEF_MAX_MS, max(0, wallMs - self.base - self.prevLua - self.prevOther))
+        local share = excess / self.prevUnits
+        for kind in pairs(self.prevKinds) do
+          local d = self.def[kind] or 0
+          self.def[kind] = d + M.DEF_ALPHA * (share - d)
+        end
+      end
       self.histN = self.histN + 1
-      self.hist[(self.histN - 1) % M.BASE_FRAMES + 1] = wallMs
+      self.hist[(self.histN - 1) % M.BASE_FRAMES + 1] = max(0, wallMs - self.prevLua - self.prevDef)
       self.base = median(self.hist, min(self.histN, M.BASE_FRAMES))
     end
     self.w1, self.w2 = wallMs, self.w1
   end
   self.prevHeavy = false
   self.frameSpent, self.frameUnits = 0, 0
+  self.reserved, self.reservedKind = nil, nil
+  local decay = M.LANE_DECAY
+  self.laneUse.mid, self.laneUse.far = self.laneUse.mid * decay, self.laneUse.far * decay
   -- a heavy request lives as long as the caller repeats it every frame
   if self.heavyPending and self.heavyReqFrame < self.frame - 1 then self.heavyPending = false end
 
@@ -202,11 +308,22 @@ function Gov:beginFrame(hasWork, wallMs)
     return
   end
   self.blocked = false
+  if self.cover then
+    -- the loading cover: the whole budget from the first frame, fresh tokens (the frame cap guards each frame)
+    self.b = hasWork and target or 0
+    self.tokens = self.b
+    return
+  end
+  if self.b > M.LOADING_TARGET_MS and not self.heavyPending then
+    self.b = max(target, self.b - 1.0)       -- (the cover just ended: down to the normal budgets within ~20 frames)
+  end
   if self.heavyPending then
     self.b = max(0, self.b - M.RAMP_DOWN_HEAVY)
   elseif hasWork then
     if self.b < target then
-      self.b = min(target, self.b + (self.loading and M.RAMP_UP_LOADING or M.RAMP_UP))
+      local up = self.loading and M.RAMP_UP_LOADING or M.RAMP_UP
+      if self:isDue() then up = max(up, M.RAMP_UP_DUE) end
+      self.b = min(target, self.b + up)
     else
       self.b = max(target, self.b - M.RAMP_DOWN_IDLE)
     end
@@ -219,25 +336,59 @@ function Gov:beginFrame(hasWork, wallMs)
 end
 
 -- May a unit of this kind run now? (The caller then runs it and calls charge with its cost.)
-function Gov:try(kind)
+function Gov:try(kind, lane)
   self.used[kind] = true
   if self.blocked or self.heavyFrame == self.frame then return false end
   local e = self.est[kind] or 1
-  if self.tokens < e then return false end
-  if self.frameSpent + e > self.b + self:maxUnit() then return false end
-  -- ... and past the first unit never more than the far cap: with every estimate at its prior, b + maxUnit is well
-  -- under it and nothing changes; it binds once a slow unit has inflated an estimate (FAR_CAP_MS)
-  if self.farCap and self.frameUnits > 0 and self.frameSpent + e > self.farCap then return false end
+  local c = e + (self.def[kind] or 0)
+  -- (in the cover the tokens are the frame's budget: a unit bigger than all of it still runs, as its frame's first)
+  if self.tokens < c and not (self.cover and self.frameUnits == 0) then return false end
+  -- (a due unit's reservation: reserve)
+  if self.reserved and kind ~= self.reservedKind and c > M.RESERVE_FREE_MS and self.tokens - c < self.reserved then
+    self.stats.reserveYields = (self.stats.reserveYields or 0) + 1
+    return false
+  end
+  if self.frameSpent + self.frameDef + c > self.b + self:maxUnit() then return false end
+  if self.frameUnits > 0 then
+    -- ... and past the first unit never more than the far cap: with every estimate at its prior, b + maxUnit is well
+    -- under it and nothing changes; it binds once a slow unit has inflated an estimate (FAR_CAP_MS). In the cover the
+    -- frame cap below is the guard.
+    if self.farCap and not self.cover and self.frameSpent + e > self.farCap then return false end
+    -- the frame cap: base + what this frame spent (units, their engine share, other noted work) + this unit
+    if (self.base or 0) + self.frameSpent + self.frameDef + self.frameOther + c > self:frameCap() then return false end
+  end
+  -- lanes: a mid unit past its share while far tiles wait gives way (FAR_SHARE)
+  if lane == 'mid' and self.farWait
+      and self.laneUse.mid - self.laneUse.far * (1 - M.FAR_SHARE) / M.FAR_SHARE > M.LANE_GRACE_MS then
+    self.stats.midYields = (self.stats.midYields or 0) + 1
+    return false
+  end
   return true
 end
 
--- Charge a unit that ran (ms = its measured cost).
-function Gov:charge(kind, ms)
+-- May an urgent unit of this kind run now, tokens or not (URGENT_ROOM_MS above)? The caller charges it as any unit.
+function Gov:tryUrgent(kind)
+  self.used[kind] = true
+  if self.blocked or self.heavyFrame == self.frame or self.heavyPending then return false end
+  if self.frameUnits > 0 then return false end
+  if self.frameSpent + self.frameDef + self.frameOther > M.URGENT_ROOM_MS then return false end
+  if self.tokens < -M.URGENT_DEBT_MS then return false end
+  return true
+end
+
+-- Charge a unit that ran (ms = its measured Lua cost; its kind's learned engine share is charged with it). lane: the
+-- one it was tried in (try).
+function Gov:charge(kind, ms, lane)
   ms = max(0, ms or 0)
   if ms >= 1 then self.frameLog[#self.frameLog + 1] = kind .. ':' .. math.floor(ms + 0.5) end
-  self.tokens = self.tokens - ms
+  local d = self.def[kind] or 0
+  self.tokens = self.tokens - ms - d
   self.frameSpent = self.frameSpent + ms
+  self.frameLua = self.frameLua + ms
+  self.frameDef = self.frameDef + d
   self.frameUnits = self.frameUnits + 1
+  self.frameKinds[kind] = (self.frameKinds[kind] or 0) + 1
+  if lane == 'mid' or lane == 'far' then self.laneUse[lane] = self.laneUse[lane] + ms + d end
   self.lastStreamFrame = self.frame
   local e = self.est[kind] or ms
   self.est[kind] = max(0.005, e + M.EST_ALPHA * (ms - e))
@@ -245,11 +396,13 @@ function Gov:charge(kind, ms)
   if self.frameSpent > self.stats.maxFrameSpent then self.stats.maxFrameSpent = self.frameSpent end
 end
 
--- The previous frame's engine tick (ms, Engine.Debug metrics "Ticking"): its excess is a debt on the bucket.
+-- The previous frame's engine tick (ms, Engine.Debug metrics "Ticking"): its excess is a debt on the bucket - when
+-- that frame ran no unit (with units, their learned engine share was charged with them: ENGINE SHARE). None in the
+-- cover (fresh tokens each frame).
 function Gov:chargeEngine(tickMs)
   self.lastEngineMs = tickMs and math.floor(tickMs + 0.5) or nil
   local debt = max(0, (tickMs or 0) - M.ENGINE_FREE_MS)
-  if debt <= 0 then return 0 end
+  if debt <= 0 or self.cover or (self.prevUnits or 0) > 0 then return 0 end
   self.tokens = max(-M.ENGINE_MAX_DEBT_MS, self.tokens - debt)
   self.stats.engineDebt = (self.stats.engineDebt or 0) + debt
   return debt
@@ -261,6 +414,18 @@ function Gov:chargeMotion(ms)
   ms = max(0, ms or 0)
   self.tokens = self.tokens - ms
   self.frameSpent = self.frameSpent + ms
+  self.frameLua = self.frameLua + ms
+end
+
+-- The frame's other mod work that is no streaming unit (the server's messages, the trees): in the frame cap and the
+-- engine share's sums, neither charged to the bucket nor part of roomFor's spent time.
+function Gov:noteOther(ms)
+  self.frameOther = self.frameOther + max(0, ms or 0)
+end
+
+-- What the frame cap leaves this frame (ms, >= 0): the trees' own Lua time a frame (core) stays inside it.
+function Gov:roomLeft()
+  return max(0, self:frameCap() - (self.base or 0) - self.frameSpent - self.frameDef - self.frameOther)
 end
 
 -- A frame's other work (navgraph, parking: not streaming units): counted in this frame's spent time, so the occasional
@@ -298,7 +463,7 @@ function Gov:requestHeavy(urgent)
   end
   self.heavyReqFrame = self.frame
   self.tokens = min(self.tokens, self.b)
-  if urgent then return grant(self) end
+  if urgent or self.cover then return grant(self) end   -- (the cover: the player waits behind it, no dt to protect)
   if self.b > 0 or self.frame - self.lastStreamFrame <= M.QUIET_BEFORE then return false end
   local calm = self.base ~= nil and self.w1 ~= nil and self.w2 ~= nil
     and self.w1 <= self.base + M.CALM_MARGIN_MS and self.w2 <= self.base + M.CALM_MARGIN_MS
@@ -313,7 +478,8 @@ function Gov:isHeavyFrame() return self.heavyFrame == self.frame end
 
 function Gov:snapshot()
   return { b = self.b, tokens = self.tokens, target = self:targetNow(), loading = self.loading, base = self.base,
-    farCap = self.farCap,
+    farCap = self.farCap, cover = self.cover, frameCap = self:frameCap(), def = self.def, laneUse = self.laneUse,
+    midYields = self.stats.midYields, due = self:isDue(), reserveYields = self.stats.reserveYields,
     heavyPending = self.heavyPending, estCdae = self.est.cdae, estDae = self.est.dae, estCdaeTex = self.est.cdaeTex,
     estCdaeTex128 = self.est.cdaeTex128, estCdaeTex256 = self.est.cdaeTex256, estCdaeTex512 = self.est.cdaeTex512,
     estMaterial = self.est.material, estMatDelete = self.est.matDelete, heavy = self.stats.heavy,

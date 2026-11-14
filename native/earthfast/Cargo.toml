@@ -47,6 +47,28 @@ libm = "=0.2.16"
 # dalek-cryptography, pure Rust, BSD-3-Clause; sha2 (RustCrypto, MIT / Apache-2.0) for the bodies' hashes. 2026-11-13.
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast"] }
 sha2 = { version = "0.10", default-features = false }
+# The mod's DDS textures made at install time from their lossless sources (texdds.rs): BC7 / BC5 / BC4 by texture-compressor
+# (pure Rust, MIT / Apache-2.0; deterministic: its SSE4.1 / AVX2 kernels give the scalar bytes). Pinned. Reviewed
+# 2026-11-13: no network, file or process access; unsafe only in its SIMD module (fixed-size array loads / stores and
+# the checked CPU-feature dispatch); build.rs only writes two lookup tables into OUT_DIR; its one dependency is libm.
+texture-compressor = "=0.2.4"
+# The texture sources (texdds.rs): lossless WebP, ~25 % under PNG; image-webp (image-rs), pure Rust, MIT / Apache-2.0,
+# forbid(unsafe_code), no file / network / process access, deps byteorder-lite and quick-error. Pinned. Reviewed 2026-11-13.
+image-webp = "=0.2.4"
+
+# The far textures' BC1 on the CPU (bc1fast.rs): Intel's ISPC Texture Compressor kernels (MIT) through intel_tex_2
+# (Traverse Research, MIT / Apache-2.0), linked as the crate's prebuilt static libraries (no ISPC compiler: its "ispc"
+# feature stays off). Pinned with its runtime ispc_rt (MIT) and num_cpus. Reviewed 2026-11-13: build.rs only prints
+# link directives for src/ispc's libraries (no network, no file writes); the Rust is thin bindgen wrappers (unsafe only
+# around the kernels' calls) and ispc_rt's task system (ISPCLaunch / ISPCAlloc / ISPCSync, which the BC kernels never
+# call: their libraries' only outside symbols are memcpy / memset / abort / puts, and __chkstk / _fltused on Windows);
+# num_cpus reads /proc and the cgroup files. No file, network or process access anywhere. Windows: release.yml builds
+# for MSVC, which the crate's libraries are for; tools/build_native.py --windows (zig, windows-gnu) hands the same MSVC
+# kernel libraries to the linker under the gnu names (they are COFF archives either way).
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", windows)))'.dependencies]
+intel_tex_2 = "=0.5.0"
+ispc_rt = "=2.0.4"
+num_cpus = "=1.17.0"
 
 [profile.release]
 opt-level = 3

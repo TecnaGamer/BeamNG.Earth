@@ -870,12 +870,16 @@ end
 -- whole missing list whenever it changes, and again every MAP_ASK_S while some are missing. The server builds the
 -- newest list first and drops what it no longer has (server/maptiles.py TileFiles), so a list that became empty
 -- goes out too (it cancels).
+-- A 'sat' tile with only its stand-in there (server maptiles.PROV_DIR: a later source standing in for a better one
+-- that could not be read yet) comes back as "satp/z/x/y" (its file: mapTilePath('satp', ...)) and is still asked for:
+-- the server builds it again now and then, and the real one's own path makes the screens load it.
 M.MAP_ASK_S = 4
 M.MAP_TILES_DIR = '/temp/beamngEarth/maptiles/'
 M.MAP_LAYERS = { sat = '.jpg', map = '.jpg', labels = '.png' }   -- server maptiles.LAYERS
 function M.mapTilePath(layer, z, x, y)
   local zxy = string.format('%d/%d/%d', z, x, y)
   if layer == 'sat' then return M.MAP_TILES_DIR .. zxy .. '.jpg' end   -- (where it always was)
+  if layer == 'satp' then return M.MAP_TILES_DIR .. 'prov/' .. zxy .. '.jpg' end
   return M.MAP_TILES_DIR .. layer .. '/' .. zxy .. M.MAP_LAYERS[layer]
 end
 local mapSent, mapSentAt = '', nil
@@ -889,6 +893,9 @@ function M.mapTiles(list)
       if FS:fileExists(M.mapTilePath(layer, z, x, y)) then
         ready[#ready + 1] = key
       else
+        if layer == 'sat' and FS:fileExists(M.mapTilePath('satp', z, x, y)) then
+          ready[#ready + 1] = string.format('satp/%d/%d/%d', z, x, y)
+        end
         missing[#missing + 1] = { z, x, y, layer }
         keys[#keys + 1] = key
       end
@@ -962,9 +969,11 @@ end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
 -- The map's "Teleport here?" box opened (or a search result picked): load the place ahead (core.preloadPlace).
-function M.uiMapPreload(lat, lon)
+-- hover: a search result, saved or recent place the pointer rests on (the light part).
+function M.uiMapPreload(lat, lon, hover)
   local core = ext('beamngEarth_core')
-  return { ok = core ~= nil and core.preloadPlace ~= nil and core.preloadPlace(tonumber(lat), tonumber(lon)) or false }
+  return { ok = core ~= nil and core.preloadPlace ~= nil
+    and core.preloadPlace(tonumber(lat), tonumber(lon), hover == true) or false }
 end
 
 function M.uiMapTeleport(lat, lon, name)

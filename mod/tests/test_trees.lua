@@ -44,6 +44,11 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+-- The detail keep-up defaults (2026-11-13: PROP_LEAD_S 4, NEAR_URGENT_MS 8, POOL_SPARE_DRIVE 2, NEW_SHAPES_PER_FRAME 2)
+-- checked once here; the tests below exercise the base behaviour with them off and turn each on where they test it.
+T.check(trees.PROP_LEAD_S == 4 and trees.NEAR_URGENT_MS == 8 and trees.POOL_SPARE_DRIVE == 2
+  and trees.NEW_SHAPES_PER_FRAME == 2, 'detail keep-up defaults on')
+trees.PROP_LEAD_S, trees.NEAR_URGENT_MS, trees.POOL_SPARE_DRIVE, trees.NEW_SHAPES_PER_FRAME = 0, 0, 0, 1
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
@@ -131,6 +136,54 @@ T.check(count() == 100 and solidCount() == 0, 'the camera at the tile, the car f
 trees.update(1, { x = 50, y = 50 }, { x = 50, y = 1900 })
 T.check(count() == 100 and solidCount() == 100, 'the car at the tile, the camera far: every item, all collide')
 trees.update(1, { x = 50, y = 50 })
+-- behind a moving car (roads.lua's kept heading, BEHIND_M): no solid items; made solid again near the car, the
+-- collision rebuild asked with the box round them (roads.requestCollision: at once when the car is about to reach them)
+do
+  local realRoads = package.loaded['beamngEarth/roads']
+  local dir, reqs = { x = 0, y = 1 }, {}
+  package.loaded['beamngEarth/roads'] = {
+    behindDir = function() return dir end,
+    behindBy = function(p, d, cx, cy, half)
+      return -((cx - p.x) * d.x + (cy - p.y) * d.y) - half * (math.abs(d.x) + math.abs(d.y))
+    end,
+    requestCollision = function(d) reqs[#reqs + 1] = d or false end }
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + 10 })
+  T.check(solidCount() == count() and count() > 0, 'past BEHIND_M heading on: still solid (hysteresis)')
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + trees.BEHIND_HYST_M + 10 })
+  T.check(count() > 0 and solidCount() == 0, 'past BEHIND_M + BEHIND_HYST_M, within SOLID_M: not solid')
+  dir = nil
+  reqs = {}
+  trees.update(1, { x = 50, y = 256 + trees.BEHIND_M + trees.BEHIND_HYST_M + 16 })    -- (RECHECK_M on)
+  local b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[1] == 0 and b[2] == 10 and b[4] == 99 and b[5] == 10,
+    'no heading (the car turned back): solid again, the rebuild asked with the box round them, 300 m off as they are')
+  -- a tile coming within SOLID_M ahead (not one BEHIND kept from solid): the next rebuild asked, no deadline box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 20 })
+  T.check(solidCount() == 0, '(beyond SOLID_M: not solid)')
+  reqs = {}
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M - 10 })
+  T.check(solidCount() == count() and #reqs > 0 and reqs[#reqs] == false, 'solid 190 m ahead: no box, as before')
+  -- made solid within CLOSE_M (a pass behind): a box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 20 })
+  reqs = {}
+  trees.update(1, { x = 50, y = 100 })
+  b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[2] == 10, 'made solid 90 m off: a box')
+  dir = { x = 0, y = -1 }
+  trees.update(1, { x = 50, y = 256 + 130 })
+  T.check(solidCount() == count(), 'heading towards the tile: solid')
+  -- solid only for another player's car (its focus), the active car far: every item sent with a box
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 400 })
+  T.check(solidCount() == 0, '(the active car far: not solid)')
+  reqs = {}
+  trees.setFoci({ { x = 50, y = 300, r = 320, trees = true } })
+  trees.update(1, { x = 50, y = 256 + trees.SOLID_M + trees.SOLID_HYST_M + 400 })
+  b = reqs[#reqs]
+  T.check(solidCount() == count() and type(b) == 'table' and b[2] == 10, "solid for another player's car: a box")
+  trees.setFoci({})
+  package.loaded['beamngEarth/roads'] = realRoads
+  trees.update(1, { x = 50, y = 50 })
+end
 
 trees.onDrop({ anchorId = 1, key = '0_0' })
 trees.update(1, { x = 50, y = 50 })
@@ -865,4 +918,42 @@ do -- the switch: COUNT_ITEMS false counts them again (the old way)
   trees.COUNT_ITEMS = true
 end
 
+do -- the keep-up recorder's view (keepup.lua): rows that should stand near a spot and are not made, and the hooks
+  T.check(#trees.keepupMissing(50, 10, 20) == 0, 'keepupMissing: nothing missing round a made tile')
+  local made, tiles_ = {}, {}
+  trees.onKeepupItem = function(t, i, g, x, y) made[#made + 1] = { t.id, i, g, x, y } end
+  trees.onKeepupTile = function(key) tiles_[#tiles_ + 1] = key end
+  local r2 = {}
+  for i = 0, 9 do r2[#r2 + 1] = string.format('{0, %d, 300, 5, 0, 1, 12, %.2f}', i, i / 10) end
+  files['/t/k.json'] = '{ groups = {}, items = { ' .. table.concat(r2, ', ') .. ' } }'
+  trees.onTile({ anchorId = 1, key = '0_1', path = '/t/k.json', n = 10 }, 1)
+  local miss = trees.keepupMissing(5, 300, 20)
+  T.check(#miss == 10 and miss[1].key == '1:0_1' and miss[1].group == '?' and tiles_[1] == '1:0_1',
+    'keepupMissing: a tile not made yet near the spot: its rows (' .. #miss .. ' ' .. tostring(miss[1] and miss[1].key)
+    .. ' ' .. tostring(miss[1] and miss[1].group) .. ' ' .. tostring(tiles_[1]) .. ')')
+  T.check(#trees.keepupMissing(5, 300, 3) == 7, 'keepupMissing: only the rows within r')
+  trees.update(1, { x = 5, y = 300 })
+  T.check(#trees.keepupMissing(5, 300, 20) == 0 and #made == 10 and made[1][1] == '1:0_1' and made[1][5] == 300,
+    'keepup hooks: each item made reported with its tile, row and spot')
+  trees.onKeepupItem, trees.onKeepupTile = nil, nil
+  trees.onDrop({ anchorId = 1, key = '0_1' })
+  trees.update(1, { x = 50, y = 50 })
+end
+do -- PROP_LEAD_S: at speed the furniture tiles ahead count nearer for the groups' caps (a door's 120 m)
+  trees.onRows(7, 'p1_0', { { 0, 300, 128, 0, 0, 1, 2.2, 0.0 } }, { 'door' })
+  local function doors() local n = 0; for it in pairs(items) do if it.m.p.x == 300 and it.m.p.y == 128 then n = n + 1 end end; return n end
+  local fast = { x = 100, y = 128, vx = 30, vy = 0, speed = 30 }
+  trees.update(7, fast)
+  T.check(doors() == 0, 'PROP_LEAD_S off: a door 156 m out (its tile) is not shown')
+  trees.PROP_LEAD_S = 4
+  trees.update(7, { x = 110, y = 128, vx = 30, vy = 0, speed = 30 })
+  T.check(doors() == 1, 'PROP_LEAD_S 4 at 30 m/s: shown (120 m nearer)')
+  trees.update(7, { x = 120, y = 128, vx = -30, vy = 0, speed = 30 })
+  T.check(doors() == 0, '... not for a tile behind the car')
+  trees.PROP_LEAD_S = 0
+  trees.dropKey('7:p1_0')
+  trees.update(7, { x = 130, y = 128 })
+end
+T.check(trees.spareWanted(trees.FRAME_MS) == 0 and trees.spareWanted(trees.LOADING_FRAME_MS) >= trees.POOL_SPARE,
+  'no spare Forests while driving by default (POOL_SPARE_DRIVE 0)')
 T.done('test_trees')

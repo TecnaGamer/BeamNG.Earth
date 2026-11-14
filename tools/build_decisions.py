@@ -14,9 +14,12 @@ server/data/world_labels.json.gz, by its label zoom and rank: a stand-in for pop
 consenting players asked for: one "x,y" z12 block a line, from the collector service). Each place is planned over a
 square of --km (default: 6 km; a metro's core) of z14 cells.
 
-Output: <out>/d<FORMAT>/<vkey>/manifest.bngm and 12/<x>/<y>.bngd: upload the vkey folder as it is (blocks first, the
-manifest last). A block built before is merged (its items kept unless made again) and signed again; the manifest
-lists every block of the folder.
+Output: <out>/d<FORMAT>/<vkey>/manifest.bngm and 12/<x>/<y>.<h>.bngd (h: the file's hash: a rebuilt block is a new
+file, the old one listed in retired.json): upload the new files first, the manifest last. A block built before is
+merged (its items kept unless made again) and signed again; the manifest lists each block's current file
+(current.json). The weekly datasets' builds are not in the vkey: each item's key holds its ring's digest of them
+(decisions.slice_digest; the ring's way ids are in the block), so a weekly build only misses the cells it changed;
+after a weekly build, building the places again replaces exactly the items whose digests changed.
 
 Its environment is a player's: the build switches (BNE_*) are reset to what earthd gives every player
 (PLAYER_SWITCHES), so the version key (decisions.vkey) is the one players compute. Cells with Hong Kong's measured
@@ -39,6 +42,7 @@ SERVER = os.path.join(ROOT, "server")
 sys.path.insert(0, SERVER)
 
 PASSES = 3
+WEEKLY_KEYS = ("rails", "lanes", "stations")      # (decisions.WEEKLY: kept in each record's versions, not the vkey)
 # what earthd puts in every player's environment (its --bridge-profile default; BNE_NETSTATS_PROC is not a switch)
 PLAYER_SWITCHES = {"BNE_BRIDGE_PROFILE": "curve"}
 TEST_PLACES = {"fells": (39.28, -76.60), "manhattan": (40.76, -73.98), "stelvio": (46.53, 10.45),
@@ -153,11 +157,15 @@ def _worker(args):
     plancache.PlanCache.store = store
     roads._facts_store = facts
     lat0, lon0 = cells[0][3], cells[0][4]
-    g, _ = bw._s.anchor(1, lat0, lon0)
     md = bw._s.md
-    for src in (getattr(md, "rail_tags", None), getattr(md, "lane_tags", None), getattr(md, "station_tags", None)):
-        if src is not None:         # (the weekly datasets' builds known before anything is keyed: earthd's
-            src.version()           # warm_manifests, here at once)
+    # (the weekly datasets' builds known before anything is planned or keyed: a cold cache's first workers planned
+    # without the lane / rail tags, their plans keyed without them, 2026-11-13)
+    start = wait_weekly(md)
+    if start is None:
+        rec.close()
+        return {"error": "the weekly datasets' manifests could not be had", "versions": None, "vkey": None,
+                "doc": None, "cpu_s": time.process_time()}
+    g, _ = bw._s.anchor(1, lat0, lon0)
     t0 = time.time()
     for done, (z, x, y, _la, _lo) in enumerate(cells, 1):
         k = mapcells.CellKey(z, x, y)
@@ -181,8 +189,65 @@ def _worker(args):
     rec.close()
     v = md.versions()
     vv = decisions.vkey(v)
-    return {"versions": json.loads(json.dumps(v, sort_keys=True)), "vkey": vv[0] if vv else None,
-            "doc": decisions.vkey_doc(v), "cpu_s": time.process_time()}
+    out = {"versions": json.loads(json.dumps(v, sort_keys=True)), "vkey": vv[0] if vv else None,
+           "doc": decisions.vkey_doc(v), "cpu_s": time.process_time()}
+    if weekly_of(v) != start:
+        out["error"] = f"a weekly dataset's build changed during the run ({start} -> {weekly_of(v)})"
+    return out
+
+
+WEEKLY_WAIT_S = 180.0
+
+
+def weekly_of(versions):
+    return {k: versions.get(k) for k in WEEKLY_KEYS} if isinstance(versions, dict) else None
+
+
+def wait_weekly(md, wait_s=None, sleep=time.sleep):
+    """The weekly datasets' builds ({rails, lanes, stations}) once every one is known (each manifest asked, again
+    every 10 s for up to wait_s), or None. Planning without them would make plans without their tags."""
+    srcs = [getattr(md, a, None) for a in ("rail_tags", "lane_tags", "station_tags")]
+    t0 = time.monotonic()
+    wait_s = WEEKLY_WAIT_S if wait_s is None else wait_s
+    while True:
+        for src in srcs:
+            if src is not None:
+                src.version()
+        got = weekly_of(md.versions())
+        if all(got.get(k, 0) is not None for k in WEEKLY_KEYS):
+            return got
+        if time.monotonic() - t0 >= wait_s:
+            return None
+        sleep(10.0)
+
+
+def _ways_worker(args):
+    """The way ids and weekly slice digest of each cell of cells (decisions.ids_of / slice_digest), as records
+    {"w": [z, x, y], "ids", "s", "weekly"} in out_jsonl."""
+    cache, cells, out_jsonl, wid = args
+    import logging
+    import blockworker as bw
+    import decisions
+    import earthd
+    import mapcells
+    earthd.raise_open_files()
+    bw.init(cache, False, True, True, True, True, None, logging.WARNING, True, True, 0, None, True)
+    md = bw._s.md
+    start = wait_weekly(md)
+    if start is None:
+        return {"error": "the weekly datasets' manifests could not be had"}
+    sources = {"rails": getattr(md, "rail_tags", None), "lanes": getattr(md, "lane_tags", None)}
+    with open(out_jsonl, "w") as rec:
+        for z, x, y in cells:
+            try:
+                f = md.cell(mapcells.CellKey(z, x, y), layers=("roads",), kind="demand").layers.get("roads")
+                ids = decisions.ids_of(f)
+                d = decisions.slice_digest(sources, (z, x, y), ids)
+            except Exception as ex:          # (no slice: the items whose rings hold it are left out)
+                print(f"ways worker {wid}: cell {z}/{x}/{y}: {type(ex).__name__}: {ex}", flush=True)
+                continue
+            rec.write(json.dumps({"w": [z, x, y], "ids": ids, "s": d, "weekly": start}) + "\n")
+    return {"weekly": start if weekly_of(md.versions()) == start else None}
 
 
 def plan_area(cache, cells, procs, work, label):
@@ -200,15 +265,61 @@ def plan_area(cache, cells, procs, work, label):
             if os.path.exists(j[2]):
                 os.remove(j[2])
         with multiprocessing.get_context("spawn").Pool(len(pj)) as pool:
-            results += pool.map(_worker, pj)
+            got = pool.map(_worker, pj)
+        results += got
         jobs += pj
-        have = {tuple(r["plans"]) for r in _records(jobs) if "plans" in r}
+        final = final_versions(got)
+        have = complete_cells(_records(jobs), final)
         todo = [c for c in cells if (c[0], c[1], c[2]) not in have]
         print(f"{label} pass {pass_ + 1}: {len(cells) - len(todo)}/{len(cells)} cells' plans complete, "
               f"{time.time() - t0:.0f} s", flush=True)
         if not todo:
             break
-    return list(_records(jobs)), results
+    return list(_records(jobs)), results, final
+
+
+def ways_area(cache, cells, procs, work, label):
+    """{(z, x, y): (way ids, slice digest or None)} of cells, and the weekly builds they were made with (None when
+    they changed meanwhile or could not be had)."""
+    os.makedirs(work, exist_ok=True)
+    cells = sorted(cells)
+    jobs = [(cache, cells[i::procs], os.path.join(work, f"{label}_ways{i}.jsonl"), i) for i in range(procs)]
+    jobs = [j for j in jobs if j[1]]
+    with multiprocessing.get_context("spawn").Pool(len(jobs)) as pool:
+        res = pool.map(_ways_worker, jobs)
+    weekly = {json.dumps(r.get("weekly"), sort_keys=True) for r in res}
+    out = {}
+    for j in jobs:
+        if os.path.exists(j[2]):
+            with open(j[2]) as f:
+                for ln in f:
+                    r = json.loads(ln)
+                    out[tuple(r["w"])] = (r["ids"], r["s"])
+    return out, (json.loads(weekly.pop()) if len(weekly) == 1 else None)
+
+
+def final_versions(results):
+    """The map data's versions every worker of a pass ended with (weekly builds included), or None (they differ, or
+    a worker failed)."""
+    vs = {json.dumps(r.get("versions"), sort_keys=True) for r in results}
+    if len(vs) != 1 or any(r.get("error") for r in results):
+        return None
+    return json.loads(vs.pop())
+
+
+def _same(versions, final):
+    if versions is None or final is None:
+        return False
+    if isinstance(versions, str):
+        versions = json.loads(versions)
+    return json.dumps(versions, sort_keys=True) == json.dumps(final, sort_keys=True)
+
+
+def complete_cells(records, final):
+    """The cells whose plans records were made with the final versions: only those are packed (pack), so only those
+    count as done; a record keyed with other versions (a cold cache's first plans, before the weekly manifests came)
+    leaves its cell to be planned again."""
+    return {tuple(r["plans"]) for r in records if "plans" in r and _same(r.get("versions"), final)}
 
 
 def _records(jobs):
@@ -220,53 +331,99 @@ def _records(jobs):
 
 
 # --- packing -------------------------------------------------------------------------------------------------------
-def pack(records, out, vkey_hex, vkey_bytes, doc, seed, built_by):
-    """The records' items into their blocks under <out>/d<FORMAT>/<vkey>/ (merged with blocks there), signed; the
-    manifest rewritten. Returns {(bx, by): bytes}."""
+def block_items(records, ways, final, place):
+    """{(bx, by): {item key: (bytes, npz)}} of the records made with the final versions for cells of place (a set of
+    (z, x, y)), each key with its ring's digest (decisions.dep_digest of the ways' slice digests), and each block's
+    ring cells' way ids (w/...). An item whose ring has a cell without a slice is left out (players plan it)."""
     import decisions
-    import fast
-    root = os.path.join(out, f"d{decisions.FORMAT}", vkey_hex)
     by_block = {}
-    vjson = json.dumps(doc["versions"], sort_keys=True)
+
+    def dep(cell, r):
+        sl = []
+        for c in decisions.ring(cell, r):
+            w = ways.get(c)
+            if w is None or w[1] is None:
+                return None, None
+            sl.append((c, w[1]))
+        return decisions.dep_digest(sl), [c for c, _ in sl]
+
+    def add(cell, key, data, is_npz, r):
+        d, ring_cells = dep(cell, r)
+        if d is None:
+            return
+        items = by_block.setdefault(decisions.block_of(cell), {})
+        items[f"{key}@{d}"] = (data, is_npz)
+        for c in ring_cells:
+            items[decisions.ways_key(c)] = (json.dumps(ways[c][0], separators=(",", ":")).encode("utf-8"), False)
     for r in records:
         if "plans" in r:
-            if r.get("versions") is not None and json.dumps(r["versions"], sort_keys=True) != vjson:
+            cell = tuple(r["plans"])
+            if cell not in place or not _same(r.get("versions"), final):
                 continue
             try:
                 with open(r["path"], "rb") as f:
                     data = f.read()
             except OSError:
                 continue
-            cell = tuple(r["plans"])
-            by_block.setdefault(decisions.block_of(cell), {})[decisions.plans_key(r["sig"], cell)] = (data, True)
+            add(cell, decisions.plans_key(r["sig"], cell), data, True, decisions.RING_PLANS)
         elif "facts" in r:
-            if json.dumps(json.loads(r["versions"]), sort_keys=True) != vjson:
-                continue
             cell = tuple(int(v) for v in r["cell"].split("/"))
-            key = decisions.facts_key(r["layer"], r["facts"], r["extra"], r["cell"])
-            by_block.setdefault(decisions.block_of(cell), {})[key] = (r["data"].encode("utf-8"), False)
+            if cell not in place or not _same(r["versions"], final):
+                continue
+            add(cell, decisions.facts_key(r["layer"], r["facts"], r["extra"], r["cell"]), r["data"].encode("utf-8"),
+                False, decisions.RING_FACTS)
+    return by_block
+
+
+def _index(root):
+    try:
+        with open(os.path.join(root, "current.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def pack(by_block, out, vkey_hex, vkey_bytes, doc, seed, built_by):
+    """by_block's items into their blocks under <out>/d<FORMAT>/<vkey>/12/<x>/<y>.<h>.bngd (h: the file's own sha256,
+    16 hex; merged with the block's current file: its items kept unless made again, by base key), signed; the
+    current names in current.json, the replaced ones in retired.json (with when: run.py prune-out removes them after
+    a grace period, so a client holding the old manifest still finds them); the manifest rewritten. Returns
+    {(bx, by): bytes}."""
+    import decisions
+    import fast
+    root = os.path.join(out, f"d{decisions.FORMAT}", vkey_hex)
+    os.makedirs(root, exist_ok=True)
+    cur = _index(root)
+    try:
+        with open(os.path.join(root, "retired.json")) as f:
+            retired = json.load(f)
+    except (OSError, ValueError):
+        retired = {}
     pub = fast._ef.dec_public_key(seed)
     sizes = {}
     for (bx, by), items in sorted(by_block.items()):
-        path = os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.bngd")
-        if os.path.exists(path):        # (a block built before: its items kept unless made again now)
-            with open(path, "rb") as f:
+        name = f"{bx}/{by}"
+        old_h = cur.get(name)
+        if old_h:                       # (a block built before: its items kept unless made again now)
+            with open(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{old_h}.bngd"), "rb") as f:
                 old = f.read()
             fast._ef.dec_verify_block(old, decisions.BLOCK_Z, bx, by, vkey_bytes, [pub])
+            made = {decisions.base_key(k) for k in items}
             for k in fast._ef.dec_block_info(old)[4]:
-                if k not in items:
+                if decisions.base_key(k) not in made:
                     items[k] = (fast._ef.dec_block_item(old, k), k.startswith("p/"))
         body = fast._ef.dec_pack_block(decisions.BLOCK_Z, bx, by, vkey_bytes,
                                        [(k, v[0], v[1]) for k, v in sorted(items.items())], seed)
-        decisions._write(path, body)
+        h = hashlib.sha256(body).hexdigest()[:decisions.HASH_HEX]
+        decisions._write(os.path.join(root, str(decisions.BLOCK_Z), str(bx), f"{by}.{h}.bngd"), body)
+        if old_h and old_h != h:
+            retired[f"{decisions.BLOCK_Z}/{bx}/{by}.{old_h}.bngd"] = time.time()
+        cur[name] = h
         sizes[(bx, by)] = len(body)
-    blocks = []
-    zdir = os.path.join(root, str(decisions.BLOCK_Z))
-    for x in os.listdir(zdir) if os.path.isdir(zdir) else ():
-        for n in os.listdir(os.path.join(zdir, x)):
-            if n.endswith(".bngd"):
-                blocks.append([int(x), int(n[:-5])])
-    man = {"format": decisions.FORMAT, "vkey": vkey_hex, "doc": doc, "blocks": sorted(blocks),
+    decisions._write(os.path.join(root, "retired.json"), json.dumps(retired, sort_keys=True).encode())
+    decisions._write(os.path.join(root, "current.json"), json.dumps(cur, sort_keys=True).encode())
+    blocks = sorted([int(k.split("/")[0]), int(k.split("/")[1]), h] for k, h in cur.items())
+    man = {"format": decisions.FORMAT, "vkey": vkey_hex, "doc": doc, "blocks": blocks,
            "built": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "builder": built_by,
            "key": pub.hex()[:16]}
     decisions._write(os.path.join(root, "manifest.bngm"),
@@ -339,19 +496,31 @@ def main():
         cells = [(c.z, c.x, c.y, *c.center()) for c in keys]
         label = re.sub(r"[^A-Za-z0-9]+", "_", name)[:40]
         t0, c0 = time.time(), os.times()
-        recs, results = plan_area(a.cache, cells, min(a.procs, len(cells)), work, label)
-        vks = {r["vkey"] for r in results}
-        if len(vks) != 1 or None in vks:
-            print(f"{name}: the workers' version keys differ or are unknown ({vks}): not packed", flush=True)
+        recs, results, final = plan_area(a.cache, cells, min(a.procs, len(cells)), work, label)
+        errs = sorted({r["error"] for r in results if r.get("error")})
+        if final is None or errs:
+            print(f"{name}: the last pass's workers did not agree on the map data's versions or failed ({errs}): "
+                  "not packed", flush=True)
             continue
-        vk = vks.pop()
-        doc = results[0]["doc"]
-        vkb = hashlib.sha256(decisions.canonical(doc)).digest()
-        assert vkb.hex()[:32] == vk
-        sizes = pack(recs, a.out, vk, vkb, doc, seed, {"native": int(fast._ef.VERSION), "tool": "build_decisions 1"})
+        vv = decisions.vkey(final)
+        vk, doc = vv[0], decisions.vkey_doc(final)
+        vkb = vv[1]
+        place = {(c[0], c[1], c[2]) for c in cells}
+        need = set()
+        for c in place:
+            need.update(decisions.ring(c, decisions.RING_PLANS))
+        ways, weekly = ways_area(a.cache, need, min(a.procs, len(need)), work, label)
+        if weekly != weekly_of(final):
+            print(f"{name}: the weekly slices were made with other builds ({weekly}) than the plans "
+                  f"({weekly_of(final)}): not packed", flush=True)
+            continue
+        by_block = block_items(recs, ways, final, place)
+        sizes = pack(by_block, a.out, vk, vkb, doc, seed, {"native": int(fast._ef.VERSION),
+                                                            "tool": "build_decisions 2"})
         c1 = os.times()
         st = {"place": name, "bbox": [s, w, n, e], "cells": len(cells), "vkey": vk,
               "plans": sum(1 for r in recs if "plans" in r), "facts": sum(1 for r in recs if "facts" in r),
+              "items": sum(len(v) for v in by_block.values()), "weekly": weekly,
               "wall_s": round(time.time() - t0, 1),
               "cpu_s": round(sum(r["cpu_s"] for r in results) + (c1.user - c0.user) + (c1.system - c0.system), 1),
               "blocks": {f"{bx}/{by}": sz for (bx, by), sz in sizes.items()}}

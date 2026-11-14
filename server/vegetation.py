@@ -1649,6 +1649,15 @@ class Tracker:
         self._quads = {}            # (anchor id, key) -> its quad in that anchor's world
         self.rebuilt = 0            # tiles built again for a key sent before (diagnostics: 0 with geo)
         self.ever = set() if rebuild_history else None
+        # (geotiles: redo_all, the tiles sent asked for again, sent again only where their file changed; digests: the
+        # sent files' digests are kept for that, earthd's stale mode turns it on)
+        self.redo, self.sent_h, self.digests = set(), {}, False
+
+    def redo_all(self):
+        """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
+        one whose file comes back the same is not sent."""
+        if self.geo:
+            self.redo = set(self.sent)
 
     def close(self):
         if self.pool is not None:
@@ -1665,13 +1674,15 @@ class Tracker:
         car = getattr(self, "car", ())
         return sum(1 for k in car if k in self.sent), len(car)
 
-    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None):
+    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
         (view), the car's first; dropped beyond drop_m of both. foci: other vehicles' collision foci (x, y, r, ...)
-        whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m."""
+        whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
+        tree: the car's time-to-reach tree (reach.Tree; geotiles only): the car's tiles in its order
+        (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
         import roads as roadsmod
         if self.geo:
-            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame)
+            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
         if aid != self.aid:
             for f in self.futs.values():
                 f.cancel()                  # the old anchor's that have not started
@@ -1713,7 +1724,7 @@ class Tracker:
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
 
-    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame):
+    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
         """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
         inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
         what was sent and in flight."""
@@ -1744,6 +1755,12 @@ class Tracker:
             for p in spots:
                 skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
         car = [k for k in near(x, y, self.send_m) if k not in skip]
+        if tree is not None and car:
+            import reach
+            try:
+                car = reach.order_geotiles(tree, frame, car, x, y, z)
+            except Exception as e:      # (nearest first, as before)
+                log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
         self.car = set(car)
         seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
         others = []
@@ -1754,13 +1771,15 @@ class Tracker:
             if k not in done:
                 done.add(k)
                 order.append(k)
-        want = [k for k in order if k not in self.sent and k not in self.building]
+        self.redo &= self.sent
+        want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
         for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((gx, gy))
             fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
+            self.sent_h.pop(k, None)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
@@ -1818,6 +1837,19 @@ class Tracker:
             return
         path, n, frame, pivot = res[:4]
         shapes = res[4] if len(res) > 4 else None       # (the far geotiles': {what: shape file}, pooled paths below)
+        again = key in self.redo
+        self.redo.discard(key)
+        if self.digests or again:
+            h = None
+            try:
+                import hashlib
+                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                    h = hashlib.sha1(f.read()).digest()
+            except (OSError, AttributeError):
+                pass
+            if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
+                return                  # (the same tile as the one the mod has)
+            self.sent_h[key] = h
         if self.ever is not None:
             if key in self.ever:
                 self.rebuilt += 1
@@ -1882,7 +1914,7 @@ class Tracker:
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)
-        if self.kind in ("bldfar", "bldsky", "brfar") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
+        if self.kind in ("bldfar", "bldsky", "brfar", "bldpack") and pool is not None:     # its mesh at a pooled shape path (matslots.py)
             slots = pool(conn, {"shape": f"{self.kind}_{aid}_{key[0]}_{key[1]}.cdae"})
             if slots:
                 m["slots"] = slots

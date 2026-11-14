@@ -1,9 +1,11 @@
 {
-  "_": "What a road sign means, whatever it looks like (task 017). The index of a role in `roles` is its atlas cell, in every system: tools/build_sign_atlas.py draws them, native roadsigns.rs cuts `shape` out of the cell.",
+  "_": "What a road sign means, whatever it looks like (task 017). The index of a role in `roles` is its atlas cell, in every system, but where variant_cells gives a system's field colour its own drawing of a role (the warning triangles' yellow field: one atlas, bne_signs_<atlas>.color, for both systems since 2026-11-13): tools/build_sign_atlas.py draws them, native roadsigns.rs cuts `shape` out of the cell.",
   "cell_px": 256,
   "cols": 8,
   "rows": 16,
   "systems": {"vienna_w": "white", "vienna_y": "yellow"},
+  "atlas": "vienna",
+  "variant_cells": {"yellow": {"warn.curve_right": 68, "warn.curve_left": 69, "warn.double_right": 70, "warn.double_left": 71, "warn.crossroads": 72, "warn.side_right": 73, "warn.side_left": 74, "warn.roundabout": 75, "warn.signals": 76, "warn.level_gate": 77, "warn.level_nogate": 78, "warn.steep_down": 79, "warn.steep_up": 80, "warn.narrow_both": 81, "warn.narrow_right": 82, "warn.narrow_left": 83, "warn.bump": 84, "warn.slippery": 85, "warn.pedestrians": 86, "warn.children": 87, "warn.cyclists": 88, "warn.animals": 89, "warn.roadworks": 90, "warn.danger": 91}},
   "roles": [
     {"id": "prio.main_road", "group": "priority", "shape": "diamond"},
     {"id": "prio.main_road_end", "group": "priority", "shape": "diamond"},

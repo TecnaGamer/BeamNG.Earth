@@ -1961,7 +1961,8 @@ class ZoneSignsTest(unittest.TestCase):
         self.assertLessEqual(set(dezones.MATERIALS_ZONE), set(mats))
         sheet = mats["bne_de_zones"]["Stages"][0]["baseColorMap"]
         self.assertTrue(sheet.endswith("/bne_de_zones.dds"))
-        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        self.assertTrue(_mt.is_shipped(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
 
 
 def _flat0(la, lo):

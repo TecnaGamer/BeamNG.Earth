@@ -10,9 +10,11 @@ map (decimetres in the cell's ENU frame), its diameter, its kind (cedar / metal)
 A road tile in the coverage box asks for the shards under it as it starts (Fetch, on a thread); tank_rows waits WAIT_S
 at most. A building whose roof holds a tank point carries a tank there (the topmost part under the point), sized from
 the photo; in a cell the manifest lists, no other building has one (the photo is the answer, an empty roof included).
-A cell the manifest does not list keeps the procedural tanks. A shard that could not be had: the procedural tanks for
-now and the tile faulted (revisit.fault: built again later). Nothing is asked before the manifest is published (a
-missing manifest: asked again after MANIFEST_RETRY_S, nothing kept). BNE_NYC_TANKS=off: the procedural tanks as before.
+A cell the manifest does not list keeps the procedural tanks. A shard that could not be had (or did not match the
+manifest, or a listed cell gone): the procedural tanks for now and the tile faulted (revisit.fault: built again
+later). The manifest and shards are nycshards.Shards': the build pinned on disk when the process first asks, for the
+whole process, named in the keys of the tiles near BOX (blockworker._nyc_key); none pinned (not published, not
+fetched yet): no measured tanks, nothing faulted. BNE_NYC_TANKS=off: the procedural tanks as before.
 
     BNE_NYC_TANKS_URL   the shards' base URL (default: the data repo's Pages, nyctanks/v1)
     BNE_NYC_TANKS_DIR   a local folder with <dir>/manifest.json and <dir>/14/<x>/<y>.npz (a build before publishing)
@@ -28,6 +30,8 @@ import zipfile
 
 import numpy as np
 
+import nycshards
+
 log = logging.getLogger("earthd.nyctanks")
 
 ON = os.environ.get("BNE_NYC_TANKS", "on") != "off"
@@ -35,10 +39,6 @@ VERSION = "v1"
 BOX = (40.47, -74.28, 40.94, -73.68)    # south, west, north, east: the five boroughs
 ZOOM = 14
 WAIT_S = 10.0
-SHARD_RETRY_S = 600
-MISS_TTL_S = 7 * 86400
-MANIFEST_TTL_S = 86400
-MANIFEST_RETRY_S = 3600
 SHARD_KEYS = ("xy", "d", "kind", "h")
 KINDS = ("cedar", "metal")
 
@@ -88,146 +88,30 @@ def decode(body):
             "kind": a["kind"].astype(np.int64), "h": a["h"].astype(np.float64) / 10.0}
 
 
-class Source:
-    """The shards: from the local folder (BNE_NYC_TANKS_DIR), else fetched once (the manifest's cells only) and kept on
-    disk under <cache>/pagesdata/nyctanks/<VERSION>/, the last MEM held in memory."""
+class Source(nycshards.Shards):
+    """The shards (nycshards.Shards: the build frozen per process, checked, kept on disk under its identity), decoded,
+    the last MEM held in memory."""
 
+    NAME, VERSION = "nyctanks", VERSION
     MEM = 32
 
     def __init__(self, cache_dir, fetcher=None, local=None, base=None):
-        self.dir = os.path.join(cache_dir, "pagesdata", "nyctanks", VERSION) if cache_dir else None
-        self.local = local
-        self.base = base or base_url()
-        self.fetcher = fetcher
-        self.lock = threading.Lock()
-        self.mem = {}
-        self.failed = {}
-        self._cells = None
-        self._cells_at = -1e18
-        self._absent = None
+        super().__init__(cache_dir, fetcher, local, base or base_url())
+
+    @staticmethod
+    def _decode(body):
+        return decode(body)
+
+    def on(self):
+        return ON
 
     def _path(self, key):
-        return os.path.join(self.dir, f"{key.z}_{key.x}_{key.y}.npz") if self.dir else None
-
-    def cells(self):
-        """The manifest's cells ("z/x/y"); False: none published (404); None: not had (offline). Asked again after
-        MANIFEST_RETRY_S."""
-        if self.local:
-            if self._cells is None:
-                try:
-                    with open(os.path.join(self.local, "manifest.json"), "rb") as fh:
-                        self._cells = set(json.loads(fh.read().decode("utf-8")).get("cells", {}).keys())
-                except (OSError, ValueError, UnicodeDecodeError):
-                    return False
-            return self._cells
-        import netfetch
-        with self.lock:
-            if self._cells is not None:
-                return self._cells
-            if time.time() - self._cells_at < MANIFEST_RETRY_S:
-                return self._absent
-            self._cells_at = time.time()
-            if self.fetcher is None:
-                self.fetcher = netfetch.Fetcher()
-            fetcher = self.fetcher
-        path = os.path.join(self.dir, "manifest.json") if self.dir else None
-        body = None
-        if path and os.path.exists(path) and time.time() - os.path.getmtime(path) < MANIFEST_TTL_S:
-            try:
-                with open(path, "rb") as fh:
-                    body = fh.read()
-            except OSError:
-                body = None
-        if body is None:
-            try:
-                body = fetcher.get(f"{self.base}/manifest.json", kind="demand").body
-            except netfetch.NotFound:
-                with self.lock:
-                    self._absent = False
-                return False
-            except Exception as e:
-                log.debug("nyc tanks manifest: %s: %s", type(e).__name__, e)
-                with self.lock:
-                    self._absent = None
-                return None
-            _keep(path, body, self.dir)
-        try:
-            j = json.loads(body.decode("utf-8"))
-            cells = set(j.get("cells", {}).keys())
-        except (ValueError, AttributeError, UnicodeDecodeError):
-            return None
-        import railtags
-        with self.lock:
-            self._cells = cells
-            self.data = railtags.data_url(j)    # (the shards' host the manifest names, None: beside it)
-        return cells
+        return self.path(key)
 
     def shard(self, key):
-        """The arrays of cell key ({}: none there), or None: not had (offline, the site failing: asked again later)."""
-        with self.lock:
-            got = self.mem.get(key)
-        if got is not None:
-            return got
-        if self.local:
-            try:
-                with open(os.path.join(self.local, str(key.z), str(key.x), f"{key.y}.npz"), "rb") as fh:
-                    body = fh.read()
-            except OSError:
-                body = b""
-        else:
-            path = self._path(key)
-            body = None
-            if path and os.path.exists(path):
-                try:
-                    if not (os.path.getsize(path) == 0 and time.time() - os.path.getmtime(path) > MISS_TTL_S):
-                        with open(path, "rb") as fh:
-                            body = fh.read()
-                except OSError:
-                    body = None
-            if body is None:
-                body = self._fetch(key)
-                if body is None:
-                    return None
-                _keep(path, body, self.dir)
-        got = decode(body)
-        with self.lock:
-            self.mem[key] = got
-            while len(self.mem) > self.MEM:
-                self.mem.pop(next(iter(self.mem)))
-        return got
-
-    def _fetch(self, key):
-        import netfetch
-        with self.lock:
-            if time.time() - self.failed.get(key, -1e18) < SHARD_RETRY_S:
-                return None
-            if self.fetcher is None:
-                self.fetcher = netfetch.Fetcher()
-            fetcher = self.fetcher
-        import railtags
-        try:
-            return railtags.fetch_data(fetcher, getattr(self, "data", None), self.base,
-                                       f"{key.z}/{key.x}/{key.y}.npz")
-        except netfetch.NotFound:
-            return b""
-        except Exception as e:
-            log.debug("nyc tanks shard %s: %s: %s", key, type(e).__name__, e)
-            with self.lock:
-                self.failed[key] = time.time()
-            return None
-
-
-def _keep(path, body, d):
-    if not path:
-        return
-    try:
-        os.makedirs(d, exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.part"
-        with open(tmp, "wb") as fh:
-            fh.write(body)
-        os.replace(tmp, path)
-    except OSError as e:
-        log.debug("nyc tanks: keep %s: %s", path, e)
+        """The arrays of cell key ({} none there, or no build decided), or None: not had (offline, the site failing,
+        not the manifest's: asked again later). Held in memory under the build's identity (nycshards.decoded)."""
+        return self.decoded(key)
 
 
 _SOURCES = {}
@@ -242,6 +126,13 @@ def source(cache_dir):
         if got is None:
             got = _SOURCES[k] = Source(cache_dir, local=k[1], base=k[2])
         return got
+
+
+def identity(cache_dir, peek=False):
+    """This dataset's identity for the tiles' keys (nycshards.Shards.identity; "off" when off; peek: not deciding)."""
+    if not ON or not (cache_dir or local_dir()):
+        return "off"
+    return source(cache_dir).identity(peek)
 
 
 class Fetch:
@@ -265,9 +156,9 @@ class Fetch:
 
         def work():
             cells = src.cells()
-            if not cells:               # (None: not had, asked again; False: not published)
-                return cells
-            return [(k, src.shard(k) if f"{k.z}/{k.x}/{k.y}" in cells else False) for k in keys]
+            if cells is False:          # (no build frozen: not published yet, or not pinned yet: the procedural tanks)
+                return False
+            return [(k, src.shard(k) if cells is None or f"{k.z}/{k.x}/{k.y}" in cells else False) for k in keys]
         self.fut = _POOL.submit(work)
 
     def result(self):

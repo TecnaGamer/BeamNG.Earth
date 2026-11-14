@@ -290,7 +290,7 @@ pub fn value_noises<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
 /// The 2 x 2 sub-pixel centres (p + 0.25, p + 0.75 along each axis) of an h x w photo inside any of pads (each a
 /// closed ring as (cols, rows) in photo pixels, even-odd within a ring, the union over rings): one bit per sub-pixel
 /// (bit 2 * row + col) over the pads' clipped bounding box. Returns (r0, c0, rows, cols, bits) or None.
-fn pad_bits(h: usize, w: usize, pads: &[(Vec<f64>, Vec<f64>)]) -> Option<(usize, usize, usize, usize, Vec<u8>)> {
+pub(crate) fn pad_bits(h: usize, w: usize, pads: &[(Vec<f64>, Vec<f64>)]) -> Option<(usize, usize, usize, usize, Vec<u8>)> {
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for (cs, rs) in pads {
         for (&c, &r) in cs.iter().zip(rs) {

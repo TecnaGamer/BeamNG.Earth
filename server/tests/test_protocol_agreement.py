@@ -106,8 +106,11 @@ MOD_TO_SERVER = {
               "trafficVisuals": F(int, OPT),
               # ... the road tiles too (roads.lua ROAD_GEO: content kept, a skin per anchor; roads.GeoTracker)
               "roadGeo": F(int, OPT),
+              # ... a generation swap's commit barrier (roads.lua swapCommit; earthd Connection.stale_swap)
+              "swapGen": F(int, OPT),
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
+              "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
               # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
               "turbineGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
@@ -125,6 +128,8 @@ MOD_TO_SERVER = {
     "commit_anchor": {"anchorId": F(int)},
     "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
+    # a generation swap committed (ok) or given up by the mod (core.lua _swapStep; earthd Connection.stale_swap)
+    "swap_done": {"gen": F(int), "ok": F(bool), "why": F(str, OPT)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
@@ -193,7 +198,8 @@ MOD_TO_SERVER = {
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     "stations": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "r_km": F(NUM), "kinds": F(list), "mode": F(str)},   # the station finder
-    "preload_place": {"lat": F(NUM), "lon": F(NUM)},     # a destination picked on the world map, loaded ahead
+    # a destination picked on the world map, loaded ahead; hover: one the pointer rests on (the light part)
+    "preload_place": {"lat": F(NUM), "lon": F(NUM), "hover": F(bool, OPT)},
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
     # imagery / mapdata (world: not asked by the map yet)
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
@@ -318,6 +324,7 @@ SERVER_TO_MOD = {
               "trafficVisuals": F(int, OPT),    # visual roads, independent of the AI graph's physics window
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
+              "farPack": F(int, OPT),           # ... and the far buildings past PACK_INNER_M as packs (hello.farPack)
               "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
               "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
@@ -344,7 +351,13 @@ SERVER_TO_MOD = {
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
-    "terrain_refresh": {"anchorId": F(int), **TERRAIN},     # the graded block in place of the provisional one
+    # the graded block in place of the provisional one; swap: a generation swap's block, held by the mod until the
+    # swap's skins are staged and committed with them
+    "terrain_refresh": {"anchorId": F(int), "swap": F(int, OPT), **TERRAIN},
+    # a generation swap (earthd Connection.stale_swap): what follows with `swap = gen` is staged; all of it sent; given up
+    "swap_begin": {"anchorId": F(int), "gen": F(int)},
+    "swap_end": {"anchorId": F(int), "gen": F(int), "skins": F(int)},
+    "swap_abort": {"anchorId": F(int), "gen": F(int)},
     "terrain_error": {"requestId": F(int, NULL), "anchorId": F(int, NULL), "error": F(str)},
     "far_tile": {"anchorId": F(int), "key": F(str), "level": F(int), "shape": F(str), "pos": F(list),
                  "err": F(NUM), "skirt": F(NUM), "sink": F(NUM, OPT), "state": F(str),   # sink: exactly on L0
@@ -393,7 +406,8 @@ SERVER_TO_MOD = {
                    # exact {what: shape}: the parts this anchor shows as their exact variants (slots "x:<what>")
                    "frame": F(list, OPT), "h": F(str, OPT), "exact": F(dict, OPT)},
     # a road geotile's draped surfaces for an anchor (road mesh, plazas, sidewalks; their colliders), a JSON file
-    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT)},
+    "roads_skin": {"anchorId": F(int), "key": F(str), "path": F(str), "data": F(dict, OPT), "slots": F(dict, OPT),
+                   "swap": F(int, OPT)},
     # a road geotile's parts shown as their exact variant for an anchor ({what: shape}; false: the base shape again)
     "roads_exact": {"anchorId": F(int), "key": F(str), "parts": F(dict), "slots": F(dict, OPT)},
     "roads_drop": {"anchorId": F(int), "key": F(str)},
@@ -428,6 +442,10 @@ SERVER_TO_MOD = {
                    "slots": F(dict, OPT),      # (a geotile's: {road geotile key: [pooled shape path, serial]})
                    "frame": F(list, OPT), "pivot": F(NUM, OPT)},
     "brfar_drop": {"anchorId": F(int), "key": F(str)},
+    # the far buildings of a whole skyline square past buildings.PACK_INNER_M as one shape (hello.farPack, key "g15_x_y")
+    "bldpack_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                     "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
+    "bldpack_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
     "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
                  "serial": F(int)},
@@ -464,6 +482,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
+                       "swap_begin", "swap_end", "swap_abort",       # a generation swap (test_stale_revisit.StaleSwapTest)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "catchup",                                    # the catch-up boost: a driving player behind (test_catchup)
@@ -481,6 +500,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "report_status", "report_context_done",       # the reporter's Send window: a player's click (test_reportsend)
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
+                       "bldpack_tile", "bldpack_drop",               # hello.farPack: needs map data
                        "navgraph",                                   # --traffic on: needs map data
                        "traffic_tile", "traffic_drop",                # visual traffic: negotiated, needs map data
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream
@@ -908,7 +928,8 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(mats[name]["mapTo"], name)                        # P2: mapTo overrides the shape's own
         self.assertEqual(mats[name]["class"], "Material")
         palette = mats[name]["Stages"][0]["baseColorMap"]
-        self.assertTrue((modsim.MOD_ROOT / palette.lstrip("/")).is_file(), palette)
+        __import__('sys').path.insert(0, __import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)), '..', '..', 'tools')); import mod_textures_dds as _mt
+        self.assertTrue(_mt.is_shipped(modsim.MOD_ROOT / palette.lstrip("/")), palette)
         # the level loader picks up every *materials.json under the level folder, so the file must
         # live inside levels/beamng_earth
         self.assertTrue(vfs.startswith("/levels/beamng_earth/"))

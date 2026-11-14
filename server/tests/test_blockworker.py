@@ -552,5 +552,171 @@ class AnchorCacheTest(unittest.TestCase):
         self.assertEqual(sorted(st.chunks), [3, 4])
 
 
+class FirstCellsTest(unittest.TestCase):
+    """A teleport's first block's map cells planned from the request on, a worker process each (earthd.Server
+    .plan_first, blockworker.first_cells / plan_first)."""
+
+    def setUp(self):
+        import plancache
+        import shutil
+        self.dir = tempfile.mkdtemp()       # (removed without complaint: the revisit cache's pack may still be open)
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        os.environ[plancache.RUN_ENV] = "test"
+        self.addCleanup(os.environ.pop, plancache.RUN_ENV, None)
+
+    def grader(self, md):
+        import grading
+        import plancache
+        g = grading.Grader(FRAME, md, lambda la, lo: 10.0 + 0.0 * np.asarray(la))
+        g.shared = plancache.for_grader(self.dir, g, None, None)
+        return g
+
+    def test_the_cells_the_block_plans(self):
+        """first_cells names the cells Grader.prepare plans for the block's points (plan_ahead's)."""
+        import grading
+        import heightmap
+        half = 1024 * heightmap.SQUARE / 2
+        keys = blockworker.first_cells(LAT, LON, 0.0, 0.0, half)
+        xs = np.linspace(-half, half, 5)
+        X, Y = np.meshgrid(xs, xs)
+        la, lo, _ = FRAME.enu_to_geodetic(X.ravel(), Y.ravel(), 0.0)
+        g = grading.Grader(FRAME, None, None)
+        want = [k for pl, idx in g.store.planners_of(np.asarray(la), np.asarray(lo))
+                for k in pl._keys(np.asarray(la)[idx] if idx is not None else np.asarray(la),
+                                  np.asarray(lo)[idx] if idx is not None else np.asarray(lo))]
+        self.assertEqual(list(keys), list(dict.fromkeys(want)))
+        self.assertGreaterEqual(len(keys), 1)
+
+    def test_planned_once_and_read_by_the_block(self):
+        from test_grading import FakeMD
+        import xproc
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        worker = self.grader(FakeMD(f))                 # (a road tile's process)
+        key = [k for pl, idx in worker.store.planners_of(np.asarray(la), np.asarray(lo))
+               for k in pl._keys(np.asarray(la), np.asarray(lo))][0]
+        st = SimpleNamespace(anchor=lambda aid, lat, lon: (worker, None))
+        ranks = []
+        real = worker.shared.claim
+        worker.shared.claim = lambda k: (ranks.append(xproc._rank("demand")), real(k))[1]
+        old, blockworker._s, pri = getattr(blockworker, "_s", None), st, xproc.PRIORITY
+        xproc.PRIORITY = 3
+        try:
+            self.assertIs(blockworker.plan_first(7, LAT, LON, tuple(key), self.dir), True)
+            self.assertIs(blockworker.plan_first(7, LAT, LON, tuple(key), self.dir), False, "planned already")
+            self.assertEqual(blockworker._FIRST[0], 0)
+        finally:
+            blockworker._s, xproc.PRIORITY = old, pri
+        self.assertEqual(ranks, [(1, 0)], "its claim held at the terrain blocks' priority")
+        self.assertEqual(xproc._rank("demand"), (1, int(pri)))
+        self.assertTrue(worker.shared.has(key))
+        md = FakeMD(f)
+        block = self.grader(md)                         # (the block's process reads them)
+        block.store.planner_of_cell(key)._cell_plans(key)
+        self.assertEqual(md.calls, 0)
+
+    def test_a_cell_being_planned_is_left_to_its_planner(self):
+        from test_grading import FakeMD
+        f = features([[(-300, 20), (300, 20)]], ["residential"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        md = FakeMD(f)
+        worker = self.grader(md)
+        key = [k for pl, idx in worker.store.planners_of(np.asarray(la), np.asarray(lo))
+               for k in pl._keys(np.asarray(la), np.asarray(lo))][0]
+        self.assertEqual(worker.shared.claim(key), (None, True))       # (another process plans it now)
+        old, blockworker._s = getattr(blockworker, "_s", None), SimpleNamespace(anchor=lambda *a: (worker, None))
+        try:
+            self.assertIs(blockworker.plan_first(7, LAT, LON, tuple(key), self.dir), False)
+        finally:
+            blockworker._s = old
+            worker.shared.release(key)
+        self.assertEqual(md.calls, 0)
+
+    def test_the_warm_loop_stands_by(self):
+        """No cell is planned ahead beside a first block's cell in the same process (one interpreter lock)."""
+        g = SimpleNamespace(planned=lambda k: False, shared=None)
+        self.assertEqual(blockworker._warm_next([(g, "k")], False), (g, "k"))
+        src = Path(blockworker.__file__).read_text()
+        self.assertIn("job = None if _FIRST[0] > 0 else", src)
+
+    def server(self, pools, road=None, cpus=16):
+        import earthd
+        s = SimpleNamespace(grading=True, block_pools=pools, road_pool=road, out_dir=self.dir,
+                            layout=SimpleNamespace(block=1024))
+        return earthd, s
+
+    def test_server_hands_each_cell_to_a_process(self):
+        from unittest import mock
+        import earthd
+        env = mock.patch.dict(os.environ, {"BNE_FIRST_FANOUT": "on"})   # (sharing is off by default, 2026-11-13)
+        env.start()
+        self.addCleanup(env.stop)
+
+        class Pool:
+            def __init__(self, workers):
+                self.workers, self.jobs = workers, []
+
+            def submit(self, fn, *args):
+                self.jobs.append((fn, args))
+                return mock.Mock()
+        anchor = SimpleNamespace(id=5, lat=LAT, lon=LON)
+        keys = [(14, 1, 1), (14, 2, 1), (14, 1, 2), (14, 2, 2)]
+        req, pre, road = Pool(1), Pool(2), Pool(4)
+        with mock.patch.object(blockworker, "first_cells", return_value=keys), \
+                mock.patch.object(earthd, "sharing_machine", return_value=True), \
+                mock.patch.object(earthd, "server_threads", return_value=16):
+            _, s = self.server([(req, None), (pre, None)], road)
+            self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 4)
+            self.assertEqual(req.jobs, [], "the block's own process is left to the provisional block")
+            self.assertEqual([j[1][3] for j in pre.jobs], keys[:2], "the prefetch lane's processes first")
+            self.assertEqual([j[1][3] for j in road.jobs], keys[2:], "then the road tiles'")
+            self.assertTrue(all(j[0] is blockworker.plan_first and j[1][:3] == (5, LAT, LON) and j[1][4] == self.dir
+                                for j in pre.jobs + road.jobs))
+            # (a lean layout: one block process for both lanes, two road processes; the rest stays the block's)
+            one, road2 = Pool(1), Pool(2)
+            _, s = self.server([(one, None), (one, None)], road2)
+            self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 2)
+            self.assertEqual((one.jobs, len(road2.jobs)), ([], 2))
+            # (off, no worker processes, no grading: none)
+            _, s = self.server([], None)
+            self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 0)
+            _, s = self.server([(req, None), (pre, None)], road)
+            s.grading = False
+            self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 0)
+            s.grading = True
+            with mock.patch.object(earthd, "FIRST_FANOUT", False):
+                self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 0)
+        with mock.patch.object(blockworker, "first_cells", return_value=keys), \
+                mock.patch.object(earthd, "sharing_machine", return_value=True), \
+                mock.patch.object(earthd, "server_threads", return_value=8):    # (half of its threads at most)
+            pre, road = Pool(2), Pool(4)
+            _, s = self.server([(req, None), (pre, None)], road)
+            self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 4)
+            with mock.patch.object(earthd, "server_threads", return_value=6):
+                pre, road = Pool(2), Pool(4)
+                _, s = self.server([(req, None), (pre, None)], road)
+                self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 0, "a server on few threads: none")
+                self.assertEqual(pre.jobs + road.jobs, [])
+        self.assertGreaterEqual(earthd.server_threads(), 1)
+        import budget
+        with mock.patch.object(blockworker, "first_cells", return_value=keys), \
+                mock.patch.object(earthd, "server_threads", return_value=16), \
+                mock.patch.dict(os.environ):
+            os.environ.pop("BNE_STAGE_SHARE", None)
+            os.environ.pop("BNE_FIRST_FANOUT", None)
+            with mock.patch.object(os, "cpu_count", return_value=8), mock.patch.object(budget, "small", return_value=True):
+                pre, road = Pool(2), Pool(4)        # (a Steam Deck: as before)
+                _, s = self.server([(req, None), (pre, None)], road)
+                self.assertFalse(earthd.sharing_machine())
+                self.assertEqual(earthd.Server.plan_first(s, anchor, 0.0, 0.0), 0)
+                os.environ["BNE_FIRST_FANOUT"] = "on"
+                self.assertTrue(earthd.sharing_machine(), "asked for")
+                os.environ.pop("BNE_FIRST_FANOUT")
+            with mock.patch.object(os, "cpu_count", return_value=16), mock.patch.object(budget, "small", return_value=False):
+                self.assertFalse(earthd.sharing_machine(), "off by default (2026-11-13) until the share fixes are in")
+            with mock.patch.object(os, "cpu_count", return_value=16), mock.patch.object(budget, "small", return_value=True):
+                self.assertFalse(earthd.sharing_machine())
+
+
 if __name__ == "__main__":
     unittest.main()

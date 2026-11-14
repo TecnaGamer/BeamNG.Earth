@@ -46,7 +46,13 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
-local function run(aid, a) for _ = 1, 6 do roads.update(gov, aid, car, nil, a) end end
+-- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
+-- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
+local function run(aid, a)
+  local n = 0
+  repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
+  for _ = 1, 3 do roads.update(gov, aid, car, nil, a) end
+end
 
 local LAT, LON = 39.2834, -76.5934
 local gx, gy = geotile.tileOf(LAT, LON)
@@ -272,6 +278,14 @@ do
   local room = roads.RELOAD_ROOM_MS
   roads.RELOAD_ROOM_MS = math.huge
   local function reloads() return S.calls.reloadCollision or 0 end
+  -- (on a mismatch: the count and the rebuild state, for CI runs that fail where no machine here does)
+  local function rc(want, what)
+    local got = reloads()
+    if got ~= want then
+      print(string.format('  %s: reloads %d, want %d, queued %d, os.clock %.2f', what, got, want, roads.queued(), os.clock()))
+    end
+    T.check(got == want, what)
+  end
   -- a second road geotile ~8 km east; each tile's only collider a 3dmr deck slab (spawned at once at any distance)
   local gx2, gy2 = geotile.tileOf(LAT, LON + 8000 / (111320 * math.cos(math.rad(LAT))))
   local key2 = geotile.key(gx2, gy2)
@@ -288,44 +302,65 @@ do
   T.check(roads.onTile(slabTile(key2, clat2, clon2, 'f1'), 2, B), 'far geotile accepted')
   run(2, B)
   T.check(#objsWith('threedmr_f1_deck') == 1, 'its colliding slab made out there')
-  T.check(reloads() == r0, 'a far tile: no player rebuild')
+  rc(r0, 'a far tile: no player rebuild')
   -- the churn: the far tile rebuilt with new content - still none
   roads.onTile(slabTile(key2, clat2, clon2, 'f2'), 2, B)
   run(2, B)
   T.check(#objsWith('threedmr_f2_deck') == 1 and #objsWith('threedmr_f1_deck') == 0, 'the far tile swapped')
-  T.check(reloads() == r0, 'a far tile swap does not set the player-rebuild flag')
+  rc(r0, 'a far tile swap does not set the player-rebuild flag')
   -- the same under the car marks at once
   roads.onTile(slabTile(key, clat, clon, 'n1'), 2, B)
   run(2, B)
-  T.check(reloads() == r0 + 1, 'a near tile rebuilds')
+  rc(r0 + 1, 'a near tile rebuilds')
   roads.onTile(slabTile(key, clat, clon, 'n2'), 2, B)
   run(2, B)
-  T.check(reloads() == r0 + 2, 'a near tile swap rebuilds as before')
+  rc(r0 + 2, 'a near tile swap rebuilds as before')
   -- deferred dirt is promoted when the player arrives
   roads.onTile(slabTile(key2, clat2, clon2, 'f3'), 2, B)
   run(2, B)
-  T.check(reloads() == r0 + 2, 'far churn again: deferred, no rebuild')
+  rc(r0 + 2, 'far churn again: deferred, no rebuild')
   car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
   run(2, B)
-  T.check(reloads() == r0 + 3, 'the player arrives: the deferred dirt promotes, one rebuild')
+  rc(r0 + 3, 'the player arrives: the deferred dirt promotes, one rebuild')
   -- a rebuild in between makes the far slab solid: nothing left to promote
   car.x, car.y = B:geodeticToWorld(clat, clon, 0)
   run(2, B)
   roads.onTile(slabTile(key2, clat2, clon2, 'f4'), 2, B)
   run(2, B)
-  T.check(reloads() == r0 + 3, 'far churn once more: deferred')
+  rc(r0 + 3, 'far churn once more: deferred')
   roads.onTile(slabTile(key, clat, clon, 'n3'), 2, B)
   run(2, B)
-  T.check(reloads() == r0 + 4, 'the near swap rebuilds (and makes the far slab solid with it)')
+  rc(r0 + 4, 'the near swap rebuilds (and makes the far slab solid with it)')
   car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
   run(2, B)
-  T.check(reloads() == r0 + 4, 'arriving later: nothing left to promote')
+  rc(r0 + 4, 'arriving later: nothing left to promote')
   -- a rebase / teleport still rebuilds at once (the island moved)
   car.x, car.y = A:geodeticToWorld(clat, clon, 0)
   T.check(roads.replace(A, 3) == 2, 'both geotiles re-placed')
   run(3, A)
-  T.check(reloads() == r0 + 5, 'a rebase forces the rebuild')
+  rc(r0 + 5, 'a rebase forces the rebuild')
   roads.RELOAD_ROOM_MS = room
+  roads.reset()
+end
+
+-- a geotile's pending colliders due for another player's car (roads.focusDue): its focus carries no z (far cars'), the
+-- pieces' boxes are in the tile's frame (a 3D inverse transform): measured, not an error (Codex review, 2026-11-14)
+do
+  local cx, cy = A:geodeticToWorld(clat, clon, 0)
+  local every = roads.RELOAD_EVERY_S
+  roads.RELOAD_EVERY_S = 1e9                 -- (no timed rebuild: what is made stays pending)
+  car.x, car.y = cx + 300, cy                -- (near enough to make them, beyond needReach)
+  T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
+    'the geotile again')
+  for _ = 1, 40 do roads.update(gov, 1, car, nil, A) end
+  roads.setFoci({ { x = cx, y = cy, r = 320, trees = true, kind = 'player' } })
+  local ok, due = pcall(roads.focusDue, roads.needDistance)
+  T.check(ok, 'focusDue with a focus without z: ' .. tostring(due))
+  local n = roads.needDistance(1e9, { x = cx, y = cy, z = 0 })
+  T.check(n < 200, 'its colliders pending, measured from the focus (' .. tostring(n) .. ' m)')
+  T.check(due == true, 'due for the other player\'s car at the tile')
+  roads.setFoci({})
+  roads.RELOAD_EVERY_S = every
   roads.reset()
 end
 

@@ -112,11 +112,14 @@ for h = 18, 29, 0.25 do                               -- (18:00 to 5 am: never b
   prev = k
 end
 T.check(fewer and prev == 3, 'fewer and fewer to 5 am')
+-- a map is shipped in the mod, or made at install from mod/texture_sources (textures.json names every DDS it makes)
+local mf = io.open(dir .. '/../texture_sources/textures.json', 'rb'); local made = mf and mf:read('*a') or ''
+if mf then mf:close() end
 for name, maps in pairs(nl.MAPS) do
   T.check(nl.MATERIALS[name] ~= nil and #maps == 3, 'a lit material, three maps: ' .. name)
   for _, p in ipairs(maps) do
     local fh = io.open(dir .. '/../beamng_earth' .. p, 'rb')
-    T.check(fh ~= nil, 'the map is there: ' .. p)
+    T.check(fh ~= nil or made:find('"' .. p:sub(2) .. '"', 1, true) ~= nil, 'the map is there: ' .. p)
     if fh then fh:close() end
   end
 end
