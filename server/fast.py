@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 291 # native source-position Dutch road-sign placement
+MIN_VERSION = 292 # native Dutch road-sign placement and signal-context matching
 
 
 class NativeMissing(RuntimeError):

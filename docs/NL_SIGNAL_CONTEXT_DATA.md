@@ -50,10 +50,17 @@ ordinary manifest and shard host. Publication is a maintainer action. The
 reader is disabled by default, performs no requests while disabled and returns
 no context when the dataset is unpublished. It does not suppress stock objects.
 
-The next integration step is native context matching and assembly planning on
-the server, followed by a small client assembly reader and distant Forest
-instances. The old bundled pack and Lua matching remain until that coordinated
-switch is tested. Performance and placement still require in-game measurement.
+`nlsignalcontext.match` now marshals local ENU coordinates into the native
+`nl_signal_context_match` kernel (earthfast 292). Direction and lane counts must
+agree before turn arrows are returned; equally close conflicting arrows remain
+unknown. Missing WKD data remains unknown unless the caller explicitly proves
+complete WKD coverage. This server API is tested but not yet wired into the
+live signal planner.
+
+The next integration step is native physical assembly planning, followed by a
+small client assembly reader and distant Forest instances. The old bundled
+pack and Lua matching remain until that coordinated switch is tested.
+Performance and placement still require in-game measurement.
 
 ## Checks
 
@@ -61,4 +68,6 @@ switch is tested. Performance and placement still require in-game measurement.
 64-bit source IDs, direction tags, tile halos and conflicting records.
 `test_nlsignaldata` checks opt-in isolation, bounded reads, actual public-shard
 fetch/cache reuse, malformed geometry and duplicate/conflicting halo records.
-Both modules are included in the foundation quality gate.
+`test_nlsignalcontext` exercises actual geodesy and the native matcher, including
+unknown coverage, conflicting arrows and JSON-safe outputs. All three modules
+are included in the foundation quality gate.
