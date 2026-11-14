@@ -1,0 +1,262 @@
+[
+  {
+    "name": "race track",
+    "aliases": [
+      "race track",
+      "racetrack",
+      "circuit",
+      "raceway",
+      "racing circuit"
+    ],
+    "osm": [
+      "[\"highway\"=\"raceway\"]",
+      "[\"leisure\"=\"track\"][\"sport\"~\"^(motor|karting|motocross)$\"]"
+    ],
+    "classes": [
+      "Q1777138"
+    ]
+  },
+  {
+    "name": "karting",
+    "aliases": [
+      "karting",
+      "kart track",
+      "go kart",
+      "go karting"
+    ],
+    "osm": [
+      "[\"sport\"=\"karting\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "drag strip",
+    "aliases": [
+      "drag strip",
+      "dragstrip",
+      "drag racing"
+    ],
+    "osm": [
+      "[\"sport\"=\"drag_racing\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "rally",
+    "aliases": [
+      "rally",
+      "rally stage",
+      "gravel road"
+    ],
+    "osm": [
+      "[\"sport\"=\"rally\"]",
+      "[\"highway\"=\"track\"][\"surface\"~\"^(gravel|fine_gravel|compacted)$\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "off-road",
+    "aliases": [
+      "dirt",
+      "off road",
+      "offroad",
+      "4x4",
+      "trail",
+      "dirt road",
+      "off road trail",
+      "offroad trail",
+      "4x4 trail"
+    ],
+    "osm": [
+      "[\"highway\"=\"track\"][\"tracktype\"~\"^grade[2-5]$\"]",
+      "[\"highway\"=\"track\"][\"4wd_only\"=\"yes\"]",
+      "[\"sport\"=\"4wd\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "motocross",
+    "aliases": [
+      "motocross",
+      "dirt bike",
+      "motocross track",
+      "dirt bike track"
+    ],
+    "osm": [
+      "[\"sport\"=\"motocross\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "rock crawling",
+    "aliases": [
+      "rock crawling",
+      "rock crawl",
+      "rock",
+      "rocks"
+    ],
+    "osm": [
+      "[\"sport\"=\"rock_crawling\"]",
+      "[\"sport\"=\"4wd\"][\"surface\"~\"^(rock|stone)$\"]"
+    ],
+    "classes": []
+  },
+  {
+    "name": "mountain peak",
+    "aliases": [
+      "mountain peak",
+      "mountain peek",
+      "peak",
+      "peek",
+      "summit",
+      "mountain"
+    ],
+    "osm": [
+      "[\"natural\"=\"peak\"]"
+    ],
+    "classes": [
+      "Q8502"
+    ]
+  },
+  {
+    "name": "mountain pass",
+    "aliases": [
+      "mountain pass",
+      "pass"
+    ],
+    "osm": [
+      "[\"mountain_pass\"=\"yes\"]"
+    ],
+    "classes": [
+      "Q133056"
+    ]
+  },
+  {
+    "name": "forest",
+    "aliases": [
+      "forest",
+      "wood",
+      "woods"
+    ],
+    "osm": [
+      "[\"landuse\"=\"forest\"]",
+      "[\"natural\"=\"wood\"]"
+    ],
+    "classes": [
+      "Q4421"
+    ]
+  },
+  {
+    "name": "lake",
+    "aliases": [
+      "lake",
+      "reservoir"
+    ],
+    "osm": [
+      "[\"natural\"=\"water\"][\"water\"~\"^(lake|reservoir)$\"]"
+    ],
+    "classes": [
+      "Q23397"
+    ]
+  },
+  {
+    "name": "beach",
+    "aliases": [
+      "beach",
+      "coast"
+    ],
+    "osm": [
+      "[\"natural\"=\"beach\"]"
+    ],
+    "classes": [
+      "Q40080"
+    ]
+  },
+  {
+    "name": "desert",
+    "aliases": [
+      "desert"
+    ],
+    "osm": [
+      "[\"natural\"=\"desert\"]"
+    ],
+    "classes": [
+      "Q8514"
+    ]
+  },
+  {
+    "name": "airport",
+    "aliases": [
+      "airport",
+      "airfield"
+    ],
+    "osm": [
+      "[\"aeroway\"=\"aerodrome\"]"
+    ],
+    "classes": [
+      "Q1248784"
+    ]
+  },
+  {
+    "name": "bridge",
+    "aliases": [
+      "bridge",
+      "viaduct"
+    ],
+    "osm": [
+      "[\"man_made\"=\"bridge\"]",
+      "[\"highway\"][\"bridge\"=\"yes\"][\"name\"]"
+    ],
+    "classes": [
+      "Q12280"
+    ]
+  },
+  {
+    "name": "tunnel",
+    "aliases": [
+      "tunnel"
+    ],
+    "osm": [
+      "[\"highway\"][\"tunnel\"=\"yes\"][\"name\"]"
+    ],
+    "classes": [
+      "Q44377"
+    ]
+  },
+  {
+    "name": "dam",
+    "aliases": [
+      "dam"
+    ],
+    "osm": [
+      "[\"waterway\"=\"dam\"]"
+    ],
+    "classes": [
+      "Q12323"
+    ]
+  },
+  {
+    "name": "canyon",
+    "aliases": [
+      "canyon",
+      "gorge"
+    ],
+    "osm": [
+      "[\"natural\"=\"valley\"][\"valley\"=\"gorge\"]"
+    ],
+    "classes": [
+      "Q150784"
+    ]
+  },
+  {
+    "name": "scenic drive",
+    "aliases": [
+      "scenic drive",
+      "scenic road"
+    ],
+    "osm": [
+      "[\"highway\"][\"scenic\"=\"yes\"]"
+    ],
+    "classes": []
+  }
+]

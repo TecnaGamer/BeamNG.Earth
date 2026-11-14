@@ -753,7 +753,7 @@ class ClassifyTest(unittest.TestCase):
 class PolicyTest(unittest.TestCase):
     def test_denied_hosts(self):
         f, clock, sleep, tr = fetcher()
-        for host in ("overpass-api.de", "vector.openstreetmap.org", "build.protomaps.com"):
+        for host in ("vector.openstreetmap.org", "build.protomaps.com"):
             for kind in nf.KINDS:
                 with self.assertRaises(nf.PolicyDenied):
                     f.get(f"https://{host}/x", kind=kind)
