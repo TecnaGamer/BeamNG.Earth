@@ -341,8 +341,14 @@ POLICIES = {
     "bulkdata.csdi.gov.hk": HostPolicy(rate=1.0, burst=4.0, max_conc=4, daily_budget=1000, daily_hard=2000,
                                        allow_prefetch=True, offline_ok=True, miss_ttl=None, binary=True, timeout=120.0,
                                        max_attempts=3, base_delay=2.0, optional=True),
-    # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
-    "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
+    # Enter-only bounded category searches, never terrain/bulk downloads. No retries on shared query services.
+    "overpass-api.de": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                   cache_ttl=DAY, max_wait=1.0, timeout=4.0, max_attempts=1, optional=True,
+                                   interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    "query.wikidata.org": HostPolicy(rate=0.1, burst=1.0, max_conc=1, daily_budget=50, daily_hard=100,
+                                     cache_ttl=DAY, max_wait=1.0, timeout=7.0, max_attempts=1, optional=True,
+                                     interactive_only=True, breaker_threshold=1, breaker_open=60.0),
+    # Never at runtime (OSMF vector tiles, Protomaps builds).
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
@@ -474,6 +480,8 @@ ROLES = {
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
     "nominatim.openstreetmap.org": "street and address search on Enter",
     "www.wikidata.org": "landmarks in the map's search",
+    "overpass-api.de": "nearby category search on Enter",
+    "query.wikidata.org": "notable category search on Enter",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
