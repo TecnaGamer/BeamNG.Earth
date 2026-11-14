@@ -35,7 +35,11 @@ use std::collections::BinaryHeap;
 
 type P = (f64, f64);
 
-const MAX_CELLS: usize = 20_000; // the pole search's budget (a footprint's outline: a few hundred at most)
+const MAX_CELLS: usize = 20_000; // the pole search's budget: cells made (a footprint's outline: a few hundred at most)
+const MAX_POPS: usize = 20_000; // ... and cells looked at
+const ROOT_CELLS: usize = 32; // root cells along the outline's long side at most
+const MIN_EXTENT_M: f64 = 1e-6; // an outline smaller than this: no dome
+const DEGENERATE_SHARE: f64 = 1e-12; // twice the area under this share of the extent's square: collinear, no dome
 
 fn area2(r: &[P]) -> f64 {
     let n = r.len();
@@ -118,7 +122,15 @@ impl Ord for Cell {
 }
 
 /// The pole of inaccessibility of the outline r (the inside point farthest from its edges), to within precision m.
-pub fn pole(r: &[P], precision: f64) -> P {
+/// Bounded whatever the outline (Codex review of a92a4828: a sliver's grid of square cells was its length over its
+/// width cells, ~1e8 for a collinear ring, and float steps that stop advancing looped forever): at most ROOT_CELLS a
+/// side of root cells, counted by index; children only while their half size still shrinks and stays over a
+/// thousandth of the precision; at most MAX_CELLS cells and MAX_POPS queue pops in all. None for a ring that is not
+/// finite or has no extent.
+pub fn pole(r: &[P], precision: f64) -> Option<P> {
+    if r.len() < 3 || !(precision > 0.0) || !precision.is_finite() || r.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return None;
+    }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for p in r {
         x0 = x0.min(p.0);
@@ -127,48 +139,64 @@ pub fn pole(r: &[P], precision: f64) -> P {
         y1 = y1.max(p.1);
     }
     let (w, h) = (x1 - x0, y1 - y0);
-    let size = w.min(h);
-    if !(size > 0.0) {
-        return r[0];
+    let long = w.max(h);
+    if !(long > MIN_EXTENT_M) || !long.is_finite() {
+        return None;
     }
+    // (square root cells of the short side, but at most ROOT_CELLS along the long one)
+    let size = w.min(h).max(long / ROOT_CELLS as f64);
+    let nx = ((w / size).ceil() as usize).clamp(1, ROOT_CELLS);
+    let ny = ((h / size).ceil() as usize).clamp(1, ROOT_CELLS);
     let half = size / 2.0;
     let mut seq = 0usize;
     let mut heap = BinaryHeap::new();
-    let mut x = x0;
-    while x < x1 {
-        let mut y = y0;
-        while y < y1 {
-            heap.push(Cell::new(r, x + half, y + half, half, seq));
+    for i in 0..nx {
+        for j in 0..ny {
+            let (x, y) = (x0 + (i as f64 + 0.5) * size, y0 + (j as f64 + 0.5) * size);
+            heap.push(Cell::new(r, x, y, half, seq));
             seq += 1;
-            y += size;
         }
-        x += size;
     }
     let mut best = Cell::new(r, x0 + w / 2.0, y0 + h / 2.0, 0.0, seq);
     seq += 1;
-    let mut made = seq;
+    let min_half = precision / 1000.0;
+    let mut pops = 0usize;
     while let Some(c) = heap.pop() {
+        pops += 1;
         if c.d > best.d {
             best = Cell { x: c.x, y: c.y, h: c.h, d: c.d, max: c.max, seq: c.seq };
         }
-        if c.max - best.d <= precision || made >= MAX_CELLS {
-            continue;
+        if pops >= MAX_POPS {
+            break;
         }
         let q = c.h / 2.0;
+        if c.max - best.d <= precision || seq + 4 > MAX_CELLS || !(q < c.h) || !(q > min_half) {
+            continue;
+        }
         for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
             heap.push(Cell::new(r, c.x + sx * q, c.y + sy * q, q, seq));
             seq += 1;
-            made += 1;
         }
     }
-    (best.x, best.y)
+    if best.x.is_finite() && best.y.is_finite() { Some((best.x, best.y)) } else { None }
 }
 
-/// The dome's centre on the outline r (counter-clockwise): its area centroid when that lies inside it, else its pole
-/// of inaccessibility (Streets GL's CurvedRoofBuilder.getCenter).
+/// The dome's centre on the outline r (counter-clockwise, finite, with an area): its area centroid when that lies
+/// inside it, else its pole of inaccessibility (Streets GL's CurvedRoofBuilder.getCenter), else its corners' mean.
 pub fn dome_centre(r: &[P]) -> P {
-    let o = r[0];
     let n = r.len();
+    let mean = {
+        let (mut sx, mut sy) = (0.0, 0.0);
+        for p in r {
+            sx += p.0;
+            sy += p.1;
+        }
+        (sx / n.max(1) as f64, sy / n.max(1) as f64)
+    };
+    if n < 3 {
+        return mean;
+    }
+    let o = r[0];
     let (mut a, mut cx, mut cy) = (0.0, 0.0, 0.0);
     for i in 0..n {
         let (p, q) = ((r[i].0 - o.0, r[i].1 - o.1), (r[(i + 1) % n].0 - o.0, r[(i + 1) % n].1 - o.1));
@@ -179,7 +207,7 @@ pub fn dome_centre(r: &[P]) -> P {
     }
     if a.abs() > 1e-9 {
         let c = (o.0 + cx / (3.0 * a), o.1 + cy / (3.0 * a));
-        if inside(r, c) {
+        if c.0.is_finite() && c.1.is_finite() && inside(r, c) {
             return c;
         }
     }
@@ -190,22 +218,60 @@ pub fn dome_centre(r: &[P]) -> P {
         x1 = x1.max(p.0);
         y1 = y1.max(p.1);
     }
-    pole(r, ((x1 - x0).min(y1 - y0) / 100.0).max(0.02))
+    pole(r, ((x1 - x0).min(y1 - y0) / 100.0).max(0.02)).unwrap_or(mean)
+}
+
+/// The outline as the dome builds it: counter-clockwise, without repeated corners (a closing corner, a corner mapped
+/// twice), or None for one that is not finite, has under three corners or no area (collinear, a sliver whose area
+/// is under DEGENERATE_SHARE of its extent's square): no dome.
+pub fn dome_ring(ring: &[P]) -> Option<Vec<P>> {
+    if ring.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return None;
+    }
+    let mut r: Vec<P> = Vec::with_capacity(ring.len());
+    for &p in ring {
+        if r.last() != Some(&p) {
+            r.push(p);
+        }
+    }
+    while r.len() > 1 && r.first() == r.last() {
+        r.pop();
+    }
+    if r.len() < 3 {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in &r {
+        x0 = x0.min(p.0);
+        y0 = y0.min(p.1);
+        x1 = x1.max(p.0);
+        y1 = y1.max(p.1);
+    }
+    let ext = (x1 - x0).max(y1 - y0);
+    let a = area2(&r);
+    if !(ext > MIN_EXTENT_M) || !ext.is_finite() || !a.is_finite() || a.abs() <= DEGENERATE_SHARE * ext * ext {
+        return None;
+    }
+    if a < 0.0 {
+        r.reverse();
+    }
+    Some(r)
 }
 
 /// The dome's faces: (quads [12 numbers, counter-clockwise from outside], their texture coordinates [8], apex
 /// triangles [9], theirs [6]). prof: the levels (scale toward the centre, share of the rise), from the eave (1, 0)
-/// to the top (0, 1).
+/// to the top (0, 1). Nothing for a degenerate outline (dome_ring) or a rise or profile that is not finite.
 pub fn dome_faces(ring: &[P], z: f64, rise: f64, prof: &[P], uv_m: f64)
                   -> (Vec<[f64; 12]>, Vec<[f64; 8]>, Vec<[f64; 9]>, Vec<[f64; 6]>) {
     let (mut q, mut qu, mut t, mut tu) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    if ring.len() < 3 || !(rise > 0.0) || prof.len() < 2 {
+    if !(rise > 0.0) || !rise.is_finite() || !z.is_finite() || !(uv_m > 0.0) || prof.len() < 2
+        || prof.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
         return (q, qu, t, tu);
     }
-    let mut r: Vec<P> = ring.to_vec();
-    if area2(&r) < 0.0 {
-        r.reverse();
-    }
+    let r = match dome_ring(ring) {
+        Some(r) => r,
+        None => return (q, qu, t, tu),
+    };
     let c = dome_centre(&r);
     let n = r.len();
     let levels: Vec<Vec<[f64; 3]>> = prof
@@ -233,23 +299,31 @@ pub fn dome_faces(ring: &[P], z: f64, rise: f64, prof: &[P], uv_m: f64)
 
 fn rows<const K: usize>(v: Vec<[f64; K]>) -> numpy::ndarray::Array2<f64> {
     let n = v.len();
-    numpy::ndarray::Array2::from_shape_vec((n, K), v.into_iter().flatten().collect()).unwrap()
+    numpy::ndarray::Array2::from_shape_vec((n, K), v.into_iter().flatten().collect())
+        .unwrap_or_else(|_| numpy::ndarray::Array2::zeros((0, K)))
 }
 
 /// buildings._dome: a dome (or onion dome) of `rise` over the outline ring (n, 2) at eave z, its levels prof (k, 2)
 /// (scale, share of the rise); texture coordinates the plan position / uv_m. Returns (quads (q, 12), their uvs (q, 8),
-/// apex triangles (t, 9), theirs (t, 6)) (version 297).
+/// apex triangles (t, 9), theirs (t, 6)), all empty for an outline with no dome (dome_ring) (version 297). Arrays
+/// narrower than two columns are a ValueError; a panic inside never crosses into Python (empty arrays).
 #[pyfunction]
 pub fn dome_roof<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, z: f64, rise: f64,
                       prof: PyReadonlyArray2<'py, f64>, uv_m: f64)
-                      -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
-                          Bound<'py, PyArray2<f64>>) {
+                      -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
+                                   Bound<'py, PyArray2<f64>>)> {
     let rv = ring.as_array();
-    let r: Vec<P> = (0..rv.nrows()).map(|i| (rv[[i, 0]], rv[[i, 1]])).collect();
     let pv = prof.as_array();
+    if (rv.nrows() > 0 && rv.ncols() < 2) || (pv.nrows() > 0 && pv.ncols() < 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err("dome_roof: (n, 2) rings and profiles"));
+    }
+    let r: Vec<P> = (0..rv.nrows()).map(|i| (rv[[i, 0]], rv[[i, 1]])).collect();
     let pr: Vec<P> = (0..pv.nrows()).map(|i| (pv[[i, 0]], pv[[i, 1]])).collect();
-    let (q, qu, t, tu) = py.detach(move || dome_faces(&r, z, rise, &pr, uv_m));
-    (rows(q).into_pyarray(py), rows(qu).into_pyarray(py), rows(t).into_pyarray(py), rows(tu).into_pyarray(py))
+    let (q, qu, t, tu) = py.detach(move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dome_faces(&r, z, rise, &pr, uv_m)))
+            .unwrap_or_else(|_| (Vec::new(), Vec::new(), Vec::new(), Vec::new()))
+    });
+    Ok((rows(q).into_pyarray(py), rows(qu).into_pyarray(py), rows(t).into_pyarray(py), rows(tu).into_pyarray(py)))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -292,6 +366,60 @@ mod tests {
         assert_eq!(t.len(), n, "one ring of apex triangles");
         assert!(t.iter().all(|f| (f[8] - 14.0).abs() < 1e-12));
         assert!(q.iter().all(|f| (f[2] - 10.0).abs() < 1e-12));
+    }
+
+    fn quick<F: FnOnce() -> R, R>(f: F) -> R {
+        let t0 = std::time::Instant::now();
+        let r = f();
+        assert!(t0.elapsed().as_millis() < 200, "took {:?}", t0.elapsed());
+        r
+    }
+
+    const PROF: [P; 3] = [(1.0, 0.0), (0.6, 0.8), (0.0, 1.0)];
+
+    #[test]
+    fn collinear_ring_no_dome_fast() {
+        let r = [(0.0, 0.0), (1.0, 1e-8), (2.0, 2e-8)];
+        let (q, _, t, _) = quick(|| dome_faces(&r, 0.0, 3.0, &PROF, 6.0));
+        assert!(q.is_empty() && t.is_empty());
+        let _ = quick(|| pole(&r, 0.02));
+        let c = quick(|| dome_centre(&r));
+        assert!(c.0.is_finite() && c.1.is_finite());
+    }
+
+    #[test]
+    fn sliver_fast() {
+        // 100 m long, 1e-6 m wide (aspect 1e-8), as an L so the centroid is not used
+        let r = [(0.0, 0.0), (100.0, 0.0), (100.0, 1e-6), (1e-6, 1e-6), (1e-6, 100.0), (0.0, 100.0)];
+        let (q, _, _, _) = quick(|| dome_faces(&r, 0.0, 3.0, &PROF, 6.0));
+        assert!(q.len() <= 2 * r.len());
+        let p = quick(|| pole(&r, 0.02)).unwrap();
+        assert!(p.0.is_finite() && p.1.is_finite());
+        let thin = [(0.0, 0.0), (100.0, 0.0), (100.0, 1e-6), (0.0, 1e-6)];
+        assert!(quick(|| pole(&thin, 1e-9)).is_some());
+    }
+
+    #[test]
+    fn non_finite_rings_no_dome() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let r = [(0.0, 0.0), (10.0, 0.0), (10.0, bad), (0.0, 10.0)];
+            let (q, _, t, _) = quick(|| dome_faces(&r, 0.0, 3.0, &PROF, 6.0));
+            assert!(q.is_empty() && t.is_empty());
+            assert!(pole(&r, 0.02).is_none());
+        }
+        let sq = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+        assert!(dome_faces(&sq, 0.0, f64::NAN, &PROF, 6.0).0.is_empty());
+        assert!(dome_faces(&sq, 0.0, 3.0, &[(1.0, 0.0), (f64::NAN, 1.0)], 6.0).0.is_empty());
+    }
+
+    #[test]
+    fn duplicate_points_dropped() {
+        let r = [(0.0, 0.0), (0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)];
+        let (q, _, t, _) = quick(|| dome_faces(&r, 0.0, 3.0, &PROF, 6.0));
+        assert_eq!(q.len(), 4, "the square's four corners");
+        assert_eq!(t.len(), 4);
+        let same = [(0.0, 0.0); 5];
+        assert!(dome_faces(&same, 0.0, 3.0, &PROF, 6.0).0.is_empty());
     }
 
     #[test]

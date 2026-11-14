@@ -1408,6 +1408,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS and not part
+                                          and not attrs.get("_parts_drawn")
                                           and (STEEPLE_KIND.get(style.name, "spire") if
                                                _hash01(seed, "tower") < STEEPLE_SHARE.get(style.name, 1.0) else False))
                 or ((STEEPLE_TOP_LOW if STEEPLE_KIND.get(style.name) == "campanile" else STEEPLE_TOP)
@@ -4945,7 +4946,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 # dome, a tower or a spire rising over it is drawn as that body and those parts: sky_body)
                 bparts, sky_body_h = sky_body(bparts, at.get("height"))
                 if not bparts and sky_body_h is not None:   # (no part over it: the outline at its parts' height)
-                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape=None)
+                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape="flat", _parts_drawn=True)
                     sky_body_h = None
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
@@ -5004,14 +5005,18 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     mins.append(pmh)
                 if key is not None:
                     seen.add(key)
+                # (the outline kept with its parts is no building of its own: no steeple of ours on it, its parts
+                # have their tower's, steeple_part; Codex review of a92a4828)
                 if sky_body_h is not None:      # (the skyline's body under its tall parts: sky_body)
-                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape=None)
+                    at = dict(at, height=sky_body_h, roof_height=None, roof_shape="flat", _parts_drawn=True)
                 elif not (PARTS_COVER_ON and _outline_under_parts(at, bparts)
                           and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
                     continue
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
                 elif outline_h is not None:
-                    at = dict(at, height=outline_h, roof_height=None)
+                    at = dict(at, height=outline_h, roof_height=None, _parts_drawn=True)
+                else:
+                    at = dict(at, _parts_drawn=True)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
                 continue

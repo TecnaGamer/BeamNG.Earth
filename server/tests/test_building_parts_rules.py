@@ -206,6 +206,30 @@ class PartRulesTest(unittest.TestCase):
         items = tile(*self._building(parts, height=None, cls="church"))
         self.assertFalse([s for s, _, _ in items if s.steeple])
 
+    @city
+    def test_no_steeple_on_an_outline_kept_under_its_parts(self):
+        """A church whose parts cover under half its outline (the outline drawn too, PARTS_COVER_MIN): the outline is
+        no church of its own, its tower part has the one spire (Codex review of a92a4828)."""
+        parts = [(-20, -8, 40, 16, {"height": 20.0}), (20, -5, 10, 10, {"height": 41.0})]
+        items = tile(*self._building(parts, height=15.0, cls="church"))
+        self.assertEqual(len(items), 3, "the outline and both parts")
+        st = [s for s, _, _ in items if s.steeple]
+        self.assertEqual([s.steeple for s in st], [bld.STEEPLE_TOP])
+        self.assertAlmostEqual(top(st[0]), 41.0, delta=0.01)
+
+    @city
+    def test_no_steeple_on_a_skyline_body(self):
+        parts = [(-20, -20, 40, 40, {"height": 20.0}), (20, -5, 10, 10, {"height": 60.0})]
+        f, b, pl = self._building(parts, height=90.0, cls="church")
+        sky = tile(f, b, pl, min_size=(bld.SKY_SLENDER_H, bld.SKY_MIN_AREA_M2), parts_min_top=bld.SKY_PARTS_MIN_M)
+        body = [s for s, _, _ in sky if abs(top(s) - (1600 * 20.0 + 100 * 60.0) / 1700) < 0.05]
+        self.assertEqual(len(body), 1)
+        self.assertFalse(body[0].steeple)
+        sky = tile(*self._building([(-20, -20, 40, 40, {"height": 20.0})], height=90.0, cls="church"),
+                   min_size=(bld.SKY_SLENDER_H, bld.SKY_MIN_AREA_M2), parts_min_top=bld.SKY_PARTS_MIN_M)
+        self.assertEqual([(round(top(s), 1), bool(s.steeple)) for s, _, _ in sky], [(20.0, False)],
+                         "no part over it: the body alone, no steeple")
+
     def test_a_church_without_parts_keeps_its_steeple(self):
         s = bld.plan(bld.clean_ring(np.array([(0, 0), (30, 0), (30, 12), (0, 12)], np.float64)),
                      {"class": "church", "seed_id": "w1"}, lat=40.0, lon=-74.0)
@@ -262,6 +286,28 @@ class DomeTest(unittest.TestCase):
         inside = np.array([bool(path.contains_points(p[None, :])[0]) or on_edge(p) for p in P[:, :2]])
         self.assertTrue(inside.all())
         self.assertAlmostEqual(P[:, 2].max(), 16.0, delta=1e-9)
+
+    def test_degenerate_outlines_no_dome_and_fast(self):
+        import time
+        for ring in ([(0, 0), (1, 1e-8), (2, 2e-8)],                                  # collinear
+                     [(0, 0), (100, 0), (100, 1e-6), (1e-6, 1e-6), (1e-6, 100), (0, 100)],   # a 1e-8 sliver L
+                     [(0, 0), (10, 0), (10, float("nan")), (0, 10)],
+                     [(0, 0), (10, 0), (10, float("inf")), (0, 10)],
+                     [(0, 0), (0, 0), (10, 0), (10, 10), (10, 10), (0, 10), (0, 0)]):      # repeated corners
+            m = bld.Mesh()
+            t0 = time.perf_counter()
+            bld._dome(m, np.array(ring, np.float64), 0.0, 3.0, (0, (255, 255, 255, 255)))
+            self.assertLess(time.perf_counter() - t0, 0.2, ring)
+            P = m.arrays()[0]
+            self.assertTrue(np.isfinite(P).all())
+        m = bld.Mesh()
+        bld._dome(m, np.array([(0, 0), (1, 1e-8), (2, 2e-8)], np.float64), 0.0, 3.0, (0, (255, 255, 255, 255)))
+        self.assertEqual(len(m.arrays()[0]), 0, "collinear: no dome")
+        m = bld.Mesh()
+        bld._dome(m, np.array([(0, 0), (0, 0), (10, 0), (10, 10), (10, 10), (0, 10), (0, 0)], np.float64), 0.0, 3.0,
+                  (0, (255, 255, 255, 255)))
+        P = m.arrays()[0]
+        self.assertEqual(int(np.sum(P[:, 2] == 0.0)), 8, "repeated corners dropped: the square's four eave quads")
 
     def test_a_cupola_is_a_dome(self):
         ring = np.array([(0.5 * math.cos(a), 0.5 * math.sin(a))
