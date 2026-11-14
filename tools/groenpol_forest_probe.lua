@@ -13,6 +13,12 @@ function state.cleanup()
   state.types = {}
 end
 local function run()
+  assert(getCurrentLevelIdentifier and getCurrentLevelIdentifier() ~= 'beamng_earth',
+         'Run this isolated renderer probe on Gridmap or another stock map, not Earth')
+  -- BeamNG exposes this datablock class through the editor factory, not the
+  -- global scenetree factory. Check it before creating any Forest object.
+  assert(worldEditorCppApi and worldEditorCppApi.createObject,
+         'Forest editor factory unavailable; no Forest was created')
   local vehicle = be:getPlayerVehicle(0)
   assert(vehicle, 'Spawn a vehicle first')
   local pos = vehicle:getPosition()
@@ -26,16 +32,10 @@ local function run()
     ground = core_terrain.getTerrainHeight(pos) or ground
   end
   local base = vec3(pos.x + tx * 12, pos.y + ty * 12, ground)
-  local f = assert(createObject('Forest'))
-  state.forest = f
-  f.canSave = false
-  f:registerObject('bneNlForestProbeForest')
-  scenetree.MissionGroup:addObject(f)
-  local fd = assert(f:getData())
-  local function add(shape, side, along, height, stretch)
-    local d = state.types[shape]
-    if not d then
-      d = assert(createObject('TSForestItemData'))
+  for _, shape in ipairs({'mast', 'head_dark', 'lens_red', 'lens_amber', 'lens_green', 'beam_unit'}) do
+      local d = assert(worldEditorCppApi.createObject('TSForestItemData'),
+                       'Forest datablock factory failed; no Forest was created')
+      state.types[shape] = d
       -- The engine resolves this virtual DAE name to the compiled CDAE beside it.
       d:setField('shapeFile', 0, root .. shape .. '.dae')
       for _, field in ipairs({'collidable', 'windScale', 'branchAmp', 'detailAmp'}) do
@@ -43,8 +43,15 @@ local function run()
       end
       d:registerObject('bneNlForestProbe_' .. shape)
       Sim.getDataBlockSet():addObject(d)
-      state.types[shape] = d
-    end
+  end
+  local f = assert(createObject('Forest'))
+  state.forest = f
+  f.canSave = false
+  f:registerObject('bneNlForestProbeForest')
+  scenetree.MissionGroup:addObject(f)
+  local fd = assert(f:getData())
+  local function add(shape, side, along, height, stretch)
+    local d = assert(state.types[shape])
     local m = MatrixF(true)
     m:setColumn(0, vec3(-tx, -ty, 0))
     m:setColumn(1, vec3(rx * (stretch or 1), ry * (stretch or 1), 0))
@@ -63,9 +70,9 @@ local function run()
   add('beam_unit', -3, 3, 4.5 - manifest.beam_centre_z, 1)
   add('beam_unit', 3, 3, 4.5 - manifest.beam_centre_z, 5)
 end
-local ok, err = xpcall(run, debug.traceback)
+local ok, err = pcall(run)
 local result = {ok = ok, error = err, items = state.count, expectedItems = 11,
   visualCheckRequired = true, note = 'Three posts: red, amber, green; two beams: same thickness, 1x and 5x length'}
 if jsonWriteFile then jsonWriteFile('/temp/nl_forest_probe_result.json', result, true) end
-if not ok then state.cleanup(); error(err) end
+if not ok then state.cleanup(); log('E', 'nlForestProbe', tostring(err)); return false end
 log('I', 'nlForestProbe', 'Created 11 diagnostic items. Remove with bneNlForestProbe.cleanup()')

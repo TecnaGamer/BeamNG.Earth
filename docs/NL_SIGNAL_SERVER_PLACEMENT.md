@@ -51,7 +51,8 @@ not mutable per-instance diffuse or palette colours. The diagnostic stays outsid
 the runtime mod and retains the model asset licence notice.
 
 `tools/groenpol_forest_probe.lua` can be staged with those assets in the game's
-temporary directory. Running it in GE-Lua creates three diagnostic posts and
+temporary directory. Run it on a stock map such as Gridmap, with Earth streaming
+inactive; the probe refuses the Earth level. Running it in GE-Lua creates three diagnostic posts and
 two differently stretched instances of one shared beam in an owned Forest.
 It never saves the level. `bneNlForestProbe.cleanup()` deletes its own objects;
 running the probe again replaces the previous diagnostic.
@@ -61,6 +62,14 @@ and no TSStatic creation. It cannot verify BeamNG's proprietary renderer.
 Manual confirmation is required for fixed emissive Forest lenses and nonuniform
 beam scaling that keeps the cross-section unchanged. A successful script call
 alone is not proof that either renders correctly.
+
+The first live attempt exposed BeamNG's factory distinction: `TSForestItemData`
+must be created through `worldEditorCppApi.createObject`, as in Earth's tree
+renderer. The diagnostic now prepares all six datablocks before creating a
+Forest, and the regression test rejects the generic factory for that class.
+A later native crash was logged in Earth's existing tree `removeItem` path;
+its relationship to the failed diagnostic is unproven. The next diagnostic is
+isolated on a stock map rather than run alongside active Earth streaming.
 
 ## Work still required before switching runtime
 
