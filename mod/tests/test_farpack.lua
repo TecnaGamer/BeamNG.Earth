@@ -196,6 +196,21 @@ do
   roads.onFarTile(farMsg(P2, { p2lat, p2lon }, { v = 1, key = P2, frame = { p2lat, p2lon }, h = 'q1',
     shape = '/s/bp_' .. P2 .. '.cdae', pos = { -470, -470, 0 }, pivot = 15 }), 1, 'P')
   run(1, A)
+  -- (a retained skyline tile of the square and a horizon piece over it: hidden under the pack, and still after it hands
+  -- over to the mix of near and far tiles below; Codex review)
+  local s2 = { v = 1, key = P2, frame = { p2lat, p2lon }, h = 's2', shape = '/s/bs_' .. P2 .. '.cdae',
+    pos = { -470, -470, 0 }, pivot = 15 }
+  roads.onFarTile(farMsg(P2, { p2lat, p2lon }, s2), 1, true)
+  local hx2, hy2 = math.floor((sx + 1) / 8), math.floor(sy / 8)
+  local H2 = geotile.key(hx2, hy2, 12)
+  local h2lat, h2lon = geotile.centre(12, hx2, hy2)
+  roads.onFarTile(farMsg(H2, { h2lat, h2lon }, { v = 1, key = H2, frame = { h2lat, h2lon }, h = 'h2', parts = {
+    [P2] = { shape = '/s/bh_' .. H2 .. '_' .. P2 .. '.cdae', pos = { -3700, -3700, 0 }, pivot = 40 } } }), 1, 'H')
+  for _ = 1, 3 do run(1, A) end
+  local s2f = roads.debugFar()[roads.farGeoKey('S', P2)]
+  local h2f = roads.debugFar()[roads.farGeoKey('H', H2)]
+  T.check(roads.farGeoHidden(s2f) == true, 'the skyline hidden under the shown pack')
+  T.check(roads.farGeoHidden(h2f, P2) == true, 'the horizon piece hidden: the square\'s pack made')
   local ks = keysOf(P2)
   local missing = geotile.key((sx + 1) * 4, gy)        -- (the square's geotile nearest the car: its road tile is made)
   for _, k in ipairs(ks) do
@@ -215,5 +230,7 @@ do
   T.check(roads.nearShowsBuildings(missing) == true, 'the road tile shows its buildings')
   T.check(roads.packCovered(pk) == true, 'covered: the missing far tile\'s geotile shows its own buildings')
   T.check(objsWith('bp_' .. P2)[1].hidden == true, 'the pack hidden over the real buildings')
+  T.check(roads.farGeoHidden(s2f) == true, 'the skyline stays hidden: near and far tiles cover its square')
+  T.check(roads.farGeoHidden(h2f, P2) == true, 'the horizon piece stays hidden too')
 end
 T.done('test_farpack')

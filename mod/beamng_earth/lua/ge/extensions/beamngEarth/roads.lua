@@ -1955,18 +1955,24 @@ function M.hzCovered(p, sq)
     local n = 2 ^ (geotile.Z - z)
     p.hzKeys = {}
     for j = 0, n - 1 do
-      for i = 0, n - 1 do p.hzKeys[#p.hzKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+      for i = 0, n - 1 do
+        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+        p.hzKeys[#p.hzKeys + 1], p.hzGeo = farGeoKey('F', g), p.hzGeo or {}
+        p.hzGeo[#p.hzKeys] = g
+      end
     end
   end
   -- (all of its far tiles arrived and made: one of sixteen hid the whole piece, the towers of the other fifteen gone
   -- until theirs came, Codex review 2026-11-14)
-  for _, k in ipairs(p.hzKeys) do
-    if not farSeen[k] then return false end
+  -- (or the geotile's road tile shows its own buildings: the same ownership as packCovered and the skyline)
+  for idx, k in ipairs(p.hzKeys) do
+    local ok = farSeen[k] and true or false
     local f = far[k]
-    if f then
-      if f.dropWait then return false end
-      for _, q in pairs(f.parts) do if not q.id and not q.deferred then return false end end
+    if ok and f then
+      if f.dropWait then ok = false end
+      for _, q in pairs(f.parts) do if not q.id and not q.deferred then ok = false; break end end
     end
+    if not ok and not M.nearShowsBuildings(p.hzGeo[idx]) then return false end
   end
   return #p.hzKeys > 0
 end
@@ -1988,10 +1994,18 @@ function M.farGeoHidden(f, sub)
       local n = 2 ^ (geotile.Z - z)
       f.skyKeys = {}
       for j = 0, n - 1 do
-        for i = 0, n - 1 do f.skyKeys[#f.skyKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+        for i = 0, n - 1 do
+          local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+          f.skyKeys[#f.skyKeys + 1], f.skyGeo = farGeoKey('F', g), f.skyGeo or {}
+          f.skyGeo[#f.skyKeys] = g
+        end
       end
     end
-    for _, k in ipairs(f.skyKeys) do if not farSeen[k] then return false end end
+    -- (a geotile whose road tile shows its own buildings counts as seen: the pack hands over to such a mix of near
+    -- and far tiles, packCovered, and the skyline came back over the near buildings; Codex review)
+    for idx, k in ipairs(f.skyKeys) do
+      if not farSeen[k] and not M.nearShowsBuildings(f.skyGeo[idx]) then return false end
+    end
     return true
   end
   local p = f.parts[sub]
