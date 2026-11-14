@@ -77,6 +77,12 @@ coordinates, heading, RVV code, supported role/speed and complete supported
 underboard text; photo URLs are removed. Format 2 prevents older readers from
 silently discarding qualifiers. Build IDs include the producer revision.
 
+Source-position ownership, complete mast-foot clearance, bridge-deck exclusion
+and accepted-record deduplication run in `earthfast.nl_source_sign_place`
+(native version 291). Python validates sign meaning and samples terrain heights;
+it does not move restrictions to a different road to make them fit. The native
+boundary validates array shapes and rejects invalid context geometry.
+
 [NDW's general data terms](https://docs.ndw.nu/algemeen/data-gebruiksvoorwaarden/)
 state CC0 unless a dataset or product states otherwise. Verify the specific
 traffic-sign export's terms and record provenance before publishing it; that

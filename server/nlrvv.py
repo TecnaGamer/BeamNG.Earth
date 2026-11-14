@@ -100,13 +100,12 @@ def place(records, frame, box, pavements, elev, decks=()):
     polygons = exitsigns._outlines(pavements)
     roles, _, by_id = roadsigns.tables()
     out = []
-    seen = set()
     for row in records:
         try:
             ident = row['id']
             lat, lon, bearing = (float(row[k]) for k in ('lat', 'lon', 'bearing'))
             role, speed = row.get('role'), row.get('speed')
-            if (ident in seen or not isinstance(ident, str) or not all(math.isfinite(v) for v in (lat, lon, bearing))
+            if (not isinstance(ident, str) or not all(math.isfinite(v) for v in (lat, lon, bearing))
                     or not (50 <= lat <= 54 and 3 <= lon <= 8 and 0 <= bearing < 360)):
                 continue
             if role not in set(data.ROLES.values()) | set(data.VARIANTS.values()) and not (
@@ -116,10 +115,6 @@ def place(records, frame, box, pavements, elev, decks=()):
             if plate_layout(row, width) is None:
                 continue
             point = exitsigns._xy(frame, [[lon, lat]])[0]
-            if not (box[0] <= point[0] < box[2] and box[1] <= point[1] < box[3]):
-                continue
-            if not exitsigns._clear(point, .22, polygons) or exitsigns._on_deck(point, decks, 1.):
-                continue
             # Transform a short geodetic heading, rather than assume every anchor
             # has exactly the same north as the source's compass bearing.
             a = math.radians(bearing)
@@ -130,11 +125,31 @@ def place(records, frame, box, pavements, elev, decks=()):
             z = exitsigns._ground_z(frame, elev, point)
             if not math.isfinite(z):
                 continue
-            seen.add(ident)
             out.append(dict(row, point=point, travel=travel, z=z))
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
-    return out
+    if not out:
+        return []
+    # Ownership, full-foot clearance and duplicate arbitration run together in
+    # Rust. Python only validates source semantics and supplies sampled heights.
+    vertices, offsets = [], [0]
+    for polygon in polygons:
+        vertices.extend(polygon)
+        offsets.append(len(vertices))
+    deck_rows = []
+    for chunk in decks:
+        if not chunk.get('deck'):
+            continue
+        line = np.asarray(chunk.get('n', ()), np.float64)
+        for a, b in zip(line, line[1:]):
+            deck_rows.append([a[0], a[1], b[0], b[1], float(chunk.get('w', 0.)) / 2])
+    rows = [[*r['point'], r['z'], *r['travel'], .22, 1.] for r in out]
+    kernel = fast.native(291, 'Dutch source sign placement')
+    kept = kernel.nl_source_sign_place(
+        [r['id'] for r in out], np.asarray(rows, np.float64),
+        np.asarray(vertices, np.float64).reshape(-1, 2), np.asarray(offsets, np.int64),
+        np.asarray(deck_rows, np.float64).reshape(-1, 5), list(map(float, box)))
+    return [out[int(i)] for i in kept]
 
 
 def render(placed, box):

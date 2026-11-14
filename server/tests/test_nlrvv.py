@@ -171,6 +171,50 @@ class PublicData(unittest.TestCase):
         bad=dict(row,plates=[dict(kind='VRIJ',text='[[fietser]]')])
         self.assertIsNone(nlrvv.render([bad],(0.,0.,100.,100.)))
 
+    def test_native_clearance_matches_existing_road_geometry(self):
+        import signroads
+        polygons = signroads.Outlines([np.array([[-5., -5.], [5., -5.], [5., 0.],
+                                                [0., 0.], [0., 5.], [-5., 5.], [-5., -5.]])])
+        points = np.array([(x, y) for x in (-6., -4.9, -.1, .1, 4.9, 6.)
+                           for y in (-6., -4.9, -.1, .1, 4.9, 6.)])
+        rows = np.c_[points, np.zeros(len(points)), np.zeros(len(points)),
+                     np.ones(len(points)), np.full(len(points), .22), np.ones(len(points))]
+        got = nlrvv.fast.native(291, 'Dutch source sign placement').nl_source_sign_place(
+            [str(i) for i in range(len(points))], rows, polygons[0],
+            np.array([0, len(polygons[0])], np.int64), np.empty((0, 5)), [-10., -10., 10., 10.])
+        expected = [i for i, point in enumerate(points) if nlrvv.exitsigns._clear(point, .22, polygons)]
+        self.assertEqual(list(got), expected)
+
+    def test_native_source_boundary_rejects_malformed_geometry(self):
+        kernel = nlrvv.fast.native(291, 'Dutch source sign placement')
+        rows = np.array([[0., 0., 0., 0., 1., .22, 1.]])
+        with self.assertRaises(ValueError):
+            kernel.nl_source_sign_place(['a'], rows, np.empty((0, 2)),
+                                        np.array([1], np.int64), np.empty((0, 5)), [-1., -1., 1., 1.])
+        with self.assertRaises(ValueError):
+            kernel.nl_source_sign_place(['a'], rows[:, :6], np.empty((0, 2)),
+                                        np.array([0], np.int64), np.empty((0, 5)), [-1., -1., 1., 1.])
+
+    def test_native_source_placement_owns_tiles_and_rejects_unsafe_feet(self):
+        # Real native geometry, with geodesy/height isolated so metre distances
+        # and the duplicate-after-rejection regression are exact.
+        def xy(frame, points):
+            return np.array([[(lon - 5.) * 100000, (lat - 52.) * 100000]
+                             for lon, lat in points])
+        rows = [dict(id='same', lat=52., lon=5., bearing=0., role='prio.give_way'),
+                dict(id='same', lat=52.0001, lon=5., bearing=0., role='prio.give_way'),
+                dict(id='edge', lat=52., lon=5.0002, bearing=0., role='prio.give_way')]
+        road = np.array([[-5., -5.], [5., -5.], [5., 5.], [-5., 5.]])
+        with patch.object(nlrvv.exitsigns, '_xy', side_effect=xy), \
+             patch.object(nlrvv.exitsigns, '_ground_z', return_value=2.), \
+             patch.object(nlrvv.exitsigns, '_outlines', return_value=[road]):
+            got = nlrvv.place(rows, None, (-20., -20., 20., 20.), (), None)
+            self.assertEqual([r['id'] for r in got], ['same'])
+            np.testing.assert_allclose(got[0]['point'], [0., 10.])
+            self.assertEqual(got[0]['z'], 2.)
+            deck = dict(deck=True, n=[[-10., 10.], [10., 10.]], w=3.)
+            self.assertEqual(nlrvv.place(rows, None, (-20., -20., 20., 20.), (), None, [deck]), [])
+
     def test_real_native_batch_uses_our_shared_assets(self):
         if not hasattr(nlrvv.fast._ef, 'road_sign_mesh'):
             self.skipTest('native renderer unavailable')

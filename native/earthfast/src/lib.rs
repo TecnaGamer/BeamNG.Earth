@@ -53,6 +53,8 @@ mod medians;
 mod deautobahn;
 mod speedsigns;
 mod roadsigns;
+mod nlplace_core;
+mod nlplace;
 mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
@@ -6035,6 +6037,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(nlplace::nl_source_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
@@ -6421,6 +6424,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
     // grading._Planner._road_stage)
     stageshare::register(m)?;
-    m.add("VERSION", 290)?;
+    m.add("VERSION", 291)?;
     Ok(())
 }
