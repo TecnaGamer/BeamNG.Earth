@@ -675,8 +675,9 @@ def sharing_machine():
     stages shared, 2026-11-13): there, and on machines between not measured yet, everything is as before."""
     if "on" in (os.environ.get("BNE_STAGE_SHARE"), os.environ.get("BNE_FIRST_FANOUT")):
         return True
-    import budget
-    return (os.cpu_count() or 0) >= PREFETCH_PROCS_CPUS and not budget.small()
+    # Off by default for now (2026-11-13): reviews found a shared stage can carry another process's fallback deck
+    # corrections into kept plans; on again once that fix (share-fix) is in. BNE_STAGE_SHARE=on turns it on.
+    return False
 
 
 def prefetch_procs():
