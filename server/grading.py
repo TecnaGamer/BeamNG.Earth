@@ -3329,14 +3329,19 @@ class _Planner:
     def _observed_lift(self, bridge, xy, z_at, ground=(), limits=()):
         """(m the abutment at bridge end xy is raised, the measured deck end's height) when a source measured the deck
         (roadz.PROVIDER, level 1): the measured deck end over the ground there, 0 or more; None when none did (the
-        inference: bridge_lifts), or when the measurement leaves a road under it (ground: lines) too little headroom
-        (_measured_too_low: the bridge solve keeps its own heights there too)."""
+        inference: bridge_lifts). Raised where it leaves a road under it (ground: lines) too little headroom
+        (_measured_raised: the bridge solve raises it alike)."""
         import roadz
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled:
             return None
+        measure = lambda line: prov.observed(self.frame, line, OBS_HALF_M, 1)     # noqa: E731
         try:
-            z = prov.observed(self.frame, bridge, OBS_HALF_M, 1)
+            z = measure(bridge)
+            if z is not None:
+                raised = self._measured_raised(bridge, measure, ground, limits, z_at)
+                if raised is not None:
+                    bridge, z = raised
         except Exception as e:
             _caught(e)
             log.debug("grading: measured deck at %s: %s: %s", xy, type(e).__name__, e)
@@ -3344,9 +3349,6 @@ class _Planner:
         if z is None:
             return None
         z = np.asarray(z, np.float64)
-        if self._measured_too_low(bridge, lambda line: prov.observed(self.frame, line, OBS_HALF_M, 1), ground, limits,
-                                  z_at):
-            return None
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(bridge, axis=0).T))]
         at_end = bool(dnp.hypot(*(bridge[-1] - xy)) < dnp.hypot(*(bridge[0] - xy)))
         d = (s[-1] - s) if at_end else s
@@ -3357,21 +3359,22 @@ class _Planner:
         return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k])
 
     @staticmethod
-    def _measured_too_low(bridge, measure, ground, limits, z_at):
-        """Does the deck measured along bridge (measure(line): heights at line's points, NaN where none) leave a road
-        crossing under it (ground: lines) less than it needs under its girders (roads.measured_too_low: its sign, else
-        OBS_MIN_UNDER_M)? Measured every DECK_STEP, as the bridge solve's line is (a deck of two nodes: its ends' heights
-        say nothing over the road in its middle). Pure given z_at and measure."""
+    def _measured_raised(bridge, measure, ground, limits, z_at):
+        """(line, heights) of the deck measured along bridge (measure(line): heights at line's points, NaN where none)
+        every DECK_STEP, as the bridge solve's line is, raised where it leaves a road crossing under it (ground: lines)
+        less than it needs under its girders (roads.measured_raised: its sign, else OBS_MIN_UNDER_M); None where no
+        crossing asked it (a deck of two nodes: its ends' heights say nothing over the road in its middle). Pure given
+        z_at and measure."""
         if not roadsmod.OBS_CLEAR_ON or not len(ground):
-            return False
+            return None
         cr = roadsmod._crossings([np.asarray(bridge, np.float64)[:, :2]],
                                  [np.asarray(g, np.float64)[:, :2] for g in ground])
         if not cr:
-            return False
+            return None
         b, _st = resample(bridge, roadsmod.DECK_STEP)
         z = measure(b)
         if z is None or len(b) < 2:
-            return False
+            return None
         z = np.asarray(z, np.float64)
         depth = roadsmod.deck_depth(roadsmod.geom_span([b]))
         zc = np.asarray(z_at(np.array([c[2] for c in cr], np.float64)), np.float64)
@@ -3379,7 +3382,12 @@ class _Planner:
         for c, zr in zip(cr, zc):
             h = roadsmod.road_sign_at(limits, c[2]) if limits else None
             req.append((0, c[1], float(zr)) if h is None else (0, c[1], float(zr), roadsmod.signed_road_clear(h, depth)))
-        return roadsmod.measured_too_low(b, z, req, depth) is not None
+        out, worst = roadsmod.measured_raised(b, z, req, depth)
+        if worst is None:
+            return None
+        ok = np.isfinite(z)
+        filled = np.interp(np.arange(len(z)), np.flatnonzero(ok), z[ok])
+        return b, np.where(ok | (out > filled), out, np.nan)    # (unmeasured and not raised: skipped as before)
 
     def _measured_corridor(self, bridge, corridor):
         """The measured deck's lowest height (m) along a bridge between arcs corridor (lo, hi), every DECK_STEP; None
@@ -3998,7 +4006,7 @@ class _Planner:
                         mz = self._measured_corridor(b, corridor)
                         if mz is not None and roadsmod.OBS_CLEAR_ON:
                             # (not one that leaves this road too little under it: the lidar took the road for the
-                            # deck, and the bridge solve keeps its own heights there, roads.measured_too_low)
+                            # deck, and the bridge solve raises it there, roads.measured_raised)
                             pla, plo, _ = self.frame.enu_to_geodetic(pt[None, 0], pt[None, 1], 0.0)
                             zr = float(np.asarray(self.elev(np.asarray(pla, f64), np.asarray(plo, f64)), f64).ravel()[0])
                             dep = roadsmod.deck_depth(roadsmod.geom_span([b]))

@@ -489,7 +489,7 @@ class BridgeOverrideTest(unittest.TestCase):
             return np.asarray(h, np.float64)
         roadz.PROVIDER = StubProvider(fn)
         # the stub's abutments sit on the flat ground, so no deck here clears the motorway under it: the clearance
-        # check (test_deck_measured_on_the_road_under_it_refused) would refuse any measurement
+        # check (test_deck_measured_on_the_road_under_it_raised) would raise any measurement
         with mock.patch.object(roads, "OBS_CLEAR_ON", False):
             _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0 + bump, atol=0.02)
@@ -523,9 +523,10 @@ class BridgeOverrideTest(unittest.TestCase):
         out2 = bp._observed([beside], pool, [line + [0.0, 40.0]], [z])
         self.assertGreater(float(np.median(out2[0])), FLAT + 5.0, "a deck beside it: measured (off its solve, FLAT + 4)")
 
-    def test_deck_measured_on_the_road_under_it_refused(self):
+    def test_deck_measured_on_the_road_under_it_raised(self):
         # the lidar took the road under a deck for the deck: 1.4 m under the girders over Storrow Drive at the Bowker
-        # Overpass (Boston, 2026-11-13); the solve stands there instead. A real deck high enough keeps its measurement
+        # Overpass (Boston, 2026-11-13); the deck is raised over it to the solve's clearance. A real deck high enough
+        # keeps its measurement
         import types
         bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
         line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
@@ -533,9 +534,10 @@ class BridgeOverrideTest(unittest.TestCase):
         pool = {k: (types.SimpleNamespace(width=12.0), line, 0.0, 1.0, 51, "")}
         z = np.full(51, FLAT + 8.0)
         req = [(0, 100.0, FLAT)]
+        clear = roads.deck_road_clear(bp._depth_of_chain([k]))
         roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), FLAT + 4.0))
         out = bp._observed([k], pool, [line], [z], required=req)
-        np.testing.assert_allclose(out[0], z, atol=1e-9, err_msg="measured too low over the road: the solve")
+        self.assertGreaterEqual(float(out[0][25]), FLAT + clear - 1e-6, "measured too low over the road: raised")
         roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), FLAT + 7.0))
         out = bp._observed([k], pool, [line], [z], required=req)
         self.assertLess(float(np.median(out[0])), FLAT + 7.5, "high enough: measured")
@@ -544,14 +546,30 @@ class BridgeOverrideTest(unittest.TestCase):
             out = bp._observed([k], pool, [line], [z], required=req)
             self.assertLess(float(np.min(out[0])), FLAT + 4.5, "switched off: measured as before")
 
-    def test_measured_too_low_uses_the_sign(self):
+    def test_measured_raised_only_near_the_road(self):
+        # raised over the road and DECK_CLEAR_REACH_M either side, falling DECK_GRADE beyond: the deck's far end keeps
+        # its measured height (the Bowker's north deck, refused whole, rose 2-4 m over the lanes it lands on 100 m away)
+        line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
+        d = roads.DECK_FULL_DEPTH
+        o = np.full(51, FLAT + 1.0 + d)
+        out, worst = roads.measured_raised(line, o, [(0, 40.0, FLAT)], d)
+        self.assertAlmostEqual(worst, 1.0)
+        self.assertAlmostEqual(float(out[10]), FLAT + roads.deck_road_clear(d))           # over the road (arc 40)
+        self.assertAlmostEqual(float(out[-1]), FLAT + 1.0 + d, msg="the far end as measured")
+        self.assertTrue(np.all(np.diff(out[10:]) <= 1e-9), "falls back to the measurement")
+
+    def test_measured_raised_uses_the_sign(self):
         line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
         o = np.full(51, FLAT + 5.0)
         d = roads.DECK_FULL_DEPTH
-        self.assertIsNone(roads.measured_too_low(line, o + d, [(0, 100.0, FLAT)], d))     # 5 m: plenty
-        bad = roads.measured_too_low(line, o + d, [(0, 100.0, FLAT, roads.signed_road_clear(5.5, d))], d)
-        self.assertAlmostEqual(bad, 5.0)                                                          # under a 5.5 m sign
-        self.assertIsNone(roads.measured_too_low(line, o + d, [(0, 5.0, FLAT)], d))      # at an abutment
+        out, worst = roads.measured_raised(line, o + d, [(0, 100.0, FLAT)], d)          # 5 m: plenty
+        self.assertIsNone(worst)
+        np.testing.assert_allclose(out, o + d)
+        sign = roads.signed_road_clear(5.5, d)
+        out, worst = roads.measured_raised(line, o + d, [(0, 100.0, FLAT, sign)], d)
+        self.assertAlmostEqual(worst, 5.0)                                                  # under a 5.5 m sign
+        self.assertAlmostEqual(float(out[25]), FLAT + float(sign))                          # raised to it
+        self.assertIsNone(roads.measured_raised(line, o + d, [(0, 5.0, FLAT)], d)[1])      # at an abutment
 
     def test_short_deck_spike_refused(self):
         # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
@@ -608,7 +626,7 @@ class GradingOverrideTest(unittest.TestCase):
         self.assertIsNone(g2._end_lift(line[0]), "measured at the ground there: no ramp")
         g3 = grading._Planner(FRAME, FakeMD(f), flat_elev)
         # (a deck measured 2 m up at its ends, clear of the motorway in the middle: flat at 2 m it would be the lidar's
-        # points of the motorway, measured_too_low)
+        # points of the motorway, measured_raised)
         roadz.PROVIDER = StubProvider(lambda xy, s: FLAT + 2.0 + 6.0 * np.sin(np.pi * s / s[-1]))
         got = g3._end_lift(line[0])
         self.assertAlmostEqual(got[0], 2.0, places=6, msg="measured 2 m up: raised 2 m")
@@ -663,7 +681,7 @@ class MeasuredRampFromPlanTest(unittest.TestCase):
             e, n, _ = FRAME.geodetic_to_enu(np.asarray(la_, np.float64), np.asarray(lo_, np.float64), 0.0)
             return np.where(np.abs(np.asarray(e) + 35.0) < 1.0, FLAT - 3.0, FLAT)
         g = grading._Planner(FRAME, FakeMD(f), cut_elev)
-        # (clear of the motorway in the middle, measured_too_low)
+        # (clear of the motorway in the middle, measured_raised)
         roadz.PROVIDER = StubProvider(lambda xy_, s: measured + 9.0 * np.sin(np.pi * s / s[-1]))
         plans = [("cross", plan)]
         g._lift_approaches(mapcells.cell_of(float(FRAME.lat0), float(FRAME.lon0)), plans, [spec])
