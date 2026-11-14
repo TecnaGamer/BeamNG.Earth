@@ -33,6 +33,13 @@ function M.new()
     local current=levelId()
     if not current or epoch and epoch~=current then return nil end
     if not (worldEditorCppApi and worldEditorCppApi.createObject) then return nil end
+    if not forestId and next(types)==nil then
+      -- A diagnostic/module reload may retain an empty owned Forest in the
+      -- engine. Give its replacement a new name without deleting that Forest.
+      while scenetree.findObject(name) or scenetree.findObject(name..'_type_0') do
+        serial=serial+1;name='bneNlAssemblyForest_'..serial
+      end
+    end
     local d=types[shape]
     if not d then
       d=worldEditorCppApi.createObject('TSForestItemData')

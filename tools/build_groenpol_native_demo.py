@@ -20,7 +20,9 @@ TEMP='/temp/nl_native_assembly_assets_20261114/'
 ORIGINAL='/levels/beamng_earth/art/shapes/beamngEarth/groenpol/'
 
 
-def build(target):
+def build(target,temp_root=TEMP):
+    if not temp_root.startswith('/temp/nl_native_assembly_assets_') or not temp_root.endswith('/') or '..' in temp_root:
+        raise ValueError('use an isolated native demo temp resource root')
     target=Path(target)
     if target.exists() and any(target.iterdir()):raise ValueError('use an empty demo output directory')
     target.mkdir(parents=True,exist_ok=True)
@@ -35,7 +37,7 @@ def build(target):
     result=nlsignalassembly.assemblies(scene,[request],catalog,[['left','through','right']],[[1,0]],[False])[0]
     if not result['ready']:raise ValueError(result)
     # Relocate resource names only. All geometry and poses remain native output.
-    (target/'assembly.json').write_text(json.dumps(result['assembly']).replace(ORIGINAL,TEMP)+'\n')
+    (target/'assembly.json').write_text(json.dumps(result['assembly']).replace(ORIGINAL,temp_root)+'\n')
     materials=json.loads((folder/'main.materials.json').read_text())
     textures=set()
     for mat in materials.values():
@@ -44,16 +46,16 @@ def build(target):
                 if isinstance(value,str) and value.startswith(ORIGINAL) and value.endswith('.dds'):
                     relative=value[len(ORIGINAL):]
                     if '/' in relative or '..' in relative:raise ValueError('unexpected texture path')
-                    textures.add(relative);stage[key]=TEMP+relative
+                    textures.add(relative);stage[key]=temp_root+relative
     for texture in sorted(textures):shutil.copyfile(assets.mesh.ASSETS/texture,target/texture)
     (folder/'main.materials.json').write_text(json.dumps(materials,sort_keys=True,indent=2)+'\n')
     client=ROOT/'mod/beamng_earth/lua/ge/extensions/beamngEarth'
     for name in ('nl_signal_assemblies','nl_signal_forest'):
         raw=(client/(name+'.lua')).read_text()
         if raw.count(ORIGINAL)!=1:raise ValueError('unexpected consumer resource-root declaration')
-        (target/(name+'.lua')).write_text(raw.replace(ORIGINAL,TEMP))
+        (target/(name+'.lua')).write_text(raw.replace(ORIGINAL,temp_root))
     (target/'native_audit.json').write_text(json.dumps(audit,sort_keys=True,indent=2)+'\n')
-    (target/'nl_native_assembly.lua').write_text(DEMO)
+    (target/'nl_native_assembly.lua').write_text(DEMO.replace(TEMP,temp_root))
     return dict(lanes=3,lens_mm=result['assembly']['lens_mm'],native_parts=len(result['assembly']['parts']),
                 variants=audit['vehicle_variants'],pose_source='earthfast.NlSignalScene.assemblies')
 
@@ -62,10 +64,11 @@ DEMO="""-- Isolated renderer check: no Earth streaming or map placement.
 assert(getCurrentLevelIdentifier()~='beamng_earth','Open Gridmap first')
 local root='/temp/nl_native_assembly_assets_20261114/'
 local state=_G.bneNlNativeAssemblyDemo
+if state and state.resourceRoot~=root then state.clear();state=nil end
 if not state then
   local consumer=dofile(root..'nl_signal_assemblies.lua')
   local factory=dofile(root..'nl_signal_forest.lua')
-  state={consumer=consumer,reader=consumer.new(factory.new())}
+  state={consumer=consumer,reader=consumer.new(factory.new()),resourceRoot=root}
   _G.bneNlNativeAssemblyDemo=state
 end
 state.reader:setEnabled(false)
@@ -90,5 +93,6 @@ log('I','nlNativeAssembly','Native three-lane 300mm assembly displayed; clear wi
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output')
+    parser.add_argument('--temp-root',default=TEMP)
     args=parser.parse_args()
-    print(json.dumps(build(args.output)))
+    print(json.dumps(build(args.output,args.temp_root)))

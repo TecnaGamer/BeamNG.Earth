@@ -15,6 +15,8 @@ import build_groenpol_forest_probe as mesh
 ROOT=mesh.ROOT
 VIRTUAL='/levels/beamng_earth/art/shapes/beamngEarth/groenpol/forest_v1/'
 PREFIX='bne_groenpol_forest_v1_'
+LEG_EXTENSION_M=.05
+LOW_MOUNT_EXTENSION_M=.05
 
 
 def build(target):
@@ -24,6 +26,14 @@ def build(target):
     catalog=json.loads((ROOT/'docs/assets/groenpol/components.json').read_text())
     materials=json.loads((mesh.ASSETS/'main.materials.json').read_text())
     runtime=copy.deepcopy(catalog)
+    leg_tops={}
+    for support in runtime['supports'].values():
+        construction=support.get('construction')
+        if construction:
+            leg_tops[construction['leg_shape']]=construction['leg_bounds_m'][1][2]
+            construction['leg_bounds_m'][1][2]+=LEG_EXTENSION_M
+    loose_mount=runtime['low_repeat']['hardware_shape']
+    runtime['low_repeat']['position'][0]+=LOW_MOUNT_EXTENSION_M
     compiled,output_materials,sources={}, {}, {}
     target.mkdir(parents=True,exist_ok=True)
 
@@ -76,7 +86,20 @@ def build(target):
     replacements={}
     for shape in sorted(shapes):
         name=Path(shape).stem
-        pieces=[(p,t,n,uv,material(mat)) for p,t,n,uv,mat in source(shape)]
+        pieces=[]
+        for p,t,n,uv,mat in source(shape):
+            if shape in leg_tops:
+                # Extend only the top ring. Foot, banding, beam and head heights
+                # stay authored; uniformly stretching the pole would move them.
+                p=p.copy()
+                p[p[:,2]>=leg_tops[shape]-.0001,2]+=LEG_EXTENSION_M
+            elif shape==loose_mount:
+                # There are no authored vertices between the mast-side ring
+                # (x < 0) and the elbow (x > .14). Move the elbow/cap forward,
+                # stretching the horizontal connector while keeping its root.
+                p=p.copy()
+                p[p[:,0]>.1,0]+=LOW_MOUNT_EXTENSION_M
+            pieces.append((p,t,n,uv,material(mat)))
         filename=name+'.cdae'
         compiled[filename]=mesh.write_mesh(target/filename,pieces)
         replacements[shape]=VIRTUAL+name+'.dae'
@@ -90,6 +113,7 @@ def build(target):
     (target/'LICENSE.md').write_bytes((mesh.ASSETS/'LICENSE.md').read_bytes())
     audit=dict(format=1,source_sha256=catalog['source_sha256'],source_shapes=sources,
                files=compiled,license='CC-BY-SA-4.0',textures='reuse original Groenpol DDS assets',
+               adjustments_m=dict(overhead_leg_top=LEG_EXTENSION_M,low_mount_standoff=LOW_MOUNT_EXTENSION_M),
                vehicle_variants=sum(k.startswith('vehicle') for k in runtime['heads']))
     return runtime,audit
 
