@@ -65,10 +65,17 @@ class Source(railtags.Shards):
             return dict(records=[], complete=False, built=None)
         found, conflicts = {}, set()
         complete = True
+        with self.manifest.lock:
+            index = self.manifest.manifest
+            listed = index.get('tiles') if isinstance(index,dict) and index.get('built') == built \
+                and index.get('format') == FORMAT and index.get('zoom') == ZOOM else None
         with self.query_lock:
             for x in range(ax, bx + 1):
                 for y in range(ay, by + 1):
-                    shard = self.shard(x, y)
+                    # The complete manifest distinguishes a genuinely empty
+                    # tile from a published tile whose download is still missing.
+                    shard = dict(format=FORMAT,records=[]) if isinstance(listed,dict) \
+                        and f'{x}/{y}.json.gz' not in listed else self.shard(x,y)
                     if not isinstance(shard, dict) or shard.get('format') != FORMAT:
                         complete = False
                         continue

@@ -142,7 +142,7 @@ class DecodeTest(unittest.TestCase):
         """A tiny deflated tile claiming tens of millions of rows (Codex review of 9f1bcf84: 62 KB for 32 M rows of
         one-byte deltas and no colours, 512 MB asked for) is refused before its rows are allocated; so is a count past
         MAX_ROWS (2 M), and a row with neither colour."""
-        import resource
+        from peakmemory import peak_rss_kib
         import zlib
         n = (32 << 20) - 8      # (inside the old 64 MiB cap: 9f1bcf84's module decoded these 65 KB, +608 MB peak)
         c = zlib.compressobj(9, zlib.DEFLATED, -15)
@@ -152,14 +152,14 @@ class DecodeTest(unittest.TestCase):
         z += [c.compress(zero) for _ in range(31)] + [c.compress(zero[:n - (31 << 20)])]
         z = b"".join(z) + c.compress(b"\x00") + c.flush()
         self.assertLess(len(z), 200_000)
-        rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss0 = peak_rss_kib()
         with self.assertRaisesRegex(ValueError, "inflates past"):
             fast._ef.obc_decode(z)
         n = 2_000_001
         tile = b"OBC1" + bc.ots.uv1(n) + b"\x01" * n + bytes([bc.FACADE]) * n + b"\x01\x01\x02\x03" + bytes(n)
         with self.assertRaisesRegex(ValueError, "rows, past"):
             fast._ef.obc_decode(bc.ots.deflate(tile))
-        self.assertLess((resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - rss0) / 1024, 64, "no rows allocated")
+        self.assertLess((peak_rss_kib() - rss0) / 1024, 64, "no rows allocated")
         with self.assertRaisesRegex(ValueError, "no colour"):
             fast._ef.obc_decode(b"OBC1" + bc.ots.uv1(2) + b"\x01\x01" + bytes([bc.FACADE, 0]) + b"\x01\x01\x02\x03\x00")
         with self.assertRaises(ValueError):

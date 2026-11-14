@@ -134,25 +134,7 @@ class DecodeTest(unittest.TestCase):
         of keys and years asked for) is refused before its rows are allocated; a count past MAX_ROWS (2 M; the
         published build's largest tile has 105,421) too."""
         import zlib
-        def peak_rss_kib():
-            if sys.platform == 'win32':
-                import ctypes
-                from ctypes import wintypes
-                class Counters(ctypes.Structure):
-                    _fields_ = [('cb', wintypes.DWORD), ('faults', wintypes.DWORD)] + [
-                        (name, ctypes.c_size_t) for name in ('peak_ws', 'ws', 'peak_paged', 'paged',
-                                                          'peak_nonpaged', 'nonpaged', 'pagefile', 'peak_pagefile')]
-                counters = Counters()
-                counters.cb = ctypes.sizeof(counters)
-                get = ctypes.WinDLL('psapi', use_last_error=True).GetProcessMemoryInfo
-                get.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
-                get.restype = wintypes.BOOL
-                if not get(wintypes.HANDLE(-1), ctypes.byref(counters), counters.cb):
-                    raise ctypes.WinError(ctypes.get_last_error())
-                return counters.peak_ws / 1024
-            import resource
-            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            return peak / 1024 if sys.platform == 'darwin' else peak
+        from peakmemory import peak_rss_kib
         c = zlib.compressobj(9, zlib.DEFLATED, -15)
         n = (32 << 20) - 8                  # (one-byte deltas and years: 2 n bytes, inside the old 64 MiB cap; the old
         z = [c.compress(b"OBY1" + by.ots.uv1(n))]     # decoder took 33.5 M rows from these 65 KB, +416 MB)

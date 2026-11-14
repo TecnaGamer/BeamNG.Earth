@@ -83,6 +83,14 @@ class ContextReader(unittest.TestCase):
         with self.assertRaises(ValueError):
             source.query((5., 52., 4., 51.))
 
+    def test_manifest_proven_empty_tile_is_complete_without_download(self):
+        source=data.Source(None,None,enabled=True);source.built='complete'
+        source.manifest.manifest=dict(format=1,zoom=14,built='complete',tiles={})
+        with patch.object(source,'version',return_value='complete'), \
+             patch.object(source,'shard',side_effect=AssertionError('known empty tile must not fetch')):
+            got=source.snapshot((5.,52.,5.001,52.001))
+        self.assertTrue(got['complete']);self.assertEqual(got['records'],[])
+
 
 if __name__ == '__main__':
     unittest.main()
