@@ -181,8 +181,9 @@ class RangeIndex:
             f.write(json.dumps(piece + [hdr.get("etag"), h]) + "\n")
 
     def _rebuild(self):
-        """The index of a store made before it existed."""
+        """The index of a store made before it existed, in storage order (assemble prefers the newest version)."""
         os.makedirs(self.root, exist_ok=True)
+        found = []
         for d in os.listdir(self.store.root):
             if len(d) != 2 or not os.path.isdir(os.path.join(self.store.root, d)):
                 continue
@@ -190,7 +191,9 @@ class RangeIndex:
                 if name.endswith(".json"):
                     m = self.store.meta(name[:-5])
                     if m and m["key"].startswith("GET\n"):
-                        self.add(m["key"].split("\n")[1], m, name[:-5])
+                        found.append((m.get("stored", 0), name[:-5], m))
+        for _, h, m in sorted(found, key=lambda f: f[:2]):
+            self.add(m["key"].split("\n")[1], m, h)
 
     def assemble(self, req):
         """A 206 for req's single Range from stored pieces of one ETag that cover it, or None. Pieces without an ETag
@@ -394,8 +397,8 @@ class CacheProxy:
         if req.method == "GET":
             self.ranges.add(canonical(req.pretty_url), self.store.meta(_sha(key)), _sha(key))
         cond = flow.metadata.get("cacheproxy_cond") or {}
-        stored = self.store.get(key)
-        if cond and stored:             # (the client asked conditionally: answer its condition from what was stored)
+        stored = cond and self.store.get(key)
+        if stored:                      # (the client asked conditionally: answer its condition from what was stored)
             req.headers.update(cond)
             flow.response = _replay(req, *stored, head=req.method == "HEAD")
 
