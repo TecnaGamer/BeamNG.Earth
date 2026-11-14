@@ -341,6 +341,7 @@ local function profFrame(dtMs)
         s.far = st.far and { live = st.far.live, queued = st.far.queued } or nil
         s.trees = st.trees and st.trees.items or nil
         s.sea = st.sea and st.sea.tiles or nil
+        s.pacerWait = st.pacer and st.pacer.wait or nil     -- (the frame pacer's sleep, inside the engine's LuaPre)
       end
     end
     local m = {}
