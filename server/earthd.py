@@ -2914,7 +2914,8 @@ class Server:
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
                                             towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self),
-                                            rules=Server.ground_rules(self))
+                                            rules=Server.ground_rules(self),
+                                            cache_dir=getattr(self.mapdata, "cache_dir", None))
 
     def ground_rules(self):
         """This server's ground rules fingerprint (blockcache.ground_rules), as its road processes make it

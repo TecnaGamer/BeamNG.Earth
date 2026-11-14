@@ -30,6 +30,7 @@ data: keep ROOT apart from the code and run this with python -I. Licence: NYC Op
 source credited): CREDITS.md.
 """
 import csv
+import hashlib
 import json
 import math
 import multiprocessing as mp
@@ -398,7 +399,9 @@ def build(root, out_dir, das, workers):
         np.savez_compressed(p, **encode(recs))
         size = os.path.getsize(p)
         total += size
-        manifest["cells"][key] = {"buildings": len(recs), "parts": sum(len(r["parts"]) for r in recs), "bytes": size}
+        # (sha256: the server reads only the shard its manifest names, nycshards.matches: no older or newer build's)
+        manifest["cells"][key] = {"buildings": len(recs), "parts": sum(len(r["parts"]) for r in recs), "bytes": size,
+                                  "sha256": hashlib.sha256(open(p, "rb").read()).hexdigest()}
     lats, lons = [], []
     import mapcells
     for key in cells:

@@ -1187,6 +1187,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
                     *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat),
                     *_surf_tags(geodesy.EnuFrame(lat, lon), *roadsmod_tile_bbox(tx, ty)),
+                    _nyc_key(geodesy.EnuFrame(lat, lon), roadsmod_tile_bbox(tx, ty)) if buildings else None,
                     bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
@@ -1206,6 +1207,21 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
 
 def _md_versions():
     return _s.md.versions() if _s.md is not None else None
+
+
+def _nyc_key(frame, box, cache_dir=None):
+    """New York's shard datasets' identities (nycmassing's setbacks, nyctanks' tanks) for the key of a tile that draws
+    buildings over ENU box (x0, y0, x1, y1) in frame: None far from the five boroughs (nycshards.identity_near: the key
+    as before), else the builds this process froze ("none" before one is pinned, "off" when off). cache_dir: where
+    their manifests are pinned (default the map data's: the Fetches' own)."""
+    cd = cache_dir or getattr(_s.md, "cache_dir", None) if _s is not None else cache_dir
+    if not cd:
+        return None
+    import nycshards
+    x0, y0, x1, y1 = (float(v) for v in tuple(box)[:4])
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64), np.array([y0, y0, y1, y1], np.float64),
+                                      0.0)
+    return nycshards.identity_near(cd, float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
 
 
 def _ground_rules():
@@ -1518,7 +1534,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import buildings as buildingsmod
         import nyctanks
         # (New York's measured rooftop tanks, asked for on a thread while the buildings are put together)
-        _tanks = nyctanks.Fetch(frame, box[0], box[1], box[2], box[3], cache_dir) if props is not None else None
+        # (its manifest pinned where the tile's key reads it: the map data's folder, blockworker._nyc_key)
+        _tanks = nyctanks.Fetch(frame, box[0], box[1], box[2], box[3],
+                                getattr(_s.md, "cache_dir", None) or cache_dir) if props is not None else None
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
@@ -2082,7 +2100,7 @@ def _geo_lat(key):
 
 
 def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None, pole_profile=None,
-                     models_dir=None, de_junctions=False, towns_on=False, wear=None, rules=None):
+                     models_dir=None, de_junctions=False, towns_on=False, wear=None, rules=None, cache_dir=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
     check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
     built in: threedmr.local_signature; de_junctions: the German junction signs, near Germany with the border data
@@ -2102,6 +2120,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                        bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), *_surf_tags(tile.frame, *tile.box[:4]),
                        # (the ground rules: rules, the server's own when it asks, earthd.Server.geo_content_key)
                        ("rules", _ground_rules() if rules is None else rules),
+                       _nyc_key(tile.frame, tile.box, cache_dir) if buildings else None,
                        bool(de_junctions), *de)     # (the German junction parts last)
 
 
@@ -3067,7 +3086,8 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
     import revisit
     frame = geodesy.EnuFrame(lat, lon)
     k = revisit.key("bldfar", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty,
-                    _s.md.versions() if _s.md is not None else None, lamp_region, bool(left_hand))
+                    _s.md.versions() if _s.md is not None else None, lamp_region, bool(left_hand),
+                    _nyc_key(frame, roadsmod_tile_bbox(tx, ty)))
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
@@ -3301,7 +3321,8 @@ def far_geo(kind, gx, gy, gzoom, out_dir, vfs_dir, lamp_region=None):
     z = far_geo_zoom(kind)
     tile = geotiles.geobox(gx, gy, z)
     names = far_geo_names(kind, tile.key)
-    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(), lamp_region)
+    k = revisit.key(kind, "g", tile.key, int(gzoom), _md_versions(), lamp_region,
+                    _nyc_key(tile.frame, tile.box) if kind in ("bldfar", "bldpack") else None)
     frame_ll = (float(tile.frame.lat0), float(tile.frame.lon0))
     got = revisit.load(_s.cache_dir, kind, k)
     if got is not None:
