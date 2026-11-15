@@ -271,11 +271,18 @@ function M.look(g, inp)
       g.ep = ep
     end
     ep.level, ep.untilT = best.level, inp.clock + M.RESCUE_WINDOW_S
+    if riding[best.id] then ep.confirmed = true end
     -- (on the approach at the deck's level: well short of the gap, or, found late, the nearest place short of it)
     if best.d >= 3 and z >= best.level - M.LEVEL_M and (not ep.safe or best.d >= M.STOP_M + 3) then
       ep.safe = { x, y, z, th }
     end
   end
+  -- the rescue's episode: confirmed once the car is on its span, entered at the deck's level; one only predicted from
+  -- the path is dropped as soon as a look no longer drives onto that span (its level check rejected it: a road falling
+  -- away under the bridge, Codex review 2026-11-15 round 2)
+  local ep = g.ep
+  if ep and riding[ep.id] then ep.confirmed = true end
+  if ep and not ep.confirmed and not onPath[ep.id] then g.ep = nil end
   g.danger = best
   g.dNow = best and best.d or nil
   return best
@@ -311,11 +318,13 @@ end
 
 -- Pure: the place to set the car back to ({ x, y, z, heading }) when it went into the gap anyway, or nil.
 -- inp = { clock, x, y, z, vx, vy, groundAt, vehId (the car's: only the one that came up to the gap is set back) }: RESCUE_DROP under the deck's level where it is (its abutments' line), in
--- the span's corridor going along it, within RESCUE_WINDOW_S of the last gap seen on that span.
+-- the span's corridor going along it, within RESCUE_WINDOW_S of the last gap seen on that span, which the car entered
+-- at the deck's level (ep.confirmed: a look had it on the span, riding).
 function M.fell(g, inp)
   local ep = g.ep
   if not ep or not ep.safe or inp.clock > (ep.untilT or -math.huge) or g.released[ep.id] ~= nil then return nil end
   if ep.vehId ~= inp.vehId then return nil end      -- (another car than the one that drove up to it)
+  if not ep.confirmed then return nil end           -- (never on the span at its level: only predicted)
   if inp.clock - (g.lastRescue or -math.huge) < M.RESCUE_GAP_S then return nil end
   local sp = ep.span
   if not inBox(sp.box, inp.x, inp.y, M.LAT_M + 4) then return nil end
@@ -357,7 +366,7 @@ function M.update(g, ctx)
       deckAt = ctx.deckAt, groundAt = ctx.groundAt })
   end
   -- (nothing ahead and no gap just passed: no engine call at all)
-  if not g.danger and not (g.ep and clock <= (g.ep.untilT or -math.huge)) then
+  if not g.danger and not (g.ep and g.ep.confirmed and clock <= (g.ep.untilT or -math.huge)) then
     M.release(g, ctx.hold)
     g.mode = 'clear'
     return g.mode

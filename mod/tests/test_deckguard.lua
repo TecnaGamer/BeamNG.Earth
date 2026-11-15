@@ -88,6 +88,19 @@ do
   T.check(look(gs, wu, 250, 0, 10.5, 30, 0, 0.25) == nil, 'driving on under it from far off: no gap once near')
   T.check(look(gs, wu, 290, 0, 10.5, 30, 0, 0.5) == nil, '... nor right at its end')
   T.check(next(gs.riding) == nil, '... never taken as on it')
+  -- (Codex review round 2: a road falling away under a bridge predicted from its level far off: the episode the far
+  -- look made is dropped once the level check rejects the span, and the car on the road under it is never set back)
+  local wd = world()
+  wd.groundAt = function(x, y)
+    if math.abs(x - 300) <= 1 or math.abs(x - 360) <= 1 then return 18 end
+    return 2
+  end
+  local gd = guard({ SPAN })
+  T.check(look(gd, wd, 120, 0, 18.5, 30, 0, 0) ~= nil and gd.ep ~= nil, 'far off at its level: a gap predicted')
+  T.check(look(gd, wd, 250, 0, 10.5, 30, 0, 2) == nil, 'the road fell away under its level: no gap')
+  T.check(gd.ep == nil, '... and no rescue episode left')
+  T.check(G.fell(gd, { clock = 4, x = 310, y = 0, z = 2.5, vx = 20, vy = 0, groundAt = wd.groundAt, vehId = 1 }) == nil,
+    '... the car on the road under it never set back')
   T.check(look(guard({}), w, 120, 0, 10.5, 30, 0) == nil, 'no spans: nothing')
 end
 
@@ -165,6 +178,10 @@ do
   local g = guard({ SPAN })
   look(g, w, 200, 0, 10.5, 30, 0, 0)
   T.check(g.ep and g.ep.safe and g.ep.safe[1] == 200, 'the approach remembered')
+  T.check(G.fell(g, { clock = 0.1, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 }) == nil,
+    'only predicted, never entered at its level: no set-back (Codex review 2026-11-15, round 2)')
+  look(g, w, 298, 0, 10.5, 30, 0, 0.25)       -- (at its end, at the deck's level: entered)
+  T.check(g.ep and g.ep.confirmed and g.ep.safe[1] == 200, 'entered at its level: the episode confirmed, the approach kept')
   -- (Codex review 2026-11-15: another car of the player's, switched to in the window, is never set back)
   T.check(G.fell(g, { clock = 1, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 2 }) == nil,
     'another vehicle under it: not set back')
