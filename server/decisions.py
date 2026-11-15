@@ -713,7 +713,7 @@ def ask_build(cache_dir, vk, bx, by):
         req = urllib.request.Request(REQUEST_URL, body, {"Content-Type": "application/json",
                                                          "User-Agent": "BeamNG.Earth"})
         try:
-            with urllib.request.urlopen(req, timeout=8.0) as r:
+            with urllib.request.urlopen(req, timeout=8.0, context=netfetch.windows_ssl_context()) as r:
                 r.read(4096)
             log.info("decisions: build of block %s/%s asked", bx, by)
         except Exception as e:
