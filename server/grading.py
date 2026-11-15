@@ -7684,14 +7684,18 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
                 grid.setdefault((gx, gy), []).append(len(centres) - 1)
             else:
                 members[found].append(m)
-    # a node on another road's middle: that road's nearest vertex joins it
+    # a node on another road's middle: that road's nearest vertex joins it (the roads whose boxes, padded by their half
+    # widths, hold the node: as arrays over every candidate at once, in their order; one road at a time, every node
+    # against every candidate in Python was 2 M box tests, 9 of a cold central Athens road tile's 144 s: GitHub #1327)
+    ca = np.asarray(cand, np.int64)
+    c_lo, c_hi = lo[ca].reshape(-1, 2), hi[ca].reshape(-1, 2)
+    c_half = np.array([float(plans[i][1].half) for i in cand], np.float64).reshape(-1, 1)
+    c_long = np.array([len(xys[i]) >= 3 for i in cand], bool)
     for c, ms in zip(centres, members):
         own = {i for i, _a, _v in ms}
-        for i in cand:
-            if i in own or len(xys[i]) < 3:
-                continue
-            if not ((lo[i] <= c + RAMP_NODE_M + float(plans[i][1].half)).all()
-                    and (hi[i] >= c - RAMP_NODE_M - float(plans[i][1].half)).all()):
+        holds = c_long & (c_lo <= c + RAMP_NODE_M + c_half).all(axis=1) & (c_hi >= c - RAMP_NODE_M - c_half).all(axis=1)
+        for i in ca[holds].tolist():
+            if i in own:
                 continue
             d = dnp.hypot(*(xys[i] - c).T)
             v = int(np.argmin(d))
