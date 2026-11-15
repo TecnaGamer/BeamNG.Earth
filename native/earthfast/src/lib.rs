@@ -68,6 +68,7 @@ mod roadz;
 mod fartex;
 mod farglobal;
 mod farpvs;
+mod farsel;
 mod dirtsteps;
 mod gridinterp;
 mod dejunction;
@@ -6260,6 +6261,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
     // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
     m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs_tex_px, m)?)?;
     // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
     // texture, earthd FAR_PVS; that branch's 212)
     // 219: l0roads / groundphoto (that branch's 171)
@@ -6447,6 +6449,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     buildcolours::register(m)?;
     // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
     m.add_function(wrap_pyfunction!(grow_along, m)?)?;
-    m.add("VERSION", 302)?;
+    // 303: the far field's per-pose kernels (the event loop's 2-7 s stalls of a BeamMP drive, 2026-11-15):
+    // farsel::far_select_nodes (farfield.select, the anchor's quadtree, ported), farsel::far_horizon_radius
+    // (HorizonGrid.radius), farpvs::far_pvs_tex_px (farpvs.Set.tex_px / hidden for many tiles, without the GIL);
+    // far_global_select's view errors looked up in the caller's dict (not copied whole at every pose)
+    farsel::register(m)?;
+    m.add("VERSION", 303)?;
     Ok(())
 }

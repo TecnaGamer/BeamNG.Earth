@@ -58,6 +58,44 @@ class FarFirstTest(unittest.TestCase):
             return c, coarse, dict(c.desired), groups_before, c.groups
         return asyncio.run(go())
 
+    def test_pose_selects_again_only_once_something_moved(self):
+        """update_far(gate=True) (a pose): the same inputs within SELECT_MOVE_M keep the last selection (no select);
+        moving farther, another call (the graphics, a horizon grid) or SELECT_MAX_S later select again."""
+        async def go():
+            c = earthd.Connection(self.s, None, _Writer())
+            a = self.s.new_anchor(LAT, LON)
+            a.first_terrain = (0.0, 0.0)
+            self.s.anchors[a.id] = a
+            c.active = a.id
+            c.focus = (0.0, 0.0)
+            c._set_block(a.id, 0.0, 0.0)
+            c.update_far(gate=True)
+            first = c.desired
+            c.update_far(gate=True)         # (its own node changes held: one more)
+            second = c.desired
+            c.focus = (3.0, 2.0)
+            c.update_far(gate=True)
+            kept = c.desired is second
+            c.focus = (3.0 + earthd.SELECT_MOVE_M + 1.0, 2.0)
+            c.update_far(gate=True)
+            moved = c.desired is not second
+            third = c.desired
+            c.update_far()                  # (not a pose: always)
+            forced = c.desired is not third
+            c.update_far(gate=True)
+            c.update_far(gate=True)
+            settled = c.desired
+            c.update_far(gate=True)
+            still = c.desired is settled
+            last = c._far_last
+            c._far_last = (last[0], last[1], last[2] - earthd.SELECT_MAX_S - 1.0) + last[3:]
+            c.update_far(gate=True)
+            return first, kept and still, moved, forced, c.desired is not settled
+        first, kept, moved, forced, timed = asyncio.run(go())
+        self.assertTrue(first)
+        self.assertTrue(kept, "a pose 4 m on: the same selection")
+        self.assertTrue(moved and forced and timed)
+
     def test_coarse_cover_then_refined(self):
         c, coarse, full, _, groups = self.selections()
         self.assertGreater(min(t.level for t in full.values()), self.s.min_level - 1)
