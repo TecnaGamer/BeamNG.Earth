@@ -280,6 +280,38 @@ tick()
 T.check(#edited == editsBefore + 1 and edited[#edited].data.jbm == 'bx' and edited[#edited].data.vcf.paints[1].baseColor[2] == 1
   and not vehicles['5-0'].bngeHeldEdit, 'near and on: the kept edit built (with the paint since)')
 
+-- (Codex review) the player's queue on: an older edit BeamMP queued while the car was near never overwrites a newer
+-- one kept after it went far; the kept (latest) edit is the one built when it is near again
+sv.enableSpawnQueue = false
+MPVehicleGE.handle(spawnRaw('5-1', 'Near By', 31, 'covet'))
+local gid51 = vehicles['5-1'].gameVehicleID
+T.check(vehicles['5-1'].isSpawned, 'a near car spawned')
+sv.enableSpawnQueue = true
+MPVehicleGE.handle('c:5-1:' .. jsonEncode({ jbm = 'editA', vcf = { parts = 'A' } }))
+T.check(vehicles['5-1'].editQueue ~= nil, 'edit A queued by BeamMP (near, queue on)')
+ma.setRemote(5, PARIS[1], PARIS[2])
+place[5] = PARIS
+clockT = clockT + ma.SETTLE_S + 0.1
+positionGE.handle(posRaw('5-1', PARIS[1], PARIS[2], PARIS[1], PARIS[2]))
+off[gid51] = true
+MPVehicleGE.handle('c:5-1:' .. jsonEncode({ jbm = 'editB', vcf = { parts = 'B' } }))
+tick()
+local kB = vehicles['5-1'].bngeHeldEdit
+T.check(kB and kB:find('editB', 1, true) and vehicles['5-1'].editQueue == nil, 'the newer edit B kept, the older A dropped')
+local nE = #edited
+applyQueuedEvents()
+T.check(#edited == nE, 'BeamMP\'s queue builds nothing for the far car')
+ma.setRemote(5, 36.52, -118.08)
+place[5] = { 36.52, -118.08 }
+clockT = clockT + ma.SETTLE_S + 0.1
+positionGE.handle(posRaw('5-1', 36.52, -118.08, 36.52, -118.08))
+off[gid51] = nil
+tick()
+applyQueuedEvents()
+T.check(#edited == nE + 1 and edited[#edited].sid == '5-1' and edited[#edited].data.jbm == 'editB',
+  'near and on: edit B built (the latest), not A')
+sv.enableSpawnQueue = false
+
 -- BeamMP's own queue: a far car queued before the hook (or while its place was not known) taken in
 vehicles['4-5'] = { serverVehicleString = '4-5', ownerID = 4, ownerName = 'Far Away', isSpawned = false, isLocal = false,
   gameVehicleID = -1, remoteVehID = 99, position = vec3(0, 0, 0),
@@ -300,11 +332,15 @@ T.check(vehicles['4-5'] == nil and removed[#removed].sid == '4-5' and removed[#r
 local n0 = #spawned
 MPVehicleGE.handle(spawnRaw('7-0', 'Stranger', 21, 'pickup'))
 T.check(#spawned == n0 and vehicles['7-0'].bngeHeld, 'place not known: kept for now')
+-- (it drives on meanwhile: its packets, untransformed, reach BeamMP's record)
+positionGE.handle('p:7-0:{"pos":[500,600,7],"vel":[0,0,0],"rot":[0,0,1,0],"rvel":[0,0,0]}')
 tick(math.floor(md.UNKNOWN_WAIT_S / md.TICK_S) - 1)
 T.check(#spawned == n0, '... for UNKNOWN_WAIT_S')
 tick(2)
-T.check(#spawned == n0 + 1 and spawned[#spawned].sid == '7-0' and spawned[#spawned].data.pos[1] == 1,
-  'then spawned as sent (BeamMP\'s behaviour)')
+T.check(#spawned == n0 + 1 and spawned[#spawned].sid == '7-0', 'then spawned (BeamMP\'s behaviour)')
+local p7 = spawned[#spawned].data
+T.check(p7.pos[1] == 500 and p7.pos[2] == 600 and p7.pos[3] == 7 and p7.rot[3] == 1,
+  '(Codex review) at its latest place from its packets, not the spawn\'s old one')
 
 -- a reload of this module: what is kept is found again on BeamMP's records
 MPVehicleGE.handle(spawnRaw('4-2', 'Far Away', 14, 'pickup'))
@@ -321,8 +357,12 @@ local realTime = os.time
 os.time = function() return realTime() + md.STALE_S + 5 end
 MPVehicleGE.handle('m:1:4-2')
 os.time = realTime
-T.check(spawned[#spawned].sid == '4-2' and not vehicles['4-2'].bngeHeld and vehicles['4-2'].isSpawned,
-  'stale: the kept spawns handed back to BeamMP')
+local back = {}
+for i = nS + 2, #spawned do back[spawned[i].sid] = true end
+local anyKept = false
+for _, v in pairs(vehicles) do if v.bngeHeld then anyKept = true end end
+T.check(back['4-2'] and back['4-1'] and not anyKept and vehicles['4-2'].isSpawned,
+  'stale: every kept spawn handed back to BeamMP')
 tick()
 
 -- an error in BeamMP's handle during a kept spawn: settings put back, the error BeamMP's

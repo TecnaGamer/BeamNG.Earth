@@ -34,6 +34,7 @@ local far = {}                           -- [serverVehicleString] = true: its la
 local wasFar = {}                        -- [serverVehicleString] = true: it was beyond FAR_M at some time (wasFar)
 local lastPos = {}                       -- [serverVehicleString] = { x, y, z }: its latest position placed (lastPos)
 local seen = {}                          -- [serverVehicleString] = its latest position in our frame, far or near (seen)
+local rawSeen = {}                       -- [serverVehicleString] = its latest untransformed position (rawSeen)
 
 local function isMPSession()
   return MPCoreNetwork ~= nil and MPCoreNetwork.isMPSession ~= nil and MPCoreNetwork.isMPSession()
@@ -125,6 +126,9 @@ function M.seen(sid)
   local s = seen[sid]
   if s and s.la == myLat and s.lo == myLon then return s end
 end
+-- The latest position packet of a car whose owner's anchor is not known (no BeamNG.Earth), as sent (no conversion:
+-- BeamMP places it there): { t, x, y, z, rot }; nil: none. (mpdefer: where such a car spawns after its wait)
+function M.rawSeen(sid) return rawSeen[sid] end
 -- Our own anchor (announceOwn): lat, lon (nil before the first).
 function M.own() return myLat, myLon end
 -- (lat, lon) on the ground in our frame: x, y, z (nil: our anchor not known yet).
@@ -138,7 +142,7 @@ end
 -- (the session's end) the remote anchors forgotten
 function M.reset()
   remote, expired, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {}, {}
-  seen = {}
+  seen, rawSeen = {}, {}
 end
 
 -- A log line once per car and kind every NOTE_S (the session's log tells what happened to a car before an instability)
@@ -225,10 +229,11 @@ function M.sanitize(decoded)
 end
 
 -- (a packet let through or found far: where the car is in our frame, for seen; its record reused, packets come ~30 a s)
-local function noteSeen(sid, p, r, now)
+local function noteSeen(sid, p, r, now, into)
   if not (p and tonumber(p[1]) and tonumber(p[2])) then return end
-  local s = seen[sid]
-  if not s then s = {}; seen[sid] = s end
+  into = into or seen
+  local s = into[sid]
+  if not s then s = {}; into[sid] = s end
   s.t, s.x, s.y, s.z, s.la, s.lo = now, p[1], p[2], tonumber(p[3]) or 0, myLat, myLon
   s.d = math.sqrt(p[1] * p[1] + p[2] * p[2])
   if type(r) == 'table' then
@@ -271,6 +276,7 @@ local function wrapHandle(original)
     if not sane then return end
     if not xf then                          -- (no conversion: the packet as sent, if it is sane)
       if type(decoded.pos) == 'table' then lastPos[serverVehicleID] = decoded.pos end
+      noteSeen(serverVehicleID, decoded.pos, decoded.rot, now, rawSeen)
       if not changed then return original(rawData) end
       local okE, enc = pcall(jsonEncode, decoded)
       return original(okE and (code .. ':' .. serverVehicleID .. ':' .. enc) or rawData)

@@ -235,7 +235,7 @@ local function take(sid, v, role, d)
   end
   v.bngeHeld = { role = role or roleOf(v), name = tostring(q.playerNickname or v.ownerName or 'player'), json = json }
   v.hideNametag = true          -- (BeamMP's own per-car flag: its tag loop skips it)
-  timers[sid] = { unknown = 0, ground = 0, nopose = 0 }
+  timers[sid] = { unknown = 0, ground = 0, nopose = 0, since = mpanchor.clock() }
   stats.held = stats.held + 1
   log('I', 'beamngEarth', string.format('BeamMP: car %s (%s) %s: its spawn kept, not spawned here', sid,
     v.bngeHeld.name, d and ('far (' .. km(d) .. ')') or 'place not known yet'))
@@ -350,6 +350,12 @@ local function wrap(orig)
           end
           v.bngeHeldEdit = raw
           stats.edits = stats.edits + 1
+          -- (an older edit BeamMP queued while the car was near is superseded: left there, its queue would build it,
+          -- or the sweep below would take it over this newer one; Codex review 2026-11-15)
+          if v.editQueue ~= nil then
+            v.editQueue = nil
+            if recs then updateQueueUI(recs) end
+          end
           return
         end
         v.bngeHeldEdit = nil                      -- (a newer edit goes through)
@@ -419,7 +425,7 @@ function M.update(dt)
         if v.isSpawned ~= false then                -- (spawned meanwhile by BeamMP itself: ours forgotten)
           v.bngeHeld, v.hideNametag, timers[sid] = nil, nil, nil
         else
-          local w = timers[sid] or { unknown = 0, ground = 0, nopose = 0 }
+          local w = timers[sid] or { unknown = 0, ground = 0, nopose = 0, since = mpanchor.clock() }
           timers[sid] = w
           local d, s = M.distOf(sid, pid)
           if d == nil then
@@ -428,10 +434,17 @@ function M.update(dt)
             w.unknown = 0
           end
           local verdict = M.verdict(d, true, w.unknown)
+          if verdict == 'spawn' and d == nil then
+            -- (place not known, spawned as BeamMP would: at its latest packet as sent, not the spawn's old place, which
+            -- the replay's new record would otherwise use; Codex review 2026-11-15)
+            local r = not mpanchor.knows(pid) and mpanchor.rawSeen(sid)
+            if r and r.t >= (w.since or -math.huge) then s = r end
+          end
           if verdict == 'spawn' and d ~= nil and not s then
-            -- (near by its owner's place only: a packet of its own first, for where to spawn it; none: as sent)
+            -- (near by its owner's place only: a packet of its own first, for where to spawn it; none: its last one
+            -- in our frame, else as sent)
             w.nopose = (w.nopose or 0) + M.TICK_S
-            if w.nopose < M.UNKNOWN_WAIT_S then verdict = 'hold' end
+            if w.nopose < M.UNKNOWN_WAIT_S then verdict = 'hold' else s = mpanchor.seen(sid) end
           elseif s then
             w.nopose = 0
           end
@@ -459,6 +472,8 @@ function M.update(dt)
           changed = true
         end
       elseif v.editQueue and v.isSpawned and type(v.editQueue) == 'string' then
+        -- (an edit queued by BeamMP while one is kept is the newer: the hook drops the queued one when it keeps an
+        -- edit, so a queued edit next to a kept one came through after it)
         local d = M.distOf(sid, pid)
         if M.holdEdit(d) then
           v.bngeHeldEdit, v.editQueue = 'c:' .. sid .. ':' .. v.editQueue, nil
