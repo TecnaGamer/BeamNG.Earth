@@ -115,7 +115,6 @@ export const settingsSchema = [
     name: "Performance",
     intro: "How much of your CPU and memory the BeamNG.Earth app may use to build the world around you.",
     items: [
-      { id: "trafficTurnYield", type: "bool", default: false, name: "Traffic green-turn yielding (experimental)", desc: "Checks approaching traffic before turning across it on green. Off leaves this decision to the normal traffic AI." },
       { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
         note: "Takes effect the next time you start BeamNG.Earth.",
         options: [ { label: "Auto", value: "auto" }, { label: "1", value: "1" }, { label: "2", value: "2" }, { label: "3", value: "3" }, { label: "4", value: "4" }, { label: "6", value: "6" }, { label: "8", value: "8" } ] },
@@ -127,6 +126,7 @@ export const settingsSchema = [
       { id: "maxRamGb", type: "select", default: "auto", name: "Max RAM for BeamNG.Earth", desc: "The most memory the BeamNG.Earth app may use to build the world, all its processes together; the game's own memory is not counted. Auto: a third of your computer's memory below 24 GB (5 GB on a 16 GB PC, at least 1.5 GB), and 60 % of it on a bigger computer, at most 24 GB (19 GB on a 32 GB PC). Near the limit the app drops its caches and restarts its busiest helper processes, and it uses less while your computer is short of memory. Lower it if the game stutters while other programs are open; the world then loads more slowly. More than Auto rarely loads faster.",
         note: "The limit takes effect at once; the app's caches and helper processes are sized for it the next time you start BeamNG.Earth.",
         options: [ { label: "Auto", value: "auto" }, { label: "3 GB", value: "3" }, { label: "4 GB", value: "4" }, { label: "6 GB", value: "6" }, { label: "8 GB", value: "8" }, { label: "12 GB", value: "12" }, { label: "16 GB", value: "16" }, { label: "24 GB", value: "24" }, { label: "32 GB", value: "32" } ] },
+      { id: "trafficTurnYield", section: "Experimental traffic & Autodrive", type: "bool", default: false, name: "Traffic green-turn yielding", desc: "Checks approaching traffic before turning across it on green. Extra traffic checks use CPU time; cost increases with more traffic. Off leaves this decision to the normal traffic AI." },
     ],
   },
   {
