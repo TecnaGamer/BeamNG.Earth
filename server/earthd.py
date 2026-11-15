@@ -156,6 +156,7 @@ import rockface as rockfacemod  # noqa: E402
 import geotiles as geotilesmod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
 import groundahead as groundaheadmod  # noqa: E402
+import deckspans as deckspansmod  # noqa: E402
 import routeahead as routeaheadmod  # noqa: E402
 import furniture as furnituremod  # noqa: E402
 import development as developmentmod  # noqa: E402
@@ -1343,6 +1344,8 @@ class Server:
         self.base_shown = OrderedDict()  # (aid, cx, cy) -> the base photo name last sent for that block (note_base)
         self.ground_bases = {}          # (aid, cx, cy) -> its ground stand-in photos (write_ground_base), until graded
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
+        # the bridges round each car for the mod's deck guard (deckspans.py; reads map cells: not behind the ground ahead)
+        self.deck_pool = ThreadPoolExecutor(1, thread_name_prefix="deck-spans")
         # the water plans (Connection.sea_tiles) apart: a plan takes seconds and holds while a teleport's block is
         # built (pacer.hold), and the ground ahead (a few ms) queued behind them: 2.2 s at 275 km/h (2026-11-07)
         self.sea_pool = ThreadPoolExecutor(1, thread_name_prefix="sea-plan")
@@ -7494,6 +7497,8 @@ class Connection:
         self.gravity = gravitymod.Tracker()     # real gravity: recompute rule, last message sent
         self.credits = creditsmod.Tracker()     # data credits: throttle, last message sent (--credits on)
         self.ground_busy = False                # a groundahead job is running (one at a time)
+        self.deck_guard = False                 # the mod has a deck guard (hello.deckGuard: deck_spans sent)
+        self.decks = None                       # ... its deckspans.Spans (made at the first pose)
         self.route_dl_version = 0               # bumped by every route(): supersedes a running route_download job
         self.route_points = []                  # the last planned route's points ([lat, lon]: a saved route's)
         self.route_dest = None                  # that route's asked destination (lat, lon): a failed re-plan toward
@@ -8765,6 +8770,8 @@ class Connection:
             # ... and the far field's levels from 3 up as global tiles when it places those (hello.globalFar:
             # farfield.lua's GLOBAL_FAR; geotiles phase 3b, --global-far): built once, kept across rebases
             self.ready_set = msg.get("readySet") == 1      # (the mod takes 'terrain_ready_set': follow.preferReady)
+            # (the mod slows the car before a bridge whose road tile has not come: deckguard.lua, deck_spans)
+            self.deck_guard = msg.get("deckGuard") == deckspansmod.PROTO
             self.global_far = (geo and msg.get("globalFar") == farfield.GLOBAL_PROTO and bool(self.s.global_far)
                                and self.s.layout.mesh)
             if self.global_far:
@@ -9964,6 +9971,7 @@ class Connection:
                 self.focus_hint = None
         self.gravity.on_pose(self, self.s.anchors[aid].frame, x, y, _num(msg, "z", 0.0))
         self.ground_ahead(aid, x, y, vx, vy)
+        self.deck_spans(aid, x, y)
         if self.s.sea is not None:
             self.sea_tiles(aid, x, y)
         # the mod's altitude rule: high above the ground it does not move its block, so no block is
@@ -10061,6 +10069,8 @@ class Connection:
         if self.s.mapdata is not None and aid == self.active and detail:
             if getattr(self.roads, "geo", False):
                 anchor = self.s.anchors.get(aid)
+                # (the tiles the mod's deck guard slows the car for, a bridge's not in yet: built first, deckguard.lua)
+                self.roads.deck_first = deckspansmod.wait_keys(msg.get("deckWait"))
                 self.roads.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_roads_geo,
                                    vel=self.vel, ground_busy=self.terrain_wait > 0, view=self.view_at,
                                    foci=self.foci, frame=anchor.frame if anchor is not None else None, tree=tree)
@@ -10765,6 +10775,37 @@ class Connection:
                 log.debug("ground ahead: %s: %s", type(e).__name__, e)
             finally:
                 self.ground_busy = False
+        self.spawn(run())
+
+    def deck_spans(self, aid, x, y):
+        """Send the mod the bridges round the car (deckspans.py; its deck guard, deckguard.lua: the car slowed before a
+        deck whose road tile has not come), made again as the car moves on (deckspans.MOVE_M / EVERY_S), one job at a
+        time in its own thread; sent only when they changed. Only to a mod that has the guard (hello.deckGuard), with
+        map data, for the active anchor while the block follows the car."""
+        if not self.deck_guard or self.s.mapdata is None or aid != self.active or not self.following \
+                or self.map_view or self.map_open or getattr(self, "teleport_pending", False):
+            return
+        anchor = self.s.anchors.get(aid)
+        if anchor is None:
+            return
+        d = self.decks
+        if d is None:
+            d = self.decks = deckspansmod.Spans(self.s.mapdata)
+        x, y = self.focus
+        if not d.due(aid, x, y):
+            return
+        d.busy = True
+        frame = anchor.frame
+
+        async def run():
+            try:
+                msg = await self.loop.run_in_executor(self.s.deck_pool, d.make, aid, frame, x, y)
+                if msg is not None and aid == self.active:
+                    self.send(msg)
+            except Exception as e:      # (no spans: the guard does nothing, as before it)
+                log.debug("deck spans: %s: %s", type(e).__name__, e)
+            finally:
+                d.busy = False
         self.spawn(run())
 
     def sea_tiles(self, aid, x, y):

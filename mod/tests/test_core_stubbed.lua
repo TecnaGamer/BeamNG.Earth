@@ -271,6 +271,16 @@ T.check(tb.lastImport.sq == 2.0 and tb.lastImport.maxH == 3500, 'importMaps squa
 T.check(pumpUntil(function() return calls.safeTeleport == 2 end, 10), 'teleport placement')
 T.near(veh.pos.z, 1181, 1e-9, 'placed at groundZ + 1')
 
+do  -- the deck guard (deckguard.lua): the server's spans for the current anchor taken, its frame step without an error
+  local st = core._state()
+  T.check(received('hello')[1].deckGuard == 1, 'hello.deckGuard: the server sends deck_spans')
+  serverSend({ type = 'deck_spans', anchorId = st.anchorId, cx = 0, cy = 0, r = 1200, spans = { { 10, 0, 70, 0 } },
+    abut = { 3 } })
+  frames(3)
+  T.check(#st.deck.spans == 1 and st.deck.aid == st.anchorId, 'deck_spans taken for the current anchor')
+  T.check(not core._deckFailed and st.deck.stats.looks > 0, 'the deck guard looks in the frame without an error')
+end
+
 -- far tiles: loaded hidden within the governor budget, shown by their swap group
 local farKeys = {}
 for i = 1, 5 do

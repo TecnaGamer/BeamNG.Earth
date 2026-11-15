@@ -182,6 +182,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   edges, ditches and the ground at walls follow the map closely (the Low and Medium presets use a lighter 2 m grid).
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
+- A bridge ahead that has not loaded yet (its road piece comes after the ground under it): the car slows down smoothly
+  and stops short of it until it has, instead of driving into the gap; also in BeamMP, where only your own car is
+  slowed (on by default; Settings > World > Slow down before bridges still loading).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
   measured along each bridge, and so do the roads leading onto them up to where they are back on the ground
   (`BNE_APPROACH_LIDAR=off` turns that part off); in France (IGN BD TOPO) and Norway (NVDB), bridges and tunnels follow the national road

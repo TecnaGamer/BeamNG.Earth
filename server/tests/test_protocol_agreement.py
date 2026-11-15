@@ -119,7 +119,9 @@ MOD_TO_SERVER = {
               # it takes a built block near its target (follow.preferReady: 'terrain_ready_set')
               "readySet": F(int, OPT),
               # the game's own user folder (FS:getUserPath: Server.check_user_dir, GitHub #770)
-              "userPath": F(str, OPT)},
+              "userPath": F(str, OPT),
+              # it slows the car before a bridge whose road tile has not come (deckguard.lua PROTO: 'deck_spans')
+              "deckGuard": F(int, OPT)},
     "traffic_visuals": {"enabled": F(bool), "reset": F(bool, OPT)},
     "prepare_anchor": {"requestId": F(int), "lat": F(NUM), "lon": F(NUM), "cx": F(NUM, OPT), "cy": F(NUM, OPT),
                        # 2026-10-22: the player's spot when not the origin (BeamMP: onto another player's anchor)
@@ -145,7 +147,9 @@ MOD_TO_SERVER = {
              # other vehicles' collision foci [{x, y, r, trees}] (collisionfoci.lua; earthd parse_foci)
              "foci": F((list, dict), OPT),
              # the edge guard holds the car for its ground (earthd Connection.hold_boost: every core meanwhile)
-             "guardHold": F(bool, OPT)},
+             "guardHold": F(bool, OPT),
+             # the road geotiles the deck guard slows the car for (a bridge's, not in yet): built first (deckspans.py)
+             "deckWait": F((list, dict), OPT)},
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
@@ -389,6 +393,9 @@ SERVER_TO_MOD = {
     "block_base": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "base": F(str), "baseSize": F(NUM)},
     # the highest ground near the player's path (groundahead.py; the mod's altitude rule), z in the anchor's frame
     "ground_ahead": {"anchorId": F(int), "z": F(NUM)},
+    # the bridges round the car (deckspans.py; the mod's deck guard, hello.deckGuard): spans [[x0, y0, x1, y1, ...]] in
+    # the anchor's world, abut [bits] (1 the first end on the ground, 2 the last), for the disc (cx, cy) r
+    "deck_spans": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM), "r": F(NUM), "spans": F(list), "abut": F(list)},
     # the water near the player (--sea on): tiles [key, x, y, z, size, nx, ny] (seatiles.py), rivers
     # [key, kind, flow m/s, [[x, y, z, width, depth], ...]] (riverlines.py)
     "sea": {"anchorId": F(int), "tiles": F(list), "rivers": F(list)},
@@ -500,6 +507,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
                        "sea",                                        # --sea on: needs map data (test_seacarve)
+                       "deck_spans",                                 # the bridges round the car: map data (test_deckspans)
                        "veg_tile", "veg_drop",                       # --trees on: needs map data
                        "turbines_tile", "turbines_drop",             # turbineGeo: test_windturbine_farstream
                        "user_dir_mismatch",                          # another user folder than the game's (test_user_dir)
