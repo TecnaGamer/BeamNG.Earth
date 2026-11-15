@@ -3,13 +3,16 @@ without having them (so a map cell can be classified, and the files it needs fet
 
     git clone https://github.com/maalos/LOD1_2024_PL
     python tools/build_polandlod1_index.py LOD1_2024_PL        # writes LOD1_2024_PL/index.npz
-    # commit index.npz at the root of the repository (polandlod1 fetches .../refs/heads/master/index.npz)
+    # commit index.npz at the root of the repository, with the files
 
 The index holds every file's name, size, SHA-256 and building count, and every tile's rectangle (EPSG:2180 metres)
 with the file and block it sits in. Rebuild it whenever a file in bld/ changes: polandlod1 checks each download
-against it. (Bump polandlod1.VERSION too if the cells' buildings change for players who already have them cached.)
+against it. polandlod1 is pinned to one commit of the repository and to the SHA-256 of the index at that commit
+(COMMIT, INDEX_SHA256), which this prints: a data update is a PR to server/polandlod1.py that sets both and bumps
+VERSION (the cell files' identity).
 """
 import argparse
+import hashlib
 import os
 import sys
 
@@ -34,6 +37,11 @@ def main():
     m = polandlod1.Manifest(out)
     print(f"{len(m.names)} files, {len(m.x0)} tiles, {sum(m.buildings)} buildings, "
           f"{os.path.getsize(out) / 1024:.0f} KiB -> {out}")
+    with open(out, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    print(f"INDEX_SHA256 = \"{digest}\"")
+    print("Commit the index and the files to the dataset repository, then in server/polandlod1.py set COMMIT to that\n"
+          "commit, INDEX_SHA256 to the line above and bump VERSION (a data update is that one reviewed change).")
 
 
 if __name__ == "__main__":

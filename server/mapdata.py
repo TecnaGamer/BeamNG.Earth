@@ -653,8 +653,8 @@ class MapData:
             v["street_edges"] = europewalks.VERSION
         if levelways.ON:
             v["levelways"] = levelways.VERSION
-        if polandlod1.enabled():                # (Poland's official footprints, BNE_PL_LOD1: keyed only while on)
-            v["pl_lod1"] = polandlod1.signature()
+        if polandlod1.enabled():                # (Poland's official footprints, BNE_PL_LOD1: keyed only while on, and by the
+            v["pl_lod1"] = polandlod1.signature()   # setting and the pin: not by whether the index has arrived yet)
         return v
 
     def warm_manifests(self):
@@ -664,6 +664,7 @@ class MapData:
         def run():
             import osmcolours
             import osmyears
+            polandlod1.warm()                   # (BNE_PL_LOD1: the pinned index, so that a first Polish cell finds it)
             got = []
             for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
                 try:
@@ -706,11 +707,16 @@ class MapData:
         """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
         return getattr(self, "pmtiles", None) is not None and layer in pmtiles.LAYERS
 
-    def path(self, key, layer, parquet=False):
+    def path(self, key, layer, parquet=False, lod1=None):
         """The cell layer's file. A layer from Overture's tiles has a folder of its own (overture-pmt<FORMAT>): the
-        parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over."""
+        parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over.
+        lod1: whether the cell is Poland's official footprints' (polandlod1.resolve(), taken once by whoever builds and
+        stores the cell, and also given to _build, so that the path and the source cannot disagree); None for readers:
+        polandlod1.routes_to_lod1 (no network)."""
         source, release = _source(layer, self.release)
-        if layer in LOD1_LAYERS and polandlod1.covers(key):
+        if lod1 is None:
+            lod1 = layer in LOD1_LAYERS and polandlod1.routes_to_lod1(key)
+        if layer in LOD1_LAYERS and lod1:
             release = f"{release}+pllod1.{polandlod1.VERSION}"     # (Poland's official footprints: their own files)
         elif not parquet and MapData._pmt(self, layer):
             source = f"overture-pmt{pmtiles.FORMAT}"
@@ -830,16 +836,20 @@ class MapData:
         _savez_deflated(tmp, arrays, STORE_LEVEL)
         staging.replace_cached(tmp, path)
 
-    def _build(self, key, layer, kind):
-        """(content arrays, provenance record or None) of one layer, from the sources."""
+    def _build(self, key, layer, kind, lod1=None):
+        """(content arrays, provenance record or None) of one layer, from the sources. lod1: the cell's source as the
+        caller decided it with polandlod1.resolve() (it chose the cache path by it); None: decided here."""
         if layer in VECTOR_LAYERS:
+            if lod1 is None:
+                lod1 = layer in LOD1_LAYERS and polandlod1.resolve(key, kind)
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats = fell = None
-            lod1 = polandlod1.query(key, kind) if layer == "buildings" else None   # None: not covered (off, outside Poland, no tiles)
-            if lod1 is not None:
-                feats, sources = lod1
-            elif layer == "building_parts" and polandlod1.covers(key):
+            from_lod1 = False
+            if lod1 and layer == "buildings":
+                feats, sources = polandlod1.query(key, kind, covered=True)
+                from_lod1 = True
+            elif lod1 and layer == "building_parts":
                 feats, sources = overture.empty(layer), {}      # (parts of Overture buildings that are not drawn)
             if feats is None and self._pmt(layer) and getattr(self, "bnwt", None) is not None \
                     and layer in bnwt.LAYERS:
@@ -859,7 +869,7 @@ class MapData:
                 # what is built from the parquet cell is not kept (revisit) and the cell is stored with the parquet
                 # ones (layer_arrays): the two sources never share a file or a cache key
                 revisit.fault()
-                got = self._load(self.path(key, layer, parquet=True))
+                got = self._load(self.path(key, layer, parquet=True, lod1=lod1))
                 if got is not None:
                     if osm is not None:
                         osm.cancel()
@@ -879,7 +889,7 @@ class MapData:
                 # lies (the pieces of all cells make the whole polygon), not only in the bbox-centre cell
                 feats.own |= feats.clipped
             arrays = _layer_arrays(feats)
-            if lod1 is not None:
+            if from_lod1:
                 prov = polandlod1.provenance(sources) if len(feats) else None
             else:
                 prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
@@ -1076,7 +1086,10 @@ class MapData:
         if layer not in ALL_LAYERS:
             raise ValueError(f"unknown map layer {layer!r}; choose from {', '.join(ALL_LAYERS)}")
         key = _key(key)
-        path = self.path(key, layer)
+        # Poland's official footprints, or not: decided here once (it may fetch the index and raise netfetch's errors:
+        # such a cell waits, it is not built from Overture), and the path and the build both take this answer
+        lod1 = polandlod1.resolve(key, kind) if layer in LOD1_LAYERS else False
+        path = self.path(key, layer, lod1=lod1)
         arrays = self._mirror_load(path)
         if arrays is not None:
             return arrays, True
@@ -1089,11 +1102,11 @@ class MapData:
             if arrays is not None:
                 return self._mirrored(key, layer, path, arrays), True
             try:
-                arrays = self._build(key, layer, kind)
+                arrays = self._build(key, layer, kind, lod1)
                 if arrays.pop("_fallback", None) is not None:
                     # (the tiles failed: the parquet cell, kept with the parquet ones; asked of the tiles again next
                     # time it is not in memory)
-                    ppath = self.path(key, layer, parquet=True)
+                    ppath = self.path(key, layer, parquet=True, lod1=lod1)
                     if not os.path.exists(ppath):
                         self._store(ppath, arrays)
                     return self._mirrored(key, layer, ppath, arrays), False
@@ -1541,7 +1554,8 @@ class MapData:
         key = _key(key)
         if layer == "buildings" and getattr(self, "bdtopo", None) is not None and self.bdtopo.wanted(key):
             self.bdtopo.load(key, "predownload")    # (a saved area: France's measured buildings with it)
-        path = self.path(key, layer)
+        lod1 = polandlod1.resolve(key, "predownload") if layer in LOD1_LAYERS else False   # (once: path and source)
+        path = self.path(key, layer, lod1=lod1)
         if os.path.exists(path):
             return False
         with self._key_lock(key, layer):
@@ -1550,10 +1564,10 @@ class MapData:
             if got is not None:
                 return False
             try:
-                arrays = self._build(key, layer, "predownload")
+                arrays = self._build(key, layer, "predownload", lod1)
                 dest = path
                 if arrays.pop("_fallback", None) is not None:
-                    dest = self.path(key, layer, parquet=True)      # (as layer_arrays: with the parquet cells)
+                    dest = self.path(key, layer, parquet=True, lod1=lod1)      # (as layer_arrays: with the parquet cells)
                     if os.path.exists(dest):
                         return False
                 self._store(dest, arrays)

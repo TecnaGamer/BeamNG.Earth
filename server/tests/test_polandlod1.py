@@ -4,6 +4,8 @@ The dataset is 250 MB, so the format is exercised with a small file written here
 reading of "ortho" rings (angle unit, `swap`) was checked on the real tiles (Wroclaw old town) when it was written.
 The index and the files come from a fake netfetch.Fetcher that serves them: no test touches the network.
 """
+import hashlib
+import json
 import math
 import os
 import re
@@ -113,15 +115,17 @@ class Isolated(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = os.environ.pop(polandlod1.ENV, None)
-        self.saved = (polandlod1._index, dict(polandlod1._state), polandlod1._in_poland_only)
+        self.saved = (polandlod1._index, dict(polandlod1._state), polandlod1._in_poland_only, polandlod1.INDEX_SHA256)
         polandlod1._index = None
         polandlod1._covers.clear()
+        polandlod1._wanted.clear()
         polandlod1._in_poland_only = lambda lats, lons: True
 
     def tearDown(self):
-        polandlod1._index, state, polandlod1._in_poland_only = self.saved
+        polandlod1._index, state, polandlod1._in_poland_only, polandlod1.INDEX_SHA256 = self.saved
         polandlod1._state.update(state)
         polandlod1._covers.clear()
+        polandlod1._wanted.clear()
         if self.env is None:
             os.environ.pop(polandlod1.ENV, None)
         else:
@@ -132,6 +136,7 @@ class Isolated(unittest.TestCase):
         """A new process' view: the Index again, the files on disk as they are."""
         polandlod1._index = None
         polandlod1._covers.clear()
+        polandlod1._wanted.clear()
 
 
 class Served(Isolated):
@@ -146,14 +151,16 @@ class Served(Isolated):
         self.origin = (int(round(float(cx))) - 60, int(round(float(cy))) - 10)
         self.body = make_file(True, self.origin)
         self.index = index_bytes(self.tmp.name, [(self.NAME, self.body)])
+        polandlod1.INDEX_SHA256 = hashlib.sha256(self.index).hexdigest()         # (the pin: this test's index)
         self.url = polandlod1.Manifest.url(self.NAME)
         self.fetcher = FakeFetcher({self.url: self.body, polandlod1.INDEX_URL: self.index})
         self.cache = os.path.join(self.tmp.name, "cache")
         polandlod1.configure(self.cache, self.fetcher)
         os.environ[polandlod1.ENV] = "1"
         self.folder = os.path.join(self.cache, "polandlod1")
-        self.file = os.path.join(self.folder, self.NAME)
-        self.index_file = os.path.join(self.folder, "index.npz")
+        self.file = os.path.join(self.folder, f"{self.NAME}.{hashlib.sha256(self.body).hexdigest()[:16]}")
+        self.index_name = f"index.{polandlod1.INDEX_SHA256[:16]}.npz"
+        self.index_file = os.path.join(self.folder, self.index_name)
 
     def place(self, index=True, file=True):
         os.makedirs(self.folder, exist_ok=True)
@@ -262,27 +269,48 @@ class CellQuery(Served):
     def test_cell_without_tiles_or_outside_poland_is_not_covered(self):
         far = mapcells.cell_of(52.5, 20.5)                              # in Poland, no tile in this index
         self.assertFalse(polandlod1.covers(far))
+        self.assertFalse(polandlod1.resolve(far))
         self.assertIsNone(polandlod1.query(far))
-        polandlod1._in_poland_only = lambda lats, lons: False           # a border cell, or unknown borders
+        self.assertFalse(polandlod1.routes_to_lod1(far))                # (the index is loaded: Overture's path)
+        polandlod1._in_poland_only = lambda lats, lons: False           # a border cell
+        polandlod1._wanted.clear()
         polandlod1._covers.clear()
         self.assertFalse(polandlod1.covers(self.key))
+        self.assertFalse(polandlod1.resolve(self.key))
         self.assertIsNone(polandlod1.query(self.key))
+        self.assertFalse(polandlod1.routes_to_lod1(self.key))
 
-    def test_signature_is_the_index_not_the_folder(self):
+    def test_signature_is_the_setting_and_the_pin(self):
         sig = polandlod1.signature()
-        self.assertEqual(sig, {"version": polandlod1.VERSION, "index": sig["index"], "files": 1, "buildings": 3})
+        self.assertEqual(sig, {"version": polandlod1.VERSION, "commit": polandlod1.COMMIT[:12],
+                               "index": polandlod1.INDEX_SHA256[:16]})
         self.assertRegex(sig["index"], r"^[0-9a-f]{16}$")
+
+    def test_the_answer_asked_for_is_the_answer_acted_on(self):
+        self.assertTrue(polandlod1.resolve(self.key))
+        polandlod1._covers.clear()
+        polandlod1._in_poland_only = lambda lats, lons: self.fail("asked again")    # (query takes `covered` as given)
+        self.assertEqual(len(polandlod1.query(self.key, covered=True)[0]), 3)
 
 
 class Download(Served):
     """Nothing in the cache folder: the index and the file come from the (fake) repository, once, and are checked."""
 
-    def test_urls_follow_master(self):
-        base = "https://raw.githubusercontent.com/maalos/LOD1_2024_PL/refs/heads/master"
+    def test_urls_are_pinned_to_a_commit(self):
+        self.assertRegex(polandlod1.COMMIT, r"^[0-9a-f]{40}$")
+        base = f"https://raw.githubusercontent.com/maalos/LOD1_2024_PL/{polandlod1.COMMIT}"
         self.assertEqual(polandlod1.INDEX_URL, f"{base}/index.npz")
         self.assertEqual(polandlod1.Manifest.url("0201_M-33.bld"), f"{base}/bld/0201_M-33.bld")
+        self.assertNotIn("master", polandlod1.BASE_URL)
+        self.assertNotIn("refs/heads", polandlod1.BASE_URL)
+
+    def test_a_name_is_quoted_in_the_url(self):
+        self.assertTrue(polandlod1.Manifest.url("a b/../x?y#z.bld").endswith("/bld/a%20b%2F..%2Fx%3Fy%23z.bld"))
 
     def test_covered_needs_only_the_index(self):
+        self.assertFalse(polandlod1.covers(self.key))                   # not loaded: covers() never fetches
+        self.assertEqual(self.fetcher.calls, [])
+        self.assertTrue(polandlod1.resolve(self.key))                   # this fetches it
         self.assertTrue(polandlod1.covers(self.key))
         self.assertTrue(polandlod1.enabled())
         self.assertEqual(self.fetcher.urls(), [polandlod1.INDEX_URL])
@@ -291,11 +319,11 @@ class Download(Served):
     def test_first_query_fetches_index_and_file_once(self):
         f, sources = polandlod1.query(self.key, "prefetch")
         self.assertEqual(len(f), 3)
-        self.assertEqual(self.fetcher.calls, [(polandlod1.INDEX_URL, "demand", polandlod1.LANE),
+        self.assertEqual(self.fetcher.calls, [(polandlod1.INDEX_URL, "prefetch", polandlod1.LANE),   # (the build's own kind)
                                               (self.url, "prefetch", polandlod1.LANE)])
         self.assertEqual(Path(self.file).read_bytes(), self.body)
         self.assertEqual(Path(self.index_file).read_bytes(), self.index)
-        self.assertEqual(sorted(os.listdir(self.folder)), [self.NAME, "index.npz"])     # no .part, no .check
+        self.assertEqual(sorted(os.listdir(self.folder)), sorted([os.path.basename(self.file), self.index_name]))
         polandlod1.query(self.key)
         self.fresh()
         polandlod1.query(self.key)                                      # a restart: all on disk
@@ -315,7 +343,7 @@ class Download(Served):
         self.fetcher.bodies[self.url] = bytes(bad)
         with self.assertRaises(netfetch.BadResponse):
             polandlod1.query(self.key)
-        self.assertEqual(os.listdir(self.folder), ["index.npz"])
+        self.assertEqual(os.listdir(self.folder), [self.index_name])
         self.fetcher.bodies[self.url] = self.body
         self.assertEqual(len(polandlod1.query(self.key)[0]), 3)         # asked again, it works
 
@@ -326,7 +354,7 @@ class Download(Served):
         with self.assertRaises(netfetch.HostUnavailable):
             polandlod1.query(self.key)
         self.assertTrue(polandlod1.covers(self.key))                    # still LOD1's cell: never Overture's
-        self.assertEqual(os.listdir(self.folder), ["index.npz"])
+        self.assertEqual(os.listdir(self.folder), [self.index_name])
         self.fetcher.errors.clear()
         self.assertEqual(len(polandlod1.query(self.key)[0]), 3)
 
@@ -341,40 +369,105 @@ class Download(Served):
 
     def test_the_cache_identity_does_not_depend_on_what_is_on_disk(self):
         before = polandlod1.signature()
+        self.assertEqual(self.fetcher.calls, [])                        # (and asking took no request)
         polandlod1.query(self.key)
         self.fresh()
         self.assertEqual(polandlod1.signature(), before)
 
-    def test_without_an_index_overture_serves_and_it_is_asked_again_later(self):
+    def test_without_an_index_the_cell_waits_it_is_not_built_from_overture(self):
         self.fetcher.errors[polandlod1.INDEX_URL] = netfetch.HostUnavailable("down", polandlod1.INDEX_URL,
                                                                              "raw.githubusercontent.com")
-        self.assertFalse(polandlod1.enabled())
+        before = polandlod1.signature()
+        with self.assertRaises(netfetch.HostUnavailable):
+            polandlod1.resolve(self.key)
+        self.assertTrue(polandlod1.enabled())                           # keyed on the setting, not on the index
+        self.assertEqual(polandlod1.signature(), before)
         self.assertFalse(polandlod1.covers(self.key))
-        self.assertIsNone(polandlod1.query(self.key))                   # (the caller uses Overture)
-        self.assertEqual(len(self.fetcher.calls), 1)                    # not asked again at once
+        self.assertTrue(polandlod1.routes_to_lod1(self.key))            # its cache path is LOD1's, not Overture's
+        with self.assertRaises(netfetch.HostUnavailable):
+            polandlod1.query(self.key)                                  # (an error, not None: Overture does not serve)
+        self.assertEqual(len(self.fetcher.calls), 1)                    # the failure is remembered: not asked again at once
         self.fetcher.errors.clear()
         polandlod1._state["retry_at"] = 0.0                             # (a minute later)
         self.assertEqual(len(polandlod1.query(self.key)[0]), 3)
 
     def test_a_bad_index_is_not_kept(self):
         self.fetcher.bodies[polandlod1.INDEX_URL] = b"<html>not an index</html>"
-        self.assertFalse(polandlod1.enabled())
+        with self.assertRaises(netfetch.BadResponse):
+            polandlod1.resolve(self.key)
         self.assertFalse(os.path.exists(self.index_file))
         self.assertEqual(os.listdir(self.folder) if os.path.isdir(self.folder) else [], [])
 
-    def test_an_old_index_is_refreshed_and_a_failed_refresh_keeps_it(self):
-        self.place()
-        old = time.time() - 8 * 86400
-        os.utime(self.index_file, (old, old))
-        self.fetcher.errors[polandlod1.INDEX_URL] = netfetch.Offline("offline", polandlod1.INDEX_URL, "h")
-        self.assertTrue(polandlod1.enabled())                           # the old one stays
+    def test_an_index_that_is_not_the_pinned_one_is_refused(self):
+        other = index_bytes(os.path.join(self.tmp.name, "other"), [("0002_M-33.bld", self.body)])
+        self.fetcher.bodies[polandlod1.INDEX_URL] = other               # a valid index, not the pinned bytes
+        with self.assertRaises(netfetch.BadResponse):
+            polandlod1.resolve(self.key)
+        self.assertFalse(polandlod1.enabled() and polandlod1.covers(self.key))
+        self.assertEqual(os.listdir(self.folder) if os.path.isdir(self.folder) else [], [])
+
+    def test_a_cached_index_that_is_not_the_pin_is_dropped_and_fetched_again(self):
+        self.place(index=False, file=False)
+        Path(self.index_file).write_bytes(self.index[:-1] + bytes([self.index[-1] ^ 1]))
+        self.assertIsNone(polandlod1.index())
+        self.assertFalse(os.path.exists(self.index_file))
+        self.assertTrue(polandlod1.resolve(self.key))
         self.assertEqual(Path(self.index_file).read_bytes(), self.index)
-        self.assertLess(os.path.getmtime(self.index_file), time.time() - 7 * 86400)
-        self.fetcher.errors.clear()
-        self.fresh()
-        self.assertTrue(polandlod1.enabled())                           # and now it is fetched again
-        self.assertGreater(os.path.getmtime(self.index_file), time.time() - 60)
-        self.assertEqual(self.fetcher.urls(), [polandlod1.INDEX_URL] * 2)
+
+    def test_the_index_is_never_fetched_again_it_is_pinned(self):
+        self.place()
+        old = time.time() - 400 * 86400
+        os.utime(self.index_file, (old, old))
+        self.assertTrue(polandlod1.resolve(self.key))
+        self.assertEqual(self.fetcher.calls, [])
+
+    def test_a_pin_change_leaves_no_old_files_behind(self):
+        self.place()
+        stale = [os.path.join(self.folder, n) for n in (self.NAME, f"{self.NAME}.0123456789abcdef", "index.npz")]
+        for p in stale:
+            Path(p).write_bytes(b"old")
+        os.remove(self.file)
+        polandlod1.query(self.key)                                      # fetches the file: its older versions go
+        self.assertEqual(sorted(os.listdir(self.folder)), sorted([os.path.basename(self.file), self.index_name, "index.npz"]))
+
+    def test_the_versions_path_never_waits_for_a_fetch(self):
+        """index(), covers(), signature(), routes_to_lod1(): what MapData.versions() / path() call for every tile key,
+        anywhere in the world, while some thread is in the middle of a (slow) index fetch."""
+        done = []
+
+        def ask():
+            polandlod1.index(), polandlod1.signature(), polandlod1.enabled()
+            polandlod1.covers(self.key), polandlod1.routes_to_lod1(self.key), polandlod1.wanted(self.key)
+            done.append(True)
+        with polandlod1._fetch_lock:                                    # (a fetch in progress)
+            t = threading.Thread(target=ask)
+            t.start()
+            t.join(5)
+            self.assertEqual(done, [True])
+            self.assertFalse(t.is_alive())
+        self.assertEqual(self.fetcher.calls, [])
+
+    def test_no_request_runs_under_the_state_lock(self):
+        """A slow index request does not hold the lock that versions() and path() need."""
+        started, release = threading.Event(), threading.Event()
+        slow = self.fetcher.get
+
+        def get(url, **kw):
+            started.set()
+            release.wait(5)
+            return slow(url, **kw)
+        self.fetcher.get = get
+        t = threading.Thread(target=lambda: polandlod1.resolve(self.key))
+        t.start()
+        self.assertTrue(started.wait(5))
+        try:
+            self.assertTrue(polandlod1._index_lock.acquire(timeout=1))   # (free while the request is out)
+            polandlod1._index_lock.release()
+            self.assertEqual(polandlod1.signature()["version"], polandlod1.VERSION)
+        finally:
+            release.set()
+            t.join(10)
+        self.assertTrue(polandlod1.covers(self.key))
 
     def test_a_fresh_index_is_not_fetched_again(self):
         self.place()
@@ -383,7 +476,8 @@ class Download(Served):
 
     def test_offline_serves_what_is_on_disk_and_defers_the_rest(self):
         polandlod1.configure(self.cache, netfetch.Fetcher(offline=True))
-        self.assertIsNone(polandlod1.query(self.key))                   # no index yet: off, Overture serves
+        with self.assertRaises(netfetch.Offline):                       # no index yet: the cell waits
+            polandlod1.query(self.key)
         polandlod1._state["retry_at"] = 0.0
         self.place(file=False)
         with self.assertRaises(netfetch.Offline):                       # an index, but not the file: deferred
@@ -443,6 +537,7 @@ class ThroughTheFetcher(Isolated):
         names = [f"{i:04d}_M-33.bld" for i in range(n)]
         bodies = {polandlod1.Manifest.url(nm): body for nm in names}
         bodies[polandlod1.INDEX_URL] = index_bytes(self.tmp.name, [(nm, body) for nm in names])
+        polandlod1.INDEX_SHA256 = hashlib.sha256(bodies[polandlod1.INDEX_URL]).hexdigest()
         tr = self.Transport(bodies)
         now = [1_000_000.0]
 
@@ -451,7 +546,7 @@ class ThroughTheFetcher(Isolated):
         fetcher = netfetch.Fetcher(clock=lambda: now[0], sleep=sleep, wall=lambda: now[0], transport=tr)
         polandlod1.configure(os.path.join(self.tmp.name, "cache"), fetcher)
         os.environ[polandlod1.ENV] = "1"
-        idx = polandlod1.index()
+        idx = polandlod1.fetch_index()
         for fi in range(n):
             self.assertTrue(os.path.getsize(idx.ensure(fi)) > 0)
         self.assertEqual(len(tr.calls), n + 1)                          # the index and every file
@@ -492,12 +587,305 @@ class IndexFormat(unittest.TestCase):
         self.assertEqual((m.names, m.buildings), (["0001_M-33.bld"], [3]))
 
 
+def crafted_index(folder, files, **columns):
+    """An index.npz whose file list is `files` ([[name, size, sha, buildings], ...]) as given, whatever it says, with
+    the tile columns of a real one (or `columns` over them): what a hostile or broken index would be."""
+    base = polandlod1.make_index([_one_file(folder)])
+    base["meta"] = np.frombuffer(json.dumps({"files": files}).encode(), np.uint8)
+    base.update(columns)
+    out = Path(folder, "crafted.npz")
+    np.savez_compressed(out, **base)
+    return out
+
+
+def _one_file(folder):
+    p = Path(folder, "one.bld")
+    p.write_bytes(make_file(True))
+    return str(p)
+
+
+class IndexNames(unittest.TestCase):
+    """Every file name of the index goes into a local path and a URL: the whole index is refused for one bad name."""
+    SHA = "0" * 64
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def manifest(self, *names):
+        return polandlod1.Manifest(crafted_index(self.tmp.name, [[n, 10, self.SHA, 1] for n in names]))
+
+    def test_the_real_names_are_accepted(self):
+        m = self.manifest("0001_M-33.bld", "1465_N-34.bld", "3021_N-33.bld")
+        self.assertEqual(len(m.names), 3)
+
+    def test_paths_urls_and_other_shapes_are_refused(self):
+        for bad in ("../../x", "../0001_M-33.bld", "/etc/passwd", "/0001_M-33.bld", "C:/Users/x/Startup/a.bld",
+                    "C:\\x.bld", "0001_M-33.bld/../../x", "bld/0001_M-33.bld", "0001_M-33.bld\n", "0001_M-33.BLD",
+                    "0001_m-33.bld", "000_M-33.bld", "00001_M-33.bld", "\u0660\u0660\u0660\u0661_M-33.bld",   # (Arabic-Indic digits)
+                    "0001_M-33.bld ", "", ".", "..", "0001_M-33.bld\x00.exe", "https://x/0001_M-33.bld"):
+            with self.subTest(name=bad):
+                with self.assertRaises(polandlod1.BadData):
+                    self.manifest("0002_M-33.bld", bad)                  # one bad name refuses the whole index
+
+    def test_other_malformed_entries_are_refused(self):
+        for files in ([["0001_M-33.bld", 10, self.SHA, 1]] * 2,                         # listed twice
+                      [["0001_M-33.bld", 0, self.SHA, 1]], [["0001_M-33.bld", True, self.SHA, 1]],
+                      [["0001_M-33.bld", polandlod1.MAX_FILE_BYTES + 1, self.SHA, 1]],
+                      [["0001_M-33.bld", 10, "xyz", 1]], [["0001_M-33.bld", 10, "A" * 64, 1]],
+                      [["0001_M-33.bld", 10, self.SHA]], [], [7], "files"):
+            with self.subTest(files=str(files)[:60]):
+                with self.assertRaises((polandlod1.BadData, TypeError)):
+                    polandlod1.Manifest(crafted_index(self.tmp.name, files))
+
+    def test_tiles_must_name_files_and_blocks_that_exist(self):
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.Manifest(crafted_index(self.tmp.name, [["0001_M-33.bld", 10, self.SHA, 1]],
+                                              tile_file=np.array([5], np.uint16)))
+
+    def test_a_refused_index_on_disk_is_removed_and_the_feature_waits(self):
+        body = crafted_index(self.tmp.name, [["../../x", 10, self.SHA, 1]]).read_bytes()
+        saved = polandlod1.INDEX_SHA256
+        polandlod1.INDEX_SHA256 = hashlib.sha256(body).hexdigest()      # (even a pinned index is checked)
+        self.addCleanup(setattr, polandlod1, "INDEX_SHA256", saved)
+        d = os.path.join(self.tmp.name, "folder")
+        os.makedirs(d)
+        Path(polandlod1._index_path(d)).write_bytes(body)
+        with self.assertLogs("polandlod1", "WARNING"):
+            self.assertIsNone(polandlod1._read_index(d))
+        self.assertEqual(os.listdir(d), [])
+
+
+class Bounds(unittest.TestCase):
+    """What the decoder will do is bounded, and malformed data is one error type."""
+
+    def test_an_inflate_bomb_is_stopped_at_the_limit(self):
+        c = zlib.compressobj(wbits=-15)
+        bomb = c.compress(b"\0" * (polandlod1.MAX_BLOCK_BYTES * 4)) + c.flush()
+        self.assertLess(len(bomb), 100_000)
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1._inflate(bomb)
+        c = zlib.compressobj(wbits=-15)
+        ok = c.compress(b"\1" * 1000) + c.flush()
+        self.assertEqual(polandlod1._inflate(ok), b"\1" * 1000)
+
+    def test_a_cut_short_stream_is_refused(self):
+        c = zlib.compressobj(wbits=-15)
+        data = c.compress(os.urandom(5000)) + c.flush()
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1._inflate(data[:len(data) // 2])
+
+    def test_varints_are_bounded(self):
+        for bad in (bytes([255] * 11 + [1]), bytes([200]), bytes([0x80] * 70)):          # too long, or cut off
+            with self.assertRaises(polandlod1.BadData):
+                polandlod1._varints(bad)
+        for bad in (bytes([255] * 11 + [1]), bytes([0x80] * 70)):
+            with self.assertRaises(polandlod1.BadData):
+                polandlod1._uvarint(bad, 0)
+
+    def header(self, tiles=1, blocks=((1, 10, 0),), extra=b"", n_tiles=None):
+        out = b"GBLD" + bytes([2, 0, 10, 10]) + uv(tiles if n_tiles is None else n_tiles)
+        out += b"".join(sv(0) + sv(0) + uv(10) + uv(10) + uv(1) for _ in range(tiles))
+        out += uv(len(blocks)) + b"".join(uv(t) + uv((ln << 1) | d) for t, ln, d in blocks)
+        return out + extra
+
+    def test_header_counts_are_capped(self):
+        polandlod1.Header(self.header(1))
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.Header(b"GBLD" + bytes([2, 0, 10, 10]) + uv(polandlod1.MAX_TILES + 1))
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.Header(self.header(1, blocks=((1, polandlod1.MAX_BLOCK_BYTES + 1, 0),)))
+        with self.assertRaises(polandlod1.BadData):                      # blocks that do not add up to the tiles
+            polandlod1.Header(self.header(2, blocks=((1, 10, 0),)))
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.Header(b"GBLD" + bytes([2, 0, 0, 10]) + uv(0) + uv(0))            # zero grid step
+        big = b"GBLD" + bytes([2, 0, 10, 10]) + uv(1) + sv(0) + sv(0) + uv(1) + uv(1) + uv(polandlod1.MAX_TILE_BUILDINGS + 1)
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.Header(big)
+
+    def test_a_file_shorter_than_its_blocks_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.bld")
+            Path(p).write_bytes(self.header(1, blocks=((1, 5000, 0),), extra=b"short"))
+            with self.assertRaises(polandlod1.BadData):
+                polandlod1.read_header(p)
+
+    def block_with(self, total, rings=b"", verts=b""):
+        """A block's six streams (`total` buildings in the one tile) with the given ring and vertex streams."""
+        raw = b"".join(stream(x) for x in (sv(0) * total, sv(0) * total, b"", uv(1) + uv(10) + uv(0) * total, rings, verts))
+        h = polandlod1.Header(b"GBLD" + bytes([2, 0, 10, 10]) + uv(1) + sv(0) + sv(0) + uv(10) + uv(10) + uv(total)
+                              + uv(1) + uv(1) + uv(len(raw) << 1))
+        return raw, h
+
+    def test_the_building_count_is_capped_before_anything_is_allocated(self):
+        raw, h = self.block_with(1)
+        h.tiles[0] = (0, 0, 10, 10, polandlod1.MAX_BLOCK_BUILDINGS + 1)             # a tile table that lies
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.decode_block(raw, h, 0, 1)
+
+    def test_a_ring_that_claims_more_than_the_stream_holds_is_refused(self):
+        raw, h = self.block_with(1, rings=uv(1) + ring(1_000_000), verts=sv(1) * 6)
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.decode_block(raw, h, 0, 1)
+        raw, h = self.block_with(1, rings=uv(1) + ring(50_000, ortho=True), verts=sv(1) * 6)
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.decode_block(raw, h, 0, 1)
+
+    def test_a_stream_longer_than_the_block_is_refused(self):
+        h = self.block_with(1)[1]
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.decode_block(uv(1 << 20) + b"xx", h, 0, 1)
+        with self.assertRaises(polandlod1.BadData):
+            polandlod1.decode_block(b"\0" * (polandlod1.MAX_BLOCK_BYTES + 1), h, 0, 1)
+
+
+class OneErrorPerFile(Served):
+    """A file the index lists (and whose hash matches) but that does not parse: netfetch.BadResponse, logged once."""
+
+    def setUp(self):
+        super().setUp()
+        good = make_file(True, self.origin)
+        # (a valid header over a block of garbage: the tile table and block table say one deflated block)
+        h = polandlod1.read_header(self._write(good))
+        garbage = b"\xff" * h.blocks[0][1]
+        self.body = good[:h.block_offsets[0]] + garbage
+        self.index = index_bytes(self.tmp.name, [(self.NAME, self.body)])
+        polandlod1.INDEX_SHA256 = hashlib.sha256(self.index).hexdigest()
+        self.fetcher.bodies.update({self.url: self.body, polandlod1.INDEX_URL: self.index})
+        self.file = os.path.join(self.folder, f"{self.NAME}.{hashlib.sha256(self.body).hexdigest()[:16]}")
+        self.index_file = os.path.join(self.folder, f"index.{polandlod1.INDEX_SHA256[:16]}.npz")
+
+    def _write(self, data):
+        p = os.path.join(self.tmp.name, "probe.bld")
+        Path(p).write_bytes(data)
+        return p
+
+    def test_the_cells_of_a_malformed_file_fail_the_same_way_and_the_log_says_it_once(self):
+        with self.assertLogs("polandlod1", "WARNING") as logs:
+            for _ in range(3):
+                with self.assertRaises(netfetch.BadResponse) as cm:
+                    polandlod1.query(self.key)
+                self.assertIn(self.NAME, str(cm.exception))
+                self.assertIn("malformed", str(cm.exception))
+        self.assertEqual(len([m for m in logs.output if "malformed" in m]), 1)
+        self.assertEqual(self.fetcher.urls().count(self.url), 1)        # (nor fetched again for every cell)
+
+
+class BorderTest(Isolated):
+    """wanted(): the cell's edges are sampled as finely as the border data is detailed, and unknown borders are not
+    remembered as 'not Poland'."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ[polandlod1.ENV] = "1"
+        polandlod1.configure(self.tmp.name, FakeFetcher())
+        self.key = mapcells.cell_of(51.1, 17.0)
+
+    def test_edges_are_sampled_every_few_metres(self):
+        seen = {}
+
+        def probe(lats, lons):
+            seen["p"] = (np.array(lats), np.array(lons))
+            return True
+        polandlod1._in_poland_only = probe
+        self.assertTrue(polandlod1.wanted(self.key))
+        lats, lons = seen["p"]
+        x, y = pl1992.from_lonlat(lons, lats)
+        n = (len(x) - polandlod1._SAMPLES ** 2) // 4
+        for k in range(4):                                               # bottom, top, left, right edge
+            ex, ey = x[k * n:(k + 1) * n], y[k * n:(k + 1) * n]
+            gap = np.hypot(np.diff(ex), np.diff(ey)).max()
+            self.assertLessEqual(gap, polandlod1.BORDER_STEP_M * 1.05, k)
+        self.assertGreater(n, 50)                                        # (a 9-point grid was ~150 m apart)
+
+    def test_unknown_borders_are_not_poland_and_are_asked_again(self):
+        calls = []
+        polandlod1._in_poland_only = lambda lats, lons: calls.append(1)             # None: unknown
+        self.assertFalse(polandlod1.wanted(self.key))
+        self.assertFalse(polandlod1.wanted(self.key))
+        self.assertEqual(len(calls), 2)                                  # not remembered
+        polandlod1._in_poland_only = lambda lats, lons: calls.append(2) or True
+        self.assertTrue(polandlod1.wanted(self.key))
+        self.assertTrue(polandlod1.wanted(self.key))
+        self.assertEqual(calls.count(2), 1)                              # a known answer is remembered
+
+    def test_without_the_variable_nothing_is_asked(self):
+        os.environ.pop(polandlod1.ENV)
+        polandlod1._in_poland_only = lambda lats, lons: self.fail("asked")
+        self.assertFalse(polandlod1.wanted(self.key))
+        self.assertFalse(polandlod1.routes_to_lod1(self.key))
+
+
+class MapDataDecidesOnce(Served):
+    """MapData takes the cell's source once and uses it for the cache path and the build (the index arriving between
+    the two used to store Overture's buildings under LOD1's path, or the other way round)."""
+
+    def setUp(self):
+        super().setUp()
+        import mapdata
+        self.mapdata = mapdata
+        self.md = mapdata.MapData(self.cache, self.fetcher)
+        self.md.overture = types.SimpleNamespace(query=lambda *a, **k: self.fail("Overture was asked"))
+
+    def pllod1_files(self):
+        out = []
+        for root, _, files in os.walk(os.path.join(self.cache, "mapdata")):
+            out += [os.path.join(root, f) for f in files if f.endswith(".npz")]
+        return out
+
+    def test_path_follows_the_decision_it_is_given(self):
+        p = lambda lod1: self.md.path(self.key, "buildings", lod1=lod1)
+        self.assertIn("+pllod1.", p(True))
+        self.assertNotIn("+pllod1.", p(False))
+        self.assertIn("+pllod1.", self.md.path(self.key, "building_parts", lod1=True))
+        self.assertNotIn("+pllod1.", self.md.path(self.key, "roads", lod1=True))     # (only the two layers)
+
+    def test_a_reader_before_the_index_looks_at_lod1_path_not_overtures(self):
+        self.assertIn("+pllod1.", self.md.path(self.key, "buildings"))               # (index not loaded: it will be LOD1's)
+        polandlod1.resolve(self.key)
+        self.assertIn("+pllod1.", self.md.path(self.key, "buildings"))
+        far = mapcells.cell_of(52.5, 20.5)                                           # in Poland, no tile in the index
+        self.assertNotIn("+pllod1.", self.md.path(far, "buildings"))
+
+    def test_a_cell_is_built_from_the_source_its_path_says(self):
+        arrays, hit = self.md.layer_arrays(self.key, "buildings")
+        self.assertFalse(hit)
+        self.assertEqual(len(arrays["ids"]), 3)
+        files = self.pllod1_files()
+        self.assertEqual(len(files), 1)
+        self.assertIn("+pllod1.", files[0])
+        self.assertEqual(files[0], self.md.path(self.key, "buildings"))
+        parts, _ = self.md.layer_arrays(self.key, "building_parts")                  # emptied beside LOD1 buildings
+        self.assertEqual(len(parts["ids"]), 0)
+        self.assertTrue(all("+pllod1." in f for f in self.pllod1_files()))
+
+    def test_no_index_no_cell_is_stored_and_overture_is_not_asked(self):
+        self.fetcher.errors[polandlod1.INDEX_URL] = netfetch.HostUnavailable("down", polandlod1.INDEX_URL, "h")
+        for layer in ("buildings", "building_parts"):
+            with self.assertRaises(netfetch.HostUnavailable):
+                self.md.layer_arrays(self.key, layer)
+        self.assertEqual(self.pllod1_files(), [])
+        self.fetcher.errors.clear()
+        polandlod1._state["retry_at"] = 0.0
+        self.assertEqual(len(self.md.layer_arrays(self.key, "buildings")[0]["ids"]), 3)
+
+    def test_versions_carry_the_setting_whether_or_not_the_index_has_arrived(self):
+        before = self.md.versions()["pl_lod1"]
+        self.assertEqual(self.fetcher.calls, [])
+        polandlod1.resolve(self.key)
+        self.assertEqual(self.md.versions()["pl_lod1"], before)
+        os.environ.pop(polandlod1.ENV)
+        self.assertNotIn("pl_lod1", self.md.versions())
+
+
 class LanePolicy(unittest.TestCase):
     def test_lod1_lane_has_a_policy_of_its_own(self):
         f = netfetch.Fetcher()
         lane, host = f.policy("raw.githubusercontent.com#lod1"), f.policy("raw.githubusercontent.com")
         self.assertGreaterEqual(lane.daily_budget, 433)                 # a whole country's files in a day
-        self.assertTrue(lane.allow_prefetch and lane.optional)
+        self.assertTrue(lane.allow_prefetch)
+        self.assertTrue(lane.shared)                                    # one bucket and budget for all the server's processes
+        self.assertFalse(lane.optional)                                 # a Polish cell (and its road tiles) wait for these files
         self.assertEqual(host.daily_budget, 24)                         # the update check's own, as before
         self.assertEqual(f.policy("raw.githubusercontent.com#other"), host)
         self.assertEqual(f.policy("github.com#x"), f.policy("github.com"))

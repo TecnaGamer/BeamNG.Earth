@@ -1,56 +1,70 @@
 """Polish LOD1 building footprints (GUGiK 2024) for the map-data buildings layer. Opt-in:
 
     BNE_PL_LOD1=1                  the index and the files a cell needs are fetched from GitHub
-                                   (github.com/maalos/LOD1_2024_PL, branch master) when the cell is first built, and
-                                   kept in <cache>/polandlod1/ (0.1 to 3.7 MB a county, 250 MB for all of Poland)
+                                   (github.com/maalos/LOD1_2024_PL, at the commit pinned below) when the cell is first
+                                   built, and kept in <cache>/polandlod1/ (0.1 to 3.7 MB a county, 250 MB for all of Poland)
 
 Where a map cell lies wholly in Poland and the files have tiles there, the cell's `buildings` come from the official
 footprints (with a measured height) instead of Overture's, and its `building_parts` are empty (they would point at
 buildings that are no longer there). Border cells and cells without tiles keep Overture: nothing changes without the
 variable, nor outside Poland.
 
-Which cells have tiles, and which file and block a tile sits in, is not read from the files but from the repository's
-index.npz (tools/build_polandlod1_index.py), fetched once into the cache folder (and again after INDEX_MAX_AGE; a
-refresh that fails keeps the old one) together with every file's size and SHA-256. So whether a cell is covered never
-depends on what has been downloaded yet (the cell files' cache path depends on it), and a download is checked before
-it is kept. Without an index (offline, first run) the feature is off and Overture serves, asked again after
-INDEX_RETRY_S. Downloads go through netfetch's "lod1" lane of raw.githubusercontent.com; when one fails the cell's
-build is deferred (netfetch's errors propagate), never completed from Overture, so a cell is not cached with the
-wrong source.
+The source is pinned: COMMIT is a fixed commit of the dataset repository (no branch, nothing that can move) and
+INDEX_SHA256 is the SHA-256 of its index.npz, so a data update is a reviewed change to these two constants (and to
+VERSION, which is the cell files' identity). Which cells have tiles, and which file and block a tile sits in, is not
+read from the files but from that index (tools/build_polandlod1_index.py), with every file's name, size and SHA-256.
+The index is only accepted when it hashes to INDEX_SHA256, every file name in it must be of the form NNNN_X-NN.bld (a
+name goes into a path and a URL), and a download is only kept when it is the size and SHA-256 the index lists. Files
+are kept under `<name>.<sha[:16]>`, so a file is never read with another version's tile table.
+
+Three states of a cell, decided once per build (mapdata passes the answer down, so the cache path and the source
+cannot disagree): not ours (option off, or not wholly in Poland: Overture, always), ours (wholly in Poland and the
+index lists tiles there: LOD1), and "not yet known" (wholly in Poland, the index not loaded yet): that cell's build
+waits for the index (resolve() fetches it and raises netfetch's errors when it cannot), it is never built from
+Overture meanwhile. Only `resolve` / `fetch_index` touch the network, never `index()`, `covers()` or `signature()`
+(MapData.versions() runs those for every tile key, anywhere in the world), and no lock is held over a request.
+Downloads go through netfetch's "lod1" lane of raw.githubusercontent.com; when one fails the cell's build is deferred
+(netfetch's errors propagate), so a cell is not cached with the wrong source.
 
 File format (README of the dataset): header, tile table, block table, then DEFLATE blocks of six streams
 [anchor_x, anchor_y, base_z, heights, rings, vertices]. Coordinates are EPSG:2180 metres (x east), converted to
-lon/lat by pl1992 (pure numpy, no pyproj). An "ortho" ring is a rotated rectilinear outline: `k` is its angle in
+lon/lat by pl1992 (numpy and dnp, no pyproj). An "ortho" ring is a rotated rectilinear outline: `k` is its angle in
 units of 90 deg / 16384, `swap` says its first edge runs along the rotated y axis (checked on real tiles: the
-corners of such rings coincide with the neighbours' ten times more often than for any other reading).
+corners of such rings coincide with the neighbours' ten times more often than for any other reading). What is parsed
+is bounded (MAX_* below): a malformed file is one clear error (netfetch.BadResponse) per file, not a traceback per cell.
 """
 import hashlib
+import io
 import json
 import logging
 import math
 import mmap
 import os
+import re
 import threading
 import time
+import urllib.parse
 import zlib
 from collections import OrderedDict
 
 import numpy as np
 
+import dmath
 import pl1992
 
 log = logging.getLogger("polandlod1")
 
 ENV = "BNE_PL_LOD1"
-REPO, BRANCH = "maalos/LOD1_2024_PL", "master"
+REPO = "maalos/LOD1_2024_PL"
+COMMIT = "e4af9414590ff10a84003afcab71ad53a295e790"                  # the dataset repository's commit in use
+INDEX_SHA256 = "bba60bc48ba85cb8fdc27e4deb13511838160003e24ec2813276263096e8b019"      # of index.npz at COMMIT
 REMOTE_DIR = "bld"              # the files' folder in the repository
-BASE_URL = f"https://raw.githubusercontent.com/{REPO}/refs/heads/{BRANCH}"     # (what github.com/<repo>/raw/... leads to)
+BASE_URL = f"https://raw.githubusercontent.com/{REPO}/{COMMIT}"       # (what github.com/<repo>/raw/<commit>/... leads to)
 INDEX_URL = f"{BASE_URL}/index.npz"
 FILE_URL = f"{BASE_URL}/{REMOTE_DIR}/{{name}}"
-INDEX_MAX_AGE = 7 * 86400       # s after which the cached index is fetched again
 INDEX_RETRY_S = 60.0            # s before an index that could not be had is asked for again
 LANE = "lod1"                   # netfetch lane: its own policy (netfetch.POLICIES["raw.githubusercontent.com#lod1"])
-VERSION = 1                     # bump when what a cell's buildings contain changes
+VERSION = 2                     # bump when what a cell's buildings contain changes, and with every new COMMIT
 DATASET = "GUGiK LOD1 2024"     # buildings.py trusts it as a footprint source (not an ML one)
 PROVENANCE_ID = "gugik-lod1"
 ATTRIBUTION = "Building footprints and heights: GUGiK (Head Office of Geodesy and Cartography), LOD1 2024"
@@ -58,6 +72,24 @@ ANGLE_UNIT = math.pi / 2 / 16384
 MARGIN_M = 60.0                 # tile extents are padded by this when picking tiles for a cell
 BLOCKS_KEPT = 4                 # decoded blocks kept (a block is a few tens of thousands of buildings)
 _SAMPLES = 9                    # points per side of a cell, to bound it in EPSG:2180
+BORDER_STEP_M = 10.0            # the border test samples a cell's edges this often (the border data is simplified to ~10 m)
+
+# what is parsed is bounded (real data: a file has at most 422 tiles and 17 blocks, a block inflates to at most 0.33 MB
+# and holds at most 15,000 buildings; the limits leave a wide margin)
+NAME_RE = re.compile(r"[0-9]{4}_[A-Z]-[0-9]{2}\.bld")       # a file's name in the index (ASCII only)
+MAX_INDEX_BYTES = 8 << 20       # index.npz (0.6 MB)
+MAX_FILES = 4096
+MAX_FILE_BYTES = 64 << 20       # a .bld file (3.7 MB at most)
+MAX_TILES = 1 << 16             # tiles in one file
+MAX_BLOCKS = 4096               # blocks in one file
+MAX_BLOCK_BYTES = 8 << 20       # a block inflated (and a block's bytes as stored)
+MAX_BLOCK_BUILDINGS = 250_000   # buildings in one block
+MAX_TILE_BUILDINGS = MAX_BLOCK_BUILDINGS
+_MAX_VARINT_BYTES = 10
+
+
+class BadData(ValueError):
+    """A .bld file or the index is not what the format allows."""
 
 
 # --- varints -------------------------------------------------------------------------------------
@@ -70,6 +102,8 @@ def _uvarint(buf, o):
         if c < 128:
             return r, o
         s += 7
+        if s > 63:
+            raise BadData("varint too long")
 
 
 def _svarint(buf, o):
@@ -82,11 +116,15 @@ def _varints(buf):
     a = np.frombuffer(buf, np.uint8)
     if not len(a):
         return np.zeros(0, np.int64)
+    if a[-1] >= 128:
+        raise BadData("stream ends inside a varint")
     ends = np.flatnonzero(a < 128)
     starts = np.empty_like(ends)
     starts[0] = 0
     starts[1:] = ends[:-1] + 1
     ln = ends - starts + 1
+    if int(ln.max()) > _MAX_VARINT_BYTES:
+        raise BadData("varint too long")
     out = np.zeros(len(ends), np.int64)
     for i in range(int(ln.max())):
         m = ln > i
@@ -98,15 +136,28 @@ def _zigzag(v):
     return (v >> 1) ^ -(v & 1)
 
 
+def _inflate(raw, limit=MAX_BLOCK_BYTES):
+    """A raw DEFLATE stream inflated, to at most `limit` bytes (a larger or unfinished stream is BadData)."""
+    d = zlib.decompressobj(-15)
+    out = d.decompress(raw, limit)
+    if d.unconsumed_tail or not d.eof:
+        raise BadData(f"block inflates to more than {limit} bytes, or is cut short")
+    return out
+
+
 # --- file header ---------------------------------------------------------------------------------
 class Header:
     """The tile and block tables of one .bld file."""
 
     def __init__(self, buf):
         if bytes(buf[:4]) != b"GBLD" or buf[4] != 2:
-            raise ValueError("not a GBLD v2 file")
+            raise BadData("not a GBLD v2 file")
         self.flags, self.xy_cm, self.z_cm = buf[5], buf[6], buf[7]
+        if not self.xy_cm or not self.z_cm:
+            raise BadData("zero grid step")
         n, o = _uvarint(buf, 8)
+        if n > MAX_TILES:
+            raise BadData(f"{n} tiles")
         tiles, px, py = [], 0, 0
         for _ in range(n):
             dx, o = _svarint(buf, o)
@@ -114,21 +165,30 @@ class Header:
             ex, o = _uvarint(buf, o)
             ey, o = _uvarint(buf, o)
             c, o = _uvarint(buf, o)
+            if c > MAX_TILE_BUILDINGS:
+                raise BadData(f"{c} buildings in a tile")
             px += dx
             py += dy
             tiles.append((px, py, ex, ey, c))
         nb, o = _uvarint(buf, o)
+        if nb > MAX_BLOCKS:
+            raise BadData(f"{nb} blocks")
         blocks = []
         for _ in range(nb):
             t, o = _uvarint(buf, o)
             m, o = _uvarint(buf, o)
+            if (m >> 1) > MAX_BLOCK_BYTES:
+                raise BadData(f"a block of {m >> 1} bytes")
             blocks.append((t, m >> 1, m & 1))
+        if sum(t for t, _, _ in blocks) != n:
+            raise BadData("the blocks do not cover the tile table")
         self.tiles, self.blocks = tiles, blocks
         offs, pos = [], o
         for _, ln, _ in blocks:
             offs.append(pos)
             pos += ln
         self.block_offsets = offs
+        self.end = pos                      # where the last block ends: the file must reach it
         first, self.block_first_tile = 0, []
         for t, _, _ in blocks:
             self.block_first_tile.append(first)
@@ -144,11 +204,15 @@ def read_header(path):
             buf = f.read(min(want, size))
             f.seek(0)
             try:
-                return Header(buf)
+                h = Header(buf)
+                break
             except IndexError:
                 if want >= size:
                     raise
                 want *= 4
+    if h.end > size:
+        raise BadData(f"the blocks end at {h.end}, the file has {size} bytes")
+    return h
 
 
 # --- one block -----------------------------------------------------------------------------------
@@ -160,7 +224,7 @@ class Block:
 
 def _ortho(p0, k, swap, steps, n):
     th = k * ANGLE_UNIT
-    u = np.array([math.cos(th), math.sin(th)])
+    u = np.array([dmath.cos(th), dmath.sin(th)])
     v = np.array([-u[1], u[0]])
     ax = (v, u) if swap else (u, v)
     m = len(steps)
@@ -173,17 +237,25 @@ def _ortho(p0, k, swap, steps, n):
 
 def decode_block(raw, header, first_tile, tiles_in_block):
     """Decode the six streams of one (already inflated) block."""
+    if len(raw) > MAX_BLOCK_BYTES:
+        raise BadData(f"a block of {len(raw)} bytes")
     o, streams = 0, []
     for _ in range(6):
         n, o = _uvarint(raw, o)
+        if o + n > len(raw):
+            raise BadData("a stream runs past the block")
         streams.append(raw[o:o + n])
         o += n
     ax_s, ay_s, _bz, ht_s, rg_s, vx_s = streams
     spm = 100.0 / header.xy_cm
     counts = [header.tiles[first_tile + i][4] for i in range(tiles_in_block)]
     total = sum(counts)
+    if total > MAX_BLOCK_BUILDINGS:
+        raise BadData(f"{total} buildings in a block")       # (before anything is allocated for them)
     ax = _zigzag(_varints(ax_s))
     ay = _zigzag(_varints(ay_s))
+    if len(ax) < total or len(ay) < total:
+        raise BadData("fewer anchors than buildings")
     gx, gy = np.empty(total, np.int64), np.empty(total, np.int64)
     ox_b, oy_b = np.empty(total, np.float64), np.empty(total, np.float64)
     i = 0
@@ -215,16 +287,22 @@ def decode_block(raw, header, first_tile, tiles_in_block):
             v = rg[rp]
             rp += 1
             n, hole, ortho = v >> 2, (v >> 1) & 1, v & 1
+            if n > len(vs) or (ortho and n < 3):
+                raise BadData(f"a ring of {n} vertices")
             if r:
                 sx += int(vs[vp])
                 sy += int(vs[vp + 1])
                 vp += 2
             p0 = np.array([sx, sy], np.float64)
             if not ortho:
+                if vp + 2 * (n - 1) > len(vs):
+                    raise BadData("a ring runs past the vertex stream")
                 d = vs[vp:vp + 2 * (n - 1)].reshape(-1, 2).astype(np.float64)
                 vp += 2 * (n - 1)
                 pts = p0 + np.vstack([[0.0, 0.0], np.cumsum(d, axis=0)])
             else:
+                if vp + n - 1 > len(vs):
+                    raise BadData("a ring runs past the vertex stream")
                 ks = vu[vp]
                 steps = vs[vp + 1:vp + 1 + n - 2].astype(np.float64)
                 vp += 1 + n - 2
@@ -280,10 +358,12 @@ def make_index(paths):
 
 class Manifest:
     """index.npz: every file's name / size / SHA-256 / building count, and every tile's rectangle (x0 y0 x1 y1,
-    EPSG:2180 metres) with the file and block it sits in. `digest` identifies this index (the cache identity)."""
+    EPSG:2180 metres) with the file and block it sits in. `digest` identifies this index. `source` is a path or a
+    file object. Every file name is checked (BadData otherwise: the whole index is refused), because a name goes into
+    a local path and a URL."""
 
-    def __init__(self, path):
-        with np.load(path) as z:
+    def __init__(self, source):
+        with np.load(source, allow_pickle=False) as z:
             raw = bytes(z["meta"])
             meta = json.loads(raw.decode())
             self.tile_file = z["tile_file"].astype(np.int64)
@@ -293,14 +373,32 @@ class Manifest:
             self.x1 = self.x0 + z["tile_ex"]
             self.y1 = self.y0 + z["tile_ey"]
         self.digest = hashlib.sha256(raw).hexdigest()
-        self.names = [f[0] for f in meta["files"]]
-        self.sizes = [int(f[1]) for f in meta["files"]]
-        self.sha = [f[2] for f in meta["files"]]
-        self.buildings = [int(f[3]) for f in meta["files"]]
+        files = meta["files"]
+        if not isinstance(files, list) or not 0 < len(files) <= MAX_FILES:
+            raise BadData("the index lists no files, or too many")
+        names, sizes, sha, buildings = [], [], [], []
+        for f in files:
+            if not isinstance(f, list) or len(f) != 4:
+                raise BadData("a malformed file entry")
+            name, size, digest, n = f
+            if not isinstance(name, str) or not NAME_RE.fullmatch(name) or os.path.basename(name) != name:
+                raise BadData(f"unsafe file name {name!r:.60}")
+            if (type(size) is not int or not 0 < size <= MAX_FILE_BYTES or type(n) is not int or n < 0
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                raise BadData(f"a malformed entry for {name}")
+            names.append(name), sizes.append(size), sha.append(digest), buildings.append(n)
+        if len(set(names)) != len(names):
+            raise BadData("a file is listed twice")
+        self.names, self.sizes, self.sha, self.buildings = names, sizes, sha, buildings
+        nt = len(self.tile_file)
+        if not (len(self.tile_blk) == len(self.x0) == len(self.y0) == len(self.x1) == len(self.y1) == nt):
+            raise BadData("the tile columns differ in length")
+        if nt and (int(self.tile_file.max()) >= len(names) or int(self.tile_blk.max()) >= MAX_BLOCKS):
+            raise BadData("a tile names a file or block that does not exist")
 
     @staticmethod
     def url(name):
-        return FILE_URL.format(name=name)
+        return FILE_URL.format(name=urllib.parse.quote(name, safe=""))
 
 
 def _get(url, kind):
@@ -328,35 +426,72 @@ def _size(path):
         return -1
 
 
-def _load_manifest(d, kind="demand"):
-    """The index of the local cache folder `d`: <d>/index.npz, fetched from the repository when it is not there yet
-    and again when it is older than INDEX_MAX_AGE (a refresh that fails keeps the old one). None without any."""
-    import netfetch
-    path = os.path.join(d, "index.npz")
-    age = time.time() - os.path.getmtime(path) if os.path.exists(path) else None
-    if age is None or age > INDEX_MAX_AGE:
-        try:
-            body = _get(INDEX_URL, kind)
-            tmp = os.path.join(d, f"index.{os.getpid()}.check")         # (it must load before it replaces the old)
-            _save(tmp, body)
-            try:
-                Manifest(tmp)
-                os.replace(tmp, path)
-            finally:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-        except (netfetch.FetchError, OSError, ValueError, KeyError) as e:
-            log.warning("polandlod1: index %s not fetched (%s: %s)%s", INDEX_URL, type(e).__name__, e,
-                        "; the one on disk stays" if age is not None else "")
+def _index_path(d):
+    return os.path.join(d, f"index.{INDEX_SHA256[:16]}.npz")
+
+
+def _read_index(d):
+    """The Manifest of the pinned index kept in folder `d`; None when it is not there, is not the pinned bytes or does
+    not load (a bad file is removed). Reads the disk only: no network."""
+    path = _index_path(d)
     try:
-        return Manifest(path)
+        with open(path, "rb") as f:
+            body = f.read(MAX_INDEX_BYTES + 1)
+    except OSError:
+        return None
+    try:
+        if len(body) > MAX_INDEX_BYTES or hashlib.sha256(body).hexdigest() != INDEX_SHA256:
+            raise BadData("not the pinned index")
+        return Manifest(io.BytesIO(body))
     except Exception as e:
-        if os.path.exists(path):
-            log.warning("polandlod1: %s unreadable (%s: %s)", path, type(e).__name__, e)
+        log.warning("polandlod1: %s unusable (%s: %s); removed", path, type(e).__name__, e)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
         return None
 
 
+def _fetch_manifest(d, kind):
+    """The pinned index from the repository, checked against INDEX_SHA256 before it is parsed or kept. Raises
+    netfetch's errors."""
+    import netfetch
+    body = _get(INDEX_URL, kind)
+    if len(body) > MAX_INDEX_BYTES or hashlib.sha256(body).hexdigest() != INDEX_SHA256:
+        raise netfetch.BadResponse(f"{INDEX_URL}: not the pinned index ({len(body)} bytes)", INDEX_URL,
+                                   netfetch.host_of(INDEX_URL))
+    try:
+        m = Manifest(io.BytesIO(body))
+    except Exception as e:                  # (the pinned bytes do not load: a bug in the pin, not in the network)
+        raise netfetch.BadResponse(f"{INDEX_URL}: {type(e).__name__}: {e}", INDEX_URL,
+                                   netfetch.host_of(INDEX_URL)) from None
+    try:
+        _save(_index_path(d), body)
+        _prune(d, "index.", keep=_index_path(d), legacy="index.npz")
+    except OSError as e:
+        raise netfetch.FetchFailed(f"{_index_path(d)}: {e}", INDEX_URL, netfetch.host_of(INDEX_URL)) from None
+    return m
+
+
+def _prune(d, prefix, keep, legacy=None):
+    """Remove what an earlier pin left beside the file `keep` (and a file of the old, unhashed name)."""
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(d, n)
+        if p != keep and not n.endswith((".part", ".check")) and (n == legacy or n.startswith(prefix)):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 # --- the files ------------------------------------------------------------------------------------
+_DECODE_ERRORS = (BadData, IndexError, ValueError, OverflowError, zlib.error)
+
+
 class Index:
     """The Manifest's tiles, and the files behind them: each is fetched into `folder` when first needed (ensure)."""
 
@@ -371,9 +506,11 @@ class Index:
         self._blocks = OrderedDict()
         self._lock = threading.Lock()
         self._file_locks = {}
+        self._bad = {}
 
     def path(self, fi):
-        return os.path.join(self.folder, self.names[fi])
+        """Where file `fi` is kept: named by its hash, so an index that changed a file is never read with the old one."""
+        return os.path.join(self.folder, f"{self.names[fi]}.{self.manifest.sha[fi][:16]}")
 
     def blocks_for(self, x0, y0, x1, y1):
         """Sorted unique (file, block) pairs that have a tile touching the box."""
@@ -401,13 +538,31 @@ class Index:
             raise netfetch.BadResponse(f"{url}: not the file the index lists ({len(body)} bytes)", url,
                                        netfetch.host_of(url))
         _save(path, body)
+        _prune(self.folder, self.names[fi] + ".", keep=path, legacy=self.names[fi])
         log.info("polandlod1: fetched %s (%d KB)", self.names[fi], len(body) // 1024)
 
+    def _bad_file(self, fi, err=None):
+        """netfetch.BadResponse for a file that does not parse: logged once, then raised afresh for every cell that
+        reaches it (without decoding it again)."""
+        import netfetch
+        msg = self._bad.get(fi)
+        if msg is None:
+            msg = self._bad[fi] = f"{self.names[fi]}: malformed data ({type(err).__name__}: {err})"
+            log.warning("polandlod1: %s; the cells it serves are not built", msg)
+        url = self.manifest.url(self.names[fi])
+        return netfetch.BadResponse(msg, url, netfetch.host_of(url))
+
     def header(self, fi, kind="demand"):
+        if fi in self._bad:
+            raise self._bad_file(fi)
         with self._lock:
             h = self._headers.get(fi)
         if h is None:
-            h = read_header(self.ensure(fi, kind))
+            path = self.ensure(fi, kind)
+            try:
+                h = read_header(path)
+            except _DECODE_ERRORS as e:
+                raise self._bad_file(fi, e) from None
             with self._lock:
                 self._headers[fi] = h
         return h
@@ -419,13 +574,18 @@ class Index:
                 self._blocks.move_to_end((fi, bi))
                 return got
         h = self.header(fi, kind)
-        with open(self.path(fi), "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-            _, ln, defl = h.blocks[bi]
-            off = h.block_offsets[bi]
-            raw = bytes(mm[off:off + ln])
-        if defl:
-            raw = zlib.decompress(raw, -15)
-        blk = decode_block(raw, h, h.block_first_tile[bi], h.blocks[bi][0])
+        try:
+            if not 0 <= bi < len(h.blocks):
+                raise BadData(f"the index names block {bi} of {len(h.blocks)}")
+            with open(self.path(fi), "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                _, ln, defl = h.blocks[bi]
+                off = h.block_offsets[bi]
+                raw = bytes(mm[off:off + ln])
+            if defl:
+                raw = _inflate(raw)
+            blk = decode_block(raw, h, h.block_first_tile[bi], h.blocks[bi][0])
+        except _DECODE_ERRORS as e:
+            raise self._bad_file(fi, e) from None
         with self._lock:
             self._blocks[(fi, bi)] = blk
             while len(self._blocks) > BLOCKS_KEPT:
@@ -435,8 +595,10 @@ class Index:
 
 _index = None
 _state = {"cache": None, "fetcher": None, "retry_at": 0.0}
-_index_lock = threading.Lock()
+_index_lock = threading.Lock()      # the module's state below; held for dictionary work only, never over I/O
+_fetch_lock = threading.Lock()      # one fetch of the index at a time: only the cells that need it wait here
 _covers = {}
+_wanted = {}
 
 
 def configure(cache_dir, fetcher):
@@ -451,14 +613,20 @@ def on():
     return os.environ.get(ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def enabled():
+    """Same as on(): whether the feature is asked for, not whether the index has arrived (that is covers() / resolve())."""
+    return on()
+
+
 def folder():
     """Where the index and the files are kept ('' when the cache folder is not known yet)."""
     return os.path.join(_state["cache"], "polandlod1") if _state["cache"] else ""
 
 
 def index():
-    """The Index of the local cache folder, None when off or while the index cannot be had (then Overture serves;
-    asked again after INDEX_RETRY_S)."""
+    """The Index when it is loaded or on disk, else None. Reads the disk at most (the pinned index is 0.6 MB, hashed
+    once); never the network and never a lock held over I/O: MapData.versions() and path() call this for every tile
+    key. fetch_index() gets it from the repository."""
     global _index
     if not on():
         return None
@@ -468,39 +636,78 @@ def index():
     with _index_lock:
         if _index is not None and _index.folder == d:
             return _index
-        if time.monotonic() < _state["retry_at"]:
-            return None
-        m = _load_manifest(d)
-        if m is None:
-            _state["retry_at"] = time.monotonic() + INDEX_RETRY_S
-            return None
-        _covers.clear()
-        _index = Index(d, m)
-        log.info("polandlod1: %d files, %d buildings, kept in %s", len(m.names), _index.n_buildings, d)
+    m = _read_index(d)
+    if m is None:
+        return None
+    with _index_lock:
+        if _index is None or _index.folder != d:
+            _index = Index(d, m)
+            _covers.clear()
+            log.info("polandlod1: %d files, %d buildings, kept in %s", len(m.names), _index.n_buildings, d)
         return _index
 
 
-def enabled():
-    return index() is not None
+def fetch_index(kind="demand"):
+    """The Index, fetched from the repository when it is not on disk. None when the feature is off; netfetch's errors
+    when it cannot be had (a failure is remembered for INDEX_RETRY_S: the cells that ask meanwhile get an error at
+    once instead of each waiting out a request). The request holds only this module's fetch lock, which nothing but
+    the Polish cells' builds ever wait for."""
+    import netfetch
+    global _index
+    idx = index()
+    if idx is not None or not on() or not folder():
+        return idx
+    d = folder()
+    with _fetch_lock:
+        idx = index()
+        if idx is not None:
+            return idx
+        wait = _state["retry_at"] - time.monotonic()
+        if wait > 0:
+            raise netfetch.HostUnavailable(f"{INDEX_URL}: not fetched a moment ago, asked again in {wait:.0f} s",
+                                           INDEX_URL, netfetch.host_of(INDEX_URL), retry_after=wait)
+        try:
+            m = _fetch_manifest(d, kind)
+        except (netfetch.FetchError, OSError) as e:
+            _state["retry_at"] = time.monotonic() + INDEX_RETRY_S
+            log.warning("polandlod1: index %s not fetched (%s: %s)", INDEX_URL, type(e).__name__, e)
+            raise
+        with _index_lock:
+            _index = Index(d, m)
+            _covers.clear()
+            log.info("polandlod1: %d files, %d buildings, kept in %s", len(m.names), _index.n_buildings, d)
+            return _index
+
+
+def warm(kind="prefetch"):
+    """Fetch the index now when the feature is on and it is not on disk (MapData.warm_manifests, on its own thread:
+    a first Polish cell then finds it). Never raises."""
+    try:
+        fetch_index(kind)
+    except Exception as e:
+        log.info("polandlod1: index not fetched ahead (%s: %s)", type(e).__name__, e)
 
 
 def signature():
-    """What the cell files' identity needs on top of VERSION (None when off): the index in use, not what happens
-    to be on disk."""
-    i = index()
-    if i is None:
+    """What the cell files' identity needs on top of VERSION (None when off): the pin, a constant. It does not depend on
+    whether the index has arrived (versions() asks for it for every tile key, and a key that changed once the index
+    loaded would split the caches)."""
+    if not on():
         return None
-    m = i.manifest
-    return {"version": VERSION, "index": m.digest[:16], "files": len(m.names), "buildings": sum(m.buildings)}
+    return {"version": VERSION, "commit": COMMIT[:12], "index": INDEX_SHA256[:16]}
 
 
 def _in_poland_only(lats, lons):
-    """True when every point is in Poland (the bundled borders); False when unknown or not."""
+    """True when every point is in Poland (the bundled borders), False when one is not; None when the borders are not
+    known (not downloaded yet)."""
     try:
         import countrybounds
-        codes = countrybounds.bundled().codes_at([(float(a), float(o)) for a, o in zip(lats, lons)])
+        borders = countrybounds.bundled()
+        if isinstance(borders, countrybounds.Absent):
+            return None
+        codes = borders.codes_at([(float(a), float(o)) for a, o in zip(lats, lons)])
     except Exception:
-        return False
+        return None
     return len(codes) > 0 and set(codes) == {"PL"}
 
 
@@ -512,32 +719,94 @@ def _cell_box(bounds):
     return lo.ravel(), la.ravel(), (x.min(), y.min(), x.max(), y.max())
 
 
+def _border_points(bounds, grid, box):
+    """(lons, lats) for the border test: the cell's four edges every BORDER_STEP_M (the border data is simplified to
+    about 10 m, so a border running through the cell cannot slip between points that are as close as its own detail),
+    and the grid inside. Poland has no foreign enclave, so a cell whose whole outline and inside grid are in Poland is."""
+    lon0, lat0, lon1, lat1 = bounds
+    n = int(max(box[2] - box[0], box[3] - box[1]) // BORDER_STEP_M) + 2
+    t = np.linspace(0.0, 1.0, n)
+    lo, la = lon0 + (lon1 - lon0) * t, lat0 + (lat1 - lat0) * t
+    return (np.concatenate([lo, lo, np.full(n, lon0), np.full(n, lon1), grid[0]]),
+            np.concatenate([np.full(n, lat0), np.full(n, lat1), la, la, grid[1]]))
+
+
+def wanted(key):
+    """True when the player asked for LOD1 and the cell lies wholly in Poland (the bundled borders). Independent of
+    the index and of the network; unknown borders count as not Poland (and are not remembered)."""
+    if not on():
+        return False
+    k = str(key)
+    with _index_lock:
+        got = _wanted.get(k)
+    if got is None:
+        bounds = key.bounds()
+        lo, la, box = _cell_box(bounds)
+        lons, lats = _border_points(bounds, (lo, la), box)
+        r = _in_poland_only(lats, lons)
+        if r is None:
+            return False
+        got = bool(r)
+        with _index_lock:
+            if len(_wanted) > 8192:
+                _wanted.clear()
+            _wanted[k] = got
+    return got
+
+
 def covers(key):
-    """True when the cell's buildings come from LOD1: wholly in Poland, and the files have tiles there."""
+    """True when the cell's buildings come from LOD1: wholly in Poland, and the index (loaded) has tiles there. False
+    while the index is not loaded: use resolve() where the answer decides what is built or stored. Never fetches."""
+    if not wanted(key):
+        return False
     idx = index()
     if idx is None:
         return False
     k = str(key)
-    got = _covers.get(k)
+    with _index_lock:
+        got = _covers.get(k)
     if got is None:
-        lo, la, box = _cell_box(key.bounds())
-        got = bool(idx.blocks_for(*box)) and _in_poland_only(la, lo)
-        if len(_covers) > 8192:
-            _covers.clear()
-        _covers[k] = got
+        _, _, box = _cell_box(key.bounds())
+        got = bool(idx.blocks_for(*box))
+        with _index_lock:
+            if len(_covers) > 8192:
+                _covers.clear()
+            _covers[k] = got
     return got
 
 
+def routes_to_lod1(key):
+    """Which cache path to look at for the cell, without the network: LOD1's when it is LOD1's, and also when it is
+    not yet known (wholly in Poland, the index not loaded: the cell's build waits for the index, so Overture's path
+    is not where it will be). Readers use this; whoever builds and stores a cell uses resolve()."""
+    return wanted(key) and (index() is None or covers(key))
+
+
+def resolve(key, kind="demand"):
+    """Is the cell LOD1's? Decided here, once, for whoever builds a cell: the cache path and the source are both
+    taken from this answer. Fetches the index when the cell is wholly in Poland and it is not on disk (kind:
+    netfetch's request kind) and raises netfetch's errors when it cannot be had: that cell then waits, it is not
+    built from Overture."""
+    if not wanted(key):
+        return False
+    fetch_index(kind)
+    return covers(key)
+
+
 # --- a cell's Features ---------------------------------------------------------------------------
-def query(key, kind="demand"):
+def query(key, kind="demand", covered=None):
     """(mapgeom.Features, {(dataset, licence): count}) of the cell's buildings, Overture's columns; None when the
-    cell is not covered (the caller uses Overture). The files it needs are fetched first (kind: netfetch's request
-    kind, so a prefetch only takes what the host has room for); their errors are raised."""
+    cell is not LOD1's (the caller uses Overture). `covered` is the answer of resolve() the caller already acted on
+    (the cache path was chosen by it): not asked again, so that the source cannot differ from the path. The index and
+    the files it needs are fetched first (kind: netfetch's request kind, so a prefetch only takes what the host has
+    room for); their errors are raised."""
     import mapgeom as mg
     import overture
-    if not covers(key):
+    if covered is None:
+        covered = resolve(key, kind)
+    if not covered:
         return None
-    idx = index()
+    idx = index() or fetch_index(kind)
     lon0, lat0, lon1, lat1 = key.bounds()
     _, _, (x0, y0, x1, y1) = _cell_box(key.bounds())
     x0, y0, x1, y1 = x0 - MARGIN_M, y0 - MARGIN_M, x1 + MARGIN_M, y1 + MARGIN_M
