@@ -578,33 +578,20 @@ let loadingDriven = false
 function checkDrivenLines() {
   if (!roadsDrivenOn.value) return
   const rd = state.value.roadsDriven
-  if (!rd) return
+  if (!rd || loadingDriven) return
+
   const rev = rd.rev || 0
-  if (rev > 0 && rev !== loadedDrivenRev.value && !loadingDriven) {
-    loadingDriven = true
-    engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
-      loadingDriven = false
-      if (Array.isArray(res)) {
-        const segs = []
-        for (const line of res) {
-          if (!line || line.length < 2) continue
-          let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
-          for (let i = 0; i < line.length; i++) {
-            const lat = line[i][0], lon = line[i][1]
-            if (lat < minLat) minLat = lat
-            if (lat > maxLat) maxLat = lat
-            if (lon < minLon) minLon = lon
-            if (lon > maxLon) maxLon = lon
-          }
-          segs.push({ box: [minLat, maxLat, minLon, maxLon], line: [...line] })
-        }
-        drivenSegments.value = segs
-        loadedDrivenRev.value = rev
-      }
-    })
-  } else if (rd.cur && drivenSegments.value.length > 0) {
+  const segs = drivenSegments.value
+  const hasRevChange = rev > 0 && rev !== loadedDrivenRev.value
+
+  // Can we safely append cur to the active line?
+  // Only if: rev has not changed, cur exists, segment count matches backend's n,
+  // and the backend's current line length is exactly our segment's length + 1 (single-step progression).
+  const canAppend = !hasRevChange && rd.cur && segs.length > 0 &&
+                    segs.length === rd.n && (rd.len === segs[segs.length - 1].line.length + 1)
+
+  if (canAppend) {
     const cur = rd.cur
-    const segs = drivenSegments.value
     const lastSeg = segs[segs.length - 1]
     const line = lastSeg.line
     const lastPt = line[line.length - 1]
@@ -616,6 +603,33 @@ function checkDrivenLines() {
       if (cur[1] > lastSeg.box[3]) lastSeg.box[3] = cur[1]
       drivenSegments.value = [...segs]
     }
+    return
+  }
+
+  // Fetch needed if rev changed, or if map segment count / line length is out of step
+  const needsFetch = hasRevChange || (rd.n > 0 && (segs.length !== rd.n || (segs.length > 0 && rd.len > segs[segs.length - 1].line.length)))
+  if (needsFetch) {
+    loadingDriven = true
+    engineLua("beamngEarth_settings and beamngEarth_settings.uiDrivenLines and beamngEarth_settings.uiDrivenLines() or {}", res => {
+      loadingDriven = false
+      if (Array.isArray(res)) {
+        const newSegs = []
+        for (const line of res) {
+          if (!line || line.length < 1) continue
+          let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180
+          for (let i = 0; i < line.length; i++) {
+            const lat = line[i][0], lon = line[i][1]
+            if (lat < minLat) minLat = lat
+            if (lat > maxLat) maxLat = lat
+            if (lon < minLon) minLon = lon
+            if (lon > maxLon) maxLon = lon
+          }
+          newSegs.push({ box: [minLat, maxLat, minLon, maxLon], line: [...line] })
+        }
+        drivenSegments.value = newSegs
+        loadedDrivenRev.value = rev
+      }
+    })
   }
 }
 

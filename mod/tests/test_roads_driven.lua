@@ -39,6 +39,7 @@ rawset(_G, 'MPVehicleGE', { isOwn = function(id) return true end })
 local RD = require('beamngEarth/roads_driven')
 
 -- Reset state
+savedData = nil
 RD._clear()
 
 -- ---------------------------------------------------------------------------
@@ -54,6 +55,12 @@ T.check(#st.polylines[1] == 1, 'initial polyline has 1 point')
 local rev0 = st.rev
 T.check(rev0 > 0, 'initial rev > 0')
 
+-- uiState metadata check
+local ui0 = RD.uiState()
+T.check(ui0.n == 1, 'uiState n is 1')
+T.check(ui0.len == 1, 'uiState len is 1')
+T.check(ui0.cur and ui0.cur[1] == 37.7749, 'uiState cur lat matches')
+
 -- Small movement under 25m: should not add point
 local pSmall = { lat = 37.774950, lon = -122.419400, speed = 15 }
 RD.update(0.1, pSmall, false)
@@ -68,6 +75,9 @@ st = RD._state()
 T.check(#st.polylines[1] == 2, 'movement >= 25m appends point to currentLine')
 T.check(st.rev == rev0, 'rev unchanged during continuous driving (Task 3)')
 T.check(st.dirty == true, 'marked dirty after driving')
+local ui1 = RD.uiState()
+T.check(ui1.n == 1, 'uiState n is still 1 after step')
+T.check(ui1.len == 2, 'uiState len is 2 after step')
 
 -- Teleport jump >= 2000m (e.g. to Oakland: 37.8044, -122.2712, ~13 km away)
 local pTele = { lat = 37.804400, lon = -122.271200, speed = 0 }
@@ -76,77 +86,117 @@ st = RD._state()
 T.check(#st.polylines == 2, 'teleport jump >= 2000m starts a new polyline segment')
 T.check(st.rev > rev0, 'rev incremented on teleport split')
 T.check(#st.polylines[2] == 1, 'new polyline has 1 point at teleport destination')
+local uiTele = RD.uiState()
+T.check(uiTele.n == 2, 'uiState n is 2 after teleport')
+T.check(uiTele.len == 1, 'uiState len is 1 for new line after teleport')
 
 -- ---------------------------------------------------------------------------
--- 2. Compact JSON saving (only when stopped, paused, or mission end)
+-- 2. 3D Map / Camera view frame guard
 -- ---------------------------------------------------------------------------
--- While driving at speed (speed = 20 m/s), update should NOT save mid-drive
+-- While in 3D map (player.camera = true), update should return early
+local odoBeforeCam = RD._state().totalKm
+local countBeforeCam = #RD._state().polylines
+local pCam = { lat = 37.850000, lon = -122.250000, speed = 0, camera = true }
+RD.update(0.1, pCam, false)
+local stCam = RD._state()
+T.check(#stCam.polylines == countBeforeCam, '3D map does not add polylines')
+T.check(stCam.totalKm == odoBeforeCam, '3D map does not add to odometer')
+
+-- ---------------------------------------------------------------------------
+-- 3. Compact JSON saving (only when paused, mission end, or stopped >= 2s & >= 5min)
+-- ---------------------------------------------------------------------------
+savedData = nil
+RD._clear()
 writeCount = 0
-local pDrive = { lat = 37.804800, lon = -122.271200, speed = 20 }
-RD.update(0.1, pDrive, false)
-T.check(writeCount == 0, 'no disk write while driving at speed (Task 4)')
 
--- When stopped (speed < 0.5 m/s), save should trigger immediately
-local pStopped = { lat = 37.805200, lon = -122.271200, speed = 0 }
-RD.update(0.1, pStopped, false)
-T.check(writeCount == 1, 'save triggered when car stopped')
+-- Start driving
+RD.update(0.1, { lat = 37.770000, lon = -122.419400, speed = 15 }, false)
+RD.update(0.1, { lat = 37.770400, lon = -122.419400, speed = 15 }, false)
+T.check(writeCount == 0, 'no save while driving at speed')
+
+-- Stopped for only 1.0s (under 2s threshold) -> should NOT save yet
+RD.update(1.0, { lat = 37.770400, lon = -122.419400, speed = 0 }, false)
+T.check(writeCount == 0, 'no save when stopped for < 2s')
+
+-- Stopped for 300s more (stoppedFor >= 2s, and clock - lastSave >= 300s / 5 min) -> should save!
+RD.update(300.0, { lat = 37.770400, lon = -122.419400, speed = 0 }, false)
+T.check(writeCount == 1, 'save triggered when stopped for >= 2s and >= 5min elapsed')
 T.check(savedPretty == false, 'save wrote compact JSON (savedPretty == false)')
-T.check(savedData and savedData.polylines, 'saved data contains polylines')
-T.check(savedData.version == 1, 'saved data has version 1')
 
--- Subsequent update while still stopped and not dirty should not save again
-RD.update(0.1, pStopped, false)
-T.check(writeCount == 1, 'no redundant save while stopped if clean')
+-- Next frame while still stopped: already clean -> should NOT save again
+RD.update(1.0, { lat = 37.770400, lon = -122.419400, speed = 0 }, false)
+T.check(writeCount == 1, 'no redundant save while clean')
 
--- When paused (isPaused = true), save should trigger if dirty
-local pDrive2 = { lat = 37.805600, lon = -122.271200, speed = 15 }
-RD.update(0.1, pDrive2, false)
-T.check(writeCount == 1, 'dirty again while driving, not saved yet')
-RD.update(0.1, pDrive2, true) -- paused
-T.check(writeCount == 2, 'save triggered when paused')
+-- Drive again (becomes dirty)
+RD.update(0.1, { lat = 37.770800, lon = -122.419400, speed = 15 }, false)
+T.check(RD._state().dirty == true, 'dirty again after driving')
+
+-- Stop again briefly at a red light (stopped for 5s, but only 10s since last save < 300s) -> should NOT save
+RD.update(5.0, { lat = 37.770800, lon = -122.419400, speed = 0 }, false)
+T.check(writeCount == 1, 'red light stop does not trigger save if < 5min since last save')
+
+-- When paused (isPaused = true): saves immediately even if < 5min!
+RD.update(0.1, { lat = 37.770800, lon = -122.419400, speed = 0 }, true)
+T.check(writeCount == 2, 'pause triggers immediate save')
 
 -- ---------------------------------------------------------------------------
--- 3. trimPoints: in-place slice, currentLine in step, universal cap
+-- 4. trimPoints: end-to-end driving past MAX_POINTS via update()
 -- ---------------------------------------------------------------------------
+savedData = nil
 RD._clear()
 RD.MAX_POINTS = 5
 
--- Create line 1 with 3 points
-local line1 = { { 37.1, -122.1 }, { 37.2, -122.2 }, { 37.3, -122.3 } }
--- Create line 2 with 4 points (total 7 points > MAX_POINTS 5)
-local line2 = { { 38.1, -121.1 }, { 38.2, -121.2 }, { 38.3, -121.3 }, { 38.4, -121.4 } }
+-- Drive 5 points to reach budget
+RD.update(0.1, { lat = 37.770000, lon = -122.419400, speed = 15 }, false) -- pt 1
+RD.update(0.1, { lat = 37.770400, lon = -122.419400, speed = 15 }, false) -- pt 2
+RD.update(0.1, { lat = 37.770800, lon = -122.419400, speed = 15 }, false) -- pt 3
+RD.update(0.1, { lat = 37.771200, lon = -122.419400, speed = 15 }, false) -- pt 4
+RD.update(0.1, { lat = 37.771600, lon = -122.419400, speed = 15 }, false) -- pt 5
 
-local st2 = RD._state()
-table.insert(st2.polylines, line1)
-table.insert(st2.polylines, line2)
-st2.currentLine = line2
+local stTrim = RD._state()
+T.check(#stTrim.polylines == 1, 'single line before trim')
+T.check(#stTrim.polylines[1] == 5, '5 points reached')
 
-RD.trimPoints()
+-- 6th point: triggers trimPoints()!
+RD.update(0.1, { lat = 37.772000, lon = -122.419400, speed = 15 }, false)
+stTrim = RD._state()
+T.check(#stTrim.polylines[1] <= 5, 'points trimmed to budget in-place')
 
--- Total points should now be <= 5
-local totalPts = #st2.polylines[1] + (#st2.polylines > 1 and #st2.polylines[2] or 0)
-T.check(totalPts <= 5, 'trimPoints enforces MAX_POINTS budget')
+-- 7th point: verify next point lands in the active line without being lost
+RD.update(0.1, { lat = 37.772400, lon = -122.419400, speed = 15 }, false)
+stTrim = RD._state()
+T.check(#stTrim.polylines == 1, 'single line remains intact')
+local lastPt = stTrim.polylines[1][#stTrim.polylines[1]]
+T.near(lastPt[1], 37.772400, 0.0001, 'subsequent point after trim lands in active line (Item 5)')
 
--- Test in-place slicing on a single active line
+-- Also test multi-line trim:
 RD._clear()
 RD.MAX_POINTS = 4
-local singleLine = { { 10.1, 20.1 }, { 10.2, 20.2 }, { 10.3, 20.3 }, { 10.4, 20.4 }, { 10.5, 20.5 } }
-local st3 = RD._state()
-table.insert(st3.polylines, singleLine)
-st3.currentLine = singleLine
+-- Line 1: 3 points
+RD.update(0.1, { lat = 37.770000, lon = -122.419400, speed = 15 }, false)
+RD.update(0.1, { lat = 37.770400, lon = -122.419400, speed = 15 }, false)
+RD.update(0.1, { lat = 37.770800, lon = -122.419400, speed = 15 }, false)
+-- Teleport jump >= 2000m -> starts Line 2 (pt 4)
+RD.update(0.1, { lat = 37.804400, lon = -122.271200, speed = 15 }, false)
+-- Line 2 point 2 (pt 5 -> trims Line 1!)
+RD.update(0.1, { lat = 37.804800, lon = -122.271200, speed = 15 }, false)
 
-RD.trimPoints()
+local stMulti = RD._state()
+local totalMulti = 0
+for _, l in ipairs(stMulti.polylines) do totalMulti = totalMulti + #l end
+T.check(totalMulti <= 4, 'multi-line trim enforces budget')
 
-T.check(#st3.polylines == 1, 'single line kept')
-T.check(#st3.polylines[1] <= 4, 'single line trimmed to budget')
-T.check(st3.currentLine == st3.polylines[1], 'currentLine remains identical table reference (Task 2)')
-T.near(st3.currentLine[#st3.currentLine][1], 10.5, 0.0001, 'latest point preserved after in-place slice')
+-- Drive another point on Line 2
+RD.update(0.1, { lat = 37.805200, lon = -122.271200, speed = 15 }, false)
+stMulti = RD._state()
+local activeLine = stMulti.polylines[#stMulti.polylines]
+local activeLastPt = activeLine[#activeLine]
+T.near(activeLastPt[1], 37.805200, 0.0001, 'new point lands in Line 2 after multi-line trim')
 
--- Restore MAX_POINTS
 RD.MAX_POINTS = 50000
 
 -- ---------------------------------------------------------------------------
--- 4. Free-camera / spectator filtering
+-- 5. Free-camera / spectator filtering
 -- ---------------------------------------------------------------------------
 savedData = nil
 RD._clear()

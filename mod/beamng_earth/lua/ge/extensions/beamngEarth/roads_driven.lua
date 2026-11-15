@@ -15,6 +15,8 @@ local currentLine = nil
 local lastLat, lastLon = nil, nil
 local dirty = false
 local clock = 0
+local lastSave = 0
+local stoppedFor = 0
 local loaded = false
 local rev = 1
 
@@ -156,10 +158,9 @@ end
 function M.update(dtReal, player, isPaused)
   clock = clock + (dtReal or 0)
   if not loaded then M.load() end
-  if not player or not player.lat or not player.lon then return end
 
-  -- Only record when the player is actively driving their own car
-  if not isDrivingVehicle() then
+  -- Ignore when player object is missing or when in camera/view frame (e.g. 3D map)
+  if not player or not player.lat or not player.lon or player.camera then
     currentLine = nil
     lastLat, lastLon = nil, nil
     return
@@ -167,6 +168,8 @@ function M.update(dtReal, player, isPaused)
 
   local lat, lon = player.lat, player.lon
   if not lastLat or not lastLon then
+    -- Initial sample: verify driving state before starting
+    if not isDrivingVehicle() then return end
     lastLat, lastLon = lat, lon
     currentLine = { { quantize6(lat), quantize6(lon) } }
     polylines[#polylines + 1] = currentLine
@@ -174,35 +177,61 @@ function M.update(dtReal, player, isPaused)
     return
   end
 
-  local d = distM(lastLat, lastLon, lat, lon)
-  if d >= M.MIN_STEP_M then
-    if d >= M.TELEPORT_GAP_M then
-      -- Player teleported: start a separate line so no streak across the globe
-      currentLine = { { quantize6(lat), quantize6(lon) } }
-      polylines[#polylines + 1] = currentLine
-      rev = rev + 1
-    else
-      local km = d / 1000
-      sessionKm = sessionKm + km
-      totalKm = totalKm + km
-      if not currentLine then
-        currentLine = { { quantize6(lastLat), quantize6(lastLon) } }
+  -- Fast delta check before expensive haversine:
+  -- 25m at the equator is ~0.000225 deg. If |dlat| < 0.00015 and |dlon| < 0.00015,
+  -- vehicle moved at most ~16m, so distance cannot be >= 25m.
+  local dlat = math.abs(lat - lastLat)
+  local dlon = math.abs(lon - lastLon)
+  if dlat >= 0.00015 or dlon >= 0.00015 then
+    local d = distM(lastLat, lastLon, lat, lon)
+    if d >= M.MIN_STEP_M then
+      -- Step threshold reached: only now check isDrivingVehicle()
+      if not isDrivingVehicle() then
+        currentLine = nil
+        lastLat, lastLon = nil, nil
+        return
+      end
+
+      if d >= M.TELEPORT_GAP_M then
+        -- Player teleported: start a separate line so no streak across the globe
+        currentLine = { { quantize6(lat), quantize6(lon) } }
         polylines[#polylines + 1] = currentLine
         rev = rev + 1
+      else
+        local km = d / 1000
+        sessionKm = sessionKm + km
+        totalKm = totalKm + km
+        if not currentLine then
+          currentLine = { { quantize6(lastLat), quantize6(lastLon) } }
+          polylines[#polylines + 1] = currentLine
+          rev = rev + 1
+        end
+        currentLine[#currentLine + 1] = { quantize6(lat), quantize6(lon) }
+        dirty = true
+        trimPoints()
       end
-      currentLine[#currentLine + 1] = { quantize6(lat), quantize6(lon) }
-      dirty = true
-      -- Note: rev is NOT incremented on normal step additions, preventing full 50k re-syncs
+      lastLat, lastLon = lat, lon
     end
-    lastLat, lastLon = lat, lon
   end
 
-  -- Persist only when stopped or paused, never mid-drive at speed
+  -- Persist on pause, or when stopped for >= 2s and >= 5 min since last save
   local speed = player.speed or 0
-  local stopped = speed < 0.5
-  local paused = isPaused or false
-  if dirty and (stopped or paused) then
-    M.save()
+  if speed < 0.5 then
+    stoppedFor = stoppedFor + (dtReal or 0)
+  else
+    stoppedFor = 0
+  end
+
+  if dirty then
+    if isPaused then
+      lastSave = clock
+      stoppedFor = 0
+      M.save()
+    elseif stoppedFor >= 2.0 and (clock - lastSave) >= 300.0 then
+      lastSave = clock
+      stoppedFor = 0
+      M.save()
+    end
   end
 end
 
@@ -218,6 +247,8 @@ function M.uiState()
     sessionKm = math.floor(sessionKm * 10) / 10,
     rev = rev,
     cur = cur,
+    n = #polylines,
+    len = currentLine and #currentLine or 0,
   }
 end
 
@@ -243,6 +274,8 @@ function M._state()
     currentLine = currentLine,
     dirty = dirty,
     clock = clock,
+    lastSave = lastSave,
+    stoppedFor = stoppedFor,
     rev = rev,
   }
 end
@@ -255,6 +288,8 @@ function M._clear()
   lastLat, lastLon = nil, nil
   dirty = false
   clock = 0
+  lastSave = 0
+  stoppedFor = 0
   loaded = false
   rev = 1
 end
