@@ -11963,6 +11963,11 @@ async def main_async(args):
         decisionsmod.prune(args.cache_dir)
     except Exception as e:
         log.info("decisions: prune: %s: %s", type(e).__name__, e)
+    try:                                        # (and other lkeys' lidar road heights: lidarz.py)
+        import lidarz as lidarzmod
+        lidarzmod.prune(args.cache_dir)
+    except Exception as e:
+        log.info("lidarz: prune: %s: %s", type(e).__name__, e)
     roadsurfmod.mark_run_start()                # (likewise: the photo's road surfaces made before it are this run's)
     lean = getattr(args, "tier", None) in ("lean", "emergency") and LEAN_POOLS
     # (the compact layout: the lean tiers', and the small tier's (SMALL_COMPACT): a block process for both lanes, the far
@@ -12839,6 +12844,14 @@ def main():
             log.warning("cdn: %s: %s", type(e).__name__, e)
             on = False
         os.environ["BNGE_DECISIONS"] = "on" if on else "off"    # (before the workers start: they inherit it)
+    if "BNGE_LIDARZ" not in os.environ:      # (the lidar road heights from the CDN where the switch says: lidarz.py)
+        import cdn as cdnmod
+        try:
+            on = not args.offline and cdnmod.lidarz_on(netfetch.Fetcher(offline=args.offline), args.cache_dir)
+        except Exception as e:
+            log.warning("cdn: %s: %s", type(e).__name__, e)
+            on = False
+        os.environ["BNGE_LIDARZ"] = "on" if on else "off"       # (before the workers start: they inherit it)
     if args.cells != 32 and args.near_visual not in MESH_LAYOUT:
         ap.error("--cells 64 needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     if args.block != TERRAIN_BLOCK and args.near_visual not in MESH_LAYOUT:

@@ -416,6 +416,11 @@ _DEC_URL = (os.environ.get("BNGE_DECISIONS_URL") or "").strip()
 _DEC_HOST = (urlsplit(_DEC_URL).hostname or "") if _DEC_URL.startswith(("http://", "https://")) else _CDN_HOST
 POLICIES[_DEC_HOST + "#dec"] = replace(POLICIES.get(_DEC_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
                                        timeout=15.0, max_attempts=2, base_delay=0.25)
+# ... and the lidar road heights' (lidarz.py: the CDN's lz/, or BNGE_LIDARZ_URL; the lidar is read itself on a miss)
+_LZ_URL = (os.environ.get("BNGE_LIDARZ_URL") or "").strip()
+_LZ_HOST = (urlsplit(_LZ_URL).hostname or "") if _LZ_URL.startswith(("http://", "https://")) else _CDN_HOST
+POLICIES[_LZ_HOST + "#lz"] = replace(POLICIES.get(_LZ_HOST, POLICIES[_CDN_HOST]), connect_timeout=2.0,
+                                     timeout=15.0, max_attempts=2, base_delay=0.25)
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)

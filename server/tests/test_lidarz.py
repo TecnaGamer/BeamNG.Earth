@@ -1,0 +1,451 @@
+"""lidarz.py / earthfast lidarz.rs / tools/build_lidarz.py: the lidar road heights as a signed CDN product. A cell
+record gives a roadz.Lines (and its stretches' answers) back bit for bit; a block is taken only with a trusted key's
+signature, its own name, block, product and version key; a player's server that reads a cell from the CDN measures,
+matches and plans exactly what it would have from the point clouds (a fake 3DEP dataset here: the same deck heights
+and bridge profiles, byte for byte, and not one point-cloud request), and reads the point clouds as before on every
+miss: off, no manifest, a network error, a foreign signature, a damaged block, another map's inputs, another DEM."""
+import hashlib
+import http.server
+import json
+import os
+import shutil
+import struct
+import sys
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+
+import decisions  # noqa: E402
+import fast  # noqa: E402
+import lidarz  # noqa: E402
+import mapcells  # noqa: E402
+import roads  # noqa: E402
+import roadz  # noqa: E402
+from test_approaches import overpass, flat_elev, FLAT  # noqa: E402
+from test_roads import FRAME  # noqa: E402
+
+ef = fast._ef
+HAVE = fast.AVAILABLE and getattr(ef, "VERSION", 0) >= lidarz.NATIVE
+SEED = bytes(range(32))
+OTHER_SEED = bytes(range(1, 33))
+DATASET = "USGS_TEST_2020"
+
+
+class FakeDem:
+    def __init__(self, z):
+        self.z = z
+
+    def sample(self, la, lo, zoom):
+        return np.full(np.shape(la), self.z, np.float64)
+
+
+class MD:
+    """The overpass's roads (test_approaches) on a flat DEM at dem."""
+
+    def __init__(self, feats=None, dem=FLAT):
+        self.feats = overpass() if feats is None else feats
+        self.dem = FakeDem(dem)
+
+    def cell(self, key, layers=None, kind=None):
+        class C:
+            pass
+        c = C()
+        c.layers = {"roads": self.feats}
+        return c
+
+
+# --- a fake 3DEP dataset (EPT: ept.json, a hierarchy, plain LAS nodes) round the overpass's deck --------------------
+W = 6400.0          # the dataset's cube (m, EPSG:3857): depth-6 nodes 100 m across
+DEPTH = 6
+
+
+def _merc(x, y):
+    la, lo, _ = FRAME.enu_to_geodetic(np.asarray(x, np.float64), np.asarray(y, np.float64), 0.0)
+    return roadz.merc_xy(np.asarray(la), np.asarray(lo))
+
+
+def _las(xyz, cls, off):
+    hdr = bytearray(227)
+    hdr[0:4] = b"LASF"
+    hdr[24], hdr[25] = 1, 2
+    struct.pack_into("<H", hdr, 94, 227)
+    struct.pack_into("<I", hdr, 96, 227)
+    hdr[104] = 0
+    struct.pack_into("<H", hdr, 105, 20)
+    struct.pack_into("<I", hdr, 107, len(xyz))
+    struct.pack_into("<3d", hdr, 131, 0.01, 0.01, 0.01)
+    struct.pack_into("<3d", hdr, 155, off[0], off[1], 0.0)
+    out = bytes(hdr)
+    for (x, y, z), c in zip(xyz, cls):
+        rec = bytearray(20)
+        struct.pack_into("<3i", rec, 0, int(round((x - off[0]) * 100)), int(round((y - off[1]) * 100)),
+                         int(round(z * 100)))
+        rec[15] = int(c)
+        out += bytes(rec)
+    return out
+
+
+def ept_files(deck_rise=6.0, seed=3):
+    """{relative path: bytes} of the fake dataset: a deck x -35..35 along y = 0 (FRAME) deck_rise over the DEM, the
+    road going on from its ends on embankments falling back to it over 80 m (elevated for the first ~40 m: a ground
+    stretch on a structure, roads.lidar_gap_candidates), and ground (class 2) beside it at the DEM."""
+    rng = np.random.default_rng(seed)
+    pts, cls = [], []
+    x = rng.uniform(-35, 35, 3000)
+    pts.append(np.c_[x, rng.uniform(-4, 4, 3000), FLAT + deck_rise + 0.002 * x])
+    cls.append(np.full(3000, 1))
+    for sgn in (-1, 1):                     # (the approaches' embankments: the lidar's, not the DTM's)
+        t = rng.uniform(0, 100, 1500)
+        pts.append(np.c_[sgn * (35 + t), rng.uniform(-4, 4, 1500),
+                         FLAT + (deck_rise + 0.002 * sgn * 35) * np.clip(1 - t / 80, 0, None)])
+        cls.append(np.full(1500, 1))
+    g = np.c_[rng.uniform(-200, 200, 4000), rng.choice([-1.0, 1.0], 4000) * rng.uniform(5, 12, 4000)]
+    pts.append(np.c_[g, np.full(len(g), FLAT)])
+    cls.append(np.full(len(g), 2))
+    p = np.vstack(pts)
+    mx, my = _merc(p[:, 0], p[:, 1])
+    mxyz = np.c_[mx, my, p[:, 2]]
+    c = np.concatenate(cls)
+    x0, y0 = float(np.floor(mx.mean() - W / 2)), float(np.floor(my.mean() - W / 2))     # (the points in its middle)
+    meta = {"bounds": [x0, y0, -100.0, x0 + W, y0 + W, W - 100.0], "srs": {"horizontal": "3857"}}
+    w = W / 2 ** DEPTH
+    ix = ((mxyz[:, 0] - x0) // w).astype(int)
+    iy = ((mxyz[:, 1] - y0) // w).astype(int)
+    files = {f"{DATASET}/ept.json": json.dumps(meta).encode()}
+    hier = {}
+    for nx, ny in sorted(set(zip(ix.tolist(), iy.tolist()))):
+        sel = (ix == nx) & (iy == ny)
+        key = f"{DEPTH}-{nx}-{ny}-0"
+        hier[key] = 100000              # (a dense octree depth: depth_at stops here)
+        for d in range(DEPTH):
+            hier.setdefault(f"{d}-{nx >> (DEPTH - d)}-{ny >> (DEPTH - d)}-0", 1)
+        files[f"{DATASET}/ept-data/{key}.laz"] = _las(mxyz[sel], c[sel], (x0 + nx * w, y0 + ny * w))
+    files[f"{DATASET}/ept-hierarchy/0-0-0-0.json"] = json.dumps(hier).encode()
+    return files
+
+
+KEY = mapcells.cell_of(float(FRAME.lat0), float(FRAME.lon0))
+
+
+def provider(cache, md=None, files=None, asked=None):
+    """A RoadZ on cache whose point-cloud reads come from files (asked: the URLs read); None files: any read fails."""
+    rz = roadz.RoadZ(cache, object(), md or MD())
+
+    def fetch(url, headers=None, lane=None):
+        rel = url[len(roadz.EPT_BASE):]
+        if asked is not None:
+            asked.append(rel)
+        if files is None or rel not in files:
+            import netfetch
+            raise netfetch.FetchError(f"no {rel}")
+        return files[rel]
+    rz._fetch = fetch
+    return rz
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    root = None
+    hits = []
+    log_message = lambda *a: None  # noqa: E731
+
+    def do_GET(self):
+        Handler.hits.append(self.path)
+        path = os.path.join(self.root, self.path.lstrip("/"))
+        if not os.path.isfile(path):
+            self.send_error(404)
+            return
+        body = Path(path).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def same(a, b):
+    import build_lidarz
+    return build_lidarz.same_lines(a, b)
+
+
+@unittest.skipUnless(HAVE, f"earthfast {lidarz.NATIVE} not built")
+class RecordTest(unittest.TestCase):
+    def lines(self):
+        a = (np.c_[np.linspace(-76.6, -76.59, 7), np.linspace(39.28, 39.29, 7)], np.r_[1.0, np.nan, 3, 4, 5, 6, -0.0],
+             1, "", "")
+        b = (np.c_[np.linspace(-76.6, -76.6001, 3), np.full(3, 39.281)], np.array([7.25, 7.5, 7.75]), 0, "", "")
+        ln = roadz.Lines.build([a, b], corrected=True)
+        ln.gaps = [("w12@0", (-76.6, 39.28), (-76.5999, 39.2801))]
+        return ln
+
+    def test_round_trip_bit_for_bit(self):
+        ln = self.lines()
+        rec = lidarz.encode(ln, b"\x05" * 32)
+        back, dem = lidarz.decode(rec)
+        self.assertEqual(dem, b"\x05" * 32)
+        self.assertTrue(same(ln, back))
+        self.assertEqual(back.ref.dtype, ln.ref.dtype)
+        self.assertEqual(lidarz.encode(back, dem), rec, "deterministic")
+        with tempfile.TemporaryDirectory() as d:
+            ln.save(os.path.join(d, "a.npz"))
+            back.save(os.path.join(d, "b.npz"))
+            a, b = roadz.Lines.load(os.path.join(d, "a.npz")), roadz.Lines.load(os.path.join(d, "b.npz"))
+            a.gaps, b.gaps = ln.gaps, back.gaps
+            self.assertTrue(same(a, b), "the same cell file on disk")
+        empty = roadz.Lines.build([], corrected=True)
+        self.assertTrue(same(empty, lidarz.decode(lidarz.encode(empty, bytes(32)))[0]))
+
+    def test_damaged_record_refused(self):
+        rec = lidarz.encode(self.lines(), bytes(32))
+        for bad in (rec[:-1], rec + b"\0", b"BLZC" + bytes(60), rec[:4] + b"\x09" + rec[5:]):
+            with self.assertRaises(ValueError):
+                lidarz.decode(bad)
+
+    def test_key_follows_the_rules_not_the_release(self):
+        doc = lidarz.lkey_doc()
+        self.assertEqual(doc["roadz"], roadz.VERSION)
+        self.assertNotIn("overture", json.dumps(doc))
+        k0 = lidarz.lkey()
+        with mock.patch.object(roadz, "LIDAR_STEP_M", roadz.LIDAR_STEP_M + 1):
+            self.assertNotEqual(lidarz.lkey(), k0, "a measuring constant is in the key")
+        with mock.patch.object(roadz, "VERSION", roadz.VERSION + 1):
+            self.assertNotEqual(lidarz.lkey(), k0, "the local cells' version")
+        with mock.patch.object(roads, "LIDAR_GAPS_ON", not roads.LIDAR_GAPS_ON):
+            self.assertNotEqual(lidarz.lkey(), k0, "the ground stretches' switch")
+        self.assertEqual(lidarz.lkey(), k0)
+
+
+@unittest.skipUnless(HAVE, f"earthfast {lidarz.NATIVE} not built")
+class ProductTest(unittest.TestCase):
+    """The builder's path (RoadZ._lidar on the fake dataset, then encode and sign) and a player's server reading the
+    cell from a local HTTP server instead of the point clouds."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.files = ept_files()
+        cls.tmp = tempfile.mkdtemp()
+        cls.web = os.path.join(cls.tmp, "web")
+        os.makedirs(cls.web)
+        Handler.root = cls.web
+        cls.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.httpd.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {"BNGE_LIDARZ": "on", "BNGE_LIDARZ_URL": self.base,
+                                                "BNGE_DECISIONS_PUBKEY": ef.dec_public_key(SEED).hex(),
+                                                "BNGE_ROADZ_SESSION": f"t{id(self)}"})
+        self.env.start()
+        self.ds = mock.patch.object(roadz, "lidar_datasets", lambda lat, lon: [DATASET])
+        self.ds.start()
+        self.old = roadz.PROVIDER, roadz.LIDAR_FETCH_THREADS, roadz.LIDAR_GAPS_WAIT_S
+        roadz.LIDAR_FETCH_THREADS = 2
+        lidarz._STORES.clear()
+        Handler.hits = []
+        shutil.rmtree(os.path.join(self.web, "lz1"), ignore_errors=True)
+        self.n = 0
+
+    def tearDown(self):
+        roadz.PROVIDER, roadz.LIDAR_FETCH_THREADS, roadz.LIDAR_GAPS_WAIT_S = self.old
+        self.env.stop()
+        self.ds.stop()
+        lidarz._STORES.clear()
+
+    def cache(self):
+        self.n += 1
+        d = os.path.join(self.tmp, f"c{id(self)}_{self.n}")
+        os.makedirs(d)
+        return d
+
+    def measured(self, md=None, files=None):
+        """The builder's: (Lines, its record, its item key) measured from the point clouds (lidarz off)."""
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            rz = provider(self.cache(), md, files or self.files)
+            parts, cands, names = rz.lidar_inputs(KEY)
+            got = rz._lidar(KEY)
+            rec = lidarz.encode(got, lidarz.dem_digest(rz, parts, cands))
+            ikey = lidarz.item_key((KEY.z, KEY.x, KEY.y), lidarz.inputs_digest(KEY, parts, cands, names))
+        return got, rec, ikey
+
+    def publish(self, items, seed=SEED, domain="lidarz", lk=None):
+        """items {item key: record} into their block and a manifest under the web root (the builder's layout)."""
+        vk, vkb = lk or lidarz.lkey()
+        bx, by = decisions.block_of((KEY.z, KEY.x, KEY.y))
+        body = ef.dec_pack_block(12, bx, by, vkb, [(k, v, False) for k, v in items.items()], seed, domain=domain)
+        h = hashlib.sha256(body).hexdigest()[:16]
+        root = os.path.join(self.web, "lz1", vk)
+        decisions._write(os.path.join(root, "12", str(bx), f"{by}.{h}.bnlz"), body)
+        man = {"format": lidarz.FORMAT, "vkey": vk, "doc": lidarz.lkey_doc(), "blocks": [[bx, by, h]]}
+        decisions._write(os.path.join(root, "manifest.bnlm"),
+                         ef.dec_make_manifest(json.dumps(man).encode(), seed, domain=domain))
+        return body
+
+    def test_measured_deck(self):
+        got, _rec, _k = self.measured()
+        decks = [i for i in range(len(got)) if got.level[i] > 0]
+        self.assertTrue(decks, "the fixture's deck is measured")
+        z = got.z[got.off[decks[0]]:got.off[decks[0] + 1]]
+        self.assertAlmostEqual(float(np.nanmedian(z)), FLAT + 6.0, delta=0.3)
+
+    def test_cell_from_the_cdn_is_the_measured_one(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        asked = []
+        rz = provider(self.cache(), files=None, asked=asked)
+        ln = rz.lines("lidar", KEY)
+        self.assertEqual(asked, [], "no point cloud read")
+        self.assertTrue(same(got, ln), "the builder's lines, bit for bit")
+        on_disk = roadz.Lines.load(rz._path("lidar", KEY))
+        with open(rz._path("lidar", KEY) + ".gaps.json") as f:
+            on_disk.gaps = [(str(a), tuple(b), tuple(c)) for a, b, c in json.load(f)]
+        self.assertTrue(same(got, on_disk), "kept on disk as a cell measured here")
+        self.assertTrue(rz.lidar_on_disk(KEY))
+        self.assertEqual(lidarz.store_for(os.path.dirname(os.path.dirname(rz.dir))).stats["hits"], 1)
+
+    def test_plans_byte_identical(self):
+        """The bridge's profile (roads.BridgeProfiles over roadz.observed) and the measured deck heights a plan takes:
+        the same bytes from the CDN's record as from the point clouds (a deck 1.8 m over the DEM: one the profile
+        takes, OBS_MAX_GRADE)."""
+        files = ept_files(deck_rise=1.8)
+        got, rec, ikey = self.measured(files=files)
+        f = overpass()
+        line = np.c_[np.linspace(-35, 35, 36), np.zeros(36)]
+
+        def plan(rz):
+            roadz.PROVIDER = rz
+            bp = roads.BridgeProfiles(FRAME, lambda key: f, flat_elev)
+            parts = bp.parts([f], (-100, -100, 100, 100))
+            obs = rz.observed(FRAME, line, 4.0, 1)
+            return [np.asarray(p[3], np.float64) for p in parts], obs
+
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            asked_a = []
+            za, oa = plan(provider(self.cache(), files=files, asked=asked_a))
+        self.assertTrue(asked_a, "measured from the point clouds")
+        self.publish({ikey: rec})
+        asked_b = []
+        zb, ob = plan(provider(self.cache(), files=None, asked=asked_b))
+        self.assertEqual(asked_b, [], "planned without a point-cloud read")
+        self.assertIsNotNone(oa)
+        self.assertEqual(oa.tobytes(), ob.tobytes(), "the measured deck heights")
+        self.assertEqual(len(za), len(zb))
+        for a, b in zip(za, zb):
+            self.assertEqual(a.tobytes(), b.tobytes(), "the bridge profile")
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            zn, on = plan(provider(self.cache(), files=None))
+        self.assertIsNone(on, "(and without either the inference: the profile differs, so the check means something)")
+        self.assertNotEqual([z.tobytes() for z in zn], [z.tobytes() for z in za])
+
+    def fallback(self, expect_reads=True, md=None, stats=None):
+        asked = []
+        rz = provider(self.cache(), md, self.files, asked)
+        ln = rz.lines("lidar", KEY)
+        self.assertEqual(bool(asked), expect_reads)
+        if stats is not None:
+            stats.update(lidarz.store_for(os.path.dirname(os.path.dirname(rz.dir))).stats)
+        return ln
+
+    def test_no_manifest_reads_the_lidar(self):
+        got, _rec, _k = self.measured()
+        self.assertTrue(same(got, self.fallback()))
+
+    def test_off_reads_the_lidar(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            self.assertTrue(same(got, self.fallback()))
+        self.assertEqual(Handler.hits, [], "nothing asked of the CDN")
+
+    def test_network_error_reads_the_lidar(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ_URL": "http://127.0.0.1:9"}):
+            lidarz._STORES.clear()
+            self.assertTrue(same(got, self.fallback()))
+
+    def test_foreign_signature_refused(self):
+        got, rec, ikey = self.measured()
+        bad = rec[:-8] + bytes(8)       # (a forged record: only a trusted key's block would carry it)
+        self.publish({ikey: bad}, seed=OTHER_SEED)
+        self.assertTrue(same(got, self.fallback()))
+
+    def test_damaged_block_refused(self):
+        got, rec, ikey = self.measured()
+        body = self.publish({ikey: rec})
+        vk = lidarz.lkey()[0]
+        bx, by = decisions.block_of((KEY.z, KEY.x, KEY.y))
+        h = hashlib.sha256(body).hexdigest()[:16]
+        p = os.path.join(self.web, "lz1", vk, "12", str(bx), f"{by}.{h}.bnlz")
+        b = bytearray(body)
+        b[-1] ^= 1
+        Path(p).write_bytes(bytes(b))
+        self.assertTrue(same(got, self.fallback()))
+
+    def test_a_decision_block_is_not_a_lidar_block(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec}, domain="dec")
+        self.assertTrue(same(got, self.fallback()))
+
+    def test_another_lkey_misses(self):
+        got, rec, ikey = self.measured()
+        other = hashlib.sha256(b"another version").digest()
+        self.publish({ikey: rec}, lk=(lidarz.lkey()[0], other))     # (signed for another key, served at ours)
+        self.assertTrue(same(got, self.fallback()))
+
+    def test_another_map_misses(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        import test_roads
+        moved = test_roads.features([[(-400, 0.5), (400, 0.5)], [(-12, -500), (-12, 500)], [(12, 500), (12, -500)]],
+                                    ["secondary", "motorway", "motorway"],
+                                    flags=[(0, "is_bridge", (400 - 35) / 800, (400 + 35) / 800)],
+                                    ids=["cross", "i20n", "i20s"])
+        md = MD(moved)
+        mine, _r, _k = self.measured(md)
+        st = {}
+        ln = self.fallback(md=md, stats=st)
+        self.assertTrue(same(mine, ln), "measured along this map's own line")
+        self.assertFalse(same(mine, got))
+        self.assertEqual(st.get("stale"), 1, "the cell is built, for another map")
+
+    def test_another_dem_misses(self):
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        md = MD(dem=FLAT + 0.5)
+        mine, _r, _k = self.measured(md)
+        st = {}
+        ln = self.fallback(md=md, stats=st)
+        self.assertTrue(same(mine, ln), "measured on this server's own DEM")
+        self.assertFalse(same(mine, got), "(the DEM matters: the datum and the stretches move with it)")
+        self.assertEqual(st.get("dem"), 1)
+
+    def test_planning_process_takes_the_cdn_instead_of_the_rule(self):
+        """A planning process of a server run (the prefetch reads the lidar; nothing on disk yet) takes the CDN's
+        answer for the run instead of the rule (gap_answers), without a point-cloud read."""
+        _got, rec, ikey = self.measured()
+        with mock.patch.dict(os.environ, {roadz.PREFETCH_ENV: "1"}), mock.patch.object(roadz, "PREFETCH_ON", True):
+            with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off", "BNGE_ROADZ_SESSION": "rule"}):
+                rz = provider(self.cache(), files=self.files)
+                self.assertIsNone(rz.gap_answers([KEY])[KEY], "without it: the rule for the run")
+            self.publish({ikey: rec})
+            asked = []
+            rz = provider(self.cache(), files=self.files, asked=asked)
+            got = rz.gap_answers([KEY])[KEY]
+            self.assertIsNotNone(got)
+            self.assertEqual(asked, [])
+            self.assertTrue(rz.lidar_on_disk(KEY))
+
+
+if __name__ == "__main__":
+    unittest.main()
