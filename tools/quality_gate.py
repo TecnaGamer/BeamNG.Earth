@@ -56,7 +56,7 @@ def main():
         [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
-        ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs"],
+        ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs", "mod/tests/test_ui_lifecycle.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],
     ]
