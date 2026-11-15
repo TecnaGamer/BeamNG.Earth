@@ -1837,7 +1837,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor, t, f[b + F_Z]) then r = 2 end
         local solid = near and not M.NO_COLLIDE[g or '']
-        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
+        if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid or g=='signal' and t.signalRefresh) then
           local sh, sc = shapeOf(t, i)
           if budget <= 0 then stop(t, i, skipped, want, band, near); return end
           if allow(sh) then
@@ -1882,6 +1882,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         end
       end
       t.shown = want
+      t.signalRefresh=nil
       t.band = band
       t.near = near
       if skipped then t.pending = true; t.scan = { from = skipped, want = want, band = band, near = near }; dirty = true end

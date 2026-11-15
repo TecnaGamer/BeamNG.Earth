@@ -54,6 +54,17 @@ mod medians;
 mod deautobahn;
 mod speedsigns;
 mod roadsigns;
+mod nlplace_core;
+mod nlplace;
+mod nlsignal_core;
+mod nlsignal;
+mod nlsurface_core;
+mod nlassembly_core;
+mod nlassembly;
+mod nlparts;
+mod nlshared;
+mod nlgraph;
+mod nljunction;
 mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
@@ -6039,6 +6050,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(nlplace::nl_source_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(nlsignal::nl_signal_context_match, m)?)?;
+    m.add_class::<nlassembly::SignalScene>()?;
+    m.add_function(wrap_pyfunction!(nlassembly::nl_signal_lens_mm,m)?)?;
+    m.add_function(wrap_pyfunction!(nlassembly::nl_signal_bundle,m)?)?;
+    m.add_function(wrap_pyfunction!(nlassembly::nl_signal_graph_requests,m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
@@ -6438,12 +6455,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 297: domes::dome_roof (a dome over any outline from its centroid or pole of inaccessibility: Streets GL's
     // CurvedRoofBuilder, MIT; server/buildings.py _dome)
     domes::register(m)?;
-    // 298: buildyears::oby_decode (a tile of the OSM building construction years, tools/build_osm_building_years.py,
-    // server/osmyears.py: the towers' facades by era, buildings.plan)
+    // 298: OSM building construction years, retained alongside Dutch roadside kernels.
     buildyears::register(m)?;
-    // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
-    // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
+    // 301: upstream building colours; 302: native Dutch roadside assemblies.
     buildcolours::register(m)?;
-    m.add("VERSION", 301)?;
+    m.add("VERSION", 302)?;
     Ok(())
 }

@@ -48,7 +48,12 @@ class Runner:
 
     def say(self, msg):
         with self.lock:
-            print(f"[{time.time() - self.t0:6.0f}s] {msg}", flush=True)
+            line = f"[{time.time() - self.t0:6.0f}s] {msg}"
+            # A failing module's decoded log can contain replacement/non-ANSI
+            # characters. Preserve its diagnostic instead of crashing the runner
+            # on Windows consoles whose output encoding is still cp1252.
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            print(line.encode(encoding, errors="backslashreplace").decode(encoding), flush=True)
 
     def expected(self, m):
         return self.hist.get(m, {}).get("secs", DEFAULT_S)

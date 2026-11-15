@@ -1341,5 +1341,7 @@ class Tracker:
             return
         self.aid, self.centre = aid, centre
         path, n, m = res
+        self.path = path
+        self.ready_serial = serial
         conn.send({"type": "navgraph", "anchorId": aid, "path": path, "cx": round(centre[0], 1),
                    "cy": round(centre[1], 1), "nodes": n, "edges": m, "serial": serial})

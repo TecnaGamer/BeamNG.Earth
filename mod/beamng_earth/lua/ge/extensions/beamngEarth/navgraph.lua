@@ -128,6 +128,7 @@ M.LAUNCH_TIMEOUT_S = 6
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
 
 local graph = nil       -- the server's last graph {anchor, nodes, edges}
+local nativeStream,nativeAccepted,nativeWasOn
 local applied = nil     -- {anchor, serial, box} of the graph in the game's map now
 local dirty = false
 local lastApply = -math.huge
@@ -368,7 +369,8 @@ function M.onMessage(msg, currentAnchor)
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
             lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
             trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
-            mph = g.mph }       -- (the country's speed signs: api.speedLimit)
+            mph = g.mph, nlNative = g.nlNative }       -- (the country's speed signs: api.speedLimit)
+  if nativeStream then nativeStream.graph(msg.serial) end
   dirty = true
   return true
 end
@@ -381,14 +383,46 @@ M.SIGNAL_TYPE = 'lightsBasic'
 -- the switchable head (the stock boom, instanced_trafficlight material): one TSStatic per approach where the
 -- road tile's static boom stands (trees.lua's signal group is hidden while these exist)
 M.SIGNAL_SHAPE = '/art/shapes/objects/s_trafficlight_boom_sn.dae'
-local heads = {}        -- instance name -> {id, x, y}: the heads in the scene (kept across applies)
+M.dutchSignals = false -- opt-in; native server geometry, stock controllers.
+local function nativeSignals()
+  if not nativeStream then
+    nativeStream=require('beamngEarth/nl_signal_stream')
+    nativeStream.configure(require('beamngEarth/net').send,function(owners)nativeAccepted(owners)end)
+    if graph then nativeStream.graph(graph.serial) end
+  end
+  return nativeStream
+end
+function M.onNativeSignals(msg,anchor)
+  return M.dutchSignals and nativeSignals().onMessage(msg,anchor) or false
+end
+-- Keep stock heads independent of the optional Dutch catalogue/planner.
+local stockScene={syncVisual=function()end}
+function stockScene.alive(h)return scenetree.findObjectById(h.id)~=nil end
+function stockScene.delete(h)local o=scenetree.findObjectById(h.id);if o then o:delete()end end
+function stockScene.move(h)
+  local o=scenetree.findObjectById(h.id);if not o then return end
+  local m=MatrixF(true)
+  m:setFromEuler(vec3(0,0,-math.rad(h.yaw)));m:setPosition(vec3(h.x,h.y,h.z));o:setTransform(m)
+end
+function stockScene.create(p,inst)
+  local o=inst:createSignalObject(p.shape,vec3(p.x,p.y,p.z),quat(0,0,0,1))
+  if not o then return end
+  local h={id=o:getID(),model='stock',shape=p.shape,x=p.x,y=p.y,z=p.z,yaw=p.yaw,
+           parts={{id=o:getID(),role='head'}}}
+  stockScene.move(h);return h
+end
+local signalScene=stockScene
+function signalScene.visualObject()return nil end
+local heads = {}        -- stable signal instance name -> owned head/support/hardware assembly
 local seenHeads = {}
+local signalRequests={}
+local suppressionGrid
 
 local function clearHeads(keep)
+  for name in pairs(signalRequests)do if not(keep and keep[name])then signalRequests[name]=nil end end
   for name, h in pairs(heads) do
     if not (keep and keep[name]) then
-      local o = scenetree.findObjectById(h.id)
-      if o then o:delete() end
+      signalScene.delete(h)
       heads[name] = nil
     end
   end
@@ -396,29 +430,102 @@ end
 
 -- A head for instance inst at a's prop transform: the one already standing there is kept (it is linked by
 -- the instance's name, which stays the same: setupSignals finds it again), so a new graph costs only the new ones.
-local function makeHead(inst, a)
+local function makeHead(inst, a, junction, controller, sequence, visualOnly)
+  if M.dutchSignals then
+    signalRequests[inst.name]={inst=inst,a=a,junction=junction,controller=controller,sequence=sequence,visualOnly=visualOnly}
+  end
+  seenHeads[inst.name]=true
+  if M.dutchSignals then
+    nativeSignals().register(inst.name,inst,controller,sequence,a)
+    if nativeSignals().owns(inst.name)then return end
+  end
   if not a[8] or not inst.createSignalObject then return end
-  local shape = M.SIGNAL_SHAPE
-  if a[12] == 1 then
-    local left = require('beamngEarth/signalshape').ensureLeft()
+  local stock=M.SIGNAL_SHAPE
+  if a[12]==1 then
+    local left=require('beamngEarth/signalshape').ensureLeft()
     if not left then return end
-    shape = left .. '.dae'
+    stock=left..'.dae'
   end
-  seenHeads[inst.name] = true
+  local p={shape=stock,model='stock',yaw=a[11]or 0,x=a[8],y=a[9],z=a[10],
+    stop={a[2],a[3],a[4]},dir={a[5],a[6]},approach_key=a[1],junction_key=junction}
+  if p.omit then
+    if heads[inst.name]then signalScene.delete(heads[inst.name]);heads[inst.name]=nil end
+    return
+  end
+  if visualOnly and p.model=='stock' then return end
   local h = heads[inst.name]
-  if h and h.shape == shape and math.abs(h.x - a[8]) < 0.05 and math.abs(h.y - a[9]) < 0.05
-    and scenetree.findObjectById(h.id) then return end
-  if h then
-    local old = scenetree.findObjectById(h.id)
-    if old then old:delete() end
+  if h and h.shape == p.shape and h.signature == p.signature and h.visualOnly==visualOnly and math.abs(h.x - p.x) < 0.05 and math.abs(h.y - p.y) < 0.05
+    and math.abs(h.z - p.z) < 0.05 and math.abs((h.yaw - p.yaw + 180) % 360 - 180) < 0.05
+    and signalScene.alive(h) then
+    h.visualController=controller;h.visualSequence=sequence
+    seenHeads[inst.name] = true; return
   end
-  local o = inst:createSignalObject(shape, vec3(a[8], a[9], a[10]), quat(0, 0, 0, 1))
-  if not o then return end
-  local m = MatrixF(true)
-  m:setFromEuler(vec3(0, 0, -math.rad(a[11] or 0)))     -- as trees.lua turns the static boom (negated: clockwise)
-  m:setPosition(vec3(a[8], a[9], a[10]))
-  o:setTransform(m)
-  heads[inst.name] = { id = o:getID(), x = a[8], y = a[9], shape = shape }
+  if h then signalScene.delete(h); heads[inst.name] = nil end
+  local err
+  h, err = signalScene.create(p, inst,heads)
+  if not h and p.model ~= 'stock' then
+    log('W', 'beamngEarth', 'Groenpol assembly ' .. inst.name .. ': ' .. tostring(err))
+    return -- keep the AI controller, but no old/unsafe visible fallback
+  end
+  if not h then return end
+  h.visualOnly=visualOnly;h.visualController=controller;h.visualSequence=sequence
+  if not visualOnly then
+    inst.linkedObjects={}
+    for _,part in ipairs(h.parts)do if part.role=='head'then inst.linkedObjects[#inst.linkedObjects+1]=part.id end end
+    signalScene.syncVisual(h)
+  end
+  h.sourcex,h.sourcey,h.sourcez=a[8],a[9],a[10]
+  heads[inst.name] = h
+  seenHeads[inst.name] = true
+end
+
+local function suppressHeads()
+  local trees = require('beamngEarth/trees')
+  local grid = {}
+  if nativeStream then for _,p in ipairs(nativeStream.spots())do
+    grid[math.floor(p[1]/4)..','..math.floor(p[2]/4)]=true
+  end end
+  for _, h in pairs(heads) do
+    local x,y=h.sourcex or h.x,h.sourcey or h.y
+    grid[math.floor(x / 4) .. ',' .. math.floor(y / 4)] = true
+  end
+  if suppressionGrid then
+    local changed=false
+    for key in pairs(grid)do if not suppressionGrid[key]then changed=true;break end end
+    if not changed then for key in pairs(suppressionGrid)do if not grid[key]then changed=true;break end end end
+    if not changed then return end
+  end
+  suppressionGrid=grid
+  trees.suppress = function(g, x, y)
+    if g ~= 'signal' and g ~= 'signal_left' then return false end
+    local cx, cy = math.floor(x / 4), math.floor(y / 4)
+    for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
+    return false
+  end
+  trees.refresh('signal')
+  trees.refresh('signal_left')
+end
+
+local function releaseHeads()
+  clearHeads()
+  suppressHeads()
+end
+
+nativeAccepted=function(owners)
+  for name,h in pairs(heads)do if owners[name]then
+    local request=signalRequests[name]
+    if request then request.inst.linkedObjects={} end
+    stockScene.delete(h);heads[name]=nil
+  end end
+  for name,request in pairs(signalRequests)do
+    if not owners[name]and not heads[name]then
+      pcall(makeHead,request.inst,request.a,request.junction,request.controller,request.sequence,request.visualOnly)
+    end
+  end
+  suppressHeads()
+end
+function M.signalAudit()
+  return nativeStream and nativeStream.stats or {disabled=not M.dutchSignals,pending=true}
 end
 
 local function signalData(nodes)
@@ -426,11 +533,22 @@ local function signalData(nodes)
   local inst, ctrls, seqs = {}, {}, {}
   local stop = nil
   local ns = 0
+  local duplicate={}
   for _, j in ipairs(graph.signals or {}) do
     local jn = nodes[j.j]
+    local sourceNode=graph.nodes[j.j]
+    -- Only complete native junctions need controllers beyond the local AI map.
+    -- A native packet must not instantiate every distant stock junction.
+    local nlVisual=M.dutchSignals and j.nlNative==true
+    if nlVisual and sourceNode and not jn then jn={radius=sourceNode[4],links={}} end
     if jn and type(j.app) == 'table' then
       local apps = {}
-      for _, a in ipairs(j.app) do if nodes[a[1]] then apps[#apps + 1] = a end end
+      for i, a in ipairs(j.app) do
+        local name='bne_'..j.j..'_'..i
+        if not duplicate[name] and (nodes[a[1]] and nodes[j.j] or nlVisual and graph.nodes[a[1]]) then
+          apps[#apps + 1] = {a=a,index=nlVisual and i or #apps+1,visual=not(nodes[a[1]] and nodes[j.j])}
+        end
+      end
       if #apps > 0 then
         ns = ns + 1
         local cs = {}
@@ -439,7 +557,7 @@ local function signalData(nodes)
           for _, l in pairs(jn.links) do speed = math.max(speed, l.speedLimit or 0) end
           for ph = 0, 1 do
             local c = ts.newController({ name = 'bne_' .. j.j .. '_' .. ph })
-            c:applyDefinition(M.SIGNAL_TYPE)
+            c:applyDefinition(nlVisual and 'lightsBasic' or M.SIGNAL_TYPE)
             if c.autoSetTimings then c:autoSetTimings(speed, 2 * jn.radius + 6) end
             ctrls[#ctrls + 1] = c
             cs[ph] = c
@@ -447,11 +565,16 @@ local function signalData(nodes)
           local seq = ts.newSequence({ name = 'bne_' .. j.j, phases = { { controllerIds = { cs[0].id } },
             { controllerIds = { cs[1].id } } } })
           seqs[#seqs + 1] = seq
-          for i, a in ipairs(apps) do
-            local s = ts.newSignal({ name = 'bne_' .. j.j .. '_' .. i, pos = vec3(a[2], a[3], a[4]),
-              dir = vec3(a[5], a[6], 0), controllerId = cs[a[7] == 1 and 1 or 0].id, sequenceId = seq.id })
-            inst[#inst + 1] = s
-            local okH, errH = pcall(makeHead, s, a)
+          for _, entry in ipairs(apps) do
+            local a,i=entry.a,entry.index;local controller=cs[a[7] == 1 and 1 or 0]
+            local s
+            if entry.visual then s={name='bne_'..j.j..'_'..i,createSignalObject=signalScene.visualObject}
+            else
+              s=ts.newSignal({ name = 'bne_' .. j.j .. '_' .. i, pos = vec3(a[2], a[3], a[4]),
+                dir = vec3(a[5], a[6], 0), controllerId = controller.id, sequenceId = seq.id })
+              inst[#inst + 1] = s
+            end
+            local okH, errH = pcall(makeHead, s, a, j.j,controller,seq,entry.visual)
             if not okH then log('W', 'beamngEarth', 'navgraph: signal head: ' .. tostring(errH)) end
           end
         else
@@ -460,7 +583,8 @@ local function signalData(nodes)
             stop:applyDefinition('signStop')
             ctrls[#ctrls + 1] = stop
           end
-          for i, a in ipairs(apps) do
+          for _, entry in ipairs(apps) do
+            local a,i=entry.a,entry.index
             inst[#inst + 1] = ts.newSignal({ name = 'bne_' .. j.j .. '_' .. i, pos = vec3(a[2], a[3], a[4]),
               dir = vec3(a[5], a[6], 0), controllerId = stop.id })
           end
@@ -597,18 +721,8 @@ local function applySignals(nodes)
     stats.sigSendMs = t4 - t3
     stats.junctions = ns
     -- the road tiles' static booms stand where the switchable heads are now
-    local trees = require('beamngEarth/trees')
-    local grid = {}
-    for _, h in pairs(heads) do grid[math.floor(h.x / 4) .. ',' .. math.floor(h.y / 4)] = true end
-    trees.suppress = function(g, x, y)
-      if g ~= 'signal' and g ~= 'signal_left' then return false end
-      local cx, cy = math.floor(x / 4), math.floor(y / 4)
-      for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
-      return false
-    end
     local t5 = wall()
-    trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
-    trees.refresh('signal_left')
+    suppressHeads() -- only actual successful heads suppress the tile's static fallback
     stats.sigTreesMs = wall() - t5
   end)
   stats.signalsMs = wall() - t1
@@ -1144,7 +1258,9 @@ end
 -- the AI planned toward roads hundreds of metres off and swerved, into a street tree on North Front Street, Baltimore
 -- (Steam Deck, 3 of 3 rebase drives, 2026-10-29). The server's own graph replaces this one when it comes.
 function M.transform(xf, anchorId)
+  if nativeStream then nativeStream.clear(false) end
   if not graph or not xf then return false end
+  if M.dutchSignals then signalRequests={} end
   local nodes = {}
   for name, n in pairs(graph.nodes) do
     local m = {}
@@ -1161,8 +1277,43 @@ function M.transform(xf, anchorId)
       lines[i] = { x1, y1, x2, y2, l[5] }
     end
   end
-  graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
+  local signals = graph.signals
+  if M.dutchSignals then
+    signals = {}
+    for _, j in ipairs(graph.signals or {}) do
+      local copy = {}; for k, v in pairs(j) do copy[k] = v end; copy.app = {}
+      for _, a in ipairs(j.app or {}) do
+        local b = {}; for k, v in pairs(a) do b[k] = v end
+        b[2], b[3], b[4] = xf:apply(a[2], a[3], a[4])
+        -- Difference of transformed points also supports the simple translation transforms used in tests.
+        local dx, dy = xf:apply(a[2] + a[5], a[3] + a[6], a[4])
+        local len = math.sqrt((dx-b[2])^2 + (dy-b[3])^2)
+        b[5], b[6] = (dx-b[2])/math.max(len, 1e-9), (dy-b[3])/math.max(len, 1e-9)
+        if a[8] then
+          b[8], b[9], b[10] = xf:apply(a[8], a[9], a[10])
+          local yaw = math.rad(a[11] or 0)
+          local x, y = xf:apply(a[8]+math.cos(yaw), a[9]+math.sin(yaw), a[10])
+          b[11] = math.deg(math.atan2(y-b[9], x-b[8]))
+        end
+        copy.app[#copy.app+1] = b
+      end
+      signals[#signals+1] = copy
+    end
+  end
+  graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = signals,
+            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, nlNative=graph.nlNative, moved = true }
+  -- Optional Dutch ownership must not change the stock rebase path.
+  if M.dutchSignals then
+    for _, h in pairs(heads) do
+      local yaw = math.rad(h.yaw)
+      local dx, dy = xf:apply(h.x+math.cos(yaw), h.y+math.sin(yaw), h.z)
+      h.x, h.y, h.z = xf:apply(h.x, h.y, h.z)
+      h.yaw = math.deg(math.atan2(dy-h.y, dx-h.x))
+      if h.sourcex then h.sourcex,h.sourcey,h.sourcez=xf:apply(h.sourcex,h.sourcey,h.sourcez) end
+      signalScene.move(h)
+    end
+    if next(heads) then suppressHeads() end
+  end
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true
@@ -1356,7 +1507,10 @@ local function overtakeScan(now)
     function(id) return localplayers.controlled(id, getObjectByID(id), controlled) end)
 end
 
-function M.update(aid, b, gov)
+function M.update(aid, b, gov, frame, ground)
+  if nativeStream and nativeWasOn and not M.dutchSignals then nativeStream.clear(false);nativeAccepted({}) end
+  nativeWasOn=M.dutchSignals
+  if M.dutchSignals and nativeStream then nativeStream.update(aid,ground,16) end
   if not M.enabled or not graph then return end
   local t0 = os.clock()
   do
@@ -1385,6 +1539,10 @@ function M.update(aid, b, gov)
     stats.guardMaxMs = math.max(stats.guardMaxMs or 0, g)
   end
   if graph.anchor ~= aid then
+    if M.dutchSignals then
+      releaseHeads()
+      pendingSignals = nil
+    end
     graph = nil
     return
   end
@@ -1469,6 +1627,7 @@ function M.status()
 end
 
 function M.reset()
+  if nativeStream then nativeStream.clear(true) end
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)
@@ -1484,7 +1643,8 @@ function M.reset()
       protectedTraffic[id] = nil
     end
   end
-  heads = {}            -- (the level took them with it)
+  heads = {} -- the level took its objects with it; no stock refresh on teardown
+  signalRequests={};seenHeads={};suppressionGrid=nil;nativeWasOn=false
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
   adaptive = newAdaptive()

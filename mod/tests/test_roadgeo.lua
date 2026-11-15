@@ -86,7 +86,7 @@ local function skinOf(aid, a)
   local x, y = a:geodeticToWorld(clat, clon, 0)
   files['/s/rs_' .. aid .. '.json'] = string.format(skin, aid, x, y, aid, x - 118, y - 118, aid, x - 118, y - 118,
     aid, x - 118, y - 118)
-  return { type = 'roads_skin', anchorId = aid, key = key, path = '/s/rs_' .. aid .. '.json' }
+  return { type = 'roads_skin', anchorId = aid, key = key, path = '/s/rs_' .. aid .. '.json', h='skin-version' }
 end
 local function objsWith(pat)
   local out = {}
@@ -154,7 +154,12 @@ end
 
 -- its skin for A
 T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
+T.check(not roads.signalSurfacesReady(1, {{key=key,h='abc',skin='skin-version'}}), 'native furniture waits for newly queued skin')
 run(1, A)
+T.check(roads.signalSurfacesReady(1, {{key=key,h='abc',skin='skin-version'}}), 'native furniture accepts made matching surfaces')
+T.check(not roads.signalSurfacesReady(1, {{key=key,h='abc',skin='old-skin'}}), 'native furniture rejects another skin generation')
+T.check(not roads.signalSurfacesReady(1, {{key=key,h='stale',skin='skin-version'}}), 'native furniture rejects another content generation')
+T.check(not roads.signalSurfacesReady(2, {{key=key,h='abc',skin='skin-version'}}), 'native furniture rejects another anchor')
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
 roads.collisionRebuilt()
 T.check(roads.settledFor(1, car.x, car.y), 'settled: the geotile under the car made with its skin')

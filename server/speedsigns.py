@@ -315,13 +315,16 @@ def general(signs, towns):
 
 
 def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False,
-               towns=None):
+               towns=None, ndw_claims=()):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none). de_on (the German
     junction signs, designs.enabled's): near Germany its zone signs too, in one mesh, and not the 274s they replace
     (dezones.tile); otherwise today's. towns: the town signs' towns (townentry.Towns.town_state) when they are on:
     Germany's general limits are then not posted (general)."""
     box = roads.tile_bbox(tx, ty)
     signs = place(frame, box, context, left_hand, mph, face)
+    if ndw_claims:
+        import nlrvv
+        signs = nlrvv.keep_inferred(signs, ndw_claims, speed=True)
     if towns is not None and len(signs) and not mph:
         signs = signs[general(signs, towns)]
     extra = None

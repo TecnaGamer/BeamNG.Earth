@@ -146,7 +146,11 @@ class SharedGateTest(unittest.TestCase):
                 f.get(URL, kind="demand")
         lines = open(log).read().splitlines()
         self.assertGreaterEqual(len(lines), 3, "all but the first waited for the shared token")
-        self.assertTrue(all(float(ln.split()[-1]) > 0.1 for ln in lines))
+        waits = [float(ln.split()[-1]) for ln in lines]
+        # Acquiring the first file lock can itself take the logged 5 ms on
+        # Windows. It is valid to log that too, alongside the three token waits.
+        self.assertGreaterEqual(sum(w > 0.1 for w in waits), 3)
+        self.assertTrue(all(w >= nf.WAIT_MS_MIN / 1000 - 0.001 for w in waits))
         self.assertGreaterEqual(sum(f.host(HOST).total["wait_ms"] for f in fs), 450, "counted as our own limits' wait")
 
     def test_only_shared_hosts_and_only_with_a_folder(self):

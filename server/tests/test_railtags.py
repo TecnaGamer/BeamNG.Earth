@@ -279,7 +279,10 @@ class KnownPinnedTest(unittest.TestCase):
                 os.makedirs(s.dir)
                 with open(os.path.join(s.dir, "manifest.json"), "w") as fh:
                     json.dump({"built": "2026-11-12T18:20:31Z"}, fh)
-                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0):
+                # Explicit time advance: Windows can perform both reads in one
+                # monotonic clock tick even when the configured interval is 0.
+                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0), \
+                     mock.patch.object(railtags.time, "monotonic", return_value=s.manifest._pin_at + 1.0):
                     self.assertEqual(s.known(), "2026-11-12T18:20:31Z")
             finally:
                 railtags.ON = on

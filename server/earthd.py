@@ -8472,6 +8472,7 @@ class Connection:
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None),
                        getattr(self, "bldhz", None), getattr(self, "turbines", None), self.nav,
+                       getattr(self, "nl_signals", None),
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -8558,6 +8559,9 @@ class Connection:
         across anchors (the mod re-places it) and the far field keeps its global tiles at a commit: after a stock map
         and back, the road and building tiles stayed missing until a teleport (game perf report 2026-11-12, #10). Every
         tracker forgets what it sent, and the next commit starts with no previous frame (as after a server restart)."""
+        if getattr(self, 'nl_signals', None) is not None:
+            self.nl_signals.close()
+            self.nl_signals = None
         self.roads.close()
         self.roads = road_tracker(self)
         self.signs.close()
@@ -8789,6 +8793,10 @@ class Connection:
                 n = cpupin.pin_game(self.s.game_cpus)
                 log.info("the game's %d %s on CPUs %s", n, "processes" if sys.platform == "win32" else "threads",
                          ",".join(map(str, sorted(self.s.game_cpus))))
+        elif kind == "nl_signals_ack":
+            tracker = getattr(self, 'nl_signals', None)
+            if tracker is not None:
+                tracker.acknowledge(msg)
         elif kind == "prepare_anchor":
             self.spawn(self.prepare_anchor(msg))
         elif kind == "server_list":             # the BeamNG.Earth servers for the tab in BeamMP's browser
@@ -10076,7 +10084,8 @@ class Connection:
             source = getattr(self.s.mapdata, "highway_signs", None)
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
-                                   ready, version=source.tags.known())
+                                   ready, version=(source.tags.known(),
+                                       self.s.mapdata.nl_rvv.known() if getattr(self.s.mapdata, 'nl_rvv', None) else None))
         if self.turbine_geo and aid == self.active and detail:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:
@@ -10140,6 +10149,11 @@ class Connection:
                                                 view=self.view_at, frame=self.s.anchors[aid].frame)
         if aid == self.active:
             self.send_progress(aid)
+        if msg.get('nlSignals') == 1 and msg.get('nlSignals') is not True or getattr(self, 'nl_signals', None) is not None:
+            if getattr(self, 'nl_signals', None) is None:
+                from nlsignalstream import Tracker
+                self.nl_signals = Tracker()
+            self.nl_signals.on_pose(self, msg)
         self.refresh_status()
         self.credits.poke(self)             # the player moved: the near / far credits may change
 

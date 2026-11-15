@@ -4,10 +4,12 @@ step (fields and their dirt roads, golf, lots, pads, roundabout islands, tapered
 and curb corners, stand-ins, the road ghosts' segments); Pillow's polygon and wide-line rasterisers as ported; the parts
 kept per cell set and not when something they read was short; the far-tile process's paint (blockworker.far_paint)."""
 import hashlib
+import itertools
 import math
 import os
 import sys
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 import numpy as np
@@ -352,7 +354,11 @@ class PaintParityTest(unittest.TestCase):
             self.assertLessEqual(len(st.shorts), paintlist.SHORTS_KEPT)
             self.assertGreater(len(st.shorts), 0)
             paintlist.SHORT_KEEP_S = 0.0
-            sf.paint_square(photo(64, 1), FRAME, *squares[0], s, None)
+            # Windows' monotonic clock can return the same tick for several
+            # builds. Explicitly advance past every retained insertion time.
+            later = max(v[0] for v in st.shorts.values()) + 1.0
+            with mock.patch.object(paintlist.time, "monotonic", side_effect=itertools.count(later, 0.001)):
+                sf.paint_square(photo(64, 1), FRAME, *squares[0], s, None)
             self.assertLessEqual(len(st.shorts), 3, "the expired ones dropped")
             state["short"] = False
             x0, y0, size = squares[1]
