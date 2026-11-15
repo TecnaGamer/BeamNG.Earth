@@ -20,6 +20,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
     launcher.py                  everything
     launcher.py --no-game        only the server (start the game yourself)
     launcher.py --no-gcpatch     the game without the engine patches (tools/gcpatch, enginepatch.py)
+    The in-game setting "Launch BeamNG without Steam" (Windows) starts the game with -nosteam.
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
     launcher.py --gpu off        hybrid graphics: never steer the game's GPU (auto does, discrete forces it)
     launcher.py --clear-cache    delete the map download cache first (instant; the files go in the background)
@@ -1346,11 +1347,21 @@ def split_launch_options(line):
     return env, wrapper, post.split()
 
 
-def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], []), meanwhile=None):
+def windows_no_steam_command(game_dir, game_args=()):
+    """Start BeamNG.drive's game binary directly, bypassing both Steam and its launcher window."""
+    exe = os.path.join(game_dir, "Bin64", "BeamNG.drive.x64.exe")
+    return [exe, "-nosteam", *list(game_args or [])]
+
+
+def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], []), meanwhile=None,
+               no_steam=False):
     """Start the game; returns a Popen when this process started it directly, else None (through Steam).
 
     meanwhile: called once the game has been asked to start, before the start is watched (a direct Linux start's
     DIRECT_FAIL_S, the Windows hand-off to Steam): run follows the world server's start there.
+
+    no_steam: on Windows, start BeamNG.drive with -nosteam instead of handing off to Steam. BeamMP is skipped in this
+    mode because its multiplayer launcher requires Steam.
 
     steam_args: (env, wrapper, options) adopted from Steam's launch options for the direct start (through Steam,
     Steam applies them itself): variables for the game's environment, a command that wraps it (gamemoderun,
@@ -1362,6 +1373,19 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra
     # a game folder the player chose outside Steam's libraries (another launcher, a copy of its own): started directly
+    if no_steam and IS_WIN:
+        d = windows_game_dir()
+        if not d:
+            raise OSError("could not locate BeamNG.drive for a Steam-free launch")
+        cmd = windows_no_steam_command(d, win_args)
+        if not os.path.isfile(cmd[0]):
+            raise OSError(f"could not find the Steam-free game executable: {cmd[0]}")
+        row("Game", "starting directly without Steam (-nosteam; the BeamNG launcher window is skipped)")
+        try:
+            return subprocess.Popen(cmd, cwd=d)
+        except OSError as e:
+            raise OSError(f"could not start BeamNG.drive without Steam: {e}") from e
+
     own = apppaths.saved_game_dir()
     own = own if own and not apppaths.in_steam_library(own) else None
     if IS_WIN and not win_args and not under_wine() and not own:
@@ -2238,6 +2262,7 @@ def run(args):
         return
     memory_notice()                     # (8 GB or less: what to expect; never stops the start)
     wine = under_wine()
+    no_steam = IS_WIN and apppaths.launch_without_steam()
     build = "native"
     if args.user_dir:
         user_dir = args.user_dir
@@ -2345,7 +2370,13 @@ def run(args):
         if not early:
             server_up(server, log_path, port, game_started=False)
         try:
-            beammp = None if args.no_game else beammp_up(user_dir, build, args)
+            if args.no_game:
+                beammp = None
+            elif no_steam:
+                row("Multiplayer", "BeamMP skipped (Launch BeamNG without Steam is enabled)")
+                beammp = None
+            else:
+                beammp = beammp_up(user_dir, build, args)
         except OSError as e:
             # (multiplayer is optional: a damaged BeamMP launcher folder, WinError 1392 "the file or directory is
             # corrupted and unreadable", stopped the app before the game started, GitHub #282)
@@ -2376,7 +2407,7 @@ def run(args):
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             clear_level_flag(user_dir)
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args,
-                              meanwhile=follow_server if early else None)
+                              meanwhile=follow_server if early else None, no_steam=no_steam)
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
             # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)

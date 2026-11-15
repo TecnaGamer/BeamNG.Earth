@@ -332,6 +332,43 @@ def steam_line(text):
     return "[2026-11-12 16:34:25] GameAction [AppID 284160, ActionID 3] : " + text
 
 
+class SteamFreeGameStartTest(unittest.TestCase):
+    def test_command_uses_the_game_binary_and_nosteam(self):
+        game = r"C:\Games\BeamNG.drive"
+        self.assertEqual(launcher.windows_no_steam_command(game, ["-gfx", "d3d12"]),
+                         [os.path.join(game, "Bin64", "BeamNG.drive.x64.exe"),
+                          "-nosteam", "-gfx", "d3d12"])
+
+    def test_enabled_setting_starts_directly_without_steam_fallback(self):
+        game = r"C:\Games\BeamNG.drive"
+        proc = object()
+        with ExitStack() as st:
+            st.enter_context(mock.patch.object(launcher, "IS_WIN", True))
+            st.enter_context(mock.patch.object(launcher, "windows_game_dir", return_value=game))
+            st.enter_context(mock.patch.object(launcher, "under_wine", return_value=False))
+            st.enter_context(mock.patch.object(launcher.apppaths, "saved_game_dir", return_value=None))
+            st.enter_context(mock.patch.object(launcher.os.path, "isfile", return_value=True))
+            st.enter_context(mock.patch.object(launcher, "row"))
+            popen = st.enter_context(mock.patch.object(launcher.subprocess, "Popen", return_value=proc))
+            steam = st.enter_context(mock.patch.object(launcher, "windows_steam_start"))
+            got = launcher.start_game(False, no_steam=True)
+        self.assertIs(got, proc)
+        popen.assert_called_once_with([os.path.join(game, "Bin64", "BeamNG.drive.x64.exe"), "-nosteam"], cwd=game)
+        steam.assert_not_called()
+
+    def test_missing_direct_binary_does_not_silently_use_steam(self):
+        with ExitStack() as st:
+            st.enter_context(mock.patch.object(launcher, "IS_WIN", True))
+            st.enter_context(mock.patch.object(launcher, "windows_game_dir", return_value=r"C:\Games\BeamNG.drive"))
+            st.enter_context(mock.patch.object(launcher, "under_wine", return_value=False))
+            st.enter_context(mock.patch.object(launcher.apppaths, "saved_game_dir", return_value=None))
+            st.enter_context(mock.patch.object(launcher.os.path, "isfile", return_value=False))
+            steam = st.enter_context(mock.patch.object(launcher, "windows_steam_start"))
+            with self.assertRaises(OSError):
+                launcher.start_game(False, no_steam=True)
+        steam.assert_not_called()
+
+
 class SteamHandoffTest(unittest.TestCase):
     """The Windows start through Steam is watched (a player's dev 401 start stopped at "starting through Steam" with no
     game, four times, Discord 2026-11-12): Steam silent -> asked again -> the game started directly; Steam working on the
@@ -443,7 +480,7 @@ class StartOrderTest(unittest.TestCase):
     """The game starts before the world server is waited for (a ten-second Windows start, Discord 2026-11-12); BeamMP
     before the game; a game already running waits for the server first."""
 
-    def run_launcher(self, running=False, server_ok=True, game_first=True, watched=False):
+    def run_launcher(self, running=False, server_ok=True, game_first=True, watched=False, no_steam=False):
         order = []
         args = argparse.Namespace(user_dir="/u", build="native", keep_mod=True, game_dir=None, no_game=False, extra=[],
                                   cache_dir=None, clear_cache=False, no_gcpatch=True, gfx="", gpu="off",
@@ -452,7 +489,9 @@ class StartOrderTest(unittest.TestCase):
         server.poll.return_value = None
         with ExitStack() as st:
             p = lambda name, **kw: st.enter_context(mock.patch.object(launcher, name, **kw))
-            p("IS_WIN", new=False)
+            p("IS_WIN", new=no_steam)
+            p("windows_game_dir", return_value="/g")
+            p("apppaths.launch_without_steam", return_value=no_steam)
             p("GAME_FIRST", new=game_first)
             for name in ("title", "support_notice", "memory_notice", "row", "say", "watch_game_log",
                          "clear_level_flag", "problem"):
@@ -500,6 +539,9 @@ class StartOrderTest(unittest.TestCase):
 
     def test_game_already_running(self):
         self.assertEqual(self.run_launcher(running=True), ["server spawned", "server waited", "beammp", "follow"])
+
+    def test_steam_free_mode_skips_beammp(self):
+        self.assertEqual(self.run_launcher(no_steam=True), ["server spawned", "game", "server waited", "follow"])
 
     def test_server_failing_after_the_game_started(self):
         self.assertEqual(self.run_launcher(server_ok=False), ["server spawned", "beammp", "game", "server waited"])

@@ -532,6 +532,10 @@ local function inOurLevel()
 end
 
 M.APPLY = {
+  launchWithoutSteam = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.appPath then core.appPath('launch', false, v and 'true' or 'false') end
+  end,
   rebaseDistance = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRebaseDistance then core.setRebaseDistance(v) else rebase.setDistance(v) end
@@ -743,6 +747,10 @@ function M.uiState()
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
+  local desiredLaunchWithoutSteam = values.launchWithoutSteam == true
+  if status.paths and status.paths.launchWithoutSteam ~= desiredLaunchWithoutSteam and core and core.appPath then
+    core.appPath('launch', false, desiredLaunchWithoutSteam and 'true' or 'false')
+  end
   local schema = {}
   for _, k in ipairs(M.ORDER) do
     local s = M.SCHEMA[k]

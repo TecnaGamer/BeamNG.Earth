@@ -168,7 +168,7 @@ local farRadius = nil         -- status.radius: the server's far-field radius (m
 local cacheInfo = nil         -- the server's last 'cache' message (download cache usage); outlives levels
 -- (M._memoryInfo: the server's last 'memory' message, its memory and limit for the settings page; not a local: the
 -- main chunk is at its 200 locals)
-local appPaths = nil          -- the server's last 'app_paths' (the cache folder, the BeamMP launcher; apppaths.py)
+local appPaths = nil          -- the server's app_paths (cache, BeamMP, Steam-free launch support and choice)
 local appPathAnswers = 0      -- how many of them answered a choice (the settings page tells a new answer by it)
 local updateInfo = nil       -- a newer version on GitHub: { current, latest, url } (server updates.py)
 local updateHidden = false   -- the notice closed for this session (its releases-page button)
@@ -1635,11 +1635,12 @@ local function onMessage(msg)
       if msg.state == 'ready' or msg.state == 'error' then updateHidden = false end
     end
   elseif t == 'app_paths' then
-    -- the settings page's "Cache folder" and "BeamMP launcher": the paths now, and the answer to the last choice
+    -- the settings page's cache folder, BeamMP launcher and Steam-free launch choice
     local r = type(msg.result) == 'table' and msg.result or nil
     if r then appPathAnswers = appPathAnswers + 1 end
     appPaths = { cacheDir = tostring(msg.cacheDir or ''), cacheNext = tostring(msg.cacheNext or ''),
-      beammp = tostring(msg.beammp or ''), answers = appPathAnswers,
+      beammp = tostring(msg.beammp or ''), launchWithoutSteam = msg.launchWithoutSteam == true,
+      launchWithoutSteamSupported = msg.launchWithoutSteamSupported == true, answers = appPathAnswers,
       result = r and { what = tostring(r.what or ''), ok = r.ok == true, text = tostring(r.text or '') }
         or (appPaths and appPaths.result) }
   elseif t == 'report_status' or t == 'report_context_done' then

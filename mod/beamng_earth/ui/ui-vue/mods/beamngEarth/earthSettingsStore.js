@@ -98,6 +98,7 @@ export const settingsSchema = [
     name: "Multiplayer",
     items: [
       { id: "beammpOnLaunch", type: "bool", default: true, name: "Start BeamMP with BeamNG.Earth", desc: "The BeamNG.Earth app starts BeamMP (multiplayer) with the game, so BeamNG.Earth servers show in BeamMP's server browser (main menu, More, BeamMP, the BeamNG.Earth category). Takes effect at the next start of the app." },
+      { id: "launchWithoutSteam", type: "bool", default: false, name: "Launch BeamNG without Steam (Windows only)", desc: "Starts BeamNG.drive directly with -nosteam at the next app start. This bypasses Steam integration and skips the BeamNG launcher window, so Steam overlay, Steam Input and playtime tracking are unavailable. BeamMP will not start in this mode." },
       { id: "beammpLauncher", type: "path", what: "beammp", name: "BeamMP launcher", placeholder: "Path to BeamMP-Launcher (the program or its folder)", desc: "The BeamMP launcher the app starts: the one you chose, else the one it found. Change... opens your system's file window (it may open behind the game: Alt+Tab to it); or type or paste its path below and press Use. Used from the next start of the app." },
     ],
   },
