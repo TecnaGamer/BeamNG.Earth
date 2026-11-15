@@ -71,3 +71,35 @@ acknowledgement schema were also checked after CI exposed their mismatches.
 
 Placement remains inferred from source context and graph lanes. Surveyed stop
 lines and independent protected-turn timing programmes are outside this PR.
+
+## Kralingseplein after the shape-node and cache corrections
+
+The previously missing northern incoming approaches were visually verified with
+the release module, including six overhead heads, straight steel, road-facing
+lanterns and feet at the carriageway edges. All four native owners at the two
+nearby eastern junctions appeared. Nineteen approaches accepted in the scene,
+with zero stream errors. Two snapshots retained identical transforms for 186
+fixed parts while phases changed, with at most one optical face per key.
+
+An initial additional ABBA run correctly aborted when native ownership did not
+return after off/on: low-disk-reserve cache eviction had removed the source
+shards. That incomplete run is not included as a successful comparison.
+After the cache-usage correction, the complete ABBA run at 51.91450 N,
+4.53665 E passed every guard, including 19 accepted owners in both on rounds.
+Same hardware/settings and 60 s warm-up / 30 s capture, fixed free camera;
+406 far tiles at this view, backlog zero at each measured round.
+
+| Round | Dutch signals | Frame p50 ms | Frame p95 ms | Mean game working set MiB | Native approaches |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A1 | off | 9.2837 | 13.2366 | 4484.47 | 0 |
+| B1 | on | 9.0004 | 12.1661 | 4490.06 | 19 |
+| B2 | on | 9.5366 | 13.9844 | 4490.81 | 19 |
+| A2 | off | 9.0828 | 12.3709 | 4485.71 | 0 |
+
+Mean working-set difference: 5.35 MiB. The arithmetic means of round medians
+are 9.1833 ms off and 9.2685 ms on; the spread between rounds remains relevant.
+This is another fixed-scene measurement, not a general frame-rate guarantee.
+[Recorded measurements](research/2026-11-15-nl-signals-kralingseplein.json)
+identify the measured signal/server revision `d4f9af13e` and release-native
+source `cfb7ae56f`. The subsequent NDW missing-shard retry is tested separately;
+it is not retroactively presented as part of this measurement.
