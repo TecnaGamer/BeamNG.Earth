@@ -57,6 +57,23 @@ class NearCrossersTest(unittest.TestCase):
         got = self.ask(np.zeros((1, 2)), np.zeros(1), pts, [0, 5], [2.0], 1.0)
         self.assertFalse(got[0])
 
+    def test_long_segments_over_sparse_points(self):
+        """Two points 14 km apart and a road of 1000 segments from one to the other and back (Codex's review,
+        2026-11-15: each segment's box over the whole 513 x 513 grid, 263 million entries and 2 GB): answered without
+        the grid, as the full scan, at once."""
+        import time
+        xy = np.array([[0.0, 0.0], [10000.0, 10000.0]])
+        line = np.array([[0.0, 0.0] if n % 2 == 0 else [10000.0, 10000.0] for n in range(1001)])
+        pts = np.c_[line, np.zeros(len(line))]
+        t0 = time.perf_counter()
+        got = self.ask(xy, np.zeros(2), pts, [0, len(pts)], [5.0], 1.0)
+        self.assertLess(time.perf_counter() - t0, 5.0)
+        self.assertTrue(got.all())
+        # (and many long roads, each under the budget, over it together)
+        roads_ = [np.c_[np.array([[0.0, 0.0], [10000.0, 10000.0], [0.0, 10000.0]]) + c, np.zeros(3)]
+                  for c in range(200)]
+        self.ask(xy, np.zeros(2), np.concatenate(roads_), np.arange(0, 601, 3), np.full(200, 5.0), 1.0)
+
     def test_random(self):
         rng = np.random.default_rng(7)
         for _ in range(300):

@@ -15,6 +15,7 @@ use crate::dm::Dm;
 const CELL_MIN_M: f64 = 16.0;       // m: the grid's cell side, at least
 const CELLS_MAX: f64 = 512.0;       // cells along the points' longer side, at most
 const BOX_PAD_M: f64 = 1e-3;        // m a segment's box grows past its reach (rounding of the nearest point on it)
+const GRID_VISITS_MAX: u64 = 1 << 22;   // cells of the segments' boxes, all told, past which the grid is not built
 const BOUND_M: f64 = 1e7;           // m: |coordinates| and reach the grid answers (products ~1e15: no overflow, no NaN;
                                     // rounding of a nearest point ~1e-8 m, well inside BOX_PAD_M)
 
@@ -71,33 +72,53 @@ pub fn near_crossers(p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
     let mut brute: Vec<usize> = Vec::new();
     let mut entries: Vec<(u32, u32)> = Vec::new();     // (road, segment) per segment the grid holds
     let mut cells: Vec<[usize; 4]> = Vec::new();        // its cells' x0 x1 y0 y1
+    let mut visits = 0u64;                              // cells of their boxes, all told
+    let mut gridded = gridded && d.len() < u32::MAX as usize && nc < u32::MAX as usize;
     for c in 0..nc {
         let (j0, j1) = (st[c], st[c + 1]);
         if j1 < j0 + 2 { continue; }
         let ok = reach[c].abs() <= BOUND_M && d[j0..j1].iter().all(|q| fin(q[0], q[1]));
-        if !ok { brute.push(c); continue; }
-        if !gridded { continue; }
+        if !ok || !gridded { brute.push(c); continue; }
         let m = reach[c].max(0.0) + BOX_PAD_M;
         for n in 0..(j1 - j0 - 1) {
             let (a, b) = (d[j0 + n], d[j0 + n + 1]);
             let (x0, x1) = (a[0].min(b[0]) - m, a[0].max(b[0]) + m);
             let (y0, y1) = (a[1].min(b[1]) - m, a[1].max(b[1]) + m);
             if x1 < qx0 || x0 > qx1 || y1 < qy0 || y0 > qy1 { continue; }
-            cells.push([cx(x0), cx(x1), cy(y0), cy(y1)]);
+            let r = [cx(x0), cx(x1), cy(y0), cy(y1)];
+            visits += ((r[1] - r[0] + 1) * (r[3] - r[2] + 1)) as u64;
+            cells.push(r);
             entries.push((c as u32, n as u32));
         }
+        if visits > GRID_VISITS_MAX {
+            // (long segments over a sparse, far-spread set of points: the boxes cover more cells than the grid
+            // saves; every road over every segment, the old scan, with no grid built)
+            gridded = false;
+            cells = Vec::new();
+            entries = Vec::new();
+            brute = (0..nc).filter(|&c| st[c + 1] >= st[c] + 2).collect();
+            break;
+        }
     }
-    // the segments by cell (CSR), each cell's list in the roads' and segments' order
-    let mut cnt = vec![0usize; nx * ny + 1];
+    // the segments by cell (CSR), each cell's list in the roads' and segments' order; only the cells with points
+    let (gx, gy) = if gridded { (nx, ny) } else { (0, 0) };
+    let mut occ = vec![false; gx * gy];
+    if gridded {
+        for q in p {
+            if fin(q[0], q[1]) { occ[cy(q[1]) * nx + cx(q[0])] = true; }
+        }
+    }
+    let mut cnt = vec![0usize; gx * gy + 1];
     for b in &cells {
-        for iy in b[2]..=b[3] { for ix in b[0]..=b[1] { cnt[iy * nx + ix + 1] += 1; } }
+        for iy in b[2]..=b[3] { for ix in b[0]..=b[1] { if occ[iy * nx + ix] { cnt[iy * nx + ix + 1] += 1; } } }
     }
-    for i in 0..nx * ny { cnt[i + 1] += cnt[i]; }
+    for i in 0..gx * gy { cnt[i + 1] += cnt[i]; }
     let mut fill = cnt.clone();
-    let mut list = vec![(0u32, 0u32); cnt[nx * ny]];
+    let mut list = vec![(0u32, 0u32); cnt[gx * gy]];
     for (b, e) in cells.iter().zip(&entries) {
         for iy in b[2]..=b[3] {
             for ix in b[0]..=b[1] {
+                if !occ[iy * nx + ix] { continue; }
                 let s = &mut fill[iy * nx + ix];
                 list[*s] = *e;
                 *s += 1;
