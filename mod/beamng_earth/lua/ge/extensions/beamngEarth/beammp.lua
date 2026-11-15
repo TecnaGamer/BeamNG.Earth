@@ -15,17 +15,82 @@ M.AFTER_TEXT = 'Install BeamNG.Earth from the page that opened, start it, then r
 M.SETTING = 'beammpRecommendOff'
 -- BeamMP's HUD apps (chat, session bar, player list) and BeamNG.Earth's in one app layout
 -- (settings/ui_apps/originalLayouts/default/beamngEarthMP.uilayout.json; the user, 2026-10-22: "combine the BeamNG ui
--- app layout with .Earth"). BeamMP sets its own layout right after its onBeamMPPostJoin hook (MPCoreNetwork
--- runPostJoin), so ours goes in on the next frame.
+-- app layout with .Earth"). BeamMP sets its own layout ("beammp") right after its onBeamMPPostJoin hook
+-- (MPCoreNetwork runPostJoin). 1.10.0 set ours on the next frame: two HUD builds in a row tore down and rebuilt BeamMP's
+-- session app, whose stale listener then threw every second, and the UI's crash recovery rebuilt the HUD over and over
+-- (#1302). Now the hook arms a one-shot rewrite of BeamMP's own request, so the HUD is built once, with ours; only in our
+-- level, in a session, with our layout file mounted and not already up. Nothing is left pending past the next frame.
 M.APP_LAYOUT = 'beamngEarthMP'
+M.BEAMMP_LAYOUT = 'beammp'
+M.LAYOUT_FILE = '/settings/ui_apps/originalLayouts/default/beamngEarthMP.uilayout.json'
+M.LEVEL_ID = 'beamng_earth'
 
 local waited = 0            -- seconds in our level in a BeamMP session without the generator (reset when connected)
 local hidden = false        -- shown once this session (the player answered or the dialog is up)
 local settingsRef = nil
-local layoutDue = false     -- BeamMP joined: our layout at the next update
+local layoutDue = false     -- BeamMP joined (our level, all checks passed): the rewrite is disarmed at the next update
+local armed = nil           -- { gs, orig, wrapper, live, used }: the one-shot rewrite of BeamMP's layout request
 
--- BeamMP's onBeamMPPostJoin (through core.lua)
-function M.onPostJoin() layoutDue = true end
+local function gameState()
+  local gs = rawget(_G, 'core_gamestate')
+  if type(gs) ~= 'table' or type(gs.setGameState) ~= 'function' then return nil end
+  return gs
+end
+
+-- Our layout may go up now: our level, a BeamMP session, our layout file mounted (BeamMP unmounts a copy the server
+-- did not send; its Lua stays loaded).
+function M.layoutAllowed()
+  local lvl = rawget(_G, 'getCurrentLevelIdentifier')
+  if type(lvl) ~= 'function' then return false end
+  local okL, id = pcall(lvl)
+  if not okL or id ~= M.LEVEL_ID or not M.inSession() then return false end
+  local fs = rawget(_G, 'FS')
+  if type(fs) ~= 'table' or type(fs.fileExists) ~= 'function' then return false end
+  local okF, exists = pcall(fs.fileExists, fs, M.LAYOUT_FILE)
+  return okF and exists == true
+end
+
+-- The rewrite off: the game's function back unless another mod wrapped it meanwhile (then ours stays under theirs,
+-- passing everything through). -> true when it rewrote a request.
+local function disarm()
+  local a = armed
+  if not a then return false end
+  armed = nil
+  a.live = false
+  if a.gs.setGameState == a.wrapper then a.gs.setGameState = a.orig end
+  return a.used
+end
+
+local function arm(gs)
+  local a = { gs = gs, orig = gs.setGameState, live = true, used = false }
+  a.wrapper = function(state, appLayout, menuItems, options)
+    if a.live and appLayout == M.BEAMMP_LAYOUT and M.layoutAllowed() then
+      a.live, a.used = false, true
+      if a.gs.setGameState == a.wrapper then a.gs.setGameState = a.orig end
+      local cur = type(a.gs.state) == 'table' and a.gs.state or {}
+      if cur.appLayout == M.APP_LAYOUT and (state == nil or state == cur.state)
+          and (menuItems == nil or menuItems == cur.menuItems) and options == nil then
+        log('I', 'beamngEarth', 'BeamMP joined: the .Earth multiplayer layout is already up (no HUD rebuild)')
+        return
+      end
+      log('I', 'beamngEarth', 'BeamMP joined: the .Earth multiplayer layout in place of "' .. appLayout .. '" (one HUD build)')
+      appLayout = M.APP_LAYOUT
+    end
+    return a.orig(state, appLayout, menuItems, options)
+  end
+  gs.setGameState = a.wrapper
+  armed = a
+end
+
+-- BeamMP's onBeamMPPostJoin (through core.lua): called inside runPostJoin just before BeamMP's own setGameState.
+function M.onPostJoin()
+  disarm()
+  layoutDue = false
+  local gs = gameState()
+  if not gs or not M.layoutAllowed() then return end   -- another map, no session, no layout file: never the HUD
+  arm(gs)
+  layoutDue = true
+end
 
 -- The player's own BeamNG.Earth back on when they leave a server (the user, 2026-10-24: "I think the earth mod gets
 -- disabled when you leave the server"). Joining, BeamMP switches off every mod the server didn't send, ours too (the
@@ -51,6 +116,8 @@ local function localEntry()
 end
 
 function M.onServerLeave()
+  layoutDue = false
+  disarm()
   local entry = localEntry()
   if not entry or entry.active then return false end
   restoreDue, restoreTries, restoreWait = true, 0, 0
@@ -126,10 +193,16 @@ end
 -- settings module.
 function M.update(dt, inLevel, connected, settings)
   settingsRef = settings
-  if layoutDue and inLevel then
+  if layoutDue then
+    -- the frame after the join: the rewrite off. Only if BeamMP sent no layout of its own (another BeamMP version),
+    -- ours now, once; never in place of BeamMP's once it is up (that swap is #1302's rebuild loop) or ours again.
     layoutDue = false
-    local gs = rawget(_G, 'core_gamestate')
-    if gs and gs.setGameState then pcall(gs.setGameState, 'multiplayer', M.APP_LAYOUT, 'multiplayer') end
+    local rewrote = disarm()
+    local gs = gameState()
+    local cur = gs and type(gs.state) == 'table' and gs.state.appLayout or nil
+    if not rewrote and inLevel and gs and cur ~= M.APP_LAYOUT and cur ~= M.BEAMMP_LAYOUT and M.layoutAllowed() then
+      pcall(gs.setGameState, 'multiplayer', M.APP_LAYOUT, 'multiplayer')
+    end
   end
   local mp = M.inSession()
   if not mp or not inLevel or connected then
@@ -149,6 +222,9 @@ end
 function M.show() guihooks.trigger('showConfirmationDialog', M.dialog()) end
 
 -- (tests) the session's state back to the start
-function M.reset() waited, hidden, layoutDue, restoreDue, restoreTries, restoreWait = 0, false, false, false, 0, 0 end
+function M.reset()
+  disarm()
+  waited, hidden, layoutDue, restoreDue, restoreTries, restoreWait = 0, false, false, false, 0, 0
+end
 
 return M

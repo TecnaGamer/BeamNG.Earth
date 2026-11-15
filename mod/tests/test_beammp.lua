@@ -76,18 +76,136 @@ beammp.onChoice('get')
 T.check(openedUrl == beammp.INSTALL_URL and triggered[#triggered][1] == 'showConfirmationDialog'
   and triggered[#triggered][2].text == beammp.AFTER_TEXT, '"Get" opens the page and shows the next step')
 
--- the app layout: BeamMP's join hook, then the next update in our level sets the combined layout once
-local states = {}
-_G.core_gamestate = { setGameState = function(a, b, c) states[#states + 1] = a .. ' ' .. b .. ' ' .. c end }
-beammp.reset()
-beammp.onPostJoin()
-beammp.update(0, false, true, settings)
-T.check(#states == 0, 'not outside our level')
-beammp.update(0, true, true, settings)
-T.check(#states == 1 and states[1] == 'multiplayer ' .. beammp.APP_LAYOUT .. ' multiplayer', 'combined layout: ' .. tostring(states[1]))
-beammp.update(0, true, true, settings)
-T.check(#states == 1, 'set once')
-_G.core_gamestate = nil
+-- the app layout (#1302): BeamMP's runPostJoin calls its onBeamMPPostJoin hook (ours: onPostJoin), then sets its own
+-- "beammp" layout. 1.10.0 then set ours on the next frame: two HUD builds in a row, which tore down and rebuilt BeamMP's
+-- session app (its stale listener threw every second; the UI's crash recovery rebuilt the HUD over and over). Now
+-- BeamMP's one request carries our layout: one HUD build, and nothing more from us.
+do
+  local LAYOUT_FILE = '/settings/ui_apps/originalLayouts/default/beamngEarthMP.uilayout.json'
+  local files = { [LAYOUT_FILE] = true }
+  local level = 'beamng_earth'
+  local inMp = true
+  _G.FS = { fileExists = function(_, p) return files[p] == true end }
+  _G.getCurrentLevelIdentifier = function() return level end
+  _G.MPCoreNetwork = { isMPSession = function() return inMp end }
+  -- the game's core_gamestate.setGameState (lua/ge/extensions/core/gamestate.lua): nil keeps a field; every call
+  -- sends the whole state to the UI (GameStateUpdate), which builds the layout it names
+  local gs
+  local function freshGameState(layout)
+    gs = { state = { state = 'freeroam', appLayout = layout, menuItems = 'freeroam' }, sent = {} }
+    gs.setGameState = function(st, layout2, menu)
+      gs.state = { state = st or gs.state.state, appLayout = layout2 or gs.state.appLayout,
+        menuItems = menu or gs.state.menuItems }
+      gs.sent[#gs.sent + 1] = gs.state.state .. ' ' .. tostring(gs.state.appLayout) .. ' ' .. gs.state.menuItems
+    end
+    gs.original = gs.setGameState
+    _G.core_gamestate = gs
+  end
+  -- BeamMP's MPCoreNetwork.runPostJoin: the hook (core.lua onBeamMPPostJoin -> beammp.onPostJoin), then its layout
+  local function runPostJoin(withLayout)
+    beammp.onPostJoin()
+    if withLayout ~= false then core_gamestate.setGameState('multiplayer', 'beammp', 'multiplayer') end
+  end
+  local function frames(n, inLevel)
+    for _ = 1, n do beammp.update(0.016, inLevel ~= false, true, settings) end
+  end
+  local OURS = 'multiplayer ' .. beammp.APP_LAYOUT .. ' multiplayer'
+  local BEAMMP = 'multiplayer beammp multiplayer'
+
+  -- a BeamNG.Earth server: one layout request reaches the game, ours (BeamMP's, rewritten); no second switch later
+  beammp.reset()
+  freshGameState('beamngEarth')                 -- (core.lua onClientPostStartMission in our level)
+  runPostJoin()
+  frames(30)
+  T.check(#gs.sent == 1 and gs.sent[1] == OURS, 'Earth server: one HUD build, our layout: ' .. table.concat(gs.sent, ', '))
+  T.check(core_gamestate.setGameState == gs.original, "the game's setGameState back as it was after the join")
+  core_gamestate.setGameState('multiplayer', 'beammp', 'multiplayer')
+  T.check(gs.sent[2] == BEAMMP, 'a later request is not touched')
+
+  -- a stock map server (BeamMP switched our copy off; our Lua stays loaded): BeamMP's layout stays, nothing from us,
+  -- and no request is left pending for later (1.10.0 kept it and switched the HUD at the next visit of our level, even
+  -- in single player)
+  beammp.reset()
+  level = 'italy'
+  freshGameState('freeroam')
+  runPostJoin()
+  frames(30, false)
+  T.check(#gs.sent == 1 and gs.sent[1] == BEAMMP, "stock map: BeamMP's layout only: " .. table.concat(gs.sent, ', '))
+  T.check(core_gamestate.setGameState == gs.original, 'stock map: setGameState never wrapped')
+  inMp, level = false, 'beamng_earth'           -- (left the server; our level in single player)
+  freshGameState('beamngEarth')
+  frames(30)
+  T.check(#gs.sent == 0, 'single player afterwards: no multiplayer layout: ' .. table.concat(gs.sent, ', '))
+  inMp = true
+
+  -- our layout file not mounted (our copy unmounted, a broken install): BeamMP's layout stays
+  beammp.reset()
+  files[LAYOUT_FILE] = nil
+  freshGameState('beamngEarth')
+  runPostJoin()
+  frames(30)
+  T.check(#gs.sent == 1 and gs.sent[1] == BEAMMP, "no layout file: BeamMP's layout: " .. table.concat(gs.sent, ', '))
+  files[LAYOUT_FILE] = true
+
+  -- not in a BeamMP session at the hook: nothing
+  beammp.reset()
+  inMp = false
+  freshGameState('beamngEarth')
+  runPostJoin()
+  frames(30)
+  T.check(#gs.sent == 1 and gs.sent[1] == BEAMMP, 'no session: nothing from us')
+  inMp = true
+
+  -- rejoining the same map (BeamMP's loadLevel calls runPostJoin directly): our layout already up: nothing re-sent
+  beammp.reset()
+  freshGameState(beammp.APP_LAYOUT)
+  gs.state.state, gs.state.menuItems = 'multiplayer', 'multiplayer'
+  runPostJoin()
+  frames(30)
+  T.check(#gs.sent == 0, 'already our layout: no rebuild: ' .. table.concat(gs.sent, ', '))
+
+  -- a BeamMP without its own layout request in runPostJoin: ours once at the next frame (one build, no swap)
+  beammp.reset()
+  freshGameState('beamngEarth')
+  runPostJoin(false)
+  frames(30)
+  T.check(#gs.sent == 1 and gs.sent[1] == OURS, 'no BeamMP layout: ours once: ' .. table.concat(gs.sent, ', '))
+  -- ... but never in place of BeamMP's layout once it is up (that swap rebuilds BeamMP's session app)
+  beammp.reset()
+  freshGameState('beammp')
+  runPostJoin(false)
+  frames(30)
+  T.check(#gs.sent == 0, "BeamMP's layout already up: kept: " .. table.concat(gs.sent, ', '))
+
+  -- left the server between the hook and BeamMP's request / the next frame: nothing
+  beammp.reset()
+  freshGameState('beamngEarth')
+  beammp.onPostJoin()
+  beammp.onServerLeave()
+  core_gamestate.setGameState('multiplayer', 'beammp', 'multiplayer')
+  frames(30)
+  T.check(#gs.sent == 1 and gs.sent[1] == BEAMMP, 'left: nothing from us: ' .. table.concat(gs.sent, ', '))
+  T.check(core_gamestate.setGameState == gs.original, 'left: setGameState back as it was')
+
+  -- another mod wraps setGameState over ours meanwhile: BeamMP's request through theirs, then ours; theirs stays in
+  -- place; ours passes later requests through unchanged
+  beammp.reset()
+  freshGameState('beamngEarth')
+  beammp.onPostJoin()
+  local under = core_gamestate.setGameState
+  local theirs = function(...) return under(...) end
+  core_gamestate.setGameState = theirs
+  core_gamestate.setGameState('multiplayer', 'beammp', 'multiplayer')
+  frames(30)
+  T.check(core_gamestate.setGameState == theirs, 'a wrapper on top of ours is left in place')
+  core_gamestate.setGameState('multiplayer', 'beammp', 'multiplayer')
+  T.check(#gs.sent == 2 and gs.sent[1] == OURS and gs.sent[2] == BEAMMP,
+    'under another wrapper: rewritten once, then passes through: ' .. table.concat(gs.sent, ', '))
+
+  _G.core_gamestate, _G.MPCoreNetwork = nil, nil
+  _G.FS = { fileExists = function() return true end }
+  _G.getCurrentLevelIdentifier = function() return 'beamng_earth' end
+end
 
 -- the install page: through the BeamMP launcher in a session, else the game's call
 local opened
