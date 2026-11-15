@@ -277,14 +277,36 @@ do
   frames(100)
   T.check(#activated == 1, 'nothing more after it ended')
 
-  -- turned off again soon after: on again, at most RESTORE_TRIES times
+  -- turned off again soon after by BeamMP in a session (a quick join elsewhere): on again after it, at most
+  -- RESTORE_TRIES times
   beammp.reset(); jobs, activated, inMp = {}, {}, true
   db.beamng_earth = { active = false }
   beammp.onModDeactivated(ours)
   inMp = false
-  for _ = 1, 20 do frames(5); db.beamng_earth.active = false end
+  for _ = 1, 20 do
+    frames(5)
+    if liveJobs() == 0 then break end
+    inMp = true; db.beamng_earth.active = false; beammp.onModDeactivated(ours); inMp = false
+  end
   frames(5)
-  T.check(#activated == beammp.RESTORE_TRIES and liveJobs() == 0, 'at most RESTORE_TRIES times: ' .. #activated)
+  T.check(#activated == beammp.RESTORE_TRIES and liveJobs() == 0, 'at most RESTORE_TRIES times a job: ' .. #activated)
+  -- turned off again by something else (no BeamMP session): not switched on again, the job ends
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  inMp = false
+  frames(3)
+  db.beamng_earth.active = false
+  frames(5)
+  T.check(#activated == 1 and liveJobs() == 0, 'off again outside a session: left off')
+  -- turned off by the player (the hook outside a session) while the job waits: it ends
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  inMp = false
+  T.check(beammp.onModDeactivated(ours) == false, 'player turn-off: nothing armed')
+  frames(5)
+  T.check(#activated == 0 and liveJobs() == 0, 'player turn-off: the pending restore ends')
 
   -- not ours, or not in a session (the player turning it off in the Mods menu): nothing
   beammp.reset(); jobs, activated = {}, {}

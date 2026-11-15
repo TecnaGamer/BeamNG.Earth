@@ -108,7 +108,8 @@ end
 -- game's own job system (core_jobsystem), not one of our extensions or modules, so neither the code swap nor the
 -- server copy's deletion takes it away. Each frame it asks BeamMP whether the session is over (one coroutine resume,
 -- only while BeamMP has our copy off); then it switches our copy on at once (before BeamMP's Lua reload 0.5 s after a
--- "Leave" from its menu), again up to RESTORE_TRIES times if something turns it off within RESTORE_GAP_S. Our copy's
+-- "Leave" from its menu), again (up to RESTORE_TRIES times) only if BeamMP turns it off again in a session within
+-- RESTORE_GAP_S; the player turning it off ends it. Our copy's
 -- modScript then brings its own code back (codeswap.lua). In the session it waits: BeamMP's checkMod would switch it
 -- straight off again ("This mod should not be running: beamng_earth"). A player without our app has no such mod:
 -- nothing is armed. A mod the player turns off outside a session (before joining, too) is never switched back on.
@@ -167,6 +168,7 @@ function M.restoreStep(s)
     if s.tries == 0 then return true end            -- (switched on by someone else: nothing for us)
     return (s.clock() - s.since) >= M.RESTORE_GAP_S
   end
+  if s.tries > 0 and not s.again then return true end   -- (off again, not by BeamMP in a session: the player's choice)
   if s.tries >= M.RESTORE_TRIES then
     log('W', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. s.mod .. ') was turned off again ' .. s.tries
       .. ' times: left off (turn it on in the Mods menu)')
@@ -174,6 +176,7 @@ function M.restoreStep(s)
   end
   s.tries = s.tries + 1
   s.since = s.clock()
+  s.again = false
   log('I', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. s.mod .. ') switched back on')
   local ok, err = pcall(mm.activateMod, s.mod)
   if not ok then log('W', 'beamngEarth', 'BeamMP: switching BeamNG.Earth back on: ' .. tostring(err)) end
@@ -206,9 +209,17 @@ function M.armRestore(why)
   return true
 end
 
--- core.lua's onModDeactivated, before the code swap: BeamMP switching the player's own copy off in a session.
+-- core.lua's onModDeactivated, before the code swap: BeamMP switching the player's own copy off in a session (a pending
+-- restore: switched on again after this session too). Outside a session it is the player: a pending restore ends.
 function M.onModDeactivated(mod)
-  if type(mod) ~= 'table' or mod.modname ~= M.LOCAL_MOD or not sessionOn() then return false end
+  if type(mod) ~= 'table' or mod.modname ~= M.LOCAL_MOD then return false end
+  local cur = rawget(_G, M.RESTORE_GLOBAL)
+  local live = type(cur) == 'table' and cur.live
+  if not sessionOn() then
+    if live then cur.live = false end
+    return false
+  end
+  if live then cur.again = true end
   return M.armRestore('turned off by BeamMP')
 end
 

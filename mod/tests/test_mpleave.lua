@@ -682,6 +682,18 @@ G.endLevel()
 frames(120)
 T.check(ours().active == false, 'player-off in this run, new server copy: still off after the leave')
 
+-- (8c) turned off by the player right after the restore (within RESTORE_GAP_S): stays off (Codex review round 2)
+start('new', filesNew())
+MPCoreNetwork.join({ mods = {}, level = 'west_coast_usa' })
+frames(10)
+G.endLevel()
+frames(3)
+T.check(ours().active == true, 'stock-map server left: on')
+core_modmanager.deactivateMod('beamng_earth')
+frames(120)
+T.check(ours().active == false and not rawget(_G, 'beamngEarthMPRestore').live,
+  'turned off by the player just after the restore: stays off, the job ended')
+
 -- (9) leaving and joining another server: off again in the new session, on after it ends
 start('new', filesNew())
 MPCoreNetwork.join({ mods = { ['beamng_earth.zip'] = copy('1.10.0', files110()) }, level = 'beamng_earth' })
