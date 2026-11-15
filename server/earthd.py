@@ -1449,6 +1449,7 @@ class Server:
         # Heightmaps: (anchorId, cx, cy) -> info, LRU order.
         self.hm = OrderedDict()
         self.hm_inflight = {}
+        self.hm_removing = {}           # key -> the removal of its evicted files (evict_heightmaps; terrain waits)
         self.hm_stage = {}              # terrain key -> what its build waits on now (the stuck log, prepare_terrain)
         self.ter_serial = itertools.count()
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
@@ -5387,8 +5388,20 @@ class Server:
         if fut is None:
             loop = asyncio.get_running_loop()
             pool = self.hm_req_pool if lane == LANE_REQUEST and progress is None and self.block_pools else self.hm_pool
+            removing = self.hm_removing.pop(key, None)
+            if removing is not None and not removing.done():
+                # (its evicted files still being removed, under the names this build writes: after them; in the
+                # build's thread, the event loop never waits)
+                def make(*args, _rm=removing):
+                    try:
+                        _rm.result()
+                    except Exception as e:
+                        log.debug("terrain %s: its earlier files' removal: %s", key, e)
+                    return self.make_heightmap(*args)
+            else:
+                make = self.make_heightmap
             fut = self.hm_inflight[key] = loop.run_in_executor(
-                pool, self.make_heightmap, anchor, cx, cy, progress, lane, time.perf_counter())
+                pool, make, anchor, cx, cy, progress, lane, time.perf_counter())
             fut.add_done_callback(lambda f: self._hm_done(key, f))
         return await asyncio.shield(fut)
 
@@ -5447,16 +5460,22 @@ class Server:
                 paths.append(os.path.join(self.out_dir, info["ter"]))
             if self.surface is not None:        # its surface masks (only read at import)
                 paths += [os.path.join(self.out_dir, name) for name in surfacemod.mask_names(self.hm_name(key)[:-4])]
-            # (off the event loop: ~20-40 removals a block, each up to tens of ms on a busy btrfs disk; kept when the
-            # block is built again meanwhile, its files under the same names)
-            self.remove_off_loop(paths, keep=lambda k=key: self.terrain_cached(k))
+            # (off the event loop: ~20-40 removals a block, each up to tens of ms on a busy btrfs disk. A build of the
+            # same block (its files under the same names) waits for it: terrain(); Codex review: a check before the
+            # removals let a rebuild start under them and lose its files)
+            if len(self.hm_removing) > 256:
+                self.hm_removing = {k: f for k, f in self.hm_removing.items() if not f.done()}
+            self.hm_removing[key] = self.remove_off_loop(paths)
 
     def remove_off_loop(self, paths, keep=None):
         """Remove files (and their .tmp) in the "remove" thread, at once (not the paced delete queue: these went at
-        once before, on the event loop). keep: asked right before, in that thread; true: they stay."""
+        once before, on the event loop). keep: asked right before, in that thread; true: they stay. Returns the
+        removal's concurrent future (done at once when there is nothing to remove)."""
         paths = list(paths)
+        done = concurrent.futures.Future()
         if not paths:
-            return
+            done.set_result(None)
+            return done
 
         def work():
             if keep is not None and keep():
@@ -5467,9 +5486,11 @@ class Server:
         if pool is None:
             pool = self._remove_pool = ThreadPoolExecutor(1, thread_name_prefix="remove")
         try:
-            pool.submit(work)
+            return pool.submit(work)
         except RuntimeError:                # (the pool shut down: at exit)
             work()
+            done.set_result(None)
+            return done
 
     def removes_flush(self):
         """Wait until the removals remove_off_loop queued so far are done (tests, shutdown)."""
