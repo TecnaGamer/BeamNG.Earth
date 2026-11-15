@@ -173,4 +173,20 @@ obj.getFrontPosition=originalFront
 function obj:getSurfaceHeightBelow()return 0 end
 M.setEnabled(true);tick()
 check(M.status().enabled,'the saved path can be used immediately after re-enabling')
+local gapReports={}
+obj.queueGameEngineLua=function(_,command)gapReports[#gapReports+1]=command end
+M.reset();M.bindPath(ids,md);speed=0
+function obj:getSurfaceHeightBelow()return -1e20 end
+tick()
+check(M.status().reason=='surface gap','terrain support failures have an explicit reason')
+check(gapReports[#gapReports]:find('onAiSurfaceGap(10,true)',1,true),'a stopped terrain hold is reported to GPS')
+local before=#gapReports;M.reset()
+check(#gapReports==before,'a route hold/reset does not claim that the terrain has cleared')
+M.bindPath(ids,md)
+function obj:getSurfaceHeightBelow()return 0 end
+tick()
+check(gapReports[#gapReports]:find('onAiSurfaceGap(10,false)',1,true),'a fresh supported probe clears the terrain reason')
+function obj:getSurfaceHeightBelow()return -1e20 end
+tick();M.onExtensionUnloaded()
+check(gapReports[#gapReports]:find('onAiSurfaceGap(10,false)',1,true),'unloading explicitly clears its terrain reason without another probe')
 print(string.format('static obstacle controller: %d checks passed',n))

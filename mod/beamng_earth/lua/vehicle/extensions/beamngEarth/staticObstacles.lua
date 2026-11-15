@@ -239,11 +239,14 @@ end
 
 -- Keep passing within adjacent lanes in the same legal direction. A transition
 -- or sharp turn is left to the ordinary AI/recovery instead of guessing its lanes.
-function M.passingCorridor(c,target,width,length,obstacleDistance)
+function M.passingCorridor(c,target,width,length,obstacleDistance,joinRemaining)
   if not c or not finite(target) or not finite(width) or not finite(length) then return nil end
   local delta=target-c.lane.centre
   if math.abs(delta)>c.lane.width*1.1 then return nil end
   local join=math.max(18,math.abs(delta)*9)
+  -- Once committed, inspect the remaining shift, not a new full lane change
+  -- from every position. A transition beyond the checked finish must not halt the pass early.
+  if finite(joinRemaining) then join=math.max(4,math.min(join,joinRemaining)) end
   local needed=math.max(join+length+3,obstacleDistance+length+3)
   local last=c.points[#c.points]
   if last.along<needed then return nil end
@@ -328,6 +331,14 @@ local policy,applied,lastCap,goal
 local phase,reason,detections,passes='idle',nil,0,0
 local lastProbe
 local work,checkWork
+local gapReported
+local function reportGap(active)
+  if active==gapReported then return end
+  if obj and obj.getId and obj.queueGameEngineLua then
+    obj:queueGameEngineLua("require('beamngEarth/gps').onAiSurfaceGap("..obj:getId()..','..tostring(active)..')')
+  end
+  gapReported=active
+end
 local function release()
   if policy and ai and ai.routeSpeed==applied and ai.speedMode=='limit' then
     ai.setSpeed(policy.speed);ai.setSpeedMode(policy.mode)
@@ -358,6 +369,7 @@ end
 function M.setEnabled(on)
   M.enabled = on == true
   if not M.enabled then
+    reportGap(false)
     work,checkWork=nil,nil
     local passing = goal ~= nil
     release(); goal, lastProbe = nil, nil
@@ -377,12 +389,14 @@ end
 
 function M.reset()
   work,checkWork=nil,nil
+  gapReported=nil -- GPS retains its terrain reason until a fresh probe or explicit disable
   release();path,bound,cursor,elapsed,goal=nil,nil,1,0,nil;phase,reason='idle',nil
   lastProbe=nil
 end
 M.onReset=M.reset
 function M.onExtensionUnloaded()
   M.reset()
+  reportGap(false)
 end
 
 function M.bindPath(ids,md,started)
@@ -474,6 +488,9 @@ local function probe()
     distance=hit.distance;detections=detections+1
   else return nil end
   local normalCap=M.brakeLimit(distance,speed,false)
+  if not goal and hit and hit.kind=='surface gap' then
+    return {cap=normalCap,legal=legal,phase='blocked',reason='surface gap',surfaceGap=true,brakeDistance=distance}
+  end
   -- A roadside object in the extra buffer need not block a supported body
   -- corridor. Keep a cautious ceiling without forcing a lane change.
   if not goal and hit and finite(hit.side) and math.abs(hit.side)>width*.5
@@ -489,12 +506,13 @@ local function probe()
   local objects=trafficObjects()
   local targets=goal and {goal.target} or M.adjacentLanes(c)
   for _,target in ipairs(targets)do
-    local pass,offset,half,join,delta=M.passingCorridor(c,target,width,length,distance)
+    local left=goal and (goal.join-math.max(0,goal.startDistance-distance))
+    local pass,offset,half,join,delta=M.passingCorridor(c,target,width,length,distance,left)
     if pass and not M.trace(pass,offset,half,cast,surface) and M.trafficClear(pass,offset,ego,objects) then
       if not goal and speed>4.5 then
         return {cap=math.min(4,normalCap),legal=legal,phase='slowing',brakeDistance=distance}
       end
-      if not goal then goal={point=hit,target=target,needsChange=true};passes=passes+1 end
+      if not goal then goal={point=hit,target=target,join=join,startDistance=distance,needsChange=true};passes=passes+1 end
       if goal.needsChange then
         if math.abs(delta)>.1 then ai.laneChange(nil,join,delta) end
         goal.needsChange=false
@@ -572,6 +590,7 @@ function M.updateGFX(dt)
     if applied then limit(0) end
     return
   end
+  reportGap(result~=nil and result.surfaceGap==true and obj:getVelocity():length()<1)
   if not result then release();phase,reason='idle',nil;return end
   phase,reason=result.phase,result.reason
   limit(result.cap,result.legal)

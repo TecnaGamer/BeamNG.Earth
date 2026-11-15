@@ -74,4 +74,12 @@ for i=1,10000 do M.updateGFX(.016) end
 local allocation=collectgarbage('count')-memory
 collectgarbage('restart')
 T.check(calls()==before and allocation<1,'an enabled but unbound helper has a plain allocation-free idle return')
+-- Loading the signal module does not make a cancelled/disabled obstacle
+-- controller alternate between 'idle' and 'disabled' and rerun cleanup each frame.
+M,B,p,md,ids,step,calls,E=fixture(false);M.reset();M.setEnabled(false)
+E.beamngEarth_trafficSignals={stop=function()error('unbound signal sensing ran')end}
+local cleanups=0;local disable=M.setEnabled
+M.setEnabled=function(on)cleanups=cleanups+1;return disable(on)end
+for _=1,1000 do M.updateGFX(.016)end
+T.check(cleanups==0,'a disabled unbound helper stays idle without repeating lifecycle cleanup')
 T.done('obstacle probe frame budget')

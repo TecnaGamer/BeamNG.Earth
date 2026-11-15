@@ -71,4 +71,26 @@ check(not M.passingCorridor(left,1.55,2,5,25),'left-driving oncoming lane exclud
 md.graph[2][9]={};md.graph[9]={[2]={}};md.positions[9]={x=30,y=20,z=0}
 local junction=M.corridor(md,{1,2,3,4,5},1,2,{x=1.55,y=5,z=.2},2,55,lanes)
 check(not M.passingCorridor(junction,4.65,2,5,25),'passing through a junction is rejected')
+-- Native I-405 reproduction: a road widens beyond the original checked
+-- finish while the car is already moving into the adjacent forward lane.
+do
+ local function road(lateral,transition)
+  local c={lateral=lateral,radius=9.66,lanes='++++',lane={centre=7.245,width=4.83},points={}}
+  for along=0,100,5 do
+   local radius=along>=transition and 12.97 or 9.66
+   c.points[#c.points+1]={x=0,y=along,z=0,along=along,fx=0,fy=1,rx=1,ry=0,
+    lanes='++++',radius=radius,lo=-radius,hi=radius,junction=false}
+  end
+  return c
+ end
+ check(M.passingCorridor(road(7.245,60),2.415,2.2,5.49,42)~=nil,
+  'entry checks the complete lane change and obstacle clearance before the later widening')
+ check(M.passingCorridor(road(6.336,48),2.415,2.2,5.49,29,31.47)~=nil,
+  'a committed pass checks its remaining shift instead of restarting the full look-ahead distance')
+ check(M.passingCorridor(road(6.336,20),2.415,2.2,5.49,29,31.47)==nil,
+  'a width change inside the remaining manoeuvre still rejects the corridor')
+ check(M.passingCorridor(road(5.204,28),2.415,2.2,5.49,11.59,13.47)~=nil,
+  'later rechecks retain the original finish rather than extending it with each position')
+end
+
 print(string.format('static obstacle geometry: %d checks passed',checks))

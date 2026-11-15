@@ -705,6 +705,32 @@ do
   spawn, quatFromDir, log = oldSpawn, oldQuat, oldLog
 end
 
+-- A terrain hold at a completed endpoint is different from waiting for more graph.
+do
+  local oldSpawn,oldQuat,oldLog=spawn,quatFromDir,log
+  local recoveries=0
+  spawn={safeTeleport=function()recoveries=recoveries+1 end}
+  quatFromDir=function(d)return d end;log=function()end
+  local f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1);f.gps.onAiSurfaceGap(1,true)
+  for i=1,70 do f:step()end
+  T.check(recoveries==1,'a reported surface gap at a finished endpoint retains ordinary recovery')
+  recoveries=0;f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1);f.gps.onAiSurfaceGap(1,true)
+  f.gps.setAutodrive(true) -- an idempotent API request must not consume the latched report
+  for i=1,70 do f:step()end
+  T.check(recoveries==1,'re-enabling active Autodrive preserves terrain recovery at a finished endpoint')
+  recoveries=0;f=fixture({'w','j'},2,6)
+  f.x,f.speed=98,0;f.gps.onAiRouteDone(1)
+  f.gps.onAiSurfaceGap(2,true)
+  for i=1,70 do f:step()end
+  T.check(recoveries==0,'another vehicle cannot turn a streaming wait into terrain recovery')
+  f.gps.onAiSurfaceGap(1,true);f.gps.onAiSurfaceGap(1,false)
+  for i=1,70 do f:step()end
+  T.check(recoveries==0,'a fresh clear probe removes the terrain-recovery exception')
+  spawn,quatFromDir,log=oldSpawn,oldQuat,oldLog
+end
+
 -- A position-based marker leg can restart on a coincident, disconnected road. Exact node pins must keep
 -- Autodrive on its confirmed graph chain instead of reducing every refresh to the reached first waypoint.
 do
