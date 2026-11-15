@@ -2177,7 +2177,7 @@ M._deckCtx = {
     end
     return veh
   end,
-  deckAt = function(x, y) return roads.deckAt(x, y) end,
+  grid = roads.deckGrid,          -- (the road tiles, walked along a span: roads.lua)
   -- the block's ground (the terrain's height), nil off its collidable area (getTerrainHeight answers the base there)
   groundAt = function(x, y)
     local b = st.block

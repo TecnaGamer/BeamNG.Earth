@@ -178,6 +178,68 @@ do
   print(string.format('  worst-case look %.3f ms', ms))
 end
 
+-- the tile grid's walk (Codex review round 5): every cell a piece crosses, a corner clipped too
+do
+  local cells = {}
+  G._cellsAlong(0.5, 0.5, 2.5, 1.6, function(ix, iy, t0, t1) cells[#cells + 1] = ix .. '_' .. iy; return false end)
+  T.check(table.concat(cells, ' ') == '0_0 1_0 1_1 2_1', 'the cells crossed, in order: ' .. table.concat(cells, ' '))
+  cells = {}
+  G._cellsAlong(3.9, 0.2, 3.2, 0.9, function(ix, iy) cells[#cells + 1] = ix .. '_' .. iy end)
+  T.check(table.concat(cells, ' ') == '3_0', 'within one cell: that one')
+  cells = {}
+  G._cellsAlong(0.1, 0.95, 1.2, 1.4, function(ix, iy) cells[#cells + 1] = ix .. '_' .. iy end)
+  T.check(table.concat(cells, ' ') == '0_0 0_1 1_1', 'a corner clipped: ' .. table.concat(cells, ' '))
+end
+
+-- a missing tile's corner clipped by a diagonal bridge between two tiles that are in (Codex review round 5)
+do
+  local w = world()
+  w.groundAt = function(x, y)
+    if (math.abs(x - 300) <= 1 and math.abs(y + 10) <= 1) or (math.abs(x - 360) <= 1 and math.abs(y - 50) <= 1) then
+      return 10
+    end
+    if x < 300 then return 10 end                   -- (its approach)
+    return 2
+  end
+  local grid = {                                    -- (20 m tiles: only the one at x 300-320, y 0-20 missing)
+    xy = function(x, y) return x / 20, y / 20 end,
+    at = function(ix, iy) if ix == 15 and iy == 0 then return 'missing', 'g17_15_0' end return 'ready' end,
+  }
+  local g = guard({ { 300, -10, 360, 50 } })
+  local d = G.look(g, { clock = 0, x = 200, y = -110, z = 10.5, vx = 30, vy = 30, groundAt = w.groundAt, grid = grid,
+    vehId = 1 })
+  T.check(d ~= nil and d.key == 'g17_15_0', 'the corner of the missing tile it clips: the gap')
+  T.check(d and d.x >= 310 and d.x <= 320 and d.y >= 0 and d.y <= 10, 'at the corner: ' .. tostring(d and d.x) .. ', '
+    .. tostring(d and d.y))
+end
+
+-- a curved bridge the path's arc leaves: its gap further along it still found (scanned along the span to the look's
+-- reach); a fork off a bridge ahead: its gap found before the car is on the first one
+do
+  local w = world()
+  w.deckAt = function(x, y) if x >= 380 then return 'missing', 'g17_8_8' end return 'ready' end
+  w.groundAt = function(x, y) if x > 303 then return 2 end return 10 end
+  -- (a bridge from (300, 0) curving north: 30 m east, then north-east)
+  local g = guard({ { 300, 0, 340, 0, 380, 30, 410, 70 } })
+  local d = look(g, w, 150, 0, 10.5, 35, 0, 0)
+  T.check(d ~= nil and d.key == 'g17_8_8' and d.d > 200 and d.d < 250, 'a curved bridge: its gap along it ' ..
+    tostring(d and d.d))
+  -- (A from the ground at (300, 0) to a fork at (340, 0), B on from there; B's tile missing past x 360)
+  local wf = world()
+  wf.deckAt = function(x, y) if x >= 360 then return 'missing', 'g17_9_9' end return 'ready' end
+  wf.groundAt = function(x, y)
+    if math.abs(x - 300) <= 1 or math.abs(x - 400) <= 1 then return 10 end
+    if x < 300 then return 10 end
+    return 2
+  end
+  local gf = G.new()
+  G.onSpans(gf, { anchorId = 1, spans = { { 300, 0, 340, 0 }, { 340, 0, 400, 0 }, { 340, 0, 400, 40 } },
+    abut = { 1, 2, 2 } }, 1)
+  local df = look(gf, wf, 200, 0, 10.5, 30, 0, 0)
+  T.check(df ~= nil and df.key == 'g17_9_9' and df.d >= 155 and df.d <= 165, 'a fork off a bridge ahead: its gap ' ..
+    tostring(df and df.d))
+end
+
 -- already on a solid part of it: the next tile's part missing
 do
   local w = world()

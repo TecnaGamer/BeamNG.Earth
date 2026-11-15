@@ -9,8 +9,9 @@
 -- Every LOOK_S (only then; nothing at all while no span comes within reach of the car, and nothing per frame while no
 -- gap is ahead) the guard follows the car's path ahead (an arc: its heading and turn rate) for its braking distance and
 -- LEAD_S more, and finds the first place on a span the car drives onto (along it, entered at an end at the deck's level,
--- or already on it) whose road tile has not arrived (roads.deckAt) where the block's ground lies DROP_M or more under the
--- deck's level (the abutments' ground heights): the gap. Then, every frame, as softdrag.lua does (the whole vehicle's
+-- or already on it) whose road tile has not arrived (roads.deckGrid: every tile its line crosses, walked along the span
+-- as far as the look reaches) where the block's ground lies DROP_M or more under the deck's level (the abutments'
+-- ground heights): the gap. Then, every frame, as softdrag.lua does (the whole vehicle's
 -- velocity scaled: in BeamMP too, nothing paused, only our own car):
 --   drag    within DRAG_S of the gap a little drag, smoothstep up to K_MAX at FULL_S (no jolt)
 --   brake   the speed capped at sqrt(2 A (d - STOP_M)) (the car comes to rest STOP_M short of the gap), at most A_MAX
@@ -178,8 +179,8 @@ end
 -- Codex review round 3: a higher road in the corridor), or, with no abutment height known, off a deck it was riding.
 -- Ahead (k > 1): only at an end (END_M), only with that end's abutment height known, the path's own ground just short
 -- of it at that height (a road under the bridge stays low there: Codex review round 4, a road below braked from far
--- off) and, near it, the car too; an end on another deck only off a deck the car is riding.
-entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py)
+-- off) and, near it, the car too; an end on another deck only off a deck the path drives along there (viaDeck).
+entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
   local fromEnd = d > 0 and u or (sp.len - u)
   if k == 1 and g.riding[sp.id] then return true end
   local abutted = (d > 0 and sp.abut0) or (d < 0 and sp.abut1)
@@ -195,7 +196,7 @@ entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py)
       end
       return true
     end
-    if not abutted then return next(g.riding) ~= nil end     -- (off another deck, at a fork)
+    if not abutted then return viaDeck(k) end               -- (off another deck the path is on, at a fork)
     if k > 1 then return false end                            -- (its height not known yet: no braking for it yet)
   elseif k > 1 then
     return false                                              -- (into its middle: it is crossed or passed under)
@@ -205,68 +206,98 @@ entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py)
 end
 
 M.SCAN_M = 2                -- m between the span's points looked at for a drop
-M.TILE_SCAN_M = 32          -- m between its points asked for their road tile (a stretch missing if either end is)
+M.PIECE_M = 64              -- m: a span's segments cut into pieces at most this long for the tile grid's walk
 
--- The first gap on the stretch of span sp the path drives (from where it enters, its end when it enters there, to a
--- step past its last sample; along it, not at the path's samples: an 8 m bridge fell between them at every look, Codex
--- review round 4): a point whose road tile is missing, the block's ground DROP_M or more under the deck's level there
--- (or either unknown). { u, x, y, key, level } or nil.
-scanSpan = function(sp, kin, dir, uin, kout, uout, n, deckAt, groundAt)
-  local a = uin
-  local fromEnd = dir > 0 and uin or (sp.len - uin)
-  if kin > 1 and fromEnd <= M.END_M then a = dir > 0 and 0 or sp.len end   -- (entered ahead at its end: from there)
-  local b = uout
-  if kout < n then b = uout + dir * M.STEP_M end
-  b = min(sp.len, max(0, b))
-  local span = (b - a) * dir
-  if span < 0 then return nil end
-  local tstep = M.TILE_SCAN_M
-  local lastT, lastSt, lastKey = nil, nil, nil
-  local nextSt, nextKey, nextT = nil, nil, nil
-  local edge = nil                          -- (t where the tiles turn missing between a ready and a missing sample)
-  local function at(t) local qx, qy = pointAt(sp, a + dir * t); return deckAt(qx, qy) end
-  local function tileState(t)               -- (the state at the tile samples either side of t: missing if either is)
-    local t0 = floor(t / tstep) * tstep
-    local t1 = min(span, t0 + tstep)
-    if lastT ~= t0 then
-      if nextT == t0 then lastSt, lastKey = nextSt, nextKey else lastSt, lastKey = at(t0) end
-      lastT = t0
-      nextSt, nextKey = at(t1)
-      nextT = t1
-      edge = nil
-      if lastSt ~= 'missing' and nextSt == 'missing' then    -- (where in between: halved down to SCAN_M)
-        local lo, hi = t0, t1
-        while hi - lo > M.SCAN_M do
-          local mid = (lo + hi) / 2
-          if at(mid) == 'missing' then hi = mid else lo = mid end
-        end
-        edge = lo
-      end
-    end
-    if lastSt == 'missing' then return 'missing', lastKey end
-    if nextSt == 'missing' and t >= (edge or t0) then return 'missing', nextKey end
-    return 'ready'
-  end
+-- The cells of the tile grid a straight piece crosses, in order, from fractional grid point (f0x, f0y) to (f1x, f1y)
+-- (Amanatides-Woo): visit(ix, iy, t0, t1) for each, t the piece's share; stops when visit returns true. Every cell the
+-- piece passes through is visited (one passed at a corner exactly too, with no length).
+local function cellsAlong(f0x, f0y, f1x, f1y, visit)
+  local ix, iy = floor(f0x), floor(f0y)
+  local dx, dy = f1x - f0x, f1y - f0y
+  local sx = dx > 0 and 1 or (dx < 0 and -1 or 0)
+  local sy = dy > 0 and 1 or (dy < 0 and -1 or 0)
+  local inf = math.huge
+  local tmx = sx > 0 and (ix + 1 - f0x) / dx or (sx < 0 and (f0x - ix) / -dx or inf)
+  local tmy = sy > 0 and (iy + 1 - f0y) / dy or (sy < 0 and (f0y - iy) / -dy or inf)
+  local tdx = sx ~= 0 and 1 / abs(dx) or inf
+  local tdy = sy ~= 0 and 1 / abs(dy) or inf
   local t = 0
-  while t <= span + 1e-6 do
-    local st, key = tileState(t)
-    if st == 'missing' then
-      local u = a + dir * t
+  for _ = 1, 100000 do
+    local tn = min(tmx, tmy, 1)
+    if visit(ix, iy, t, tn) then return true end
+    if tn >= 1 then return false end
+    if tmx < tmy then ix, t, tmx = ix + sx, tmx, tmx + tdx else iy, t, tmy = iy + sy, tmy, tmy + tdy end
+  end
+  return false
+end
+M._cellsAlong = cellsAlong
+
+-- The first gap on span sp from a to b m along it (going dir): every road tile its line crosses on the way (walked over
+-- the tile grid: grid.xy(x, y) -> fractional cell, grid.at(ix, iy) -> 'missing' | 'ready', key), and in each one whose
+-- tile is missing, the block's ground at its entry, every SCAN_M and at its exit, DROP_M or more under the deck's level
+-- there (or either unknown). Codex review rounds 4 / 5: the path's 8 m samples skipped an 8 m bridge, and 32 m probes a
+-- missing tile's corner clipped between two ready ones. { u, x, y, key, level } or nil.
+scanSpan = function(sp, dir, a, b, grid, groundAt)
+  if (b - a) * dir < 0 then return nil end
+  -- the stretch's points: its ends and the span's points between them, pieces at most PIECE_M long
+  local us = { a }
+  local cum = sp.cum
+  if dir > 0 then
+    for k = 1, sp.n do if cum[k] > a and cum[k] < b then us[#us + 1] = cum[k] end end
+  else
+    for k = sp.n, 1, -1 do if cum[k] < a and cum[k] > b then us[#us + 1] = cum[k] end end
+  end
+  us[#us + 1] = b
+  local found = nil
+  local function cell(u0, u1, ix, iy)
+    local st, key = grid.at(ix, iy)
+    if st ~= 'missing' then return false end
+    local len = abs(u1 - u0)
+    local m = max(1, math.ceil(len / M.SCAN_M))
+    for j = 0, m do
+      local u = u0 + (u1 - u0) * j / m
       local qx, qy = pointAt(sp, u)
       local lz = levelAt(sp, u, groundAt)
       local gz = lz and groundAt(qx, qy)
-      if not (lz and gz) or gz < lz - M.DROP_M then return { u = u, x = qx, y = qy, key = key, level = lz } end
-      t = t + M.SCAN_M
-    elseif edge and lastT == floor(t / tstep) * tstep and t < edge then
-      t = edge                                     -- (on to where the tiles turn missing)
-    else
-      t = (floor(t / tstep) + 1) * tstep          -- (a stretch whose tiles are in: skipped whole)
+      if not (lz and gz) or gz < lz - M.DROP_M then
+        found = { u = u, x = qx, y = qy, key = key, level = lz }
+        return true
+      end
+    end
+    return false
+  end
+  local lastU, lfx, lfy = nil, nil, nil
+  for i = 1, #us - 1 do
+    local u0, u1 = us[i], us[i + 1]
+    local pieces = max(1, math.ceil(abs(u1 - u0) / M.PIECE_M))
+    for j = 1, pieces do
+      local pa = u0 + (u1 - u0) * (j - 1) / pieces
+      local pb = u0 + (u1 - u0) * j / pieces
+      local f0x, f0y
+      if lastU == pa then f0x, f0y = lfx, lfy else f0x, f0y = grid.xy(pointAt(sp, pa)) end
+      local f1x, f1y = grid.xy(pointAt(sp, pb))
+      lastU, lfx, lfy = pb, f1x, f1y
+      if cellsAlong(f0x, f0y, f1x, f1y, function(ix, iy, t0, t1)
+        return cell(pa + (pb - pa) * t0, pa + (pb - pa) * t1, ix, iy)
+      end) then return found end
     end
   end
   return nil
 end
 
--- Pure: one look along the path. inp = { clock, x, y, z, vx, vy, vehId, deckAt(x, y) -> 'missing' | 'ready', tile key;
+-- A tile grid from a point question deckAt(x, y) -> state, key (tests, tools): cells POINT_CELL_M square, each asked at
+-- its centre.
+M.POINT_CELL_M = 2
+function M.pointGrid(deckAt)
+  local c = M.POINT_CELL_M
+  return {
+    xy = function(x, y) return x / c, y / c end,
+    at = function(ix, iy) return deckAt((ix + 0.5) * c, (iy + 0.5) * c) end,
+  }
+end
+
+-- Pure: one look along the path. inp = { clock, x, y, z, vx, vy, vehId, grid (the road tiles: xy(x, y) -> fractional
+-- cell, at(ix, iy) -> 'missing' | 'ready', key; roads.deckGrid) or deckAt(x, y) -> 'missing' | 'ready', key (pointGrid);
 -- groundAt(x, y) -> the block's ground height there or nil }. Sets g.danger = { d (m along the path to the gap), x, y
 -- (its place on the span), id (the span's), span, key (the tile), level (the deck's level there), at } or nil; returns it.
 function M.look(g, inp)
@@ -309,9 +340,20 @@ function M.look(g, inp)
   -- onPath: every span the path drives onto, a predicted entry too (its level asked again at every look, near it the
   -- abutment's height decides: Codex review 2026-11-15, a road under a bridge once taken far off kept for good)
   local riding, onPath, best = {}, {}, nil
-  local groundAt, deckAt = inp.groundAt, inp.deckAt
-  for _, sp in ipairs(cands) do
-    local kin, dir, uin, kout, uout = nil, nil, nil, nil, nil
+  local groundAt, grid = inp.groundAt, inp.grid or M.pointGrid(inp.deckAt)
+  -- a fork's end (on another deck): driven onto only off a deck the path drives along there (one entered this look, or
+  -- the one the car is on now)
+  local entered = {}
+  local function viaDeck(k)
+    if k == 1 then return next(g.riding) ~= nil end
+    local hx, hy = px[k - 1], py[k - 1]
+    for _, e in ipairs(entered) do
+      if inBox(e.box, hx, hy, M.LAT_M) and nearest(e, hx, hy) <= M.LAT_M then return true end
+    end
+    return false
+  end
+  local function enter(sp)
+    local kin, dir, uin
     for k = 1, n do
       local hx, hy = px[k], py[k]
       local on, u, c = false, 0, 0
@@ -321,31 +363,45 @@ function M.look(g, inp)
         c = pdx[k] * sx + pdy[k] * sy
         on = dist <= M.LAT_M and abs(c) >= M.COS_MIN
       end
-      if not on then
-        if kin then break end
-      else
+      if on then
         local d = c > 0 and 1 or -1
-        if not kin then
-          if not entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py) then break end
-          kin, dir, uin = k, d, u
-          onPath[sp.id] = true
-          if k == 1 then riding[sp.id] = true end
-        elseif d ~= dir then
-          break
-        end
-        kout, uout = k, u
+        if not entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck) then return nil end
+        return k, d, u
       end
     end
-    if kin and g.released[sp.id] == nil then
-      local gap = scanSpan(sp, kin, dir, uin, kout, uout, n, deckAt, groundAt)
-      if gap then
-        local s = max(0, (kin - 1) * M.STEP_M + (gap.u - uin) * dir)
-        if not best or s < best.d then
-          best = { d = s, x = gap.x, y = gap.y, id = sp.id, span = sp, key = gap.key, level = gap.level or (z - 0.5),
-            at = inp.clock }
+    return nil
+  end
+  local todo = cands
+  for _ = 1, 3 do                   -- (again for the forks off a deck entered in the round before)
+    local rest = {}
+    for _, sp in ipairs(todo) do
+      local kin, dir, uin = enter(sp)
+      if kin then
+        entered[#entered + 1] = sp
+        onPath[sp.id] = true
+        if kin == 1 then riding[sp.id] = true end
+        if g.released[sp.id] == nil then
+          -- from where the path drives onto it (its end, when that is ahead) along it as far as the look reaches: a
+          -- car on a bridge follows the bridge (the path's arc may leave its corridor on a curved one)
+          local fromEnd = dir > 0 and uin or (sp.len - uin)
+          local a = (kin > 1 and fromEnd <= M.END_M) and (dir > 0 and 0 or sp.len) or uin
+          local rem = max(0, L - (kin - 1) * step)
+          local b = dir > 0 and min(sp.len, uin + rem) or max(0, uin - rem)
+          local gap = scanSpan(sp, dir, a, b, grid, groundAt)
+          if gap then
+            local sd = max(0, (kin - 1) * step + (gap.u - uin) * dir)
+            if not best or sd < best.d then
+              best = { d = sd, x = gap.x, y = gap.y, id = sp.id, span = sp, key = gap.key,
+                level = gap.level or (z - 0.5), at = inp.clock }
+            end
+          end
         end
+      else
+        rest[#rest + 1] = sp
       end
     end
+    if #rest == #todo then break end
+    todo = rest
   end
   -- a span let go (GIVE_UP_S) is the guard's again once the car is off it
   for id in pairs(g.released) do
@@ -442,7 +498,7 @@ end
 function M.waiting(g) return g.held == true or g.mode == 'wait' end
 
 -- With the engine. ctx = { clock, dtSim, dtReal, pl (core st.player: x y z vx vy), anchorId, getVeh() (the player's
--- vehicle or nil: called only with a gap ahead), deckAt, groundAt, hold (simhold) }. Returns the mode: 'off' | 'clear' | 'slow' | 'wait' | 'hold'.
+-- vehicle or nil: called only with a gap ahead), grid (roads.deckGrid) or deckAt, groundAt, hold (simhold) }. Returns the mode: 'off' | 'clear' | 'slow' | 'wait' | 'hold'.
 function M.update(g, ctx)
   local pl = ctx.pl
   if not M.ON or not pl or pl.camera or g.aid == nil or g.aid ~= ctx.anchorId then
@@ -455,7 +511,7 @@ function M.update(g, ctx)
   if clock >= g.nextLook then
     g.nextLook = clock + M.LOOK_S
     M.look(g, { clock = clock, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx or 0, vy = pl.vy or 0, vehId = pl.vehicleId,
-      deckAt = ctx.deckAt, groundAt = ctx.groundAt })
+      grid = ctx.grid, deckAt = ctx.deckAt, groundAt = ctx.groundAt })
   end
   -- (nothing ahead and no gap just passed: no engine call at all)
   if not g.danger and not (g.ep and g.ep.confirmed and clock <= (g.ep.untilT or -math.huge)) then

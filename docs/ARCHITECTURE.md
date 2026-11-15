@@ -876,7 +876,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   ground), from the cells already on disk, in its own thread, again every 150 m / 4 s and sent only when changed.
   Every 0.25 s (nothing at all while no span is within reach) the mod follows the car's path ahead (an arc at its turn
   rate) for its braking distance + 2 s and finds the first place on a span the car drives onto (along it, entered at an
-  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckAt`: no tile there; a tile in
+  end at the deck's level, or already on it) whose road tile has not arrived (`roads.deckGrid`: every tile the span crosses, walked over the tile grid; no tile there; a tile in
   makes its deck solid in time itself) where the block's ground lies 2 m or more under the deck's level (the
   abutments' heights, `getTerrainHeight`): then a light drag, the speed capped to stop 12 m short (4 m/s^2, at most
   7 m/s^2 taken off), a hold (simhold: our car only in BeamMP) if it cannot stop, a set-back if it went over anyway;
