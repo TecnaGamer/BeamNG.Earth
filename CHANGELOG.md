@@ -14,6 +14,11 @@ What changed in each release of BeamNG.Earth, newest first.
 
 Works with BeamNG.drive 0.40.5.
 
+> **BeamMP server hosts: please update your server's BeamNG.Earth files.** While players are connected, BeamMP runs
+> the copy of BeamNG.Earth your server sends, not their own, so the multiplayer fixes below (the HUD flicker, far
+> players' cars, the bridge guard) only reach your players once your server sends 1.10.1 (the Host package or the
+> Docker image of this release).
+
 ### Fixed
 - **Reduced the chance of falling through a bridge that hasn't loaded yet**: the car now slows down smoothly and stops
   short of a bridge whose road hasn't arrived, is held there as a last resort, and is put back on the road if it went
