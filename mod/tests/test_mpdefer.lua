@@ -203,8 +203,14 @@ T.check(#spawned == 0, 'BeamMP\'s queue does not spawn it')
 -- our own car and a near player's: as before
 MPVehicleGE.handle(spawnRaw('0-0', 'Me', 50, 'pickup'))
 T.check(vehicles['0-0'].isLocal and not vehicles['0-0'].bngeHeld, 'our own car: untouched')
+-- (Codex review 4) a near BeamNG.Earth player's car goes to BeamMP only with a place in our frame: its spawn's
+-- coordinates are in its owner's frame; kept until its first packet, then spawned there
 MPVehicleGE.handle(spawnRaw('5-0', 'Near By', 12, 'covet'))
-T.check(#spawned == 1 and spawned[1].sid == '5-0' and not vehicles['5-0'].bngeHeld, 'a near player\'s car: spawned at once')
+T.check(#spawned == 0 and vehicles['5-0'].bngeHeld, 'a near player\'s car, no packet of its own yet: kept')
+positionGE.handle(posRaw('5-0', 36.52, -118.08, 36.5202, -118.0801))
+tick()
+T.check(#spawned == 1 and spawned[1].sid == '5-0' and not vehicles['5-0'].bngeHeld
+  and math.abs(spawned[1].data.pos[1] - ma.seen('5-0').x) < 1e-6, '... its first packet: spawned there')
 
 -- with the player's queue on: a far car kept too; a near one queued as BeamMP does
 sv.enableSpawnQueue = true
@@ -253,7 +259,7 @@ T.check(math.abs(last.data.pos[1] - seenNow.x) < 1e-6 and math.abs(last.data.pos
   and last.data.rot[4] > 0.8, 'at its latest place in our frame')
 T.check(vehicles['4-0'].isSpawned and not vehicles['4-0'].bngeHeld and not vehicles['4-0'].hideNametag,
   'BeamMP\'s record of it spawned; nothing kept')
-T.check(md.stats.released == 1 and #md.foci() == 0, 'counted')
+T.check(md.stats.released == 2 and #md.foci() == 0, 'counted')
 
 -- a far spawned car's edit: kept until it is near and on again
 for _ = 1, 3 do positionGE.handle(posRaw('5-0', 36.52, -118.08, 36.52, -118.08)) end
@@ -283,7 +289,9 @@ T.check(#edited == editsBefore + 1 and edited[#edited].data.jbm == 'bx' and edit
 -- (Codex review) the player's queue on: an older edit BeamMP queued while the car was near never overwrites a newer
 -- one kept after it went far; the kept (latest) edit is the one built when it is near again
 sv.enableSpawnQueue = false
+positionGE.handle(posRaw('5-1', 36.52, -118.08, 36.5203, -118.0802))
 MPVehicleGE.handle(spawnRaw('5-1', 'Near By', 31, 'covet'))
+T.check(math.abs(spawned[#spawned].data.pos[2] - ma.seen('5-1').y) < 1e-6, 'a near car with a packet first: spawned at once there')
 local gid51 = vehicles['5-1'].gameVehicleID
 T.check(vehicles['5-1'].isSpawned, 'a near car spawned')
 sv.enableSpawnQueue = true
@@ -335,6 +343,7 @@ T.check(ma.seen('8-0') == nil, 'its pose from the old anchor forgotten')
 -- the same for an edit of a spawned car in the settling window
 ma.setRemote(9, 36.52, -118.08)
 place[9] = { 36.52, -118.08 }
+positionGE.handle(posRaw('9-0', 36.52, -118.08, 36.52, -118.08))
 MPVehicleGE.handle(spawnRaw('9-0', 'Edit Hopper', 42, 'covet'))
 T.check(vehicles['9-0'].isSpawned, 'a near car spawned')
 positionGE.handle(posRaw('9-0', 36.52, -118.08, 36.52, -118.08))
@@ -362,12 +371,89 @@ local s12 = ma.seen('12-0')
 T.check(#spawned == n12 + 1 and spawned[#spawned].sid == '12-0' and math.abs(spawned[#spawned].data.pos[1] - s12.x) < 1e-6,
   'its first packet: spawned there')
 
+-- (Codex review 4) a kept car handed to BeamMP's queue (the player's queue on) whose owner's anchor changes before
+-- the queue spawns it (a teleport within RELEASE_M): taken back, never spawned at the pose from before; its next
+-- packet in our frame spawns it there. The same when OUR anchor changes (a rebase: the pose was in our old frame).
+local function queuedRelease(pid, sid, vid)
+  ma.setRemote(pid, PARIS[1], PARIS[2])
+  place[pid] = PARIS
+  MPVehicleGE.handle(spawnRaw(sid, 'Queued' .. pid, vid, 'pickup'))
+  ma.setRemote(pid, 36.51, -118.09)
+  place[pid] = { 36.51, -118.09 }
+  clockT = clockT + ma.SETTLE_S + 0.1
+  positionGE.handle(posRaw(sid, 36.51, -118.09, 36.5005, -118.1005))
+  groundOk = true
+  sv.enableSpawnQueue = true
+  tick()
+  return vehicles[sid]
+end
+local q13 = queuedRelease(13, '13-0', 61)
+T.check(q13.spawnQueue and not q13.bngeHeld and not q13.isSpawned, 'released into BeamMP\'s queue (queue on)')
+local old13 = jsonDecode(q13.spawnQueue.data).pos
+ma.setRemote(13, 36.53, -118.12)                      -- (its owner teleports 3 km on: still near)
+place[13] = { 36.53, -118.12 }
+local n13 = #spawned
+applyQueuedEvents()
+T.check(#spawned == n13 and vehicles['13-0'].bngeHeld and not vehicles['13-0'].spawnQueue,
+  'its owner\'s anchor changed: the queued spawn taken back at once, BeamMP\'s queue spawns nothing')
+tick(3)
+applyQueuedEvents()
+T.check(#spawned == n13, 'no packet since: still kept')
+clockT = clockT + ma.SETTLE_S + 0.1
+positionGE.handle(posRaw('13-0', 36.53, -118.12, 36.5010, -118.1010))
+tick()
+applyQueuedEvents()
+local sp13 = spawned[#spawned]
+T.check(#spawned == n13 + 1 and sp13.sid == '13-0' and math.abs(sp13.data.pos[1] - ma.seen('13-0').x) < 1e-6
+  and math.abs(sp13.data.pos[1] - old13[1]) > 1, 'its packet in our frame: spawned there, not at the old pose')
+-- our own anchor changes (a rebase) while a released spawn waits in BeamMP's queue
+local q14 = queuedRelease(14, '14-0', 62)
+T.check(q14.spawnQueue and not q14.bngeHeld, 'released into BeamMP\'s queue')
+local n14 = #spawned
+ma.announceOwn(36.505, -118.105)
+applyQueuedEvents()
+T.check(#spawned == n14 and vehicles['14-0'].bngeHeld, 'our anchor changed: the queued spawn taken back')
+ma.announceOwn(ME[1], ME[2])
+sv.enableSpawnQueue = false
+tick()
+
+-- (own pass after review 4) every other way an old or foreign pose could reach BeamMP:
+-- a near BeamNG.Earth car's spawn sitting in BeamMP's queue without a place in our frame (queued before the hook):
+-- taken in whatever its distance, spawned at its packet
+ma.setRemote(15, 36.51, -118.09)
+place[15] = { 36.51, -118.09 }
+vehicles['15-0'] = { serverVehicleString = '15-0', ownerID = 15, ownerName = 'Early', isSpawned = false, isLocal = false,
+  gameVehicleID = -1, remoteVehID = 71, position = vec3(0, 0, 0),
+  spawnQueue = { playerNickname = 'Early', serverVehicleID = '15-0',
+    data = jsonEncode({ vid = 71, jbm = 'van', pos = { 1, 2, 3 }, rot = { 0, 0, 0, 1 } }) } }
+tick()
+T.check(vehicles['15-0'].bngeHeld and not vehicles['15-0'].spawnQueue, 'a near Earth car queued without our-frame place: taken in')
+positionGE.handle(posRaw('15-0', 36.51, -118.09, 36.5004, -118.1004))
+sv.enableSpawnQueue = true
+local n15 = #spawned
+tick()
+T.check(vehicles['15-0'].spawnQueue and vehicles['15-0'].bngePosed, 'its packet: handed back to BeamMP\'s queue with a place')
+tick(2)
+T.check(vehicles['15-0'].spawnQueue and not vehicles['15-0'].bngeHeld, 'a queued spawn with a place: left in BeamMP\'s queue')
+applyQueuedEvents()
+T.check(#spawned == n15 + 1 and math.abs(spawned[#spawned].data.pos[1] - ma.seen('15-0').x) < 1e-6,
+  'BeamMP\'s queue spawns it at its place in our frame')
+sv.enableSpawnQueue = false
+-- a BeamNG.Earth player's kept car whose place is not known for long (no owner place, no packets): never spawned at
+-- the spawn's coordinates by the timeout
+ma.setRemote(16, PARIS[1], PARIS[2])
+MPVehicleGE.handle(spawnRaw('16-0', 'Placeless', 72, 'pickup'))
+T.check(vehicles['16-0'].bngeHeld, 'kept (place not known)')
+local n16 = #spawned
+tick(math.floor(2 * md.UNKNOWN_WAIT_S / md.TICK_S) + 2)
+T.check(vehicles['16-0'].bngeHeld and #spawned == n16, 'a known Earth player\'s car: no timeout spawn at foreign coordinates')
+
 -- BeamMP's own queue: a far car queued before the hook (or while its place was not known) taken in
+ma.setRemote(4, PARIS[1], PARIS[2])
+place[4] = PARIS
 vehicles['4-5'] = { serverVehicleString = '4-5', ownerID = 4, ownerName = 'Far Away', isSpawned = false, isLocal = false,
   gameVehicleID = -1, remoteVehID = 99, position = vec3(0, 0, 0),
   spawnQueue = { playerNickname = 'Far Away', serverVehicleID = '4-5', data = jsonEncode({ vid = 99, jbm = 'van' }) } }
-ma.setRemote(4, PARIS[1], PARIS[2])
-place[4] = PARIS
 clockT = clockT + 10                                  -- (its earlier packets stale: by its owner's place)
 local ui0 = #queueUI
 tick()

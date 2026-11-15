@@ -43,9 +43,18 @@ end
 -- Called by core.lua right after st.anchor is set (commitTeleport, finishRebase): every anchor
 -- change, including the player's very first one. A no-op outside a BeamMP session.
 -- core.lua: our anchor is now (lat, lon) (a teleport's or a rebase's commit).
+-- (mpdefer.lua: an anchor changed, ours (pid nil) or player pid's; every pose of its cars kept from before is stale)
+local function anchorChanged(pid)
+  local md = package.loaded['beamngEarth/mpdefer']
+  if md and md.onAnchorChange then pcall(md.onAnchorChange, pid) end
+end
+
 function M.announceOwn(lat, lon)
-  if lat ~= myLat or lon ~= myLon then M.ownChanged = true end
+  local changed = lat ~= myLat or lon ~= myLon
+  if changed then M.ownChanged = true end
+  local had = myLat ~= nil
   myLat, myLon = lat, lon
+  if changed and had then anchorChanged(nil) end
 end
 
 -- A player's position packets name no anchor: those it sent from its old place can arrive after the plugin told us
@@ -74,6 +83,7 @@ function M.setRemote(pid, lat, lon)
   lat, lon = M.coordinates(lat, lon)
   if not pid or not (pid >= 0 and pid < math.huge and pid % 1 == 0) or not lat then return false end
   local old = remote[pid]
+  local changed = (old and (old.lat ~= lat or old.lon ~= lon)) or (not old and expired[pid])
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
     -- (its cars' poses were worked out with the old anchor: after a teleport they say nothing of where the cars are
@@ -86,6 +96,12 @@ function M.setRemote(pid, lat, lon)
   end
   remote[pid] = { lat = lat, lon = lon }
   expired[pid] = nil
+  -- (known now: its untransformed poses from before (no BeamNG.Earth heard) are in no frame of ours)
+  local prefix = tostring(pid) .. '-'
+  for sid in pairs(rawSeen) do
+    if sid:sub(1, #prefix) == prefix then rawSeen[sid] = nil end
+  end
+  if changed then anchorChanged(pid) end
   return true
 end
 

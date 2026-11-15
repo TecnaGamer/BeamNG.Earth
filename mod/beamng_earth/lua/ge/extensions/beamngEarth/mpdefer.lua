@@ -223,7 +223,7 @@ end
 local function km(d) return d and string.format('%.0f km', d / 1000) or 'place not known' end
 
 -- A queued spawn taken off BeamMP's record v (its queue would spawn it): kept in v.bngeHeld.
-local function take(sid, v, role, d)
+local function take(sid, v, role, d, why)
   local q = v.spawnQueue
   if type(q) ~= 'table' or type(q.data) ~= 'string' then return false end
   v.spawnQueue = nil
@@ -238,7 +238,7 @@ local function take(sid, v, role, d)
   timers[sid] = { unknown = 0, ground = 0, nopose = 0, since = mpanchor.clock() }
   stats.held = stats.held + 1
   log('I', 'beamngEarth', string.format('BeamMP: car %s (%s) %s: its spawn kept, not spawned here', sid,
-    v.bngeHeld.name, d and ('far (' .. km(d) .. ')') or 'place not known yet'))
+    v.bngeHeld.name, why or (d and ('far (' .. km(d) .. ')') or 'place not known yet')))
   return true
 end
 
@@ -274,6 +274,15 @@ local function release(sid, v, s, why)
   stats.released = stats.released + 1
   log('I', 'beamngEarth', string.format('BeamMP: car %s (%s) %s: spawned', sid, h.name, why))
   original('s:' .. h.role .. ':' .. h.name .. ':' .. sid .. ':' .. json)
+  M.markPosed(sid, s ~= nil)
+end
+
+-- The record BeamMP made of a spawn handed to it with a place in our frame (now, by its owner's anchor now): a spawn
+-- of it waiting in BeamMP's queue may stay there (update's sweep takes in any other of a BeamNG.Earth player's).
+function M.markPosed(sid, posed)
+  local recs = records()
+  local v = recs and recs[sid]
+  if type(v) == 'table' then v.bngePosed = posed or nil end
 end
 
 local function releaseEdit(sid, v, why)
@@ -325,12 +334,26 @@ local function wrap(orig)
         return
       end
       if type(v) == 'table' and v.isSpawned ~= false then return orig(raw) end    -- (BeamMP's own update of a car)
-      local d = M.distOf(sid, pid)
-      if M.verdict(d, false, 0) == 'spawn' then return orig(raw) end
+      local d, s = M.distOf(sid, pid)
+      local why = nil
+      if M.verdict(d, false, 0) == 'spawn' then
+        if not mpanchor.knows(pid) then return orig(raw) end     -- (no BeamNG.Earth: its coordinates as BeamMP's)
+        -- A BeamNG.Earth player's car is handed to BeamMP only with a place in our frame: the spawn's coordinates are
+        -- in its owner's frame (another anchor), and BeamMP's queue spawns there when no position packet came first.
+        -- None yet: kept till its first packet (mpdefer.update; Codex review 4, 2026-11-15).
+        local dec = s and decode(data)
+        local json = dec and encode(M.withPose(dec, s))
+        if json then
+          orig('s:' .. role .. ':' .. name .. ':' .. sid .. ':' .. json)
+          M.markPosed(sid, true)
+          return
+        end
+        why = 'near (' .. km(d) .. '), no position of its own yet'
+      end
       if not queuedCall(orig, raw) then return end
       recs = records()
       v = recs and recs[sid]
-      if type(v) == 'table' and not v.isLocal and v.isSpawned == false then take(sid, v, role, d) end
+      if type(v) == 'table' and not v.isLocal and v.isSpawned == false then take(sid, v, role, d, why) end
       return
     elseif code == 'c' then
       if h then                                   -- (a kept spawn takes the edit: the latest config spawns)
@@ -387,6 +410,36 @@ local function wrap(orig)
   end
 end
 
+-- (mpanchor) An anchor changed: player pid's (a teleport), or ours (pid nil: a rebase or teleport). Every pose of
+-- their cars kept from before is stale: the cars moved with their owner, or our frame did. A spawn waiting in BeamMP's
+-- queue (one we handed back, or its own) carries such a pose (BeamMP spawns there when no packet comes first): taken
+-- back at once, before its queue can run, and kept until a position in our frame comes. A kept car's wait for its
+-- ground starts again at its new place. (Codex review 4, 2026-11-15)
+function M.onAnchorChange(pid)
+  if not isActive() then return end
+  local recs = records()
+  if not recs then return end
+  local mine = myPid()
+  local changed = false
+  for sid, v in pairs(recs) do
+    local owner = type(v) == 'table' and (tonumber(v.ownerID) or pidOf(sid))
+    if owner and not v.isLocal and owner ~= mine and (pid == nil or owner == pid) and v.isSpawned == false
+        and mpanchor.knows(owner) then
+      v.bngePosed = nil
+      if v.bngeHeld then
+        local w = timers[sid]
+        if w then w.ground, w.x, w.y, w.nopose = 0, nil, nil, 0 end
+      elseif type(v.spawnQueue) == 'table' then
+        if take(sid, v, nil, nil, pid and 'its owner\'s anchor changed' or 'our anchor changed') then
+          stats.taken = stats.taken + 1
+          changed = true
+        end
+      end
+    end
+  end
+  if changed then updateQueueUI(recs) end
+end
+
 -- Wraps MPVehicleGE.handle once per MPVehicleGE table (BeamMP reloaded: wrapped again). -> installed
 function M.install()
   local m = mp()
@@ -435,10 +488,16 @@ function M.update(dt)
           end
           local verdict = M.verdict(d, true, w.unknown)
           if verdict == 'spawn' and d == nil then
-            -- (place not known, spawned as BeamMP would: at its latest packet as sent, not the spawn's old place, which
-            -- the replay's new record would otherwise use; Codex review 2026-11-15)
-            local r = not mpanchor.knows(pid) and mpanchor.rawSeen(sid)
-            if r and r.t >= (w.since or -math.huge) then s = r end
+            if mpanchor.knows(pid) then
+              -- (a BeamNG.Earth player's car is never spawned at the spawn's coordinates, its owner's frame: it waits
+              -- for a place of its own in our frame, however long. Codex review 4, 2026-11-15)
+              verdict = 'hold'
+            else
+              -- (place not known, spawned as BeamMP would: at its latest packet as sent, not the spawn's old place,
+              -- which the replay's new record would otherwise use; Codex review 2026-11-15)
+              local r = mpanchor.rawSeen(sid)
+              if r and r.t >= (w.since or -math.huge) then s = r end
+            end
           end
           if verdict == 'spawn' and d ~= nil and not s then
             -- (near by its owner's place only: spawned only at a place of its own in our frame, its last packet
@@ -476,9 +535,13 @@ function M.update(dt)
           end
         end
       elseif v.spawnQueue and v.isSpawned == false then
-        -- (BeamMP's own queue: a far car queued before the hook was in, or while its place was not known)
+        -- (BeamMP's own queue: a far car queued before the hook was in, or while its place was not known; and any
+        -- spawn of a BeamNG.Earth player's car queued without a place in our frame (before the hook, or while it
+        -- passed packets through): its coordinates are in its owner's frame. Codex review 4, 2026-11-15)
         local d = M.distOf(sid, pid)
-        if M.verdict(d, false, 0) == 'hold' and d ~= nil and take(sid, v, nil, d) then
+        local unposed = mpanchor.knows(pid) and not v.bngePosed
+        if (unposed or (M.verdict(d, false, 0) == 'hold' and d ~= nil))
+            and take(sid, v, nil, d, unposed and 'queued without a place in our frame' or nil) then
           stats.taken = stats.taken + 1
           changed = true
         end
