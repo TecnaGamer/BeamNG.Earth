@@ -385,10 +385,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
   (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
   page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
-  helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
+  helper processes, and it uses less while your computer is short of memory, but never holds itself below 3 GB (the
+  least its own processes need: on an 8 GB or 4 GB computer too); the caches and the number of helper
   processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the
-  world load more slowly, not crash. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the
-  watchdog off.)
+  world load more slowly, not stop; when the limit is too low for the place, the status line and the settings page
+  say so. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the watchdog off.)
 - Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
   NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;

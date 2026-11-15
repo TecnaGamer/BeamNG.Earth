@@ -426,6 +426,7 @@ function M.memoryLine(m)
     line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
   end
   line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.tooLow then line = line .. '. Too low for this place: the world loads slowly, raise it' end
   if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
   return line
 end
