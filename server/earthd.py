@@ -467,6 +467,7 @@ HM_KEEP_SENT = 2            # terrains handed to the mod but maybe not committed
 # Generated far-tile files kept per server, by layout: a 64-cell tile is ~3.7x the bytes (348 KB)
 # and a pose needs ~300 tiles instead of ~811 (docs/V1_4_SPEC.md §3.1).
 TILE_CACHE = {32: 6000, 64: 2500}
+TILE_EVICT_SLACK = 0.05         # a full far-tile cache is evicted this far under its cap at once (Server._tile_done)
 HM_THREADS = 4
 HM_REQUEST_THREADS = 2          # Server.hm_req_pool: the request lane's (they wait on its block process)
 LAG_TICK_S, LAG_REPORT_S = 0.1, 0.25     # the event-loop stall report (-v)
@@ -494,6 +495,7 @@ VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at 
                                 # for the rest of it
 VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
+SELECT_SLACK_EPS = 1e-3          # m: a pose skips the far selection only when it moved less than its slack by this much
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
 WORLD_WARM_CONC = 2
 EYE_LOD_MIN_M = 3000.0          # an eye above this: the far tiles' detail by the 3D distance (eye_clearance)
@@ -1450,6 +1452,7 @@ class Server:
         # Heightmaps: (anchorId, cx, cy) -> info, LRU order.
         self.hm = OrderedDict()
         self.hm_inflight = {}
+        self.hm_removing = {}           # key -> the removal of its evicted files (evict_heightmaps; terrain waits)
         self.hm_stage = {}              # terrain key -> what its build waits on now (the stuck log, prepare_terrain)
         self.ter_serial = itertools.count()
         self.base_stale = set()         # blocks whose base photo lacks lazy imagery (NAIP) still to come
@@ -1647,10 +1650,15 @@ class Server:
         """A base photo name in out_dir gone with its packed copies in the game's terrain texture cache (whichever size it
         was made at). A replaced stand-in or earlier refresh lost only its photo, its 5.6-22 MB pack stayed for good:
         one a block at speed, 165 GB in the cache of a test PC by 2026-11-03."""
-        self._remove(os.path.join(self.out_dir, name))
-        for px in BASE_SIZES:
-            self._remove(os.path.join(terraincache.cache_dir(self.user_dir),
-                                      terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds"))
+        for p in self._base_paths(name):
+            self._remove(p)
+
+    def _base_paths(self, name):
+        """_remove_base's files."""
+        return [os.path.join(self.out_dir, name)] + [
+            os.path.join(terraincache.cache_dir(self.user_dir),
+                         terraincache.base_key(f"{self.vfs_dir}/{name}", base_ao_vfs(px)) + ".dds")
+            for px in BASE_SIZES]
 
     PACK_WIPE_MARK = "terrainpacks_wiped_v1"   # in the cache dir: the one wipe of the leaked packs done
     PACK_WIPE_MIN_BYTES = 5 * 1024 ** 3
@@ -5383,8 +5391,20 @@ class Server:
         if fut is None:
             loop = asyncio.get_running_loop()
             pool = self.hm_req_pool if lane == LANE_REQUEST and progress is None and self.block_pools else self.hm_pool
+            removing = self.hm_removing.pop(key, None)
+            if removing is not None and not removing.done():
+                # (its evicted files still being removed, under the names this build writes: after them; in the
+                # build's thread, the event loop never waits)
+                def make(*args, _rm=removing):
+                    try:
+                        _rm.result()
+                    except Exception as e:
+                        log.debug("terrain %s: its earlier files' removal: %s", key, e)
+                    return self.make_heightmap(*args)
+            else:
+                make = self.make_heightmap
             fut = self.hm_inflight[key] = loop.run_in_executor(
-                pool, self.make_heightmap, anchor, cx, cy, progress, lane, time.perf_counter())
+                pool, make, anchor, cx, cy, progress, lane, time.perf_counter())
             fut.add_done_callback(lambda f: self._hm_done(key, f))
         return await asyncio.shield(fut)
 
@@ -5431,19 +5451,58 @@ class Server:
                  if a.first_terrain is not None and (newest is None or aid > newest)}
         for key in [k for k in self.hm if k not in keep][:max(0, len(self.hm) - HM_CACHE)]:
             info = self.hm.pop(key)
-            self._remove(os.path.join(self.out_dir, self.hm_name(key)))
+            paths = [os.path.join(self.out_dir, self.hm_name(key))]
             self.base_stale.discard(key)
             self.base_pending.pop(key, None)
             # its photos (the base, a refreshed one, the stand-in) with their packed copies in the game's terrain
             # texture cache
-            for name in {self.base_name(key), info.get("base") or self.base_name(key), self.quick_base_name(key),
-                         *info.get("old_bases", ())}:
-                self._remove_base(name)
+            for name in sorted({self.base_name(key), info.get("base") or self.base_name(key), self.quick_base_name(key),
+                                *info.get("old_bases", ())}):
+                paths += self._base_paths(name)
             if info.get("ter"):
-                self._remove(os.path.join(self.out_dir, info["ter"]))
+                paths.append(os.path.join(self.out_dir, info["ter"]))
             if self.surface is not None:        # its surface masks (only read at import)
-                for name in surfacemod.mask_names(self.hm_name(key)[:-4]):
-                    self._remove(os.path.join(self.out_dir, name))
+                paths += [os.path.join(self.out_dir, name) for name in surfacemod.mask_names(self.hm_name(key)[:-4])]
+            # (off the event loop: ~20-40 removals a block, each up to tens of ms on a busy btrfs disk. A build of the
+            # same block (its files under the same names) waits for it: terrain(); Codex review: a check before the
+            # removals let a rebuild start under them and lose its files)
+            if len(self.hm_removing) > 256:
+                self.hm_removing = {k: f for k, f in self.hm_removing.items() if not f.done()}
+            self.hm_removing[key] = self.remove_off_loop(paths)
+
+    def remove_off_loop(self, paths, keep=None):
+        """Remove files (and their .tmp) in the "remove" thread, at once (not the paced delete queue: these went at
+        once before, on the event loop). keep: asked right before, in that thread; true: they stay. Returns the
+        removal's concurrent future (done at once when there is nothing to remove)."""
+        paths = list(paths)
+        done = concurrent.futures.Future()
+        if not paths:
+            done.set_result(None)
+            return done
+
+        def work():
+            if keep is not None and keep():
+                return
+            for p in paths:
+                self._remove(p)
+        pool = getattr(self, "_remove_pool", None)
+        if pool is None:
+            pool = self._remove_pool = ThreadPoolExecutor(1, thread_name_prefix="remove")
+        try:
+            return pool.submit(work)
+        except RuntimeError:                # (the pool shut down: at exit)
+            work()
+            done.set_result(None)
+            return done
+
+    def removes_flush(self):
+        """Wait until the removals remove_off_loop queued so far are done (tests, shutdown)."""
+        pool = getattr(self, "_remove_pool", None)
+        if pool is not None:
+            try:
+                pool.submit(lambda: None).result()
+            except RuntimeError:
+                pass
 
     # --- far tiles -------------------------------------------------------
     def tile_name(self, aid, key):
@@ -5549,16 +5608,21 @@ class Server:
         tiles): one off the screen (behind the camera, outside its view cone) MAP_TEX_OFF_PX, else at most
         MAP_TEX_OVERSAMPLE x its edge in screen pixels (at MAP_SCREEN_H px for the field of view), never under
         MAP_TEX_MIN_PX. Retextured as the camera turns (a texture's size may change, its UVs go by its own)."""
-        orig = tile
-        if isinstance(tile, farfield.Piece):
-            tile = tile.base                # (a piece takes its node's texture: the same size)
-        px = self.tex_size(tile.level)
-        if isinstance(tile, farfield.GTile) and tile.key in self.coarse_keys:
-            # (a teleport's coarse cover: a few photos, sharpened later)
-            px = min(px, FIRST_RAMP_NEAR_PX if tile.level <= farfield.GLOBAL_MIN_LEVEL else FIRST_RAMP_TEX_PX)
+        return self.tile_tex_px_many(anchor, [tile])[0]
+
+    def tile_tex_px_many(self, anchor, tiles):
+        """tile_tex_px of many tiles (the far PVS's sizes in one native call per connection: pvs_px_many)."""
+        bases = [t.base if isinstance(t, farfield.Piece) else t for t in tiles]    # (a piece: its node's texture)
+        pxs = []
+        for tile in bases:
+            px = self.tex_size(tile.level)
+            if isinstance(tile, farfield.GTile) and tile.key in self.coarse_keys:
+                # (a teleport's coarse cover: a few photos, sharpened later)
+                px = min(px, FIRST_RAMP_NEAR_PX if tile.level <= farfield.GLOBAL_MIN_LEVEL else FIRST_RAMP_TEX_PX)
+            pxs.append(px)
         # (the far PVS, farpvs.py: behind terrain from everywhere the player can be soon, a few photos until it is not;
         # in sight, what the screen resolves of it from there)
-        px = self.pvs_px(anchor, orig, px)
+        pxs = self.pvs_px_many(anchor, tiles, pxs)
         conn = None
         for c in self.connections:
             if c.active != anchor.id or not isinstance(getattr(c, "cam", None), dict):
@@ -5572,7 +5636,7 @@ class Server:
                 conn = c
                 break
         if conn is None:
-            return px
+            return pxs
         cam = conn.cam
         try:
             x, y, z = float(cam["x"]), float(cam["y"]), float(cam["z"])
@@ -5580,23 +5644,28 @@ class Server:
             gz = float(cam["tz"]) if cam.get("tz") is not None else z - conn.eye_clearance()
             fov = float(cam.get("fovDeg") or 60.0)
         except (KeyError, TypeError, ValueError):
-            return px
-        x0, y0, x1, y1 = tile.bbox
-        s = max(x1 - x0, y1 - y0)
-        dx, dy, dz = (x0 + x1) / 2 - x, (y0 + y1) / 2 - y, gz - z
-        d = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if d < s:
-            return px                       # (under the camera)
+            return pxs
         n = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
         tv = dmath.tan(math.radians(fov) / 2)
         half = dmath.atan(math.hypot(tv, tv * farfield.ASPECT))
-        slack = dmath.asin(min(1.0, s * 0.7071 / d))
-        ang = dmath.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
-        if ang - slack > half:
-            return min(px, MAP_TEX_OFF_PX)
-        on_screen = s * (MAP_SCREEN_H / (2 * tv)) / d
-        want = 2 ** math.ceil(dmath.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
-        return int(max(MAP_TEX_MIN_PX, min(px, want)))
+        out = []
+        for tile, px in zip(bases, pxs):
+            x0, y0, x1, y1 = tile.bbox
+            s = max(x1 - x0, y1 - y0)
+            dx, dy, dz = (x0 + x1) / 2 - x, (y0 + y1) / 2 - y, gz - z
+            d = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if d < s:
+                out.append(px)              # (under the camera)
+                continue
+            slack = dmath.asin(min(1.0, s * 0.7071 / d))
+            ang = dmath.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
+            if ang - slack > half:
+                out.append(min(px, MAP_TEX_OFF_PX))
+                continue
+            on_screen = s * (MAP_SCREEN_H / (2 * tv)) / d
+            want = 2 ** math.ceil(dmath.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
+            out.append(int(max(MAP_TEX_MIN_PX, min(px, want))))
+        return out
 
     @property
     def max_level(self):
@@ -5706,48 +5775,77 @@ class Server:
         PVS, farpvs.Set.tex_px: hidden behind terrain, or what its screen resolves of the tile from where its player can
         be soon; the most any of them needs), `full` at most; `full` when one of them has no set. A piece goes by its
         node."""
-        if not self.pvs_on or not self.pvs_fields:
-            return full
-        key = tile.key
-        glob = isinstance(tile, farfield.GTile)
-        best = None
-        up = self.up_px(anchor, tile, full)
+        return self.pvs_px_many(anchor, [tile], [full])[0]
+
+    def pvs_px_many(self, anchor, tiles, fulls):
+        """pvs_px of many tiles (fulls: each one's `full`), each connection's set asked once for all of them
+        (farpvs.Set.tex_px_many: one native call; tile by tile, a set coming in held the event loop ~15 ms per 700 far
+        tiles, several times that while the server's threads competed for the interpreter)."""
+        if not self.pvs_on or not self.pvs_fields or not tiles:
+            return list(fulls)
+        n = len(tiles)
+        ups = self.up_px_many(anchor, tiles, fulls)
+        glob = [isinstance(t, farfield.GTile) for t in tiles]
+        best, done = [None] * n, [None] * n
         for c in self.connections:
-            if c.active is None or (not glob and c.active != anchor.id):
+            if c.active is None:
                 continue
-            t = c.desired.get(key)
-            if t is None:
+            desired = c.desired
+            idx = [q for q in range(n) if done[q] is None and (glob[q] or c.active == anchor.id)
+                   and tiles[q].key in desired]
+            if not idx:
                 continue                    # (not this connection's: no say)
             s = getattr(c, "pvs", None)
             if s is None or s.aid != c.active:
-                return full
-            node = t.base if isinstance(t, farfield.Piece) else t
-            px = s.tex_px(key, node.bbox, t.level, node.size, full, up)
-            best = px if best is None else max(best, px)
-            if best >= up:
-                return up
-        return full if best is None else best
+                for q in idx:
+                    done[q] = fulls[q]
+                continue
+            rows = []
+            for q in idx:
+                key = tiles[q].key
+                t = desired[key]
+                node = t.base if isinstance(t, farfield.Piece) else t
+                rows.append((key, node.bbox, t.level, node.size, fulls[q], ups[q]))
+            for q, px in zip(idx, s.tex_px_many(rows)):
+                best[q] = px if best[q] is None else max(best[q], px)
+                if best[q] >= ups[q]:
+                    done[q] = ups[q]
+        return [done[q] if done[q] is not None else fulls[q] if best[q] is None else best[q] for q in range(n)]
 
     def up_px(self, anchor, tile, full):
         """The most texture px far tile `tile` may get where the screen resolves more of it than its level's `full`
         (farpvs.UP_ON, pvs_px): farpvs.UP_PX_MAX at most, and texels no finer than the sharpest photos at its middle
         (Imagery.sharp_zoom: USGS's z16 in the US, EOX's z14 elsewhere: larger would only enlarge them)."""
+        return self.up_px_many(anchor, [tile], [full])[0]
+
+    def up_px_many(self, anchor, tiles, fulls):
+        """up_px of many tiles, their middles' latitudes and longitudes in one call."""
         if not farpvsmod.UP_ON or self.imagery is None or getattr(anchor, "frame", None) is None:
-            return full
-        node = tile.base if isinstance(tile, farfield.Piece) else tile
-        x0, y0, x1, y1 = node.bbox
+            return list(fulls)
+        nodes = [t.base if isinstance(t, farfield.Piece) else t for t in tiles]
+        bbs = [node.bbox for node in nodes]
         try:
-            lat, lon, _ = anchor.frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
-            reach = imagerymod.zoom_for(float(lat), node.size / farpvsmod.UP_PX_MAX)
-            texel = imagerymod.ground_res(float(lat), self.imagery.sharp_zoom(float(lat), float(lon), reach))
-        except Exception as e:                  # (no imagery chain to ask: the level's own)
-            log.debug("far texture cap %s: %s", tile.key, e)
-            return full
-        px = full
-        while px * 2 <= farpvsmod.UP_PX_MAX and node.size / (px * 2) >= texel * 0.9:   # (a z14 tile at 1024 px
-            # over USGS's z16 is 1.885 m against 1.88: the same photos, not enlarged)
-            px *= 2
-        return px
+            lat, lon, _ = anchor.frame.enu_to_geodetic(np.array([(b[0] + b[2]) / 2 for b in bbs], np.float64),
+                                                       np.array([(b[1] + b[3]) / 2 for b in bbs], np.float64), 0.0)
+            lat, lon = np.atleast_1d(lat).tolist(), np.atleast_1d(lon).tolist()
+        except Exception as e:
+            log.debug("far texture caps: %s", e)
+            return list(fulls)
+        out = []
+        for node, full, la, lo, t in zip(nodes, fulls, lat, lon, tiles):
+            try:
+                reach = imagerymod.zoom_for(la, node.size / farpvsmod.UP_PX_MAX)
+                texel = imagerymod.ground_res(la, self.imagery.sharp_zoom(la, lo, reach))
+            except Exception as e:              # (no imagery chain to ask: the level's own)
+                log.debug("far texture cap %s: %s", t.key, e)
+                out.append(full)
+                continue
+            px = full
+            while px * 2 <= farpvsmod.UP_PX_MAX and node.size / (px * 2) >= texel * 0.9:   # (a z14 tile at 1024 px
+                # over USGS's z16 is 1.885 m against 1.88: the same photos, not enlarged)
+                px *= 2
+            out.append(px)
+        return out
 
     def pvs_hidden(self, anchor, tile):
         """Is far tile `tile` (shown under `anchor`) hidden behind terrain for every connection that wants it (each
@@ -5779,7 +5877,23 @@ class Server:
         if self.imagery is not None:
             frame, x0, y0, size = self.tile_where(anchor, tile)
             px = self.tile_tex_px(anchor, tile)
-            self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=soon, gutter=True)
+            # (the photo tiles it needs worked out in the "img-plan" thread, in order: the Mercator grid and its maths
+            # were the event loop's, imagery._ll in the stall reports of a BeamMP drive, 2026-11-15)
+            pool = getattr(self, "_img_plan_pool", None)
+            if pool is None:
+                pool = self._img_plan_pool = ThreadPoolExecutor(1, thread_name_prefix="img-plan")
+            args = (frame, *imagerymod.gutter_square(x0, y0, size, px), px)
+            im = self.imagery
+
+            def run():
+                try:
+                    im.prefetch(*args, soon=soon, gutter=True)
+                except Exception as e:      # (fire and forget: render meets any error)
+                    log.debug("imagery prefetch: %s: %s", type(e).__name__, e)
+            try:
+                pool.submit(run)
+            except RuntimeError:            # (the pool shut down: at exit)
+                pass
 
     # --- BeamMP shared world generation v2 (mpshare.py, .claude/work/mp_share_v2.md) --------------------------------
     def share_parts(self):
@@ -6859,6 +6973,7 @@ class Server:
             d, k = self.lod_errs, (ck[0], node)
         d.pop(k, None)
         d[k] = float(e)
+        self.lod_errs_gen = getattr(self, "lod_errs_gen", 0) + 1     # (Connection._far_unchanged)
         if len(d) > LOD_ERRS_MAX:
             for old in list(itertools.islice(d, len(d) - LOD_ERRS_MAX * 3 // 4)):
                 del d[old]
@@ -6895,10 +7010,14 @@ class Server:
             self._retex_pump()
         if self.matslots.short():
             self.reclaim_names()
-        if len(self.tiles) > self.tile_cache:
+        if len(self.tiles) > self.tile_cache and len(self.tiles) >= getattr(self, "_evict_next", 0):
+            # (down to TILE_EVICT_SLACK under the cap, the next pass that many tiles later: a pass is O(tiles) (in_use,
+            # the scan), and once the cache was full every finished tile made one on the event loop)
             used = self.in_use()
-            for old in [k for k in self.tiles if k not in used][:len(self.tiles) - self.tile_cache]:
+            target = int(self.tile_cache * (1.0 - TILE_EVICT_SLACK))
+            for old in [k for k in self.tiles if k not in used][:max(0, len(self.tiles) - target)]:
                 self._evict_tile(old)
+            self._evict_next = len(self.tiles) + max(1, int(self.tile_cache * TILE_EVICT_SLACK))
 
     def reclaim_names(self):
         """Event loop: the pooled names (and shape files) of tiles about to be neither sent nor built back to the
@@ -7246,6 +7365,7 @@ class Server:
                 del self.tiles[ck]
             for k in [k for k in self.lod_errs if k[0] == aid]:
                 del self.lod_errs[k]
+            self.lod_errs_gen = getattr(self, "lod_errs_gen", 0) + 1
             for ck in [k for k in self.matslots.holders() if k[0] == aid]:
                 self.matslots.release(ck)
             for ck in [ck for ck in list(self.degraded) if ck[0] == aid]:     # list(): workers add meanwhile
@@ -8577,6 +8697,7 @@ class Connection:
         self.nav = navgraphmod.Tracker()
         self.active = None              # (far tiles in flight land unwanted: not desired, skipped)
         self.shown, self.sent, self.desired, self.groups, self.queue, self.qi = {}, {}, {}, [], [], 0
+        self._rg_last = self._far_last = None
         self.refined, self.node_changed, self.failed = set(), {}, set()
         log.info("world reset: the mod's level started again, every tile sent anew")
 
@@ -9505,12 +9626,9 @@ class Connection:
         olds = [provisional_ter] + self.graded_sent(key)
         grounds = self.s.ground_bases.pop(key, [])
         await asyncio.sleep(PROVISIONAL_KEEP_S)
-        for t in olds:
-            if t and t != info.get("ter"):
-                self.s._remove(os.path.join(self.s.out_dir, t))
-        for g in grounds:               # (its ground stand-in photos with their packs; kept if the graded one shows one)
-            if g != info.get("base"):
-                self.s._remove_base(g)
+        # (off the event loop: Server.remove_off_loop)
+        self.s.remove_off_loop([os.path.join(self.s.out_dir, t) for t in olds if t and t != info.get("ter")]
+                               + [p for g in grounds if g != info.get("base") for p in self.s._base_paths(g)])
 
     async def prepare_terrain(self, msg):
         req = msg.get("requestId")
@@ -9658,12 +9776,9 @@ class Connection:
         olds = [provisional_ter] + self.graded_sent(key)
         grounds = self.s.ground_bases.pop(key, [])
         await asyncio.sleep(PROVISIONAL_KEEP_S)
-        for t in olds:
-            if t and t != info.get("ter"):
-                self.s._remove(os.path.join(self.s.out_dir, t))
-        for g in grounds:               # (its ground stand-in photos with their packs; kept if the graded one shows one)
-            if g != info.get("base"):
-                self.s._remove_base(g)
+        # (off the event loop: Server.remove_off_loop)
+        self.s.remove_off_loop([os.path.join(self.s.out_dir, t) for t in olds if t and t != info.get("ter")]
+                               + [p for g in grounds if g != info.get("base") for p in self.s._base_paths(g)])
 
     def commit_anchor(self, aid):
         if aid == self.active:
@@ -9721,6 +9836,7 @@ class Connection:
         self.active = aid
         self.ppolys = {}
         self.desired, self.sent, self.groups, self.queue, self.qi = {}, keep, [], [], 0
+        self._rg_last = self._far_last = None
         self.graded_wait = []
         self.restore_wait = []
         old_grid = self.s.horizon_grids.get(old.id) if old is not None else None
@@ -10042,7 +10158,7 @@ class Connection:
             elif self.eye < ref / MAP_ZOOM_RAMP_K and getattr(self, "lod_ramp", 1.0) >= 1.0:
                 self.lod_ramp, self.zoom_ref = MAP_RAMP_START, self.eye
                 log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
-        self.update_far()
+        self.update_far(gate=True)         # (not again when nothing it goes by moved: _far_unchanged)
         self.pvs_tick()                     # (the far PVS for where the player is now; after the selection: its radius)
         self.far_lazy_tick()
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
@@ -11136,8 +11252,42 @@ class Connection:
                  radius / 1000)
         return n
 
-    def update_far(self):
-        """Recompute the desired set, the swap groups and the build queue; wake the streamer."""
+    def _far_unchanged(self, now, anchor, radius, extra, forced, min_level, view):
+        """Is this selection surely the last one's (update_far's gate, on_pose)? Only when it could not differ: the last
+        selection changed no node (so its result is its own fixed point: the held nodes the same too), every discrete
+        input is the same (the anchor, the forced boxes, the detail scale and the 3D map, the coarse cover, the held
+        nodes, the horizon's grid and eye, the camera's pixels per radian and pop size, the known tile errors), and the
+        player, the radius, the eye's height over the ground and the camera moved less in all than the last selection's
+        slack (farfield.LAST_SLACK: every bound a node's answer went by is farther from its value than that). The
+        selection, not its tiles' build order: update_far still regroups and wakes the streamer. Remembers these inputs
+        when not (with the slack the selection then reports: update_far)."""
+        hz = extra.get("horizon")
+        cone = self.map_cone(aid=anchor.id) if self.global_on(anchor, radius) else None
+        disc = (self.active, tuple(tuple(b) for b in forced), self.lod_scale, self.map_view,
+                self.map_open, getattr(self, "lod_ramp", 1.0), self.first_ramp is None, min_level,
+                frozenset(self.node_changed), extra.get("disc"), extra.get("max_level"),
+                None if hz is None else (hz.eye, id(hz.grid)), self.view_cap, self.global_on(anchor, radius),
+                None if cone is None else tuple(cone), self.eye is not None and self.eye > MAP_HIGH_EYE_M,
+                None if view is None else (view.ppr, view.tau, view.reach, view.cap, view.h, view.cells,
+                                           getattr(self.s, "lod_errs_gen", 0)))
+        fx, fy = self.view_focus
+        cont = (fx, fy, radius, self.eye_clearance()) + (() if view is None else (view.cx, view.cy, view.dz))
+        last = getattr(self, "_far_last", None)
+        # (the last selection's own result still in place: no other update_far, a reset of the desired set, since)
+        if last is not None and last[0] == disc and len(last[1]) == len(cont) and last[3] is self.desired \
+                and last[4] is self.refined:
+            a, b = cont, last[1]
+            moved = math.hypot(a[0] - b[0], a[1] - b[1]) + abs(a[2] - b[2]) + abs(a[3] - b[3])
+            if len(a) > 4:
+                moved += math.hypot(a[4] - b[4], a[5] - b[5]) + abs(a[6] - b[6])
+            if moved < last[2] - SELECT_SLACK_EPS:
+                return True
+        self._far_pending = (disc, cont)    # (kept with its result and slack: update_far)
+        return False
+
+    def update_far(self, gate=False):
+        """Recompute the desired set, the swap groups and the build queue; wake the streamer. gate (a pose): not when
+        nothing the selection goes by has changed (_far_unchanged)."""
         if self.active is None:
             return
         now = time.monotonic()
@@ -11155,6 +11305,11 @@ class Connection:
             k0 = kfun
             forced, kfun, view = [], (lambda lvl: k0(lvl) * FIRST_RAMP_K), None
             min_level = max(min_level, FIRST_RAMP_MIN_LEVEL)
+        if gate and self._far_unchanged(now, anchor, radius, extra, forced, min_level, view):
+            # (the same selection surely: not made again; the build order goes by the focus, as after one)
+            self._regroup()
+            self.wake.set()
+            return
         if self.global_on(anchor, radius):
             # far levels from 3 up as global tiles (geotiles phase 3b): the same for every anchor, kept at a rebase
             high = self.eye is not None and self.eye > MAP_HIGH_EYE_M
@@ -11194,6 +11349,9 @@ class Connection:
             self.s.coarse_keys.update(k for k in new if farfield.is_global_key(k))
         changed = new.keys() != self.desired.keys()
         self.desired = new
+        pend = self.__dict__.pop("_far_pending", None) if gate else None
+        slack = farfield.LAST_SLACK
+        self._far_last = None if pend is None or slack is None else (pend[0], pend[1], slack, new, refined)
         self._regroup()
         if changed and not self.dirty:
             self.dirty = True
@@ -11257,11 +11415,20 @@ class Connection:
     def tex_short(self, info, t):
         """A built far tile's texture is less than it should have now: smaller than tile_tex_px, or the coarse cover's
         few photos (FIRST_RAMP) where the tile is not hidden behind terrain (pvs_hidden: those may keep them)."""
+        return self.tex_short_many([(info, t)])[0]
+
+    def tex_short_many(self, pairs):
+        """tex_short of many (info, tile) pairs, their sizes asked at once (Server.tile_tex_px_many)."""
         anchor = self.s.anchors.get(self.active)
-        if anchor is None or not info.tex_px:
-            return bool(info.coarse)
-        need = self.s.tile_tex_px(anchor, t)
-        return info.tex_px < need or (bool(info.coarse) and not self.s.pvs_hidden(anchor, t))
+        out = [bool(info.coarse) for info, _t in pairs]
+        if anchor is None:
+            return out
+        idx = [q for q, (info, _t) in enumerate(pairs) if info.tex_px]
+        needs = self.s.tile_tex_px_many(anchor, [pairs[q][1] for q in idx]) if idx else []
+        for q, need in zip(idx, needs):
+            info, t = pairs[q]
+            out[q] = info.tex_px < need or (bool(info.coarse) and not self.s.pvs_hidden(anchor, t))
+        return out
 
     def far_lazy_tick(self):
         """The far tiles shown larger than their level's texture (farpvs.UP_ON: in sight, the screen resolving more):
@@ -11394,12 +11561,18 @@ class Connection:
         if anchor is None or self.first_ramp is not None or not self.s.pvs_on:
             return                          # (a teleport's coarse cover: sharpened as the full selection replaces it)
         n = 0
+        cands = []
         for key, t in list(self.desired.items()):
             ck = self.ck(key)
             if ck not in self.shown and key not in self.sent:
                 continue
             info = self.s.tiles.get(ck)
-            if info is None or info.material is None or info.stale or not self.tex_short(info, t):
+            if info is None or info.material is None or info.stale:
+                continue
+            cands.append((ck, info, t))
+        short = self.tex_short_many([(info, t) for _ck, info, t in cands])
+        for (ck, info, t), sh in zip(cands, short):
+            if not sh:
                 continue
             info.stale = True
             self.s.retex_request(ck, pump=False)
@@ -11490,10 +11663,7 @@ class Connection:
         if not (h > 0 and 1 < fov < 170 and math.isfinite(cx) and math.isfinite(cy) and math.isfinite(cz)):
             return None
         ppr = self.lod_ppr(h, fov)
-        aid, errs = self.active, self.s.lod_errs
-
-        def err(node):
-            return errs.get((aid, node)) if len(node) == 3 else None
+        err = farfield.ErrLookup(self.s.lod_errs, self.active)    # (looked up node by node in the Rust selection)
         reach, cap = farfield.SSE_REACH, farfield.SSE_SPACING_CAP
         tune = os.environ.get("BNGE_LOD")      # experiments: "reach,cap"
         if tune:
@@ -11506,7 +11676,11 @@ class Connection:
         cur = {k for a, k in self.shown if a == aid or a == GLOBAL_AID}
         if len(self.gpolys) > 4 * len(self.desired) + 1000:
             self.gpolys = {ck: q for ck, q in self.gpolys.items() if ck[0] == aid}
-        self.groups = farfield.swap_groups(cur, self.desired, self.poly_of)
+        last = getattr(self, "_rg_last", None)
+        if not (last is not None and last[0] == aid and last[1] == cur and last[2] == self.desired.keys()):
+            # (else the same change as the last time: its groups as they are, none swapped in since: shown the same)
+            self.groups = farfield.swap_groups(cur, self.desired, self.poly_of)
+        self._rg_last = (aid, cur, set(self.desired))
         # Sent tiles no group needs any more: the mod drops them. (A global one kept from a previous anchor takes
         # the tile of this selection: its quad in this anchor's world.)
         needed = {k for adds, _ in self.groups for k in adds}
@@ -11835,11 +12009,15 @@ class Connection:
                     time.monotonic() - getattr(self, "_texup_at", 0.0) > MAP_TEX_UPGRADE_S:
                 # (the camera turned: tiles shown with a smaller texture than they now need on screen, sharper)
                 self._texup_at = time.monotonic()
+                cands = []
                 for ck in [ck for ck in self.shown if ck[0] == anchor.id or ck[0] == GLOBAL_AID]:
                     info = self.s.tiles.get(ck)
                     if info is None or info.material is None or not info.tex_px or info.tile is None:
                         continue
-                    if self.s.tile_tex_px(anchor, info.tile) > info.tex_px and not info.stale:
+                    cands.append((ck, info))
+                needs = self.s.tile_tex_px_many(anchor, [info.tile for _ck, info in cands]) if cands else []
+                for (ck, info), need in zip(cands, needs):
+                    if need > info.tex_px and not info.stale:
                         info.stale = True
                         self.s.retex_request(ck, pump=False)
             if self.s.retex_todo and (self.map_view or self.map_open):
