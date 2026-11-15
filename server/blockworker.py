@@ -161,8 +161,8 @@ class _State:
                     # (one store for every anchor: the plans are the planning regions', whatever the anchor)
                     self.plan_store = gradingmod.PlanStore(
                         self.md, plan_elev, self.widths)
-                    if self.surface is not None:     # (the roads' embankment mask reads the same land cover)
-                        self.plan_store.surface = self.surface
+                    # (the roads' embankment mask reads the same land cover; a late process has none)
+                    self.plan_store.surface = getattr(self, "surface", None)
                     # (its tunnels' drowned question asked of the road tiles' chain store: resolved once for both)
                     self.plan_store.tunnel_store = lambda: self.__dict__.get("chain_stores", {}).get("tunnels")
                 grader = (gradingmod.Grader(frame, self.md, self.plan_store.elev, self.widths,
@@ -673,7 +673,8 @@ def ground(frame, la, lo, z):
     surface.Surface.forest)."""
     import grading
     surf = getattr(_s, "surface", None)
-    cover = surf.forest(la, lo) if surf is not None else None
+    forest = getattr(surf, "forest", None)      # (a test's stand-in has none: no cover, the ground as it is)
+    cover = forest(la, lo) if forest is not None else None
     z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
                                                           cover)
     if _s.airports is not None:
@@ -3513,7 +3514,7 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
         base = seacarvemod.SeaDem(base, _s.sea if tile.level <= seacarvemod.CARVE_MAX_LEVEL else None)
     # (past the graded levels: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
     surf = getattr(_s, "surface", None)
-    src = (gradingmod.GradedDem(base, g, surf.forest if surf is not None else None) if tile.level <= 0
+    src = (gradingmod.GradedDem(base, g, getattr(surf, "forest", None)) if tile.level <= 0
            else gradingmod.DeckGroundDem(base, g)) \
         if g is not None else base
     return farfield.build_tile(frame, src, tile, zoom, q, ref_zoom, with_sink=with_sink,

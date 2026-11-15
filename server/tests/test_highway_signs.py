@@ -64,11 +64,19 @@ def fixture(raw_dir):
     return md
 
 
+def shaped_ground(f, la, lo, z):
+    """blockworker.ground's shaping with no land cover read (the fakes carry no landcover layer): the terrain's own
+    roughness off the roads, which the worker applies and the direct path must apply too (BNE_TERRAIN_BUMPS is on in
+    this build)."""
+    import grading
+    return np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+
+
 def server(md, out):
     anchor = SimpleNamespace(id=1, lat=LAT, lon=LON, frame=FRAME, zooms=[15], bridges=None, tunnels=None)
     ns = SimpleNamespace(mapdata=md, anchors={1: anchor}, road_pool=None, far_bld_pool=None, sign_pool=None,
         gas_stations=False, surface=None,
-        grader_for=lambda a: None, ground=lambda f, la, lo, z: z, dem=FakeDem(),
+        grader_for=lambda a: None, ground=shaped_ground, dem=FakeDem(),
         grader_lock=threading.Lock(), sea=None, buildings=False, road_widths=None,
         left_hand=lambda a: False, mph=lambda a: True, anchor_q=lambda a: None, buried=lambda a: 0.0,
         country=lambda a: 'US', lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None,

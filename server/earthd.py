@@ -3845,7 +3845,8 @@ class Server:
     def ground(self, frame, la, lo, z):
         """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened in the
         forests (surface.Surface.forest)."""
-        cover = self.surface.forest(la, lo) if self.surface is not None else None
+        forest = getattr(self.surface, "forest", None)      # (a test's stand-in has none: no cover)
+        cover = forest(la, lo) if forest is not None else None
         z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
                                                                  cover)
         if self.airports is not None:
@@ -6227,7 +6228,7 @@ class Server:
             if self.sea is not None:
                 base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
             # (past them: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
-            src = (gradingmod.GradedDem(base, g, self.surface.forest if self.surface is not None else None)
+            src = (gradingmod.GradedDem(base, g, getattr(self.surface, "forest", None))
                    if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
                 if g is not None else base
             analyses = self.deshadow is not None or self.colormatch is not None
