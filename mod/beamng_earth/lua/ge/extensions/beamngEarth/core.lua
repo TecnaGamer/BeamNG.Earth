@@ -1198,6 +1198,10 @@ local function onMessage(msg)
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
     M._memoryInfo = nil
+    -- (the settings page's "Restart world server": the server's start-time values went with it; a restart under way
+    -- now waits for the new server, srvrestart.lua)
+    st.startSettings, st.startFixed, st.restartable = nil, nil, false
+    M._srvrestart.disconnected(M._restart, st.clock)
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
     if not st.anchor then st.autoTeleportDone = false end
@@ -1222,6 +1226,12 @@ local function onMessage(msg)
       pcall(beamngEarth_settings.serverPrivacy, msg.privacyRegion, msg.telemetryConsent)
     end
     st.sessionId = msg.sessionId
+    -- the start-time values of the settings the server reads only at its start, and whether its launcher starts it
+    -- again (the settings page's "Restart world server": srvrestart.lua); a restart under way: the new server
+    st.startSettings = type(msg.startSettings) == 'table' and msg.startSettings or nil
+    st.startFixed = type(msg.startFixed) == 'table' and msg.startFixed or nil     -- (set by hand: never pending)
+    st.restartable = msg.restartable == true
+    M._srvrestart.hello(M._restart, st.clock, msg.sessionId)
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
@@ -1653,6 +1663,10 @@ local function onMessage(msg)
     -- the in-game reports' sends and the server's part of a report (report.lua, reportsend.lua; server reportsend.py)
     local rep = rawget(_G, 'beamngEarth_report')
     if rep and rep.onServerMessage then rep.onServerMessage(msg) end
+  elseif t == 'server_restart' then
+    -- the server's answer to the settings page's "Restart world server" (srvrestart.lua; server srvrestart.py)
+    M._srvrestart.answer(M._restart, st.clock, msg.ok == true, msg.error)
+    if msg.ok ~= true then log('W', 'beamngEarth', 'world server restart refused: ' .. tostring(msg.error)) end
   elseif t == 'memory' then
     -- the world server's memory and its limit (server memwatch.status): the settings page's line
     M._memoryInfo = { usedMB = tonumber(msg.usedMB) or 0, limitMB = tonumber(msg.limitMB) or 0,
@@ -2220,6 +2234,8 @@ local function updateBanner(dt)
   i.net, i.session = net.state(), st.sessionId ~= nil
   i.everConnected, i.attempts = net.everConnected(), net.attempts()
   i.note, i.noteDetail = st.serverNote, st.serverNoteDetail
+  -- (a world server restart under way: its line in place of the lost connection's, srvrestart.lua)
+  if M._restart.phase then i.restart, i.restartLevel = M.restartBanner() else i.restart, i.restartLevel = nil, nil end
   local m = st.guard.mode
   -- (healthy: no warning, the block follows; a pause there waits for the late block like a drop hold)
   i.edge = (not st.guard.healthy and (m == 'warn' or m == 'hold')) and m or nil
@@ -2986,6 +3002,7 @@ local function onUpdate(dtReal, dtSim)
     gov:noteOther(t1 - t)       -- (the messages' time in the frame cap and the engine share's sums: governor.lua)
     t = t1
   end
+  if M._restart.phase then M._restartStep() end     -- (a world server restart under way only: srvrestart.lua)
   if not scenetree.MissionGroup then return end -- no level loaded
   tickMotionBlur()
 
@@ -3288,6 +3305,7 @@ local function onClientEndMission()
   groundcover.reset() -- its objects go with the level
   groundcover.enginePatch(false)
   M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
+  M._restartTeardown()  -- (a world server restart's hold released)
   roads.reset()
   sea.reset()
   if st.inOurLevel then pcall(trees.saveShapes, true) end    -- (the next level start warms them: prewarmSaved)
@@ -3340,6 +3358,7 @@ local function onExtensionUnloaded()
   net.close()
   farfield.clear()
   M._swapTeardown()     -- (a generation swap under way: its hold released, nothing of it left)
+  M._restartTeardown()  -- (a world server restart's hold released)
   roads.clear()
   sea.clear()
   trees.clear()
@@ -3716,6 +3735,84 @@ function M.fastAreaPause(fastId)
     end
     M._fastPaused = false
   end
+end
+-- The settings page's "Restart world server" (srvrestart.lua has the phases; server srvrestart.py): asked by
+-- settings.uiRestartServer; from the server's yes until the world round the car is there again the car is held
+-- (simhold: the game paused, in BeamMP our own car only), released for the frames the resync needs to commit; a hold the
+-- player let go themselves (resumed the game) is theirs from then on. Nothing runs per frame without a restart.
+M._srvrestart = require('beamngEarth/srvrestart')
+M._restart = M._srvrestart.new()
+M._restartCtx = {}
+M.RESTART_KEY_FILE = '/temp/beamngEarth/restart.key'     -- (server srvrestart.KEY_FILE in its session root)
+function M.restartKey()
+  local read = rawget(_G, 'readFile')
+  if not read then return nil end
+  local ok, text = pcall(read, M.RESTART_KEY_FILE)
+  if not ok or type(text) ~= 'string' then return nil end
+  local key = text:match('^%s*(%x+)%s*$')
+  return (key and #key >= 16) and key or nil
+end
+function M.restartServer()
+  local r, sr = M._restart, M._srvrestart
+  if sr.BUSY[r.phase] then return false, 'a restart is under way' end
+  if not (net.isConnected() and st.sessionId) then return false, 'the world server is not connected' end
+  if not st.restartable then
+    return false, 'this world server was not started by the BeamNG.Earth app: restart it by hand'
+  end
+  -- (the key the server wrote in our own folder: only the game can ask, server srvrestart.write_key)
+  local key = M.restartKey()
+  if not key then
+    return false, 'the restart key of the world server is not in this game\'s folder (does the server use another one?)'
+  end
+  if not net.send({ type = 'server_restart', key = key }) then return false, 'the world server is not connected' end
+  sr.request(r, st.clock, st.sessionId)
+  log('I', 'beamngEarth', 'world server restart asked (the settings page)')
+  return true
+end
+-- For the settings page (settings.uiState): the settings waiting for a restart (values: the player's; order: theirs),
+-- whether the button can be offered, and a restart under way.
+function M.restartState(values, order)
+  local r, sr = M._restart, M._srvrestart
+  local mem = M._memoryInfo
+  return { pending = sr.pending(values, st.startSettings, mem and mem.restart, order, st.startFixed),
+    restartable = st.restartable == true and net.isConnected() and st.sessionId ~= nil,
+    phase = r.phase, busy = sr.BUSY[r.phase] == true, text = sr.text(r, r.ours),
+    mp = require('beamngEarth/simhold').mpSession() }
+end
+-- The banner's line for a restart (nil without one) and its level.
+function M.restartBanner()
+  local r = M._restart
+  if not r.phase then return nil end
+  return M._srvrestart.text(r, r.ours), M._srvrestart.level(r)
+end
+function M._restartStep()
+  local r, c = M._restart, M._restartCtx
+  local simhold = require('beamngEarth/simhold')
+  if r.ours and not simhold.paused() then r.ours, r.letGo = false, true end   -- (the player resumed: theirs now)
+  local p, pl = st.pending, st.player
+  c.clock, c.mp = st.clock, simhold.mpSession()
+  c.inLevel = st.inOurLevel == true and st.anchor ~= nil and getPlayerVehicle(0) ~= nil
+  c.resyncReady = p ~= nil and p.ready == true and p.purpose == 'resync'
+  local ready = st.sessionId ~= nil and st.sessionId == r.newSession
+  if ready and c.inLevel then
+    ready = not st.resync and st.block ~= nil and st.anchorSession == st.sessionId
+      and (not pl or roads.readyAround(st.anchorId, pl.x, pl.y, drophold.NEAR_M))
+  end
+  c.worldReady = ready
+  local want = M._srvrestart.step(r, c)
+  if want and not r.ours and not simhold.paused() then
+    simhold.pause(true)
+    r.ours = true
+  elseif not want and r.ours then
+    simhold.pause(false)
+    r.ours = false
+  end
+end
+function M._restartTeardown()
+  local r = M._restart
+  if r.ours then require('beamngEarth/simhold').pause(false) end
+  r.ours = false
+  if r.phase == 'loading' or r.phase == 'done' then r.phase = nil end
 end
 function M.areaAdd(id, s, w, n, e, name, mode, fastOn)
   if not net.isConnected() then return false end

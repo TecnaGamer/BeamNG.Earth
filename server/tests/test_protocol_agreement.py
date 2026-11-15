@@ -156,6 +156,10 @@ MOD_TO_SERVER = {
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
+    # 2026-11-15: the settings page's "Restart world server" (srvrestart.lua; server srvrestart.py): the server stops
+    # cleanly and its launcher starts it again; always answered with a 'server_restart'. key: the capability the server
+    # wrote in the game's temp/beamngEarth folder (srvrestart.write_key; core.restartKey)
+    "server_restart": {"key": F(str)},
     # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
     # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
     # player's "Send to the developers" (only the folder's name: never a path)
@@ -320,6 +324,10 @@ SERVER_TO_MOD = {
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "memoryTier": F(str, OPT), "memoryNote": F(str, OPT),   # low-memory machines only (budget.TIER lean / emergency)
+              # the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and
+              # whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button
+              "startSettings": F(dict, OPT), "restartable": F(bool, OPT),
+              "startFixed": F((list, dict), OPT),   # ... the ids set by hand there (never pending: srvrestart.lua)
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
@@ -485,6 +493,8 @@ SERVER_TO_MOD = {
                "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
                "availMB": F(NUM, OPT), "restart": F(bool),
                "tooLow": F(bool)},    # (over Max RAM for minutes: memwatch.too_low, the settings line says so)
+    # the answer to 'server_restart': ok, the server stops now and is started again; else why not (error)
+    "server_restart": {"ok": F(bool), "error": F(str, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
               "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)
@@ -1174,6 +1184,11 @@ class ServerMessagesTest(test_server.ServerHarness):
         self.assertIn("clearedBytes", until(lambda m: m["type"] == "cache"))
         c.send({"type": "memory"})                      # the page's world server memory line (memwatch.status)
         self.assertGreater(until(lambda m: m["type"] == "memory")["processes"], 0)
+        # the page's "Restart world server": this test's server has no supervisor (srvrestart.ENV), so it says why not
+        c.send({"type": "server_restart", "key": "0" * 32})
+        answer = until(lambda m: m["type"] == "server_restart")
+        self.assertFalse(answer["ok"])
+        self.assertIn("not started by the BeamNG.Earth app", answer["error"])
         c.send({"type": "app_path"})                    # the page's cache folder and BeamMP launcher (no choice made)
         self.assertTrue(until(lambda m: m["type"] == "app_paths")["cacheDir"])
         # (shared world building, commented out 2026-10-27)

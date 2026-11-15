@@ -784,6 +784,8 @@ function M.uiState()
   -- the cache folder and the BeamMP launcher (the server's app_paths), asked with the cache numbers
   if core and core.appPath and cachePolls % M.CACHE_POLL == 1 then core.appPath() end
   status.paths = core and core.appPathState and core.appPathState() or nil
+  -- the settings waiting for a world server restart, and a restart under way (core.restartState, srvrestart.lua)
+  status.restart = core and core.restartState and core.restartState(values, M.ORDER) or nil
   local schema = {}
   for _, k in ipairs(M.ORDER) do
     local s = M.SCHEMA[k]
@@ -803,6 +805,16 @@ function M.uiReset()
   M.save()
   M.applyAll()
   return M.getAll()
+end
+
+-- "Restart world server" (the page's button, shown when a setting read only at the server's start differs from the
+-- value it started with): the server stops cleanly and its launcher starts it again with the settings read anew; the
+-- world reloads round the car, held meanwhile (core.restartServer, srvrestart.lua; server srvrestart.py).
+function M.uiRestartServer()
+  local core = ext('beamngEarth_core')
+  if not (core and core.restartServer) then return { ok = false, error = 'mod not loaded' } end
+  local ok, why = core.restartServer()
+  return { ok = ok == true, error = why }
 end
 
 -- "Clear cache" (the page asked for confirmation): the server removes every download but this
