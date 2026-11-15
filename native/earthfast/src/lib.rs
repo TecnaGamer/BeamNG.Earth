@@ -126,6 +126,7 @@ mod bnwt;
 mod aerialcov;
 mod decisions;
 mod paintlist;
+mod nearcross;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -704,38 +705,38 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
 
 /// railways._blocked: which points (xy (k, 2), bed heights z (k,)) lie on a crossing road at grade: per road (its
 /// centre line pts (n, 3) [x, y, z] one road after another, starts (C + 1,)) the point's nearest segment (the first of
-/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z. numpy's float64
-/// arithmetic of the Python it replaces.
+/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z (nearcross.rs: the
+/// segments near each point from a grid). numpy's float64 arithmetic of the Python it replaced.
 #[pyfunction]
 fn near_crossers(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f64>, pts: PyReadonlyArray2<f64>,
-                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> Vec<bool> {
+                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> PyResult<Vec<bool>> {
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
-    let k = p.nrows();
+    let (k, n) = (p.nrows(), d.nrows());
     let nc = st.len().saturating_sub(1);
-    py.detach(|| {
-        let mut out = vec![false; k];
-        for c in 0..nc {
-            let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let segs: Vec<[f64; 5]> = (j0..j1 - 1).map(|j| {
-                let (ax, ay) = (d[[j, 0]], d[[j, 1]]);
-                let (bx, by) = (d[[j + 1, 0]] - ax, d[[j + 1, 1]] - ay);
-                [ax, ay, bx, by, (bx * bx + by * by).max(1e-12)]
-            }).collect();
-            for i in 0..k {
-                if out[i] { continue; }
-                let (px, py_) = (p[[i, 0]], p[[i, 1]]);
-                let (mut best, mut bj) = (f64::INFINITY, usize::MAX);
-                for (n, g) in segs.iter().enumerate() {
-                    let t = (((px - g[0]) * g[2] + (py_ - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-                    let dd = (px - (g[0] + t * g[2])).dhypot(py_ - (g[1] + t * g[3]));
-                    if dd < best || bj == usize::MAX { best = dd; bj = n; }
-                }
-                if bj != usize::MAX && best < r[c] && (z[i] - d[[j0 + bj, 2]]).abs() < dz { out[i] = true; }
-            }
-        }
-        out
-    })
+    if p.ncols() < 2 || d.ncols() < 3 || z.len() != k || r.len() < nc
+        || st.iter().any(|&v| v < 0 || v as usize > n) || (1..st.len()).any(|i| st[i] < st[i - 1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "near_crossers: xy (k, 2), z (k,), pts (n, 3), starts rising within pts, reach (C,)"));
+    }
+    let pv: Vec<[f64; 2]> = (0..k).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let dv: Vec<[f64; 3]> = (0..n).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
+    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
+    let rv: Vec<f64> = r.iter().copied().collect();
+    Ok(py.detach(|| nearcross::near_crossers(&pv, &zv, &dv, &sv, &rv, dz)))
+}
+
+/// grading.rail_yield_pieces: mask (k,) and the points whose arc (s (k,)) is within reach of a masked point's
+/// (nearcross::grow_along).
+#[pyfunction]
+fn grow_along(s: PyReadonlyArray1<f64>, mask: PyReadonlyArray1<bool>, reach: f64) -> PyResult<Vec<bool>> {
+    let (s, m) = (s.as_array(), mask.as_array());
+    if s.len() != m.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grow_along: s (k,), mask (k,)"));
+    }
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let mv: Vec<bool> = m.iter().copied().collect();
+    Ok(nearcross::grow_along(&sv, &mv, reach))
 }
 
 /// roads.clip_polyline: the pieces of a polyline (pts (k, D >= 2), xy first) inside the box, Liang-Barsky per segment,
@@ -6444,6 +6445,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
     // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
     buildcolours::register(m)?;
-    m.add("VERSION", 301)?;
+    // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
+    m.add_function(wrap_pyfunction!(grow_along, m)?)?;
+    m.add("VERSION", 302)?;
     Ok(())
 }
