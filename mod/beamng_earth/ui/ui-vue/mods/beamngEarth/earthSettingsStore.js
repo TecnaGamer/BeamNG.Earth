@@ -115,6 +115,7 @@ export const settingsSchema = [
     name: "Performance",
     intro: "How much of your CPU and memory the BeamNG.Earth app may use to build the world around you.",
     items: [
+      { id: "trafficTurnYield", type: "bool", default: false, name: "Traffic green-turn yielding (experimental)", desc: "Checks approaching traffic before turning across it on green. Off leaves this decision to the normal traffic AI." },
       { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
         note: "Takes effect the next time you start BeamNG.Earth.",
         options: [ { label: "Auto", value: "auto" }, { label: "1", value: "1" }, { label: "2", value: "2" }, { label: "3", value: "3" }, { label: "4", value: "4" }, { label: "6", value: "6" }, { label: "8", value: "8" } ] },

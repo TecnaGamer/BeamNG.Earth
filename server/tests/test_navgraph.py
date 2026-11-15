@@ -41,13 +41,14 @@ class ShortIdsTest(unittest.TestCase):
         a, b = "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_6831d", "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_7555d"
         g = {"nodes": {a: [0, 0, 0, 3], b: [10, 0, 0, 3]}, "edges": [[a, b, 1, 1, 0, 13.4, 1.0, 3.0]],
              "signals": [{"j": b, "kind": "stop", "app": [[a, 1.0, 2.0, 0.0, 1.0, 0.0, 0]]}], "lines": [[0, 0, 1, 1, 1]],
-             "rules": {"rightHandDrive": True}}
+             "rules": {"rightHandDrive": True}, "cuts": [b]}
         s = navgraph.short_ids(g)
         na, nb = navgraph.short_ids({"nodes": {a: [0, 0, 0, 1]}})["nodes"].popitem()[0], None
         self.assertEqual(set(s["nodes"]), {s["edges"][0][0], s["edges"][0][1]})
         self.assertEqual(s["edges"][0][0], na, "the same node: the same short name in another graph")
         self.assertEqual(s["signals"][0]["j"], s["edges"][0][1])
         self.assertEqual(s["signals"][0]["app"][0][0], s["edges"][0][0])
+        self.assertEqual(s["cuts"], [s["edges"][0][1]], "cut IDs use the same names as graph nodes")
         self.assertEqual(s["edges"][0][2:], g["edges"][0][2:])
         self.assertEqual((s["lines"], s["rules"]), (g["lines"], g["rules"]))
         self.assertTrue(all(len(k) == 13 for k in s["nodes"]))
@@ -55,6 +56,23 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_source_window_marks_only_clipped_road_ends(self):
+        for direction in (-1, 0, 1):
+            with self.subTest(direction=direction):
+                g = graph([[(-200, 0), (200, 0)]], ["primary"],
+                          oneway=[(0, 0, 1, direction)], window=70)
+                self.assertEqual(len(g.get("cuts", [])), 2)
+                ends = {min(g["nodes"], key=lambda n: g["nodes"][n][0]),
+                        max(g["nodes"], key=lambda n: g["nodes"][n][0])}
+                self.assertEqual(set(g["cuts"]), ends)
+                for name in g["cuts"]:
+                    self.assertEqual(sum(name in e[:2] for e in g["edges"]), 1)
+        g = graph([[(-200, 0), (200, 0)]], ["primary"], centre=(150, 0), window=80)
+        real_end = max(g["nodes"], key=lambda n: g["nodes"][n][0])
+        self.assertEqual(len(g["cuts"]), 1)
+        self.assertNotIn(real_end, g["cuts"], "the source road's real end is not a streaming boundary")
+        self.assertEqual(graph([[(-30, 0), (30, 0)]], ["primary"], window=70)["cuts"], [])
+
     def test_submetre_source_road_keeps_its_connection_and_direction(self):
         lines = [[(0, 0), (100, 0)], [(100, 0), (100.74, 0)], [(100.74, 0), (200, 0)]]
         con = [(0, "A", 0, 0), (0, "B", 1, 1), (1, "B", 0, 0), (1, "C", 1, 1),

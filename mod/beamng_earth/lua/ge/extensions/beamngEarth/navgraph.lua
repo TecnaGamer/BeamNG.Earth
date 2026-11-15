@@ -145,7 +145,23 @@ local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
 local lastGuard = -math.huge
-local cuts = {}         -- { x, y } of the applied graph's nodes that lost a road to the clip
+local cuts = {}         -- { x, y, id } of the applied graph's nodes that lost a road to the clip
+local stoppedAtCuts = {}
+
+function M.onTrafficCutStop(id, cut, x, y, z)
+  stoppedAtCuts[id] = type(cut)=='string' and cut~='' and type(x)=='number' and type(y)=='number'
+    and type(z)=='number' and {cut,x,y,z} or nil
+end
+
+local function reportedCutStop(id, p)
+  local r=stoppedAtCuts[id]
+  if not r then return false end
+  if (p.x-r[2])^2+(p.y-r[3])^2+(p.z-r[4])^2<=4 then
+    for _,c in ipairs(cuts)do if c[3]==r[1]then return true end end
+  end
+  stoppedAtCuts[id]=nil -- a relocated car or a changed graph cannot inherit the old hold
+  return false
+end
 
 -- Pure: point inside box {x0, y0, x1, y1} shrunk by m (no box: anywhere).
 function M.inside(b, x, y, m)
@@ -228,7 +244,7 @@ end
 
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
--- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
+-- Returns nodes, node count, edge count and the cuts: { x, y, id } of each kept node with a road to a node left out.
 function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
   local nodes, nn, ne = {}, 0, 0
   local keep = {}
@@ -264,6 +280,12 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
     return t
   end
   local cut, cutList = {}, {}
+  for _, name in ipairs(g.cuts or {}) do
+    if phys[name] and not cut[name] then
+      cut[name] = true
+      cutList[#cutList + 1] = { keep[name][1], keep[name][2], name }
+    end
+  end
   for _, e in ipairs(g.edges) do
     step()
     local a, bb = e[1], e[2]
@@ -271,7 +293,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
       local k = pair[1]
       if phys[k] and not phys[pair[2]] and g.nodes[pair[2]] and not cut[k] then
         cut[k] = true
-        cutList[#cutList + 1] = { keep[k][1], keep[k][2] }
+        cutList[#cutList + 1] = { keep[k][1], keep[k][2], k }
       end
     end
     if keep[a] and keep[bb] and a ~= bb and not M.tooSteep(keep[a], keep[bb]) then
@@ -365,6 +387,7 @@ function M.onMessage(msg, currentAnchor)
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
+            cuts = type(g.cuts) == 'table' and g.cuts or {},
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
             lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
             trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
@@ -532,7 +555,12 @@ local function apply(b, pre, moved)
   local tA = wall()
   if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
   stats.gpsMs = stats.gpsMs + (wall() - tA)
-  be:queueAllObjectLua('mapmgr.requestMap()')
+  -- Pool vehicles can fetch the latest map before their queued GE acknowledgement runs.
+  -- Publish its boundaries alongside the map mailbox, so setMap can protect its first plan.
+  local cutIds = {}
+  for _, c in ipairs(cl) do cutIds[#cutIds + 1] = c[3] end
+  be:sendToMailbox('beamngEarthTrafficCuts', lpack.encode(cutIds))
+  be:queueAllObjectLua(M.trafficBoundaryCommand(cl) .. '; mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
   local mr = rawget(_G, 'ui_apps_minimap_roads')
@@ -729,6 +757,7 @@ local function guard(b, all, lag)
     -- The full traffic table also contains player vehicles and may still contain an AI car just entered by a player.
     if localplayers.controlled(id, o, controlled) or (type(traffic) == 'table' and traffic.isAi == false) then
       stillSince[id], seenAt[id], lastTeleport[id] = nil, nil, nil
+      stoppedAtCuts[id] = nil
     else
       if o and o:getActive() then
         local p = o:getPosition()
@@ -761,6 +790,7 @@ local function guard(b, all, lag)
           local facingCut = fl > 1e-6 and M.headingToCut(p.x, p.y, f.x / fl, f.y / fl, cuts, M.CUT_NEAR_M) or false
           atCut = M.cutStopped(sp, fwd, roadDot, r and r.oneWay or nil, facingCut)
         end
+        if not paused and sp<M.STUCK_MS and reportedCutStop(id,p) then atCut=true end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
@@ -773,6 +803,7 @@ local function guard(b, all, lag)
           if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1
           elseif atCut then stats.cutStopRespawns = (stats.cutStopRespawns or 0) + 1 end
           stillSince[id] = nil
+          stoppedAtCuts[id] = nil
           lastTeleport[id] = now
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
           -- pop in and its tyres smoke as it lands (the photo comparisons, 2026-10-14)
@@ -1162,6 +1193,7 @@ function M.transform(xf, anchorId)
     end
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
+            cuts = graph.cuts,
             rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
@@ -1171,6 +1203,19 @@ end
 function M.currentGraph() return graph end      -- (tests)
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
+
+function M.trafficBoundaryCommand(list)
+  local ids = {}
+  for _, c in ipairs(list) do ids[#ids + 1] = string.format('%q', c[3]) end
+  return 'if not beamngEarth_trafficBoundary then extensions.load("beamngEarth_trafficBoundary") end; '
+    .. 'beamngEarth_trafficBoundary.setCuts({' .. table.concat(ids, ',') .. '})'
+end
+
+function M.onVehicleMapmgrUpdate(id)
+  if not graph or not applied then return end
+  local vehicle = getObjectByID(id)
+  if vehicle then vehicle:queueLuaCommand(M.trafficBoundaryCommand(cuts)) end
+end
 
 function M.onTeleport()
   respawnAll = true
@@ -1469,6 +1514,9 @@ function M.status()
 end
 
 function M.reset()
+  if applied and be and be.queueAllObjectLua then
+    be:queueAllObjectLua('if beamngEarth_trafficBoundary then extensions.unload("beamngEarth_trafficBoundary") end')
+  end
   local gt = gameplay_traffic
   if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
     syncTrafficPool(gt)
@@ -1495,6 +1543,7 @@ function M.reset()
   seenAt = {}
   lastTeleport = {}
   cuts = {}
+  stoppedAtCuts = {}
   M.restoreChoice()
   stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
   prep, waited = nil, 0

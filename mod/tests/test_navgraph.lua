@@ -287,12 +287,14 @@ do
   N.enabled = true
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
   jsonDecode = function() return { nodes = { a = { 100, 200, 5, 3 }, b = { 150, 200, 5, 3 } },
-                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, lines = { { 10, 20, 30, 40, 1 } } } end
+                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, cuts={'b'},
+                                   lines = { { 10, 20, 30, 40, 1 } } } end
   readFile = function() return '{}' end
   T.check(N.onMessage({ anchorId = 7, path = 'x', serial = 1 }, 7), 'a graph for anchor 7')
   local xf = { apply = function(_, x, y, z) return x - 1000, y + 50, z - 2 end }
   T.check(N.transform(xf, 8), 'moved into anchor 8')
   local g = N.currentGraph()
+  T.check(g.cuts and g.cuts[1]=='b','source cut identities survive graph reception and rebase')
   T.check(g.anchor == 8 and g.nodes.a[1] == -900 and g.nodes.a[2] == 250 and g.nodes.a[3] == 3 and g.nodes.a[4] == 3,
     'its nodes in the new frame, radius kept')
   T.check(g.lines and g.lines[1][1] == -990 and g.lines[1][2] == 70 and g.lines[1][3] == -970 and g.lines[1][5] == 1,
@@ -394,7 +396,7 @@ do
   N.takeChoice(nil)
   N.enabled = true
   local names = { 'jsonDecode', 'readFile', 'writeFile', 'jsonEncode', 'map', 'be', 'path',
-                  'getObjectByID', 'gameplay_traffic' }
+                  'getObjectByID', 'gameplay_traffic', 'lpack' }
   local sg = {}
   for _, k in ipairs(names) do sg[k] = rawget(_G, k) end
   local log0 = rawget(_G, 'log')
@@ -417,8 +419,12 @@ do
   local world = {}
   map = { reset = function(n) world.nodes = n end, getMap = function() return world end,
           findClosestRoad = function(p) if p.x > 97 and p.y > 5 then return 'c', 's' end return 'b', 'c' end }
-  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function() end,
-         sendToMailbox = function() end }
+  local boundaryMailbox, boundariesBeforeRequest
+  lpack = { encode = function(value) return value end }
+  be = { getPlayerVehicleID = function() return -1 end, queueAllObjectLua = function(_, command)
+           if command:find('mapmgr.requestMap', 1, true) then boundariesBeforeRequest = boundaryMailbox end
+         end,
+         sendToMailbox = function(_, name, value) if name == 'beamngEarthTrafficCuts' then boundaryMailbox = value end end }
   local cars, ports = {}, {}
   getObjectByID = function(id)
     local c = cars[id]
@@ -444,6 +450,8 @@ do
   T.check(N.onMessage({ anchorId = 1, path = 'x', serial = 1 }, 1), 'guard: a graph whose clip cuts c at (100, 0)')
   N.update(1, box)              -- applies the graph; the guard runs from the next frame on
   T.check(N.status().cuts == 1, 'guard: applied, one cut')
+  T.check(boundariesBeforeRequest and #boundariesBeforeRequest == 1 and boundariesBeforeRequest[1] == 'c',
+    'the applied map publishes its exact boundary before vehicles request the replacement map')
   cars[101] = { pos = v(95, 2), vel = v(0, 0), dir = v(0, 1) }      -- stopped at the dead end, turned off it
   cars[102] = { pos = v(92, -2), vel = v(-3, 0), dir = v(1, 0) }    -- backing through its turn, nose at the cut
   cars[103] = { pos = v(0, 0), vel = v(0, 0), dir = v(1, 0) }       -- stopped far from any cut (a signal queue)
@@ -504,6 +512,37 @@ do
   now = 1048
   N.update(1, box)
   T.check(ports[101] == p101 + 1, 'guard: unpaused: taken again')
+  -- Native traffic stops at the penultimate waypoint of a clipped plan. A
+  -- long final edge puts that stop beyond the guard's fixed distance window.
+  cars[107]={pos=v(0,-20,1),vel=v(0,0),dir=v(1,0)}
+  now=1050;N.update(1,box)
+  T.check(ports[107]==nil,'a stopped car outside the cut radius is not geometrically recycled')
+  N.onTrafficCutStop(107,'c',0,-20,1);now=1051;N.update(1,box)
+  T.check(ports[107]==1,'a matching native cut-stop report clears the blocked approach without the generic stuck delay')
+  now=1052;N.update(1,box)
+  T.check(ports[107]==1,'recycling clears the report and retains the normal cooldown')
+  cars[108]={pos=v(0,-30,1),vel=v(0,0),dir=v(1,0)}
+  now=1053;N.update(1,box);now=1059;N.update(1,box)
+  T.check(ports[108]==nil,'ordinary distant signal and following stops still remain alone')
+  N.onTrafficCutStop(108,'old-cut',0,-30,1);now=1060;N.update(1,box)
+  T.check(ports[108]==nil,'a report for a cut absent from the current graph is ignored')
+  N.onTrafficCutStop(108,'c',0,-30,1);N.onTrafficCutStop(108,'');now=1061;N.update(1,box)
+  T.check(ports[108]==nil,'the vehicle can release its previous boundary report')
+  N.onTrafficCutStop(108,'c',0,-30,1);cars[108].pos=v(0,-34,1);now=1062;N.update(1,box)
+  T.check(ports[108]==nil,'a stale report cannot follow a car to another position')
+  N.onTrafficCutStop(108,'c',0,-34,1);cars[108].pos=v(0,-34,11);now=1063;N.update(1,box)
+  T.check(ports[108]==nil,'matching horizontal coordinates on another road level do not reuse a stale stop')
+  cars[108].pos=v(0,-34,1);cars[108].vel=v(1,0);N.onTrafficCutStop(108,'c',0,-34,1)
+  now=1064;N.update(1,box)
+  T.check(ports[108]==nil,'a moving car is not recycled for a delayed stop report')
+  local playerGetter0=be.getPlayerVehicleID;be.getPlayerVehicleID=function()return 108 end
+  cars[108].vel=v(0,0);now=1065;N.update(1,box)
+  T.check(ports[108]==nil,'a player taking over the traffic vehicle remains protected')
+  be.getPlayerVehicleID=playerGetter0;N.onTrafficCutStop(108,'c',0,-34,1)
+  simTimeAuthority={getPause=function()return true end};now=1066;N.update(1,box)
+  T.check(ports[108]==nil,'an explicit boundary stop still cannot recover while paused')
+  simTimeAuthority=nil;now=1067;N.update(1,box)
+  T.check(ports[108]==1,'the current stopped boundary is handled once driving resumes: '..tostring(ports[108]))
   table.clear = tc0
   for _, k in ipairs(names) do _G[k] = sg[k] end
   if not log0 then log = nil end

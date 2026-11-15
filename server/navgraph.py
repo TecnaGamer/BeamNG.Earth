@@ -674,6 +674,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             e[5] = min(e[5], round(RING_MS, 2))
     # keep the edges with both ends in the window; z of their nodes from the ground
     inside = {nm for nm, (x, y) in pending.items() if abs(x - cx) <= window and abs(y - cy) <= window}
+    # The physical terrain can extend past this window while the next graph builds.
+    # Keep these artificial ends distinguishable from real dead ends in the client.
+    cuts = {a for e in edges for a, b in ((e[0], e[1]), (e[1], e[0])) if a in inside and b not in inside}
     edges = [e for e in edges if e[0] in inside and e[1] in inside]
     used = sorted({e[0] for e in edges} | {e[1] for e in edges})
     if used:
@@ -737,7 +740,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             if rumble:
                 e.append(True)
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
-    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines, "cuts": sorted(cuts.intersection(nodes)),
             "trafficProfile": _traffic_profile(frame, density_lines, cx, cy), "mph": bool(mph)}
 
 
@@ -1263,6 +1266,8 @@ def short_ids(graph):
     out = dict(graph)
     out["nodes"] = {sid(k): v for k, v in graph.get("nodes", {}).items()}
     out["edges"] = [[sid(e[0]), sid(e[1])] + list(e[2:]) for e in graph.get("edges", ())]
+    if "cuts" in graph:
+        out["cuts"] = [sid(name) for name in graph["cuts"]]
     if graph.get("signals"):
         out["signals"] = [dict(sg, j=sid(sg["j"]), app=[[sid(a[0])] + list(a[1:]) for a in sg.get("app", ())])
                           for sg in graph["signals"]]
