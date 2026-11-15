@@ -74,14 +74,16 @@ pub fn ram_tier(limit_mb: f64) -> &'static str {
 
 /// The desktop tier's sizes for a limit: (decoded DEM tiles a process, map data MB a process, a worker's shed ceiling
 /// MB, its pool's rotation ceiling MB, road-tile processes at most, far-tile processes at most). From a 6.5 GB limit
-/// (a 20 GB PC's Auto) to 16 GB and more (a 32 GB PC's Auto: 17.9 GB): DEM ~200 -> 512 tiles, map data 160 -> 256 MB,
+/// (a 20 GB PC's Auto) to 16 GB and more (a 32 GB PC's Auto: 17.9 GB): DEM ~200 -> 512 tiles, map data 160 -> 256 MB (384 at the 24 GB cap),
 /// ceilings 1350 / 1800 -> 3000 / 4000 MB (the RAM-keyed ceilings before: 2000 / 2800 below 40 GB, 3000 / 3800 below
 /// 56 GB, none above).
 #[pyfunction]
 pub fn ram_desktop_sizes(limit_mb: f64) -> (i64, i64, i64, i64, i64, i64) {
     let l = limit_mb.max(0.0);
     let dem = (l / 32.0).clamp(192.0, 512.0) as i64;
-    let mapdata = (l / 64.0).clamp(160.0, 256.0) as i64;
+    // (384 at the cap, 256 at 16 GB as before: five road processes in five cities decoded 200-1587 layers again per
+    // 25 tiles in 256 MB and 64-416 in 384, for 71 MB more private memory a process, 2026-11-15)
+    let mapdata = (l / 64.0).clamp(160.0, 384.0) as i64;
     let rotate = (0.24 * l + 250.0).clamp(1800.0, 4000.0);
     let shed = 0.75 * rotate;
     let road = (((l - 3072.0) / 1229.0).floor() as i64).max(2);
@@ -195,8 +197,9 @@ mod tests {
     #[test]
     fn desktop_sizes_follow_the_limit() {
         let (dem, md, shed, rot, road, far) = ram_desktop_sizes(AUTO_MAX_MB);
-        assert_eq!((dem, md, shed, rot), (512, 256, 3000, 4000));
+        assert_eq!((dem, md, shed, rot), (512, 384, 3000, 4000));
         assert!(road >= 4 && far >= 10);
+        assert_eq!(ram_desktop_sizes(16384.0).1, 256, "a 16 GB limit: as before");
         let (dem, md, shed, rot, road, far) = ram_desktop_sizes(ram_auto_mb(32.0 * GB));
         assert!(dem >= 500 && md >= 250 && shed >= 2900 && rot >= 3900, "a 32 GB PC: about the desktop sizes");
         assert!(road >= 4 && far >= 10, "no fewer processes than the CPU allows");

@@ -444,7 +444,7 @@ def apply(is_small=None):
             import dem
             import mapdata
             dem.MEM_TILES = min(dem.MEM_TILES, sizes[0])
-            mapdata.MEM_MB = min(mapdata.MEM_MB, sizes[1])
+            mapdata.MEM_MB = sizes[1]       # (the limit's: 384 at the 24 GB cap, above the module's 256)
     if os.environ.get("BNGE_DEM_MEM_TILES"):        # (A/B: decoded DEM tiles kept per process)
         import dem
         dem.MEM_TILES = int(os.environ["BNGE_DEM_MEM_TILES"])
