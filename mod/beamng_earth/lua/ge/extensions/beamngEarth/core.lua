@@ -3185,6 +3185,12 @@ local function onClientPreStartMission(levelPath)
 end
 
 local function onClientEndMission()
+  if be and be.queueAllObjectLua then
+    be:queueAllObjectLua([[
+      if beamngEarth_maneuverClearance then extensions.unload('beamngEarth_maneuverClearance') end
+      if beamngEarth_oncomingClearance then extensions.unload('beamngEarth_oncomingClearance') end
+    ]])
+  end
   notePlayerPos(true)
   hudapps.unhookCityZone()
   hudapps.unhookMinimapNorth()
@@ -3791,7 +3797,9 @@ M.onUiChangedState = onUiChangedState
 M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
-M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onVehicleMapmgrUpdate = function(id)
+  gps.onVehicleMapmgrUpdate(id)
+end
 M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
@@ -3820,6 +3828,18 @@ M.onModActivated = function(mod)
 end
 M.onModDeactivated = function(mod)
   pcall(M._codeswap.check, 'turned off: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
+end
+
+-- Preserve the GPS and optional traffic acknowledgement when adding vehicle policies.
+M._clearanceMapAck = M.onVehicleMapmgrUpdate
+M.onVehicleMapmgrUpdate = function(id)
+  M._clearanceMapAck(id)
+  local vehicle = st.inOurLevel and getObjectByID(id)
+  if vehicle then vehicle:queueLuaCommand([[
+    if not ai or (ai.mode ~= 'traffic' and ai.mode ~= 'manual') then return end
+    if not beamngEarth_oncomingClearance then extensions.load('beamngEarth_oncomingClearance') end; beamngEarth_oncomingClearance.bindMap()
+    if not beamngEarth_maneuverClearance then extensions.load('beamngEarth_maneuverClearance') end; beamngEarth_maneuverClearance.bindMap()
+  ]]) end
 end
 
 return M

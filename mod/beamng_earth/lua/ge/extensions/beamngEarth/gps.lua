@@ -701,7 +701,7 @@ end
 
 local function holdAutodrive(veh)
   if not autoBlocked then
-    veh:queueLuaCommand('if beamngEarth_autodrive then beamngEarth_autodrive.stop() else ai.setMode("stop") end')
+    veh:queueLuaCommand('if beamngEarth_autodrive then (beamngEarth_autodrive.hold or beamngEarth_autodrive.stop)() else ai.setMode("stop") end')
   end
   autoBlocked, autoForce, routedTo = true, true, nil
 end
@@ -1115,7 +1115,7 @@ local function autoKeep(nodes, now)
   local c = core()
   local healthy = not (c and c.serverHealthy) or c.serverHealthy()
   if not healthy then
-    if not paused then veh:queueLuaCommand('ai.setMode("stop")') end
+    if not paused then holdAutodrive(veh) end
     paused, stillSince = true, nil
     return
   elseif paused then

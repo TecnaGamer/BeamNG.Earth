@@ -3,10 +3,17 @@
 local M = {}
 local lastPath, lastMap, lastVersion, lastSpeed, lastAggression
 
-function M.reset()
+local function resetPath()
   lastPath, lastMap, lastVersion, lastSpeed, lastAggression = nil, nil, nil, nil, nil
+  if beamngEarth_staticObstacles then beamngEarth_staticObstacles.reset() end
+end
+function M.reset()
+  resetPath()
+  if beamngEarth_oncomingPass then beamngEarth_oncomingPass.reset() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.onReset() end
 end
 M.onReset = M.reset
+M.onExtensionUnloaded = M.reset
 
 -- A remaining suffix of the old path followed by new nodes. setPath appends ONLY when its first node is the
 -- old path's last node. Identical remaining paths need no command; forks, loops and shorter endpoints restart.
@@ -51,6 +58,15 @@ end
 function M.stop(mode)
   M.reset()
   ai.setMode(mode or 'stop')
+end
+
+-- A streamed-route hold can resume the same manoeuvre. User cancellation,
+-- physical recovery and arrival still discard it through reset/stop/arrive.
+function M.hold()
+  resetPath()
+  if beamngEarth_oncomingPass then beamngEarth_oncomingPass.suspend() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.suspend() end
+  ai.setMode('stop')
 end
 
 -- GE plans from the vehicle reference point; the stock AI drives from obj:getFrontPosition(). A queued restart
@@ -105,6 +121,7 @@ function M.drive(ids, version, force, speed, aggression)
     mapmgr.requestMap()
     return 'waiting'
   end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.resume() end
   if obj and obj.getFrontPosition and obj.getPosition and obj.getDirectionVector then
     local front, ref = obj:getFrontPosition(), obj:getPosition()
     ids = M.forwardStart(ids, md, { x = front.x, y = front.y, z = ref.z }, obj:getDirectionVector())
@@ -126,6 +143,13 @@ function M.drive(ids, version, force, speed, aggression)
   lastPath = {}
   for i, id in ipairs(ids) do lastPath[i] = id end
   lastMap, lastVersion, lastSpeed, lastAggression = md, version, speed, aggression
+  -- Autodrive can start after the map acknowledgement while the player was still driving manually.
+  if extensions and extensions.load then
+    if not beamngEarth_oncomingClearance then extensions.load('beamngEarth_oncomingClearance') end
+    if not beamngEarth_maneuverClearance then extensions.load('beamngEarth_maneuverClearance') end
+  end
+  if beamngEarth_oncomingClearance then beamngEarth_oncomingClearance.bindMap() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.bindMap() end
   return action
 end
 
