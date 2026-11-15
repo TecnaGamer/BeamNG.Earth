@@ -9226,13 +9226,10 @@ class Connection:
                        "parts": [{"path": p, "x": c[0], "y": c[1]} for p, c in parts]})
 
     async def app_path(self, msg):
-        """The settings page's "Cache folder" and "BeamMP launcher" (apppaths.py, the user 2026-10-25: "Open the
-        explorer for that operating system but have a text input for the path as fallback"): what ('cache' or
-        'beammp') chosen in the system's window (pick: true) or typed (path), kept for the next start of the app;
-        always answered with app_paths (the paths now, and how the choice went). Without what: the paths only."""
+        """Settings paths and the next-start Windows Steam-free launch choice."""
         what = msg.get("what")
         pick, path = msg.get("pick") is True, msg.get("path")
-        if what not in ("cache", "beammp") or not (pick or isinstance(path, str)):
+        if what not in ("cache", "beammp", "launch") or (what == "launch" and pick) or not (pick or isinstance(path, str)):
             self.send(await self.loop.run_in_executor(None, app_paths_message, self.s.cache_dir, None))
             return
         if pick:
@@ -12712,16 +12709,19 @@ def app_paths_message(cache_dir, result):
     """app_paths for the settings page: the cache folder in use and the one kept for the next start, the BeamMP
     launcher (the player's choice, else the one found), whether a window is open (picking), and result: the answer to
     the last choice ({what, ok, text})."""
+    launch_without_steam = False
     try:
         ap, bm = _app_modules()
         dd = ap.data_dir()
         saved = ap.saved_cache_dir(dd) or ap.default_cache_dir()
         launcher = bm.remembered(dd) or bm.find(dd) or ""
+        launch_without_steam = ap.launch_without_steam(dd)
     except Exception as e:          # (a source copy without them: the page shows the folder in use only)
         log.debug("app paths: %s: %s", type(e).__name__, e)
         saved, launcher = cache_dir, ""
     m = {"type": "app_paths", "cacheDir": os.path.abspath(cache_dir), "cacheNext": os.path.abspath(saved),
-         "beammp": launcher}
+         "beammp": launcher, "launchWithoutSteam": bool(launch_without_steam),
+         "launchWithoutSteamSupported": os.name == "nt"}
     if result:
         m["result"] = result
     return m
@@ -12741,6 +12741,14 @@ def pick_app_path(what):
 def set_app_path(what, path):
     """Keep a typed or chosen path for the next start: {what, ok, text}."""
     ap, bm = _app_modules()
+    if what == "launch":
+        if path.lower() not in ("true", "false"):
+            return {"what": what, "ok": False, "text": "expected true or false"}
+        enabled = path.lower() == "true"
+        ap.save_launch_without_steam(enabled)
+        return {"what": what, "ok": True,
+                "text": "Steam-free launch enabled for the next app start" if enabled
+                else "Steam launch restored for the next app start"}
     if what == "cache":
         d, err = ap.set_cache_dir(path)
         if err:

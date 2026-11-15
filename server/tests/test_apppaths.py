@@ -58,6 +58,22 @@ class CacheDirTest(unittest.TestCase):
             self.assertEqual(launcher.cache_dir_arg(where, dd), where, "a full path with backslashes is kept")
 
 
+class LaunchSettingsTest(unittest.TestCase):
+    def test_steam_free_choice_defaults_off_and_persists(self):
+        with tempfile.TemporaryDirectory() as dd:
+            self.assertFalse(apppaths.launch_without_steam(dd))
+            apppaths.save_launch_without_steam(True, dd)
+            self.assertTrue(apppaths.launch_without_steam(dd))
+            apppaths.save_launch_without_steam(False, dd)
+            self.assertFalse(apppaths.launch_without_steam(dd))
+
+    def test_steam_free_choice_requires_a_boolean(self):
+        with tempfile.TemporaryDirectory() as dd:
+            with self.assertRaises(ValueError):
+                apppaths.save_launch_without_steam("true", dd)
+            self.assertFalse(apppaths.launch_without_steam(dd))
+
+
 class GameDirTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

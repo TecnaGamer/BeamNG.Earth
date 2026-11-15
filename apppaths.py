@@ -54,6 +54,18 @@ def save_app_settings(dd=None, **kw):
         json.dump(d, f, indent=2)
 
 
+def launch_without_steam(dd=None):
+    """Whether the next Windows game start should bypass Steam's integration."""
+    return app_settings(dd).get("launchWithoutSteam") is True
+
+
+def save_launch_without_steam(enabled, dd=None):
+    """Remember the Windows game's Steam-free launch choice in the app's settings."""
+    if not isinstance(enabled, bool):
+        raise ValueError("launchWithoutSteam must be a boolean")
+    save_app_settings(dd, launchWithoutSteam=enabled)
+
+
 def drive_relative(path):
     """Is path a Windows drive-relative path ("c:games\\x", "c:games"): a drive letter with no separator after it?
     That is what c:\\games\\beamng-cache becomes when a shell drops its backslashes (Git Bash, MSYS, unquoted), and

@@ -474,7 +474,8 @@ SERVER_TO_MOD = {
                      "lat": F(NUM), "lon": F(NUM), "radius": F(NUM),
                      # ... and the night side's city lights over the ground (none: none could be had)
                      "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
-    "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
+    "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str),
+                  "launchWithoutSteam": F(bool), "launchWithoutSteamSupported": F(bool), "result": F(dict, OPT)},
     # the in-game reports (reportsend.py): a send's state (queued / sending / retry / sent / failed, the collector's
     # report id once sent) and the server's part of a report written
     "report_status": {"folder": F(str), "state": F(str), "id": F(str, OPT), "text": F(str, OPT), "tries": F(int, OPT),
