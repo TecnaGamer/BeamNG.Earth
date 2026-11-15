@@ -76,6 +76,14 @@ class EpicManifestTest(Tmp):
         self.write("G.txt", {"DisplayName": "BeamNG.drive", "InstallLocation": epic})
         self.assertEqual(GI.epic_installs(self.path("manifests")), [os.path.normpath(epic)])
 
+    def test_deeply_nested_manifest_is_skipped(self):
+        # (Codex review of ee11b37e: under MANIFEST_MAX, 100,000 nested arrays raised RecursionError out of json and
+        # stopped every Windows start, a Steam copy's too)
+        epic = make_game(self.path("Epic Games", "BeamNGdrive"))
+        self.write("A.item", None, raw="[" * 100000 + "]" * 100000)
+        self.write("B.item", {"DisplayName": "BeamNG.drive", "InstallLocation": epic})
+        self.assertEqual(GI.epic_installs(self.path("manifests")), [os.path.normpath(epic)])
+
     def test_matched_by_names_not_by_folder(self):
         # (a folder called BeamNG holding another game is not BeamNG: the manifest's names decide)
         d = make_game(self.path("BeamNG.drive"))
@@ -169,10 +177,14 @@ class ModeTest(unittest.TestCase):
         self.assertEqual(mode, "direct")
         self.assertIn("not Steam's", note)
 
-    def test_direct_needs_a_folder(self):
-        mode, note = GI.resolve_mode("direct", None, "windows")
-        self.assertEqual(mode, "steam")
-        self.assertTrue(note)
+    def test_direct_without_a_folder_stays_direct(self):
+        # (Codex review of ee11b37e: it became "steam", so a removed copy with direct chosen started Steam or Steam's
+        # copy; it stays direct, and direct_start stops with the missing-copy message)
+        for build in ("windows", "native"):
+            mode, note = GI.resolve_mode("direct", None, build)
+            self.assertEqual(mode, "direct")
+            self.assertTrue(note)
+        self.assertIsNone(GI.launch_exe(None, "direct", True))
 
     def test_game_mode_and_proton_as_before(self):
         self.assertEqual(GI.resolve_mode("direct", self.steam, "native", gamescope=True)[0], "steam")
@@ -293,6 +305,26 @@ class ResolveTest(Tmp):
         with mock.patch.object(launcher, "ask_game_dir") as agd:      # (game running / --no-game: never asked)
             launcher.resolve_launch(args(), "/u/current", "native", can_ask=False)
         agd.assert_not_called()
+
+    def test_direct_with_the_copy_gone_never_reaches_steam(self):
+        # the saved copy removed, nothing else found, the folder question skipped: the start stops, Steam untouched
+        apppaths.set_launch_mode("direct")
+        with mock.patch.object(launcher, "ask_game_dir", return_value=None):
+            la = launcher.resolve_launch(args(), "/u/current", "windows", ask=self.no_ask)
+        self.assertEqual((la.install, la.mode), (None, "direct"))
+        with ExitStack() as st:
+            for name in ("IS_WIN",):
+                st.enter_context(mock.patch.object(launcher, name, True))
+            st.enter_context(mock.patch.object(launcher, "problem"))
+            st.enter_context(mock.patch.object(launcher, "under_wine", return_value=False))
+            steam = st.enter_context(mock.patch.object(launcher, "windows_steam_start"))
+            sf = st.enter_context(mock.patch.object(launcher.os, "startfile", create=True))
+            po = st.enter_context(mock.patch.object(launcher.subprocess, "Popen"))
+            with self.assertRaises(SystemExit):
+                launcher.start_game(False, launch=la)
+        steam.assert_not_called()
+        sf.assert_not_called()
+        po.assert_not_called()
 
     def test_game_mode_keeps_its_start(self):
         apppaths.set_launch_mode("direct")

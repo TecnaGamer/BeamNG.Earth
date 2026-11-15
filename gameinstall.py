@@ -170,7 +170,9 @@ def epic_installs(manifest_dir):
                 continue
             with open(p, "rb") as f:
                 m = json.loads(f.read().decode("utf-8-sig", errors="replace"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
+            # (RecursionError: deeply nested JSON under MANIFEST_MAX; one bad manifest of another game must not stop
+            # the start of any copy, Codex review of ee11b37e)
             continue
         if not isinstance(m, dict) or m.get("bIsIncompleteInstall") is True or not _is_beamng(m):
             continue
@@ -237,8 +239,10 @@ def resolve_mode(chosen, install, build, gamescope=False):
         return resolve_mode("auto", install, build)[0], "Steam Deck Game Mode: the game starts as before (the start " \
                                                         "without Steam applies on the desktop)"
     if chosen == "direct":
-        return ("direct", "") if install else ("steam", "BeamNG.drive's folder is not known: a start without Steam "
-                                                        "needs it (--game-dir PATH)")
+        # (no copy: still direct, and direct_start stops with the missing-copy message; never through Steam, which
+        # would start Steam or another copy against the player's choice, Codex review of ee11b37e)
+        return ("direct", "") if install else ("direct", "BeamNG.drive's folder is not known: a start without Steam "
+                                                         "needs it (--game-dir PATH, or --launch steam)")
     if chosen == "steam" and store in ("epic", "other"):
         mode = resolve_mode("auto", install, build)[0]
         return mode, f"this copy is not Steam's ({STORE_NAME[store]}): started {'directly' if mode == 'direct' else 'from its folder'}"
