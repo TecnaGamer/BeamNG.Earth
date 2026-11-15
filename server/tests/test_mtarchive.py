@@ -302,7 +302,7 @@ class RealArchiveTest(_Base):
         f = self.fetcher()
         d = self.dem(f, "rel")
         self.assertEqual(d._download(demmod.MAPTERHORN, *k), self.ep[k])
-        old = os.path.join(self.tmp.name, "rel", "mtarchive", self.meta["md5sum"])
+        old = os.path.join(self.tmp.name, "rel", "mtarchive", mtarchive.NAMESPACE, self.meta["md5sum"])
         self.assertTrue(os.path.exists(os.path.join(old, "head.bin")))
         # the file list names a new release (new MD5 and size) while the mirrors still have the old file
         items = [dict(i) for i in self.items]
@@ -314,7 +314,7 @@ class RealArchiveTest(_Base):
         k2 = (16, 18531, 24623)
         self.assertEqual(d2._download(demmod.MAPTERHORN, *k2), self.ep[k2], "from the endpoint")
         self.assertIn(ENDPOINT, f2.hosts(), "the old copies are not used for the new release")
-        new = os.path.join(self.tmp.name, "rel", "mtarchive", "b" * 32)
+        new = os.path.join(self.tmp.name, "rel", "mtarchive", mtarchive.NAMESPACE, "b" * 32)
         self.assertFalse(os.path.exists(os.path.join(new, "head.bin")), "no copy's byte read for the new release")
         self.assertEqual(f2.served_hosts(), {ENDPOINT}, "the copies answered 412 to If-Match the new MD5")
 
@@ -326,7 +326,8 @@ class RealArchiveTest(_Base):
         d2 = self.dem(f, "chg")
         self.assertEqual(d2._download(demmod.MAPTERHORN, 16, 18531, 24623), self.ep[(16, 18531, 24623)])
         self.assertIn(MTD, f.hosts(), "the other mirror, checked against the cached head")
-        with open(os.path.join(self.tmp.name, "chg", "mtarchive", self.meta["md5sum"], "meta.json")) as fh:
+        with open(os.path.join(self.tmp.name, "chg", "mtarchive", mtarchive.NAMESPACE, self.meta["md5sum"],
+                               "meta.json")) as fh:
             m = json.load(fh)
         self.assertEqual(m["bad"], [f'0:"{SRC}-etag"'])
         # a mirror whose first 16 KB differ from the cached head: never used
@@ -337,8 +338,9 @@ class RealArchiveTest(_Base):
         f3.mirror[MTD]["head"] = bytes(head)
         d3 = self.dem(f3, "chg3")
         d3.archives.region(16, 1, 1)
-        os.makedirs(os.path.join(self.tmp.name, "chg3", "mtarchive", self.meta["md5sum"]), exist_ok=True)
-        with open(os.path.join(self.tmp.name, "chg3", "mtarchive", self.meta["md5sum"], "head.bin"), "wb") as fh:
+        hd = os.path.join(self.tmp.name, "chg3", "mtarchive", mtarchive.NAMESPACE, self.meta["md5sum"])
+        os.makedirs(hd, exist_ok=True)
+        with open(os.path.join(hd, "head.bin"), "wb") as fh:
             fh.write(load_fixture()[1][0])
         self.assertEqual(d3._download(demmod.MAPTERHORN, 16, 18530, 24623), self.ep[(16, 18530, 24623)])
         self.assertIn(ENDPOINT, f3.hosts())
@@ -477,6 +479,52 @@ class ReleaseIdentityTest(_Base):
                                                            "mirrors": {SRC: f'"{SRC}-etag"'}}}
         self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
         self.assertIn(ENDPOINT, f.hosts())
+
+
+class UpgradeTest(_Base):
+    """A cache filled by the builds before copies had to be proven the listed release (the old namespace
+    <dem>/mtarchive/<md5>): its regions' raw z13+ tiles, their misses and the decoded tiles over them are dropped once,
+    then read again from a proven copy (Codex review of 5776353e [high])."""
+
+    def test_tiles_from_unproven_copies_are_read_again(self):
+        good = {(16, 18528, 24620): terrarium(1)}
+        blob = write_pmtiles(good)
+        items = [{"name": "6-18-24.pmtiles", "md5sum": "f" * 32, "size": len(blob), "min_zoom": 13, "max_zoom": 16}]
+        c = os.path.join(self.tmp.name, "c")
+        # (as an old build left it: the wrong copy's tile, a decoded z12 tile, a miss, the old head folder; and a tile
+        # of another region, kept)
+        wrong = os.path.join(c, "mapterhorn", "16", "18528", "24620.webp")
+        os.makedirs(os.path.dirname(wrong))
+        with open(wrong, "wb") as fh:
+            fh.write(b"wrong copy")
+        other = os.path.join(c, "mapterhorn", "16", "1", "2.webp")
+        os.makedirs(os.path.dirname(other))
+        with open(other, "wb") as fh:
+            fh.write(b"elsewhere")
+        demmod.missindex.record([os.path.join(c, "mapterhorn", "16", "18528", "24621.404")])
+        dec = os.path.join(c, "decoded", "v4", "g1", "12", "1158", "1539.f32z")
+        os.makedirs(os.path.dirname(dec))
+        with open(dec, "wb") as fh:
+            fh.write(b"decoded")
+        oldns = os.path.join(c, "mtarchive", "f" * 32)
+        os.makedirs(oldns)
+        with open(os.path.join(oldns, "meta.json"), "w") as fh:
+            json.dump({"name": "6-18-24.pmtiles", "size": len(blob), "etag": {}, "bad": []}, fh)
+        f = ArchiveFetcher({"6-18-24.pmtiles": Sparse(len(blob), whole=blob)}, items, good)
+        d = self.dem(f, "c")
+        self.assertEqual(d._download(demmod.MAPTERHORN, 16, 18528, 24620), good[(16, 18528, 24620)],
+                         "read again from the proven copy, not the old cache's")
+        self.assertFalse(os.path.exists(dec), "the decoded tile over the region dropped")
+        self.assertFalse(demmod.missindex.known(os.path.join(c, "mapterhorn", "16", "18528", "24621.404")))
+        self.assertFalse(os.path.exists(oldns))
+        with open(other, "rb") as fh:
+            self.assertEqual(fh.read(), b"elsewhere", "other regions untouched")
+        self.assertTrue(os.path.exists(os.path.join(c, "mtarchive", mtarchive.NAMESPACE, ".migrated")))
+        with open(wrong, "wb") as fh:                     # (once only: a later start keeps what is there)
+            fh.write(b"kept")
+        self.dem(f, "c")
+        with open(wrong, "rb") as fh:
+            self.assertEqual(fh.read(), b"kept")
 
 
 class ArchivesOfTest(unittest.TestCase):

@@ -147,6 +147,12 @@ pub struct Hour {
     pub dem: BTreeMap<String, u64>,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct State {
+    hours: Vec<Hour>,
+    runs: Vec<(String, u64, u64)>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Saved {
     id: String,
@@ -180,7 +186,8 @@ pub struct Telemetry {
     written: HashSet<u64>, // hours already in hours.jsonl
     uniques: crate::uniques::Uniques, // distinct installs per day, ids not kept (uniques.rs)
     // "<install id>:<run id>" -> (the highest report number counted, unix s): a report sent again (its answer lost) is
-    // not counted again, whichever runs of the install report in between; saved with installs.json (runs.json) so a
+    // not counted again, whichever runs of the install report in between; saved with the open hours' counts
+    // (state.json, save_state) so a
     // restart keeps them (2026-11-15 Codex review: one pair per install, forgotten when another run reported or the
     // collector restarted)
     runs: HashMap<String, (u64, u64)>,
@@ -243,13 +250,17 @@ impl Telemetry {
                 }
             }
         }
-        if let Ok(text) = fs::read_to_string(dir.join("runs.json")) {
-            if let Ok(list) = serde_json::from_str::<Vec<(String, u64, u64)>>(&text) {
-                for (k, seq, at) in list {
+        // the hours not finished yet and the runs' report numbers, from one snapshot (state.json, save_state): what was
+        // counted and what may not be counted again come back together
+        let mut open_hours: Vec<Hour> = Vec::new();
+        if let Ok(text) = fs::read_to_string(dir.join("state.json")) {
+            if let Ok(st) = serde_json::from_str::<State>(&text) {
+                for (k, seq, at) in st.runs {
                     if now.saturating_sub(at) <= RUN_KEEP_S {
                         self.runs.insert(k, (seq, at));
                     }
                 }
+                open_hours = st.hours;
             }
         }
         if let Ok(text) = fs::read_to_string(dir.join("minutes.jsonl")) {
@@ -283,6 +294,11 @@ impl Telemetry {
         let _ = fs::write(dir.join("minutes.jsonl"), m);
         let h: String = self.hours.values().map(|x| serde_json::to_string(x).unwrap() + "\n").collect();
         let _ = fs::write(dir.join("hours.jsonl"), h);
+        for h in open_hours {
+            if !self.written.contains(&h.h) && now.saturating_sub(h.h * 3600) <= HOUR_KEEP {
+                self.hours.insert(h.h, h);     // (its line goes to hours.jsonl when it is over, as before)
+            }
+        }
     }
 
     fn append(&self, file: &str, line: String) {
@@ -301,10 +317,22 @@ impl Telemetry {
         if fs::write(&tmp, serde_json::to_string(&list).unwrap()).is_ok() {
             let _ = fs::rename(&tmp, dir.join("installs.json"));
         }
-        let runs: Vec<(&String, u64, u64)> = self.runs.iter().map(|(k, v)| (k, v.0, v.1)).collect();
-        let tmp = dir.join("runs.json.tmp");
-        if fs::write(&tmp, serde_json::to_string(&runs).unwrap()).is_ok() {
-            let _ = fs::rename(&tmp, dir.join("runs.json"));
+        self.save_state();
+    }
+
+    /// The hours not yet in hours.jsonl and the runs' report numbers in one file, written whole and renamed into
+    /// place (Codex review of 5776353e: the numbers were kept alone, so a restart within the hour lost an accepted
+    /// report's counts and then refused its resend). A report taken after the last snapshot loses both together: its
+    /// resend is counted.
+    fn save_state(&self) {
+        let Some(dir) = &self.dir else { return };
+        let st = State {
+            hours: self.hours.values().filter(|h| !self.written.contains(&h.h)).cloned().collect(),
+            runs: self.runs.iter().map(|(k, v)| (k.clone(), v.0, v.1)).collect(),
+        };
+        let tmp = dir.join("state.json.tmp");
+        if fs::write(&tmp, serde_json::to_string(&st).unwrap()).is_ok() {
+            let _ = fs::rename(&tmp, dir.join("state.json"));
         }
     }
 
@@ -709,7 +737,9 @@ mod tests {
         t.report(ip, "DE".into(), mk("aa", 1, 10), later, u + 120).unwrap();       // A's resend after the restart
         t.report(ip, "DE".into(), mk("aa", 2, 1), later + gap, u + 120).unwrap();  // A's next report: counted
         let q = t.private(later + gap, u + 120);
-        assert_eq!(q["sources24h"][src]["req"], 1, "after the restart only the new report");
+        // (Codex review of 5776353e: the marks survived the restart but the hour's counts did not: the accepted
+        // report's counts were lost and its resend refused)
+        assert_eq!(q["sources24h"][src]["req"], 14, "the hour's counts kept, the resend not counted, the new one");
         let _ = fs::remove_dir_all(&dir);
     }
 

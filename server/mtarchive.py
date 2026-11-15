@@ -1,5 +1,5 @@
-"""Mapterhorn's elevation tiles of zoom 13 and deeper from its regional PMTiles archives, by HTTP range reads, instead of
-its tile endpoint (the user, 2026-11-15: the maintainer asked apps to use the archives; players' servers asked
+"""Mapterhorn's elevation tiles of zoom 13 and deeper from its regional PMTiles archives, by HTTP range reads, instead
+of its tile endpoint (the user, 2026-11-15: the maintainer asked apps to use the archives; players' servers asked
 tiles.mapterhorn.com ~60 M times a day).
 
 Mapterhorn's file list (download_urls.json, dem.Dem._coverage) names one archive per zoom-6 tile with lidar under it
@@ -13,7 +13,7 @@ Thin glue: the network (netfetch, the hosts' shared rate limits), the disk cache
 header, directories, lookups and the plan of the range reads are native (earthfast pmtiles.rs: pmt_header,
 pmt_find_many, pmt_ranges).
 
-    <dem>/mtarchive/<md5>/head.bin        the archive's first 16 KB (header + root directory)
+    <dem>/mtarchive/v2/<md5>/head.bin        the archive's first 16 KB (header + root directory)
                          /meta.json       its name and size, each mirror's ETag (its copy checked), mirrors whose
                                           copy differs
                          /leaf/<off>_<len> leaf directories as stored (gzip; ~10 KB, ~4,100 tiles each)
@@ -54,6 +54,8 @@ ON = os.environ.get("BNGE_DEM_ARCHIVES", "1") != "0"
 MIN_ZOOM = 13                   # the regional archives' first zoom (the planet's z0-12: the tile host's packs)
 COVERAGE_ZOOM = 6
 HEAD_BYTES = 16384
+NAMESPACE = "v2"                # <dem>/mtarchive/<NAMESPACE>/<md5>: v2, copies proven the listed release (bound); the
+                                # folders before it (<dem>/mtarchive/<md5>) dropped with their tiles (migrate_unproven)
 MERGE_GAP = 0                   # bytes between two tiles still read in one range (0: only back-to-back tiles)
 MAX_RUN = 4 * 1024 * 1024       # bytes one range read takes at most (a single larger tile: a read of its own)
 MAX_DEPTH = 4                   # directory levels (PMTiles: root + leaves)
@@ -92,6 +94,103 @@ def bindings_of(body):
         if m:
             out[str(name)] = {"md5": md5, "size": size, "mirrors": m}
     return out
+
+
+def migrate_unproven(dem_dir):
+    """Once per cache: what the archives gave before a copy had to be proven the listed release (Codex review of
+    5776353e: the branch's builds before it, never released, could keep the wrong copy's tiles): the old namespace's
+    folders (<dem>/mtarchive/<md5>, their head and directories) removed, and in each region one of them names, the raw
+    tiles of zoom 13 and deeper, their columns' remembered 404s, and the decoded tiles of every zoom over it (a z12 or
+    coarser tile's lidar test read those directories): all read again, from proven copies or the endpoint. Done by one
+    process (xproc), then a flag (<dem>/mtarchive/<NAMESPACE>/.migrated)."""
+    base = os.path.join(dem_dir, "mtarchive")
+    flag = os.path.join(base, NAMESPACE, ".migrated")
+    if os.path.exists(flag):
+        return
+    try:
+        names = os.listdir(base)
+    except OSError:
+        names = []
+    old = [n for n in names if _MD5.match(n)]
+    if old:
+        got, mine = xproc.once(flag + ".lock", lambda: True if os.path.exists(flag) else None, 120.0, patient=True)
+        if got:
+            return
+        try:
+            regions = set()
+            for n in old:
+                p = os.path.join(base, n)
+                try:
+                    with open(os.path.join(p, "meta.json"), encoding="utf-8") as f:
+                        mm = _NAME.match(str(json.load(f).get("name", "")))
+                    if mm:
+                        regions.add((int(mm.group(1)), int(mm.group(2))))
+                except (OSError, ValueError, AttributeError):
+                    pass
+                import shutil
+                shutil.rmtree(p, ignore_errors=True)
+            for rx, ry in sorted(regions):
+                _drop_region(dem_dir, rx, ry)
+            if regions:
+                log.info("mtarchive: tiles of %d regions read before the archives' copies were proven: dropped, read "
+                         "again", len(regions))
+        finally:
+            if mine:
+                xproc.release(flag + ".lock")
+    try:
+        os.makedirs(os.path.dirname(flag), exist_ok=True)
+        with open(flag, "w", encoding="utf-8") as f:
+            f.write("1")
+    except OSError:
+        pass
+
+
+def _drop_region(dem_dir, rx, ry):
+    """The raw z13+ tiles (and their columns' miss indexes) and every decoded tile over zoom-6 region (rx, ry)."""
+    raw = os.path.join(dem_dir, "mapterhorn")
+    for z in range(MIN_ZOOM, 19):
+        d = 1 << (z - COVERAGE_ZOOM)
+        zdir = os.path.join(raw, str(z))
+        if not os.path.isdir(zdir):
+            continue
+        for x in range(rx * d, (rx + 1) * d):
+            col = os.path.join(zdir, str(x))
+            try:
+                names = os.listdir(col)
+            except OSError:
+                continue
+            for n in names:
+                stem = n.split(".", 1)[0]
+                if n == "_misses" or (stem.isdigit() and ry * d <= int(stem) < (ry + 1) * d
+                                      and n.endswith((".webp", ".404"))):
+                    _remove(os.path.join(col, n))
+    dec = os.path.join(dem_dir, "decoded")
+    for ver in _listdir(dec):
+        for g in _listdir(os.path.join(dec, ver)):
+            gdir = os.path.join(dec, ver, g)
+            for z in range(0, 19):
+                if z >= COVERAGE_ZOOM:
+                    d = 1 << (z - COVERAGE_ZOOM)
+                    xs, y0, y1 = range(rx * d, (rx + 1) * d), ry * d, (ry + 1) * d
+                else:
+                    s = COVERAGE_ZOOM - z
+                    xs, y0, y1 = [rx >> s], ry >> s, (ry >> s) + 1
+                zdir = os.path.join(gdir, str(z))
+                if not os.path.isdir(zdir):
+                    continue
+                for x in xs:
+                    col = os.path.join(zdir, str(x))
+                    for n in _listdir(col):
+                        stem = n.split(".", 1)[0]
+                        if stem.isdigit() and y0 <= int(stem) < y1:
+                            _remove(os.path.join(col, n))
+
+
+def _listdir(p):
+    try:
+        return os.listdir(p)
+    except OSError:
+        return []
 
 
 class Unavailable(IOError):
@@ -374,7 +473,8 @@ class Archives:
 
     def __init__(self, dem_dir, fetcher, items):
         fast.require(NATIVE, "Mapterhorn's regional archives (pmt_find_many, pmt_ranges)")
-        self.root = os.path.join(dem_dir, "mtarchive")
+        self.root = os.path.join(dem_dir, "mtarchive", NAMESPACE)
+        migrate_unproven(dem_dir)
         self.fetcher, self._items = fetcher, items
         self._regions = {}
         self._lock = threading.Lock()

@@ -177,6 +177,7 @@ All paths are relative to the bucket root, which is also `https://tiles.tgforeve
 | `s2wc/v1/{z}/{px}/{py}.bngp` | Sentinel-2 photo packs | data repo `tiles` | by hand | `public, max-age=2592000, immutable` (30 days) | yes |
 | `dem/mapterhorn/<release>/{z}/{px}/{py}.bngp` | Mapterhorn elevation, z0-12 | data repo `dem` | by hand, per Mapterhorn release | `public, max-age=2592000, immutable` | yes |
 | `dem/mapterhorn/<release>/index.bin` | which packs exist | data repo `dem` | once per release | `public, max-age=86400` | yes |
+| `dem/mapterhorn/archives.json` | the binding of Mapterhorn's regional archive copies (each mirror's ETag) to the listed release's MD5 (`tools/build_mt_bindings.py`; the client reads z13+ only from a bound copy) | data repo `mt-bindings` | by hand, per Mapterhorn release (`--merge` keeps what still holds) | `public, max-age=86400` (the client reads it daily) | yes |
 | `aerial/v1/g<gen>/{z}/{px}/{py}.bngp` | 1 m aerial packs | data repo `aerial`; the builder box | by hand; on demand | `public, max-age=31536000, immutable` (1 year) | yes |
 | `aerial/v1/cov/<rx>/<ry>.json` | aerial coverage per region | the same | after every build | `public, max-age=300` | no (`.json`) |
 | `aerial/v1/_cells/<x>_<y>.json` | per-cell build records | the same | after every cell | `no-cache` | no |
@@ -230,8 +231,9 @@ decision blocks (see below).
   part), or the **binding file** below ties that ETag to the MD5; every read carries `If-Match` with it. Tiles next to
   each other in the archive come in one read.
 - **Binding file:** `dem/mapterhorn/archives.json` on the tile host, built by `tools/build_mt_bindings.py --out
-  archives.json [--names ...] [--max-gb N] [--merge old.json]`: each mirror's copy of each archive read whole (range
-  reads, `If-Match` its ETag) through MD5; a copy whose MD5 is the list's gets its ETag recorded. Without an entry (and
+  archives.json [--names ...] [--mirrors data.source.coop ...] [--max-gb N] [--merge old.json]` (exit status 3 when it
+  was asked to hash and bound nothing): each mirror's copy of each archive read whole (4 range reads of 64 MiB in
+  flight on kept connections, `If-Match` its ETag) through MD5; a copy whose MD5 is the list's gets its ETag recorded. Without an entry (and
   for multipart copies, whose ETag is not their MD5) the client uses the tile endpoint for that archive. Every archive
   once per mirror per Mapterhorn release (8.9 TiB per mirror for release 0.0.13): start with the regions players
   visit; `--merge` keeps the entries still valid for a new release. `Cache-Control`: a day (`max-age=86400`); the
