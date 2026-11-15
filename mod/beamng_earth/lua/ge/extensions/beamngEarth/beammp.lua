@@ -93,52 +93,143 @@ function M.onPostJoin()
 end
 
 -- The player's own BeamNG.Earth back on when they leave a server (the user, 2026-10-24: "I think the earth mod gets
--- disabled when you leave the server"). Joining, BeamMP switches off every mod the server didn't send, ours too (the
--- server's copy, "multiplayerbeamng_earth", runs in the session); leaving, it deletes the server's copy and leaves ours
--- off, so the BeamNG.Earth level and the servers tab were gone until the game restarted. Called from the server's copy
--- in BeamMP's onBeamMPServerLeave, before BeamMP's cleanup removes it. A player without our app has no such mod:
--- nothing happens (core_modmanager.activateMod logs "mod not existing").
--- Switched on once BeamMP's session is over (M.restoreTick): in the leave hook BeamMP still counts the session, and its
--- MPModManager.checkMod turned our copy straight off again ("This mod should not be running: beamng_earth", Steam Deck
--- and a player's bug report, 2026-11-10/11), so the level stayed gone until the game restarted; with the code swap
--- (codeswap.lua) the player's copy's code had come in for that moment and then had no files at all.
+-- disabled when you leave the server"; again 2026-11-15 on 1.10.1: "when i left the server it disabled the mod").
+-- Joining, BeamMP's MPModManager.checkAllMods switches off every mod the server didn't send, ours too (the server's
+-- copy, "multiplayerbeamng_earth", runs in the session, codeswap.lua); leaving, cleanUpSessionMods deletes the
+-- server's copy (core_modmanager.deleteMod: the files go, the Lua already loaded stays) and leaves ours off, so the
+-- BeamNG.Earth level and the servers tab were gone until the game restarted (the launcher turns it back on at its next
+-- start: install.ensure_mod_active).
+-- 1.10.0 switched it on from core's onUpdate once the session was over, but behind onUpdate's early return for the
+-- menus: leaving through the level's end (Esc > Main menu: onClientEndMission -> MPCoreNetwork.leaveServer(false)) the
+-- level state was already reset, so that never ran (the user's log 2026-11-15: no line of ours after "1 Mods cleaned
+-- up"). And a server's copy is whatever version its host put there, so its code can't be the one that does it.
+-- Now the player's own copy's code arms it when BeamMP switches that copy off in a session (onModDeactivated, before
+-- codeswap.lua swaps its code out; only then: a copy already off at the join was the player's choice): a job in the
+-- game's own job system (core_jobsystem), not one of our extensions or modules, so neither the code swap nor the
+-- server copy's deletion takes it away. Each frame it asks BeamMP whether the session is over (one coroutine resume,
+-- only while BeamMP has our copy off); then it switches our copy on at once (before BeamMP's Lua reload 0.5 s after a
+-- "Leave" from its menu), again (up to RESTORE_TRIES times) only if BeamMP turns it off again in a session within
+-- RESTORE_GAP_S; the player turning it off ends it. Our copy's
+-- modScript then brings its own code back (codeswap.lua). In the session it waits: BeamMP's checkMod would switch it
+-- straight off again ("This mod should not be running: beamng_earth"). A player without our app has no such mod:
+-- nothing is armed. A mod the player turns off outside a session (before joining, too) is never switched back on.
 M.LOCAL_MOD = 'beamng_earth'
 M.RESTORE_TRIES = 3             -- switched on again this many times when something turned it off meanwhile
-M.RESTORE_GAP_S = 1.0
-local restoreDue, restoreTries, restoreWait = false, 0, 0
+M.RESTORE_GAP_S = 1.0           -- on and still on this long: done
+-- the pending restore ({ live, mod, tries, ... }): a global, so a copy loaded later (after a swap, from the server's
+-- copy) sees a job already running and doesn't start a second one
+M.RESTORE_GLOBAL = 'beamngEarthMPRestore'
 
-local function localEntry()
+local function modManager()
   local mm = rawget(_G, 'core_modmanager')
   if type(mm) ~= 'table' or type(mm.getModDB) ~= 'function' or type(mm.activateMod) ~= 'function' then return nil end
+  return mm
+end
+
+local function localEntry()
+  local mm = modManager()
+  if not mm then return nil end
   local ok, entry = pcall(mm.getModDB, M.LOCAL_MOD)
   if not ok or type(entry) ~= 'table' then return nil end
   return entry, mm
 end
 
+-- BeamMP in a session or on its way into one (MPCoreNetwork; no BeamMP: never)
+local function sessionOn()
+  local mp = rawget(_G, 'MPCoreNetwork')
+  if type(mp) ~= 'table' then return false end
+  for _, f in ipairs({ mp.isMPSession, mp.isGoingMPSession }) do
+    if type(f) == 'function' then
+      local ok, v = pcall(f)
+      if ok and v == true then return true end
+    end
+  end
+  return false
+end
+
+local function clockS()
+  local ht = rawget(_G, 'hptimer')
+  if type(ht) == 'function' then
+    local ok, t = pcall(ht)
+    if ok and t then
+      return function() return t:stop() / 1000 end
+    end
+  end
+  local c0 = os.clock()
+  return function() return os.clock() - c0 end
+end
+
+-- One frame of a pending restore. -> true when done (switched on and still on, on already, gave up, nothing to do).
+function M.restoreStep(s)
+  if sessionOn() then return false end
+  local entry, mm = localEntry()
+  if not entry then return true end                 -- no mod manager, or no local copy any more
+  if entry.active then
+    if s.tries == 0 then return true end            -- (switched on by someone else: nothing for us)
+    return (s.clock() - s.since) >= M.RESTORE_GAP_S
+  end
+  if s.tries > 0 and not s.again then return true end   -- (off again, not by BeamMP in a session: the player's choice)
+  if s.tries >= M.RESTORE_TRIES then
+    log('W', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. s.mod .. ') was turned off again ' .. s.tries
+      .. ' times: left off (turn it on in the Mods menu)')
+    return true
+  end
+  s.tries = s.tries + 1
+  s.since = s.clock()
+  s.again = false
+  log('I', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. s.mod .. ') switched back on')
+  local ok, err = pcall(mm.activateMod, s.mod)
+  if not ok then log('W', 'beamngEarth', 'BeamMP: switching BeamNG.Earth back on: ' .. tostring(err)) end
+  return false
+end
+
+-- The job: a step a frame until done (an error in a step ends it). (The job system first runs it at its next update.)
+local function restoreJob(job, s)
+  while s.live do
+    local ok, done = pcall(M.restoreStep, s)
+    if not ok or done then break end
+    job.sleep(0)
+  end
+  s.live = false
+end
+M._restoreJob = restoreJob
+
+-- Arm the restore (no-op when one is pending). -> true when armed now.
+function M.armRestore(why)
+  local cur = rawget(_G, M.RESTORE_GLOBAL)
+  if type(cur) == 'table' and cur.live then return false end
+  local js = rawget(_G, 'core_jobsystem')
+  if type(js) ~= 'table' or type(js.create) ~= 'function' then return false end
+  local s = { live = true, mod = M.LOCAL_MOD, tries = 0, since = 0, clock = clockS() }
+  local ok = pcall(js.create, restoreJob, 1, s)
+  if not ok then return false end
+  rawset(_G, M.RESTORE_GLOBAL, s)
+  log('I', 'beamngEarth', 'BeamMP: BeamNG.Earth (' .. M.LOCAL_MOD .. ') is off for the session (' .. tostring(why)
+    .. '): switched back on when it ends')
+  return true
+end
+
+-- core.lua's onModDeactivated, before the code swap: BeamMP switching the player's own copy off in a session (a pending
+-- restore: switched on again after this session too). Outside a session it is the player: a pending restore ends.
+function M.onModDeactivated(mod)
+  if type(mod) ~= 'table' or mod.modname ~= M.LOCAL_MOD then return false end
+  local cur = rawget(_G, M.RESTORE_GLOBAL)
+  local live = type(cur) == 'table' and cur.live
+  if not sessionOn() then
+    if live then cur.live = false end
+    return false
+  end
+  if live then cur.again = true end
+  return M.armRestore('turned off by BeamMP')
+end
+
+-- BeamMP's onBeamMPServerLeave (through core.lua): the layout rewrite off. It arms nothing: "our copy is off" alone
+-- doesn't say BeamMP turned it off (the player may have, before joining: Codex review 2026-11-15), and only the
+-- onModDeactivated above sees that; a player whose own copy is older than this is turned back on at the launcher's next
+-- start (install.ensure_mod_active).
 function M.onServerLeave()
   layoutDue = false
   disarm()
-  local entry = localEntry()
-  if not entry or entry.active then return false end
-  restoreDue, restoreTries, restoreWait = true, 0, 0
-  return M.restoreTick(0)
-end
-
--- Each frame (core.lua onUpdate, also outside a level): our copy switched on once BeamMP's session is over. -> true when
--- it was switched on now.
-function M.restoreTick(dt)
-  if not restoreDue then return false end
-  restoreWait = restoreWait - (dt or 0)
-  if restoreWait > 0 or M.inSession() then return false end
-  local entry, mm = localEntry()
-  if not entry or entry.active or restoreTries >= M.RESTORE_TRIES then
-    restoreDue = false          -- (on and still on RESTORE_GAP_S later: done)
-    return false
-  end
-  restoreTries = restoreTries + 1
-  restoreWait = M.RESTORE_GAP_S
-  log('I', 'beamngEarth', 'BeamMP: left the server: BeamNG.Earth (' .. M.LOCAL_MOD .. ') switched back on')
-  return (pcall(mm.activateMod, M.LOCAL_MOD))
 end
 
 -- Is the game in a BeamMP session? (BeamMP's own extension MPCoreNetwork; nil outside BeamMP.)
@@ -224,7 +315,10 @@ function M.show() guihooks.trigger('showConfirmationDialog', M.dialog()) end
 -- (tests) the session's state back to the start
 function M.reset()
   disarm()
-  waited, hidden, layoutDue, restoreDue, restoreTries, restoreWait = 0, false, false, false, 0, 0
+  waited, hidden, layoutDue = 0, false, false
+  local r = rawget(_G, M.RESTORE_GLOBAL)
+  if type(r) == 'table' then r.live = false end      -- (a pending restore's job ends at its next frame)
+  rawset(_G, M.RESTORE_GLOBAL, nil)
 end
 
 return M

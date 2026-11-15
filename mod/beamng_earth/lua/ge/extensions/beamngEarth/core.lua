@@ -2986,7 +2986,6 @@ local function onUpdate(dtReal, dtSim)
     gov:noteOther(t1 - t)       -- (the messages' time in the frame cap and the engine share's sums: governor.lua)
     t = t1
   end
-  pcall(beammp.restoreTick, dtReal)  -- (our own copy back on after a BeamMP session, once it is over: also outside a level)
   if not scenetree.MissionGroup then return end -- no level loaded
   tickMotionBlur()
 
@@ -3250,7 +3249,8 @@ end
 -- the others are (mpsession.lua).
 function M.onBeamMPPostJoin() beammp.onPostJoin(); mpsession.onPostJoin() end
 
--- BeamMP left the server (its own hook): the other players' cars we deactivated back on.
+-- BeamMP left the server (its own hook): the other players' cars we deactivated back on; the player's own copy of the
+-- mod back on once the session is over (beammp.lua).
 function M.onBeamMPServerLeave() pcall(beammp.onServerLeave); pcall(mpsession.reset) end
 
 -- The UI apps (ui/modules/apps/BeamNGEarth*) say when they are on screen: hudapps.lua.
@@ -3899,6 +3899,9 @@ M.onModActivated = function(mod)
   pcall(M._codeswap.check, 'turned on: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
 end
 M.onModDeactivated = function(mod)
+  -- first: BeamMP switching the player's own copy off in a session arms its switch back on at the session's end (a job
+  -- the swap below and the server copy's deletion leave in place: beammp.lua), whatever copy the server sent
+  pcall(beammp.onModDeactivated, mod)
   pcall(M._codeswap.check, 'turned off: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
 end
 
