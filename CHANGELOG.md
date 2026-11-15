@@ -2,7 +2,7 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
-## 1.10.0 beta (2026-11-DD)
+## 1.10.0 beta (2026-11-14)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
 > develop the mod.** For help, that includes multiplayer:
