@@ -28,6 +28,7 @@ import logging
 import math
 import missindex
 import os
+import sys
 import threading
 import time
 from collections import Counter, OrderedDict
@@ -49,6 +50,7 @@ import netfetch
 import polardem
 import revisit
 import staging
+import xproc
 
 log = logging.getLogger("earthd.dem")
 
@@ -175,6 +177,21 @@ MT_CDN_MAX_ZOOM = GLOBAL_ZOOM
 MT_CDN_RETRY_S = 600.0              # the index not to be had: the endpoint alone, asked again after this
 PACK_WAIT_S = 8.0                   # another process fetching a pack: its tile waited for at most this long
 PACK_CLAIM_STALE_S = 30.0           # a pack claim older than this: its process ended mid-fetch
+# One download of a raw tile on the machine at a time (_fetch_raw): the server's processes (main, terrain blocks, far
+# tiles, road tiles) all start on a fresh place together and each met the same cold tiles, and the probes, the
+# prefetch and the loads of one process did not share an in-flight registry either (telemetry 2026-11-15: ~60 M
+# Mapterhorn requests a day). A process (or thread) that finds a tile being downloaded waits for it on disk (an
+# xproc lock file, <dem>/locks/<src>-<z>-<x>-<y>.lock: dead holders' broken, Windows too) for up to DL_WAIT_S, on to
+# DL_LIVE_S while its holder is alive and at it; then downloads it itself. The cache is looked at again once the lock
+# is had.
+SINGLE_FLIGHT = os.environ.get("BNGE_DEM_SINGLE_FLIGHT", "1") != "0"
+DL_WAIT_S = 30.0
+DL_LIVE_S = 120.0
+DL_URGENT_WAIT_S = 10.0             # (the urgent lane's: no live wait)
+_MISS = ("no tile",)                # (_fetch_raw's ready(): a 404 another process remembered)
+# Callers of the raw reads (_note): the module that asked (frames of these skipped), for the telemetry's DEM detail.
+_SKIP_MODULES = frozenset(("dem", "runtimeprofiler", "contextlib", "functools", "threading",
+                           "concurrent.futures.thread", "concurrent.futures._base", "pools"))
 _cdn_env = os.environ.get("BNGE_DEM_CDN", "").strip()
 MT_CDN_RELEASE = None if _cdn_env.lower() in ("", "off", "0", "none") else _cdn_env
 
@@ -300,6 +317,26 @@ class Dem:
         self._cdn_idx = None            # (release, index bytes) once read
         self._cdn_failed_at = -1e18
         self._pack_locks = {}           # pack key -> lock: one fetch of a pack at a time in this process
+        import multiprocessing
+        if SINGLE_FLIGHT and multiprocessing.current_process().name == "MainProcess":
+            self._prune_locks()
+
+    def _prune_locks(self):
+        """Download locks (_fetch_raw) left by processes that ended mid-download, older than a day: removed (a lock
+        is broken when its tile is asked again; one never asked again stayed)."""
+        d = os.path.join(self.cache_dir, "locks")
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        now = time.time()
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if n.endswith(".lock") and now - os.path.getmtime(p) > 86400:
+                    os.remove(p)
+            except OSError:
+                continue
 
 
     def clear_memory(self):
@@ -567,12 +604,14 @@ class Dem:
         netfetch.FetchError when the host cannot deliver (netfetch.Deferred for a refused prefetch)."""
         if src is MAPTERHORN and z > GLOBAL_ZOOM and not self._listed(z, x, y):
             self._count(src["name"] + ":unlisted")
+            self._note(src, z, "unlisted")
             return None
         path = self._path(src, z, x, y)
         miss = os.path.join(self.cache_dir, src["name"], str(z), str(x), f"{y}.404")
         data = self.disk.read(path)         # None: not cached (or evicted a moment ago)
         if data is not None:
             self._count(src["name"] + ":disk")
+            self._note(src, z, "disk")
             return data
         mk = (src["name"], z, x, y)
         if self._mem_raw or self._mem_miss:
@@ -581,33 +620,97 @@ class Dem:
                 if data is not None:
                     self._mem_raw.move_to_end(mk)
                 elif mk in self._mem_miss:
+                    self._note(src, z, "miss")
                     return None
             if data is not None:
                 self._count(src["name"] + ":memory")
+                self._note(src, z, "memory")
                 return data
         url = src["url"].format(z=z, x=x, y=y)
         if self.fetcher.miss_alive(miss, url):
+            self._note(src, z, "miss")
             return None
         if src is MAPTERHORN and z <= MT_CDN_MAX_ZOOM and self.cdn_release:
             got = self._download_pack(z, x, y, kind)
             if got is not False:
+                self._note(src, z, "cdn")
                 return got
+        return self._fetch_raw(src, z, x, y, url, path, miss, mk, kind)
+
+    def _fetch_raw(self, src, z, x, y, url, path, miss, mk, kind):
+        """Raw tile (z, x, y) from src's host (_download's network part): one download on the machine at a time
+        (SINGLE_FLIGHT); bytes, or None for a 404 (remembered)."""
+        # (one folder of their own: not among the tiles, whose folders the map's cache view counts by name)
+        lock = os.path.join(self.cache_dir, "locks", f"{src['name']}-{z}-{x}-{y}.lock")
+        mine = False
+        if SINGLE_FLIGHT:
+            def ready():
+                if os.path.exists(path):
+                    got = self.disk.read(path)
+                    if got is not None:
+                        return got
+                return _MISS if self.fetcher.miss_alive(miss, url) else None
+            # (the urgent lane's loads, the block under the car: waited for DL_URGENT_WAIT_S at most)
+            urgent = self.is_urgent() or threading.current_thread().name.startswith("dem-urgent")
+            got, mine = xproc.once(lock, ready, DL_URGENT_WAIT_S if urgent else DL_WAIT_S,
+                                   kind=kind if kind in xproc.KIND_RANK else "demand",
+                                   live_s=None if urgent else DL_LIVE_S, patient=True)
+            if got is not None:             # (another process's, or another thread's, download)
+                self._count(src["name"] + ":waited")
+                self._note(src, z, "waited")
+                return None if got is _MISS else got
         try:
-            data = self.fetcher.get(url, kind=kind).body
-        except netfetch.NotFound:
-            self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
-            self._count(src["name"] + ":404")
-            return None
-        except netfetch.FetchError:
-            self._count(src["name"] + ":error")
-            raise
-        self._keep(mk, path, data)
+            try:
+                data = self.fetcher.get(url, kind=kind).body
+            except netfetch.NotFound:
+                self._remember_miss([(mk, miss)])   # (again: its time starts the miss TTL)
+                self._count(src["name"] + ":404")
+                self._note(src, z, "404")
+                return None
+            except netfetch.Deferred:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "deferred")
+                raise
+            except netfetch.FetchError:
+                self._count(src["name"] + ":error")
+                self._note(src, z, "error")
+                raise
+            self._keep(mk, path, data)
+            try:
+                missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
+            except OSError:
+                pass
+            self._count(src["name"] + ":net")
+            self._note(src, z, "net")
+            return data
+        finally:
+            if mine:
+                xproc.release(lock)
+
+    def _caller(self):
+        """The module that asked for the tiles this thread reads now (a pool task: the one that queued it)."""
+        c = getattr(self._local, "caller", None)
+        if c is not None:
+            return c
+        f = sys._getframe(1)
+        while f is not None and f.f_globals.get("__name__") in _SKIP_MODULES:
+            f = f.f_back
+        name = f.f_globals.get("__name__") if f is not None else None
+        return (name or "pool").rsplit(".", 1)[-1][:20]
+
+    def _as(self, caller, fn, *args):
+        """fn(*args) with this thread's reads counted as caller's (a pool task queued by caller)."""
+        prev = getattr(self._local, "caller", None)
+        self._local.caller = caller
         try:
-            missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
-        except OSError:
-            pass
-        self._count(src["name"] + ":net")
-        return data
+            return fn(*args)
+        finally:
+            self._local.caller = prev
+
+    def _note(self, src, z, outcome):
+        """A raw tile read's telemetry detail (netfetch.note_detail): the source, the caller, the zoom, how it was
+        answered. No position."""
+        netfetch.note_detail(f"{src['name']}:{self._caller()}:{z}:{outcome}")
 
     def _keep(self, mk, path, data):
         """Downloaded tile bytes written to the disk cache; when that fails (a full disk, a folder that cannot be
@@ -809,11 +912,12 @@ class Dem:
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
         own _download to meet)."""
         futs = []
+        caller = self._caller()
         with self._lock:
             for k in keys:
                 f = self._probing.get(k)
                 if f is None:
-                    f = self._probing[k] = self.probe_pool.submit(self._probe, k)
+                    f = self._probing[k] = self.probe_pool.submit(self._as, caller, self._probe, k)
                 futs.append(f)
         return futs
 
@@ -1086,8 +1190,9 @@ class Dem:
 
     def _make_tile0(self, key):
         z, x, y = key
-        if z > MAX_ZOOM:                # (most places have no z16: its z15 parent asked alongside)
-            self._ahead([(MAX_ZOOM, x >> (z - MAX_ZOOM), y >> (z - MAX_ZOOM))])
+        # (a z16 tile's z15 parent is asked only once the z16 tile is found missing (_from_ancestor below): it was
+        # downloaded ahead alongside every z16 tile, used or not, a z15 request for every 4 z16 tiles of a lidar area
+        # that has them; where the file list has no z16 the z16 asks nothing and the parent comes at once)
         try:
             data = self._download(MAPTERHORN, z, x, y)
             a = None if data is None else self._decode(MAPTERHORN, z, x, y, data)
@@ -1147,11 +1252,16 @@ class Dem:
     # --- the ground under the surface model ------------------------------
     def _lidar(self, x, y):
         """Has Mapterhorn deeper tiles (national lidar: a terrain model already) under z12 tile (x, y)? Two of
-        its z13 children asked, at once (404s are remembered)."""
-        self._wait(self._ahead([(GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1)]))
-        for cx, cy in ((2 * x, 2 * y), (2 * x + 1, 2 * y + 1)):
+        its z13 children (diagonal): yes when either is there (404s are remembered). A child already on disk answers
+        without a request; otherwise they are asked one after the other, the second only when the first is missing
+        (both were downloaded at once before, the second wasted wherever the first was there: the same answer)."""
+        kids = ((GLOBAL_ZOOM + 1, 2 * x, 2 * y), (GLOBAL_ZOOM + 1, 2 * x + 1, 2 * y + 1))
+        for k in kids:
+            if os.path.exists(self._path(MAPTERHORN, *k)) and self._download(MAPTERHORN, *k) is not None:
+                return True
+        for k in kids:
             try:
-                if self._download(MAPTERHORN, GLOBAL_ZOOM + 1, cx, cy) is not None:
+                if self._download(MAPTERHORN, *k) is not None:
                     return True
             except netfetch.FetchError:
                 self._partial()
@@ -1267,6 +1377,7 @@ class Dem:
         out, futs, new = {}, {}, []
         urgent = getattr(self._local, "urgent", False)
         pool = self.urgent_pool if urgent else self.pool
+        caller = self._caller()
         if urgent and len(keys) >= 16 and log.isEnabledFor(logging.DEBUG):
             zs = Counter(k[0] for k in keys)
             log.debug("dem urgent: %d tiles %s", len(keys), dict(zs))
@@ -1279,7 +1390,7 @@ class Dem:
                                                   and not self._inflight[k].done()):
                     futs[k] = self._inflight[k]
                 else:
-                    futs[k] = self._inflight[k] = pool.submit(self._load_tile, k)
+                    futs[k] = self._inflight[k] = pool.submit(self._as, caller, self._load_tile, k)
                     new.append(k)
         # Outside the lock: the callback runs at once if the future is already done.
         for k in new:

@@ -1119,8 +1119,10 @@ class Host:
 
 # --- every process's totals, for telemetry.py -------------------------------------------------------------------------
 # BNE_NETSTATS_PROC (earthd sets it before its worker processes start, so they inherit it): a folder where every process
-# writes its fetchers' lifetime per-host counters (<pid>.json, at most every PROC_WRITE_S, and at exit); the main
-# process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own.
+# writes its fetchers' lifetime per-host counters (<pid>-<instance>.json, at most every PROC_WRITE_S, and at exit); the
+# main process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own. The folder
+# is the server run's own (earthd: netstats/proc/<run>, telemetry.run_proc_dir): a new run's telemetry never reads an
+# older run's files, whose counts were sent already (a restart counted every file left from zero, 2026-11-15 review).
 _PROC_DIR = os.environ.get("BNE_NETSTATS_PROC") or None
 PROC_WRITE_S = 30.0
 _ALL = weakref.WeakSet()            # this process's fetchers
@@ -1139,16 +1141,55 @@ def process_totals():
     return out
 
 
+# Finer counts beside the per-host ones (dem.py: a raw elevation tile's source, caller, zoom and how it was answered:
+# from the disk, a remembered 404, the tile host's packs, another process's download, the network), this process's
+# lifetime, written with its totals and sent by telemetry.py ("dem"). At most DETAIL_MAX keys a process (the rest
+# counted under "other"): bounded whatever the callers pass.
+DETAIL_MAX = 512
+_DETAIL = collections.Counter()
+_DETAIL_LOCK = threading.Lock()
+
+
+def note_detail(key, n=1):
+    """One more of key in this process's detail counts (short keys, no positions)."""
+    with _DETAIL_LOCK:
+        if key not in _DETAIL and len(_DETAIL) >= DETAIL_MAX:
+            key = "other"
+        _DETAIL[key] += n
+    if _PROC_DIR:
+        _proc_writer()
+
+
+def process_details():
+    """{key: n} of this process's note_detail counts, over its lifetime."""
+    with _DETAIL_LOCK:
+        return dict(_DETAIL)
+
+
+_INSTANCE = [None, None]            # [pid, token]: this process instance's random token (instance())
+
+
+def instance():
+    """A random token of this process instance: its totals file is <pid>-<token>.json, so a pid used again (a worker
+    restarted) is never taken for the old process, and neither's counts are counted twice or lost."""
+    if _INSTANCE[0] != os.getpid():
+        import secrets
+        _INSTANCE[0], _INSTANCE[1] = os.getpid(), secrets.token_hex(6)
+    return _INSTANCE[1]
+
+
 def write_process_totals():
-    """This process's totals to <BNE_NETSTATS_PROC>/<pid>.json (atomic)."""
+    """This process's totals to <BNE_NETSTATS_PROC>/<pid>-<instance>.json (atomic)."""
     if not _PROC_DIR:
         return
     try:
         os.makedirs(_PROC_DIR, exist_ok=True)
-        path = os.path.join(_PROC_DIR, f"{os.getpid()}.json")
+        inst = instance()
+        path = os.path.join(_PROC_DIR, f"{os.getpid()}-{inst}.json")
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
-            json.dump({"pid": os.getpid(), "at": time.time(), "hosts": process_totals()}, fh)
+            json.dump({"pid": os.getpid(), "inst": inst, "at": time.time(), "hosts": process_totals(),
+                       "detail": process_details()}, fh)
         os.replace(tmp, path)
     except OSError as e:
         log.debug("net: process totals: %s", e)

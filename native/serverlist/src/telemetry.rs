@@ -3,7 +3,9 @@
 //! way. Like how steam tracks player count. More details info could be private").
 //!
 //! POST /telemetry   {"id": 32 hex (a random install id), "v", "os", "game", "mp", "interval",
-//!                    "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}}}
+//!                    "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}},
+//!                    "rid", "seq": the sender's run and the report's number (a report sent again counted once),
+//!                    "dem": {"<source>:<caller>:<zoom>:<outcome>": n} (the elevation reads; /stats/advanced dem24h)}
 //!                   from each player's companion server (server/telemetry.py) every 5 minutes. The sender's address
 //!                   gives its country (Geo) and is then dropped: no address, name or position is kept.
 //! GET  /stats       public: players online now (an install heard from in ONLINE_TTL) and in game, the peaks, the
@@ -36,6 +38,8 @@ const MAX_SPAN: u64 = 20 * 366 * 86400;
 const MAX_INSTALLS: usize = 200_000;
 const MAX_IDS_PER_IP: usize = 32; // distinct installs one address may report for in an hour
 const MAX_SOURCES: usize = 64;
+const MAX_DEM_IN: usize = 128; // DEM detail keys taken from one report (the client sends at most 64)
+const MAX_DEM_KEYS: usize = 2048; // ... and kept per hour
 pub const K_ANON: u32 = 5; // a country shown publicly from this many players online
 
 #[derive(Deserialize, Default)]
@@ -71,6 +75,15 @@ pub struct Report {
     // the performance section (perf.rs), only from players who chose "Performance data"
     #[serde(default)]
     pub perf: Option<crate::perf::PerfIn>,
+    // (2026-11-15) the sender's run and the report's number in it: a report sent again because its answer was lost
+    // comes with the same pair, and its counts are taken once
+    #[serde(default)]
+    rid: Option<String>,
+    #[serde(default)]
+    seq: Option<u64>,
+    // the elevation tiles' raw reads, "<source>:<caller>:<zoom>:<outcome>" -> n (server/dem.py _note; no positions)
+    #[serde(default)]
+    dem: Option<HashMap<String, u64>>,
 }
 
 impl Report {
@@ -127,6 +140,9 @@ pub struct Hour {
     pub online: u32,
     pub playing: u32,
     pub sources: BTreeMap<String, Source>,
+    // the elevation reads' detail (Report.dem), summed; at most MAX_DEM_KEYS an hour
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dem: BTreeMap<String, u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -148,6 +164,8 @@ struct Install {
     cc: String,
     game: bool,
     mp: bool,
+    rid: String, // the last counted report's run and number (Report.rid / seq): the same again is not counted twice
+    seq: u64,
 }
 
 pub struct Telemetry {
@@ -214,7 +232,7 @@ impl Telemetry {
                     if ago < ONLINE_TTL {
                         if let Some(seen) = inst_now.checked_sub(ago) {
                             self.installs.insert(x.id, Install { seen, seen_unix: x.at, v: x.v, os: x.os, cc: x.cc,
-                                                                 game: x.game, mp: x.mp });
+                                                                 game: x.game, mp: x.mp, rid: String::new(), seq: 0 });
                         }
                     }
                 }
@@ -235,6 +253,7 @@ impl Telemetry {
                     if now.saturating_sub(h.h * 3600) <= HOUR_KEEP {
                         if now.saturating_sub(h.h * 3600) > SOURCE_KEEP {
                             h.sources.clear(); // (the peaks stay, the data-source sums go)
+                            h.dem.clear();
                         }
                         self.written.insert(h.h);
                         self.hours.insert(h.h, h);
@@ -313,9 +332,22 @@ impl Telemetry {
             }
             slot.1.push(id.clone());
         }
+        // a report sent again (its answer lost: the same run and number as the last one counted) is not counted again
+        let rid: String = r.rid.clone().unwrap_or_default().chars().filter(|c| c.is_ascii_hexdigit()).take(32).collect();
+        let seq = r.seq.unwrap_or(0);
+        let again = !rid.is_empty() && seq > 0
+            && self.installs.get(&id).is_some_and(|i| i.rid == rid && seq <= i.seq);
         let hour = unix_now / 3600;
         let entry = self.hours.entry(hour).or_insert_with(|| Hour { h: hour, ..Default::default() });
-        if let Some(src) = r.sources {
+        if let Some(dem) = r.dem.filter(|_| !again) {
+            for (k, n) in dem.into_iter().take(MAX_DEM_IN) {
+                if !host_ok(&k) || entry.dem.len() >= MAX_DEM_KEYS && !entry.dem.contains_key(&k) {
+                    continue;
+                }
+                *entry.dem.entry(k.to_ascii_lowercase()).or_default() += n.min(10_000_000);
+            }
+        }
+        if let Some(src) = r.sources.filter(|_| !again) {
             for (host, s) in src.into_iter().take(MAX_SOURCES) {
                 if !host_ok(&host) || entry.sources.len() >= 512 && !entry.sources.contains_key(&host) {
                     continue;
@@ -330,8 +362,12 @@ impl Telemetry {
             }
         }
         self.uniques.saw(&id, unix_now);
+        let (rid, seq) = match self.installs.get(&id) {
+            Some(i) if again || (rid.is_empty() && seq == 0) => (i.rid.clone(), i.seq),
+            _ => (rid, seq),
+        };
         self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean_name(r.v, 24), os: clean_name(r.os, 12), cc,
-                                           game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
+                                           game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false), rid, seq });
         let (o, p) = self.online(now);
         let e = self.hours.get_mut(&hour).unwrap();
         e.online = e.online.max(o);
@@ -373,7 +409,7 @@ impl Telemetry {
         let done: Vec<u64> = self.hours.keys().copied().filter(|h| *h < unix_now / 3600).collect();
         for h in done {
             if let Some(x) = self.hours.get(&h) {
-                if (!x.sources.is_empty() || x.online > 0) && !self.written.contains(&h) {
+                if (!x.sources.is_empty() || !x.dem.is_empty() || x.online > 0) && !self.written.contains(&h) {
                     self.append("hours.jsonl", serde_json::to_string(x).unwrap());
                     self.written.insert(h);
                 }
@@ -384,6 +420,7 @@ impl Telemetry {
         let src_cut = unix_now.saturating_sub(SOURCE_KEEP) / 3600;
         for (_, h) in self.hours.range_mut(..src_cut) {
             h.sources.clear();
+            h.dem.clear();
         }
         self.written.retain(|h| *h >= cut);
     }
@@ -508,12 +545,16 @@ impl Telemetry {
         let week = unix_now.saturating_sub(7 * 86400) / 3600;
         let day = unix_now.saturating_sub(86400) / 3600;
         let mut last24: BTreeMap<String, Source> = BTreeMap::new();
+        let mut dem24: BTreeMap<String, u64> = BTreeMap::new();
         let mut hourly: Vec<serde_json::Value> = Vec::new();
         for h in self.hours.range(week..) {
             let src: BTreeMap<&String, &Source> = h.1.sources.iter().collect();
             if *h.0 >= day {
                 for (k, s) in &src {
                     last24.entry((*k).clone()).or_default().add(s);
+                }
+                for (k, n) in &h.1.dem {
+                    *dem24.entry(k.clone()).or_default() += n;
                 }
             }
             // (each hour's sources as their request counts only: the page shows nothing else, and every field of every
@@ -523,7 +564,7 @@ impl Telemetry {
             hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": req}));
         }
         serde_json::json!({"versions": versions, "systems": systems, "countries": countries, "beammp": mp,
-                           "sources24h": last24, "hourly": hourly})
+                           "sources24h": last24, "dem24h": dem24, "hourly": hourly})
     }
 }
 
@@ -543,7 +584,7 @@ mod tests {
         let mut s = HashMap::new();
         s.insert("overturemaps-us-west-2.s3.amazonaws.com".to_string(), SourceIn { req: Some(req), mb: Some(1.5), e429: Some(1), ..Default::default() });
         Report { id: id.into(), v: Some("1.8.2".into()), os: Some("linux".into()), game: Some(game), mp: Some(false), sources: Some(s),
-                 perf: None }
+                 perf: None, rid: None, seq: None, dem: None }
     }
 
     #[test]
@@ -571,6 +612,44 @@ mod tests {
         // gone after the online window
         let later = now + ONLINE_TTL + Duration::from_secs(1);
         assert_eq!(t.online(later), (0, 0));
+    }
+
+    #[test]
+    fn a_report_sent_again_is_counted_once_and_dem_detail_summed() {
+        let mut t = Telemetry::new(None);
+        let now = Instant::now();
+        let u = 1_800_000_000;
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        let id = format!("{:032x}", 77);
+        let mk = |seq: u64, req: u64| {
+            let mut r = rep(&id, true, req);
+            r.rid = Some("00aa11bb22cc33dd".into());
+            r.seq = Some(seq);
+            let mut d = HashMap::new();
+            d.insert("mapterhorn:grading:16:net".to_string(), req);
+            d.insert("bad key with spaces".to_string(), 5);
+            r.dem = Some(d);
+            r
+        };
+        let gap = MIN_GAP + Duration::from_secs(1);
+        let src = "overturemaps-us-west-2.s3.amazonaws.com";
+        t.report(ip, "DE".into(), mk(1, 10), now, u).unwrap();
+        t.report(ip, "DE".into(), mk(1, 10), now + gap, u).unwrap();       // (its answer was lost: sent again)
+        let q = t.private(now + gap, u);
+        assert_eq!(q["sources24h"][src]["req"], 10);
+        assert_eq!(q["dem24h"]["mapterhorn:grading:16:net"], 10);
+        assert!(q["dem24h"].get("bad key with spaces").is_none());
+        t.report(ip, "DE".into(), mk(2, 4), now + gap * 2, u).unwrap();
+        let q = t.private(now + gap * 2, u);
+        assert_eq!(q["sources24h"][src]["req"], 14);
+        assert_eq!(q["dem24h"]["mapterhorn:grading:16:net"], 14);
+        // a new run (rid) starts its numbers again; reports without them (older clients) are always counted
+        let mut r = mk(1, 1);
+        r.rid = Some("ffee".into());
+        t.report(ip, "DE".into(), r, now + gap * 3, u).unwrap();
+        t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 4, u).unwrap();
+        t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 5, u).unwrap();
+        assert_eq!(t.private(now + gap * 5, u)["sources24h"][src]["req"], 17);
     }
 
     #[test]

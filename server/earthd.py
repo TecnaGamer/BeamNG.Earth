@@ -11941,7 +11941,12 @@ async def main_async(args):
     telemetry_on = args.telemetry == "on" and not args.offline and not os.environ.get("CI") \
         and os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
     if telemetry_on:
-        proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
+        import telemetry
+        # (this run's own folder: a restart's telemetry never counts the files an older run left again)
+        try:
+            proc_dir = telemetry.run_proc_dir(os.path.join(args.cache_dir, "netstats", "proc"))
+        except OSError:
+            proc_dir = os.path.join(args.cache_dir, "netstats", "proc", f"r{os.getpid()}")
         os.environ["BNE_NETSTATS_PROC"] = proc_dir
         netfetch._PROC_DIR = proc_dir
     # (the one-at-a-time export hosts admitted across every process of the server, netfetch.SharedGate: set before the
