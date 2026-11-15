@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -102,6 +103,24 @@ class PublicData(unittest.TestCase):
             raw = gzip.decompress((target / str(x) / f'{y}.json.gz').read_bytes())
             self.assertNotIn(b'NEVER_EXPORT_THIS', raw)
             self.assertEqual(json.loads(raw)['records'][0]['id'], 'a')
+
+    def test_missing_listed_shard_recovers_under_the_same_build(self):
+        import railtags
+        x,y=data.tile(52.,5.,maths=dmath)
+        row=dict(id='recovered',lat=52.,lon=5.)
+        with tempfile.TemporaryDirectory() as folder:
+            source=nlrvv.Source(folder,None)
+            source.built='same-build'
+            bodies=[gzip.compress(b'{}'),gzip.compress(json.dumps(dict(format=data.FORMAT,records=[row])).encode())]
+            with patch.object(source,'version',return_value='same-build'), \
+                 patch.object(source,'get',side_effect=bodies) as fetch:
+                self.assertIsNone(source.shard(x,y))
+                self.assertIsNone(source.shard(x,y))
+                self.assertEqual(fetch.call_count,1)
+                later=time.time()+railtags.SHARD_RETRY_S+1
+                with patch('railtags.time.time',return_value=later):
+                    self.assertEqual(source.shard(x,y)['records'],[row])
+                self.assertEqual(fetch.call_count,2)
 
     def test_unpublished_and_disabled_dataset_cannot_break_existing_signs(self):
         source = nlrvv.Source(None, None)

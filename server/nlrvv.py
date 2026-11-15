@@ -1,7 +1,10 @@
 """Optional public NDW tiles, server placement and shared native atlas meshes."""
 from collections import OrderedDict
 import math
+import os
+import re
 import threading
+import time
 
 import numpy as np
 import dmath
@@ -53,6 +56,21 @@ class Source(railtags.Shards):
         super().__init__(cache_dir, fetcher, 'nl-rvv')
         self.shards = OrderedDict()
         self.query_lock = threading.Lock()
+
+    def shard(self,x,y):
+        got=super().shard(x,y)
+        if got is not None and (not isinstance(got,dict) or got.get('format')!=data.FORMAT
+                                or not isinstance(got.get('records'),list)):
+            # A manifest-listed shard's 404 must not become an eternal cached
+            # empty response: keep the tile short and allow bounded recovery.
+            with self.lock:self.shards.pop((x,y),None)
+            self.shard_down[(x,y)]=time.time()
+            if self.dir and self.built:
+                path=os.path.join(self.dir,re.sub(r'[^0-9A-Za-z]+','_',self.built),f'{x}_{y}.json.gz')
+                try:os.remove(path)
+                except FileNotFoundError:pass
+            return None
+        return got
 
     def query(self, bounds):
         """Records in lon/lat bounds. Missing/unpublished data gives no records."""

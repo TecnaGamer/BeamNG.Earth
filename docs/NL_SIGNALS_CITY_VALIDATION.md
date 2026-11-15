@@ -56,7 +56,10 @@ miss interval, so later publication can recover without a different build ID.
 Regressions exercise actual cache eviction and recovery of a previously missing
 shard; they do not disable the disk reserve or weaken stock fallbacks.
 
-Final checks: 49 native geometry tests, 49 signal server tests, 20 NDW tests,
+The same bounded recovery is covered for a missing listed NDW sign shard; a
+temporary 404 does not become an indefinitely cached empty response.
+
+Final checks: 49 native geometry tests, 49 signal server tests, 21 NDW tests,
 127 Lua modules and 4 JavaScript tests passed. Windows and Linux release builds
 completed. Linux runtime was not executed locally. Seven offline roadgeo tests
 passed; two real-source tests require cache shards absent on this machine.
