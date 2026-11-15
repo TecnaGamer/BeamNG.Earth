@@ -208,6 +208,33 @@ class PoolTest(unittest.TestCase):
         self.assertEqual(local.calls, 2, "the rest built here")
         self.assertEqual(len(helper.jobs), 2)
 
+    def test_switches_default_helper_matches_default_earthd(self):
+        # (Codex review of f8d79aa2: earthd.main writes BNE_BRIDGE_PROFILE=curve, a standalone `peerwork.py serve`
+        # leaves it unset: the same tiles, so the same switches; a real switch still differs)
+        import revisit
+
+        def key(env):
+            with mock.patch.dict(os.environ, env):
+                for k in [k for k in os.environ if k.startswith("BNE_")]:
+                    if k not in env:
+                        del os.environ[k]
+                with revisit._lock:
+                    revisit._switches.clear()
+                peerwork._switches.clear()
+                try:
+                    return peerwork.switches()
+                finally:
+                    with revisit._lock:
+                        revisit._switches.clear()
+                    peerwork._switches.clear()
+        helper, earthd = key({}), key({"BNE_BRIDGE_PROFILE": "curve"})
+        self.assertEqual(helper, earthd, "a default helper and a default earthd")
+        self.assertNotEqual(key({"BNE_BRIDGE_PROFILE": "legacy"}), earthd, "another bridge profile")
+        self.assertNotEqual(key({"BNE_BRIDGE_PROFILE": "curve", "BNE_RAIL_COLLIDE": "on"}), earthd,
+                            "an experimental switch")
+        self.assertNotEqual(key({"BNE_HKDTM": "off"}), earthd, "Hong Kong's terrain: other far tiles there")
+        self.assertEqual(key({"BNE_STALE_REVISIT": "on"}), earthd, "not a switch (revisit.NOT_SWITCHES)")
+
     def test_other_switches_not_used(self):
         # (a helper with other build switches, e.g. without the player's Experimental ones: other tiles, same code)
         helper, local = FakeHelper(switches="0123456789abcdef"), LocalPool()

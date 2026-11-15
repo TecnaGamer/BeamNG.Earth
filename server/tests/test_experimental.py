@@ -49,6 +49,8 @@ def fresh_keys():
         revisit._code.clear()
     import bakepack
     bakepack._switches.clear()
+    import peerwork
+    peerwork._switches.clear()
 
 
 class ChoiceTest(unittest.TestCase):
@@ -215,7 +217,7 @@ class KeysTest(unittest.TestCase):
         h, _ = peerwork.recv_msg(a)
         self.assertFalse(h["ok"])
         self.assertIn("build switches", h["error"])
-        self.assertEqual(h["switches"], revisit.switches_key())
+        self.assertEqual(h["switches"], peerwork.switches())
 
     def test_decoded_elevation_mirror(self):
         import dem

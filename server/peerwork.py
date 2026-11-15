@@ -120,11 +120,26 @@ def code_id():
     return _CODE_ID
 
 
+_switches = []
+
+
 def switches():
-    """This server's build switches (revisit.switches_key: the BNE_* that change output, the settings page's
-    Experimental ones among them): a helper whose switches differ builds other tiles from the same code."""
-    import revisit
-    return revisit.switches_key()
+    """This server's build switches (the BNE_* that change output, revisit.NOT_SWITCHES left out; the settings page's
+    Experimental ones among them): a helper whose switches differ builds other tiles from the same code. The bridge
+    profile as the roads read it (roads.bridge_profile_mode): earthd writes its CLI default into the environment, a
+    standalone `peerwork.py serve` does not (Codex review of f8d79aa2: every default helper was refused). Once a
+    process."""
+    if not _switches:
+        import hashlib
+        import revisit
+        import roads
+        sw = {k: v for k, v in os.environ.items() if k.startswith("BNE_") and k not in revisit.NOT_SWITCHES}
+        sw["BNE_BRIDGE_PROFILE"] = roads.bridge_profile_mode()
+        h = hashlib.sha1()
+        for k in sorted(sw):
+            h.update(f"{k}={sw[k]}".encode())
+        _switches.append(h.hexdigest()[:16])
+    return _switches[0]
 
 
 def version():
