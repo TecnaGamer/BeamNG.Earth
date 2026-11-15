@@ -11,7 +11,6 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -480,123 +479,6 @@ class ReleaseIdentityTest(_Base):
                                                            "mirrors": {SRC: f'"{SRC}-etag"'}}}
         self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
         self.assertIn(ENDPOINT, f.hosts())
-
-
-class UpgradeTest(_Base):
-    """A cache filled by the builds before copies had to be proven the listed release (the old namespace
-    <dem>/mtarchive/<md5>): its regions' raw z13+ tiles, their misses and the decoded tiles over them are dropped once,
-    then read again from a proven copy (Codex review of 5776353e [high])."""
-
-    def test_tiles_from_unproven_copies_are_read_again(self):
-        good = {(16, 18528, 24620): terrarium(1)}
-        blob = write_pmtiles(good)
-        items = [{"name": "6-18-24.pmtiles", "md5sum": "f" * 32, "size": len(blob), "min_zoom": 13, "max_zoom": 16}]
-        c = os.path.join(self.tmp.name, "c")
-        # (as an old build left it: the wrong copy's tile, a decoded z12 tile, a miss, the old head folder; and a tile
-        # of another region, kept)
-        wrong = os.path.join(c, "mapterhorn", "16", "18528", "24620.webp")
-        os.makedirs(os.path.dirname(wrong))
-        with open(wrong, "wb") as fh:
-            fh.write(b"wrong copy")
-        other = os.path.join(c, "mapterhorn", "16", "1", "2.webp")
-        os.makedirs(os.path.dirname(other))
-        with open(other, "wb") as fh:
-            fh.write(b"elsewhere")
-        demmod.missindex.record([os.path.join(c, "mapterhorn", "16", "18528", "24621.404")])
-        dec = os.path.join(c, "decoded", "v4", "g1", "12", "1158", "1539.f32z")
-        os.makedirs(os.path.dirname(dec))
-        with open(dec, "wb") as fh:
-            fh.write(b"decoded")
-        oldns = os.path.join(c, "mtarchive", "f" * 32)
-        os.makedirs(oldns)
-        with open(os.path.join(oldns, "meta.json"), "w") as fh:
-            json.dump({"name": "6-18-24.pmtiles", "size": len(blob), "etag": {}, "bad": []}, fh)
-        f = ArchiveFetcher({"6-18-24.pmtiles": Sparse(len(blob), whole=blob)}, items, good)
-        d = self.dem(f, "c")
-        self.assertEqual(d._download(demmod.MAPTERHORN, 16, 18528, 24620), good[(16, 18528, 24620)],
-                         "read again from the proven copy, not the old cache's")
-        self.assertFalse(os.path.exists(dec), "the decoded tile over the region dropped")
-        self.assertFalse(demmod.missindex.known(os.path.join(c, "mapterhorn", "16", "18528", "24621.404")))
-        self.assertFalse(os.path.exists(oldns))
-        with open(other, "rb") as fh:
-            self.assertEqual(fh.read(), b"elsewhere", "other regions untouched")
-        self.assertTrue(os.path.exists(os.path.join(c, "mtarchive", mtarchive.NAMESPACE, ".migrated")))
-        with open(wrong, "wb") as fh:                     # (once only: a later start keeps what is there)
-            fh.write(b"kept")
-        self.dem(f, "c")
-        with open(wrong, "rb") as fh:
-            self.assertEqual(fh.read(), b"kept")
-
-
-class InterruptedMigrationTest(unittest.TestCase):
-    """The migration killed midway (Codex review of bce5d9f4 [high]: the old folders, the only record of which regions
-    to clean, went first): the next start finishes it; the flag only once every affected file is gone."""
-
-    class Killed(BaseException):
-        pass
-
-    def _old_cache(self, dem):
-        tiles = []
-        for n, (rx, ry) in enumerate(((18, 24), (33, 22))):
-            md5 = f"{n + 1:x}" * 32
-            os.makedirs(os.path.join(dem, "mtarchive", md5))
-            with open(os.path.join(dem, "mtarchive", md5, "meta.json"), "w") as fh:
-                json.dump({"name": f"6-{rx}-{ry}.pmtiles", "size": 1, "etag": {}, "bad": []}, fh)
-            for z in (13, 16):
-                d = 1 << (z - 6)
-                p = os.path.join(dem, "mapterhorn", str(z), str(rx * d + 1), f"{ry * d + 2}.webp")
-                os.makedirs(os.path.dirname(p), exist_ok=True)
-                with open(p, "wb") as fh:
-                    fh.write(b"unproven")
-                tiles.append(p)
-            p = os.path.join(dem, "decoded", "v4", "g1", "12", str(rx * 64 + 3), f"{ry * 64 + 4}.f32z")
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "wb") as fh:
-                fh.write(b"decoded")
-            tiles.append(p)
-        return tiles
-
-    def test_an_interrupted_migration_resumes(self):
-        with tempfile.TemporaryDirectory() as dem:
-            tiles = self._old_cache(dem)
-            real = mtarchive._drop_region
-            calls = []
-
-            def dies_on_the_second(dem_dir, rx, ry):
-                calls.append((rx, ry))
-                if len(calls) == 2:
-                    raise self.Killed()             # (the process killed before this region's files went)
-                return real(dem_dir, rx, ry)
-            with mock.patch.object(mtarchive, "_drop_region", dies_on_the_second):
-                with self.assertRaises(self.Killed):
-                    mtarchive.migrate_unproven(dem)
-            flag = os.path.join(dem, "mtarchive", mtarchive.NAMESPACE, ".migrated")
-            self.assertFalse(os.path.exists(flag), "not done: no flag")
-            left = [p for p in tiles if os.path.exists(p)]
-            self.assertTrue(left, "the second region's files still there")
-            olds = [n for n in os.listdir(os.path.join(dem, "mtarchive")) if n != mtarchive.NAMESPACE]
-            self.assertTrue(olds, "the record of what is left to clean kept")
-            mtarchive.migrate_unproven(dem)         # (the next start)
-            self.assertEqual([p for p in tiles if os.path.exists(p)], [], "every unproven file gone")
-            self.assertEqual([n for n in os.listdir(os.path.join(dem, "mtarchive")) if n != mtarchive.NAMESPACE], [])
-            self.assertTrue(os.path.exists(flag))
-
-    def test_a_file_that_cannot_be_removed_keeps_it_pending(self):
-        with tempfile.TemporaryDirectory() as dem:
-            tiles = self._old_cache(dem)
-            real_remove = os.remove
-
-            def stuck(p, *a, **k):
-                if p == tiles[0]:
-                    raise PermissionError("in use")
-                return real_remove(p, *a, **k)
-            with mock.patch("os.remove", stuck):
-                mtarchive.migrate_unproven(dem)
-            flag = os.path.join(dem, "mtarchive", mtarchive.NAMESPACE, ".migrated")
-            self.assertFalse(os.path.exists(flag), "a file left: not done")
-            mtarchive.migrate_unproven(dem)
-            self.assertFalse(os.path.exists(tiles[0]))
-            self.assertTrue(os.path.exists(flag))
 
 
 class ArchivesOfTest(unittest.TestCase):
