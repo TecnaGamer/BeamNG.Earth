@@ -12756,8 +12756,12 @@ class GeoTracker:
 
         build_s = getattr(self, "build_s", None) or reach_build_est()
 
+        deck_first = getattr(self, "deck_first", None) or ()
+
         def order(job):
             k = job[0]
+            if k in deck_first:         # (a bridge's tile the mod's deck guard slows the car for: first, deckguard.lua)
+                return (-1, 0.0)
             if k in car:
                 d = car[k]
                 if tree is not None:    # (by time to reach: reach.order_key; in m at the car's speed)
