@@ -179,8 +179,9 @@ end
 -- Codex review round 3: a higher road in the corridor), or, with no abutment height known, off a deck it was riding.
 -- Ahead (k > 1): only at an end (END_M), only with that end's abutment height known, the path's own ground just short
 -- of it at that height (a road under the bridge stays low there: Codex review round 4, a road below braked from far
--- off) and, near it, the car too; an end on another deck only off a deck the path drives along there (viaDeck).
-entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
+-- off) and, near it, the car too. An end on another deck (a fork's branch) never ahead; on it now only coming off a deck
+-- the car rides (and look scans it only when it is the one branch round the car there).
+entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py)
   local fromEnd = d > 0 and u or (sp.len - u)
   if k == 1 and g.riding[sp.id] then return true end
   local abutted = (d > 0 and sp.abut0) or (d < 0 and sp.abut1)
@@ -196,7 +197,7 @@ entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
       end
       return true
     end
-    if not abutted then return viaDeck(k), true end         -- (off another deck the path is on, at a fork)
+    if not abutted then return k == 1 and next(g.riding) ~= nil end   -- (off a deck it rides, at a fork)
     if k > 1 then return false end                            -- (its height not known yet: no braking for it yet)
   elseif k > 1 then
     return false                                              -- (into its middle: it is crossed or passed under)
@@ -341,78 +342,48 @@ function M.look(g, inp)
   -- abutment's height decides: Codex review 2026-11-15, a road under a bridge once taken far off kept for good)
   local riding, onPath, best = {}, {}, nil
   local groundAt, grid = inp.groundAt, inp.grid or M.pointGrid(inp.deckAt)
-  -- a fork's end (on another deck): driven onto only off a deck the path drives along there (one entered this look, or
-  -- the one the car is on now)
-  local entered = {}
-  local function viaDeck(k)
-    if k == 1 then return next(g.riding) ~= nil end
-    local hx, hy = px[k - 1], py[k - 1]
-    for _, e in ipairs(entered) do
-      if inBox(e.box, hx, hy, M.LAT_M) and nearest(e, hx, hy) <= M.LAT_M then return true end
-    end
-    return false
-  end
-  -- where the path drives onto span sp: its sample kin, direction, along-span m there, how many samples on it in a row
-  -- (run), and whether it was entered at a fork (off another deck)
+  -- where the path drives onto span sp: its sample kin, direction, along-span m there; nil if it does not
   local function enter(sp)
-    local kin, dir, uin, run, viaFork = nil, nil, nil, 0, false
     for k = 1, n do
       local hx, hy = px[k], py[k]
-      local on, u, c = false, 0, 0
       if inBox(sp.box, hx, hy, M.LAT_M) then
-        local dist, sx, sy
-        dist, u, sx, sy = nearest(sp, hx, hy)
-        c = pdx[k] * sx + pdy[k] * sy
-        on = dist <= M.LAT_M and abs(c) >= M.COS_MIN
-      end
-      if not on then
-        if kin then break end
-      else
-        local d = c > 0 and 1 or -1
-        if not kin then
-          local ok, fork = entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
-          if not ok then return nil end
-          kin, dir, uin, viaFork = k, d, u, fork == true
-        elseif d ~= dir then
-          break
+        local dist, u, sx, sy = nearest(sp, hx, hy)
+        local c = pdx[k] * sx + pdy[k] * sy
+        if dist <= M.LAT_M and abs(c) >= M.COS_MIN then
+          local d = c > 0 and 1 or -1
+          if not entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py) then return nil end
+          return { sp = sp, kin = k, dir = d, uin = u }
         end
-        run = run + 1
       end
     end
-    if not kin then return nil end
-    return { sp = sp, kin = kin, dir = dir, uin = uin, run = run, fork = viaFork }
+    return nil
   end
   local ins = {}
-  local todo = cands
-  for _ = 1, 3 do                   -- (again for the forks off a deck entered in the round before)
-    local rest = {}
-    for _, sp in ipairs(todo) do
-      local e = enter(sp)
-      if e then
-        entered[#entered + 1] = sp
-        ins[#ins + 1] = e
-        onPath[sp.id] = true
-        if e.kin == 1 then riding[sp.id] = true end
-      else
-        rest[#rest + 1] = sp
-      end
+  for _, sp in ipairs(cands) do
+    local e = enter(sp)
+    if e then
+      ins[#ins + 1] = e
+      onPath[sp.id] = true
+      if e.kin == 1 then riding[sp.id] = true end
     end
-    if #rest == #todo then break end
-    todo = rest
   end
-  -- at a fork, only the branch the path follows longest (Codex review round 6: a branch not taken, its tile missing,
-  -- braked the car on the one taken): of the spans entered from the same end (a fork's node: near it the car is in the
-  -- corridors of all its branches, and rides them all), the most samples on it in a row; a tie keeps both
-  local bestRun = {}
-  for _, e in ipairs(ins) do       -- (every span entered from that end counts: the branch the car rides on too)
+  -- a fork's branches (spans entered from an end on another deck): round the fork the car is in the corridors of all of
+  -- them (a shallow one for a long way), and which one it takes cannot be told from its path; such a branch is scanned
+  -- only when it is the one round the car from that end, else none of them (Codex review rounds 6 / 7: the branch not
+  -- taken, its tile missing, braked and held the car on the one taken; a gap just past a fork is not guarded)
+  local atFork = {}
+  for _, e in ipairs(ins) do
     local sp = e.sp
-    local ex, ey = (e.dir > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (e.dir > 0) and sp.pts[2] or sp.pts[2 * sp.n]
-    e.node = string.format('%.0f_%.0f', ex, ey)
-    bestRun[e.node] = max(bestRun[e.node] or 0, e.run)
+    e.forkEnd = not ((e.dir > 0 and sp.abut0) or (e.dir < 0 and sp.abut1))
+    if e.forkEnd then
+      local ex, ey = (e.dir > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (e.dir > 0) and sp.pts[2] or sp.pts[2 * sp.n]
+      e.node = string.format('%.0f_%.0f', ex, ey)
+      atFork[e.node] = (atFork[e.node] or 0) + 1
+    end
   end
   for _, e in ipairs(ins) do
     local sp, kin, dir, uin = e.sp, e.kin, e.dir, e.uin
-    if g.released[sp.id] == nil and e.run >= bestRun[e.node] then
+    if g.released[sp.id] == nil and not (e.forkEnd and atFork[e.node] > 1) then
       -- from where the path drives onto it (its end, when that is ahead) along it as far as the look reaches: a car on
       -- a bridge follows the bridge (the path's arc may leave its corridor on a curved one)
       local fromEnd = dir > 0 and uin or (sp.len - uin)

@@ -214,7 +214,8 @@ do
 end
 
 -- a curved bridge the path's arc leaves: its gap further along it still found (scanned along the span to the look's
--- reach); a fork off a bridge ahead: its gap found before the car is on the first one
+-- reach); a fork's branch ahead: never braked for (which branch the car takes is not known; the fork extension of
+-- round 5 dropped after Codex review rounds 6 / 7)
 do
   local w = world()
   w.deckAt = function(x, y) if x >= 380 then return 'missing', 'g17_8_8' end return 'ready' end
@@ -236,17 +237,15 @@ do
   G.onSpans(gf, { anchorId = 1, spans = { { 300, 0, 340, 0 }, { 340, 0, 400, 0 }, { 340, 0, 400, 40 } },
     abut = { 1, 2, 2 } }, 1)
   local df = look(gf, wf, 200, 0, 10.5, 30, 0, 0)
-  T.check(df ~= nil and df.key == 'g17_9_9' and df.d >= 155 and df.d <= 165, 'a fork off a bridge ahead: its gap ' ..
-    tostring(df and df.d))
+  T.check(df == nil, 'a fork\'s branch ahead, its tile missing: not braked for')
 end
 
--- a fork on a bridge (Codex review round 6): the branch the car does not take has its tile missing, the one it takes is
--- in: no gap; the branch it takes missing: the gap
+-- a fork on a bridge (Codex review rounds 6 / 7): the car taking one branch, the other's tile missing: never braked or
+-- held, before, at or past the fork; once only the branch it took is round it, that one's own gap is found
 do
-  local past = false
-  local function fork(missingY)
+  local function fork(missing, xs)
     local w = world()
-    w.deckAt = function(x, y) if missingY(x, y) then return 'missing', 'g17_7_7' end return 'ready' end
+    w.deckAt = function(x, y) if missing(x, y) then return 'missing', 'g17_7_7' end return 'ready' end
     w.groundAt = function(x, y)
       if math.abs(x - 300) <= 1 or math.abs(x - 500) <= 1 then return 10 end
       return 2
@@ -254,21 +253,44 @@ do
     local g = G.new()
     G.onSpans(g, { anchorId = 1, spans = { { 300, 0, 340, 0 }, { 340, 0, 500, 0 }, { 340, 0, 500, 100 } },
       abut = { 1, 2, 2 } }, 1)
-    look(g, w, 290, 0, 10.5, 30, 0, 0)               -- (onto the first span at its end, at its level)
-    local d = look(g, w, 320, 0, 10.5, 30, 0, 0.25)
-    if past then        -- (on to just past the fork, on the straight branch)
-      look(g, w, 336, 0, 10.5, 30, 0, 0.5)
-      d = look(g, w, 350, 0, 10.5, 30, 0, 0.75)
-    end
-    return d
+    local out = {}
+    for i, x in ipairs(xs) do out[i] = look(g, w, x, 0, 10.5, 30, 0, i * 0.25) or false end
+    return out
   end
-  T.check(fork(function(x, y) return y > 20 end) == nil, 'the branch not taken missing, the one taken in: no gap')
-  local d = fork(function(x, y) return x > 380 and math.abs(y) < 5 end)
-  T.check(d ~= nil and d.x >= 380 and math.abs(d.y) < 5, 'the branch taken missing: its gap ' .. tostring(d and d.d))
-  past = true
-  T.check(fork(function(x, y) return y > 20 end) == nil, 'just past the fork on the branch taken: the other one\'s gap ignored')
-  d = fork(function(x, y) return x > 380 and math.abs(y) < 5 end)
-  T.check(d ~= nil and d.x >= 380, '... its own gap ahead found')
+  local xs = { 290, 320, 336, 350, 380, 420 }
+  local got = fork(function(x, y) return y > 20 end, xs)
+  local any = false
+  for i = 1, #xs do any = any or got[i] ~= false end
+  T.check(not any, 'the branch not taken missing: no gap at any look')
+  got = fork(function(x, y) return x > 440 and math.abs(y) < 5 end, xs)
+  T.check(not got[2] and not got[4], 'the branch taken missing: not braked for before or right at the fork')
+  T.check(got[5] and got[5].x >= 440, '... once it alone is round the car: its gap ' .. tostring(got[5] and got[5].d))
+end
+
+-- a shallow fork (Codex review round 7: its branches 10 m apart after 200 m, both round the car all the way; 100 m
+-- tiles, the ones north of y = 0 missing: only the branch not taken crosses into them): never braked, never held
+do
+  local grid = {
+    xy = function(x, y) return x / 100, y / 100 end,
+    at = function(ix, iy) if iy >= 0 then return 'missing', 'g17_' .. ix .. '_' .. iy end return 'ready' end,
+  }
+  local groundAt = function(x, y)
+    if math.abs(x + 100) <= 1 or math.abs(x - 200) <= 1 then return 10 end
+    return 2
+  end
+  local g = G.new()
+  G.onSpans(g, { anchorId = 1, spans = { { -100, -2, 0, -2 }, { 0, -2, 200, -2 }, { 0, -2, 200, 8 } }, abut = { 1, 2, 2 } },
+    1)
+  local bad = nil
+  local x, clock = -110, 0
+  while x <= 220 do
+    local d = G.look(g, { clock = clock, x = x, y = -2, z = 10.5, vx = 10, vy = 0, grid = grid, groundAt = groundAt,
+      vehId = 1 })
+    local scale, hold = G.brake(g, { v = 10, dt = 1 / 60 })
+    if d or scale < 1 or hold then bad = bad or x end
+    x, clock = x + 2.5, clock + 0.25
+  end
+  T.check(bad == nil, 'a shallow fork, the branch not taken missing: never braked or held (first at ' .. tostring(bad) .. ')')
 end
 
 -- already on a solid part of it: the next tile's part missing
