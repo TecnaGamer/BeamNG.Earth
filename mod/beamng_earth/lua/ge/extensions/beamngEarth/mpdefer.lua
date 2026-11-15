@@ -441,10 +441,21 @@ function M.update(dt)
             if r and r.t >= (w.since or -math.huge) then s = r end
           end
           if verdict == 'spawn' and d ~= nil and not s then
-            -- (near by its owner's place only: a packet of its own first, for where to spawn it; none: its last one
-            -- in our frame, else as sent)
-            w.nopose = (w.nopose or 0) + M.TICK_S
-            if w.nopose < M.UNKNOWN_WAIT_S then verdict = 'hold' else s = mpanchor.seen(sid) end
+            -- (near by its owner's place only: spawned only at a place of its own in our frame, its last packet
+            -- (older than SEEN_FRESH_S, still near; mpanchor forgets it when its owner's anchor changes), never at the
+            -- spawn's coordinates: those are in its owner's frame of then; none: it waits for a packet. Codex review
+            -- 3, 2026-11-15)
+            local last = mpanchor.seen(sid)
+            if last and tonumber(last.d) and last.d <= M.RELEASE_M then
+              s = last
+            else
+              if not w.nopose or w.nopose == 0 then
+                log('I', 'beamngEarth', string.format('BeamMP: car %s near by its owner\'s place (%s): waits for a '
+                  .. 'position of its own', sid, km(d)))
+              end
+              w.nopose = (w.nopose or 0) + M.TICK_S
+              verdict = 'hold'
+            end
           elseif s then
             w.nopose = 0
           end

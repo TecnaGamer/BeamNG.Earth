@@ -344,6 +344,24 @@ local nE9 = #edited
 MPVehicleGE.handle('c:9-0:' .. jsonEncode({ jbm = 'far_edit' }))
 T.check(#edited == nE9 and vehicles['9-0'].bngeHeldEdit, 'an edit in its owner\'s settling window: kept (far by its new place)')
 
+-- (Codex review 3) a kept car whose owner teleports next to us but whose packets do not come: never spawned at the
+-- spawn's old coordinates (its owner's old frame) however long; it spawns at its first packet in our frame
+ma.setRemote(12, PARIS[1], PARIS[2])
+place[12] = PARIS
+MPVehicleGE.handle(spawnRaw('12-0', 'Silent', 51, 'pickup'))
+T.check(vehicles['12-0'].bngeHeld, 'a far car kept')
+ma.setRemote(12, 36.51, -118.09)
+place[12] = { 36.51, -118.09 }
+groundOk = true
+local n12 = #spawned
+tick(math.floor(2 * md.UNKNOWN_WAIT_S / md.TICK_S) + 2)
+T.check(vehicles['12-0'].bngeHeld and #spawned == n12, 'its owner near, no packet of its own: kept (not at its old coordinates)')
+positionGE.handle(posRaw('12-0', 36.51, -118.09, 36.5005, -118.1005))
+tick()
+local s12 = ma.seen('12-0')
+T.check(#spawned == n12 + 1 and spawned[#spawned].sid == '12-0' and math.abs(spawned[#spawned].data.pos[1] - s12.x) < 1e-6,
+  'its first packet: spawned there')
+
 -- BeamMP's own queue: a far car queued before the hook (or while its place was not known) taken in
 vehicles['4-5'] = { serverVehicleString = '4-5', ownerID = 4, ownerName = 'Far Away', isSpawned = false, isLocal = false,
   gameVehicleID = -1, remoteVehID = 99, position = vec3(0, 0, 0),
