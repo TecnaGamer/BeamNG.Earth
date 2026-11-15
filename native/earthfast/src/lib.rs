@@ -6453,6 +6453,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tools/build_lidarz.py) and the decision archives' file functions taking a signed product's domain (dec_*:
     // domain = "dec" | "lidarz", its own magics inside the signature)
     lidarz::register(m)?;
-    m.add("VERSION", 303)?;
+    // 304: pmt_find_many / pmt_ranges (Mapterhorn's regional elevation archives read by range reads instead of its
+    // tile endpoint: server/mtarchive.py)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
+    m.add("VERSION", 304)?;
     Ok(())
 }

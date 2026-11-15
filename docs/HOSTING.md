@@ -220,6 +220,14 @@ decision blocks (see below).
 - **Built by:** `tools/build_mt_packs.py` in the data repo's `dem` workflow. It reads the archive with range reads
   (never stores it whole), checks the archive's ETag on every read, and checks its MD5 before writing `index.bin`.
 - **How often:** by hand, for each new Mapterhorn release.
+- **Zooms 13 and deeper** are not on the project's host: the client reads them straight out of Mapterhorn's regional
+  archives (`6-<x>-<y>.pmtiles`, one per zoom-6 tile with lidar, listed in Mapterhorn's `download_urls.json` with
+  their size and MD5) by HTTP range reads, from Source Cooperative's mirror
+  (`https://data.source.coop/mapterhorn/mapterhorn/<name>`) first, then `https://download.mapterhorn.com/<name>`, and
+  only when neither can be read from the tile endpoint (`server/mtarchive.py`). Each archive's header and leaf
+  directories are cached under `<cache>/dem/mtarchive/<md5>/` (a new release is a new folder), a mirror's copy is
+  used once its size and first 16 KB match the cached head, and every read carries `If-Match` with that mirror's ETag.
+  Tiles next to each other in the archive come in one read. Nothing to host or build for this.
 - **Size:** about the size of the source archive (331 GiB for release 0.0.13).
 
 ### 1 m aerial packs: `aerial/v1/`

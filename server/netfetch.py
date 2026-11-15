@@ -226,6 +226,16 @@ POLICIES = {
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
                                        allow_prefetch=True, offline_ok=True, revalidate_after=180 * DAY,
                                        miss_ttl=90 * DAY, **TILE_HOST),
+    # Mapterhorn's regional PMTiles archives (dem.py / mtarchive.py: zoom 13+ by range reads, the maintainer's wish
+    # instead of the tile endpoint): Source Cooperative's mirror first, then Mapterhorn's own download host (which also
+    # serves its file list). One range read is a run of neighbouring tiles (up to 4 MB) or a ~10 KB directory: fewer,
+    # larger requests than the endpoint's; admitted across the server's processes (shared), politely.
+    "data.source.coop": HostPolicy(rate=20.0, burst=60.0, max_conc=12, daily_budget=60000, shared=True,
+                                   allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0, optional=True,
+                                   **TILE_HOST),
+    "download.mapterhorn.com": HostPolicy(rate=10.0, burst=30.0, max_conc=6, daily_budget=30000, shared=True,
+                                          allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
+                                          optional=True, **TILE_HOST),
     "s3.amazonaws.com": HostPolicy(rate=50.0, burst=100.0, max_conc=8, daily_budget=None,
                                    allow_prefetch=True, offline_ok=True, miss_ttl=None, **TILE_HOST),
     # BeamNG.Earth's own data on GitHub Pages (railtags.py: the weekly OSM rail shards, ~300 km each, kept on disk)
@@ -450,7 +460,9 @@ ROLES = {
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
     "tiles.maps.eox.at": "worldwide satellite photos; new ground outside the detailed-photo regions may stay plain",
     "tiles.mapterhorn.com": "terrain heights; new places use the coarser backup meanwhile",
-    "download.mapterhorn.com": "the list of where detailed terrain heights exist; new places may load slower",
+    "download.mapterhorn.com": "detailed terrain heights (second source) and the list of where they exist; new places "
+                               "may load slower",
+    "data.source.coop": "detailed terrain heights (Mapterhorn's archives); Mapterhorn's own hosts meanwhile",
     "s3.amazonaws.com": "terrain heights (backup source); only matters while the main one is down too",
     "copernicus-dem-30m.s3.amazonaws.com": "terrain heights near the poles",
     "canelevation-dem.s3.ca-central-1.amazonaws.com": "Canada's lidar ground under the distant terrain; as before meanwhile",
