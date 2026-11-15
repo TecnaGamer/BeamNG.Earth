@@ -494,8 +494,7 @@ VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at 
                                 # for the rest of it
 VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
-SELECT_MOVE_M = 8.0             # a pose selects the far tiles again once the focus, radius or camera moved this far ...
-SELECT_MAX_S = 2.0              # ... or this long after the last (Connection._far_unchanged)
+SELECT_SLACK_EPS = 1e-3          # m: a pose skips the far selection only when it moved less than its slack by this much
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
 WORLD_WARM_CONC = 2
 EYE_LOD_MIN_M = 3000.0          # an eye above this: the far tiles' detail by the 3D distance (eye_clearance)
@@ -6971,6 +6970,7 @@ class Server:
             d, k = self.lod_errs, (ck[0], node)
         d.pop(k, None)
         d[k] = float(e)
+        self.lod_errs_gen = getattr(self, "lod_errs_gen", 0) + 1     # (Connection._far_unchanged)
         if len(d) > LOD_ERRS_MAX:
             for old in list(itertools.islice(d, len(d) - LOD_ERRS_MAX * 3 // 4)):
                 del d[old]
@@ -7362,6 +7362,7 @@ class Server:
                 del self.tiles[ck]
             for k in [k for k in self.lod_errs if k[0] == aid]:
                 del self.lod_errs[k]
+            self.lod_errs_gen = getattr(self, "lod_errs_gen", 0) + 1
             for ck in [k for k in self.matslots.holders() if k[0] == aid]:
                 self.matslots.release(ck)
             for ck in [ck for ck in list(self.degraded) if ck[0] == aid]:     # list(): workers add meanwhile
@@ -11211,12 +11212,14 @@ class Connection:
         return n
 
     def _far_unchanged(self, now, anchor, radius, extra, forced, min_level, view):
-        """Would this selection be the last one's (update_far's gate, on_pose)? Every discrete input the same (the
-        anchor, the desired set's object, the forced boxes, the detail scale and the 3D map, the coarse cover, the held
-        nodes, the horizon's grid and eye, the camera's pixels per radian and pop size, the known tile errors' count),
-        the focus, the radius and the camera within SELECT_MOVE_M of the last's (their own 2 Hz poses move them 15 m at
-        30 m/s: a car standing or creeping selects again only once it has moved), and the last at most SELECT_MAX_S
-        ago. Remembers these inputs when not."""
+        """Is this selection surely the last one's (update_far's gate, on_pose)? Only when it could not differ: the last
+        selection changed no node (so its result is its own fixed point: the held nodes the same too), every discrete
+        input is the same (the anchor, the forced boxes, the detail scale and the 3D map, the coarse cover, the held
+        nodes, the horizon's grid and eye, the camera's pixels per radian and pop size, the known tile errors), and the
+        player, the radius, the eye's height over the ground and the camera moved less in all than the last selection's
+        slack (farfield.LAST_SLACK: every bound a node's answer went by is farther from its value than that). The
+        selection, not its tiles' build order: update_far still regroups and wakes the streamer. Remembers these inputs
+        when not (with the slack the selection then reports: update_far)."""
         hz = extra.get("horizon")
         cone = self.map_cone(aid=anchor.id) if self.global_on(anchor, radius) else None
         disc = (self.active, tuple(tuple(b) for b in forced), self.lod_scale, self.map_view,
@@ -11224,17 +11227,21 @@ class Connection:
                 frozenset(self.node_changed), extra.get("disc"), extra.get("max_level"),
                 None if hz is None else (hz.eye, id(hz.grid)), self.view_cap, self.global_on(anchor, radius),
                 None if cone is None else tuple(cone), self.eye is not None and self.eye > MAP_HIGH_EYE_M,
-                None if view is None else (view.ppr, view.tau, view.reach, view.cap, len(self.s.lod_errs),
-                                           len(self.s.glod_errs)))
+                None if view is None else (view.ppr, view.tau, view.reach, view.cap, view.h, view.cells,
+                                           getattr(self.s, "lod_errs_gen", 0)))
         fx, fy = self.view_focus
         cont = (fx, fy, radius, self.eye_clearance()) + (() if view is None else (view.cx, view.cy, view.dz))
         last = getattr(self, "_far_last", None)
         # (the last selection's own result still in place: no other update_far, a reset of the desired set, since)
-        mine = last is not None and last[3] is self.desired and last[4] is self.refined
-        if (mine and last[0] == disc and len(last[1]) == len(cont) and now - last[2] < SELECT_MAX_S
-                and all(abs(a - b) <= SELECT_MOVE_M for a, b in zip(cont, last[1]))):
-            return True
-        self._far_pending = (disc, cont, now)      # (kept with its result: update_far)
+        if last is not None and last[0] == disc and len(last[1]) == len(cont) and last[3] is self.desired \
+                and last[4] is self.refined:
+            a, b = cont, last[1]
+            moved = math.hypot(a[0] - b[0], a[1] - b[1]) + abs(a[2] - b[2]) + abs(a[3] - b[3])
+            if len(a) > 4:
+                moved += math.hypot(a[4] - b[4], a[5] - b[5]) + abs(a[6] - b[6])
+            if moved < last[2] - SELECT_SLACK_EPS:
+                return True
+        self._far_pending = (disc, cont)    # (kept with its result and slack: update_far)
         return False
 
     def update_far(self, gate=False):
@@ -11258,7 +11265,10 @@ class Connection:
             forced, kfun, view = [], (lambda lvl: k0(lvl) * FIRST_RAMP_K), None
             min_level = max(min_level, FIRST_RAMP_MIN_LEVEL)
         if gate and self._far_unchanged(now, anchor, radius, extra, forced, min_level, view):
-            return                          # (a pose that moved nothing the selection goes by: the same tiles)
+            # (the same selection surely: not made again; the build order goes by the focus, as after one)
+            self._regroup()
+            self.wake.set()
+            return
         if self.global_on(anchor, radius):
             # far levels from 3 up as global tiles (geotiles phase 3b): the same for every anchor, kept at a rebase
             high = self.eye is not None and self.eye > MAP_HIGH_EYE_M
@@ -11299,7 +11309,8 @@ class Connection:
         changed = new.keys() != self.desired.keys()
         self.desired = new
         pend = self.__dict__.pop("_far_pending", None) if gate else None
-        self._far_last = None if pend is None else pend + (new, refined)
+        slack = farfield.LAST_SLACK
+        self._far_last = None if pend is None or slack is None else (pend[0], pend[1], slack, new, refined)
         self._regroup()
         if changed and not self.dirty:
             self.dirty = True

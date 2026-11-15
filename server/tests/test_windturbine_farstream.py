@@ -93,8 +93,7 @@ class TurbineFarTrackerTest(unittest.TestCase):
             self.assertEqual(len(futures), 2, "terrain batches use the existing two-job limit")
             tracker.on_pose(conn, 1, 0, 0, loop, build, frame=frame)
             self.assertEqual(len(futures), 2, "another pose cannot queue extra work while both jobs are pending")
-            for future, args in futures[:]:
-                gx, gy = args[-2:]          # (staging.build_inline(build, out_dir, digest, gx, gy))
+            for future, (gx, gy) in futures[:]:
                 future.set_result(("/isolated/turbines.json", 0, geotiles.centre(gx, gy, earthd.TURBINE_Z), 0))
             self.assertTrue(all(m["type"] == "turbines_tile" and m["key"].startswith("g15_") for m in messages))
             tracker.sent.add(target)

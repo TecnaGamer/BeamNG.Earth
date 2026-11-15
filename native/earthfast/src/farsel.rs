@@ -9,7 +9,7 @@
 //!   the order it found them).
 //! - far_horizon_radius: farfield.HorizonGrid.radius, the far radius to the line-of-sight horizon over the zmax grid.
 use crate::dm::Dm;
-use crate::farglobal::{clip_convex, poly_area};
+use crate::farglobal::{clip_convex, poly_area, tighten, SLACK_PAD};
 
 use numpy::PyReadonlyArray2;
 use pyo3::exceptions::PyValueError;
@@ -109,6 +109,13 @@ impl Horizon {
         }
         d <= self.reach + (2.0 * self.r * pmax(0.0, self.zmax(level, i, j))).sqrt()
     }
+
+    /// How far d can move before keeps' answer may change.
+    fn keeps_slack(&self, level: i32, i: i64, j: i64, d: f64) -> f64 {
+        let t = self.reach + (2.0 * self.r * pmax(0.0, self.zmax(level, i, j))).sqrt();
+        let s = (d - self.min_d).abs();
+        if t.is_finite() { s.min((d - t).abs()) } else { s }
+    }
 }
 
 /// farfield.out_of_view: the factor a node's distance counts with outside the 3D map's view cone.
@@ -171,6 +178,25 @@ impl View<'_, '_> {
         } else {
             split
         })
+    }
+
+    /// How far the camera and the player can move before decide's answer may change (INF: the error not known).
+    #[allow(clippy::too_many_arguments)]
+    fn slack(&self, was: bool, node: Node, b: [f64; 4], d: f64, d3: f64, lim: f64, lim_f: f64, h: f64)
+             -> PyResult<f64> {
+        let Some(e) = self.err(node)? else { return Ok(f64::INFINITY) };
+        let e = pmin(e, self.cap * (b[2] - b[0]) / self.cells);
+        let dxy = pmax(pmax(b[0] - self.cx, 0.0), self.cx - b[2]).dhypot(pmax(pmax(b[1] - self.cy, 0.0), self.cy - b[3]));
+        let dm = pmax(dxy.dhypot(self.dz), 1.0);
+        let d1 = e * self.ppr / self.tau;
+        let mut s = f64::INFINITY;
+        for v in [dm - d1, dm - d1 * (1.0 + self.hs), d - self.reach * lim, d3 - lim_f] {
+            tighten(&mut s, v);
+        }
+        if was {
+            tighten(&mut s, d3 - (1.0 + h) * lim_f);
+        }
+        Ok(s)
     }
 }
 
@@ -236,7 +262,7 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
                              view: Option<(f64, f64, f64, f64, f64, f64, f64, f64, f64, Bound<'py, PyAny>,
                                            Bound<'py, PyAny>)>,
                              region: Option<(PyReadonlyArray2<'py, f64>, f64)>, cone: Option<Vec<f64>>)
-                             -> PyResult<(Vec<(i32, i64, i64, i64, Vec<f64>)>, Vec<Node>)> {
+                             -> PyResult<(Vec<(i32, i64, i64, i64, Vec<f64>)>, Vec<Node>, f64)> {
     let hz = match &horizon {
         Some((reach, min_d, r, base, gl, ml)) => Some(Horizon::new(*reach, *min_d, *r, &base.as_array(), *gl, *ml)?),
         None => None,
@@ -278,6 +304,15 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
         None => [lo_x, lo_y, hi_x, hi_y],
     };
     let mut stack: Vec<Node> = Vec::new();
+    // (the slack: the selection is the same while the player, the radius, the eye height and the camera move less than
+    // this in all: every bound a node's answer goes by is farther from its value; the roots' range too)
+    let mut slack = SLACK_PAD;
+    if region.is_none() {
+        for v in [lo_x - (lo_x / s).floor() * s, (hi_x / s).ceil() * s - hi_x, lo_y - (lo_y / s).floor() * s,
+                  (hi_y / s).ceil() * s - hi_y] {
+            tighten(&mut slack, v);
+        }
+    }
     for j in (ry0 / s).floor() as i64..(ry1 / s).ceil() as i64 {
         for i in (rx0 / s).floor() as i64..(rx1 / s).ceil() as i64 {
             stack.push((max_level, i, j));
@@ -295,11 +330,20 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
         if disc {
             let dd = box_dist(x0, y0, x1, y1, px, py);
             d = Some(dd);
+            tighten(&mut slack, dd - radius);
+            if let Some(hz) = &hz {
+                tighten(&mut slack, hz.keeps_slack(lvl, i, j, dd));
+            }
             if dd >= radius || hz.as_ref().is_some_and(|hz| !hz.keeps(lvl, i, j, dd)) {
                 continue;
             }
-        } else if !(x0 < hi_x && x1 > lo_x && y0 < hi_y && y1 > lo_y) {
-            continue;
+        } else {
+            for v in [x0 - hi_x, x1 - lo_x, y0 - hi_y, y1 - lo_y] {
+                tighten(&mut slack, v);
+            }
+            if !(x0 < hi_x && x1 > lo_x && y0 < hi_y && y1 > lo_y) {
+                continue;
+            }
         }
         let cover = match &region {
             Some(r) => match r.cover(x0, y0, x1, y1) {
@@ -317,11 +361,21 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
                 let d = d.unwrap_or_else(|| box_dist(x0, y0, x1, y1, px, py));
                 let lim = switch_distance(lvl, &ks, &radii, min_level);
                 let mut d3 = d.dhypot(eye_h);
+                let mut fac = 1.0;
                 if let Some(c) = cone.as_deref() {
-                    d3 *= out_of_view(c, x0, y0, x1, y1, d);
+                    fac = out_of_view(c, x0, y0, x1, y1, d);
+                    d3 *= fac;
+                    if out_of_view(c, x0, y0, x1, y1, 1e-9) != 1.0 {
+                        tighten(&mut slack, d);     // (the node under the camera, d 0, counts as in view)
+                    }
                 }
                 let was = prev.contains(&node);
                 let split = d3 < lim || (was && d3 < (1.0 + h) * lim);
+                // (d3 moves at most fac x the player's move plus the eye's)
+                tighten(&mut slack, (d3 - lim) / fac);
+                if was {
+                    tighten(&mut slack, (d3 - (1.0 + h) * lim) / fac);
+                }
                 match &view {
                     Some(v) => {
                         let lim_f = if lvl - 1 > min_level {
@@ -329,6 +383,7 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
                         } else {
                             lim
                         };
+                        tighten(&mut slack, v.slack(was, node, [x0, y0, x1, y1], d, d3, lim, lim_f, h)? / fac);
                         v.decide(split, was, node, [x0, y0, x1, y1], d, d3, lim, lim_f, h)?
                     }
                     None => split,
@@ -350,7 +405,7 @@ pub fn far_select_nodes<'py>(px: f64, py: f64, radius: f64, disc: bool, max_leve
             _ => out.push((lvl, i, j, -1, Vec::new())),
         }
     }
-    Ok((out, refined))
+    Ok((out, refined, slack))
 }
 
 /// farfield.HorizonGrid.radius: (the far radius, zmax_region) for an eye `reach` m from its sea-level horizon

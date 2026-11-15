@@ -20,6 +20,7 @@ Not yet: grading the ground under roads, markings, junction shapes, bridges and 
 flagged as bridge / tunnel or off ground level are left out), the navgraph.
 """
 import json
+import functools
 import logging
 import math
 import types
@@ -12398,10 +12399,11 @@ class Tracker:
         for tx, ty in want[:max(0, BUILD_PER_POSE - len(self.building))]:   # in flight at most (vegetation.Tracker)
             self.building.add((tx, ty))
             self.started[(tx, ty)] = now
-            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, staging.build_inline, build,
-                                                             getattr(getattr(conn, "s", None), "out_dir", None),
-                                                             False, aid, tx, ty)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         # a build that never ends leaves the loading line at "roads & buildings 0/36" with nothing in the log (GitHub
         # #241, a Discord report): said once per tile, with how many are in flight
@@ -12802,9 +12804,9 @@ class GeoTracker:
             self.building.add(k)
             self.started[k] = now
             # (the content's and the skin's files read in the worker, not on the event loop)
-            fut = self.futs[k] = loop.run_in_executor(self.pool, staging.build_inline_paths, build,
-                                                      getattr(getattr(conn, "s", None), "out_dir", None),
-                                                      _geo_inline_paths, aid, k[0], k[1], content, skin, make)
+            job = functools.partial(staging.build_inline_paths, build,
+                                    getattr(getattr(conn, "s", None), "out_dir", None), _geo_inline_paths)
+            fut = self.futs[k] = loop.run_in_executor(self.pool, job, aid, k[0], k[1], content, skin, make)
             fut.add_done_callback(lambda f, kk=k, a=aid, c=content, sk=skin, m=make:
                                   self._built(conn, a, kk, f, c, sk, m))
         for k in self.building:

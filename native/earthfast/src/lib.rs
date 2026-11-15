@@ -6454,6 +6454,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (HorizonGrid.radius), farpvs::far_pvs_tex_px (farpvs.Set.tex_px / hidden for many tiles, without the GIL);
     // far_global_select's view errors looked up in the caller's dict (not copied whole at every pose)
     farsel::register(m)?;
-    m.add("VERSION", 303)?;
+    // 304: far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
+    // same: earthd's selection gate skips only selections that could not change)
+    m.add("VERSION", 304)?;
     Ok(())
 }

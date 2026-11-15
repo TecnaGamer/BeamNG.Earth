@@ -387,7 +387,7 @@ def out_of_view(cone, x0, y0, x1, y1, d):
     return 1.0 if a - slack <= dmath.acos(max(-1.0, min(1.0, cone[6]))) else max(1.0, cone[8])
 
 
-SELECT_NEED = 303      # earthfast farsel.rs (far_select_nodes, far_horizon_radius)
+SELECT_NEED = 304      # earthfast farsel.rs (far_select_nodes with its slack, far_horizon_radius)
 
 
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
@@ -431,7 +431,8 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
         vw = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau), float(view.reach),
               float(view.h), float(view.cap), float(view.cells), errs, aid)
     reg = (region.arr, float(GLOBAL_MIN_AREA)) if region is not None else None
-    items, refined = fast._ef.far_select_nodes(
+    global LAST_SLACK
+    items, refined, LAST_SLACK = fast._ef.far_select_nodes(
         float(px), float(py), float(radius), bool(disc), int(max_level), int(min_level), int(forced_level), float(h),
         float(eye_h), ks, [(int(m), float(r)) for m, r in radii.items()],
         [n for n in prev_refined if len(n) == 3], [n for n in hold if len(n) == 3],
@@ -784,7 +785,8 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         kw["view"] = (float(view.cx), float(view.cy), float(view.dz), float(view.ppr), float(view.tau),
                       float(view.reach), float(view.h), float(view.cap), float(view.cells), view.gerr)
     t0 = time.perf_counter()
-    tiles, grefined, regions = fast._ef.far_global_select(
+    global LAST_SLACK
+    tiles, grefined, regions, gslack = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
         ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h), **kw)
     out = {}
@@ -814,12 +816,18 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
                             None, forced_level, view, region=Region(zf, regions), eye_h=eye_h, cone=cone)
         out.update(aout)
         refined |= aref
+        gslack = min(gslack, LAST_SLACK)
+    LAST_SLACK = gslack
     global LAST_GLOBAL_SELECT
     LAST_GLOBAL_SELECT = (t1 - t0, time.perf_counter() - t1, len(regions or ()), len(tiles))
     return out, refined
 
 
 LAST_GLOBAL_SELECT = None   # (global part s, anchor part s, regions, global tiles) of the last select_global (logs)
+# The last select / select_global's slack (m): its result stays the same while the player, the radius, the eye's height
+# over the ground and the camera (the screen-space LOD's) move less than this in all, the other inputs unchanged and
+# the previous result as prev_refined (earthd Connection._far_unchanged: a pose's selection skipped only then)
+LAST_SLACK = None
 _GTILE_MEMO = {}            # (lat0, lon0, zf) -> {(z, x, y): GTile}: select_global's tiles of an anchor's world
 _GTILE_MEMO_MAX = 20000
 

@@ -34,6 +34,7 @@ import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
 
 LAT, LON = 39.2847, -76.5928        # Baltimore (Fells Point)
+X0, Y0 = 137.3, -61.9               # the start (off the lattice: at 0, 0 every bound is a whole number of tiles away)
 
 
 class _Writer:
@@ -112,7 +113,7 @@ def pose_msg(aid, t, speed):
     """The car at time t on a circle of 6 km radius (a gentle curve), heading along it."""
     r = 6000.0
     a = speed * t / r
-    x, y = r * dmath.sin(a), r * (1.0 - dmath.cos(a))
+    x, y = X0 + r * dmath.sin(a), Y0 + r * (1.0 - dmath.cos(a))
     vx, vy = speed * dmath.cos(a), speed * dmath.sin(a)
     return {"type": "pose", "anchorId": aid, "x": x, "y": y, "z": 10.0, "vx": vx, "vy": vy, "lat": LAT, "lon": LON,
             "speed": speed, "follow": True,

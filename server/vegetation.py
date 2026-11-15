@@ -19,6 +19,7 @@ cell's map data and VERSION; its random choices (species, yaw, size, thinning ra
   inside the orchard left out so the rows are not filled in at random.
 - Farmland: shrubs in a line down the gap between the dirt crop rows.
 """
+import functools
 import logging
 import math
 import os
@@ -1747,9 +1748,11 @@ class Tracker:
         # (Sinaia 2026-10-15: bare ground for minutes)
         for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((tx, ty))
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, staging.build_inline, build,
-                                                             getattr(getattr(conn, "s", None), "out_dir", None),
-                                                             False, aid, tx, ty)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline; the build's own
+            # arguments as before)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    False)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, job, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
                   and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
@@ -1823,9 +1826,9 @@ class Tracker:
         for gx, gy in want[:n_go]:
             self.building.add((gx, gy))
             # (the tile's file read in the worker, not on the event loop: staging.build_inline)
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(
-                self.pool, staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
-                self.digests or (gx, gy) in self.redo, gx, gy)
+            job = functools.partial(staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                                    self.digests or (gx, gy) in self.redo)
+            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, job, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
