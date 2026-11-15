@@ -1585,8 +1585,9 @@ local function onMessage(msg)
       elseif not st.anchor then defaultStart() end
     end
   elseif t == 'route_result' then
+    -- (legs and steps too: gps.lua reads them for the API's gpsRoute().legs / .steps; GitHub #1259)
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error,
-      elev = msg.elev } end
+      elev = msg.elev, legs = msg.legs, steps = msg.steps } end
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)

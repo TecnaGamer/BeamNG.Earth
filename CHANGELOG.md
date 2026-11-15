@@ -74,9 +74,9 @@ Works with BeamNG.drive 0.40.5.
   Denmark, Iceland, Aland and the Faroes give way instead of STOP signs.
 - **Modding API 1.3 to 1.8** for add-on authors: in-tunnel checks, posted speed limits (also on tunnel lines: PR #1069,
   ProxyFirewall202), places and buildings round a point (PR #1053, SwimmingRemy) and cached-only requests (PR #1218,
-  SwimmingRemy), the planned GPS route (PR #1132) and its turn steps (PR #1135, zolaski333), `toGame` / `toGeo`, a
+  SwimmingRemy), the planned GPS route (PR #1132), `toGame` / `toGeo`, a
   "rebased" event (PR #1183, DeRamp); see docs/ADDONS.md.
-- **GPS route through several stops** (PR #1004, zolaski333).
+- **GPS routes through several stops for add-ons** (modding API `gpsSetRoute`; PR #1004, zolaski333).
 - **More scenery from the map**: solar farms, container terminals, vineyards in rows, round bales after the harvest,
   camp site caravans, marinas, obstruction lights on tall buildings, jet fans in road tunnels, mapped street lamps
   (PR #981, wyo-backroads), power poles where a line's supports are mapped (PR #919, wyo-backroads), mapped benches,
@@ -238,6 +238,7 @@ Works with BeamNG.drive 0.40.5.
 - **Reduced the chance of flickering road paint**: markings and wear sit a few millimetres above the road.
 - **Reduced the chance of glitches with very long buildings, sparse bridge elements and sharp corners in bridge decks** (PR #863 and #852, chateau86; PR #879, teddante).
 - **Map weather badge** shows the moon at night under a clear sky (PR #1002, zolaski333).
+- **Railroad crossing lettering** reads the right way round on normal and mirrored gates (GitHub #699).
 - **3D map**: reduced the chance of a crash opening the 3D map with ReShade / DirectX 12 (the labels' window now stays
   in the game's window); the orbit target follows the view (PR #864, Vabian124).
 - **Traffic U-turns at the graph's edge**: reduced the chance of cars turning around where the world ends.

@@ -280,7 +280,8 @@ SERVER_TO_MOD = {
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
-                      "legs": F(list, OPT)},          # with via: [[dist_m, dur_s], ...] per leg
+                      "legs": F(list, OPT),           # with via: [[dist_m, dur_s], ...] per leg
+                      "steps": F(list, OPT)},         # OSRM maneuvers (routing.parse; the API's gpsRoute().steps)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
     # the blocks built already round the player (follow.preferReady takes one instead of its own target)
     "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor

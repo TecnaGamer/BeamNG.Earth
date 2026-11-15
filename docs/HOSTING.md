@@ -184,8 +184,8 @@ All paths are relative to the bucket root, which is also `https://tiles.tgforeve
 | `data/<dataset>/<key>/...` | mirror of the weekly datasets | data repo `data` (`tools/mirror_data.py`) | weekly | `public, max-age=31536000, immutable` | yes |
 | `data/<dataset>/<key>/manifest.json` | marks a complete copy | the same | weekly | `public, max-age=3600` | no (`.json`) |
 | `osmtags/<key>/osmtags*.pmtiles` | OpenStreetMap road tags | data repo `data` (job `osmtags`) | weekly | `public, max-age=31536000, immutable` | yes |
-| `osmyears/<key>/osmyears*.pmtiles` | OpenStreetMap building construction years (not published yet) | data repo `data` (a job like `osmtags`) | weekly | `public, max-age=31536000, immutable` | yes |
-| `osmcolours/<key>/osmcolours*.pmtiles` | OpenStreetMap building and part colours (not published yet) | data repo `data` (job `osmcolours`) | weekly | `public, max-age=31536000, immutable` | yes |
+| `osmyears/<key>/osmyears*.pmtiles` | OpenStreetMap building construction years | data repo `data` (a job like `osmtags`) | weekly | `public, max-age=31536000, immutable` | yes |
+| `osmcolours/<key>/osmcolours*.pmtiles` | OpenStreetMap building and part colours | data repo `data` (job `osmcolours`) | weekly | `public, max-age=31536000, immutable` | yes |
 
 A **pack** (`.bngp`, `server/tilepack.py`) holds the 8 x 8 tiles of one zoom under a tile three zooms up, so one
 request fetches 64 tiles. A pack that does not exist (a 404) means "no tiles here" (open sea, or nothing built);
@@ -265,7 +265,7 @@ Pre-computed road plans and cell facts for popular places, for exactly one serve
 - **OSM road tags:** `osmtags/<key>/osmtags-NNN.pmtiles`, OpenStreetMap's road tags (lanes, widths, speed limits,
   surfaces...) from OSM US's Layercake file, in parts of at most 400 MB (about 2.4 GB per build). Only its manifest is
   on Pages.
-- **OSM building years (not published yet):** `osmyears/<key>/osmyears-NNN.pmtiles`, the construction years
+- **OSM building years:** `osmyears/<key>/osmyears-NNN.pmtiles`, the construction years
   (start_date) of OSM's dated buildings from Layercake's buildings file (`tools/build_osm_building_years.py`, ~17 M
   rows, an estimated 50-60 MB per build; it reads the file's id, type, start_date and bbox columns, ~9 GB). Each
   build's parts are in a folder of their own (`<key>/osmyears-NNN.pmtiles`, the manifest's `"key"`) and never change
@@ -273,7 +273,7 @@ Pre-computed road plans and cell facts for popular places, for exactly one serve
   folder before the manifest. The manifest pins each part's size and the SHA-256 of its first 16 KB (header and
   root directory); a part that does not match is not read. Its manifest goes on Pages as `osmyears/manifest.json`;
   the server (`server/osmyears.py`) asks for nothing else until that exists.
-- **OSM building colours (not published yet):** `osmcolours/<key>/osmcolours-NNN.pmtiles`, the mapped
+- **OSM building colours:** `osmcolours/<key>/osmcolours-NNN.pmtiles`, the mapped
   `building:colour` / `roof:colour` of OSM's buildings and building parts as RGB, read from the planet
   (`tools/build_osm_building_colours.py`, three streamed passes; ~3.5 M rows, an estimated 10-20 MB per build), for
   the colours Overture leaves out (names its colour table lacks: beige, lightgray, DarkGreen, gold ...). The same
