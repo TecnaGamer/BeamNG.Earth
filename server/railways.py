@@ -588,21 +588,52 @@ def _coarse_here(frame, box):
         return False
 
 
+SEG_HITS_PAIRS = 1 << 20     # segment pairs _seg_hits tests in one array step at most (its memory: ~30 bytes a pair)
+SEG_BOX_PAD_M = 1e-6        # m round each segment's box in _seg_hits' prefilter (only pairs whose boxes meet can cross)
+
+
 def _seg_hits(a, b):
-    """Arc positions along polyline a where it crosses polyline b (proper segment intersections). Pure."""
-    out = []
+    """Arc positions along polyline a where it crosses polyline b (proper segment intersections), in a's segment order
+    then b's. Pure.
+
+    The pairs of segments whose boxes meet are tested, as arrays; the others cannot cross. It was two Python loops over
+    every pair: a central Athens cell's rail bridges (whole features, km long) against its roads took most of the 900 s
+    its plans took, planned by 8 processes at once (GitHub #1327). Each pair's sums are the loops' own, elementwise, so
+    the hits are the same floats."""
+    a = np.asarray(a, np.float64)
+    b = np.asarray(b, np.float64)
+    if len(a) < 2 or len(b) < 2:
+        return []
+    a2, b2 = a[:, :2], b[:, :2]
+    pad = SEG_BOX_PAD_M
+    alo, ahi = np.minimum(a2[:-1], a2[1:]) - pad, np.maximum(a2[:-1], a2[1:]) + pad
+    blo, bhi = np.minimum(b2[:-1], b2[1:]) - pad, np.maximum(b2[:-1], b2[1:]) + pad
+    # (the whole lines first: most of coarse_underpasses' road and bridge pairs are nowhere near each other)
+    if (alo.min(0) > bhi.max(0)).any() or (blo.min(0) > ahi.max(0)).any():
+        return []
     sa = _arc(a)
-    for i in range(len(a) - 1):
-        p, r = a[i], a[i + 1] - a[i]
-        for j in range(len(b) - 1):
-            q, t = b[j], b[j + 1] - b[j]
-            den = r[0] * t[1] - r[1] * t[0]
-            if abs(den) < 1e-12:
-                continue
-            u = ((q[0] - p[0]) * t[1] - (q[1] - p[1]) * t[0]) / den
-            v = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den
-            if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
-                out.append(float(sa[i] + u * (sa[i + 1] - sa[i])))
+    p, r = a2[:-1], a2[1:] - a2[:-1]
+    q, t = b2[:-1], b2[1:] - b2[:-1]
+    out = []
+    step = max(1, SEG_HITS_PAIRS // len(q))
+    for i0 in range(0, len(p), step):
+        i1 = min(len(p), i0 + step)
+        meet = ((alo[i0:i1, None, 0] <= bhi[None, :, 0]) & (ahi[i0:i1, None, 0] >= blo[None, :, 0])
+                & (alo[i0:i1, None, 1] <= bhi[None, :, 1]) & (ahi[i0:i1, None, 1] >= blo[None, :, 1]))
+        ii, jj = np.nonzero(meet)       # (row-major: a's segments in order, b's within each, as the loops went)
+        if not len(ii):
+            continue
+        ii += i0
+        pi, ri, qj, tj = p[ii], r[ii], q[jj], t[jj]
+        den = ri[:, 0] * tj[:, 1] - ri[:, 1] * tj[:, 0]
+        ok = np.abs(den) >= 1e-12
+        ii, pi, ri, qj, tj, den = ii[ok], pi[ok], ri[ok], qj[ok], tj[ok], den[ok]
+        dx, dy = qj[:, 0] - pi[:, 0], qj[:, 1] - pi[:, 1]
+        u = (dx * tj[:, 1] - dy * tj[:, 0]) / den
+        v = (dx * ri[:, 1] - dy * ri[:, 0]) / den
+        hit = (u >= 0.0) & (u <= 1.0) & (v >= 0.0) & (v <= 1.0)
+        ih, uh = ii[hit], u[hit]
+        out.extend((sa[ih] + uh * (sa[ih + 1] - sa[ih])).tolist())
     return out
 
 
@@ -616,11 +647,22 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
     if not coarse and not (FLAT_SEP_ON and RAW_ELEV is not None):
         return []
     out = []
+    # (each road against only the bridges whose boxes meet its own, in their order: a central Athens window's roads
+    # against every bridge round it were ~6,800 _seg_hits calls, 616k a cold first road tile, 21 of its 144 s, though
+    # nearly all of them lay nowhere near each other: GitHub #1327. A pair whose boxes do not meet has no crossing)
+    pad = 2.0 * SEG_BOX_PAD_M      # (_seg_hits' own test pads both lines' segments)
+    bb = np.array([(*np.asarray(b, np.float64)[:, :2].min(0), *np.asarray(b, np.float64)[:, :2].max(0))
+                   for b in bridges]).reshape(-1, 4)
     for line, half in crossings(frame, cells, box, reach):
         if len(line) < 2:
             continue
+        lo, hi = np.asarray(line, np.float64)[:, :2].min(0) - pad, np.asarray(line, np.float64)[:, :2].max(0) + pad
+        near = _box_hits(bb, (lo[0], lo[1], hi[0], hi[1]))
+        if not near:
+            continue
         sl = _arc(line)
-        for b in bridges:
+        for k in near:
+            b = bridges[k]
             for sc in _seg_hits(line, b):
                 if not coarse and not flat_rail_crossing(frame, b, line, sc):
                     continue

@@ -31,10 +31,17 @@ import xproc
 log = logging.getLogger("earthd.plancache")
 
 WAIT_S = 90.0
-LIVE_WAIT_S = 240.0         # s: past WAIT_S a holder still at work is waited for this long by a thread holding no claim
+LIVE_WAIT_S = 900.0         # s: past WAIT_S a holder still at work is waited for this long by a thread holding no claim
                             # (xproc.once live_s): central London's cells took 2-4 minutes on a busy PC's four server
                             # threads, and each process that stopped waiting at WAIT_S planned them again beside their
                             # planner, slower still for all (a road tile past 300 s, its road processes restarted, 2026-11-13)
+                            # 240 -> 900 s (pools.HUNG_CEILING_X times the road tiles' 300 s, how long a busy road job
+                            # is waited for at most): a central Athens cell's planner was still at it at 240 s and all
+                            # 8 waiters (the block worker, 4 road processes, 3 far ones) planned it again beside it, the
+                            # 8 copies on the same cores finishing it at 900 s (GitHub #1327). A copy of a planner at
+                            # work never comes sooner than its plans: they are the same computation, on fewer free cores.
+                            # A dead holder is still taken over at once (xproc.once's alive checks), a stale lock after
+                            # xproc.STALE_S, and a thread holding a claim of its own still stops waiting at WAIT_S
 LONG_WAIT_S = 20.0          # s: a wait for another process's plans this long is logged (claim)
 KEEP_S = 6 * 3600.0         # run folders untouched this long are removed (prune)
 VERSIONS_RECHECK_S = 2.0    # s between reads of the map data's versions for the revisit keys (PlanCache.persist)
