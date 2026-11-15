@@ -786,5 +786,29 @@ do
 end
 
 
+-- A streaming hold is not another failed recovery attempt. In particular,
+-- a real retry before the hold must not become a teleport on the first resumed tick.
+do
+ local oldSpawn,oldQuat,oldLog=spawn,quatFromDir,log
+ local recoveries=0
+ spawn={safeTeleport=function()recoveries=recoveries+1 end}
+ quatFromDir=function(d)return d end;log=function()end
+ local f=fixture(nil,0,6);f.speed=0
+ f:step(f.gps.AUTO_NOPROGRESS_S+1)
+ local retries=f.gps.noProgressReplans
+ T.check(retries==1 and recoveries==0,'the first genuine stall retries before the streaming hold')
+ f:step() -- the retried route was active before terrain became late
+ f.driveReady=false
+ for _=1,70 do f:step()end
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'a world-health hold never advances progress recovery')
+ f.driveReady=true;f:step()
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'resuming does not turn the earlier retry into a teleport')
+ f:step(f.gps.AUTO_NOPROGRESS_S-1)
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries,'resuming grants a fresh full progress interval')
+ f:step(2)
+ T.check(recoveries==0 and f.gps.noProgressReplans==retries+1,'a later genuine stall starts with a retry after the hold')
+ spawn,quatFromDir,log=oldSpawn,oldQuat,oldLog
+end
+
 os.clock, package.loaded['beamngEarth/navgraph'] = savedClock, savedNav
 T.done('test_gps_autodrive')

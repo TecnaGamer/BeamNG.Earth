@@ -2094,7 +2094,12 @@ M.serverHealthy = function() return serverHealthy() end
 -- A late prefetch does not remove the ground already loaded. Let the AI keep
 -- using it; the edge guard still uses normal health and protects its boundary.
 -- Connection loss, resync and actual terrain errors continue to hold Autodrive.
-M.autodriveReady = function() return serverHealthy(true) end
+M.autodriveReady = function()
+  local g = st.guard
+  -- An overdue prefetch may wait while usable ground remains. Brake before
+  -- its warning becomes a whole-game edge pause; a healthy moving block keeps following normally.
+  return serverHealthy(true) and not (g.pausedByUs or g.mode == 'hold' or (g.mode == 'warn' and not g.healthy))
+end
 M.mpStatus = function() return mpanchor.status() end -- console: beamngEarth_core.mpStatus()
 
 -- The collidable area of the block in use (the anchor's, else the level-start flat block), or nil.

@@ -1105,6 +1105,7 @@ local function autoKeep(nodes, now)
   if not healthy then
     if not paused then veh:queueLuaCommand('ai.setMode("stop")') end
     paused, stillSince = true, nil
+    progRemaining, progAt, stuckTries = nil, nil, 0 -- waiting for the world is not failed driving
     return
   elseif paused then
     paused, routedTo = false, nil         -- back: the path given again
