@@ -8,6 +8,8 @@ M.PROBE_HEIGHTS = {0.2, 1.1}
 M.MARGIN_M = 0.25
 M.SAMPLE_S = 0.2
 M.MAX_REACH_M = 250
+M.PROBE_BUDGET_MS = 0.75 -- cooperative slice; retain the full ray/surface grid
+M.PROBE_MAX_S = 0.15    -- brake if a slow machine cannot finish within the look-ahead margin
 
 local function finite(x) return type(x)=='number' and x==x and math.abs(x)<math.huge end
 local function clamp(x,a,b) return math.max(a,math.min(b,x)) end
@@ -325,6 +327,7 @@ local path,bound,cursor,elapsed=nil,nil,1,0
 local policy,applied,lastCap,goal
 local phase,reason,detections,passes='idle',nil,0,0
 local lastProbe
+local work,checkWork
 local function release()
   if policy and ai and ai.routeSpeed==applied and ai.speedMode=='limit' then
     ai.setSpeed(policy.speed);ai.setSpeedMode(policy.mode)
@@ -341,6 +344,12 @@ local function limit(cap,legal)
   applied,lastCap=cap,cap;ai.setSpeed(cap);ai.setSpeedMode('limit')
 end
 
+-- Optional passage helpers cancel an in-flight snapshot when their policy changes.
+function M.cancelProbe()
+  work,checkWork=nil,nil
+  elapsed=M.SAMPLE_S
+end
+
 function M.speedCeiling()
   if policy then return policy.speed end
   return ai and ai.routeSpeed
@@ -349,6 +358,7 @@ end
 function M.setEnabled(on)
   M.enabled = on == true
   if not M.enabled then
+    work,checkWork=nil,nil
     local passing = goal ~= nil
     release(); goal, lastProbe = nil, nil
     phase, reason = 'disabled', nil
@@ -366,6 +376,7 @@ function M.onExtensionLoaded()
 end
 
 function M.reset()
+  work,checkWork=nil,nil
   release();path,bound,cursor,elapsed,goal=nil,nil,1,0,nil;phase,reason='idle',nil
   lastProbe=nil
 end
@@ -378,6 +389,7 @@ function M.bindPath(ids,md,started)
   if md~=bound then M.reset();bound=md end
   local changed=not path or #path~=#ids
   if not changed then for i,id in ipairs(ids)do if path[i]~=id then changed=true;break end end end
+  if changed or started then work,checkWork=nil,nil end
   if changed then path={};for i,id in ipairs(ids)do path[i]=id end;cursor=1 end
   if started then
     local cap=lastCap
@@ -436,9 +448,17 @@ local function probe()
     return unavailable()
   end
   cursor=c.cursor
-  local function cast(x,y,z,dx,dy,dz,d)return obj:castRayStatic(vec3(x,y,z),vec3(dx,dy,dz),d)end
+  local function cast(x,y,z,dx,dy,dz,d)
+    local hit=obj:castRayStatic(vec3(x,y,z),vec3(dx,dy,dz),d)
+    if checkWork then checkWork() end
+    return hit
+  end
   local surface={initial=obj:getSurfaceHeightBelow(p),origin=p,up=obj:getDirectionVectorUp(),
-    height=function(x,y,z)return obj:getSurfaceHeightBelow(vec3(x,y,z))end}
+    height=function(x,y,z)
+      local height=obj:getSurfaceHeightBelow(vec3(x,y,z))
+      if checkWork then checkWork() end
+      return height
+    end}
   local function halfWidth(p)
     return M.probeHalfWidth(p,width,c)
   end
@@ -464,7 +484,7 @@ local function probe()
   -- relative lane change; a boundary start can seed either neighbouring lane.
   local boundary=c.lane.lo+math.floor((c.lateral-c.lane.lo)/c.lane.width+.5)*c.lane.width
   if not goal and math.abs(c.lateral-boundary)<.3 then
-    return {cap=math.min(2,normalCap),legal=legal,phase='aligning',reason='lane boundary'}
+    return {cap=math.min(2,normalCap),legal=legal,phase='aligning',reason='lane boundary',brakeDistance=distance}
   end
   local objects=trafficObjects()
   local targets=goal and {goal.target} or M.adjacentLanes(c)
@@ -472,7 +492,7 @@ local function probe()
     local pass,offset,half,join,delta=M.passingCorridor(c,target,width,length,distance)
     if pass and not M.trace(pass,offset,half,cast,surface) and M.trafficClear(pass,offset,ego,objects) then
       if not goal and speed>4.5 then
-        return {cap=math.min(4,normalCap),legal=legal,phase='slowing'}
+        return {cap=math.min(4,normalCap),legal=legal,phase='slowing',brakeDistance=distance}
       end
       if not goal then goal={point=hit,target=target,needsChange=true};passes=passes+1 end
       if goal.needsChange then
@@ -484,21 +504,69 @@ local function probe()
       return {cap=4,legal=legal,phase='passing'}
     end
   end
-  return {cap=goal and 0 or normalCap,legal=legal,phase='blocked',reason='no clear legal corridor'}
+  return {cap=goal and 0 or normalCap,legal=legal,phase='blocked',reason='no clear legal corridor',brakeDistance=distance}
+end
+
+local function startProbe()
+  -- One coroutine owns one snapshot. Reset/rebind discards it before it can
+  -- publish a stale result. Timers cover execution only, excluding frame waits.
+  local timer=HighPerfTimer and HighPerfTimer()
+  local current={age=0,timer=timer}
+  work=current
+  current.thread=coroutine.create(function()
+    local p=obj:getFrontPosition()
+    current.origin={x=p.x,y=p.y,z=p.z}
+    local queries,spent=0,0
+    if timer then checkWork=function()
+      queries=queries+1
+      if queries<32 then return end
+      queries=0;spent=spent+timer:stopAndReset()
+      if spent>=M.PROBE_BUDGET_MS then
+        coroutine.yield();spent=0;timer:stopAndReset()
+      end
+    end end
+    local result=probe()
+    if result and result.brakeDistance then
+      local p,o=obj:getFrontPosition(),current.origin
+      local travel=math.sqrt((p.x-o.x)^2+(p.y-o.y)^2+(p.z-o.z)^2)
+      result.cap=math.min(result.cap,M.brakeLimit(result.brakeDistance-travel,obj:getVelocity():length(),false))
+    end
+    return result
+  end)
+end
+
+local function advanceProbe(dt)
+  local current=work
+  current.age=current.age+(dt or 0)
+  if current.timer then current.timer:stopAndReset() end
+  local ok,result=coroutine.resume(current.thread)
+  if ok and coroutine.status(current.thread)~='dead' then
+    if current.age>=M.PROBE_MAX_S then limit(0);phase,reason='probing','probe budget exceeded' end
+    return true
+  end
+  work,checkWork=nil,nil
+  return false,ok,result
 end
 
 function M.updateGFX(dt)
   if not M.enabled then
-    if policy or goal then M.setEnabled(false) end
+    if policy or goal or work then M.setEnabled(false) end
     return
   end
   if not path or not bound or not mapmgr or mapmgr.mapData~=bound or not ai or ai.mode~='manual' then
-    release();goal=nil;phase='idle';return
+    if work or policy or goal or phase~='idle' then
+      work,checkWork=nil,nil
+      release();goal=nil;phase='idle'
+    end
+    return
   end
   elapsed=elapsed+(dt or 0)
-  if elapsed<M.SAMPLE_S then return end
-  elapsed=0
-  local ok,result=pcall(probe)
+  if not work then
+    if elapsed<M.SAMPLE_S then return end
+    elapsed=0;startProbe()
+  end
+  local pending,ok,result=advanceProbe(dt)
+  if pending then return end
   if not ok then
       reason=tostring(result);phase='unavailable'
     if applied then limit(0) end
@@ -511,7 +579,7 @@ end
 
 function M.status()
   return {enabled=M.enabled,phase=phase,reason=reason,holding=applied~=nil,speedCap=applied,detections=detections,passes=passes,
-    bound=bound~=nil,probe=lastProbe}
+    bound=bound~=nil,probe=lastProbe,probePending=work~=nil}
 end
 
 return M
