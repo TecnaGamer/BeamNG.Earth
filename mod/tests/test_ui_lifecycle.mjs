@@ -55,7 +55,7 @@ function world({ replies = {}, files = {} } = {}) {
   } })
   globalThis.window = {
     bngRoutes: { added: 0, removed: 0, add() { this.added += 1 }, remove() { this.removed += 1 } },
-    bngApi: { engineLua() {} },
+    bngApi: { engineLua(cmd) { calls.push(`engineLua ${cmd}`) } },
   }
   globalThis.__H = {
     lua: { extensions: new Proxy({}, { get: (_, name) => ext(String(name)) }) },
@@ -154,6 +154,42 @@ if (run(5)) {
   const load = await timed(ui.onLoad())
   assert.ok(load.ms >= TIMEOUT_MS - 50 && load.ms < TIMEOUT_MS + 500, `timeout backstop: ${load.ms} ms`)
   assert.ok(load.error && /timed out/.test(load.error.message), "the timeout is reported")
+}
+
+// 6. our files unmounted part way through the load (Codex review): what the load had registered so far (pause tab and
+// buttons, paste listeners, routes, the page-exists flag) is rolled back before onLoad resolves
+const rolledBack = (w, what) => {
+  assert.ok(w.calls.includes("ui_pause_actions.unregisterModTab"), `${what}: pause tab removed`)
+  assert.ok(w.calls.includes("ui_router_routeManager.unregisterModRoutes"), `${what}: routes removed`)
+  assert.ok(w.calls.some(c => c.includes("setPageExists(false)")), `${what}: page-exists flag cleared`)
+  assert.ok(globalThis.window.bngRoutes.removed >= 1, `${what}: UI routes removed`)
+}
+if (run(6)) {
+  // after the pause tab: paste.js gone
+  let w = world({ files: { "./paste.js": () => missing("./paste.js") } })
+  let ui = await evaluatedCopy()
+  let load = await timed(ui.onLoad())
+  assert.ok(load.ms < QUICK_MS && load.error === null, `paste.js gone: ${load.ms} ms, ${load.error}`)
+  assert.ok(w.calls.includes("ui_pause_actions.registerModButton"), "(the tab and buttons were registered first)")
+  rolledBack(w, "paste.js gone")
+  // after the routes: earthServers.js gone
+  w = world({ files: { "./earthServers.js": () => missing("./earthServers.js") } })
+  ui = await evaluatedCopy()
+  load = await timed(ui.onLoad())
+  assert.ok(load.ms < QUICK_MS && load.error === null, `earthServers.js gone: ${load.ms} ms, ${load.error}`)
+  assert.ok(w.calls.includes("ui_router_routeManager.registerModRoutes"), "(the routes were registered first)")
+  rolledBack(w, "earthServers.js gone")
+  assert.equal(w.paste.removed, 1, "paste listeners removed")
+  // the loader's unload afterwards: nothing left to remove, nothing imported
+  const n = w.calls.length, before = w.imports.length
+  const unload = await timed(ui.onUnload())
+  assert.ok(unload.error === null && w.calls.length === n && w.imports.length === before, "unload afterwards: nothing more")
+  // a rollback whose Lua replies never come still ends (no 30 s wait)
+  w = world({ files: { "./earthServers.js": () => missing("./earthServers.js") },
+              replies: { "ui_pause_actions.unregisterModTab": never } })
+  ui = await evaluatedCopy()
+  load = await timed(ui.onLoad())
+  assert.ok(load.error === null && load.ms < TIMEOUT_MS, `rollback with a missing reply: ${load.ms} ms`)
 }
 
 console.log("test_ui_lifecycle: ok")

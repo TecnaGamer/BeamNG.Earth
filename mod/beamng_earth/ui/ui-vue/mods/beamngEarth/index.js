@@ -73,7 +73,16 @@ function enqueue(label, operation) {
       return await Promise.race([operation(lifecycle, run), expired])
     } catch (e) {
       if (run.quiet) {
-        if (run.gone) console.warn(`BeamNG.Earth: UI ${label} ended: ${run.gone}`)
+        if (run.gone) {
+          console.warn(`BeamNG.Earth: UI ${label} ended: ${run.gone}`)
+          // what this load registered before the missing file is rolled back now (its pages cannot open), on a
+          // context of its own (this run is over); the removals are sent at once, their replies are not awaited
+          if (label === "load" && lifecycle.owner === owner) {
+            lifecycle.owner = null
+            const cleanup = { active: true, expired: new Promise(() => {}), onReply() {}, error: null }
+            unloadUi(cleanup).catch(err => console.error("BeamNG.Earth: UI rollback failed", err))
+          }
+        }
         return
       }
       throw e
