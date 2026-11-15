@@ -25,8 +25,8 @@ not a universal FPS or memory guarantee. The changing round timings show noise
 and warm-cache effects. This measures the main game process, not total server,
 GPU or system memory. The benchmark restores the original feature setting.
 
-The raw local artifact is `release-city-abba.json` in the isolated test outputs;
-the table preserves its measured round values without publishing machine paths.
+The [recorded round measurements](research/2026-11-15-nl-signals-rotterdam.json)
+preserve frame statistics and sampled memory without private machine paths.
 The local NDW build is a limited public-source sample, not national coverage.
 
 ## Runtime regressions checked
@@ -43,11 +43,21 @@ mesh. Planning now uses the existing server ground-cover ribbons as well as
 drawn raised surfaces; ground ribbons sample committed quantised terrain and
 respect holes. No extra BGT data or downloaded road model is required.
 
-Final checks: 46 native geometry tests, 47 signal server tests, 20 NDW tests,
+Subsequent short-edge regressions verify that source signal stations can lie
+beyond the final graph edge. The native matcher follows compatible incoming
+degree-two shape nodes, samples the local tangent and height at the stop station,
+and never crosses another junction. This avoids missing wide approaches and
+aiming a head using a different bend farther into the intersection.
+
+Final checks: 49 native geometry tests, 47 signal server tests, 20 NDW tests,
 127 Lua modules and 4 JavaScript tests passed. Windows and Linux release builds
 completed. Linux runtime was not executed locally. Seven offline roadgeo tests
 passed; two real-source tests require cache shards absent on this machine.
-The Rotterdam run above exercised actual generated geometry instead.
+The Rotterdam run above exercised actual generated geometry instead. Its exact
+source revision is recorded above; the later shape-node matching correction is
+covered separately by the native regressions, not retroactively attributed to
+that earlier measurement. Windows test-output encoding and the partial-junction
+acknowledgement schema were also checked after CI exposed their mismatches.
 
 Placement remains inferred from source context and graph lanes. Surveyed stop
 lines and independent protected-turn timing programmes are outside this PR.
