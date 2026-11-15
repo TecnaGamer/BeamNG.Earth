@@ -3,10 +3,17 @@
 local M = {}
 local lastPath, lastMap, lastVersion, lastSpeed, lastAggression
 
-function M.reset()
+local function resetPath()
   lastPath, lastMap, lastVersion, lastSpeed, lastAggression = nil, nil, nil, nil, nil
+  if beamngEarth_staticObstacles then beamngEarth_staticObstacles.reset() end
+end
+function M.reset()
+  resetPath()
+  if beamngEarth_oncomingPass then beamngEarth_oncomingPass.reset() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.onReset() end
 end
 M.onReset = M.reset
+M.onExtensionUnloaded = M.reset
 
 -- A remaining suffix of the old path followed by new nodes. setPath appends ONLY when its first node is the
 -- old path's last node. Identical remaining paths need no command; forks, loops and shorter endpoints restart.
@@ -51,6 +58,14 @@ end
 function M.stop(mode)
   M.reset()
   ai.setMode(mode or 'stop')
+end
+
+-- Keep temporary route waits separate from cancellation and physical recovery.
+function M.hold()
+  resetPath()
+  if beamngEarth_oncomingPass then beamngEarth_oncomingPass.suspend() end
+  if beamngEarth_maneuverClearance then beamngEarth_maneuverClearance.suspend() end
+  ai.setMode('stop')
 end
 
 -- GE plans from the vehicle reference point; the stock AI drives from obj:getFrontPosition(). A queued restart
@@ -126,6 +141,10 @@ function M.drive(ids, version, force, speed, aggression)
   lastPath = {}
   for i, id in ipairs(ids) do lastPath[i] = id end
   lastMap, lastVersion, lastSpeed, lastAggression = md, version, speed, aggression
+  if not beamngEarth_staticObstacles and extensions and extensions.load then
+    extensions.load('beamngEarth_staticObstacles')
+  end
+  if beamngEarth_staticObstacles then beamngEarth_staticObstacles.bindPath(lastPath,md,action=='start') end
   return action
 end
 

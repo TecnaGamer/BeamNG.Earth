@@ -27,9 +27,10 @@ local function fixture(path, y, radius, configure)
     setStopPoint = function(_, distance) f.stopDistance = distance end }
   env.mapmgr = { requestMap = function() f.requests = f.requests + 1 end }
   env.obj = { queueGameEngineLua = function() G.retryAutodrive() end }
-  env.extensions = { load = function()
-    local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/autodrive.lua'))
-    env.beamngEarth_autodrive = setfenv(loader, env)()
+  env.extensions = { load = function(name)
+    local files={beamngEarth_autodrive='autodrive',beamngEarth_staticObstacles='staticObstacles'}
+    local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/' .. assert(files[name]) .. '.lua'))
+    env[name] = setfenv(loader, env)()
   end }
   function f:mapArrives()
     local graph = {}

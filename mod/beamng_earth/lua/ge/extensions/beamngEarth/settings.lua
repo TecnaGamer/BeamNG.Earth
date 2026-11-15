@@ -158,6 +158,7 @@ M.SCHEMA = {
   -- after a teleport the server on every CPU core and the game on two, until the new place is loaded (server
   -- cpupin.full_split, read at each teleport; the user, 2026-10-31)
   teleportPriority = { kind = 'bool', default = false, label = 'Full priority loading (joining, teleports)' },
+  autodriveObstacles = { kind = 'bool', default = false, label = 'Autodrive obstacle avoidance' },
   -- the most memory the world server may hold, all its processes together (server budget.py / memwatch.py; read from
   -- this file when it starts, cpupin.player_settings, and sent at once when changed: core.memorySetLimit). 'auto': a
   -- third of the RAM (at least 1.5 GB), 60 % of it on a 24 GB or bigger machine (at most 24 GB)
@@ -183,7 +184,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
-  'devMapKm' }
+  'devMapKm', 'autodriveObstacles' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
@@ -531,6 +532,11 @@ local function inOurLevel()
 end
 
 M.APPLY = {
+  autodriveObstacles = function(v)
+    if be and be.queueAllObjectLua then
+      be:queueAllObjectLua("if beamngEarth_staticObstacles and beamngEarth_staticObstacles.setEnabled then beamngEarth_staticObstacles.setEnabled(" .. tostring(v) .. ') end')
+    end
+  end,
   rebaseDistance = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRebaseDistance then core.setRebaseDistance(v) else rebase.setDistance(v) end
