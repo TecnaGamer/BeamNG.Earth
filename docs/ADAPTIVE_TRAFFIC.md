@@ -8,8 +8,13 @@ Both parts are off by default: neither has been checked in game yet.
 
 `server/traffic.py` combines a smooth nearest-settlement curve with drivable-road length sampled inside a 750 m radius.
 The settlement catalogue is the bundled Natural Earth populated-place layer in `maplayers.js` (`server/settlements.py`,
-no network); its scalerank is only a coarse settlement-size proxy. Road density, built-up share and road class
-contribute to the target, while motorway mainlines and confirmed divided carriageways (a matched median) double it.
+no network); its scalerank is only a coarse settlement-size proxy. Road density, built-up share, functional road class,
+and mapped lane count contribute to the target:
+- **Road functional class multipliers**: `motorway` ($2.0\times$), `trunk` ($1.6\times$), `primary` ($1.3\times$), `secondary` ($1.0\times$),
+  `tertiary` ($0.75\times$), `residential`/`unclassified` ($0.40\times$), `living_street` ($0.15\times$), `service` ($0.10\times$),
+  and `track` ($0.02\times$).
+- **Lane scaling**: Scaled sublinearly with resolved lane count ($\sqrt{\text{lanes} / 2.0}$ on standard roads, $\sqrt{\text{lanes} / 4.0}$ on motorways).
+- **Divided carriageways / motorways**: Retain a minimum $1.8\times\text{--}2.0\times$ capacity multiplier.
 Tracks and busways do not count as traffic roads. When the settlement catalogue or player coordinates are unavailable,
 the model falls back to the mapped road network.
 
@@ -21,11 +26,12 @@ rough-road flag on its graph edges (`navgraph.ROUGH_SMOOTHNESS`, the edge's 11th
 The speeding traffic (`speeding.lua`) keeps to the limit there instead of its habit over it (`navgraph.speedProfileAt`).
 
 In the game (`navgraph.lua`, `M.ADAPTIVE`, Settings > World > Adaptive traffic amount) the stock traffic's active
-amount (`gameplay_traffic.setActiveAmount`) moves toward the profile's target by one car at most every 5 s, never above
-the player's own amount (the ceiling found before it was touched, or the cars spawned). After a teleport the new
-place's amount is set at once instead of the old one. It waits while the pool is held for a teleport and while an
-occupied traffic car is protected; an amount changed by someone else (the radial menu, the game's UI) becomes the
-player's amount, a ceiling of 0 (traffic toggled off) is left alone, and switching the setting off puts the player's
+amount (`gameplay_traffic.setActiveAmount`) moves toward the profile's target by one car at most every 5 s, modulated
+by the local diurnal time curve (`M.timeFactor()` from `distanttraffic.lua`'s 24-hour cycle: morning/evening rush peak vs
+quiet night lull), never above the player's own amount (the ceiling found before it was touched, or the cars spawned). After
+a teleport the new place's amount is set at once instead of the old one. It waits while the pool is held for a teleport
+and while an occupied traffic car is protected; an amount changed by someone else (the radial menu, the game's UI) becomes
+the player's amount, a ceiling of 0 (traffic toggled off) is left alone, and switching the setting off puts the player's
 amount back. The check runs once a second. `beamngEarth_core.status().trafficAdaptive` shows the state.
 
 ## Junction priority (BNE_PRIORITY_STOPS=on, off by default)

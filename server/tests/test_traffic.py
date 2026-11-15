@@ -121,6 +121,50 @@ class SettlementDistanceTest(unittest.TestCase):
         values = [profile_at(d, density=0)["target"] for d in (199.0, 199.5, 200.0, 200.5, 201.0)]
         self.assertTrue(all(abs(b - a) < 0.02 for a, b in zip(values, values[1:])), values)
 
+    def test_road_class_multipliers_scale_target(self):
+        total = metres_for_density(4.5)
+        kw = dict(settlement=None, sample_radius_m=traffic.SAMPLE_RADIUS_M, max_traffic=15)
+        p_motorway = traffic.calculate(total, 0, total, 0, road_class="motorway", **kw)
+        p_primary = traffic.calculate(total, 0, total, 0, road_class="primary", **kw)
+        p_secondary = traffic.calculate(total, 0, 0, total, road_class="secondary", **kw)
+        p_residential = traffic.calculate(total, 0, 0, total, road_class="residential", **kw)
+        p_service = traffic.calculate(total, 0, 0, total, road_class="service", **kw)
+        p_track = traffic.calculate(total, 0, 0, total, road_class="track", **kw)
+
+        self.assertGreater(p_motorway["target"], p_primary["target"])
+        self.assertGreater(p_primary["target"], p_secondary["target"])
+        self.assertGreater(p_secondary["target"], p_residential["target"])
+        self.assertGreater(p_residential["target"], p_service["target"])
+        self.assertGreater(p_service["target"], p_track["target"])
+        self.assertEqual(p_motorway["roadMultiplier"], 2.0)
+        self.assertAlmostEqual(p_primary["roadMultiplier"], 1.3, places=2)
+        self.assertAlmostEqual(p_residential["roadMultiplier"], 0.4, places=2)
+        self.assertAlmostEqual(p_track["roadMultiplier"], 0.02, places=2)
+
+    def test_lane_count_scales_target_with_diminishing_returns(self):
+        total = metres_for_density(4.5)
+        kw = dict(settlement=None, road_class="motorway", sample_radius_m=traffic.SAMPLE_RADIUS_M, max_traffic=100)
+        p_2lane = traffic.calculate(total, 0, total, 0, lanes=2, **kw)
+        p_4lane = traffic.calculate(total, 0, total, 0, lanes=4, **kw)
+        p_8lane = traffic.calculate(total, 0, total, 0, lanes=8, **kw)
+
+        self.assertGreater(p_8lane["target"], p_4lane["target"])
+        self.assertGreater(p_4lane["target"], p_2lane["target"])
+        self.assertEqual(p_4lane["roadLanes"], 4)
+        self.assertEqual(p_8lane["roadLanes"], 8)
+        # 8 lanes vs 4 lanes has sqrt(8/4) = sqrt(2) ~ 1.414 ratio
+        ratio = p_8lane["roadMultiplier"] / p_4lane["roadMultiplier"]
+        self.assertAlmostEqual(ratio, math.sqrt(2.0), places=2)
+
+    def test_road_lanes_attribute_parsing(self):
+        total = metres_for_density(2.0)
+        p_valid = traffic.calculate(total, 0, 0, 0, settlement=None, lanes="4")
+        self.assertEqual(p_valid["roadLanes"], 4)
+        p_nan = traffic.calculate(total, 0, 0, 0, settlement=None, lanes=float("nan"))
+        self.assertIsNone(p_nan["roadLanes"])
+        p_none = traffic.calculate(total, 0, 0, 0, settlement=None, lanes=None)
+        self.assertIsNone(p_none["roadLanes"])
+
 
 if __name__ == "__main__":
     unittest.main()

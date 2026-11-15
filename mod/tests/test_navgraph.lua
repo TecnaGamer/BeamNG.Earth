@@ -310,6 +310,16 @@ do
   T.check(N.adaptiveTarget(4.4, 10) == 4 and N.adaptiveTarget(4.6, 10) == 5 and N.adaptiveTarget(64, 12) == 12
     and N.adaptiveTarget(-1, 10) == 0 and N.adaptiveTarget(nil, 10) == nil and N.adaptiveTarget(0 / 0, 10) == nil,
     'adaptive target: rounded, capped at the player\'s amount, never negative')
+  T.check(N.adaptiveTarget(10, 15, 0.5) == 5 and N.adaptiveTarget(10, 4, 1.0) == 4
+    and N.adaptiveTarget(10, 15, 0.1) == 1 and N.adaptiveTarget(10, 15, 0) == 10,
+    'adaptive target: diurnal time factor scaling, capped by player ceiling')
+  T.check(N.timeFactor() == 1.0, 'timeFactor defaults to 1.0 when environment tod is absent')
+  local env0 = rawget(_G, 'core_environment')
+  core_environment = { getTimeOfDay = function() return { time = 0.208333 } end } -- (0.208333 + 0.5) % 1.0 * 24 = 17:00 (5 PM peak)
+  T.check(N.timeFactor() >= 0.95, 'timeFactor peak hour at 17:00 is near 1.0')
+  core_environment = { getTimeOfDay = function() return { time = 0.666666 } end } -- (0.666666 + 0.5) % 1.0 * 24 = 04:00 (4 AM night)
+  T.check(N.timeFactor() <= 0.15, 'timeFactor early morning at 04:00 is near minimum floor')
+  core_environment = env0
   T.check(N.adaptiveStep(12, 7) == 11 and N.adaptiveStep(3, 8) == 4 and N.adaptiveStep(5, 5) == 5,
     'adaptive step: one car at a time')
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
