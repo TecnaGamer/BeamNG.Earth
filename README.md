@@ -557,7 +557,9 @@ BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive t
 Leaving a server turns BeamNG.Earth back on (joining one switches your other mods off).
 
 You are sent to where the others are. Cars show in the right place in everyone's world; other players show on the
-world map (**M**) as green arrows; players far away (another country) are hidden until you meet. Crash damage: a crash
+world map (**M**) as green arrows; players far away (another country) are hidden until you meet. A far player's car
+isn't even loaded on your computer until it comes within about 15 miles (then it appears with its latest parts and
+paint, by BeamMP's own spawn queue settings), so far players spawning or changing cars don't freeze your game. Crash damage: a crash
 you watch keeps the damage your own game worked out; a car that crashed out of your sight takes on its owner's damage
 (broken parts and dents) once it comes within about 0.6 miles.
 
