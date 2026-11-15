@@ -476,14 +476,17 @@ so keep `"request": false` in the switch file.
 (`server/roadz.py`). A cold Manhattan visit downloaded 698 MB in 2,538 requests for that (54 % of all its bytes), and
 kept about 2 MB of answers. The answers arrived after the first road plans, so every near cell was planned twice.
 The builder measures popular places once with the same code (`tools/build_lidarz.py`) and publishes the answers per
-map cell (`server/lidarz.py`, `native/earthfast/src/lidarz.rs`). Manhattan's 117 cells with lidar answers are 15
-blocks, 1.2 MB in all; the 12 cells round the teleport point are 4 blocks, 0.67 MB.
+map cell (`server/lidarz.py`, `native/earthfast/src/lidarz.rs`). The 12 cells round a Manhattan teleport point are
+4 blocks, 0.59 MB, where the builder read 114 MB of point clouds in 250 requests for them.
 
 **Same result, or no result.** A client uses a cell's record only when it would have measured exactly the same thing.
 Otherwise it reads the lidar itself, as before. A record's key holds a digest of the cell's inputs: its bridge and
-approach lines from the client's own map, their widths, and the 3DEP datasets to read. The record also holds a digest
-of the builder's DEM heights along those lines, which the client compares with its own. Another map release or DEM
-changes only the cells it touches. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
+approach lines from the client's own map, their widths, and the 3DEP datasets to read. The record also holds every
+point where the builder's measuring read our DEM (the datum's ground points beside the road, the deck ends, the
+stations of the stretches and approaches) and a digest of the heights it read; the client reads its own DEM at the
+same points and compares. Another map release or DEM changes only the cells it touches. A cell taken from the CDN
+keeps its record beside its cache file (`roadz/.../<y>.npz.lidarz`) and is checked again each time a process reads
+it from disk; when the map, the DEM or the lkey no longer agree, or the switch is off, the cell is made again. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
 kernels' versions and every constant the measuring reads. It does not hold the server release, so a build stays
 valid across updates until those rules change.
 
@@ -511,10 +514,10 @@ By hand, the same as the decision archives with these names:
 ```sh
 python3 tools/build_lidarz.py build --places "manhattan" --cache ~/bnge-builder/decisions-cache \
     --out ~/bnge-builder/dec-out --key ~/bnge-builder/decisions-signing.key --procs 2
-aws s3 sync <out>/lz1/<lkey>/12 s3://<bucket>/lz/lz1/<lkey>/12 --exclude "*" --include "*.bnlz" \
+aws s3 sync <out>/lz2/<lkey>/12 s3://<bucket>/lz/lz2/<lkey>/12 --exclude "*" --include "*.bnlz" \
     --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream \
     --cache-control "public, max-age=31536000, immutable"
-aws s3 cp <out>/lz1/<lkey>/manifest.bnlm s3://<bucket>/lz/lz1/<lkey>/manifest.bnlm \
+aws s3 cp <out>/lz2/<lkey>/manifest.bnlm s3://<bucket>/lz/lz2/<lkey>/manifest.bnlm \
     --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream --cache-control "no-cache"
 ```
 

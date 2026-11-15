@@ -779,6 +779,16 @@ class RoadZ:
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                        # (a cell the CDN's product gave (its record beside it, lidarz.KEPT): taken again only while
+                        # this server's map, DEM and lkey still make the builder's measurement, else measured anew;
+                        # Codex review of 206afb6f)
+                        if os.path.exists(p + lidarz.KEPT) and not lidarz.kept_ok(self, key, got, p + lidarz.KEPT):
+                            for q in (p + lidarz.KEPT, p + ".gaps.json", p):
+                                try:
+                                    os.remove(q)
+                                except OSError:
+                                    pass
+                            raise ValueError("a CDN cell no longer this server's measurement")
                     # (used: the download cache's eviction takes a file's mtime for its last use when this server's
                     # own process did not read it, and these are read in the workers; a cell read on every visit was
                     # as old as its download, among the first evicted when the disk ran short of its reserve, and
@@ -821,11 +831,18 @@ class RoadZ:
                         if src == "lidar":
                             import staging
                             os.makedirs(os.path.dirname(p), exist_ok=True)
+                            if getattr(got, "lidarz", None) is not None:
+                                lidarz.keep(got, p + lidarz.KEPT)   # (first: never its lines without their identity)
                             tmp = staging.tmp_for(p + ".gaps.json")
                             with open(tmp, "w", encoding="utf-8") as fh:
                                 json.dump([[f, list(a), list(b)] for f, a, b in getattr(got, "gaps", [])], fh)
                             staging.replace_cached(tmp, p + ".gaps.json")
                         got.save(p)
+                        if src == "lidar" and getattr(got, "lidarz", None) is None:
+                            try:                # (measured here: no CDN cell's record any more)
+                                os.remove(p + lidarz.KEPT)
+                            except OSError:
+                                pass
                         if src == "lidar":      # (the cell whole on disk: its partial node reads have done their job)
                             import shutil
                             shutil.rmtree(os.path.join(self.dir, "eptparts", str(key).replace("/", "_")),
@@ -1664,7 +1681,10 @@ class RoadZ:
                 if pre:
                     f = self._path(src, key)
                     if f and os.path.exists(f):
-                        build(key)          # (a read of the files on disk)
+                        if src == "lidar":
+                            from_cdn(key)   # (the files on disk; a kept CDN cell no longer ours: the CDN, not a read)
+                        else:
+                            build(key)      # (a read of the files on disk)
                         continue
                     self._want(src, key)    # (asked of the server's prefetch)
                     if src == "lidar" and lidarz.enabled():
@@ -1716,13 +1736,20 @@ class RoadZ:
 
     # ---- heights for a map road ----
     def _dem_raw(self, la, lo):
+        """Our DEM's heights at (la, lo) (DEM_ZOOM). Every call is logged while this thread's _tl.dem_log is a list
+        (the lidarz builder: where the measuring read the DEM, and what it read there, lidarz.measure)."""
         d = getattr(self.md, "dem", None) if self.md is not None else None
         if d is None and self.md is not None:
             import gradesep
             d = gradesep._dem(self.md)
         if d is None:
-            return np.full(len(np.atleast_1d(la)), np.nan)
-        return np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+            out = np.full(len(np.atleast_1d(la)), np.nan)
+        else:
+            out = np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+        rec = getattr(_tl, "dem_log", None)
+        if rec is not None:
+            rec.append((np.array(la, np.float64).ravel(), np.array(lo, np.float64).ravel(), np.array(out).ravel()))
+        return out
 
     def _cell_offset(self, src, key, ln):
         mk = (src, str(key))

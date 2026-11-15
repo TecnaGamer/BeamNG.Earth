@@ -46,12 +46,26 @@ class FakeDem:
         return np.full(np.shape(la), self.z, np.float64)
 
 
+class OffDem(FakeDem):
+    """FLAT within 4 m of the overpass's line (y = 0, FRAME), FLAT + rise beyond: a DEM revision away from the road
+    centre line, where the lidar's ground points (the datum) are sampled but no point of the map's lines is."""
+
+    def __init__(self, rise):
+        super().__init__(FLAT)
+        self.rise = rise
+
+    def sample(self, la, lo, zoom):
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        y = np.asarray(FRAME.geodetic_to_enu(la, lo, 0.0)[1], np.float64)
+        return np.where(np.abs(y) > 4.0, FLAT + self.rise, FLAT).reshape(np.shape(la))
+
+
 class MD:
-    """The overpass's roads (test_approaches) on a flat DEM at dem."""
+    """The overpass's roads (test_approaches) on a flat DEM at dem (or a DEM object)."""
 
     def __init__(self, feats=None, dem=FLAT):
         self.feats = overpass() if feats is None else feats
-        self.dem = FakeDem(dem)
+        self.dem = dem if hasattr(dem, "sample") else FakeDem(dem)
 
     def cell(self, key, layers=None, kind=None):
         class C:
@@ -185,12 +199,16 @@ class RecordTest(unittest.TestCase):
 
     def test_round_trip_bit_for_bit(self):
         ln = self.lines()
-        rec = lidarz.encode(ln, b"\x05" * 32)
-        back, dem = lidarz.decode(rec)
+        calls = [2, 0, 1]
+        pts = np.array([[39.28, -76.6], [39.2801, -76.5999], [39.29, -76.59]])
+        rec = lidarz.encode(ln, b"\x05" * 32, calls, pts)
+        back, dem, calls2, pts2 = lidarz.decode(rec)
+        self.assertEqual(calls2, calls)
+        self.assertEqual(pts2.tobytes(), pts.tobytes(), "where the builder read the DEM, bit for bit")
         self.assertEqual(dem, b"\x05" * 32)
         self.assertTrue(same(ln, back))
         self.assertEqual(back.ref.dtype, ln.ref.dtype)
-        self.assertEqual(lidarz.encode(back, dem), rec, "deterministic")
+        self.assertEqual(lidarz.encode(back, dem, calls2, pts2), rec, "deterministic")
         with tempfile.TemporaryDirectory() as d:
             ln.save(os.path.join(d, "a.npz"))
             back.save(os.path.join(d, "b.npz"))
@@ -198,10 +216,10 @@ class RecordTest(unittest.TestCase):
             a.gaps, b.gaps = ln.gaps, back.gaps
             self.assertTrue(same(a, b), "the same cell file on disk")
         empty = roadz.Lines.build([], corrected=True)
-        self.assertTrue(same(empty, lidarz.decode(lidarz.encode(empty, bytes(32)))[0]))
+        self.assertTrue(same(empty, lidarz.decode(lidarz.encode(empty, bytes(32), [], np.zeros((0, 2))))[0]))
 
     def test_damaged_record_refused(self):
-        rec = lidarz.encode(self.lines(), bytes(32))
+        rec = lidarz.encode(self.lines(), bytes(32), [1], np.array([[39.28, -76.6]]))
         for bad in (rec[:-1], rec + b"\0", b"BLZC" + bytes(60), rec[:4] + b"\x09" + rec[5:]):
             with self.assertRaises(ValueError):
                 lidarz.decode(bad)
@@ -253,7 +271,7 @@ class ProductTest(unittest.TestCase):
         roadz.LIDAR_FETCH_THREADS = 2
         lidarz._STORES.clear()
         Handler.hits = []
-        shutil.rmtree(os.path.join(self.web, "lz1"), ignore_errors=True)
+        shutil.rmtree(os.path.join(self.web, f"lz{lidarz.FORMAT}"), ignore_errors=True)
         self.n = 0
 
     def tearDown(self):
@@ -272,10 +290,8 @@ class ProductTest(unittest.TestCase):
         """The builder's: (Lines, its record, its item key) measured from the point clouds (lidarz off)."""
         with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
             rz = provider(self.cache(), md, files or self.files)
-            parts, cands, names = rz.lidar_inputs(KEY)
-            got = rz._lidar(KEY)
-            rec = lidarz.encode(got, lidarz.dem_digest(rz, parts, cands))
-            ikey = lidarz.item_key((KEY.z, KEY.x, KEY.y), lidarz.inputs_digest(KEY, parts, cands, names))
+            got, rec, ikey = lidarz.record_for(rz, KEY)
+            self.assertTrue(same(got, rz._lidar(KEY)), "what this server measures")
         return got, rec, ikey
 
     def publish(self, items, seed=SEED, domain="lidarz", lk=None):
@@ -284,7 +300,7 @@ class ProductTest(unittest.TestCase):
         bx, by = decisions.block_of((KEY.z, KEY.x, KEY.y))
         body = ef.dec_pack_block(12, bx, by, vkb, [(k, v, False) for k, v in items.items()], seed, domain=domain)
         h = hashlib.sha256(body).hexdigest()[:16]
-        root = os.path.join(self.web, "lz1", vk)
+        root = os.path.join(self.web, f"lz{lidarz.FORMAT}", vk)
         decisions._write(os.path.join(root, "12", str(bx), f"{by}.{h}.bnlz"), body)
         man = {"format": lidarz.FORMAT, "vkey": vk, "doc": lidarz.lkey_doc(), "blocks": [[bx, by, h]]}
         decisions._write(os.path.join(root, "manifest.bnlm"),
@@ -386,7 +402,7 @@ class ProductTest(unittest.TestCase):
         vk = lidarz.lkey()[0]
         bx, by = decisions.block_of((KEY.z, KEY.x, KEY.y))
         h = hashlib.sha256(body).hexdigest()[:16]
-        p = os.path.join(self.web, "lz1", vk, "12", str(bx), f"{by}.{h}.bnlz")
+        p = os.path.join(self.web, f"lz{lidarz.FORMAT}", vk, "12", str(bx), f"{by}.{h}.bnlz")
         b = bytearray(body)
         b[-1] ^= 1
         Path(p).write_bytes(bytes(b))
@@ -429,6 +445,80 @@ class ProductTest(unittest.TestCase):
         self.assertTrue(same(mine, ln), "measured on this server's own DEM")
         self.assertFalse(same(mine, got), "(the DEM matters: the datum and the stretches move with it)")
         self.assertEqual(st.get("dem"), 1)
+
+    def test_dem_change_off_the_centre_line_misses(self):
+        """Codex review of 206afb6f [high]: a DEM revision only where the datum's ground points are (beside the road,
+        not on its line) changes what this server would measure; the record must not stand in for it."""
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        md = MD(dem=OffDem(0.6))
+        mine, _r, _k = self.measured(md)
+        self.assertFalse(same(mine, got), "(the off-centre DEM moves the measurement)")
+        st = {}
+        ln = self.fallback(md=md, stats=st)
+        self.assertTrue(same(mine, ln), "measured on this server's own DEM, not the builder's record")
+        self.assertEqual(st.get("dem"), 1)
+
+    def test_builder_reuses_a_record_only_on_the_same_dem(self):
+        """The builder's work records (build_lidarz: a cell made before is not read again) follow the same identity: a
+        DEM revision beside the road makes the cell be measured again."""
+        _got, rec, _ikey = self.measured()
+        self.assertTrue(lidarz.record_ok(provider(self.cache(), files=None), rec))
+        self.assertFalse(lidarz.record_ok(provider(self.cache(), MD(dem=OffDem(0.6)), files=None), rec))
+        _lines, _dem, _calls, samples = lidarz.decode(rec)
+        y = FRAME.geodetic_to_enu(samples[:, 0], samples[:, 1], 0.0)[1]
+        self.assertGreater(float(np.max(np.abs(y))), 4.0, "(the record holds the datum's ground points beside the road)")
+
+    def persisted(self):
+        """A cache whose cell came from the CDN (on disk now), and its cache folder."""
+        got, rec, ikey = self.measured()
+        self.publish({ikey: rec})
+        cache = self.cache()
+        ln = provider(cache, files=None).lines("lidar", KEY)
+        self.assertTrue(same(got, ln))
+        return got, cache
+
+    def reread(self, cache, md=None, expect_reads=True):
+        """The cell asked again by a new process (another RoadZ) on the same cache."""
+        lidarz._STORES.clear()
+        asked = []
+        rz = provider(cache, md, self.files, asked)
+        ln = rz.lines("lidar", KEY)
+        self.assertEqual(bool(asked), expect_reads)
+        return ln
+
+    def test_a_kept_cdn_cell_is_kept_while_its_inputs_hold(self):
+        got, cache = self.persisted()
+        self.assertTrue(same(got, self.reread(cache, expect_reads=False)))
+
+    def test_a_kept_cdn_cell_is_dropped_when_the_map_changes(self):
+        """Codex review of 206afb6f [high]: the CDN's lines kept on disk were taken on the next visit whatever the map
+        said by then; they are checked again against this server's inputs, and measured here when they differ."""
+        _got, cache = self.persisted()
+        md = MD(self.moved())
+        mine, _r, _k = self.measured(md)
+        self.assertTrue(same(mine, self.reread(cache, md)), "measured along the new map's line")
+
+    def test_a_kept_cdn_cell_is_dropped_when_the_dem_changes(self):
+        _got, cache = self.persisted()
+        md = MD(dem=OffDem(0.6))
+        mine, _r, _k = self.measured(md)
+        self.assertTrue(same(mine, self.reread(cache, md)))
+
+    def test_a_kept_cdn_cell_is_dropped_when_the_product_is_off(self):
+        got, cache = self.persisted()
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            self.assertTrue(same(got, self.reread(cache)), "measured here (the same lines: the same inputs)")
+        self.assertFalse(os.path.exists(os.path.join(cache, "roadz", f"v{roadz.VERSION}", "lidar", str(KEY.z),
+                                                     str(KEY.x), f"{KEY.y}.npz.lidarz")),
+                         "a cell measured here is no CDN cell any more")
+
+    def moved(self):
+        import test_roads
+        return test_roads.features([[(-400, 0.5), (400, 0.5)], [(-12, -500), (-12, 500)], [(12, 500), (12, -500)]],
+                                   ["secondary", "motorway", "motorway"],
+                                   flags=[(0, "is_bridge", (400 - 35) / 800, (400 + 35) / 800)],
+                                   ids=["cross", "i20n", "i20s"])
 
     def test_planning_process_takes_the_cdn_instead_of_the_rule(self):
         """A planning process of a server run (the prefetch reads the lidar; nothing on disk yet) takes the CDN's

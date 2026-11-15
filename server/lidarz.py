@@ -12,8 +12,18 @@ and before anything is read. A hit is the builder's Lines, bit for bit (earthfas
 goes the same way as one measured here (lines(): on disk under the same name, the same gaps). Anything else is a miss
 and the lidar is read as before: off, no manifest, a block not built, a network error, a block whose signature, name
 hash, cell or version key do not check out, a record that does not decode, a cell whose inputs differ from the
-builder's (another map: another inputs digest in the item's key), a DEM that differs from the builder's at the
-inputs' probe points (the record's dem digest).
+builder's (another map: another inputs digest in the item's key), a DEM that gives other heights than the builder's
+anywhere the builder's measuring read it (FORMAT 2: the record holds every DEM read of the measuring, call by call,
+and the digest of what it read; this server reads its own DEM at the same points the same way and compares: the
+datum's ground points beside the roads, the deck ends, the stretches' and approaches' stations; FORMAT 1 checked
+points along the map's lines only, Codex review of 206afb6f).
+
+A hit kept on disk keeps its identity (KEPT: the record, its lkey and item key, beside the cell's files, written
+first): RoadZ.lines takes such a cell from disk again only while kept_ok holds (the product on, the same lkey, the
+same inputs from this server's map, the same DEM heights at the record's points, the record's lines the file's);
+else the cell's files are removed and it is made again (the CDN, or measured here). A cell measured here drops it.
+The per-process memory of RoadZ (_mem) needs no identity of its own: one process's map release, DEM and lkey do not
+change while it runs, and a cell is checked when it is read from disk into it.
 
 The key (staleness: nothing measured under other rules or another DEM may stand in). The version key (lkey: sha256
 of lkey_doc) holds this product's layout (FORMAT), roadz.VERSION (the local cells' folder: any change of what the lidar
@@ -46,7 +56,9 @@ import mapcells
 log = logging.getLogger("earthd.lidarz")
 
 NATIVE = 303                    # earthfast: lz_* and the dec_* functions' domain
-FORMAT = 1                      # the layout, lkey_doc and the cell records (earthfast LZ_CELL_FORMAT 1)
+FORMAT = 2                      # the layout, lkey_doc and the cell records (earthfast LZ_CELL_FORMAT 2; 2: every
+                                # DEM read of the measuring in the record, Codex review of 206afb6f)
+KEPT = ".lidarz"                # a CDN cell's identity beside its roadz file (<y>.npz.lidarz: keep / kept_ok)
 ENV = "BNGE_LIDARZ"
 URL_ENV = "BNGE_LIDARZ_URL"
 SUBDIR = "lidarz"
@@ -78,7 +90,7 @@ def lkey_doc():
     import roadz
     return {"lz": FORMAT, "roadz": roadz.VERSION, "native": [roadz.NATIVE, roadz.GAP_NATIVE],
             "params": {k: getattr(roadz, k) for k in PARAMS}, "gaps": bool(roads.LIDAR_GAPS_ON),
-            "dem": [dem.DECODED_VERSION, roadz.DEM_ZOOM], "probes": int(fast._ef.LZ_PROBES_MAX)}
+            "dem": [dem.DECODED_VERSION, roadz.DEM_ZOOM], "cell": int(fast._ef.LZ_CELL_FORMAT)}
 
 
 def lkey():
@@ -113,16 +125,39 @@ def inputs_digest(key, parts, cands, names):
                                            [str(n) for n in names]))
 
 
-def dem_digest(rz, parts, cands):
-    """The digest of our DEM's heights (rz._dem_raw: what the measuring reads) at the inputs' probe points."""
-    rings, _h, _f = _rings(parts, cands)
-    pts = np.asarray(fast._ef.lz_probe_points(rings), np.float64)
-    vals = rz._dem_raw(pts[:, 1], pts[:, 0]) if len(pts) else np.zeros(0)
-    return bytes(fast._ef.lz_dem_digest(np.ascontiguousarray(np.asarray(vals, np.float64))))
+def measure(rz, key):
+    """The builder's: (Lines with .gaps, calls, samples (m, 2) lat / lon, dem digest) of cell key measured from the
+    point clouds (rz._lidar), with every DEM read it made (roadz._tl.dem_log) and the digest of what it read."""
+    import roadz
+    log_ = roadz._tl.dem_log = []
+    try:
+        got = rz._lidar(key)
+    finally:
+        roadz._tl.dem_log = None
+    calls = [len(la) for la, _lo, _v in log_]
+    samples = (np.stack([np.concatenate([la for la, _lo, _v in log_]), np.concatenate([lo for _la, lo, _v in log_])], 1)
+               if log_ else np.zeros((0, 2)))
+    vals = np.concatenate([v for _la, _lo, v in log_]) if log_ else np.zeros(0)
+    return got, calls, np.ascontiguousarray(samples, np.float64), _digest(vals)
 
 
-def encode(lines, dem):
-    """A cell record (earthfast lz_encode_cell) of a roadz.Lines (with its .gaps) and the builder's dem digest."""
+def _digest(vals):
+    return bytes(fast._ef.lz_dem_digest(np.ascontiguousarray(np.asarray(vals, np.float64).ravel())))
+
+
+def dem_replay(rz, calls, samples):
+    """The digest of this server's DEM at the record's points, read call by call as the builder read them."""
+    out, i = [], 0
+    for n in calls:
+        la, lo = samples[i:i + n, 0], samples[i:i + n, 1]
+        out.append(np.asarray(rz._dem_raw(np.ascontiguousarray(la), np.ascontiguousarray(lo)), np.float64).ravel())
+        i += n
+    return _digest(np.concatenate(out) if out else np.zeros(0))
+
+
+def encode(lines, dem, calls, samples):
+    """A cell record (earthfast lz_encode_cell) of a roadz.Lines (with its .gaps), the builder's dem digest and its DEM
+    reads (calls: each read's points; samples (m, 2) lat / lon)."""
     n = len(lines)
     refs = [str(v) for v in lines.ref] if len(lines.ref) else [""] * n
     names = [str(v) for v in lines.name] if len(lines.name) else [""] * n
@@ -131,16 +166,82 @@ def encode(lines, dem):
                                          np.ascontiguousarray(lines.z, np.float64),
                                          np.ascontiguousarray(lines.off, np.int64),
                                          np.ascontiguousarray(lines.level, np.int8), refs, names,
-                                         bool(lines.corrected), gaps, dem))
+                                         bool(lines.corrected), gaps, dem, [int(c) for c in calls],
+                                         np.ascontiguousarray(np.asarray(samples, np.float64).reshape(-1, 2))))
 
 
 def decode(buf):
-    """(roadz.Lines with .gaps, dem digest) of a cell record; ValueError when it is damaged."""
+    """(roadz.Lines with .gaps, dem digest, calls, samples) of a cell record; ValueError when it is damaged."""
     import roadz
-    lonlat, z, off, level, refs, names, corrected, gaps, dem = fast._ef.lz_decode_cell(buf)
+    lonlat, z, off, level, refs, names, corrected, gaps, dem, calls, samples = fast._ef.lz_decode_cell(buf)
     got = roadz.Lines(lonlat, z, off, level, refs, names, corrected)
     got.gaps = [(str(f), (float(a[0]), float(a[1])), (float(b[0]), float(b[1]))) for f, a, b in gaps]
-    return got, bytes(dem)
+    return got, bytes(dem), [int(c) for c in calls], np.asarray(samples, np.float64)
+
+
+def record_for(rz, key):
+    """The builder's: (Lines, record, item key) of cell key, or None (nothing a server would read there)."""
+    parts, cands, names = rz.lidar_inputs(key)
+    if not parts or not names:
+        return None
+    ikey = item_key((int(key[0]), int(key[1]), int(key[2])), inputs_digest(key, parts, cands, names))
+    got, calls, samples, dem = measure(rz, key)
+    return got, encode(got, dem, calls, samples), ikey
+
+
+def record_ok(rz, buf):
+    """Does this server's DEM give the heights a record's measuring read (the builder: a record made before)?"""
+    _got, dem, calls, samples = decode(buf)
+    return dem_replay(rz, calls, samples) == dem
+
+
+def same_lines(a, b):
+    """Are two roadz.Lines (and their gaps) the same bit for bit?"""
+    for f in ("lonlat", "z", "off", "level"):
+        x, y = np.asarray(getattr(a, f)), np.asarray(getattr(b, f))
+        if x.dtype != y.dtype or x.shape != y.shape or x.tobytes() != y.tobytes():
+            return False
+    n = len(a)
+    ra = [str(v) for v in a.ref] if len(a.ref) else [""] * n
+    rb = [str(v) for v in b.ref] if len(b.ref) else [""] * n
+    na = [str(v) for v in a.name] if len(a.name) else [""] * n
+    nb = [str(v) for v in b.name] if len(b.name) else [""] * n
+    ga = [(str(f), tuple(map(float, p)), tuple(map(float, q))) for f, p, q in getattr(a, "gaps", [])]
+    gb = [(str(f), tuple(map(float, p)), tuple(map(float, q))) for f, p, q in getattr(b, "gaps", [])]
+    return ra == rb and na == nb and bool(a.corrected) == bool(b.corrected) and ga == gb
+
+
+def keep(lines, path):
+    """A CDN cell's identity (lines.lidarz: lkey, item key, record) written to path (beside its roadz files)."""
+    vk, ikey, rec = lines.lidarz
+    head = f"BNLK1 {vk} {ikey}\n".encode("ascii")
+    decisions._write(path, head + rec)
+
+
+def kept_ok(rz, key, lines, path):
+    """May a CDN cell kept on disk (its lines as loaded, its identity at path) stand for cell key now? The product on,
+    the same lkey, the same inputs from this server's map, the same DEM heights where the builder read them, and the
+    record's lines those on disk. Never raises."""
+    try:
+        if not enabled():
+            return False
+        with open(path, "rb") as f:
+            buf = f.read()
+        head, rec = buf.split(b"\n", 1)
+        magic, vk, ikey = head.decode("ascii").split(" ")
+        if magic != "BNLK1" or vk != lkey()[0]:
+            return False
+        parts, cands, names = rz.lidar_inputs(key)
+        if not parts or not names:
+            return False
+        k = (int(key[0]), int(key[1]), int(key[2]))
+        if ikey != item_key(k, inputs_digest(key, parts, cands, names)):
+            return False
+        got, dem, calls, samples = decode(rec)
+        return same_lines(got, lines) and dem_replay(rz, calls, samples) == dem
+    except Exception as e:
+        log.info("lidarz: kept cell %s: %s: %s", key, type(e).__name__, e)
+        return False
 
 
 class Store(decisions.Store):
@@ -206,15 +307,17 @@ def cell(rz, key, parts, cands, names, fetch=True):
         if k.z != CELL_Z:
             return None
         s = store_for(cache_dir)
-        data = s.record((k.z, k.x, k.y), item_key((k.z, k.x, k.y), inputs_digest(k, parts, cands, names)), fetch)
+        ikey = item_key((k.z, k.x, k.y), inputs_digest(k, parts, cands, names))
+        data = s.record((k.z, k.x, k.y), ikey, fetch)
         if data is None:
             return None
-        got, dem = decode(data)
-        if dem != dem_digest(rz, parts, cands):
+        got, dem, calls, samples = decode(data)
+        if dem != dem_replay(rz, calls, samples):
             s._count("dem")             # (our DEM is not the builder's there: measured here)
             log.info("lidarz: cell %s: the DEM differs from the builder's: the lidar read here", k)
             return None
         s._count("hits")
+        got.lidarz = (lkey()[0], ikey, bytes(data))     # (its identity, kept with it on disk: keep)
         log.debug("lidarz: cell %s from the CDN: %d lines, %d stretches", k, len(got), len(got.gaps))
         return got
     except Exception as e:              # (never in the way: the lidar read here)
@@ -247,8 +350,9 @@ def prune(cache_dir, keep_s=7 * 86400.0):
 
 def record_info(buf):
     """{"lines", "vertices", "gaps", "bytes"} of a cell record (the builder's stats)."""
-    got, _dem = decode(buf)
-    return {"lines": len(got), "vertices": int(len(got.z)), "gaps": len(got.gaps), "bytes": len(buf)}
+    got, _dem, calls, _s = decode(buf)
+    return {"lines": len(got), "vertices": int(len(got.z)), "gaps": len(got.gaps), "bytes": len(buf),
+            "dem_reads": int(sum(calls))}
 
 
 def manifest_doc(vk, blocks, built_by, pub):

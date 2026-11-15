@@ -17,8 +17,9 @@ need no read: a player's server makes them from the map alone).
 Output: <out>/lz<FORMAT>/<lkey>/manifest.bnlm and 12/<x>/<y>.<h>.bnlz (h: the file's hash; a rebuilt block is a new
 file, the old one in retired.json): upload the blocks first, the manifest last. A block built before is merged (its
 records kept unless made again: by cell) and signed again. Each record's key holds the digest of the inputs it was
-measured along; a cell whose inputs and DEM at its probe points are those of a record already made for this lkey
-(<cache>/lidarz_work/) is not read again, so building after a new map release reads only the changed cells.
+measured along; a cell whose inputs, and DEM heights where its measuring read the DEM, are those of a record already
+made for this lkey (<cache>/lidarz_work/) is not read again, so building after a new map release reads only the
+changed cells.
 
 Its environment is a player's (tools/build_decisions.player_env: the build switches reset, the lidar given time) and
 the product is never read here (BNGE_LIDARZ=off).
@@ -88,21 +89,20 @@ def _worker(args):
             if not parts or not names:
                 continue                    # (nothing a player's server would read)
             ikey = lidarz.item_key((z, x, y), lidarz.inputs_digest(key, parts, cands, names))
-            dem = lidarz.dem_digest(rz, parts, cands)
             path = record_path(cache, vk, (z, x, y), ikey)
             row.update(key=ikey, path=path, decks=len(parts), candidates=len(cands))
             old = None
             if os.path.exists(path):
                 with open(path, "rb") as f:
                     old = f.read()
-            if old is not None and lidarz.decode(old)[1] == dem:
-                row["made"] = False         # (made before from the same inputs and DEM)
+            if old is not None and lidarz.record_ok(rz, old):
+                row["made"] = False         # (made before from the same inputs, and the DEM where it read it the same)
             else:
                 r0, b0 = rz.stats["requests"], rz.stats["bytes"]
-                got = rz._lidar(key)
-                rec = lidarz.encode(got, dem)
-                back, _ = lidarz.decode(rec)
-                if not same_lines(got, back):
+                got, rec, ikey2 = lidarz.record_for(rz, key)
+                if ikey2 != ikey:
+                    raise RuntimeError("the cell's inputs changed during its build")
+                if not same_lines(got, lidarz.decode(rec)[0]):
                     raise RuntimeError("the record does not give the lines back bit for bit")
                 decisions._write(path, rec)
                 row.update(made=True, requests=rz.stats["requests"] - r0, mb=round((rz.stats["bytes"] - b0) / 1e6, 2))
@@ -121,20 +121,8 @@ def _worker(args):
 
 
 def same_lines(a, b):
-    """Are two roadz.Lines (and their gaps) the same bit for bit?"""
-    import numpy as np
-    for f in ("lonlat", "z", "off", "level"):
-        x, y = np.asarray(getattr(a, f)), np.asarray(getattr(b, f))
-        if x.dtype != y.dtype or x.shape != y.shape or x.tobytes() != y.tobytes():
-            return False
-    n = len(a)
-    ra = [str(v) for v in a.ref] if len(a.ref) else [""] * n
-    rb = [str(v) for v in b.ref] if len(b.ref) else [""] * n
-    na = [str(v) for v in a.name] if len(a.name) else [""] * n
-    nb = [str(v) for v in b.name] if len(b.name) else [""] * n
-    ga = [(str(f), tuple(map(float, p)), tuple(map(float, q))) for f, p, q in getattr(a, "gaps", [])]
-    gb = [(str(f), tuple(map(float, p)), tuple(map(float, q))) for f, p, q in getattr(b, "gaps", [])]
-    return ra == rb and na == nb and bool(a.corrected) == bool(b.corrected) and ga == gb
+    import lidarz
+    return lidarz.same_lines(a, b)
 
 
 def us_cells(s, w, n, e):
