@@ -92,12 +92,12 @@ do
   -- look made is dropped once the level check rejects the span, and the car on the road under it is never set back)
   local wd = world()
   wd.groundAt = function(x, y)
-    if math.abs(x - 300) <= 1 or math.abs(x - 360) <= 1 then return 18 end
+    if math.abs(x - 300) <= 15 or math.abs(x - 360) <= 15 then return 18 end   -- (its embankments)
     return 2
   end
   local gd = guard({ SPAN })
-  T.check(look(gd, wd, 120, 0, 18.5, 30, 0, 0) ~= nil and gd.ep ~= nil, 'far off at its level: a gap predicted')
-  T.check(look(gd, wd, 250, 0, 10.5, 30, 0, 2) == nil, 'the road fell away under its level: no gap')
+  T.check(look(gd, wd, 120, 0, 18.5, 40, 0, 0) ~= nil and gd.ep ~= nil, 'far off at its level: a gap predicted')
+  T.check(look(gd, wd, 250, 0, 10.5, 40, 0, 2) == nil, 'the road fell away under its level: no gap')
   T.check(gd.ep == nil, '... and no rescue episode left')
   T.check(G.fell(gd, { clock = 4, x = 310, y = 0, z = 2.5, vx = 20, vy = 0, groundAt = wd.groundAt, vehId = 1 }) == nil,
     '... the car on the road under it never set back')
@@ -124,6 +124,58 @@ do
     'no abutment known, not off a deck: not taken as on it')
   g3.riding = { other = true }
   T.check(look(g3, world(), 298, 0, 10.5, 30, 0, 0.25) ~= nil, '... off a deck it was on: on it, the gap ahead')
+end
+
+-- Codex review round 4: a short bridge between two path samples on every look (the 8 m sampling's phase)
+do
+  local w = world({ x0 = 300, x1 = 308 })
+  w.groundAt = function(x, y) if x > 301 and x < 307 then return 2 end return 10 end
+  local g = guard({ { 300, 0, 308, 0 } })
+  local seen, x, clock = 0, 124, 0
+  while x <= 300 do
+    if look(g, w, x, 0, 10.5, 32, 0, clock) then seen = seen + 1 end
+    x, clock = x + 8, clock + 0.25
+  end
+  T.check(seen >= 20, 'an 8 m bridge whose gap falls between the samples: found at every look (' .. seen .. ')')
+end
+
+-- Codex review round 4: a road under a bridge approached from far off (no braking until its height can be checked)
+do
+  local w = world()
+  w.groundAt = function(x, y)
+    if math.abs(x - 300) <= 1 or math.abs(x - 360) <= 1 then return 10 end
+    return 2
+  end
+  local g = guard({ SPAN })
+  T.check(look(g, w, 210, 0, 2.5, 30, 0, 0) == nil, 'a road 8 m under a bridge, 90 m off: no gap (its road there stays low)')
+  -- ... while a road rising onto it is one
+  local wr = world()
+  wr.groundAt = function(x, y)
+    if x > 303 and x < 357 then return 2 end
+    if x <= 300 then return math.max(2, 10 - (300 - x) * 0.08) end  -- (an 8 % ramp up to the abutment)
+    return 10
+  end
+  T.check(look(guard({ SPAN }), wr, 160, 0, 2.5, 30, 0, 0) ~= nil, 'a road rising onto it from below, 140 m off: the gap')
+end
+
+-- the cost of a look (the worst case: on a 900 m viaduct whose tile is missing and whose ground is at its level, every
+-- 2 m of it looked at; 400 spans round the car)
+do
+  local spans = {}
+  for i = 1, 399 do spans[i] = { 5000 + i * 10, 3000, 5005 + i * 10, 3000 } end
+  spans[400] = { 0, 0, 450, 0, 900, 0 }
+  local w = world()
+  w.deckAt = function() return 'missing', 'g17_1_1' end
+  w.groundAt = function() return 10 end
+  local abut = {}
+  for i = 1, 400 do abut[i] = 3 end
+  local g = guard(spans, abut)
+  local t0 = os.clock()
+  for i = 1, 100 do look(g, w, 1, 0, 10.5, 70, 0, i * 0.25) end
+  local ms = (os.clock() - t0) * 1000 / 100
+  T.check(g.riding[g.spans[400].id] and g.stats.looks >= 100, 'on the viaduct, looked along it')
+  T.check(ms < 2, string.format('a worst-case look: %.3f ms', ms))
+  print(string.format('  worst-case look %.3f ms', ms))
 end
 
 -- already on a solid part of it: the next tile's part missing

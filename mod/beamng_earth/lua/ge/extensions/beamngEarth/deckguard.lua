@@ -157,6 +157,115 @@ local function inBox(b, x, y, m)
   return x >= b[1] - m and x <= b[3] + m and y >= b[2] - m and y <= b[4] + m
 end
 
+local entersAt, scanSpan
+
+-- The point at u m along the span.
+local function pointAt(sp, u)
+  local p, cum = sp.pts, sp.cum
+  if u <= 0 then return p[1], p[2] end
+  for k = 2, sp.n do
+    if cum[k] >= u then
+      local l = cum[k] - cum[k - 1]
+      local f = l > 1e-9 and (u - cum[k - 1]) / l or 0
+      return p[2 * k - 3] + (p[2 * k - 1] - p[2 * k - 3]) * f, p[2 * k - 2] + (p[2 * k] - p[2 * k - 2]) * f
+    end
+  end
+  return p[2 * sp.n - 1], p[2 * sp.n]
+end
+
+-- Does the path drive onto span sp at its sample k (going d along it, u m along it there)? On it now (k == 1): entered
+-- at its level before (riding), or at its known level (LEVEL_M under to LEVEL_M + LEVEL_UP_M over the abutments' line;
+-- Codex review round 3: a higher road in the corridor), or, with no abutment height known, off a deck it was riding.
+-- Ahead (k > 1): only at an end (END_M), only with that end's abutment height known, the path's own ground just short
+-- of it at that height (a road under the bridge stays low there: Codex review round 4, a road below braked from far
+-- off) and, near it, the car too; an end on another deck only off a deck the car is riding.
+entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py)
+  local fromEnd = d > 0 and u or (sp.len - u)
+  if k == 1 and g.riding[sp.id] then return true end
+  local abutted = (d > 0 and sp.abut0) or (d < 0 and sp.abut1)
+  local ez = abutted and levelAt(sp, d > 0 and 0 or sp.len, groundAt) or nil
+  if fromEnd <= M.END_M then
+    local ex, ey = (d > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (d > 0) and sp.pts[2] or sp.pts[2 * sp.n]
+    local near = (ex - x) ^ 2 + (ey - y) ^ 2 <= M.LEVEL_NEAR_M * M.LEVEL_NEAR_M
+    if ez then
+      if near and abs(z - ez) > M.LEVEL_M then return false end     -- (rejected: nothing overrides it)
+      if k > 1 then
+        local gb = groundAt(px[k - 1], py[k - 1])
+        return gb ~= nil and abs(gb - ez) <= M.LEVEL_M
+      end
+      return true
+    end
+    if not abutted then return next(g.riding) ~= nil end     -- (off another deck, at a fork)
+    if k > 1 then return false end                            -- (its height not known yet: no braking for it yet)
+  elseif k > 1 then
+    return false                                              -- (into its middle: it is crossed or passed under)
+  end
+  local lz = levelAt(sp, u, groundAt)
+  return lz ~= nil and z >= lz - M.LEVEL_M and z <= lz + M.LEVEL_M + M.LEVEL_UP_M
+end
+
+M.SCAN_M = 2                -- m between the span's points looked at for a drop
+M.TILE_SCAN_M = 32          -- m between its points asked for their road tile (a stretch missing if either end is)
+
+-- The first gap on the stretch of span sp the path drives (from where it enters, its end when it enters there, to a
+-- step past its last sample; along it, not at the path's samples: an 8 m bridge fell between them at every look, Codex
+-- review round 4): a point whose road tile is missing, the block's ground DROP_M or more under the deck's level there
+-- (or either unknown). { u, x, y, key, level } or nil.
+scanSpan = function(sp, kin, dir, uin, kout, uout, n, deckAt, groundAt)
+  local a = uin
+  local fromEnd = dir > 0 and uin or (sp.len - uin)
+  if kin > 1 and fromEnd <= M.END_M then a = dir > 0 and 0 or sp.len end   -- (entered ahead at its end: from there)
+  local b = uout
+  if kout < n then b = uout + dir * M.STEP_M end
+  b = min(sp.len, max(0, b))
+  local span = (b - a) * dir
+  if span < 0 then return nil end
+  local tstep = M.TILE_SCAN_M
+  local lastT, lastSt, lastKey = nil, nil, nil
+  local nextSt, nextKey, nextT = nil, nil, nil
+  local edge = nil                          -- (t where the tiles turn missing between a ready and a missing sample)
+  local function at(t) local qx, qy = pointAt(sp, a + dir * t); return deckAt(qx, qy) end
+  local function tileState(t)               -- (the state at the tile samples either side of t: missing if either is)
+    local t0 = floor(t / tstep) * tstep
+    local t1 = min(span, t0 + tstep)
+    if lastT ~= t0 then
+      if nextT == t0 then lastSt, lastKey = nextSt, nextKey else lastSt, lastKey = at(t0) end
+      lastT = t0
+      nextSt, nextKey = at(t1)
+      nextT = t1
+      edge = nil
+      if lastSt ~= 'missing' and nextSt == 'missing' then    -- (where in between: halved down to SCAN_M)
+        local lo, hi = t0, t1
+        while hi - lo > M.SCAN_M do
+          local mid = (lo + hi) / 2
+          if at(mid) == 'missing' then hi = mid else lo = mid end
+        end
+        edge = lo
+      end
+    end
+    if lastSt == 'missing' then return 'missing', lastKey end
+    if nextSt == 'missing' and t >= (edge or t0) then return 'missing', nextKey end
+    return 'ready'
+  end
+  local t = 0
+  while t <= span + 1e-6 do
+    local st, key = tileState(t)
+    if st == 'missing' then
+      local u = a + dir * t
+      local qx, qy = pointAt(sp, u)
+      local lz = levelAt(sp, u, groundAt)
+      local gz = lz and groundAt(qx, qy)
+      if not (lz and gz) or gz < lz - M.DROP_M then return { u = u, x = qx, y = qy, key = key, level = lz } end
+      t = t + M.SCAN_M
+    elseif edge and lastT == floor(t / tstep) * tstep and t < edge then
+      t = edge                                     -- (on to where the tiles turn missing)
+    else
+      t = (floor(t / tstep) + 1) * tstep          -- (a stretch whose tiles are in: skipped whole)
+    end
+  end
+  return nil
+end
+
 -- Pure: one look along the path. inp = { clock, x, y, z, vx, vy, vehId, deckAt(x, y) -> 'missing' | 'ready', tile key;
 -- groundAt(x, y) -> the block's ground height there or nil }. Sets g.danger = { d (m along the path to the gap), x, y
 -- (its place on the span), id (the span's), span, key (the tile), level (the deck's level there), at } or nil; returns it.
@@ -202,69 +311,38 @@ function M.look(g, inp)
   local riding, onPath, best = {}, {}, nil
   local groundAt, deckAt = inp.groundAt, inp.deckAt
   for _, sp in ipairs(cands) do
-    local dir, entered = nil, false
+    local kin, dir, uin, kout, uout = nil, nil, nil, nil, nil
     for k = 1, n do
       local hx, hy = px[k], py[k]
-      local on, u, qx, qy, c = false, 0, hx, hy, 0
+      local on, u, c = false, 0, 0
       if inBox(sp.box, hx, hy, M.LAT_M) then
         local dist, sx, sy
-        dist, u, sx, sy, qx, qy = nearest(sp, hx, hy)
+        dist, u, sx, sy = nearest(sp, hx, hy)
         c = pdx[k] * sx + pdy[k] * sy
         on = dist <= M.LAT_M and abs(c) >= M.COS_MIN
       end
       if not on then
-        if entered then break end
+        if kin then break end
       else
         local d = c > 0 and 1 or -1
-        if not entered then
-          -- entering it: already on it (it was entered at its level before), at an end at the deck's level, or on it
-          -- now at its known level; else it is crossed or passed under (or left alone)
-          local fromEnd = d > 0 and u or (sp.len - u)
-          local ok = (k == 1 and g.riding[sp.id]) or false
-          local rejected = false        -- (its end's level check said no: nothing below overrides it)
-          if not ok and fromEnd <= M.END_M then
-            local abutted = d > 0 and sp.abut0 or (d < 0 and sp.abut1)
-            local ez = abutted and levelAt(sp, d > 0 and 0 or sp.len, groundAt) or nil
-            local ex, ey = (d > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (d > 0) and sp.pts[2] or sp.pts[2 * sp.n]
-            local near = (ex - x) ^ 2 + (ey - y) ^ 2 <= M.LEVEL_NEAR_M * M.LEVEL_NEAR_M
-            if ez and near then
-              ok = abs(z - ez) <= M.LEVEL_M
-              rejected = not ok
-            else
-              ok = k > 1        -- (a predicted entry, asked again as it nears; on it now: the checks below)
-            end
-          end
-          -- on it now, mid-span, at its known level: within LEVEL_M under it to LEVEL_M + LEVEL_UP_M over it (a deck
-          -- raised over a road under it stands above its abutments' line); a road far over or under it is not on it
-          -- (Codex review 2026-11-15 round 3: a higher road within the corridor was taken as on the bridge)
-          if not ok and not rejected and k == 1 then
-            local lz = levelAt(sp, u, groundAt)
-            if lz then
-              ok = z >= lz - M.LEVEL_M and z <= lz + M.LEVEL_M + M.LEVEL_UP_M
-            else            -- (no abutment known: on it only off a deck it was on, joined at a fork)
-              ok = fromEnd <= M.END_M and next(g.riding) ~= nil
-            end
-          end
-          if not ok then break end
-          entered, dir = true, d
+        if not kin then
+          if not entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py) then break end
+          kin, dir, uin = k, d, u
           onPath[sp.id] = true
           if k == 1 then riding[sp.id] = true end
         elseif d ~= dir then
           break
         end
-        if g.released[sp.id] == nil then
-          local st, key = deckAt(qx, qy)
-          if st == 'missing' then
-            local lz = levelAt(sp, u, groundAt)
-            local gz = lz and groundAt(qx, qy)
-            if not (lz and gz) or gz < lz - M.DROP_M then
-              local s = (k - 1) * step
-              if not best or s < best.d then
-                best = { d = s, x = qx, y = qy, id = sp.id, span = sp, key = key, level = lz or (z - 0.5), at = inp.clock }
-              end
-              break
-            end
-          end
+        kout, uout = k, u
+      end
+    end
+    if kin and g.released[sp.id] == nil then
+      local gap = scanSpan(sp, kin, dir, uin, kout, uout, n, deckAt, groundAt)
+      if gap then
+        local s = max(0, (kin - 1) * M.STEP_M + (gap.u - uin) * dir)
+        if not best or s < best.d then
+          best = { d = s, x = gap.x, y = gap.y, id = sp.id, span = sp, key = gap.key, level = gap.level or (z - 0.5),
+            at = inp.clock }
         end
       end
     end
