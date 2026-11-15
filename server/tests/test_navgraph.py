@@ -73,6 +73,17 @@ class GraphTest(unittest.TestCase):
                 g = graph([[(0, 0), (length, 0)]], ["primary"])
                 self.assertEqual(g["edges"], [])
 
+    def test_distant_copy_does_not_hide_road_inside_window(self):
+        distant = features([[(10000, 0), (10200, 0)]], ["secondary"], ids=["shared"])
+        local = features([[(-100, 0), (100, 0)]], ["secondary"], ids=["shared"])
+        expected = navgraph.build(FRAME, [local], flat, (0., 0.), window=500.)
+        self.assertTrue(expected["edges"])
+        for cells in ([distant, local], [local, distant], [distant, local, local]):
+            with self.subTest(distant_first=cells[0] is distant, copies=len(cells)):
+                actual = navgraph.build(FRAME, cells, flat, (0., 0.), window=500.)
+                self.assertEqual(actual["nodes"], expected["nodes"])
+                self.assertEqual(actual["edges"], expected["edges"])
+
     def test_rumble_heuristic_is_country_and_road_type_scoped(self):
         motorway = SimpleNamespace(kind="paved", cls="motorway", urban=True, link=False)
         rural_primary = SimpleNamespace(kind="paved", cls="primary", urban=False, link=False)
