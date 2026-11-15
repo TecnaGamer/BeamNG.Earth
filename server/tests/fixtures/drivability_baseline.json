@@ -300,7 +300,7 @@
   }
  },
  "casagranda_bridge": {
-  "steps": 147,
+  "steps": 136,
   "parts": {
    "bridge:24180283-706a-4193-a9d6-18dbee4df38d": {
     "step_m": 0.4731,
@@ -323,7 +323,7 @@
     "lift_g": 0.4049
    },
    "ground:56a28a10-46e0-4513-aadc-4ad7ffe86ab4": {
-    "step_m": 6.2478,
+    "step_m": 1.229,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -800,7 +800,7 @@
   }
  },
  "paris_maillot_1083": {
-  "steps": 663,
+  "steps": 586,
   "parts": {
    "bridge:03416596-4287-47ca-a11f-def3e0e3acfc": {
     "step_m": 0.062,
@@ -813,9 +813,9 @@
     "lift_g": 3.7895
    },
    "bridge:71e37f88-8864-4e3b-a741-fe720cff5fdc": {
-    "step_m": 0.1196,
+    "step_m": 0.1191,
     "grade": 0.0772,
-    "lift_g": 2.0715
+    "lift_g": 2.0633
    },
    "bridge:93063b69-441e-4ffa-9dd2-0cc2e8d5af62": {
     "step_m": 1.3672,
@@ -823,7 +823,7 @@
     "lift_g": 5.4672
    },
    "bridge:9eeccc1a-3c92-4df7-8096-1389dc5a1b59": {
-    "step_m": 4.9429,
+    "step_m": 4.0525,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -852,6 +852,11 @@
     "grade": 0.9842,
     "lift_g": 11.929
    },
+   "bridge:f5b121f5-9e41-4c45-a418-4f2aaee21ac4": {
+    "step_m": 0.0353,
+    "grade": 0.0278,
+    "lift_g": 0.2095
+   },
    "ground:0073f56a-93d4-422d-a0ba-0681ae109e49": {
     "step_m": 0.0298,
     "grade": 0.06,
@@ -863,7 +868,7 @@
     "lift_g": 1.5426
    },
    "ground:10ca6b31-9181-4276-9aa1-0e06cdb34ea8": {
-    "step_m": 1.5412,
+    "step_m": 1.5304,
     "grade": 0.132,
     "lift_g": 0.9517
    },
@@ -873,7 +878,7 @@
     "lift_g": 2.7222
    },
    "ground:14fa10e8-9393-49fa-8172-dcf80f4ece0a": {
-    "step_m": 2.7141,
+    "step_m": 0.1897,
     "grade": 0.1438,
     "lift_g": 1.1336
    },
@@ -883,8 +888,8 @@
     "lift_g": 1.2295
    },
    "ground:2195024c-c18c-4f51-836d-b82f75a37373": {
-    "step_m": 4.4656,
-    "grade": 0.2424,
+    "step_m": 4.3143,
+    "grade": 0.2403,
     "lift_g": 2.7376
    },
    "ground:237fb24a-b548-44d5-8740-9ceac2a05ab2": {
@@ -908,7 +913,7 @@
     "lift_g": 0.9136
    },
    "ground:339cedd8-e7b4-4d67-8bc1-327b940ba061": {
-    "step_m": 0.7906,
+    "step_m": 0.7592,
     "grade": 0.0068,
     "lift_g": 0.0372
    },
@@ -921,11 +926,6 @@
     "step_m": 0.1429,
     "grade": 0.1451,
     "lift_g": 1.6367
-   },
-   "ground:435051f5-d744-4b2a-bca4-12c5f27ddb05": {
-    "step_m": 0.5667,
-    "grade": 0.0124,
-    "lift_g": 0.1352
    },
    "ground:457db81e-10d5-4121-adde-ef0b5a6d8521": {
     "step_m": 0.0101,
@@ -948,7 +948,7 @@
     "lift_g": 0.4091
    },
    "ground:59487550-ed31-4d57-8670-0c8f8fa14916": {
-    "step_m": 0.4674,
+    "step_m": 0.3977,
     "grade": 0.3439,
     "lift_g": 3.3121
    },
@@ -964,8 +964,8 @@
    },
    "ground:6de84dc8-59a9-470e-be0b-47d2613328ff": {
     "step_m": 0.9496,
-    "grade": 0.1417,
-    "lift_g": 2.3259
+    "grade": 0.1391,
+    "lift_g": 2.1315
    },
    "ground:71e37f88-8864-4e3b-a741-fe720cff5fdc": {
     "step_m": 0.0658,
@@ -973,24 +973,24 @@
     "lift_g": 0.5116
    },
    "ground:817dcbd5-ffc4-43c9-a162-82f9b3e3e92b": {
-    "step_m": 0.2281,
+    "step_m": 0.2216,
     "grade": 0.0155,
     "lift_g": 0.1039
    },
    "ground:838e9aad-de5c-427c-891f-8e9b7ad32f14": {
-    "step_m": 0.6715,
+    "step_m": 0.2973,
     "grade": 0.0942,
     "lift_g": 1.4899
    },
    "ground:84d6df6b-c778-48d7-8ac9-157fbe14fc31": {
-    "step_m": 4.2526,
-    "grade": 0.1568,
+    "step_m": 4.2446,
+    "grade": 0.156,
     "lift_g": 3.1496
    },
    "ground:90b3b3be-760e-4d9e-b0bb-0335a286025c": {
-    "step_m": 2.8939,
-    "grade": 0.2609,
-    "lift_g": 3.8525
+    "step_m": 2.6769,
+    "grade": 0.1483,
+    "lift_g": 3.6354
    },
    "ground:93063b69-441e-4ffa-9dd2-0cc2e8d5af62": {
     "step_m": 0.2764,
@@ -998,12 +998,12 @@
     "lift_g": 0.3855
    },
    "ground:9e55eab1-2bf1-45c2-a029-6e98d88bf360": {
-    "step_m": 4.7426,
+    "step_m": 4.5755,
     "grade": 0.1809,
-    "lift_g": 2.8874
+    "lift_g": 2.8033
    },
    "ground:9eeccc1a-3c92-4df7-8096-1389dc5a1b59": {
-    "step_m": 0.5954,
+    "step_m": 0.675,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1053,7 +1053,7 @@
     "lift_g": 0.4281
    },
    "ground:d283e09c-fdcd-46fa-9690-6a0444ce3695": {
-    "step_m": 2.4458,
+    "step_m": 2.3257,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1063,7 +1063,7 @@
     "lift_g": 2.5204
    },
    "ground:ea7bf85b-5eee-46fc-9922-321e0b735929": {
-    "step_m": 0.7461,
+    "step_m": 0.2338,
     "grade": 0.1247,
     "lift_g": 0.923
    },
@@ -1083,7 +1083,7 @@
     "lift_g": 4.5127
    },
    "ground:fb105231-7641-48d3-adc9-e00c9c8154b3": {
-    "step_m": 0.7739,
+    "step_m": 0.489,
     "grade": 0.0782,
     "lift_g": 0.826
    },
@@ -1103,9 +1103,9 @@
     "lift_g": 2.4086
    },
    "tunnel:eeb16a87-89c1-4324-9a78-0b3ad5899a87.5426112#3": {
-    "step_m": 0.6682,
-    "grade": 0.7056,
-    "lift_g": 10.5605
+    "step_m": 0.5465,
+    "grade": 0.5914,
+    "lift_g": 8.7659
    },
    "tunnel:fd230cc2-6827-419b-9c7f-dd8c1ba43cd6.0#1": {
     "step_m": 0.0471,
@@ -1115,7 +1115,7 @@
   }
  },
  "paris_maillot_ax_1083": {
-  "steps": 283,
+  "steps": 281,
   "parts": {
    "bridge:06600d5d-ffc1-4cf9-910e-559e4439978e": {
     "step_m": 0.1129,
@@ -1198,9 +1198,9 @@
     "lift_g": 0.3273
    },
    "ground:90b3b3be-760e-4d9e-b0bb-0335a286025c": {
-    "step_m": 4.9198,
+    "step_m": 4.8202,
     "grade": 0.0441,
-    "lift_g": 2.0098
+    "lift_g": 0.2496
    },
    "ground:936e51bf-1eaf-4b19-9363-897537ea39f0": {
     "step_m": 3.8457,
@@ -1704,7 +1704,7 @@
   }
  },
  "vienna_a23_1083": {
-  "steps": 110,
+  "steps": 100,
   "parts": {
    "bridge:28b927b9-f784-426e-9940-5203d45563b4": {
     "step_m": 0.0286,
@@ -1728,11 +1728,6 @@
    },
    "ground:73a77ad1-12be-421d-8a3d-1fb7faccf20a": {
     "step_m": 0.4195,
-    "grade": 0.0,
-    "lift_g": 0.0
-   },
-   "ground:7bad97ca-be21-4590-b543-48990b87394b": {
-    "step_m": 1.0306,
     "grade": 0.0,
     "lift_g": 0.0
    },
