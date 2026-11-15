@@ -8389,6 +8389,22 @@ def _short_piece(s, gc, f, k, oc, fc, pinned):
     return _shallow_full_low(s, gc, f, k)
 
 
+def _ground_lines_near(xy, ground):
+    """The ground roads' lines of ground ({(fid, "g"): [lines]}) with an end within CHAIN_END_M of the line xy's box,
+    in the keys' order. Their ends are tested all at once: line by line, six small numpy calls each, a chain's 4,690
+    lines made this 17 % of a road tile in central Sydney (171 calls, 2026-11-15). Pure."""
+    lines = [np.asarray(ln, np.float64).reshape(-1, 2) for gk, lns in sorted((ground or {}).items()) if gk[1] == "g"
+             for ln in lns if len(ln) >= 2]
+    if not lines:
+        return lines
+    lo, hi = xy.min(axis=0) - CHAIN_END_M, xy.max(axis=0) + CHAIN_END_M
+    ends = np.empty((len(lines), 2, 2), np.float64)
+    for k, ln in enumerate(lines):
+        ends[k, 0], ends[k, 1] = ln[0], ln[-1]
+    near = ((ends >= lo) & (ends <= hi)).all(axis=2).any(axis=1)
+    return [ln for ln, keep in zip(lines, near.tolist()) if keep]
+
+
 def tunnel_side_ground(xy, s, g, spec, gfn, ground=None):
     """(left, right): the ground beside a tunnel line xy (k, 2; arc s, the ground over it g) as the burial reads it
     (tunnel_sections' sides), or None: not a road buried under flat ground (BURY_CLASSES, BURY_ON). Read with gfn(points
@@ -8410,10 +8426,7 @@ def tunnel_side_ground(xy, s, g, spec, gfn, ground=None):
     step = nrm[:, None, :] * off[None, :, None]
     gl = np.asarray(gfn((xy[:, None, :] + step).reshape(-1, 2)), np.float64)
     gr = np.asarray(gfn((xy[:, None, :] - step).reshape(-1, 2)), np.float64)
-    lines = [np.asarray(ln, np.float64).reshape(-1, 2) for gk, lns in sorted((ground or {}).items()) if gk[1] == "g"
-             for ln in lns if len(ln) >= 2]
-    lo, hi = xy.min(axis=0) - CHAIN_END_M, xy.max(axis=0) + CHAIN_END_M
-    lines = [ln for ln in lines if ((ln[[0, -1]] >= lo) & (ln[[0, -1]] <= hi)).all(axis=1).any()]
+    lines = _ground_lines_near(xy, ground)
     pts = np.concatenate(lines) if lines else np.zeros((0, 2))
     starts = np.r_[0, np.cumsum([len(ln) for ln in lines])].astype(np.int64)
     sl, sr = fast._ef.tunnel_side_ground(
