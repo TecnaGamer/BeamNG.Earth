@@ -61,6 +61,14 @@ Works with BeamNG.drive 0.40.5.
   30 s to 2 s, tunnel sides 3.9 s to 0.75 s, stations 55.6 s to 44.4 s) (PR #1283, #1315 and #1314, crunchdomo).
 
 ### New
+- **Epic Games and no-Steam launch** (new; please tell us how it goes): the app now finds BeamNG.drive installed from
+  the Epic Games Store, and can start the game without Steam on Windows and Linux (`--launch direct`, kept for later
+  starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks
+  which one to use (`--choose-game` to ask again). Steam players see no change. BeamMP on Linux still needs the game in
+  a Steam library. Builds on ideas from PR #1309 (ProxyFirewall202).
+- **Restart world server** button on the settings page: settings that need the world server to restart (Experimental
+  features, Ground grid, CPU cores and priority, 3D models from 3dmr.eu, Max RAM's sizing, the cache folder) apply
+  without closing the game; the world reloads around your car, which is held still meanwhile.
 - **Experimental settings page**: features that could only be turned on with environment variables are now switches
   (all off by default, from the next start of BeamNG.Earth): road signs (and the Dutch ones), French and European
   road scenery, guard rails at drops, widened entrances, right of way by road class, bumpy and rough dirt roads, extra
