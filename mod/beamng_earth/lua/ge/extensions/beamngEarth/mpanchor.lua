@@ -83,7 +83,9 @@ function M.setRemote(pid, lat, lon)
   lat, lon = M.coordinates(lat, lon)
   if not pid or not (pid >= 0 and pid < math.huge and pid % 1 == 0) or not lat then return false end
   local old = remote[pid]
-  local changed = (old and (old.lat ~= lat or old.lon ~= lon)) or (not old and expired[pid])
+  -- (mpdefer: any change, the first anchor learned too: a spawn queued while its owner was not known carries its raw
+  -- coordinates, in the owner's frame. Codex review 5, 2026-11-15)
+  local changed = not old or old.lat ~= lat or old.lon ~= lon
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
     -- (its cars' poses were worked out with the old anchor: after a teleport they say nothing of where the cars are

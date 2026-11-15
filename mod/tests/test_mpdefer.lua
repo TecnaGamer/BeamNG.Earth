@@ -448,6 +448,24 @@ local n16 = #spawned
 tick(math.floor(2 * md.UNKNOWN_WAIT_S / md.TICK_S) + 2)
 T.check(vehicles['16-0'].bngeHeld and #spawned == n16, 'a known Earth player\'s car: no timeout spawn at foreign coordinates')
 
+-- (Codex review 5) a player without a known anchor: its kept spawn times out into BeamMP's queue at its raw packet;
+-- its first anchor then comes (it is a BeamNG.Earth player, in Paris): the queued spawn is taken back at once, before
+-- BeamMP's queue can spawn it at the raw coordinates
+sv.enableSpawnQueue = true
+MPVehicleGE.handle(spawnRaw('17-0', 'Late Earth', 81, 'pickup'))
+positionGE.handle('p:17-0:{"pos":[500,600,7],"vel":[0,0,0],"rot":[0,0,1,0],"rvel":[0,0,0]}')
+tick(math.floor(md.UNKNOWN_WAIT_S / md.TICK_S) + 1)
+T.check(vehicles['17-0'].spawnQueue and not vehicles['17-0'].bngeHeld, 'timed out into BeamMP\'s queue (raw place)')
+ma.setRemote(17, PARIS[1], PARIS[2])
+place[17] = PARIS
+local n17 = #spawned
+applyQueuedEvents()
+T.check(#spawned == n17 and vehicles['17-0'].bngeHeld and not vehicles['17-0'].spawnQueue,
+  'its first anchor learned: taken back at once, nothing spawned at the raw coordinates')
+tick()
+T.check(vehicles['17-0'].bngeHeld and #spawned == n17, 'far (Paris): kept')
+sv.enableSpawnQueue = false
+
 -- BeamMP's own queue: a far car queued before the hook (or while its place was not known) taken in
 ma.setRemote(4, PARIS[1], PARIS[2])
 place[4] = PARIS
