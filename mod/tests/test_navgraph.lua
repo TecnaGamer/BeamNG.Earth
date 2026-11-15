@@ -597,8 +597,10 @@ do
   T.check(spawnArgs[101].p.x==100 and spawnArgs[101].p.y==0 and spawnArgs[101].lo==N.AHEAD_M[1],
     'ahead recycling leaves the normal spawn gap beyond the leading traffic')
   cars[102].pos=v(400,0);now=1101;N.update(1,box)
-  T.check(spawnArgs[101].p.x==-10 and spawnArgs[101].d.x==-1,
-    'no room beyond the leading traffic falls back behind the camera')
+  T.check(spawnArgs[101].p.x==0,
+    'traffic beyond the ahead-spawn window does not push its reference out of the block')
+  cars[102].pos=v(2000,0);now=1101.6;N.update(1,box)
+  T.check(spawnArgs[101].p.x==0,'a car two kilometres away cannot remove nearby ahead spawns')
   cars[102].pos=v(200,20);now=1102;N.update(1,box)
   T.check(spawnArgs[101].p.x==0,'traffic on a separated parallel road does not move the spawn reference')
   cars[102].pos=v(200,0,20);now=1103;N.update(1,box)
@@ -619,6 +621,20 @@ do
   now=2003;N.update(1,box);now=2004;N.update(1,box)
   T.check(commands[101] and commands[101]:find('spawnMotion',1,true),
     'respawn launch still boosts a clear road with enough stopping distance')
+  local function request(command) return tonumber(command:match('onSpawnLaunch%(%%d,(%d+)')) end
+  local firstRequest=request(commands[101])
+  T.check(firstRequest~=nil,'a boost attempt includes its acknowledgement token')
+  N.onSpawnLaunch(101,firstRequest,false,'ai-not-driving')
+  commands[101]=nil;now=2004.2;N.update(1,box)
+  local secondRequest=request(commands[101])
+  T.check(secondRequest and secondRequest~=firstRequest,'a skipped VE boost is retried while its window is open')
+  local launched=N.status().launches or 0
+  N.onSpawnLaunch(101,firstRequest,true,'launched')
+  T.check((N.status().launches or 0)==launched,'a late acknowledgement cannot consume a newer attempt')
+  N.onSpawnLaunch(101,secondRequest,true,'launched')
+  commands[101]=nil;now=2004.4;N.update(1,box)
+  T.check(commands[101]==nil and N.status().launches==launched+1,'success is counted once and ends retries')
+  T.check(N.status().launchSkipReasons['ai-not-driving']==1,'skip reasons are visible separately from successful boosts')
   commands[101]=nil;cars[101].pos=v(75,0);cars[101].dir=v(-1,0);cars[101].rc=3
   now=2005;N.update(1,box);now=2006;N.update(1,box)
   T.check(commands[101] and commands[101]:find('spawnMotion',1,true),
@@ -637,6 +653,12 @@ do
   local traffic = cars[101].traffic
   traffic.onTrafficTick = nativeTick
   now=2007;N.update(1,box)
+  local readTraffic=gameplay_traffic.getTrafficData
+  local trafficReads=0
+  gameplay_traffic.getTrafficData=function()trafficReads=trafficReads+1;return readTraffic()end
+  now=2007.01;N.update(1,box)
+  T.check(trafficReads==0,'frames between launch scans do not walk traffic to synchronise callbacks')
+  gameplay_traffic.getTrafficData=readTraffic
   T.check(traffic.onTrafficTick ~= nativeTick, 'stock traffic tick is protected while our launch policy owns the map')
   traffic.respawnSpeed = 8.333
   local a, b = traffic:onTrafficTick('tick',17)
@@ -670,7 +692,18 @@ do
   T.check(traffic.onTrafficTick == external, 'cleanup preserves an externally replaced callback')
   traffic.respawnSpeed=8.333;owned(traffic)
   T.check(positiveBoosts == 4, 'an obsolete wrapper does not keep suppressing native state')
-  N.LAUNCH=true;now=2016;N.update(1,box);N.reset()
+  N.LAUNCH=true;now=2016;N.update(1,box)
+  cars[101].rc=0;now=2020;N.update(1,box)
+  cars[101].rc=1;now=2021;N.update(1,box)
+  now=2022;N.update(1,box)
+  local expiredRequest=request(commands[101])
+  N.onSpawnLaunch(101,expiredRequest,false,'traffic-blocked')
+  commands[101]=nil;now=2021+N.LAUNCH_TIMEOUT_S;N.update(1,box)
+  T.check(commands[101]==nil and (N.status().launchExpired or 0)>0,'the retry window expires even when a vehicle remains active')
+  launched=N.status().launches
+  N.onSpawnLaunch(101,expiredRequest,true,'launched')
+  T.check(N.status().launches==launched,'an expired request cannot later be counted as a boost')
+  N.reset()
   T.check(traffic.onTrafficTick == external, 'level cleanup restores the callback that it actually wrapped')
   N.GUARD_S = guard0
   table.clear = tc0

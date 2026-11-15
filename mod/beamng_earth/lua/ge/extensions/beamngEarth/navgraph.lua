@@ -830,7 +830,8 @@ local function guard(b, all, lag)
                   local q = other:getPosition()
                   local dx, dy = q.x - pp.x, q.y - pp.y
                   if math.abs(q.z - pp.z) < 5 and math.abs(dx * uy - dy * ux) < 6 then
-                    lead = math.max(lead, dx * ux + dy * uy)
+                    local ahead = dx * ux + dy * uy
+                    if ahead <= M.AHEAD_M[2] then lead = math.max(lead, ahead) end
                   end
                 end
               end
@@ -1329,18 +1330,25 @@ end
 
 -- Pure (PR #728, ProxyFirewall202): the vehicle Lua that pushes a car standing (or slower than target - 1 m/s) on to
 -- target m/s along its heading (thrusters.applyVelocity) and spins its wheels to match (beamngEarth_spawnMotion), or nil.
-function M.spawnVelocityCommand(target)
+function M.spawnVelocityCommand(target, request)
   target = tonumber(target)
   if not target or target ~= target or target <= 1 or target == math.huge or target > 80 then return nil end
   local threshold = math.max(0, target - 1)
-  return string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+  local body = string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+    .. 'if _f>=%.3f then _reason="at-speed" end; '
     .. 'if _f>=-1 and _f<%.3f and thrusters and type(thrusters.applyVelocity)=="function" then '
     .. 'if not beamngEarth_spawnMotion then extensions.load("beamngEarth_spawnMotion") end; '
-    .. 'local _clearOk,_clear=pcall(function() return beamngEarth_spawnMotion.canLaunch(%.3f) end); '
-    .. 'if not (_clearOk and _clear) then return end; '
-    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
+    .. 'local _clearOk,_clear,_why=pcall(function() return beamngEarth_spawnMotion.canLaunch(%.3f) end); '
+    .. 'if not (_clearOk and _clear) then _reason=_why or "unsafe"; return end; '
+    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then _applied=true; _reason="launched"; pcall(function() '
     .. 'if beamngEarth_spawnMotion then beamngEarth_spawnMotion.applyRollingSpeed(%.3f) end end) end end',
-    threshold, target, target, target)
+    threshold, threshold, target, target, target)
+  local prefix='local _applied,_reason=false,"not-ready"; '
+  if not request then return prefix .. body end
+  return prefix .. 'local _ok=pcall(function() ' .. body .. ' end); '
+    .. 'obj:queueGameEngineLua(string.format(' .. string.format('%q',
+      "require('beamngEarth/navgraph').onSpawnLaunch(%d," .. tostring(request) .. ",%s,%q)")
+    .. ',obj:getId(),tostring(_applied),_ok and _reason or "error"))'
 end
 
 -- Pure: the speed (m/s) a respawned car is launched at on an edge with this limit (m/s), its heading's cosine with the
@@ -1387,6 +1395,24 @@ local function syncStockTicks()
 end
 
 local launchCount, launchWait, lastLaunchScan = {}, {}, -math.huge
+local launchRequest = 0
+local function skippedLaunch(reason)
+  stats.launchSkipped = (stats.launchSkipped or 0) + 1
+  stats.launchSkipReasons = stats.launchSkipReasons or {}
+  stats.launchSkipReasons[reason] = (stats.launchSkipReasons[reason] or 0) + 1
+end
+function M.onSpawnLaunch(id, request, launched, reason)
+  local w = launchWait[id]
+  if not w or w.request ~= request then return end
+  w.inFlight = false
+  if launched then
+    stats.launches = (stats.launches or 0) + 1
+    launchWait[id] = nil
+  else
+    skippedLaunch(reason or 'unsafe')
+    if reason=='at-speed' or reason=='impact-detector' or reason=='multiple-clusters' then launchWait[id]=nil end
+  end
+end
 local junctionNodes, junctionOf = nil, nil   -- (the graph's nodes where 3+ roads meet: positions, per graph table)
 
 local function nearJunction(x, y, radius)
@@ -1406,7 +1432,7 @@ local function nearJunction(x, y, radius)
   return false
 end
 
-local function launch(id)
+local function launch(id, request)
   local o = getObjectByID(id)
   if not o or not o:getActive() or localplayers.controlled(id, o, controlled) then return end
   local m = map and map.getMap and map.getMap()
@@ -1426,22 +1452,22 @@ local function launch(id)
   local v = M.launchSpeed(e.speedLimit, d:normalized():dot(heading), e.oneWay, nearJunction(p.x, p.y))
   -- A boost must leave time to stop before the loaded road ends, even while the traffic guard waits.
   if v and M.headingToCut(p.x, p.y, heading.x, heading.y, cuts, M.stopReach(v) + v) then return end
-  local cmd = v and M.spawnVelocityCommand(v)
+  local cmd = v and M.spawnVelocityCommand(v, request)
   if cmd then
     o:queueLuaCommand(cmd)
-    stats.launches = (stats.launches or 0) + 1
+    stats.launchRequests = (stats.launchRequests or 0) + 1
+    return true
   end
 end
 
 -- Every LAUNCH_SCAN_S: the traffic cars whose respawn count went up are launched once placed (M.LAUNCH above).
 local function launchRespawned(now)
   local gt = gameplay_traffic
-  if not M.LAUNCH or not gt or not gt.getState or gt.getState() ~= 'on' or now - lastLaunchScan < M.LAUNCH_SCAN_S then
-    return
-  end
+  if now - lastLaunchScan < M.LAUNCH_SCAN_S then return end
   lastLaunchScan = now
+  syncStockTicks() -- shares the protected launch-scan cadence, including release when LAUNCH is switched off
+  if not M.LAUNCH or not gt or not gt.getState or gt.getState() ~= 'on' then return end
   if simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause() then return end
-  localplayers.snapshot(controlled)
   local data = gt.getTrafficData() or {}
   for id, t in pairs(data) do
     if type(t) == 'table' and t.isAi ~= false then
@@ -1452,15 +1478,20 @@ local function launchRespawned(now)
       launchCount[id] = rc
       local w = launchWait[id]
       if w then
-        if t.state == 'fadeIn' or (t.state == 'active' and t.respawnActive ~= true) then
-          w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
-          if now >= w.readyAt then
-            launchWait[id] = nil
-            local ok, err = pcall(launch, id)
-            if not ok then log('W', 'beamngEarth', 'navgraph launch: ' .. tostring(err)) end
-          end
-        elseif now >= w.expires then
+        if now >= w.expires then
           launchWait[id] = nil
+          stats.launchExpired = (stats.launchExpired or 0) + 1
+        elseif t.state == 'fadeIn' or (t.state == 'active' and t.respawnActive ~= true) then
+          w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
+          if now >= w.readyAt and not w.inFlight then
+            launchRequest = launchRequest + 1
+            w.request, w.inFlight = launchRequest, true
+            local ok, sent = pcall(launch, id, w.request)
+            if not ok or not sent then
+              w.inFlight = false
+              skippedLaunch(ok and 'road-ineligible' or 'error')
+            end
+          end
         end
       end
     end
@@ -1489,8 +1520,10 @@ local function overtakeScan(now)
 end
 
 function M.update(aid, b, gov)
-  syncStockTicks()
-  if not M.enabled or not graph then return end
+  if not M.enabled or not graph then
+    for id in pairs(stockTicks) do releaseStockTick(id) end
+    return
+  end
   local t0 = os.clock()
   do
     local ok, err = pcall(checkRegion, t0)
@@ -1595,7 +1628,8 @@ function M.status()
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
            cuts = stats.cuts, cutRespawns = stats.cutRespawns, cutStopRespawns = stats.cutStopRespawns,
            aheadRespawns = stats.aheadRespawns,
-           launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
+           launches = stats.launches, launchRequests = stats.launchRequests, launchSkipped = stats.launchSkipped,
+           launchSkipReasons = stats.launchSkipReasons, launchExpired = stats.launchExpired, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil, trafficAdaptive = M.trafficStatus() }

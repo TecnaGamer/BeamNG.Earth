@@ -8,8 +8,8 @@ local function car(x, y, z, dx, dy, length, width)
 end
 obj = { getId = function() return 1 end }
 local clusters = {[0]=0,[1]=0}
-v = {data={nodes={[0]={cid=0},[1]={cid=1}}}}
-obj.getRefNodeId = function() return 0 end
+v = {data={refNodes={[0]={ref=0}},nodes={[0]={cid=0},[1]={cid=1}}}}
+obj.getRefNodeId = nil -- GE-only API; native vehicle Lua uses v.data.refNodes
 obj.getNodeCluster = function(_,cid) return clusters[cid] end
 for method, field in pairs({getObjectCenterPositionXYZ='pos', getObjectDirectionVectorXYZ='dir',
   getObjectDirectionVectorUpXYZ='up'}) do
@@ -112,4 +112,26 @@ forward = -2
 T.check(launch(helper) == 0, 'a reversing vehicle is not boosted')
 forward = 25
 T.check(launch(helper) == 0, 'a vehicle already at launch speed is not boosted')
+forward=0;cars={[1]=car(0,0)}
+local scans=0;local clusterApi=obj.getNodeCluster
+obj.getNodeCluster=function(_,id)scans=scans+1;return clusterApi(obj,id)end
+beamstate={damage=0}
+S.invalidateClusterCache();S.canLaunch(25);local first=scans
+S.canLaunch(25)
+T.check(scans-first==1,'an unchanged configuration only checks the reference cluster on later attempts')
+clusters[1]=783;beamstate.damage=1
+T.check(not S.canLaunch(25),'damage invalidates a previously safe cluster layout')
+clusters[1]=0;S.onBeamBroke()
+T.check(S.canLaunch(25),'a beam-change notification rechecks the current topology')
+S.onReset();first=scans;S.canLaunch(25)
+T.check(scans-first>1,'vehicle reset invalidates the cluster cache')
+local reports={}
+obj.queueGameEngineLua=function(_,text)reports[#reports+1]=text end
+beamngEarth_spawnMotion=helper
+assert(loadstring(N.spawnVelocityCommand(25,41)))()
+T.check(reports[1] and reports[1]:find('onSpawnLaunch(1,41,true',1,true),'the native command reports actual impulse success to its GE request')
+electrics.values.throttle=0
+assert(loadstring(N.spawnVelocityCommand(25,42)))()
+T.check(reports[2] and reports[2]:find('onSpawnLaunch(1,42,false',1,true)
+  and reports[2]:find('ai-not-driving',1,true),'a skipped command acknowledges its reason without applying an impulse')
 T.done('spawn motion clearance')

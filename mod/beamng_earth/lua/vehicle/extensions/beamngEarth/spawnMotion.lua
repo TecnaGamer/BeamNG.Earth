@@ -16,6 +16,12 @@ local MAX_NODE_RADIUS_RATIO = 1.60
 local MIN_WHEEL_NODES = 6
 local MIN_DELTA_V = 0.02
 local VECTOR_EPSILON = 0.0001
+local clusterData, clusterNodes, clusterDamage, clusterRef, singleCluster
+function M.invalidateClusterCache()
+  clusterData, clusterNodes, clusterDamage, clusterRef, singleCluster = nil,nil,nil,nil,nil
+end
+M.onReset = M.invalidateClusterCache
+M.onBeamBroke = M.invalidateClusterCache
 
 local function finite(n)
   return type(n) == "number" and n == n and n ~= math.huge and n ~= -math.huge
@@ -54,29 +60,37 @@ end
 -- Check at command execution, not when GE queues the launch: traffic can move or respawn in between.
 -- Use the same live vehicle bounds as the stock AI. A skipped boost leaves its ordinary acceleration intact.
 function M.canLaunch(speed)
-  if not finite(speed) or speed <= 1 or speed > 80 or not obj or not mapmgr or not mapmgr.getObjects then return false end
+  if not finite(speed) or speed <= 1 or speed > 80 or not obj or not mapmgr or not mapmgr.getObjects then return false,'unavailable' end
   -- Wait for the AI's own forward drive request. A newly respawned vehicle can
   -- still be awaiting its map, braking, or preparing a reversing manoeuvre.
   local e = electrics and electrics.values
   if not ai or ai.mode ~= 'traffic' or not e or not finite(e.gearIndex) or e.gearIndex <= 0
     or not finite(e.throttle) or e.throttle <= 0 or not finite(e.brake) or e.brake > 0
     or not finite(e.parkingbrake) or e.parkingbrake > 0
-    or controller and controller.isFrozen then return false end
+    or controller and controller.isFrozen then return false,'ai-not-driving' end
   -- The instantaneous impulse can trigger the stock impact detector even without damage.
   -- Leave these vehicles to normal AI acceleration; keep their crash protection intact.
   if controller and controller.getControllersByType
-    and next(controller.getControllersByType('braking/postCrashBrake')) then return false end
+    and next(controller.getControllersByType('braking/postCrashBrake')) then return false,'impact-detector' end
   -- The body impulse acts on the reference cluster only. Separate clusters (for
   -- example a mixer drum) would be left behind and can tear their mounts apart.
-  if not (v and v.data and type(v.data.nodes) == 'table' and next(v.data.nodes)
-    and obj.getNodeCluster and obj.getRefNodeId) then return false end
-  local cluster = obj:getNodeCluster(obj:getRefNodeId())
-  if not finite(cluster) or cluster < 0 then return false end
-  for _, node in pairs(v.data.nodes) do
-    if obj:getNodeCluster(node.cid) ~= cluster then return false end
+  local ref = v and v.data and v.data.refNodes and v.data.refNodes[0]
+  if not (ref and finite(ref.ref) and type(v.data.nodes) == 'table' and next(v.data.nodes)
+    and obj.getNodeCluster) then return false,'cluster-data-unavailable' end
+  local cluster = obj:getNodeCluster(ref.ref)
+  if not finite(cluster) or cluster < 0 then return false,'cluster-data-unavailable' end
+  local damage = beamstate and beamstate.damage
+  -- Topology can change after damage. Unknown damage state deliberately rescans.
+  if not finite(damage) or clusterData~=v.data or clusterNodes~=v.data.nodes or clusterDamage~=damage or clusterRef~=cluster then
+    singleCluster=true
+    for _,node in pairs(v.data.nodes) do
+      if obj:getNodeCluster(node.cid)~=cluster then singleCluster=false;break end
+    end
+    clusterData,clusterNodes,clusterDamage,clusterRef=v.data,v.data.nodes,damage,cluster
   end
+  if not singleCluster then return false,'multiple-clusters' end
   local objects = mapmgr.getObjects()
-  if not objects then return false end
+  if not objects then return false,'traffic-unavailable' end
   local function box(id)
     local p = { obj:getObjectCenterPositionXYZ(id) }
     local f = { obj:getObjectDirectionVectorXYZ(id) }
@@ -103,7 +117,7 @@ function M.canLaunch(speed)
       local ahead, longitudinal = scalar(delta, ego.f), extent(other, ego.f)
       if ahead + longitudinal > -ego.halfLength and ahead - longitudinal - ego.halfLength < space
         and math.abs(scalar(delta, ego.r)) < ego.halfWidth + extent(other, ego.r) + 0.3
-        and math.abs(scalar(delta, ego.u)) < ego.halfHeight + extent(other, ego.u) + 0.3 then return false end
+        and math.abs(scalar(delta, ego.u)) < ego.halfHeight + extent(other, ego.u) + 0.3 then return false,'traffic-blocked' end
     end
   end
   return true
