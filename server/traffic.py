@@ -114,8 +114,48 @@ def is_divided_road(road_class, median_m=0.0, link=False, oneway=False):
     return cls in {"trunk", "primary", "secondary", "tertiary"} and float(median_m or 0) > 0.0
 
 
+ROAD_CLASS_MULTIPLIERS = {
+    "motorway": 2.0,
+    "trunk": 1.6,
+    "primary": 1.3,
+    "secondary": 1.0,
+    "tertiary": 0.75,
+    "residential": 0.40,
+    "unclassified": 0.40,
+    "living_street": 0.15,
+    "service": 0.10,
+    "track": 0.02,
+}
+
+
+def road_multiplier(road_class="unknown", lanes=None, divided=False):
+    """Capacity multiplier based on road functional classification, lane count, and divided status."""
+    cls = str(road_class or "unknown").lower()
+    if cls not in ROAD_CLASS_MULTIPLIERS:
+        return 2.0 if bool(divided) else 1.0
+
+    base = ROAD_CLASS_MULTIPLIERS[cls]
+    try:
+        lane_count = float(lanes) if lanes is not None and not math.isnan(float(lanes)) else None
+    except (ValueError, TypeError):
+        lane_count = None
+
+    if lane_count is not None and lane_count > 0:
+        ref_lanes = 4.0 if cls == "motorway" else 2.0
+        # Sublinear scaling with lane count
+        lane_factor = math.sqrt(max(0.5, lane_count) / ref_lanes)
+        mult = base * lane_factor
+    else:
+        mult = base
+
+    if divided and mult < 1.8 and cls in {"trunk", "primary", "secondary"}:
+        mult = max(mult, 1.8 if cls in {"trunk", "primary"} else 1.5)
+
+    return max(0.01, mult)
+
+
 def calculate(total_m, urban_m, major_m, local_m, settlement=None, road_class="unknown", divided=False,
-              sample_radius_m=SAMPLE_RADIUS_M, max_traffic=15):
+              sample_radius_m=SAMPLE_RADIUS_M, max_traffic=15, lanes=None):
     """Build a JSON-safe diagnostic profile and floating desired vehicle population."""
     radius = max(1.0, float(sample_radius_m))
     total = max(0.0, float(total_m))
@@ -147,13 +187,23 @@ def calculate(total_m, urban_m, major_m, local_m, settlement=None, road_class="u
         city_core = cap * smoothstep((density - 7.5) / 3.5)
         nearby = max(nearby, city_core)
     target = max(proximity, nearby)
-    multiplier = 2.0 if bool(divided) else 1.0
+    multiplier = road_multiplier(road_class, lanes=lanes, divided=divided)
     target = min(float(cap), target * multiplier)
 
     if place:
         source = "Natural-Earth-populated-places+mapped-roads"
     else:
         source = "mapped-roads-fallback"
+
+    resolved_lanes = None
+    if lanes is not None:
+        try:
+            val = float(lanes)
+            if not math.isnan(val) and val > 0:
+                resolved_lanes = int(round(val))
+        except (ValueError, TypeError):
+            pass
+
     return {
         "band": band,
         "distanceKm": round(distance_km, 2) if distance_km is not None else None,
@@ -163,6 +213,7 @@ def calculate(total_m, urban_m, major_m, local_m, settlement=None, road_class="u
         "settlementLat": float(place["lat"]) if place and place.get("lat") is not None else None,
         "settlementLon": float(place["lon"]) if place and place.get("lon") is not None else None,
         "roadClass": str(road_class or "unknown"),
+        "roadLanes": resolved_lanes,
         "carriageway": "freeway" if divided and str(road_class) == "motorway" else
                        ("dual-carriageway" if divided else "single-carriageway"),
         "divided": bool(divided),
@@ -174,7 +225,7 @@ def calculate(total_m, urban_m, major_m, local_m, settlement=None, road_class="u
         "sampleAreaKm2": round(area, 3),
         "settlementTarget": round(proximity, 3),
         "localTarget": round(nearby, 3),
-        "roadMultiplier": multiplier,
+        "roadMultiplier": round(multiplier, 3),
         "target": round(target, 3),
         "source": source,
     }
