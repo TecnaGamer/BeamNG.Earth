@@ -120,6 +120,13 @@ def code_id():
     return _CODE_ID
 
 
+def switches():
+    """This server's build switches (revisit.switches_key: the BNE_* that change output, the settings page's
+    Experimental ones among them): a helper whose switches differ builds other tiles from the same code."""
+    import revisit
+    return revisit.switches_key()
+
+
 def version():
     try:
         with open(os.path.join(_ROOT, "VERSION")) as f:
@@ -517,7 +524,8 @@ class Helper:
 
     def hello(self):
         _require_unpinned_helper()
-        return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "workers": self.workers}
+        return {"ok": True, "protocol": PROTOCOL, "version": version(), "code": code_id(), "switches": switches(),
+                "workers": self.workers}
 
     def handle(self, sock, addr):
         try:
@@ -525,6 +533,9 @@ class Helper:
             mine = self.hello()
             if h.get("op") != "hello" or h.get("protocol") != PROTOCOL or h.get("code") != mine["code"]:
                 send_msg(sock, dict(mine, ok=False, error="a different BeamNG.Earth version"))
+                return
+            if h.get("switches") != mine["switches"]:   # (other build switches: other tiles, the same code)
+                send_msg(sock, dict(mine, ok=False, error="other experimental settings (build switches)"))
                 return
             send_msg(sock, mine)
             while True:
@@ -637,9 +648,10 @@ class _Conn:
         s = socket.create_connection((self.host, self.port), timeout=CONNECT_S)
         s.settimeout(JOB_TIMEOUT_S)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        send_msg(s, {"op": "hello", "protocol": PROTOCOL, "version": version(), "code": code_id()})
+        send_msg(s, {"op": "hello", "protocol": PROTOCOL, "version": version(), "code": code_id(),
+                     "switches": switches()})
         h, _ = recv_msg(s)
-        if not h.get("ok"):
+        if not h.get("ok") or h.get("switches") != switches():
             s.close()
             raise ConnectionError(f"{self.host}:{self.port}: {h.get('error', 'refused')} "
                                   f"(theirs {h.get('version')} {h.get('code')}, ours {version()} {code_id()})")

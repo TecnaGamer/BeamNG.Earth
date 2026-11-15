@@ -321,6 +321,25 @@ def ground_square_setting(user_dir):
         return None
 
 
+def experimental_env(user_dir, env):
+    """The settings page's Experimental switches (server/experimental.py: the BNE_* build switches the player turned
+    on) into env, the server's environment, before it starts: its modules read them at import, in every process alike.
+    A switch that is off adds nothing (the cache keys and the shared archives stay the defaults'); one set by hand
+    stays. Read at every server start: a change on the page holds from the next one. Returns the ids turned on."""
+    try:
+        here = os.path.join(ROOT, "server")
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import experimental
+        ids = experimental.apply(env, user_dir)
+    except Exception as e:      # (an unreadable file: the defaults)
+        say(f"The experimental settings were not read ({type(e).__name__}: {e}); they stay off.")
+        return []
+    if ids:
+        say("Experimental features on (the settings page): " + ", ".join(ids))
+    return ids
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
@@ -342,6 +361,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
         sq = ground_square_setting(user_dir)
         if sq:
             env["BNGE_GROUND_SQUARE"] = sq
+    experimental_env(user_dir, env)     # the settings page's Experimental switches (server/experimental.py)
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():

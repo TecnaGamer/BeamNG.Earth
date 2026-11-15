@@ -94,8 +94,12 @@ def main():
     if telemetry and has_flag(help_text, "--telemetry") and "--offline" not in extra and "--telemetry" not in extra:
         cmd += ["--telemetry", "on"]
 
+    experimental = experimental_env(user_dir, os.environ)     # (the server inherits this environment)
+
     install.say(f"BeamNG.Earth {install.version()}: starting the world server")
     install.say(f"  BeamNG.drive user folder: {user_dir}")
+    if experimental:
+        install.say("  Experimental features on (the settings page): " + ", ".join(experimental))
     install.say("  Telemetry: " + ("on: anonymous player count and data-source load, no location "
                                     "(BNE_TELEMETRY=off turns it off)" if "--telemetry" in cmd else "off"))
     if skipped:
@@ -110,6 +114,20 @@ def main():
         sys.exit(run_logged(cmd, log_path))
     except KeyboardInterrupt:
         sys.exit(0)
+
+
+def experimental_env(user_dir, env):
+    """The settings page's Experimental switches (server/experimental.py) into env before the server starts, as the
+    app's launcher does (launcher.experimental_env): its modules read them at import, in every process alike. Returns
+    the ids turned on ([] when the file cannot be read: the defaults)."""
+    try:
+        here = os.path.join(ROOT, "server")
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import experimental
+        return experimental.apply(env, user_dir)
+    except Exception:
+        return []
 
 
 def server_log_path():

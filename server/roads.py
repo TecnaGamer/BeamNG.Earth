@@ -602,7 +602,8 @@ def _facts_baked(feats, kind, extra):
     except (ValueError, IndexError, TypeError):
         return None
     got = bakepack.find(revisit.CACHE_DIR, bakepack.facts_key(kind, extra, cid[0]),
-                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions})
+                        {"bake_format": bakepack.BAKE_FORMAT, "facts_format": FACTS_FORMAT, "versions": versions,
+                         "switches": bakepack.switches()})
     if got is None:
         import decisions        # (the shared decision archives: built by the project's builder, signed, checked)
         if decisions.enabled():
