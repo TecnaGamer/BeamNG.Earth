@@ -101,8 +101,10 @@ Build it yourself from the source's root: `docker build -f docker/Dockerfile -t 
   version as the server's. Start the BeamNG.Earth app and the BeamMP launcher in either order (the app starts the game,
   or just its world server if the game is already running), then join. Without the app, a window asks to install it:
   the world can't load without it.
-- A player who joins is sent to where the others are, and each player's car shows in the right place in everyone's
-  world, with its dents. Other players show on the world map (M) as arrows.
+- A returning player starts where they left off. A saved location or an explicitly chosen destination takes priority
+  over the server's invitation to join another player. With no saved/chosen location, a new player can still join
+  the others. Each player's car shows in the right place in everyone's world, with its dents. Other players show
+  on the world map (M) as arrows.
 - Each player's app builds the world around them on their own computer, and this server shares the slowest part of
   it (in testing): the road levelling plans of each map area that a player builds come to the server, which keeps
   them in `Resources/Server/BeamNGEarth/store` and sends them to every player who comes there later, this session or

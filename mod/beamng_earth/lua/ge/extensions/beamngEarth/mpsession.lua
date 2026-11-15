@@ -6,7 +6,7 @@
 --     heading (others(): the world map's arrows); the cars of a
 --     player whose anchor is not known (no BeamNG.Earth, or not heard yet) are deactivated here: they would stand in
 --     the wrong place;
---   - bngeGoTo { lat, lon }: on joining, a teleport to where the others are.
+--   - bngeGoTo { lat, lon }: on joining without a saved/chosen destination, a teleport to where the others are.
 -- Damage: BeamMP sends parts that break off (break groups) but not dents; its own full-damage message (nodesVE.getNodes:
 -- every node and beam, applied on the other players' copies by its nodesGE) is never sent. This sends our own cars'
 -- damage on BeamMP's full-damage path (nodesGE.sendNodes), as only the beams broken or bent (DAMAGE_VE: tens of KB for
@@ -66,6 +66,7 @@ local floating = {}         -- game vehicle id -> true: floating here (off our b
 local poseIn, hideIn = 0, 0
 local joined = false        -- BeamMP joined and no pose sent yet: the first pose asks for the meeting place
 local wentTo = false        -- the session's one bngeGoTo done
+local keepJoinLocation = false -- core chose a saved/explicit destination; ignore the server's meeting invitation
 local camPlaced = false     -- the free camera put on the ground once (BeamMP joins without a car)
 local lastPlayers = -1      -- (the log: the player count as last logged)
 local stats = { anchors = 0, go = 0, poses = 0, converged = 0, peers = 0 }
@@ -521,7 +522,7 @@ local function onGoTo(data)
   local c = core()
   stats.go = stats.go + 1
   if test.late and testClock < M.TEST_LATE_S then lateGoTo = data; return end
-  if wentTo or not ok or type(d) ~= 'table' or not c then return end
+  if keepJoinLocation or wentTo or not ok or type(d) ~= 'table' or not c then return end
   local lat, lon = require('beamngEarth/mpanchor').coordinates(d.lat, d.lon)
   if not lat then return end
   wentTo = true
@@ -573,13 +574,21 @@ function M.onTeleport()
 end
 M.placeCamera = placeCamera     -- (tests)
 
--- BeamMP's join done (core.lua onBeamMPPostJoin): the first pose asks the plugin where the others are.
+-- Called when core chooses where to start or accepts an explicit teleport. This can happen before OR after
+-- onPostJoin: do not clear it there. The ordinary level/session teardown resets it for the next join.
+-- Do not look up lastPosition in onGoTo: by then a first-time start may already have written its default position.
+function M.keepJoinLocation() keepJoinLocation = true end
+
+-- BeamMP's join done (core.lua onBeamMPPostJoin): the first pose asks for a meeting place only without a saved choice.
 -- (and where to get help: the BeamMP team, 2026-10-27, players kept asking them about BeamNG.Earth)
 M.SUPPORT = 'BeamNG.Earth on BeamMP: for help join the TGForever Discord, https://discord.gg/tgf. BeamNG.Earth is '
   .. 'not like a normal BeamNG mod: if something is not working, it is almost certainly a BeamNG.Earth problem, not a '
   .. 'BeamMP one, so please do not contact the BeamMP team or open BeamMP support tickets about it.'
 function M.onPostJoin()
-  joined, wentTo, camPlaced = true, false, false
+  joined, wentTo = true, false
+  -- A saved startup may already have placed the camera before PostJoin. Keep that spot;
+  -- resetting camPlaced would move it back to the anchor origin (away from the saved road).
+  camPlaced = keepJoinLocation and camPlaced or false
   anchors = {}
   log('I', 'beamngEarth', M.SUPPORT)
 end
@@ -1006,7 +1015,7 @@ function M.update(dt, anchor, player)
       if ok and tonumber(nx) and tonumber(ny) then h = (h - math.deg(math.atan2(nx, ny)) + 360) % 360 end
     end
     TriggerServerEvent('bngePose', jsonEncode({ v = M.PROTO, aLat = anchor.lat, aLon = anchor.lon, lat = lat,
-      lon = lon, joined = joined, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
+      lon = lon, joined = joined and not keepJoinLocation, h = h and math.floor(h * 10 + 0.5) / 10 or nil,
       sc = shareInfo and shareInfo.code or nil, sw = shareInfo and shareInfo.weight or nil }))
     stats.poses = stats.poses + 1
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
@@ -1181,6 +1190,7 @@ function M.reset()
   nodesBySid = {}
   M.applyServerSky(nil)       -- (the real time and weather again after a session with the server's)
   deactivated, anchors, poseIn, hideIn, joined, wentTo, camPlaced, lastPlayers = {}, {}, 0, 0, false, false, false, -1
+  keepJoinLocation = false
   waitGround = {}
   members, sentDamage, damageSince, restoredAt, restores = {}, {}, {}, {}, {}
   -- share, config, configWait, convergeIn, anchorSince, lastAnchorKey = nil, nil, 0, 0, 0, nil   -- (shared world building)

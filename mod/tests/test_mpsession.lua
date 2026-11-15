@@ -437,4 +437,41 @@ do -- no car (BeamMP joins without one): the free camera on the ground, and lift
   T.check(put == nil, 'a car: the camera is never moved here')
   be, core_camera, getPlayerVehicle, quatFromDir = savedBe, savedCam, savedGet, savedQ
 end
+do -- A returning player's startup location wins over the server's delayed meeting invitation.
+  ms.reset()
+  ms.keepJoinLocation() -- the companion connected before BeamMP's post-join hook
+  ms.onTeleport()
+  ms.onPostJoin()
+  asked.go = nil
+  handlers.bngeGoTo('t')
+  T.check(asked.go == nil, 'saved startup location is retained when selected before PostJoin')
+  local before = #sent
+  ms.update(0.1, anchor, { x = 100, y = 0, z = 0 })
+  T.check(#sent > before and sent[before + 1].data:find('"joined":false', 1, true),
+    'saved startup sends its pose without requesting a meeting destination')
+  handlers.bngeGoTo('t')
+  T.check(asked.go == nil, 'late/repeated meeting invitations cannot undo the saved location')
+  do
+    local oldBe, oldCamera, oldGet = be, core_camera, getPlayerVehicle
+    local moved = false
+    be = { getSurfaceHeightBelow = function() return 100 end }
+    core_camera = { setPosRot = function() moved = true end }
+    getPlayerVehicle = function() return nil end
+    ms.placeCamera({ x = 900, y = 700, z = 103 })
+    T.check(not moved, 'PostJoin keeps the camera already placed at the saved road, not the anchor origin')
+    be, core_camera, getPlayerVehicle = oldBe, oldCamera, oldGet
+  end
+
+  ms.reset()
+  ms.onPostJoin()
+  ms.keepJoinLocation() -- the companion connected after PostJoin
+  handlers.bngeGoTo('t')
+  T.check(asked.go == nil, 'saved startup location is retained when selected after PostJoin')
+
+  ms.reset()
+  ms.onPostJoin()
+  handlers.bngeGoTo('t')
+  T.check(asked.go and asked.go[1] == decoded.t.lat and asked.go[2] > decoded.t.lon,
+    'next session without a saved/chosen location still uses the meeting fallback')
+end
 T.done('test_mpsession')

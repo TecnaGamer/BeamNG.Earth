@@ -269,12 +269,16 @@ local function defaultStart()
   -- place (a teleport's target), else this run's
   local okP, pos = pcall(places.lastPosition)
   if okP and type(pos) == 'table' and tonumber(pos.lat) and tonumber(pos.lon) then
+    mpsession.keepJoinLocation()
     return teleportTo(pos.lat, pos.lon, nil, 'start')
   end
   if not ui.hasLatLon() then
     local okR, recent = pcall(places.recentList)
     local r = okR and type(recent) == 'table' and recent[1] or nil
-    if r and tonumber(r.lat) and tonumber(r.lon) then return teleportTo(r.lat, r.lon, r.name, 'start') end
+    if r and tonumber(r.lat) and tonumber(r.lon) then
+      mpsession.keepJoinLocation()
+      return teleportTo(r.lat, r.lon, r.name, 'start')
+    end
   end
   local lat, lon = ui.getLatLon(DEFAULT_LAT, DEFAULT_LON)
   return teleportTo(lat, lon, nil, 'start')
@@ -283,8 +287,12 @@ local function startTeleport()
   local choice = levelinfo.chosen()
   local id = levelinfo.placeId(choice)
   local p = id and places.find(id)
-  if p then return teleportTo(p.lat, p.lon, p.name, 'start') end
+  if p then
+    mpsession.keepJoinLocation()
+    return teleportTo(p.lat, p.lon, p.name, 'start')
+  end
   if choice == levelinfo.RANDOM and net.isConnected() then
+    mpsession.keepJoinLocation()
     st.randomStart = { id = nextId(), t0 = st.clock }
     net.send({ type = 'random_place', id = st.randomStart.id })
     setStatus('Picking a random place...')
@@ -3167,7 +3175,7 @@ local function onClientPostStartMission(levelPath)
 end
 
 -- BeamMP finished joining a server (its own hook): the combined app layout (beammp.lua); the first pose asks where
--- the others are (mpsession.lua).
+-- the others are only when no saved/explicit startup location was chosen (mpsession.lua).
 function M.onBeamMPPostJoin() beammp.onPostJoin(); mpsession.onPostJoin() end
 
 -- BeamMP left the server (its own hook): the other players' cars we deactivated back on.
@@ -3304,6 +3312,7 @@ teleportTo = function(lat, lon, name, kind)
   st.placeSnapped = place ~= nil and not (okA and adLat)
   st.teleportRetry = nil       -- (a new teleport replaces a failed one's retry)
   if requestAnchor(aLat, aLon, 'teleport', cx, cy, place) then
+    if kind == 'teleport' then mpsession.keepJoinLocation() end -- a delayed join invitation must not undo the player's Go
     setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon))
     loadprogress.reset()
     loadprogress.start(st.clock)        -- the bar says "Loading" from now (loadprogress.lua)

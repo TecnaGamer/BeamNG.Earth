@@ -1075,4 +1075,30 @@ do -- a computer with too little memory (the server's emergency tier): one warni
   T.check(#toasts == 1, 'the lean tier: no toast (the app window says it)')
   guihooks = oldGh
 end
+do -- Resume must protect its chosen location before a late BeamMP invitation arrives.
+  local ms = require('beamngEarth/mpsession')
+  local places = require('beamngEarth/places')
+  local net = require('beamngEarth/net')
+  local oldPosition, oldConnected, oldSend = places.lastPosition, net.isConnected, net.send
+  local oldKeep = ms.keepJoinLocation
+  local kept, requests = 0, {}
+  places.lastPosition = function() return { lat = 35.5, lon = 139.7 } end
+  net.isConnected = function() return true end
+  net.send = function(msg) requests[#requests + 1] = msg end
+  ms.keepJoinLocation = function() kept = kept + 1; oldKeep() end
+  core.onClientStartMission()
+  local request
+  for _, msg in ipairs(requests) do if msg.type == 'prepare_anchor' then request = msg end end
+  T.check(kept == 1 and request and request.purpose == 'teleport',
+    'saved startup chooses its terrain and protects it from the BeamMP meeting invitation')
+  local expectedLat, expectedLon = 35.5, 139.7
+  if core.SNAP_TELEPORTS then expectedLat, expectedLon = require('beamngEarth/geodesy').snapAnchor(expectedLat, expectedLon) end
+  T.near(request.lat, expectedLat, 1e-6, 'resume latitude goes through the existing Earth location flow')
+  T.near(request.lon, expectedLon, 1e-6, 'resume longitude goes through the existing Earth location flow')
+  core.onBeamMPPostJoin()
+  T.check(core.teleport(48.8, 2.3), 'explicit teleport is still accepted')
+  T.check(kept == 2, 'explicit Go also protects against a delayed join invitation')
+  places.lastPosition, net.isConnected, net.send = oldPosition, oldConnected, oldSend
+  ms.keepJoinLocation = oldKeep
+end
 T.done('test_core_stubbed')
