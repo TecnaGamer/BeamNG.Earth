@@ -6,13 +6,17 @@
 //! from the segments a uniform grid over the points puts near them: a segment whose box, grown by the road's reach,
 //! misses a point's grid cell is farther from the point than the reach, so it can be neither a nearest segment nearer
 //! than the reach nor one equal to it; the segments that are kept are taken in their own order with the same test, so
-//! the nearest (and the first of equals) is the same one. Points or roads with a coordinate that is not finite (whose
-//! distances the grid's bound does not hold for) are answered over every segment, as before.
+//! the nearest (and the first of equals) is the same one. Points or roads with a coordinate (or a reach) past
+//! BOUND_M or not finite are answered over every segment, as before: there the distances can overflow to inf or NaN
+//! (a NaN first segment held the old scan's nearest for good, which a grid leaving that segment out would not), and
+//! the nearest point on a segment can round further than BOX_PAD_M off its box.
 use crate::dm::Dm;
 
 const CELL_MIN_M: f64 = 16.0;       // m: the grid's cell side, at least
 const CELLS_MAX: f64 = 512.0;       // cells along the points' longer side, at most
 const BOX_PAD_M: f64 = 1e-3;        // m a segment's box grows past its reach (rounding of the nearest point on it)
+const BOUND_M: f64 = 1e7;           // m: |coordinates| and reach the grid answers (products ~1e15: no overflow, no NaN;
+                                    // rounding of a nearest point ~1e-8 m, well inside BOX_PAD_M)
 
 #[inline]
 fn seg(d: &[[f64; 3]], j: usize) -> [f64; 5] {
@@ -46,7 +50,7 @@ pub fn near_crossers(p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
     let k = p.len();
     let nc = st.len().saturating_sub(1);
     let mut out = vec![false; k];
-    let fin = |x: f64, y: f64| x.is_finite() && y.is_finite();
+    let fin = |x: f64, y: f64| x.abs() <= BOUND_M && y.abs() <= BOUND_M;     // (false for NaN too)
     // the grid over the finite points
     let (mut qx0, mut qy0, mut qx1, mut qy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for q in p {
@@ -70,7 +74,7 @@ pub fn near_crossers(p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
     for c in 0..nc {
         let (j0, j1) = (st[c], st[c + 1]);
         if j1 < j0 + 2 { continue; }
-        let ok = reach[c].is_finite() && d[j0..j1].iter().all(|q| fin(q[0], q[1]));
+        let ok = reach[c].abs() <= BOUND_M && d[j0..j1].iter().all(|q| fin(q[0], q[1]));
         if !ok { brute.push(c); continue; }
         if !gridded { continue; }
         let m = reach[c].max(0.0) + BOX_PAD_M;
@@ -103,7 +107,7 @@ pub fn near_crossers(p: &[[f64; 2]], z: &[f64], d: &[[f64; 3]], st: &[usize], re
     for i in 0..k {
         let (px, py) = (p[i][0], p[i][1]);
         if !fin(px, py) {
-            // (every road over every segment: the old answer for a point the grid holds nothing of)
+            // (every road over every segment: the old answer for a point the grid does not answer)
             out[i] = (0..nc).any(|c| {
                 let (j0, j1) = (st[c], st[c + 1]);
                 j1 >= j0 + 2 && on_road(0..(j1 - j0 - 1), d, px, py, z[i], reach[c], dz, j0)

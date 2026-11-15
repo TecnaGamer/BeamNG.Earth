@@ -17,6 +17,70 @@ def track(x0=-100.0, x1=100.0, z=9.45):
     return xy, np.full(51, z)
 
 
+def full_scan(xy, z, pts, starts, reach, dz):
+    """earthfast.near_crossers as every point against every segment of every road (the kernel before its grid)."""
+    import dnp
+    out = np.zeros(len(xy), bool)
+    with np.errstate(all="ignore"):
+        for c in range(len(starts) - 1):
+            d = pts[starts[c]:starts[c + 1]]
+            if len(d) < 2:
+                continue
+            a, b = d[:-1, :2], d[1:, :2] - d[:-1, :2]
+            l2 = np.maximum(b[:, 0] * b[:, 0] + b[:, 1] * b[:, 1], 1e-12)
+            for i, (px, py) in enumerate(xy):
+                t = np.clip(((px - a[:, 0]) * b[:, 0] + (py - a[:, 1]) * b[:, 1]) / l2, 0.0, 1.0)
+                dd = dnp.hypot(px - (a[:, 0] + t * b[:, 0]), py - (a[:, 1] + t * b[:, 1]))
+                best, bj = np.inf, None
+                for n, v in enumerate(dd.tolist()):
+                    if v < best or bj is None:
+                        best, bj = v, n
+                if best < reach[c] and abs(z[i] - d[bj, 2]) < dz:
+                    out[i] = True
+    return out
+
+
+class NearCrossersTest(unittest.TestCase):
+    """The kernel's grid of near segments answers as the full scan, ties, NaN and overflowing distances included."""
+
+    def ask(self, xy, z, pts, starts, reach, dz):
+        import fast
+        got = np.asarray(fast._ef.near_crossers(np.ascontiguousarray(xy, np.float64), np.asarray(z, np.float64),
+                                                np.ascontiguousarray(pts, np.float64), np.asarray(starts, np.int64),
+                                                np.asarray(reach, np.float64), float(dz)), bool)
+        np.testing.assert_array_equal(got, full_scan(xy, z, pts, starts, reach, dz))
+        return got
+
+    def test_overflowing_first_segment(self):
+        """A first segment whose distance overflows to NaN holds the nearest for good (Codex's review, 2026-11-15)."""
+        pts = np.array([[1e200, 1e200, 0], [2e200, 2e200, 0], [100, 100, 0], [1, 0, 0], [0, 0, 0]], np.float64)
+        got = self.ask(np.zeros((1, 2)), np.zeros(1), pts, [0, 5], [2.0], 1.0)
+        self.assertFalse(got[0])
+
+    def test_random(self):
+        rng = np.random.default_rng(7)
+        for _ in range(300):
+            k = int(rng.integers(1, 40))
+            big = float(rng.choice([1.0, 9.9e6, 1.01e7, 1e154, 1e200, 1.7e308]))
+            xy = np.round(rng.normal(size=(k, 2)) * 30.0)
+            if rng.random() < 0.2:
+                xy[int(rng.integers(0, k))] *= big
+            if rng.random() < 0.05:
+                xy[int(rng.integers(0, k)), 0] = np.nan
+            lines, reach = [], []
+            for _c in range(int(rng.integers(1, 5))):
+                n = int(rng.integers(0, 8))
+                ln = np.round(rng.normal(size=(n, 2)) * 30.0)
+                if n and rng.random() < 0.3:
+                    ln[int(rng.integers(0, n))] = rng.choice([-1.0, 1.0], size=2) * big
+                if n > 2 and rng.random() < 0.2:
+                    ln[1] = ln[0]       # (a zero-length segment)
+                lines.append(np.c_[ln, rng.normal(size=n)])
+                reach.append(float(rng.choice([0.0, 5.0, 40.0, big, np.inf])))
+            starts = np.r_[0, np.cumsum([len(ln) for ln in lines])]
+            self.ask(xy, rng.normal(size=k), np.concatenate(lines), starts, reach, 1.0)
+
+
 class RailYieldTest(unittest.TestCase):
     def test_cut_out_of_a_crossing_road(self):
         xy, z = track()
