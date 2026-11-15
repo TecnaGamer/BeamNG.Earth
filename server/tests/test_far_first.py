@@ -77,6 +77,8 @@ class FarFirstTest(unittest.TestCase):
         async def go():
             c = earthd.Connection(self.s, None, _Writer())
             c.global_far = global_far
+            if global_far:      # (a disc, the default horizon mode's: in square mode the global part reports no slack)
+                c.view_cap = 80000.0
             a = self.s.new_anchor(LAT, LON)
             a.first_terrain = (0.0, 0.0)
             self.s.anchors[a.id] = a

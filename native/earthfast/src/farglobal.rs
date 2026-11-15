@@ -419,6 +419,12 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
             tiles.push((z, x, y, quad_flat(&q), size));
         }
     }
+    // (square mode: the roots are searched by their quads' distance, kept by their bboxes' overlap with the square; far
+    // from the anchor a rotated root's bbox overlaps it past the search's reach, so a move of any size may bring one in:
+    // no slack, every pose selects. Codex review round 3; the disc's search and cull go by the same distance)
+    if !disc {
+        slack = 0.0;
+    }
     Ok((tiles, refined, regions, slack))
 }
 
