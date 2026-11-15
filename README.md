@@ -29,7 +29,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - A real view distance out to the horizon, with the Earth's curvature.
 - Both poles: Antarctica's ice sheet up to the South Pole (2,835 m) from the Copernicus DEM, the Arctic's sea ice
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
-- Opt-in (`BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
+- Opt-in (Settings > Experimental > Road surface from aerial photos, or `BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
   colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
@@ -80,9 +80,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
-  and tram tracks (street track where trams run on the road). Opt-in (set `BNE_RAIL_XING=1`): a level crossing as
+  and tram tracks (street track where trams run on the road). Opt-in (Settings > Experimental > Grouped level crossings, or `BNE_RAIL_XING=1`): a level crossing as
   one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
-  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
+  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (Settings > Experimental > Overhead railway wires, or `BNE_CATENARY=1`): electrified lines
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
   A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
   smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
@@ -92,7 +92,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
   crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
   switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
-  collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
+  collider at the rails for riding them (Settings > Experimental > Solid railway rails, or `BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (Settings > Experimental > Railway tunnels, or `BNE_RAIL_TUNNELS=on`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
@@ -121,7 +121,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
-- Road signs (off unless the server has `BNE_ROADSIGNS=on`; Settings > World > Road signs): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
+- Road signs (experimental, off by default; Settings > Experimental > Road signs, from the next start of BeamNG.Earth): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
   signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
   no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
   limit ends.
@@ -206,7 +206,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
   has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
-  `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
+  `BNE_GRADE_GUARD=on` (off by default; Settings > Experimental > Road steepness limit) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Smooth bends (on by default; `BNE_ROAD_SMOOTH=off` draws the roads as mapped): the map draws a bend as a few
   straight pieces, so roads had a visible corner at every vertex, and a banked racetrack's chords made a series of
@@ -215,7 +215,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   spirals so the curvature has no steps (`BNE_ROAD_G2=off`: the arcs alone). The road's ends and the points where
   another road joins it stay where the map has them. The road mesh, the ground's grading, the markings and the AI's
   routes all follow the same line. Driveways and parking aisles keep their mapped corners; railways are rounded only
-  with `BNE_RAIL_CURVES=on`.
+  with `BNE_RAIL_CURVES=on` (Settings > Experimental > Rounded railway curves).
 - Lane changes inside a highway stretch (from PR #880 by DerEifrige-f; `BNE_LANE_SECTIONS=off` turns it off): where
   the map's ways between two junctions hold different lane counts (an auxiliary lane opening before an exit, a lane
   dropping after an entrance), the road gets each part's own lane count and width. Where OpenStreetMap places the
@@ -246,7 +246,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
   update changes how that part of the world is built.
-- Experimental, off by default (`BNE_STALE_REVISIT=on` turns it on): after an app update, a place you've been to is
+- Experimental, off by default (Settings > Experimental > Show the older world while rebuilding, or `BNE_STALE_REVISIT=on`): after an app update, a place you've been to is
   shown as it was last built (its ground, roads, sidewalks, street furniture, trees and signs, all of that one version
   together) while the new version is built in the background, then swapped in: the ground and road surfaces that
   changed are prepared out of sight and switched in one frame with the car held for a moment, and only the parts the
@@ -383,15 +383,29 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
   and the game keeps two until it has loaded.
+- **Experimental** settings page: features still being tested, all off by default, each from the next start of
+  BeamNG.Earth (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
+  switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the
+  shared prebuilt world data is made for the defaults) and rebuilds places you visited. **Road signs** and **Dutch road
+  signs**; **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street
+  edges; in France also its markings, bend and traffic signs, speed cameras, utility poles and regional houses);
+  **Guard rails at drops**; **Widened entrances**; **Right of way by road class** (stop signs and stopping AI at
+  unsignalised junctions); **Bumpy road surfaces**; **Rough dirt roads**; **Tyre polish, crack networks and
+  manholes**; **Road steepness limit**; **Road surface from aerial photos**; **Rougher land off the roads**; **Rock
+  faces in deep road cuts**; **Ground over shallow tunnels**; **More undersea tunnels**; **Traffic through tunnels**;
+  **Solid railway rails**; **Overhead railway wires**; **Grouped level crossings**; **Railway tunnels**; **Rounded
+  railway curves**; **Closed 3D models**; **Detailed Canadian lidar**; **Show the older world while rebuilding** (after
+  an update). A switch set by hand in the server's environment wins over the page.
 - **Max RAM for BeamNG.Earth** (Performance settings page): the most memory the world server may hold, all its
   processes together (the game's own memory is not counted). **Auto** (the default) takes a third of your computer's
   memory below 24 GB (about 5 GB on a 16 GB PC, at least 1.5 GB) and 60 % of it on a bigger computer, at most 24 GB
   (about 19 GB on a 32 GB PC); or pick 3 to 32 GB. The
   page shows the memory in use against the limit. Near the limit the server drops its caches and restarts its busiest
-  helper processes, and it uses less while your computer is short of memory; the caches and the number of helper
+  helper processes, and it uses less while your computer is short of memory, but never holds itself below 3 GB (the
+  least its own processes need: on an 8 GB or 4 GB computer too); the caches and the number of helper
   processes are sized for the limit from the next start (the limit itself applies at once). A low limit makes the
-  world load more slowly, not crash. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the
-  watchdog off.)
+  world load more slowly, not stop; when the limit is too low for the place, the status line and the settings page
+  say so. (`--max-ram-gb` / `BNGE_MAX_RAM_GB` on the server; `BNGE_MEMWATCH=off` turns the watchdog off.)
 - Works behind a proxy: the app's downloads use the HTTP/HTTPS proxy set on your computer (HTTPS_PROXY, HTTP_PROXY,
   NO_PROXY or the system's proxy setting; SOCKS proxies are not supported).
 - Updates: the mod tells you in game (and on its settings page, with a link) when a newer version is on GitHub;

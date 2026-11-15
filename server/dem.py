@@ -1145,6 +1145,10 @@ class Dem:
     def _mirror_path(self, key):
         z, x, y = key
         hk = "h" if self.hkdtm is not None and hkdtmmod.covers(z, x, y) else ""     # (made with Hong Kong's DTM)
+        # (made with the opt-in Canadian lidar, the settings page's Experimental switch: BNE_LIDARBC's own files and
+        # its bias, BNE_HRDEM_NEAR's whole HRDEM. Their tiles apart: off, the mirror's tiles as before)
+        hk += ("b" if getattr(self, "lidarbc", None) is not None else "") + \
+            ("n" if getattr(self, "hrdem_near", HRDEM_NEAR) else "")
         return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
                             str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 

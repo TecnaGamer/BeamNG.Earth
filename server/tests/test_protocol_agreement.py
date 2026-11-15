@@ -483,7 +483,8 @@ SERVER_TO_MOD = {
     # the server's memory and its limit (memwatch.status), for the settings page: after every mod 'memory'
     "memory": {"usedMB": F(NUM), "limitMB": F(NUM), "effMB": F(NUM), "autoMB": F(NUM), "setting": F(NUM),
                "tier": F(str), "processes": F(int), "sheds": F(int), "rotations": F(int), "peakMB": F(NUM),
-               "availMB": F(NUM, OPT), "restart": F(bool)},
+               "availMB": F(NUM, OPT), "restart": F(bool),
+               "tooLow": F(bool)},    # (over Max RAM for minutes: memwatch.too_low, the settings line says so)
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
               "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)

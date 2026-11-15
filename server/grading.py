@@ -7685,13 +7685,17 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
             else:
                 members[found].append(m)
     # a node on another road's middle: that road's nearest vertex joins it
+    # (the roads whose box a node is within, all of them at once per node: asked road by road, two small numpy calls a
+    # pair, a city tile's 1,587 plans made 3.6 million of them and this loop was 15 % of the tile, Sydney 2026-11-14)
+    mid = np.array([i for i in cand if len(xys[i]) >= 3], np.int64)
+    mid_half = np.array([float(plans[i][1].half) for i in mid], np.float64)[:, None]
+    mid_lo, mid_hi = lo[mid], hi[mid]
     for c, ms in zip(centres, members):
         own = {i for i, _a, _v in ms}
-        for i in cand:
-            if i in own or len(xys[i]) < 3:
-                continue
-            if not ((lo[i] <= c + RAMP_NODE_M + float(plans[i][1].half)).all()
-                    and (hi[i] >= c - RAMP_NODE_M - float(plans[i][1].half)).all()):
+        inside = ((mid_lo <= (c + RAMP_NODE_M)[None, :] + mid_half).all(axis=1)
+                  & (mid_hi >= (c - RAMP_NODE_M)[None, :] - mid_half).all(axis=1))
+        for i in mid[inside].tolist():
+            if i in own:
                 continue
             d = dnp.hypot(*(xys[i] - c).T)
             v = int(np.argmin(d))

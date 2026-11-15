@@ -5555,6 +5555,9 @@ class Server:
             # (a full drive fails far tiles, blocks and caches with "No space left on device": the first week's most
             # frequent errors; the cache is cut back to its reserve, but other files may fill the drive)
             parts.append("your drive is nearly full: free some space (the download cache is cut back)")
+        mem = memwatchmod.too_low()     # (the server over its Max RAM for minutes: memwatch.TOO_LOW_S)
+        if mem:
+            parts.append(mem)
         return "Degraded: " + "; ".join(parts) if parts else ""
 
     def level_summary(self):
@@ -13094,6 +13097,13 @@ def main():
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("download cache: %s", args.cache_dir)
+    try:                # (the settings page's Experimental switches, put in this environment before the start)
+        import experimental
+        on = sorted({k for _sid, env, _n in experimental.FEATURES for k in env if os.environ.get(k)})
+        if on:
+            log.info("experimental switches: %s", ", ".join(f"{k}={os.environ[k]}" for k in on))
+    except Exception:
+        pass
     if args.max_ram_gb is not None:     # (the settings page's choice otherwise: cpupin.apply_player_settings)
         import budget as _b
         os.environ[_b.SETTING_ENV] = str(args.max_ram_gb) if args.max_ram_gb > 0 else "auto"

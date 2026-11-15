@@ -19,16 +19,44 @@ const LIFECYCLE = Symbol.for("beamngEarth.uiLifecycle")
 const LIFECYCLE_TIMEOUT_MS = 30_000
 const owner = {}
 let serversTab = null
+let pasteSupport = null
+// A newer request makes the running operation's wait pointless (#1302): the game's UI mod loader runs again on every
+// UiModsChanged (BeamMP mounting/unmounting mods during a join) and awaits each mod's onUnload/onLoad in turn, so a load
+// stuck on a Lua reply or import that never comes held the next unload/load, and the whole UI, until the timeout.
+// A load no longer wanted (unloaded, or replaced by another load) and a running unload (its removals are already sent)
+// give way at once and end quietly; the newer request redoes what is needed.
+function supersede(lifecycle) {
+  const running = lifecycle.running
+  if (running && (running.label === "unload" || lifecycle.desired !== running.request)) {
+    running.stop(new Error(`BeamNG.Earth: UI ${running.label} superseded`), true)
+  }
+}
+// Our files gone (BeamMP unmounted this copy while the loader still lists it): a module request answered 404
+function missingFile(e) {
+  return /\b404\b/.test(String(e?.message ?? e))
+}
 function enqueue(label, operation) {
   const lifecycle = window[LIFECYCLE] ||= { queue: Promise.resolve(), owner: null }
   const request = { owner }
   if (label === "load") lifecycle.desired = request
   else if (lifecycle.desired?.owner === owner) lifecycle.desired = null
+  supersede(lifecycle)
   const result = lifecycle.queue.then(async () => {
+    // superseded while queued: nothing to load
+    if (label === "load" && lifecycle.desired !== request) return
     let expire
     const expired = new Promise((_, reject) => { expire = reject })
-    const run = { active: true, expired, timedOut: false, retried: false,
+    const run = { active: true, expired, timedOut: false, retried: false, quiet: false,
       error: new Error(`BeamNG.Earth: UI ${label} timed out after ${LIFECYCLE_TIMEOUT_MS} ms`) }
+    run.stop = (error, quiet) => {
+      if (!run.active) return
+      run.active = false
+      run.error = error
+      run.quiet = quiet
+      expire(error)
+    }
+    const entry = { label, request, stop: run.stop }
+    lifecycle.running = entry
     run.onReply = () => {
       // A backgrounded game can deliver a valid callback after the deadline. Retry the still-desired load
       // from the beginning; never resume the expired continuation or revive an unloaded/replaced owner.
@@ -36,12 +64,32 @@ function enqueue(label, operation) {
       run.retried = true
       enqueue(label, operation).catch(e => console.error("BeamNG.Earth: UI recovery failed", e))
     }
-    const timer = setTimeout(() => { run.active = false; run.timedOut = true; expire(run.error) }, LIFECYCLE_TIMEOUT_MS)
+    const timer = setTimeout(() => {
+      if (!run.active) return
+      run.timedOut = true
+      run.stop(run.error, false)
+    }, LIFECYCLE_TIMEOUT_MS)
     try {
       return await Promise.race([operation(lifecycle, run), expired])
+    } catch (e) {
+      if (run.quiet) {
+        if (run.gone) {
+          console.warn(`BeamNG.Earth: UI ${label} ended: ${run.gone}`)
+          // what this load registered before the missing file is rolled back now (its pages cannot open), on a
+          // context of its own (this run is over); the removals are sent at once, their replies are not awaited
+          if (label === "load" && lifecycle.owner === owner) {
+            lifecycle.owner = null
+            const cleanup = { active: true, expired: new Promise(() => {}), onReply() {}, error: null }
+            unloadUi(cleanup).catch(err => console.error("BeamNG.Earth: UI rollback failed", err))
+          }
+        }
+        return
+      }
+      throw e
     } finally {
       run.active = false
       clearTimeout(timer)
+      if (lifecycle.running === entry) lifecycle.running = null
     }
   })
   lifecycle.queue = result.catch(() => {}) // rejected or missing replies must not block later loads/cleanup
@@ -53,7 +101,14 @@ function check(run) {
 async function step(run, action) {
   check(run)
   const pending = Promise.resolve(action())
-  pending.then(run.onReply, run.onReply)
+  pending.then(run.onReply, e => {
+    // a file of ours is gone: the rest would fail the same way (or register pages that cannot open); end quietly
+    if (missingFile(e) && run.active) {
+      run.gone = String(e?.message ?? e)
+      run.stop(new Error(`BeamNG.Earth: UI files not mounted (${run.gone})`), true)
+    }
+    run.onReply()
+  })
   const result = await Promise.race([pending, run.expired])
   // Timing out does not cancel a Lua command or import. Its late result must not resume stale UI work.
   check(run)
@@ -170,8 +225,11 @@ async function loadUi(run) {
   await registerPauseTab(run)
   check(run)
   // Ctrl+V in the mod's text boxes, through the engine's clipboard (paste.js: the game's browser has none of its own)
-  try { (await step(run, () => import("./paste.js"))).installPaste() }
-  catch (e) { if (!run.active) throw e; console.error("BeamNG.Earth: paste support failed", e) }
+  try {
+    const paste = await step(run, () => import("./paste.js"))
+    paste.installPaste()
+    pasteSupport = paste           // (removed through this at unload: no import then, our files may be gone)
+  } catch (e) { if (!run.active) throw e; console.error("BeamNG.Earth: paste support failed", e) }
   // tell the mod the page exists: its imgui window becomes a compact HUD (settings.lua)
   if (window.bngApi && window.bngApi.engineLua) {
     window.bngApi.engineLua("if beamngEarth_settings then beamngEarth_settings.setPageExists(true) end")
@@ -194,7 +252,8 @@ async function unloadUi(run) {
   check(run)
   try { serversTab?.stop() } catch (e) { /* never started */ }
   serversTab = null
-  try { (await import("./paste.js")).removePaste() } catch (e) { /* never installed */ }
+  try { pasteSupport?.removePaste() } catch (e) { /* never installed */ }
+  pasteSupport = null
   // Release local state first, and send both independent Lua removals without waiting on either callback.
   // A missing pause-tab reply must not prevent route cleanup (or a later UI load).
   try {

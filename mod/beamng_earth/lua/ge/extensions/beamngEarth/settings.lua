@@ -31,7 +31,8 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
+M.VERSION = 3     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
+                  -- 3: road signs off by default, a real switch (a version-2 file's roadSigns = true was the hidden default)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -122,8 +123,36 @@ M.SCHEMA = {
   telemetryChoice = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Telemetry choice made (version)' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
-  -- ordinary road signs (server roadsigns.py, needs BNE_ROADSIGNS=on on the server)
-  roadSigns = { kind = 'bool', default = true, label = 'Road signs' },
+  -- ordinary road signs (server roadsigns.py): one of the Experimental switches below since 2026-11-15 (off by default:
+  -- the server's BNE_ROADSIGNS=on, set from this file when it starts; off again at once through the message road_signs)
+  roadSigns = { kind = 'bool', default = false, label = 'Road signs' },
+  -- the Experimental page (the user, 2026-11-15: "add the toggles for the features that can only be enabled via
+  -- environment variables"): each the server's BNE_* build switches (server/experimental.py FEATURES), all off by
+  -- default; the app's launcher (start.py for a source install) reads them from this file and starts the server with
+  -- them, so a change holds from the next start of BeamNG.Earth. Nothing here applies them in the game itself
+  expNlRoadSigns = { kind = 'bool', default = false, label = 'Dutch road signs' },
+  expEuScenery = { kind = 'bool', default = false, label = 'French and European road scenery' },
+  expDropRails = { kind = 'bool', default = false, label = 'Guard rails at drops' },
+  expEntranceFlares = { kind = 'bool', default = false, label = 'Widened entrances' },
+  expPriorityStops = { kind = 'bool', default = false, label = 'Right of way by road class' },
+  expRoadBumps = { kind = 'bool', default = false, label = 'Bumpy road surfaces' },
+  expRoughDirt = { kind = 'bool', default = false, label = 'Rough dirt roads' },
+  expWearStrips = { kind = 'bool', default = false, label = 'Tyre polish, crack networks and manholes' },
+  expGradeGuard = { kind = 'bool', default = false, label = 'Road steepness limit' },
+  expPhotoSurface = { kind = 'bool', default = false, label = 'Road surface from aerial photos' },
+  expTerrainBumps = { kind = 'bool', default = false, label = 'Rougher land off the roads' },
+  expCliffWalls = { kind = 'bool', default = false, label = 'Rock faces in deep road cuts' },
+  expTunnelLids = { kind = 'bool', default = false, label = 'Ground over shallow tunnels' },
+  expSubseaTunnels = { kind = 'bool', default = false, label = 'More undersea tunnels' },
+  expAiTunnels = { kind = 'bool', default = false, label = 'Traffic through tunnels' },
+  expRailCollide = { kind = 'bool', default = false, label = 'Solid railway rails' },
+  expCatenary = { kind = 'bool', default = false, label = 'Overhead railway wires' },
+  expRailCrossings = { kind = 'bool', default = false, label = 'Grouped level crossings' },
+  expRailTunnels = { kind = 'bool', default = false, label = 'Railway tunnels' },
+  expRailCurves = { kind = 'bool', default = false, label = 'Rounded railway curves' },
+  expWatertight = { kind = 'bool', default = false, label = 'Closed 3D models' },
+  expCanadaLidar = { kind = 'bool', default = false, label = 'Detailed Canadian lidar' },
+  expStaleRevisit = { kind = 'bool', default = false, label = 'Show the older world while rebuilding' },
   -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
   -- accordingly (server designs.py; the message german_junctions)
   germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
@@ -186,7 +215,12 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'maxRamGb', 'devOutlineKm',
-  'devMapKm' }
+  'devMapKm',
+  -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
+  'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
+  'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
+  'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
+  'expCanadaLidar', 'expStaleRevisit' }
 
 -- Stored but not on the settings page
 M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
@@ -323,6 +357,9 @@ function M.load(path)
     -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
     -- old default, not as a choice; once saved as version 2 the player's own setting stands)
     if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
+    -- (road signs became a real switch, off by default, with version 3, 2026-11-15: a file from before had true as the
+    -- hidden switch's default, not as a choice; the server reads it so too, experimental.SINCE_VERSION)
+    if (tonumber(data.version) or 1) < 3 then values.roadSigns = false end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
@@ -428,6 +465,7 @@ function M.memoryLine(m)
     line = line .. ', lowered to ' .. gb(m.effMB) .. ' while the computer is short of memory'
   end
   line = line .. string.format(', %d processes', tonumber(m.processes) or 0)
+  if m.tooLow then line = line .. '. Too low for this place: the world loads slowly, raise it' end
   if m.restart then line = line .. '. Restart BeamNG.Earth to resize its caches and processes' end
   return line
 end
