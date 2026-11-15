@@ -218,39 +218,154 @@ beammp.openInstallPage()
 T.check(opened == 'game ' .. beammp.INSTALL_URL, 'opened by the game: ' .. tostring(opened))
 _G.openWebBrowser = nil
 
--- leaving a server: the player's own BeamNG.Earth (switched off by BeamMP at the join) back on
+-- leaving a server: the player's own BeamNG.Earth (switched off by BeamMP at the join) back on once the session is
+-- over, by a job in the game's job system (it outlives our modules: the code swap, the server copy's deletion)
 do
-  local activated, db = {}, { beamng_earth = { active = false } }
-  core_modmanager = { getModDB = function(n) return db[n] end,
+  local realLog = _G.log
+  local logs = {}
+  _G.log = function(_, _, msg) logs[#logs + 1] = msg end
+  local now = 0                       -- (the job's clock: hptimer, ms)
+  _G.hptimer = function()
+    local t0 = now
+    return { stop = function() return (now - t0) * 1000 end }
+  end
+  local jobs = {}
+  _G.core_jobsystem = { create = function(fct, maxdt, ...)
+    local job = { args = { ... } }
+    job.sleep = function() coroutine.yield() end      -- (sleep(0): one frame)
+    job.t = coroutine.create(fct)
+    jobs[#jobs + 1] = job
+    return job
+  end }
+  local function frames(n, dt)
+    for _ = 1, n do
+      now = now + (dt or 1 / 60)
+      for _, j in ipairs(jobs) do
+        if coroutine.status(j.t) ~= 'dead' then
+          local ok, err = coroutine.resume(j.t, j, unpack(j.args))
+          if not ok then error(err) end
+        end
+      end
+    end
+  end
+  local function liveJobs()
+    local n = 0
+    for _, j in ipairs(jobs) do if coroutine.status(j.t) ~= 'dead' then n = n + 1 end end
+    return n
+  end
+  local activated, db = {}, {}
+  _G.core_modmanager = { getModDB = function(n) return db[n] end,
     activateMod = function(n) activated[#activated + 1] = n; db[n].active = true end }
-  _G.MPCoreNetwork = { isMPSession = function() return false end }
-  beammp.reset()
-  T.check(beammp.onServerLeave() and activated[1] == 'beamng_earth', 'left (session over): our own mod switched back on')
-  T.check(not beammp.restoreTick(5) and #activated == 1, 'still on later: done')
-  db.beamng_earth.active = true
-  T.check(not beammp.onServerLeave() and #activated == 1, 'already on: left alone')
-  db.beamng_earth = nil
-  T.check(not beammp.onServerLeave() and #activated == 1, 'no local copy (no app): nothing')
-
-  -- the leave hook comes while BeamMP still counts the session (its checkMod would turn ours straight off again): on
-  -- once the session is over; again (up to RESTORE_TRIES) when turned off meanwhile
-  db.beamng_earth = { active = false }
-  activated = {}
   local inMp = true
-  _G.MPCoreNetwork = { isMPSession = function() return inMp end }
+  _G.MPCoreNetwork = { isMPSession = function() return inMp end, isGoingMPSession = function() return false end }
+  local ours = { modname = 'beamng_earth' }
+
+  -- BeamMP's checkMod switches ours off in the session: armed (once); nothing while the session lasts
   beammp.reset()
-  T.check(not beammp.onServerLeave() and #activated == 0, 'leave hook in the session: not yet')
-  T.check(not beammp.restoreTick(0.1) and #activated == 0, 'session still on: not yet')
+  db.beamng_earth = { active = false }
+  T.check(beammp.onModDeactivated(ours) == true and liveJobs() == 1, 'switched off in a session: armed')
+  T.check(beammp.onModDeactivated(ours) == false and beammp.onServerLeave() == false and liveJobs() == 1,
+    'already pending: no second job')
+  frames(600)
+  T.check(#activated == 0, 'in the session: left off (BeamMP would switch it straight off again)')
+  -- the session over (MPCoreNetwork.leaveServer: the hook, then isMpSession false): on at the next frame
   inMp = false
-  T.check(beammp.restoreTick(0.1) and #activated == 1, 'session over: switched on')
-  db.beamng_earth.active = false           -- (turned off again by someone)
-  T.check(not beammp.restoreTick(0.5) and #activated == 1, 'the gap first')
-  T.check(beammp.restoreTick(0.6) and #activated == 2, 'turned off meanwhile: on again')
-  for _ = 1, 10 do db.beamng_earth.active = false; beammp.restoreTick(2) end
-  T.check(#activated == beammp.RESTORE_TRIES, 'at most RESTORE_TRIES times: ' .. #activated)
-  core_modmanager = nil
+  frames(1)
+  T.check(#activated == 1 and activated[1] == 'beamng_earth', 'session over: on at the next frame')
+  frames(math.ceil(beammp.RESTORE_GAP_S * 60) + 2)
+  T.check(liveJobs() == 0 and not rawget(_G, beammp.RESTORE_GLOBAL).live and #activated == 1,
+    'still on after the gap: the job ends')
+  frames(100)
+  T.check(#activated == 1, 'nothing more after it ended')
+
+  -- turned off again soon after: on again, at most RESTORE_TRIES times
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  inMp = false
+  for _ = 1, 20 do frames(5); db.beamng_earth.active = false end
+  frames(5)
+  T.check(#activated == beammp.RESTORE_TRIES and liveJobs() == 0, 'at most RESTORE_TRIES times: ' .. #activated)
+
+  -- not ours, or not in a session (the player turning it off in the Mods menu): nothing
+  beammp.reset(); jobs, activated = {}, {}
+  inMp = true
+  T.check(beammp.onModDeactivated({ modname = 'someothermod' }) == false and liveJobs() == 0, 'another mod: nothing')
+  inMp = false
+  T.check(beammp.onModDeactivated(ours) == false and liveJobs() == 0, 'outside a session: never switched back on')
+  T.check(beammp.onModDeactivated(nil) == false, 'no mod table: nothing')
+
+  -- the leave hook: armed when ours is off (a server's copy with this code), not when on or missing
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  T.check(beammp.onServerLeave() == true and liveJobs() == 1, 'leave hook, ours off: armed')
+  frames(3)
+  T.check(#activated == 0, 'leave hook: BeamMP still counts the session there: not yet')
+  inMp = false
+  frames(1)
+  T.check(#activated == 1, 'then on')
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth.active = true
+  T.check(beammp.onServerLeave() == false and liveJobs() == 0, 'leave hook, ours on: nothing')
+  db.beamng_earth = nil
+  T.check(beammp.onServerLeave() == false and liveJobs() == 0, 'leave hook, no local copy (no app): nothing')
+  -- (MPCoreNetwork.onClientEndMission calls leaveServer at every level's end, single player too)
+  db.beamng_earth = { active = false }
+  inMp = false
+  T.check(beammp.onServerLeave() == false and liveJobs() == 0,
+    'leave hook outside a session (turned off by the player): nothing')
+  inMp = true
+
+  -- this code loaded in a session with ours off (a server's copy swapped in): armed; not outside a session
+  db.beamng_earth = { active = false }
+  T.check(beammp.onLoad() == true and liveJobs() == 1, 'loaded in a session, ours off: armed')
+  beammp.reset(); jobs = {}
+  inMp = false
+  T.check(beammp.onLoad() == false and liveJobs() == 0, 'loaded outside a session: nothing')
+
+  -- switched on by someone else first (an older copy's own restore): the job just ends
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  db.beamng_earth.active = true
+  inMp = false
+  frames(2)
+  T.check(#activated == 0 and liveJobs() == 0, 'on already: nothing, the job ends')
+
+  -- the code swap forgets our modules: the job keeps going; the new code's module sees it pending
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  package.loaded['beamngEarth/beammp'] = nil
+  local fresh = require('beamngEarth/beammp')
+  T.check(fresh ~= beammp and fresh.onServerLeave() == false and liveJobs() == 1, 'new code: the pending job seen')
+  inMp = false
+  frames(1)
+  T.check(#activated == 1, 'the old code\'s job switched it on after its module was forgotten')
+  fresh.reset()
+
+  -- an error in the mod manager: the job ends quietly; no job system or mod manager: nothing armed, no error
+  beammp.reset(); jobs, activated, inMp = {}, {}, true
+  db.beamng_earth = { active = false }
+  beammp.onModDeactivated(ours)
+  local armedState = rawget(_G, beammp.RESTORE_GLOBAL)
+  _G.core_modmanager.getModDB = function() error('boom') end
+  inMp = false
+  frames(2)
+  T.check(liveJobs() == 0 and not armedState.live, 'an error: the job ends')
   beammp.reset()
-  T.check(not beammp.onServerLeave() and not beammp.restoreTick(1), 'no mod manager: nothing')
+  local js = _G.core_jobsystem
+  _G.core_jobsystem = nil
+  inMp = true
+  db.beamng_earth = { active = false }
+  _G.core_modmanager = { getModDB = function(n) return db[n] end, activateMod = function() end }
+  T.check(beammp.onModDeactivated(ours) == false, 'no job system: not armed')
+  _G.core_jobsystem = js
+  _G.core_modmanager = nil
+  T.check(beammp.onServerLeave() == false and beammp.onLoad() == false, 'no mod manager: nothing')
+  beammp.reset()
+  _G.MPCoreNetwork, _G.core_jobsystem, _G.hptimer = nil, nil, nil
+  _G.log = realLog
 end
 
 T.done('test_beammp')

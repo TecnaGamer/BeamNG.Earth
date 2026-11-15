@@ -44,6 +44,10 @@ Works with BeamNG.drive 0.40.5.
   UI's crash recovery again and again. The HUD is now built once, and only on BeamNG.Earth servers; a join on a stock
   map no longer leaves our layout waiting for your next single-player drive, and a missing UI file no longer holds
   the whole interface for 30 seconds.
+- **Reduced the chance of BeamNG.Earth staying switched off after you leave a BeamMP server** (until the game was
+  restarted: no BeamNG.Earth map, no BeamNG.Earth servers tab). BeamMP switches your copy off while you're connected;
+  it is now switched back on as the session ends, also when you leave through Esc > Main menu and when the server
+  sends an older copy of the mod.
 - **Reduced the chance of the world never finishing loading with a low "Max RAM for BeamNG.Earth"** (3 GB, or Auto on
   8 GB and 4 GB computers): if one of the road helper processes closed, roads, trees and buildings could wait for
   good. The helpers are now started again by themselves, the server is never held below 3 GB, and the status line
