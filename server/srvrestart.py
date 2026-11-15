@@ -74,6 +74,14 @@ def apply_ground(env, settings):
     return env
 
 
+def _grid_of(value):
+    """The Ground grid setting ("1" / "2") a BNGE_GROUND_SQUARE value puts in force (heightmap.ground_square's rule)."""
+    try:
+        return "2" if float(str(value or "").strip() or 1.0) == 2.0 else "1"
+    except ValueError:
+        return "1"
+
+
 def supervisor_part(settings, env, base_env):
     """What a supervisor applied, for START_ENV: {"values": the experimental switches as the settings file asked for
     them, "fixed": the settings the page cannot change (their variables set by hand in base_env, the environment
@@ -87,8 +95,8 @@ def supervisor_part(settings, env, base_env):
     for sid, feature_env, _needs in experimental.FEATURES:
         if any(base_env.get(k) or env.get(k) != wanted.get(k) for k in feature_env):
             fixed.append(sid)
-    if base_env.get(GROUND_ENV):
-        fixed.append("groundGrid")
+    if base_env.get(GROUND_ENV) or _grid_of(env.get(GROUND_ENV)) != v["groundGrid"]:
+        fixed.append("groundGrid")      # (by hand, or a dev's BNGE_SERVER_ENV square other than the page's)
     return {"values": {sid: v[sid] for sid in experimental.IDS}, "fixed": fixed}
 
 

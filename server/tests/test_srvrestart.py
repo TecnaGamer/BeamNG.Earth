@@ -118,6 +118,13 @@ class ViewTest(unittest.TestCase):
         env = {"BNE_CATENARY": "1"}
         srvrestart.supervisor_env(env, {"version": 3}, base_env={})
         self.assertIn("expCatenary", json.loads(env[srvrestart.START_ENV])["fixed"])
+        # (Codex round 2) a dev's BNGE_SERVER_ENV="BNGE_GROUND_SQUARE=2" over the page's 1 m: fixed, never offered;
+        # the same square as the page's, or the page's own: not fixed
+        for square, grid, want in (("2", "1", True), ("2.0", "1", True), ("1", "2", True), ("2", "2", False),
+                                   ("", "1", False), ("1", "1", False)):
+            env = {srvrestart.GROUND_ENV: square} if square else {}
+            srvrestart.supervisor_env(env, {"version": 3, "groundGrid": grid}, base_env={})
+            self.assertEqual("groundGrid" in json.loads(env[srvrestart.START_ENV])["fixed"], want, (square, grid))
         with tempfile.TemporaryDirectory() as folder:
             _v, fixed = srvrestart.start_view(folder, {srvrestart.START_ENV: json.dumps(part)}, hand=["serverCores"])
             self.assertEqual(fixed, ["expAiTunnels", "groundGrid", "serverCores"])
@@ -468,6 +475,23 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(json.loads(envs[1][srvrestart.START_ENV])["values"]["expAiTunnels"])
         self.assertEqual(envs[0][srvrestart.TIMES_ENV], "", "the first start: no restarts yet")
         self.assertEqual(len(envs[1][srvrestart.TIMES_ENV].split(",")), 1, "the restarted server knows of one")
+
+
+class LauncherServerEnvTest(unittest.TestCase):
+    def test_server_env_ground_override_is_fixed(self):
+        """Codex round 2: the launcher's BNGE_SERVER_ENV square over the page's Ground grid is reported fixed."""
+        import launcher
+        with tempfile.TemporaryDirectory() as folder:
+            write_settings(folder, {"version": 3, "groundGrid": "1"})
+            for server_env, want in (("BNGE_GROUND_SQUARE=2", True), ("", False)):
+                with mock.patch.object(launcher.subprocess, "Popen", return_value=FakeProc(None)) as popen, \
+                        mock.patch.object(launcher.threading, "Thread"), mock.patch.object(launcher, "say"), \
+                        mock.patch.dict(os.environ, {"BNGE_SERVER_ENV": server_env}, clear=False):
+                    os.environ.pop(srvrestart.GROUND_ENV, None)
+                    launcher.start_server(folder, [], os.path.join(folder, "server.log"))
+                env = popen.call_args.kwargs["env"]
+                self.assertEqual(env.get(srvrestart.GROUND_ENV), "2" if want else None)
+                self.assertEqual("groundGrid" in json.loads(env[srvrestart.START_ENV])["fixed"], want, server_env)
 
 
 class RestartExtraTest(unittest.TestCase):
