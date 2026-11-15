@@ -647,11 +647,22 @@ def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
     if not coarse and not (FLAT_SEP_ON and RAW_ELEV is not None):
         return []
     out = []
+    # (each road against only the bridges whose boxes meet its own, in their order: a central Athens window's roads
+    # against every bridge round it were ~6,800 _seg_hits calls, 616k a cold first road tile, 21 of its 144 s, though
+    # nearly all of them lay nowhere near each other: GitHub #1327. A pair whose boxes do not meet has no crossing)
+    pad = 2.0 * SEG_BOX_PAD_M      # (_seg_hits' own test pads both lines' segments)
+    bb = np.array([(*np.asarray(b, np.float64)[:, :2].min(0), *np.asarray(b, np.float64)[:, :2].max(0))
+                   for b in bridges]).reshape(-1, 4)
     for line, half in crossings(frame, cells, box, reach):
         if len(line) < 2:
             continue
+        lo, hi = np.asarray(line, np.float64)[:, :2].min(0) - pad, np.asarray(line, np.float64)[:, :2].max(0) + pad
+        near = _box_hits(bb, (lo[0], lo[1], hi[0], hi[1]))
+        if not near:
+            continue
         sl = _arc(line)
-        for b in bridges:
+        for k in near:
+            b = bridges[k]
             for sc in _seg_hits(line, b):
                 if not coarse and not flat_rail_crossing(frame, b, line, sc):
                     continue

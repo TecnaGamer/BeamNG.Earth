@@ -1084,6 +1084,40 @@ class CoarseUnderpassTest(unittest.TestCase):
         self.assertEqual(sum(len(h) for h in hits), 100)
         self.assertLess(took, 2.0)
 
+    def test_coarse_underpasses_only_near_bridges(self):
+        """GitHub #1327: each road is tested against the bridges whose boxes meet its own: the same pieces, in the same
+        order, as against every bridge; roads far from every bridge call _seg_hits not at all."""
+        import geodesy
+        frame = geodesy.EnuFrame(38.0446, 23.7371, 0.0)
+        rng = np.random.default_rng(14)
+        lines = [(np.cumsum(rng.normal(0.0, 25.0, (int(rng.integers(2, 30)), 2)), axis=0) + rng.uniform(-800, 800, 2),
+                  float(rng.uniform(2.0, 8.0))) for _ in range(80)]
+        lines.append((np.array([[5000.0, 5000.0], [5100.0, 5000.0]]), 3.0))      # far from every bridge
+        bridges = [("b%d" % k, "rail", "bridge", np.cumsum(rng.normal(0.0, 40.0, (int(rng.integers(2, 60)), 2)), axis=0)
+                    + rng.uniform(-800, 800, 2)) for k in range(25)]
+        rails = bridges + [("g", "rail", "ground", np.array([[0.0, 0.0], [10.0, 0.0]]))]
+        calls = []
+        seg_hits = railways._seg_hits
+
+        def counted(a, b):
+            calls.append(float(a[0][0]))
+            return seg_hits(a, b)
+        with mock.patch.object(railways, "crossings", lambda *_a, **_k: lines), \
+                mock.patch.object(railways, "COARSE_AT", lambda la, lo: True), \
+                mock.patch.object(railways, "_seg_hits", counted):
+            got = railways.coarse_underpasses(frame, [], (0, 0, 10, 10), rails)
+            n_near = len(calls)
+            with mock.patch.object(railways, "_box_hits", lambda fb, box, mask=None: list(range(len(fb)))):
+                every = railways.coarse_underpasses(frame, [], (0, 0, 10, 10), rails)
+        self.assertGreater(len(got), 10)
+        self.assertEqual(len(got), len(every))
+        for (xy, h), (xy2, h2) in zip(got, every):
+            self.assertEqual(h, h2)
+            np.testing.assert_array_equal(xy, xy2)
+        self.assertLess(n_near, len(calls) - n_near)                     # (fewer pairs tested)
+        self.assertNotIn(5000.0, calls[:n_near])                         # (the far road: never tested)
+        self.assertIn(5000.0, calls[n_near:])
+
     def test_only_on_coarse_elevation(self):
         import geodesy
         frame = geodesy.EnuFrame(58.1, 56.4, 0.0)
