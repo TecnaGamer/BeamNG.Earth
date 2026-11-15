@@ -22,6 +22,13 @@ server/decisions.py, tools/build_decisions.py): a thin wrapper round a pinned se
                                                   # V's replaced block files past the grace period (here, and in R2
                                                   # when run through the unit)
 
+--product lidarz (before the command: run.py --product lidarz all --places-file FILE) does the same for the lidar road
+heights (server/lidarz.py, tools/build_lidarz.py: the 3DEP lidar's answers per map cell, signed with the same key):
+./out/lz<FORMAT>/<lkey>/ here, s3://<bucket>/lz/lz<FORMAT>/<lkey>/ (https://tiles.tgforever.net/lz/...), files
+*.bnlz and manifest.bnlm; its lkey follows roadz's rules, not the release, so a later build merges into it. The
+pinned checkout then needs tools/build_lidarz.py too (`git archive <commit> server tools/build_decisions.py
+tools/build_lidarz.py docs/PLACES.md`).
+
 The output of the current version stays in ./out: a later build of the same version merges into its blocks and
 rewrites the manifest from current.json, so deleting it would drop the uploaded blocks from the next manifest.
 Place lines: "block X,Y" (one z12 block), or anything tools/build_decisions.py --places takes (a name,
@@ -52,9 +59,26 @@ MANIFEST_CACHE = "no-cache"
 sys.path.insert(0, os.path.join(SRC, "server"))
 
 
+PRODUCTS = {
+    # name: (tool, CDN folder, server module, block file extension, manifest name, earthfast domain)
+    "dec": ("build_decisions.py", "dec", "decisions", "bngd", "manifest.bngm", "dec"),
+    "lidarz": ("build_lidarz.py", "lz", "lidarz", "bnlz", "manifest.bnlm", "lidarz"),
+}
+PRODUCT = PRODUCTS["dec"]
+
+
+def _mod():
+    import importlib
+    return importlib.import_module(PRODUCT[2])
+
+
 def dfmt():
-    import decisions
-    return f"d{decisions.FORMAT}"
+    m = _mod()
+    return f"d{m.FORMAT}" if PRODUCT[2] == "decisions" else f"lz{m.FORMAT}"
+
+
+def dkw():
+    return {} if PRODUCT[5] == "dec" else {"domain": PRODUCT[5]}
 SECRET_NAMES = ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY", "R2_ENDPOINT")
 
@@ -175,7 +199,7 @@ def build(a):
             spec = "@asked:" + spec
         t0 = time.time()
         print(f"[{i}/{len(lines)}] {place}: {f:.1f} GB free, cache {c:.2f} GB", flush=True)
-        r = subprocess.run([PY, os.path.join(SRC, "tools", "build_decisions.py"), "build", "--places", spec,
+        r = subprocess.run([PY, os.path.join(SRC, "tools", PRODUCT[0]), "build", "--places", spec,
                             "--km", str(a.km), "--cache", CACHE, "--out", OUT, "--key", KEY, "--procs",
                             str(a.procs), "--stats", st_path], env=env, cwd=HERE)
         dt = time.time() - t0
@@ -190,11 +214,19 @@ def build(a):
             rows = []
         with open(STATS, "a") as fh:
             for row in rows:
-                row["packed_plans"] = packed_plans(row.get("blocks", {}))
                 row = dict(row, line=place, commit=commit()[:12], at=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                           cache_gb=round(du_gb(CACHE), 2))
-                fh.write(json.dumps(row, sort_keys=True) + "\n")
+                           cache_gb=round(du_gb(CACHE), 2), product=PRODUCT[1])
                 kb = sum(row.get("blocks", {}).values()) / 1e3
+                if PRODUCT[1] != "dec":
+                    row.pop("per_cell", None)
+                    fh.write(json.dumps(row, sort_keys=True) + "\n")
+                    print(f"[{i}/{len(lines)}] {row['place']}: {row['cells']} cells, {row['records']} records "
+                          f"({row['made']} measured, {row['failed']} failed), {len(row.get('blocks', {}))} blocks "
+                          f"{kb:.0f} KB, {row['ept_mb']} MB of point clouds, {row['wall_s']} s wall, {row['cpu_s']} s "
+                          f"CPU, lkey {row['lkey']}", flush=True)
+                    continue
+                row["packed_plans"] = packed_plans(row.get("blocks", {}))
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
                 print(f"[{i}/{len(lines)}] {row['place']}: {row['cells']} cells, {row['plans']} plans, "
                       f"{row['facts']} facts, {len(row.get('blocks', {}))} blocks {kb:.0f} KB, {row['wall_s']} s "
                       f"wall, {row['cpu_s']} s CPU, vkey {row['vkey']}; plans packed per block "
@@ -220,9 +252,9 @@ def check(vk):
     import decisions
     import fast
     root = os.path.join(OUT, dfmt(), vk)
-    with open(os.path.join(root, "manifest.bngm"), "rb") as f:
-        man = json.loads(fast._ef.dec_open_manifest(f.read(), None))
-    if man.get("vkey") != vk or man.get("format") != decisions.FORMAT:
+    with open(os.path.join(root, PRODUCT[4]), "rb") as f:
+        man = json.loads(fast._ef.dec_open_manifest(f.read(), None, **dkw()))
+    if man.get("vkey") != vk or man.get("format") != _mod().FORMAT:
         raise SystemExit(f"manifest of {man.get('vkey')} (format {man.get('format')}) in folder {vk}")
     vkb = hashlib.sha256(decisions.canonical(man["doc"])).digest()
     if vkb.hex()[:32] != vk:
@@ -230,12 +262,12 @@ def check(vk):
     n = size = 0
     rels = []
     for bx, by, h in man["blocks"]:
-        rel = f"{decisions.BLOCK_Z}/{bx}/{by}.{h}.bngd"
+        rel = f"{decisions.BLOCK_Z}/{bx}/{by}.{h}.{PRODUCT[3]}"
         with open(os.path.join(root, rel), "rb") as f:
             b = f.read()
         if hashlib.sha256(b).hexdigest()[:decisions.HASH_HEX] != h:
             raise SystemExit(f"{rel}: not the file its name holds")
-        fast._ef.dec_verify_block(b, decisions.BLOCK_Z, bx, by, vkb, None)
+        fast._ef.dec_verify_block(b, decisions.BLOCK_Z, bx, by, vkb, None, **dkw())
         n += 1
         size += len(b)
         rels.append(rel)
@@ -259,26 +291,26 @@ def upload(a, vks=None):
     for vk in vks:
         n, size, rels = check(vk)
         root = os.path.join(OUT, dfmt(), vk)
-        dst = f"s3://{bucket}/dec/{dfmt()}/{vk}"
+        dst = f"s3://{bucket}/{PRODUCT[1]}/{dfmt()}/{vk}"
         t0 = time.time()
         # (the blocks by name: a name is its content, so sync uploads only the new ones; retired ones are left
         # there until prune-out)
         r = subprocess.run(aws_base(env)[:2] + ["sync"] + aws_base(env)[2:]
-                           + [os.path.join(root, "12"), f"{dst}/12", "--exclude", "*", "--include", "*.bngd",
+                           + [os.path.join(root, "12"), f"{dst}/12", "--exclude", "*", "--include", f"*.{PRODUCT[3]}",
                               "--content-type", "application/octet-stream", "--cache-control", BLOCK_CACHE],
                            env=env)
         if r.returncode != 0:
             print(f"{vk}: block upload failed (exit {r.returncode}); manifest not uploaded", flush=True)
             return 1
         r = subprocess.run(aws_base(env)[:2] + ["cp"] + aws_base(env)[2:]
-                           + [os.path.join(root, "manifest.bngm"), f"{dst}/manifest.bngm",
+                           + [os.path.join(root, PRODUCT[4]), f"{dst}/{PRODUCT[4]}",
                               "--content-type", "application/octet-stream", "--cache-control", MANIFEST_CACHE],
                            env=env)
         if r.returncode != 0:
             print(f"{vk}: manifest upload failed (exit {r.returncode})", flush=True)
             return 1
         print(f"uploaded {vk}: manifest of {n} blocks ({size / 1e6:.2f} MB) to {dst}/ in {time.time() - t0:.1f} s "
-              f"(https://tiles.tgforever.net/dec/{dfmt()}/{vk}/manifest.bngm)", flush=True)
+              f"(https://tiles.tgforever.net/{PRODUCT[1]}/{dfmt()}/{vk}/{PRODUCT[4]})", flush=True)
     return 0
 
 
@@ -322,7 +354,7 @@ def prune_out(a):
             continue
         if env is not None:
             r = subprocess.run(aws_base(env)[:2] + ["rm"] + aws_base(env)[2:]
-                               + [f"s3://{bucket}/dec/{dfmt()}/{a.keep}/{rel}"], env=env)
+                               + [f"s3://{bucket}/{PRODUCT[1]}/{dfmt()}/{a.keep}/{rel}"], env=env)
             if r.returncode != 0:
                 keep[rel] = t
                 continue
@@ -341,7 +373,10 @@ def prune_out(a):
 
 
 def main():
+    global PRODUCT
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--product", choices=sorted(PRODUCTS), default="dec",
+                    help="dec: the decision archives (default); lidarz: the lidar road heights")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("build", "all"):
         p = sub.add_parser(name)
@@ -358,6 +393,7 @@ def main():
     p.add_argument("--grace-days", type=float, default=GRACE_DAYS)
     p.add_argument("--remote", action="store_true", help="fail unless R2 credentials are there (the unit)")
     a = ap.parse_args()
+    PRODUCT = PRODUCTS[a.product]
     if a.cmd == "build":
         return build(a)
     if a.cmd == "upload":

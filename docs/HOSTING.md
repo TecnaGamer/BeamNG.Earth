@@ -23,7 +23,7 @@ deploy script, service wrapper and unit files).
 6. [The data repository and its workflows](#the-data-repository-and-its-workflows)
 7. [The collector service](#the-collector-service)
 8. [The on-demand aerial builder](#the-on-demand-aerial-builder)
-9. [Signed decision archives](#signed-decision-archives)
+9. [Signed decision archives](#signed-decision-archives) (and the [lidar road heights](#lidar-road-heights))
 10. [Client settings (environment variables)](#client-settings-environment-variables)
 11. [Run your own CDN, step by step](#run-your-own-cdn-step-by-step)
 12. [Costs](#costs)
@@ -46,7 +46,7 @@ deploy script, service wrapper and unit files).
   | Cloudflare R2 bucket          | -----------------> | tiles.tgforever.net           |
   | bnge-tiles                    |                    | Cloudflare edge cache         |
   |  s2wc/  dem/  aerial/  bnwt2/ |                    | (cache rule "R2 tiles";       |
-  |  dec/   data/ osmtags/        |                    |  /bnwt* goes straight to R2)  |
+  |  dec/ lz/ data/ osmtags/      |                    |  /bnwt* goes straight to R2)  |
   +-------------------------------+                    +---------------+---------------+
                 ^                                                      |
                 | S3 API uploads                                       | HTTPS GET, range reads
@@ -150,7 +150,8 @@ repo holds the current file):
 {"imagery":   {"bngs2":  {"enabled": true, "max_zoom": 13, "max_lat": {"14": 50}},
                "bngaer": {"enabled": true, "request": true}},
  "dem":       {"bngmt":  {"enabled": true, "release": "0.0.13"}},
- "decisions": {"enabled": true, "request": false}}
+ "decisions": {"enabled": true, "request": false},
+ "lidarz":    {"enabled": true}}
 ```
 
 | key | turns on | options |
@@ -159,6 +160,7 @@ repo holds the current file):
 | `imagery.bngaer` | the 1 m aerial packs | `request: false` = never ask for on-demand builds |
 | `dem.bngmt` | the Mapterhorn z0-12 elevation packs | `release`: which Mapterhorn release's packs to read |
 | `decisions` | the signed decision archives | `request: true` = ask for missing blocks (only when the collector supports it) |
+| `lidarz` | the signed lidar road heights | none |
 
 BNWT is not in the switch file yet: it is on only when a player sets `BNGE_BNWT_URL`.
 
@@ -181,6 +183,7 @@ All paths are relative to the bucket root, which is also `https://tiles.tgforeve
 | `bnwt<FORMAT>/<release>/...pmtiles` | prebaked world input tiles | data repo `bnwt` | monthly | `public, max-age=31536000, immutable` | no (`/bnwt`) |
 | `bnwt<FORMAT>/<release>/*.json` | BNWT indexes, manifests, shard records | data repo `bnwt` | monthly | `no-cache` | no |
 | `dec/d<FORMAT>/<vkey>/...` | signed decision archives | the builder box | after each release | see [below](#signed-decision-archives) | see below |
+| `lz/lz<FORMAT>/<lkey>/...` | signed lidar road heights | the builder box | when roadz's rules or the map change | as the decision archives | as the decision archives |
 | `data/<dataset>/<key>/...` | mirror of the weekly datasets | data repo `data` (`tools/mirror_data.py`) | weekly | `public, max-age=31536000, immutable` | yes |
 | `data/<dataset>/<key>/manifest.json` | marks a complete copy | the same | weekly | `public, max-age=3600` | no (`.json`) |
 | `osmtags/<key>/osmtags*.pmtiles` | OpenStreetMap road tags | data repo `data` (job `osmtags`) | weekly | `public, max-age=31536000, immutable` | yes |
@@ -251,6 +254,12 @@ decision blocks (see below).
 
 Pre-computed road plans and cell facts for popular places, for exactly one server version. See
 [Signed decision archives](#signed-decision-archives) for the layout, the signing and the recommended headers.
+
+### Signed lidar road heights: `lz/lz<FORMAT>/<lkey>/`
+
+For each US map cell with a bridge, exactly what the client's own 3DEP lidar read would produce (its measured deck,
+elevated-stretch and approach lines), so a first visit reads a few small blocks instead of the point clouds. See
+[Lidar road heights](#lidar-road-heights).
 
 ### Weekly data mirror: `data/` and `osmtags/`
 
@@ -461,6 +470,63 @@ here and in the bucket, after a grace period (7 days), so a client that still ho
 blocks meanwhile. The collector does not yet have an endpoint for requesting missing blocks (TELEMETRY.md, section 8),
 so keep `"request": false` in the switch file.
 
+## Lidar road heights
+
+**What they are.** In the US the client measures bridge decks and their approaches in the USGS 3DEP point clouds
+(`server/roadz.py`). A cold Manhattan visit downloaded 698 MB in 2,538 requests for that (54 % of all its bytes), and
+kept about 2 MB of answers. The answers arrived after the first road plans, so every near cell was planned twice.
+The builder measures popular places once with the same code (`tools/build_lidarz.py`) and publishes the answers per
+map cell (`server/lidarz.py`, `native/earthfast/src/lidarz.rs`). The 12 cells round a Manhattan teleport point are
+4 blocks, 0.59 MB, where the builder read 114 MB of point clouds in 250 requests for them.
+
+**Same result, or no result.** A client uses a cell's record only when it would have measured exactly the same thing.
+Otherwise it reads the lidar itself, as before. A record's key holds a digest of the cell's inputs: its bridge and
+approach lines from the client's own map, their widths, and the 3DEP datasets to read. The record also holds every
+point where the builder's measuring read our DEM (the datum's ground points beside the road, the deck ends, the
+stations of the stretches and approaches) and a digest of the heights it read; the client reads its own DEM at the
+same points and compares. Another map release or DEM changes only the cells it touches. A cell taken from the CDN
+keeps its record inside its own cache file (`roadz/.../<y>.npz`, so eviction cannot part them) and is checked again
+each time a process reads it from disk; when the map, the DEM or the lkey no longer agree, or the switch is off, the
+cell is made again. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
+kernels' versions and every constant the measuring reads. It does not hold the server release, so a build stays
+valid across updates until those rules change.
+
+**Layout** (under `BNGE_LIDARZ_URL`, by default `https://tiles.tgforever.net/lz`):
+
+```
+lz<FORMAT>/<lkey>/manifest.bnlm         signed: the lkey's document and the list of blocks
+lz<FORMAT>/<lkey>/12/<x>/<y>.<h>.bnlz   one z12 block's cell records (4 x 4 cells), signed; <h> the file's hash
+```
+
+**Signing.** These files use the decision archives' format, key and checks (`decisions.rs`, domain `lidarz`). Their
+magics (`BNLZ` / `BNLM`) are inside the signed bytes, so a decision block never verifies as a lidar block or the other
+way round. `BNGE_DECISIONS_PUBKEY` replaces the accepted keys for both.
+
+**Build and upload** (on the builder box; `run.py` maps the credentials, the build reads the key only through
+`--key`):
+
+```sh
+python3 hosting/decisions-builder/run.py --product lidarz build --places-file places.txt --procs 2
+python3 hosting/decisions-builder/run.py --product lidarz upload     # through the unit's EnvironmentFile
+```
+
+By hand, the same as the decision archives with these names:
+
+```sh
+python3 tools/build_lidarz.py build --places "manhattan" --cache ~/bnge-builder/decisions-cache \
+    --out ~/bnge-builder/dec-out --key ~/bnge-builder/decisions-signing.key --procs 2
+aws s3 sync <out>/lz2/<lkey>/12 s3://<bucket>/lz/lz2/<lkey>/12 --exclude "*" --include "*.bnlz" \
+    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream \
+    --cache-control "public, max-age=31536000, immutable"
+aws s3 cp <out>/lz2/<lkey>/manifest.bnlm s3://<bucket>/lz/lz2/<lkey>/manifest.bnlm \
+    --endpoint-url "$R2_ENDPOINT" --content-type application/octet-stream --cache-control "no-cache"
+```
+
+A cell is measured once per lkey and set of inputs. The records are kept in `<cache>/lidarz_work/`, so building the
+same places again after a map release reads the point clouds only for the cells whose bridges changed. A Manhattan
+cell reads up to about 50 MB of point clouds from the 3DEP bucket on AWS, as a player's server would. Turn it on
+with `{"lidarz": {"enabled": true}}` in the switch file once the place's blocks are uploaded.
+
 ## Client settings (environment variables)
 
 These are read by the BeamNG.Earth server on the player's PC (`server/`). Set them in the environment that starts the
@@ -483,6 +549,9 @@ launcher or `run_server.sh` / `run_server.bat`. With the launcher you can also p
 | `BNGE_DECISIONS_URL` | `<BNGE_CDN_BASE>/dec` | where the decision archives are |
 | `BNGE_DECISIONS_PUBKEY` | the compiled `TRUSTED` keys | ed25519 public keys (hex, comma-separated) to accept **instead of** the compiled ones |
 | `BNGE_DECISIONS_REQUEST`, `BNGE_DECISIONS_REQUEST_URL` | off; `https://earth.tgforever.net/decisions/request` | ask for missing decision blocks (not deployed yet) |
+| `BNGE_LIDARZ` | the switch file | `on` / `off`: use the lidar road heights whatever the switch says |
+| `BNGE_LIDARZ_URL` | `<BNGE_CDN_BASE>/lz` | where the lidar road heights are |
+| `BNGE_LIDARZ_WAIT` | `6` | seconds a road planning process waits for a cell's record before it plans without the lidar (the server reads it meanwhile, and the cell is planned again when it is in) |
 
 ### Other hosted data and services
 
