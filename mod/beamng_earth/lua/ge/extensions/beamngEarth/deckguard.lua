@@ -196,7 +196,7 @@ entersAt = function(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
       end
       return true
     end
-    if not abutted then return viaDeck(k) end               -- (off another deck the path is on, at a fork)
+    if not abutted then return viaDeck(k), true end         -- (off another deck the path is on, at a fork)
     if k > 1 then return false end                            -- (its height not known yet: no braking for it yet)
   elseif k > 1 then
     return false                                              -- (into its middle: it is crossed or passed under)
@@ -352,8 +352,10 @@ function M.look(g, inp)
     end
     return false
   end
+  -- where the path drives onto span sp: its sample kin, direction, along-span m there, how many samples on it in a row
+  -- (run), and whether it was entered at a fork (off another deck)
   local function enter(sp)
-    local kin, dir, uin
+    local kin, dir, uin, run, viaFork = nil, nil, nil, 0, false
     for k = 1, n do
       local hx, hy = px[k], py[k]
       local on, u, c = false, 0, 0
@@ -363,45 +365,69 @@ function M.look(g, inp)
         c = pdx[k] * sx + pdy[k] * sy
         on = dist <= M.LAT_M and abs(c) >= M.COS_MIN
       end
-      if on then
+      if not on then
+        if kin then break end
+      else
         local d = c > 0 and 1 or -1
-        if not entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck) then return nil end
-        return k, d, u
+        if not kin then
+          local ok, fork = entersAt(g, sp, k, d, u, x, y, z, groundAt, px, py, viaDeck)
+          if not ok then return nil end
+          kin, dir, uin, viaFork = k, d, u, fork == true
+        elseif d ~= dir then
+          break
+        end
+        run = run + 1
       end
     end
-    return nil
+    if not kin then return nil end
+    return { sp = sp, kin = kin, dir = dir, uin = uin, run = run, fork = viaFork }
   end
+  local ins = {}
   local todo = cands
   for _ = 1, 3 do                   -- (again for the forks off a deck entered in the round before)
     local rest = {}
     for _, sp in ipairs(todo) do
-      local kin, dir, uin = enter(sp)
-      if kin then
+      local e = enter(sp)
+      if e then
         entered[#entered + 1] = sp
+        ins[#ins + 1] = e
         onPath[sp.id] = true
-        if kin == 1 then riding[sp.id] = true end
-        if g.released[sp.id] == nil then
-          -- from where the path drives onto it (its end, when that is ahead) along it as far as the look reaches: a
-          -- car on a bridge follows the bridge (the path's arc may leave its corridor on a curved one)
-          local fromEnd = dir > 0 and uin or (sp.len - uin)
-          local a = (kin > 1 and fromEnd <= M.END_M) and (dir > 0 and 0 or sp.len) or uin
-          local rem = max(0, L - (kin - 1) * step)
-          local b = dir > 0 and min(sp.len, uin + rem) or max(0, uin - rem)
-          local gap = scanSpan(sp, dir, a, b, grid, groundAt)
-          if gap then
-            local sd = max(0, (kin - 1) * step + (gap.u - uin) * dir)
-            if not best or sd < best.d then
-              best = { d = sd, x = gap.x, y = gap.y, id = sp.id, span = sp, key = gap.key,
-                level = gap.level or (z - 0.5), at = inp.clock }
-            end
-          end
-        end
+        if e.kin == 1 then riding[sp.id] = true end
       else
         rest[#rest + 1] = sp
       end
     end
     if #rest == #todo then break end
     todo = rest
+  end
+  -- at a fork, only the branch the path follows longest (Codex review round 6: a branch not taken, its tile missing,
+  -- braked the car on the one taken): of the spans entered from the same end (a fork's node: near it the car is in the
+  -- corridors of all its branches, and rides them all), the most samples on it in a row; a tie keeps both
+  local bestRun = {}
+  for _, e in ipairs(ins) do       -- (every span entered from that end counts: the branch the car rides on too)
+    local sp = e.sp
+    local ex, ey = (e.dir > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (e.dir > 0) and sp.pts[2] or sp.pts[2 * sp.n]
+    e.node = string.format('%.0f_%.0f', ex, ey)
+    bestRun[e.node] = max(bestRun[e.node] or 0, e.run)
+  end
+  for _, e in ipairs(ins) do
+    local sp, kin, dir, uin = e.sp, e.kin, e.dir, e.uin
+    if g.released[sp.id] == nil and e.run >= bestRun[e.node] then
+      -- from where the path drives onto it (its end, when that is ahead) along it as far as the look reaches: a car on
+      -- a bridge follows the bridge (the path's arc may leave its corridor on a curved one)
+      local fromEnd = dir > 0 and uin or (sp.len - uin)
+      local a = (kin > 1 and fromEnd <= M.END_M) and (dir > 0 and 0 or sp.len) or uin
+      local rem = max(0, L - (kin - 1) * step)
+      local b = dir > 0 and min(sp.len, uin + rem) or max(0, uin - rem)
+      local gap = scanSpan(sp, dir, a, b, grid, groundAt)
+      if gap then
+        local sd = max(0, (kin - 1) * step + (gap.u - uin) * dir)
+        if not best or sd < best.d then
+          best = { d = sd, x = gap.x, y = gap.y, id = sp.id, span = sp, key = gap.key,
+            level = gap.level or (z - 0.5), at = inp.clock }
+        end
+      end
+    end
   end
   -- a span let go (GIVE_UP_S) is the guard's again once the car is off it
   for id in pairs(g.released) do
