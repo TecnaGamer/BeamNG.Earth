@@ -1684,8 +1684,15 @@ class RoadZ:
                 if pre:
                     f = self._path(src, key)
                     if f and os.path.exists(f):
-                        if src == "lidar":
-                            from_cdn(key)   # (the files on disk; a kept CDN cell no longer ours: the CDN, not a read)
+                        if src == "lidar" and lidarz.enabled():
+                            # (a kept CDN cell is checked first, lidarz.kept_ok: its DEM reads may download tiles and a
+                            # dropped one asks the CDN again, so on a thread with the same wait as a CDN read, the rule
+                            # past it; Codex review of 1b5ba25e)
+                            t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
+                            t.start()
+                            cdn.append(t)
+                        elif src == "lidar":
+                            from_cdn(key)   # (product off: a kept CDN cell fails its check at once, and is no read)
                         else:
                             build(key)      # (a read of the files on disk)
                         continue

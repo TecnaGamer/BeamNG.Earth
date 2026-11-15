@@ -549,6 +549,33 @@ class ProductTest(unittest.TestCase):
         self.evict_all_but_the_cell(cache)
         self.assertTrue(same(got, self.reread(cache, expect_reads=False)))
 
+    def test_a_slow_check_of_a_kept_cell_is_bounded_by_the_planning_wait(self):
+        """Codex review of 1b5ba25e [medium]: a planning process checked a kept CDN cell (its DEM reads may download
+        tiles, a dropped cell asks the CDN again) on its own thread, unbounded by lidarz.WAIT_S; it takes the rule
+        within the wait instead, and the check goes on in the background."""
+        import time as _t
+        _got, cache = self.persisted()
+        real = lidarz.kept_ok
+
+        def slow(*a, **k):
+            _t.sleep(1.5)
+            return real(*a, **k)
+        with mock.patch.dict(os.environ, {roadz.PREFETCH_ENV: "1", "BNGE_ROADZ_SESSION": "slowcheck"}), \
+                mock.patch.object(roadz, "PREFETCH_ON", True), mock.patch.object(lidarz, "WAIT_S", 0.2), \
+                mock.patch.object(lidarz, "kept_ok", slow):
+            rz = provider(cache, files=None)
+            t0 = _t.monotonic()
+            got = rz.gap_answers([KEY])[KEY]
+            dt = _t.monotonic() - t0
+        self.assertLess(dt, 1.0, "within the planning wait")
+        self.assertIsNone(got, "the rule meanwhile")
+
+    def test_a_quick_check_of_a_kept_cell_answers_the_planning_process(self):
+        _got, cache = self.persisted()
+        with mock.patch.dict(os.environ, {roadz.PREFETCH_ENV: "1", "BNGE_ROADZ_SESSION": "quickcheck"}), \
+                mock.patch.object(roadz, "PREFETCH_ON", True):
+            self.assertIsNotNone(provider(cache, files=None).gap_answers([KEY])[KEY])
+
     def moved(self):
         import test_roads
         return test_roads.features([[(-400, 0.5), (400, 0.5)], [(-12, -500), (-12, 500)], [(12, 500), (12, -500)]],
