@@ -121,7 +121,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
-- Road signs (experimental, off by default; Settings > Experimental > Road signs, from the next start of BeamNG.Earth): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
+- Road signs (experimental, off by default; Settings > Experimental > Road signs, from the next world server restart): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
   signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
   no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
   limit ends.
@@ -353,7 +353,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     ground around you; from the next level load.
   - **Ground grid** (1 m / 2 m): how fine the ground you drive on is. 2 m (the Low and Medium presets) loads a
     quarter of the data each time the ground moves with you: shorter hitches while driving, at the cost of softer
-    small bumps and road edges; from the next start of BeamNG.Earth.
+    small bumps and road edges; from the next world server restart (Restart world server, below).
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles), and the tallest towers past them (none at Near, 12 miles at Normal, 22 at Far, the horizon at Max).
@@ -380,11 +380,18 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
   data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
-  priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
+  priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next world server
+  restart; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
   and the game keeps two until it has loaded.
-- **Experimental** settings page: features still being tested, all off by default, each from the next start of
-  BeamNG.Earth (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
+- **Restart world server** (at the top of the settings pages): the settings the world server reads only when it starts
+  (the Experimental page, Ground grid, the server's CPU cores and priority, 3D models from 3dmr.eu, Max RAM's cache
+  sizes, a new download cache folder) apply without closing the game. Once one of them differs from what the running server started with, the page
+  names it and offers the button: the server stops cleanly, the app's launcher (or `start.py`) starts it again with the
+  same options and the settings read anew, and the world reloads around you in a few seconds while your car is held
+  still (in multiplayer only your own world reloads and only your car waits). A server started by hand gets no button.
+- **Experimental** settings page: features still being tested, all off by default, each from the next world server
+  restart (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
   switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the
   shared prebuilt world data is made for the defaults) and rebuilds places you visited. **Road signs** and **Dutch road
   signs**; **French and European road scenery** (each European country's guardrails, sign faces, bus stops and street

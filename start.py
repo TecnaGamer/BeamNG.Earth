@@ -94,7 +94,9 @@ def main():
     if telemetry and has_flag(help_text, "--telemetry") and "--offline" not in extra and "--telemetry" not in extra:
         cmd += ["--telemetry", "on"]
 
-    experimental = experimental_env(user_dir, os.environ)     # (the server inherits this environment)
+    base_env = dict(os.environ)
+    env = dict(base_env)
+    experimental = experimental_env(user_dir, env)      # (the server's environment; read again at each restart)
 
     install.say(f"BeamNG.Earth {install.version()}: starting the world server")
     install.say(f"  BeamNG.drive user folder: {user_dir}")
@@ -106,14 +108,57 @@ def main():
         install.say(f"  (this server version has no {', '.join(skipped)}; left out)")
     install.say("  Leave this window open while you play; close it (or press Ctrl+C) to stop the server.")
     install.say("  Now start BeamNG.drive and pick the 'BeamNG.Earth' level in Freeroam.")
-    log_path = server_log_path()
+    log_path = server_log_path(rotate=False)
     if log_path:
         install.say(f"  Server log: {log_path}")
     install.say("")
     try:
-        sys.exit(run_logged(cmd, log_path))
+        sys.exit(run_restarting(cmd, user_dir, base_env, env))
     except KeyboardInterrupt:
         sys.exit(0)
+
+
+def run_restarting(cmd, user_dir, base_env, env, run=None, limiter=None):
+    """Run the server (run_logged), and again with the same options when it exits asking for it (srvrestart.EXIT_CODE:
+    the settings page's "Restart world server"), its environment made anew from base_env with the settings read again
+    (the Experimental switches), at most srvrestart.MAX_RESTARTS in WINDOW_S. Any other exit code is returned."""
+    import time
+    sr = _srvrestart()
+    run = run or (lambda c, path, e: run_logged(c, path, e))
+    limiter = limiter or sr.Limiter()
+    while True:
+        restart_env(user_dir, env)
+        code = run(cmd, server_log_path(), env)
+        if not sr.wants_restart(code):
+            return code
+        if not limiter.allow(time.monotonic()):
+            install.say(f"The world server asked to restart more than {sr.MAX_RESTARTS} times in "
+                        f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.")
+            return code
+        install.say("")
+        install.say("Restarting the world server (asked from the game's settings page): the settings are read again")
+        env = dict(base_env)
+        ids = experimental_env(user_dir, env)
+        if ids:
+            install.say("  Experimental features on (the settings page): " + ", ".join(ids))
+
+
+def _srvrestart():
+    here = os.path.join(ROOT, "server")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import srvrestart
+    return srvrestart
+
+
+def restart_env(user_dir, env):
+    """env marked as a server this script starts again when it asks, with the start-time values it applied
+    (srvrestart.supervisor_env, as the app's launcher.restart_env)."""
+    try:
+        import experimental
+        _srvrestart().supervisor_env(env, experimental.read_settings(user_dir))
+    except Exception:
+        pass                            # (no restart button then)
 
 
 def experimental_env(user_dir, env):
@@ -130,16 +175,18 @@ def experimental_env(user_dir, env):
         return []
 
 
-def server_log_path():
+def server_log_path(rotate=True):
     """The server's log file: the launcher's (apppaths.data_dir()/logs/server.log, the downloaded app's), with the last
-    two runs kept beside it; None when its folder cannot be made. (Tann2019, 2026-11-05: a source run's log was only in
-    its console window, which cannot be copied from easily.)"""
+    two runs kept beside it (rotate: moved aside now, for a run about to start); None when its folder cannot be made.
+    (Tann2019, 2026-11-05: a source run's log was only in its console window, which cannot be copied from easily.)"""
     try:
         import apppaths
         path = os.path.join(apppaths.data_dir(), "logs", "server.log")
         os.makedirs(os.path.dirname(path), exist_ok=True)
     except (ImportError, OSError):
         return None
+    if not rotate:
+        return path
     try:                                # (the launcher's keep_previous_log: server.log.1, .2)
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             if os.path.isfile(path + ".1"):
@@ -150,15 +197,17 @@ def server_log_path():
     return path
 
 
-def run_logged(cmd, log_path):
-    """Run the server, its output shown here as before and written to log_path too; its exit code."""
+def run_logged(cmd, log_path, env=None):
+    """Run the server (in env, default this process's), its output shown here as before and written to log_path too;
+    its exit code."""
+    env = dict(os.environ if env is None else env)
     if not log_path:
-        return subprocess.call(cmd, cwd=ROOT)
-    env = dict(os.environ, PYTHONUNBUFFERED="1")    # (lines as they come, not in blocks through the pipe)
+        return subprocess.call(cmd, cwd=ROOT, env=env)
+    env["PYTHONUNBUFFERED"] = "1"       # (lines as they come, not in blocks through the pipe)
     try:
         log = open(log_path, "wb")
     except OSError:
-        return subprocess.call(cmd, cwd=ROOT)
+        return subprocess.call(cmd, cwd=ROOT, env=env)
     with log:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         out = getattr(sys.stdout, "buffer", None)

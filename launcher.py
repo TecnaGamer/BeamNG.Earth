@@ -340,6 +340,116 @@ def experimental_env(user_dir, env):
     return ids
 
 
+def _srvrestart():
+    here = os.path.join(ROOT, "server")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import srvrestart
+    return srvrestart
+
+
+def restart_env(user_dir, env):
+    """The server's environment marked as one this launcher starts again when it asks (srvrestart.ENV: the settings
+    page's "Restart world server"), with the start-time values of the settings applied here (srvrestart.START_ENV: the
+    page shows the button when one differs from the player's settings)."""
+    try:
+        import experimental         # (experimental_env put the server folder on the path)
+        _srvrestart().supervisor_env(env, experimental.read_settings(user_dir))
+    except Exception as e:          # (no button then; the server runs as before)
+        say(f"(the restart button is off: {type(e).__name__}: {e})")
+
+
+class RestartingServer:
+    """The world server's process, started again (start(): start_server with the same arguments, the settings read
+    anew) when it exits asking for it: srvrestart.EXIT_CODE, the settings page's "Restart world server" (2026-11-15),
+    at most srvrestart.MAX_RESTARTS in WINDOW_S. Any other exit (a crash, a stop) is the server's end, as before.
+    poll / wait / pid / kill / returncode as the process's (wait_for_game, server_up, stop_server use it so)."""
+
+    def __init__(self, start, port=SERVER_PORT, log_path=None):
+        self.start, self.port, self.log_path = start, port, log_path
+        self.limiter = _srvrestart().Limiter()
+        self.stopping = False           # (stop_server: an exit now is the end, never restarted)
+        self.restarts = 0
+        self.proc = start()
+
+    @property
+    def pid(self):
+        return self.proc.pid
+
+    @property
+    def returncode(self):
+        return self.proc.returncode
+
+    def kill(self):
+        return self.proc.kill()
+
+    def poll(self):
+        code = self.proc.poll()
+        if code is None or self._again(code):
+            return None
+        return code
+
+    def wait(self, timeout=None):
+        while True:
+            code = self.proc.wait(timeout)
+            if not self._again(code):
+                return code
+
+    def _again(self, code):
+        """The server exited with code: started again when it asked (True), else False."""
+        sr = _srvrestart()
+        if self.stopping or not sr.wants_restart(code):
+            return False
+        if not self.limiter.allow(time.monotonic()):
+            problem(f"The world server asked to restart more than {sr.MAX_RESTARTS} times in "
+                    f"{sr.WINDOW_S / 60:g} minutes; it stays stopped.", "Close the game, then start BeamNG.Earth again.")
+            return False
+        self.restarts += 1
+        row("World server", "restarting (asked from the game's settings page): the settings are read again")
+        self._clear_leftovers()
+        deadline = time.monotonic() + PORT_FREE_S
+        while server_port_busy(self.port) and time.monotonic() < deadline:
+            time.sleep(0.25)
+        self.proc = self.start()
+        if self.log_path:
+            threading.Thread(target=self._follow, args=(self.proc,), name="server-restart", daemon=True).start()
+        return True
+
+    def _clear_leftovers(self):
+        """Linux: anything left of the old server's process group (its workers end with it, srvrestart.finish; this is
+        only for one that did not) killed before the new server takes the port. Windows: the old server stopped its
+        workers itself (a process id there may already be another program's)."""
+        if IS_WIN:
+            return
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (OSError, AttributeError, TypeError):
+            pass
+
+    def _follow(self, proc):
+        if wait_server_ready(proc, self.log_path, self.port):
+            row("World server", "running again")
+        elif proc.poll() is None or not _srvrestart().wants_restart(proc.poll()):
+            problem("the restarted world server did not start listening.",
+                    server_start_diagnostic(proc, self.log_path) + f"\nFull startup log: {self.log_path}")
+
+
+PORT_FREE_S = 20.0      # s a restart waits for the old server's port to be free
+
+
+def restart_extra(own, first):
+    """A restarted server's options: the player's own (own) with the download cache folder as saved now (the settings
+    page's "Change...": "next start"), as a new start would take it; first (the first start's) when the player gave
+    --cache-dir themselves or the saved folder cannot be read."""
+    if "--cache-dir" in own or any(a.startswith("--cache-dir=") for a in own):
+        return first
+    try:
+        cache = cache_dir_arg(None)
+    except OSError:
+        return first
+    return (["--cache-dir", cache] if cache else []) + list(own)
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
@@ -362,6 +472,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
         if sq:
             env["BNGE_GROUND_SQUARE"] = sq
     experimental_env(user_dir, env)     # the settings page's Experimental switches (server/experimental.py)
+    restart_env(user_dir, env)          # ... and its "Restart world server" (server/srvrestart.py; RestartingServer)
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
@@ -542,6 +653,9 @@ def server_up(server, log_path, port, game_started):
 
 
 def stop_server(proc):
+    if isinstance(proc, RestartingServer):
+        proc.stopping = True                    # (its exit now is the end: never started again)
+        proc = proc.proc
     if proc is None or proc.poll() is not None:
         return
     row("World server", "stopping")
@@ -2324,6 +2438,7 @@ def run(args):
     port_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     port_parser.add_argument("--port", type=int, default=SERVER_PORT)
     port = port_parser.parse_known_args(extra)[0].port
+    own_extra = list(extra)             # (the player's own server options; the cache folder below, again at a restart)
     if "--cache-dir" not in extra:
         try:
             cache = cache_dir_arg(args.cache_dir)
@@ -2342,7 +2457,14 @@ def run(args):
     if getattr(args, "clear_cache", False):
         clear_cache(extra)
     log_path = os.path.join(data_dir(), "logs", "server.log")
-    server = start_server(user_dir, extra, log_path, game_running=bool(running))
+    starts = []
+
+    def start():                # (again for the settings page's "Restart world server": the game runs then)
+        starts.append(True)
+        if len(starts) == 1:
+            return start_server(user_dir, extra, log_path, game_running=bool(running))
+        return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True)
+    server = RestartingServer(start, port, log_path)
     beammp = None
     try:
         row("World server", "starting")
