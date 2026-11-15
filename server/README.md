@@ -459,7 +459,8 @@ built in `main_async` and handed to `Dem`, `Imagery`, `weather.fetch` and `gravi
 | `downloads.sourceforge.net` (EGM2008) | 1/s, 1 | 1 | — | no | — |
 | `stac.overturemaps.org` (map data: the Overture STAC index) | 5/s, 10 | 2 | 5,000 | above half a bucket | 30 days |
 | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com`, `overturemapswestus2.blob.core.windows.net` (Overture GeoParquet, AWS then the Azure mirror), `esa-worldcover.s3.eu-central-1.amazonaws.com`, `dataforgood-fb-data.s3.amazonaws.com` (canopy height) | 20/s, 40 | 4 | — | above half a bucket | never |
-| `overpass-api.de`, `vector.openstreetmap.org`, `build.protomaps.com` | never at runtime (`PolicyDenied`) | | | | |
+| `overpass-api.de` (map category search, on Enter only: interactive, no retries, breaker after one failure) | 0.1/s, 1 | 1 | 50 (hard 100) | no | 1 day |
+| `vector.openstreetmap.org`, `build.protomaps.com` | never at runtime (`PolicyDenied`) | | | | |
 | any other host | 2/s, 4 | 2 | 5,000 | no | 30 days |
 
 - **Priorities**: `demand` (a texture or heightmap being built) waits for a token (up to 30 s, then

@@ -99,6 +99,206 @@
    }
   }
  },
+ "boston_bowker": {
+  "steps": 139,
+  "parts": {
+   "bridge:347fec82-6337-4d8a-8851-d0e47606773c": {
+    "step_m": 0.1954,
+    "grade": 0.0352,
+    "lift_g": 0.4671
+   },
+   "bridge:3cd5f587-05ba-484e-9cc2-c9cb050bb805": {
+    "step_m": 0.9115,
+    "grade": 0.2195,
+    "lift_g": 5.8171
+   },
+   "bridge:60dcf877-481a-4ee6-b8b7-86abc631c77b": {
+    "step_m": 0.0395,
+    "grade": 0.0502,
+    "lift_g": 1.1555
+   },
+   "bridge:64dc338c-cfdb-4df3-abda-123224c4adf6": {
+    "step_m": 0.0611,
+    "grade": 0.0657,
+    "lift_g": 0.8967
+   },
+   "bridge:7927d8ea-21ca-4c09-8b47-7f380ae08994": {
+    "step_m": 2.0176,
+    "grade": 0.5375,
+    "lift_g": 12.1639
+   },
+   "bridge:80110548-f34c-431a-aef4-de81855d5af6": {
+    "step_m": 0.0853,
+    "grade": 0.0662,
+    "lift_g": 2.271
+   },
+   "bridge:9782fc93-333e-456e-a9b4-19e7654c7762": {
+    "step_m": 0.0163,
+    "grade": 0.0291,
+    "lift_g": 0.4246
+   },
+   "bridge:aa8443a9-d3a0-4e6b-b803-41358b7e87bb": {
+    "step_m": 0.0245,
+    "grade": 0.0634,
+    "lift_g": 1.3685
+   },
+   "bridge:c657c3d8-a1aa-4fd8-999b-274de4a937b9": {
+    "step_m": 0.0478,
+    "grade": 0.0708,
+    "lift_g": 0.771
+   },
+   "ground:01219e90-f837-4652-bcd5-93326303b58d": {
+    "step_m": 1.1646,
+    "grade": 0.0,
+    "lift_g": 0.0
+   },
+   "ground:2e7b7974-ca36-4ff5-a881-f974b6303729": {
+    "step_m": 0.0236,
+    "grade": 0.0715,
+    "lift_g": 0.9827
+   },
+   "ground:347fec82-6337-4d8a-8851-d0e47606773c": {
+    "step_m": 0.1933,
+    "grade": 0.035,
+    "lift_g": 0.4674
+   },
+   "ground:3847f614-f6ad-4b9c-9361-09e53bc363f6": {
+    "step_m": 0.2093,
+    "grade": 0.0624,
+    "lift_g": 0.5802
+   },
+   "ground:3cd5f587-05ba-484e-9cc2-c9cb050bb805": {
+    "step_m": 0.0254,
+    "grade": 0.1485,
+    "lift_g": 1.6078
+   },
+   "ground:5c7479ea-f564-45da-a971-049172f0cb4c": {
+    "step_m": 0.1701,
+    "grade": 0.0169,
+    "lift_g": 0.1828
+   },
+   "ground:64dc338c-cfdb-4df3-abda-123224c4adf6": {
+    "step_m": 0.2032,
+    "grade": 0.1093,
+    "lift_g": 0.8226
+   },
+   "ground:6f5f3464-6d22-47f6-8a87-c02c13f56fd6": {
+    "step_m": 0.1479,
+    "grade": 0.0487,
+    "lift_g": 1.014
+   },
+   "ground:7927d8ea-21ca-4c09-8b47-7f380ae08994": {
+    "step_m": 0.016,
+    "grade": 0.071,
+    "lift_g": 0.3412
+   },
+   "ground:80110548-f34c-431a-aef4-de81855d5af6": {
+    "step_m": 0.2516,
+    "grade": 0.0838,
+    "lift_g": 1.247
+   },
+   "ground:aa8443a9-d3a0-4e6b-b803-41358b7e87bb": {
+    "step_m": 0.1829,
+    "grade": 0.0779,
+    "lift_g": 0.4346
+   },
+   "ground:b3ecba9f-12f6-40de-aa0d-7a7f6f8a810f": {
+    "step_m": 1.1613,
+    "grade": 0.0,
+    "lift_g": 0.0
+   },
+   "ground:b6fd05b8-b955-46a8-b12b-bf73a2d89b02": {
+    "step_m": 0.0317,
+    "grade": 0.06,
+    "lift_g": 0.4873
+   },
+   "ground:b8e954b0-2b48-440f-84ea-c71be95ba6ca": {
+    "step_m": 0.0441,
+    "grade": 0.0206,
+    "lift_g": 0.3531
+   },
+   "ground:c657c3d8-a1aa-4fd8-999b-274de4a937b9": {
+    "step_m": 1.6562,
+    "grade": 0.0776,
+    "lift_g": 0.7168
+   },
+   "ground:d26fb6db-9d90-49d3-aae7-4ddd7755f56c": {
+    "step_m": 0.0176,
+    "grade": 0.1025,
+    "lift_g": 1.6046
+   },
+   "ground:d9ad1a8f-2f25-4645-91a7-71632a8dcc1b": {
+    "step_m": 0.3721,
+    "grade": 0.0205,
+    "lift_g": 0.4551
+   }
+  }
+ },
+ "boston_storrow_massave": {
+  "steps": 44,
+  "parts": {
+   "bridge:31b77920-8d8b-4e94-9469-577977c43038": {
+    "step_m": 0.2057,
+    "grade": 0.0784,
+    "lift_g": 0.7272
+   },
+   "bridge:7481403a-a00b-40be-b6f1-5bafe5df4bc5": {
+    "step_m": 0.2683,
+    "grade": 0.074,
+    "lift_g": 0.8321
+   },
+   "bridge:ac5b5614-e611-454b-94ad-ca96bbcfa812": {
+    "step_m": 0.0368,
+    "grade": 0.0435,
+    "lift_g": 0.4235
+   },
+   "bridge:e9749529-0c71-4231-8592-9c5267b8b101": {
+    "step_m": 0.023,
+    "grade": 0.0605,
+    "lift_g": 0.466
+   },
+   "ground:34c1f770-ca66-4e1c-8412-2e21eeeb0cf0": {
+    "step_m": 0.3919,
+    "grade": 0.0607,
+    "lift_g": 1.2222
+   },
+   "ground:404c53fd-b344-42c4-9d75-591a01b3cc7b": {
+    "step_m": 0.0899,
+    "grade": 0.0261,
+    "lift_g": 0.2976
+   },
+   "ground:69f58d8e-65ee-4dbd-9c06-4c3d76f3eeb1": {
+    "step_m": 0.5644,
+    "grade": 0.0391,
+    "lift_g": 0.4105
+   },
+   "ground:7ca99dac-05a7-4947-a1b5-94de9ac05caf": {
+    "step_m": 0.0212,
+    "grade": 0.031,
+    "lift_g": 0.4787
+   },
+   "ground:8f6fe5eb-5009-4524-9522-f23c28315189": {
+    "step_m": 1.553,
+    "grade": 0.0528,
+    "lift_g": 0.1351
+   },
+   "ground:bef87ec6-ea8a-4499-9b6f-3a714fb00d74": {
+    "step_m": 0.6823,
+    "grade": 0.0277,
+    "lift_g": 0.0914
+   },
+   "ground:cc57b457-a04f-4c94-a34e-7c414dd86101": {
+    "step_m": 0.1126,
+    "grade": 0.018,
+    "lift_g": 0.0886
+   },
+   "ground:ffd24015-4fd7-4b53-be9a-c66e78f4f1f0": {
+    "step_m": 0.0579,
+    "grade": 0.0181,
+    "lift_g": 0.2918
+   }
+  }
+ },
  "casagranda_bridge": {
   "steps": 147,
   "parts": {

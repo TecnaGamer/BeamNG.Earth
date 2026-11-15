@@ -1127,6 +1127,23 @@ def material_json(palette_vfs):
     }}
 
 
+def palette_fallback_rgb(grid, px=64):
+    """Render the palette colors (height tint, slope, water, shore) from an elevation grid into an RGB texture."""
+    if grid is None:
+        return np.full((px, px, 3), [99, 89, 69], dtype=np.uint8)
+    im = Image.fromarray(np.asarray(grid, np.float32))
+    elev = np.asarray(im.resize((px, px), Image.BILINEAR), np.float32)
+    gy, gx = np.gradient(elev)
+    slope_t = np.clip(dnp.hypot(gx, gy) / 1.0, 0.0, 1.0)
+    water = (elev <= 0.5) & (slope_t < 0.02)
+    uu = np.where(water, WATER_U, u_from_elev(elev))
+    vv = np.clip(0.5 - 0.47 * slope_t, 0.0, 1.0)
+    pal = np.asarray(palette_image(), np.uint8)
+    iu = np.clip(np.int32(uu * (PALETTE_W - 1) + 0.5), 0, PALETTE_W - 1)
+    iv = np.clip(np.int32(vv * (PALETTE_H - 1) + 0.5), 0, PALETTE_H - 1)
+    return pal[iv, iu]
+
+
 def write_mod_assets(mod_dir):
     """Write the palette and the material file into the mod (mod/beamng_earth). The level
     loader picks up every main.materials.json under the level folder."""

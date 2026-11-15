@@ -169,6 +169,9 @@ async function loadUi(run) {
   catch (e) { if (!run.active) throw e /* otherwise no legacy button */ }
   await registerPauseTab(run)
   check(run)
+  // Ctrl+V in the mod's text boxes, through the engine's clipboard (paste.js: the game's browser has none of its own)
+  try { (await step(run, () => import("./paste.js"))).installPaste() }
+  catch (e) { if (!run.active) throw e; console.error("BeamNG.Earth: paste support failed", e) }
   // tell the mod the page exists: its imgui window becomes a compact HUD (settings.lua)
   if (window.bngApi && window.bngApi.engineLua) {
     window.bngApi.engineLua("if beamngEarth_settings then beamngEarth_settings.setPageExists(true) end")
@@ -191,6 +194,7 @@ async function unloadUi(run) {
   check(run)
   try { serversTab?.stop() } catch (e) { /* never started */ }
   serversTab = null
+  try { (await import("./paste.js")).removePaste() } catch (e) { /* never installed */ }
   // Release local state first, and send both independent Lua removals without waiting on either callback.
   // A missing pause-tab reply must not prevent route cleanup (or a later UI load).
   try {

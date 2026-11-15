@@ -167,8 +167,10 @@ fn unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn clean(s: Option<String>, max: usize) -> String {
-    s.unwrap_or_default().chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(max).collect::<String>().trim().to_string()
+/// A version or system name as a report may give it: letters, digits and . _ + - only (anything else dropped; they were
+/// any printable ASCII, and the advanced page put them into its HTML: Codex review 2026-11-14).
+fn clean_name(s: Option<String>, max: usize) -> String {
+    s.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-')).take(max).collect()
 }
 
 fn host_ok(h: &str) -> bool {
@@ -328,7 +330,7 @@ impl Telemetry {
             }
         }
         self.uniques.saw(&id, unix_now);
-        self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean(r.v, 24), os: clean(r.os, 12), cc,
+        self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean_name(r.v, 24), os: clean_name(r.os, 12), cc,
                                            game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
         let (o, p) = self.online(now);
         let e = self.hours.get_mut(&hour).unwrap();
@@ -514,7 +516,11 @@ impl Telemetry {
                     last24.entry((*k).clone()).or_default().add(s);
                 }
             }
-            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": src}));
+            // (each hour's sources as their request counts only: the page shows nothing else, and every field of every
+            // source for 169 hours made /stats/advanced 2.5 MB, 2.85 MB of it this list)
+            let req: BTreeMap<&String, serde_json::Value> =
+                src.iter().filter(|(_, s)| s.req > 0).map(|(k, s)| (*k, serde_json::json!({"req": s.req}))).collect();
+            hourly.push(serde_json::json!({"t": h.0 * 3600, "online": h.1.online, "playing": h.1.playing, "sources": req}));
         }
         serde_json::json!({"versions": versions, "systems": systems, "countries": countries, "beammp": mp,
                            "sources24h": last24, "hourly": hourly})
@@ -523,6 +529,14 @@ impl Telemetry {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn report_names_keep_version_characters_only() {
+        // (the advanced page rendered them as HTML: a version "<svg/onload=alert(1)>" ran in visitors' browsers)
+        assert_eq!(clean_name(Some("<svg/onload=alert(1)>".into()), 24), "svgonloadalert1");
+        assert_eq!(clean_name(Some("1.9.1-beta.dev.440".into()), 24), "1.9.1-beta.dev.440");
+        assert_eq!(clean_name(Some("windows".into()), 12), "windows");
+    }
+
     use super::*;
 
     fn rep(id: &str, game: bool, req: u64) -> Report {

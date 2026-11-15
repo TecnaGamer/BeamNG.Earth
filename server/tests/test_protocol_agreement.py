@@ -111,6 +111,7 @@ MOD_TO_SERVER = {
               # ... and the far buildings, skyline and far bridges (roads.lua FAR_GEO: blockworker.far_geo)
               "farGeo": F(int, OPT),
               "farPack": F(int, OPT),           # far building packs past buildings.PACK_INNER_M (hello.farPack)
+              "farHz": F(int, OPT),             # the horizon ring's tall buildings (bldhz.PROTO)
               # mapped turbine landmarks reuse the geotile tracker, independently of buildings/roads
               "turbineGeo": F(int, OPT),
               # ... and the far field from level 3 up as global tiles (farfield.lua GLOBAL_FAR: select_global)
@@ -279,7 +280,8 @@ SERVER_TO_MOD = {
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
-                      "legs": F(list, OPT)},          # with via: [[dist_m, dur_s], ...] per leg
+                      "legs": F(list, OPT),           # with via: [[dist_m, dur_s], ...] per leg
+                      "steps": F(list, OPT)},         # OSRM maneuvers (routing.parse; the API's gpsRoute().steps)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
     # the blocks built already round the player (follow.preferReady takes one instead of its own target)
     "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor
@@ -325,6 +327,7 @@ SERVER_TO_MOD = {
               "roadGeo": F(int, OPT),           # road tiles as geotiles (hello.roadGeo, the road processes on)
               "farGeo": F(int, OPT),            # far buildings / skyline / far bridges as geotiles (hello.farGeo)
               "farPack": F(int, OPT),           # ... and the far buildings past PACK_INNER_M as packs (hello.farPack)
+              "farHz": F(int, OPT),             # ... and the horizon ring (hello.farHz, BNE_BLDHZ_DIR)
               "turbineGeo": F(int, OPT),        # mapped turbine geotiles (zoom 15; native stock shapes)
               "globalFar": F(int, OPT),         # far levels >= 3 as global tiles (hello.globalFar, --global-far)
               "deshadow": F(str, OPT),          # --deshadow lambert|full only (the settings page shows it)
@@ -446,6 +449,10 @@ SERVER_TO_MOD = {
     "bldpack_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
                      "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
     "bldpack_drop": {"anchorId": F(int), "key": F(str)},
+    # the horizon ring's tall buildings, a piece per skyline square under a zoom-12 geotile (hello.farHz, bldhz.py)
+    "bldhz_tile": {"anchorId": F(int), "key": F(str), "path": F(str), "n": F(int), "data": F(dict, OPT),
+                   "slots": F(dict, OPT), "frame": F(list, OPT), "pivot": F(NUM, OPT)},
+    "bldhz_drop": {"anchorId": F(int), "key": F(str)},
     # the AI road graph around the player (navgraph.py, --traffic on): a JSON file of nodes and edges
     "navgraph": {"anchorId": F(int), "path": F(str), "cx": F(NUM), "cy": F(NUM), "nodes": F(int), "edges": F(int),
                  "serial": F(int)},
@@ -501,6 +508,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "bldfar_tile", "bldfar_drop",                 # --buildings on: needs map data
                        "bldsky_tile", "bldsky_drop", "brfar_tile", "brfar_drop",
                        "bldpack_tile", "bldpack_drop",               # hello.farPack: needs map data
+                       "bldhz_tile", "bldhz_drop",                   # hello.farHz: needs BNE_BLDHZ_DIR's index
                        "navgraph",                                   # --traffic on: needs map data
                        "traffic_tile", "traffic_drop",                # visual traffic: negotiated, needs map data
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream

@@ -664,6 +664,12 @@ class MapData:
                     got.append(mod.shards(self))
                 except Exception:
                     got.append(None)
+            try:
+                import bldhz            # (the horizon ring's tall buildings, the same way)
+                tall = bldhz.source(self)
+                got.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
+            except Exception:
+                got.append(None)
             for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
                         getattr(self, "station_tags", None), *got):
                 if src is None:

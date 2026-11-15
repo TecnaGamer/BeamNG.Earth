@@ -141,7 +141,11 @@ Physics geometry always comes from open data:
   national orthophotos near the player. Esri World Imagery is optional, using
   the user's own key.
 - **Buildings and roads:** Overture and OpenStreetMap, from extracts the server
-  holds itself. Never query the public Overpass API at runtime.
+  holds itself. Never query the public Overpass API for world data at runtime. The one
+  exception (the owner's OK, 2026-11-14): the map's category search ("race tracks",
+  "forests" ...) sends one small, cached Overpass query per Enter, never while typing
+  (`server/geocode.py`, netfetch policy `overpass-api.de`: interactive only, rate 0.1/s,
+  50 a day, named places only, the player's position rounded to 0.01°).
 - **Land cover and vegetation:** ESA WorldCover and Meta canopy height.
 - Both are read per global cell by the map-data pipeline (`server/mapdata.py`, "Map data" below).
 - **Gravity:** WGS84 normal gravity (Somigliana + free air) plus the EGM2008 anomalies (NGA,

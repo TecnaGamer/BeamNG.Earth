@@ -12,11 +12,16 @@ answers ranked together (search()):
 Google is not used (project rule). The mod sends the typed text and the player's position (a location bias: nearer
 results first); requests are debounced by the map (300 ms, 3+ characters) and limited by netfetch. The map credits
 OpenStreetMap, Photon, Wikipedia and Wikidata.
+Category phrases additionally use bounded Overpass and notable direct Wikidata instances on Enter only;
+search_categories.json holds the reviewed aliases, OSM selectors and classes. Results and empty answers are
+cached for an hour (rounded origin), concurrent re-asks share work, admission failures cool down for at most 10 seconds, other failures for a minute.
+Nominatim resolves a named near/in anchor on Enter; large in-regions use only Wikidata within approximate bounds.
 """
 import concurrent.futures
 import difflib
 import json
 import locale
+from pathlib import Path
 import math
 import dmath
 import dnp
@@ -35,7 +40,7 @@ WIKIDATA_URL = "https://www.wikidata.org/w/api.php"
 LIMIT = 7
 RESULTS = 8                     # at most this many in the map's list
 MIN_CHARS = 3
-ATTRIBUTION = "Search: OpenStreetMap (Nominatim, Photon by komoot), Wikipedia, Wikidata"
+ATTRIBUTION = "Search: © OpenStreetMap contributors (Nominatim, Overpass, Photon by komoot), Wikipedia, Wikidata"
 # Names in the language of the country the player is in, where Photon has it (en, de, fr, it; the status bar's
 # place names too, placenames.py): Photon's lang="en"
 # showed "Cologne", "Switzerland" to players in Cologne (SwissCheese26's PR #275: German names for DACH). By the
@@ -89,7 +94,7 @@ def parse(data):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             continue
         name, detail, kind = label(f.get("properties"))
-        out.append({"name": name, "detail": detail, "kind": kind, "lat": round(lat, 6), "lon": round(lon, 6)})
+        out.append({"name": name, "detail": detail, "kind": kind, "lat": round(lat, 6), "lon": round(lon, 6), "country": (f.get("properties") or {}).get("country") or ""})
     return out
 
 
@@ -262,7 +267,7 @@ def parse_nominatim(data):
         parts = [v for v in (street, town, a.get("state"), a.get("country")) if v and v != name]
         out.append({"name": name, "detail": ", ".join(parts[:3]), "kind": r.get("type") or r.get("category") or "",
                     "lat": round(lat, 6), "lon": round(lon, 6), "rank": rank, "importance": r.get("importance"),
-                    "where": r.get("display_name") or ""})     # the whole address, for matching: town and district
+                    "country": a.get("country") or "", "where": r.get("display_name") or ""})     # the whole address, for matching: town and district
     return out
 
 
@@ -401,7 +406,11 @@ def merge(q, results, lat=None, lon=None, limit=RESULTS):
         out = [r for r in out if fits(q, r) >= KEEP]
     out = [r for r in out if fits(q, r) >= FLOOR]
     final = [{"name": r["name"], "detail": r.get("detail") or "", "kind": r.get("kind") or "", "lat": r["lat"],
-              "lon": r["lon"], "score": r["score"]} for r in out[:limit]]
+              "lon": r["lon"], "score": r["score"], "country": r.get("country") or "",
+              "result_type": "address" if r.get("kind") in {"house", "road", "street", "residential", "pedestrian",
+                  "service", "living_street", "tertiary", "secondary", "primary", "unclassified"} else "name",
+              **({"distance_mi": category_km(lat, lon, r["lat"], r["lon"]) / 1.609344}
+                 if lat is not None and lon is not None else {})} for r in out[:limit]]
     if final and fold(final[0]["name"]).replace(" ", "") == fold(q).replace(" ", "") and not street_like(q) \
             and not any(c.isdigit() for c in q):
         final[0]["sure"] = True     # Enter may take it without the full search (EarthMap.vue onSearch)
@@ -492,6 +501,255 @@ def superlative_results(kind, cc, player_cc, lang):
     return out[:RESULTS]
 
 
+# ------------------------------------------------------------------------------------------- categories
+# Data lives beside this module so synonyms and source mappings can be reviewed without changing the search logic.
+CATEGORIES = json.loads(Path(__file__).with_name("search_categories.json").read_text(encoding="utf-8"))
+CATEGORY_RADIUS_M = 15000
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+SPARQL_URL = "https://query.wikidata.org/sparql"
+
+
+def _category_words(text):
+    # Only whole category phrases qualify; names such as "Forest Hill" keep their ordinary search behavior.
+    return " ".join(w[:-3] + "y" if w.endswith("ies") else w[:-2] if w.endswith(("ches", "shes", "sses", "xes")) else w[:-1] if w.endswith("s") and not w.endswith("ss")
+                    else w for w in fold(text).split())
+
+
+_CATEGORY_ALIASES = {_category_words(a): c for c in CATEGORIES for a in c["aliases"]}
+
+
+def category_query(q):
+    """(category data, near/in/None, place text), or None. Conservative whole-phrase typo correction."""
+    # "near me", "nearby", "around here": the player's own position, not a place for Nominatim to look up ("me" is Maine)
+    q = re.sub(r"\s+(nearby|close by|(near|around|close to)\s+(me|here|my location|my position))$", "", q.strip(), flags=re.I)
+    bits = re.split(r"\s+(near|in)\s+", q, maxsplit=1, flags=re.I)
+    words = _category_words(bits[0])
+    cat = _CATEGORY_ALIASES.get(words)
+    if cat is None and len(words) >= 5:
+        close = difflib.get_close_matches(words, _CATEGORY_ALIASES, n=2, cutoff=0.88)
+        if close and len({_CATEGORY_ALIASES[a]["name"] for a in close}) == 1:
+            cat = _CATEGORY_ALIASES[close[0]]
+    if cat is None or (len(bits) > 1 and not bits[2].strip()):
+        return None
+    return cat, bits[1].lower() if len(bits) > 1 else None, bits[2].strip() if len(bits) > 1 else None
+
+
+def category_overpass_url(cat, lat, lon, bbox=None):
+    """One bounded union, centers only, no geometry download. No user text enters Overpass QL."""
+    scope = f"(around:{cat.get('radius_m', CATEGORY_RADIUS_M)},{lat:.2f},{lon:.2f})"
+    if bbox:
+        south, north, west, east = bbox
+        scope += f"({south},{west},{north},{east})"
+    selectors = "".join("nwr" + tags + scope + ";" for tags in cat["osm"])
+    query = "[out:json][timeout:5][maxsize:8388608];(" + selectors + ");out center tags 200;"
+    return OVERPASS_URL + "?" + urllib.parse.urlencode({"data": query})
+
+
+def category_wikidata_url(cat, bbox=None):
+    """Reviewed class families, notable first; small Enter-only query, cached independently of position."""
+    classes = " ".join("wd:" + c for c in cat["classes"])
+    excluded = " ".join("wd:" + c for c in cat.get("exclude_classes", []))
+    exclusion = ("FILTER NOT EXISTS { VALUES ?excludedClass { " + excluded +
+                 " } ?item wdt:P31/wdt:P279* ?excludedClass. }") if excluded else ""
+    region = ""
+    if bbox:
+        south, north, west, east = bbox
+        region = (f"FILTER(geof:latitude(?coord) >= {south} && geof:latitude(?coord) <= {north} && "
+                  f"geof:longitude(?coord) >= {west} && geof:longitude(?coord) <= {east})")
+    query = '''PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+SELECT ?item ?itemLabel ?coord ?countryLabel ?links WHERE {
+ { SELECT DISTINCT ?item ?coord ?links WHERE {
+ VALUES ?class { %s }
+ ?item wdt:P31/wdt:P279* ?class; wdt:P625 ?coord; wikibase:sitelinks ?links.
+ FILTER(?links >= 20) %s %s
+ } ORDER BY DESC(?links) ?item LIMIT 24 }
+ OPTIONAL { ?item wdt:P17 ?country. }
+ SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+} ORDER BY DESC(?links) ?item LIMIT 24''' % (classes, region, exclusion)
+    return SPARQL_URL + "?" + urllib.parse.urlencode({"query": query, "format": "json"})
+
+
+def category_km(lat1, lon1, lat2, lon2):
+    """Great-circle distances for worldwide suggestions, including across the date line."""
+    a, b = dmath.radians(lat1), dmath.radians(lat2)
+    x = dmath.sin((b - a) / 2)
+    y = dmath.sin(dmath.radians(lon2 - lon1) / 2)
+    h = min(1.0, max(0.0, x * x + dmath.cos(a) * dmath.cos(b) * y * y))
+    return 12742.0 * dmath.atan2(dmath.sqrt(h), dmath.sqrt(1 - h))
+
+
+def _category_result(name, cat, lat, lon, country="", **extra):
+    if not isinstance(name, str) or not name.strip():
+        return None
+    name = name.strip()
+    try:
+        lat, lon = float(lat), float(lon)
+    except (ValueError, TypeError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return dict(name=name, detail=country, kind=cat["name"], lat=round(lat, 6),
+                lon=round(lon, 6), country=country, category=True, unnamed=not bool(name), **extra)
+
+
+def parse_category_overpass(data, cat):
+    # A timeout can carry partial elements: don't cache those as a successful complete answer.
+    if data.get("remark"):
+        raise ValueError("Overpass did not complete the category search")
+    out = []
+    for e in data.get("elements", []):
+        tags = e.get("tags") or {}
+        center = e.get("center") or e
+        r = _category_result(tags.get("name:en") or tags.get("name"), cat, center.get("lat"), center.get("lon"),
+                             tags.get("addr:country") or tags.get("is_in:country") or "", source="overpass")
+        if r:
+            out.append(r)
+    return out
+
+
+def parse_category_wikidata(data, cat):
+    out = []
+    for b in data.get("results", {}).get("bindings", []):
+        point = re.fullmatch(r"Point\(([-+\d.eE]+) ([-+\d.eE]+)\)", b.get("coord", {}).get("value", ""))
+        if not point:
+            continue
+        try:
+            links = int(b.get("links", {}).get("value", 0))
+        except (ValueError, TypeError):
+            continue
+        name = b.get("itemLabel", {}).get("value", "")
+        if not name or re.fullmatch(r"Q\d+", name):
+            continue
+        r = _category_result(name, cat, point[2], point[1], b.get("countryLabel", {}).get("value", ""),
+                             source="wikidata", links=links)
+        if r:
+            out.append(r)
+    return out
+
+
+_category_lock = threading.Lock()
+_category_cache = {}  # key -> (expiry, Future); includes empty answers and short failure cooldowns, coalesces re-asks
+
+
+def _category_cached(key, fn):
+    now = time.monotonic()
+    with _category_lock:
+        entry = _category_cache.get(key)
+        owner = entry is None or entry[0] <= now
+        if owner:
+            if len(_category_cache) >= CACHE_MAX:
+                for old in list(_category_cache):
+                    if _category_cache[old][1].done():
+                        del _category_cache[old]
+            future = concurrent.futures.Future()
+            _category_cache[key] = (now + CACHE_S, future)
+        else:
+            future = entry[1]
+    if owner:
+        try:
+            future.set_result(fn())
+        except Exception as e:
+            with _category_lock:
+                cooldown = 10 if isinstance(e, (netfetch.RateLimited, netfetch.BudgetExceeded,
+                                                netfetch.HostUnavailable)) else 60
+                _category_cache[key] = (time.monotonic() + cooldown, future)
+            future.set_exception(e)
+    return future.result()
+
+
+def _category_anchor(net, place, lat, lon):
+    if not place:
+        return lat, lon, None, ""
+    def resolve():
+        data = _json(net, nominatim_url(place, limit=1))
+        if not isinstance(data, list) or not data:
+            raise ValueError("Category search location was not found")
+        p = data[0]
+        la, lo = float(p["lat"]), float(p["lon"])
+        if not (-90 <= la <= 90 and -180 <= lo <= 180):
+            raise ValueError("Invalid category search location")
+        bbox = tuple(float(v) for v in p["boundingbox"])
+        if len(bbox) != 4 or not (-90 <= bbox[0] <= bbox[1] <= 90 and -180 <= bbox[2] <= bbox[3] <= 180):
+            raise ValueError("Invalid category search bounds")
+        return la, lo, bbox, (p.get("address") or {}).get("country", "")
+    return _category_cached(("anchor", fold(place)), resolve)
+
+
+def _category_source(net, hit, lat, lon, source):
+    cat, mode, place = hit
+    # Round only the request/cache origin, never the distance shown to a player.
+    player_lat = float(lat) if lat is not None else None
+    player_lon = float(lon) if lon is not None else None
+    lat = round(player_lat, 2) if player_lat is not None else None
+    lon = round(player_lon, 2) if player_lon is not None else None
+    def fetch():
+        la, lo, bbox, country = _category_anchor(net, place, lat, lon)
+        bounds = bbox if mode == "in" else None
+        rows = []
+        if source == "overpass":
+            # Never scan a country-sized OSM area. Small in-regions also stay inside the category's radius.
+            if la is not None and lo is not None and not (bounds and
+                    (bounds[1] - bounds[0] > 1 or bounds[3] - bounds[2] > 1)):
+                request = category_overpass_url(cat, la, lo, bounds)
+                rows = _category_cached(("wire", request), lambda: parse_category_overpass(
+                    json.loads(net.get(request, kind="demand").body), cat))
+        elif cat["classes"]:
+            request = category_wikidata_url(cat, bounds)
+            rows = _category_cached(("wire", request), lambda: parse_category_wikidata(
+                json.loads(net.get(request, kind="demand").body), cat))
+        return rows, country if bounds else "", la, lo
+    # Cache only candidates and location metadata. Every caller gets fresh distances and copies of rows.
+    cached, country, anchor_lat, anchor_lon = _category_cached(
+        (cat["name"], mode, fold(place), lat, lon, source), fetch)
+    la, lo = (player_lat, player_lon) if player_lat is not None and player_lon is not None else (anchor_lat, anchor_lon)
+    rows = []
+    for raw in cached:
+        r = dict(raw)
+        r["distance"] = category_km(la, lo, r["lat"], r["lon"]) if la is not None and lo is not None else float("inf")
+        where = r.get("country") or country
+        r["country"] = where
+        r["distance_mi"] = r["distance"] / 1.609344 if r["distance"] != float("inf") else None
+        distance = f"{r['distance_mi']:.1f} mi" if r["distance_mi"] is not None else ""
+        r["detail"] = " · ".join(v for v in (cat["name"], distance, where) if v)
+        rows.append(r)
+    return rows
+
+
+def merge_categories(q, normal, categories):
+    """Keep strong name matches, then nearby named places, then two notable suggestions further away."""
+    # Single category words are ambiguous place names too (Summit, Dam, fuzzy Forrest).
+    # Exact/prefix names win in that case; explicit category phrases still favor nearby destinations.
+    exact = [r for r in normal if fold(r["name"]) == fold(q)][:1]
+    normal = [r for r in normal if fits(q, r) >= WEAK and fold(r["name"]) != fold(q)]
+    hit = category_query(q)
+    ambiguous = hit and hit[1] is None and len(fold(q).split()) == 1
+    if ambiguous:
+        normal.sort(key=lambda r: not fold(r["name"]).startswith(fold(q)))
+    normal = normal[:2]
+    if exact and hit and (hit[1] or ambiguous):
+        normal, exact = exact + normal[:1], []
+    local = sorted((r for r in categories if r.get("source") == "overpass" and not r.get("unnamed")),
+                   key=lambda r: (r.get("unnamed", False), r["distance"], r["name"]))
+    famous = sorted((r for r in categories if r.get("source") == "wikidata"),
+                    key=lambda r: (-r.get("links", 0), r["distance"], r["name"]))
+    # Reserve space for distant suggestions, filling with more local results if not enough unique famous ones exist.
+    ordered = normal + local[:max(0, RESULTS - len(normal) - len(exact) - min(2, len(famous)))] + exact + famous + local
+    out = []
+    for r in ordered:
+        if any(_same_place(fold(o["name"]), fold(r["name"]), category_km(o["lat"], o["lon"], r["lat"], r["lon"])) for o in out):
+            continue
+        out.append({**{k: r[k] for k in ("name", "detail", "kind", "lat", "lon")},
+                    "result_type": "category" if r.get("category") else r.get("result_type", "name"),
+                    **{k: r[k] for k in ("distance_mi", "country") if k in r}})
+        if len(out) == RESULTS:
+            break
+    return out
+
+
 # ------------------------------------------------------------------------------------------- the search
 def _ask(jobs, deadline):
     """Run jobs ({name: (function, args)}) at once until deadline (time.monotonic()): (results, errors, unanswered)."""
@@ -526,7 +784,11 @@ def search(q, lat=None, lon=None, net=None, country=None, full=False):
             return found
     net = net if net is not None else netfetch.default_fetcher()
     deadline = time.monotonic() + (ENTER_DEADLINE_S if full else TYPING_DEADLINE_S)
+    category = category_query(q)
     jobs = {}
+    if full and category:
+        for source in ("overpass", "wikidata"):
+            jobs["category " + source] = (_category_source, (net, category, lat, lon, source))
     if time.monotonic() >= _skip.get("photon", 0.0):
         jobs["photon"] = (_photon, (net, q, lat, lon, lang))
     if full:
@@ -538,7 +800,7 @@ def search(q, lat=None, lon=None, net=None, country=None, full=False):
         jobs["wikipedia " + w] = (_wikipedia, (net, q, w))
     results, errors, late = _ask(jobs, deadline)
     asked = len(jobs)
-    if not any(fits(q, r) >= WEAK for r in results):
+    if not category and not any(fits(q, r) >= WEAK for r in results):
         more = {}
         for v in variants(q):
             more["wikidata " + v] = (_wikidata, (net, v, shown))
@@ -557,7 +819,13 @@ def search(q, lat=None, lon=None, net=None, country=None, full=False):
         asked += len(more)
     if not results and errors and len(errors) + late >= asked:
         raise errors[0]
-    return merge(q, results, lat, lon)
+    normal = merge(q, [r for r in results if not r.get("category")], lat, lon)
+    if category:
+        for r in normal:
+            r.pop("sure", None)  # Enter must discover places rather than teleport to a generic category article.
+        if full:
+            return merge_categories(q, normal, [r for r in results if r.get("category")])
+    return normal
 
 
 # ------------------------------------------------------------------------------------------- where am I

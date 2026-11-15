@@ -140,6 +140,7 @@ import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
+import terrainprefill  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
@@ -150,6 +151,7 @@ import seacarve as seacarvemod  # noqa: E402
 import seatiles as seatilesmod  # noqa: E402
 import vegetation as vegetationmod
 import buildings as buildingsmod  # noqa: E402
+import bldhz as bldhzmod  # noqa: E402
 import rockface as rockfacemod  # noqa: E402
 import geotiles as geotilesmod  # noqa: E402
 import riverlines as riverlinesmod  # noqa: E402
@@ -826,7 +828,7 @@ SESSION_ORPHAN_S = 600.0
 # geotiles are anchor-free, so prune never took them, and two days' driving left 9 GB in the session folder.
 GEO_FILES_GRACE_S = 120.0
 GEO_LIST_BATCH_S = 1.0          # geo_dropped: tiles whose grace ends within this share one listing of the folder
-GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar", "bldpack": "bldpack"}  # kind -> Connection attr
+GEO_TRACKERS = {"roads": "roads", "bldfar": "bldfar", "bldsky": "bldsky", "brfar": "brfar", "bldpack": "bldpack", "bldhz": "bldhz"}  # kind -> Connection attr
 SESSION_HEARTBEAT_S = 60.0
 SESSION_SWEEP_S = 30.0      # main_async: how often sweep_sessions runs
 LEASE_GRACE_S = 900.0       # a disconnected game's stream lease (PR #817) kept this long for it to reconnect
@@ -1199,8 +1201,10 @@ class Server:
         self.orphan_s = SESSION_ORPHAN_S
         self.heartbeat_at = time.monotonic()
         self._scan_sessions()
-        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), off the start's path
-        threading.Thread(target=terraintexmod.ensure, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
+        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), then every ground
+        # material's packed textures in the game's terrain cache (terrainprefill.py: the game packs a missing one on its
+        # main thread, ~3 s a texture, mid-drive), off the start's path, one paced thread
+        threading.Thread(target=self._ground_textures, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
                          name="terraintex", daemon=True).start()
         self.out_dir = os.path.join(root, self.sid)
         self.cdae_dir = os.path.join(user_dir, *CDAE_ROOT, self.sid.lower())
@@ -1313,6 +1317,10 @@ class Server:
         # (anchorId, key) of cached tiles built with the palette because the imagery failed; shown in
         # the status note (re-texturing them once the host is back is a ROADMAP follow-up)
         self.degraded = set()
+        self.degraded_fails = {}            # ck -> consecutive failure count (for per-tile backoff)
+        self.degraded_retry = {}            # ck -> next monotonic time to retry retexturing
+        if self.net is not None:
+            self.net.on_circuit_closed = self._on_circuit_closed
         # Heightmap workers: with the block processes they mostly wait on a process, and with two a
         # request queued behind a prefetch and an earlier request (3.5 s at 90 m/s, 2026-10-12)
         self.hm_pool = ThreadPoolExecutor(HM_THREADS, thread_name_prefix="heightmap")
@@ -1726,6 +1734,12 @@ class Server:
             if getattr(c, "lease", None) is None:
                 out |= c.sessions
         return out
+
+    @staticmethod
+    def _ground_textures(user_dir, game_dir):
+        """(a thread) terraintex.ensure, then terrainprefill.prefill: the squares' PNGs exist before their packs."""
+        terraintexmod.ensure(user_dir, game_dir)
+        terrainprefill.prefill(user_dir, game_dir)
 
     def check_user_dir(self, conn, game_path):
         """The game's own user folder (hello.userPath) against the one this server writes into: a game whose user
@@ -3674,7 +3688,7 @@ class Server:
         geo = getattr(getattr(conn, "roads", None), "geo", False)
         loop = asyncio.get_running_loop()
         for t in tiles:
-            for key in osm_fuel_cells(anchor.frame, t, geo):
+            for key in self.fuel_cells(aid, anchor.frame, t, geo):
                 k = str(key)
                 if k in self.osm_fuel_done:
                     continue
@@ -3696,6 +3710,22 @@ class Server:
         log.debug("osm fuel: cell %s, %d stations in %.2f s", key, len(rows), time.perf_counter() - t0)
         return rows, True
 
+    FUEL_CELLS_MAX = 20000
+
+    def fuel_cells(self, aid, frame, tile, geo):
+        """osm_fuel_cells of a road tile, memoised: every pose asked them for all the tiles round the car, each a
+        conversion to lat/lon on the event loop (a 4.1 s 'event loop stalled' in geotiles.enu_to_geodetic < ...
+        osm_fuel_want < on_pose, 2026-11-14). A geotile's cells are the same for every anchor; an anchor tile's are its
+        anchor's."""
+        memo = self.__dict__.setdefault("_fuel_cells", {})
+        mk = (bool(geo), None if geo else aid, tuple(tile))
+        got = memo.get(mk)
+        if got is None:
+            if len(memo) >= self.FUEL_CELLS_MAX:
+                memo.clear()
+            got = memo[mk] = tuple(osm_fuel_cells(frame, tile, geo))
+        return got
+
     def _osm_fuel_got(self, k, key, fut):
         waiting = self.osm_fuel_wait.pop(k, set())
         try:
@@ -3713,7 +3743,8 @@ class Server:
             # (a geotile's content is the connection's, whatever the anchor: dev's geotiles, kept by the mod across
             # anchors; an anchor's road tiles only while it is the tracker's)
             if anchor is not None and roads is not None and (geo or roads.aid == aid):
-                again = osm_fuel_tiles(anchor.frame, key, roads.sent, geo)
+                k_ = str(key)
+                again = {t for t in roads.sent if any(str(c) == k_ for c in self.fuel_cells(aid, anchor.frame, t, geo))}
                 if again:
                     log.info("osm fuel: cell %s brought %d stations: road tiles %s again", k, len(rows), sorted(again))
                     roads.again(again)
@@ -6166,6 +6197,15 @@ class Server:
                 if self.imagery_failures % 100 == 1:
                     log.warning("tile %s of anchor %d: no imagery (%s), palette material (%d tiles so far)",
                                 tile.key, anchor.id, e, self.imagery_failures)
+                if not (self.net is not None and getattr(self.net, "offline_flag", False)):
+                    if geo is not None:
+                        w0 = time.perf_counter()
+                        built, geo = geo.result(), None
+                        geo_wait += time.perf_counter() - w0
+                    material = self.matslots.take(ck)
+                    texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
+                    fallback_rgb = farfield.palette_fallback_rgb(getattr(built, "grid", None))
+                    tex_bytes = imagerymod.write_dds(os.path.join(self.out_dir, texture), fallback_rgb)
         if geo is not None:             # (a revisit hit, or no imagery)
             w0 = time.perf_counter()
             built = geo.result()
@@ -6173,7 +6213,7 @@ class Server:
         if node is not tile:            # a piece: its node cut to its global tile
             if part is None:
                 tex = None
-                if material is not None:
+                if material is not None and ck not in self.degraded:
                     with open(os.path.join(self.out_dir, texture), "rb") as fh:
                         tex = (fh.read(), tex_bytes, used, frozenset(pending or ()))
                 self.piece_parts[(anchor.id, node.key)] = {"built": built, "tex": tex}
@@ -6213,6 +6253,8 @@ class Server:
         if material is not None:
             info.rev = self.tex_rev.get(ck, 0)
             info.cm_pending = frozenset(pending or ())
+            if ck in self.degraded:
+                info.stale = True
         return info
 
     def tex_key(self, anchor, tile, px):
@@ -6611,7 +6653,7 @@ class Server:
             rgb, used = self.render_tile(anchor, tile, px, pending)
         except imagerymod.ImageryError as e:
             log.debug("tile %s of anchor %d: texture not rendered again (%s)", tile.key, anchor.id, e)
-            return prev
+            return replace(prev, retex_repeat=prev.retex_repeat + 1)
         rgb = self.rock_faces(anchor, tile, px, rgb, prev.grid)
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
@@ -6824,8 +6866,19 @@ class Server:
         before = self.tiles.get(ck)
         info = self.tiles[ck] = fut.result()
         self.note_lod_err(ck, info)
+        recovered = False                   # (a degraded tile's new texture: its stale re-render count starts over)
         if before is not None and info.texture != before.texture:
+            recovered = ck in self.degraded
             self._send_retex(ck, info)      # a re-rendered texture: the mods showing the tile switch to it
+            self.degraded.discard(ck)
+            self.degraded_fails.pop(ck, None)
+            self.degraded_retry.pop(ck, None)
+            info.retex_repeat = 0
+        elif before is not None and info.texture == before.texture and ck in self.degraded:
+            fails = self.degraded_fails.get(ck, 0) + 1
+            self.degraded_fails[ck] = fails
+            backoff = min(300.0, 15.0 * (2 ** min(fails - 1, 5)))
+            self.degraded_retry[ck] = time.monotonic() + backoff
         for rk in sorted(info.cm_pending, key=str):     # regions it was rendered without
             st = self._region_status(rk)
             if st is None:
@@ -6833,7 +6886,7 @@ class Server:
             else:                           # ready meanwhile (while the texture was being rendered)
                 self._cm_settle(ck, rk, st, pump=False)
         if before is not None and info is not before:     # a re-render: stale at once again, or not
-            info.retex_repeat = before.retex_repeat + 1 if info.stale else 0
+            info.retex_repeat = (0 if recovered else before.retex_repeat) + 1 if info.stale else 0
         if info.stale:
             self._retex_pump()
         if self.matslots.short():
@@ -6927,6 +6980,8 @@ class Server:
     def _evict_tile(self, ck):
         info = self.tiles.pop(ck)
         self.degraded.discard(ck)
+        self.degraded_fails.pop(ck, None)
+        self.degraded_retry.pop(ck, None)
         self.matslots.release(ck)
         # --colormatch: a later build must not reuse its texture's name (re-rendered, or rendered raw
         # for a region that may finish before the tile is built again: the listener misses it then)
@@ -6947,6 +7002,53 @@ class Server:
     def _ds_listener(self, rk, changed):
         """Deshadow worker thread: a region's relight values are ready (changed: it relights)."""
         self._cm_listener((imagerymod.DS_PENDING,) + tuple(rk), changed)
+
+    def imagery_hosts(self):
+        """Host names of the satellite imagery failover chain."""
+        if self.imagery is None:
+            return ()
+        if self.net is not None:
+            hosts = self.net.chain_hosts("imagery")
+            if hosts:
+                return hosts
+        return tuple(dict.fromkeys(netfetch.host_of(s.url) if "/" in s.url else s.url
+                                   for s in self.imagery.chain))
+
+    def imagery_down(self):
+        """Is every host in the satellite imagery chain currently unreachable? A host whose breaker is due a probe
+        counts as reachable: only a request closes an open breaker, so waiting for it to close stalled the recovery
+        of degraded tiles for ever after a full outage (Codex review of PR #1260)."""
+        if self.net is None or getattr(self.net, "offline_flag", False):
+            return True
+        hosts = self.imagery_hosts()
+        may = getattr(self.net, "may_try", None) or self.net.available
+        return bool(hosts) and all(not may(h) for h in hosts)
+
+    def _on_circuit_closed(self, host_name):
+        """Netfetch callback: an imagery circuit breaker closed after a host became available again."""
+        if host_name in self.imagery_hosts():
+            loop = self.loop
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(self.retex_degraded, True)
+
+    def retex_degraded(self, reset_backoff=False):
+        """(event loop) Enqueue live retexture for tiles built without imagery due to network trouble."""
+        if not self.degraded or self.imagery is None or self.imagery_down():
+            return
+        now = time.monotonic()
+        if reset_backoff:
+            self.degraded_retry.clear()
+            self.degraded_fails.clear()
+        for ck in list(self.degraded):
+            if not reset_backoff and now < self.degraded_retry.get(ck, 0.0):
+                continue
+            info = self.tiles.get(ck)
+            if info is not None and info.material is not None:
+                info.stale = True
+                if reset_backoff:
+                    info.retex_repeat = 0
+                self.retex_request(ck, pump=False)
+        self._retex_pump()
 
     def _region_status(self, rk):
         """None (not ready), False (ready, changes nothing) or True of a pending region: a colour-match
@@ -7009,10 +7111,12 @@ class Server:
             info = self.tiles.get(ck)
             viewers = self._retex_viewers(ck) if info is not None and info.stale else []
             if not viewers or ck in self.tile_inflight or (ck[0] not in self.anchors and ck[0] != GLOBAL_AID) \
-                    or info.retex_repeat >= RETEX_REPEAT:
+                    or (ck not in self.degraded and info.retex_repeat >= RETEX_REPEAT):
                 self.retex_todo.discard(ck)
                 if info is not None and info.stale and ck not in self.tile_inflight:
                     self.retex_stats["dropped"] += 1
+                continue
+            if ck in self.degraded and self.imagery_down():
                 continue
             t = info.tile if info.tile is not None else farfield.tile_of(ck[1])
             d = min(t.distance(*c.view_focus) for c in viewers)
@@ -7371,7 +7475,8 @@ class Connection:
         self.gpolys = {}                        # (anchorId, key) -> a shown global tile's quad in that anchor's world
         self.ppolys = {}                        # piece key -> its polygon (pieces sent / shown under the active anchor)
         self.building_scale = 1.0
-        self.bldfar = self.bldsky = self.brfar = self.bldpack = None
+        self.bldfar = self.bldsky = self.brfar = self.bldpack = self.bldhz = None
+        self.far_hz = False                     # the horizon ring's tall buildings (hello.farHz, bldhz.py)
         self.far_pack = False                   # far building packs past PACK_INNER_M (hello.farPack, buildings.PACK_*)
         self.make_far_trackers(False)
         self.turbine_geo = False               # separate capability; no road/building radius increase
@@ -8366,7 +8471,7 @@ class Connection:
                 self.s.slots_let_go(list(self.slot_holds))
             self.slot_holds = {}
             for tr in (self.roads, self.signs, self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None),
-                       getattr(self, "turbines", None), self.nav,
+                       getattr(self, "bldhz", None), getattr(self, "turbines", None), self.nav,
                        self.distant_traffic, self.distant_traffic_far):
                 if tr is not None:
                     tr.close()
@@ -8392,10 +8497,10 @@ class Connection:
         geotiles (geo: far buildings in the road geotiles' grid sent as whole skyline squares, the skyline's and far
         bridges' squares at geotiles.SKY_Z / BRIDGE_Z), each at the building scale's reach (set_graphics)."""
         import geotiles
-        for tr in (self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None)):
+        for tr in (self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "bldhz", None)):
             if tr is not None:
                 tr.close()
-        self.bldpack = None
+        self.bldpack = self.bldhz = None
         self.far_geo = bool(geo)
         bld = self.building_scale
         far_m = buildingsmod.FAR_SEND_M * bld
@@ -8431,6 +8536,12 @@ class Connection:
             # mod hides each piece where its road geotile shows its own deck)
             self.brfar = (vegetationmod.Tracker(br_m, br_drop, buildingsmod.BRIDGE_FAR_PER_POSE, "brfar", geo=True,
                                                 z=geotiles.BRIDGE_Z) if bridges else None)
+            # (the horizon ring past the skyline: the tall buildings' index, bldhz.py; its pieces hidden by the mod
+            # where a skyline square, a pack or far tiles show)
+            if getattr(self, "far_hz", False) and sky:
+                hz_m = bldhzmod.reach(bld, getattr(self, "view_cap", None))
+                self.bldhz = vegetationmod.Tracker(hz_m, hz_m + bldhzmod.DROP_EXTRA_M, bldhzmod.PER_POSE, "bldhz",
+                                                   geo=True, z=bldhzmod.Z)
             return
         self.bldfar = vegetationmod.Tracker(far_m, far_drop, buildingsmod.FAR_PER_POSE, "bldfar",
                                             group=buildingsmod.SKY_UNIT if sky else None)
@@ -8451,7 +8562,8 @@ class Connection:
         self.roads = road_tracker(self)
         self.signs.close()
         self.signs = signstream.Tracker()
-        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "turbines", None),
+        for tr in (self.veg, self.bldfar, self.bldsky, self.brfar, getattr(self, "bldpack", None), getattr(self, "bldhz", None),
+                   getattr(self, "turbines", None),
                    self.distant_traffic, self.distant_traffic_far):
             if tr is not None:
                 tr.forget()
@@ -8637,13 +8749,16 @@ class Connection:
             # FAR_GEO; a far tile and the road geotile of the same key hold the same buildings: one shows them)
             far_geo = road_geo and msg.get("farGeo") == buildingsmod.FAR_GEO and self.s.far_geo_ok()
             far_pack = bool(far_geo and msg.get("farPack") == buildingsmod.FAR_PACK and buildingsmod.PACK_ON)
-            if far_geo != self.far_geo or far_pack != self.far_pack:
-                self.far_pack = far_pack
+            far_hz = bool(far_geo and msg.get("farHz") == bldhzmod.PROTO and bldhzmod.on(self.s.mapdata))
+            if far_geo != self.far_geo or far_pack != self.far_pack or far_hz != self.far_hz:
+                self.far_pack, self.far_hz = far_pack, far_hz
                 self.make_far_trackers(far_geo)
             if far_geo:
                 m["farGeo"] = buildingsmod.FAR_GEO
             if far_pack:
                 m["farPack"] = buildingsmod.FAR_PACK
+            if far_hz:
+                m["farHz"] = bldhzmod.PROTO
             self.turbine_geo = msg.get("turbineGeo") == TURBINE_GEO
             if self.turbine_geo:
                 m["turbineGeo"] = TURBINE_GEO
@@ -8880,6 +8995,7 @@ class Connection:
                 self.bldsky.send_m = buildingsmod.SKY_SEND_M * bld
                 self.bldsky.drop_m = self.bldsky.send_m + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
                 self.bldsky.inner = (self.far_reach(), buildingsmod.SKY_UNIT)
+            self.set_hz_reach()
             if self.brfar is not None:
                 self.brfar.send_m = buildingsmod.BRIDGE_FAR_SEND_M * bld
                 self.brfar.drop_m = self.brfar.send_m + (buildingsmod.BRIDGE_FAR_DROP_M - buildingsmod.BRIDGE_FAR_SEND_M)
@@ -8895,6 +9011,7 @@ class Connection:
             cap = max(VIEW_CAP_MIN_M, float(v)) if v > 0 else None
             far = far or cap != self.view_cap
             self.view_cap = cap
+            self.set_hz_reach()             # (the horizon ring's "max": to the fixed view distance when shorter)
         log.info("graphics: terrain detail x%.2f, trees to %.0f m, far buildings to %.0f m, ground photo %d px, view %s, "
                  "pixel error %s", self.lod_scale, self.veg.send_m, self.bldfar.send_m, self.s.base_px,
                  "to the horizon" if self.view_cap is None else f"{self.view_cap / 1000:.0f} km",
@@ -9996,6 +10113,11 @@ class Connection:
                 self.bldsky.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                     self.build_far_geo("bldsky") if geo else self.s.build_sky_tile,
                                     view=self.view_at, frame=frame)
+                # (the horizon ring last, once the skyline round the car is there)
+                if self.bldhz is not None and self.bldhz.send_m > 0 \
+                        and self.bldsky.progress()[0] >= self.bldsky.progress()[1]:
+                    self.bldhz.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.build_far_geo("bldhz"),
+                                       view=self.view_at, frame=frame)
             if self.brfar is not None and later and self.bldfar.progress()[0] >= self.bldfar.progress()[1]:
                 self.brfar.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                                    self.build_far_geo("brfar") if geo else self.s.build_far_bridge_tile,
@@ -11036,6 +11158,18 @@ class Connection:
             self.batch = [time.perf_counter(), 0, 0]
         self.wake.set()
 
+    def set_hz_reach(self):
+        """The horizon ring's reach for the building distance and the fixed view distance now (bldhz.reach); turned off
+        (Near), every horizon tile the mod has is dropped and the builds in flight left unwanted (Codex review: the
+        poses stop at reach 0, and the drops happen in them)."""
+        tr = getattr(self, "bldhz", None)
+        if tr is None:
+            return
+        tr.send_m = bldhzmod.reach(self.building_scale, getattr(self, "view_cap", None))
+        tr.drop_m = tr.send_m + bldhzmod.DROP_EXTRA_M
+        if tr.send_m <= 0:
+            tr.drop_all(self)
+
     def building_reach(self):
         """The far buildings' and the skyline's send distances: the graphics setting's, farther with the 3D map open as
         the eye rises (the user, 2026-11-07: "make buildings start rendering further out"), at most MAP_BLD_*_MAX_M."""
@@ -11694,7 +11828,8 @@ class Connection:
                 if info.material is not None and not info.stale and self.first_ramp is None and self.tex_short(info, t):
                     info.stale = True   # (a coarse cover's texture: rendered again, the whole chain at its own size)
                 if info.stale:          # a region turned ready since: re-rendered live, then far_retex
-                    self.s.retex_request(ck)
+                    if ck not in self.s.degraded or not self.s.imagery_down():
+                        self.s.retex_request(ck)
                 self.batch[1] += 1
                 m = {"type": "far_tile", "anchorId": self.active, "key": t.key, "level": t.level,
                      "shape": f"{self.s.vfs_dir}/{info.shape or self.s.tile_name(*ck)}",
@@ -12012,6 +12147,8 @@ async def main_async(args):
                 log.info("net: %s%s", line, "" if rate is None else f"; large downloads at {rate:.2f} MB/s")
             for c in list(server.connections):     # a host that came back while nobody posed
                 c.refresh_status()
+            if server.degraded and not server.imagery_down():
+                server.retex_degraded()
     ticker = asyncio.create_task(net_log())
     profile_task = asyncio.create_task(runtimeprofiler.stream(server))
 

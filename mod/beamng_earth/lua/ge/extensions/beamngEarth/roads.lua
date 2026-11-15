@@ -1726,6 +1726,10 @@ M.FAR_GEO = 1
 -- skyline square hides under its shown pack.
 M.FAR_PACK = 1
 M.PACK_HANDOVER_S = 15
+-- The horizon ring (hello.farHz, server bldhz.py): past the skyline the tall buildings of a zoom-12 geotile, kind 'H',
+-- a piece per skyline square (its sub key, geotile.Z - 2). A piece hides while its square has its skyline tile (made, or
+-- one with nothing in it), its pack made, or all its far buildings tiles in and made (M.hzCovered): never drawn twice.
+M.FAR_HZ = 1
 function M.debugFar() return far end       -- (tests)
 M.farGeo = false
 function M.setFarGeo(on) M.farGeo = on and true or false end
@@ -1845,7 +1849,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
     f.sky = { z, x, y }
   end
   local list = {}
-  if k == 'B' then
+  if k == 'B' or k == 'H' then
     for sub, e in pairs(type(data.parts) == 'table' and data.parts or {}) do list[#list + 1] = { sub, e } end
     table.sort(list, function(a, b) return tostring(a[1]) < tostring(b[1]) end)
   elseif type(data.shape) == 'string' then
@@ -1912,22 +1916,74 @@ function M.packCovered(f)
     local z, x, y = f.sky[1], f.sky[2], f.sky[3]
     if not z then return false end
     local n = 2 ^ (geotile.Z - z)
-    f.packKeys = {}
+    f.packKeys, f.packGeo = {}, {}
     for j = 0, n - 1 do
-      for i = 0, n - 1 do f.packKeys[#f.packKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+      for i = 0, n - 1 do
+        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+        f.packKeys[#f.packKeys + 1], f.packGeo[#f.packGeo + 1] = farGeoKey('F', g), g
+      end
     end
   end
-  for _, k in ipairs(f.packKeys) do
+  -- (a geotile whose road tile shows its own buildings counts as covered without its far tile: after a fast run the
+  -- far field took 30-60 s to catch up, and one far tile of sixteen missing kept the whole square's pack - walls with
+  -- painted windows - over the real buildings beside a stopped car; the user's report, 2026-11-14)
+  for idx, k in ipairs(f.packKeys) do
     local ff = far[k]
-    if not ff or ff.dropWait then return false end
-    for _, p in pairs(ff.parts) do if not p.id and not p.deferred then return false end end
+    local ok = ff ~= nil and not ff.dropWait
+    if ok then
+      for _, p in pairs(ff.parts) do if not p.id and not p.deferred then ok = false; break end end
+    end
+    if not ok and not M.nearShowsBuildings(f.packGeo[idx]) then return false end
   end
   return true
+end
+
+-- Horizon piece p (skyline square sq, a geotile key at geotile.Z - 2): does its square show buildings of its own (its
+-- skyline tile made or empty, its pack made, or a far buildings tile under it seen)?
+local function partsMade(f)
+  for _, q in pairs(f.parts) do if not q.id then return false end end
+  return true
+end
+function M.hzCovered(p, sq)
+  local s = far[farGeoKey('S', sq)]
+  if s and partsMade(s) and not M.farGeoHidden(s) then return true end   -- (a skyline tile shown, not one handing over)
+  local pk = far[farGeoKey('P', sq)]
+  if pk and next(pk.parts) and partsMade(pk) then return true end
+  if not p.hzKeys then
+    local z, x, y = geotile.parse(sq)
+    if not z then return false end
+    local n = 2 ^ (geotile.Z - z)
+    p.hzKeys = {}
+    for j = 0, n - 1 do
+      for i = 0, n - 1 do
+        local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+        p.hzKeys[#p.hzKeys + 1], p.hzGeo = farGeoKey('F', g), p.hzGeo or {}
+        p.hzGeo[#p.hzKeys] = g
+      end
+    end
+  end
+  -- (all of its far tiles arrived and made: one of sixteen hid the whole piece, the towers of the other fifteen gone
+  -- until theirs came, Codex review 2026-11-14)
+  -- (or the geotile's road tile shows its own buildings: the same ownership as packCovered and the skyline)
+  for idx, k in ipairs(p.hzKeys) do
+    local ok = farSeen[k] and true or false
+    local f = far[k]
+    if ok and f then
+      if f.dropWait then ok = false end
+      for _, q in pairs(f.parts) do if not q.id and not q.deferred then ok = false; break end end
+    end
+    if not ok and not M.nearShowsBuildings(p.hzGeo[idx]) then return false end
+  end
+  return #p.hzKeys > 0
 end
 
 -- Pure-ish: is far geotile f's part sub hidden now (the ownership rule above)?
 function M.farGeoHidden(f, sub)
   if f.kind == 'P' then return M.packCovered(f) end
+  if f.kind == 'H' then
+    local p = f.parts[sub]
+    return p ~= nil and M.hzCovered(p, sub)
+  end
   if f.kind == 'S' then
     local pk = far[farGeoKey('P', f.gkey)]        -- (under its square's shown pack)
     local pp = pk and pk.parts.shape
@@ -1938,10 +1994,18 @@ function M.farGeoHidden(f, sub)
       local n = 2 ^ (geotile.Z - z)
       f.skyKeys = {}
       for j = 0, n - 1 do
-        for i = 0, n - 1 do f.skyKeys[#f.skyKeys + 1] = farGeoKey('F', geotile.key(x * n + i, y * n + j, geotile.Z)) end
+        for i = 0, n - 1 do
+          local g = geotile.key(x * n + i, y * n + j, geotile.Z)
+          f.skyKeys[#f.skyKeys + 1], f.skyGeo = farGeoKey('F', g), f.skyGeo or {}
+          f.skyGeo[#f.skyKeys] = g
+        end
       end
     end
-    for _, k in ipairs(f.skyKeys) do if not farSeen[k] then return false end end
+    -- (a geotile whose road tile shows its own buildings counts as seen: the pack hands over to such a mix of near
+    -- and far tiles, packCovered, and the skyline came back over the near buildings; Codex review)
+    for idx, k in ipairs(f.skyKeys) do
+      if not farSeen[k] and not M.nearShowsBuildings(f.skyGeo[idx]) then return false end
+    end
     return true
   end
   local p = f.parts[sub]
