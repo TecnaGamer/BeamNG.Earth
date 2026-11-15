@@ -1,4 +1,5 @@
 import asyncio
+import json
 import struct
 import sys
 import unittest
@@ -40,6 +41,19 @@ class FramingTest(unittest.TestCase):
             r.feed_eof()
             return [await protocol.read_message(r) for _ in range(3)]
         self.assertEqual(asyncio.run(run()), [{"type": "a"}, {"type": "b"}, None])
+
+    def test_raw_json_spliced_as_is(self):
+        """A RawJson value (a tile file read in its worker) goes into the frame as its text; the frame decodes to the
+        same message as with the parsed value."""
+        text = '{"groups":["a"],"items":[[1,2.5,-0.125]],"name":"Côte"}'
+        msg = {"type": "veg_tile", "key": "g17_1_2", "data": protocol.RawJson(text), "slots": {"shape": ["p", 3]}}
+        frame = protocol.encode(msg)
+        self.assertIn(text.encode("utf-8"), frame)
+        want = {"type": "veg_tile", "key": "g17_1_2", "data": json.loads(text), "slots": {"shape": ["p", 3]}}
+        self.assertEqual(protocol.decode_payload(frame[4:]), want)
+        self.assertEqual(protocol.HEADER.unpack(frame[:4])[0], len(frame) - 4)
+        self.assertEqual(msg["data"]["items"], [[1, 2.5, -0.125]], "read as the value it holds")
+        self.assertEqual(json.loads(protocol.encode({"d": protocol.RawJson("[1]")})[4:]), {"d": [1]}, "no other key")
 
     def test_async_reader_truncated(self):
         async def run():

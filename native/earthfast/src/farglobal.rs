@@ -20,6 +20,7 @@ use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 use crate::geotiles::{geo_to_ecef, lat_of, lon_of, near, quad, quad_dist, centre, Frame};
@@ -186,12 +187,30 @@ fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
     if a - slack <= c[6].clamp(-1.0, 1.0).dacos() { 1.0 } else { c[8].max(1.0) }
 }
 
-/// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs).
-pub type SseArgs = (f64, f64, f64, f64, f64, f64, f64, f64, f64, HashMap<(u32, i64, i64), f64>);
+/// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs {(z, x, y): err}). errs is
+/// looked up node by node as the selection meets them (earthd's glod_errs holds every built global tile's, up to
+/// LOD_ERRS_MAX: copied whole into a map at every pose it was the event loop's O(tiles built) per pose).
+pub type SseArgs<'py> = (f64, f64, f64, f64, f64, f64, f64, f64, f64, Bound<'py, PyDict>);
+
+/// The known errors: the caller's dict (far_global_select), or a map (the tests).
+enum Errs<'py> {
+    Dict(Bound<'py, PyDict>),
+    #[allow(dead_code)]
+    Map(HashMap<(u32, i64, i64), f64>),
+}
+
+impl Errs<'_> {
+    fn get(&self, node: &(u32, i64, i64)) -> Option<f64> {
+        match self {
+            Errs::Map(m) => m.get(node).copied(),
+            Errs::Dict(d) => d.get_item(*node).ok().flatten().and_then(|v| v.extract::<f64>().ok()),
+        }
+    }
+}
 
 /// Screen-space LOD (farfield.View, the same rule as farfield.select's): the camera, the pop allowed and the known
 /// errors of the built tiles.
-pub struct Sse {
+pub struct Sse<'py> {
     cx: f64,
     cy: f64,
     dz: f64,
@@ -201,20 +220,20 @@ pub struct Sse {
     hs: f64,
     cap: f64,
     cells: f64,
-    errs: HashMap<(u32, i64, i64), f64>,
+    errs: Errs<'py>,
 }
 
-impl From<SseArgs> for Sse {
-    fn from(a: SseArgs) -> Self {
+impl<'py> From<SseArgs<'py>> for Sse<'py> {
+    fn from(a: SseArgs<'py>) -> Self {
         let (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs) = a;
-        Sse { cx, cy, dz: dz.max(0.0), ppr, tau, reach, hs, cap, cells: cells.max(1.0), errs }
+        Sse { cx, cy, dz: dz.max(0.0), ppr, tau, reach, hs, cap, cells: cells.max(1.0), errs: Errs::Dict(errs) }
     }
 }
 
-impl Sse {
+impl Sse<'_> {
     /// The node's split pop on screen (px; its known error at most cap vertex spacings, from the camera), or None.
     fn pixels(&self, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64) -> Option<f64> {
-        let e = (*self.errs.get(&node)?).min(self.cap * size / self.cells);
+        let e = self.errs.get(&node)?.min(self.cap * size / self.cells);
         Some(e * self.ppr / quad_dist(q, self.cx, self.cy).dhypot(self.dz).max(1.0))
     }
 
@@ -260,7 +279,7 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
                               hold: Vec<(u32, i64, i64)>, forced: Vec<(f64, f64, f64, f64)>,
                               horizon: Option<(f64, f64, f64, PyReadonlyArray2<'py, f64>, f64, f64,
                                                Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>,
-                              eye_h: f64, cone: Option<Vec<f64>>, view: Option<SseArgs>)
+                              eye_h: f64, cone: Option<Vec<f64>>, view: Option<SseArgs<'py>>)
                          -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>)> {
     let sse = view.map(Sse::from).filter(|v| v.tau > 0.0);
     let hz = horizon.map(|(reach, min_d, r, base, half, cell, merc)| {
@@ -829,10 +848,11 @@ mod tests {
         assert!((normal_err(&r, &s, 3, 1.0) - 0.5f64.sqrt()).abs() < 1e-12);
     }
 
-    fn sse(tau: f64, e: f64) -> Sse {
+    fn sse(tau: f64, e: f64) -> Sse<'static> {
         let mut errs = HashMap::new();
         errs.insert((5, 0, 0), e);
-        Sse::from((0.0, 0.0, 0.0, 1000.0, tau, 4.0, 0.5, 1e9, 64.0, errs))
+        Sse { cx: 0.0, cy: 0.0, dz: 0.0, ppr: 1000.0, tau, reach: 4.0, hs: 0.5, cap: 1e9, cells: 64.0,
+              errs: Errs::Map(errs) }
     }
 
     #[test]

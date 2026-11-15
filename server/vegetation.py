@@ -23,6 +23,7 @@ import logging
 import math
 import os
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -1373,6 +1374,8 @@ TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the 
 SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
 DROP_M = 1536.0             # ... and dropped beyond this
 BUILD_PER_POSE = 8
+TRACK_MOVE_M = 8.0          # a geotile tracker passes again once the car, camera or a focus moved this much ...
+TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something it sent, built or redoes changed
 
 
 class JsonRows(str):
@@ -1676,12 +1679,14 @@ class Tracker:
         # sent files' digests are kept for that, earthd's stale mode turns it on)
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
+        self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
         one whose file comes back the same is not sent."""
         if self.geo:
             self.redo = set(self.sent)
+            self._gate = None
 
     def close(self):
         if self.pool is not None:
@@ -1692,6 +1697,7 @@ class Tracker:
         wanted again (those building land as new ones)."""
         self.sent = set()
         self.aid = None
+        self._gate = None
 
     def progress(self):
         """(done, wanted) of the tiles round the car at the last pose (done: sent to the mod); (0, 0) before one."""
@@ -1741,7 +1747,9 @@ class Tracker:
         # (Sinaia 2026-10-15: bare ground for minutes)
         for tx, ty in want[:max(0, self.per_pose - len(self.building))]:
             self.building.add((tx, ty))
-            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, build, aid, tx, ty)
+            fut = self.futs[(tx, ty)] = loop.run_in_executor(self.pool, staging.build_inline, build,
+                                                             getattr(getattr(conn, "s", None), "out_dir", None),
+                                                             False, aid, tx, ty)
             fut.add_done_callback(lambda f, k=(tx, ty), a=aid: self._built(conn, a, k, f))
         for k in [k for k in list(self.sent) if all(self._dist(k, *p) > self.drop_m for p in spots)
                   and all(self._dist(k, f[0], f[1]) > f[2] + roadsmod.TILE for f in foci)]:
@@ -1763,6 +1771,19 @@ class Tracker:
             self.pool = ThreadPoolExecutor(self.per_pose, thread_name_prefix=f"{self.kind}-geo")
         z = self.z or geotiles.Z
         spots = [(x, y)] + ([tuple(view)] if view else [])
+        # (a pose that changes nothing this tracker goes by: no pass; the car, the camera and the other cars' foci
+        # within TRACK_MOVE_M of the last pass's, nothing sent, built or asked again since, at most TRACK_MAX_S ago)
+        now = time.monotonic()
+
+        def gate_key():
+            return (aid, id(frame), view is None, len(foci), id(tree), self.send_m, self.drop_m, self.inner,
+                    self.group_z, z, len(self.sent), len(self.building), len(self.redo), self.epoch, self.per_pose)
+        cont = [float(v) for p in spots for v in p[:2]] + [float(v) for f in foci for v in f[:3]]
+        last = getattr(self, "_gate", None)
+        if last is not None and last[0] == gate_key() and now - last[2] < TRACK_MAX_S and len(cont) == len(last[1]) \
+                and all(abs(a - b) <= TRACK_MOVE_M for a, b in zip(cont, last[1])) \
+                and not (last[3] and len(self.building) < self.per_pose):
+            return
 
         def near(px, py, r):
             """Keys within r of (px, py), nearest first (each tile by its own quad)."""
@@ -1797,9 +1818,14 @@ class Tracker:
                 order.append(k)
         self.redo &= self.sent
         want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
-        for gx, gy in want[:max(0, self.per_pose - len(self.building))]:
+        n_go = max(0, self.per_pose - len(self.building))
+        more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
+        for gx, gy in want[:n_go]:
             self.building.add((gx, gy))
-            fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
+            # (the tile's file read in the worker, not on the event loop: staging.build_inline)
+            fut = self.futs[(gx, gy)] = loop.run_in_executor(
+                self.pool, staging.build_inline, build, getattr(getattr(conn, "s", None), "out_dir", None),
+                self.digests or (gx, gy) in self.redo, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy), e=self.epoch: self._built_geo(conn, k, f, e))
         for k in self._far_sent(spots, foci):
             self.sent.discard(k)
@@ -1808,6 +1834,7 @@ class Tracker:
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone(self.kind, k, geotiles.key(*k, z))
+        self._gate = (gate_key(), cont, now, more)
 
     def _far_sent(self, spots, foci):
         """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
@@ -1876,6 +1903,9 @@ class Tracker:
         except Exception as e:
             log.debug("%s geotile %s: %s: %s", self.kind, key, type(e).__name__, e)
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:
             return
         path, n, frame, pivot = res[:4]
@@ -1883,13 +1913,14 @@ class Tracker:
         again = key in self.redo
         self.redo.discard(key)
         if self.digests or again:
-            h = None
-            try:
-                import hashlib
-                with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
-                    h = hashlib.sha1(f.read()).digest()
-            except (OSError, AttributeError):
-                pass
+            h = pre.digest if pre is not None else None
+            if h is None:
+                try:
+                    import hashlib
+                    with open(os.path.join(conn.s.out_dir, os.path.basename(path)), "rb") as f:
+                        h = hashlib.sha1(f.read()).digest()
+                except (OSError, AttributeError):
+                    pass
             if again and h is not None and self.sent_h.get(key) == h and key in self.sent:
                 return                  # (the same tile as the one the mod has)
             self.sent_h[key] = h
@@ -1902,7 +1933,7 @@ class Tracker:
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)
         out_dir = getattr(s, "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:
             m["data"] = data
         pool = getattr(s, "pool_shapes", None)
@@ -1947,13 +1978,16 @@ class Tracker:
         except Exception as e:
             log.debug("%s tile %s: %s: %s", self.kind, key, type(e).__name__, e)
             return
+        pre = res if isinstance(res, staging.Inlined) else None
+        if pre is not None:
+            res = pre.res
         if res is None:                 # its cells not at hand yet: asked again on a later pose
             return
         path, n = res
         self.sent.add(key)
         m = {"type": f"{self.kind}_tile", "anchorId": aid, "key": f"{key[0]}_{key[1]}", "path": path, "n": n}
         out_dir = getattr(getattr(conn, "s", None), "out_dir", None)
-        data = staging.inline_json(out_dir, path) if out_dir else None
+        data = pre.data if pre is not None else staging.inline_json(out_dir, path) if out_dir else None
         if data is not None:                # (the game need not open the file: staging.inline_json)
             m["data"] = data
         pool = getattr(getattr(conn, "s", None), "pool_shapes", None)

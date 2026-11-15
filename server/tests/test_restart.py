@@ -703,6 +703,7 @@ class LeakedPacksTest(unittest.TestCase):
             s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
             s.hm_committed, s.hm_sent = [], []
             s.evict_heightmaps(fresh=None)
+            s.removes_flush()               # (the files go in the "remove" thread)
             self.assertNotIn(key, s.hm)
             self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
 
