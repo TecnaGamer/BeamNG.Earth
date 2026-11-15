@@ -28,7 +28,7 @@ local function fixture(path, y, radius, configure)
   env.mapmgr = { requestMap = function() f.requests = f.requests + 1 end }
   env.obj = { queueGameEngineLua = function() G.retryAutodrive() end }
   env.extensions = { load = function(name)
-    local files={beamngEarth_autodrive='autodrive',beamngEarth_staticObstacles='staticObstacles'}
+    local files={beamngEarth_autodrive='autodrive',beamngEarth_staticObstacles='staticObstacles',beamngEarth_trafficSignals='trafficSignals'}
     local loader = assert(loadfile(dir .. '/../beamng_earth/lua/vehicle/extensions/beamngEarth/' .. assert(files[name]) .. '.lua'))
     env[name] = setfenv(loader, env)()
   end }
@@ -776,6 +776,25 @@ do
   local exact = f.gps.targetNodes('w', 'j', { via = { { projection = point } }, projection = point })
   T.check(table.concat(exact, ',') == 'w,j,t', 'pins follow travel direction, not edge storage order, without duplicate endpoints')
   package.loaded[module] = original
+end
+
+-- A red-light wait can outlast stall recovery. Only a current signal heartbeat
+-- from this player exempts it; losing the heartbeat restores normal recovery.
+do
+  local f=fixture(nil,0,6)
+  f.speed=0
+  local starts=#f.drives
+  for _=1,90 do f.gps.onAiSignalWait(1,true);f:step(1)end
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'waiting at red for90seconds never triggers a recovery or progress retry')
+  T.check(#f.drives==starts,'a deliberate signal wait does not repeatedly restart the lane-aware route')
+  f.gps.onAiSignalWait(2,false);f:step(.25)
+  T.check(#f.drives==starts,'another vehicle cannot clear the player signal wait')
+  f:step(f.gps.AUTO_NOPROGRESS_S+3)
+  T.check((f.gps.noProgressReplans or 0)>0,'an expired signal heartbeat cannot hide a genuine stall')
+  local stopped=fixture(nil,0,6)
+  stopped.speed=0;stopped.healthy=false;stopped.gps.onAiSignalWait(1,true);stopped:step()
+  T.check(stopped.modes[#stopped.modes]=='stop','signal waiting never bypasses a server-health stop')
 end
 
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do

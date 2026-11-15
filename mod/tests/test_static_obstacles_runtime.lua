@@ -92,6 +92,28 @@ bind();tick()
 check(M.status().phase=='idle','clear-road control leaves stock AI alone')
 check(ai.routeSpeed==7 and ai.speedMode=='legal','clear road preserves speed mode')
 
+-- Traffic controls share this speed policy with obstacle clearance. A green
+-- signal must release its limit without lifting a separate obstacle's limit.
+beamngEarth_trafficSignals=dofile(root..'trafficSignals.lua')
+M.reset();ai.mode='manual';ai.routeSpeed,ai.speedMode=8,'legal';p.x,p.y=4.65,35;speed=6
+local light={action=2,pos=vec3(0,40,0),instance='test-light'}
+mapmgr.signalsData={[2]={[3]={light}}}
+bind();check(tick().phase=='signal','real signal decision joins the native controller')
+check(ai.routeSpeed>0 and ai.routeSpeed<3,'red light brakes while retaining the original ceiling')
+p.y=38;speed=0;tick();near(ai.routeSpeed,0,'remain stopped before red line')
+light.action=0;tick()
+check(ai.routeSpeed==8 and ai.speedMode=='legal','green restores the original speed policy')
+light.action=2;tick();ai.routeSpeed,ai.speedMode=7,'legal';tick();light.action=0;tick()
+check(ai.routeSpeed==7 and ai.speedMode=='legal','green preserves a newer user policy')
+M.reset();ai.routeSpeed,ai.speedMode=8,'legal';p.x,p.y=1.55,27;light.action=2
+objects={[11]={pos=vec3(4.65,30,.8),vel=vec3(0,0,0),active=false}}
+bind();check(tick().phase=='blocked','the nearer static obstruction still controls braking')
+near(ai.routeSpeed,0,'a signal cannot lift the obstacle ceiling')
+light.action=0;tick();near(ai.routeSpeed,0,'green does not release the independent obstruction')
+M.reset();objects={};p.x,p.y=4.65,38;light.action=2;bind();tick();ai.mode='stop';tick()
+check(ai.routeSpeed==8 and ai.speedMode=='legal','arrival releases signal ceiling for native stop mode')
+check(not M.status().signal,'arrival discards the signal observation')
+
 -- Chicago's 3.32m alley has 1.66m lanes, narrower than the stock Roamer.
 -- Its body fits when centred as the stock AI does; the extra clearance margin
 -- must not cast into buildings beyond the physical road on either driving side.
@@ -157,7 +179,12 @@ end
 p.x,p.y=1.55,5;wide=true;bind()
 check(tick().phase=='blocked','an obstruction across the body still stops the car')
 near(ai.routeSpeed,0,'a body collision cannot inherit the buffer-only movement allowance')
-M.reset();wide=false;mapmgr.signalsData={};p.y=5
+M.reset();wide=false;p.y=38;fringeY=41.6;fringe=p.x-1-M.MARGIN_M
+light.pos=vec3(0,40,0);light.action=2;mapmgr.signalsData={[2]={[3]={light}}};bind()
+check(tick().phase=='signal','a red signal still overrides buffer-only clearance')
+near(ai.routeSpeed,0,'buffer clearance cannot move through a red light')
+light.action=0;tick();near(ai.routeSpeed,4,'green releases only the signal hold')
+M.reset();mapmgr.signalsData={};p.y=5
 function obj:castRayStatic(_,_,len)return len end
 function obj:getSurfaceHeightBelow(q)return q.x<.4 and -1e20 or 0 end
 bind();check(tick().phase=='blocked','missing support at the buffer edge remains a closed path')
@@ -166,13 +193,42 @@ near(ai.routeSpeed,0,'unloaded ground is never treated as harmless roadside clea
 M.setEnabled(false)
 check(ai.routeSpeed==8 and ai.speedMode=='legal','switching off restores the prior speed policy')
 local originalFront=obj.getFrontPosition
+local signalController=beamngEarth_trafficSignals;beamngEarth_trafficSignals=nil
 obj.getFrontPosition=function()error('disabled obstacle sensing ran')end
 for _=1,100 do M.updateGFX(.2) end
 check(not M.status().holding,'the disabled path performs no obstacle sensing')
 obj.getFrontPosition=originalFront
+beamngEarth_trafficSignals=signalController
 function obj:getSurfaceHeightBelow()return 0 end
 M.setEnabled(true);tick()
 check(M.status().enabled,'the saved path can be used immediately after re-enabling')
+M.reset();p.x,p.y=4.65,38;speed=0;ai.routeSpeed,ai.speedMode=8,'legal'
+light.action=2;mapmgr.signalsData={[2]={[3]={light}}};M.setEnabled(false);bind()
+local oldCast,oldFloor=obj.castRayStatic,obj.getSurfaceHeightBelow
+obj.castRayStatic=function()error('disabled obstacle raycast ran')end
+obj.getSurfaceHeightBelow=function()error('disabled obstacle ground query ran')end
+check(tick().phase=='signal' and ai.routeSpeed==0,'red-light braking works with obstacle sensing off and no rays')
+light.action=0;tick()
+check(ai.routeSpeed==8 and ai.speedMode=='legal','green releases the signal ceiling while obstacle sensing stays off')
+obj.castRayStatic,obj.getSurfaceHeightBelow=oldCast,oldFloor
+light.action=2;M.setEnabled(true)
+local oldCorridor=M.corridor;M.corridor=function()return nil end
+check(tick().phase=='signal' and ai.routeSpeed==0,'an unavailable obstacle corridor does not hide a red light')
+M.corridor=oldCorridor
+M.setEnabled(false)
+near(ai.routeSpeed,0,'disabling obstacle avoidance does not release the red-light hold')
+-- Signals must brake without waiting for a budgeted obstacle trace to finish.
+HighPerfTimer=function()return {stopAndReset=function()return .8 end}end
+M.reset();M.PROBE_MAX_S=10;M.setEnabled(true);p.x,p.y=1.55,5;speed=0
+light.action=2;light.pos=vec3(0,8,0);mapmgr.signalsData={[1]={[2]={light}}}
+ai.mode='manual';ai.routeSpeed,ai.speedMode=8,'legal';bind()
+M.updateGFX(.016)
+check(M.status().probePending,'the obstacle trace is deliberately suspended')
+check(ai.routeSpeed==0,'red-light braking applies while obstacle sensing is unfinished')
+M.setEnabled(false)
+check(not M.status().probePending and ai.routeSpeed==0,'disabling pending obstacle work preserves the independent signal hold')
+HighPerfTimer=nil
+M.setEnabled(true);mapmgr.signalsData={}
 local gapReports={}
 obj.queueGameEngineLua=function(_,command)gapReports[#gapReports+1]=command end
 M.reset();M.bindPath(ids,md);speed=0

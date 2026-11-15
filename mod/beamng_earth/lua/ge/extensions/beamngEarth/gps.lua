@@ -95,6 +95,7 @@ local recoverAhead       -- (below)
 local paused = false    -- the AI holds the car (world server away)
 local vehGraph = {}     -- vehicle id -> the game's map buildSerial when its mapmgr last took the graph
 local pathWait = nil    -- os.clock() since a path waits for the car to have the graph it was planned on
+local signalWaitAt = nil -- recent vehicle confirmation of a deliberate red-light stop
 local targetS = nil     -- the route distance of the arrows' target
 local downloadProgress = nil   -- { total, done, active } | nil: the route's corridor prefetch (server routeahead.py)
 
@@ -708,6 +709,11 @@ function M.onAiRouteDone(id)
   lastCheck = -math.huge
 end
 
+function M.onAiSignalWait(id, waiting)
+  local veh=auto and playerVeh()
+  if veh and veh:getId()==id then signalWaitAt=waiting and os.clock() or nil end
+end
+
 local function holdAutodrive(veh)
   if not autoBlocked then
     veh:queueLuaCommand('if beamngEarth_autodrive then (beamngEarth_autodrive.hold or beamngEarth_autodrive.stop)() else ai.setMode("stop") end')
@@ -1086,6 +1092,7 @@ function M.setAutodrive(on, brake)
   autoFinished = nil
   autoPath, autoRoadPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
+  signalWaitAt=nil
   progRemaining, progAt, stuckTries = nil, nil, 0
   if on then
     routedTo = nil                       -- the arrows (and the AI's path) set again at the next check
@@ -1135,7 +1142,11 @@ local function autoKeep(nodes, now)
   local v = veh.getVelocity and veh:getVelocity()
   local speed = v and math.sqrt(v.x * v.x + v.y * v.y) or 0
   if speed >= 1 then surfaceGap=false end
-  if speed < 1 then stillSince = stillSince or now else stillSince = nil end
+  if signalWaitAt and now-signalWaitAt<2 then
+    -- A signal stop is progress through traffic controls, not a stall. Require
+    -- a fresh vehicle heartbeat so unloading/cancelling a helper cannot mask a failure.
+    stillSince,progRemaining,progAt,stuckTries=nil,nil,nil,0
+  elseif speed < 1 then stillSince = stillSince or now else stillSince = nil end
   if pathWait and M.vehicleHasGraph(veh) then routedTo = nil end     -- the path that waited: given now
   if (autoPath and autoSerial ~= graphSerial()) or (stillSince and now - stillSince > M.AUTO_STALL_S) then
     routedTo = nil
@@ -1348,6 +1359,7 @@ end
 
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
 function M.reset()
+  signalWaitAt=nil
   surfaceGap=false
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
   lineKey = nil

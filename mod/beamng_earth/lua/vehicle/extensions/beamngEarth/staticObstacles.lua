@@ -331,6 +331,19 @@ local policy,applied,lastCap,goal
 local phase,reason,detections,passes='idle',nil,0,0
 local lastProbe
 local work,checkWork
+local signalResult
+local waitReported,waitElapsed=false,0
+
+local function reportSignalWait(waiting,dt)
+  waitElapsed=waitElapsed+(dt or 0)
+  if waiting~=waitReported or(waiting and waitElapsed>=.5)then
+    if obj and obj.getId and obj.queueGameEngineLua then
+      obj:queueGameEngineLua("require('beamngEarth/gps').onAiSignalWait("..obj:getId()..','..tostring(waiting)..')')
+    end
+    waitReported,waitElapsed=waiting,0
+  end
+end
+
 local gapReported
 local function reportGap(active)
   if active==gapReported then return end
@@ -340,6 +353,7 @@ local function reportGap(active)
   gapReported=active
 end
 local function release()
+  reportSignalWait(false)
   if policy and ai and ai.routeSpeed==applied and ai.speedMode=='limit' then
     ai.setSpeed(policy.speed);ai.setSpeedMode(policy.mode)
   end
@@ -372,8 +386,10 @@ function M.setEnabled(on)
     reportGap(false)
     work,checkWork=nil,nil
     local passing = goal ~= nil
-    release(); goal, lastProbe = nil, nil
-    phase, reason = 'disabled', nil
+    goal, lastProbe = nil, nil
+    if signalResult then
+      limit(signalResult.cap,signalResult.legal);phase,reason='signal',signalResult.reason
+    else release();phase,reason='disabled',nil end
     if passing and obj and obj.queueGameEngineLua then
       obj:queueGameEngineLua("local G=require('beamngEarth/gps');if G.autodrive()then G.retryAutodrive()end")
     end
@@ -392,6 +408,7 @@ function M.reset()
   gapReported=nil -- GPS retains its terrain reason until a fresh probe or explicit disable
   release();path,bound,cursor,elapsed,goal=nil,nil,1,0,nil;phase,reason='idle',nil
   lastProbe=nil
+  signalResult=nil
 end
 M.onReset=M.reset
 function M.onExtensionUnloaded()
@@ -400,6 +417,7 @@ function M.onExtensionUnloaded()
 end
 
 function M.bindPath(ids,md,started)
+  if not beamngEarth_trafficSignals and extensions and extensions.load then extensions.load('beamngEarth_trafficSignals')end
   if md~=bound then M.reset();bound=md end
   local changed=not path or #path~=#ids
   if not changed then for i,id in ipairs(ids)do if path[i]~=id then changed=true;break end end end
@@ -568,37 +586,70 @@ end
 
 function M.updateGFX(dt)
   if not M.enabled then
-    if policy or goal or work then M.setEnabled(false) end
-    return
+    if work or goal or (phase~='disabled' and phase~='signal') then M.setEnabled(false) end
+    if not path or not bound or not beamngEarth_trafficSignals then return end
   end
   if not path or not bound or not mapmgr or mapmgr.mapData~=bound or not ai or ai.mode~='manual' then
-    if work or policy or goal or phase~='idle' then
+    if ai and ai.mode~='manual' and beamngEarth_oncomingPass and not beamngEarth_oncomingPass.suspended() then
+      beamngEarth_oncomingPass.reset()
+    end
+    if work or policy or goal or signalResult or waitReported or phase~='idle' then
       work,checkWork=nil,nil
-      release();goal=nil;phase='idle'
+      release();goal=nil;signalResult=nil;phase='idle'
     end
     return
   end
   elapsed=elapsed+(dt or 0)
-  if not work then
-    if elapsed<M.SAMPLE_S then return end
-    elapsed=0;startProbe()
-  end
-  local pending,ok,result=advanceProbe(dt)
-  if pending then return end
+  local sampled=elapsed
+  local sample=elapsed>=M.SAMPLE_S
+  if not sample and not work then return end
+  if sample then elapsed=0;signalResult=nil end
+  local ok,result=pcall(function()
+    if sample and beamngEarth_trafficSignals then
+      local p,h=obj:getFrontPosition(),obj:getDirectionVector()
+      local a,b=mapmgr.findBestRoad(p,h)
+      local pa,pb=a and bound.positions[a],b and bound.positions[b]
+      if pa and pb then
+        if (pb.x-pa.x)*h.x+(pb.y-pa.y)*h.y<0 then a,b=b,a end
+        signalResult=beamngEarth_trafficSignals.forPath(bound,path,mapmgr.signalsData,a,b,p,h,obj:getVelocity():length(),cursor)
+        local edge=bound.graph[a]and bound.graph[a][b]
+        if signalResult then signalResult.legal=edge and edge.speedLimit end
+      end
+    end
+    if M.enabled and not work and sample then startProbe() end
+  end)
   if not ok then
-      reason=tostring(result);phase='unavailable'
+    reportSignalWait(false)
+    reason=tostring(result);phase='unavailable'
     if applied then limit(0) end
     return
   end
+  if work then
+    local pending
+    pending,ok,result=advanceProbe(dt)
+    if pending then
+      -- Signal braking is independent of the unfinished obstacle trace.
+      if signalResult then limit(math.min(signalResult.cap,lastCap or math.huge),signalResult.legal) end
+      reportSignalWait(signalResult~=nil and signalResult.cap<.5 and obj:getVelocity():length()<.5,sample and sampled or 0)
+      return
+    end
+    if not ok then
+      reportSignalWait(false);reason=tostring(result);phase='unavailable'
+      if applied then limit(0) end
+      return
+    end
+  end
   reportGap(result~=nil and result.surfaceGap==true and obj:getVelocity():length()<1)
+  if signalResult and(not result or signalResult.cap<result.cap)then result=signalResult end
   if not result then release();phase,reason='idle',nil;return end
+  reportSignalWait(signalResult~=nil and signalResult.cap<.5 and obj:getVelocity():length()<.5,sampled)
   phase,reason=result.phase,result.reason
   limit(result.cap,result.legal)
 end
 
 function M.status()
   return {enabled=M.enabled,phase=phase,reason=reason,holding=applied~=nil,speedCap=applied,detections=detections,passes=passes,
-    bound=bound~=nil,probe=lastProbe,probePending=work~=nil}
+    bound=bound~=nil,probe=lastProbe,probePending=work~=nil,signal=signalResult,waitingForSignal=waitReported}
 end
 
 return M
