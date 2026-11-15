@@ -1,8 +1,10 @@
 import gzip
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -12,6 +14,50 @@ import nlsignaldata as data
 
 
 class ContextReader(unittest.TestCase):
+    def test_missing_published_shard_can_recover_without_a_new_build(self):
+        import railtags
+        row=dict(kind='signal',id='1',geometry=[[5.,52.]],tags={})
+        bounds=(4.99999,51.99999,5.00001,52.00001)
+        with tempfile.TemporaryDirectory() as folder:
+            source=data.Source(folder,None,enabled=True)
+            bodies=[gzip.compress(b'{}'),gzip.compress(json.dumps(dict(format=1,records=[row])).encode())]
+            with patch.object(source,'version',return_value='same-build'), \
+                 patch.object(source,'known',return_value='same-build'), \
+                 patch.object(source,'get',side_effect=bodies) as fetch:
+                self.assertFalse(source.snapshot(bounds)['complete'])
+                self.assertEqual(source.snapshot(bounds)['records'],[])
+                self.assertEqual(fetch.call_count,1)
+                later=time.time()+railtags.SHARD_RETRY_S+1
+                with patch('railtags.time.time',return_value=later):
+                    result=source.snapshot(bounds)
+                self.assertTrue(result['complete']);self.assertEqual(result['records'],[row])
+                self.assertEqual(fetch.call_count,2)
+
+    def test_active_context_survives_disk_pressure_and_reader_recreation(self):
+        import cache
+        row=dict(kind='signal',id='1',geometry=[[5.,52.]],tags={})
+        x,y=data.tile(5.,52.)
+        class Fetcher:
+            def get(self,url,**kw):raise AssertionError('cached context must work offline: '+url)
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/'pagesdata/nl-signal-context'
+            shard=root/'cached'/f'{x}_{y}.json.gz';shard.parent.mkdir(parents=True)
+            shard.write_bytes(gzip.compress(json.dumps(dict(format=1,records=[row])).encode()))
+            manifest=root/'manifest.json'
+            manifest.write_text(json.dumps(dict(built='cached',format=1,zoom=14,
+                tiles={f'{x}/{y}.json.gz':{}})))
+            # The global cache has already indexed old downloads. Touching only
+            # the filesystem mtime is insufficient: its live LRU needs the hit.
+            os.utime(shard,(1,1));os.utime(manifest,(1,1))
+            disk=cache.Cache(folder,0,start=False);disk.scan()
+            source=data.Source(folder,Fetcher(),enabled=True,disk=disk)
+            bounds=(4.99999,51.99999,5.00001,52.00001)
+            self.assertEqual(source.query(bounds),[row])
+            disk.evict(target=0)
+            self.assertTrue(shard.is_file());self.assertTrue(manifest.is_file())
+            reloaded=data.Source(folder,Fetcher(),enabled=True,disk=disk)
+            self.assertEqual(reloaded.query(bounds),[row])
+
     def test_disabled_or_unpublished_does_not_fetch(self):
         source = data.Source(None, None)
         with patch.object(source, 'version', side_effect=AssertionError('off must not fetch')):

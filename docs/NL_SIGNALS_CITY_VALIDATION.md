@@ -49,7 +49,14 @@ degree-two shape nodes, samples the local tangent and height at the stop station
 and never crosses another junction. This avoids missing wide approaches and
 aiming a head using a different bend farther into the intersection.
 
-Final checks: 49 native geometry tests, 47 signal server tests, 20 NDW tests,
+Cache-pressure follow-up: the context reader now registers disk hits with the
+server's shared LRU, including a recreated reader after off/on. A published
+shard's missing/invalid response is incomplete and retries at the existing bounded
+miss interval, so later publication can recover without a different build ID.
+Regressions exercise actual cache eviction and recovery of a previously missing
+shard; they do not disable the disk reserve or weaken stock fallbacks.
+
+Final checks: 49 native geometry tests, 49 signal server tests, 20 NDW tests,
 127 Lua modules and 4 JavaScript tests passed. Windows and Linux release builds
 completed. Linux runtime was not executed locally. Seven offline roadgeo tests
 passed; two real-source tests require cache shards absent on this machine.

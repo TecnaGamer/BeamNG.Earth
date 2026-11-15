@@ -110,7 +110,7 @@ class Tracker:
         if len(tiles) > 64:
             tiles = tiles[:64]
         if self.source is None:
-            self.source = Source(conn.s.cache_dir, conn.s.net, enabled=True)
+            self.source = Source(conn.s.cache_dir, conn.s.net, enabled=True, disk=getattr(conn.s,'cache',None))
         serial = getattr(nav, 'ready_serial', nav.serial)
         signature = (aid, serial, path, info['ter'], tuple((x,y,r.get('h'),conn.roads.skin_h.get((x,y)),tuple(sorted(e.items())))
                      for x,y,r,e in tiles), self.source.known())

@@ -5,7 +5,10 @@ reader is not enabled by constructing it, and does not alter stock signals.
 """
 from collections import OrderedDict
 import math
+import os
+import re
 import threading
+import time
 
 import dmath
 import railtags
@@ -34,11 +37,38 @@ def valid(row):
 
 
 class Source(railtags.Shards):
-    def __init__(self, cache_dir, fetcher, enabled=False):
+    def __init__(self, cache_dir, fetcher, enabled=False, disk=None):
         super().__init__(cache_dir, fetcher, 'nl-signal-context')
         self.enabled = bool(enabled)
+        self.disk = disk
         self.shards = OrderedDict()
         self.query_lock = threading.Lock()
+
+    def shard(self, x, y):
+        # The common shard reader keeps decoded rows in memory. Mark the source
+        # file used too: disk-pressure eviction must not remove active context,
+        # which would disappear on the next off/on cycle while offline.
+        built = self.version()
+        path = os.path.join(self.dir,re.sub(r'[^0-9A-Za-z]+','_',built),f'{x}_{y}.json.gz') \
+            if self.dir and built else None
+        if self.disk is not None and path:
+            self.disk.used(path)
+        result = super().shard(x,y)
+        if result is not None and (not isinstance(result,dict) or result.get('format')!=FORMAT
+                                  or not isinstance(result.get('records'),list)):
+            # A listed shard's 404 is incomplete, not a permanently empty tile.
+            # The common reader caches {} for 404s; discard only that invalid
+            # source response and retry at its existing bounded miss interval.
+            with self.lock:self.shards.pop((x,y),None)
+            self.shard_down[(x,y)] = time.time()
+            if path:
+                try:os.remove(path)
+                except FileNotFoundError:pass
+            result = None
+        if self.disk is not None and path:
+            try:self.disk.used(path,os.path.getsize(path))
+            except OSError:self.disk.forget(path)
+        return result
 
     def query(self, bounds):
         return self.snapshot(bounds)['records']
@@ -63,6 +93,8 @@ class Source(railtags.Shards):
         built = self.version()
         if built is None:
             return dict(records=[], complete=False, built=None)
+        if self.disk is not None and self.dir:
+            self.disk.used(os.path.join(self.dir,'manifest.json'))
         found, conflicts = {}, set()
         complete = True
         with self.manifest.lock:
