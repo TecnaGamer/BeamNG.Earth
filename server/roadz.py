@@ -798,6 +798,11 @@ class RoadZ:
                                     os.remove(q)
                                 except OSError:
                                     pass
+                            if prefetched() and not getattr(_tl, "prefetch", False):
+                                # (a planning process of a server run reads no point clouds, gap_answers: the CDN,
+                                # else None and the rule, the server's prefetch measuring it meanwhile)
+                                cdn_only = True
+                                self._want(src, key)
                             raise ValueError("a CDN cell no longer this server's measurement")
                     # (used: the download cache's eviction takes a file's mtime for its last use when this server's
                     # own process did not read it, and these are read in the workers; a cell read on every visit was
@@ -1691,10 +1696,10 @@ class RoadZ:
                             t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
                             t.start()
                             cdn.append(t)
-                        elif src == "lidar":
-                            from_cdn(key)   # (product off: a kept CDN cell fails its check at once, and is no read)
                         else:
-                            build(key)      # (a read of the files on disk)
+                            # (a read of the files on disk, at once; with the product off a kept CDN cell fails its
+                            # check at once and, in this planning process, is no point-cloud read: lines)
+                            build(key)
                         continue
                     self._want(src, key)    # (asked of the server's prefetch)
                     if src == "lidar" and lidarz.enabled():

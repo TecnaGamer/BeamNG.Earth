@@ -576,6 +576,20 @@ class ProductTest(unittest.TestCase):
                 mock.patch.object(roadz, "PREFETCH_ON", True):
             self.assertIsNotNone(provider(cache, files=None).gap_answers([KEY])[KEY])
 
+    def test_a_dropped_kept_cell_is_no_read_in_a_planning_process(self):
+        """With the product off, a planning process of a server run that finds a kept CDN cell on disk drops it (its
+        check fails) and takes the rule, asking the server's prefetch for it; it never reads point clouds itself."""
+        _got, cache = self.persisted()
+        with mock.patch.dict(os.environ, {roadz.PREFETCH_ENV: "1", "BNGE_ROADZ_SESSION": "dropped",
+                                          "BNGE_LIDARZ": "off"}), mock.patch.object(roadz, "PREFETCH_ON", True):
+            asked = []
+            rz = provider(cache, files=self.files, asked=asked)
+            self.assertIsNone(rz.gap_answers([KEY])[KEY], "the rule")
+            self.assertEqual(asked, [], "no point-cloud read in the planning process")
+            self.assertFalse(os.path.exists(self.cell_file(cache)), "the kept cell dropped")
+            want = os.listdir(os.path.join(rz._session_dir(), roadz.WANT_DIR))
+            self.assertEqual(want, [f"lidar_{KEY.z}_{KEY.x}_{KEY.y}"], "asked of the server's prefetch")
+
     def moved(self):
         import test_roads
         return test_roads.features([[(-400, 0.5), (400, 0.5)], [(-12, -500), (-12, 500)], [(12, 500), (12, -500)]],
