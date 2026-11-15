@@ -485,8 +485,9 @@ approach lines from the client's own map, their widths, and the 3DEP datasets to
 point where the builder's measuring read our DEM (the datum's ground points beside the road, the deck ends, the
 stations of the stretches and approaches) and a digest of the heights it read; the client reads its own DEM at the
 same points and compares. Another map release or DEM changes only the cells it touches. A cell taken from the CDN
-keeps its record beside its cache file (`roadz/.../<y>.npz.lidarz`) and is checked again each time a process reads
-it from disk; when the map, the DEM or the lkey no longer agree, or the switch is off, the cell is made again. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
+keeps its record inside its own cache file (`roadz/.../<y>.npz`, so eviction cannot part them) and is checked again
+each time a process reads it from disk; when the map, the DEM or the lkey no longer agree, or the switch is off, the
+cell is made again. The version key (`<lkey>`) holds the measuring rules: `roadz.VERSION`, the
 kernels' versions and every constant the measuring reads. It does not hold the server release, so a build stays
 valid across updates until those rules change.
 

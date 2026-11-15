@@ -462,18 +462,28 @@ class Lines:
         return len(self.off) - 1
 
     def save(self, path):
+        """The lines to path (one file, replaced whole). A cell the CDN's product gave carries its identity inside
+        it (array "lidarz": lidarz.identity_bytes), so no eviction can part the heights from what they must be checked
+        against (Codex review of 866ebb97: a file of its own beside them could be evicted alone)."""
         import staging
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = staging.tmp_for(path)
+        extra = {}
+        ident = getattr(self, "lidarz", None)
+        if ident is not None:
+            extra["lidarz"] = np.frombuffer(lidarz.identity_bytes(ident), np.uint8)
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, lonlat=self.lonlat, z=self.z, off=self.off, level=self.level, ref=self.ref,
-                                name=self.name, corrected=np.array(self.corrected))
+                                name=self.name, corrected=np.array(self.corrected), **extra)
         staging.replace_cached(tmp, path)
 
     @classmethod
     def load(cls, path):
         with np.load(path, allow_pickle=False) as d:
-            return cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            got = cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            if "lidarz" in d.files:     # (a CDN cell: its identity, lidarz.kept_ok)
+                got.lidarz = lidarz.identity_of(d["lidarz"].tobytes())
+        return got
 
 
 # ---- the vector sources ----------------------------------------------------------------------------------------
@@ -779,11 +789,11 @@ class RoadZ:
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
-                        # (a cell the CDN's product gave (its record beside it, lidarz.KEPT): taken again only while
-                        # this server's map, DEM and lkey still make the builder's measurement, else measured anew;
-                        # Codex review of 206afb6f)
-                        if os.path.exists(p + lidarz.KEPT) and not lidarz.kept_ok(self, key, got, p + lidarz.KEPT):
-                            for q in (p + lidarz.KEPT, p + ".gaps.json", p):
+                        # (a cell the CDN's product gave (its identity inside the file, Lines.load): taken again
+                        # only while this server's map, DEM and lkey still make the builder's measurement, else made
+                        # anew; Codex reviews of 206afb6f and 866ebb97)
+                        if getattr(got, "lidarz", None) is not None and not lidarz.kept_ok(self, key, got):
+                            for q in (p + ".gaps.json", p):
                                 try:
                                     os.remove(q)
                                 except OSError:
@@ -831,18 +841,11 @@ class RoadZ:
                         if src == "lidar":
                             import staging
                             os.makedirs(os.path.dirname(p), exist_ok=True)
-                            if getattr(got, "lidarz", None) is not None:
-                                lidarz.keep(got, p + lidarz.KEPT)   # (first: never its lines without their identity)
                             tmp = staging.tmp_for(p + ".gaps.json")
                             with open(tmp, "w", encoding="utf-8") as fh:
                                 json.dump([[f, list(a), list(b)] for f, a, b in getattr(got, "gaps", [])], fh)
                             staging.replace_cached(tmp, p + ".gaps.json")
                         got.save(p)
-                        if src == "lidar" and getattr(got, "lidarz", None) is None:
-                            try:                # (measured here: no CDN cell's record any more)
-                                os.remove(p + lidarz.KEPT)
-                            except OSError:
-                                pass
                         if src == "lidar":      # (the cell whole on disk: its partial node reads have done their job)
                             import shutil
                             shutil.rmtree(os.path.join(self.dir, "eptparts", str(key).replace("/", "_")),

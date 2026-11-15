@@ -476,6 +476,9 @@ class ProductTest(unittest.TestCase):
         cache = self.cache()
         ln = provider(cache, files=None).lines("lidar", KEY)
         self.assertTrue(same(got, ln))
+        kept = roadz.Lines.load(self.cell_file(cache))
+        self.assertEqual(kept.lidarz[2], rec, "the record kept inside the cell's own file")
+        self.assertEqual(kept.lidarz[:2], (lidarz.lkey()[0], ikey))
         return got, cache
 
     def reread(self, cache, md=None, expect_reads=True):
@@ -509,9 +512,42 @@ class ProductTest(unittest.TestCase):
         got, cache = self.persisted()
         with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
             self.assertTrue(same(got, self.reread(cache)), "measured here (the same lines: the same inputs)")
-        self.assertFalse(os.path.exists(os.path.join(cache, "roadz", f"v{roadz.VERSION}", "lidar", str(KEY.z),
-                                                     str(KEY.x), f"{KEY.y}.npz.lidarz")),
-                         "a cell measured here is no CDN cell any more")
+        self.assertIsNone(getattr(roadz.Lines.load(self.cell_file(cache)), "lidarz", None),
+                          "a cell measured here is no CDN cell any more")
+
+    def cell_file(self, cache):
+        return os.path.join(cache, "roadz", f"v{roadz.VERSION}", "lidar", str(KEY.z), str(KEY.x), f"{KEY.y}.npz")
+
+    def evict_all_but_the_cell(self, cache):
+        """What cache eviction may leave of a kept CDN cell: its lines and gaps files, every other file of it gone
+        (cache.py evicts the roadz files one by one)."""
+        d = os.path.join(cache, "roadz", f"v{roadz.VERSION}", "lidar", str(KEY.z), str(KEY.x))
+        keep = {f"{KEY.y}.npz", f"{KEY.y}.npz.gaps.json"}
+        gone = [n for n in os.listdir(d) if n.startswith(f"{KEY.y}.") and n not in keep]
+        for n in gone:
+            os.remove(os.path.join(d, n))
+        self.assertTrue(all(os.path.exists(os.path.join(d, n)) for n in keep))
+        return gone
+
+    def test_a_kept_cdn_cell_without_its_other_files_is_still_checked(self):
+        """Codex review of 866ebb97 [high]: the identity in a file of its own could be evicted alone, and the CDN's
+        lines were then taken as measured here, unchecked, after the DEM changed."""
+        _got, cache = self.persisted()
+        self.evict_all_but_the_cell(cache)
+        md = MD(dem=OffDem(0.6))
+        mine, _r, _k = self.measured(md)
+        self.assertTrue(same(mine, self.reread(cache, md)), "the DEM changed: measured here")
+
+    def test_a_kept_cdn_cell_without_its_other_files_is_dropped_when_off(self):
+        got, cache = self.persisted()
+        self.evict_all_but_the_cell(cache)
+        with mock.patch.dict(os.environ, {"BNGE_LIDARZ": "off"}):
+            self.assertTrue(same(got, self.reread(cache)))      # (measured: the reads happen, reread checks)
+
+    def test_a_kept_cdn_cell_without_its_other_files_is_kept_while_its_inputs_hold(self):
+        got, cache = self.persisted()
+        self.evict_all_but_the_cell(cache)
+        self.assertTrue(same(got, self.reread(cache, expect_reads=False)))
 
     def moved(self):
         import test_roads

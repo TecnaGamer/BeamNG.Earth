@@ -18,10 +18,12 @@ and the digest of what it read; this server reads its own DEM at the same points
 datum's ground points beside the roads, the deck ends, the stretches' and approaches' stations; FORMAT 1 checked
 points along the map's lines only, Codex review of 206afb6f).
 
-A hit kept on disk keeps its identity (KEPT: the record, its lkey and item key, beside the cell's files, written
-first): RoadZ.lines takes such a cell from disk again only while kept_ok holds (the product on, the same lkey, the
+A hit kept on disk keeps its identity inside the cell's own file (roadz.Lines.save: the record, its lkey and item
+key as an array of the npz, written whole with the lines, so cache eviction can never keep the heights and drop what
+they are checked against; Codex review of 866ebb97, a file of its own beside them could be evicted alone):
+RoadZ.lines takes such a cell from disk again only while kept_ok holds (the product on, the same lkey, the
 same inputs from this server's map, the same DEM heights at the record's points, the record's lines the file's);
-else the cell's files are removed and it is made again (the CDN, or measured here). A cell measured here drops it.
+else the cell's files are removed and it is made again (the CDN, or measured here). A cell measured here has none.
 The per-process memory of RoadZ (_mem) needs no identity of its own: one process's map release, DEM and lkey do not
 change while it runs, and a cell is checked when it is read from disk into it.
 
@@ -58,7 +60,6 @@ log = logging.getLogger("earthd.lidarz")
 NATIVE = 303                    # earthfast: lz_* and the dec_* functions' domain
 FORMAT = 2                      # the layout, lkey_doc and the cell records (earthfast LZ_CELL_FORMAT 2; 2: every
                                 # DEM read of the measuring in the record, Codex review of 206afb6f)
-KEPT = ".lidarz"                # a CDN cell's identity beside its roadz file (<y>.npz.lidarz: keep / kept_ok)
 ENV = "BNGE_LIDARZ"
 URL_ENV = "BNGE_LIDARZ_URL"
 SUBDIR = "lidarz"
@@ -211,25 +212,31 @@ def same_lines(a, b):
     return ra == rb and na == nb and bool(a.corrected) == bool(b.corrected) and ga == gb
 
 
-def keep(lines, path):
-    """A CDN cell's identity (lines.lidarz: lkey, item key, record) written to path (beside its roadz files)."""
-    vk, ikey, rec = lines.lidarz
-    head = f"BNLK1 {vk} {ikey}\n".encode("ascii")
-    decisions._write(path, head + rec)
+def identity_bytes(ident):
+    """A CDN cell's identity (lkey hex, item key, record bytes) as bytes (kept inside its roadz file)."""
+    vk, ikey, rec = ident
+    return f"BNLK1 {vk} {ikey}\n".encode("ascii") + bytes(rec)
 
 
-def kept_ok(rz, key, lines, path):
-    """May a CDN cell kept on disk (its lines as loaded, its identity at path) stand for cell key now? The product on,
-    the same lkey, the same inputs from this server's map, the same DEM heights where the builder read them, and the
-    record's lines those on disk. Never raises."""
+def identity_of(buf):
+    """(lkey hex, item key, record bytes) of identity_bytes' bytes; ("", "", b"") when unreadable (fails kept_ok)."""
+    try:
+        head, rec = bytes(buf).split(b"\n", 1)
+        magic, vk, ikey = head.decode("ascii").split(" ")
+        return (vk, ikey, rec) if magic == "BNLK1" else ("", "", b"")
+    except (ValueError, UnicodeDecodeError):
+        return ("", "", b"")
+
+
+def kept_ok(rz, key, lines):
+    """May a CDN cell kept on disk (its lines as loaded, with their identity lines.lidarz) stand for cell key now? The
+    product on, the same lkey, the same inputs from this server's map, the same DEM heights where the builder read
+    them, and the record's lines those on disk. Never raises."""
     try:
         if not enabled():
             return False
-        with open(path, "rb") as f:
-            buf = f.read()
-        head, rec = buf.split(b"\n", 1)
-        magic, vk, ikey = head.decode("ascii").split(" ")
-        if magic != "BNLK1" or vk != lkey()[0]:
+        vk, ikey, rec = lines.lidarz
+        if vk != lkey()[0]:
             return False
         parts, cands, names = rz.lidar_inputs(key)
         if not parts or not names:
