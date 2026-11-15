@@ -42,11 +42,18 @@ core_trafficSignals = {
   end,
 }
 
-local function apply(left)
+local function apply(left,farNative)
   graph = { nodes = { j = { 0, 0, 0, 4 }, s = { 0, -80, 0, 4 } },
     edges = { { 's', 'j', 0, 1, 1, 13, 1, 4 } },
     signals = { { j = 'j', kind = 'signal', app = { { 's', 2, -10, 0, 0, 1, 0, 8, -10, 0, 0, left and 1 or nil } } } },
     rules = { rightHandDrive = left } }
+  if farNative~=nil then
+    graph.nlNative=true
+    graph.nodes.fj={10000,0,0,4};graph.nodes.fs={10000,-80,0,4}
+    graph.edges[#graph.edges+1]={'fs','fj',0,1,1,13,1,4}
+    graph.signals[#graph.signals+1]={j='fj',kind='signal',nlNative=farNative,
+      app={{'fs',10000,-10,0,0,1,0}}}
+  end
   T.check(N.onMessage({ anchorId = 1, serial = 1, path = '/graph' }, 1), 'graph accepted')
   local b = { -500, -500, 500, 500 }
   N.update(1, b)
@@ -98,5 +105,11 @@ signals=N.currentGraph().signals
 N.transform({apply=function(_,x,y,z)return x+100,y+200,z end},2)
 T.check(registered>0 and moves>moved and N.currentGraph().signals~=signals,
   'enabled Dutch path alone transforms approach positions and fallback heads')
+N.reset();registered=0
+apply(false,false)
+T.check(registered==1,'native graph retains the normal AI window for distant stock controllers')
+N.reset();registered=0
+apply(false,true)
+T.check(registered==2,'a complete native mount outside the AI window gets a visual controller')
 N.reset();N.dutchSignals=false
 T.done('test_signal_heads')

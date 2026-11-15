@@ -47,6 +47,28 @@ def _json(path):
     return json.loads(path.read_text(encoding='utf-8'))
 
 
+def ground_footprints(chunks, source_frame, frame):
+    """Marshal the renderer's painted-road envelopes, using its native ribbon kernel.
+
+    No mast positions are selected here. Rust samples the committed terrain for
+    these XY envelopes, so painted asphalt is not mistaken for missing geometry.
+    """
+    import blockworker, roadmesh
+    mapped = blockworker._map_chunks(source_frame, frame, chunks)
+    points, triangles, offset = [], [], 0
+    for left, right, *_ in roadmesh.ribbons(mapped):
+        n = len(left)
+        if n < 2:
+            continue
+        p = np.column_stack((np.concatenate((left, right)), np.zeros(2*n)))
+        i = np.arange(n-1, dtype=np.int64)
+        t = np.concatenate((np.column_stack((i, i+1, n+i)),
+                            np.column_stack((i+1, n+i+1, n+i))))
+        points.append(p); triangles.append(t + offset); offset += len(p)
+    if points:
+        return dict(kind='ground_road',positions=np.concatenate(points),triangles=np.concatenate(triangles))
+
+
 def session_scene(root, vfs, aid, frame, ground, centre, tiles):
     """tiles: immutable copies of the road tracker's fully sent (key, parts, exact) rows.
 
@@ -75,6 +97,14 @@ def session_scene(root, vfs, aid, frame, ground, centre, tiles):
         data = _json(Path(root) / blockworker.geo_names(key)['json'])
         if data.get('h') != content.get('h'):
             raise SurfacePending('road content generation changed')
+        def missing():
+            raise SurfacePending('painted road inputs pending')
+        inputs = blockworker._skin_inputs(key, str(root), missing)
+        if not inputs or inputs.get('h') != content.get('h') or 'ground_cover' not in inputs:
+            raise SurfacePending('painted road generation pending')
+        footprint = ground_footprints(inputs['ground_cover'], tile_frame, frame)
+        if footprint is not None:
+            parts.append(footprint)
         for what in ('deck',):
             row = data.get(what)
             if not isinstance(row, dict):

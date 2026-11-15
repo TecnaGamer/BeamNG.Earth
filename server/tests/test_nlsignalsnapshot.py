@@ -63,5 +63,15 @@ class OwnershipTest(unittest.TestCase):
         self.assertEqual(s.acknowledge(p['epoch'], 1, p['revision']), ())
         self.assertEqual(s.suppression(), ())
 
+    def test_complete_subsets_can_unlock_independently_in_one_packet(self):
+        s=Snapshot();s.reset(True,1)
+        p=s.offer(s.begin(),parts(),['near','bridge'])
+        self.assertEqual(s.acknowledge(p['epoch'],1,p['revision'],['near']),('near',))
+        self.assertEqual(s.suppression(),('near',))
+        self.assertIsNone(s.acknowledge(p['epoch'],1,p['revision'],['unknown']))
+        self.assertEqual(s.acknowledge(p['epoch'],1,p['revision'],['near','bridge']),('near','bridge'))
+        s.begin()
+        self.assertIsNone(s.acknowledge(p['epoch'],1,p['revision'],['near']))
+
 
 if __name__ == '__main__': unittest.main()

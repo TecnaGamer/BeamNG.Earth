@@ -34,6 +34,7 @@ class Tracker:
         self.closed = False
         self.graph_signature = None
         self.groups = {}
+        self.offered_groups = ()
         self.files = deque()
         self.stats = dict(builds=0, pending=0, failures=0, accepted=0)
 
@@ -49,7 +50,14 @@ class Tracker:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
     def acknowledge(self, msg):
-        accepted = self.state.acknowledge(msg.get('epoch'), msg.get('anchorId'), msg.get('revision'))
+        owners=msg.get('owners')
+        if isinstance(owners,dict) and not owners:owners=[]  # Lua's empty table may encode as {}
+        if owners is not None:
+            if not isinstance(owners,list) or any(not isinstance(o,str) for o in owners):return None
+            chosen=set(owners)
+            if any(chosen.intersection(group) and not group.issubset(chosen) for group in self.offered_groups):
+                return None
+        accepted = self.state.acknowledge(msg.get('epoch'), msg.get('anchorId'), msg.get('revision'),owners)
         if accepted is not None:
             self.stats['accepted'] += 1
         return accepted
@@ -167,14 +175,22 @@ class Tracker:
                 return
             # Distant parked decks must not hold a nearby junction hostage.
             # Require only tiles within a maximum span of accepted components.
-            required = []
-            for row in surfaces:
-                q = row['bounds']; xs = [v[0] for v in q]; ys = [v[1] for v in q]
-                if any(min(xs)-45 <= p['pose'][0] <= max(xs)+45 and
-                       min(ys)-45 <= p['pose'][1] <= max(ys)+45 for p in result['parts']):
-                    required.append({k:v for k,v in row.items() if k != 'bounds'})
+            def dependencies(parts):
+                out=[]
+                for row in surfaces:
+                    q=row['bounds'];xs=[v[0] for v in q];ys=[v[1] for v in q]
+                    if any(min(xs)-45<=p['pose'][0]<=max(xs)+45 and min(ys)-45<=p['pose'][1]<=max(ys)+45 for p in parts):
+                        out.append({k:v for k,v in row.items() if k!='bounds'})
+                return out
             packet.update(ground=ground, graphSerial=serial, owners=result['owners'], bundle=True,
-                          surfaces=required)
+                          surfaces=dependencies(result['parts']))
+            groups=[];first=1
+            for junction,group in sorted(result['groups'].items()):
+                groups.append(dict(key=junction,first=first,count=len(group['parts']),owners=group['owners'],
+                                   surfaces=dependencies(group['parts'])))
+                first+=len(group['parts'])
+            packet['groups']=groups
+            self.offered_groups=tuple(frozenset(g['owners']) for g in groups)
             name = f'nl_signals_{id(self):x}_{packet["revision"]}.json'
             path = Path(conn.s.out_dir) / name
             tmp = staging.tmp_for(str(path))
@@ -192,8 +208,13 @@ class Tracker:
                 self.graph_signature = graph_signature
             conn.send(dict(type='nl_signals', anchorId=ticket.anchor, epoch=ticket.epoch,
                            revision=packet['revision'], path=f'{conn.s.vfs_dir}/{name}'))
-            if any(s.get('pending') for s in result['statuses']):
-                self.retry_at = time.monotonic() + 2.
+            # New road/terrain versions already change on_pose's signature.
+            # Re-solving the same incomplete edge coverage every two seconds
+            # cannot load another tile and needlessly keeps a parked city busy.
+            # Public shard arrivals are asynchronous under the same manifest,
+            # so only incomplete context needs polling without a version change.
+            if not result.get('contextComplete',True):
+                self.retry_at = time.monotonic() + 5.
         except (SurfacePending, FileNotFoundError):
             self.stats['pending'] += 1
             self.retry_at = time.monotonic() + 2.

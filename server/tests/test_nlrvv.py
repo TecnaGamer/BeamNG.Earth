@@ -150,6 +150,16 @@ class PublicData(unittest.TestCase):
                 self.assertEqual(source.query((5.,52.,5.001,52.001)),[])
                 self.assertFalse(build.complete)
 
+    def test_producer_manifest_proves_unlisted_tiles_empty(self):
+        source=nlrvv.Source(None,None);source.built='published'
+        source.manifest.manifest=dict(format=data.FORMAT,built='published',tiles=['2086/1364'])
+        with patch.object(nlrvv.roadsigns,'NL_ON',True), \
+             patch.object(source,'version',return_value='published'), \
+             patch.object(source,'shard',side_effect=AssertionError('known empty tile must not fetch')):
+            with revisit.scope()as build:
+                self.assertEqual(source.query((5.,52.,5.001,52.001)),[])
+                self.assertTrue(build.complete)
+
     def test_published_public_tiles_use_normal_fetch_and_persistent_cache(self):
         row = data.normalize(record())[0]
         x, y = data.tile(row['lat'], row['lon'], maths=dmath)

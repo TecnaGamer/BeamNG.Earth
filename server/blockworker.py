@@ -1910,6 +1910,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         props = (props or []) + radar_props
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
+    P.ground_cover = cover  # already computed: painted carriageways, absent from the marking mesh
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.fuel_tried = fuel_tried
@@ -2096,7 +2097,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         data["h"] = h
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
-        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
+        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h,
+                  "ground_cover": getattr(P, "ground_cover", [])}
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
         sig = _file_sig(os.path.join(out_dir, names["inputs"]))
         with _geo_lock:

@@ -8,7 +8,9 @@ package.preload['beamngEarth/nl_signal_forest']=function()return {new=function()
     setFrame=function()frames=frames+1;return true end,forgetLevel=function()end}
 end}end
 local surfaceReady=false
-package.preload['beamngEarth/roads']=function()return {signalSurfacesReady=function()return surfaceReady end}end
+package.preload['beamngEarth/roads']=function()return {signalSurfacesReady=function(_,rows)
+  if type(surfaceReady)=='function'then return surfaceReady(rows)end;return surfaceReady
+end}end
 local stream=require('beamngEarth/nl_signal_stream')
 T.check(created==0,'loading the stream creates no forest or item')
 local packets,acks={},{}
@@ -50,4 +52,26 @@ stream.update(1,'b.ter',16)
 T.check(#acks==2,'committed ground unlocks the queued generation')
 stream.clear(false)
 T.check(next(live)==nil and not stream.owns('bne_a'),'disable removes only owned items and releases suppression')
+local bridgeReady=false
+surfaceReady=function(rows)return rows[1].key=='near'or bridgeReady end
+stream.graph(7)
+stream.register('bne_a',{},c,seq,{'a',0,0,0,0,1,0,4,0,0})
+stream.register('bne_b',{},c,seq,{'b',0,0,0,0,1,0,4,0,0})
+local grouped=copy(p);grouped.revision=3;grouped.parts[2]=copy(grouped.parts[1])
+grouped.parts[2].key='head_b';grouped.parts[2].approach='bne_b';grouped.owners={'bne_a','bne_b'}
+local near={key='near',h='h',skin='s',exact={}};local bridge={key='bridge',h='h',skin='s',exact={}}
+grouped.surfaces={near,bridge}
+grouped.groups={{key='near',first=1,count=1,owners={'bne_a'},surfaces={near}},
+  {key='bridge',first=2,count=1,owners={'bne_b'},surfaces={bridge}}}
+packets['/groups']=grouped
+assert(stream.onMessage({anchorId=1,epoch=1,revision=3,path='/groups'},1))
+now=now+1;stream.update(1,'b.ter',16)
+T.check(stream.owns('bne_a')and not stream.owns('bne_b'),'unloaded distant bridge does not block a complete nearby junction')
+T.check(#acks[#acks].owners==1,'partial packet acknowledges only the complete rendered junction')
+bridgeReady=true;now=now+1;stream.update(1,'b.ter',16)
+T.check(stream.owns('bne_a')and stream.owns('bne_b')and #acks[#acks].owners==2,
+  'same packet adds the waiting junction when its own geometry becomes visible')
+grouped.revision=4;grouped.groups[2].first=1
+T.check(not stream.onMessage({anchorId=1,epoch=1,revision=4,path='/groups'},1),'overlapping group ranges cannot duplicate a head')
+stream.clear(false)
 T.done('test_nl_signal_stream')

@@ -69,6 +69,11 @@ class Source(railtags.Shards):
             index = self.manifest.manifest
             listed = index.get('tiles') if isinstance(index,dict) and index.get('built') == built \
                 and index.get('format') == data.FORMAT else None
+        # The NDW producer publishes a list of x/y keys; context-style manifests
+        # use a mapping of shard filenames. Both prove that absent tiles are empty.
+        if isinstance(listed,list) and all(isinstance(k,str) and len(k.split('/'))==2
+                and all(v.isdecimal() for v in k.split('/')) for k in listed):
+            listed = {k+'.json.gz':None for k in listed}
         ax, ay = data.tile(min(54, north), max(3, west), maths=dmath)
         bx, by = data.tile(max(50, south), min(8, east), maths=dmath)
         if (bx - ax + 1) * (by - ay + 1) > 64:

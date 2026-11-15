@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import json
+import pickle
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -28,6 +29,7 @@ class ExactSurfaceInputs(unittest.TestCase):
             (root/skin_names['json']).write_text(json.dumps(dict(anchorId=aid,key=key,
                 road=dict(shape=vfs+'/'+skin_names['road'],pos=[1,2,3]))))
             (root/content_names['json']).write_text(json.dumps(dict(h='same')))
+            (root/content_names['inputs']).write_bytes(pickle.dumps(dict(h='same',ground_cover=[])))
             args=(root,vfs,aid,frame,dict(ter='g.ter',zBase=0.,maxHeight=100.),(0.,0.),[(gx,gy,dict(h='same'),{})])
             with patch.object(inputs,'make_scene',return_value='scene')as make:
                 self.assertEqual(inputs.session_scene(*args),'scene')
@@ -37,6 +39,31 @@ class ExactSurfaceInputs(unittest.TestCase):
                     np.asarray(geotiles.quad(frame,gx,gy))[:,:2].reshape(8))
             (root/content_names['json']).write_text(json.dumps(dict(h='changed')))
             with self.assertRaises(inputs.SurfacePending):inputs.session_scene(*args)
+
+    def test_painted_carriageway_is_present_without_visible_road_triangles(self):
+        import geodesy
+        frame=geodesy.EnuFrame(51.92,4.46,0.)
+        chunk=dict(m='asphalt',w=6.5,tl=10.,p=0,n=[[0.,-20.,50.],[0.,20.,50.]])
+        part=inputs.ground_footprints([chunk],frame,frame)
+        self.assertEqual(part['kind'],'ground_road')
+        self.assertGreater(len(part['triangles']),0)
+        self.assertAlmostEqual(float(part['positions'][:,0].max()),3.25,places=4)
+        # The source profile is deliberately at another height: the committed
+        # terrain, not this envelope's placeholder Z, owns the painted road.
+        from nlsignalassembly import make_scene,plans
+        scene=make_scene([part],np.zeros((41,41),np.uint16),2.,100.,(0.,0.),
+                         [[-30.,-30.,30.,30.]],square=1.)
+        request=dict(stop=[0.,0.,2.],travel=[0.,1.],lanes=2,opposite=0,radius=3.25,
+                     overhead=True,before=3.,after=0.)
+        result=plans(scene,[request])[0]
+        self.assertTrue(result['ready'],result)
+
+    def test_missing_painted_road_generation_stays_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            import blockworker
+            with self.assertRaises(inputs.SurfacePending):
+                blockworker._skin_inputs('missing',folder,
+                    lambda: (_ for _ in ()).throw(inputs.SurfacePending('pending')))
 
     def test_terrain_uses_quantised_samples_and_actual_holes(self):
         with tempfile.TemporaryDirectory() as folder:

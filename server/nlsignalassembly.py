@@ -76,7 +76,7 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
     for i, part in enumerate(parts):
         if i >= 256:
             raise ValueError('too many signal surface parts')
-        if part['kind'] not in ('road', 'walk'):
+        if part['kind'] not in ('road', 'walk', 'ground_road'):
             raise ValueError('signal surface kind')
         # A freshly built road has float64 points, but the game receives float32
         # shape vertices. Use exactly those coordinates in both fresh and cached paths.
@@ -94,7 +94,7 @@ def make_scene(parts, qgrid, z_base, max_height, centre, coverage, square=height
         p = dnp.matmul(p, basis.T) + origin
         points.append(p)
         triangles.append(t + offset)
-        kinds.extend([1 if part['kind'] == 'road' else 2] * len(t))
+        kinds.extend([dict(road=1, walk=2, ground_road=3)[part['kind']]] * len(t))
         offset += len(p)
         triangle_count += len(t)
         if offset > 2_000_000 or triangle_count > 1_000_000:

@@ -52,6 +52,7 @@ class LiveNativeBuild(unittest.TestCase):
         self.assertTrue(all('300' in p['variant'] and 'forest' in p for p in heads))
         written=json.loads((self.root/Path(result['graphPath']).name).read_text())
         self.assertTrue(written['nlNative']);self.assertEqual(len(written['signals']),1)
+        self.assertTrue(written['signals'][0]['nlNative'])
         for app in written['signals'][0]['app']:
             self.assertLess(app[1]*app[4]+app[2]*app[5],-5.,'inferred stop is before its primary heads')
 

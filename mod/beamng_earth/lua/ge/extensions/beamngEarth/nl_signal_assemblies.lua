@@ -34,7 +34,7 @@ local function copyPart(p)
   local a,b,c=axes[1],axes[2],axes[3]
   if a[1]*(b[2]*c[3]-b[3]*c[2])+a[2]*(b[3]*c[1]-b[1]*c[3])
       +a[3]*(b[1]*c[2]-b[2]*c[1])<0.99 then return nil end
-  return {key=p.key,shape=p.shape,pose=pose}
+  return {key=p.key,shape=p.shape,pose=pose,optical=p.optical==true}
 end
 local function same(a,b)
   if a.shape~=b.shape then return false end
@@ -60,7 +60,7 @@ function M.farParts(assembly,channels)
       if not body then return nil,'invalid_part' end
       rows[#rows+1]=body
       if phase~='off' then
-        local lens=copyPart({key=p.key..':light',shape=p.forest[phase],pose=p.pose})
+        local lens=copyPart({key=p.key..':light',shape=p.forest[phase],pose=p.pose,optical=true})
         if not lens then return nil,'invalid_part' end
         rows[#rows+1]=lens
       end
@@ -77,7 +77,13 @@ function M.new(backend)
   assert(backend and backend.create and backend.remove)
   local self={enabled=false,revision=-1,live={},pending=nil,errors=0,scope=nil,requireScope=false}
   local function discard(p)
-    if p then for _,entry in pairs(p.created) do backend.remove(entry.handle) end end
+    if p then
+      for _,entry in pairs(p.created) do backend.remove(entry.handle) end
+      for key,part in pairs(p.replaced) do
+        local ok,handle=pcall(backend.create,part)
+        if ok and handle then self.live[key]={part=part,handle=handle} end
+      end
+    end
   end
   function self:setEnabled(on)
     assert(type(on)=='boolean')
@@ -118,7 +124,7 @@ function M.new(backend)
     end
     -- Fully validate before touching an accepted snapshot or an in-progress one.
     discard(self.pending)
-    self.pending={revision=packet.revision,rows=rows,created={},keep={},at=1}
+    self.pending={revision=packet.revision,rows=rows,created={},keep={},replaced={},at=1}
     return true
   end
   function self:setFrame(frame)
@@ -139,6 +145,12 @@ function M.new(backend)
           return false,'create_failed'
         end
         p.created[row.key]={part=row,handle=handle}
+        if old and old.part.optical and row.optical then
+          -- A budgeted assembly can span frames. Never leave red and green
+          -- optical faces visible together until its later full acceptance.
+          backend.remove(old.handle);self.live[row.key]=nil
+          p.replaced[row.key]=old.part
+        end
       end
       p.at=p.at+1;budget=budget-1
     end

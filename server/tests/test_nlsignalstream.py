@@ -5,12 +5,49 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import json
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from nlsignalstream import Tracker
 
 
 class ConnectionOwnership(unittest.TestCase):
+    def test_surface_dependencies_are_scoped_to_each_complete_junction(self):
+        with tempfile.TemporaryDirectory() as folder:
+            t=Tracker();t.state.reset(True,1);ticket=t.state.begin()
+            a=dict(key='a',pose=[0.,0.,0.]);b=dict(key='b',pose=[1000.,0.,0.])
+            groups=dict(near=dict(parts=[a],owners=['a']),remote=dict(parts=[b],owners=['b']))
+            result=dict(parts=[a,b],owners=['a','b'],groups=groups,statuses=[],signalSignature='[]',graphPath='/temp/test/g.json')
+            f=Future();f.set_result(result)
+            conn=SimpleNamespace(send=lambda msg:None,s=SimpleNamespace(out_dir=folder,vfs_dir='/temp/test'))
+            surfaces=[dict(key=key,h='h',skin='s',exact={},bounds=[[x-10,-10],[x+10,-10],[x+10,10],[x-10,10]])
+                      for key,x in [('near',0),('remote',1000)]]
+            t._built(conn,ticket,1,'g.ter',f,surfaces)
+            packet=json.loads(next(Path(folder).glob('nl_signals_*.json')).read_text())
+            self.assertEqual([(g['first'],g['count'])for g in packet['groups']],[(1,1),(2,1)])
+            self.assertEqual([[r['key']for r in g['surfaces']]for g in packet['groups']],[['near'],['remote']])
+
+    def test_incomplete_geometry_waits_for_changed_inputs_not_a_busy_retry(self):
+        with tempfile.TemporaryDirectory()as folder:
+            t=Tracker();t.state.reset(True,1);ticket=t.state.begin()
+            conn=SimpleNamespace(send=lambda msg:None,s=SimpleNamespace(out_dir=folder,vfs_dir='/temp/test'))
+            result=dict(parts=[],owners=[],groups={},statuses=[dict(pending=True)],
+                        signalSignature='[]',graphPath='/temp/test/g.json',contextComplete=True)
+            f=Future();f.set_result(result);t._built(conn,ticket,1,'g.ter',f)
+            self.assertIsNone(t.retry_at)
+            ticket=t.state.begin();result['contextComplete']=False
+            f=Future();f.set_result(result);t._built(conn,ticket,1,'g.ter',f)
+            self.assertIsNotNone(t.retry_at,'public shard arrivals still need polling')
+    def test_partial_acknowledgement_cannot_split_one_junction(self):
+        t=Tracker();t.state.reset(True,1)
+        p=t.state.offer(t.state.begin(),[dict(key='mast')],['a','b','c'])
+        t.offered_groups=(frozenset(['a','b']),frozenset(['c']))
+        ack=dict(epoch=p['epoch'],anchorId=1,revision=p['revision'],owners=['a'])
+        self.assertIsNone(t.acknowledge(ack))
+        ack['owners']=['a','b']
+        self.assertEqual(t.acknowledge(ack),('a','b'))
+        ack['owners']=['a','b','c']
+        self.assertEqual(t.acknowledge(ack),('a','b','c'))
     def test_preparing_next_block_does_not_block_committed_terrain(self):
         t=Tracker();t.source=SimpleNamespace(known=lambda:'known');t.future=object()
         conn=SimpleNamespace(active=1,pending_block=object(),block=SimpleNamespace(cx=0.,cy=0.),

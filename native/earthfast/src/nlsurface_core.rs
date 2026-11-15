@@ -8,7 +8,7 @@ pub const LEVEL_TOLERANCE: f64 = 2.5;
 
 #[derive(Clone)]
 pub struct Surface {
-    pub kind: u8, // 1 carriageway, 2 walk/island
+    pub kind: u8, // 1 drawn carriageway/deck, 2 walk/island, 3 terrain-painted carriageway
     pub triangle: [[f64; 3]; 3],
 }
 
@@ -152,7 +152,7 @@ impl Scene {
         let mut cells: HashMap<(i32,i32),Vec<usize>> = HashMap::new();
         let mut references = 0i64;
         for (i, surface) in surfaces.iter().enumerate() {
-            if !(1..=2).contains(&surface.kind)
+            if !(1..=3).contains(&surface.kind)
                 || !surface.triangle.iter().flatten().all(|v| v.is_finite() && v.abs() < 1e9) {
                 return Err("invalid support surface");
             }
@@ -218,8 +218,9 @@ impl Scene {
         }
         for &i in near {
             let s = &self.surfaces[i];
-            if s.kind != 1 { continue; }
-            let (d,road_z) = nearest(p,&s.triangle);
+            if s.kind != 1 && s.kind != 3 { continue; }
+            let (d,mesh_z) = nearest(p,&s.triangle);
+            let road_z=if s.kind==3 {let Some(z)=self.terrain.sample(p)else{continue};z}else{mesh_z};
             if walk.is_some() && road_z<=z+0.025 { continue; }
             if (road_z-z).abs() < LEVEL_TOLERANCE && d <= CLEARANCE*CLEARANCE {
                 return Err(if d <= 1e-12 { Rejection::Carriageway } else { Rejection::NearCarriageway });
@@ -245,8 +246,9 @@ impl Scene {
         let cell=((p[0]/CELL).floor() as i32,(p[1]/CELL).floor() as i32);
         let mut best:Option<f64>=None;
         for &i in self.cells.get(&cell).map(Vec::as_slice).unwrap_or(&[]) {
-            let s=&self.surfaces[i];if s.kind!=1 { continue; }
-            let (d,z)=nearest(p,&s.triangle);
+            let s=&self.surfaces[i];if s.kind!=1 && s.kind!=3 { continue; }
+            let (d,mesh_z)=nearest(p,&s.triangle);
+            let z=if s.kind==3 {let Some(z)=self.terrain.sample(p)else{continue};z}else{mesh_z};
             if self.walk_height(p,reference_z).is_some_and(|h|h>=z-0.025) { continue; }
             if d<=1e-12 && (z-reference_z).abs()<=LEVEL_TOLERANCE
                 && best.map_or(true,|old|(z-reference_z).abs()<(old-reference_z).abs()) { best=Some(z); }
@@ -259,7 +261,8 @@ impl Scene {
             || top <= bottom || !(0. ..=CLEARANCE).contains(&radius) { return false; }
         let cell=((p[0]/CELL).floor() as i32,(p[1]/CELL).floor() as i32);
         self.cells.get(&cell).map_or(true, |indices| indices.iter().all(|&i| {
-            let s=&self.surfaces[i];let (d,z)=nearest(p,&s.triangle);
+            let s=&self.surfaces[i];let (d,mesh_z)=nearest(p,&s.triangle);
+            let z=if s.kind==3 {let Some(z)=self.terrain.sample(p)else{return false};z}else{mesh_z};
             d > radius*radius || z <= bottom+0.25 || z >= top+0.15
         }))
     }
@@ -273,10 +276,11 @@ impl Scene {
             if !self.covered(p,0.16) { return false; }
             let cell=((p[0]/CELL).floor() as i32,(p[1]/CELL).floor() as i32);
             for &i in self.cells.get(&cell).map(Vec::as_slice).unwrap_or(&[]) {
-                let s=&self.surfaces[i];let (d,z)=nearest(p,&s.triangle);
+                let s=&self.surfaces[i];let (d,mesh_z)=nearest(p,&s.triangle);
+                let z=if s.kind==3 {let Some(z)=self.terrain.sample(p)else{return false};z}else{mesh_z};
                 if d > 0.16*0.16 { continue; }
                 if z > bottom && z < top+0.15 { return false; }
-                if s.kind == 1 && z <= bottom && bottom-z < 4.5 { return false; }
+                if (s.kind == 1 || s.kind == 3) && z <= bottom && bottom-z < 4.5 { return false; }
             }
         }
         true
@@ -352,5 +356,23 @@ mod tests {
         let mut grid=terrain(0.);grid.holes=vec![1;9];
         let scene=Scene::new(vec![],grid,vec![[-20.,-20.,20.,20.]]).unwrap();
         assert_eq!(scene.foot([0.,0.],0.),Err(Rejection::MissingGround));
+    }
+    #[test] fn painted_carriageway_uses_committed_terrain_not_placeholder_mesh_height() {
+        let scene=Scene::new(vec![triangle(3,-99.)],terrain(2.),vec![[-20.,-20.,20.,20.]]).unwrap();
+        assert_eq!(scene.road_floor([0.,0.],2.),Some(2.));
+        assert_eq!(scene.road_floor([0.,0.],20.),None);
+        assert_eq!(scene.foot([0.,0.],2.),Err(Rejection::Carriageway));
+        assert!(!scene.overhead_clear([-1.,0.],[1.,0.],5.,6.));
+    }
+    #[test] fn raised_island_overrides_painted_carriageway() {
+        let scene=Scene::new(vec![triangle(3,-99.),triangle(2,2.15)],terrain(2.),vec![[-20.,-20.,20.,20.]]).unwrap();
+        assert_eq!(scene.foot([0.,0.],2.),Ok(Foot{z:2.15,kind:2}));
+        assert_eq!(scene.road_floor([0.,0.],2.),None);
+    }
+    #[test] fn painted_road_does_not_fill_terrain_holes() {
+        let mut grid=terrain(2.);grid.holes=vec![1;9];
+        let scene=Scene::new(vec![triangle(3,2.)],grid,vec![[-20.,-20.,20.,20.]]).unwrap();
+        assert_eq!(scene.road_floor([0.,0.],2.),None);
+        assert_eq!(scene.foot([0.,0.],2.),Err(Rejection::MissingGround));
     }
 }

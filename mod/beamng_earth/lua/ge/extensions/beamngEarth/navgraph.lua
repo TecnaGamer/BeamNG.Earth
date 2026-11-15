@@ -537,7 +537,9 @@ local function signalData(nodes)
   for _, j in ipairs(graph.signals or {}) do
     local jn = nodes[j.j]
     local sourceNode=graph.nodes[j.j]
-    local nlVisual=M.dutchSignals and graph.nlNative==true
+    -- Only complete native junctions need controllers beyond the local AI map.
+    -- A native packet must not instantiate every distant stock junction.
+    local nlVisual=M.dutchSignals and j.nlNative==true
     if nlVisual and sourceNode and not jn then jn={radius=sourceNode[4],links={}} end
     if jn and type(j.app) == 'table' then
       local apps = {}

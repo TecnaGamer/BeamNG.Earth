@@ -84,4 +84,22 @@ do
   scoped:setEnabled(false);scoped:setEnabled(true)
   T.check(not scoped:enqueue(p) and count==0,'disable cannot reuse an old connection scope')
 end
+do
+  local visible={}
+  local r=consumer.new({create=function(p)local h={part=p};visible[h]=true;return h end,
+    remove=function(h)visible[h]=nil end})
+  local red=part('lamp');red.optical=true;red.shape=root..'red.dae'
+  local green=part('lamp');green.optical=true;green.shape=root..'green.dae'
+  r:setEnabled(true);assert(r:enqueue(packet(1,{red})));assert(r:tick(1))
+  assert(r:enqueue(packet(2,{green,part('later')})))
+  assert(not r:tick(1))
+  local count,shape=0,nil
+  for h in pairs(visible)do count=count+1;shape=h.part.shape end
+  T.check(count==1 and shape==green.shape,'budgeted phase change never displays red and green together')
+  assert(r:enqueue(packet(3,{red})))
+  assert(r:tick(1))
+  count=0;for h in pairs(visible)do count=count+1;shape=h.part.shape end
+  T.check(count==1 and shape==red.shape,'cancelled partial phase restores and replaces the prior optical face cleanly')
+  r:setEnabled(false)
+end
 T.done('test_nl_signal_assemblies')

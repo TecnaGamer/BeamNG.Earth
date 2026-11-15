@@ -3336,17 +3336,17 @@ end
 -- server solve. A sent tile or the retained old skin is not acceptance.
 function M.signalSurfacesReady(aid, rows)
   if type(rows) ~= 'table' or #rows > 64 then return false end
-  if swapState and not swapState.committed then return false end
+  if swapState and not swapState.committed then return false,'road_swap' end
   for _, row in ipairs(rows) do
     local t = tiles[geoKey(row.key)]
     if not t or t.ghost or t.anchor ~= aid or t.h ~= row.h or not t.skin
-        or t.skin.anchor ~= aid or t.skin.h ~= row.skin then return false end
+        or t.skin.anchor ~= aid or t.skin.h ~= row.skin then return false,'surface_version:'..row.key end
     for _, what in ipairs({'road', 'walk'}) do
-      if t.skin[what] and not t[what] then return false end
+      if t.skin[what] and not t[what] then return false,'surface_mesh:'..row.key..':'..what end
     end
-    if t.parts.deck and not t.deck then return false end
+    if t.parts.deck and not t.deck then return false,'surface_mesh:'..row.key..':deck' end
     for what, exactAid in pairs(row.exact or {}) do
-      if what == 'deck' and t.exactOf[what] ~= exactAid then return false end
+      if what == 'deck' and t.exactOf[what] ~= exactAid then return false,'surface_exact:'..row.key end
     end
   end
   return true

@@ -25,6 +25,7 @@ class Snapshot:
         self.anchor = None
         self.pending = None
         self.accepted = None
+        self.allowed = ()
 
     def reset(self, enabled=False, anchor=None):
         """Disconnect, option change or anchor replacement invalidates all work.
@@ -38,6 +39,7 @@ class Snapshot:
         self.generation += 1
         self.enabled, self.anchor = enabled, anchor if enabled else None
         self.pending = self.accepted = None
+        self.allowed = ()
 
     def begin(self):
         """New surface/context generation; keep the accepted render meanwhile."""
@@ -80,18 +82,27 @@ class Snapshot:
         packet = dict(format=1, revision=self.revision, epoch=self.epoch,
                       anchor=self.anchor, parts=json.loads(payload))
         self.pending = (ticket, packet, tuple(owners))
+        self.allowed = tuple(owners)
         return copy.deepcopy(packet)
 
-    def acknowledge(self, epoch, anchor, revision):
+    def acknowledge(self, epoch, anchor, revision, owners=None):
         """Return owners permitted to replace stock, or None for stale replies."""
         if any(type(v) is not int for v in (epoch, anchor, revision)):
             return None
-        p = self.pending
+        p = self.pending or self.accepted
         if not p or not self.current(p[0]) or (epoch, anchor, revision) != (
                 self.epoch, self.anchor, p[1]['revision']):
             return None
-        self.accepted, self.pending = p, None
-        return p[2]
+        if owners is None:
+            selected = self.allowed
+        else:
+            if not isinstance(owners,list) or len(owners)>512 or any(not isinstance(o,str) for o in owners) \
+                    or len(set(owners))!=len(owners) or not set(owners).issubset(self.allowed):
+                return None
+            chosen=set(owners)
+            selected = tuple(o for o in self.allowed if o in chosen)
+        self.accepted, self.pending = (p[0],p[1],selected), None
+        return selected
 
     def suppression(self):
         """Only confirmed ownership; never suppress for an incomplete build."""
