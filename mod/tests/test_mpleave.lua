@@ -36,7 +36,7 @@ do
   T.check(body ~= nil, 'core.lua: onModDeactivated found')
   local a, b = body and body:find('beammp.onModDeactivated', 1, true), body and body:find('_codeswap.check', 1, true)
   T.check(a ~= nil and b ~= nil and a < b, 'core.lua: the restore armed before the code swap')
-  T.check(core:find('pcall(beammp.onLoad)', 1, true) ~= nil, 'core.lua: beammp.onLoad at load')
+  T.check(core:find('beammp.onLoad', 1, true) == nil, 'core.lua: no arming at load (no provenance there)')
   T.check(core:find('beammp.restoreTick', 1, true) == nil, 'core.lua: no restoreTick behind the menu early return')
   T.check(core:find('pcall(beammp.onServerLeave)', 1, true) ~= nil, 'core.lua: the leave hook')
 end
@@ -61,7 +61,6 @@ M.onModDeactivated = function(mod)
   pcall(beammp.onModDeactivated, mod)
   pcall(cs.check, 'turned off: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
 end
-pcall(beammp.onLoad)
 return M
 ]]
 
@@ -628,15 +627,16 @@ MPCoreNetwork.leaveServer(true)
 frames(60)
 T.check(ours().active == true and coreCode() == 'new', '1.8 server copy: on again, our code: ' .. tostring(coreCode()))
 
--- (7) a 1.10.0 player on a fixed server's copy: the server copy's code (swapped in by 1.10.0's own code) arms it at
--- load or in the leave hook
+-- (7) a 1.10.0 player on a fixed server's copy: the fixed code came in after BeamMP turned ours off and can't tell that
+-- from the player's own choice, so it stays off in this run (the launcher's next start turns it on:
+-- install.ensure_mod_active); updating the player's own copy is what fixes it
 start('1.10.0', files110())
 MPCoreNetwork.join({ mods = { ['beamng_earth.zip'] = copy('new', filesNew()) }, level = 'beamng_earth' })
 frames(10)
 T.check(coreCode() == 'new' and ours().active == false, '1.10.0 player, fixed server copy: its code in the session')
 G.endLevel()
-frames(3)
-T.check(ours().active == true, '1.10.0 player, fixed server copy: on again')
+frames(120)
+T.check(ours().active == false, '1.10.0 player, fixed server copy, Esc: left off (a known limit)')
 
 -- (8) the player turns the mod off outside a session: it stays off
 start('new', filesNew())
@@ -650,6 +650,37 @@ frames(10)
 G.endLevel()
 frames(120)
 T.check(ours().active == false, 'turned off by the player, then a level ended: stays off')
+
+-- (8b) turned off by the player before joining (and the game restarted: none of our code runs), then a server that
+-- sends a copy (new or old) or none: BeamMP never turned ours off, so it stays off after the leave (Codex review)
+for _, sent in ipairs({ { ['beamng_earth.zip'] = copy('new', filesNew()) },
+    { ['beamng_earth.zip'] = copy('1.10.0', files110()) }, {} }) do
+  for _, goBack in ipairs({ false, true }) do
+    start('new', filesNew())
+    core_modmanager.deactivateMod('beamng_earth')
+    boot()                               -- (a restart: the mod off, nothing of ours loaded)
+    T.check(coreCode() == nil, 'player-off, restarted: none of our code')
+    MPCoreNetwork.join({ mods = sent, level = next(sent) and 'beamng_earth' or 'west_coast_usa' })
+    frames(10)
+    T.check(ours().active == false, 'player-off: off in the session')
+    if goBack then MPCoreNetwork.leaveServer(true) else G.endLevel() end
+    frames(120)
+    -- (a server's 1.10.0 copy's own leave hook switches it on after a Leave: BeamMP's second leaveServer from
+    -- onClientEndMission, after the session flags are cleared; that copy's code can't be changed)
+    local oldOwnRestore = goBack and next(sent) and sent['beamng_earth.zip'].code == '1.10.0'
+    T.check(oldOwnRestore or (ours().active == false and rawget(_G, 'beamngEarthMPRestore') == nil),
+      'player-off before the join: still off after the leave (' .. (next(sent) and sent['beamng_earth.zip'].code or
+      'no copy') .. ', ' .. (goBack and 'Leave' or 'Esc') .. ')')
+  end
+end
+-- ... and turned off in this run (our code still loaded), then a server's new copy: still off after the leave
+start('new', filesNew())
+core_modmanager.deactivateMod('beamng_earth')
+MPCoreNetwork.join({ mods = { ['beamng_earth.zip'] = copy('new', filesNew()) }, level = 'beamng_earth' })
+frames(10)
+G.endLevel()
+frames(120)
+T.check(ours().active == false, 'player-off in this run, new server copy: still off after the leave')
 
 -- (9) leaving and joining another server: off again in the new session, on after it ends
 start('new', filesNew())

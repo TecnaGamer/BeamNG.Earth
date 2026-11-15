@@ -3904,7 +3904,5 @@ M.onModDeactivated = function(mod)
   pcall(beammp.onModDeactivated, mod)
   pcall(M._codeswap.check, 'turned off: ' .. tostring(type(mod) == 'table' and mod.modname or '?'), true)
 end
--- (this code loaded in a session with the player's copy off, a server's copy swapped in: the same, armed now)
-pcall(beammp.onLoad)
 
 return M

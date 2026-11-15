@@ -104,14 +104,14 @@ end
 -- level state was already reset, so that never ran (the user's log 2026-11-15: no line of ours after "1 Mods cleaned
 -- up"). And a server's copy is whatever version its host put there, so its code can't be the one that does it.
 -- Now the player's own copy's code arms it when BeamMP switches that copy off in a session (onModDeactivated, before
--- codeswap.lua swaps its code out), and the leave hook arms it too (a server's copy with this code): a job in the
+-- codeswap.lua swaps its code out; only then: a copy already off at the join was the player's choice): a job in the
 -- game's own job system (core_jobsystem), not one of our extensions or modules, so neither the code swap nor the
 -- server copy's deletion takes it away. Each frame it asks BeamMP whether the session is over (one coroutine resume,
 -- only while BeamMP has our copy off); then it switches our copy on at once (before BeamMP's Lua reload 0.5 s after a
 -- "Leave" from its menu), again up to RESTORE_TRIES times if something turns it off within RESTORE_GAP_S. Our copy's
 -- modScript then brings its own code back (codeswap.lua). In the session it waits: BeamMP's checkMod would switch it
 -- straight off again ("This mod should not be running: beamng_earth"). A player without our app has no such mod:
--- nothing is armed. A mod the player turns off outside a session is never switched back on.
+-- nothing is armed. A mod the player turns off outside a session (before joining, too) is never switched back on.
 M.LOCAL_MOD = 'beamng_earth'
 M.RESTORE_TRIES = 3             -- switched on again this many times when something turned it off meanwhile
 M.RESTORE_GAP_S = 1.0           -- on and still on this long: done
@@ -212,25 +212,13 @@ function M.onModDeactivated(mod)
   return M.armRestore('turned off by BeamMP')
 end
 
--- BeamMP's onBeamMPServerLeave (through core.lua): our copy still off (armed by a code that had no onModDeactivated
--- part, or the job gone): armed now; it switches it on once BeamMP's session is over (in this hook it still counts).
--- Only from a session: MPCoreNetwork.onClientEndMission calls leaveServer at every level's end, single player too,
--- and a copy the player turned off there stays off (its code stays loaded; 1.10.0's hook would switch it back on).
+-- BeamMP's onBeamMPServerLeave (through core.lua): the layout rewrite off. It arms nothing: "our copy is off" alone
+-- doesn't say BeamMP turned it off (the player may have, before joining: Codex review 2026-11-15), and only the
+-- onModDeactivated above sees that; a player whose own copy is older than this is turned back on at the launcher's next
+-- start (install.ensure_mod_active).
 function M.onServerLeave()
   layoutDue = false
   disarm()
-  if not sessionOn() then return false end
-  local entry = localEntry()
-  if not entry or entry.active then return false end
-  return M.armRestore('left the server')
-end
-
--- core.lua at load: this code loaded in a session with our copy off (a server's copy swapped in): armed.
-function M.onLoad()
-  if not sessionOn() then return false end
-  local entry = localEntry()
-  if not entry or entry.active then return false end
-  return M.armRestore('this copy loaded in the session')
 end
 
 -- Is the game in a BeamMP session? (BeamMP's own extension MPCoreNetwork; nil outside BeamMP.)
