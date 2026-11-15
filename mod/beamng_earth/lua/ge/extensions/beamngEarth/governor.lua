@@ -336,32 +336,46 @@ function Gov:beginFrame(hasWork, wallMs)
 end
 
 -- May a unit of this kind run now? (The caller then runs it and calls charge with its cost.)
+-- Why units waited (stats.no['<kind>:<reason>'], the refusals counted; snapshot 'no'): the governor's budget (tokens),
+-- a reservation, the frame's plan (b + maxUnit), the far cap, the frame cap, the far tiles' lane share, a heavy frame.
+-- (2026-11-14: a PC's buildings took ~35 s to replace their stand-ins after a stop, ~1.5 s a mesh; which rule held
+-- them was not known.) Only a refused try counts: nothing per frame.
+local function no(self, kind, why)
+  local t = self.stats.no
+  if not t then t = {}; self.stats.no = t end
+  local k = kind .. ':' .. why
+  t[k] = (t[k] or 0) + 1
+  return false
+end
+
 function Gov:try(kind, lane)
   self.used[kind] = true
-  if self.blocked or self.heavyFrame == self.frame then return false end
+  if self.blocked or self.heavyFrame == self.frame then return no(self, kind, 'heavy') end
   local e = self.est[kind] or 1
   local c = e + (self.def[kind] or 0)
   -- (in the cover the tokens are the frame's budget: a unit bigger than all of it still runs, as its frame's first)
-  if self.tokens < c and not (self.cover and self.frameUnits == 0) then return false end
+  if self.tokens < c and not (self.cover and self.frameUnits == 0) then return no(self, kind, 'tokens') end
   -- (a due unit's reservation: reserve)
   if self.reserved and kind ~= self.reservedKind and c > M.RESERVE_FREE_MS and self.tokens - c < self.reserved then
     self.stats.reserveYields = (self.stats.reserveYields or 0) + 1
-    return false
+    return no(self, kind, 'reserve')
   end
-  if self.frameSpent + self.frameDef + c > self.b + self:maxUnit() then return false end
+  if self.frameSpent + self.frameDef + c > self.b + self:maxUnit() then return no(self, kind, 'plan') end
   if self.frameUnits > 0 then
     -- ... and past the first unit never more than the far cap: with every estimate at its prior, b + maxUnit is well
     -- under it and nothing changes; it binds once a slow unit has inflated an estimate (FAR_CAP_MS). In the cover the
     -- frame cap below is the guard.
-    if self.farCap and not self.cover and self.frameSpent + e > self.farCap then return false end
+    if self.farCap and not self.cover and self.frameSpent + e > self.farCap then return no(self, kind, 'farcap') end
     -- the frame cap: base + what this frame spent (units, their engine share, other noted work) + this unit
-    if (self.base or 0) + self.frameSpent + self.frameDef + self.frameOther + c > self:frameCap() then return false end
+    if (self.base or 0) + self.frameSpent + self.frameDef + self.frameOther + c > self:frameCap() then
+      return no(self, kind, 'framecap')
+    end
   end
   -- lanes: a mid unit past its share while far tiles wait gives way (FAR_SHARE)
   if lane == 'mid' and self.farWait
       and self.laneUse.mid - self.laneUse.far * (1 - M.FAR_SHARE) / M.FAR_SHARE > M.LANE_GRACE_MS then
     self.stats.midYields = (self.stats.midYields or 0) + 1
-    return false
+    return no(self, kind, 'lane')
   end
   return true
 end
@@ -483,7 +497,8 @@ function Gov:snapshot()
     heavyPending = self.heavyPending, estCdae = self.est.cdae, estDae = self.est.dae, estCdaeTex = self.est.cdaeTex,
     estCdaeTex128 = self.est.cdaeTex128, estCdaeTex256 = self.est.cdaeTex256, estCdaeTex512 = self.est.cdaeTex512,
     estMaterial = self.est.material, estMatDelete = self.est.matDelete, heavy = self.stats.heavy,
-    units = self.stats.units, maxFrameSpent = self.stats.maxFrameSpent, engineDebt = self.stats.engineDebt }
+    units = self.stats.units, maxFrameSpent = self.stats.maxFrameSpent, engineDebt = self.stats.engineDebt,
+    no = self.stats.no, est = self.est }
 end
 
 M.Gov = Gov

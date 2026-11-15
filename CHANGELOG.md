@@ -207,6 +207,19 @@ Works with BeamNG.drive 0.40.5.
 - **Far scenery after a connection drop**: far tiles built without photos during an outage now get their photos once
   the imagery services are back, without a teleport (PR #1260, OmdevShastri).
 - **Server stalls** moved off the main loop on slow or external disks (GitHub #1054).
+- **Reduced the chance of freezes driving onto a new kind of ground** (rock, brick, cobbles ...): the game prepared each
+  ground texture on its main thread the first time it appeared (5-12 s freezes at speed in our tests and two players'
+  logs); the server now prepares them in the background when it starts.
+- **Reduced the chance of world-building pauses**: a gas station lookup ran for every tile round the car on each
+  position update (up to 4 s in a log).
+- **Forests in the far north and south** are no longer much too dense (about 4.6x the trees per area at 69 degrees,
+  e.g. Lapland), and flat forests no longer show their trees in rows from afar: tree and bush spacing now follows the
+  real ground distance at every latitude.
+- **Reduced the chance of distant-building stand-ins staying over real buildings** after a fast drive: a block of
+  cheap far buildings now gives way as soon as the real buildings around the car are in, instead of waiting up to a
+  minute for the rest of the far field.
+- **Frame pacing** no longer holds frames faster than 250 fps back (seen as "LuaPre" time while driving), and turns
+  itself off on a system whose timer is too coarse for it.
 - **Reduced the chance of slow world building** on some machines: the "what will the car reach first" planning ran
   on the server's main loop and could hold up everything else (a player's log); it now runs on its own thread.
 

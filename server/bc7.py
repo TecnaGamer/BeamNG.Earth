@@ -21,6 +21,7 @@ import numpy as np
 import fast
 
 WEIGHTS = np.array([0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64], np.int32)
+DXGI_BC7_UNORM = 98         # (the game's packed data arrays and detail / macro colour: linear)
 DXGI_BC7_UNORM_SRGB = 99
 
 
@@ -99,6 +100,19 @@ def _encode_gpu(chain):
         return None
 
 
+def header(w, h, levels, dxgi=None):
+    """The 148-byte DDS header of a BC7 texture (DX10 header, `levels` mips; dxgi: DXGI_BC7_UNORM_SRGB by default, or
+    DXGI_BC7_UNORM, the game's for its data arrays). Byte for byte the game's own terrain cache files' (2026-11-14)."""
+    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000      # CAPS HEIGHT WIDTH PIXELFORMAT MIPMAPCOUNT LINEARSIZE
+    head = struct.pack("<4s7I", b"DDS ", 124, flags, h, w, max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * 16, 1, levels)
+    head += b"\0" * 44                                                 # reserved
+    head += struct.pack("<2I4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)   # pixel format: FOURCC DX10
+    head += struct.pack("<4I", 0x401008, 0, 0, 0)                     # caps: COMPLEX TEXTURE MIPMAP
+    head += struct.pack("<I", 0)                                       # reserved2
+    head += struct.pack("<5I", DXGI_BC7_UNORM_SRGB if dxgi is None else dxgi, 3, 0, 1, 0)  # format, TEXTURE2D, -, 1, -
+    return head
+
+
 def dds(rgb):
     """A BC7_UNORM_SRGB DDS (DX10 header, the full mip chain) of a square power-of-two RGB image."""
     img = np.asarray(rgb, np.uint8)
@@ -107,11 +121,4 @@ def dds(rgb):
     body = _encode_gpu(chain)
     if body is None:
         body = b"".join(encode(m) for m in chain)
-    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000      # CAPS HEIGHT WIDTH PIXELFORMAT MIPMAPCOUNT LINEARSIZE
-    head = struct.pack("<4s7I", b"DDS ", 124, flags, h, w, max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * 16, 1, len(chain))
-    head += b"\0" * 44                                                 # reserved
-    head += struct.pack("<2I4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)   # pixel format: FOURCC DX10
-    head += struct.pack("<4I", 0x401008, 0, 0, 0)                     # caps: COMPLEX TEXTURE MIPMAP
-    head += struct.pack("<I", 0)                                       # reserved2
-    head += struct.pack("<5I", DXGI_BC7_UNORM_SRGB, 3, 0, 1, 0)       # DX10: format, TEXTURE2D, -, array 1, -
-    return head + body
+    return header(w, h, len(chain)) + body

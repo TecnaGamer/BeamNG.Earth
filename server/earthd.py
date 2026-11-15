@@ -140,6 +140,7 @@ import farfield  # noqa: E402
 import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
+import terrainprefill  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
@@ -1200,8 +1201,10 @@ class Server:
         self.orphan_s = SESSION_ORPHAN_S
         self.heartbeat_at = time.monotonic()
         self._scan_sessions()
-        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), off the start's path
-        threading.Thread(target=terraintexmod.ensure, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
+        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), then every ground
+        # material's packed textures in the game's terrain cache (terrainprefill.py: the game packs a missing one on its
+        # main thread, ~3 s a texture, mid-drive), off the start's path, one paced thread
+        threading.Thread(target=self._ground_textures, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
                          name="terraintex", daemon=True).start()
         self.out_dir = os.path.join(root, self.sid)
         self.cdae_dir = os.path.join(user_dir, *CDAE_ROOT, self.sid.lower())
@@ -1731,6 +1734,12 @@ class Server:
             if getattr(c, "lease", None) is None:
                 out |= c.sessions
         return out
+
+    @staticmethod
+    def _ground_textures(user_dir, game_dir):
+        """(a thread) terraintex.ensure, then terrainprefill.prefill: the squares' PNGs exist before their packs."""
+        terraintexmod.ensure(user_dir, game_dir)
+        terrainprefill.prefill(user_dir, game_dir)
 
     def check_user_dir(self, conn, game_path):
         """The game's own user folder (hello.userPath) against the one this server writes into: a game whose user
@@ -3679,7 +3688,7 @@ class Server:
         geo = getattr(getattr(conn, "roads", None), "geo", False)
         loop = asyncio.get_running_loop()
         for t in tiles:
-            for key in osm_fuel_cells(anchor.frame, t, geo):
+            for key in self.fuel_cells(aid, anchor.frame, t, geo):
                 k = str(key)
                 if k in self.osm_fuel_done:
                     continue
@@ -3701,6 +3710,22 @@ class Server:
         log.debug("osm fuel: cell %s, %d stations in %.2f s", key, len(rows), time.perf_counter() - t0)
         return rows, True
 
+    FUEL_CELLS_MAX = 20000
+
+    def fuel_cells(self, aid, frame, tile, geo):
+        """osm_fuel_cells of a road tile, memoised: every pose asked them for all the tiles round the car, each a
+        conversion to lat/lon on the event loop (a 4.1 s 'event loop stalled' in geotiles.enu_to_geodetic < ...
+        osm_fuel_want < on_pose, 2026-11-14). A geotile's cells are the same for every anchor; an anchor tile's are its
+        anchor's."""
+        memo = self.__dict__.setdefault("_fuel_cells", {})
+        mk = (bool(geo), None if geo else aid, tuple(tile))
+        got = memo.get(mk)
+        if got is None:
+            if len(memo) >= self.FUEL_CELLS_MAX:
+                memo.clear()
+            got = memo[mk] = tuple(osm_fuel_cells(frame, tile, geo))
+        return got
+
     def _osm_fuel_got(self, k, key, fut):
         waiting = self.osm_fuel_wait.pop(k, set())
         try:
@@ -3718,7 +3743,8 @@ class Server:
             # (a geotile's content is the connection's, whatever the anchor: dev's geotiles, kept by the mod across
             # anchors; an anchor's road tiles only while it is the tracker's)
             if anchor is not None and roads is not None and (geo or roads.aid == aid):
-                again = osm_fuel_tiles(anchor.frame, key, roads.sent, geo)
+                k_ = str(key)
+                again = {t for t in roads.sent if any(str(c) == k_ for c in self.fuel_cells(aid, anchor.frame, t, geo))}
                 if again:
                     log.info("osm fuel: cell %s brought %d stations: road tiles %s again", k, len(rows), sorted(again))
                     roads.again(again)
