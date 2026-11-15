@@ -11,8 +11,9 @@ Every REPORT_S the server sends https://earth.tgforever.net/telemetry (the proje
      "dem": {"<source>:<caller>:<zoom>:<outcome>": n}}   (the elevation tiles' raw reads, under the network switch;
                                                          dem.py _note: which module, no position)
 
-A report whose answer did not come is sent again unchanged (its rid and seq) before any new counts, so a collector
-that got it the first time can count it once.
+A report whose answer did not come is sent again unchanged (its rid and seq) before any new counts, for as long as it
+takes, so a collector that got it the first time counts it once (never under another seq); one the collector refuses
+outright (a 4xx but 408 / 429) is dropped.
 
 Nothing else: no place, no position, no IP kept (the collector derives the country from the address and drops it).
 Off with the settings page's Anonymous usage statistics switch (read before every report), BNE_TELEMETRY=off (or
@@ -29,6 +30,7 @@ import platform
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import netfetch
@@ -65,7 +67,8 @@ PROC_KEEP_S = 3600.0        # a dead process's totals file is removed this long 
                             # run's folder this long after its last change)
 DEM_KEYS = 64               # DEM detail keys a report holds at most (the rest summed under "other"; ~3 KB: the
                             # collector takes 16 KB a report)
-PENDING_TRIES = 4           # a report sent this many times unacknowledged: its counts go into a new one instead
+REJECTED = "rejected"       # send()'s answer for a report the collector refused outright (True: taken; False: no
+                            # answer, perhaps taken: sent again unchanged)
 KEYS = {"req": ("requests",), "mb": ("bytes",), "ok": ("s2xx",), "e4xx": ("s4xx",), "e404": ("s404",),
         "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",),
         # our own limits: background requests dropped (deferred), demand ones that waited (and ms) or were refused,
@@ -172,7 +175,6 @@ class Reporter:
         self.rid = secrets.token_hex(8)
         self.seq = 0
         self.pending = None         # (seq, sources, dem) of a report not acknowledged: sent again before new counts
-        self.pending_tries = 0
         self._stop = threading.Event()
 
     def start(self):
@@ -308,22 +310,19 @@ class Reporter:
         if perf and upload:
             body["perf"] = perf
         self._keep_last(body, None if upload else perf)
-        if self.send(body):
-            self.pending, self.pending_tries = None, 0
+        got = self.send(body)
+        if got is REJECTED:
+            # (refused outright, a 400 / 413: the collector took none of it, and the same body would be refused
+            # again: its counts dropped, never put under a new seq)
+            log.debug("telemetry: report %d refused by the collector: its counts dropped", seq)
+            self.pending = None
+        elif got:
+            self.pending = None
         elif self.pending is None:
-            self.pending, self.pending_tries = (seq, send_sources, send_dem), 1     # (sent again, the same seq, next)
-        else:
-            self.pending_tries += 1
-            if self.pending_tries >= PENDING_TRIES:
-                # (refused again and again, a body the collector will not take perhaps: its counts go into the
-                # next new report instead, as before the seq)
-                for host, d in send_sources.items():
-                    c = self.carry.setdefault(host, dict.fromkeys(KEYS, 0))
-                    for k, v in d.items():
-                        c[k] = c.get(k, 0) + v
-                for k, v in send_dem.items():
-                    self.carry_dem[k] = self.carry_dem.get(k, 0) + v
-                self.pending, self.pending_tries = None, 0
+            # (no answer: it may have arrived. Sent again as it is, its rid and seq, until an answer comes: its counts
+            # are never put under another seq, which a collector would count a second time; one body at most, the
+            # new counts wait in carry)
+            self.pending = (seq, send_sources, send_dem)
 
     def _keep_last(self, body, held=None):
         """The report as sent, for the settings page's "What is sent" (LAST_FILE in the cache); held: the performance
@@ -345,6 +344,11 @@ class Reporter:
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=netfetch.windows_ssl_context()) as r:
                 return 200 <= r.status < 300
+        except urllib.error.HTTPError as e:
+            log.debug("telemetry report: HTTP %s", e.code)
+            # (the collector's own answer: a 4xx other than "too soon" (429) / a timeout (408) means it took nothing
+            # and never will; 429, 5xx: not counted now, the same report again later)
+            return REJECTED if 400 <= e.code < 500 and e.code not in (408, 429) else False
         except Exception as e:
             log.debug("telemetry report: %s: %s", type(e).__name__, e)
             return False

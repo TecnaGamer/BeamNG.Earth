@@ -65,17 +65,68 @@ class ReporterTest(unittest.TestCase):
         self.r.report()
         self.assertNotIn("b.example.org", self.sent[-1]["sources"])
 
-    def test_a_report_refused_again_and_again_goes_into_a_new_one(self):
+    def _collector(self, answer):
+        """A collector that counts each (rid, seq) once, as native/serverlist does; answer(n) -> what the sender
+        hears for the n-th report (True, False: no answer, or telemetry.REJECTED)."""
+        seen, total, n = set(), {}, [0]
+
+        def send(body):
+            n[0] += 1
+            got = answer(n[0])
+            if got is not telemetry.REJECTED:          # (taken, whether or not its answer comes back)
+                ident = (body["rid"], body["seq"])
+                if ident not in seen:
+                    seen.add(ident)
+                    for host, d in body["sources"].items():
+                        total[host] = total.get(host, 0) + d["req"]
+                    for k, v in body.get("dem", {}).items():
+                        total[k] = total.get(k, 0) + v
+            self.sent.append(body)
+            return got
+        return send, total
+
+    def test_lost_answers_never_count_a_report_twice(self):
+        # (Codex review of 497c725b: after 4 lost answers the counts went into a new seq, counted again)
+        send, total = self._collector(lambda n: n > 6)           # (every report arrives; six answers lost)
+        self.r.send = send
         self.count("g.example.org", 5)
-        self.ok = False
-        for _ in range(telemetry.PENDING_TRIES):
+        netfetch.note_detail("mapterhorn:test_lost:16:net", 3)
+        for _ in range(7):
             self.r.report()
-        self.assertEqual(len({b["seq"] for b in self.sent}), 1)
-        self.count("g.example.org", 1)
-        self.ok = True
+            self.count("g.example.org", 1)
         self.r.report()
-        self.assertEqual(self.sent[-1]["sources"]["g.example.org"]["req"], 6, "nothing lost")
-        self.assertEqual(self.sent[-1]["seq"], self.sent[0]["seq"] + 1)
+        self.r.report()
+        self.assertEqual(total.get("g.example.org"), 5 + 7, "each request counted exactly once")
+        self.assertEqual(total.get("mapterhorn:test_lost:16:net"), 3)
+        self.assertEqual(len({b["seq"] for b in self.sent[:7]}), 1, "the same report until it is acknowledged")
+
+    def test_a_rejected_report_is_dropped_not_sent_again(self):
+        # (an explicit refusal, a 400 / 413: the collector took nothing, and the same body would be refused forever)
+        send, total = self._collector(lambda n: telemetry.REJECTED if n == 1 else True)
+        self.r.send = send
+        self.count("h.example.org", 5)
+        self.r.report()
+        self.count("h.example.org", 2)
+        self.r.report()
+        self.assertEqual(total.get("h.example.org"), 2, "the refused counts dropped, never inflated")
+        self.assertEqual(self.sent[1]["seq"], self.sent[0]["seq"] + 1)
+
+    def test_post_tells_a_refusal_from_a_lost_answer(self):
+        import io
+        import urllib.error
+
+        def raising(e):
+            def f(*a, **k):
+                raise e
+            return f
+        cases = [(urllib.error.HTTPError(telemetry.URL, 400, "bad", {}, io.BytesIO()), telemetry.REJECTED),
+                 (urllib.error.HTTPError(telemetry.URL, 413, "big", {}, io.BytesIO()), telemetry.REJECTED),
+                 (urllib.error.HTTPError(telemetry.URL, 429, "soon", {}, io.BytesIO()), False),
+                 (urllib.error.HTTPError(telemetry.URL, 502, "gw", {}, io.BytesIO()), False),
+                 (TimeoutError("lost"), False), (OSError("reset"), False)]
+        for e, want in cases:
+            with mock.patch("urllib.request.urlopen", raising(e)):
+                self.assertIs(self.r._post({"id": "x"}), want, e)
 
     def test_other_processes_totals_are_summed_once(self):
         os.makedirs(self.proc)
