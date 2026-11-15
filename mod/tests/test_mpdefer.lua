@@ -312,6 +312,38 @@ T.check(#edited == nE + 1 and edited[#edited].sid == '5-1' and edited[#edited].d
   'near and on: edit B built (the latest), not A')
 sv.enableSpawnQueue = false
 
+-- (Codex review 2) a kept car near and waiting for its ground whose owner teleports far before it spawns: its pose
+-- from the old anchor no longer counts, it stays kept
+ma.setRemote(8, PARIS[1], PARIS[2])
+place[8] = PARIS
+MPVehicleGE.handle(spawnRaw('8-0', 'Hopper', 41, 'pickup'))
+T.check(vehicles['8-0'].bngeHeld, 'a far car kept')
+ma.setRemote(8, 36.51, -118.09)
+place[8] = { 36.51, -118.09 }
+clockT = clockT + ma.SETTLE_S + 0.1
+positionGE.handle(posRaw('8-0', 36.51, -118.09, 36.5005, -118.1005))
+groundOk = false
+tick()
+T.check(vehicles['8-0'].bngeHeld and #md.foci() >= 1, 'near: waits for its ground')
+ma.setRemote(8, PARIS[1], PARIS[2])                  -- (its owner teleports away; its packets settle, none come)
+place[8] = PARIS
+groundOk = true
+local n8 = #spawned
+tick()
+T.check(vehicles['8-0'].bngeHeld and #spawned == n8, 'its owner gone far: still kept (the old near pose not used)')
+T.check(ma.seen('8-0') == nil, 'its pose from the old anchor forgotten')
+-- the same for an edit of a spawned car in the settling window
+ma.setRemote(9, 36.52, -118.08)
+place[9] = { 36.52, -118.08 }
+MPVehicleGE.handle(spawnRaw('9-0', 'Edit Hopper', 42, 'covet'))
+T.check(vehicles['9-0'].isSpawned, 'a near car spawned')
+positionGE.handle(posRaw('9-0', 36.52, -118.08, 36.52, -118.08))
+ma.setRemote(9, PARIS[1], PARIS[2])
+place[9] = PARIS
+local nE9 = #edited
+MPVehicleGE.handle('c:9-0:' .. jsonEncode({ jbm = 'far_edit' }))
+T.check(#edited == nE9 and vehicles['9-0'].bngeHeldEdit, 'an edit in its owner\'s settling window: kept (far by its new place)')
+
 -- BeamMP's own queue: a far car queued before the hook (or while its place was not known) taken in
 vehicles['4-5'] = { serverVehicleString = '4-5', ownerID = 4, ownerName = 'Far Away', isSpawned = false, isLocal = false,
   gameVehicleID = -1, remoteVehID = 99, position = vec3(0, 0, 0),

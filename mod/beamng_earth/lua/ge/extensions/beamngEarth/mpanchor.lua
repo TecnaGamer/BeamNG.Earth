@@ -76,6 +76,13 @@ function M.setRemote(pid, lat, lon)
   local old = remote[pid]
   if old and (old.lat ~= lat or old.lon ~= lon) then
     settleUntil[pid] = M.clock() + M.SETTLE_S
+    -- (its cars' poses were worked out with the old anchor: after a teleport they say nothing of where the cars are
+    -- now, and none come for SETTLE_S; mpdefer would spawn a kept car or build an edit by them. Codex review 2,
+    -- 2026-11-15)
+    local prefix = tostring(pid) .. '-'
+    for sid in pairs(seen) do
+      if sid:sub(1, #prefix) == prefix then seen[sid] = nil end
+    end
   end
   remote[pid] = { lat = lat, lon = lon }
   expired[pid] = nil
