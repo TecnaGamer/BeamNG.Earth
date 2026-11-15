@@ -452,6 +452,27 @@ do
   T.check(N.status().cuts == 1, 'guard: applied, one cut')
   T.check(boundariesBeforeRequest and #boundariesBeforeRequest == 1 and boundariesBeforeRequest[1] == 'c',
     'the applied map publishes its exact boundary before vehicles request the replacement map')
+  do
+    local getter=getObjectByID
+    local queued={}
+    getObjectByID=function(id)
+      if id==4 then return nil end
+      return {isTraffic=id~=2 and 'true' or nil,isPlayerControlled=function()return id==3 end,
+        queueLuaCommand=function(_,cmd)queued[#queued+1]=cmd end}
+    end
+    N.onTrafficVehicleAdded(1)
+    T.check(#queued==1 and queued[1]==N.trafficBoundaryCommand(true),
+      'traffic registration queues first-map protection even before AI mode activates')
+    N.onTrafficVehicleAdded(2);N.onTrafficVehicleAdded(3);N.onTrafficVehicleAdded(4)
+    T.check(#queued==1,'parked cars, registered players and missing vehicles are not installed')
+    N.onVehicleMapmgrUpdate(1)
+    T.check(queued[2]==N.trafficBoundaryCommand(),'map acknowledgements gate installation on traffic mode')
+    N.onTrafficVehicleRemoved(1)
+    T.check(queued[3]:find('extensions.unload',1,true)~=nil,'leaving the traffic pool unloads the helper')
+    N.onTrafficVehicleAdded(1)
+    T.check(queued[4]==queued[1],'a reused pool vehicle receives protection again')
+    getObjectByID=getter
+  end
   cars[101] = { pos = v(95, 2), vel = v(0, 0), dir = v(0, 1) }      -- stopped at the dead end, turned off it
   cars[102] = { pos = v(92, -2), vel = v(-3, 0), dir = v(1, 0) }    -- backing through its turn, nose at the cut
   cars[103] = { pos = v(0, 0), vel = v(0, 0), dir = v(1, 0) }       -- stopped far from any cut (a signal queue)

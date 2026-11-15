@@ -317,7 +317,9 @@ function M.setCuts(ids)
     if not (md and md.graph[id]) then cuts[id] = nil end
   end
   for _, id in ipairs(ids or {}) do cuts[id] = true end
-  -- A newly activated pool vehicle may already have planned before its first GE acknowledgement.
+  -- Clear a plan made before the first protected-map install (e.g. a pool car's
+  -- late acknowledgement). Repeated cuts do not reinstall; replacement maps are
+  -- installed inside setMap below, so normal graph handoffs do not reset the AI.
   if install() and ai.mode == 'traffic' then ai.reset() end
 end
 

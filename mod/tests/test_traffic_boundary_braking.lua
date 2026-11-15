@@ -100,4 +100,13 @@ T.check(#reports==5 and reports[5][2]=='','vehicle reset invalidates a reported 
 plan();B.updateGFX(.1);ai.mode='manual';B.updateGFX(.1)
 T.check(#reports==7 and reports[7][2]=='','switching out of stock traffic clears the report instead of governing the player')
 B.onExtensionUnloaded();package.loaded['beamngEarth/navgraph']=nav0
+-- No per-frame state rebuilding or policy calls once a non-traffic helper is idle.
+B.onReset();ai.mode='manual'
+if jit then jit.off(B.updateGFX,true) end
+collectgarbage('collect');collectgarbage('stop')
+local memory=collectgarbage('count')
+for i=1,10000 do B.updateGFX(.016) end
+local allocated=collectgarbage('count')-memory
+collectgarbage('restart')
+T.check(allocated<1,'10,000 idle updates allocate less than 1 KiB with GC stopped: '..allocated)
 T.done('traffic boundary braking')

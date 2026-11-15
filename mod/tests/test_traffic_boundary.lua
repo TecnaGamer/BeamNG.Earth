@@ -103,8 +103,27 @@ local _,_,_,clipCuts=N.toNodes({nodes={a={0,0,0,3},b={50,0,0,3},c={150,0,0,3}},
 T.check(#clipCuts==1 and clipCuts[1][3]=='b','clipping records the actual cut node identity')
 local received
 beamngEarth_trafficBoundary={setCuts=function(ids) received=ids end}
-assert(loadstring(N.trafficBoundaryCommand({{0,100,'cut"quoted'},{0,200,'next'}})))()
-T.check(received[1]=='cut"quoted' and received[2]=='next','GE hands off exact cut identities with Lua-safe quoting')
+mailbox={'cut"quoted','next'}
+assert(loadstring(N.trafficBoundaryCommand()))()
+T.check(received[1]=='cut"quoted' and received[2]=='next','GE hands off exact cut identities from the mailbox')
+local command=N.trafficBoundaryCommand()
+local many={};for i=1,1000 do many[i]='cut'..i end
+mailbox=many;assert(loadstring(command))()
+T.check(#received==1000 and #command<400,'large cut lists do not grow the per-vehicle Lua command')
+mailbox=nil;received=nil;assert(loadstring(command))()
+T.check(received==nil,'missing metadata leaves the installed cut history intact')
+mailbox='';assert(loadstring(command))()
+T.check(received==nil,'an empty mailbox is not decoded')
+local loads=0;beamngEarth_trafficBoundary=nil
+extensions={load=function()loads=loads+1;beamngEarth_trafficBoundary={setCuts=function(ids)received=ids end}end}
+mailbox={'pool-cut'}
+ai.mode='manual';assert(loadstring(command))()
+ai.mode='disabled';assert(loadstring(command))()
+T.check(loads==0,'map broadcasts do not load the helper in player or parked vehicles')
+assert(loadstring(N.trafficBoundaryCommand(true)))()
+T.check(loads==1 and received[1]=='pool-cut','a registered pool member is protected before traffic mode activates')
+ai.mode='traffic';assert(loadstring(command))()
+T.check(loads==1,'map acknowledgements reuse the traffic helper')
 -- A fresh city spawn can start at a junction just before the server's window
 -- ends. Stock's minimum look-ahead can then select the incoming one-way road.
 do

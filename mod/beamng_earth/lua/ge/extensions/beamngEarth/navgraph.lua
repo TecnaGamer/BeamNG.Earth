@@ -560,7 +560,7 @@ local function apply(b, pre, moved)
   local cutIds = {}
   for _, c in ipairs(cl) do cutIds[#cutIds + 1] = c[3] end
   be:sendToMailbox('beamngEarthTrafficCuts', lpack.encode(cutIds))
-  be:queueAllObjectLua(M.trafficBoundaryCommand(cl) .. '; mapmgr.requestMap()')
+  be:queueAllObjectLua(M.trafficBoundaryCommand() .. '; mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
   local mr = rawget(_G, 'ui_apps_minimap_roads')
@@ -1204,17 +1204,38 @@ function M.currentGraph() return graph end      -- (tests)
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
-function M.trafficBoundaryCommand(list)
-  local ids = {}
-  for _, c in ipairs(list) do ids[#ids + 1] = string.format('%q', c[3]) end
-  return 'if not beamngEarth_trafficBoundary then extensions.load("beamngEarth_trafficBoundary") end; '
-    .. 'beamngEarth_trafficBoundary.setCuts({' .. table.concat(ids, ',') .. '})'
+-- The mailbox is published once per graph; every vehicle compiles the same small
+-- command, independent of the number of cuts. Activation can precede ai.setMode.
+local boundaryCommand = 'if not beamngEarth_trafficBoundary then extensions.load("beamngEarth_trafficBoundary") end; '
+  .. 'local data=obj:getLastMailbox("beamngEarthTrafficCuts"); '
+  .. 'if data and data~="" then beamngEarth_trafficBoundary.setCuts(lpack.decode(data)) end'
+local activeBoundaryCommand = 'if ai.mode=="traffic" then ' .. boundaryCommand .. ' end'
+function M.trafficBoundaryCommand(activating)
+  return activating and boundaryCommand or activeBoundaryCommand
+end
+
+function M.onTrafficVehicleAdded(id)
+  if not graph or not applied then return end
+  local vehicle = getObjectByID(id)
+  -- Stock also registers the player with ignoreAi=true; it is not a traffic car.
+  -- Install before activation, including dormant pool members, so their first
+  -- map and plan are protected even if the GE acknowledgement arrives later.
+  if vehicle and vehicle.isTraffic == 'true' and not vehicle:isPlayerControlled() then
+    vehicle:queueLuaCommand(M.trafficBoundaryCommand(true))
+  end
+end
+
+function M.onTrafficVehicleRemoved(id)
+  local vehicle = getObjectByID(id)
+  if vehicle then
+    vehicle:queueLuaCommand('if beamngEarth_trafficBoundary then extensions.unload("beamngEarth_trafficBoundary") end')
+  end
 end
 
 function M.onVehicleMapmgrUpdate(id)
   if not graph or not applied then return end
   local vehicle = getObjectByID(id)
-  if vehicle then vehicle:queueLuaCommand(M.trafficBoundaryCommand(cuts)) end
+  if vehicle then vehicle:queueLuaCommand(M.trafficBoundaryCommand()) end
 end
 
 function M.onTeleport()
