@@ -19,10 +19,14 @@ pmt_find_many, pmt_ranges).
                          /leaf/<off>_<len> leaf directories as stored (gzip; ~10 KB, ~4,100 tiles each)
 
 Releases never mix: everything an archive caches sits under the MD5 the file list gives for it (a new release is a new
-folder; folders of releases the list no longer names go after a day). A mirror is used for an archive only once its
-copy is checked against it: its size (Content-Range) the list's, and its first 16 KB the same bytes as the cached head;
-every later read from it carries If-Match with the ETag it answered then (a 412: its copy changed: not used for this
-release again). A mirror that fails is skipped for DEMOTE_S.
+folder; folders of releases the list no longer names go after a day), and a mirror's copy is read only once it is
+proven to be that release: its ETag tied to the list's MD5, by the project's binding (bindings_of: the whole copy
+hashed by tools/build_mt_bindings.py, its ETag recorded) or, for a copy stored in one part, by the ETag being the MD5
+itself. Every read of it, the first one too, carries If-Match with that ETag, so no byte of another version is ever
+read (a 412: not used for this release again); its size must be the list's and its first 16 KB the cached head's. Size,
+head and ETag alone prove nothing (Codex review 2026-11-15: two copies with the same head and directories and other
+tile bytes of the same lengths). No proven copy: the archive is not used, the endpoint as before. A mirror that fails
+is skipped for DEMOTE_S.
 
 Tiles go into the same raw cache as the endpoint's (dem/mapterhorn/<z>/<x>/<y>.webp, a missing one a remembered 404):
 everything downstream is unchanged. Tiles next to each other in an archive (its tiles are stored in Hilbert order:
@@ -58,8 +62,36 @@ LEAF_MEM = 256                  # leaf directories kept in memory per process (~
 LOCK_WAIT_S = 30.0              # another process reading the same head / leaf: waited for this long
 PRUNE_AGE_S = 86400.0           # an older release's folder untouched this long goes (main process)
 READ_THREADS = 4
+# The project's binding of the mirrors' copies to Mapterhorn's releases (tools/build_mt_bindings.py hashes each copy
+# whole: its MD5 the file list's, its ETag recorded): a copy is used only through it, If-Match its bound ETag
+# (BNGE_MT_BINDINGS: a URL or a file; default <CDN>/dem/mapterhorn/archives.json). Read again after BIND_MAX_AGE_S; a
+# failed read asked again after BIND_RETRY_S.
+BINDINGS_URL = os.environ.get("BNGE_MT_BINDINGS") or None
+BIND_MAX_AGE_S = 86400.0
+BIND_RETRY_S = 600.0
 _NAME = re.compile(r"^6-(\d+)-(\d+)\.pmtiles$")
 _MD5 = re.compile(r"^[0-9a-f]{32}$")
+
+
+def bindings_of(body):
+    """{archive name: {"md5", "size", "mirrors": {host: ETag}}} of a binding file (tools/build_mt_bindings.py's JSON:
+    {"format": 1, "archives": {name: {"md5", "size", "mirrors": {host: ETag}}}}); malformed entries left out, only the
+    hosts of MIRRORS. Raises ValueError for a file that is not one. Pure."""
+    doc = json.loads(body)
+    if not isinstance(doc, dict) or doc.get("format") != 1 or not isinstance(doc.get("archives"), dict):
+        raise ValueError("not a binding file (format 1)")
+    out = {}
+    for name, e in doc["archives"].items():
+        try:
+            md5, size, mirrors = str(e["md5"]).lower(), int(e["size"]), e["mirrors"]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not _NAME.match(str(name)) or not _MD5.match(md5) or size <= 0 or not isinstance(mirrors, dict):
+            continue
+        m = {h: str(t) for h, t in mirrors.items() if h in HOSTS and isinstance(t, str) and 0 < len(t) <= 128}
+        if m:
+            out[str(name)] = {"md5": md5, "size": size, "mirrors": m}
+    return out
 
 
 class Unavailable(IOError):
@@ -114,9 +146,11 @@ def _read(path):
 class Region:
     """One regional archive (one release: its MD5)."""
 
-    def __init__(self, arcs, name, md5, size):
+    def __init__(self, arcs, name, md5, size, bound):
         self.a, self.name, self.md5, self.size = arcs, name, md5, size
+        self.bound = bound              # {mirror index: the ETag the project's binding ties to this release}
         self.dir = os.path.join(arcs.root, md5)
+        self._bad = set(self._meta()["bad"])    # "<mirror>:<ETag>" copies found not to be it
         self._lock = threading.Lock()
         self._head = None               # (header dict, root directory bytes)
         self._leaves = OrderedDict()
@@ -132,10 +166,15 @@ class Region:
             pass
         return {"name": self.name, "size": self.size, "etag": {}, "bad": []}
 
+    def dead(self):
+        """Has every bound copy been found not to be this release (or failed its If-Match)?"""
+        return all(f"{i}:{t}" in self._bad for i, t in self.bound.items())
+
     def _meta_update(self, fn):
         with self._lock:
             m = self._meta()
             fn(m)
+            self._bad.update(m["bad"])
             _write(os.path.join(self.dir, "meta.json"), json.dumps(m, sort_keys=True).encode())
             return m
 
@@ -166,31 +205,35 @@ class Region:
             raise netfetch.BadResponse(f"{url}: HTTP {res.status}, {len(res.body)} bytes for {start}-{end - 1}", url,
                                        netfetch.host_of(url), status=res.status)
         tag = (res.headers.get("etag") or "").strip()
-        if etag and tag and tag != etag:
-            raise Mismatch(f"{url}: ETag {tag}, checked as {etag}")
+        if etag and tag != etag:
+            raise Mismatch(f"{url}: ETag {tag or 'none'}, bound as {etag}")
         return res.body, tag
 
     def _checked(self, i, kind):
-        """Mirror i's ETag once its copy is checked against this release (its size, its first HEAD_BYTES the cached
-        head's: the head written from it when there is none); None when it differs (marked: not asked again)."""
-        m = self._meta()
-        if str(i) in m["bad"]:
+        """Mirror i's ETag when its copy is the release the file list names: the project's binding (bindings_of,
+        tools/build_mt_bindings.py: the whole file hashed to the list's MD5) ties that ETag to it, and the copy answers
+        with it (its first read already If-Match: no byte of another version is read), its first HEAD_BYTES the cached
+        head's (the head written from it when there is none). None: not bound, or it differs (marked)."""
+        tag = self.bound.get(i)
+        if not tag:
             return None
-        tag = m["etag"].get(str(i))
-        if tag:
+        mark = f"{i}:{tag}"
+        m = self._meta()
+        if mark in m["bad"]:
+            return None
+        if m["etag"].get(str(i)) == tag:
             return tag
         try:
-            head, tag = self._range(i, 0, HEAD_BYTES, kind)
+            head, _ = self._range(i, 0, HEAD_BYTES, kind, tag)
             have = _read(os.path.join(self.dir, "head.bin"))
             if have is not None and have != head:
                 raise Mismatch(f"{MIRRORS[i].format(name=self.name)}: another head than the cached one")
         except Mismatch as e:
             log.info("mtarchive: %s: not used for %s (%s)", HOSTS[i], self.name, e)
-            self._meta_update(lambda mm: mm["bad"].append(str(i)) if str(i) not in mm["bad"] else None)
+            self._meta_update(lambda mm: mm["bad"].append(mark) if mark not in mm["bad"] else None)
             return None
         if have is None:
             _write(os.path.join(self.dir, "head.bin"), head)
-        tag = tag or "-"
         self._meta_update(lambda mm: mm["etag"].__setitem__(str(i), tag))
         return tag
 
@@ -203,12 +246,13 @@ class Region:
                 tag = self._checked(i, kind)
                 if tag is None:
                     continue
-                return self._range(i, start, end, kind, None if tag == "-" else tag)[0]
+                return self._range(i, start, end, kind, tag)[0]
             except netfetch.Deferred:
                 raise
             except Mismatch as e:
                 log.info("mtarchive: %s: not used for %s any more (%s)", HOSTS[i], self.name, e)
-                self._meta_update(lambda mm: (mm["bad"].append(str(i)) if str(i) not in mm["bad"] else None,
+                mark = f"{i}:{self.bound.get(i)}"
+                self._meta_update(lambda mm: (mm["bad"].append(mark) if mark not in mm["bad"] else None,
                                               mm["etag"].pop(str(i), None)))
                 err = e
             except netfetch.FetchError as e:
@@ -336,6 +380,7 @@ class Archives:
         self._lock = threading.Lock()
         self._demoted = {}
         self._pruned = False
+        self._bind = {"at": -1e18, "failed_at": -1e18, "doc": None}
         self.pool = ThreadPoolExecutor(READ_THREADS, thread_name_prefix="dem-archive")
         self.stats = {"reads": 0, "tiles": 0, "missing": 0}
 
@@ -357,15 +402,79 @@ class Archives:
         it = items.get((x >> d, y >> d))
         if it is None or z > it["max_zoom"]:
             return None
+        # (only copies tied to the listed release: the project's binding's ETags; without one, an ETag that is the
+        # listed MD5 itself (a file stored in one part: S3's and R2's ETag is then its MD5), asked for with If-Match,
+        # so another copy answers 412 and is never read. No copy left: the archive is not this module's)
+        b = (self.bindings() or {}).get(it["name"])
+        if b is not None and b["md5"] == it["md5"] and b["size"] == it["size"]:
+            bound = {i: b["mirrors"][h] for i, h in enumerate(HOSTS) if b["mirrors"].get(h)}
+        else:
+            bound = {i: f'"{it["md5"]}"' for i in range(len(HOSTS))}
+        if not bound:
+            return None
         with self._lock:
             r = self._regions.get(it["md5"])
             if r is None:
-                r = self._regions[it["md5"]] = Region(self, it["name"], it["md5"], it["size"])
+                r = self._regions[it["md5"]] = Region(self, it["name"], it["md5"], it["size"], bound)
+            r.bound = bound
             prune = not self._pruned
             self._pruned = True
         if prune:
             self._prune({v["md5"] for v in items.values()})
+        if r.dead():
+            return None
         return r
+
+    def bindings(self):
+        """{archive name: {"md5", "size", "mirrors": {host: ETag}}}: the project's binding of the mirrors' copies to
+        Mapterhorn's releases (BINDINGS_URL, bindings_of), from disk (read again after BIND_MAX_AGE_S) or the net; the
+        older copy on disk while the net cannot give one (its entries stand only where their MD5 is the list's); {}
+        when there is none (the archives are not used: the endpoint as before)."""
+        st = self._bind
+        now = time.monotonic()
+        if st["doc"] is not None and now - st["at"] < BIND_MAX_AGE_S:
+            return st["doc"]
+        with self._lock:
+            if st["doc"] is not None and now - st["at"] < BIND_MAX_AGE_S:
+                return st["doc"]
+            path = os.path.join(self.root, "bindings.json")
+            disk = _read(path)
+            try:
+                age = time.time() - os.path.getmtime(path)
+            except OSError:
+                age = None
+            old = None
+            if disk is not None:
+                try:
+                    old = bindings_of(disk)
+                except ValueError:
+                    old = None
+            if old is not None and age is not None and age < BIND_MAX_AGE_S:
+                st["doc"], st["at"] = old, now - age
+                return old
+            if now - st["failed_at"] >= BIND_RETRY_S:
+                try:
+                    body = self._bindings_body()
+                    doc = bindings_of(body)
+                    _write(path, body)
+                    st["doc"], st["at"] = doc, now
+                    return doc
+                except (netfetch.FetchError, OSError, ValueError) as e:
+                    log.info("mtarchive: no binding of the archives (%s: %s): %s", type(e).__name__, e,
+                             "the copy on disk" if old else "the tile endpoint meanwhile")
+                    st["failed_at"] = now
+            st["doc"], st["at"] = (old or {}), now - BIND_MAX_AGE_S + BIND_RETRY_S
+            return st["doc"]
+
+    def _bindings_body(self):
+        url = BINDINGS_URL
+        if url is None:
+            import imagery as imagerymod
+            url = f"{imagerymod.CDN_BASE}/dem/mapterhorn/archives.json"
+        if not url.startswith(("https://", "http://")):
+            with open(url, "rb") as f:
+                return f.read()
+        return self.fetcher.get(url, kind="demand").body
 
     def _group(self, keys):
         by = {}

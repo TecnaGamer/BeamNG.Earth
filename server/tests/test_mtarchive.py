@@ -62,15 +62,36 @@ class ArchiveFetcher:
         self.items = items                  # download_urls.json items
         self.endpoint_tiles = endpoint_tiles or {}
         self.mirror = {SRC: {}, MTD: {}}    # host -> {"fail", "size", "etag", "head"}
+        # the project's binding (tools/build_mt_bindings.py): every listed archive's copies on both mirrors, by the
+        # ETags these mirrors answer; None: no binding published (404)
+        self.binding = {"format": 1, "archives": {
+            i["name"]: {"md5": i["md5sum"], "size": i["size"], "mirrors": {SRC: f'"{SRC}-etag"', MTD: f'"{MTD}-etag"'}}
+            for i in items if i["name"] != "planet.pmtiles"}}
         self.calls = []
+        self.served = []                    # hosts that answered with data (not a 412 / 404 / failure)
         self.lock = threading.Lock()
 
     def get(self, url, *, kind="demand", headers=None):
         host = netfetch.host_of(url)
+        res = self._get(url, kind, headers, host)
+        if res.status in (200, 206) and host in (SRC, MTD, ENDPOINT) and url != demmod.COVERAGE_URL:
+            with self.lock:
+                self.served.append(host)
+        return res
+
+    def served_hosts(self):
         with self.lock:
-            self.calls.append((host, url, (headers or {}).get("Range"), kind))
+            return set(self.served)
+
+    def _get(self, url, kind, headers, host):
+        with self.lock:
+            self.calls.append((host, url, (headers or {}).get("Range"), kind, (headers or {}).get("If-Match")))
         if url == demmod.COVERAGE_URL:
             return R(200, json.dumps({"version": "test", "items": self.items}).encode(), {})
+        if url.endswith("/dem/mapterhorn/archives.json"):
+            if self.binding is None:
+                raise netfetch.NotFound("404", url, host, status=404)
+            return R(200, json.dumps(self.binding).encode(), {})
         if host == ENDPOINT:
             z, x, y = (int(v) for v in url.rsplit(".", 1)[0].rsplit("/", 3)[1:])
             b = self.endpoint_tiles.get((z, x, y))
@@ -102,7 +123,8 @@ class ArchiveFetcher:
 
     def hosts(self):
         with self.lock:
-            return [c[0] for c in self.calls if c[1] != demmod.COVERAGE_URL]
+            return [c[0] for c in self.calls if c[1] != demmod.COVERAGE_URL
+                    and not c[1].endswith("/dem/mapterhorn/archives.json")]
 
     def reads(self, host=None):
         with self.lock:
@@ -263,6 +285,18 @@ class RealArchiveTest(_Base):
         self.assertEqual(d2._download(demmod.MAPTERHORN, *k), self.ep[k], "a demand load: the endpoint, last")
         self.assertIn(ENDPOINT, f2.hosts())
 
+    def test_no_binding_no_archive(self):
+        f = self.fetcher()
+        f.binding = None                    # (none published: the endpoint, as before)
+        d = self.dem(f, "nb")
+        k = (16, 18530, 24623)
+        self.assertEqual(d._download(demmod.MAPTERHORN, *k), self.ep[k])
+        self.assertEqual(f.served_hosts(), {ENDPOINT}, "multipart copies (ETag not the MD5): 412, never read")
+        self.assertTrue(all(c[1] == demmod.COVERAGE_URL or c[0] == ENDPOINT or c[1].endswith("archives.json")
+                            or c[2] == "bytes=0-16383" for c in f.calls), "only the If-Match head tries")
+        self.assertEqual(d._download(demmod.MAPTERHORN, 16, 18531, 24623, kind="prefetch"),
+                         self.ep[(16, 18531, 24623)], "no copy left: a prefetch asks the endpoint as before")
+
     def test_a_new_release_never_mixes(self):
         k = (16, 18530, 24623)
         f = self.fetcher()
@@ -281,9 +315,8 @@ class RealArchiveTest(_Base):
         self.assertEqual(d2._download(demmod.MAPTERHORN, *k2), self.ep[k2], "from the endpoint")
         self.assertIn(ENDPOINT, f2.hosts(), "the old copies are not used for the new release")
         new = os.path.join(self.tmp.name, "rel", "mtarchive", "b" * 32)
-        self.assertFalse(os.path.exists(os.path.join(new, "head.bin")), "nothing of the old release under the new")
-        with open(os.path.join(new, "meta.json")) as fh:
-            self.assertEqual(sorted(json.load(fh)["bad"]), ["0", "1"])
+        self.assertFalse(os.path.exists(os.path.join(new, "head.bin")), "no copy's byte read for the new release")
+        self.assertEqual(f2.served_hosts(), {ENDPOINT}, "the copies answered 412 to If-Match the new MD5")
 
     def test_a_changed_copy_is_dropped(self):
         f = self.fetcher()
@@ -295,7 +328,7 @@ class RealArchiveTest(_Base):
         self.assertIn(MTD, f.hosts(), "the other mirror, checked against the cached head")
         with open(os.path.join(self.tmp.name, "chg", "mtarchive", self.meta["md5sum"], "meta.json")) as fh:
             m = json.load(fh)
-        self.assertEqual(m["bad"], ["0"])
+        self.assertEqual(m["bad"], [f'0:"{SRC}-etag"'])
         # a mirror whose first 16 KB differ from the cached head: never used
         f3 = self.fetcher()
         f3.mirror[SRC]["fail"] = True
@@ -366,6 +399,86 @@ class WrittenArchiveTest(_Base):
         self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "c", "mapterhorn", "16", "18528", "24620.webp")))
 
 
+class ReleaseIdentityTest(_Base):
+    """A mirror's copy is used only once the project's binding (tools/build_mt_bindings.py: the whole file hashed)
+    ties its ETag to the MD5 the file list names (Codex review of 38d0dbda [high]: size + first 16 KB + ETag did not
+    prove it: two copies with the same head and directories and other tile bytes of the same lengths mixed)."""
+
+    def setUp(self):
+        super().setUp()
+        self.k = (16, 18528, 24620)
+        good = {self.k: terrarium(1), (16, 18529, 24620): terrarium(2)}
+        other = {self.k: terrarium(1)[:-8] + b"\x00" * 8, (16, 18529, 24620): terrarium(2)}   # (same lengths)
+        self.good, self.other = write_pmtiles(good), write_pmtiles(other)
+        self.items = [{"name": "6-18-24.pmtiles", "md5sum": "d" * 32, "size": len(self.good), "min_zoom": 13,
+                       "max_zoom": 16}]
+        self.ep = good
+
+    def fetcher(self):
+        f = ArchiveFetcher({"6-18-24.pmtiles": Sparse(len(self.good), whole=self.good)}, self.items, self.ep)
+        other = Sparse(len(self.other), whole=self.other)
+        get0 = f.get
+
+        def get(url, *, kind="demand", headers=None):     # (the second mirror holds the other copy)
+            if netfetch.host_of(url) == MTD:
+                f.archives = {"6-18-24.pmtiles": other}
+                try:
+                    return get0(url, kind=kind, headers=headers)
+                finally:
+                    f.archives = {"6-18-24.pmtiles": Sparse(len(self.good), whole=self.good)}
+            return get0(url, kind=kind, headers=headers)
+        f.get = get
+        return f
+
+    def test_unbound_copies_never_serve_a_tile(self):
+        f = self.fetcher()
+        d = self.dem(f)
+        d.archives.bindings = lambda: {}                 # (no binding published)
+        f.mirror[SRC]["fail"] = True                     # (the first mirror down: the other copy would answer)
+        self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k], "the endpoint's bytes")
+        self.assertEqual(f.served_hosts(), {ENDPOINT}, "the other copy answered 412, never read")
+
+    def test_a_copy_whose_etag_is_the_listed_md5_binds_itself(self):
+        # (a file stored in one part: its ETag is its MD5, a proof of the release without the project's binding)
+        f = self.fetcher()
+        f.mirror[SRC]["etag"] = '"' + "d" * 32 + '"'
+        d = self.dem(f)
+        d.archives.bindings = lambda: {}
+        self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
+        self.assertEqual(f.served_hosts(), {SRC})
+        self.assertTrue(all(c[4] == '"' + "d" * 32 + '"' for c in f.calls if c[0] == SRC), "every read pinned to it")
+
+    def test_only_the_bound_mirror(self):
+        f = self.fetcher()
+        d = self.dem(f)
+        d.archives.bindings = lambda: {"6-18-24.pmtiles": {"md5": "d" * 32, "size": len(self.good),
+                                                           "mirrors": {SRC: f'"{SRC}-etag"'}}}
+        self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
+        self.assertEqual(set(f.hosts()), {SRC})
+        f.mirror[SRC]["fail"] = True
+        k2 = (16, 18529, 24620)
+        self.assertEqual(d._download(demmod.MAPTERHORN, *k2), self.ep[k2])
+        self.assertNotIn(MTD, f.hosts(), "the unbound copy is never asked")
+        self.assertIn(ENDPOINT, f.hosts())
+
+    def test_a_binding_of_another_release_is_ignored(self):
+        f = self.fetcher()
+        d = self.dem(f)
+        d.archives.bindings = lambda: {"6-18-24.pmtiles": {"md5": "e" * 32, "size": len(self.good),
+                                                           "mirrors": {SRC: f'"{SRC}-etag"', MTD: f'"{MTD}-etag"'}}}
+        self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
+        self.assertEqual(f.served_hosts(), {ENDPOINT})
+
+    def test_a_bound_mirror_answering_another_etag_is_dropped(self):
+        f = self.fetcher()
+        f.mirror[SRC]["etag"] = '"replaced"'
+        d = self.dem(f)
+        d.archives.bindings = lambda: {"6-18-24.pmtiles": {"md5": "d" * 32, "size": len(self.good),
+                                                           "mirrors": {SRC: f'"{SRC}-etag"'}}}
+        self.assertEqual(d._download(demmod.MAPTERHORN, *self.k), self.ep[self.k])
+        self.assertIn(ENDPOINT, f.hosts())
+
+
 class ArchivesOfTest(unittest.TestCase):
     def test_archives_of(self):
         doc = {"items": [{"name": "planet.pmtiles", "md5sum": "0" * 32, "size": 5, "min_zoom": 0, "max_zoom": 12},
@@ -374,6 +487,17 @@ class ArchivesOfTest(unittest.TestCase):
                          {"name": "../x.pmtiles", "md5sum": "a" * 32, "size": 7, "min_zoom": 13, "max_zoom": 16}]}
         self.assertEqual(mtarchive.archives_of(doc),
                          {(18, 24): {"name": "6-18-24.pmtiles", "md5": "a" * 32, "size": 7, "max_zoom": 16}})
+
+    def test_bindings_of(self):
+        doc = {"format": 1, "archives": {
+            "6-18-24.pmtiles": {"md5": "A" * 32, "size": 7, "mirrors": {SRC: '"e1"', "evil.example.org": '"e2"'}},
+            "6-1-2.pmtiles": {"md5": "a" * 32, "size": 7, "mirrors": {"evil.example.org": '"e2"'}},
+            "../x.pmtiles": {"md5": "a" * 32, "size": 7, "mirrors": {SRC: '"e"'}},
+            "6-3-4.pmtiles": {"md5": "nothex", "size": 7, "mirrors": {SRC: '"e"'}}}}
+        self.assertEqual(mtarchive.bindings_of(json.dumps(doc)),
+                         {"6-18-24.pmtiles": {"md5": "a" * 32, "size": 7, "mirrors": {SRC: '"e1"'}}})
+        with self.assertRaises(ValueError):
+            mtarchive.bindings_of(json.dumps({"format": 2, "archives": {}}))
 
     @unittest.skipUnless(fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= mtarchive.NATIVE, "earthfast 304")
     def test_ranges(self):

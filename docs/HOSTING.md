@@ -225,9 +225,17 @@ decision blocks (see below).
   their size and MD5) by HTTP range reads, from Source Cooperative's mirror
   (`https://data.source.coop/mapterhorn/mapterhorn/<name>`) first, then `https://download.mapterhorn.com/<name>`, and
   only when neither can be read from the tile endpoint (`server/mtarchive.py`). Each archive's header and leaf
-  directories are cached under `<cache>/dem/mtarchive/<md5>/` (a new release is a new folder), a mirror's copy is
-  used once its size and first 16 KB match the cached head, and every read carries `If-Match` with that mirror's ETag.
-  Tiles next to each other in the archive come in one read. Nothing to host or build for this.
+  directories are cached under `<cache>/dem/mtarchive/<md5>/` (a new release is a new folder). A mirror's copy is
+  read only once it is proven to be the listed release: its ETag is the list's MD5 itself (a file stored in one
+  part), or the **binding file** below ties that ETag to the MD5; every read carries `If-Match` with it. Tiles next to
+  each other in the archive come in one read.
+- **Binding file:** `dem/mapterhorn/archives.json` on the tile host, built by `tools/build_mt_bindings.py --out
+  archives.json [--names ...] [--max-gb N] [--merge old.json]`: each mirror's copy of each archive read whole (range
+  reads, `If-Match` its ETag) through MD5; a copy whose MD5 is the list's gets its ETag recorded. Without an entry (and
+  for multipart copies, whose ETag is not their MD5) the client uses the tile endpoint for that archive. Every archive
+  once per mirror per Mapterhorn release (8.9 TiB per mirror for release 0.0.13): start with the regions players
+  visit; `--merge` keeps the entries still valid for a new release. `Cache-Control`: a day (`max-age=86400`); the
+  client reads it again daily.
 - **Size:** about the size of the source archive (331 GiB for release 0.0.13).
 
 ### 1 m aerial packs: `aerial/v1/`

@@ -38,6 +38,8 @@ const MAX_SPAN: u64 = 20 * 366 * 86400;
 const MAX_INSTALLS: usize = 200_000;
 const MAX_IDS_PER_IP: usize = 32; // distinct installs one address may report for in an hour
 const MAX_SOURCES: usize = 64;
+const RUN_KEEP_S: u64 = 7 * 86400; // a sender run's last counted report number kept this long after it
+const MAX_RUNS: usize = 400_000; // ... and this many runs at most (the oldest forgotten first)
 const MAX_DEM_IN: usize = 128; // DEM detail keys taken from one report (the client sends at most 64)
 const MAX_DEM_KEYS: usize = 2048; // ... and kept per hour
 pub const K_ANON: u32 = 5; // a country shown publicly from this many players online
@@ -164,8 +166,6 @@ struct Install {
     cc: String,
     game: bool,
     mp: bool,
-    rid: String, // the last counted report's run and number (Report.rid / seq): the same again is not counted twice
-    seq: u64,
 }
 
 pub struct Telemetry {
@@ -179,6 +179,11 @@ pub struct Telemetry {
     last_sample: u64,
     written: HashSet<u64>, // hours already in hours.jsonl
     uniques: crate::uniques::Uniques, // distinct installs per day, ids not kept (uniques.rs)
+    // "<install id>:<run id>" -> (the highest report number counted, unix s): a report sent again (its answer lost) is
+    // not counted again, whichever runs of the install report in between; saved with installs.json (runs.json) so a
+    // restart keeps them (2026-11-15 Codex review: one pair per install, forgotten when another run reported or the
+    // collector restarted)
+    runs: HashMap<String, (u64, u64)>,
 }
 
 fn unix() -> u64 {
@@ -200,7 +205,7 @@ impl Telemetry {
         let uniques = crate::uniques::Uniques::new(dir.clone());
         let mut t = Telemetry { installs: HashMap::new(), per_ip: HashMap::new(), samples: VecDeque::new(),
                                 hours: BTreeMap::new(), dir, last_sample: 0, written: HashSet::new(),
-                                minutes: VecDeque::new(), last_minute: 0, uniques };
+                                minutes: VecDeque::new(), last_minute: 0, uniques, runs: HashMap::new() };
         t.load();
         // (the installs heard from in the last day, restored from installs.json: counted on their days too, the
         // first start's seed)
@@ -232,8 +237,17 @@ impl Telemetry {
                     if ago < ONLINE_TTL {
                         if let Some(seen) = inst_now.checked_sub(ago) {
                             self.installs.insert(x.id, Install { seen, seen_unix: x.at, v: x.v, os: x.os, cc: x.cc,
-                                                                 game: x.game, mp: x.mp, rid: String::new(), seq: 0 });
+                                                                 game: x.game, mp: x.mp });
                         }
+                    }
+                }
+            }
+        }
+        if let Ok(text) = fs::read_to_string(dir.join("runs.json")) {
+            if let Ok(list) = serde_json::from_str::<Vec<(String, u64, u64)>>(&text) {
+                for (k, seq, at) in list {
+                    if now.saturating_sub(at) <= RUN_KEEP_S {
+                        self.runs.insert(k, (seq, at));
                     }
                 }
             }
@@ -287,6 +301,11 @@ impl Telemetry {
         if fs::write(&tmp, serde_json::to_string(&list).unwrap()).is_ok() {
             let _ = fs::rename(&tmp, dir.join("installs.json"));
         }
+        let runs: Vec<(&String, u64, u64)> = self.runs.iter().map(|(k, v)| (k, v.0, v.1)).collect();
+        let tmp = dir.join("runs.json.tmp");
+        if fs::write(&tmp, serde_json::to_string(&runs).unwrap()).is_ok() {
+            let _ = fs::rename(&tmp, dir.join("runs.json"));
+        }
     }
 
     /// An install's (version, OS) as kept from its last report.
@@ -335,8 +354,11 @@ impl Telemetry {
         // a report sent again (its answer lost: the same run and number as the last one counted) is not counted again
         let rid: String = r.rid.clone().unwrap_or_default().chars().filter(|c| c.is_ascii_hexdigit()).take(32).collect();
         let seq = r.seq.unwrap_or(0);
-        let again = !rid.is_empty() && seq > 0
-            && self.installs.get(&id).is_some_and(|i| i.rid == rid && seq <= i.seq);
+        let run_key = format!("{id}:{rid}");
+        let again = !rid.is_empty() && seq > 0 && self.runs.get(&run_key).is_some_and(|r| seq <= r.0);
+        if !rid.is_empty() && seq > 0 && !again {
+            self.runs.insert(run_key, (seq, unix_now));
+        }
         let hour = unix_now / 3600;
         let entry = self.hours.entry(hour).or_insert_with(|| Hour { h: hour, ..Default::default() });
         if let Some(dem) = r.dem.filter(|_| !again) {
@@ -362,12 +384,8 @@ impl Telemetry {
             }
         }
         self.uniques.saw(&id, unix_now);
-        let (rid, seq) = match self.installs.get(&id) {
-            Some(i) if again || (rid.is_empty() && seq == 0) => (i.rid.clone(), i.seq),
-            _ => (rid, seq),
-        };
         self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean_name(r.v, 24), os: clean_name(r.os, 12), cc,
-                                           game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false), rid, seq });
+                                           game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
         let (o, p) = self.online(now);
         let e = self.hours.get_mut(&hour).unwrap();
         e.online = e.online.max(o);
@@ -379,6 +397,13 @@ impl Telemetry {
     pub fn tick(&mut self, now: Instant, unix_now: u64) {
         self.installs.retain(|_, i| now.duration_since(i.seen) < Duration::from_secs(86400));
         self.per_ip.retain(|_, s| now.duration_since(s.0) < Duration::from_secs(3600));
+        self.runs.retain(|_, r| unix_now.saturating_sub(r.1) <= RUN_KEEP_S);
+        if self.runs.len() > MAX_RUNS {
+            let mut ages: Vec<u64> = self.runs.values().map(|r| r.1).collect();
+            ages.sort_unstable();
+            let cut = ages[self.runs.len() - MAX_RUNS];
+            self.runs.retain(|_, r| r.1 > cut);
+        }
         let minute = unix_now / 60 * 60;
         if minute > self.last_minute {
             self.last_minute = minute;
@@ -650,6 +675,42 @@ mod tests {
         t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 4, u).unwrap();
         t.report(ip, "DE".into(), rep(&id, true, 1), now + gap * 5, u).unwrap();
         assert_eq!(t.private(now + gap * 5, u)["sources24h"][src]["req"], 17);
+    }
+
+    #[test]
+    fn interleaved_runs_and_a_collector_restart_count_a_report_once() {
+        // (Codex review of 38d0dbda: one rid / seq per install, so run B's report made run A's resend new again; and a
+        // restart forgot them all)
+        let dir = std::env::temp_dir().join(format!("bnge_tel_runs_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        let id = format!("{:032x}", 78);
+        let mk = |rid: &str, seq: u64, req: u64| {
+            let mut r = rep(&id, true, req);
+            r.rid = Some(rid.into());
+            r.seq = Some(seq);
+            r
+        };
+        let src = "overturemaps-us-west-2.s3.amazonaws.com";
+        let gap = MIN_GAP + Duration::from_secs(1);
+        let u = unix();
+        let now = Instant::now();
+        {
+            let mut t = Telemetry::new(Some(dir.clone()));
+            t.report(ip, "DE".into(), mk("aa", 1, 10), now, u).unwrap();          // run A, its answer lost
+            t.report(ip, "DE".into(), mk("bb", 1, 3), now + gap, u).unwrap();     // run B of the same install
+            t.report(ip, "DE".into(), mk("aa", 1, 10), now + gap * 2, u).unwrap(); // A sends it again
+            t.report(ip, "DE".into(), mk("bb", 1, 3), now + gap * 3, u).unwrap();  // and B
+            assert_eq!(t.private(now + gap * 3, u)["sources24h"][src]["req"], 13);
+            t.tick(now + gap * 3, u + 61);                 // (the minute's save)
+        }
+        let mut t = Telemetry::new(Some(dir.clone()));     // (restarted)
+        let later = Instant::now() + gap * 4;
+        t.report(ip, "DE".into(), mk("aa", 1, 10), later, u + 120).unwrap();       // A's resend after the restart
+        t.report(ip, "DE".into(), mk("aa", 2, 1), later + gap, u + 120).unwrap();  // A's next report: counted
+        let q = t.private(later + gap, u + 120);
+        assert_eq!(q["sources24h"][src]["req"], 1, "after the restart only the new report");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
