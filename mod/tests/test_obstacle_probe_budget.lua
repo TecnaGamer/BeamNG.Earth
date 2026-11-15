@@ -74,6 +74,19 @@ for i=1,10000 do M.updateGFX(.016) end
 local allocation=collectgarbage('count')-memory
 collectgarbage('restart')
 T.check(calls()==before and allocation<1,'an enabled but unbound helper has a plain allocation-free idle return')
+-- A slow, already committed passage may finish its long visibility scan
+-- across 30 Hz frames without repeatedly braking. Overdue work still stops.
+M,B,p,md,ids,step,calls,E=fixture(true);M.PROBE_MAX_S=.03
+E.obj.getVelocity=function()return {length=function()return 3 end}end
+E.beamngEarth_oncomingPass={SPEED=3,PROBE_MAX_S=.2,active=function()return true end,status=function()return {}end}
+for _=1,4 do step()end
+T.check(M.status().probePending and B.routeSpeed==30,'a slow committed pass gets a bounded longer scan window')
+for _=1,9 do step()end
+T.check(B.routeSpeed==0,'the slow-pass extension still stops when its own bounded window expires')
+M,B,p,md,ids,step,calls,E=fixture(true);M.PROBE_MAX_S=.03
+E.beamngEarth_oncomingPass={SPEED=3,PROBE_MAX_S=.2,active=function()return true end,status=function()return {}end}
+step();step()
+T.check(B.routeSpeed==0,'an active passing helper cannot extend the deadline at ordinary road speeds')
 -- Loading the signal module does not make a cancelled/disabled obstacle
 -- controller alternate between 'idle' and 'disabled' and rerun cleanup each frame.
 M,B,p,md,ids,step,calls,E=fixture(false);M.reset();M.setEnabled(false)

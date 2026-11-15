@@ -115,6 +115,7 @@ export const settingsSchema = [
     name: "Performance",
     intro: "How much of your CPU and memory the BeamNG.Earth app may use to build the world around you.",
     items: [
+      { id: "autodriveOncomingPass", type: "bool", default: false, name: "Autodrive opposing-lane passing (experimental)", desc: "Allows passing an obstruction through a clear opposing lane when obstacle avoidance is enabled. Adds visibility and traffic checks. Road markings are not checked, so it can cross solid lines." },
       { id: "autodriveObstacles", type: "bool", default: false, name: "Autodrive obstacle avoidance (experimental)", desc: "Checks for static obstacles, brakes and tries clear lanes in your direction. Extra road sensing costs CPU time. Off uses normal AI behavior; traffic-light braking stays independent." },
       { id: "serverCores", type: "select", default: "auto", name: "World server CPU cores", desc: "The CPU cores the app builds the map on; the game keeps the others. Auto: a quarter of your cores (one on a 4-core CPU). On an older CPU where the map loads slowly or pauses while you drive, 2 can load it much faster, at a few frames per second. The app never takes more than half your cores.",
         note: "Takes effect the next time you start BeamNG.Earth.",

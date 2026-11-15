@@ -385,7 +385,9 @@ function M.setEnabled(on)
   if not M.enabled then
     reportGap(false)
     work,checkWork=nil,nil
-    local passing = goal ~= nil
+    local oncoming=beamngEarth_oncomingPass
+    local passing = goal ~= nil or (oncoming and oncoming.active())
+    if oncoming then oncoming.reset() end
     goal, lastProbe = nil, nil
     if signalResult then
       limit(signalResult.cap,signalResult.legal);phase,reason='signal',signalResult.reason
@@ -414,6 +416,9 @@ M.onReset=M.reset
 function M.onExtensionUnloaded()
   M.reset()
   reportGap(false)
+  if beamngEarth_oncomingPass and beamngEarth_oncomingPass.active() then
+    beamngEarth_oncomingPass.reset();ai.setMode('stop')
+  end
 end
 
 function M.bindPath(ids,md,started)
@@ -461,8 +466,9 @@ local function trafficObjects()
 end
 
 local function probe()
+  local oncoming=beamngEarth_oncomingPass
   local function unavailable()
-    return nil
+    return oncoming and oncoming.active() and {cap=0,phase='waiting',reason='passing road unavailable'} or nil
   end
   local p,h=obj:getFrontPosition(),obj:getDirectionVector()
   local a,b=mapmgr.findBestRoad(p,h)
@@ -498,6 +504,9 @@ local function probe()
   lastProbe.hit=hit and hit.distance
   local legal=bound.graph[a][b].speedLimit
   local ego={id=obj:getId(),width=width,length=length,height=obj:getInitialHeight(),surface=surface}
+  if oncoming and oncoming.active() then
+    return oncoming.update(M,bound,path,c,hit,ego,trafficObjects(),cast,speed,legal,a,b)
+  end
   local distance=goal and M.alongRoute(c,goal.point)
   if goal and (not distance or distance < -length-1) then goal=nil end
   if goal then
@@ -540,6 +549,15 @@ local function probe()
       return {cap=4,legal=legal,phase='passing'}
     end
   end
+  if not goal then
+    if not oncoming and extensions and extensions.load then
+      extensions.load('beamngEarth_oncomingPass');oncoming=beamngEarth_oncomingPass
+    end
+    if oncoming then
+      local result=oncoming.update(M,bound,path,c,hit,ego,objects,cast,speed,legal,a,b)
+      if result then return result end
+    end
+  end
   return {cap=goal and 0 or normalCap,legal=legal,phase='blocked',reason='no clear legal corridor',brakeDistance=distance}
 end
 
@@ -577,7 +595,14 @@ local function advanceProbe(dt)
   if current.timer then current.timer:stopAndReset() end
   local ok,result=coroutine.resume(current.thread)
   if ok and coroutine.status(current.thread)~='dead' then
-    if current.age>=M.PROBE_MAX_S then limit(0);phase,reason='probing','probe budget exceeded' end
+    local deadline=M.PROBE_MAX_S
+    local pass=beamngEarth_oncomingPass
+    -- A committed 3 m/s passage moves at most 1.75 m in this window, inside
+    -- its checked stopping margin. Keep the shorter deadline at road speeds.
+    if pass and pass.active() and obj:getVelocity():length()<=pass.SPEED+.5 then
+      deadline=math.max(deadline,pass.PROBE_MAX_S or deadline)
+    end
+    if current.age>=deadline then limit(0);phase,reason='probing','probe budget exceeded' end
     return true
   end
   work,checkWork=nil,nil
@@ -590,10 +615,10 @@ function M.updateGFX(dt)
     if not path or not bound or not beamngEarth_trafficSignals then return end
   end
   if not path or not bound or not mapmgr or mapmgr.mapData~=bound or not ai or ai.mode~='manual' then
-    if ai and ai.mode~='manual' and beamngEarth_oncomingPass and not beamngEarth_oncomingPass.suspended() then
-      beamngEarth_oncomingPass.reset()
-    end
     if work or policy or goal or signalResult or waitReported or phase~='idle' then
+      if ai and ai.mode~='manual' and beamngEarth_oncomingPass and not beamngEarth_oncomingPass.suspended() then
+        beamngEarth_oncomingPass.reset()
+      end
       work,checkWork=nil,nil
       release();goal=nil;signalResult=nil;phase='idle'
     end
@@ -649,7 +674,8 @@ end
 
 function M.status()
   return {enabled=M.enabled,phase=phase,reason=reason,holding=applied~=nil,speedCap=applied,detections=detections,passes=passes,
-    bound=bound~=nil,probe=lastProbe,probePending=work~=nil,signal=signalResult,waitingForSignal=waitReported}
+    bound=bound~=nil,probe=lastProbe,probePending=work~=nil,oncoming=beamngEarth_oncomingPass and beamngEarth_oncomingPass.status(),
+    signal=signalResult,waitingForSignal=waitReported}
 end
 
 return M
