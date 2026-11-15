@@ -33,6 +33,7 @@ local installed = false
 local far = {}                           -- [serverVehicleString] = true: its last position was beyond FAR_M (isFar)
 local wasFar = {}                        -- [serverVehicleString] = true: it was beyond FAR_M at some time (wasFar)
 local lastPos = {}                       -- [serverVehicleString] = { x, y, z }: its latest position placed (lastPos)
+local seen = {}                          -- [serverVehicleString] = its latest position in our frame, far or near (seen)
 
 local function isMPSession()
   return MPCoreNetwork ~= nil and MPCoreNetwork.isMPSession ~= nil and MPCoreNetwork.isMPSession()
@@ -95,7 +96,7 @@ function M.retainRemote(players)
       expired[pid] = true
     end
   end
-  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince }) do
+  for _, records in ipairs({ far, wasFar, lastPos, lastAt, nearSince, seen }) do
     for sid in pairs(records) do
       local pid = tostring(sid):match('^(%d+)%-')
       if not players[pid] then records[sid] = nil end
@@ -117,9 +118,27 @@ function M.lastPos(sid)
   if p then return p[1], p[2], p[3] end
 end
 
+-- The latest position packet of this remote car converted into our frame, the far ones too (mpdefer.lua: is a car
+-- whose spawn is kept near yet?): { t (M.clock), x, y, z, rot, d (m from our origin) }; nil: none since our anchor's
+-- last change (a position worked out in our old frame says nothing in the new one).
+function M.seen(sid)
+  local s = seen[sid]
+  if s and s.la == myLat and s.lo == myLon then return s end
+end
+-- Our own anchor (announceOwn): lat, lon (nil before the first).
+function M.own() return myLat, myLon end
+-- (lat, lon) on the ground in our frame: x, y, z (nil: our anchor not known yet).
+local ownAnchor = nil
+function M.toOurs(lat, lon)
+  if not myLat or not tonumber(lat) or not tonumber(lon) then return nil end
+  if not ownAnchor or ownAnchor.lat ~= myLat or ownAnchor.lon ~= myLon then ownAnchor = geodesy.newAnchor(myLat, myLon) end
+  return ownAnchor:geodeticToWorld(lat, lon, 0)
+end
+
 -- (the session's end) the remote anchors forgotten
 function M.reset()
   remote, expired, xfCache, far, wasFar, lastPos, settleUntil, lastAt, nearSince = {}, {}, {}, {}, {}, {}, {}, {}, {}
+  seen = {}
 end
 
 -- A log line once per car and kind every NOTE_S (the session's log tells what happened to a car before an instability)
@@ -205,6 +224,21 @@ function M.sanitize(decoded)
   return true, false
 end
 
+-- (a packet let through or found far: where the car is in our frame, for seen; its record reused, packets come ~30 a s)
+local function noteSeen(sid, p, r, now)
+  if not (p and tonumber(p[1]) and tonumber(p[2])) then return end
+  local s = seen[sid]
+  if not s then s = {}; seen[sid] = s end
+  s.t, s.x, s.y, s.z, s.la, s.lo = now, p[1], p[2], tonumber(p[3]) or 0, myLat, myLon
+  s.d = math.sqrt(p[1] * p[1] + p[2] * p[2])
+  if type(r) == 'table' then
+    s.rot = s.rot or {}
+    s.rot[1], s.rot[2], s.rot[3], s.rot[4] = r[1], r[2], r[3], r[4]
+  else
+    s.rot = nil
+  end
+end
+
 -- Wraps positionGE.handle: corrects a 'p' (position) packet's embedded JSON before handing the
 -- (possibly rewritten) raw string to the original handle, which then runs completely unmodified.
 local function wrapHandle(original)
@@ -253,6 +287,7 @@ local function wrapHandle(original)
     end
     local p = decoded.pos
     if p and tonumber(p[1]) and tonumber(p[2]) and p[1] * p[1] + p[2] * p[2] > M.FAR_M * M.FAR_M then
+      noteSeen(serverVehicleID, p, decoded.rot, now)
       if not far[serverVehicleID] then
         log('I', 'beamngEarth', string.format('BeamMP: car %s far (%.0f km): its packets dropped', serverVehicleID,
           math.sqrt(p[1] * p[1] + p[2] * p[2]) / 1000))
@@ -276,6 +311,7 @@ local function wrapHandle(original)
     end
     far[serverVehicleID] = nil
     if p then lastPos[serverVehicleID], lastAt[serverVehicleID] = p, now end
+    noteSeen(serverVehicleID, p, decoded.rot, now)
     local ok2, reencoded = pcall(jsonEncode, decoded)
     if not ok2 then return original(rawData) end
     return original(code .. ':' .. serverVehicleID .. ':' .. reencoded)

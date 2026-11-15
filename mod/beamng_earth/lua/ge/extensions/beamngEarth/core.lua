@@ -2398,6 +2398,20 @@ local function updateBeamMP(dt)
     local ok, err = pcall(mpsession.update, dt, st.anchor, st.player or st.cam)
     if not ok then mpsessionBroken = true; log('E', 'beamngEarth', 'BeamMP session: ' .. tostring(err)) end
   end
+  -- far players' cars not spawned here (mpdefer.lua; from the level's start, before the world server is up: the cars
+  -- already on the server come as we join). An error: everything kept handed back, BeamMP's own behaviour again.
+  if st.inOurLevel and beammp.inSession() then
+    local md = require('beamngEarth/mpdefer')
+    if not md.broken then
+      local ok, err = pcall(md.update, dt)
+      if not ok then
+        md.broken = true
+        log('E', 'beamngEarth', 'BeamMP far cars: ' .. tostring(err))
+        pcall(md.reset)
+        pcall(md.handBack, 'handed back (an error)')
+      end
+    end
+  end
 end
 
 -- Hitch attribution (the user, 2026-10-14: "there's definitely some performance issues sometimes"): each frame
