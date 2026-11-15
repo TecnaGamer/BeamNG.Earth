@@ -24,6 +24,7 @@ import time
 import numpy as np
 
 import dmath
+import dnp
 
 log = logging.getLogger("earthd.deckspans")
 
@@ -165,9 +166,9 @@ def line_dist(xy, x, y):
     """m from (x, y) to the polyline xy (k >= 2, 2)."""
     a, b = xy[:-1], xy[1:]
     ab = b - a
-    L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+    L2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip(((x - a[:, 0]) * ab[:, 0] + (y - a[:, 1]) * ab[:, 1]) / L2, 0.0, 1.0)
-    return float(np.min(np.hypot(a[:, 0] + t * ab[:, 0] - x, a[:, 1] + t * ab[:, 1] - y)))
+    return float(np.min(dnp.hypot(a[:, 0] + t * ab[:, 0] - x, a[:, 1] + t * ab[:, 1] - y)))
 
 
 def message(aid, x, y, pieces, radius=RADIUS_M):
