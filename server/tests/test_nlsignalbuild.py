@@ -62,6 +62,16 @@ class LiveNativeBuild(unittest.TestCase):
         self.assertEqual(result['groups'],previous)
         self.assertTrue(result['statuses'][0]['pending'])
 
+    def test_rejected_native_mount_preserves_stock_controller_geometry(self):
+        original=dict(j='j',kind='signal',app=[['w',-12.,0.,0.,1.,0.,1,2.,3.,4.,90.]])
+        self.g['signals']=[original]
+        with patch.object(assembly,'junction',return_value=dict(ready=False,retryable=False,reason='lane_surface_unavailable')):
+            result=self.build()
+        written=json.loads((self.root/Path(result['graphPath']).name).read_text())
+        self.assertEqual(written['signals'],[original])
+        self.assertEqual(json.loads(result['signalSignature']),[original])
+        self.assertEqual(result['owners'],[])
+
     def test_absent_public_data_does_not_guess_or_read_surfaces(self):
         self.source.snapshot=lambda bounds:dict(built=None,complete=False,records=[])
         (self.root/'graph.json').write_text(json.dumps(self.g))

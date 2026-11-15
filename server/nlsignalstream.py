@@ -37,6 +37,11 @@ class Tracker:
         self.files = deque()
         self.stats = dict(builds=0, pending=0, failures=0, accepted=0)
 
+    def waiting(self, reason):
+        if self.stats.get('waiting') != reason:
+            self.stats['waiting'] = reason
+            log.info('native signals waiting: %s', reason)
+
     def close(self):
         self.closed = True
         self.state.reset()
@@ -70,16 +75,22 @@ class Tracker:
             self.state.reset(True, aid)
             self.signature = self.graph_signature = None
             self.groups = {}
-        if self.closed or not getattr(conn.roads, 'geo', False) or conn.pending_block is not None:
+        # A prepared next block does not invalidate the committed block. Its
+        # exact client terrain token below determines which geometry is usable.
+        if self.closed or not getattr(conn.roads, 'geo', False):
+            self.waiting('closed' if self.closed else 'road_mode')
             return
         nav = conn.nav
         path = getattr(nav, 'path', None)
         if nav.aid != aid or not path or conn.block is None:
+            self.waiting('graph_or_block')
             return
         centre = (conn.block.cx, conn.block.cy)
         info = conn.s.hm.get((aid, *centre))
         if not info or not info.get('ter') or msg.get('nlGround') != info['ter']:
+            self.waiting('terrain_version: server=%s client=%s' % ((info or {}).get('ter'),msg.get('nlGround')))
             return
+        self.waiting('planning')
         frame = conn.s.anchors[aid].frame
         # Copy only fully sent content + this anchor's skin. Retry markers are
         # not proof of coverage. The worker never traverses a mutable tracker.
@@ -137,10 +148,20 @@ class Tracker:
         try:
             result = future.result()
             if result.get('pending'):
+                self.waiting(result.get('reason','context_pending'))
                 self.stats['pending'] += 1
                 self.retry_at = time.monotonic() + 5.
                 return
             self.groups = result['groups']
+            reasons = {}
+            for status in result['statuses']:
+                for reason in status.get('reasons', ()):
+                    reasons[reason] = reasons.get(reason, 0) + 1
+            summary = (len(result['owners']), tuple(sorted(reasons.items())))
+            if self.stats.get('placement') != summary:
+                self.stats['placement'] = summary
+                log.info('native signals placement: %s approaches; rejected groups: %s',
+                         summary[0], reasons)
             packet = self.state.offer(ticket, result['parts'], result['owners'])
             if packet is None:
                 return

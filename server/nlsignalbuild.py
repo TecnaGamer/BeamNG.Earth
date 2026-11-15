@@ -69,7 +69,11 @@ def build(root, vfs, aid, frame, terrain, centre, tiles, graph_path, source, cat
         if signal is not None:
             for app, stop in zip(signal['app'], group['stops']):
                 app[1:4] = stop
-    graph['signals'] = plan['signals']
+    # Unbuilt junctions still use their original stock approaches and identities.
+    # Native lane ordering/stops only become authoritative with a complete mount.
+    signals = [row for row in graph.get('signals', []) if row['j'] not in ready]
+    signals.extend(row for row in plan['signals'] if row['j'] in ready)
+    graph['signals'] = signals
     graph['nlNative'] = True
     # A separate graph file never races a stock connection's shared navgraph.
     name = f'nl_{name_key}_{Path(graph_path).name}'
@@ -79,4 +83,4 @@ def build(root, vfs, aid, frame, terrain, centre, tiles, graph_path, source, cat
         f.write(dumps(graph))
     staging.replace(tmp, str(path))
     return dict(parts=parts, owners=owners, statuses=status, context=context['built'],
-                graphPath=f'{vfs}/{name}', signalSignature=dumps(plan['signals']),groups=ready)
+                graphPath=f'{vfs}/{name}', signalSignature=dumps(signals),groups=ready)

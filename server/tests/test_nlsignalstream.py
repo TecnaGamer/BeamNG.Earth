@@ -4,12 +4,25 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from nlsignalstream import Tracker
 
 
 class ConnectionOwnership(unittest.TestCase):
+    def test_preparing_next_block_does_not_block_committed_terrain(self):
+        t=Tracker();t.source=SimpleNamespace(known=lambda:'known');t.future=object()
+        conn=SimpleNamespace(active=1,pending_block=object(),block=SimpleNamespace(cx=0.,cy=0.),
+            roads=SimpleNamespace(geo=True,sent=set(),skins=set(),building=set(),info={},skin_h={}),
+            nav=SimpleNamespace(aid=1,path='/temp/graph.json',serial=1,ready_serial=1),
+            s=SimpleNamespace(hm={(1,0.,0.):dict(ter='committed.ter')},
+                anchors={1:SimpleNamespace(frame=object())}))
+        with patch('nlsignalstream.geotiles.tiles_near',return_value=[]):
+            t.on_pose(conn,dict(nlSignals=1,nlGround='committed.ter'))
+        self.assertEqual(t.stats['waiting'],'planning')
+        self.assertIsNotNone(t.signature)
+
     def test_disabled_pose_creates_no_worker_or_source(self):
         t=Tracker();t.on_pose(SimpleNamespace(active=1),{})
         self.assertIsNone(t.source);self.assertIsNone(t.pool)
