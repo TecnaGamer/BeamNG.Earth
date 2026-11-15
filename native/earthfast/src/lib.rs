@@ -277,14 +277,16 @@ fn clear_of(segs: PyReadonlyArray2<f64>, half: PyReadonlyArray1<f64>, owner: PyR
 /// roads._dual_side: (share of a's ~10 m samples with b beside it gap_min..gap_max apart and parallel within
 /// cos_par, mean side of b over those: +1 left of a's direction, -1 right). a (k, 2), b (m, 2).
 #[pyfunction]
-fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64)
+#[pyo3(signature = (a, b, gap_min, gap_max, cos_par, require_overlap=false))]
+fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64,
+             require_overlap: bool)
              -> (f64, f64) {
-    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par)
+    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par, require_overlap)
 }
 
 /// dual_side on views (roads' spec kernels call it in Rust).
 pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarray::ArrayView2<f64>, gap_min: f64,
-                             gap_max: f64, cos_par: f64) -> (f64, f64) {
+                             gap_max: f64, cos_par: f64, require_overlap: bool) -> (f64, f64) {
     let ka = a.nrows();
     let kb = b.nrows();
     if ka < 2 || kb < 2 {
@@ -335,7 +337,14 @@ pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarr
         let (tax, tay) = (seg[k][0] / lk, seg[k][1] / lk);
         let (mut best, mut bj, mut nx, mut ny) = (f64::INFINITY, 0usize, 0.0, 0.0);
         for j in 0..mb {
-            let f = (((qx - b[[j, 0]]) * bs[j][0] + (qy - b[[j, 1]]) * bs[j][1]) / bl2[j]).clamp(0.0, 1.0);
+            let f = ((qx - b[[j, 0]]) * bs[j][0] + (qy - b[[j, 1]]) * bs[j][1]) / bl2[j];
+            // Navigation must not infer a one-way road from a neighbour's end cap.
+            // Physical road specifications retain their existing width/median rules.
+            // A normal projection at an open endpoint can round just outside it.
+            if require_overlap && ((j == 0 && f < -1e-12) || (j == mb - 1 && f > 1.0 + 1e-12)) {
+                continue;
+            }
+            let f = f.clamp(0.0, 1.0);
             let (px, py) = (b[[j, 0]] + bs[j][0] * f, b[[j, 1]] + bs[j][1] * f);
             let d = (px - qx).dhypot(py - qy);    // (as np.hypot: ties at a shared vertex pick the same segment)
             if d < best {
@@ -6444,6 +6453,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
     // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
     buildcolours::register(m)?;
-    m.add("VERSION", 301)?;
+    // 302: opt-in longitudinal overlap for navigation's inferred carriageway directions.
+    m.add("VERSION", 302)?;
     Ok(())
 }
