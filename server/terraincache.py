@@ -12,6 +12,10 @@ source paths of the packed texture, concatenated. The base-colour texture packs 
 and A from aoBaseTex, so its key is xxh64(base + base + base + ao) (paths exactly as the material's fields,
 VFS form), printed as 16 hex digits; the files on disk are lower case.
 
+The same rule keys every packed texture (2026-11-14, 36 of the game's own files matched): a slot's colour is
+xxh64(colour * 3 + ao), its pack xxh64(roughness + height + normal + normal); terrainprefill.py writes those of every
+ground material at the server's start.
+
 base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value) writes that cache file for a photo (BC7 sRGB with its
 mips, as the game's own: DXGI 99, bc7.py), after the photo itself exists. Returns its path.
 """

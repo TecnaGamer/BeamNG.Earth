@@ -253,6 +253,58 @@ class VegetationTest(unittest.TestCase):
         self.assertGreater(int((veg.Vegetation(md, None).cell(KEY).kind == veg.KIND_TREE).sum()), 0, "on grass: kept")
 
 
+class LatitudeTest(unittest.TestCase):
+    """The canopy raster and the scatter grids are in Web Mercator units: the same pixels cover cos(lat) as much ground.
+    A flat forest at 69 N had ~4.5x the trees per km2 of the same forest at 39 N, and its flat crowns' tops stood on a
+    lattice (a player's Lapland report, 2026-11-14). Now about the same density, and no lattice."""
+
+    @staticmethod
+    def density(lat, lon, dx):
+        key = mapcells.cell_of(lat, lon)
+        lon0, lat0, lon1, lat1 = key.bounds()
+        cx, cy = veg._to3857((lon0 + lon1) / 2, (lat0 + lat1) / 2)
+        n = 360                                                   # (a window of the cell: the real raster's pixels)
+        x0, y1 = cx - n * dx / 2, cy + n * dx / 2
+        h = np.full((n, n), 12, np.uint8)                         # one flat 12 m forest (an upsampled canopy's plateau)
+
+        class Trees(Raster):
+            def sample(self, lon, lat):
+                return np.full(np.shape(lon), 10, np.uint8)      # WorldCover tree cover
+
+        layers = {"canopy": Raster(h, x0, y1, dx, nodata=255), "landcover": Trees(None, 0, 0, 1),
+                  "buildings": Feats(3, []), "roads": Feats(2, []), "water": Feats(3, [])}
+        cd = SimpleNamespace(bounds=key.bounds(), layers=layers)
+
+        class MD:
+            release = "t"
+
+            def cell(self, k, layers=None, kind="demand"):
+                if tuple(k)[1:] == (key.x, key.y):
+                    return cd
+                return SimpleNamespace(bounds=None, layers={"buildings": None, "roads": None, "water": None})
+        it = veg.Vegetation(MD(), None).cell(key)
+        trees = it.take(it.kind == veg.KIND_TREE)
+        km2 = (n * dx * np.cos(np.radians((lat0 + lat1) / 2)) / 1000.0) ** 2   # the window's ground area
+        return len(trees) / km2, trees
+
+    def test_same_density_at_69_n_as_at_39_n(self):
+        dx = 1.194                                                # (the z17 canopy raster's pixel: the same at both)
+        d39, _ = self.density(39.29, -76.58, dx)
+        d69, trees = self.density(69.0127, 28.6714, dx)
+        self.assertGreater(d39, 0)
+        self.assertLess(d69 / d39, 1.6, (d39, d69))
+        self.assertGreater(d69 / d39, 0.6, (d39, d69))
+        # no lattice: the tops of a flat crown were kept in the raster's order, rows and columns at one spacing
+        lat = np.asarray(trees.lat)
+        rows = np.unique(np.round((lat - lat.min()) * 1e5).astype(np.int64))
+        self.assertGreater(len(rows), len(lat) ** 0.5 * 1.5, "tops on few rows: a lattice")
+
+    def test_merc_k(self):
+        self.assertAlmostEqual(veg._merc_k(veg.MERC_REF_LAT), 1.0, places=9)
+        self.assertAlmostEqual(veg._merc_k(69.0), 2.137, places=2)
+        self.assertAlmostEqual(veg._merc_k(-69.0), veg._merc_k(69.0), places=12)
+
+
 class RegionalTest(unittest.TestCase):
     def g(self, group, h, lat, lon, lcls, u=0.9):
         return int(veg.regional(np.array([group]), np.array([h]), np.array([lat]), np.array([lon]),

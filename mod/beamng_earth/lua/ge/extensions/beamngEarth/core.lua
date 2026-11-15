@@ -1585,8 +1585,9 @@ local function onMessage(msg)
       elseif not st.anchor then defaultStart() end
     end
   elseif t == 'route_result' then
+    -- (legs and steps too: gps.lua reads them for the API's gpsRoute().legs / .steps; GitHub #1259)
     if msg.id then routeResults[msg.id] = { points = msg.points or {}, dist = msg.dist, dur = msg.dur, error = msg.error,
-      elev = msg.elev } end
+      elev = msg.elev, legs = msg.legs, steps = msg.steps } end
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
@@ -3067,7 +3068,12 @@ local function onPreRender(dtReal, dtSim)
       and M._pacer.active(now / 1000)
     if on then
       local wait = M._pacer.step(now - M._paceLast)
-      if wait > 0 then pcall(M._pacer.sleep, wait); now = M._paceClock() end
+      if wait > 0 then
+        pcall(M._pacer.sleep, wait)
+        local t = M._paceClock()
+        M._pacer.slept(wait, t - now)     -- (a coarse system timer: every sleep overshoots; pacing then stops)
+        now = t
+      end
     else
       M._pacer.reset()
     end
@@ -3443,7 +3449,7 @@ function M.status()
     terrainLatency = st.terrainLatency, horizon = horizonOn, farRadius = farRadius,
     visibleDistance = st.visibleDistance or VISIBLE_DISTANCE, banner = banner.current().id, guard = st.guard.mode,
     sessions = roads.allHeldSessions(), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
-    trafficAdaptive = navgraph.trafficStatus() })
+    trafficAdaptive = navgraph.trafficStatus(), pacer = M._pacer.stats() })
 end
 
 -- The connection state line (the settings page shows it): the banner's { id, level, text } (text

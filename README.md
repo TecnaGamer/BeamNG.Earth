@@ -62,7 +62,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
-  mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
+  mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. The colours
+  mapped in OpenStreetMap (building and roof colours) are used where Overture has none, and pre-war towers are built
+  in masonry from their mapped construction years. Buildings show
   out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; the tallest towers (200 ft and
   up) go on to about 12 miles (22 at Far, the horizon at Max); bridges show out to about 3 miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
@@ -197,8 +199,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
   air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
 - Measured roofs from national LoD2 building models: each building's roof shape (flat, gabled, hipped, half-hipped,
-  mansard, pyramidal, ...), height and roof rise fill what the map does not say, in Germany (the states' models) and,
-  once their data is published, Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
+  mansard, pyramidal, ...), height and roof rise fill what the map does not say, in Germany (the states' models),
+  Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
   has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
   once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
@@ -273,7 +275,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - A level select with famous places and a **Random location** button (it starts you on a road).
 - World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
-  addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
+  addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Kinds of places
+  work too: "race track", "rally", "off-road", "peak", "forest", "beach" ... (plurals, typos, "near <place>") list
+  real places near you and famous ones worldwide, with their distance and country; the category buttons under the
+  search box do the same in one click. Ctrl+V pastes into the search and the other text boxes. Works with a controller,
   laid out like the stock map. Layers > **Highways** (off by default) draws the US Interstates and US routes with their
   shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
 - **3D map** (experimental): a Google Earth style view in the game itself. Fly up from your car to see the whole
@@ -281,7 +286,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   needle turns with the view. The map key opens the 2D or 3D map, whichever you used last, and each has a button for
   the other. Any camera more than about 150 miles up sees the Earth as a globe too.
 - **Altitude** HUD app (hidden by default; add it from the apps menu, under BeamNG.Earth): height above sea level and
-  above the ground, and how fast you climb or fall.
+  above the ground, and how fast you climb or fall, in the game's units (feet or metres).
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
   route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
@@ -357,13 +362,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     **Distant traffic quality** offers Low, Medium and High populations; lower levels reduce resource use.
     Off-screen motion updates less often. See [the implementation guide](docs/DISTANT_TRAFFIC.md) for bounds.
   - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
-    horizon or a fixed distance).
+    horizon or a fixed distance, from 1 km / 0.6 miles up).
   - **Road surface detail** (Off / Basic / Full; Off on Low, Basic on Medium, Full above): wear on the paved roads
-    from the game's own road decals, drawn with the road itself (no extra objects). Basic: tyre polish in the lanes'
-    wheel paths on busier roads, a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
+    from the game's own road decals, drawn with the road itself (no extra objects). Basic: a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
     asphalt edge on rural roads through grass, crops or woods (the land cover beside them). Full
-    also sealed and alligator cracks, crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
-    where mapped), manhole covers on town streets, oil spots in parking lots and, in the autumn, fallen leaves
+    also crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
+    where mapped), oil spots in parking lots and, in the autumn, fallen leaves
     along the edges where trees stand beside the road.
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
     corners reached about 40 % farther).

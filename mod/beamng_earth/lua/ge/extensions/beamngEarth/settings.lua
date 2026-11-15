@@ -48,8 +48,9 @@ M.SCHEMA = {
   treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
-  -- the road surface's wear (server roadwear.py, the message road_wear): off; basic (tyre polish in the lanes, a concrete
-  -- road's joints, grassy edges on country roads: three materials at most); full (also cracks, sealed cracks, patches, potholes, manholes, oil spots, autumn leaves). Part of the
+  -- the road surface's wear (server roadwear.py, the message road_wear): off; basic (a concrete road's joints, grassy
+  -- edges on country roads); full (also crack lines, patches, potholes, oil spots, autumn leaves; the tyre polish, crack
+  -- networks and manholes only with the server's BNE_WEAR_STRIPS=on). Part of the
   -- road mesh: no objects of their own
   roadDetail = { kind = 'enum', default = 'full', values = { 'off', 'basic', 'full' }, label = 'Road surface detail' },
   distantTraffic = { kind = 'bool', default = false, label = 'Distant traffic lights' },    -- (off by default: its fps cost, PR #641)
