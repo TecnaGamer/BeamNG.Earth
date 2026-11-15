@@ -221,6 +221,8 @@ Works with BeamNG.drive 0.40.5.
 - **The altitude app follows the game's units**: metres and m/s with metric units (it always showed feet).
 - **Pasting works in BeamNG.Earth's text boxes** (map search, saved places, add-ons, settings): Ctrl+V now pastes from
   the clipboard (the game's browser could not).
+- **Reduced the chance of "certificate verify failed" when sending a report** (and the anonymous statistics) on some
+  Windows PCs: they now check certificates the way the map downloads already do (Windows' own verification).
 - **Frame pacing** no longer holds frames faster than 250 fps back (seen as "LuaPre" time while driving), and turns
   itself off on a system whose timer is too coarse for it.
 - **Reduced the chance of slow world building** on some machines: the "what will the car reach first" planning ran

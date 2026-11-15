@@ -238,7 +238,7 @@ class Reporter:
         req = urllib.request.Request(self.url, json.dumps(body, separators=(",", ":")).encode("utf-8"),
                                      {"Content-Type": "application/json", "User-Agent": "BeamNG.Earth"})
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=netfetch.windows_ssl_context()) as r:
                 return 200 <= r.status < 300
         except Exception as e:
             log.debug("telemetry report: %s: %s", type(e).__name__, e)
