@@ -150,7 +150,7 @@ MOD_TO_SERVER = {
     # the download cache (cache.py; additive): the page's size cap (GB, 0 = unlimited), a clear, or
     # neither (fresh usage numbers); always answered with a 'cache'
     "cache": {"capGb": F(NUM, OPT), "clear": F(bool, OPT)},
-    "nl_signals_ack": {"anchorId": F(int), "epoch": F(int), "revision": F(int)},
+    "nl_signals_ack": {"anchorId": F(int), "epoch": F(int), "revision": F(int), "owners": F((list, dict), OPT)},
     # the settings page's Max RAM for BeamNG.Earth (memwatch.py): the limit (GB, 0 Auto) when the player changed it, or
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
