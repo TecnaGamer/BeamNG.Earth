@@ -1019,6 +1019,71 @@ class CoarseUnderpassTest(unittest.TestCase):
         self.assertEqual([round(v, 6) for v in railways._seg_hits(road, rail)], [40.0])
         self.assertEqual(railways._seg_hits(road, rail + [0.0, 50.0]), [])
 
+    @staticmethod
+    def _seg_hits_loops(a, b):
+        """_seg_hits as it was before GitHub #1327 (two loops over every pair of segments): the reference."""
+        out = []
+        sa = railways._arc(a)
+        for i in range(len(a) - 1):
+            p, r = a[i], a[i + 1] - a[i]
+            for j in range(len(b) - 1):
+                q, t = b[j], b[j + 1] - b[j]
+                den = r[0] * t[1] - r[1] * t[0]
+                if abs(den) < 1e-12:
+                    continue
+                u = ((q[0] - p[0]) * t[1] - (q[1] - p[1]) * t[0]) / den
+                v = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den
+                if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
+                    out.append(float(sa[i] + u * (sa[i + 1] - sa[i])))
+        return out
+
+    def test_seg_hits_same_floats_as_the_loops(self):
+        """GitHub #1327: the array form finds the loops' crossings, the same floats in the same order: wandering lines
+        crossing many times, lines sharing vertices and touching at segment ends, parallel and overlapping ones, far
+        from the origin, and pieces cut small (SEG_HITS_PAIRS) so a's segments are taken in several steps."""
+        rng = np.random.default_rng(1327)
+        cases = []
+        for _ in range(60):
+            na, nb = int(rng.integers(2, 40)), int(rng.integers(2, 40))
+            a = np.cumsum(rng.normal(0.0, 30.0, (na, 2)), axis=0)
+            b = np.cumsum(rng.normal(0.0, 30.0, (nb, 2)), axis=0)
+            cases.append((a, b))
+        grid = np.array([[float(x), float(y)] for x in range(0, 50, 10) for y in (0.0, 10.0)])
+        cases.append((grid, grid[::-1]))                                     # shared vertices, touching ends
+        cases.append((np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]]),
+                      np.array([[5.0, 0.0], [15.0, 0.0]])))                  # collinear overlap: no proper crossing
+        cases.append((np.array([[0.0, 0.0], [10.0, 10.0]]), np.array([[10.0, 10.0], [20.0, 0.0]])))   # end on end
+        off = np.array([412345.678, -287654.321])
+        cases.append((cases[0][0] + off, cases[0][1] + off))                 # far from the frame's origin
+        saved = railways.SEG_HITS_PAIRS
+        try:
+            for pairs in (saved, 7):
+                railways.SEG_HITS_PAIRS = pairs
+                n = 0
+                for a, b in cases:
+                    got = railways._seg_hits(a, b)
+                    self.assertEqual(got, self._seg_hits_loops(a, b))
+                    self.assertTrue(all(type(v) is float for v in got))
+                    n += len(got)
+                self.assertGreater(n, 100)          # (the random lines do cross)
+        finally:
+            railways.SEG_HITS_PAIRS = saved
+        self.assertEqual(railways._seg_hits(np.zeros((1, 2)), cases[0][1]), [])
+
+    def test_seg_hits_long_lines_fast(self):
+        """GitHub #1327: a km-long rail bridge of 4,000 points against 300 roads of 60 points each, most nowhere near it,
+        in well under a second (the loops: ~70 M pair tests in Python, minutes)."""
+        import time
+        rng = np.random.default_rng(7)
+        bridge = np.c_[np.linspace(0.0, 4000.0, 4000), 5.0 * np.sin(np.linspace(0.0, 40.0, 4000))]
+        roads_ = [np.c_[np.full(60, x), np.linspace(-300.0, 300.0, 60) + rng.normal(0.0, 1.0)]
+                  + [0.0, 0.0 if k % 3 == 0 else 2000.0] for k, x in enumerate(np.linspace(5.0, 3995.0, 300))]
+        t0 = time.perf_counter()
+        hits = [railways._seg_hits(r, bridge) for r in roads_]
+        took = time.perf_counter() - t0
+        self.assertEqual(sum(len(h) for h in hits), 100)
+        self.assertLess(took, 2.0)
+
     def test_only_on_coarse_elevation(self):
         import geodesy
         frame = geodesy.EnuFrame(58.1, 56.4, 0.0)
