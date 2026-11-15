@@ -17,7 +17,9 @@ points and lane context. Rust matches these to directed incoming graph arms;
 ambiguous matches are refused. No source evidence means no invented junction.
 
 Rust checks actual road/walk triangles, height layers, safe feet, columns and
-span clearance. Exact convex geotile coverage handles rotated seams. Missing
+span clearance. For terrain-painted carriageways, the existing server ground-cover
+ribbons supply the road envelope and committed terrain supplies its height;
+marking meshes are not mistaken for the whole road. Exact convex geotile coverage handles rotated seams. Missing
 neighbours retry rather than becoming safe ground. Mirrored cantilevers,
 portals, 3+1 layouts and standing heads are alternatives. Portals have no
 six-head count limit within their physical 40 m span limit. Every accepted
@@ -41,7 +43,8 @@ packet. Stale workers cannot gain ownership. Missing surfaces retry; an unchange
 previous complete junction may remain pending. Rejected owners keep stock heads.
 
 The mod validates finished matrices and waits for the exact committed terrain
-and visible road/sidewalk versions. Stock heads detach only after every new
+and visible road/sidewalk versions per complete junction. A parked distant bridge
+does not block independent nearby junctions. Stock heads detach only after every new
 item exists, followed by an exact epoch/revision acknowledgement. It performs
 no geographic placement.
 
@@ -51,6 +54,8 @@ reusing existing DDS textures. There are no per-lamp models or distant TSStatic
 assemblies. Runtime catalogue and audit metadata live outside the mod.
 
 Existing approach controllers supply lamp phases; only optical faces change.
+An optical replacement removes its previous face in the same tick, with rollback
+on cancellation, so multi-frame creation never overlaps old and new colours.
 Unchanged geometry and rebases do not rebuild booms. Unknown phases render dark.
 Lane arrows follow the existing approach phase: independent protected-turn
 programmes and surveyed Dutch phasing are not synthesised. Dutch red-to-green
@@ -72,10 +77,9 @@ integration and stale-generation ownership. Lua tests cover off-mode laziness,
 surface readiness, Forest reuse and optical-only phase changes. Earlier Gridmap
 component probes were visually confirmed by the user.
 
-The actual Rotterdam/Amsterdam on/off frame-time and process-memory comparison
-is still pending: the user is testing the normal game and requested the measurement
-later. Offline/stubbed timings are not substituted. Public data deployment is a
-maintainer action.
+An actual Rotterdam on/off frame-time and process-memory comparison was completed
+on 15 November 2026; see [the measured results](NL_SIGNALS_CITY_VALIDATION.md).
+Public data deployment remains a maintainer action.
 
 `python tools/benchmark_nl_signals.py` prints a plan without contacting the game.
 Later, `--run --pid GAME_PID --out result.json` records a parked Rotterdam or
