@@ -476,6 +476,7 @@ FIN_WORKER = os.environ.get("BNGE_FIN_WORKER", "1") != "0"     # (A/B: 0 renders
 PAINT_WORKER = os.environ.get("BNGE_PAINT_WORKER", "1") != "0"
 NAV_LEAD_S, NAV_LEAD_MAX_M = 12.0, 500.0     # the nav graph's centre ahead of a moving car (navgraph.WINDOW_M 1100)
 LAG_STALL_S = 2.0                     # s: a stall this long is logged without -v (its stack, then its length)
+LAG_DUMP_S = 300.0                    # s: at most one every-thread stack dump per this long (a stall's)
 # The event loop's thread a step above the server's other threads (budget.raise_thread, Windows): a block built 17 s
 # earlier held the car at the edge until the loop answered its request (A13 at 200 mph, 2 server cores, 2026-11-04;
 # GitHub #725). BNGE_LOOP_RAISE=0: as the others, as before
@@ -12184,7 +12185,7 @@ async def main_async(args):
     def watch_lag():
         # (long stalls always: GitHub #725's server.log had 19 s with no line right after a block was built, the
         # block's terrain_ready 25 s late and the car held at the edge; nothing said what the loop was doing)
-        reported, long_at = None, None
+        reported, long_at, dumped = None, None, [-LAG_DUMP_S]
         while True:
             time.sleep(LAG_TICK_S)
             b = beat[0]
@@ -12195,6 +12196,14 @@ async def main_async(args):
             if lag > LAG_STALL_S and long_at is None:
                 long_at = b
                 log.warning("event loop stalled > %.1f s (every game message waits) in %s", lag, main_stack())
+                # ... and every thread's stack, at most every LAG_DUMP_S: stalls landing on trivial lines (a hypot, a
+                # min, an os.remove: the user's BeamMP session 2026-11-15, 2-7 s each) mean the main thread waits
+                # for something else (another thread holding the GIL in a native call, the disk); the main
+                # thread's own stack can't say what (py-spy can't attach to the AppImage's process)
+                if time.monotonic() - dumped[0] >= LAG_DUMP_S:
+                    dumped[0] = time.monotonic()
+                    import stackdump
+                    stackdump.dump("event loop stall: every thread")
             elif lag > LAG_REPORT_S and reported != b and log.isEnabledFor(logging.DEBUG):
                 reported = b
                 log.debug("event loop stalled > %.2f s in %s", lag, main_stack())
