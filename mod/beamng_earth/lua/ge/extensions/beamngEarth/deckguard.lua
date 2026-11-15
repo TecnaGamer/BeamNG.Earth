@@ -156,7 +156,7 @@ local function inBox(b, x, y, m)
   return x >= b[1] - m and x <= b[3] + m and y >= b[2] - m and y <= b[4] + m
 end
 
--- Pure: one look along the path. inp = { clock, x, y, z, vx, vy, deckAt(x, y) -> 'missing' | 'ready', tile key;
+-- Pure: one look along the path. inp = { clock, x, y, z, vx, vy, vehId, deckAt(x, y) -> 'missing' | 'ready', tile key;
 -- groundAt(x, y) -> the block's ground height there or nil }. Sets g.danger = { d (m along the path to the gap), x, y
 -- (its place on the span), id (the span's), span, key (the tile), level (the deck's level there), at } or nil; returns it.
 function M.look(g, inp)
@@ -195,7 +195,10 @@ function M.look(g, inp)
     cx, cy = cx + cos(am) * step, cy + sin(am) * step
     a = a + kappa * step
   end
-  local riding, best = {}, nil
+  -- riding: the spans the car is on now, entered at their level (kept to the next look: no level asked again on them);
+  -- onPath: every span the path drives onto, a predicted entry too (its level asked again at every look, near it the
+  -- abutment's height decides: Codex review 2026-11-15, a road under a bridge once taken far off kept for good)
+  local riding, onPath, best = {}, {}, nil
   local groundAt, deckAt = inp.groundAt, inp.deckAt
   for _, sp in ipairs(cands) do
     local dir, entered = nil, false
@@ -216,7 +219,7 @@ function M.look(g, inp)
           -- entering it: already on it (it was entered at its level before), at an end at the deck's level, or on it
           -- now at its known level; else it is crossed or passed under (or left alone)
           local fromEnd = d > 0 and u or (sp.len - u)
-          local ok = riding[sp.id] or g.riding[sp.id] or false
+          local ok = (k == 1 and g.riding[sp.id]) or false
           if not ok and fromEnd <= M.END_M then
             local abutted = d > 0 and sp.abut0 or (d < 0 and sp.abut1)
             local ez = abutted and levelAt(sp, d > 0 and 0 or sp.len, groundAt) or nil
@@ -230,7 +233,8 @@ function M.look(g, inp)
           end
           if not ok then break end
           entered, dir = true, d
-          riding[sp.id] = true
+          onPath[sp.id] = true
+          if k == 1 then riding[sp.id] = true end
         elseif d ~= dir then
           break
         end
@@ -253,7 +257,7 @@ function M.look(g, inp)
   end
   -- a span let go (GIVE_UP_S) is the guard's again once the car is off it
   for id in pairs(g.released) do
-    if not riding[id] then g.released[id] = nil end
+    if not onPath[id] then g.released[id] = nil end
   end
   g.riding = riding
   if best then
@@ -262,7 +266,10 @@ function M.look(g, inp)
     if not old or old.id ~= best.id then g.stats.dangers = g.stats.dangers + 1 end
     -- the episode the rescue looks back on: the gap's span, its level, where the car last was on the approach
     local ep = g.ep
-    if not ep or ep.id ~= best.id then ep = { id = best.id, span = best.span }; g.ep = ep end
+    if not ep or ep.id ~= best.id or ep.vehId ~= inp.vehId then
+      ep = { id = best.id, span = best.span, vehId = inp.vehId }
+      g.ep = ep
+    end
     ep.level, ep.untilT = best.level, inp.clock + M.RESCUE_WINDOW_S
     -- (on the approach at the deck's level: well short of the gap, or, found late, the nearest place short of it)
     if best.d >= 3 and z >= best.level - M.LEVEL_M and (not ep.safe or best.d >= M.STOP_M + 3) then
@@ -303,11 +310,12 @@ function M.brake(g, inp)
 end
 
 -- Pure: the place to set the car back to ({ x, y, z, heading }) when it went into the gap anyway, or nil.
--- inp = { clock, x, y, z, vx, vy, groundAt }: RESCUE_DROP under the deck's level where it is (its abutments' line), in
+-- inp = { clock, x, y, z, vx, vy, groundAt, vehId (the car's: only the one that came up to the gap is set back) }: RESCUE_DROP under the deck's level where it is (its abutments' line), in
 -- the span's corridor going along it, within RESCUE_WINDOW_S of the last gap seen on that span.
 function M.fell(g, inp)
   local ep = g.ep
   if not ep or not ep.safe or inp.clock > (ep.untilT or -math.huge) or g.released[ep.id] ~= nil then return nil end
+  if ep.vehId ~= inp.vehId then return nil end      -- (another car than the one that drove up to it)
   if inp.clock - (g.lastRescue or -math.huge) < M.RESCUE_GAP_S then return nil end
   local sp = ep.span
   if not inBox(sp.box, inp.x, inp.y, M.LAT_M + 4) then return nil end
@@ -342,10 +350,11 @@ function M.update(g, ctx)
     return g.mode
   end
   local clock = ctx.clock
+  if pl.vehicleId ~= g.vehId then M.switched(g, ctx.hold, pl.vehicleId) end    -- (another car: nothing of the old one's)
   if clock >= g.nextLook then
     g.nextLook = clock + M.LOOK_S
-    M.look(g, { clock = clock, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx or 0, vy = pl.vy or 0, deckAt = ctx.deckAt,
-      groundAt = ctx.groundAt })
+    M.look(g, { clock = clock, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx or 0, vy = pl.vy or 0, vehId = pl.vehicleId,
+      deckAt = ctx.deckAt, groundAt = ctx.groundAt })
   end
   -- (nothing ahead and no gap just passed: no engine call at all)
   if not g.danger and not (g.ep and clock <= (g.ep.untilT or -math.huge)) then
@@ -359,7 +368,8 @@ function M.update(g, ctx)
   -- (the speed towards the gap: along the heading it was found on; backing away from it is never braked)
   local th = g.theta or 0
   local v = vx * cos(th) + vy * sin(th)
-  local rescue = M.fell(g, { clock = clock, x = pl.x, y = pl.y, z = pl.z, vx = vx, vy = vy, groundAt = ctx.groundAt })
+  local rescue = M.fell(g, { clock = clock, x = pl.x, y = pl.y, z = pl.z, vx = vx, vy = vy, groundAt = ctx.groundAt,
+    vehId = pl.vehicleId })
   if rescue then
     M.release(g, ctx.hold)
     log('W', 'beamngEarth', string.format('deck guard: the car went into the gap of a bridge not loaded yet: set back '
@@ -410,6 +420,14 @@ function M.update(g, ctx)
   end
   g.mode = atLine and 'wait' or (scale < 1 and 'slow' or 'clear')
   return g.mode
+end
+
+-- The player's car is another one (a vehicle switch, a new car; Codex review 2026-11-15): the old one's hold let go, its
+-- gap, approach (the rescue's), riding and heading forgotten; the next look is the new car's.
+function M.switched(g, h, vehId)
+  M.release(g, h)
+  g.vehId, g.danger, g.dNow, g.ep, g.riding, g.released, g.theta, g.thetaT = vehId, nil, nil, nil, {}, {}, nil, nil
+  g.waitS, g.resumedAt, g.nextLook = 0, nil, -math.huge
 end
 
 -- Let go of a hold the guard made (the tile came, the guard off, a new frame).

@@ -29,9 +29,9 @@ end
 
 local SPAN = { 300, 0, 330, 0, 360, 0 }
 
-local function look(g, w, x, y, z, vx, vy, clock)
+local function look(g, w, x, y, z, vx, vy, clock, vehId)
   return G.look(g, { clock = clock or 0, x = x, y = y, z = z or 10.5, vx = vx, vy = vy or 0, deckAt = w.deckAt,
-    groundAt = w.groundAt })
+    groundAt = w.groundAt, vehId = vehId or 1 })
 end
 
 -- spans
@@ -81,6 +81,13 @@ do
     return 2
   end
   T.check(look(g, wu, 250, 0, 10.5, 20, 0) == nil, 'entering it far under its abutment: a road under it')
+  -- (Codex review 2026-11-15: the same road under it driven towards from far off, where the level is not tested yet: a
+  -- predicted entry must not count as being on it, the level is tested again once near)
+  local gs = guard({ SPAN })
+  look(gs, wu, 120, 0, 10.5, 30, 0, 0)
+  T.check(look(gs, wu, 250, 0, 10.5, 30, 0, 0.25) == nil, 'driving on under it from far off: no gap once near')
+  T.check(look(gs, wu, 290, 0, 10.5, 30, 0, 0.5) == nil, '... nor right at its end')
+  T.check(next(gs.riding) == nil, '... never taken as on it')
   T.check(look(guard({}), w, 120, 0, 10.5, 30, 0) == nil, 'no spans: nothing')
 end
 
@@ -158,15 +165,18 @@ do
   local g = guard({ SPAN })
   look(g, w, 200, 0, 10.5, 30, 0, 0)
   T.check(g.ep and g.ep.safe and g.ep.safe[1] == 200, 'the approach remembered')
-  local r = G.fell(g, { clock = 1, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt })
+  -- (Codex review 2026-11-15: another car of the player's, switched to in the window, is never set back)
+  T.check(G.fell(g, { clock = 1, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 2 }) == nil,
+    'another vehicle under it: not set back')
+  local r = G.fell(g, { clock = 1, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 })
   T.check(r and r[1] == 200 and r[2] == 0, 'in the gap, under the deck: set back on the approach')
-  T.check(G.fell(g, { clock = 1.2, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt }) == nil,
+  T.check(G.fell(g, { clock = 1.2, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 }) == nil,
     'at most once a RESCUE_GAP_S')
-  T.check(G.fell(g, { clock = 3, x = 330, y = 0, z = 9, vx = 20, vy = 0, groundAt = w.groundAt }) == nil, 'on the deck: none')
-  T.check(G.fell(g, { clock = 3, x = 330, y = 0, z = 4, vx = 0, vy = 20, groundAt = w.groundAt }) == nil,
+  T.check(G.fell(g, { clock = 3, x = 330, y = 0, z = 9, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 }) == nil, 'on the deck: none')
+  T.check(G.fell(g, { clock = 3, x = 330, y = 0, z = 4, vx = 0, vy = 20, groundAt = w.groundAt, vehId = 1 }) == nil,
     'crossing under it: none')
-  T.check(G.fell(g, { clock = 3, x = 330, y = 40, z = 4, vx = 20, vy = 0, groundAt = w.groundAt }) == nil, 'beside it: none')
-  T.check(G.fell(g, { clock = 20, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt }) == nil,
+  T.check(G.fell(g, { clock = 3, x = 330, y = 40, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 }) == nil, 'beside it: none')
+  T.check(G.fell(g, { clock = 20, x = 330, y = 0, z = 4, vx = 20, vy = 0, groundAt = w.groundAt, vehId = 1 }) == nil,
     'long after the gap was seen: none')
 end
 
@@ -221,6 +231,18 @@ do
   ctx.clock = 81
   G.update(g, ctx)
   T.check(next(g.released) == nil, '... the guard\'s again once the car is off it')
+  -- a vehicle switch (Codex review 2026-11-15): the old car's gap, approach and hold are not the new one's
+  pl.x, pl.vx, pl.vehicleId = 290, 40, 7
+  ctx.dtReal = 1 / 60
+  ctx.clock = 90
+  G.update(g, ctx)
+  ctx.clock = 90.5
+  T.check(G.update(g, ctx) == 'hold' and paused and g.ep and g.ep.vehId == 7, 'car 7 held before the gap')
+  pl.vehicleId, pl.x, pl.z, pl.vx = 8, 330, 2.5, 20     -- (on the road 8 m under it)
+  ctx.clock = 90.6
+  local m8 = G.update(g, ctx)
+  T.check(not paused and g.held == nil, 'switched to car 8: the hold let go')
+  T.check(m8 ~= 'rescue' and (g.ep == nil or g.ep.vehId == 8), 'car 8 under the span: not set back to car 7\'s approach')
   G.newFrame(g)
   T.check(#g.spans == 0 and g.aid == nil, 'a new frame: no spans until the next message')
 end
