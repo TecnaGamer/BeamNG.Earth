@@ -125,6 +125,7 @@ mod bldclear;
 mod bnwt;
 mod aerialcov;
 mod decisions;
+mod lidarz;
 mod paintlist;
 mod nearcross;
 
@@ -6447,6 +6448,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     buildcolours::register(m)?;
     // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
     m.add_function(wrap_pyfunction!(grow_along, m)?)?;
-    m.add("VERSION", 302)?;
+    // 303 (302 is the grow_along branch's): the lidar-derived road heights per map cell as a signed CDN product
+    // (lidarz: lz_encode_cell / lz_decode_cell, lz_inputs_digest, lz_probe_points, lz_dem_digest; server/lidarz.py,
+    // tools/build_lidarz.py) and the decision archives' file functions taking a signed product's domain (dec_*:
+    // domain = "dec" | "lidarz", its own magics inside the signature)
+    lidarz::register(m)?;
+    m.add("VERSION", 303)?;
     Ok(())
 }

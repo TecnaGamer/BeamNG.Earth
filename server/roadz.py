@@ -26,6 +26,9 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   end that the lidar shows elevated (roads.lidar_gap_candidates: an untagged viaduct stretch), read where the
   deck's measured end stands over the DTM only (the nodes the decks' read had not): their elevated start is a deck
   in roads.level_ranges (gap_answers, one decision per cell and server run; BNE_LIDAR_GAPS=off: none).
+  Before any point is read, a cell's answer is asked of the project's CDN (lidarz.py, BNGE_LIDARZ: the same answer
+  measured by the project's builder along the same map lines and DEM, signed; a planning process that would take the
+  rule waits lidarz.WAIT_S for it); any miss reads the point clouds as below.
 Matching (earthfast.roadz_match): each station of a map road takes the nearest source segment of its level (bridge,
 tunnel, ground) within reach whose direction agrees and whose name / number does not contradict the map's; the
 heights then lose their spikes and impossible grades (earthfast.profile_clean). Vector heights are taken relative to
@@ -58,6 +61,7 @@ import dmath
 import dnp
 import hkdtm
 import hklidar
+import lidarz
 import mapcells
 import roadzhk
 import xproc
@@ -240,6 +244,10 @@ class LidarDropped(Exception):
 
 class _CellBuilt(Exception):
     """Another process built the whole cell while this one read its nodes (RoadZ._read): its file is taken."""
+
+
+class _NoProduct(Exception):
+    """No CDN answer for a cell whose lidar would have to be read (RoadZ._lidar's cdn_only)."""
 
 
 # A node's read is claimed across the server's processes (xproc: a lock file beside its part file): the main process
@@ -454,18 +462,28 @@ class Lines:
         return len(self.off) - 1
 
     def save(self, path):
+        """The lines to path (one file, replaced whole). A cell the CDN's product gave carries its identity inside
+        it (array "lidarz": lidarz.identity_bytes), so no eviction can part the heights from what they must be checked
+        against (Codex review of 866ebb97: a file of its own beside them could be evicted alone)."""
         import staging
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = staging.tmp_for(path)
+        extra = {}
+        ident = getattr(self, "lidarz", None)
+        if ident is not None:
+            extra["lidarz"] = np.frombuffer(lidarz.identity_bytes(ident), np.uint8)
         with open(tmp, "wb") as fh:
             np.savez_compressed(fh, lonlat=self.lonlat, z=self.z, off=self.off, level=self.level, ref=self.ref,
-                                name=self.name, corrected=np.array(self.corrected))
+                                name=self.name, corrected=np.array(self.corrected), **extra)
         staging.replace_cached(tmp, path)
 
     @classmethod
     def load(cls, path):
         with np.load(path, allow_pickle=False) as d:
-            return cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            got = cls(d["lonlat"], d["z"], d["off"], d["level"], d["ref"], d["name"], bool(d["corrected"]))
+            if "lidarz" in d.files:     # (a CDN cell: its identity, lidarz.kept_ok)
+                got.lidarz = lidarz.identity_of(d["lidarz"].tobytes())
+        return got
 
 
 # ---- the vector sources ----------------------------------------------------------------------------------------
@@ -747,9 +765,10 @@ class RoadZ:
             src = HK_CELLS
         return os.path.join(self.dir, src, str(key.z), str(key.x), f"{key.y}.npz") if self.dir else None
 
-    def lines(self, src, key):
+    def lines(self, src, key, cdn_only=False):
         """The cell's Lines of source src (fetched and kept on disk the first time), or None when it could not be
-        had (offline, a failed fetch: asked again next time)."""
+        had (offline, a failed fetch: asked again next time). cdn_only: the lidar's from disk or the CDN's product
+        only (lidarz.py), None (no fault) when it would have to be read."""
         key = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
         mk = (src, str(key))
         with self._lock:
@@ -770,6 +789,21 @@ class RoadZ:
                     if src == "lidar":      # (its elevated ground stretches: written before the lines)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                        # (a cell the CDN's product gave (its identity inside the file, Lines.load): taken again
+                        # only while this server's map, DEM and lkey still make the builder's measurement, else made
+                        # anew; Codex reviews of 206afb6f and 866ebb97)
+                        if getattr(got, "lidarz", None) is not None and not lidarz.kept_ok(self, key, got):
+                            for q in (p + ".gaps.json", p):
+                                try:
+                                    os.remove(q)
+                                except OSError:
+                                    pass
+                            if prefetched() and not getattr(_tl, "prefetch", False):
+                                # (a planning process of a server run reads no point clouds, gap_answers: the CDN,
+                                # else None and the rule, the server's prefetch measuring it meanwhile)
+                                cdn_only = True
+                                self._want(src, key)
+                            raise ValueError("a CDN cell no longer this server's measurement")
                     # (used: the download cache's eviction takes a file's mtime for its last use when this server's
                     # own process did not read it, and these are read in the workers; a cell read on every visit was
                     # as old as its download, among the first evicted when the disk ran short of its reserve, and
@@ -785,12 +819,17 @@ class RoadZ:
                 t0 = time.monotonic()
                 try:
                     try:
-                        got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk, "lidar": self._lidar}[src](key)
+                        if src == "lidar":
+                            got = self._lidar(key, cdn_only=True) if cdn_only else self._lidar(key)
+                        else:
+                            got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk}[src](key)
                     except _CellBuilt:      # (another process's: read as any cell on disk, not written again)
                         got = Lines.load(p)
                         with open(p + ".gaps.json", encoding="utf-8") as fh:
                             got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
                         p = None
+                except _NoProduct:
+                    return None             # (left to the server's prefetch: gap_answers)
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
                     _tl.failed = e          # (the prefetch's: a 404 ends a want, _pf_loop)
@@ -1228,20 +1267,38 @@ class RoadZ:
         return [c for c in roads.lidar_gap_candidates(feats)
                 if lon0 <= c[1][0, 0] < lon1 and lat0 <= c[1][0, 1] < lat1]
 
-    def _lidar(self, key):
-        import geodesy
+    def lidar_inputs(self, key):
+        """(parts, cands, names) of what cell key's lidar read measures along: its bridge parts [(lonlat, half
+        width)], gap candidates [(fid, lonlat, half width)] and the 3DEP datasets to try (LIDAR_DATASETS at most; []:
+        nothing to read). From the map alone (no point clouds): the CDN product's inputs digest (lidarz.py)."""
         parts = self._bridges(key)
         cands = self._gap_candidates(key)
         if not parts and not cands:
-            return Lines.build([], corrected=True)
+            return parts, cands, []
         lat_c, lon_c = key.center()
         names = lidar_datasets(lat_c, lon_c)
         if not names:
             first = parts[0][0] if parts else cands[0][1]
             mid = first[len(first) // 2]
             names = lidar_datasets(float(mid[1]), float(mid[0]))
+        return parts, cands, names[:LIDAR_DATASETS]
+
+    def _lidar(self, key, cdn_only=False):
+        """The cell's lidar Lines (.gaps: the elevated stretches' answers). cdn_only: never read the point clouds
+        (_NoProduct when the CDN's product has no answer and a read would be needed: gap_answers' planning processes,
+        which leave the reads to the server's prefetch)."""
+        import geodesy
+        parts, cands, names = self.lidar_inputs(key)
         if not names:
             return Lines.build([], corrected=True)
+        if parts and lidarz.enabled():
+            # (a read would follow: the builder's answer for exactly these inputs first, lidarz.py; a miss reads here)
+            got = lidarz.cell(self, key, parts, cands, names)
+            if got is not None:
+                return got
+        if parts and cdn_only:
+            raise _NoProduct(str(key))
+        lat_c, lon_c = key.center()
         frame = geodesy.EnuFrame(lat_c, lon_c)
         nb = len(parts)
         parts = parts + [(ring, half) for _fid, ring, half in cands]     # (the candidates measured in the same read)
@@ -1249,7 +1306,7 @@ class RoadZ:
         for ring, half in parts:
             e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
             local.append((np.stack([np.asarray(e), np.asarray(n)], 1), half))
-        for name in names[:LIDAR_DATASETS]:
+        for name in names:
             got = self._lidar_from(name, key, frame, parts, local, nb, [c[0] for c in cands])
             if got is not None:
                 return got
@@ -1615,7 +1672,15 @@ class RoadZ:
                 except Exception as e:
                     log.debug("roadz %s gaps %s: %s: %s", src, key, type(e).__name__, e)
                     done[str(key)] = None
-            threads = []
+            def from_cdn(key):
+                try:
+                    ln = self.lines(src, key, cdn_only=True)
+                    if ln is not None:
+                        done[str(key)] = list(getattr(ln, "gaps", []))
+                except Exception as e:
+                    log.debug("roadz %s gaps %s from the CDN: %s: %s", src, key, type(e).__name__, e)
+            threads, cdn = [], []
+            t0 = time.monotonic()
             pre = prefetched()      # (the server's prefetch reads them: taken only when on disk, PREFETCHED_WAIT_S)
             for key in todo:
                 p = self._decision(src, key)
@@ -1624,9 +1689,26 @@ class RoadZ:
                 if pre:
                     f = self._path(src, key)
                     if f and os.path.exists(f):
-                        build(key)          # (a read of the files on disk)
+                        if src == "lidar" and lidarz.enabled():
+                            # (a kept CDN cell is checked first, lidarz.kept_ok: its DEM reads may download tiles and a
+                            # dropped one asks the CDN again, so on a thread with the same wait as a CDN read, the rule
+                            # past it; Codex review of 1b5ba25e)
+                            t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
+                            t.start()
+                            cdn.append(t)
+                        else:
+                            # (a read of the files on disk, at once; with the product off a kept CDN cell fails its
+                            # check at once and, in this planning process, is no point-cloud read: lines)
+                            build(key)
                         continue
                     self._want(src, key)    # (asked of the server's prefetch)
+                    if src == "lidar" and lidarz.enabled():
+                        # (the builder's answer from the CDN: a block read, not the point clouds; lidarz.WAIT_S at
+                        # most, then the rule as before while the prefetch reads it)
+                        t = threading.Thread(target=from_cdn, args=(key,), name="roadz-lidarz", daemon=True)
+                        t.start()
+                        cdn.append(t)
+                        continue
                     if PREFETCHED_WAIT_S <= 0:
                         continue            # (the rule for the run: planned again once the lidar is in, LateWork)
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
@@ -1636,11 +1718,13 @@ class RoadZ:
                 wait = PREFETCHED_WAIT_S
             else:
                 wait = LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S
-            end = time.monotonic() + wait
+            end = t0 + wait
             for t in threads:
                 t.join(max(0.0, end - time.monotonic()))
             if any(t.is_alive() for t in threads):
                 self._gaps_slow = True          # (LIDAR_GAPS_SLOW_WAIT_S from now on)
+            for t in cdn:
+                t.join(max(0.0, t0 + max(wait, lidarz.WAIT_S) - time.monotonic()))
             for key in todo:
                 got = self._decide(key, done.get(str(key)), src)    # (not built in time: None, the rule)
                 if got is None:
@@ -1667,13 +1751,20 @@ class RoadZ:
 
     # ---- heights for a map road ----
     def _dem_raw(self, la, lo):
+        """Our DEM's heights at (la, lo) (DEM_ZOOM). Every call is logged while this thread's _tl.dem_log is a list
+        (the lidarz builder: where the measuring read the DEM, and what it read there, lidarz.measure)."""
         d = getattr(self.md, "dem", None) if self.md is not None else None
         if d is None and self.md is not None:
             import gradesep
             d = gradesep._dem(self.md)
         if d is None:
-            return np.full(len(np.atleast_1d(la)), np.nan)
-        return np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+            out = np.full(len(np.atleast_1d(la)), np.nan)
+        else:
+            out = np.asarray(d.sample(np.asarray(la, np.float64), np.asarray(lo, np.float64), DEM_ZOOM), np.float64)
+        rec = getattr(_tl, "dem_log", None)
+        if rec is not None:
+            rec.append((np.array(la, np.float64).ravel(), np.array(lo, np.float64).ravel(), np.array(out).ravel()))
+        return out
 
     def _cell_offset(self, src, key, ln):
         mk = (src, str(key))
