@@ -98,45 +98,30 @@ def bindings_of(body):
 
 def migrate_unproven(dem_dir):
     """Once per cache: what the archives gave before a copy had to be proven the listed release (Codex review of
-    5776353e: the branch's builds before it, never released, could keep the wrong copy's tiles): the old namespace's
-    folders (<dem>/mtarchive/<md5>, their head and directories) removed, and in each region one of them names, the raw
-    tiles of zoom 13 and deeper, their columns' remembered 404s, and the decoded tiles of every zoom over it (a z12 or
-    coarser tile's lidar test read those directories): all read again, from proven copies or the endpoint. Done by one
-    process (xproc), then a flag (<dem>/mtarchive/<NAMESPACE>/.migrated)."""
+    5776353e: the branch's builds before it, never released, could keep the wrong copy's tiles). In each region an old
+    namespace folder (<dem>/mtarchive/<md5>, its meta.json naming the archive) stands for, the raw tiles of zoom 13 and
+    deeper, their columns' remembered 404s and the decoded tiles of every zoom over it (a z12 or coarser tile's lidar
+    test read those directories) are removed, all read again from proven copies or the endpoint. The old folder, the
+    only record of which region to clean, goes only once all of its region's files are gone, and the flag
+    (<dem>/mtarchive/<NAMESPACE>/.migrated) only once no old folder is left: a migration killed midway, or a file that
+    cannot be removed now, is finished at a later start (Codex review of bce5d9f4). One process at a time (xproc). A
+    folder without meta.json had no mirror checked, so no tile read through it: removed alone."""
     base = os.path.join(dem_dir, "mtarchive")
     flag = os.path.join(base, NAMESPACE, ".migrated")
     if os.path.exists(flag):
         return
-    try:
-        names = os.listdir(base)
-    except OSError:
-        names = []
-    old = [n for n in names if _MD5.match(n)]
-    if old:
-        got, mine = xproc.once(flag + ".lock", lambda: True if os.path.exists(flag) else None, 120.0, patient=True)
+    if any(_MD5.match(n) for n in _listdir(base)):
+        lock = flag + ".lock"
+        got, mine = xproc.once(lock, lambda: True if os.path.exists(flag) else None, 120.0, patient=True)
         if got:
             return
         try:
-            regions = set()
-            for n in old:
-                p = os.path.join(base, n)
-                try:
-                    with open(os.path.join(p, "meta.json"), encoding="utf-8") as f:
-                        mm = _NAME.match(str(json.load(f).get("name", "")))
-                    if mm:
-                        regions.add((int(mm.group(1)), int(mm.group(2))))
-                except (OSError, ValueError, AttributeError):
-                    pass
-                import shutil
-                shutil.rmtree(p, ignore_errors=True)
-            for rx, ry in sorted(regions):
-                _drop_region(dem_dir, rx, ry)
-            if regions:
-                log.info("mtarchive: tiles of %d regions read before the archives' copies were proven: dropped, read "
-                         "again", len(regions))
+            _migrate(dem_dir, base)
         finally:
             if mine:
-                xproc.release(flag + ".lock")
+                xproc.release(lock)
+    if any(_MD5.match(n) for n in _listdir(base)):
+        return                                  # (not done: the next start goes on)
     try:
         os.makedirs(os.path.dirname(flag), exist_ok=True)
         with open(flag, "w", encoding="utf-8") as f:
@@ -145,8 +130,39 @@ def migrate_unproven(dem_dir):
         pass
 
 
+def _migrate(dem_dir, base):
+    import shutil
+    dropped = {}
+    n_regions = 0
+    for n in sorted(x for x in _listdir(base) if _MD5.match(x)):
+        p = os.path.join(base, n)
+        region = None
+        try:
+            with open(os.path.join(p, "meta.json"), encoding="utf-8") as f:
+                mm = _NAME.match(str(json.load(f).get("name", "")))
+            if mm is None:
+                continue                        # (a name it cannot read: kept, not taken as nothing to clean)
+            region = (int(mm.group(1)), int(mm.group(2)))
+        except FileNotFoundError:
+            region = None                       # (no mirror ever checked through it: nothing read)
+        except (OSError, ValueError, AttributeError):
+            continue                            # (unreadable now: kept for a later start)
+        if region is not None:
+            if region not in dropped:
+                dropped[region] = _drop_region(dem_dir, *region)
+                n_regions += 1
+            if not dropped[region]:
+                continue                        # (a file left: this folder stays the record of it)
+        shutil.rmtree(p, ignore_errors=True)
+    if n_regions:
+        log.info("mtarchive: tiles of %d regions read before the archives' copies were proven: dropped, read again%s",
+                 n_regions, "" if all(dropped.values()) else " (some files not yet: again at the next start)")
+
+
 def _drop_region(dem_dir, rx, ry):
-    """The raw z13+ tiles (and their columns' miss indexes) and every decoded tile over zoom-6 region (rx, ry)."""
+    """The raw z13+ tiles (and their columns' miss indexes) and every decoded tile over zoom-6 region (rx, ry)
+    removed: True when none is left."""
+    ok = True
     raw = os.path.join(dem_dir, "mapterhorn")
     for z in range(MIN_ZOOM, 19):
         d = 1 << (z - COVERAGE_ZOOM)
@@ -155,15 +171,11 @@ def _drop_region(dem_dir, rx, ry):
             continue
         for x in range(rx * d, (rx + 1) * d):
             col = os.path.join(zdir, str(x))
-            try:
-                names = os.listdir(col)
-            except OSError:
-                continue
-            for n in names:
+            for n in _listdir(col):
                 stem = n.split(".", 1)[0]
                 if n == "_misses" or (stem.isdigit() and ry * d <= int(stem) < (ry + 1) * d
                                       and n.endswith((".webp", ".404"))):
-                    _remove(os.path.join(col, n))
+                    ok = _remove(os.path.join(col, n)) and ok
     dec = os.path.join(dem_dir, "decoded")
     for ver in _listdir(dec):
         for g in _listdir(os.path.join(dec, ver)):
@@ -173,8 +185,8 @@ def _drop_region(dem_dir, rx, ry):
                     d = 1 << (z - COVERAGE_ZOOM)
                     xs, y0, y1 = range(rx * d, (rx + 1) * d), ry * d, (ry + 1) * d
                 else:
-                    s = COVERAGE_ZOOM - z
-                    xs, y0, y1 = [rx >> s], ry >> s, (ry >> s) + 1
+                    sh = COVERAGE_ZOOM - z
+                    xs, y0, y1 = [rx >> sh], ry >> sh, (ry >> sh) + 1
                 zdir = os.path.join(gdir, str(z))
                 if not os.path.isdir(zdir):
                     continue
@@ -183,7 +195,8 @@ def _drop_region(dem_dir, rx, ry):
                     for n in _listdir(col):
                         stem = n.split(".", 1)[0]
                         if stem.isdigit() and y0 <= int(stem) < y1:
-                            _remove(os.path.join(col, n))
+                            ok = _remove(os.path.join(col, n)) and ok
+    return ok
 
 
 def _listdir(p):
@@ -462,10 +475,14 @@ def _kind(kind):
 
 
 def _remove(path):
+    """path removed (or already gone): True; False when it is still there."""
     try:
         os.remove(path)
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError:
+        return not os.path.exists(path)
+    return True
 
 
 class Archives:
