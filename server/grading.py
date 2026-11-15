@@ -7009,9 +7009,10 @@ def rail_yield_pieces(xy, z, roads_, half):
     if not blk.any():
         return [(xy, z)]
     grow = half + RAIL_YIELD_PAD_M       # (along the line past the carriageway: the cut piece's round end clears it)
-    sb = s[blk]
-    near = np.abs(s[:, None] - sb[None, :]).min(axis=1) <= grow + 1e-9
-    blk = blk | near
+    import fast
+    fast.require(302, "grow_along")     # (one pass along the line: was every point against every cut one)
+    blk = np.asarray(fast._ef.grow_along(np.ascontiguousarray(s, np.float64), np.ascontiguousarray(blk, bool),
+                                         float(grow + 1e-9)), bool)
     out = []
     keep = ~blk
     idx = np.flatnonzero(np.diff(np.concatenate([[0], keep.astype(np.int8), [0]])))

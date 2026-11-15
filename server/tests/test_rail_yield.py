@@ -49,6 +49,25 @@ class RailYieldTest(unittest.TestCase):
         (pxy, _pz), = grading.rail_yield_pieces(xy, z, [road], railways.GRADE_HALF_M)
         self.assertEqual(len(pxy), len(xy))
 
+    def test_long_line_through_a_street_grid(self):
+        """A 3 km line through a grid of streets every 100 m (a rail yard's cell): cut at each street it crosses at
+        grade (the road's nearest segment by the grid of near segments, earthfast near_crossers), the ones beside it,
+        over it or past its end kept off it."""
+        xy, z = np.c_[np.linspace(0.0, 3000.0, 601), np.zeros(601)], np.full(601, 9.45)
+        roads_ = [(np.array([[x, -400.0], [x, -50.0], [x + 0.5, 50.0], [x, 400.0]]), np.full(4, 10.0), 4.0)
+                  for x in np.arange(50.0, 3000.0, 100.0)]
+        roads_.append((np.array([[1400.0, -400.0], [1400.0, 400.0]]), np.full(2, 16.0), 4.0))     # a bridge
+        roads_.append((np.array([[-500.0, 30.0], [3500.0, 30.0]]), np.full(2, 10.0), 4.0))        # beside it
+        roads_.append((np.array([[3100.0, -400.0], [3100.0, 400.0]]), np.full(2, 10.0), 4.0))     # past its end
+        pieces = grading.rail_yield_pieces(xy, z, roads_, railways.GRADE_HALF_M)
+        self.assertEqual(len(pieces), 31)
+        gap = 4.0 + railways.GRADE_HALF_M + grading.RAIL_YIELD_PAD_M
+        for x in np.arange(50.0, 3000.0, 100.0):
+            for pxy, _pz in pieces:
+                self.assertGreaterEqual(float(np.abs(pxy[:, 0] - x).min()), gap - grading.RAIL_YIELD_STEP_M - 1e-6)
+        self.assertAlmostEqual(float(pieces[0][0][0, 0]), 0.0)
+        self.assertAlmostEqual(float(pieces[-1][0][-1, 0]), 3000.0)
+
     def test_off(self):
         xy, z = track()
         road = (np.array([[0.0, -100.0], [0.0, 100.0]]), np.full(2, 10.0), 4.0)

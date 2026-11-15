@@ -1396,10 +1396,11 @@ def seam_crossers(xy, zb, roads_):
     lines, box = _seam_boxes(roads_)
     # (the roads whose box meets the track's, all at once: a numpy max / min per road and track was most of it)
     near = np.flatnonzero(~((box[:, 2] < lo[0]) | (box[:, 3] < lo[1]) | (box[:, 0] > hi[0]) | (box[:, 1] > hi[1])))
-    for k in near.tolist():
+    near = near.tolist()
+    # (every near road's crossings in one kernel call, each road's as a call of its own gives them)
+    for k, hits in zip(near, roads._crossings_by([xy], [lines[k] for k in near]) if near else ()):
         rxy, rz, rh = roads_[k]
         r = lines[k]
-        hits = roads._crossings([xy], [r])
         rzz = np.asarray(rz, np.float64)[:len(r)]
         if hits and any(abs(float(rzz[int(np.argmin(dnp.hypot(*(r - pt).T)))])
                             - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
