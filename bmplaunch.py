@@ -350,12 +350,11 @@ def download(data_dir, user_agent, say=print):
 
 
 def game_user_path(user_dir):
-    """The user folder BeamMP wants (the folder above the game version's, as --user-path)."""
-    d = os.path.normpath(user_dir)
-    base = os.path.basename(d)
-    if base == "current" or base[:1].isdigit():
-        return os.path.dirname(d)
-    return d
+    """The user folder BeamMP wants (the folder above the game version's, as --user-path): the same folder the game is
+    given with -userpath (gameinstall.user_base, one rule for both: a folder of the player's own named "2026-profile"
+    went to the game as it is and to BeamMP as its parent, Codex review of 904ac751)."""
+    import gameinstall
+    return gameinstall.user_base(user_dir)
 
 
 def child_env(env=None, frozen=None):

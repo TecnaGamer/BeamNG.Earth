@@ -1425,9 +1425,7 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
             # that version folder, so the game gets its parent (a Flatpak Steam's folder, the user's report
             # 2026-10-26 — without it the game made a second "current" in it, without the mod). A player's own
             # folder without the version naming goes as it is.
-            base = os.path.basename(user_dir or "")
-            game_user = os.path.dirname(user_dir) if user_dir and (base == "current" or
-                                                                   base.replace(".", "").isdigit()) else user_dir
+            game_user = gameinstall.user_base(user_dir)      # (one rule for the game and BeamMP: bmplaunch.start)
             proc = subprocess.Popen(([*wrapper] if wrapper else []) +
                                     ([runtime, "--verb=waitforexitandrun", "--"] if runtime else []) +
                                     [exe] + (["-userpath", game_user] if game_user else []) + extra +

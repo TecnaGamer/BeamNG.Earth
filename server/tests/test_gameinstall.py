@@ -479,6 +479,13 @@ class BeammpBesideEveryModeTest(Tmp):
         start, _ = self.run_up(True, launch("C:/G", "steam", "steam", True))
         self.assertFalse(start.call_args.kwargs["user_path"])
 
+    def test_same_user_base_for_beammp_and_the_game(self):
+        # (Codex review of 904ac751: a folder of the player's own whose name starts with a digit went to the game as
+        # it is but to BeamMP as its parent: BeamMP's mod in another folder)
+        for user in ("/g/2026-profile", "/g/BeamNG.drive/current", "/g/BeamNG.drive/0.40", "/g/mine", "/g/7"):
+            self.assertEqual(bmplaunch.game_user_path(user), GI.user_base(user), user)
+        self.assertEqual(GI.user_base("/g/2026-profile"), os.path.normpath("/g/2026-profile"))
+
     def test_bmplaunch_user_path_on_windows(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(bmplaunch, "IS_WIN", True), \
                 mock.patch.object(bmplaunch.subprocess, "Popen") as popen, \
