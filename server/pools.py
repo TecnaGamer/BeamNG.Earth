@@ -49,9 +49,9 @@ class Abandoned(Exception):
 # much busy as that process. Past HUNG_CEILING_X times its time a job is hung whatever the CPU (a process spinning
 # without end). CPU read every CPU_SAMPLE_S at most, only while a job runs.
 CPU_WINDOW_S = 60.0
-CPU_BUSY_FRAC = 0.05
+CPU_BUSY_FRAC = float(os.environ.get("BNE_CPU_BUSY_FRAC", "0.01"))
 CPU_SAMPLE_S = 5.0
-HUNG_CEILING_X = 3.0
+HUNG_CEILING_X = float(os.environ.get("BNE_HUNG_CEILING_X", "3.0"))
 
 
 def _clk_tck():
@@ -551,11 +551,12 @@ class RespawningPool:
 
     def _pids(self):
         """The process ids of the pool's processes: the current executor's and those of rotated ones still finishing
-        their jobs."""
+        their jobs; plus the main process (os.getpid()), whose road/cell planning or prefetch jobs in this pool wait
+        for on xproc locks."""
         with self._lock:
             self._retired = [p for p in self._retired if _running(p)]
             procs = _procs(self._pool) + self._retired
-        return [p.pid for p in procs if _running(p)]
+        return [p.pid for p in procs if _running(p)] + [os.getpid()]
 
     def cpu_sample(self, now=None):
         """The processes' CPU times read for overdue (at most every cpu.every s). True when read."""

@@ -164,6 +164,33 @@ class WarmTest(unittest.TestCase):
             staging.warm(os.path.join(game, "t.cdae"))          # (reads it; a missing file is no error)
             staging.warm(os.path.join(game, "missing.cdae"))
 
+    def test_event_loop_warms_in_background_thread(self):
+        """On the server's event loop (e.g. Server.reslot / matslots.place), warm runs in a background thread."""
+        import asyncio
+        import threading
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            game = os.path.join(d, "BeamNG.drive", "current", "temp", "beamngEarth", "s")
+            os.makedirs(game)
+            path = os.path.join(game, "m.json")
+            tmp = staging.tmp_for(path)
+            Path(tmp).write_bytes(b"{}")
+            warmed = threading.Event()
+            thread_names = []
+
+            def fake_warm(p):
+                thread_names.append(threading.current_thread().name)
+                warmed.set()
+
+            async def run_on_loop():
+                staging.replace(tmp, path)
+
+            with mock.patch.object(staging, "WARM_READ", True), mock.patch.object(staging, "warm", fake_warm):
+                asyncio.run(run_on_loop())
+
+            self.assertTrue(warmed.wait(2.0))
+            self.assertEqual(thread_names, ["warm-bg"])
+
 
 class ReadHeldTest(unittest.TestCase):
     """Windows: a cache file being replaced cannot be opened for a moment (GitHub #240 / #241)."""

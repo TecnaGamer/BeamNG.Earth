@@ -125,7 +125,13 @@ def _on_event_loop():
 def _replace_once(tmp, path):
     _replace(tmp, path)
     if WARM_READ and staging_dir(path) is not None:
-        warm(path)
+        if _on_event_loop():
+            # A synchronous read here stalls the server's main loop (every game packet waits while Windows Defender
+            # scans the file, up to 15 s stalls during matslots.place on Windows). Warm in a background thread so the
+            # antivirus scan still finishes before the game opens it without stalling the event loop.
+            threading.Thread(target=warm, args=(path,), name="warm-bg", daemon=True).start()
+        else:
+            warm(path)
 
 
 def _replace(tmp, path):
