@@ -389,7 +389,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   sizes, a new download cache folder) apply without closing the game. Once one of them differs from what the running server started with, the page
   names it and offers the button: the server stops cleanly, the app's launcher (or `start.py`) starts it again with the
   same options and the settings read anew, and the world reloads around you in a few seconds while your car is held
-  still (in multiplayer only your own world reloads and only your car waits). A server started by hand gets no button.
+  still (in multiplayer only your own world reloads and only your car waits). A server started by hand gets no button;
+  only the game itself can ask (with a key the server writes in the game's own folder), at most five restarts in ten
+  minutes (then the button is refused for a while and the server keeps running); a setting forced in the server's
+  environment by hand is not offered.
 - **Experimental** settings page: features still being tested, all off by default, each from the next world server
   restart (the app's launcher, or `start.py` for a source install, starts the world server with the `BNE_*`
   switch each stands for: server/experimental.py). With any of them on, the server builds every place itself (the

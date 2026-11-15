@@ -348,13 +348,14 @@ def _srvrestart():
     return srvrestart
 
 
-def restart_env(user_dir, env):
-    """The server's environment marked as one this launcher starts again when it asks (srvrestart.ENV: the settings
-    page's "Restart world server"), with the start-time values of the settings applied here (srvrestart.START_ENV: the
-    page shows the button when one differs from the player's settings)."""
+def restart_env(user_dir, env, times=()):
+    """The server's environment (its settings applied) marked as one this launcher starts again when it asks
+    (srvrestart.ENV: the settings page's "Restart world server"), with what was applied here (srvrestart.START_ENV:
+    the page shows the button when one differs from the player's settings; the ones set by hand in this launcher's own
+    environment are left out) and the restarts so far (times: the server refuses one this launcher would not honour)."""
     try:
         import experimental         # (experimental_env put the server folder on the path)
-        _srvrestart().supervisor_env(env, experimental.read_settings(user_dir))
+        _srvrestart().supervisor_env(env, experimental.read_settings(user_dir), base_env=os.environ, times=times)
     except Exception as e:          # (no button then; the server runs as before)
         say(f"(the restart button is off: {type(e).__name__}: {e})")
 
@@ -365,9 +366,9 @@ class RestartingServer:
     at most srvrestart.MAX_RESTARTS in WINDOW_S. Any other exit (a crash, a stop) is the server's end, as before.
     poll / wait / pid / kill / returncode as the process's (wait_for_game, server_up, stop_server use it so)."""
 
-    def __init__(self, start, port=SERVER_PORT, log_path=None):
+    def __init__(self, start, port=SERVER_PORT, log_path=None, limiter=None):
         self.start, self.port, self.log_path = start, port, log_path
-        self.limiter = _srvrestart().Limiter()
+        self.limiter = limiter or _srvrestart().Limiter()   # (start() hands its times to the server: TIMES_ENV)
         self.stopping = False           # (stop_server: an exit now is the end, never restarted)
         self.restarts = 0
         self.proc = start()
@@ -400,8 +401,8 @@ class RestartingServer:
         sr = _srvrestart()
         if self.stopping or not sr.wants_restart(code):
             return False
-        if not self.limiter.allow(time.monotonic()):
-            problem(f"The world server asked to restart more than {sr.MAX_RESTARTS} times in "
+        if not self.limiter.allow(time.time()):     # (the server refuses requests past it: srvrestart.budget_refusal)
+            problem(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
                     f"{sr.WINDOW_S / 60:g} minutes; it stays stopped.", "Close the game, then start BeamNG.Earth again.")
             return False
         self.restarts += 1
@@ -450,7 +451,7 @@ def restart_extra(own, first):
     return (["--cache-dir", cache] if cache else []) + list(own)
 
 
-def start_server(user_dir, extra, log_path, game_running=None):
+def start_server(user_dir, extra, log_path, game_running=None, restart_times=()):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
     if telemetry_on() and "--offline" not in extra:
@@ -472,13 +473,14 @@ def start_server(user_dir, extra, log_path, game_running=None):
         if sq:
             env["BNGE_GROUND_SQUARE"] = sq
     experimental_env(user_dir, env)     # the settings page's Experimental switches (server/experimental.py)
-    restart_env(user_dir, env)          # ... and its "Restart world server" (server/srvrestart.py; RestartingServer)
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():
         k, sep, v = kv.partition("=")
         if sep and k:
             env[k] = v
+    # ... and its "Restart world server" (server/srvrestart.py; RestartingServer), from what is applied now
+    restart_env(user_dir, env, restart_times)
     kw = {"cwd": ROOT, "env": env}
     if IS_WIN:
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -2458,13 +2460,15 @@ def run(args):
         clear_cache(extra)
     log_path = os.path.join(data_dir(), "logs", "server.log")
     starts = []
+    limiter = _srvrestart().Limiter()   # (its restarts so far go to each server: it refuses one past the limit)
 
     def start():                # (again for the settings page's "Restart world server": the game runs then)
         starts.append(True)
         if len(starts) == 1:
-            return start_server(user_dir, extra, log_path, game_running=bool(running))
-        return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True)
-    server = RestartingServer(start, port, log_path)
+            return start_server(user_dir, extra, log_path, game_running=bool(running), restart_times=limiter.times)
+        return start_server(user_dir, restart_extra(own_extra, extra), log_path, game_running=True,
+                            restart_times=limiter.times)
+    server = RestartingServer(start, port, log_path, limiter=limiter)
     beammp = None
     try:
         row("World server", "starting")

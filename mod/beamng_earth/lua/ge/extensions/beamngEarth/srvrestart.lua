@@ -36,13 +36,16 @@ M.HELD = ' - the car is held still meanwhile'
 function M.new() return { phase = nil } end
 
 -- The ids (in order) whose value in values differs from the server's start-time value (start: hello.startSettings),
--- and 'maxRamGb' when the server says Max RAM changed since its start (memRestart). Pure.
-function M.pending(values, start, memRestart, order)
+-- but those set by hand in the server's environment (fixed: hello.startFixed; a restart would not change them), and
+-- 'maxRamGb' when the server says Max RAM changed since its start (memRestart). Pure.
+function M.pending(values, start, memRestart, order, fixed)
   local out = {}
+  local skip = {}
+  for _, k in pairs(type(fixed) == 'table' and fixed or {}) do skip[k] = true end
   if type(values) == 'table' and type(start) == 'table' then
     for _, k in ipairs(order or {}) do
       local s, v = start[k], values[k]
-      if s ~= nil and v ~= nil and v ~= s and k ~= 'maxRamGb' then out[#out + 1] = k end
+      if s ~= nil and v ~= nil and v ~= s and k ~= 'maxRamGb' and not skip[k] then out[#out + 1] = k end
     end
   end
   if memRestart then out[#out + 1] = 'maxRamGb' end

@@ -1200,7 +1200,7 @@ local function onMessage(msg)
     M._memoryInfo = nil
     -- (the settings page's "Restart world server": the server's start-time values went with it; a restart under way
     -- now waits for the new server, srvrestart.lua)
-    st.startSettings, st.restartable = nil, false
+    st.startSettings, st.startFixed, st.restartable = nil, nil, false
     M._srvrestart.disconnected(M._restart, st.clock)
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
     -- an auto-teleport lost with the connection is retried on the next hello
@@ -1229,6 +1229,7 @@ local function onMessage(msg)
     -- the start-time values of the settings the server reads only at its start, and whether its launcher starts it
     -- again (the settings page's "Restart world server": srvrestart.lua); a restart under way: the new server
     st.startSettings = type(msg.startSettings) == 'table' and msg.startSettings or nil
+    st.startFixed = type(msg.startFixed) == 'table' and msg.startFixed or nil     -- (set by hand: never pending)
     st.restartable = msg.restartable == true
     M._srvrestart.hello(M._restart, st.clock, msg.sessionId)
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
@@ -3742,6 +3743,15 @@ end
 M._srvrestart = require('beamngEarth/srvrestart')
 M._restart = M._srvrestart.new()
 M._restartCtx = {}
+M.RESTART_KEY_FILE = '/temp/beamngEarth/restart.key'     -- (server srvrestart.KEY_FILE in its session root)
+function M.restartKey()
+  local read = rawget(_G, 'readFile')
+  if not read then return nil end
+  local ok, text = pcall(read, M.RESTART_KEY_FILE)
+  if not ok or type(text) ~= 'string' then return nil end
+  local key = text:match('^%s*(%x+)%s*$')
+  return (key and #key >= 16) and key or nil
+end
 function M.restartServer()
   local r, sr = M._restart, M._srvrestart
   if sr.BUSY[r.phase] then return false, 'a restart is under way' end
@@ -3749,7 +3759,12 @@ function M.restartServer()
   if not st.restartable then
     return false, 'this world server was not started by the BeamNG.Earth app: restart it by hand'
   end
-  if not net.send({ type = 'server_restart' }) then return false, 'the world server is not connected' end
+  -- (the key the server wrote in our own folder: only the game can ask, server srvrestart.write_key)
+  local key = M.restartKey()
+  if not key then
+    return false, 'the restart key of the world server is not in this game\'s folder (does the server use another one?)'
+  end
+  if not net.send({ type = 'server_restart', key = key }) then return false, 'the world server is not connected' end
   sr.request(r, st.clock, st.sessionId)
   log('I', 'beamngEarth', 'world server restart asked (the settings page)')
   return true
@@ -3759,7 +3774,7 @@ end
 function M.restartState(values, order)
   local r, sr = M._restart, M._srvrestart
   local mem = M._memoryInfo
-  return { pending = sr.pending(values, st.startSettings, mem and mem.restart, order),
+  return { pending = sr.pending(values, st.startSettings, mem and mem.restart, order, st.startFixed),
     restartable = st.restartable == true and net.isConnected() and st.sessionId ~= nil,
     phase = r.phase, busy = sr.BUSY[r.phase] == true, text = sr.text(r, r.ours),
     mp = require('beamngEarth/simhold').mpSession() }

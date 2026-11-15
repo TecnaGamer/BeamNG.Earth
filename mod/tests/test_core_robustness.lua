@@ -413,7 +413,16 @@ do
   local roadsReady = false
   roadsM.readyAround = function() return roadsReady end
   local nHello, nA6 = #received('hello'), #received('prepare_anchor')
+  -- the key the server wrote in the game's folder (server srvrestart.write_key): without it nothing is sent
+  local keyFile = nil
+  local readFile0 = rawget(_G, 'readFile')
+  readFile = function(p) return p == core.RESTART_KEY_FILE and keyFile or nil end
+  local okK, whyK = core.restartServer()
+  T.check(okK == false and whyK:find('restart key', 1, true) and last('server_restart') == nil,
+    'no key in the game\'s folder: refused here, nothing sent')
+  keyFile = '0123456789abcdef0123456789abcdef\n'
   T.check(core.restartServer() == true and last('server_restart') ~= nil, 'the button sends server_restart')
+  T.check(last('server_restart').key == '0123456789abcdef0123456789abcdef', '... with the key')
   T.check(select(2, core.restartServer()) == 'a restart is under way', 'once: a second press is refused')
   frames(2)
   T.check(not simTimeAuthority.paused, 'asked: the car not held before the server says yes')
@@ -464,6 +473,7 @@ do
   T.check(okR == false and whyR:find('not started by the BeamNG.Earth app', 1, true), 'a server without a supervisor: no restart')
   T.check(core.restartState(mine, order).restartable == false, '... and no button')
   roadsM.readyAround = readyAround0
+  readFile = readFile0
 end
 
 ------------------------------------------------------------------------------------------

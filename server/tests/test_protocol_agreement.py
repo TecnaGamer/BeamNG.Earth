@@ -157,8 +157,9 @@ MOD_TO_SERVER = {
     # nothing (fresh numbers); always answered with a 'memory'
     "memory": {"limitGb": F(NUM, OPT)},
     # 2026-11-15: the settings page's "Restart world server" (srvrestart.lua; server srvrestart.py): the server stops
-    # cleanly and its launcher starts it again; always answered with a 'server_restart'
-    "server_restart": {},
+    # cleanly and its launcher starts it again; always answered with a 'server_restart'. key: the capability the server
+    # wrote in the game's temp/beamngEarth folder (srvrestart.write_key; core.restartKey)
+    "server_restart": {"key": F(str)},
     # 2026-11-12: the in-game reports (report.lua / reportsend.lua; server reportsend.py): the moment's server part
     # (where the camera, the centre's aim point and the car are), the mod's files written (scrubbed), and the
     # player's "Send to the developers" (only the folder's name: never a path)
@@ -326,6 +327,7 @@ SERVER_TO_MOD = {
               # the start-time values of the settings read only at a start (srvrestart.start_view: {id: value}) and
               # whether a supervisor starts the server again (srvrestart.ENV): the settings page's restart button
               "startSettings": F(dict, OPT), "restartable": F(bool, OPT),
+              "startFixed": F((list, dict), OPT),   # ... the ids set by hand there (never pending: srvrestart.lua)
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
@@ -1183,7 +1185,7 @@ class ServerMessagesTest(test_server.ServerHarness):
         c.send({"type": "memory"})                      # the page's world server memory line (memwatch.status)
         self.assertGreater(until(lambda m: m["type"] == "memory")["processes"], 0)
         # the page's "Restart world server": this test's server has no supervisor (srvrestart.ENV), so it says why not
-        c.send({"type": "server_restart"})
+        c.send({"type": "server_restart", "key": "0" * 32})
         answer = until(lambda m: m["type"] == "server_restart")
         self.assertFalse(answer["ok"])
         self.assertIn("not started by the BeamNG.Earth app", answer["error"])

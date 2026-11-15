@@ -19,6 +19,10 @@ p = sr.pending({ groundGrid = '1', expAiTunnels = true, serverCores = '4' }, sta
 T.check(#p == 3 and p[1] == 'expAiTunnels' and p[2] == 'serverCores' and p[3] == 'maxRamGb',
   'pending: in the page\'s order, Max RAM from the memory answer')
 T.check(#sr.pending({ groundGrid = '2' }, nil, false, order) == 0, 'an older server (no startSettings): nothing')
+p = sr.pending({ groundGrid = '2', expAiTunnels = true, serverCores = 'auto' }, start, false, order, { 'groundGrid' })
+T.check(#p == 1 and p[1] == 'expAiTunnels', 'set by hand in the server\'s environment (startFixed): never pending')
+p = sr.pending({ groundGrid = '2' }, start, false, order, {})
+T.check(#p == 1, 'startFixed as Lua\'s empty table: nothing left out')
 
 local function ctx(t, over)
   local c = { clock = t, inLevel = true, resyncReady = false, worldReady = false, mp = false }

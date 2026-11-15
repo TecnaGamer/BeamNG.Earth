@@ -1569,7 +1569,9 @@ class Server:
         # at a start (hello.startSettings; main), whether a supervisor starts this server again (hello.restartable), and
         # main_async's stop (set by request_restart)
         self.start_settings = None
+        self.start_fixed = []           # (ids set by hand: the page cannot change them, hello.startFixed)
         self.restartable = False
+        self.restart_key = None         # (the capability in the game's folder: srvrestart.write_key)
         self.stop_future = None
         self.restart_wanted = False
         self._fast_lock = threading.Lock()
@@ -5534,14 +5536,23 @@ class Server:
         parts = [weathermod.CREDIT] if self.weather is not None else []
         return "; ".join(parts + [ELEVATION_CREDIT])
 
-    def restart_refusal(self):
-        """Why the settings page's "Restart world server" cannot be done now (srvrestart.py), or None."""
+    def restart_refusal(self, conn, msg):
+        """Why the settings page's "Restart world server" asked on connection conn with message msg cannot be done now
+        (srvrestart.py), or None. Only the game asks: the connection that said its hello (it holds the game's stream
+        lease) with the key this server wrote in the game's own folder (a stray local client knows neither); never when
+        the supervisor's limit is reached (the server would stay stopped: the request is refused instead)."""
         if not self.restartable:
             return ("this world server was not started by the BeamNG.Earth app (its launcher or start.py), so it "
                     "cannot start itself again: stop it and start it again by hand")
+        lease = getattr(conn, "lease", None)
+        if lease is None or lease.connection is not conn:
+            return "only the game's own connection may restart the world server (no hello on this one)"
+        if not srvrestartmod.key_ok(self.restart_key, msg.get("key")):
+            return ("the request did not carry this world server's restart key (the game reads it from its "
+                    "temp/beamngEarth folder: does the server write to another user folder?)")
         if self.stop_future is None:
             return "the world server is still starting"
-        return None
+        return srvrestartmod.budget_refusal()
 
     def request_restart(self, delay_s=0.5):
         """Stop serving (main_async's stop) after delay_s, so the answers sent before go out first; main() then exits
@@ -8864,6 +8875,8 @@ class Connection:
             # again: the settings page's "Restart world server" (srvrestart.py, srvrestart.lua)
             if self.s.start_settings is not None:
                 m["startSettings"] = self.s.start_settings
+                if self.s.start_fixed:
+                    m["startFixed"] = list(self.s.start_fixed)
             if self.s.restartable:
                 m["restartable"] = True
             if self.s.mapdata is not None:      # our shapes' materials, set up by the mod now (prewarm.py)
@@ -9059,7 +9072,7 @@ class Connection:
                 memwatchmod.set_setting(msg.get("limitGb"))
             self.send(dict(memwatchmod.status(), type="memory"))
         elif kind == "server_restart":          # the settings page's "Restart world server" (srvrestart.py)
-            why = self.s.restart_refusal()
+            why = self.s.restart_refusal(self, msg)
             if why:
                 log.info("restart: refused (%s)", why)
                 self.send({"type": "server_restart", "ok": False, "error": why})
@@ -12433,7 +12446,13 @@ async def main_async(args, restart=None):
     server.server_cpus = getattr(args, "server_cpus", None)
     # (the settings page's "Restart world server", srvrestart.py: main's start-time view, the supervisor's mark)
     server.start_settings = getattr(args, "start_settings", None)
+    server.start_fixed = getattr(args, "start_fixed", None) or []
     server.restartable = srvrestartmod.restartable()
+    if server.restartable:          # (the capability only the game can read: its own temp/beamngEarth folder)
+        server.restart_key = srvrestartmod.write_key(server.root)
+        if server.restart_key is None:
+            log.warning("restart: the restart key could not be written in %s: the settings page cannot restart this "
+                        "server", server.root)
     server.photo_pool = photo_pool
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
     memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool)
@@ -13190,19 +13209,24 @@ def main():
     import sampler
     sampler.maybe_start()           # BNGE_SAMPLE=<path>: a sampling profile of this process's threads (debugging)
     import budget
+    hand = []
     try:                            # the settings page's Performance choices (GitHub #529): before the priority and
         if args.user_dir:               # (aerialpacks.consent in every process: the player's statistics choice)
             os.environ.setdefault("BNGE_USER_DIR", os.path.abspath(args.user_dir))
+        # (set by hand, so the page's value cannot change them: the restart button leaves them out, srvrestart.py)
+        hand = [k for k, on in (("serverCores", os.environ.get("BNGE_SERVER_CORES")),
+                                ("models3dmr", os.environ.get("BNE_3DMR")), ("serverPriority", args.nice != NICE)) if on]
         args.nice, chosen = cpupin.apply_player_settings(args.user_dir, args.nice, NICE)    # the cores' split below
         if chosen:
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
     try:            # (the same moment's start-time values for the settings page's restart button: srvrestart.py)
-        args.start_settings = srvrestartmod.start_view(args.user_dir) if args.user_dir else None
+        args.start_settings, args.start_fixed = (srvrestartmod.start_view(
+            args.user_dir, square=heightmap.SQUARE, hand=hand) if args.user_dir else (None, []))
     except Exception as e:
         log.warning("could not read the settings for the restart button: %s", e)
-        args.start_settings = None
+        args.start_settings, args.start_fixed = None, []
     global BELOW_GAME
     BELOW_GAME = bool(args.nice and args.nice > 0)     # (Connection.catch_up: no game cores lent at the game's priority)
     if args.nice:

@@ -95,8 +95,7 @@ def main():
         cmd += ["--telemetry", "on"]
 
     base_env = dict(os.environ)
-    env = dict(base_env)
-    experimental = experimental_env(user_dir, env)      # (the server's environment; read again at each restart)
+    experimental = experimental_env(user_dir, dict(base_env))   # (for the lines below; run_restarting applies them)
 
     install.say(f"BeamNG.Earth {install.version()}: starting the world server")
     install.say(f"  BeamNG.drive user folder: {user_dir}")
@@ -113,34 +112,35 @@ def main():
         install.say(f"  Server log: {log_path}")
     install.say("")
     try:
-        sys.exit(run_restarting(cmd, user_dir, base_env, env))
+        sys.exit(run_restarting(cmd, user_dir, base_env))
     except KeyboardInterrupt:
         sys.exit(0)
 
 
-def run_restarting(cmd, user_dir, base_env, env, run=None, limiter=None):
+def run_restarting(cmd, user_dir, base_env, run=None, limiter=None):
     """Run the server (run_logged), and again with the same options when it exits asking for it (srvrestart.EXIT_CODE:
-    the settings page's "Restart world server"), its environment made anew from base_env with the settings read again
-    (the Experimental switches), at most srvrestart.MAX_RESTARTS in WINDOW_S. Any other exit code is returned."""
+    the settings page's "Restart world server"), each time in an environment made anew from base_env with the settings
+    read again (server_env: the Experimental switches, the ground grid), at most srvrestart.MAX_RESTARTS in WINDOW_S
+    (the server is told its restarts so far and refuses one past it). Any other exit code is returned."""
     import time
     sr = _srvrestart()
     run = run or (lambda c, path, e: run_logged(c, path, e))
     limiter = limiter or sr.Limiter()
+    first = True
     while True:
-        restart_env(user_dir, env)
+        env, ids = server_env(user_dir, base_env, limiter.times)
+        if not first and ids:
+            install.say("  Experimental features on (the settings page): " + ", ".join(ids))
+        first = False
         code = run(cmd, server_log_path(), env)
         if not sr.wants_restart(code):
             return code
-        if not limiter.allow(time.monotonic()):
-            install.say(f"The world server asked to restart more than {sr.MAX_RESTARTS} times in "
+        if not limiter.allow(time.time()):
+            install.say(f"The world server exited asking to restart more than {sr.MAX_RESTARTS} times in "
                         f"{sr.WINDOW_S / 60:g} minutes; it stays stopped. Start it again with this script.")
             return code
         install.say("")
         install.say("Restarting the world server (asked from the game's settings page): the settings are read again")
-        env = dict(base_env)
-        ids = experimental_env(user_dir, env)
-        if ids:
-            install.say("  Experimental features on (the settings page): " + ", ".join(ids))
 
 
 def _srvrestart():
@@ -151,14 +151,21 @@ def _srvrestart():
     return srvrestart
 
 
-def restart_env(user_dir, env):
-    """env marked as a server this script starts again when it asks, with the start-time values it applied
-    (srvrestart.supervisor_env, as the app's launcher.restart_env)."""
+def server_env(user_dir, base_env, times=()):
+    """(the server's environment, the Experimental ids on): base_env with the settings page's start-time settings as
+    the app's launcher applies them (the Experimental switches, the ground grid: a variable set by hand wins), marked
+    as a server this script starts again when it asks (srvrestart.supervisor_env, from what was applied)."""
+    env = dict(base_env)
+    ids = experimental_env(user_dir, env)
     try:
         import experimental
-        _srvrestart().supervisor_env(env, experimental.read_settings(user_dir))
+        sr = _srvrestart()
+        settings = experimental.read_settings(user_dir)
+        sr.apply_ground(env, settings)
+        sr.supervisor_env(env, settings, base_env=base_env, times=times)
     except Exception:
         pass                            # (no restart button then)
+    return env, ids
 
 
 def experimental_env(user_dir, env):

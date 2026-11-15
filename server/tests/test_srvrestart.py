@@ -63,26 +63,64 @@ class ViewTest(unittest.TestCase):
         # (road signs before settings version 3: the hidden switch's old default, not a choice: experimental.chosen)
         self.assertIs(srvrestart.view({"version": 2, "roadSigns": True})["roadSigns"], False)
 
+    def applied(self, settings, base=None):
+        """A supervisor's environment for settings (as launcher.start_server / start.server_env build it)."""
+        base = dict(base or {})
+        env = dict(base)
+        for k, v in experimental.env_for(settings).items():     # (experimental.apply's rule: one set by hand stays)
+            env.setdefault(k, v)
+        srvrestart.apply_ground(env, settings)
+        return srvrestart.supervisor_env(env, settings, base_env=base, times=[100.0, 200.5])
+
     def test_supervisor_part_and_start_view(self):
         with tempfile.TemporaryDirectory() as folder:
-            write_settings(folder, {"version": 3, "expDropRails": True, "serverCores": "2"})
-            env = srvrestart.supervisor_env({}, experimental.read_settings(folder))
+            d = {"version": 3, "expDropRails": True, "serverCores": "2"}
+            write_settings(folder, d)
+            env = self.applied(d)
             self.assertEqual(env[srvrestart.ENV], "1")
+            self.assertEqual(env[srvrestart.TIMES_ENV], "100.000,200.500")
             part = json.loads(env[srvrestart.START_ENV])
-            self.assertEqual(set(part), {"groundGrid", *experimental.IDS}, "only what the supervisor applies")
-            self.assertTrue(part["expDropRails"])
+            self.assertEqual(set(part["values"]), set(experimental.IDS), "only what the supervisor applies")
+            self.assertTrue(part["values"]["expDropRails"])
+            self.assertEqual(part["fixed"], [], "nothing set by hand")
             self.assertTrue(srvrestart.restartable(env))
             self.assertFalse(srvrestart.restartable({}))
             # the player changes the file while the server starts: the switches are what the supervisor applied, the
             # server's own settings what it read itself
             write_settings(folder, {"version": 3, "expDropRails": False, "serverCores": "4"})
-            v = srvrestart.start_view(folder, env)
+            v, fixed = srvrestart.start_view(folder, env, square=1.0)
             self.assertTrue(v["expDropRails"])
-            self.assertEqual(v["serverCores"], "4")
+            self.assertEqual((v["serverCores"], fixed), ("4", []))
             # a broken or odd hand-over changes nothing it should not
-            for bad in ("{broken", json.dumps({"serverCores": "8", "expDropRails": "yes", "unknown": 1})):
-                v = srvrestart.start_view(folder, {srvrestart.START_ENV: bad})
-                self.assertEqual((v["serverCores"], v["expDropRails"]), ("4", False), bad)
+            for bad in ("{broken", json.dumps({"values": {"serverCores": "8", "expDropRails": "yes"}, "fixed": [3, "x"]})):
+                v, fixed = srvrestart.start_view(folder, {srvrestart.START_ENV: bad})
+                self.assertEqual((v["serverCores"], v["expDropRails"], fixed), ("4", False, []), bad)
+
+    def test_ground_grid_is_what_is_in_force(self):
+        """Codex 2026-11-15: start.py never applied Ground grid, yet the hello reported the file's 2 m as active (the
+        button then went away with the server still on 1 m). The value is the server's own square now."""
+        with tempfile.TemporaryDirectory() as folder:
+            write_settings(folder, {"version": 3, "groundGrid": "2"})
+            v, _ = srvrestart.start_view(folder, {}, square=1.0)
+            self.assertEqual(v["groundGrid"], "1", "the square in force, not the file's wish")
+            v, _ = srvrestart.start_view(folder, {}, square=2.0)
+            self.assertEqual(v["groundGrid"], "2")
+        self.assertEqual(srvrestart.apply_ground({}, {"groundGrid": "2"}), {srvrestart.GROUND_ENV: "2"})
+        self.assertEqual(srvrestart.apply_ground({}, {"groundGrid": "1"}), {})
+        self.assertEqual(srvrestart.apply_ground({srvrestart.GROUND_ENV: "1"}, {"groundGrid": "2"}),
+                         {srvrestart.GROUND_ENV: "1"}, "set by hand: it wins")
+
+    def test_set_by_hand_is_fixed(self):
+        d = {"version": 3, "groundGrid": "2"}
+        part = json.loads(self.applied(d, base={"BNE_AI_TUNNELS": "on", srvrestart.GROUND_ENV: "1"})[srvrestart.START_ENV])
+        self.assertEqual(set(part["fixed"]), {"expAiTunnels", "groundGrid"}, "the page cannot change these")
+        # a dev's BNGE_SERVER_ENV override after the switches: not what the file asks for, fixed too
+        env = {"BNE_CATENARY": "1"}
+        srvrestart.supervisor_env(env, {"version": 3}, base_env={})
+        self.assertIn("expCatenary", json.loads(env[srvrestart.START_ENV])["fixed"])
+        with tempfile.TemporaryDirectory() as folder:
+            _v, fixed = srvrestart.start_view(folder, {srvrestart.START_ENV: json.dumps(part)}, hand=["serverCores"])
+            self.assertEqual(fixed, ["expAiTunnels", "groundGrid", "serverCores"])
 
     def test_values_match_the_mod_schema(self):
         # (the mod compares them with its settings as they are: srvrestart.lua pending; settings.lua SCHEMA's values)
@@ -97,6 +135,24 @@ class LimiterTest(unittest.TestCase):
         self.assertEqual([lim.allow(t) for t in (0, 10, 20, 30)], [True, True, True, False])
         self.assertFalse(lim.allow(599))
         self.assertTrue(lim.allow(601), "the first one is out of the window again")
+
+    def test_server_side_budget(self):
+        """Codex 2026-11-15: six requests in ten minutes used up the supervisor's five restarts and the sixth left the
+        player with a stopped server. The server now knows the supervisor's restarts and refuses instead."""
+        sup = srvrestart.Limiter()
+        env = {}
+        now = 1_000_000.0
+        for i in range(srvrestart.MAX_RESTARTS):
+            env[srvrestart.TIMES_ENV] = ",".join(f"{t:.3f}" for t in sup.times)
+            self.assertIsNone(srvrestart.budget_refusal(env, now + i), f"restart {i + 1}: allowed")
+            self.assertTrue(sup.allow(now + i + 0.5), "and the supervisor, a moment later, honours it")
+        env[srvrestart.TIMES_ENV] = ",".join(f"{t:.3f}" for t in sup.times)
+        why = srvrestart.budget_refusal(env, now + 10)
+        self.assertIn("try again in 10 min", why, "the sixth: refused by the server, which keeps running")
+        self.assertFalse(sup.would_allow(now + 10))
+        self.assertIsNone(srvrestart.budget_refusal(env, now + srvrestart.WINDOW_S + 1), "later: allowed again")
+        self.assertIsNone(srvrestart.budget_refusal({srvrestart.TIMES_ENV: "x,,nan"}, now), "garbage: no times")
+        self.assertIsNone(srvrestart.budget_refusal({}, now))
 
     def test_only_the_restart_code(self):
         self.assertTrue(srvrestart.wants_restart(srvrestart.EXIT_CODE))
@@ -160,16 +216,48 @@ class ServerSideTest(unittest.TestCase):
 
     def bare_server(self):
         s = self.earthd.Server.__new__(self.earthd.Server)
-        s.restartable, s.stop_future, s.restart_wanted = False, None, False
+        s.restartable, s.stop_future, s.restart_wanted, s.restart_key = False, None, False, "ab" * 16
         return s
 
     def test_refusals(self):
         s = self.bare_server()
-        self.assertIn("not started by the BeamNG.Earth app", s.restart_refusal())
+        game = types.SimpleNamespace()
+        game.lease = types.SimpleNamespace(connection=game)
+        ok = {"key": "ab" * 16}
+        self.assertIn("not started by the BeamNG.Earth app", s.restart_refusal(game, ok))
         s.restartable = True
-        self.assertIn("still starting", s.restart_refusal(), "not serving yet")
+        self.assertIn("still starting", s.restart_refusal(game, ok), "not serving yet")
         s.stop_future = object()
-        self.assertIsNone(s.restart_refusal())
+        with mock.patch.dict(os.environ, {srvrestart.TIMES_ENV: ""}):
+            self.assertIsNone(s.restart_refusal(game, ok))
+            # (Codex 2026-11-15: any local client could stop the server) no hello on the connection, another
+            # connection's lease, no key or a wrong one: refused before anything is answered yes
+            self.assertIn("no hello", s.restart_refusal(types.SimpleNamespace(lease=None), ok))
+            other = types.SimpleNamespace(lease=game.lease)
+            self.assertIn("no hello", s.restart_refusal(other, ok))
+            for bad in ({}, {"key": "cd" * 16}, {"key": 5}, {"key": ""}):
+                self.assertIn("restart key", s.restart_refusal(game, bad), bad)
+            s.restart_key = None
+            self.assertIn("restart key", s.restart_refusal(game, ok), "no key written: nobody can ask")
+            s.restart_key = "ab" * 16
+        times = ",".join(str(time.time() - i) for i in range(srvrestart.MAX_RESTARTS))
+        with mock.patch.dict(os.environ, {srvrestart.TIMES_ENV: times}):
+            self.assertIn("try again in", s.restart_refusal(game, ok), "the supervisor's limit: refused, not stopped")
+
+    def test_key_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            k1 = srvrestart.write_key(os.path.join(root, "temp", "beamngEarth"))
+            path = os.path.join(root, "temp", "beamngEarth", srvrestart.KEY_FILE)
+            with open(path, encoding="ascii") as f:
+                self.assertEqual(f.read(), k1)
+            if os.name == "posix":
+                self.assertEqual(os.stat(path).st_mode & 0o777, 0o600, "private to the user")
+            k2 = srvrestart.write_key(os.path.join(root, "temp", "beamngEarth"))
+            self.assertNotEqual(k1, k2, "a fresh key every start")
+            self.assertTrue(srvrestart.key_ok(k2, k2 + "\n") and not srvrestart.key_ok(k2, k1))
+            blocker = os.path.join(root, "file")
+            open(blocker, "w").close()
+            self.assertIsNone(srvrestart.write_key(os.path.join(blocker, "sub")), "cannot write: None")
 
     def test_request_then_serve_returns_with_connections_closed(self):
         earthd = self.earthd
@@ -216,6 +304,7 @@ class ServerSideTest(unittest.TestCase):
 
 
 import test_server  # noqa: E402
+from netclient import Client  # noqa: E402
 
 
 class SessionTest(test_server.ServerHarness):
@@ -223,20 +312,41 @@ class SessionTest(test_server.ServerHarness):
 
     def test_hello_and_request(self):
         self.server.start_settings = srvrestart.view({"version": 3, "expDropRails": True})
+        self.server.start_fixed = ["serverCores"]
         self.server.restartable = True
+        key = self.server.restart_key = srvrestart.write_key(self.server.root)
+        self.assertTrue(os.path.isfile(os.path.join(self.server.root, srvrestart.KEY_FILE)))
         self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
         m, _ = self.c.until(lambda m: m["type"] == "hello", 10)
         self.assertIs(m["restartable"], True)
         self.assertIs(m["startSettings"]["expDropRails"], True)
         self.assertEqual(m["startSettings"]["groundGrid"], "1")
-        self.c.send({"type": "server_restart"})
+        self.assertEqual(m["startFixed"], ["serverCores"])
+        self.c.send({"type": "server_restart", "key": key})
         m, _ = self.c.until(lambda m: m["type"] == "server_restart", 10)
         self.assertEqual((m["ok"], "still starting" in m["error"]), (False, True), "not serving yet: refused")
 
         async def serving():
             self.server.stop_future = asyncio.get_running_loop().create_future()
         asyncio.run_coroutine_threadsafe(serving(), self.loop).result(5)
-        self.c.send({"type": "server_restart"})
+        # (Codex 2026-11-15) a stray local client: without a hello, or with one but without the key, refused and the
+        # server keeps serving
+        stray = Client(self.srv.sockets[0].getsockname()[1])
+        try:
+            stray.send({"type": "server_restart", "key": key})
+            m, _ = stray.until(lambda m: m["type"] == "server_restart", 10)
+            self.assertFalse(m["ok"])
+            self.assertIn("no hello", m["error"])
+            stray.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
+            stray.until(lambda m: m["type"] == "hello", 10)
+            stray.send({"type": "server_restart", "key": "0" * 32})
+            m, _ = stray.until(lambda m: m["type"] == "server_restart", 10)
+            self.assertFalse(m["ok"])
+            self.assertIn("restart key", m["error"])
+        finally:
+            stray.close()
+        self.assertFalse(self.server.stop_future.done() or self.server.restart_wanted, "still serving")
+        self.c.send({"type": "server_restart", "key": key})
         m, _ = self.c.until(lambda m: m["type"] == "server_restart", 10)
         self.assertEqual(m, {"type": "server_restart", "ok": True}, "the answer first ...")
         end = time.monotonic() + 5
@@ -342,8 +452,10 @@ class LauncherTest(unittest.TestCase):
                     mock.patch.dict(os.environ, {}, clear=False):
                 for k in [k for k in os.environ if k.startswith("BNE_")]:
                     os.environ.pop(k)
+                lim = srvrestart.Limiter()
                 rs = launcher.RestartingServer(
-                    lambda: launcher.start_server(folder, [], os.path.join(folder, "server.log")), 47613, None)
+                    lambda: launcher.start_server(folder, [], os.path.join(folder, "server.log"),
+                                                  restart_times=lim.times), 47613, None, limiter=lim)
                 write_settings(folder, {"version": 3, "expAiTunnels": True})     # (changed in the game meanwhile)
                 rs.poll()
                 rs.poll()
@@ -352,8 +464,10 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(envs[1].get("BNE_AI_TUNNELS"), "on", "the new switch in the restarted server")
         for env in envs:
             self.assertEqual(env[srvrestart.ENV], "1")
-        self.assertFalse(json.loads(envs[0][srvrestart.START_ENV])["expAiTunnels"])
-        self.assertTrue(json.loads(envs[1][srvrestart.START_ENV])["expAiTunnels"])
+        self.assertFalse(json.loads(envs[0][srvrestart.START_ENV])["values"]["expAiTunnels"])
+        self.assertTrue(json.loads(envs[1][srvrestart.START_ENV])["values"]["expAiTunnels"])
+        self.assertEqual(envs[0][srvrestart.TIMES_ENV], "", "the first start: no restarts yet")
+        self.assertEqual(len(envs[1][srvrestart.TIMES_ENV].split(",")), 1, "the restarted server knows of one")
 
 
 class RestartExtraTest(unittest.TestCase):
@@ -379,34 +493,48 @@ class StartPyTest(unittest.TestCase):
                 mock.patch.object(start, "server_log_path", return_value=None):
             write_settings(folder, {"version": 3})
             base = {"PATH": "x"}
-            env = dict(base)
-            start.experimental_env(folder, env)
             runs = []
 
             def run(cmd, path, e):
                 runs.append(dict(e))
                 if len(runs) == 1:
-                    write_settings(folder, {"version": 3, "expCatenary": True})
+                    write_settings(folder, {"version": 3, "expCatenary": True, "groundGrid": "2"})
                     return srvrestart.EXIT_CODE
                 return 0
-            self.assertEqual(start.run_restarting(["server"], folder, base, env, run=run), 0)
+            self.assertEqual(start.run_restarting(["server"], folder, base, run=run), 0)
         self.assertEqual(len(runs), 2)
         self.assertNotIn("BNE_CATENARY", runs[0])
         self.assertEqual(runs[1].get("BNE_CATENARY"), "1", "the restarted server's environment made anew")
         self.assertEqual(runs[1]["PATH"], "x")
         self.assertTrue(all(r[srvrestart.ENV] == "1" for r in runs))
+        self.assertEqual(base, {"PATH": "x"}, "the base environment untouched")
+        # (Codex 2026-11-15: start.py never applied Ground grid) the restarted source server gets the 2 m ground
+        self.assertNotIn(srvrestart.GROUND_ENV, runs[0])
+        self.assertEqual(runs[1].get(srvrestart.GROUND_ENV), "2")
+        self.assertEqual(len(runs[1][srvrestart.TIMES_ENV].split(",")), 1)
+
+    def test_ground_grid_by_hand_wins_and_is_fixed(self):
+        import start
+        with tempfile.TemporaryDirectory() as folder:
+            write_settings(folder, {"version": 3, "groundGrid": "2"})
+            env, _ids = start.server_env(folder, {srvrestart.GROUND_ENV: "1"})
+            self.assertEqual(env[srvrestart.GROUND_ENV], "1")
+            self.assertIn("groundGrid", json.loads(env[srvrestart.START_ENV])["fixed"])
+            env, _ids = start.server_env(folder, {})
+            self.assertEqual(env[srvrestart.GROUND_ENV], "2")
+            self.assertEqual(json.loads(env[srvrestart.START_ENV])["fixed"], [])
 
     def test_limit_and_crash(self):
         import start
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(start.install, "say"), \
                 mock.patch.object(start, "server_log_path", return_value=None):
             calls = []
-            code = start.run_restarting(["server"], folder, {}, {},
+            code = start.run_restarting(["server"], folder, {},
                                         run=lambda c, p, e: calls.append(1) or srvrestart.EXIT_CODE,
                                         limiter=srvrestart.Limiter(most=2))
             self.assertEqual((code, len(calls)), (srvrestart.EXIT_CODE, 3), "two restarts, then it stays stopped")
             calls.clear()
-            self.assertEqual(start.run_restarting(["server"], folder, {}, {}, run=lambda c, p, e: calls.append(1) or 1), 1)
+            self.assertEqual(start.run_restarting(["server"], folder, {}, run=lambda c, p, e: calls.append(1) or 1), 1)
             self.assertEqual(len(calls), 1, "a crash is not restarted")
 
 
