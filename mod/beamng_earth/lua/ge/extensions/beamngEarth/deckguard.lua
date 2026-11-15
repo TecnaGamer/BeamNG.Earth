@@ -35,6 +35,7 @@ M.LAT_M = 9                 -- m from a span's line the path counts as on it ...
 M.COS_MIN = 0.75            -- ... going along it (cos of the angle: ~41 deg)
 M.END_M = 40                -- m from a span's end the path may enter it (farther in: it crosses it or passes under)
 M.LEVEL_M = 6               -- m: the car this near the deck's level is at it
+M.LEVEL_UP_M = 4            -- m more over the abutments' line a car on it may be mid-span (a deck raised over a road)
 M.LEVEL_NEAR_M = 80         -- ... tested only this near the end it enters (farther, the road there may climb or fall)
 M.DROP_M = 2.0              -- m: the block's ground this far under the deck's level is a gap (less: driven on as ground)
 M.A = 4.0                   -- m/s^2: the braking profile (at 4, a tile 600 m ahead, where they arrive on time at
@@ -220,16 +221,29 @@ function M.look(g, inp)
           -- now at its known level; else it is crossed or passed under (or left alone)
           local fromEnd = d > 0 and u or (sp.len - u)
           local ok = (k == 1 and g.riding[sp.id]) or false
+          local rejected = false        -- (its end's level check said no: nothing below overrides it)
           if not ok and fromEnd <= M.END_M then
             local abutted = d > 0 and sp.abut0 or (d < 0 and sp.abut1)
             local ez = abutted and levelAt(sp, d > 0 and 0 or sp.len, groundAt) or nil
             local ex, ey = (d > 0) and sp.pts[1] or sp.pts[2 * sp.n - 1], (d > 0) and sp.pts[2] or sp.pts[2 * sp.n]
             local near = (ex - x) ^ 2 + (ey - y) ^ 2 <= M.LEVEL_NEAR_M * M.LEVEL_NEAR_M
-            ok = not (ez and near) or abs(z - ez) <= M.LEVEL_M
+            if ez and near then
+              ok = abs(z - ez) <= M.LEVEL_M
+              rejected = not ok
+            else
+              ok = k > 1        -- (a predicted entry, asked again as it nears; on it now: the checks below)
+            end
           end
-          if not ok and k == 1 then
+          -- on it now, mid-span, at its known level: within LEVEL_M under it to LEVEL_M + LEVEL_UP_M over it (a deck
+          -- raised over a road under it stands above its abutments' line); a road far over or under it is not on it
+          -- (Codex review 2026-11-15 round 3: a higher road within the corridor was taken as on the bridge)
+          if not ok and not rejected and k == 1 then
             local lz = levelAt(sp, u, groundAt)
-            ok = lz ~= nil and z >= lz - M.LEVEL_M
+            if lz then
+              ok = z >= lz - M.LEVEL_M and z <= lz + M.LEVEL_M + M.LEVEL_UP_M
+            else            -- (no abutment known: on it only off a deck it was on, joined at a fork)
+              ok = fromEnd <= M.END_M and next(g.riding) ~= nil
+            end
           end
           if not ok then break end
           entered, dir = true, d

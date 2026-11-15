@@ -104,6 +104,28 @@ do
   T.check(look(guard({}), w, 120, 0, 10.5, 30, 0) == nil, 'no spans: nothing')
 end
 
+-- a road above it (Codex review 2026-11-15 round 3): within the corridor at its end but 20 m over the deck's level, the
+-- bridge's tile missing: not on the bridge; nor mid-span far over it, with no level check at an end to decide
+do
+  local w = world()
+  local g = guard({ SPAN })
+  T.check(look(g, w, 298, 0, 30.5, 30, 0, 0) == nil and next(g.riding) == nil and g.ep == nil,
+    'a higher road at its end: no gap, not on it, no episode')
+  local _, hold = G.brake(g, { v = 30, dt = 1 / 60 })
+  T.check(not hold, '... never held')
+  local g2 = guard({ { 300, 0, 400, 0, 500, 0 } })
+  w.groundAt = function(x, y) if math.abs(x - 300) <= 1 or math.abs(x - 500) <= 1 then return 10 end return 2 end
+  T.check(look(g2, w, 400, 0, 30.5, 30, 0, 0) == nil and next(g2.riding) == nil, 'mid-span 20 m over its level: not on it')
+  T.check(look(g2, w, 400, 0, 12, 30, 0, 0.25) ~= nil and g2.riding[g2.spans[1].id], 'mid-span at its level: on it')
+  -- a span whose ends stand on other decks (no abutment height known): on it only coming off a deck the car was on
+  local g3 = G.new()
+  G.onSpans(g3, { anchorId = 1, spans = { SPAN }, abut = { 0 } }, 1)
+  T.check(look(g3, world(), 298, 0, 30.5, 30, 0, 0) == nil and next(g3.riding) == nil,
+    'no abutment known, not off a deck: not taken as on it')
+  g3.riding = { other = true }
+  T.check(look(g3, world(), 298, 0, 10.5, 30, 0, 0.25) ~= nil, '... off a deck it was on: on it, the gap ahead')
+end
+
 -- already on a solid part of it: the next tile's part missing
 do
   local w = world()
