@@ -491,10 +491,22 @@ and remembered; `default` goes back. Move the old cache folder there first to ke
 deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
 keeps the area around you.
 
-**BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
-where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;
-`--game-dir PATH` sets it too, `--game-dir default` forgets it. A game folder outside Steam is started directly. On
-Linux, BeamMP's launcher finds the game only in Steam's libraries, so BeamMP isn't started with such a copy.
+**BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app also
+looks where BeamNG itself records its folder and, on Windows, in the Epic Games Launcher's list of installed games.
+Not found anywhere: the app asks where it is the first time (Enter opens your system's folder window, or type or paste
+the folder) and remembers it; `--game-dir PATH` sets it too, `--game-dir default` forgets it. **Several copies**
+(Steam and Epic Games, say): the app asks once which one to start and remembers it; `--choose-game` asks again. An
+Epic Games copy starts directly (see below); a copy in a folder of your own starts from its folder. On Linux, BeamMP's
+launcher finds the game only in Steam's libraries, so BeamMP isn't started with a copy outside them (single player
+works as usual).
+
+**Starting without Steam** (`--launch direct`, remembered; `--launch steam` or `--launch auto` goes back): the app
+starts the game's own program with `-nosteam` and the same user folder (`-userpath`), so the mod, the map cache and
+your settings stay the same, and Steam doesn't need to be running. Windows: `Bin64\BeamNG.drive.x64.exe` (BeamNG's
+launch options window is skipped; `--gfx` still picks a renderer); Linux: the native `BinLinux/BeamNG.drive.x64`.
+Steam's overlay, Steam Input and play time aren't available this way. BeamMP still starts with the game. On a
+Steam Deck in Game Mode, and for the Windows build under Proton, the game starts as before. The default (`auto`)
+starts a Steam copy through Steam as before.
 
 More detail (traffic, the status bar, reporting problems, troubleshooting): [docs/QUICKSTART.md](docs/QUICKSTART.md).
 

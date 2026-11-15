@@ -463,13 +463,17 @@ def system_too_old(exe, run=None):
     return f"this system's libraries are too old for it ({m.group(1)} missing)" if m else None
 
 
-def start(exe, user_dir, log_path):
-    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path."""
+def start(exe, user_dir, log_path, user_path=False):
+    """The BeamMP launcher, without starting the game itself (the app does), its output to log_path. user_path
+    (Windows): the user folder named to it too (--user-path), as the game is told with -userpath when the app starts it
+    without Steam (gameinstall.py), so both use the same folder."""
     args = [exe, "--no-launch"]
     if not IS_WIN:
         # (a build from source: its self-update would fetch the Windows launcher; the game's folder named, as BeamMP
         # cannot find a Linux one by itself)
         args += ["--no-update", "--user-path", game_user_path(user_dir)]
+    elif user_path and user_dir:
+        args += ["--user-path", game_user_path(user_dir)]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     # (it writes Launcher.cfg, Launcher.log and its key in its working folder: a system package's /usr/bin is not
     # writable, "Failed to write config on disk!" and it quit, 2026-11-04; then the log's folder)

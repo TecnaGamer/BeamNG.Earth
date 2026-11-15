@@ -20,6 +20,8 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
     launcher.py                  everything
     launcher.py --no-game        only the server (start the game yourself)
     launcher.py --no-gcpatch     the game without the engine patches (tools/gcpatch, enginepatch.py)
+    launcher.py --launch direct  start the game without Steam (-nosteam; kept; --launch steam / auto go back)
+    launcher.py --choose-game    pick the copy of the game (Steam, Epic Games, a folder) and how it starts
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
     launcher.py --gpu off        hybrid graphics: never steer the game's GPU (auto does, discrete forces it)
     launcher.py --clear-cache    delete the map download cache first (instant; the files go in the background)
@@ -38,6 +40,7 @@ import threading
 import time
 
 import apppaths
+import gameinstall
 
 FROZEN = getattr(sys, "frozen", False)
 ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
@@ -1101,7 +1104,8 @@ def windows_steam_start(win_args=(), meanwhile=None):
         row("Game", "started directly")
     elif how == "none":
         problem("the game did not start: Steam did not start it, and BeamNG.drive's folder was not found to start it "
-                "directly.", "Press Play on BeamNG.drive in Steam: the world server keeps running for it.")
+                "directly.", "Press Play on BeamNG.drive in Steam: the world server keeps running for it. Next time, "
+                "--game-dir PATH --launch direct starts it without Steam.")
     return proc
 
 
@@ -1135,45 +1139,20 @@ def windows_beamng_ini():
     return _ini(os.path.join(base, "BeamNG", "BeamNG.drive.ini"))
 
 
+def windows_installs():
+    """Every BeamNG.drive copy on Windows (also inside a Proton prefix), in the search order (gameinstall.find_windows):
+    the folder the player chose, installPath in %LOCALAPPDATA%\\BeamNG\\BeamNG.drive.ini (as BeamMP's launcher finds
+    it), the game's registry key, Steam's libraries, the Epic Games Launcher's manifests."""
+    return gameinstall.find_windows(saved=apppaths.saved_game_dir(), ini=windows_beamng_ini(),
+                                    registry=gameinstall.read_registry_values(),
+                                    steam_path=gameinstall.read_steam_path(),
+                                    manifest_dir=gameinstall.epic_manifest_dir())
+
+
 def windows_game_dir():
-    """The game's folder on Windows (also inside a Proton prefix), as BeamMP's launcher finds it: installPath in
-    %LOCALAPPDATA%\\BeamNG\\BeamNG.drive.ini, else the game's registry key, else Steam's libraries."""
-    ok = lambda d: d and os.path.isfile(os.path.join(d, "BeamNG.drive.exe"))
-    own = apppaths.saved_game_dir()         # (the folder the player chose: --game-dir, the start's question)
-    if own:
-        return own
-    d = windows_beamng_ini().get("installPath")
-    if ok(d):
-        return d
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\BeamNG\BeamNG.drive") as k:
-            i = 0
-            while True:
-                try:
-                    _, v, _ = winreg.EnumValue(k, i)
-                except OSError:
-                    break
-                if isinstance(v, str) and ok(v):
-                    return v
-                i += 1
-    except OSError:
-        pass
-    try:
-        import winreg
-        import re
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
-            steam = winreg.QueryValueEx(k, "SteamPath")[0]
-        libs = [steam]
-        with open(os.path.join(steam, "steamapps", "libraryfolders.vdf"), encoding="utf-8", errors="replace") as f:
-            libs += [p.replace("\\\\", "\\") for p in re.findall(r'"path"\s+"([^"]+)"', f.read())]
-        for lib in libs:
-            d = os.path.join(lib, "steamapps", "common", "BeamNG.drive")
-            if ok(d):
-                return d
-    except OSError:
-        pass
-    return None
+    """The game's folder on Windows: the first copy found (windows_installs), or None."""
+    found = windows_installs()
+    return found[0].root if found else None
 
 
 # --gfx -> the game's -gfx value. The game knows "dx11" and "vk" but not "dx12" (2026-10-24, a Windows 10 / RTX 3060
@@ -1366,8 +1345,14 @@ def split_launch_options(line):
     return env, wrapper, post.split()
 
 
-def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], []), meanwhile=None):
+def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({}, [], []), meanwhile=None,
+               launch=None):
     """Start the game; returns a Popen when this process started it directly, else None (through Steam).
+
+    launch: the copy and the launch mode chosen before the start (gameinstall.Launch, resolve_launch): "direct" starts
+    the game's own program without Steam (direct_start; never through Steam after all), "folder" a copy of the player's
+    own from its folder, "steam" as before. None: as before (a saved folder outside Steam's libraries from its folder,
+    else through Steam).
 
     meanwhile: called once the game has been asked to start, before the start is watched (a direct Linux start's
     DIRECT_FAIL_S, the Windows hand-off to Steam): run follows the world server's start there.
@@ -1381,9 +1366,15 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     win_args = ["-gfx", GFX_ARG.get(gfx, gfx)] if gfx else []
     extra = os.environ.get("BNGE_GAME_ARGS", "").split()     # (tests: e.g. "-bngetest car,damage")
     win_args += extra
+    if launch is not None and launch.mode == "direct":
+        return direct_start(launch, use_gcpatch, win_args if IS_WIN else extra, user_dir, steam_args, wrapper,
+                            meanwhile)
     # a game folder the player chose outside Steam's libraries (another launcher, a copy of its own): started directly
-    own = apppaths.saved_game_dir()
-    own = own if own and not apppaths.in_steam_library(own) else None
+    if launch is not None:
+        own = launch.install.root if launch.mode == "folder" and launch.install else None
+    else:
+        own = apppaths.saved_game_dir()
+        own = own if own and not apppaths.in_steam_library(own) else None
     if IS_WIN and not win_args and not under_wine() and not own:
         # through Steam on Windows itself: Steam Input (a Steam Controller), the overlay and Steam's play time reach
         # only a game Steam started (GitHub #218, 1.6.1 on Windows: "Steam doesn't pass input from the Steam
@@ -1394,7 +1385,7 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
     if IS_WIN:
         # as BeamMP's launcher: the game's own launcher (BeamNG.drive.exe) in its folder, waited on. Works under
         # Wine / Proton too (the .exe started with protontricks), where Steam's links do not reach Steam
-        d = windows_game_dir()
+        d = own or (launch.install.root if launch is not None and launch.install else None) or windows_game_dir()
         if d:
             row("Game", f"starting ({d})")
             try:
@@ -1406,7 +1397,8 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
         steam_launch(win_args)
         return None
     if not IS_WIN:
-        exe = linux_game_exe()
+        exe = os.path.join(launch.install.root, GAME_EXE_LINUX) if launch is not None and launch.install else \
+            linux_game_exe()
         if exe and sandboxed_game(exe):
             row("Game", "starting through Steam (a Flatpak / snap Steam: without the grass patch)")
             exe = None
@@ -1453,10 +1445,81 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
                 return proc
             say(f"the direct start ended (code {proc.returncode}); starting the game through Steam instead")
         elif exe:
-            row("Game", "Steam is not running: starting through Steam (without the grass patch)")
+            row("Game", "Steam is not running: starting through Steam (without the grass patch; --launch direct "
+                        "starts the game without Steam)")
     row("Game", "starting through Steam")
     steam_launch(win_args if IS_WIN else ())
     return None
+
+
+def direct_start(launch, use_gcpatch=False, game_args=(), user_dir=None, steam_args=({}, [], []), wrapper=(),
+                 meanwhile=None):
+    """The game's own program started without Steam (launch mode "direct", gameinstall.py): Windows
+    <root>\\Bin64\\BeamNG.drive.x64.exe, Linux <root>/BinLinux/BeamNG.drive.x64, with -nosteam and -userpath (the same
+    user folder as through Steam: the mod, the caches and the settings stay where they are). Never through Steam after
+    all (PR #1309: no silent switch back): a program that is not there or ends at once is said and the app stops.
+    game_args: Windows: a renderer's -gfx and tests' options; Linux: tests' options (Steam's launch options' own come
+    from steam_args, their variables too; wrapper: start_game's, with their wrapper command). Returns the Popen."""
+    inst, exe = launch.install, launch.exe
+    store = inst.store if inst else ""
+    if not inst or not exe or not os.path.isfile(exe):
+        problem(f"BeamNG.drive's program for a start without Steam was not found: {exe or '(no game folder)'}",
+                "Point the app at the game's folder with --game-dir PATH, or start through Steam again with "
+                "--launch steam.")
+        raise SystemExit(1)
+    if not IS_WIN and sandboxed_game(exe):
+        problem("this copy of BeamNG.drive belongs to a Flatpak / snap Steam: it runs only inside that sandbox, "
+                "through Steam.", "Start with --launch steam (or --launch auto).")
+        raise SystemExit(1)
+    row("Game", f"starting without Steam ({exe})")
+    say("  (Steam's overlay, Steam Input and play time are not there in this mode; --launch steam goes back)")
+    if store == "epic":
+        say("  (an Epic Games copy: if the game asks you to sign in or closes at once, open the Epic Games Launcher, "
+            "start BeamNG.drive there once, then try again)")
+    if IS_WIN:
+        cmd, kw = [exe] + gameinstall.direct_args(launch.user_base, game_args), {"cwd": inst.root}
+    else:
+        steam_env, _, steam_opts = steam_args
+        env = clean_env()
+        for k in ("SteamAppId", "SteamGameId", "SteamOverlayGameId"):      # (no Steam: none of its ids)
+            env.pop(k, None)
+        lib = gcpatch_lib() if use_gcpatch else None
+        if lib:
+            env["LD_PRELOAD"] = lib + (":" + env["LD_PRELOAD"] if env.get("LD_PRELOAD") else "")
+            if user_dir:
+                env["BNGEARTH_USER_DIR"] = user_dir
+        env.update(steam_env)
+        # (the Steam Linux Runtime of a Steam library's copy, when there: the game's UI needs its libraries on SteamOS;
+        # it is files, not the Steam client)
+        runtime = steam_runtime(exe)
+        cmd = list(wrapper or []) + ([runtime, "--verb=waitforexitandrun", "--"] if runtime else []) + [exe] + \
+            gameinstall.direct_args(launch.user_base, list(game_args or []) + list(steam_opts or []))
+        kw = {"cwd": os.path.dirname(os.path.dirname(exe)), "env": env, "stdout": subprocess.DEVNULL,
+              "stderr": subprocess.DEVNULL, "start_new_session": True}
+        if lib:
+            row("Game", "with the grass patch")
+    try:
+        proc = subprocess.Popen(cmd, **kw)
+    except OSError as e:
+        problem(f"BeamNG.drive could not be started without Steam: {exe} ({e})",
+                "Check that the folder is the game's, or start through Steam with --launch steam.")
+        raise SystemExit(1)
+    if meanwhile:
+        meanwhile()
+    t0 = time.time()
+    while time.time() - t0 < DIRECT_FAIL_S:
+        if proc.poll() is not None:
+            break
+        time.sleep(1)
+    if proc.poll() is None:
+        return proc
+    hint = {"epic": "Open the Epic Games Launcher, start BeamNG.drive from your library once, then start BeamNG.Earth "
+                    "again. ",
+            "steam": "This copy may need Steam: start BeamNG.Earth with --launch steam. "}.get(store, "")
+    log = os.path.join(user_dir, "beamng.log") if user_dir else "beamng.log in the game's user folder"
+    problem(f"BeamNG.drive ended right after its start without Steam (exit code {proc.returncode}): {exe}",
+            hint + f"The game's own log may say why: {log}")
+    raise SystemExit(1)
 
 
 # A game update turns every mod off (core_modmanager.getModsDisabledAfterUpdate: "Mods will be disabled after updating
@@ -2055,6 +2118,13 @@ def main():
     ap.add_argument("--game-dir", metavar="PATH",
                     help="where BeamNG.drive is installed, when it is not found in Steam's libraries (another "
                          "launcher, a folder of its own; kept for the next starts, 'default' forgets it)")
+    ap.add_argument("--choose-game", action="store_true",
+                    help="ask which copy of BeamNG.drive to start (Steam, Epic Games, another folder) and how, even "
+                         "when one was chosen before (asked by itself when several copies are found)")
+    ap.add_argument("--launch", choices=["auto", "steam", "direct"],
+                    help="how the game starts, kept for the next starts: steam (through Steam: its overlay, Steam "
+                         "Input, play time), direct (the game's own program with -nosteam: no Steam client needed), "
+                         "auto (the default: a Steam copy through Steam, an Epic Games copy directly)")
     ap.add_argument("--user-dir", help="BeamNG.drive user folder (default: found)")
     ap.add_argument("--proton", dest="build", action="store_const", const="proton",
                     help="Linux: the game is the Windows build under Proton")
@@ -2105,15 +2175,113 @@ def main():
         sys.exit(1)
 
 
-def ask_game_dir(ask=None):
-    """The game is in none of Steam's libraries (another launcher, a folder of its own): the player is asked where it
-    is (the system's folder window, or the path typed), kept for the next starts. Skipped: through Steam as before."""
-    say("BeamNG.drive was not found in Steam's libraries.")
+LAUNCH_TEXT = {"steam": "through Steam", "direct": "without Steam (-nosteam)", "folder": "from its folder"}
+
+
+def find_installs():
+    """Every copy of the game this system has, in the search order (gameinstall.py)."""
+    if IS_WIN:
+        return windows_installs()
+    import install
+    return gameinstall.find_linux(apppaths.saved_game_dir(), install._steam_roots())
+
+
+def choose_game(installs, ask=None):
+    """Several copies (or --choose-game): the player picks one, or another folder (M); kept (app.json gameDir). Returns
+    the folder chosen, or None (no console to ask in, or nothing chosen)."""
+    ask = ask or input
+    say("Which copy of BeamNG.drive should BeamNG.Earth start?")
+    for i, inst in enumerate(installs, 1):
+        say(f"  {i}. {inst.label()}")
+    say("  M. another folder")
+    span = f"1-{len(installs)}, M" if installs else "M"
+    for _ in range(3):
+        try:
+            a = (ask(f"  Your choice [{span}]: ") or "").strip().lower()
+        except (EOFError, OSError):
+            return None
+        if a == "m":
+            return ask_game_dir(ask, searched=False)
+        if a.isdigit() and 1 <= int(a) <= len(installs):
+            root = installs[int(a) - 1].root
+            if apppaths.set_game_dir(root):
+                say(f"  Using {root} (from now on; --choose-game asks again).")
+                return root
+        say("  (a number from the list, or M)")
+    return None
+
+
+def ask_launch_mode(inst, ask=None):
+    """With the copy just chosen, a Steam copy: through Steam, or directly without Steam (app.json launchMode)."""
+    if inst.store != "steam":
+        return
+    ask = ask or input
+    try:
+        a = (ask("  Start it [S]team (Steam's overlay, Steam Input, play time) or [D]irectly, without Steam? [S/d]: ")
+             or "").strip().lower()
+    except (EOFError, OSError):
+        return
+    apppaths.set_launch_mode("direct" if a in ("d", "direct") else "auto")
+
+
+def resolve_launch(args, user_dir, build, can_ask=True, ask=None):
+    """The copy of the game and how it starts, settled before anything starts (gameinstall.Launch): --launch (kept),
+    the copy from --game-dir / the saved choice / BeamNG's records / Steam / Epic, the player asked when several
+    copies are found (none is preferred silently) or none at all."""
+    given = getattr(args, "launch", None)
+    if given:
+        apppaths.set_launch_mode(given)
+        row("Launch", f"{given} (kept for the next starts; --launch auto goes back to the default)")
+    gamescope = not IS_WIN and under_gamescope()
+    can_ask = can_ask and not gamescope         # (Game Mode: no console; the start as before)
+    build_name = "proton" if build == "proton" else "windows" if IS_WIN else "native"
+    installs = [] if build_name == "proton" else find_installs()   # (the Windows build under Proton: through Steam)
+    choose = getattr(args, "choose_game", False)
+    pick = None
+    if installs and installs[0].source == "saved" and not choose:
+        pick = installs[0]
+    elif can_ask and build_name != "proton" and (choose or len(installs) > 1):
+        if choose_game(installs, ask):
+            installs = find_installs()
+            pick = installs[0] if installs else None
+            if pick and not given:
+                ask_launch_mode(pick, ask)
+        elif installs:
+            pick = installs[0]
+            row("Game", f"nothing chosen: using {pick.root} this time (--choose-game asks again)")
+    elif len(installs) > 1:
+        pick = installs[0]
+        row("Game", f"{len(installs)} copies of BeamNG.drive found, none chosen: using {pick.root} (start the app "
+                    "with --choose-game in a console to pick)")
+    elif installs:
+        pick = installs[0]
+    elif can_ask and build_name != "proton":
+        if ask_game_dir(ask):
+            installs = find_installs()
+            pick = installs[0] if installs else None
+    chosen = apppaths.saved_launch_mode()
+    mode, note = gameinstall.resolve_mode(chosen, pick, build_name, gamescope)
+    launch = gameinstall.Launch(pick, build_name, gameinstall.user_base(user_dir), chosen, mode,
+                                gameinstall.launch_exe(pick, mode, IS_WIN), note)
+    if pick:
+        row("Game copy", f"{pick.label()}, {LAUNCH_TEXT[mode]}")
+    if note:
+        say(f"  ({note})")
+    return launch
+
+
+def ask_game_dir(ask=None, searched=True):
+    """The game is found nowhere (Steam's libraries, BeamNG's own records, the Epic Games Launcher), or the player
+    wants another folder: the player is asked where it is (the system's folder window, or the path typed), kept for
+    the next starts. Skipped: through Steam as before."""
+    if searched:
+        say("BeamNG.drive was not found (Steam's libraries, BeamNG's own records" +
+            (", the Epic Games Launcher)." if IS_WIN else ")."))
     exe = "BeamNG.drive.exe" if IS_WIN else "BinLinux/BeamNG.drive.x64"
     d = apppaths.ask_path(f"Where is BeamNG.drive installed? (the folder with {exe})", "folder",
                           apppaths.set_game_dir, ask=ask, say=say)
     if d:
-        say(f"  Using {d} (from now on; --game-dir PATH changes it, --game-dir default forgets it).")
+        say(f"  Using {d} (from now on; --game-dir PATH or --choose-game changes it, --game-dir default forgets it).")
     else:
         say("  Not set: the game is started through Steam.")
     return d
@@ -2162,9 +2330,11 @@ def beammp_install(user_dir, dd, ask=None):
     return exe
 
 
-def beammp_up(user_dir, build, args):
+def beammp_up(user_dir, build, args, launch=None):
     """BeamMP for multiplayer (bmplaunch.py): the official BeamMP launcher started before the game (it updates BeamMP's
-    mod in the game, which then connects to it). Returns its process (stopped with the server), or None."""
+    mod in the game, which then connects to it). Returns its process (stopped with the server), or None. Whatever the
+    launch mode (launch: gameinstall.Launch): BeamMP never starts the game (--no-launch) and uses the game's user
+    folder (a start without Steam on Windows names it to both: -userpath / --user-path)."""
     import bmplaunch
     if getattr(args, "no_beammp", False):
         return None
@@ -2176,9 +2346,13 @@ def beammp_up(user_dir, build, args):
         return None
     dd = data_dir()
     own = apppaths.saved_game_dir()
-    if not IS_WIN and own and not apppaths.in_steam_library(own):
-        # (BeamMP's launcher looks for the game in Steam's libraries only on Linux, and has no option for a folder)
-        row("Multiplayer", "BeamMP not started: on Linux BeamMP's launcher finds the game only in Steam's libraries")
+    outside = (launch.install.store != "steam") if launch is not None and launch.install else \
+        bool(own and not apppaths.in_steam_library(own))
+    if not IS_WIN and outside:
+        # (BeamMP's launcher looks for the game in Steam's libraries only on Linux, and has no option for a folder; it
+        # does not need Steam running: a Steam library's copy started without Steam still has multiplayer)
+        row("Multiplayer", "BeamMP not started: on Linux BeamMP needs BeamNG.drive in a Steam library for now (its "
+                           "launcher finds the game only there). Single player works as usual.")
         return None
     if not bmplaunch.on_launch(user_dir, dd):
         row("Multiplayer", "BeamMP not started (turned off: BeamNG.Earth settings, \"Start BeamMP with BeamNG.Earth\")")
@@ -2203,7 +2377,8 @@ def beammp_up(user_dir, build, args):
         row("Multiplayer", "BeamMP not installed")
         return None
     log_path = os.path.join(dd, "logs", "beammp-launcher.log")
-    proc = bmplaunch.start(exe, user_dir, log_path)
+    proc = bmplaunch.start(exe, user_dir, log_path,
+                           user_path=bool(IS_WIN and launch is not None and launch.mode == "direct"))
     timeout = getattr(args, "beammp_wait", 30.0)
     try:
         row("Multiplayer", f"starting BeamMP (up to {timeout:g}s; --no-beammp skips this) ...")
@@ -2290,6 +2465,16 @@ def run(args):
     row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
         + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
     running = game_still_running()
+    if getattr(args, "game_dir", None):
+        if args.game_dir.strip().strip('"').lower() == "default":
+            apppaths.set_game_dir("default")
+            row("Game", "found as before (the chosen folder forgotten)")
+        elif apppaths.set_game_dir(args.game_dir):
+            row("Game", f"{apppaths.saved_game_dir()} (kept for the next starts)")
+        else:
+            say(f"  --game-dir: BeamNG.drive is not in {args.game_dir}")
+    # the copy and the launch mode, before anything starts (gameinstall.py; asks when several copies are found)
+    launch = resolve_launch(args, user_dir, build, can_ask=not (args.no_game or running or wine))
     if not running:
         install.clear_reload_files(user_dir)
     reload_game = False
@@ -2309,18 +2494,7 @@ def run(args):
                            "builds its shaders again once)")
         except Exception as e:      # (never in the way of a start)
             row("Sky", f"not patched ({type(e).__name__}: {e})")
-    if getattr(args, "game_dir", None):
-        if args.game_dir.strip().strip('"').lower() == "default":
-            apppaths.set_game_dir("default")
-            row("Game", "found as before (the chosen folder forgotten)")
-        elif apppaths.set_game_dir(args.game_dir):
-            row("Game", f"{apppaths.saved_game_dir()} (kept for the next starts)")
-        else:
-            say(f"  --game-dir: BeamNG.drive is not in {args.game_dir}")
-    if not (args.no_game or running or wine or build != "native") and not (
-            windows_game_dir() if IS_WIN else linux_game_exe()):
-        ask_game_dir()
-    extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
+    extra =args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     port_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     port_parser.add_argument("--port", type=int, default=SERVER_PORT)
     port = port_parser.parse_known_args(extra)[0].port
@@ -2365,7 +2539,7 @@ def run(args):
         if not early:
             server_up(server, log_path, port, game_started=False)
         try:
-            beammp = None if args.no_game else beammp_up(user_dir, build, args)
+            beammp = None if args.no_game else beammp_up(user_dir, build, args, launch)
         except OSError as e:
             # (multiplayer is optional: a damaged BeamMP launcher folder, WinError 1392 "the file or directory is
             # corrupted and unreadable", stopped the app before the game started, GitHub #282)
@@ -2396,7 +2570,7 @@ def run(args):
                 say("(under Wine / Proton: on Linux the AppImage runs the server natively, faster)")
             clear_level_flag(user_dir)
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args,
-                              meanwhile=follow_server if early else None)
+                              meanwhile=follow_server if early else None, launch=launch)
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
             # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)
