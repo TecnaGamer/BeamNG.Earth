@@ -5492,6 +5492,9 @@ class Server:
             # (a full drive fails far tiles, blocks and caches with "No space left on device": the first week's most
             # frequent errors; the cache is cut back to its reserve, but other files may fill the drive)
             parts.append("your drive is nearly full: free some space (the download cache is cut back)")
+        mem = memwatchmod.too_low()     # (the server over its Max RAM for minutes: memwatch.TOO_LOW_S)
+        if mem:
+            parts.append(mem)
         return "Degraded: " + "; ".join(parts) if parts else ""
 
     def level_summary(self):

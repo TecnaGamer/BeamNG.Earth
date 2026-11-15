@@ -1650,7 +1650,7 @@ local function onMessage(msg)
     M._memoryInfo = { usedMB = tonumber(msg.usedMB) or 0, limitMB = tonumber(msg.limitMB) or 0,
       effMB = tonumber(msg.effMB) or 0, autoMB = tonumber(msg.autoMB) or 0, setting = tonumber(msg.setting) or 0,
       tier = tostring(msg.tier or ''), processes = tonumber(msg.processes) or 0, peakMB = tonumber(msg.peakMB) or 0,
-      restart = msg.restart == true }
+      restart = msg.restart == true, tooLow = msg.tooLow == true }
   elseif t == 'cache' then
     -- the download cache (server cache.py): its usage for the settings page; clearedBytes answers a clear
     local prev = cacheInfo
