@@ -653,6 +653,14 @@ end
 
 local function playerId() return be and be.getPlayerVehicleID and be:getPlayerVehicleID(0) or -1 end
 
+-- Stock may still have a boost queued for the previous spawn. Only our
+-- execution-time clearance check may launch a car after we relocate it.
+local function discardSpawnBoost(traffic)
+  if type(traffic) == 'table' and type(traffic.respawnSpeed) == 'number' and traffic.respawnSpeed > 0 then
+    traffic.respawnSpeed = nil
+  end
+end
+
 -- Pure: where a respawned car goes, (x, y, dirX, dirY, min m, max m) for gameplay_traffic.forceTeleport, or nil for
 -- behind the camera: ahead of a player at (px, py) moving (vx, vy) m/s faster than AHEAD_MS, AHEAD_M along the way but
 -- no farther than the block b's edge guard (GUARD_M + a margin) in that direction; nil too when that leaves no room.
@@ -810,7 +818,25 @@ local function guard(b, all, lag)
           local cp, cf = core_camera and core_camera.getPosition(), core_camera and core_camera.getForward()
           local pu = pv and pv:getVelocity()
           local ax, ay, adx, ady, amin, amax = nil
-          if pp and pu and not all then ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x, pp.y, pu.x, pu.y, b) end
+          if pp and pu and not all then
+            -- The next car starts at rest. Measure its ahead gap from the traffic already
+            -- in front, so recycling cannot insert it just ahead of a fast-moving queue.
+            local speed = math.sqrt(pu.x * pu.x + pu.y * pu.y)
+            local ux, uy, lead = pu.x / math.max(speed, 1e-6), pu.y / math.max(speed, 1e-6), 0
+            if speed >= M.AHEAD_MS then
+              for otherId in pairs(gt.getTrafficData() or {}) do
+                local other = otherId ~= id and otherId ~= me and getObjectByID(otherId) or nil
+                if other and other:getActive() then
+                  local q = other:getPosition()
+                  local dx, dy = q.x - pp.x, q.y - pp.y
+                  if math.abs(q.z - pp.z) < 5 and math.abs(dx * uy - dy * ux) < 6 then
+                    lead = math.max(lead, dx * ux + dy * uy)
+                  end
+                end
+              end
+            end
+            ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x + ux * lead, pp.y + uy * lead, pu.x, pu.y, b)
+          end
           local ox, oy, odx, ody
           if ax and M.ONCOMING then
             oncomingTurn = not oncomingTurn
@@ -831,6 +857,7 @@ local function guard(b, all, lag)
           else
             pcall(gt.forceTeleport, id)
           end
+          discardSpawnBoost(traffic)
         end
       else
         stillSince[id] = nil
@@ -854,6 +881,8 @@ local function scatterTraffic(gt, b)
     end
   end
   pcall(gt.forceTeleportAll, eligibleTraffic)
+  local data = gt.getTrafficData and gt.getTrafficData() or {}
+  for _, id in ipairs(eligibleTraffic) do discardSpawnBoost(data[id]) end
 end
 
 -- Stock can keep a traffic car in its AI pool after somebody enters it. In particular, setActiveAmount(0) would
@@ -1306,10 +1335,12 @@ function M.spawnVelocityCommand(target)
   local threshold = math.max(0, target - 1)
   return string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
     .. 'if _f>=-1 and _f<%.3f and thrusters and type(thrusters.applyVelocity)=="function" then '
-    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
     .. 'if not beamngEarth_spawnMotion then extensions.load("beamngEarth_spawnMotion") end; '
+    .. 'local _clearOk,_clear=pcall(function() return beamngEarth_spawnMotion.canLaunch(%.3f) end); '
+    .. 'if not (_clearOk and _clear) then return end; '
+    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
     .. 'if beamngEarth_spawnMotion then beamngEarth_spawnMotion.applyRollingSpeed(%.3f) end end) end end',
-    threshold, target, target)
+    threshold, target, target, target)
 end
 
 -- Pure: the speed (m/s) a respawned car is launched at on an edge with this limit (m/s), its heading's cosine with the
@@ -1321,6 +1352,38 @@ function M.launchSpeed(limit, cosine, oneWay, nearJunction)
   local v = limit * M.LAUNCH_SHARE
   if v < M.LAUNCH_MIN_MS then return nil end
   return math.min(v, 80)
+end
+
+-- Stock queues its own unconditional impulse during the traffic tick, before
+-- our delayed launch. Use just the launch that checks live vehicle clearance.
+local stockTicks = {}
+local function releaseStockTick(id)
+  local w = stockTicks[id]
+  if not w then return end
+  w.active = false
+  if w.traffic.onTrafficTick == w.wrapper then w.traffic.onTrafficTick = w.original end
+  stockTicks[id] = nil
+end
+local function syncStockTicks()
+  local gt = gameplay_traffic
+  local data = gt and gt.getTrafficData and gt.getTrafficData() or {}
+  local enabled = M.enabled and M.LAUNCH and applied and graph
+  for id, w in pairs(stockTicks) do
+    if not enabled or data[id] ~= w.traffic or w.traffic.onTrafficTick ~= w.wrapper then releaseStockTick(id) end
+  end
+  if not enabled then return end
+  localplayers.snapshot(controlled)
+  for id, traffic in pairs(data) do
+    if type(traffic) == 'table' and type(traffic.onTrafficTick) == 'function' and not stockTicks[id] then
+      local w = { id = id, traffic = traffic, original = traffic.onTrafficTick, active = true }
+      w.wrapper = function(self, ...)
+        if w.active and M.enabled and M.LAUNCH and applied and graph and self.isAi ~= false
+          and not localplayers.controlled(w.id, getObjectByID(w.id), controlled) then discardSpawnBoost(self) end
+        return w.original(self, ...)
+      end
+      traffic.onTrafficTick, stockTicks[id] = w.wrapper, w
+    end
+  end
 end
 
 local launchCount, launchWait, lastLaunchScan = {}, {}, -math.huge
@@ -1359,7 +1422,10 @@ local function launch(id)
   local f = o:getDirectionVector()
   f.z = 0
   if d:length() < 0.1 or f:length() < 0.1 then return end
-  local v = M.launchSpeed(e.speedLimit, d:normalized():dot(f:normalized()), e.oneWay, nearJunction(p.x, p.y))
+  local heading = f:normalized()
+  local v = M.launchSpeed(e.speedLimit, d:normalized():dot(heading), e.oneWay, nearJunction(p.x, p.y))
+  -- A boost must leave time to stop before the loaded road ends, even while the traffic guard waits.
+  if v and M.headingToCut(p.x, p.y, heading.x, heading.y, cuts, M.stopReach(v) + v) then return end
   local cmd = v and M.spawnVelocityCommand(v)
   if cmd then
     o:queueLuaCommand(cmd)
@@ -1423,6 +1489,7 @@ local function overtakeScan(now)
 end
 
 function M.update(aid, b, gov)
+  syncStockTicks()
   if not M.enabled or not graph then return end
   local t0 = os.clock()
   do
@@ -1535,6 +1602,7 @@ function M.status()
 end
 
 function M.reset()
+  for id in pairs(stockTicks) do releaseStockTick(id) end
   if applied and be and be.queueAllObjectLua then
     be:queueAllObjectLua('if beamngEarth_trafficBoundary then extensions.unload("beamngEarth_trafficBoundary") end')
   end

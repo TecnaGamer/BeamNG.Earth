@@ -51,6 +51,64 @@ local function dot(ax, ay, az, bx, by, bz)
   return ax * bx + ay * by + az * bz
 end
 
+-- Check at command execution, not when GE queues the launch: traffic can move or respawn in between.
+-- Use the same live vehicle bounds as the stock AI. A skipped boost leaves its ordinary acceleration intact.
+function M.canLaunch(speed)
+  if not finite(speed) or speed <= 1 or speed > 80 or not obj or not mapmgr or not mapmgr.getObjects then return false end
+  -- Wait for the AI's own forward drive request. A newly respawned vehicle can
+  -- still be awaiting its map, braking, or preparing a reversing manoeuvre.
+  local e = electrics and electrics.values
+  if not ai or ai.mode ~= 'traffic' or not e or not finite(e.gearIndex) or e.gearIndex <= 0
+    or not finite(e.throttle) or e.throttle <= 0 or not finite(e.brake) or e.brake > 0
+    or not finite(e.parkingbrake) or e.parkingbrake > 0
+    or controller and controller.isFrozen then return false end
+  -- The instantaneous impulse can trigger the stock impact detector even without damage.
+  -- Leave these vehicles to normal AI acceleration; keep their crash protection intact.
+  if controller and controller.getControllersByType
+    and next(controller.getControllersByType('braking/postCrashBrake')) then return false end
+  -- The body impulse acts on the reference cluster only. Separate clusters (for
+  -- example a mixer drum) would be left behind and can tear their mounts apart.
+  if not (v and v.data and type(v.data.nodes) == 'table' and next(v.data.nodes)
+    and obj.getNodeCluster and obj.getRefNodeId) then return false end
+  local cluster = obj:getNodeCluster(obj:getRefNodeId())
+  if not finite(cluster) or cluster < 0 then return false end
+  for _, node in pairs(v.data.nodes) do
+    if obj:getNodeCluster(node.cid) ~= cluster then return false end
+  end
+  local objects = mapmgr.getObjects()
+  if not objects then return false end
+  local function box(id)
+    local p = { obj:getObjectCenterPositionXYZ(id) }
+    local f = { obj:getObjectDirectionVectorXYZ(id) }
+    local u = { obj:getObjectDirectionVectorUpXYZ(id) }
+    local r = { cross(u[1], u[2], u[3], f[1], f[2], f[3]) }
+    local length = math.sqrt(r[1]^2 + r[2]^2 + r[3]^2)
+    for i = 1, 3 do r[i] = r[i] / math.max(length, 1e-30) end
+    return { p = p, f = f, u = u, r = r, halfLength = obj:getObjectInitialLength(id) * 0.5,
+      halfWidth = obj:getObjectInitialWidth(id) * 0.5, halfHeight = obj:getObjectInitialHeight(id) * 0.5 }
+  end
+  local function scalar(a, b) return dot(a[1], a[2], a[3], b[1], b[2], b[3]) end
+  local function extent(b, axis)
+    return math.abs(scalar(b.f, axis)) * b.halfLength + math.abs(scalar(b.r, axis)) * b.halfWidth
+      + math.abs(scalar(b.u, axis)) * b.halfHeight
+  end
+  local id = obj:getId()
+  local ego = box(id)
+  -- One second to react, then braking at 4 m/s², plus a small standstill gap. Do not assume the car ahead keeps moving.
+  local space = speed + speed * speed / 8 + 2
+  for otherId in pairs(objects) do
+    if otherId ~= id then
+      local other = box(otherId)
+      local delta = { other.p[1] - ego.p[1], other.p[2] - ego.p[2], other.p[3] - ego.p[3] }
+      local ahead, longitudinal = scalar(delta, ego.f), extent(other, ego.f)
+      if ahead + longitudinal > -ego.halfLength and ahead - longitudinal - ego.halfLength < space
+        and math.abs(scalar(delta, ego.r)) < ego.halfWidth + extent(other, ego.r) + 0.3
+        and math.abs(scalar(delta, ego.u)) < ego.halfHeight + extent(other, ego.u) + 0.3 then return false end
+    end
+  end
+  return true
+end
+
 local function addNodeIds(result, seen, source)
   if type(source) ~= "table" then return end
   for key, value in pairs(source) do
