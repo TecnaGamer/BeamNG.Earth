@@ -218,6 +218,9 @@ Works with BeamNG.drive 0.40.5.
 - **Reduced the chance of distant-building stand-ins staying over real buildings** after a fast drive: a block of
   cheap far buildings now gives way as soon as the real buildings around the car are in, instead of waiting up to a
   minute for the rest of the far field.
+- **The altitude app follows the game's units**: metres and m/s with metric units (it always showed feet).
+- **Pasting works in BeamNG.Earth's text boxes** (map search, saved places, add-ons, settings): Ctrl+V now pastes from
+  the clipboard (the game's browser could not).
 - **Frame pacing** no longer holds frames faster than 250 fps back (seen as "LuaPre" time while driving), and turns
   itself off on a system whose timer is too coarse for it.
 - **Reduced the chance of slow world building** on some machines: the "what will the car reach first" planning ran
