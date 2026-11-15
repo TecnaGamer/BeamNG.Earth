@@ -491,7 +491,7 @@ class StartOrderTest(unittest.TestCase):
             p = lambda name, **kw: st.enter_context(mock.patch.object(launcher, name, **kw))
             p("IS_WIN", new=no_steam)
             p("windows_game_dir", return_value="/g")
-            p("apppaths.launch_without_steam", return_value=no_steam)
+            st.enter_context(mock.patch.object(launcher.apppaths, "launch_without_steam", return_value=no_steam))
             p("GAME_FIRST", new=game_first)
             for name in ("title", "support_notice", "memory_notice", "row", "say", "watch_game_log",
                          "clear_level_flag", "problem"):
