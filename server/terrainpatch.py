@@ -9,6 +9,7 @@ lifted under roads like the block), on a STEP_M grid, in PIECE_M pieces each pla
 import os
 
 import numpy as np
+import dnp
 
 STEP_M = 8.0                # grid spacing (the ground a far car rests on; 4 m until 2026-10-24: 4x the cells for it)
 MAX_SIDE_M = 1280.0         # a patch's side at most
@@ -80,7 +81,7 @@ def build(frame, elev, box, prefix, step=STEP_M):
         la, lo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), np.zeros(gx.size))
         z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2],
                        np.float64).reshape(gx.shape)
-    per_piece = 2 * int(round(PIECE_M / step)) ** 2
+    per_piece = 2 * dnp.sq(int(round(PIECE_M / step)))
     for path, (px0, py0, px1, py1), done in todo:
         cx, cy = (px0 + px1) / 2, (py0 + py1) / 2
         if not done:
@@ -88,7 +89,7 @@ def build(frame, elev, box, prefix, step=STEP_M):
             j0, j1 = int(round((py0 - box[1]) / step)), int(round((py1 - box[1]) / step))
             pos, tris = mesh(xs[i0:i1 + 1], ys[j0:j1 + 1], z[j0:j1 + 1, i0:i1 + 1], (cx, cy))
             # (atomic through staging: whole or not at all, the game may load it at once; read once on Windows, warm)
-            cdae.write(path, pos, tris, collision_only=True, material=MATERIAL)
+            cdae.write(path, pos, tris, collision_only=True, material=MATERIAL, close=False)   # (terrain)
         out.append((path, (cx, cy)))
         total += per_piece
     return out, total

@@ -18,6 +18,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "server"), str(ROOT / "tools"), str(Path(__file__).parent)]
 import franceroads as fr
+import mod_textures_dds
 import furniture
 import geodesy
 import mapgeom
@@ -320,13 +321,13 @@ class AssetTest(unittest.TestCase):
             for material in set(mesh.tri):
                 stage = materials[material]["Stages"][0]
                 if "baseColorMap" in stage:
-                    self.assertTrue((assets.OUT / Path(stage["baseColorMap"]).name).is_file())
+                    self.assertTrue(mod_textures_dds.is_shipped(assets.OUT / Path(stage["baseColorMap"]).name))
 
     def test_mirrored_symbols_and_text_accent_are_shipped(self):
         from PIL import Image, ImageOps
         for a, b in (("fr_a1a", "fr_a1b"), ("fr_a1c", "fr_a1d")):
             np.testing.assert_array_equal(np.asarray(assets.texture(a)), np.asarray(ImageOps.mirror(assets.texture(b))))
-        panel = Image.open(assets.OUT / "m9c.color.png")
+        panel = mod_textures_dds.open_texture(assets.OUT / "m9c.color.dds")      # (a DDS made at install from its source)
         self.assertEqual(panel.size, (512, 512))
         self.assertGreater(np.count_nonzero(np.asarray(panel)[60:200, :, 0] < 100), 1000)
 
@@ -341,24 +342,22 @@ class AssetTest(unittest.TestCase):
         np.testing.assert_array_equal(expected, actual)
 
     def test_generator_reproduces_shipped_assets_ignoring_newlines(self):
-        from PIL import Image
         with tempfile.TemporaryDirectory() as tmp:
             assets.build(Path(tmp))
             generated = sorted(Path(tmp).iterdir())
             self.assertEqual(len(generated), 16)  # 7 models, 8 faces and their material file
             for got in generated:
-                src = assets.OUT / got.name
+                # (the tool draws PNGs; the mod ships them as DDS, tools/mod_textures_dds.py)
+                src = assets.OUT / mod_textures_dds.shipped(got.name)
                 with self.subTest(asset=got.name):
-                    self.assertTrue(src.is_file())
+                    self.assertTrue(mod_textures_dds.is_shipped(src))
                     if src.suffix == ".dae":
                         self.assert_collada_equal(src.read_text(encoding="utf-8"), got.read_text(encoding="utf-8"))
                     elif src.suffix == ".json":
                         self.assertEqual(json.loads(src.read_text(encoding="utf-8")),
-                                         json.loads(got.read_text(encoding="utf-8")))
-                    elif src.suffix == ".png":
-                        # PNG compression/metadata can vary without changing a pixel.
-                        with Image.open(src) as a, Image.open(got) as b:
-                            np.testing.assert_array_equal(np.asarray(a.convert("RGBA")), np.asarray(b.convert("RGBA")))
+                                         mod_textures_dds.shipped(json.loads(got.read_text(encoding="utf-8"))))
+                    elif src.suffix == ".dds":
+                        self.assertGreater(mod_textures_dds.texture_psnr(got, src), 45.0, got.name)
                     else:
                         self.fail("Unexpected generated asset: " + got.name)
 
@@ -525,7 +524,9 @@ class RenderingRegressionTest(FrenchTest):
         base = self.heights_at(p, t[tm == mats.index("road_asphalt_2lane")], xy)
         paint = self.heights_at(p, t[tm == mats.index(fr.PAINT_MATERIAL)], xy)
         self.assertTrue(np.isfinite(base).all() and np.isfinite(paint).all())
-        self.assertGreater(float(np.min(paint - base)), .005)
+        # (over the asphalt everywhere, by millimetres: the user, 2026-11-11, "i want to make them virtualy the same
+        # height of the road": roadmesh.LIFT mark 2 mm)
+        self.assertGreater(float(np.min(paint - base)), .001)
 
     def test_geometric_paint_is_opaque_and_registered_for_road_tiles(self):
         materials = json.loads((assets.OUT / "main.materials.json").read_text())

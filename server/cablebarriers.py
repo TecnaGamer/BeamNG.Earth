@@ -1,5 +1,6 @@
 """Galvanized median posts and four steel cables, in the colliding road stream."""
 import numpy as np
+import dnp
 import roadmesh
 import roads
 
@@ -45,7 +46,7 @@ def runs(frame, rows, blockers, box, elev):
                 continue
             source = np.c_[centres[group], z[group], normals[group], station[group]]
             for piece in roads.clip_polyline(source, *box):
-                piece = piece[np.r_[True, np.linalg.norm(np.diff(piece[:, :2], axis=0), axis=1) > 1e-6]]
+                piece = piece[np.r_[True, dnp.norm(np.diff(piece[:, :2], axis=0), axis=1) > 1e-6]]
                 if len(piece) < 2:
                     continue
                 ticks = np.arange(np.ceil(piece[0, 5]/POST_SPACING)*POST_SPACING,
@@ -86,12 +87,12 @@ def build(chunks, origin):
             continue
         line = np.asarray(chunk['n'], float)
         normals = np.asarray(chunk['cross'], float)
-        normals /= np.maximum(np.linalg.norm(normals, axis=1)[:, None], 1e-9)
+        normals /= np.maximum(dnp.norm(normals, axis=1)[:, None], 1e-9)
         for height in CABLE_HEIGHTS:
             angles = np.arange(6)*np.pi/3.
             ring = np.repeat(line[:, None, :], 6, axis=1)
-            ring[:, :, :2] += normals[:, None, :]*np.cos(angles)[None, :, None]*CABLE_RADIUS
-            ring[:, :, 2] += height+np.sin(angles)*CABLE_RADIUS
+            ring[:, :, :2] += normals[:, None, :]*dnp.cos(angles)[None, :, None]*CABLE_RADIUS
+            ring[:, :, 2] += height+dnp.sin(angles)*CABLE_RADIUS
             for k in range(len(line)-1):
                 for j in range(6):
                     nxt = (j+1)%6
@@ -104,7 +105,7 @@ def build(chunks, origin):
                     triangles.append(tri[::-1] if reverse else tri)
                     materials.append(0)
         for post in np.asarray(chunk['posts'], float).reshape(-1, 5):
-            normal = post[3:5]/max(np.linalg.norm(post[3:5]), 1e-9)
+            normal = post[3:5]/max(dnp.norm(post[3:5]), 1e-9)
             # Slim I-section steel post and amber reflector cap, as in the reference.
             box(post[:3], normal, (-.035,-.006,-.15), (.035,.006,HEIGHT))
             for x in (-.035,.027):

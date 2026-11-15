@@ -1,60 +1,136 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
+use crate::dm::Dm;
+mod dm;
+mod devctx;
+mod reach;
 mod devraster;
+mod roofs;
+mod domes;
+mod roofphoto;
 mod gravity;
 mod polyproject;
+mod lanesections;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
 mod carriageways;
 mod spaceclouds;
 mod cdaez;
+mod texdds;
 mod clearance;
 mod f32z;
+mod blockstore;
+mod packz;
 mod gpu;
 mod traffic;
 mod dsm;
 mod vegmask;
 mod roadgeom;
+mod roadsmooth;
 mod shore;
 mod photofill;
 mod ambience;
+mod gradeguard;
 mod power;
 mod underpass;
 mod coarseease;
 mod junctionsnap;
 mod tunnelcover;
+mod tunnelchain;
+mod portal;
 mod gradesep;
 mod lamps;
 mod decks;
+mod deckjoints;
 mod deckmerge;
 mod levels;
+mod levelrules;
 mod tapers;
 mod islands;
 mod ribbons;
 mod groundpaint;
 mod medians;
+mod deautobahn;
 mod speedsigns;
+mod roadsigns;
+mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
 mod areacover;
 mod geotiles;
+mod chaingraph;
 mod geocontent;
 mod farcontent;
 mod sidewalks;
 mod roadz;
 mod fartex;
 mod farglobal;
+mod farpvs;
+mod farsel;
 mod dirtsteps;
 mod gridinterp;
+mod dejunction;
 mod streetlabels;
 mod perfclean;
+mod membudget;
 mod mdhtml;
+mod reportpack;
+mod farrestore;
 mod roadlanes;
 mod waytags;
+mod pmtiles;
 mod underdeck;
+mod deckground;
+mod railseam;
+mod stageshare;
+mod classgrid;
+mod frontage;
+mod furnstations;
+mod stationgeom;
+mod railpiers;
+mod bdtopo;
+mod nycmassing;
+mod rooftop;
+mod specs;
+mod gsrows;
+mod places;
+mod planends;
+mod planset;
+mod corridor;
+mod approach;
+mod junctions;
+mod wallsindex;
+mod roadwalls;
+mod mappedlamps;
+mod vegclumps;
+mod roadwear;
+mod roadtone;
+mod railbeds;
+mod osmtagshards;
+mod buildyears;
+mod buildcolours;
+mod gradebins;
+mod par;
+mod bc1fast;
+mod l0roads;
+mod groundphoto;
+mod layerfold;
+mod roadsurf;
+mod levelways;
+mod meshtrim;
+mod shelterfit;
+mod tilecuts;
+mod bldclear;
+mod bnwt;
+mod aerialcov;
+mod decisions;
+mod lidarz;
+mod paintlist;
+mod nearcross;
 
+use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
 use pyo3::prelude::*;
@@ -74,7 +150,7 @@ where
     F: pyo3::marker::Ungil + FnOnce() -> T,
     T: pyo3::marker::Ungil,
 {
-    if work >= RELEASE_MIN { py.allow_threads(f) } else { f() }
+    if work >= RELEASE_MIN { py.detach(f) } else { f() }
 }
 
 
@@ -133,7 +209,7 @@ fn island_ring_rays<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, segs
         let mut out = Vec::with_capacity(rays * 2);
         for k in 0..rays {
             let a = 2.0 * std::f64::consts::PI * (k as f64) / (rays as f64);
-            let (ux, uy) = (a.cos(), a.sin());
+            let (ux, uy) = (a.dcos(), a.dsin());
             let mut r = 0.0;
             while r < rmax {
                 let (qx, qy) = (cx + ux * (r + step), cy + uy * (r + step));
@@ -166,18 +242,20 @@ fn points_inside<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, pts: Py
 #[pyfunction]
 fn polyline_dist<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, pts: PyReadonlyArray2<'py, f64>)
                       -> Bound<'py, PyArray1<f64>> {
-    let l = line.as_array();
-    let q = pts.as_array();
+    polyline_dist_core(line.as_array(), pts.as_array()).into_pyarray(py)
+}
+
+/// polyline_dist on views (roads' spec kernels call it in Rust).
+pub(crate) fn polyline_dist_core(l: numpy::ndarray::ArrayView2<f64>, q: numpy::ndarray::ArrayView2<f64>) -> Vec<f64> {
     let k = l.nrows();
-    let v: Vec<f64> = q.rows().into_iter().map(|r| {
+    q.rows().into_iter().map(|r| {
         let mut best = f64::INFINITY;
         for i in 0..k.saturating_sub(1) {
             let d = seg_dist(l[[i, 0]], l[[i, 1]], l[[i + 1, 0]], l[[i + 1, 1]], r[0], r[1]);
             if d < best { best = d; }
         }
         best
-    }).collect();
-    v.into_pyarray(py)
+    }).collect()
 }
 
 /// furniture._clear: is (px, py) farther than its segment's half width + margin from every segment not owned by
@@ -204,8 +282,12 @@ fn clear_of(segs: PyReadonlyArray2<f64>, half: PyReadonlyArray1<f64>, owner: PyR
 #[pyfunction]
 fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64)
              -> (f64, f64) {
-    let a = a.as_array();
-    let b = b.as_array();
+    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par)
+}
+
+/// dual_side on views (roads' spec kernels call it in Rust).
+pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarray::ArrayView2<f64>, gap_min: f64,
+                             gap_max: f64, cos_par: f64) -> (f64, f64) {
     let ka = a.nrows();
     let kb = b.nrows();
     if ka < 2 || kb < 2 {
@@ -258,7 +340,7 @@ fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, g
         for j in 0..mb {
             let f = (((qx - b[[j, 0]]) * bs[j][0] + (qy - b[[j, 1]]) * bs[j][1]) / bl2[j]).clamp(0.0, 1.0);
             let (px, py) = (b[[j, 0]] + bs[j][0] * f, b[[j, 1]] + bs[j][1] * f);
-            let d = (px - qx).hypot(py - qy);    // (as np.hypot: ties at a shared vertex pick the same segment)
+            let d = (px - qx).dhypot(py - qy);    // (as np.hypot: ties at a shared vertex pick the same segment)
             if d < best {
                 best = d;
                 bj = j;
@@ -286,7 +368,7 @@ fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, g
 /// path. Made on first use.
 #[pyfunction]
 fn gpu_name(py: Python<'_>) -> Option<String> {
-    py.allow_threads(|| gpu::get().map(|g| g.name.clone()))
+    py.detach(|| gpu::get().map(|g| g.name.clone()))
 }
 
 /// colormatch.detect_seams' angle loop on the GPU (gpu.rs): src (7, h, w) float32 = [w, w*L_0 .. w*L_5]. Returns
@@ -302,7 +384,7 @@ fn seam_detect_gpu<'py>(py: Python<'py>, src: PyReadonlyArray3<'py, f32>, n_ang:
         return Err(pyo3::exceptions::PyValueError::new_err("seam_detect_gpu: src must be (7, h, w)"));
     }
     let data: Vec<f32> = v.iter().copied().collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             gpu::seam_detect(g, &data, h, w, n_ang, half, depth, &offs, full, gate, agree, min_valid)
@@ -328,7 +410,7 @@ fn bc1_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let v = a.as_array();
         (v.shape()[1], v.shape()[0], v.iter().copied().collect())
     }).collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         let refs: Vec<(usize, usize, &[u8])> = data.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc1_encode(g, &refs)))
@@ -351,7 +433,7 @@ fn bc7_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let b = a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: contiguous images"))?;
         refs.push((sh[1], sh[0], b));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc7_encode(g, &refs)))
             .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
@@ -386,13 +468,47 @@ fn segment_crossings_g(
     ground: PyReadonlyArray2<f64>,
     ground_starts: PyReadonlyArray1<i64>,
 ) -> Vec<(usize, usize, f64, f64, f64)> {
-    let pa = parts.as_array();
-    let ps = part_starts.as_array();
-    let ga = ground.as_array();
-    let gs = ground_starts.as_array();
+    let (pa, ps, ga, gs) = (parts.as_array(), part_starts.as_array(), ground.as_array(), ground_starts.as_array());
+    py.detach(|| segment_crossings_core(pa, ps, ga, gs))
+}
+
+/// segment_crossings_g on lists of lines: parts and ground each a list of float64 (k, >= 2) arrays (their first two
+/// columns), packed here: roads._crossings / _crossings_by stacked them in numpy on every call (~1 % of a 16-tile
+/// Fells Point probe's CPU, 2026-11-12). 240.
+#[pyfunction]
+fn segment_crossings_lists(py: Python<'_>, parts: Vec<PyReadonlyArray2<'_, f64>>, ground: Vec<PyReadonlyArray2<'_, f64>>)
+                           -> PyResult<Vec<(usize, usize, f64, f64, f64)>> {
+    fn pack(lines: &[PyReadonlyArray2<'_, f64>]) -> PyResult<(numpy::ndarray::Array2<f64>, numpy::ndarray::Array1<i64>)> {
+        let n: usize = lines.iter().map(|l| l.as_array().nrows()).sum();
+        let mut pts = numpy::ndarray::Array2::<f64>::zeros((n, 2));
+        let mut starts = numpy::ndarray::Array1::<i64>::zeros(lines.len() + 1);
+        let mut k = 0usize;
+        for (j, l) in lines.iter().enumerate() {
+            let a = l.as_array();
+            if a.ncols() < 2 && a.nrows() > 0 {
+                return Err(pyo3::exceptions::PyValueError::new_err("segment_crossings_lists: lines (k, >= 2)"));
+            }
+            for r in 0..a.nrows() {
+                pts[[k, 0]] = a[[r, 0]];
+                pts[[k, 1]] = a[[r, 1]];
+                k += 1;
+            }
+            starts[j + 1] = k as i64;
+        }
+        Ok((pts, starts))
+    }
+    let (pa, ps) = pack(&parts)?;
+    let (ga, gs) = pack(&ground)?;
+    Ok(py.detach(|| segment_crossings_core(pa.view(), ps.view(), ga.view(), gs.view())))
+}
+
+/// segment_crossings_g on views (gradesep's underpasses call it in Rust).
+pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: numpy::ndarray::ArrayView1<i64>,
+                                     ga: numpy::ndarray::ArrayView2<f64>, gs: numpy::ndarray::ArrayView1<i64>)
+                                     -> Vec<(usize, usize, f64, f64, f64)> {
     let np_ = ps.len().saturating_sub(1);
     let ng = gs.len().saturating_sub(1);
-    py.allow_threads(|| {
+    {
         let bbox = |a: &numpy::ndarray::ArrayView2<f64>, i0: usize, i1: usize| {
             let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
             for k in i0..i1 {
@@ -411,7 +527,7 @@ fn segment_crossings_g(
             for k in 1..(i1 - i0) {
                 let dx = pa[[i0 + k, 0]] - pa[[i0 + k - 1, 0]];
                 let dy = pa[[i0 + k, 1]] - pa[[i0 + k - 1, 1]];
-                s[k] = s[k - 1] + dx.hypot(dy);
+                s[k] = s[k - 1] + dx.dhypot(dy);
             }
             for g in 0..ng {
                 let (gx0, gy0, gx1, gy1) = gbox[g];
@@ -436,61 +552,55 @@ fn segment_crossings_g(
             }
         }
         out
-    })
+    }
 }
 
-/// roads._seg_hits for many ground lines: (line index, arc m along m, sin of the angle) where each of the polylines
-/// (pts (n, 2), starts (L + 1,), the last: n) crosses polyline m (k, 2); per line, per segment of m, per segment of the
-/// line in order: numpy's float64 arithmetic of the Python it replaces (_bridge_reach's loop, 2026-10-25).
-#[pyfunction]
-fn seg_hits(py: Python<'_>, m: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>)
-            -> Vec<(usize, f64, f64)> {
-    let ma = m.as_array();
-    let ga = pts.as_array();
-    let gs = starts.as_array();
-    let nm = ma.nrows();
+/// (line index, arc m along ma, sin of the angle) where each of the polylines ga (gs (L + 1,): where each begins,
+/// the last: its length) crosses polyline ma; per line, per segment of ma, per segment of the line in order:
+/// numpy's float64 arithmetic of the Python it replaced (roads._bridge_reach's crossings, 2026-10-25;
+/// levelrules.rs).
+pub(crate) fn seg_hits_core(ma: &[[f64; 2]], ga: &[[f64; 2]], gs: &[usize]) -> Vec<(usize, f64, f64)> {
+    let nm = ma.len();
     let ng = gs.len().saturating_sub(1);
-    py.allow_threads(|| {
-        let mut out = Vec::new();
-        if nm < 2 { return out; }
-        let mut sm = vec![0.0f64; nm];
-        for k in 1..nm {
-            sm[k] = sm[k - 1] + (ma[[k, 0]] - ma[[k - 1, 0]]).hypot(ma[[k, 1]] - ma[[k - 1, 1]]);
+    let mut out = Vec::new();
+    if nm < 2 { return out; }
+    let mut sm = vec![0.0f64; nm];
+    for k in 1..nm {
+        sm[k] = sm[k - 1] + (ma[k][0] - ma[k - 1][0]).dhypot(ma[k][1] - ma[k - 1][1]);
+    }
+    let (mut mx0, mut my0, mut mx1, mut my1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for k in 0..nm {
+        mx0 = mx0.min(ma[k][0]); mx1 = mx1.max(ma[k][0]);
+        my0 = my0.min(ma[k][1]); my1 = my1.max(ma[k][1]);
+    }
+    for g in 0..ng {
+        let (j0, j1) = (gs[g], gs[g + 1]);
+        if j1 < j0 + 2 { continue; }
+        let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for k in j0..j1 {
+            gx0 = gx0.min(ga[k][0]); gx1 = gx1.max(ga[k][0]);
+            gy0 = gy0.min(ga[k][1]); gy1 = gy1.max(ga[k][1]);
         }
-        let (mut mx0, mut my0, mut mx1, mut my1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for k in 0..nm {
-            mx0 = mx0.min(ma[[k, 0]]); mx1 = mx1.max(ma[[k, 0]]);
-            my0 = my0.min(ma[[k, 1]]); my1 = my1.max(ma[[k, 1]]);
-        }
-        for g in 0..ng {
-            let (j0, j1) = (gs[g] as usize, gs[g + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for k in j0..j1 {
-                gx0 = gx0.min(ga[[k, 0]]); gx1 = gx1.max(ga[[k, 0]]);
-                gy0 = gy0.min(ga[[k, 1]]); gy1 = gy1.max(ga[[k, 1]]);
-            }
-            if gx1 < mx0 || gx0 > mx1 || gy1 < my0 || gy0 > my1 { continue; }
-            for k in 0..nm - 1 {
-                let (px, py_) = (ma[[k, 0]], ma[[k, 1]]);
-                let (rx, ry) = (ma[[k + 1, 0]] - px, ma[[k + 1, 1]] - py_);
-                for n in j0..j1 - 1 {
-                    let (cx, cy) = (ga[[n, 0]], ga[[n, 1]]);
-                    let (sx, sy) = (ga[[n + 1, 0]] - cx, ga[[n + 1, 1]] - cy);
-                    let den = rx * sy - ry * sx;
-                    if !(den.abs() > 1e-12) { continue; }
-                    let (wx, wy) = (cx - px, cy - py_);
-                    let t = (wx * sy - wy * sx) / den;
-                    let u = (wx * ry - wy * rx) / den;
-                    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
-                        let sin = den.abs() / (rx.hypot(ry) * sx.hypot(sy)).max(1e-12);
-                        out.push((g, sm[k] + t * (sm[k + 1] - sm[k]), sin));
-                    }
+        if gx1 < mx0 || gx0 > mx1 || gy1 < my0 || gy0 > my1 { continue; }
+        for k in 0..nm - 1 {
+            let (px, py_) = (ma[k][0], ma[k][1]);
+            let (rx, ry) = (ma[k + 1][0] - px, ma[k + 1][1] - py_);
+            for n in j0..j1 - 1 {
+                let (cx, cy) = (ga[n][0], ga[n][1]);
+                let (sx, sy) = (ga[n + 1][0] - cx, ga[n + 1][1] - cy);
+                let den = rx * sy - ry * sx;
+                if !(den.abs() > 1e-12) { continue; }
+                let (wx, wy) = (cx - px, cy - py_);
+                let t = (wx * sy - wy * sx) / den;
+                let u = (wx * ry - wy * rx) / den;
+                if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
+                    let sin = den.abs() / (rx.dhypot(ry) * sx.dhypot(sy)).max(1e-12);
+                    out.push((g, sm[k] + t * (sm[k + 1] - sm[k]), sin));
                 }
             }
         }
-        out
-    })
+    }
+    out
 }
 
 /// roads._under_decks: which points (xy (k, 2), road heights z (k,)) lie under a bridge deck: per deck chunk (its
@@ -503,7 +613,7 @@ fn under_decks(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f6
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
     let k = p.nrows();
     let nc = st.len().saturating_sub(1);
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = vec![false; k];
         for c in 0..nc {
             let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
@@ -520,7 +630,7 @@ fn under_decks(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f6
                 for (n, g) in segs.iter().enumerate() {
                     let (apx, apy) = (px - g[0], py_ - g[1]);
                     let t = ((apx * g[2] + apy * g[3]) / g[4]).clamp(0.0, 1.0);
-                    let dd = (px - (g[0] + t * g[2])).hypot(py_ - (g[1] + t * g[3]));
+                    let dd = (px - (g[0] + t * g[2])).dhypot(py_ - (g[1] + t * g[3]));
                     if dd < best || bj == usize::MAX { best = dd; bj = n; }
                 }
                 if bj == usize::MAX || !(best <= r[c]) { continue; }
@@ -541,7 +651,7 @@ fn face_normal_sum<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>, 
                         -> Bound<'py, PyArray2<f64>> {
     let (p, t) = (positions.as_array(), tris.as_array());
     let (n, m) = (p.nrows(), t.nrows());
-    let acc = py.allow_threads(|| {
+    let acc = py.detach(|| {
         let mut fnrm = vec![[0.0f64; 3]; m];
         for i in 0..m {
             let (a, b, c) = (t[[i, 0]] as usize, t[[i, 1]] as usize, t[[i, 2]] as usize);
@@ -577,7 +687,7 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
                   -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<i64>>) {
     let t = tris.as_array();
     let m = t.nrows();
-    let (order, idx) = py.allow_threads(|| {
+    let (order, idx) = py.detach(|| {
         let mut remap = vec![-1i64; nverts];
         let mut order = Vec::new();
         for i in 0..m {
@@ -597,38 +707,38 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
 
 /// railways._blocked: which points (xy (k, 2), bed heights z (k,)) lie on a crossing road at grade: per road (its
 /// centre line pts (n, 3) [x, y, z] one road after another, starts (C + 1,)) the point's nearest segment (the first of
-/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z. numpy's float64
-/// arithmetic of the Python it replaces.
+/// equals) nearer than reach (C,) with the road's height at that segment's start within dz of z (nearcross.rs: the
+/// segments near each point from a grid). numpy's float64 arithmetic of the Python it replaced.
 #[pyfunction]
 fn near_crossers(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f64>, pts: PyReadonlyArray2<f64>,
-                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> Vec<bool> {
+                 starts: PyReadonlyArray1<i64>, reach: PyReadonlyArray1<f64>, dz: f64) -> PyResult<Vec<bool>> {
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
-    let k = p.nrows();
+    let (k, n) = (p.nrows(), d.nrows());
     let nc = st.len().saturating_sub(1);
-    py.allow_threads(|| {
-        let mut out = vec![false; k];
-        for c in 0..nc {
-            let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let segs: Vec<[f64; 5]> = (j0..j1 - 1).map(|j| {
-                let (ax, ay) = (d[[j, 0]], d[[j, 1]]);
-                let (bx, by) = (d[[j + 1, 0]] - ax, d[[j + 1, 1]] - ay);
-                [ax, ay, bx, by, (bx * bx + by * by).max(1e-12)]
-            }).collect();
-            for i in 0..k {
-                if out[i] { continue; }
-                let (px, py_) = (p[[i, 0]], p[[i, 1]]);
-                let (mut best, mut bj) = (f64::INFINITY, usize::MAX);
-                for (n, g) in segs.iter().enumerate() {
-                    let t = (((px - g[0]) * g[2] + (py_ - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-                    let dd = (px - (g[0] + t * g[2])).hypot(py_ - (g[1] + t * g[3]));
-                    if dd < best || bj == usize::MAX { best = dd; bj = n; }
-                }
-                if bj != usize::MAX && best < r[c] && (z[i] - d[[j0 + bj, 2]]).abs() < dz { out[i] = true; }
-            }
-        }
-        out
-    })
+    if p.ncols() < 2 || d.ncols() < 3 || z.len() != k || r.len() < nc
+        || st.iter().any(|&v| v < 0 || v as usize > n) || (1..st.len()).any(|i| st[i] < st[i - 1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "near_crossers: xy (k, 2), z (k,), pts (n, 3), starts rising within pts, reach (C,)"));
+    }
+    let pv: Vec<[f64; 2]> = (0..k).map(|i| [p[[i, 0]], p[[i, 1]]]).collect();
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let dv: Vec<[f64; 3]> = (0..n).map(|j| [d[[j, 0]], d[[j, 1]], d[[j, 2]]]).collect();
+    let sv: Vec<usize> = st.iter().map(|&v| v as usize).collect();
+    let rv: Vec<f64> = r.iter().copied().collect();
+    Ok(py.detach(|| nearcross::near_crossers(&pv, &zv, &dv, &sv, &rv, dz)))
+}
+
+/// grading.rail_yield_pieces: mask (k,) and the points whose arc (s (k,)) is within reach of a masked point's
+/// (nearcross::grow_along).
+#[pyfunction]
+fn grow_along(s: PyReadonlyArray1<f64>, mask: PyReadonlyArray1<bool>, reach: f64) -> PyResult<Vec<bool>> {
+    let (s, m) = (s.as_array(), mask.as_array());
+    if s.len() != m.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grow_along: s (k,), mask (k,)"));
+    }
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let mv: Vec<bool> = m.iter().copied().collect();
+    Ok(nearcross::grow_along(&sv, &mv, reach))
 }
 
 /// roads.clip_polyline: the pieces of a polyline (pts (k, D >= 2), xy first) inside the box, Liang-Barsky per segment,
@@ -638,7 +748,7 @@ fn clip_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, x0: f64,
                       -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>) {
     let p = pts.as_array();
     let (k, dim) = (p.nrows(), p.ncols());
-    let (data, starts) = py.allow_threads(|| {
+    let (data, starts) = py.detach(|| {
         let mut data: Vec<f64> = Vec::new();
         let mut starts: Vec<i64> = vec![0];
         let mut cur: Vec<Vec<f64>> = Vec::new();
@@ -693,85 +803,119 @@ fn clip_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, x0: f64,
     (numpy::ndarray::Array2::from_shape_vec((n, dim), data).unwrap().into_pyarray(py), starts.into_pyarray(py))
 }
 
-/// Which points (n, 2) lie within (tx, ty) of a target (k, 2) along both axes (a box test, through a grid of the
-/// targets): roads._skew_decks' pre-check of the features' ends against the bridges' ends (lon / lat).
-#[pyfunction]
-fn ends_near(py: Python<'_>, pts: PyReadonlyArray2<f64>, targets: PyReadonlyArray2<f64>, tx: f64, ty: f64) -> Vec<bool> {
-    let (p, t) = (pts.as_array(), targets.as_array());
-    py.allow_threads(|| {
-        let n = p.nrows();
-        if t.nrows() == 0 || !(tx > 0.0 && ty > 0.0) { return vec![false; n]; }
-        let mut map: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
-        for j in 0..t.nrows() {
-            let (x, y) = (t[[j, 0]], t[[j, 1]]);
-            if !(x.is_finite() && y.is_finite()) { continue; }
-            map.entry(((x / tx).floor() as i64, (y / ty).floor() as i64)).or_default().push(j);
-        }
-        (0..n).map(|i| {
-            let (x, y) = (p[[i, 0]], p[[i, 1]]);
-            if !(x.is_finite() && y.is_finite()) { return false; }
-            let (kx, ky) = ((x / tx).floor() as i64, (y / ty).floor() as i64);
-            for gx in kx - 1..=kx + 1 {
-                for gy in ky - 1..=ky + 1 {
-                    if let Some(v) = map.get(&(gx, gy)) {
-                        if v.iter().any(|&j| (t[[j, 0]] - x).abs() <= tx && (t[[j, 1]] - y).abs() <= ty) { return true; }
-                    }
+/// Which points p lie within (tx, ty) of a target t along both axes (a box test, through a grid of the targets):
+/// roads._skew_decks' pre-check of the features' ends against the bridges' ends (lon / lat; levelrules.rs).
+pub(crate) fn ends_near_core(p: &[[f64; 2]], t: &[[f64; 2]], tx: f64, ty: f64) -> Vec<bool> {
+    let n = p.len();
+    if t.is_empty() || !(tx > 0.0 && ty > 0.0) { return vec![false; n]; }
+    let mut map: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+    for (j, q) in t.iter().enumerate() {
+        let (x, y) = (q[0], q[1]);
+        if !(x.is_finite() && y.is_finite()) { continue; }
+        map.entry(((x / tx).floor() as i64, (y / ty).floor() as i64)).or_default().push(j);
+    }
+    (0..n).map(|i| {
+        let (x, y) = (p[i][0], p[i][1]);
+        if !(x.is_finite() && y.is_finite()) { return false; }
+        let (kx, ky) = ((x / tx).floor() as i64, (y / ty).floor() as i64);
+        for gx in kx - 1..=kx + 1 {
+            for gy in ky - 1..=ky + 1 {
+                if let Some(v) = map.get(&(gx, gy)) {
+                    if v.iter().any(|&j| (t[j][0] - x).abs() <= tx && (t[j][1] - y).abs() <= ty) { return true; }
                 }
             }
-            false
-        }).collect()
-    })
+        }
+        false
+    }).collect()
 }
 
 /// roads._deck_crossings: (i, j, arc on i, arc on j) where polylines i < j cross away from their end points.
-/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n).
+/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n). The pairs whose boxes
+/// meet by a sweep along x (each line's boxes against all others' was the pool's square: BridgeProfiles._resolve asks
+/// it again as each chain's pool grows, ~1.4 % of a cold Manhattan build, 2026-11-10), and of such a pair only the
+/// segments within DECK_X_PAD_M of the other line's box; the same tests and the same order of hits, without the GIL.
 #[pyfunction]
-fn deck_crossings(pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>) -> Vec<(usize, usize, f64, f64)> {
-    let p = pts.as_array();
+fn deck_crossings(py: Python<'_>, pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>)
+                  -> Vec<(usize, usize, f64, f64)> {
+    let pa = pts.as_array();
     let st = starts.as_array();
     let nl = st.len().saturating_sub(1);
     let rng: Vec<(usize, usize)> = (0..nl).map(|i| (st[i] as usize, st[i + 1] as usize)).collect();
+    let p: Vec<[f64; 2]> = (0..pa.nrows()).map(|k| [pa[[k, 0]], pa[[k, 1]]]).collect();
+    release(py, p.len() * 4, move || deck_crossings_core(&p, &rng))
+}
+
+/// m a segment may lie off the other line's box and still be tried (far more than any rounding of the crossing test:
+/// a segment that far off cannot meet the line inside both segments).
+const DECK_X_PAD_M: f64 = 1.0;
+
+fn deck_crossings_core(p: &[[f64; 2]], rng: &[(usize, usize)]) -> Vec<(usize, usize, f64, f64)> {
+    let nl = rng.len();
     let mut boxes = Vec::with_capacity(nl);
     let mut arcs: Vec<Vec<f64>> = Vec::with_capacity(nl);
-    for &(a, b) in &rng {
+    for &(a, b) in rng {
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         let mut arc = Vec::with_capacity(b - a);
         let mut acc = 0.0;
         for k in a..b {
             for c in 0..2 {
-                lo[c] = lo[c].min(p[[k, c]]);
-                hi[c] = hi[c].max(p[[k, c]]);
+                lo[c] = lo[c].min(p[k][c]);
+                hi[c] = hi[c].max(p[k][c]);
             }
             if k > a {
-                acc += (p[[k, 0]] - p[[k - 1, 0]]).hypot(p[[k, 1]] - p[[k - 1, 1]]);
+                acc += (p[k][0] - p[k - 1][0]).dhypot(p[k][1] - p[k - 1][1]);
             }
             arc.push(acc);
         }
         boxes.push((lo, hi));
         arcs.push(arc);
     }
-    let mut out = Vec::new();
-    for i in 0..nl {
-        let (ai, bi) = rng[i];
-        if bi - ai < 2 {
-            continue;
-        }
-        for j in (i + 1)..nl {
-            let (aj, bj) = rng[j];
-            if bj - aj < 2 {
-                continue;
+    // (the lines with 2 points or more, by their boxes' west edge: each one's candidates are the lines starting west
+    // of its east edge after it in that order; a NaN box meets nothing, as the comparisons below)
+    let mut order: Vec<usize> = (0..nl).filter(|&i| rng[i].1 - rng[i].0 >= 2 && !boxes[i].0[0].is_nan()
+                                               && !boxes[i].1[0].is_nan()).collect();
+    order.sort_by(|&a, &b| boxes[a].0[0].total_cmp(&boxes[b].0[0]).then(a.cmp(&b)));
+    let mut cand: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    for (oi, &i) in order.iter().enumerate() {
+        let (alo, ahi) = boxes[i];
+        for &j in &order[oi + 1..] {
+            let (blo, bhi) = boxes[j];
+            if blo[0] > ahi[0] {
+                break;
             }
-            let ((alo, ahi), (blo, bhi)) = (boxes[i], boxes[j]);
             if ahi[0] < blo[0] || bhi[0] < alo[0] || ahi[1] < blo[1] || bhi[1] < alo[1] {
                 continue;
             }
+            if i < j { cand[i].push(j); } else { cand[j].push(i); }
+        }
+    }
+    let seg_near = |a: usize, b: usize, lo: [f64; 2], hi: [f64; 2]| -> Vec<usize> {
+        (0..(b - a - 1)).filter(|&q| {
+            let (x0, y0, x1, y1) = (p[a + q][0], p[a + q][1], p[a + q + 1][0], p[a + q + 1][1]);
+            !(x0.max(x1) < lo[0] - DECK_X_PAD_M || x0.min(x1) > hi[0] + DECK_X_PAD_M
+              || y0.max(y1) < lo[1] - DECK_X_PAD_M || y0.min(y1) > hi[1] + DECK_X_PAD_M)
+        }).collect()
+    };
+    let mut out = Vec::new();
+    for i in 0..nl {
+        if cand[i].is_empty() {
+            continue;
+        }
+        cand[i].sort_unstable();
+        let (ai, bi) = rng[i];
+        for &j in &cand[i] {
+            let (aj, bj) = rng[j];
             let (si_end, sj_end) = (arcs[i][bi - ai - 1], arcs[j][bj - aj - 1]);
-            for q in 0..(bj - aj - 1) {
-                let (ax, ay) = (p[[aj + q, 0]], p[[aj + q, 1]]);
-                let (d0, d1) = (p[[aj + q + 1, 0]] - ax, p[[aj + q + 1, 1]] - ay);
-                for k in 0..(bi - ai - 1) {
-                    let (px, py) = (p[[ai + k, 0]], p[[ai + k, 1]]);
-                    let (r0, r1) = (p[[ai + k + 1, 0]] - px, p[[ai + k + 1, 1]] - py);
+            let ks = seg_near(ai, bi, boxes[j].0, boxes[j].1);
+            if ks.is_empty() {
+                continue;
+            }
+            for q in seg_near(aj, bj, boxes[i].0, boxes[i].1) {
+                let (ax, ay) = (p[aj + q][0], p[aj + q][1]);
+                let (d0, d1) = (p[aj + q + 1][0] - ax, p[aj + q + 1][1] - ay);
+                for &k in &ks {
+                    let (px, py) = (p[ai + k][0], p[ai + k][1]);
+                    let (r0, r1) = (p[ai + k + 1][0] - px, p[ai + k + 1][1] - py);
                     let den = r0 * d1 - r1 * d0;
                     if den.abs() <= 1e-12 {
                         continue;
@@ -806,14 +950,14 @@ fn point_inside(poly: PyReadonlyArray2<f64>, x: f64, y: f64) -> bool {
 fn road_through(py: Python<'_>, ring: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>,
                 starts: PyReadonlyArray1<i64>, step: f64) -> f64 {
     let (r, p, st) = (ring.as_array(), pts.as_array(), starts.as_array());
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut total = 0.0f64;
         for l in 0..st.len().saturating_sub(1) {
             let (i0, i1) = (st[l] as usize, st[l + 1] as usize);
             for i in i0..i1.saturating_sub(1) {
                 let (px, py_) = (p[[i, 0]], p[[i, 1]]);
                 let (dx, dy) = (p[[i + 1, 0]] - px, p[[i + 1, 1]] - py_);
-                let len = dx.hypot(dy);
+                let len = dx.dhypot(dy);
                 let k = ((len / step) as i64).max(1);
                 let kf = k as f64;
                 for j in 0..k {
@@ -848,35 +992,121 @@ fn inside_view(p: &numpy::ndarray::ArrayView2<f64>, x: f64, y: f64) -> bool {
     c
 }
 
+/// geodesy.EnuFrame.geodetic_to_enu's maths for one point (lat, lon degrees, h m): WGS84 to ECEF, then into the frame
+/// (origin (3,) ECEF, rot (3, 3) rows E, N, U). The one copy every entry below uses (their numbers the same).
+#[inline]
+fn g2e_one(lat: f64, lon: f64, hv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const E2: f64 = F * (2.0 - F);
+    let (phi, lam) = (lat.to_radians(), lon.to_radians());
+    let (sl, cl) = (phi.dsin(), phi.dcos());
+    let nr = A / (1.0 - E2 * sl * sl).sqrt();
+    let rr = (nr + hv) * cl;
+    let x = rr * lam.dcos() - o[0];
+    let y = rr * lam.dsin() - o[1];
+    let z = (nr * (1.0 - E2) + hv) * sl - o[2];
+    (r[0][0] * x + r[0][1] * y + r[0][2] * z, r[1][0] * x + r[1][1] * y + r[1][2] * z,
+     r[2][0] * x + r[2][1] * y + r[2][2] * z)
+}
+
+/// geodesy.EnuFrame.enu_to_geodetic's maths for one point: ENU (e, n, u) -> ECEF through the frame -> (lat, lon, h)
+/// by Heikkinen's closed form (the polar axis included).
+#[inline]
+fn e2g_one(ev: f64, nv: f64, uv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const B: f64 = A * (1.0 - F);
+    const E2: f64 = F * (2.0 - F);
+    const EP2: f64 = E2 / (1.0 - E2);
+    let x = o[0] + r[0][0] * ev + r[1][0] * nv + r[2][0] * uv;
+    let y = o[1] + r[0][1] * ev + r[1][1] * nv + r[2][1] * uv;
+    let z = o[2] + r[0][2] * ev + r[1][2] * nv + r[2][2] * uv;
+    let p2 = x * x + y * y;
+    let p = p2.sqrt();
+    let z2 = z * z;
+    let (la, h);
+    if p < 1e-6 {
+        la = if z >= 0.0 { 90.0 } else { -90.0 };
+        h = z.abs() - B;
+    } else {
+        let f_ = 54.0 * B * B * z2;
+        let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
+        let c = E2 * E2 * f_ * p2 / (g * g * g);
+        let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).dcbrt();
+        let k = s + 1.0 + 1.0 / s;
+        let pp = f_ / (3.0 * k * k * g * g);
+        let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
+        let r0 = -pp * E2 * p / (1.0 + q)
+            + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
+        let t = (p - E2 * r0) * (p - E2 * r0);
+        let uu = (t + z2).sqrt();
+        let vv = (t + (1.0 - E2) * z2).sqrt();
+        let z0 = B * B * z / (A * vv);
+        h = uu * (1.0 - B * B / (A * vv));
+        la = (z + EP2 * z0).datan2(p).to_degrees();
+    }
+    (la, y.datan2(x).to_degrees(), h)
+}
+
+fn frame_of(origin: &PyReadonlyArray1<'_, f64>, rot: &PyReadonlyArray2<'_, f64>) -> PyResult<([f64; 3], [[f64; 3]; 3])> {
+    let (o, r) = (origin.as_array(), rot.as_array());
+    if o.len() < 3 || r.nrows() < 3 || r.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("a frame: origin (3,), rot (3, 3)"));
+    }
+    Ok(([o[0], o[1], o[2]], [[r[[0, 0]], r[[0, 1]], r[[0, 2]]], [r[[1, 0]], r[[1, 1]], r[[1, 2]]],
+                             [r[[2, 0]], r[[2, 1]], r[[2, 2]]]]))
+}
+
+type Three<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// (x, y, z) of every point i by one(a[i], b[i], c(i)), the GIL let go for long lists.
+fn three<'py, C, O>(py: Python<'py>, a: numpy::ndarray::ArrayView1<f64>, b: numpy::ndarray::ArrayView1<f64>, c: C,
+                    cost: usize, one: O) -> Three<'py>
+where
+    C: Fn(usize) -> f64 + Sync,
+    O: Fn(f64, f64, f64) -> (f64, f64, f64) + Sync,
+{
+    let n = a.len();
+    let (x, y, z) = release(py, n * cost, || {
+        let (mut x, mut y, mut z) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        for i in 0..n {
+            let v = one(a[i], b[i], c(i));
+            x.push(v.0);
+            y.push(v.1);
+            z.push(v.2);
+        }
+        (x, y, z)
+    });
+    (x.into_pyarray(py), y.into_pyarray(py), z.into_pyarray(py))
+}
+
 /// geodesy.EnuFrame.geodetic_to_enu for 1-D lat, lon, h (degrees, metres): WGS84 to ECEF, then into the frame
 /// (origin (3,) ECEF, rot (3, 3) rows E, N, U). -> (e, n, u).
 #[pyfunction]
 fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
                         h: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
-    const A: f64 = 6378137.0;
-    const F: f64 = 1.0 / 298.257223563;
-    const E2: f64 = F * (2.0 - F);
-    let (la, lo, hh, o, r) = (lat.as_array(), lon.as_array(), h.as_array(), origin.as_array(), rot.as_array());
-    let n = la.len();
-    let (e, nn, u) = release(py, n * 40, || {
-    let (mut e, mut nn, mut u) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
-    for i in 0..n {
-        let (phi, lam, hv) = (la[i].to_radians(), lo[i].to_radians(), hh[i]);
-        let (sl, cl) = (phi.sin(), phi.cos());
-        let nr = A / (1.0 - E2 * sl * sl).sqrt();
-        let rr = (nr + hv) * cl;
-        let x = rr * lam.cos() - o[0];
-        let y = rr * lam.sin() - o[1];
-        let z = (nr * (1.0 - E2) + hv) * sl - o[2];
-        e.push(r[[0, 0]] * x + r[[0, 1]] * y + r[[0, 2]] * z);
-        nn.push(r[[1, 0]] * x + r[[1, 1]] * y + r[[1, 2]] * z);
-        u.push(r[[2, 0]] * x + r[[2, 1]] * y + r[[2, 2]] * z);
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo, hh) = (lat.as_array(), lon.as_array(), h.as_array());
+    if lo.len() != la.len() || hh.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu: arrays of different lengths"));
     }
-    (e, nn, u)
-    });
-    (e.into_pyarray(py), nn.into_pyarray(py), u.into_pyarray(py))
+    Ok(three(py, la, lo, |i| hh[i], 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
+}
+
+/// geodetic_to_enu with one height for every point (geodesy._rust3's common call: the same numbers, no array of
+/// heights made and broadcast for it).
+#[pyfunction]
+fn geodetic_to_enu_c<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>, h: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo) = (lat.as_array(), lon.as_array());
+    if lo.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu_c: arrays of different lengths"));
+    }
+    Ok(three(py, la, lo, |_| h, 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
 }
 
 /// geodesy.EnuFrame.enu_to_geodetic for point lists: ENU (e, n, u) -> ECEF through the frame (origin, rot rows =
@@ -885,53 +1115,128 @@ fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
 #[pyfunction]
 fn enu_to_geodetic<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>,
                         u: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na, ua) = (e.as_array(), n.as_array(), u.as_array());
+    if na.len() != ea.len() || ua.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |i| ua[i], 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// enu_to_geodetic with one up value for every point (geodesy._rust3's common call).
+#[pyfunction]
+fn enu_to_geodetic_c<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>, u: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na) = (e.as_array(), n.as_array());
+    if na.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic_c: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |_| u, 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// mapgeom.Features.xy_in's first half: the WGS84 ECEF (n, 3) of lon/lat points (ll (n, 2), h = 0), kept per layer;
+/// ecef_to_frame turns it into any frame's (e, n) with the numbers geodetic_to_enu gives (its very operations: the
+/// origin subtracted from the same products). A cell's roads layer is read in each of its neighbours' frames
+/// (gradesep: nine), each time with its trigonometry again.
+#[pyfunction]
+fn lonlat_to_ecef<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     const A: f64 = 6378137.0;
     const F: f64 = 1.0 / 298.257223563;
-    const B: f64 = A * (1.0 - F);
     const E2: f64 = F * (2.0 - F);
-    const EP2: f64 = E2 / (1.0 - E2);
-    let (ea, na, ua, o, r) = (e.as_array(), n.as_array(), u.as_array(), origin.as_array(), rot.as_array());
-    let m = ea.len();
-    let (lat, lon, hgt) = release(py, m * 60, || {
-    let (mut lat, mut lon, mut hgt) = (Vec::with_capacity(m), Vec::with_capacity(m), Vec::with_capacity(m));
-    for i in 0..m {
-        let (ev, nv, uv) = (ea[i], na[i], ua[i]);
-        let x = o[0] + r[[0, 0]] * ev + r[[1, 0]] * nv + r[[2, 0]] * uv;
-        let y = o[1] + r[[0, 1]] * ev + r[[1, 1]] * nv + r[[2, 1]] * uv;
-        let z = o[2] + r[[0, 2]] * ev + r[[1, 2]] * nv + r[[2, 2]] * uv;
-        let p2 = x * x + y * y;
-        let p = p2.sqrt();
-        let z2 = z * z;
-        let (la, h);
-        if p < 1e-6 {
-            la = if z >= 0.0 { 90.0 } else { -90.0 };
-            h = z.abs() - B;
-        } else {
-            let f_ = 54.0 * B * B * z2;
-            let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
-            let c = E2 * E2 * f_ * p2 / (g * g * g);
-            let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
-            let k = s + 1.0 + 1.0 / s;
-            let pp = f_ / (3.0 * k * k * g * g);
-            let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
-            let r0 = -pp * E2 * p / (1.0 + q)
-                + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
-            let t = (p - E2 * r0) * (p - E2 * r0);
-            let uu = (t + z2).sqrt();
-            let vv = (t + (1.0 - E2) * z2).sqrt();
-            let z0 = B * B * z / (A * vv);
-            h = uu * (1.0 - B * B / (A * vv));
-            la = (z + EP2 * z0).atan2(p).to_degrees();
-        }
-        lat.push(la);
-        lon.push(y.atan2(x).to_degrees());
-        hgt.push(h);
+    let p = ll.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("lonlat_to_ecef: (n, 2) lon/lat"));
     }
-    (lat, lon, hgt)
+    let out = release(py, n * 40, || {
+        let mut out = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            // (g2e_one's first half with h = 0)
+            let hv = 0.0f64;
+            let (phi, lam) = (p[[i, 1]].to_radians(), p[[i, 0]].to_radians());
+            let (sl, cl) = (phi.dsin(), phi.dcos());
+            let nr = A / (1.0 - E2 * sl * sl).sqrt();
+            let rr = (nr + hv) * cl;
+            out.push(rr * lam.dcos());
+            out.push(rr * lam.dsin());
+            out.push((nr * (1.0 - E2) + hv) * sl);
+        }
+        out
     });
-    (lat.into_pyarray(py), lon.into_pyarray(py), hgt.into_pyarray(py))
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 3), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 2) east / north in the frame (origin, rot) of ECEF points (lonlat_to_ecef's): geodetic_to_enu's last step.
+#[pyfunction]
+fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
+                      rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let p = xyz.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ecef_to_frame: (n, 3) ECEF"));
+    }
+    let out = release(py, n * 6, || {
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let x = p[[i, 0]] - o[0];
+            let y = p[[i, 1]] - o[1];
+            let z = p[[i, 2]] - o[2];
+            out.push(r[0][0] * x + r[0][1] * y + r[0][2] * z);
+            out.push(r[1][0] * x + r[1][1] * y + r[1][2] * z);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 2), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 4) segments x0 y0 x1 y1 (segs, in the frame (o1, r1)) in the frame (o2, r2) at the ground: each point through
+/// enu_to_geodetic (up 0) and back by geodetic_to_enu (height 0) with those kernels' very operations, one pass, no
+/// GIL (roadwidth.RoadWidths._near_walls: a cell's walls in a neighbour's frame, two conversion calls and their
+/// arrays per set of cells; ~1.2 % of a cold Manhattan road tile build, 2026-11-10).
+#[pyfunction]
+fn reframe_segs<'py>(py: Python<'py>, segs: PyReadonlyArray2<'py, f64>, o1: PyReadonlyArray1<'py, f64>,
+                     r1: PyReadonlyArray2<'py, f64>, o2: PyReadonlyArray1<'py, f64>, r2: PyReadonlyArray2<'py, f64>)
+                     -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (oa, ra) = frame_of(&o1, &r1)?;
+    let (ob, rb) = frame_of(&o2, &r2)?;
+    let s = segs.as_array();
+    let n = s.nrows();
+    if n > 0 && s.ncols() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err("reframe_segs: (n, 4) segments"));
+    }
+    let flat: Vec<f64> = s.iter().copied().collect();
+    let out = release(py, n * 200, move || {
+        let conv = |x: f64, y: f64| {
+            let (la, lo, _) = e2g_one(x, y, 0.0, &oa, &ra);
+            let (e, nn, _) = g2e_one(la, lo, 0.0, &ob, &rb);
+            (e, nn)
+        };
+        let mut out = Vec::with_capacity(n * 4);
+        // (a ring's walls follow each other: a segment's start is the one before's end, the same bits, converted once)
+        let mut prev: Option<([u64; 2], (f64, f64))> = None;
+        for s in flat.chunks_exact(4) {
+            let k0 = [s[0].to_bits(), s[1].to_bits()];
+            let a = match prev {
+                Some((k, v)) if k == k0 => v,
+                _ => conv(s[0], s[1]),
+            };
+            let b = conv(s[2], s[3]);
+            prev = Some(([s[2].to_bits(), s[3].to_bits()], b));
+            out.extend_from_slice(&[a.0, a.1, b.0, b.1]);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 4), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
 }
 
 /// bc7.encode: BC7 mode-6 blocks (16 bytes each, row-major) of an (h, w, 3|4) uint8 image, edges padded by
@@ -1087,12 +1392,13 @@ fn bc7_block(t: &[[i32; 4]; 16]) -> [u8; 16] {
 #[pyfunction]
 fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyBytes> {
     let a = img.as_array();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
     let (h, w, ch) = (a.shape()[0], a.shape()[1], a.shape()[2]);
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
     // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
+    // (the process's shared cap, par.rs: a thread per 2 k blocks at most)
+    let threads = par::threads_for(nby * nbx, 2048).min(nby.max(1));
     let rows_per = (nby + threads - 1) / threads.max(1);
     std::thread::scope(|sc| {
     for (bi, band) in out.chunks_mut((rows_per * nbx * 16).max(16)).enumerate() {
@@ -1162,7 +1468,7 @@ fn inside_blockers<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, segs: 
                 let (dx, dy) = (sg[[k, 2]] - ax, sg[[k, 3]] - ay);
                 let l2 = (dx * dx + dy * dy).max(1e-12);
                 let t = (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0);
-                if (x - (ax + t * dx)).hypot(y - (ay + t * dy)) < h[b] {
+                if (x - (ax + t * dx)).dhypot(y - (ay + t * dy)) < h[b] {
                     out[i] = true;
                     break 'blk;
                 }
@@ -1183,7 +1489,7 @@ fn densify<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, spacing: f64) 
     }
     for i in 0..k.saturating_sub(1) {
         let (a, b) = (p.row(i), p.row(i + 1));
-        let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / spacing).ceil() as i64;
+        let n = ((b[0] - a[0]).dhypot(b[1] - a[1]) / spacing).ceil() as i64;
         for s in 1..n {
             let f = s as f64 / n as f64;
             for j in 0..c {
@@ -1278,6 +1584,108 @@ fn np_percentile(v: &[f64], q: f64) -> f64 {
     if g >= 0.5 { b - d * (1.0 - g) } else { a + d * g }
 }
 
+/// roadwidth.clearance_row: the room between the building walls along a street (centreline (k, >= 2)) a carriageway
+/// on its line keeps clear of: every `step` m (end_skip m kept clear of its ends: the corner houses of its junctions) a
+/// ray each way to the first wall within reach; (the q-quantile of twice the nearer wall's distance: the road stays on
+/// its line, so that is the room it has, none within reach no limit; the q-quantile of the wall-to-wall distance where
+/// both sides have one: the street's own width), each over the sections with a wall (both walls), None where fewer than
+/// min_samples or a share under `walled` of the sections have one. q in 0..1: the narrowest share q of them is left to
+/// the buildings' own cut (buildings.road_clearance).
+#[allow(clippy::too_many_arguments)]
+fn clearance_row_any<T: Copy + Into<f64> + numpy::Element>(
+        line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+        counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<T>, bucket: f64,
+        step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+        -> (Option<f64>, Option<f64>) {
+    let l = line.as_array();
+    let k = l.nrows();
+    if k < 2 {
+        return (None, None);
+    }
+    let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
+    let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (Ok(keys), Ok(first), Ok(counts), Ok(seg_of)) = (keys.as_slice(), first.as_slice(), counts.as_slice(),
+                                                         seg_of.as_slice()) else { return (None, None) };
+    let sg = segs.as_array();
+    clearance_core(&xs, &ys, step, end_skip, reach, min_samples, q, walled,
+                   |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// clearance_row's sections and quantiles over a centreline (xs, ys; k >= 2 points), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clearance_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, _reach: f64, min_samples: usize, q: f64, walled: f64,
+        ray: R) -> (Option<f64>, Option<f64>) {
+    let k = xs.len();
+    if k < 2 {
+        return (None, None);
+    }
+    let mut s = vec![0.0f64; k];
+    for i in 1..k {
+        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
+    }
+    let total = s[k - 1];
+    // (a short street, a cul-de-sac between two buildings: its middle half)
+    let end_skip = end_skip.min(total * 0.25);
+    let step = step.min((total - 2.0 * end_skip) / 2.0).max(0.5);
+    let stop = total - end_skip + 1e-9;
+    let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
+    let mut w = Vec::with_capacity(count);
+    let mut rows = Vec::with_capacity(count);
+    for i in 0..count {
+        let dd = end_skip + i as f64 * step;
+        let j = s.partition_point(|&v| v < dd).clamp(1, k - 1);
+        let (tx, ty) = (xs[j] - xs[j - 1], ys[j] - ys[j - 1]);
+        let len = tx.dhypot(ty);
+        if !(len >= 1e-6) {
+            continue;
+        }
+        let (nx, ny) = (-ty / len, tx / len);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
+        let near = match (a.is_nan(), b.is_nan()) {
+            (true, true) => f64::INFINITY,
+            (true, false) => b,
+            (false, true) => a,
+            (false, false) => a.min(b),
+        };
+        w.push(2.0 * near);
+        rows.push(if a.is_nan() || b.is_nan() { f64::INFINITY } else { a + b });
+    }
+    let total_n = w.len();
+    let quant = |v: Vec<f64>| {
+        // (over the sections that have a wall: a long road's open stretches do not hide its village's houses)
+        let mut v: Vec<f64> = v.into_iter().filter(|x| x.is_finite()).collect();
+        if v.len() < min_samples.max(1) || (v.len() as f64) < walled * total_n as f64 {
+            return None;
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(v[((q.clamp(0.0, 1.0) * v.len() as f64).floor() as usize).min(v.len() - 1)])
+    };
+    (quant(w), quant(rows))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row32(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                   counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f32>,
+                   bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                   -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
+}
+
+/// clearance_row with float64 walls.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn clearance_row(line: PyReadonlyArray2<f64>, keys: PyReadonlyArray1<i64>, first: PyReadonlyArray1<i64>,
+                 counts: PyReadonlyArray1<i64>, seg_of: PyReadonlyArray1<i64>, segs: PyReadonlyArray2<f64>,
+                 bucket: f64, step: f64, end_skip: f64, reach: f64, min_samples: usize, q: f64, walled: f64)
+                 -> (Option<f64>, Option<f64>) {
+    clearance_row_any(line, keys, first, counts, seg_of, segs, bucket, step, end_skip, reach, min_samples, q, walled)
+}
+
 /// roadwidth.measure_row: the right-of-way between the building walls of a street (centreline (k, >=2)), or None.
 #[allow(clippy::too_many_arguments)]
 fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
@@ -1291,9 +1699,26 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     }
     let xs: Vec<f64> = (0..k).map(|i| l[[i, 0]]).collect();
     let ys: Vec<f64> = (0..k).map(|i| l[[i, 1]]).collect();
+    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
+                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
+    let sg = segs.as_array();
+    measure_core(&xs, &ys, step, end_skip, min_samples, walled, agree,
+                 |cx, cy, dx, dy| wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, dx, dy, reach))
+}
+
+/// measure_row's cross-sections, median and agreement over a centreline (xs, ys), the walls behind `ray`
+/// ((px, py, dx, dy) -> the first wall's distance within reach, or NaN).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn measure_core<R: Fn(f64, f64, f64, f64) -> f64>(
+        xs: &[f64], ys: &[f64], step: f64, end_skip: f64, min_samples: usize, walled: f64, agree: f64, ray: R)
+        -> Option<f64> {
+    let k = xs.len();
+    if k < 2 {
+        return None;
+    }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
-        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).hypot(ys[i] - ys[i - 1]);
+        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
     }
     let total = s[k - 1];
     if total < 2.0 * end_skip + step {
@@ -1302,9 +1727,6 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
     // numpy.arange(end_skip, total - end_skip + 1e-9, step)
     let stop = total - end_skip + 1e-9;
     let count = ((stop - end_skip) / step).ceil().max(0.0) as usize;
-    let (keys, first, counts, seg_of) = (keys.as_slice().unwrap(), first.as_slice().unwrap(),
-                                         counts.as_slice().unwrap(), seg_of.as_slice().unwrap());
-    let sg = segs.as_array();
     let mut w = Vec::with_capacity(count);
     let mut n = 0usize;
     for i in 0..count {
@@ -1313,15 +1735,15 @@ fn measure_row_any<T: Copy + Into<f64> + numpy::Element>(
         let mut j = s.partition_point(|&v| v < dd);
         j = j.clamp(1, k - 1);
         let (tx, ty) = (xs[j] - xs[j - 1], ys[j] - ys[j - 1]);
-        let len = tx.hypot(ty);
+        let len = tx.dhypot(ty);
         if !(len >= 1e-6) {
             continue;
         }
         n += 1;
         let (nx, ny) = (-ty / len, tx / len);
-        let (cx, cy) = (np_interp(dd, &s, &xs), np_interp(dd, &s, &ys));
-        let a = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, nx, ny, reach);
-        let b = wall_ray(keys, first, counts, seg_of, &sg, bucket, cx, cy, -nx, -ny, reach);
+        let (cx, cy) = (np_interp(dd, &s, xs), np_interp(dd, &s, ys));
+        let a = ray(cx, cy, nx, ny);
+        let b = ray(cx, cy, -nx, -ny);
         let v = a + b;
         if !v.is_nan() {
             w.push(v);
@@ -1386,7 +1808,7 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     }
     let mut arc = vec![0.0f64; n];
     for i in 1..n {
-        arc[i] = arc[i - 1] + (xy[[i, 0]] - xy[[i - 1, 0]]).hypot(xy[[i, 1]] - xy[[i - 1, 1]]);
+        arc[i] = arc[i - 1] + (xy[[i, 0]] - xy[[i - 1, 0]]).dhypot(xy[[i, 1]] - xy[[i - 1, 1]]);
     }
     // the road's turning (radians) summed along it to each vertex: a map line draws a curve as straight pieces turning
     // at their vertices, ~100 m apart on a rural interstate, and a circle through points 12 m apart saw 8 % at each
@@ -1396,7 +1818,7 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     for i in 1..n - 1 {
         let (ax, ay) = (xy[[i, 0]] - xy[[i - 1, 0]], xy[[i, 1]] - xy[[i - 1, 1]]);
         let (bx, by) = (xy[[i + 1, 0]] - xy[[i, 0]], xy[[i + 1, 1]] - xy[[i, 1]]);
-        let d = if ax.hypot(ay) < 1e-9 || bx.hypot(by) < 1e-9 { 0.0 } else { (ax * by - ay * bx).atan2(ax * bx + ay * by) };
+        let d = if ax.dhypot(ay) < 1e-9 || bx.dhypot(by) < 1e-9 { 0.0 } else { (ax * by - ay * bx).datan2(ax * bx + ay * by) };
         turn[i] = turn[i - 1] + d;      // (> 0 turning left)
     }
     turn[n - 1] = turn[n - 2];
@@ -1433,274 +1855,84 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     out.into_pyarray(py)
 }
 
-/// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
-const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
+/// The grade_points arrays as gradebins takes them.
+macro_rules! grade_segs {
+    ($a:expr, $b:expr, $za:expr, $zb:expr, $h:expr, $rh:expr, $rid:expr, $rk:expr, $abut:expr, $cut:expr, $ba:expr,
+     $bb:expr, $steep:expr, $link:expr, $abut_d:expr) => {
+        gradebins::Segs { a: $a.as_array(), b: $b.as_array(), za: $za.as_array(), zb: $zb.as_array(),
+                          h: $h.as_array(), rh: $rh.as_array(), rid: $rid.as_array(), rk: $rk.as_array(),
+                          abut: $abut.as_array(), cut: $cut.as_array(), ba: $ba.as_array(), bb: $bb.as_array(),
+                          steep: $steep.as_array(), link: $link.as_array(), abut_d: $abut_d.as_array() }
+    };
+}
 
+/// grading.grade_points by the reference traversal (gradebins::bucketed: segments outer, the points in BUCKET m
+/// squares): the binned one's twin for the identity tests and BNE_GRADE_BINNED=off. cut (segments, 6): a cutting's
+/// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
+/// a banked curve, grading.bank); steep: flags, gradebins::STEEP a mountain pass road's (grading.Plan.steep: its sides
+/// fall to the natural ground at steep_run, from steep_t_min, between its retaining wall and its parapet),
+/// gradebins::OPEN_TUNNEL a tunnel's open section (grading.Plan.open_tunnel); link: bit 0 the plan goes on
+/// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
+/// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
+/// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
+/// abut_d (segments, 2): along its road to a start / end abutment, NaN: none.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                      base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
                      za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
-                     rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
+                     rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, rk: PyReadonlyArray1<'py, i64>,
+                     abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
                      ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                      link: PyReadonlyArray1<'py, u8>, extrap: f64,
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
-                     yield_ramp: f64, abut_under: f64, abut_d: PyReadonlyArray2<'py, f64>)
+                     yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
+                     abut_d: PyReadonlyArray2<'py, f64>)
                      -> Bound<'py, PyArray1<f64>> {
-    let abut_d = abut_d.as_array();         // (segments, 2): along its road to a start / end abutment, NaN: none
+    let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
+                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               yield_ramp, rank_fade, rank_height_fade, abut_under };
+    let segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
-    let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
-    let (rh, rid) = (rh.as_array(), rid.as_array());
-    let abut = abut.as_array();
-    let cut = cut.as_array();               // (segments, 6): a cutting's wall, top and top offset, left then right
-    // (segments): the cross slope at each segment's ends (m per m toward its left: a banked curve, grading.bank)
-    let (ba, bb) = (ba.as_array(), bb.as_array());
-    // (segments): a mountain pass road's (grading.Plan.steep): its sides fall to the natural ground at steep_run, from
-    // steep_t_min, between its retaining wall and its parapet
-    let steep = steep.as_array();
-    // (segments): bit 0 the plan goes on before it, bit 1 after it. A point past such an end takes the segment's line
-    // carried on (up to extrap m), not its end height: on a grade the ends' heights blended in, before and after, made
-    // a washboard of the plan's vertex step (4 m, +-3.5 cm on the Stelvio's 10 %; the user, 2026-11-01: "the road
-    // still feels bumpy"). A plan's own end (a dead end, a cell's edge) keeps its end height.
-    let link = link.as_array();
-    let banked: Vec<bool> = (0..h.len()).map(|s| ba[s] != 0.0 || bb[s] != 0.0).collect();
-    let sharp = cut.iter().any(|v| v.is_finite());
-    let has_cut: Vec<bool> = (0..h.len()).map(|s| (0..6).any(|k| cut[[s, k]].is_finite())).collect();
-    let cut_reach: Vec<f64> = (0..h.len()).map(|s| {
-        let r = cut[[s, 2]].max(cut[[s, 5]]).max(cut[[s, 0]]).max(cut[[s, 3]]);
-        if r.is_finite() { r + 0.5 + 2.0 * sharp_step } else { 0.0 }
-    }).collect();
-    let n = px.len();
-    let mut out: Vec<f64> = base.iter().copied().collect();
-    if n == 0 {
-        return out.into_pyarray(py);
+    py.detach(|| gradebins::bucketed(px, pyy, base, &segs, &prm, None)).into_pyarray(py)
+}
+
+/// grading.grade_points (the default): grade_points' heights bit for bit by fine bins (gradebins::binned), without the
+/// GIL. keep (segments,): 1 for the segments taking part (the plans whose boxes meet the points': PlanPack.near's,
+/// without copying the arrays); bin_m: the fine bins' size (m).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
+                            base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
+                            b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>,
+                            zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
+                            rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>,
+                            rk: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>,
+                            cut: PyReadonlyArray2<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
+                            bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
+                            link: PyReadonlyArray1<'py, u8>, extrap: f64,
+                            lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64,
+                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                            sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
+                            yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
+                            abut_d: PyReadonlyArray2<'py, f64>, keep: PyReadonlyArray1<'py, u8>, bin_m: f64)
+                            -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
+                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               yield_ramp, rank_fade, rank_height_fade, abut_under };
+    let segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
+    let keep = keep.as_array();
+    if keep.len() != segs.h.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grade_points_binned: keep is not one per segment"));
     }
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for i in 0..n {
-        x0 = x0.min(px[i]); x1 = x1.max(px[i]);
-        y0 = y0.min(pyy[i]); y1 = y1.max(pyy[i]);
-    }
-    let bxs: Vec<i64> = (0..n).map(|i| ((px[i] - x0) / bucket).floor() as i64).collect();
-    let bys: Vec<i64> = (0..n).map(|i| ((pyy[i] - y0) / bucket).floor() as i64).collect();
-    let nbx = bxs.iter().copied().max().unwrap() + 1;
-    let keys: Vec<i64> = (0..n).map(|i| bys[i] * nbx + bxs[i]).collect();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&i| keys[i]);                    // stable, as argsort(kind="stable")
-    let sk: Vec<i64> = order.iter().map(|&i| keys[i]).collect();
-    // the points and their state in that order (the pairs loop reads them in runs: px[order[j]] and the state arrays
-    // indexed at random were most of its time, 2026-10-26); each point's sums in the same segment order as before
-    let xs: Vec<f64> = order.iter().map(|&i| px[i]).collect();
-    let ys: Vec<f64> = order.iter().map(|&i| pyy[i]).collect();
-    let bs: Vec<f64> = order.iter().map(|&i| base[i]).collect();
-    let mut num = vec![0.0f64; n];
-    let mut den = vec![0.0f64; n];
-    let mut wmax = vec![0.0f64; n];
-    // two passes: the highest core of a road's last stretch before a bridge (abut) over each point, then the blend
-    // without the roads more than wall_cut under it beside them, outside their own cores (grading.grade_points, #38)
-    let mut top = vec![f64::NEG_INFINITY; n];
-    // (sep) how much each point is in a core, and that core's height: other roads beside it count less (#92)
-    let mut cmax = vec![0.0f64; n];
-    let mut csum = vec![0.0f64; n];
-    let mut cz = vec![0.0f64; n];
-    let mut raised = vec![f64::NEG_INFINITY; n];    // (sharp) the cuttings' tops over the points beside them
-    let mut beff: Vec<f64> = bs.clone();
-    // the carriageway each point is deepest in (d - rh, most negative) and its height there
-    let mut cdeep = vec![0.0f64; n];
-    let mut carz = vec![f64::NAN; n];
-    let mut carid = vec![-1i64; n];
-    // the cutting band each point is deepest in (d - its far edge) and its road and height
-    let mut bdeep = vec![0.0f64; n];
-    let mut bz = vec![f64::NAN; n];
-    let mut bid = vec![-1i64; n];
-    let smooth = |v: f64| { let v = v.clamp(0.0, 1.0); v * v * (3.0 - 2.0 * v) };
-    // pass 1: a pair with d - h past this has u >= 1 (its core hs <= h, its ramp tt <= t_max, a wall's flat and ramp
-    // wall_flat + wall_t), so w = 0: skipped (a margin for the rounding)
-    let far1 = t_max.max(wall_flat + wall_t) + 1e-6;
-    for pass in 0..2 {
-        if pass == 1 && sharp {
-            for i in 0..n {
-                beff[i] = bs[i].max(raised[i]);
-            }
-        }
-        for s in 0..h.len() {
-            // (pass 0 within the blend's reach too: the Python loop pairs the points with a segment once, at h + t_max)
-            let reach = if pass == 0 { (h[s] + if sep { core_fade } else { 0.0 }).max(cut_reach[s]).min(h[s] + t_max) }
-                        else { h[s] + t_max };
-            let (ax, ay, bx, by) = (a[[s, 0]], a[[s, 1]], b[[s, 0]], b[[s, 1]]);
-            let (lo_x, hi_x) = (ax.min(bx) - reach, ax.max(bx) + reach);
-            let (lo_y, hi_y) = (ay.min(by) - reach, ay.max(by) + reach);
-            if hi_x < x0 || lo_x > x1 || hi_y < y0 || lo_y > y1 {
-                continue;
-            }
-            let cx0 = 0i64.max(((lo_x - x0) / bucket).floor() as i64);
-            let cx1 = (nbx - 1).min(((hi_x - x0) / bucket).floor() as i64);
-            let cy0 = 0i64.max(((lo_y - y0) / bucket).floor() as i64);
-            let cy1 = ((hi_y - y0) / bucket).floor() as i64;
-            let (abx, aby) = (bx - ax, by - ay);
-            let l2 = abx * abx + aby * aby;
-            // pass 0's farthest effect: a carriageway (rh), an abutment (h), a cutting's band (h + wall_flat) and top
-            // (cut_reach: its side and ahead limits), a core (h + core_fade); a margin for the rounding
-            let far0 = rh[s].max(h[s] + if has_cut[s] { wall_flat.max(0.0) } else { 0.0 }).max(cut_reach[s])
-                .max(h[s] + if sep { core_fade } else { 0.0 }) + 1e-6;
-            for row in cy0..=cy1 {
-                let i0 = sk.partition_point(|&k| k < row * nbx + cx0);
-                let i1 = sk.partition_point(|&k| k <= row * nbx + cx1);
-                for idx in i0..i1.max(i0) {
-                    let (qx, qy) = (xs[idx] - ax, ys[idx] - ay);
-                    let t = if l2 > 1e-12 { ((qx * abx + qy * aby) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                    let (ddx, ddy) = (qx - t * abx, qy - t * aby);
-                    let d = (ddx * ddx + ddy * ddy).sqrt();       // (not hypot: libm's is ~5x dearer, the pairs loop's main cost)
-                    let mut target = za[s] + (zb[s] - za[s]) * t;
-                    if link[s] != 0 && l2 > 1e-12 {
-                        let tu = (qx * abx + qy * aby) / l2;
-                        let e = extrap / l2.sqrt();
-                        let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
-                        let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
-                        target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
-                    }
-                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
-                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
-                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
-                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
-                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
-                        let len = l2.sqrt();
-                        let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
-                        let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
-                        let mut beyond = 0.0f64;
-                        if da.is_finite() {
-                            beyond = beyond.max(-along - da);
-                        }
-                        if db.is_finite() {
-                            beyond = beyond.max(along - len - db);
-                        }
-                        target -= beyond * abut_under;
-                    }
-                    if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
-                        let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
-                        target += (ba[s] + (bb[s] - ba[s]) * t) * off;
-                    }
-                    let left = (qx * aby - qy * abx) < 0.0;
-                    let co = if left { 0 } else { 3 };
-                    let (cwall, ctop, creach) = (cut[[s, co]], cut[[s, co + 1]], cut[[s, co + 2]]);
-                    if pass == 0 {
-                        if d > far0 {
-                            continue;       // (nothing below reaches this far: the box's corners)
-                        }
-                        // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
-                        // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
-                        let cr = if steep[s] != 0 { h[s] } else { rh[s] };
-                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
-                            cdeep[idx] = d - cr;
-                            carz[idx] = target;
-                            carid[idx] = rid[s];
-                        }
-                        if abut[s] != 0 && d <= h[s] && target > top[idx] {
-                            top[idx] = target;
-                        }
-                        if has_cut[s] && ctop.is_finite() {     // the ground raised to a cutting's top past its wall
-                            let lab0 = l2.max(1e-24).sqrt();
-                            let al0 = (qx * abx + qy * aby) / lab0;
-                            let ahead0 = (-al0).max(al0 - lab0).max(0.0);
-                            let side0 = (qx * aby - qy * abx).abs() / lab0;
-                            let bend = h[s].min(cwall) + wall_flat;     // the band behind its wall
-                            if side0 > rh[s] && ahead0 < side0 && d - bend < bdeep[idx] {
-                                bdeep[idx] = d - bend;
-                                bz[idx] = target;
-                                bid[idx] = rid[s];
-                            }
-                            if side0 > cwall && side0 <= creach + 0.5 && ahead0 < sharp_step * 2.0 && ctop > raised[idx] {
-                                raised[idx] = ctop;
-                            }
-                        }
-                        if sep {
-                            let cn = 1.0 - smooth((d - h[s]) / core_fade);
-                            if cn > 0.0 {
-                                if cn > cmax[idx] {
-                                    cmax[idx] = cn;
-                                }
-                                csum[idx] += cn;
-                                cz[idx] += cn * target;
-                            }
-                        }
-                        continue;
-                    }
-                    // (past every blend's reach: no weight, nothing changes; the box's corners, ~half the pairs)
-                    if d - h[s] > far1 {
-                        continue;
-                    }
-                    // a cut deeper than wall_cut: a retaining wall at the core's edge, the ground right behind it
-                    // (for a point more beside the segment than ahead of it: ahead, the road's own next segments blend
-                    // in along it, and cutting those off made a kink on every crest)
-                    let side = if l2 > 1e-12 { (qx * aby - qy * abx).abs() / l2.sqrt() } else { d };
-                    let ahead = if l2 > 1e-12 {
-                        let along = (qx * abx + qy * aby) / l2.sqrt();
-                        (-along).max(along - l2.sqrt()).max(0.0)
-                    } else { 0.0 };
-                    // (and not far past a road's end: beside a tunnel the approach's last segment flattened a strip
-                    // 10 m along it, a pit beside the arch, 2026-10-17)
-                    // (on a cutting's side the core ends at its wall; where the ground falls away there the road ends)
-                    let hs = if cwall.is_finite() { h[s].min(cwall) } else { h[s] };
-                    let drop = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-                    let wall = beff[idx] - target > wall_cut && ahead < side && ahead < wall_ahead;
-                    let tt = if wall { wall_t }
-                             else if steep[s] != 0 { (steep_run * (target - beff[idx]).abs()).clamp(steep_t_min, t_max) }
-                             else { (slope_run * (target - beff[idx]).abs()).clamp(t_min, t_max) };
-                    // a wall: flat on one terrain step behind it (no slope in front of its face), then up
-                    let u = ((d - hs - if wall { wall_flat } else { 0.0 }) / tt).clamp(0.0, 1.0);
-                    let w = 1.0 - u * u * (3.0 - 2.0 * u);
-                    // (another road's carriageway here, at another level: this road gives way past its own carriageway)
-                    // (a road's own carriageway never gives way: a hairpin's band over the leg above sank its lanes
-                    // under the terrain, the Stelvio Pass, the user's report 2026-10-21)
-                    // (a carriageway first: a road's cutting band reaching over another road's carriageway at another level
-                    // (its "climb" was that road's embankment) does not pull that road's ground; a bridge's abutment sank
-                    // 2.5 m under the deck into the street below, a wall cars hit, GitHub #108 Meppen)
-                    // (by how much: fully from wall_cut apart and yield_ramp past its carriageway, none from yield_ramp
-                    // less and at its edge; giving way at once there stepped a hairpin's lane 27 cm where its other leg
-                    // crossed wall_cut, the Stelvio, 2026-11-01)
-                    let ramp = yield_ramp.max(1e-6);
-                    let apart = |dz: f64| smooth((dz.abs() - wall_cut + ramp) / ramp);
-                    let mut yf = 0.0f64;
-                    if carid[idx] >= 0 && carid[idx] != rid[s] {
-                        yf = apart(target - carz[idx]);
-                    }
-                    // (a cutting's band: another road's alone; a pass road's legs (grading.LEG_RID_SHIFT: the same road)
-                    // blend over each other's bands, the ground between them a slope: giving way there drew a 5 m step
-                    // along the band's edge, which notches at every vertex: spikes between a hairpin's legs, the user's
-                    // report 2026-11-01. On each other's lanes they still give way, above)
-                    if bid[idx] >= 0 && bid[idx] & LEG_ROAD_MASK != rid[s] & LEG_ROAD_MASK {
-                        yf = yf.max(apart(target - bz[idx]));
-                    }
-                    yf *= smooth((d - rh[s]) / ramp);
-                    if w > 0.0 && !drop && yf < 1.0 && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
-                        let w = w * (1.0 - yf);
-                        let r = d / blend_r;
-                        let mut wb = w / (1.0 + r * r);
-                        if sep {
-                            let rf = cz[idx] / csum[idx].max(1e-12);
-                            let f = cmax[idx] * smooth(((target - rf).abs() - sep_from) / (sep_full - sep_from))
-                                * smooth((d - hs) / core_fade) * smooth((side - ahead) / side_fade);
-                            wb *= 1.0 - f;
-                        }
-                        num[idx] += wb * target;
-                        den[idx] += wb;
-                        if w > wmax[idx] {
-                            wmax[idx] = w;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for j in 0..n {
-        let i = order[j];
-        out[i] = beff[j];
-        if den[j] > 0.0 {
-            out[i] = beff[j] + wmax[j] * (num[j] / den[j] - beff[j] + lift);
-        }
-    }
-    out.into_pyarray(py)
+    let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
+    let out = py.detach(|| {
+        let kv: Vec<bool> = keep.iter().map(|&k| k != 0).collect();
+        gradebins::binned(px, pyy, base, &segs, &prm, Some(&kv), bin_m)
+    });
+    Ok(out.into_pyarray(py))
 }
 
 /// roads.tunnel_sections: a tunnel's road level and its sections from the ground over it, sampled at arc lengths s.
@@ -1713,11 +1945,29 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
                         open_cover: f64, full_cover: f64, min_n: usize)
                         -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>) {
     let (s, g) = (s.as_array(), g.as_array());
+    let (s, g) = (s.as_slice().unwrap(), g.as_slice().unwrap());
+    let (floor, kinds) = sections_of(s, g, g, open_cover, full_cover, min_n);
+    (floor.into_pyarray(py), kinds.into_pyarray(py))
+}
+
+/// tunnel_sections with the floor's hull on g (its ends pinned: a joint inside the hill at the tunnel network's
+/// height, tunnelchain) and the cover read on cover_g (the real ground there). (floor, kinds)
+#[pyfunction]
+fn tunnel_sections_cover<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyReadonlyArray1<'py, f64>,
+                              cover_g: PyReadonlyArray1<'py, f64>, open_cover: f64, full_cover: f64, min_n: usize)
+                              -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>) {
+    let (floor, kinds) = sections_of(s.as_slice().unwrap(), g.as_slice().unwrap(), cover_g.as_slice().unwrap(),
+                                     open_cover, full_cover, min_n);
+    (floor.into_pyarray(py), kinds.into_pyarray(py))
+}
+
+fn sections_of(s: &[f64], g: &[f64], gc: &[f64], open_cover: f64, full_cover: f64, min_n: usize)
+               -> (Vec<f64>, Vec<i64>) {
     let n = s.len();
     let mut floor = vec![0.0f64; n];
-    let mut kinds = vec![0i64; n];
+    let kinds;
     if n == 0 {
-        return (floor.into_pyarray(py), kinds.into_pyarray(py));
+        return (floor, vec![]);
     }
     // the lower hull (monotone chain over s ascending)
     let mut hull: Vec<usize> = Vec::new();
@@ -1735,15 +1985,54 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
         let (a, b) = (hull[k], hull[(k + 1).min(hull.len() - 1)]);
         floor[i] = if b == a || s[b] <= s[a] { g[a] } else { g[a] + (g[b] - g[a]) * (s[i] - s[a]) / (s[b] - s[a]) };
     }
-    // covered runs and their kinds
-    let covered: Vec<bool> = (0..n).map(|i| g[i] - floor[i] >= open_cover).collect();
+    kinds = kinds_of(gc, &floor, open_cover, full_cover, min_n);
+    (floor, kinds)
+}
+
+/// tunnel_sections over a buried floor (tunnelchain::buried_floor): the hull of g, lowered under flat ground the map
+/// has a tunnel under (side_l / side_r: the ground beside it) to `need` under it, ramps of `grade` from its ends; the
+/// kinds read on cover_g, short open gaps under no cutting closed (tunnelchain::close_gaps). prm: [open_cover,
+/// full_cover, need, grade, flat_m, min_run, gap_m, trench_m, open_cover of a buried line, start is a portal, end is a
+/// portal (1 / 0), a part of a buried network (1 / 0)]. (floor, kinds, buried)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn tunnel_sections_buried<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyReadonlyArray1<'py, f64>,
+                               cover_g: PyReadonlyArray1<'py, f64>, side_l: PyReadonlyArray1<'py, f64>,
+                               side_r: PyReadonlyArray1<'py, f64>, prm: PyReadonlyArray1<'py, f64>, min_n: usize)
+                               -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i64>>, bool) {
+    let (s, g, gc) = (s.as_slice().unwrap(), g.as_slice().unwrap(), cover_g.as_slice().unwrap());
+    let prm = prm.as_slice().unwrap();
+    let ends = if prm.len() >= 11 { (prm[9] > 0.5, prm[10] > 0.5) } else { (true, true) };
+    let (floor, buried) = tunnelchain::buried_floor_flag(s, g, gc, side_l.as_slice().unwrap(),
+                                                         side_r.as_slice().unwrap(), prm[0], prm[2], prm[3], prm[4],
+                                                         prm[5], ends);
+    // (a part of a buried network, prm[11]: joined inside to a floor the burial lowered, it is the ramp up from it:
+    // I-395's 106 m piece from the tunnel under Washington's Mall up to D Street was a tube to its last metre)
+    // (a buried line covered only where its box fits under the ground: prm[8], its portals where the ramps reach that;
+    // a network's part between joints keeps the hull's own measure: under ground that undulates it was open in places)
+    let open = if buried && prm.len() >= 9 { prm[8] } else { prm[0] };
+    let buried = buried || (prm.len() >= 12 && prm[11] > 0.5);
+    let mut kinds = kinds_of(gc, &floor, open, prm[1], min_n);
+    if prm.len() >= 8 {
+        tunnelchain::close_gaps(s, gc, side_l.as_slice().unwrap(), side_r.as_slice().unwrap(), &mut kinds, prm[6],
+                                prm[7]);
+    }
+    (floor.into_pyarray(py), kinds.into_pyarray(py), buried)
+}
+
+/// The sections' kinds from the ground over the floor: 2 where a covered run (gc - floor >= open_cover, min_n samples
+/// or more) reaches full_cover, else 1; open gaps of fewer than min_n samples between covered runs closed.
+pub(crate) fn kinds_of(gc: &[f64], floor: &[f64], open_cover: f64, full_cover: f64, min_n: usize) -> Vec<i64> {
+    let n = floor.len();
+    let mut kinds = vec![0i64; n];
+    let covered: Vec<bool> = (0..n).map(|i| gc[i] - floor[i] >= open_cover).collect();
     let mut runs: Vec<(usize, usize, i64)> = Vec::new();
     let mut i = 0usize;
     while i < n {
         if !covered[i] { i += 1; continue; }
         let mut j = i;
         while j + 1 < n && covered[j + 1] { j += 1; }
-        let deep = (i..=j).any(|q| g[q] - floor[q] >= full_cover);
+        let deep = (i..=j).any(|q| gc[q] - floor[q] >= full_cover);
         if j + 1 - i >= min_n { runs.push((i, j, if deep { 2 } else { 1 })); }
         i = j + 1;
     }
@@ -1761,7 +2050,7 @@ fn tunnel_sections<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, g: PyRea
     for (a, b, kind) in merged {
         for q in a..=b { kinds[q] = kind; }
     }
-    (floor.into_pyarray(py), kinds.into_pyarray(py))
+    kinds
 }
 
 /// grading.resample: points every step m along xy (k, 2), the last point kept, and their arc lengths.
@@ -1774,7 +2063,7 @@ fn resample<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, step: f64)
     let ys: Vec<f64> = (0..k).map(|i| p[[i, 1]]).collect();
     let mut s = vec![0.0f64; k];
     for i in 1..k {
-        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).hypot(ys[i] - ys[i - 1]);
+        s[i] = s[i - 1] + (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
     }
     let total = s[k - 1];
     if !(total > 0.0) {
@@ -1797,7 +2086,7 @@ fn resample<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, step: f64)
 fn along(x: &[f64], y: &[f64], dist: f64) -> (f64, f64) {
     let mut left = dist;
     for i in 1..x.len() {
-        let l = (x[i] - x[i - 1]).hypot(y[i] - y[i - 1]);
+        let l = (x[i] - x[i - 1]).dhypot(y[i] - y[i - 1]);
         if l >= left && l > 0.0 {
             let t = left / l;
             return (x[i - 1] + t * (x[i] - x[i - 1]), y[i - 1] + t * (y[i] - y[i - 1]));
@@ -1870,14 +2159,14 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
     let (cxy, coff, ccl, crd) = (cand_xy.as_array(), cand_off.as_array(), cand_class.as_array(), cand_road.as_array());
     let (qn, qd, qcl, qrd, qr) = (q_node.as_array(), q_dir.as_array(), q_class.as_array(), q_road.as_array(),
                                   q_reach.as_array());
-    let cos_max = turn_deg.to_radians().cos();
+    let cos_max = turn_deg.to_radians().dcos();
     let grid = EndsGrid::new(&cxy, &coff, join);
     let mut out: Vec<f64> = Vec::new();
     let mut off: Vec<i64> = vec![0];
     for q in 0..qn.nrows() {
         let (nx, ny) = (qn[[q, 0]], qn[[q, 1]]);
         let (dx, dy) = (qd[[q, 0]], qd[[q, 1]]);
-        let dl = dx.hypot(dy);
+        let dl = dx.dhypot(dy);
         let mut best: Option<(f64, Vec<f64>, Vec<f64>)> = None;
         if dl > 0.0 {
             for c in grid.near(nx, ny) {
@@ -1889,8 +2178,8 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                     continue;
                 }
                 // (the ends first: most candidates are nowhere near the node)
-                let at_start = (cxy[[a, 0]] - nx).hypot(cxy[[a, 1]] - ny) <= join;
-                if !at_start && (cxy[[b - 1, 0]] - nx).hypot(cxy[[b - 1, 1]] - ny) > join {
+                let at_start = (cxy[[a, 0]] - nx).dhypot(cxy[[a, 1]] - ny) <= join;
+                if !at_start && (cxy[[b - 1, 0]] - nx).dhypot(cxy[[b - 1, 1]] - ny) > join {
                     continue;
                 }
                 let mut xs: Vec<f64> = (a..b).map(|i| cxy[[i, 0]]).collect();
@@ -1901,7 +2190,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
                 }
                 let (px, py) = along(&xs, &ys, look);
                 let (ex, ey) = (px - xs[0], py - ys[0]);
-                let el = ex.hypot(ey);
+                let el = ex.dhypot(ey);
                 if el <= 0.0 {
                     continue;
                 }
@@ -1917,7 +2206,7 @@ fn chain_extensions<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, c
             out.push(ny);
             let mut left = qr[q];
             for i in 1..xs.len() {
-                let l = (xs[i] - xs[i - 1]).hypot(ys[i] - ys[i - 1]);
+                let l = (xs[i] - xs[i - 1]).dhypot(ys[i] - ys[i - 1]);
                 if l >= left {
                     let t = if l > 0.0 { left / l } else { 0.0 };
                     out.push(xs[i - 1] + t * (xs[i] - xs[i - 1]));
@@ -1953,9 +2242,9 @@ fn node_parts<'py>(py: Python<'py>, cand_xy: PyReadonlyArray2<'py, f64>, cand_of
             if b < a + 2 {
                 continue;
             }
-            if (cxy[[a, 0]] - nx).hypot(cxy[[a, 1]] - ny) <= join {
+            if (cxy[[a, 0]] - nx).dhypot(cxy[[a, 1]] - ny) <= join {
                 out.push(2 * c as i64);
-            } else if (cxy[[b - 1, 0]] - nx).hypot(cxy[[b - 1, 1]] - ny) <= join {
+            } else if (cxy[[b - 1, 0]] - nx).dhypot(cxy[[b - 1, 1]] - ny) <= join {
                 out.push(2 * c as i64 + 1);
             }
         }
@@ -1977,12 +2266,12 @@ fn route_samples<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyR
         olo.push(lon[0]);
     }
     let m = 111320.0;
-    let c = lat.get(0).copied().unwrap_or(0.0).to_radians().cos();
+    let c = lat.get(0).copied().unwrap_or(0.0).to_radians().dcos();
     let xy = |i: usize| (lon[i] * m * c, lat[i] * m);
     let (mut next, mut cum) = (step, 0.0);
     for i in 1..n {
         let ((ax, ay), (bx, by)) = (xy(i - 1), xy(i));
-        let seg = (bx - ax).hypot(by - ay);
+        let seg = (bx - ax).dhypot(by - ay);
         while step > 0.0 && next <= cum + seg && next <= max_m {
             let t = if seg > 0.0 { (next - cum) / seg } else { 0.0 };
             ola.push(lat[i - 1] + (lat[i] - lat[i - 1]) * t);
@@ -2028,7 +2317,7 @@ fn smooth_profile<'py>(py: Python<'py>, z: PyReadonlyArray1<'py, f64>, step: f64
     let r = (3.0 * sigma / step).ceil() as usize;
     let mut k: Vec<f64> = (0..=2 * r).map(|i| {
         let x = (i as f64 - r as f64) * step / sigma;
-        (-0.5 * (x * x)).exp()
+        (-0.5 * (x * x)).dexp()
     }).collect();
     let sum: f64 = k.iter().sum();
     for v in k.iter_mut() {
@@ -2073,7 +2362,7 @@ fn seg_dist_min(line: PyReadonlyArray2<f64>, px: f64, py: f64) -> f64 {
         let (dx, dy) = (l[[i + 1, 0]] - ax, l[[i + 1, 1]] - ay);
         let l2 = (dx * dx + dy * dy).max(1e-12);
         let t = (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0);
-        let d = (ax + dx * t - px).hypot(ay + dy * t - py);
+        let d = (ax + dx * t - px).dhypot(ay + dy * t - py);
         if d < best {
             best = d;
         }
@@ -2185,7 +2474,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
     let img = rgb.as_array();
     let u = u.as_array();
     let oct = octaves.as_array();
-    let res = py.allow_threads(|| {
+    let res = py.detach(|| {
     let px = img.shape()[0];
     let (ny, nx) = (u.nrows(), u.ncols());
     let t = size / px as f64;
@@ -2231,7 +2520,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
         for i in 0..px {
             let gx = grad(i, 0, px, &|q| h[j * px + q]);
             let gy = grad(j, 0, px, &|q| h[q * px + i]);
-            let sl = gx.hypot(gy);
+            let sl = gx.dhypot(gy);
             let tt = ((sl - steep_a) / (steep_b - steep_a)).clamp(0.0, 1.0);
             let k = tt * tt * (3.0 - 2.0 * tt);
             slope[j * px + i] = sl;
@@ -2269,7 +2558,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
             }
             n /= wsum;
             let sa = (1.0 - 1.5 * foot / strata_m).clamp(0.0, 1.0);
-            let strata = sa * (2.0 * std::f64::consts::PI * hs / strata_m + 3.0 * n).sin() * strata_w;
+            let strata = sa * (2.0 * std::f64::consts::PI * hs / strata_m + 3.0 * n).dsin() * strata_w;
             let f = [img[[j, i, 0]] as f32 / 255.0, img[[j, i, 1]] as f32 / 255.0, img[[j, i, 2]] as f32 / 255.0];
             let lum = f[0] * lw.0 + f[1] * lw.1 + f[2] * lw.2;
             let tints = [tint.0, tint.1, tint.2];
@@ -2290,7 +2579,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
 /// The byte of imagery._to_srgb for a float32 in [0, 1]: rint(x ** (1 / 2.2) * 255).
 fn srgb_byte(x: f32) -> u8 {
     let inv = (1.0f64 / 2.2) as f32;
-    (x.powf(inv) * 255.0f32).round_ties_even().clamp(0.0, 255.0) as u8
+    (x.dpowf(inv) * 255.0f32).round_ties_even().clamp(0.0, 255.0) as u8
 }
 
 /// For k = 1..255 the smallest float32 in [0, 1] whose srgb_byte is >= k (the byte of x is then the number of
@@ -2329,25 +2618,8 @@ fn srgb_monotonic() -> bool {
 /// Rows of out (row_len values each) filled by f(row, its values) on up to 8 threads in bands (each value from its own
 /// inputs only: the same numbers as one thread).
 fn par_rows<T: Send, F: Fn(usize, &mut [T]) + Sync>(out: &mut [T], row_len: usize, f: F) {
-    let rows = if row_len == 0 { 0 } else { out.len() / row_len };
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(rows.max(1));
-    if threads <= 1 || rows * row_len < 1 << 16 {
-        for (y, r) in out.chunks_mut(row_len.max(1)).enumerate() {
-            f(y, r);
-        }
-        return;
-    }
-    let per = rows.div_ceil(threads);
-    std::thread::scope(|sc| {
-        for (bi, band) in out.chunks_mut(per * row_len).enumerate() {
-            let f = &f;
-            sc.spawn(move || {
-                for (k, r) in band.chunks_mut(row_len).enumerate() {
-                    f(bi * per + k, r);
-                }
-            });
-        }
-    });
+    // (the process's shared cap, par.rs: a thread per 64 k values at most)
+    par::rows(out, row_len, par::threads_for(out.len(), 1 << 16), f)
 }
 
 pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::ndarray::ArrayView1<f32>, sharpen: f32)
@@ -2491,7 +2763,7 @@ fn mip_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReado
     if nc != 3 && nc != 4 {
         return Err(pyo3::exceptions::PyValueError::new_err(format!("mip_levels: 3 or 4 channels, not {}", nc)));
     }
-    let levels = py.allow_threads(|| mip_levels_core(img, lut, sharpen));
+    let levels = py.detach(|| mip_levels_core(img, lut, sharpen));
     Ok(levels.into_iter().map(|a| a.into_pyarray(py)).collect())
 }
 
@@ -2502,7 +2774,7 @@ fn polyline_min_dist(l: &numpy::ndarray::ArrayView2<f64>, px: f64, py: f64) -> f
         let (dx, dy) = (l[[i + 1, 0]] - ax, l[[i + 1, 1]] - ay);
         let l2 = (dx * dx + dy * dy).max(1e-12);
         let t = (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0);
-        let d = (ax + dx * t - px).hypot(ay + dy * t - py);
+        let d = (ax + dx * t - px).dhypot(ay + dy * t - py);
         if d < best {
             best = d;
         }
@@ -2544,7 +2816,7 @@ fn loop_crossed(poly: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>, margin:
     let rv = ring.view();
     for i in 0..p.nrows() - 1 {
         let (ax, ay, bx, by) = (p[[i, 0]], p[[i, 1]], p[[i + 1, 0]], p[[i + 1, 1]]);
-        let k = 1usize.max(((bx - ax).hypot(by - ay) / 2.0) as usize);
+        let k = 1usize.max(((bx - ax).dhypot(by - ay) / 2.0) as usize);
         for s in 0..k {
             let t = (s as f64 + 0.5) / k as f64;
             let (qx, qy) = (ax + (bx - ax) * t, ay + (by - ay) * t);
@@ -2591,7 +2863,7 @@ fn shared_walls(coords: PyReadonlyArray2<f64>, offs: PyReadonlyArray1<i64>, cent
         let ni = ib - ia;
         for k in lo..hi.max(lo) {
             let j = ord[k] as usize;
-            if j == i || (ce[[j, 0]] - ce[[i, 0]]).hypot(ce[[j, 1]] - ce[[i, 1]]) > r[i] + r[j] + tol {
+            if j == i || (ce[[j, 0]] - ce[[i, 0]]).dhypot(ce[[j, 1]] - ce[[i, 1]]) > r[i] + r[j] + tol {
                 continue;
             }
             let (ja, jb) = (o[j] as usize, o[j + 1] as usize);
@@ -2605,7 +2877,7 @@ fn shared_walls(coords: PyReadonlyArray2<f64>, offs: PyReadonlyArray1<i64>, cent
                     let l2 = (dx * dx + dy * dy).max(1e-9);
                     let t = (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0);
                     let (qx, qy) = (ax + t * dx, ay + t * dy);
-                    if (px - qx).hypot(py - qy) < tol {
+                    if (px - qx).dhypot(py - qy) < tol {
                         close += 1;
                         if close >= 2 {
                             break 'pts;
@@ -2817,7 +3089,7 @@ fn float_predictor_f32<'py>(py: Python<'py>, data: &[u8], w: usize, h: usize) ->
     if data.len() < row * h {
         return Err(pyo3::exceptions::PyValueError::new_err("float_predictor_f32: tile data too short"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let mut v = vec![0f32; w * h];
         let mut b = vec![0u8; row];
         for r in 0..h {
@@ -2856,7 +3128,7 @@ fn bilinear_grid<'py>(
     if xs.len() != ys.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_grid: fx and fy differ in length"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
             let (x, y) = (xs[i], ys[i]);
             let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
@@ -2871,7 +3143,7 @@ fn bilinear_grid<'py>(
     Ok(out.into_pyarray(py))
 }
 
-/// Python's math.hypot(x, y), exactly (CPython's vector_norm: the squares summed losslessly after scaling by a power of
+/// Python's math.dhypot(x, y), exactly (CPython's vector_norm: the squares summed losslessly after scaling by a power of
 /// two, one differential correction): libm's hypot differs from it in the last bit for ~13 % of inputs, enough to change
 /// a building's oriented box (2026-10-26). For ports of Python code that calls math.hypot.
 pub fn py_hypot(x: f64, y: f64) -> f64 {
@@ -2891,7 +3163,7 @@ pub fn py_hypot(x: f64, y: f64) -> f64 {
         return f64::MIN_POSITIVE * py_hypot(ax / f64::MIN_POSITIVE, ay / f64::MIN_POSITIVE);
     }
     let scale = ldexp1(-max_e);
-    let dl_mul = |a: f64, b: f64| { let z = a * b; (z, a.mul_add(b, -z)) };
+    let dl_mul = |a: f64, b: f64| { let z = a * b; (z, a.dmul_add(b, -z)) };
     let dl_fast_sum = |a: f64, b: f64| { let s = a + b; let z = s - a; (s, b - z) };
     let (mut csum, mut frac1, mut frac2) = (1.0f64, 0.0f64, 0.0f64);
     for v in [ax, ay] {
@@ -3053,6 +3325,72 @@ pub fn py_hash01_fints(seed: f64, ints: &[i64]) -> f64 {
     blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0
 }
 
+/// Python's repr() of a str whose characters are all ASCII (CPython's unicode_repr: single quotes unless it holds a '
+/// and no ", the backslash, \t \n \r and the other controls escaped); None for any other character (repr() asked).
+fn py_ascii_str_repr(v: &str, out: &mut String) -> bool {
+    if !v.is_ascii() {
+        return false;
+    }
+    let quote = if v.contains('\'') && !v.contains('"') { '"' } else { '\'' };
+    out.push(quote);
+    for c in v.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    true
+}
+
+/// buildings._hash01(*vals): BLAKE2b-64 of repr(vals) (the tuple's repr: ASCII str, int, bool and None items made
+/// here as CPython writes them, any other item by its own repr(): a float's too, py_float_repr's shortest digits
+/// are not always CPython's, 2208031614071659.3 for 2208031614071659.2), / 2^64.
+/// The Python's repr + encode + hashlib per call was ~3 % of a first visit's far building tiles (version 242).
+#[pyfunction(signature = (*vals))]
+fn hash01(vals: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<f64> {
+    use pyo3::types::{PyBool, PyInt, PyString};
+    let mut s = String::with_capacity(64);
+    s.push('(');
+    let n = vals.len();
+    for (k, v) in vals.iter().enumerate() {
+        if k > 0 {
+            s.push_str(", ");
+        }
+        let mut done = false;
+        if let Ok(t) = v.cast_exact::<PyString>() {
+            done = py_ascii_str_repr(t.to_str()?, &mut s);
+        } else if v.is_none() {
+            s.push_str("None");
+            done = true;
+        } else if let Ok(b) = v.cast_exact::<PyBool>() {
+            s.push_str(if b.is_true() { "True" } else { "False" });
+            done = true;
+        } else if v.is_exact_instance_of::<PyInt>() {
+            if let Ok(i) = v.extract::<i64>() {
+                s.push_str(&i.to_string());
+                done = true;
+            }
+        }
+        if !done {
+            s.push_str(&v.repr()?.to_str()?.to_owned());
+        }
+    }
+    if n == 1 {
+        s.push(',');
+    }
+    s.push(')');
+    Ok(blake2b_8(s.as_bytes()) as f64 / 18446744073709551616.0)
+}
+
 #[pyfunction]
 fn hash01_test(seeds: Vec<f64>, ints: Vec<Vec<i64>>) -> (Vec<f64>, Vec<String>) {
     (seeds.iter().zip(&ints).map(|(&s, iv)| py_hash01_fints(s, iv)).collect(),
@@ -3077,12 +3415,41 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// buildings._walls (with _plain_wall_with_windows, _plain_strip, _band_v): each wall of the ring floor by floor as
 /// quads, in the Python's order and float arithmetic (math.hypot: py_hypot, round(): half to even, _hash01: blake2b of
 /// the repr). Returns (positions: 12 per quad, uvs: 8 per quad, material per quad: 0 the facade, 1 the shopfront,
-/// 2 the window white). c: the constants (see buildings._walls). door_edge / front: -1 for none.
+/// 2 the window white). c: the constants (see buildings._walls). door_edge / front: -1 for none. vary / win_cells:
+/// the night windows' cells (wall_cells). shop_edges: the walls (ring edges) a shop's ground floor faces a street on,
+/// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's). shop_band
+/// (v0, v1, unit m): the shop floor from rows v0..v1 of its own sheet, a whole repeat per unit m (an office tower's
+/// lobby, 197); None: the shop sheet's band shop_k.
+/// building_walls with its P, UV and mid as numpy arrays (float64, float64, uint8), not lists: buildings.Mesh keeps
+/// them as blocks (a Python float per number and numpy's conversion of the lists at the end were ~2 % of a road tile
+/// set's CPU, Fells Point 2026-11-12). 240.
 #[pyfunction]
+#[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
+                    shop_band=None))]
+#[allow(clippy::too_many_arguments)]
+fn building_walls_np<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, z0: f64, z_eave: f64, wall: bool,
+                          plain: bool, band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool,
+                          door_edge: i64, door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64,
+                          lite: bool, c: Vec<f64>, vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>,
+                          shop_edges: Vec<i64>, shop_band: Option<(f64, f64, f64)>)
+                          -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<u8>>)> {
+    let (p, uv, mid) = building_walls(py, ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop,
+                                      door_edge, door_pos, roof_flat, seed, windows_false, front, lite, c, vary,
+                                      win_cells, shop_edges, shop_band)?;
+    Ok((p.into_pyarray(py), uv.into_pyarray(py), mid.into_pyarray(py)))
+}
+
+#[pyfunction]
+#[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
+                    shop_band=None))]
 #[allow(clippy::too_many_arguments)]
 fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_eave: f64, wall: bool, plain: bool,
                   band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool, door_edge: i64,
-                  door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64, lite: bool, c: Vec<f64>)
+                  door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64, lite: bool, c: Vec<f64>,
+                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>, shop_edges: Vec<i64>,
+                  shop_band: Option<(f64, f64, f64)>)
                   -> PyResult<(Vec<f64>, Vec<f64>, Vec<u8>)> {
     if c.len() != 18 {
         return Err(pyo3::exceptions::PyValueError::new_err("building_walls: 18 constants"));
@@ -3093,14 +3460,18 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
         (c[0], c[1], c[2], c[3], c[4] as i64, c[5] as i64, c[6], c[7]);
     let (gf_shop, win_out, house_bay) = (c[8], c[9], c[10]);
     let (wu0, wu1, wv0, wv1, win_w, win_h, win_sill) = (c[11], c[12], c[13], c[14], c[15], c[16], c[17]);
-    Ok(py.allow_threads(|| {
+    Ok(py.detach(|| {
         let mut pp: Vec<f64> = Vec::new();
         let mut uv: Vec<f64> = Vec::new();
         let mut mid: Vec<u8> = Vec::new();
+        // (each quad's wall, floor and laid-over window: wall_cells' keys)
+        let (cur_wall, cur_floor, cur_win) = (Cell::new(0i64), Cell::new(0i64), Cell::new(0i64));
+        let mut keys: Vec<(i64, i64, i64)> = Vec::new();
         let mut quad = |p: [(f64, f64, f64); 4], t: [(f64, f64); 4], m: u8| {
             for q in p.iter() { pp.push(q.0); pp.push(q.1); pp.push(q.2); }
             for q in t.iter() { uv.push(q.0); uv.push(q.1); }
             mid.push(m);
+            keys.push((cur_wall.get(), cur_floor.get(), cur_win.get()));
         };
         let band_v = |k: i64| {
             let eps = 1.5 / 1024.0;
@@ -3134,6 +3505,8 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
             if l < 0.05 {
                 continue;
             }
+            cur_wall.set(i as i64);
+            cur_floor.set(-1);
             if wall {
                 // _plain_wall_with_windows
                 let su = siding_uv;
@@ -3167,6 +3540,7 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                 let out = (d.1 * win_out, -d.0 * win_out);
                 let base = z_eave - floors as f64 * floor_h;
                 for f in 0..floors {
+                    cur_floor.set(f);
                     let zf = base + f as f64 * floor_h + win_sill;
                     if zf + win_h > z_eave - 0.2 {
                         continue;
@@ -3175,6 +3549,7 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                         if f == 0 && nb % 2 == 1 && k == nb / 2 {
                             continue;
                         }
+                        cur_win.set(k);
                         let s = l * (k as f64 + 0.5) / nb as f64;
                         let cc = (a.0 + d.0 * s + out.0, a.1 + d.1 * s + out.1);
                         let hw = (d.0 * win_w / 2.0, d.1 * win_w / 2.0);
@@ -3209,13 +3584,19 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                 za = base - 0.3;
             }
             for f in 0..floors {
+                cur_floor.set(f);
                 let zb = if f == floors - 1 { z_eave } else { base + (f + 1) as f64 * floor_h };
                 let (m, bk, uu);
-                if f == 0 && shop {
+                if f == 0 && shop && (shop_edges.is_empty() || shop_edges.contains(&(i as i64))) {
                     m = 1u8;
                     bk = shop_k;
-                    let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
-                    uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    if let Some((_, _, unit)) = shop_band {     // (its own sheet: whole repeats of unit m)
+                        let nbs = rnd(l / unit).max(1);
+                        uu = if l > 2.0 { nbs as f64 } else { 0.02 * l };
+                    } else {
+                        let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
+                        uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    }
                 } else {
                     m = 0u8;
                     bk = band_k;
@@ -3244,7 +3625,10 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                         continue;
                     }
                 }
-                let (v0, v1) = band_v(bk);
+                let (v0, v1) = match shop_band {
+                    Some((sv0, sv1, _)) if m == 1 => (sv0, sv1),
+                    _ => band_v(bk),
+                };
                 let has_door = f == 0 && roof_flat && door_edge >= 0 && door_edge == i as i64;
                 if has_door && door_gap < door_pos && door_pos < l - door_gap {
                     let (mut s0, mut s1) = (door_pos - door_gap, door_pos + door_gap);
@@ -3278,8 +3662,100 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
             }
         }
         drop(quad);
-        (pp, uv, mid)
+        if vary.is_empty() && win_cells.is_empty() {
+            return (pp, uv, mid);
+        }
+        wall_cells(&pp, &uv, &mid, &keys, seed, &vary, &win_cells, lite, bands)
     }))
+}
+
+/// A number in [0, n) hashed from a building's seed and a wall, floor and bay (or window) of it: the same in every
+/// build and every tile it is in (#916 hashed a quad's corner: a building drawn in a near and a far tile's own frames
+/// would have lit other windows in each).
+fn cell_pick(seed: f64, key: (i64, i64, i64), n: i64) -> i64 {
+    let mut h = seed.to_bits() ^ 0x165667B19E3779F9;
+    for v in [key.0, key.1, key.2] {
+        h = (h ^ v as u64).wrapping_mul(0x9E3779B97F4A7C15);
+        h ^= h >> 31;
+    }
+    h = h.wrapping_mul(0xBF58476D1CE4E5B9);
+    h ^= h >> 29;
+    (h % n.max(1) as u64) as i64
+}
+
+/// building_walls' night windows (buildings.WIN_CELLS): each floor's quad of a band in vary ((material slot, band,
+/// bays per sheet, run)) starts at a cell of the band hashed from the building's seed, its wall, floor and first bay
+/// (keys: each quad's wall, floor, laid-over window) (whole bays: the same windows by day); not lite, a floor wider
+/// than run bays is cut into runs, each from its own cell (a run going on where the one before it ended joins it);
+/// lite (far tiles), a floor stays one quad (its first run's cell: near and far tiles agree there). A laid-over window
+/// (slot 2) takes one of win_cells (u0, u1). Only UVs change, and the corners of a floor cut into runs.
+#[allow(clippy::too_many_arguments)]
+fn wall_cells(pp: &[f64], uv: &[f64], mid: &[u8], keys: &[(i64, i64, i64)], seed: f64, vary: &[(u8, i64, i64, i64)],
+              win_cells: &[(f64, f64)], lite: bool, bands: f64) -> (Vec<f64>, Vec<f64>, Vec<u8>) {
+    let eps = 1.5 / 1024.0;
+    let (mut op, mut ou, mut om) = (Vec::with_capacity(pp.len()), Vec::with_capacity(uv.len()),
+                                    Vec::with_capacity(mid.len()));
+    for (qi, &m) in mid.iter().enumerate() {
+        let p = &pp[qi * 12..qi * 12 + 12];
+        let t = &uv[qi * 8..qi * 8 + 8];
+        let (wl, fl, wk) = keys[qi];
+        if m == 2 && !win_cells.is_empty() {
+            let (c0, c1) = win_cells[cell_pick(seed, (wl, fl, wk), win_cells.len() as i64) as usize];
+            op.extend_from_slice(p);
+            ou.extend_from_slice(&[c0, t[1], c1, t[3], c1, t[5], c0, t[7]]);
+            om.push(m);
+            continue;
+        }
+        let band = vary.iter().find(|&&(slot, k, _, _)| {
+            slot == m && (t[1] - (1.0 - (k + 1) as f64 / bands + eps)).abs() < 1e-6
+                && (t[5] - (1.0 - k as f64 / bands - eps)).abs() < 1e-6
+        });
+        let (bpt, run) = match band { Some(&(_, _, n, r)) if n > 0 => (n, r.max(1)), _ => (0, 1) };
+        let (u0, span) = (t[0] * bpt as f64, (t[2] - t[0]) * bpt as f64);
+        let nb = span.round_ties_even() as i64;
+        if bpt == 0 || (u0 - u0.round_ties_even()).abs() > 1e-6 || (span - nb as f64).abs() > 1e-6 || nb < 1 {
+            op.extend_from_slice(p);
+            ou.extend_from_slice(t);
+            om.push(m);
+            continue;
+        }
+        let run = if lite { nb } else { run };
+        let k0 = u0.round_ties_even() as i64;               // (its first bay from the wall's start: a door's gap)
+        let (ax, ay, za, bx, by, zb) = (p[0], p[1], p[2], p[3], p[4], p[8]);
+        let mut emit = |s0: i64, len: i64, off: i64| {
+            if len == nb {
+                op.extend_from_slice(p);
+            } else {
+                let (fa, fb) = (s0 as f64 / nb as f64, (s0 + len) as f64 / nb as f64);
+                let (pax, pay) = (ax + (bx - ax) * fa, ay + (by - ay) * fa);
+                let (pbx, pby) = (ax + (bx - ax) * fb, ay + (by - ay) * fb);
+                op.extend_from_slice(&[pax, pay, za, pbx, pby, za, pbx, pby, zb, pax, pay, zb]);
+            }
+            let (ua, ub) = (off as f64 / bpt as f64, (off + len) as f64 / bpt as f64);
+            ou.extend_from_slice(&[ua, t[1], ub, t[3], ub, t[5], ua, t[7]]);
+            om.push(m);
+        };
+        // (the group: its first bay, bays, cell)
+        let mut g: Option<(i64, i64, i64)> = None;
+        let mut s = 0i64;
+        while s < nb {
+            let len = run.min(nb - s);
+            let off = cell_pick(seed, (wl, fl, (k0 + s) * 4 + m as i64), bpt);
+            g = match g {
+                Some((g0, gl, go)) if (go + gl) % bpt == off => Some((g0, gl + len, go)),
+                Some((g0, gl, go)) => {
+                    emit(g0, gl, go);
+                    Some((s, len, off))
+                }
+                None => Some((s, len, off)),
+            };
+            s += len;
+        }
+        if let Some((g0, gl, go)) = g {
+            emit(g0, gl, go);
+        }
+    }
+    (op, ou, om)
 }
 
 /// buildings.triangulate: ear clipping of the counter-clockwise simple ring p (n, 2), (n - 2, 3) indices into p (fewer if
@@ -3290,7 +3766,7 @@ fn triangulate<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> Bound<'py
     let a = p.as_array();
     let n = a.nrows();
     let pts: Vec<(f64, f64)> = (0..n).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    let out = py.allow_threads(|| ear_clip(&pts));
+    let out = py.detach(|| ear_clip(&pts));
     let flat: Vec<i64> = out.iter().flat_map(|t| t.iter().copied()).collect();
     numpy::ndarray::Array2::from_shape_vec((out.len(), 3), flat).unwrap().into_pyarray(py)
 }
@@ -3348,7 +3824,7 @@ fn clean_ring_core<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, tol: f64
                         -> Option<Bound<'py, PyArray2<f64>>> {
     let a = p.as_array();
     let mut pts: Vec<(f64, f64)> = (0..a.nrows()).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    let got = py.allow_threads(|| {
+    let got = py.detach(|| {
         if pts.len() > 1 {
             let ((ax, ay), (bx, by)) = (pts[0], pts[pts.len() - 1]);
             if (ax - bx).abs() <= 1e-08 + 1e-05 * bx.abs() && (ay - by).abs() <= 1e-08 + 1e-05 * by.abs() {
@@ -3367,9 +3843,9 @@ fn clean_ring_core<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, tol: f64
                 let prev = pts[(i + n - 1) % n];
                 let nxt = pts[(i + 1) % n];
                 let (dx, dy) = (nxt.0 - prev.0, nxt.1 - prev.1);
-                let l = dx.hypot(dy);
+                let l = dx.dhypot(dy);
                 let off = (dx * (pts[i].1 - prev.1) - dy * (pts[i].0 - prev.0)).abs() / l.max(1e-9);
-                let near = (pts[i].0 - prev.0).hypot(pts[i].1 - prev.1) < 1e-3;
+                let near = (pts[i].0 - prev.0).dhypot(pts[i].1 - prev.1) < 1e-3;
                 if off < tol || near {
                     drop[i] = true;
                     any = true;
@@ -3409,7 +3885,7 @@ fn clean_ring_core<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, tol: f64
 fn oriented_box_core(py: Python<'_>, p: PyReadonlyArray2<'_, f64>) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
     let a = p.as_array();
     let pts: Vec<(f64, f64)> = (0..a.nrows()).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    py.allow_threads(|| {
+    py.detach(|| {
         let n = pts.len();
         let mut best: Option<(f64, (f64, f64, f64, f64, f64, f64, f64, f64))> = None;
         for i in 0..n {
@@ -3469,7 +3945,7 @@ fn bilinear_tiles<'py>(
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_tiles: fx and fy differ in length"));
     }
     let px = |y: usize, x: usize| ts[(y / tile) * nx + x / tile][[y % tile, x % tile]] as f64;
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
             let (x, y) = (xs[i], ys[i]);
             let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
@@ -3489,7 +3965,7 @@ fn bilinear_tiles<'py>(
 #[pyfunction]
 fn terrarium_heights<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyArray2<f32>> {
     let a = img.as_array();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array2::from_shape_fn((a.shape()[0], a.shape()[1]), |(y, x)| {
             a[[y, x, 0]] as f32 * 256.0f32 + a[[y, x, 1]] as f32 + a[[y, x, 2]] as f32 / 256.0f32 - 32768.0f32
         })
@@ -3505,7 +3981,7 @@ fn rf_pass(py: Python<'_>, mut x: numpy::PyReadwriteArray3<'_, f32>, cut_prev: P
     let mut xa = x.as_array_mut();
     let (rows, cols, ch) = (xa.shape()[0], xa.shape()[1], xa.shape()[2]);
     let af = a as f32;
-    py.allow_threads(|| {
+    py.detach(|| {
         for r in 0..rows {
             for c in 1..cols {
                 let f = if cut[[r, c]] { 0.0f32 } else { af };
@@ -3533,7 +4009,7 @@ fn rf_pass(py: Python<'_>, mut x: numpy::PyReadwriteArray3<'_, f32>, cut_prev: P
 fn vmedian<'py>(py: Python<'py>, x: PyReadonlyArray3<'py, f32>, ok: PyReadonlyArray3<'py, bool>,
                 n: PyReadonlyArray2<'py, i64>) -> Bound<'py, PyArray2<f32>> {
     let (xa, oa, na) = (x.as_array(), ok.as_array(), n.as_array());
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let (k, h, w) = (xa.shape()[0], xa.shape()[1], xa.shape()[2]);
         let mut buf = vec![0f32; k];
         numpy::ndarray::Array2::from_shape_fn((h, w), |(y, x_)| {
@@ -3592,7 +4068,7 @@ fn seam_pass<'py>(py: Python<'py>, arrs: PyReadonlyArray3<'py, f32>, half: i64, 
     let (nch, h, w) = (view.shape()[0], view.shape()[1], view.shape()[2]);
     assert!(nch == 7);
     let a = arrs.as_slice().expect("contiguous");
-    let (score, dm) = py.allow_threads(|| {
+    let (score, dm) = py.detach(|| {
         let clip = |v: i64, hi: usize| v.clamp(0, hi as i64) as usize;
         let hi_x: Vec<usize> = (0..w as i64).map(|i| clip(i + half + 1, w)).collect();
         let lo_x: Vec<usize> = (0..w as i64).map(|i| clip(i - half, w)).collect();
@@ -3723,7 +4199,7 @@ fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: 
             let (x0, y0, x1, y1) = (b[[k, 0]], b[[k, 1]], b[[k, 2]], b[[k, 3]]);
             let dx = (x0 - px).max(0.0).max(px - x1);
             let dy = (y0 - py_).max(0.0).max(py_ - y1);
-            let d = dx.hypot(dy);
+            let d = dx.dhypot(dy);
             if cone.len() == 8 {
                 if d <= 0.0 {
                     return d;
@@ -3731,15 +4207,15 @@ fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: 
                 let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
                 let r = (cx * cx + cy * cy + cz * cz).sqrt();
                 // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
-                let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).asin();
+                let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).dasin();
                 let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
-                return if c.acos() - slack <= cone[6].clamp(-1.0, 1.0).acos() { d } else { d * penalty };
+                return if c.dacos() - slack <= cone[6].clamp(-1.0, 1.0).dacos() { d } else { d * penalty };
             }
             if cone.len() != 5 || d <= 0.0 {
                 return d;
             }
             let (cx, cy) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1]);
-            let r = cx.hypot(cy);
+            let r = cx.dhypot(cy);
             if r <= x1 - x0 || (cx * cone[2] + cy * cone[3]) / r >= cone[4] { d } else { d * penalty }
         }).collect()
     });
@@ -3758,7 +4234,7 @@ fn road_corridors<'py>(py: Python<'py>, mut mask: numpy::PyReadwriteArray2<'py, 
     let mut m = mask.as_array_mut();
     let mut p = push.as_mut().map(|a| a.as_array_mut());
     let (n_r, n_c) = (m.shape()[0] as i64, m.shape()[1] as i64);
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..s.shape()[0] {
             let (a0, a1, b0, b1, hwk) = (s[[k, 0]], s[[k, 1]], s[[k, 2]], s[[k, 3]], h[k]);
             let c0 = ((a0.min(b0) - hwk) as i64).max(0);
@@ -3772,7 +4248,7 @@ fn road_corridors<'py>(py: Python<'py>, mut mask: numpy::PyReadwriteArray2<'py, 
             let dot = 0.0 + ab0 * ab0 + ab1 * ab1;
             let l2 = if dot != 0.0 { dot } else { 1e-9 };
             let (nx, ny) = (-ab1, ab0);
-            let nl0 = nx.hypot(ny);
+            let nl0 = nx.dhypot(ny);
             let nl = if nl0 != 0.0 { nl0 } else { 1.0 };
             for r in r0..r1 {
                 let gr = r as f64 + 0.5;
@@ -3781,7 +4257,7 @@ fn road_corridors<'py>(py: Python<'py>, mut mask: numpy::PyReadwriteArray2<'py, 
                     let t = (((gc - a0) * ab0 + (gr - a1) * ab1) / l2).clamp(0.0, 1.0);
                     let ox = gc - (a0 + t * ab0);
                     let oy = gr - (a1 + t * ab1);
-                    let d = ox.hypot(oy);
+                    let d = ox.dhypot(oy);
                     let inside = d <= hwk;
                     if inside {
                         m[[r as usize, c as usize]] = true;
@@ -3814,7 +4290,7 @@ fn horizon_steps<'py>(py: Python<'py>, hpad: PyReadonlyArray2<'py, f32>, mut bes
     let n = best.as_array().shape()[0];
     let b = best.as_slice_mut().expect("contiguous");
     let p = pad as usize;
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..st.shape()[0] {
             let (iy, ix, fy, fx, d) = (st[[k, 0]] as i64, st[[k, 1]] as i64, st[[k, 2]], st[[k, 3]], st[[k, 4]]);
             let (wx0, wx1, wy0, wy1) = ((1.0 - fx) as f32, fx as f32, (1.0 - fy) as f32, fy as f32);
@@ -3869,6 +4345,11 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             sj[j + 1] = sj[j] + l2[j].sqrt();
         }
         let total = sj[k - 1];
+        // (the points by east: each segment visits only those within its box's east range, not every point; a
+        // rounded line has 2-4x the segments, 2026-11-12. The same mask: a point is in when any segment takes it.)
+        let mut order: Vec<usize> = (0..np_).filter(|&i| ev[i].is_finite() && nv[i].is_finite()).collect();
+        order.sort_by(|&p, &q| ev[p].total_cmp(&ev[q]));
+        let sorted_e: Vec<f64> = order.iter().map(|&i| ev[i]).collect();
         for j in 0..k - 1 {
             let (a0, a1, b0, b1) = (xv[[j, 0]], xv[[j, 1]], xv[[j + 1, 0]], xv[[j + 1, 1]]);
             if a0.min(b0) - hw > x1 || a0.max(b0) + hw < x0 || a1.min(b1) - hw > y1 || a1.max(b1) + hw < y0 {
@@ -3876,8 +4357,12 @@ fn over_tunnel(py: Python<'_>, mut mask: numpy::PyReadwriteArray1<'_, bool>, e: 
             }
             let (ab0, ab1) = (b0 - a0, b1 - a1);
             let len = l2[j].sqrt();
-            for i in 0..np_ {
-                if mv[i] {
+            let (lo_e, hi_e) = (a0.min(b0) - hw, a0.max(b0) + hw);
+            let (lo_n, hi_n) = (a1.min(b1) - hw, a1.max(b1) + hw);
+            let first = sorted_e.partition_point(|&x| x < lo_e);
+            let last = sorted_e.partition_point(|&x| x <= hi_e);
+            for &i in &order[first..last] {
+                if mv[i] || nv[i] < lo_n || nv[i] > hi_n {
                     continue;
                 }
                 let t = ((ev[i] - a0) * ab0 + (nv[i] - a1) * ab1) / l2[j];
@@ -3914,7 +4399,7 @@ fn points_near_segments<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, a: 
         let near = |i: usize, g: &[f64; 6]| {
             let (p0, p1) = (pv[[i, 0]], pv[[i, 1]]);
             let t = (((p0 - g[0]) * g[2] + (p1 - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-            let d = (p0 - (g[0] + t * g[2])).hypot(p1 - (g[1] + t * g[3]));
+            let d = (p0 - (g[0] + t * g[2])).dhypot(p1 - (g[1] + t * g[3]));
             d < g[5]
         };
         if np_ * ns < 4096 || np_ == 0 {
@@ -3974,12 +4459,12 @@ fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u:
                 m0: bool, m1: bool, margin: f64, end_m: f64, side_extra: f64, squares: bool) {
     let (uv, xv, zv) = (u.as_array(), xy.as_array(), z.as_array());
     let mut mv = mask.as_array_mut();
-    py.allow_threads(|| {
+    py.detach(|| {
         let n = uv.shape()[0] as i64;
         let k = xv.shape()[0];
         if k < 2 { return; }
         let mut sj = vec![0.0f64; k];
-        for j in 1..k { sj[j] = sj[j - 1] + (xv[[j, 0]] - xv[[j - 1, 0]]).hypot(xv[[j, 1]] - xv[[j - 1, 1]]); }
+        for j in 1..k { sj[j] = sj[j - 1] + (xv[[j, 0]] - xv[[j - 1, 0]]).dhypot(xv[[j, 1]] - xv[[j - 1, 1]]); }
         let total = sj[k - 1];
         let reach = if low { hw + side_extra } else { hw };
         if low && !squares {
@@ -4005,7 +4490,7 @@ fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u:
                     let l2 = (abx * abx + aby * aby).max(1e-12);
                     let t0 = ((x - ax) * abx + (y - ay) * aby) / l2;
                     let t = t0.clamp(0.0, 1.0);
-                    let d = (x - (ax + t * abx)).hypot(y - (ay + t * aby));
+                    let d = (x - (ax + t * abx)).dhypot(y - (ay + t * aby));
                     if d < bd {
                         bd = d;
                         bs = sj[j] + t * (sj[j + 1] - sj[j]);
@@ -4058,7 +4543,7 @@ fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u:
                     if t0 < lo_t || t0 > hi_t { continue; }
                     let beyond = !(0.0..=1.0).contains(&t0);
                     let t = t0.clamp(0.0, 1.0);
-                    let d = (xx - (ax + t * abx)).hypot(yy - (ay + t * aby));
+                    let d = (xx - (ax + t * abx)).dhypot(yy - (ay + t * aby));
                     let hit = if low {
                         let s = sj[j] + t * (sj[j + 1] - sj[j]);
                         let over = if squares { std::f64::consts::FRAC_1_SQRT_2 * square } else { 0.0 };
@@ -4107,7 +4592,7 @@ fn arch_raise_part(py: Python<'_>, mut z: numpy::PyReadwriteArray1<'_, f64>, px:
         for j in 0..k - 1 {
             let (ax, ay, abx, aby) = (xv[[j, 0]], xv[[j, 1]], xv[[j + 1, 0]] - xv[[j, 0]], xv[[j + 1, 1]] - xv[[j, 1]]);
             let l2 = (abx * abx + aby * aby).max(1e-12);
-            let len = abx.hypot(aby);
+            let len = abx.dhypot(aby);
             seg.push([ax, ay, abx, aby, l2, s0, fv[j], fv[j + 1]]);
             s0 += len;
         }
@@ -4235,7 +4720,7 @@ fn deck_edges_covered<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, op: P
             seg.iter().zip(planes.iter()).any(|(g, pl)| {
                 if g[8] == o { return false; }
                 let t = (((p0 - g[0]) * g[2] + (p1 - g[1]) * g[3]) / g[4]).clamp(0.0, 1.0);
-                let d = (p0 - (g[0] + t * g[2])).hypot(p1 - (g[1] + t * g[3]));
+                let d = (p0 - (g[0] + t * g[2])).dhypot(p1 - (g[1] + t * g[3]));
                 if !(d < g[5] && (p2 - (g[6] + t * (g[7] - g[6]))).abs() < dz) {
                     return false;
                 }
@@ -4277,7 +4762,7 @@ fn veg_rows_json<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, i64>, e: PyR
                       rank: PyReadonlyArray1<'py, f64>) -> String {
     let (g, e, n, z, yaw, sc, h, r) = (group.as_array(), e.as_array(), n.as_array(), z.as_array(), yaw.as_array(),
                                        scale.as_array(), height.as_array(), rank.as_array());
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = String::with_capacity(g.len() * 56 + 2);
         out.push('[');
         for i in 0..g.len() {
@@ -4421,7 +4906,7 @@ fn bc1_block(t: &[[i32; 3]; 16]) -> [u8; 8] {
 #[pyfunction]
 fn bc1_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyBytes> {
     let a = img.as_array();
-    let out = py.allow_threads(|| bc1_encode_core(a));
+    let out = py.detach(|| bc1_encode_core(a));
     PyBytes::new(py, &out)
 }
 
@@ -4459,7 +4944,7 @@ fn mesh_warp<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>, qx: PyReadonl
                   qy: PyReadonlyArray2<'py, f64>, cells: usize, cw: usize, px: usize)
                   -> Bound<'py, numpy::PyArray3<u8>> {
     let (a, qx, qy) = (img.as_array(), qx.as_array(), qy.as_array());
-    let out = py.allow_threads(|| fartex::warp_rgba(a, qx, qy, cells, cw, px, 4));
+    let out = py.detach(|| fartex::warp_rgba(a, qx, qy, cells, cw, px, 4));
     out.into_pyarray(py)
 }
 
@@ -4655,7 +5140,7 @@ fn sharp_probes<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, road_half:
         let (a, b, d) = if n < 2 { (0, 0, 1.0) } else if i == 0 { (1, 0, 1.0) } else if i == n - 1 { (n - 1, n - 2, 1.0) }
                         else { (i + 1, i - 1, 2.0) };
         let (tx, ty) = ((p[[a, 0]] - p[[b, 0]]) / d, (p[[a, 1]] - p[[b, 1]]) / d);
-        let l = tx.hypot(ty).max(1e-9);
+        let l = tx.dhypot(ty).max(1e-9);
         nl.push((-(ty / l), tx / l));
     }
     for side in [1.0f64, -1.0] {
@@ -4773,15 +5258,19 @@ fn sharp_cuts<'py>(py: Python<'py>, g: PyReadonlyArray1<'py, f64>, z: PyReadonly
 #[pyfunction]
 fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: f64, min_turn_deg: f64)
                     -> Bound<'py, PyArray1<bool>> {
-    let p = xy.as_array();
+    tight_bends_core(xy.as_array(), half_span, min_turn_deg).into_pyarray(py)
+}
+
+/// tight_bends on a view (roads' spec kernels call it in Rust).
+pub(crate) fn tight_bends_core(p: numpy::ndarray::ArrayView2<f64>, half_span: f64, min_turn_deg: f64) -> Vec<bool> {
     let k = p.nrows();
     let mut out = vec![false; k];
     if k < 3 {
-        return out.into_pyarray(py);
+        return out;
     }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
-        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).hypot(p[[i, 1]] - p[[i - 1, 1]]);
+        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).dhypot(p[[i, 1]] - p[[i - 1, 1]]);
     }
     let dir = |d: f64| -> (f64, f64) {         // the unit direction of the segment at arc d (clamped)
         let d = d.clamp(0.0, s[k - 1]);
@@ -4790,16 +5279,16 @@ fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: 
             j -= 1;
         }
         let (dx, dy) = (p[[j, 0]] - p[[j - 1, 0]], p[[j, 1]] - p[[j - 1, 1]]);
-        let l = dx.hypot(dy).max(1e-12);
+        let l = dx.dhypot(dy).max(1e-12);
         (dx / l, dy / l)
     };
-    let cos_min = min_turn_deg.to_radians().cos();
+    let cos_min = min_turn_deg.to_radians().dcos();
     for i in 0..k {
         let (ux, uy) = dir(s[i] - half_span);
         let (vx, vy) = dir(s[i] + half_span);
         out[i] = ux * vx + uy * vy <= cos_min;
     }
-    out.into_pyarray(py)
+    out
 }
 
 
@@ -4813,7 +5302,7 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
     let k = p.nrows();
     let mut s = vec![0.0f64; k];
     for i in 1..k {
-        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).hypot(p[[i, 1]] - p[[i - 1, 1]]);
+        s[i] = s[i - 1] + (p[[i, 0]] - p[[i - 1, 0]]).dhypot(p[[i, 1]] - p[[i - 1, 1]]);
     }
     let out: Vec<f64> = rows.iter().map(|&r| {
         let i = r.clamp(0, k as i64 - 1) as usize;
@@ -4824,7 +5313,7 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
             let (dx, dy) = (bx - ax, by - ay);
             let l2 = dx * dx + dy * dy;
             let t = if l2 > 1e-12 { (((x - ax) * dx + (y - ay) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-            let d = (x - ax - t * dx).hypot(y - ay - t * dy);
+            let d = (x - ax - t * dx).dhypot(y - ay - t * dy);
             if d < best && d < ratio * (s[j] + t * (s[j + 1] - s[j]) - s[i]).abs() {
                 best = d;
             }
@@ -4839,13 +5328,31 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
 /// juniper, desert_shrub, desert_rock, oak_west, tropical); wc: WorldCover's (shrub, bare, grass, built) classes.
 /// Palms are most town trees only where they are in life: South Florida, the Rio Grande Valley, coastal Southern
 /// California, the tropics; a few along the rest of the Gulf Coast (GitHub #110: Houston and Austin were mostly palms,
-/// in life live oaks and loblolly pines). The Southeast's conifers are pines.
+/// in life live oaks and loblolly pines). The Southeast's conifers are pines. med (per item) / g_med: the Mediterranean
+/// basin's Cs climates (zone ZONE_MED, vegetation.mediterranean): most broadleaves and conifers there are its own (holm
+/// and cork oaks, olives, maritime pines, cypresses: Italy's stock trees), MED_SHARE of them (more in town).
+/// zone (per item, vegetation.regional): ZONE_MED; ZONE_RIPARIAN, temperate Europe's river banks: RIPARIAN_SHARE of the
+/// broadleaves are poplars (black and hybrid poplars of the Loire, the Po, the Danube; ext[2]); ZONE_HOT_DESERT, North
+/// America's hot deserts (Koppen BWh: the Mojave, Sonoran, Chihuahuan): CREOSOTE_SHARE of the desert shrubs are
+/// creosote bushes (ext[3]). Australia (its box): AUS_SHARE of the trees are eucalypts (ext[1]; in town fewer).
+/// ext: (g_med, g_euc, g_poplar, g_creosote), 255 none.
 #[pyfunction]
+#[pyo3(signature = (group, height, lat, lon, lcls, u, ids, wc, zone=None, ext=[255, 255, 255, 255]))]
 #[allow(clippy::too_many_arguments)]
 fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, height: PyReadonlyArray1<'py, f64>,
                         lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
-                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4])
+                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4],
+                        zone: Option<PyReadonlyArray1<'py, u8>>, ext: [u8; 4])
                         -> Bound<'py, PyArray1<u8>> {
+    const MED_SHARE: (f64, f64) = (0.75, 0.9);      // (open country, in town)
+    const AUS_SHARE: (f64, f64) = (0.85, 0.6);
+    const RIPARIAN_SHARE: f64 = 0.4;
+    const CREOSOTE_SHARE: f64 = 0.7;
+    const ZONE_MED: u8 = 1;
+    const ZONE_RIPARIAN: u8 = 2;
+    const ZONE_HOT_DESERT: u8 = 3;
+    let [g_med, g_euc, g_poplar, g_creosote] = ext;
+    let zone = zone.map(|m| m.as_array().to_vec());
     let (group, height, lat, lon, lcls, u) = (group.as_array(), height.as_array(), lat.as_array(), lon.as_array(),
                                                lcls.as_array(), u.as_array());
     let [g_dec, g_con, g_shrub, g_rock, g_pine_w, g_palm, g_juniper, g_dshrub, g_drock, g_oak_w, g_trop] = ids;
@@ -4894,8 +5401,24 @@ fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, heigh
         if tree && ui < palm_p {
             g = g_palm;
         }
+        let australia = la > -44.0 && la < -10.0 && lo > 112.0 && lo < 154.0;
+        if australia && g_euc != 255 && (g == g_dec || g == g_con)
+            && ui < if built { AUS_SHARE.1 } else { AUS_SHARE.0 } {
+            g = g_euc;
+        }
         if tropics && g == g_dec && h >= 12.0 {
             g = g_trop;
+        }
+        let z = zone.as_ref().and_then(|m| m.get(i).copied()).unwrap_or(0);
+        if z == ZONE_MED && g_med != 255 && (g == g_dec || g == g_con)
+            && ui < if built { MED_SHARE.1 } else { MED_SHARE.0 } {
+            g = g_med;
+        }
+        if z == ZONE_RIPARIAN && g_poplar != 255 && g == g_dec && ui < RIPARIAN_SHARE {
+            g = g_poplar;
+        }
+        if z == ZONE_HOT_DESERT && g_creosote != 255 && g == g_dshrub && ui < CREOSOTE_SHARE {
+            g = g_creosote;
         }
         out[i] = g;
     }
@@ -4973,8 +5496,8 @@ fn first_probe_near_lines(pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i
         if b < a + 2 {
             continue;
         }
-        let d0 = (pv[[a, 0]] - p.0).hypot(pv[[a, 1]] - p.1);
-        let d1 = (pv[[b - 1, 0]] - p.0).hypot(pv[[b - 1, 1]] - p.1);
+        let d0 = (pv[[a, 0]] - p.0).dhypot(pv[[a, 1]] - p.1);
+        let d1 = (pv[[b - 1, 0]] - p.0).dhypot(pv[[b - 1, 1]] - p.1);
         if d0.min(d1) < join_m {
             continue;
         }
@@ -4999,7 +5522,7 @@ fn first_probe_near_lines(pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i
                 let (dx, dy) = (pv[[k + 1, 0]] - ax, pv[[k + 1, 1]] - ay);
                 let t = (((qx - ax) * dx + (qy - ay) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
                 let (cx, cy) = (ax + t * dx, ay + t * dy);
-                let d = (cx - qx).hypot(cy - qy);
+                let d = (cx - qx).dhypot(cy - qy);
                 if d < best {
                     best = d;
                     bx = cx;
@@ -5171,7 +5694,7 @@ fn paint_lines<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, segs: PyRea
     if kd.iter().any(|&v| v as usize >= k) {
         return Err(pyo3::exceptions::PyValueError::new_err("paint_lines: a kind past the colours"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let (h, w) = (img.shape()[0], img.shape()[1]);
         let mut cov = vec![0f32; k * h * w];
         for s in 0..m {
@@ -5241,7 +5764,7 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
         return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)² grid"));
     }
     let hv: Vec<f64> = g.iter().copied().collect();
-    let (tris, surf, worst) = py.allow_threads(|| rtin_core(&hv, n, max_err));
+    let (tris, surf, worst) = py.detach(|| rtin_core(&hv, n, max_err));
     let m = tris.len();
     let tris = numpy::ndarray::Array2::from_shape_vec((m, 3), tris.into_iter().flatten().collect()).unwrap();
     let surf = numpy::ndarray::Array2::from_shape_vec((n, n), surf).unwrap();
@@ -5360,10 +5883,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
@@ -5371,9 +5896,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(junctionsnap::hold_junction_corridors, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
-    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads_over, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_chain_nodes, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_portal_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnelchain::tunnel_side_ground, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
     m.add_function(wrap_pyfunction!(shore::shore_steps, m)?)?;
     m.add_function(wrap_pyfunction!(shore::carve_segments, m)?)?;
     m.add_function(wrap_pyfunction!(vegmask::mask_polys, m)?)?;
@@ -5397,8 +5926,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (2026-11-08: gradesep._spans' rows and lines over the layers as they are; roads._deck_gaps' look round a road)
     m.add_function(wrap_pyfunction!(gradesep::gradesep_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_gather_rows, m)?)?;
-    m.add_function(wrap_pyfunction!(decks::first_ring_ends, m)?)?;
-    m.add_function(wrap_pyfunction!(decks::deck_gaps_round, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
@@ -5408,7 +5935,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
-    m.add_function(wrap_pyfunction!(devraster::fill_bits, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::cloud_layer, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::shell_lonlat, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::night_lights, m)?)?;
@@ -5426,15 +5952,23 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(point_inside, m)?)?;
     m.add_function(wrap_pyfunction!(geodetic_to_enu, m)?)?;
     m.add_function(wrap_pyfunction!(enu_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geodetic_to_enu_c, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
+    m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
+    m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
     m.add_function(wrap_pyfunction!(densify, m)?)?;
     m.add_function(wrap_pyfunction!(measure_row, m)?)?;
     m.add_function(wrap_pyfunction!(measure_row32, m)?)?;
     m.add_function(wrap_pyfunction!(grade_points, m)?)?;
+    m.add_function(wrap_pyfunction!(grade_points_binned, m)?)?;
     m.add_function(wrap_pyfunction!(bank_profile, m)?)?;
     m.add_function(wrap_pyfunction!(resample, m)?)?;
     m.add_function(wrap_pyfunction!(tunnel_sections, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnel_sections_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(tunnel_sections_buried, m)?)?;
     m.add_function(wrap_pyfunction!(smooth_profile, m)?)?;
     m.add_function(wrap_pyfunction!(chain_extensions, m)?)?;
     m.add_function(wrap_pyfunction!(route_samples, m)?)?;
@@ -5458,17 +5992,17 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_hypot_test, m)?)?;
     m.add_function(wrap_pyfunction!(oriented_box_core, m)?)?;
     m.add_function(wrap_pyfunction!(hash01_test, m)?)?;
+    m.add_function(wrap_pyfunction!(hash01, m)?)?;
+    m.add_function(wrap_pyfunction!(chaingraph::chain_graph, m)?)?;
     m.add_function(wrap_pyfunction!(building_walls, m)?)?;
     m.add_function(wrap_pyfunction!(float_predictor_f32, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings, m)?)?;
-    m.add_function(wrap_pyfunction!(seg_hits, m)?)?;
     m.add_function(wrap_pyfunction!(under_decks, m)?)?;
     m.add_function(wrap_pyfunction!(road_through, m)?)?;
     m.add_function(wrap_pyfunction!(face_normal_sum, m)?)?;
     m.add_function(wrap_pyfunction!(first_use, m)?)?;
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
-    m.add_function(wrap_pyfunction!(ends_near, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
     m.add_function(wrap_pyfunction!(seam_detect_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode_gpu, m)?)?;
@@ -5505,6 +6039,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_general, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
@@ -5519,6 +6060,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roadz::deck_lidar, m)?)?;
     m.add_function(wrap_pyfunction!(roadz::deck_blend, m)?)?;
     m.add_function(wrap_pyfunction!(roadz::lidar_gap_stretch, m)?)?;
+        // 261: tier_crossing_runs (roadz.observed: a deck of another tier only crossing, glki6's PR #1171) and
+        // pixel_corridor (roadzhk: the DSM pixels round a deck line, glki6's PR #1180)
+    m.add_function(wrap_pyfunction!(roadz::tier_crossing_runs, m)?)?;
+    m.add_function(wrap_pyfunction!(roadz::pixel_corridor, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_of, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_info, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_quad, m)?)?;
@@ -5527,19 +6072,25 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geotiles::geo_tiles_dist, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_map, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_world_to_latlon, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_placement, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
     m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::geodesic_lengths, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_runs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_normal_err, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_unpack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_pack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::cdae_zstats, m)?)?;
@@ -5548,6 +6099,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sidewalks::sidewalk_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(farcontent::bridge_slabs, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::tile_warp, m)?)?;
+    m.add_function(wrap_pyfunction!(fartex::core_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::season_img, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::dds_levels, m)?)?;
     m.add_function(wrap_pyfunction!(fartex::jpeg_rgb, m)?)?;
@@ -5557,6 +6109,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::bridge_level_spans, m)?)?;
+    m.add_class::<classgrid::ClassGridCache>()?;
+    m.add_class::<classgrid::ClassGridPlan>()?;
+    m.add_function(wrap_pyfunction!(classgrid::class_grid_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
@@ -5572,6 +6128,340 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
-    m.add("VERSION", 170)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::slope_wall_floors, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::skeleton_roof_uv, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::sky_walls, m)?)?;
+    m.add_class::<frontage::FrontageCoverage>()?;
+    // (roads.level_ranges' rules a layer at a time: _skew_decks, _deck_gaps, _lidar_gaps, the grade separations' merge,
+    // lidar_gap_candidates)
+    m.add_class::<levelrules::LevelLayer>()?;
+    m.add_function(wrap_pyfunction!(levelrules::level_extras, m)?)?;
+    // 176: roofs::heightfield_roof; 177: roofs::triangulate_holes; 178: frontage::FrontageCoverage (PR #505's paved
+    // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof; 180: its gables;
+    // 181: grade_points' road ranks (rk, rank_fade, rank_height_fade: PR #1050)
+    m.add_function(wrap_pyfunction!(roofphoto::roof_photo_colours, m)?)?;
+    // 182: roofphoto::roof_photo_colours (buildings.RoofPhoto: roof colours from the cached orthophoto)
+    m.add_function(wrap_pyfunction!(bdtopo::bdtopo_points, m)?)?;
+    m.add_function(wrap_pyfunction!(bdtopo::bdtopo_match, m)?)?;
+    // 183: bdtopo::bdtopo_points,
+    // bdtopo::bdtopo_match (France's measured buildings, server/bdtopo.py: PR #456's BD TOPO join, ported)
+    // 184: building_walls' vary / win_cells (wall_cells: the night windows' cells, PR #916 reworked)
+    // 185: levelrules (LevelLayer: rules / near / lidar_lines, level_extras: roads.level_ranges' rules per
+    // layer; deck_gaps_round, seg_hits, ends_near and tunnel_reach folded into them)
+    m.add_function(wrap_pyfunction!(nycmassing::nyc_massing_match, m)?)?;
+    // 186: nycmassing::nyc_massing_match (New York's measured massing, server/nycmassing.py: the 2014 3-D Building
+    // Model's records joined to the map's footprints)
+    m.add_function(wrap_pyfunction!(rooftop::roof_kit, m)?)?;
+    // 187: rooftop::roof_kit (buildings._clutter: penthouses, stair / lift bulkheads and rooftop units on flat roofs)
+    m.add_function(wrap_pyfunction!(devctx::dev_building_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_land_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_pois, m)?)?;
+    m.add_class::<devctx::DevContext>()?;
+    m.add_function(wrap_pyfunction!(furnstations::furniture_stations, m)?)?;
+    // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
+    // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
+    // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
+    m.add_class::<specs::RoadRules>()?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_layer_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_back, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_underpasses, m)?)?;
+    // 189: specs::RoadRules (roads.road_specs / bridge_specs / tunnel_specs / _structure_width / dual_carriageways a
+    // layer at a time; carriageway, ring_width, dual_cap, switchbacks, _ramp_junction) and gsrows (gradesep._layer_rows,
+    // _to_frame, _rows / _owners, _underpasses and _spans' back mapping)
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_probe, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_apply, m)?)?;
+    // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
+    // GitHub #1098)
+    // 191: building_walls' shop_edges (a shop's ground floor on its street walls only)
+    // 193: regional_groups' med / g_med (the Mediterranean basin's trees)
+    m.add_function(wrap_pyfunction!(planends::plan_ends_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridges_joined, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridge_chain, m)?)?;
+    m.add_function(wrap_pyfunction!(wallsindex::walls_index, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_near_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwalls::road_walls, m)?)?;
+    // 194: planends (grading's bridge-end queries a cell's plan ends at a time: _ends_near, bridge_chain, the joined
+    // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
+    // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
+    // another frame by the rotation alone); wallsindex (roadwidth.Walls' bucket index)
+    // 197: building_walls' shop_band (an office tower's lobby sheet)
+    m.add_function(wrap_pyfunction!(mappedlamps::lamp_road_yaw, m)?)?;
+    m.add_function(wrap_pyfunction!(mappedlamps::points_along, m)?)?;
+    // 199: mappedlamps (the mapped street lamps' arms toward their road, the mapped points along each road; 198 is
+    // another branch's)
+    // 198: reframe_segs (roadwidth's walls in another cell's frame in one pass)
+    m.add_function(wrap_pyfunction!(vegclumps::veg_clumps, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::field_lattice, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::edge_axis, m)?)?;
+    // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
+    // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run); regional_groups' zone / ext
+    // (Australia's eucalypts, temperate Europe's riverside poplars, North America's creosote bushes)
+    // 200: places (solar farms, container stacks, trailer parks: area_grid; port cranes: edge_spots; marina boats:
+    // berths; mapped street furniture off the carriageways: street_points)
+    m.add_function(wrap_pyfunction!(places::area_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(places::edge_spots, m)?)?;
+    m.add_function(wrap_pyfunction!(places::berths, m)?)?;
+    m.add_function(wrap_pyfunction!(places::street_points, m)?)?;
+    m.add_function(wrap_pyfunction!(places::outline_panels, m)?)?;
+
+    m.add_function(wrap_pyfunction!(places::roof_corners, m)?)?;
+    m.add_function(wrap_pyfunction!(places::grid_marks, m)?)?;
+    m.add_function(wrap_pyfunction!(roadwear::wear_plan, m)?)?;
+    // 202: roadwear (wear_plan: tyre polish, concrete joints, cracks, patches, manholes, oil spots along a tile's roads)
+    m.add_function(wrap_pyfunction!(roadtone::paint_lines_toned, m)?)?;
+    // 203: roadtone (paint_lines_toned: the roads painted into the photo in its own pavement's tone)
+    m.add_function(wrap_pyfunction!(roadtone::paint_cover_toned, m)?)?;
+    // 204: paint_cover_toned (lots and pads in the photo's own tone)
+    // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
+    // railway stations' signs; PR #1106 / #1023, their 188)
+    // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_tile_id, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_header, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
+    // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
+    // tiles, server/pmtiles.py; 205 left to another branch)
+    // 207: farglobal::far_normal_err and far_global_mesh's 11th value err_n (the far terrain's pixel-error LOD, the
+    // lodPx setting; another branch's 206)
+    // 208: roofs::slope_wall_floors (the walls above a heightfield roof's eave in floor bands of the window sheet)
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_smooth, m)?)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_join_beds, m)?)?;
+    // 209: railbeds (railprofile.smooth / join_beds: a node window's ground beds smoothed and its switches joined, in
+    // one call each; that branch's 206)
+    m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
+    // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
+    // server/osmtagshards.py; that branch's 207)
+    m.add_function(wrap_pyfunction!(planset::plan_nearest_on, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_weld, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
+    m.add_function(wrap_pyfunction!(junctions::junctions_find, m)?)?;
+    // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
+    // 212: planset::plan_merge (_plan_set's weld, trim and pack at once, one reading of the plans)
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
+    // 213: packz::zstd_pack / zstd_unpack (the revisit cache's pack records, server/revisitpack.py; that branch's 171)
+    // 214: junctions::junctions_find (junctions.find: corners, cuts, crosswalks, ramps in one call)
+    m.add_class::<reach::RoadReach>()?;
+    m.add_function(wrap_pyfunction!(reach::reach_tile_keys, m)?)?;
+    // 215: reach (RoadReach: the drivable roads near a fast car as a graph and its time-to-reach tree;
+    // reach_tile_keys: the geotiles along a tree in its order; server/reach.py; that branch's 211)
+    // 216: gradebins (grade_points_binned: the corridor apply by fine bins, bit for bit grade_points' heights,
+    // without the GIL; grade_points itself on the same pair arithmetic, without the GIL too; that branch's 211)
+    // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
+    // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs_tex_px, m)?)?;
+    // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
+    // texture, earthd FAR_PVS; that branch's 212)
+    // 219: l0roads / groundphoto (that branch's 171)
+    // (L0 roads: a provisional block's road corridors flattened before any road plan, l0roads.py)
+    m.add_function(wrap_pyfunction!(l0roads::l0_flatten, m)?)?;
+    // (L0 ground: a teleport's first block's stand-in photo from its own ground layers, earthd.write_ground_base)
+    m.add_function(wrap_pyfunction!(groundphoto::ground_photo, m)?)?;
+    // 220: layerfold (layer_stats / layer_fold: a block's rarely used ground layers folded into the ones around them,
+    // surface.fold_layers: fewer terrain materials per .ter, a cheaper texture-array rebuild at the swap)
+    m.add_function(wrap_pyfunction!(layerfold::layer_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(layerfold::layer_fold, m)?)?;
+    // 221: the stations' small geometry (busstations.contains / dist_to_path, railstations._crossings): stationgeom (that branch's 222)
+    m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
+    // 230: road_smooth_g2 (roadsmooth.py: the roads curvature continuous, spirals into and out of the arcs; pins)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_g2, m)?)?;
+    // 231: roadsurf (road_photo_surface: an untagged minor road's surface from the aerial's z17 tiles on the disk,
+    // against the same photo's mapped paved / unpaved roads, server/roadsurf.py); roadtone's tone rows may carry a
+    // kind's own sample luma cap and a light-pavement (concrete) band (paint_lines_toned / paint_cover_toned)
+    m.add_function(wrap_pyfunction!(roadsurf::road_photo_surface, m)?)?;
+    // 234: corridor::plan_share_corridors (grading.share_corridors: roads whose carriageways touch or overlap side by
+    // side agree in height there, a smoothing spline along each; GitHub #1043, #1045)
+    m.add_function(wrap_pyfunction!(corridor::plan_share_corridors, m)?)?;
+    // 235: roadsmooth.smooth's layer steps (road_connector_pins, road_smooth_rebuild, road_smooth_fractions: its
+    // Python round the line kernels was most of the smoothing's CPU)
+    m.add_function(wrap_pyfunction!(roadsmooth::road_connector_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_rebuild, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_fractions, m)?)?;
+    // (and lanesections.split's new layer: lane_split_coords / lane_split_rules)
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_coords, m)?)?;
+    m.add_function(wrap_pyfunction!(lanesections::lane_split_rules, m)?)?;
+    // (and levelways.promote: level_ways_promote)
+    m.add_function(wrap_pyfunction!(levelways::level_ways_promote, m)?)?;
+    // (and roadmesh's per-ribbon rounds: deck_trim_overlaps, keep_up_mask, shared_points)
+    m.add_function(wrap_pyfunction!(meshtrim::deck_trim_overlaps, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::keep_up_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(meshtrim::shared_points, m)?)?;
+    // (and shelters' carriageway tests: shelter_intrusion, shelter_worst_post)
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_intrusion, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::shelter_worst_post, m)?)?;
+    m.add_function(wrap_pyfunction!(shelterfit::lines_point_min_dist, m)?)?;
+    // (and busstations.centroid's shoelace centroid: ring_centroid)
+    m.add_function(wrap_pyfunction!(stationgeom::ring_centroid, m)?)?;
+    // 236: approach (grading.approach_add ported, with fill_z: a raised junction's arms filled to a ramp surface, not
+    // offset over their own climb; junction_arm_raise, stub_carried_raise, under_deck_reach: GitHub #1043 Wesley Chapel)
+    m.add_function(wrap_pyfunction!(approach::approach_add, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::junction_arm_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::stub_carried_raise, m)?)?;
+    m.add_function(wrap_pyfunction!(approach::under_deck_reach, m)?)?;
+    // 238: gradesep_underpasses' prm[7] (a junction over a tunnel: its arms' crossings by the node count); deck_weld
+    // (one height at each joint of a deck chain's per-part profile)
+    m.add_function(wrap_pyfunction!(decks::deck_weld, m)?)?;
+    // 240: the road tiles' kernels (tilecuts: build_tile's cut lists as masks of the tile's roads packed once,
+    // road_cut_boxes / inside_road_cuts; retaining_walls' deck_floor; offset_polyline; railways' PointMemo; doors'
+    // nearest_segments), building_walls_np (Mesh's numpy blocks), segment_crossings_lists (roads._crossings)
+    m.add_function(wrap_pyfunction!(tilecuts::road_cut_boxes, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::inside_road_cuts, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::deck_floor, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::offset_polyline, m)?)?;
+    m.add_class::<tilecuts::PointMemo>()?;
+    m.add_function(wrap_pyfunction!(building_walls_np, m)?)?;
+    m.add_function(wrap_pyfunction!(tilecuts::nearest_segments, m)?)?;
+    m.add_function(wrap_pyfunction!(segment_crossings_lists, m)?)?;
+    // 241: deckjoints (a deck junction of several joints one field, its lone ends pinned: junction_groups, field_pins;
+    // the pads of joints a short part links merged: pad_links; GitHub #1083), gradebins' overlap yield
+    m.add_function(wrap_pyfunction!(deckjoints::junction_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::field_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(deckjoints::pad_links, m)?)?;
+    // 243: bldclear (buildings.road_clearance: footprints against the drawn carriageways, footprint_road_overlap /
+    // footprint_clear: a footprint cut back to the asphalt's edge; GitHub #523 #543 #1184)
+    m.add_function(wrap_pyfunction!(bldclear::footprint_road_overlap, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_clear, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_pieces, m)?)?;
+    m.add_function(wrap_pyfunction!(bldclear::footprint_twins, m)?)?;
+    // (and roadwidth.clearance_row: the room between a street's walls its carriageway keeps clear of)
+    m.add_function(wrap_pyfunction!(clearance_row, m)?)?;
+    m.add_function(wrap_pyfunction!(clearance_row32, m)?)?;
+        // 242: geo_world_to_latlon, chain_graph, hash01, skeleton_roof_uv, sky_walls (world gen speed)
+        // 247: 242 (world gen speed) and 243 (bldclear) in one module
+        // 248: tunnel networks (tunnelchain: tunnel_chain_nodes, tunnel_portal_cover; tunnel_sections_cover /
+        // _buried, tunnel_cover_roads_over)
+        // 253: a road joined at a bridge's end is no crossing under it whatever the C library's hypot rounds to
+        // (levelrules END_EPS_M)
+        // 256: tunnel_side_ground (the ground beside a tunnel read out to the walls of a trench, held where a road on
+        // the ground joins it; tunnel_sections_buried's network flag)
+    // 257: membudget (budget.py / memwatch.py: the settings page's Max RAM, its tiers, sizes and watchdog; 254 before)
+    m.add_function(wrap_pyfunction!(membudget::ram_auto_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_limit_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_tier, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_desktop_sizes, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_effective_mb, m)?)?;
+    m.add_function(wrap_pyfunction!(membudget::ram_watch, m)?)?;
+        // 259: tunnel entrances (portal: portal_mesh, tunnel_cover_mesh, portal_style)
+    m.add_function(wrap_pyfunction!(portal::portal_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::tunnel_cover_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(portal::portal_style, m)?)?;
+    // 261: pmtiles.rs puts a cut line's rule ranges (bridges, tunnels, levels, ...) on the line we have, by its
+    // connectors (a 19 km rail line cut to 14 km had every bridge 880 m off; BNE_PMT_ANCHOR=off: as before), and reads
+    // the max_height_m rule (access restrictions for vehicles over a height) (from Robitnik's PR #1193); roadz's
+    // tier_crossing_runs and pixel_corridor (glki6's PRs #1171 / #1180); junctions_find's left_hand (left-hand
+    // traffic's stop lines on the incoming half, zolaski333's PR #1134)
+    // 263: railway stations' platform edges and link chains with their tracks / ends in grids (stationgeom:
+    // station_snap_edges, station_link_chains: railstations.snap_edges / _links' chains, King's Cross / Euston tiles)
+    m.add_function(wrap_pyfunction!(stationgeom::station_snap_edges, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_link_chains, m)?)?;
+        // 262: deterministic maths (dm: the libm crate in every kernel instead of the platform's C library; dm_vec and
+        // the dm_<fn> scalars for server/dnp.py / dmath.py: Windows and Linux plan the same roads, GitHub #1169)
+    dm::register(m)?;
+        // 264: 262 (deterministic maths) and 263 (stationgeom) in one module
+    // 266: bldclear::footprint_twins (the same building mapped twice: one of the two outlines left out, London's
+    // reports 2026-11-12); junctions_find's one-way / single-lane arms' stop lines (London reports 3, 8, 9)
+    // and a rail / walkway bridge's piers kept off every road and footway under it
+    // (railpiers: rail_pier_sites; railways._sited counted only the roads the track crosses at grade)
+    m.add_function(wrap_pyfunction!(railpiers::rail_pier_sites, m)?)?;
+    // 267: 266 and the in-game reports' privacy scrub, log tails and upload body (reportpack: report_scrub, report_scrub_json,
+    // report_log_tail, report_logs_pack, report_body, report_nearby; server/reportsend.py)
+    m.add_function(wrap_pyfunction!(reportpack::report_scrub, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_scrub_json, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_log_tail, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_logs_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_body, m)?)?;
+    m.add_function(wrap_pyfunction!(reportpack::report_nearby, m)?)?;
+    // 268: bnwt (our prebaked z14 input tiles, BNWT: the lossless tile codec, the PMTiles writer's head, a square's
+    // tile-id run and a directory's entries in a range; server/bnwt.py, tools/build_bnwt.py)
+    bnwt::register(m)?;
+    // 273 (269-272 kept for other branches): bnwt FORMAT 2 (no cell in a tile, the cell's edges coded: open-sea tiles
+    // deduplicated, run-length directory entries), bnwt_assign (a block's rows to its cells, as the parquet bbox test)
+    // 274 (on 273; was 269 on its branch): the graded terrain blocks kept on disk (blockstore: blockstore_put_heights, blockstore_get_heights,
+    // blockstore_put_block, blockstore_get_block, blockstore_prune; server/blockcache.py)
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_heights, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_put_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_get_block, m)?)?;
+    m.add_function(wrap_pyfunction!(blockstore::blockstore_prune, m)?)?;
+    // 275 (on 274; was 270 on its branch): a cached place's far field put back in one call (farrestore: far_restore, far_shape_stamp;
+    // server/farrestore.py; 269 was left for the block chunk cache)
+    m.add_function(wrap_pyfunction!(farrestore::far_restore, m)?)?;
+    m.add_function(wrap_pyfunction!(farrestore::far_shape_stamp, m)?)?;
+    // 276 (on 275; was 271 on its branch): the 1 m aerial packs' coverage files (aerialcov: aerial_cov_table, aerial_pack_where,
+    // aerial_pack_state; server/aerialpacks.py)
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_cov_table, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_where, m)?)?;
+    m.add_function(wrap_pyfunction!(aerialcov::aerial_pack_state, m)?)?;
+    // 281: a cell's roads measured between the building walls in two calls without the interpreter lock (roadwalls:
+    // road_near_cells, road_walls; roadwidth.RoadWidths.measure_many), measure_row / clearance_row's loops shared
+    // with them (measure_core, clearance_core)
+    // 282 (on 281): the shared decision archives (decisions: BNGD blocks of road plans and
+    // cell facts, signed manifests, ed25519 checks, the npz transform; server/decisions.py, tools/build_decisions.py)
+    decisions::register(m)?;
+    // 285 (on 283; 284 is the governor branch's): the mod's textures encoded at install time from their lossless sources (texdds: texture_dds_files,
+    // texture_dds, TEXDDS_ID; modtextures.py, install.py, tools/package.py)
+    texdds::register(m)?;
+    // 287 (on 285; 286 is the stage-sharing branch's, 284 the governor branch's): the per-sample kernels on threads
+    // under one cap per process (par: set_native_threads, native_threads; grade_points_binned's bins, the mip levels,
+    // the CPU BC1 / BC7 encoders), the far textures' DDS on the CPU (bc1fast: dds_levels' integer mips and ISPC's BC1
+    // kernels; bc1_encode_fast, mip_levels_fast, bc1_ispc_linked)
+    m.add_function(wrap_pyfunction!(par::set_native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(par::native_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_encode_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::mip_levels_fast, m)?)?;
+    m.add_function(wrap_pyfunction!(bc1fast::bc1_ispc_linked, m)?)?;
+    // 290 (286 on its branch; 288 and 289 are other branches'): road stages shared by the server's processes (stageshare:
+    // stage_claim, stage_wait, stage_release, stage_busy, stage_put, stage_get; server/plancache.py's stage_*,
+    // grading._Planner._road_stage)
+    stageshare::register(m)?;
+    // 293 (291 and 292 are other branches'): RoadReach.grow takes the driver's intent (intent_turn, intent_brake,
+    // intent_s: server/reach.py intent())
+    // 295 (on 293; 294 is the stage-sharing fix branch's; written as 288 on 285, then 291 on 290): a ground photo's
+    // whole paint in one call from paint lists made once per set of map cells (paintlist: PaintStyle, PaintRoads,
+    // PaintPolys, PaintFields, paint_photo, pil_raster; server/paintlist.py, surface.paint_square), roadtone's coverage
+    // loop shared with it
+    paintlist::register(m)?;
+    // 296 (on 295; written as 294 on 290): the stage claims with an owner token, the process's start time and an
+    // uptime lease, changed only under the folder's lock; a damaged stage file written again (stage_claim / stage_wait
+    // repair; stage_put and stage_release take the token)
+    // 297: domes::dome_roof (a dome over any outline from its centroid or pole of inaccessibility: Streets GL's
+    // CurvedRoofBuilder, MIT; server/buildings.py _dome)
+    domes::register(m)?;
+    // 298: buildyears::oby_decode (a tile of the OSM building construction years, tools/build_osm_building_years.py,
+    // server/osmyears.py: the towers' facades by era, buildings.plan)
+    buildyears::register(m)?;
+    // 301 (299 is the detail packs' branch, 300 a shelved branch's): buildcolours::obc_decode (a tile of the OSM
+    // building and part colours, tools/build_osm_building_colours.py, server/osmcolours.py: the colours Overture drops)
+    buildcolours::register(m)?;
+    // 302: grow_along (grading.rail_yield_pieces' cut along the line, nearcross.rs; near_crossers' segments from a grid)
+    m.add_function(wrap_pyfunction!(grow_along, m)?)?;
+    // 303 (302 is the grow_along branch's): the lidar-derived road heights per map cell as a signed CDN product
+    // (lidarz: lz_encode_cell / lz_decode_cell, lz_inputs_digest, lz_probe_points, lz_dem_digest; server/lidarz.py,
+    // tools/build_lidarz.py) and the decision archives' file functions taking a signed product's domain (dec_*:
+    // domain = "dec" | "lidarz", its own magics inside the signature)
+    lidarz::register(m)?;
+    // 304: the far field's per-pose kernels (the event loop's 2-7 s stalls of a BeamMP drive, 2026-11-15):
+    // farsel::far_select_nodes (farfield.select, the anchor's quadtree, ported), farsel::far_horizon_radius
+    // (HorizonGrid.radius), farpvs::far_pvs_tex_px (farpvs.Set.tex_px / hidden for many tiles, without the GIL);
+    // far_global_select's view errors looked up in the caller's dict (not copied whole at every pose)
+    farsel::register(m)?;
+    // (304 also) far_select_nodes and far_global_select return the selection's slack (the move under which it stays the
+    // same: earthd's selection gate skips only selections that could not change)
+    m.add("VERSION", 304)?;
     Ok(())
 }

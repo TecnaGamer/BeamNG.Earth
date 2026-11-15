@@ -143,13 +143,108 @@ class UnderpassTest(unittest.TestCase):
         self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
         self.assertEqual(roads.level_ranges(f, 1), [])          # (its tunnel: ground under the bridge)
 
+    def test_a_skew_crossing_s_bridge_spans_the_road_under_it_across_its_whole_width(self):
+        # a track at 45 deg under a motorway (the A4 at Glaireuse, #1020): the track's band slides along the motorway by
+        # the motorway's half width across its carriageway; a deck square to the track left its edges in the cut
+        # (the track mapped as a tunnel all along, 71 m: no ground part of it for roads._bridge_reach to lengthen over)
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(-25.0, -25.0), (25.0, 25.0)]],
+                            ["motorway", "track"], flags=[(1, "is_tunnel")]),
+                   lambda e, n: np.zeros_like(e))
+        skew, roads.SKEW_ON = roads.SKEW_ON, False     # (the span's own length: no roads._bridge_reach on top)
+        try:
+            got = roads.level_ranges(f, 0)
+        finally:
+            roads.SKEW_ON = skew
+        self.assertEqual([k for _, _, k in got], ["bridge"])
+        up, lo = roads.STYLE["motorway"][0] / 2.0, roads.STYLE["track"][0] / 2.0     # (gradesep's halves)
+        want = 2 * ((lo + gradesep.CLEAR_M) * 2 ** 0.5 + up)      # (over sin 45, and the half width over tan 45)
+        self.assertAlmostEqual((got[0][1] - got[0][0]) * 400.0, want, delta=0.5)
+
+    def test_a_long_road_s_bridge_stands_over_the_crossing(self):
+        # a motorway's 15 km feature (Overture's): its level ranges are fractions in sub_polyline's metric, the kernels
+        # measure in the cell's frame; read as one in the other the A4's deck at Glaireuse stood 8.7 m off the track
+        # under it (#1020)
+        f = hooked(features([[(-9000.0, -9000.0), (0.0, -3000.0), (0.0, 6000.0)], [(-25.0, -25.0), (25.0, 25.0)]],
+                            ["motorway", "track"], flags=[(1, "is_tunnel")]),
+                   lambda e, n: np.zeros_like(e))
+        got = roads.level_ranges(f, 0)
+        self.assertEqual([k for _, _, k in got], ["bridge"])
+        ring = np.asarray(f.parts(0)[0][0], np.float64)
+        ends = roads.sub_polyline(ring, got[0][0], got[0][1])[[0, -1]]
+        _, n, _ = FRAME.geodetic_to_enu(ends[:, 1], ends[:, 0], 0.0)
+        _, n0, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        self.assertLess(abs(float(np.mean(n)) - float(n0[0])), 0.5)
+
     def test_a_long_tunnel_in_short_pieces_stays_a_tunnel(self):
-        # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, no underpass
+        # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, with 6 m of ground
+        # over it where the road crosses (more than roads.TUNNEL_OPEN_COVER): no underpass
+        _, n0, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        mound = lambda e, n: np.where((np.abs(n - n0[0]) < 45.0) & (np.abs(e - e0[0]) < 30.0), 6.0, 0.0)   # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
+                            ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]), mound)
+        self.assertEqual(roads.level_ranges(f, 0), [])
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
+
+    def test_a_long_tunnel_in_the_open_is_an_underpass(self):
+        # GitHub #1009 (Highway 3 under Paasikiventie, Hameenlinna): the same 100 m tunnel with the ground over it no
+        # higher than past its portals (a cutting the DEM shows open under the bridge): opened anyway
+        # (roads.TUNNEL_OPEN_COVER), so the road crossing over it is a bridge, not graded down into the cutting
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        cutting = lambda e, n: np.where(np.abs(e - e0[0]) < 12.0, 0.0, 7.0)       # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
+                            ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]), cutting)
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
+        self.assertIn([], [roads.level_ranges(f, i) for i in (1, 2)], "the piece it crosses: ground, no tube")
+
+    def test_a_junction_over_a_long_tunnel_in_the_open_bridges_it(self):
+        # GitHub #1083 (Vienna's S1 under Rautenweg): the junction's node stands 1 m beside the tunnel's line, so its
+        # arms cross it within END_M of their ends; the arm going on from the node still crosses over (JOINED_ENDS)
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        cutting = lambda e, n: np.where(np.abs(e - e0[0]) < 12.0, 0.0, 7.0)       # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (1.0, 0.0)], [(1.0, 0.0), (200.0, 0.0)], [(0.0, -60.0), (0.0, 60.0)]],
+                            ["secondary", "secondary", "motorway"], flags=[(2, "is_tunnel")]), cutting)
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
+        self.assertEqual(roads.level_ranges(f, 2), [], "the tunnel: ground under the bridge")
+        joined, gradesep.JOINED_ENDS = gradesep.JOINED_ENDS, False
+        try:
+            g = hooked(features([[(-200.0, 0.0), (1.0, 0.0)], [(1.0, 0.0), (200.0, 0.0)], [(0.0, -60.0), (0.0, 60.0)]],
+                                ["secondary", "secondary", "motorway"], flags=[(2, "is_tunnel")]), cutting)
+            self.assertEqual([k for _, _, k in roads.level_ranges(g, 2)], ["tunnel"])
+        finally:
+            gradesep.JOINED_ENDS = joined
+
+    def test_the_road_going_on_from_an_underpass_s_portals_stays_on_the_ground(self):
+        # The SR17 at Popoli (42.1710 N 13.8247 E) under the Rome-Pescara railway: the map splits the road at its 20 m
+        # underpass, and its pieces either side met the tunnel at its ends. Taken as lines over it, they got bridges
+        # that ran on along the road through the underpass: the road going under was a deck on the ground (PORTAL_JOIN)
+        lines = [[(0.0, -200.0), (0.0, -10.0)], [(0.0, -10.0), (0.0, 10.0)], [(0.0, 10.0), (0.0, 200.0)],
+                 [(-200.0, 0.0), (200.0, 0.0)]]
+        classes = ["primary", "primary", "primary", "secondary"]
+        f = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 3)], ["bridge"], "the road over it: a bridge")
+        self.assertEqual([roads.level_ranges(f, i) for i in (0, 1, 2)], [[], [], []], "the road under it: ground")
+        joined, gradesep.PORTAL_JOIN = gradesep.PORTAL_JOIN, False
+        try:
+            g = hooked(features(lines, classes, flags=[(1, "is_tunnel")]), lambda e, n: np.zeros_like(e))
+            self.assertIn("bridge", [k for i in (0, 1, 2) for _, _, k in roads.level_ranges(g, i)])
+        finally:
+            gradesep.PORTAL_JOIN = joined
+
+    def test_portal_joins_are_the_rows_at_an_end_of_both_lines(self):
+        pts = np.array([[0.0, -200.0], [0.0, -10.0], [0.0, -10.0], [0.0, 10.0], [-200.0, 0.0], [200.0, 0.0]])
+        starts = np.array([0, 2, 4, 6])
+        cand = np.array([[0, 1, 190.0, 0.0, 0.0, 1.0],     # the road going on from the portal: a join
+                         [2, 1, 200.0, 10.0, 1.0, 1.0],    # a line over the tunnel's middle
+                         [0, 2, 190.0, 0.0, 1.0, 0.0]])    # (not a line over a short tunnel: left to the kernel)
+        self.assertEqual(gradesep._portal_joins(pts, starts, cand).tolist(), [True, False, False])
+
+    def test_a_long_tunnel_on_flat_ground_stays_a_tunnel(self):
+        # the same on a flat DEM (a covered tunnel the DEM does not show): no bridge over it
         f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
                             ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]),
                    lambda e, n: np.zeros_like(e))
         self.assertEqual(roads.level_ranges(f, 0), [])
-        self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
 
     def test_a_short_tunnel_through_a_hill_stays_a_tunnel(self):
         # 20 m of ground over the road crossing it above the portals' approaches
@@ -311,6 +406,54 @@ class ReferenceTest(unittest.TestCase):
         f = cross(("motorway", "secondary"), flags=[(1, "is_tunnel", 0.45, 0.55)])
         self.check(f, NearMd(embankment, f))
         self.check(cross(), NearMd(lambda e, n: np.zeros_like(e), None))
+
+
+class ElsewhereTest(unittest.TestCase):
+    """roads._gradesep_elsewhere: a road's home cell takes the spans the other cells it crosses found for it (CA-1 by
+    Wilder Tunnel, 2026-11-09: its bridge over the underpass was found in the tunnel's cell only, its home cell next
+    door had none, and every copy took the home cell's ranges)."""
+
+    def copies(self, found_east):
+        lon1 = KEY.bounds()[2]
+        e_edge = (lon1 - LON) * roads_m_lon()
+        line = [[(e_edge - 300.0, 0.0), (e_edge + 300.0, 0.0)]]   # (starts in KEY, ends in the cell east of it)
+        east = mapcells.CellKey(KEY.z, KEY.x + 1, KEY.y)
+        home, other = features(line, ["trunk"], ids=["ca1"]), features(line, ["trunk"], ids=["ca1"])
+        home.__dict__.update(_bnge_cell=(str(KEY), "roads", ()), _bnge_neighbours=lambda: [other],
+                             _bnge_gradesep=lambda f: {})
+        other.__dict__.update(_bnge_cell=(str(east), "roads", ()), _bnge_neighbours=lambda: [home],
+                              _bnge_gradesep=lambda f: found_east)
+        return home, other
+
+    def test_the_home_cell_takes_a_bridge_found_where_the_road_goes_on(self):
+        home, other = self.copies({0: [(0.6, 0.62, "bridge")]})
+        self.assertEqual(roads._gradesep_elsewhere(home, 0), [(0.6, 0.62, "bridge")])
+        self.assertEqual(roads._level_ranges(home, 0), [(0.6, 0.62, "bridge")])
+        self.assertEqual(roads._gradesep_elsewhere(other, 0), [], "not its home: it takes the home copy's")
+
+    def test_copies_far_from_home_take_their_neighbours_spans(self):
+        # GitHub #1020 (the A4 at Glaireuse): a 15 km motorway's copies far from its home cell (its first point) each
+        # took only their own cell's spans; one had the bridge over a track's underpass and the next did not
+        lon0, lon1 = KEY.bounds()[0], KEY.bounds()[2]
+        w_edge, e_edge = (lon0 - LON) * roads_m_lon(), (lon1 - LON) * roads_m_lon()
+        line = [[(w_edge - 300.0, 0.0), (e_edge + 300.0, 0.0)]]   # (starts in the cell west of KEY: its home)
+        east = mapcells.CellKey(KEY.z, KEY.x + 1, KEY.y)
+        mid, other = features(line, ["motorway"], ids=["a4"]), features(line, ["motorway"], ids=["a4"])
+        mid.__dict__.update(_bnge_cell=(str(KEY), "roads", ()), _bnge_neighbours=lambda: [other],
+                            _bnge_gradesep=lambda f: {})
+        other.__dict__.update(_bnge_cell=(str(east), "roads", ()), _bnge_neighbours=lambda: [mid],
+                              _bnge_gradesep=lambda f: {0: [(0.7, 0.71, "bridge")]})
+        self.assertEqual(roads._gradesep_elsewhere(mid, 0), [(0.7, 0.71, "bridge")])
+        self.assertEqual(roads._level_ranges(mid, 0), [(0.7, 0.71, "bridge")])
+
+    def test_nothing_found_elsewhere_changes_nothing(self):
+        home, _other = self.copies({})
+        self.assertEqual(roads._level_ranges(home, 0), [])
+
+
+def roads_m_lon():
+    from test_roads import M_LON
+    return M_LON
 
 
 if __name__ == "__main__":

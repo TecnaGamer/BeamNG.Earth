@@ -24,6 +24,7 @@ from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
+import dnp
 
 import geodesy
 import mapcells
@@ -50,6 +51,7 @@ BUCKET = 16.0           # m, wall segment buckets
 
 
 MEMO_MAX = 200000        # roads' widths kept per process (RoadWidths.memo), then forgotten all at once
+NEAR_MEMO = 20000        # roads' cells kept per process (RoadWidths.near; ~0.4 kB each), then forgotten all at once
 WALL_CELLS = 48          # cells of building walls kept per process (budget.py: fewer on a small machine)
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
@@ -76,26 +78,12 @@ class Walls:
             bk, self.seg_of = index
             self.keys, self.first, self.counts = bk[0], bk[1], bk[2]     # (rows: contiguous, as the Rust loop takes)
             return
-        # bucket index, vectorised (a Python loop per segment took ~18 s for a city's 9 cells, 2026-10-12):
-        # one (segment, bucket) pair per bucket a segment's box touches, sorted by bucket key
-        s = np.asarray(self.segs, np.float64)
-        bx0 = np.floor(np.minimum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        bx1 = np.floor(np.maximum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        by0 = np.floor(np.minimum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        by1 = np.floor(np.maximum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        nx, ny = bx1 - bx0 + 1, by1 - by0 + 1
-        cnt = nx * ny
-        seg = np.repeat(np.arange(len(s)), cnt)
-        k = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-        bx = np.repeat(bx0, cnt) + k % np.repeat(nx, cnt)
-        by = np.repeat(by0, cnt) + k // np.repeat(nx, cnt)
-        key = self._key(bx, by)
-        # (any order within a bucket: a ray keeps its nearest hit; np.unique would sort the sorted keys again)
-        order = np.argsort(key)
-        ks = key[order]
-        first = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]]) if len(ks) else np.zeros(0, np.int64)
-        self.keys = ks[first]
-        self.first, self.counts, self.seg_of = first, np.diff(np.r_[first, len(ks)]), seg[order]
+        # the bucket index (wallsindex.rs: one (segment, bucket) pair per bucket a segment's box touches, sorted by
+        # bucket key; numpy's ~15 whole-array passes were ~1.7 % of a cold road tile's samples, 2026-11-10)
+        import fast
+        fast.require(194, "walls_index")
+        self.keys, self.first, self.counts, self.seg_of = fast._ef.walls_index(
+            np.ascontiguousarray(self.segs, np.float64).reshape(-1, 4), float(BUCKET))
 
     def index_arrays(self):
         """(buckets (3, B) int64 rows key, first, count, seg_of (P,) int64): the bucket index, for the store."""
@@ -171,6 +159,59 @@ def measure_row(centreline, walls):
     fn = fast._ef.measure_row32 if f32 else fast._ef.measure_row
     return fn(np.ascontiguousarray(np.asarray(centreline, np.float64)[:, :2]), *k, BUCKET,
               STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE)
+
+
+# The room a street's carriageway keeps clear of (the user, 2026-11-12: "houses blocking the road"; GitHub #1184, #543):
+# where the map gives no width, a town street took its class's (parking lanes and all: 10.6 m for a residential street)
+# and the houses of a narrow street stood in its lanes (Campulung's old streets, Trastevere, Setagaya's 4 m lanes,
+# Newhey's terraces on the A640: 819 of Setagaya's 3,657 mapped footprints in a carriageway). measure_row narrows only a
+# street walled on both sides consistently; clearance_row is the limit from whatever walls there are: the nearer wall
+# each CLEAR_STEP m (a carriageway stays on its line), their CLEAR_Q quantile over the sections with one (the narrowest
+# CLEAR_Q left to buildings.road_clearance's cut: one house over the line does not narrow a whole street; a long road's
+# open stretches do not hide its village: Newhey Road), with walls along CLEAR_WALLED of it at least.
+CLEAR_STEP = 4.0
+CLEAR_END_SKIP = 8.0     # (a quarter of a shorter street)
+CLEAR_MIN_SAMPLES = 2
+CLEAR_Q = 0.25
+CLEAR_WALLED = 0.25     # share of a street's sections with a wall near (both walls: its own width) for a limit
+CLEAR_SLACK_M = 0.3     # m between a carriageway's (or its sidewalks') edge and the wall at least
+
+
+def clearance_row(centreline, walls):
+    """(The room (m, twice the nearer wall's distance) a carriageway on the street's centreline (k, 2), metres, keeps
+    clear of between the walls, the wall-to-wall width where both sides have one), the CLEAR_Q quantiles of its
+    sections, each None for no limit; None without walls. Pure."""
+    import fast
+    if not len(walls.keys):
+        return None
+    fast.require(243, "clearance_row")
+    k = walls.__dict__.get("_rs")
+    f32 = walls.segs.dtype == np.float32
+    if k is None:
+        k = walls._rs = tuple(np.ascontiguousarray(a, t) for a, t in
+                              ((walls.keys, np.int64), (walls.first, np.int64), (walls.counts, np.int64),
+                               (walls.seg_of, np.int64), (walls.segs, np.float32 if f32 else np.float64)))
+    fn = fast._ef.clearance_row32 if f32 else fast._ef.clearance_row
+    return fn(np.ascontiguousarray(np.asarray(centreline, np.float64)[:, :2]), *k, BUCKET, CLEAR_STEP, CLEAR_END_SKIP,
+              REACH, CLEAR_MIN_SAMPLES, CLEAR_Q, CLEAR_WALLED)
+
+
+def verge_frontage(centreline, walls, width):
+    """Shares of each side with façades within 4, 9.5 and 14.5 m of the road edge."""
+    import furniture
+
+    length = furniture._arclen(centreline)[-1]
+    if length <= 1. or not len(walls.keys):
+        return np.zeros((2, 3))
+    n = min(31, max(3, int(length / 5.) + 1))
+    edge = min(4., .12 * length)
+    points, tangent = furniture._at(centreline, np.linspace(edge, length - edge, n))
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    half = width / 2.
+    hits = walls.rays(np.tile(points, (2, 1)), np.concatenate([normal, -normal]), half + 14.5)
+    gaps = hits.reshape(2, n, 1) - half
+    return np.mean((gaps >= .20) & (gaps <= np.array([4., 9.5, 14.5])), axis=1)
+
 
 def split(row):
     """(carriageway m, sidewalk m) of a right-of-way, or None when the carriageway would be implausible."""
@@ -270,6 +311,15 @@ def store_dir(cache_dir, md):
     return os.path.join(cache_dir, "roadwidth", f"v{WALLS_VERSION}", str(getattr(md, "release", "x")))
 
 
+def _memo_key(fid, ll):
+    """A road's width / clearance memo key: its id AND its geometry's bytes. Each map cell decodes a road crossing it
+    on its own (its bends smoothed in that cell's frame: copies ~1e-10 deg apart), and a memo by id alone answered
+    every later copy with whichever cell's copy came first: a cell's plans depended on which cells a process had
+    planned before it (Fells Point 14/4706/6244 after 14/4706/6243, 2026-11-12)."""
+    import hashlib       # (a digest: MEMO_MAX keys of whole geometries were tens of MB per process)
+    return fid, hashlib.blake2b(np.ascontiguousarray(ll, np.float64).tobytes(), digest_size=16).digest()
+
+
 class RoadWidths:
     """Measured street widths per road id, decided once per server run (thread-safe). cell_fn(key) ->
     the buildings Features of a map cell (None / raises when unavailable: the road keeps its default)."""
@@ -278,7 +328,9 @@ class RoadWidths:
         """store_dir: the walls' files (the map data release's own folder), or None (none kept on disk)."""
         self.cell_fn = cell_fn
         self.store_dir = store_dir
-        self.memo = {}                          # fid -> (carriageway, walk) or None (MEMO_MAX at most)
+        self.memo = {}                          # _memo_key -> (carriageway, walk) or None (MEMO_MAX at most)
+        self.caps = {}                          # _memo_key -> clearance_row or None (MEMO_MAX at most)
+        self.near = {}                          # a road's lon/lat bytes -> its cells (_near_walls; NEAR_MEMO at most)
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
         self.reframed = OrderedDict()           # (cell key, frame's cell key) -> (its Walls, segs in that frame)
@@ -287,11 +339,18 @@ class RoadWidths:
 
 
     def clear_memory(self):
-        """Drop the walls and widths kept in memory (budget.maybe_shed)."""
+        """Drop the walls and widths kept in memory (budget.maybe_shed). The reframed segments too: each entry is good
+        only for the Walls object it was made from (_near_walls: hit[0] is w), so with the walls gone none of them
+        could be used again, and they stayed, REFRAMED float64 arrays and the Walls (their files' mappings) they hold,
+        until as many new ones had pushed them out (a shed left "walls 0, combos 0, reframed 64", 2026-11-12)."""
         with self.lock:
             self.walls.clear()
             self.combos.clear()
+            self.reframed.clear()
             self.memo.clear()
+            self.caps.clear()
+            self.near.clear()
+
     def _walls(self, key):
         """The walls of the buildings in cell key, in a frame at the cell's centre."""
         with self.lock:
@@ -366,13 +425,24 @@ class RoadWidths:
         Each road read the buildings of the 8 cells around its middle's too: ~75 cells of buildings for one road
         tile's planning on a first visit to a Pennsylvania town, 2026-10-27; a width needs the walls within REACH."""
         # (the cells along it: every NEAR_STEP_M of it; its box's cells were a grid of them for a long rural road)
-        seg = np.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * np.cos(np.radians(ll[:-1, 1])))
-        s = np.r_[0.0, np.cumsum(seg)]
-        t = np.r_[np.arange(0.0, s[-1], NEAR_STEP_M), s[-1]] if s[-1] > 0 else np.zeros(1)
-        lat, lon = np.interp(t, s, ll[:, 1]), np.interp(t, s, ll[:, 0])
-        dlat = (NEAR_M + NEAR_STEP_M / 2) / 111320.0
-        dlon = dlat / max(0.05, float(np.cos(np.radians(np.mean(lat)))))
-        keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)
+        # Kept per geometry (its bytes: the same road asks for its width, its clearance and its frontage, in each
+        # process: 63,000 calls a first visit, ~0.25 ms of whole-array passes each, 2026-11-12)
+        nk = ll.tobytes() if isinstance(ll, np.ndarray) and ll.dtype == np.float64 else None
+        with self.lock:
+            keys = self.near.get(nk) if nk is not None else None
+        if keys is None:
+            seg = dnp.hypot(np.diff(ll[:, 1]) * 111320.0, np.diff(ll[:, 0]) * 111320.0 * dnp.cos(np.radians(ll[:-1, 1])))
+            s = np.r_[0.0, np.cumsum(seg)]
+            t = np.r_[np.arange(0.0, s[-1], NEAR_STEP_M), s[-1]] if s[-1] > 0 else np.zeros(1)
+            lat, lon = np.interp(t, s, ll[:, 1]), np.interp(t, s, ll[:, 0])
+            dlat = (NEAR_M + NEAR_STEP_M / 2) / 111320.0
+            dlon = dlat / max(0.05, float(dnp.cos(np.radians(np.mean(lat)))))
+            keys = sorted(mapcells.cells_near_points(lat, lon, dlat, dlon), key=str)
+            if nk is not None:
+                with self.lock:
+                    if len(self.near) >= NEAR_MEMO:
+                        self.near.clear()
+                    self.near[nk] = keys
         if len(keys) == 1:
             return self._walls(keys[0])
         self.prefetch(keys)
@@ -397,10 +467,11 @@ class RoadWidths:
                 if hit is not None and hit[0] is w:
                     sg = hit[1]
                 else:
-                    pts = sg.reshape(-1, 2)
-                    la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-                    sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                    # (through lon / lat at the ground in one pass: earthfast.reframe_segs, the conversions' maths)
+                    import fast
+                    fast.require(198, "reframe_segs")
+                    sg = fast._ef.reframe_segs(np.ascontiguousarray(sg, np.float64), f.origin, f.rot, frame.origin,
+                                               frame.rot)
                     with self.lock:
                         self.reframed[rk] = (w, sg)
                         while len(self.reframed) > REFRAMED:
@@ -413,12 +484,86 @@ class RoadWidths:
                 self.combos.popitem(last=False)
         return got
 
+    def measure_many(self, asks):
+        """The widths (get) and clearances (cap) of many roads at once, into the memos get and cap answer from: asks
+        [(fid, lonlat (k, 2), want)], want 1 the width, 2 the clearance, 3 both. The same numbers as one get / cap per
+        road (earthfast.road_near_cells, road_walls: a cell's roads in two calls without the interpreter lock, a road
+        near a cell's edge against each cell's own walls instead of a joint index of them; the walls took 13 % of a
+        cell's planning, 2026-11-13). A road it leaves out (odd coordinates, walls of another kind) is measured by get /
+        cap as before."""
+        import fast
+        fast.require(281, "road_walls")
+        todo = []
+        with self.lock:
+            for fid, ll, want in asks:
+                ll = np.asarray(ll, np.float64)
+                if ll.ndim != 2 or ll.shape[1] != 2 or len(ll) < 1:
+                    continue
+                mk = _memo_key(fid, ll)
+                w = (want & 1 if mk not in self.memo else 0) | (want & 2 if mk not in self.caps else 0)
+                if w:
+                    todo.append((mk, ll, w))
+        if not todo:
+            return
+        off = np.zeros(len(todo) + 1, np.int64)
+        np.cumsum([len(t[1]) for t in todo], out=off[1:])
+        flat = np.ascontiguousarray(np.concatenate([t[1] for t in todo]))
+        cells, coff, ok = fast._ef.road_near_cells(flat, off, float(NEAR_STEP_M),
+                                                   (NEAR_M + NEAR_STEP_M / 2) / 111320.0, mapcells.ZOOM)
+        uniq, inv = np.unique(cells, axis=0, return_inverse=True) if len(cells) else (cells, np.zeros(0, np.int64))
+        keys = [mapcells.CellKey(mapcells.ZOOM, int(x), int(y)) for x, y in uniq.tolist()]
+        self.prefetch(keys)
+        packed, usable = [], np.ones(len(keys), bool)
+        for i, k in enumerate(keys):
+            frame, walls = self._walls(k)
+            rs = walls.__dict__.get("_rs")
+            if walls.segs.dtype != np.float32 or walls.segs.ndim != 2:
+                usable[i] = False       # (walls of another kind: get / cap's own way)
+                packed.append(None)
+                continue
+            if rs is None:
+                rs = walls._rs = tuple(np.ascontiguousarray(a, t) for a, t in
+                                       ((walls.keys, np.int64), (walls.first, np.int64), (walls.counts, np.int64),
+                                        (walls.seg_of, np.int64), (walls.segs, np.float32)))
+            packed.append((np.ascontiguousarray(frame.origin, np.float64), np.ascontiguousarray(frame.rot, np.float64))
+                          + rs)
+        inv = np.asarray(inv, np.int64).ravel()
+        want = np.array([t[2] for t in todo], np.uint8)
+        for r in range(len(todo)):          # (left to get / cap: no cells, or a cell whose walls are of another kind)
+            a, b = int(coff[r]), int(coff[r + 1])
+            if not ok[r] or b <= a or not usable[inv[a:b]].all():
+                want[r] = 0
+        if not usable.all():                # (the road_walls cells: the usable ones, renumbered)
+            renum = np.cumsum(usable) - 1
+            inv = np.where(usable[inv], renum[inv], 0)
+            packed = [p for p in packed if p is not None]
+            if not packed:
+                return
+        row, near, w2w, has = fast._ef.road_walls(
+            flat, off, want, np.ascontiguousarray(inv, np.int64), np.ascontiguousarray(coff, np.int64), packed,
+            float(BUCKET), (STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE),
+            (CLEAR_STEP, CLEAR_END_SKIP, REACH, CLEAR_MIN_SAMPLES, CLEAR_Q, CLEAR_WALLED))
+        row, near, w2w, has = row.tolist(), near.tolist(), w2w.tolist(), has.tolist()
+        with self.lock:
+            if len(self.memo) >= MEMO_MAX:
+                self.memo.clear()
+            if len(self.caps) >= MEMO_MAX:
+                self.caps.clear()
+            for r, (mk, _ll, _w) in enumerate(todo):
+                w = int(want[r])
+                if w & 1:
+                    self.memo.setdefault(mk, split(row[r]) if row[r] == row[r] else None)
+                if w & 2:
+                    self.caps.setdefault(mk, (near[r] if near[r] == near[r] else None,
+                                              w2w[r] if w2w[r] == w2w[r] else None) if has[r] else None)
+
     def get(self, fid, lonlat):
         """(carriageway m, sidewalk m) of road fid (geometry lonlat (k, 2)), or None (defaults)."""
-        with self.lock:
-            if fid in self.memo:
-                return self.memo[fid]
         ll = np.asarray(lonlat, np.float64)
+        mk = _memo_key(fid, ll)
+        with self.lock:
+            if mk in self.memo:
+                return self.memo[mk]
         frame, walls = self._near_walls(ll)
         res = None
         if len(walls.segs):
@@ -428,5 +573,33 @@ class RoadWidths:
         with self.lock:
             if len(self.memo) >= MEMO_MAX:      # (unbounded, it grew for a whole session in every road worker)
                 self.memo.clear()
-            self.memo.setdefault(fid, res)
-            return self.memo[fid]
+            self.memo.setdefault(mk, res)
+            return self.memo[mk]
+
+    def cap(self, fid, lonlat):
+        """clearance_row of road fid (geometry lonlat (k, 2)): (the room between the walls along it a carriageway on its
+        line keeps clear of, its wall-to-wall width), each None for no limit; None without walls."""
+        ll = np.asarray(lonlat, np.float64)
+        mk = _memo_key(fid, ll)
+        with self.lock:
+            if mk in self.caps:
+                return self.caps[mk]
+        frame, walls = self._near_walls(ll)
+        res = None
+        if len(walls.segs):
+            e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+            res = clearance_row(np.c_[e, n], walls)
+        with self.lock:
+            if len(self.caps) >= MEMO_MAX:
+                self.caps.clear()
+            self.caps.setdefault(mk, res)
+            return self.caps[mk]
+
+    def frontage(self, lonlat, width):
+        """Side-specific frontage, within a village street's normal range."""
+        scale = np.array([111320. * dnp.cos(np.radians(lonlat[len(lonlat) // 2, 1])), 111320.])
+        if dnp.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
+            return None
+        frame, walls = self._near_walls(lonlat)
+        xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]
+        return verge_frontage(np.column_stack(xy), walls, width)

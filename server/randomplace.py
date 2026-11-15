@@ -16,6 +16,8 @@ import os
 import sys
 
 import numpy as np
+import dmath
+import dnp
 
 import mapcells
 import roads as roadsmod
@@ -56,7 +58,7 @@ def _seg_nearest(xy, p):
     ab = b - a
     L2 = np.maximum((ab * ab).sum(1), 1e-12)
     t = np.clip(((p - a) * ab).sum(1) / L2, 0.0, 1.0)
-    d = np.hypot(*(a + t[:, None] * ab - p).T)
+    d = dnp.hypot(*(a + t[:, None] * ab - p).T)
     k = int(d.argmin())
     return float(d[k]), k, float(t[k])
 
@@ -64,7 +66,7 @@ def _seg_nearest(xy, p):
 def road_spot(md, lat, lon, radius_m=SEARCH_M, classes=ROAD_CLASSES):
     """(lat, lon, class) of the nearest point within radius_m on a public road on the ground, kept END_CLEAR_M off the
     ends of its piece (a junction's middle is no place to start), or None."""
-    k = math.cos(math.radians(lat))
+    k = dmath.cos(math.radians(lat))
     dlat, dlon = radius_m / M_LAT, radius_m / (M_LAT * max(k, 0.05))
     best = None
     for key in mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
@@ -81,7 +83,7 @@ def road_spot(md, lat, lon, radius_m=SEARCH_M, classes=ROAD_CLASSES):
                 if len(ring) < 2:
                     continue
                 xy = np.stack([(ring[:, 0] - lon) * M_LAT * k, (ring[:, 1] - lat) * M_LAT], axis=1)
-                s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+                s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
                 d, j, t = _seg_nearest(xy, np.zeros(2))
                 if d > radius_m or (best is not None and d >= best[0]):
                     continue
@@ -103,8 +105,8 @@ def pick(md, rng=None):
         lat, lon, name = ts[int(rng.integers(len(ts)))]
         r = OFFSET_M * math.sqrt(float(rng.random()))           # (uniform over the disc)
         a = 2 * math.pi * float(rng.random())
-        la = lat + r * math.sin(a) / M_LAT
-        lo = lon + r * math.cos(a) / (M_LAT * max(math.cos(math.radians(lat)), 0.05))
+        la = lat + r * dmath.sin(a) / M_LAT
+        lo = lon + r * dmath.cos(a) / (M_LAT * max(dmath.cos(math.radians(lat)), 0.05))
         try:
             spot = road_spot(md, la, lo)
         except Exception as e:          # a cell that will not load (offline): another town

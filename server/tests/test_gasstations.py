@@ -1200,6 +1200,29 @@ class TileTest(unittest.TestCase):
         self.assertIn("b-roof", skip1)
         json.dumps(recs)                                        # plain JSON
 
+    def test_tile_sites_reports_tried(self):
+        # (the station finder, the user 2026-11-09: a listing the world built nothing for leaves the map) the stations
+        # the tile owns, each with whether it was laid out; the records the same as without the report
+        md = station_md()
+        md.all["places"] = feats("places", [
+            ("pla-1", (240.0, 100.0), {"basic_category": "gas_station", "name": "Speedway", "operating_status": "open"}),
+            ("pla-2", (60.0, 200.0), {"basic_category": "gas_station", "name": "Sunoco", "operating_status": "open"})],
+            mg.POINT)
+        tried = []
+        recs, skip = gs.tile_sites(FRAME, 0, 0, md, flat, tried=tried)
+        self.assertEqual((recs, skip), gs.tile_sites(FRAME, 0, 0, md, flat))
+        got = sorted((k, round(la, 4), round(lo, 4), laid) for k, la, lo, laid in tried)
+        want = []
+        for x, y, laid in ((240.0, 100.0, True), (60.0, 200.0, False)):
+            la, lo, _ = FRAME.enu_to_geodetic(x, y, 0.0)
+            want.append(("fuel", round(float(la), 4), round(float(lo), 4), laid))
+        self.assertEqual(got, sorted(want))
+
+    def test_tile_sites_tried_owned_only(self):
+        tried = []
+        gs.tile_sites(FRAME, 1, 0, station_md(), flat, tried=tried)    # (the station's pin is tile (0, 0)'s)
+        self.assertEqual(tried, [])
+
     def test_tile_sites_walk_cuts(self):
         md = station_md()
         cuts = []

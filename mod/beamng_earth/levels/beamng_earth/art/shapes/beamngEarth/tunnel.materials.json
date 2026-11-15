@@ -159,7 +159,8 @@
       {}
     ],
     "groundType": "ROCK",
-    "translucent": false
+    "translucent": false,
+    "doubleSided": true
   },
   "bne_tunnel_soil": {
     "name": "bne_tunnel_soil",
@@ -496,7 +497,8 @@
       {}
     ],
     "groundType": "CONCRETE",
-    "translucent": false
+    "translucent": false,
+    "doubleSided": true
   },
   "bne_rail_ballast_weedy": {
     "name": "bne_rail_ballast_weedy",
@@ -655,6 +657,57 @@
       {}
     ],
     "groundType": "GRASS",
+    "translucent": false
+  },
+  "bne_rail_collider": {
+    "name": "bne_rail_collider",
+    "mapTo": "bne_rail_collider",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "01993bde-36b1-597a-96c6-6740241338a1",
+    "Stages": [
+      {
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.55,
+        "baseColorFactor": [
+          0.27,
+          0.19,
+          0.14,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
+  },
+  "bne_portal_collar": {
+    "name": "bne_portal_collar",
+    "mapTo": "bne_portal_collar",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1b8b0786-fcf3-5581-b6eb-a989a3e65ca7",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png",
+        "normalMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1.0,
+          0.99,
+          0.96,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "CONCRETE",
     "translucent": false
   }
 }

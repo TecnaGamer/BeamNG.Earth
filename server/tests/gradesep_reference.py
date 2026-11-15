@@ -135,11 +135,17 @@ def underpasses(md, frame, lines, kinds, groups):
     return keep
 
 
+def _row_pieces(feats, i):
+    """gradesep._row's pieces as they were (none for a feature that is no crossing line)."""
+    kh = G._kind_half(feats, i)
+    return [] if kh is None else pieces(feats, i, kh[0])
+
+
 def spans(md, key, feats):
     """gradesep._spans as it was."""
     if feats is None or not len(feats) or "subtype" not in feats.attrs:
         return {}
-    if not G.ON and not any(p[0] in (2, 3) for i in range(len(feats)) for p in (G._row(feats, i)[2] or ())):
+    if not G.ON and not any(p[0] in (2, 3) for i in range(len(feats)) for p in _row_pieces(feats, i)):
         return {}
     import revisit
     try:

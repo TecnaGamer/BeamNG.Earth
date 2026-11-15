@@ -23,6 +23,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy as g  # noqa: E402
 import imagery  # noqa: E402
+import missindex  # noqa: E402
 import netfetch  # noqa: E402
 
 LAT0, LON0 = 36.5785, -118.2923
@@ -318,8 +319,9 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(set(used), {"eox2023"})
         stats = im2.stats_snapshot()
         self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
-        markers = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        indexes = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f == missindex.NAME]
+        self.assertTrue(indexes)
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")], "no marker files")
 
     def test_unreachable_source_falls_back(self):
         def serve(name, z, x, y):
@@ -386,29 +388,43 @@ class ChainTest(unittest.TestCase):
             return (400, b"bad request") if name == "usgs" else self.tile(name, z, x, y)
         _, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
         self.assertEqual(set(used), {"eox2023"})
-        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")])
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")
+                          or f == missindex.NAME])
 
     def test_miss_marker_ttl(self):
-        """A .404 marker is valid for the host's miss_ttl (90 days): older ones are asked again. An
-        old-style marker (an empty file from before TTLs) works the same way."""
+        """A remembered 404 is valid for the host's miss_ttl (90 days): older ones are asked again (and remembered
+        anew). An old-style marker file works the same way."""
         def serve(name, z, x, y):
             return (404, b"") if name == "usgs" else self.tile(name, z, x, y)
         im = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im)
-        markers = [os.path.join(d, f) for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs"))
-                   for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        cols = [d for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) if missindex.NAME in fs]
+        self.assertTrue(cols)
+        misses = [missindex.marker(d, y) for d in cols for y in missindex.column(d)]
+        self.assertTrue(misses)
         n = len(im.requests)
         im2 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im2)
-        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh markers
+        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh misses
         old = time.time() - netfetch.POLICIES["basemap.nationalmap.gov"].miss_ttl - 60
-        for m in markers:
-            os.utime(m, (old, old))
+        missindex.record(misses, t=old)
         im3 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im3)
         self.assertTrue([r for r in im3.requests if r[0] == "usgs"])            # expired: asked again
-        self.assertTrue(all(time.time() - os.path.getmtime(m) < 60 for m in markers if os.path.exists(m)))
+        self.assertTrue(all(time.time() - missindex.when(m) < 60 for m in misses if missindex.known(m)))
+        # old marker files instead of the index lines: the same
+        for d in cols:
+            os.remove(os.path.join(d, missindex.NAME))
+        for m in misses:
+            open(m, "wb").close()
+        im4 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im4)
+        self.assertEqual(sum(1 for r in im4.requests if r[0] == "usgs"), 0)     # fresh old markers
+        for m in misses:
+            os.utime(m, (old, old))
+        im5 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im5)
+        self.assertTrue([r for r in im5.requests if r[0] == "usgs"])            # expired: asked again
         self.assertTrue(n)
 
     def test_prefetch_dropped_then_fetched_on_demand(self):
@@ -552,8 +568,8 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(imagery.Imagery(self.tmp.name, imagery.BASE_CHAIN).attribution(),
                          "Imagery: State of Maryland, MD iMAP / DoIT six-inch imagery; "
                          "USDA NAIP (public domain); "
-                         "USDA NAIP via USGS The National Map (public domain); "
-                         "USGS The National Map (public domain); " + eox
+                         "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); "
+                         "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain); " + eox
                          + "2023), CC BY-NC-SA 4.0; " + eox + "2016 & 2017), CC BY 4.0")
         self.assertNotIn("Sentinel-2 cloudless", imagery.ATTRIBUTION)
         for n in imagery.DEFAULT_CHAIN:                     # the overlay's font is ASCII only
@@ -604,7 +620,7 @@ class ExportImageryTest(unittest.TestCase):
     def child_colour(x, y):
         return (50 + x % 7 * 20, 60 + y % 5 * 30, 210)
 
-    def make(self, black=False):
+    def make(self, black=False, xyz_status=200):
         def serve_export(z, x, y, size):
             n = size // 256
             a = np.zeros((size, size, 3), np.uint8)
@@ -619,6 +635,8 @@ class ExportImageryTest(unittest.TestCase):
             return 200, b.getvalue()
 
         def serve_xyz(name, z, x, y):
+            if xyz_status != 200 and z > 12:        # (its coverage probes, z10 / z12, say covered)
+                return xyz_status, b""
             a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
             a[::2, ::2] += 6
             return 200, png(a)
@@ -626,6 +644,24 @@ class ExportImageryTest(unittest.TestCase):
         net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests),
                                sleep=lambda s: None, policies=FAST)
         return imagery.Imagery(self.tmp.name, ("naip", "usgs"), fetcher=net, tone=0.0)
+
+    def test_no_colour_match_to_a_reference_with_no_data(self):
+        # the lazy source's colours are matched to the rest of the chain's; where that has no data the reference is
+        # the fallback colour, and matching to it pulled every texel toward it (the roofs' photo in Maryland: md6in
+        # then Virginia's blank service). Then the lazy source as served
+        im = self.make(xyz_status=404)
+        im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertEqual(set(used), {"naip"})
+        raw, _ = im._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        self.assertTrue((rgb == raw).all())
+        self.tmp.cleanup()              # (a cache of its own: the first one remembers the reference's misses)
+        self.tmp = tempfile.TemporaryDirectory()
+        im2 = self.make()               # (a reference with data: matched, as before)
+        im2.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        rgb2, _ = im2.render(self.frame, 0.0, 0.0, 256.0, 256)
+        raw2, _ = im2._render(imagery.EnuSquare(self.frame, 0.0, 0.0, 256.0), 256)
+        self.assertFalse((rgb2 == raw2).all())
 
     def wait(self, im):
         for _ in range(200):
@@ -666,6 +702,62 @@ class ExportImageryTest(unittest.TestCase):
         im.disk.read = lambda path: reads.append(path) or orig(path)
         time.sleep(0.3)
         self.assertEqual(reads, [], "the warm thread rests")
+
+    def test_far_warm_fetches_a_far_squares_best_photos(self):
+        # a far tile larger than its level's (farpvs.UP_ON): its NAIP photos after the near list, its callback once in
+        im = self.make()
+        rgb, used = im.render(self.frame, 2000.0, 2000.0, 512.0, 512)
+        self.assertEqual(set(used), {"usgs"})               # (a render never fetches NAIP)
+        self.wait(im)
+        done = threading.Event()
+        im.far_warm("t", 2000.0, self.frame, 2000.0, 2000.0, 512.0, 512, done.set)
+        self.assertTrue(done.wait(10.0), "its callback once its photos are in")
+        self.assertTrue(all(im._warm_done(k) for k in im.lazy_keys(self.frame, 2000.0, 2000.0, 512.0, 512)))
+        rgb, used = im.render(self.frame, 2000.0, 2000.0, 512.0, 512)
+        self.assertEqual(set(used), {"naip"})               # the best photos now
+        self.assertEqual(im._far_warm, {})
+
+    def test_far_warm_keeps_half_the_budget(self):
+        im = self.make()
+        im.fetcher.budget_share = lambda url: 0.6           # (past FAR_BUDGET_SHARE today)
+        done = threading.Event()
+        im.far_warm("t", 0.0, self.frame, 0.0, 0.0, 512.0, 512, done.set)
+        for _ in range(200):
+            with im._warm_cv:
+                if not im._far_warm:
+                    break
+            time.sleep(0.02)
+        self.assertEqual(im._far_warm, {})
+        self.assertFalse([r for r in self.requests if r[0] == "naip"], "the rest of the budget for the near photos")
+        self.assertFalse(done.is_set(), "nothing fetched: nothing to render again")
+
+    def test_sharp_zoom_counts_the_lazy_sources(self):
+        im = self.make()
+        z = im.sharp_zoom(*self.frame.enu_to_geodetic(0.0, 0.0, 0.0)[:2])
+        for _ in range(100):                                # (its probes fetched meanwhile)
+            z = im.sharp_zoom(*self.frame.enu_to_geodetic(0.0, 0.0, 0.0)[:2])
+            if z == 17:
+                break
+            time.sleep(0.05)
+        self.assertEqual(z, 17)                             # NAIP's, not USGS's 16
+
+    def test_sharp_zoom_reach_skips_unreachable_regional_probes(self):
+        # a far tile that can never come to a regional tile cache's zooms (REGIONAL_XYZ_MIN_ZOOM) asks no coverage probe
+        # of it: inside its box the answer is its zoom, as a probe would say where it covers; a reachable one probes
+        reqs = []
+
+        def serve(name, z, x, y):
+            reqs.append((name, z))
+            return 200, png(background(z, x, y))
+        with tempfile.TemporaryDirectory() as d:
+            im = FakeNet(d, serve, chain=("czechia", "eox2023"), tone=0.0)
+            lat, lon = 50.0, 15.0
+            self.assertEqual(im.sharp_zoom(lat, lon, reach=14), 17)
+            self.assertEqual(im.sharp_zoom(43.0, 20.0, reach=14), 14)        # (outside its box: EOX's)
+            self.assertEqual(reqs, [])
+            im.sharp_zoom(lat, lon, reach=17)
+            im.pool.shutdown(wait=True)
+            self.assertEqual(reqs, [("czechia", 12)])                         # (the probe, for the reachable)
 
     def test_lazy_then_split_tiles(self):
         im = self.make()
@@ -808,6 +900,30 @@ class ExportImageryTest(unittest.TestCase):
         same = imagery.match_colours(raw, raw, 10)
         self.assertTrue((same == raw).all(), "matching an image to itself changes nothing")
 
+    def test_fetch_lazy_fetches_what_a_render_would_skip(self):
+        # the roofs' photo (buildings.roof_photo online): a render reads a lazy tile from disk only, so its lazy tiles
+        # are fetched first, in the calling thread, as demand requests; once each, then nothing more to fetch
+        im = self.make()
+        self.assertFalse(im.lazy_ready(self.frame, 0.0, 0.0, 256.0, 256))
+        kinds = []
+        get = im.fetcher.get
+        im.fetcher.get = lambda url, kind="demand", **kw: (kinds.append(kind) if "bbox=" in url else None) or \
+            get(url, kind=kind, **kw)     # (the exports' kinds: not the coverage probes' background requests)
+        n = im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertGreater(n, 0)
+        self.assertTrue(kinds and set(kinds) == {"demand"}, kinds)
+        self.assertTrue(im.lazy_ready(self.frame, 0.0, 0.0, 256.0, 256))
+        rgb, used = im.render(self.frame, 0.0, 0.0, 256.0, 256)
+        self.assertEqual(set(used), {"naip"})
+        asked = len(self.requests)
+        self.assertEqual(im.fetch_lazy(self.frame, 0.0, 0.0, 256.0, 256), 0, "on disk: nothing again")
+        self.assertEqual(len(self.requests), asked)
+        kinds.clear()
+        with im.urgent():               # (a tile round the car: urgent_photos)
+            im.fetch_lazy(self.frame, 3000.0, 0.0, 256.0, 256)
+        self.assertTrue(kinds and set(kinds) == {"urgent"})
+        self.assertEqual(getattr(im._local, "kind", "demand"), "demand", "the thread's kind put back")
+
     def test_lazy_ready(self):
         im = self.make()
         self.assertFalse(im.lazy_ready(self.frame, 0.0, 0.0, 256.0, 256))
@@ -844,6 +960,110 @@ class GutterTest(unittest.TestCase):
                 self.assertAlmostEqual(u * size + x0, 1000.0 + f * 64.0, places=9)
             self.assertGreater(float(imagery.gutter_uv(0.0, px)), 0.5 / px)        # off the wrap seam
             self.assertLess(float(imagery.gutter_uv(1.0, px)), 1 - 0.5 / px)
+
+    def _serve_all(self, name, z, x, y):
+        return 200, png(background(z, x, y))
+
+    def _with_gutter_fetch(self, on, fn):
+        old = imagery.GUTTER_FETCH
+        imagery.GUTTER_FETCH = on
+        try:
+            return fn()
+        finally:
+            imagery.GUTTER_FETCH = old
+
+    def test_merc_tile_asks_only_its_own_photo_tile(self):
+        # a global far tile's footprint ends on photo tile edges: its gutter asks for no photo of its own (before: the
+        # 8 tiles round it); the footprint's texels are the same, the gutter is its edge clamped
+        z, x, y = 10, 300, 400
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            new = FakeNet(d1, self._serve_all, chain=("eox2023",), tone=0.0)
+            old = FakeNet(d2, self._serve_all, chain=("eox2023",), tone=0.0)
+            for px in (128, 256, 512):
+                gp = imagery.gutter(px)
+                new.requests.clear()
+                old.requests.clear()
+                a, used = new.render_merc(z, x, y, px)
+                b, _ = self._with_gutter_fetch(True, lambda: old.render_merc(z, x, y, px))
+                zs = {r[1] for r in new.requests}
+                self.assertEqual(len(zs), 1)
+                dz = zs.pop() - z
+                k = 2 ** max(dz, 0)
+                want = sorted((x * k + i, y * k + j) for i in range(k) for j in range(k)) if dz >= 0 else \
+                    [(x >> -dz, y >> -dz)]
+                self.assertEqual(sorted(r[2:] for r in new.requests), want)
+                self.assertGreater(len(old.requests), len(new.requests))
+                np.testing.assert_array_equal(a[gp:-gp, gp:-gp], b[gp:-gp, gp:-gp])
+                if dz >= 0:     # (at 128 px the photo tile is its parent's: the gutter's inner sides are in it)
+                    np.testing.assert_array_equal(a[:gp, gp:-gp], np.broadcast_to(a[gp, gp:-gp],
+                                                                                 (gp, px - 2 * gp, 3)))
+                    np.testing.assert_array_equal(a[gp:-gp, -gp:], np.broadcast_to(a[gp:-gp, -gp - 1:-gp],
+                                                                                    (px - 2 * gp, gp, 3)))
+                self.assertEqual(set(used), {"eox2023"})
+                # neighbours on hand (fetched before): the gutter takes them, as before
+                new.tiles([r[1:] and (imagery.SOURCES[r[0]],) + r[1:] for r in old.requests])
+                new.requests.clear()
+                c, _ = new.render_merc(z, x, y, px)
+                self.assertEqual(new.requests, [])
+                np.testing.assert_array_equal(c, b)
+
+    def test_enu_gutter_across_a_tile_edge(self):
+        # an anchor tile whose gutter crosses a photo tile's edge but whose footprint does not: the prefetch, the
+        # fetch and the render ask for the footprint's tiles alone, and its texels are those of the old render
+        f = g.EnuFrame(LAT0, LON0)
+        z = 16
+        tx = int((LON0 + 180.0) / 360.0 * 2 ** z) + 1
+        e_b, _, _ = f.geodetic_to_enu(LAT0, tx * 360.0 / 2 ** z - 180.0, 0.0)
+        px = 256
+        sq = imagery.gutter_square(float(e_b) + 1.0, -32.0, 64.0, px)
+        gp = imagery.gutter(px)
+        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+            new = FakeNet(d1, self._serve_all, chain=("usgs",), tone=0.0)
+            old = FakeNet(d2, self._serve_all, chain=("usgs",), tone=0.0)
+            for _ in range(3):              # (the coverage probes first)
+                new.prefetch(f, *sq, px, gutter=True)
+                new.pool.shutdown(wait=True)
+                new.pool = futures.ThreadPoolExecutor(4)
+            pre = sorted(r for r in new.requests if r[1] == z)
+            self.assertTrue(pre and all(r[2] >= tx for r in pre), pre)
+            n = len(new.requests)
+            a, _ = new.render(f, *sq, px, gutter=True)
+            self.assertEqual(new.requests[n:], [])          # nothing the prefetch did not ask
+            b, _ = self._with_gutter_fetch(True, lambda: old.render(f, *sq, px, gutter=True))
+            self.assertTrue(any(r[1] == z and r[2] < tx for r in old.requests))
+            np.testing.assert_array_equal(a[gp:-gp, gp:-gp], b[gp:-gp, gp:-gp])
+            self.assertTrue(new.fetch_needed(f, *sq, px, gutter=True))
+            self.assertEqual(new.requests[n:], [])
+
+    def test_prefetch_goes_past_an_out_of_area_regional_source(self):
+        # a regional tile cache first in the chain (Connecticut's from z16) whose box misses the square: the prefetch
+        # carries on to the source render draws from (before: it ended there, no z16+ texture was ever prefetched)
+        f = g.EnuFrame(LAT0, LON0)
+        old = imagery.PREFETCH_STOP_REGIONAL
+        imagery.PREFETCH_STOP_REGIONAL = False      # (BNGE_PREFETCH_PAST_REGIONAL=1)
+        self.addCleanup(setattr, imagery, "PREFETCH_STOP_REGIONAL", old)
+        with tempfile.TemporaryDirectory() as d:
+            im = FakeNet(d, self._serve_all, chain=("czechia", "usgs"), tone=0.0)
+            sq = imagery.gutter_square(0.0, 0.0, 256.0, 256)
+            for _ in range(3):              # (the coverage probes first)
+                im.prefetch(f, *sq, 256, soon=True, gutter=True)
+                im.pool.shutdown(wait=True)
+                im.pool = futures.ThreadPoolExecutor(4)
+            self.assertTrue([r for r in im.requests if r[0] == "usgs" and r[1] == 16])
+            self.assertFalse([r for r in im.requests if r[0] == "czechia"])
+
+    def test_one_hosts_queue_never_holds_anothers(self):
+        # imagery's fetch threads are per photo host: a host whose tiles wait (its rate) keeps no other's queued
+        pools = imagery.HostPools(1, "t")
+        pools._one = False                  # (BNGE_IMG_HOST_POOLS=1)
+        gate = threading.Event()
+        try:
+            for _ in range(3):
+                pools.of("ign").submit(gate.wait, 5.0)
+            self.assertEqual(pools.of("eox").submit(lambda: 7).result(timeout=2.0), 7)
+        finally:
+            gate.set()
+            pools.shutdown(wait=True)
 
     def test_shape_uv_inset(self):
         import farfield as ff
@@ -895,6 +1115,241 @@ def bc1_decode(data, w, h):
     return img[:h, :w]
 
 
+class LazyStateTest(unittest.TestCase):
+    """imagery.lazy_state / fetch_lazy (the roofs' photo, buildings.roof_photo_final): each lazy tile decided by itself
+    (on disk, or known to hold nothing), not by its export parent's last child; an evicted tile and an expired miss
+    asked again; the expiry of the "nothing there" answers that decide."""
+    LAT, LON = 39.2834, -76.5934
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.frame = g.EnuFrame(self.LAT, self.LON)
+        missindex.reset_memo()
+
+    def tearDown(self):
+        missindex.reset_memo()
+        self.tmp.cleanup()
+
+    def make(self, usda_black=lambda i, j: False, naip_black=lambda i, j: False):
+        """naipusda then naip (both lazy exports, 4 x 4 tiles a parent) then usgs; usda_black(i, j) / naip_black: the
+        parent's child (i, j) black (no flights there: a miss)."""
+        def serve_export(z, x, y, size, name):
+            n = size // 256
+            a = np.zeros((size, size, 3), np.uint8) + np.array((90, 120, 60) if name == "naip" else (60, 90, 120),
+                                                               np.uint8)
+            a[::2, ::2] += 3
+            black = usda_black if name == "naipusda" else naip_black
+            for j in range(n):
+                for i in range(n):
+                    if black(i, j):
+                        a[j * 256:(j + 1) * 256, i * 256:(i + 1) * 256] = 0
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST)
+        return imagery.Imagery(self.tmp.name, ("naipusda", "naip", "usgs"), fetcher=net, tone=0.0)
+
+    def exports(self, name=None):
+        return [r for r in self.requests if r[1] == 15 and (name is None or r[0] == name)]
+
+    def square(self):
+        return self.frame, 0.0, 0.0, 256.0, 256
+
+    def test_mixed_children_decided_one_by_one(self):
+        # USDA's parents hold data in their east half only, the last child among them: by the last child the parent
+        # looked done and NAIP was never asked for the west half; per tile, NAIP is asked where USDA has nothing
+        im = self.make(usda_black=lambda i, j: i < 2)
+        im.fetch_lazy(*self.square())
+        self.assertTrue(self.exports("naipusda"))
+        kids = [k for s, z, k in im._lazy_children(*self.square()) if s.name == "naipusda"][0]
+        if any(tx % 4 < 2 for tx, ty in kids):
+            self.assertTrue(self.exports("naip"), "NAIP for USDA's empty tiles")
+        resolved, expiry, todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved)
+        self.assertEqual(todo, [])
+        _, used = im.render(*self.square())
+        self.assertNotIn("usgs", {k for k, v in used.items() if v > 0.01 * 256 * 256})
+
+    def test_nothing_there_decides_with_its_expiry(self):
+        im = self.make(usda_black=lambda i, j: True, naip_black=lambda i, j: True)
+        t0 = time.time()
+        im.fetch_lazy(*self.square())
+        resolved, expiry, todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved, todo)
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        self.assertIsNotNone(expiry)
+        self.assertAlmostEqual(expiry, t0 + ttl, delta=120)
+        n = len(self.requests)
+        self.assertEqual(im.fetch_lazy(*self.square()), 0, "decided: nothing asked again")
+        self.assertEqual(len(self.requests), n)
+
+    def test_an_evicted_tile_is_fetched_again(self):
+        im = self.make()
+        im.fetch_lazy(*self.square())
+        self.assertTrue(im.lazy_state(*self.square())[0])
+        src, z, kids = im._lazy_children(*self.square())[0]
+        tx, ty = kids[0]
+        last = (1 << src.export) - 1
+        if (tx | last, ty | last) == (tx, ty):
+            tx, ty = kids[-1]
+        os.remove(im._paths(src, z, tx, ty)[0])         # (the cache cap: one tile, not its parent's last)
+        resolved, _e, todo = im.lazy_state(*self.square())
+        self.assertFalse(resolved)
+        self.assertEqual(todo, [(src, z, tx, ty)])
+        n = len(self.exports())
+        self.assertEqual(im.fetch_lazy(*self.square()), 1)
+        self.assertEqual(len(self.exports()), n + 1)
+        self.assertTrue(os.path.exists(im._paths(src, z, tx, ty)[0]))
+        self.assertTrue(im.lazy_state(*self.square())[0])
+
+    def test_an_expired_miss_reused_while_its_host_is_down_bounds_a_later_source_s_photo(self):
+        # (review of 172d8032: an expired preferred miss reused while its host could not be asked decided with no expiry,
+        # so a later source's photo was kept for good and the preferred source's return never seen)
+        from unittest import mock
+        import buildings
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
+        missindex.reset_memo()
+        br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
+        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        t0 = time.time()
+        st = im._child_state(src, z, *kids[0])
+        self.assertEqual(st[0], "none")
+        self.assertAlmostEqual(st[1], t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        im.fetch_lazy(*self.square())
+        self.assertFalse(self.exports("naipusda"), "not asked while down")
+        self.assertTrue(self.exports("naip"), "the later source fills in")
+        resolved, expiry, _todo = im.lazy_state(*self.square())
+        self.assertTrue(resolved)
+        self.assertAlmostEqual(expiry, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        with mock.patch.object(buildings, "_photo_sources", return_value=("naipusda", "naip")), \
+                mock.patch.object(buildings, "_photo_reader_live", return_value=im):
+            ph, final, until = buildings.roof_photo_final(self.frame, 8.0, 8.0, 248.0, 248.0, self.tmp.name, True)
+        self.assertIsNotNone(ph, "the later source's photo")
+        self.assertTrue(final)
+        self.assertIsNotNone(until, "kept only until the preferred source is asked again")
+        self.assertLessEqual(until, time.time() + imagery.UNAVAILABLE_RETRY_S + 60)
+
+    def test_map_tile_under_a_down_host_s_expired_miss_is_a_stand_in_until_it_recovers(self):
+        # (review of a9a978a9: the map tile from a later source under an expiring "nothing there" was written as the
+        # tile for good, and the mod never asked for it again)
+        import maptiles
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        self.assertEqual(src.name, "naipusda")
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=time.time() - ttl - 3600)
+        missindex.reset_memo()
+        br = im.fetcher.host("apps.geo.fpac.usda.gov").breaker
+        br.state, br.open_until = "open", im.fetcher.clock() + 600       # (USDA's host down: its breaker open)
+        t0 = time.time()
+        tx, ty = kids[0]
+        mt = maptiles.MapTiles(im)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual(name, "naip", "the later source fills in")
+        self.assertFalse(final, "a stand-in: the preferred source may come back")
+        self.assertAlmostEqual(until, t0 + imagery.UNAVAILABLE_RETRY_S, delta=60)
+        self.assertFalse(self.exports("naipusda"), "not asked while down")
+        br.state, br.open_until = "closed", 0.0                        # (the host is back)
+        _, name, final, until = mt.tile(z, tx, ty)
+        self.assertEqual((name, final, until), ("naipusda", True, None), "asked again: its photo is the tile")
+        self.assertTrue(self.exports("naipusda"))
+
+    def test_an_expired_outside_probe_is_asked_again_and_recovered_coverage_used(self):
+        # (review of 6cbcfd2b: a probe's 404 kept in memory as None for the process's life, and "outside" renewed with
+        # a fresh deadline at every look; now its own deadline, and once past it the probe is fetched again)
+        state = {"usgs": 404, "now": time.time()}
+
+        def serve_export(z, x, y, size, name):
+            a = np.zeros((size, size, 3), np.uint8) + np.array((90, 120, 60), np.uint8)
+            a[::2, ::2] += 3
+            b = io.BytesIO()
+            Image.fromarray(a).save(b, "JPEG", quality=95)
+            return 200, b.getvalue()
+
+        def serve_xyz(name, z, x, y):
+            if state["usgs"] != 200:
+                return state["usgs"], b""
+            a = np.zeros((256, 256, 3), np.uint8) + np.array((200, 30, 30), np.uint8)
+            a[::2, ::2] += 6
+            return 200, png(a)
+        self.requests = []
+        net = netfetch.Fetcher(transport=ExportTransport(serve_export, serve_xyz, self.requests, by_name=True),
+                               sleep=lambda s: None, policies=FAST, wall=lambda: state["now"])
+        im = imagery.Imagery(self.tmp.name, ("naip", "usgs"), fetcher=net, tone=0.0)
+
+        def settle():
+            for _ in range(200):
+                with im._lock:
+                    if not im._inflight:
+                        return
+                time.sleep(0.02)
+        src, z, kids = im._lazy_children(*self.square())[0]
+        tx, ty = kids[0]
+        for _ in range(4):                      # (the probes fetched: z10, then z12)
+            st = im._child_state(src, z, tx, ty)
+            settle()
+        st = im._child_state(src, z, tx, ty)
+        self.assertEqual(st[0], "none", "the probe says outside")
+        ttl = FAST["basemap.nationalmap.gov"].miss_ttl
+        self.assertAlmostEqual(st[1], time.time() + ttl, delta=120, msg="the probe's own deadline")
+        first = st[1]
+        state["now"] += ttl / 2
+        self.assertEqual(im._child_state(src, z, tx, ty), ("none", first), "not renewed at a later look")
+        probes = len([r for r in self.requests if r[0] == "usgs"])
+        state["usgs"], state["now"] = 200, first + 10       # (coverage there now, and the 404 expired)
+        st = im._child_state(src, z, tx, ty)
+        self.assertEqual(st[0], "todo", "undecided while the probe is asked again")
+        for _ in range(4):
+            settle()
+            im._child_state(src, z, tx, ty)
+        settle()
+        self.assertGreater(len([r for r in self.requests if r[0] == "usgs"]), probes, "the probe asked again")
+        self.assertEqual(im._child_state(src, z, tx, ty)[0], "todo", "covered: the tile itself to fetch")
+        im.fetch_lazy(*self.square())
+        self.assertTrue([r for r in self.requests if r[0] == "naip"], "the recovered source asked")
+        self.assertEqual(im._child_state(src, z, tx, ty), ("data", None))
+        _, used = im.render(*self.square())
+        self.assertIn("naip", used)
+
+    def test_an_expired_miss_is_asked_again(self):
+        im = self.make()
+        src, z, kids = im._lazy_children(*self.square())[0]
+        ttl = FAST["apps.geo.fpac.usda.gov"].miss_ttl
+        old = time.time() - ttl - 3600
+        missindex.record([im._paths(src, z, tx, ty)[1] for tx, ty in kids], t=old)
+        missindex.reset_memo()
+        resolved, _e, todo = im.lazy_state(*self.square())
+        self.assertFalse(resolved, "an expired miss decides nothing")
+        self.assertEqual({k[0].name for k in todo}, {"naipusda"})
+        im.fetch_lazy(*self.square())
+        self.assertTrue(self.exports("naipusda"), "asked again")
+        self.assertTrue(all(os.path.exists(im._paths(src, z, tx, ty)[0]) for tx, ty in kids), "its photo now")
+        self.assertTrue(im.lazy_state(*self.square())[0])
+        # (a miss within its time decides, with its expiry)
+        im2_dir = tempfile.TemporaryDirectory()
+        try:
+            self.tmp, keep = im2_dir, self.tmp
+            im2 = self.make()
+            recent = time.time() - 3600
+            missindex.record([im2._paths(src, z, tx, ty)[1] for tx, ty in kids], t=recent)
+            missindex.reset_memo()
+            st = [im2._child_state(src, z, tx, ty) for tx, ty in kids]
+            self.assertTrue(all(s == "none" and abs(e - (recent + ttl)) < 2 for s, e in st), st)
+        finally:
+            self.tmp = keep
+            im2_dir.cleanup()
+
+
 class DdsTest(unittest.TestCase):
     def test_mips_linear_light(self):
         # a black / white checker averages to the linear mid grey (186 in sRGB), not 128
@@ -925,10 +1380,14 @@ class DdsTest(unittest.TestCase):
             self.assertTrue(caps & imagery.DDSCAPS_MIPMAP and caps & imagery.DDSCAPS_COMPLEX)
             with Image.open(path) as im:                                    # a standard reader accepts it
                 self.assertEqual(im.size, (n, n))
-            # level k is the BC1 encoding of mip_arrays' level k (linear light, sharpened) ...
+            # level k is the BC1 encoding (ISPC's, earthfast bc1fast.rs) of mip_arrays' level k (linear light,
+            # sharpened; in integers: within one sRGB step of it) ...
             off = imagery.DDS_HEADER
-            for k, (sz, lv) in enumerate(zip(sizes, imagery.mip_arrays(rgb))):
-                self.assertEqual(data[off:off + sz], imagery.fast._ef.bc1_encode(np.ascontiguousarray(lv)), k)
+            ef = imagery.fast._ef
+            ints = [rgb] + list(ef.mip_levels_fast(rgb, imagery._TO_LIN, float(imagery.MIP_SHARPEN)))
+            for k, (sz, lv, iv) in enumerate(zip(sizes, imagery.mip_arrays(rgb), ints)):
+                self.assertLessEqual(int(np.abs(lv.astype(int) - iv.astype(int)).max()), 1, k)
+                self.assertEqual(data[off:off + sz], ef.bc1_encode_fast(np.ascontiguousarray(iv)), k)
                 off += sz
             # ... and decodes to the image (row 0 first, as the source image)
             got = bc1_decode(data[imagery.DDS_HEADER:imagery.DDS_HEADER + sizes[0]], n, n)
@@ -941,6 +1400,27 @@ class DdsTest(unittest.TestCase):
         for px, want in ((512, 128 + sum(max(1, (512 >> k) // 4) ** 2 * 8 for k in range(10))),
                          (256, 128 + sum(max(1, (256 >> k) // 4) ** 2 * 8 for k in range(9)))):
             self.assertEqual(len(imagery.encode_dds(np.zeros((px, px, 3), np.uint8))), want)
+
+
+class PictureDdsTest(unittest.TestCase):
+    """A drawn sign face goes out as a DDS (never a PNG the engine's texture cooker takes at run time: it deadlocked the
+    game), its sides stretched up to powers of two."""
+
+    def test_any_size_to_a_power_of_two_dds(self):
+        import io
+        import tempfile
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 70), (10, 60, 160)).save(buf, format="PNG")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "face.color.dds")
+            n = imagery.write_picture_dds(p, buf.getvalue())
+            with open(p, "rb") as f:
+                data = f.read()
+        self.assertEqual(n, len(data))
+        w, h, mips, fourcc, _ = imagery.read_dds_info(data)
+        self.assertEqual((w, h, fourcc), (512, 128, b"DXT1"))
+        self.assertGreater(mips, 1)
 
 
 class NetworkImageryTest(unittest.TestCase):
@@ -967,7 +1447,9 @@ class NetworkImageryTest(unittest.TestCase):
 
     def test_open_ocean(self):
         rgb, used = self.render(30.0, -140.0, size=4096.0)
-        self.assertEqual(set(used), {"eox2016"})       # uniform deep blue from both EOX layers
+        # EOX's open-sea blue: EOX 2023 serves it on a fresh cache (its sea is the picture, not a blank: e2ff61f5); a
+        # cache holding an older run's blank verdict for its tiles takes EOX 2016's, the same blue
+        self.assertTrue(used and set(used) <= {"eox2023", "eox2016"}, used)
         self.assertLess(rgb.reshape(-1, 3).std(0).max(), 2)
         self.assertGreater(int(rgb[..., 2].mean()), int(rgb[..., 0].mean()))
 

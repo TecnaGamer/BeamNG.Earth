@@ -8,6 +8,7 @@ import math
 import os
 
 import numpy as np
+import dmath
 
 import house_regions
 
@@ -63,7 +64,8 @@ def eligible(spec, attrs):
         return False
     if spec.shop or spec.steeple or spec.deck or (attrs.get("min_height") or 0) > .5:
         return False
-    if str(attrs.get("roof_shape") or "").lower() not in {"", "gabled", "hipped", "half-hipped", "pyramidal", "flat"}:
+    if str(attrs.get("roof_shape") or "").lower().replace("_", "-") not in {"", "gabled", "hipped", "half-hipped",
+                                                                          "pyramidal", "flat"}:
         return False
     if str(attrs.get("facade_material") or "").lower() in {"glass", "metal", "steel", "aluminium", "copper"}:
         return False
@@ -133,7 +135,7 @@ def adapt(spec, attrs, lat, lon):
     if family == "wood":
         mat, color = "wood", pick(WOOD, "wood")
     color = b.parse_color(attrs.get("facade_color")) or color
-    roof_given = str(attrs.get("roof_shape") or "").lower()
+    roof_given = str(attrs.get("roof_shape") or "").lower().replace("_", "-")
     roof = roof_given or ("half-hipped" if family == "halfhip" else "hipped" if family == "render" and h("hip") < .18 else "gabled")
     if roof == "pyramidal":
         roof = "hipped"
@@ -145,7 +147,7 @@ def adapt(spec, attrs, lat, lon):
     if b._area2(spec.ring) / (8 * hl * hw) < .86:
         roof = "flat"
         family = "render" if family in {"timber", "halfhip"} else family
-    rise = 0. if roof == "flat" else hw * math.tan(math.radians(pitch))
+    rise = 0. if roof == "flat" else hw * dmath.tan(math.radians(pitch))
     rh = _number(attrs.get("roof_height"))
     if rh is not None and rh > 8.:
         return spec                          # implausible/special geometry stays upstream
@@ -164,7 +166,7 @@ def adapt(spec, attrs, lat, lon):
     if roof != "flat":
         if rise < .10:
             return spec
-        pitch = math.degrees(math.atan2(rise, hw))
+        pitch = math.degrees(dmath.atan2(rise, hw))
     roof_kind = "canal" if region in {"basque", "mediterranean", "southwest", "toulouse"} else "slate" if region in {"brittany", "pyrenees"} else "tile"
     if region in {"loire", "normandy", "paris_basin", "alpine", "central"} and h("slate") < .65:
         roof_kind = "slate"

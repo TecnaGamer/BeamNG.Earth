@@ -19,6 +19,7 @@ import logging
 import os
 import struct
 import threading
+import dmath
 
 log = logging.getLogger("earthd.bakepack")
 
@@ -30,15 +31,6 @@ BAKE_FORMAT = 1
 _lock = threading.Lock()
 _packs = {}             # cache dir -> [Pack]
 _seen = {}              # cache dir -> the pack files' (name, size, mtime) when last listed
-
-
-def meta_for(md, signature, frames):
-    """The meta a pack made with map data md and plans signature / frames carries (and a reader expects)."""
-    import plancache
-    import roads
-    return {"bake_format": BAKE_FORMAT, "plans_format": plancache.PLANS_FORMAT, "facts_format": roads.FACTS_FORMAT,
-            "frames": frames, "signature": signature,
-            "versions": json.loads(json.dumps(md.versions(), sort_keys=True)) if md is not None else None}
 
 
 class Writer:
@@ -208,7 +200,7 @@ def sync(cache_dir, net, md, lat, lon, signature, now=None):
         index = json.load(open(ip, encoding="utf-8"))
         for e in index.get("packs", []):
             s, w, n, east = e["bbox"]
-            k = 111320.0 * math.cos(math.radians(lat))
+            k = 111320.0 * dmath.cos(math.radians(lat))
             dy = max(s - lat, 0.0, lat - n) * 110540.0
             dx = max(w - lon, 0.0, lon - east) * k
             if math.hypot(dx, dy) > NEAR_M or not _matches(_Meta(e.get("meta") or {}), expect):

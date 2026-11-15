@@ -22,14 +22,18 @@ together, each kerb has the sign of the town its traffic enters, the other town'
 The state is a function of the point alone, never of the road segment or the tile, so every segment and every tile
 puts a road's signs at the same places (ROADMAP "deterministic generation"). Pure given its inputs.
 
-In the game (BNE_TOWNSIGNS=on, off by default): Towns.rows gives a road tile its signs (roads.build_tile's towns),
-each sign two Forest items of its commune's own faces (write_face: the name drawn on the sign, a textured quad,
-written once per session next to the tile): the entry face with the body every town sign shares (the mod's
-sign_town_body: two posts and the plate's back, tools/generate_town_signs.py) and the exit face at the same spot turned
-round, on the body's back. The tile names its faces ("townsigns": group -> shape, texture, material); the mod's
-townsigns.lua makes each face's Material and puts face and body at one spot (trees.lua).
+In the game (Settings > World > Town signs, off by default for now; BNE_TOWNSIGNS=on / off forces it): Towns.rows
+gives a road tile its signs (roads.build_tile's towns), each sign two Forest items of its commune's own faces
+(write_face: the name drawn on the sign, a textured quad, written once per session next to the tile): the entry face
+with the body every
+town sign shares (the mod's sign_town_body: two posts and the plate's back, tools/generate_town_signs.py) and the exit
+face at the same spot turned round, on the body's back. The tile names its faces ("townsigns": group -> shape,
+texture, material); the mod's townsigns.lua makes each face's Material and puts face and body at one spot (trees.lua).
 """
+import functools
+import gzip
 import hashlib
+import json
 import logging
 import math
 import os
@@ -40,6 +44,8 @@ from collections import OrderedDict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import dmath
+import dnp
 
 import furniture
 import polygon
@@ -47,7 +53,20 @@ from overture import LATIN_COLS, REGIONAL_LANGS
 
 log = logging.getLogger("earthd.townsigns")
 
-ON = os.environ.get("BNE_TOWNSIGNS", "off") == "on"
+# BNE_TOWNSIGNS=on / off forces the town signs whatever the settings page's Town signs switch says (enabled)
+ENV = os.environ.get("BNE_TOWNSIGNS", "")
+
+
+def enabled(server_flag):
+    """Whether the town signs are built: BNE_TOWNSIGNS=on / off forces it, anything else follows server_flag (the
+    settings page's Town signs, earthd.Server.towns_on: off unless the player turns it on)."""
+    if ENV == "on":
+        return True
+    if ENV == "off":
+        return False
+    return bool(server_flag)
+
+
 # the countries whose rules are written here (ISO 3166 alpha-2): France (EB10 / EB20), Belgium (F1a / F3a, the user
 # 2026-10-29: "toute l'Europe", country by country, as the real signs are), Luxembourg (E,9a / E,9b), Germany
 # (Zeichen 310 / 311), Switzerland (4.27 - 4.30), Italy (figura II 273 / 274), Austria (Hinweiszeichen 17a / 17b), the
@@ -86,6 +105,10 @@ SIGN_CLASSES = {"primary", "secondary", "tertiary", "unclassified", "residential
 MAIN_CLASSES = {"primary"}
 MAIN_SIGNS = {"CH", "LI", "IE"}            # (Ireland's: green on a national road, white on the others)
 G_ENTRY, G_EXIT = "townentry", "townexit"
+# Countries whose signs, with PR #505's regional kit on, are the kit's own boards (signmesh.Mesh.town: the measured
+# EB10 / EB20 proportions of townlayout and its Typoroute L1 lettering, the author's model) at the places these
+# signs are put (roads.build_tile: the rows Towns.maker hands back in meshed), not this module's face textures
+KIT_BOARDS = {"FR", "MC"}
 M_PER_DEG = 111320.0
 AGGLO_CELL_M = 20.0             # m, the agglomeration grid's step (the land cover's pixels are 10 m)
 AGGLO_MARGIN_M = 400.0          # m around a commune its grid reaches (a town across the boundary is one area)
@@ -416,7 +439,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         pts = np.array([box[:2], box[2:]], np.float64)
     dlat = AGGLO_CELL_M / M_PER_DEG
     # (the commune's own longitude step, its latitude rounded: the same grid whichever cell or frame asks)
-    dlon = AGGLO_CELL_M / (M_PER_DEG * max(math.cos(math.radians(round(lat_c, 1))), 0.01))
+    dlon = AGGLO_CELL_M / (M_PER_DEG * max(dmath.cos(math.radians(round(lat_c, 1))), 0.01))
     mlat, mlon = AGGLO_MARGIN_M / AGGLO_CELL_M * dlat, AGGLO_MARGIN_M / AGGLO_CELL_M * dlon
     i0 = math.floor((float(pts[:, 1].min()) - mlat) / dlat)
     i1 = math.ceil((float(pts[:, 1].max()) + mlat) / dlat)
@@ -439,7 +462,7 @@ def agglomeration(lonlat_parts, urban_fn, box=None):
         if opened.any():                # (all of it that thin: a village of a few houses along a lane, kept whole)
             area = opened
     lab, sizes = _pieces(area)
-    keep = sizes >= MIN_AGGLO_M2 / AGGLO_CELL_M ** 2
+    keep = sizes >= MIN_AGGLO_M2 / (AGGLO_CELL_M * AGGLO_CELL_M)
     keep[0] = False
     if not keep.any():
         keep[int(np.argmax(sizes[1:])) + 1] = True  # (no piece that large: the largest, the village's bourg)
@@ -693,8 +716,8 @@ def nearest_site(sites, lat, lon):
     """Per point (lat, lon arrays): the index of the nearest of sites ((k, 2) lon/lat; distances on the plane of the
     sites' mean latitude). Pure."""
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
-    c = math.cos(math.radians(float(np.mean(sites[:, 1]))))
-    d = ((lon[..., None] - sites[:, 0]) * c) ** 2 + (lat[..., None] - sites[:, 1]) ** 2
+    c = dmath.cos(math.radians(float(np.mean(sites[:, 1]))))
+    d = dnp.sq((lon[..., None] - sites[:, 0]) * c) + dnp.sq(lat[..., None] - sites[:, 1])
     return np.argmin(d, axis=-1)
 
 
@@ -744,6 +767,8 @@ def split_villages(communes, points_of):
                 names = _names(feats, i)
                 town =(town_of(str(feats.attrs["localities"][i]), cities) if "localities" in feats.attrs
                         else (None, ""))
+                if c.country == "DE" and "localities" in feats.attrs and not town[1].startswith("="):
+                    town = de_town(str(feats.attrs["localities"][i]), c.county) or town
                 found[vid] = (" ".join(str(feats.attrs["name"][i]).split()), names, p[0], town)
         if not found:
             # (all of its villages smaller areas': a comarca, no town; none near the tile in a large one, a Latvian
@@ -772,7 +797,10 @@ def split_villages(communes, points_of):
             sub = village_sub(name, c, gname)
             if gname.startswith("="):       # a city's Stadtteil: the city's name, the Stadtteil's under it
                 gname = gname[1:]
-                name, sub, local = gname, (name if name != gname else village_sub(gname, c)), own.get(gname, "")
+                part = name != gname
+                name, sub, local = gname, (name if part else village_sub(gname, c)), own.get(gname, "")
+                if part and c.country == "DE" and gname not in CITY_STATES:
+                    sub = "Stadtteil " + sub        # (VwV-StVO zu den Zeichen 310 und 311 Rn. 6: "Stadtteil Pasing")
             if c.country == "DE":
                 # (Lusatia's names are both already, "Cottbus - Chóśebuz": the German on the first line, the Sorbian
                 # on the second, as its Ortstafeln; the small line the German only)
@@ -876,7 +904,7 @@ VILLAGE_COUNTRIES.update({**{cc: "region" for cc in ("IM", "JE", "GL", "BM", "KY
 def _km2(lonlat_parts):
     """The area of a polygon's outer rings, km2 (on the plane of their mean latitude). Pure."""
     lat = float(np.mean(np.concatenate([r[:, 1] for rings in lonlat_parts for r in rings[:1]])))
-    return _area(lonlat_parts) * (M_PER_DEG / 1000.0) ** 2 * math.cos(math.radians(lat))
+    return _area(lonlat_parts) * dnp.sq(M_PER_DEG / 1000.0) * dmath.cos(math.radians(lat))
 
 
 def kreisfreie(county, lonlat_parts=None):
@@ -900,7 +928,7 @@ def _area(lonlat_parts):
     s = 0.0
     for rings in lonlat_parts:
         r = rings[0]
-        s += abs(float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
+        s += abs(float(dnp.dot(r[:, 0], np.roll(r[:, 1], -1)) - dnp.dot(r[:, 1], np.roll(r[:, 0], -1)))) / 2
     return s
 
 
@@ -915,12 +943,101 @@ def village_sub(name, commune, town=""):
         return commune.sub
     if commune.country != "DE":
         return ""
-    if town and name != town:
-        return town
     county = commune.county.split(" - ")[0]
-    if not county or county == name.split(" - ")[0]:
-        return ""
-    return county if re.search(r"kreis|Region|Stadtverband", county, re.IGNORECASE) else "Landkreis " + county
+    kreis = ("" if not county or county == name.split(" - ")[0] else
+             county if re.search(r"kreis|Region|Stadtverband", county, re.IGNORECASE) else "Landkreis " + county)
+    if town.startswith("="):            # (a city's Stadtteil: split_villages writes its small line)
+        return kreis
+    if town and name != town:
+        # an Ortsteil: its Gemeinde, "Stadt", "Markt" or "Gemeinde" before it, and the Kreis under that (VwV-StVO zu
+        # den Zeichen 310 und 311 Rn. 6; the user, 2026-11-07: Sarching's sign, "Gemeinde Barbing" and "Landkreis
+        # Regensburg"); a name with the word already as it is (Markt Indersdorf)
+        g = town.split(" - ")[0]
+        if not re.match(r"(Stadt|Markt|Gemeinde) ", g):
+            g = de_kind(g, county) + " " + g
+        return g + ("\n" + kreis if kreis else "")
+    return kreis
+
+
+# Germany's Gemeinden and which are a Stadt or a Markt (tools/build_de_gemeinden.py, from Destatis' municipality
+# directory GV100AD): an Ortsteil's small line names its Gemeinde as "Stadt Schrobenhausen", "Markt Donaustauf", any
+# other "Gemeinde Barbing" (de_kind), and a village's Gemeinde is the innermost of its localities that is one (de_town)
+DE_GEMEINDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "de_gemeinden.json.gz")
+# the words a German place's key leaves out (de_key): the little words between a name's parts and Destatis' shortened
+# ones ("Pfaffenhofen a.d.Ilm" is Overture's "Pfaffenhofen an der Ilm", "Weil a.Rhein" "Weil am Rhein")
+DE_KEY_SKIP = {"an", "am", "der", "den", "dem", "die", "des", "im", "in", "bei", "ob", "unter", "vor", "auf", "und",
+               "zu", "a", "d", "i", "b", "o", "u", "v", "z"}
+DE_KREIS_WORDS = {"landkreis", "kreis", "stadtkreis", "regionalverband"}     # (de_kreis_key: Kreis or not)
+
+
+def de_key(name):
+    """A German Gemeinde's name as a key both Destatis' and Overture's spelling of it give: its first name only (the
+    Sorbian after " / " or " - ", Destatis' suffix after ", ": "Neutraubling, St"), lower case, its words without
+    DE_KEY_SKIP, "St." as "Sankt" (St. Englmar, Sankt Englmar)."""
+    words = re.findall(r"[^\W\d_]+", re.split(r", | / | - ", name)[0].lower())
+    return " ".join("sankt" if w == "st" else w for w in words if w not in DE_KEY_SKIP)
+
+
+def de_kreis_key(name):
+    """de_key of a Kreis without the word Kreis or Landkreis (Overture's "Landkreis Regensburg", Destatis'
+    "Regensburg"; a kreisfreie Stadt and the Landkreis of its name one key: their Gemeinden's names differ)."""
+    return " ".join(w for w in de_key(name).split() if w not in DE_KREIS_WORDS)
+
+
+@functools.lru_cache(maxsize=1)
+def _de_gemeinden():
+    """{de_kreis_key: {de_key: "Stadt" | "Markt" | "Gemeinde"}} of DE_GEMEINDEN ({} without it)."""
+    try:
+        with gzip.open(DE_GEMEINDEN, "rt", encoding="utf-8") as fh:
+            rows = json.load(fh).get("rows", ())
+    except (OSError, ValueError) as e:
+        log.warning("town signs: %s: %s", DE_GEMEINDEN, e)
+        return {}
+    out = {}
+    for kreis, name, kind in rows:
+        out.setdefault(de_kreis_key(kreis), {})[de_key(name)] = {"S": "Stadt", "M": "Markt"}.get(kind, "Gemeinde")
+    return out
+
+
+def _shortened(short, full):
+    """Is the key short Destatis' shortening of the key full: the same first word, then only abbreviations (3 letters
+    at most) whose letters come in order in full's other words ("rohr nb", "rohr niederbayern")?"""
+    s, f = short.split(), full.split()
+    if len(s) < 2 or len(f) < 2 or s[0] != f[0] or any(len(w) > 3 for w in s[1:]):
+        return False
+    rest = iter("".join(f[1:]))
+    return all(ch in rest for ch in "".join(s[1:]))
+
+
+def de_gemeinde(town, county):
+    """ "Stadt", "Markt" or "Gemeinde": what the place town (Overture's name) of the county (Overture's, with or
+    without Landkreis) is by Destatis (_de_gemeinden; a name it shortens: _shortened), None when it is no Gemeinde
+    there (an Ortsteil, a Verwaltungsgemeinschaft's own name: Gachenbach's "Schrobenhausen" is one, the city another)."""
+    by = _de_gemeinden().get(de_kreis_key(county or ""), {})
+    k = de_key(town)
+    got = by.get(k)
+    if got is None:
+        got = next((v for kk, v in sorted(by.items()) if _shortened(kk, k)), None)
+    return got
+
+
+def de_kind(town, county):
+    """de_gemeinde, a "Gemeinde" when Destatis does not know it (a name too far from its own)."""
+    return de_gemeinde(town, county) or "Gemeinde"
+
+
+def de_town(localities, county):
+    """(id, name) of a German village's Gemeinde from its "town_points" localities ("subtype:id=name|...",
+    outermost first): the innermost that is a Gemeinde of county by Destatis (de_gemeinde; the village itself when it
+    is its Gemeinde's own), None when none is. Overture puts a Verwaltungsgemeinschaft named as its seat over its
+    Gemeinden (Gachenbach under a "Schrobenhausen" that is not the city: "Stadt Schrobenhausen" on Gachenbach's sign,
+    2026-11-07)."""
+    for item in reversed(localities.split("|")):
+        sub, _, rest = item.partition(":")
+        fid, _, name = rest.partition("=")
+        if sub == "locality" and fid and name and de_gemeinde(name, county) is not None:
+            return fid, name
+    return None
 
 
 # The next place on an exit sign (Luxembourg's E,9b names it above the struck-through name, with an arrow): the
@@ -938,7 +1055,7 @@ def next_place(lat, lon, heading, points, name):
     counter-clockwise from east), among points [(name, lon, lat)], its own name (name) left out; None if none is
     within NEXT_CONE_DEG and NEXT_MIN_M .. NEXT_MAX_M. The nearest, an angle off the heading counting as distance (a
     village straight ahead before one as near to the side). Pure."""
-    c = math.cos(math.radians(lat))
+    c = dmath.cos(math.radians(lat))
     h = math.radians(heading)
     best = None
     for n, plon, plat in points:
@@ -948,7 +1065,7 @@ def next_place(lat, lon, heading, points, name):
         d = math.hypot(dx, dy)
         if not NEXT_MIN_M <= d <= NEXT_MAX_M:
             continue
-        off = abs((math.degrees(math.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
+        off = abs((math.degrees(dmath.atan2(dy, dx) - h) + 180.0) % 360.0 - 180.0)
         if off > NEXT_CONE_DEG:
             continue
         score = (d * (1.0 + off / 45.0), n)
@@ -983,7 +1100,7 @@ def commune_agglomeration(c, urban_fn):
     lon0, lat0 = pts.min(axis=0)
     lon1, lat1 = pts.max(axis=0)
     dlat = VILLAGE_PROBE_M / M_PER_DEG
-    dlon = dlat / max(math.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
+    dlon = dlat / max(dmath.cos(math.radians(float(pts[:, 1].mean()))), 0.01)
     p = c.sites[c.site]
     # (the probes within VILLAGE_REACH_M of its point: a Swedish kommun's village alone in it, Kiruna's 20,000 km2;
     # on the commune's own lattice, the same probes as the whole box's there)
@@ -1004,7 +1121,7 @@ def commune_agglomeration(c, urban_fn):
     box = (max(box[0], p[0] - rlon), max(box[1], p[1] - rlat), min(box[2], p[0] + rlon), min(box[3], p[1] + rlat))
     # the fine grid over the probes' built-up land only, when the part is large (a Greek dimos' villages each on a
     # grid of their whole part kept the road tiles minutes, Trikala 2026-10-30); none of it there: no village
-    if (box[2] - box[0]) * (box[3] - box[1]) > (VILLAGE_FINE_M / M_PER_DEG) ** 2 / math.cos(math.radians(p[1])):
+    if (box[2] - box[0]) * (box[3] - box[1]) > dnp.sq(VILLAGE_FINE_M / M_PER_DEG) / dmath.cos(math.radians(p[1])):
         built = np.zeros(len(la), bool)
         built[mine] = np.asarray(urban_fn(la[mine], lo[mine]), bool)
         if not built.any():
@@ -1215,13 +1332,142 @@ def _sign(commune, line, s, travel, width, left_hand, main=False):
     q = p[0][:2] + side * (width / 2 + SIGN_OFF_M)
     yaw = furniture._yaw(side[0], side[1])
     at = [round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[0][2]), 2)]
-    tail = [commune.name, commune.local, commune.country, round(math.degrees(math.atan2(-f[1], -f[0])), 1),
+    tail = [commune.name, commune.local, commune.country, round(math.degrees(dmath.atan2(-f[1], -f[0])), 1),
             commune.sub, bool(main)]
     return [[G_ENTRY] + at + [round(yaw, 1), 1.0, SIGN_H, 0.0] + tail,
             [G_EXIT] + at + [round((yaw + 180.0) % 360.0, 1), 1.0, SIGN_H, 0.0] + tail]
 
 
-def town_signs(roads, communes, frame, box, left_hand=False, rings=()):
+# A commune boundary that runs through a fork has a change on every road that leaves the node (Broumov / Hejtmanko-
+# vice, 2026-11-11: two roads, four posts within 10 m). The changes of one node that are the same step between the same two
+# communes (the node side's, the far side's) are one: _sign's pair (an entry face each way, its exit face on its back)
+# stands on the road that carries the node's own side, JUNCTION_STEM_M before the node, for all the branches.
+JUNCTION_MERGE_M = 30.0         # m: the farthest from its node a change is taken into the node's
+JUNCTION_STEM_M = 8.0           # m before the node the merged pair stands on the stem (a shorter stem: 1 m before its end)
+JUNCTION_NODE_M = 1.5           # m: two road ends this close are one node
+JUNCTION_STEM_MIN_M = 3.0       # m: the stem's least length
+JUNCTION_HOPS = 3               # segments a stem short of JUNCTION_STEM_M is lengthened by
+# A boundary between two towns grown together (a change from one commune to the next, no open land between) has its
+# signs on the through roads only: the boundary cuts every residential street of the built-up land (Broumov /
+# Hejtmankovice, 2026-11-11: three pairs a few metres apart on streets between the houses).
+INTERTOWN_CLASSES = {"primary", "secondary", "tertiary", "unclassified"}
+CLASS_ORDER = {"primary": 4, "secondary": 3, "tertiary": 2, "unclassified": 1, "residential": 0}
+
+
+def _length(line):
+    return float(furniture._arclen(line)[-1])
+
+
+def merge_junctions(lines, changes, communes, frame, judged=None):
+    """(lines, changes) with the changes of one fork made one. lines: [(spec, centreline)], changes [(line index, s, a,
+    b)] as _changes' (the traffic along the line leaves commune a and enters b). Changes within JUNCTION_MERGE_M of
+    the same node (road ends within JUNCTION_NODE_M) with the same commune on the node's side and the same on the far
+    side are one change on the node's stem: a road (or a few of them, joined in one line) at the node with no change
+    of its own and the node side's commune a few metres from the node, the sign JUNCTION_STEM_M before it. With no such
+    stem the road of the highest class (then the longest) keeps its change and the others lose theirs. Pure; lines
+    gets the stems' joined lines at its end. judged (a dict, optional): {a stem line's index: the class of the highest
+    road its merged changes were on}, by which town_signs judges the merged change between two towns grown together
+    (not by the stem's own class: a residential stem would drop a secondary branch's pair, a secondary stem keep
+    residential branches' ones)."""
+    if len(changes) < 2:
+        return lines, changes
+    lengths = {}
+
+    def length(i):
+        if i not in lengths:
+            lengths[i] = _length(lines[i][1])
+        return lengths[i]
+    clusters = []                   # [node xy, node side, far side, [change indices]]
+    for k, (li, s, a, b) in enumerate(changes):
+        line, total = lines[li][1], length(li)
+        at_start = s <= total - s
+        if (s if at_start else total - s) > JUNCTION_MERGE_M:
+            continue
+        node = np.asarray(line[0 if at_start else -1][:2], np.float64)
+        side, far = (a, b) if at_start else (b, a)
+        for c in clusters:
+            if c[1] == side and c[2] == far and dnp.hypot(*(c[0] - node)) <= JUNCTION_NODE_M:
+                c[3].append(k)
+                break
+        else:
+            clusters.append([node, side, far, [k]])
+    clusters = [c for c in clusters if len(c[3]) > 1]
+    if not clusters:
+        return lines, changes
+    changed = {li for li, *_ in changes}
+    lines = list(lines)
+    drop, extra = set(), []
+    for node, side, far, ks in clusters:
+        stem = _stem(lines, changed, node, length)
+        placed = None
+        if stem is not None:
+            poly, spec = stem
+            total = _length(poly)
+            at = total - min(JUNCTION_STEM_M, total - 1.0)
+            q, _ = furniture._at(poly, np.array([at]))
+            if int(state(q[:, :2], communes, frame)[0]) == side:
+                placed = (spec, poly, at)
+        if placed is not None:
+            drop.update(ks)
+            lines.append((placed[0], placed[1]))
+            extra.append((len(lines) - 1, placed[2], side, far))
+            if judged is not None:
+                judged[len(lines) - 1] = max((lines[changes[k][0]][0].cls for k in ks),
+                                             key=lambda c: CLASS_ORDER.get(c, -1))
+            continue
+        keep = max(ks, key=lambda k: (CLASS_ORDER.get(lines[changes[k][0]][0].cls, -1), length(changes[k][0])))
+        drop.update(k for k in ks if k != keep)
+    return lines, [c for k, c in enumerate(changes) if k not in drop] + extra
+
+
+def _stem(lines, changed, node, length):
+    """(centreline running toward node, spec) of the node's stem, or None: a two-way road ending at node with no change
+    on it (changed: the line indices that have one), lengthened up to JUNCTION_HOPS segments at its far end while it is
+    shorter than JUNCTION_STEM_M + 1 and exactly one other such road continues it. Of several the highest class, then
+    the longest."""
+    def ends(i):
+        line = lines[i][1]
+        return np.asarray(line[0][:2]), np.asarray(line[-1][:2])
+
+    def usable(i):
+        return i not in changed and not lines[i][0].oneway and length(i) >= 0.5
+
+    def touching(point, skip):
+        out = []
+        for i in range(len(lines)):
+            if i in skip or not usable(i):
+                continue
+            first, last = ends(i)
+            if dnp.hypot(*(first - point)) <= JUNCTION_NODE_M:
+                out.append((i, False))          # (runs away from the point)
+            elif dnp.hypot(*(last - point)) <= JUNCTION_NODE_M:
+                out.append((i, True))           # (runs toward it)
+        return out
+    best = None
+    for i, toward in touching(node, ()):
+        line = np.asarray(lines[i][1], np.float64)
+        line = line if toward else line[::-1]
+        used = {i}
+        for _ in range(JUNCTION_HOPS):
+            if _length(line) >= JUNCTION_STEM_M + 1.0:
+                break
+            more = touching(line[0][:2], used)
+            if len(more) != 1:
+                break
+            j, toward_j = more[0]
+            used.add(j)
+            piece = np.asarray(lines[j][1], np.float64)
+            line = np.vstack([piece if toward_j else piece[::-1], line[1:]])
+        total = _length(line)
+        if total < JUNCTION_STEM_MIN_M:
+            continue
+        rank = (CLASS_ORDER.get(lines[i][0].cls, -1), total)
+        if best is None or rank > best[0]:
+            best = (rank, line, lines[i][0])
+    return None if best is None else (best[1], best[2])
+
+
+def town_signs(roads, communes, frame, box, left_hand=False, rings=(), mapped=None, urban=None):
     """Sign rows [group, x, y, z, yaw, scale, height, rank, name, local, country, ...] (furniture's prop rows, the
     commune's name, its regional name and its country, then _sign's) of a tile box (x0, y0, x1, y1): on the roads of
     SIGN_CLASSES
@@ -1230,28 +1476,233 @@ def town_signs(roads, communes, frame, box, left_hand=False, rings=()):
     on its kerb side (_sign: its exit face on the back, which the way out sees across the road). A one-way road has its
     way out's sign too, on the far kerb, turned to the way that does not exist: its back is the exit sign its traffic
     sees. A roundabout's ring (rings: their ids) has none: its approaches carry them (10 of Troyes' 121 entry signs
-    stood on rings, each a few metres from the one on the road coming in, 2026-10-29)."""
+    stood on rings, each a few metres from the one on the road coming in, 2026-10-29). mapped: Germany's mapped
+    Ortstafeln near the box [(x, y, name)] (Towns.mapped_nodes): each stands where it is mapped, and an estimated sign
+    of its town near it is left out (mapped_signs; urban(lat, lon) -> bool array, the land cover's built-up class:
+    which way a village the places do not have is)."""
     x0, y0, x1, y1 = box
     rows = []
     if not communes:
         return rows
+    lines, changes, mlines = [], [], []
     for fid, spec, line, _ in roads:
-        if spec.cls not in SIGN_CLASSES or spec.link or spec.kind != "paved" or len(line) < 2 or fid in rings:
+        if len(line) < 2 or fid in rings:
             continue
         line = np.asarray(line, np.float64)
+        if mapped and spec.cls not in MAPPED_SKIP:
+            mlines.append((spec, line))
+        if spec.cls not in SIGN_CLASSES or spec.link or spec.kind != "paved":
+            continue
+        lines.append((spec, line))
+        changes += [(len(lines) - 1, s, a, b) for s, a, b in _changes(line, communes, frame)]
+    signs = []
+    if mapped:
+        changes, signs = mapped_signs(lines, changes, communes, frame, mapped, urban, mlines)
+    judged = {}
+    lines, changes = merge_junctions(lines, changes, communes, frame, judged)
+    for li, s, a, b in changes:
+        spec, line = lines[li]
+        if a >= 0 and b >= 0 and judged.get(li, spec.cls) not in INTERTOWN_CLASSES:
+            continue
         ways = (1.0, -1.0)
         if spec.oneway:
             ways = (-1.0,) if (spec.dir or 1) < 0 else (1.0,)
         main = spec.cls in MAIN_CLASSES
-        for s, a, b in _changes(line, communes, frame):
-            for travel in ways:
-                # the traffic going along the line leaves a and enters b; the other way, the reverse
-                leave, enter = (a, b) if travel > 0 else (b, a)
-                if enter >= 0:
-                    rows += _sign(communes[enter], line, s, travel, spec.width, left_hand, main)
-                if spec.oneway and leave >= 0:      # (no way in on this kerb's far side to carry the exit sign)
-                    rows += _sign(communes[leave], line, s, -travel, spec.width, left_hand, main)
+        for travel in ways:
+            # the traffic going along the line leaves a and enters b; the other way, the reverse
+            leave, enter = (a, b) if travel > 0 else (b, a)
+            if enter >= 0:
+                rows += _sign(communes[enter], line, s, travel, spec.width, left_hand, main)
+            if spec.oneway and leave >= 0:      # (no way in on this kerb's far side to carry the exit sign)
+                rows += _sign(communes[leave], line, s, -travel, spec.width, left_hand, main)
+    for li, s, c, travel in signs:      # (a mapped one: its kerb the way in's, a one-way road's too, as above)
+        spec, line = mlines[li]
+        rows += _sign(c, line, s, travel, spec.width, left_hand, spec.cls in MAIN_CLASSES)
     return [r for r in rows if x0 <= r[1] < x1 and y0 <= r[2] < y1]
+
+
+# Germany's mapped Ortstafeln (OpenStreetMap's traffic_sign=city_limit, DE:310 / DE:311 nodes, the lane shards':
+# tools/build_lane_tags.py, railtags.sign_nodes): the estimate of where the closed development begins (VwV-StVO zu den
+# Zeichen 310 und 311 Rn. 1) is the land cover's, 60-250 m off at 10 of the 25 mapped around Barbing and wrong road at
+# 9 more (2026-11-07); a mapped one stands where it is (native townsigns_de.rs: snap and select)
+TOWN_SIGN_CODE = re.compile(r"(^|,)(city_limit|DE:31[01])($|,|\[|-|:)")
+MAPPED_SNAP_M = 15.0            # m from a road line a mapped node is still on it (a vertex of its way, or beside it)
+# the roads a mapped one is never on (any other may carry one: VwV-StVO zu den Zeichen 310 und 311 Rn. 3, "auch auf
+# unbedeutenden Straßen"; Waidhofen's on a trunk link, Hörzhausen's on a track, 2026-11-07)
+MAPPED_SKIP = {"motorway"}
+MAPPED_PROBE_M = 50.0           # m either way along its road the town's side of a mapped sign is read (state)
+MAPPED_REACH_M = 300.0          # m: an estimated sign of a mapped sign's town this near it is left out
+MAPPED_DEDUPE_M = 25.0          # m: a town's second mapped sign on a road this close to its first is the same post
+MAPPED_KERNEL = 171             # (fast.require: townsigns_de.rs)
+# m along the road either side of a mapped sign of a village the places do not have, whose built-up land says which
+# way it is (MAPPED_LOOK_STEP_M apart)
+MAPPED_LOOK_M, MAPPED_LOOK_STEP_M = 160.0, 20.0
+MAPPED_VILLAGE_M = 2000.0       # m: an unlisted village's mapped signs this near each other are its (their middle)
+# the words a mapped sign's name may be instead of a town's (no name: the commune either side of it)
+NOT_A_NAME = {"ortsende", "ortseingang", "ortsausgang", "ortstafel", "ortsschild", "ortsgrenze", "stadtgrenze",
+              "city limit", "city_limit"}
+
+
+def _name_parts(name):
+    """The town names a mapped Ortstafel's name gives, in order: "Piesenkofen / Obertraubling" (the village, then its
+    Gemeinde, or the towns each side), "Regensburg (Stadtteil Harting)" -> Regensburg, Stadtteil Harting."""
+    return [p.strip() for p in re.split(r"[/(),;]", name or "") if p.strip()]
+
+
+def _resolve(part, communes, sides):
+    """The index of the German commune a name part means, or -1: the commune of that name (a city's Stadtteile share
+    the city's: the one on a side of the sign, sides (minus, plus) of state), or the longest name the part begins with
+    ("Regensburg Leoprechting": Regensburg)."""
+    low = part.lower()
+    named = [k for k, c in enumerate(communes) if c.country == "DE" and c.name.lower() == low]
+    if not named:
+        pre = [(len(c.name), k) for k, c in enumerate(communes)
+               if c.country == "DE" and low.startswith(c.name.lower() + " ")]
+        if pre:
+            n = max(pre)[0]
+            named = [k for size, k in pre if size == n]
+    if not named:
+        return -1
+    on = [k for k in named if k in sides]
+    return on[0] if on else named[0]
+
+
+def _unlisted(part, xy, communes, frame):
+    """A German village the places do not have but a mapped sign names (Oberhinkofen, in Obertraubling: 3 of the 25
+    mapped around Barbing, 2026-11-07): the commune whose land the sign stands on (its village's part of its
+    Gemeinde, nearest_site), named part, its small line its Gemeinde's and Kreis' (village_sub); a kreisfreie Stadt's
+    part the city's name over "Stadtteil" part. None when no German commune's land holds xy."""
+    lat, lon, _ = frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    for c in communes:
+        if c.country != "DE" or not inside(c.parts, np.array([xy]))[0]:
+            continue
+        if c.sites is not None and int(nearest_site(c.sites, lat, lon)[0]) != c.site:
+            continue
+        town = c.town or c.name
+        fid = f"{c.fid}~{part}"
+        if c.county.split(" - ")[0] == town:            # (a kreisfreie Stadt's part)
+            return c._replace(sub="Stadtteil " + part, local="", fid=fid, group=None, agglo=None)
+        return c._replace(name=part, local="", sub=village_sub(part, c, town), fid=fid, group=None, agglo=None)
+    return None
+
+
+def _built_side(line, s, frame, urban):
+    """+1 when the road's built-up land (urban, the land cover) lies more along line after arc length s than before
+    it (MAPPED_LOOK_M either way), -1 the other way, 0 for as much (or no urban)."""
+    if urban is None:
+        return 0
+    d = np.arange(MAPPED_LOOK_STEP_M, MAPPED_LOOK_M + 1.0, MAPPED_LOOK_STEP_M)
+    p, _ = furniture._at(line, np.r_[s - d[::-1], s + d])
+    lat, lon, _ = frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
+    b = np.asarray(urban(np.asarray(lat, np.float64), np.asarray(lon, np.float64)), bool)
+    before, after = int(b[:len(d)].sum()), int(b[len(d):].sum())
+    return (after > before) - (after < before)
+
+
+def _site_xy(c, frame):
+    """A commune's own point in frame metres: its village's point, else the middle of its outline."""
+    if c.sites is not None:
+        lon, lat = c.sites[c.site]
+    else:
+        pts = np.concatenate([r for rings in c.lonlat for r in rings[:1]])
+        lon, lat = (pts.min(axis=0) + pts.max(axis=0)) / 2
+    x, y, _ = frame.geodetic_to_enu(float(lat), float(lon), 0.0)
+    return np.array([float(x), float(y)])
+
+
+def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=None):
+    """(changes kept, mapped signs [(index in mlines, arc length, Commune, the way in: +1 along the line, -1
+    against it)]) of town_signs' lines [(spec, centreline)] and estimated changes [(line index, s, a, b)] (mlines: the
+    lines a mapped sign may be on, all but MAPPED_SKIP's; None: lines), with
+    Germany's mapped Ortstafeln mapped [(x, y, name)]: each onto the nearest line (MAPPED_SNAP_M), its town the German
+    commune its name's first part means, and any later part's but the first's own Gemeinde ("Regensburg /
+    Tegernheim" at their boundary: a sign for each; "Piesenkofen / Obertraubling": Piesenkofen's only), the commune
+    either side of it when it has no name (state, MAPPED_PROBE_M along the
+    line), a village the places do not have when its name means no commune (_unlisted); its way in toward the side its
+    town is on, else toward its town's point (an unlisted village's: the middle of its mapped signs, MAPPED_VILLAGE_M,
+    for one alone its built-up side, _built_side). An estimated change's side of one of
+    those towns within MAPPED_REACH_M of a mapped sign is left out (-1; where two towns meet, the other's stays; the
+    change goes when neither side is left); a town's mapped signs on one line MAPPED_DEDUPE_M apart are one."""
+    import fast
+    fast.require(MAPPED_KERNEL, "the mapped town signs")
+    mlines = lines if mlines is None else mlines
+    if not mlines or not mapped:
+        return changes, []
+    pts = np.concatenate([np.asarray(line, np.float64)[:, :2] for _, line in mlines])
+    off = np.r_[0, np.cumsum([len(line) for _, line in mlines])].astype(np.int64)
+    nodes = np.array([(x, y) for x, y, _ in mapped], np.float64).reshape(-1, 2)
+    snaps = fast._ef.town_sign_snap(np.ascontiguousarray(pts), off, np.ascontiguousarray(nodes), MAPPED_SNAP_M)
+    signs = []
+    for (li, s, _), (_, _, name) in zip(snaps.tolist(), mapped):
+        if li < 0:
+            continue
+        li = int(li)
+        line = mlines[li][1]
+        total = float(furniture._arclen(line)[-1])
+        probe, _ = furniture._at(line, np.array([max(0.0, s - MAPPED_PROBE_M), min(total, s + MAPPED_PROBE_M)]))
+        sides = [int(v) for v in state(probe[:, :2], communes, frame)]
+        parts = [p for p in _name_parts(name) if p.lower() not in NOT_A_NAME]
+        first = _resolve(parts[0], communes, sides) if parts else -1
+        towns = [first] if first >= 0 else []
+        own = (communes[first].town or "").lower() if first >= 0 else ""
+        for part in parts[1:]:
+            c = _resolve(part, communes, sides)
+            if c < 0 or c in towns or (first >= 0 and part.lower() == own) or (first < 0 and c not in sides):
+                continue        # (none; the first's own Gemeinde: "Piesenkofen / Obertraubling"; a guess's: by it)
+            towns.append(c)
+        if not towns and not parts:     # (no name: the communes either side, as an estimated change)
+            towns = [c for c in dict.fromkeys(sides) if c >= 0 and communes[c].country == "DE"] \
+                if sides[0] != sides[1] else []
+        for c in towns:
+            name_c = communes[c].name
+            plus, minus = (sides[1] >= 0 and communes[sides[1]].name == name_c,
+                           sides[0] >= 0 and communes[sides[0]].name == name_c)
+            if plus != minus:
+                travel = 1.0 if plus else -1.0
+            else:               # (its town on both sides or neither: toward its town's point)
+                site = _site_xy(communes[c], frame)
+                travel = 1.0 if dnp.hypot(*(probe[1, :2] - site)) < dnp.hypot(*(probe[0, :2] - site)) else -1.0
+            signs.append((li, float(s), communes[c], travel))
+        if not towns and parts and first < 0:       # (a village the places do not have)
+            at, _ = furniture._at(line, np.array([s]))
+            c = _unlisted(parts[0], at[0, :2], communes, frame)
+            if c is None:
+                continue
+            low = parts[0].lower()
+            own_xy = np.array([(x, y) for x, y, n in mapped
+                               if (_name_parts(n) or [""])[0].lower() == low
+                               and dnp.hypot(x - at[0, 0], y - at[0, 1]) <= MAPPED_VILLAGE_M]).reshape(-1, 2)
+            mid = own_xy.mean(axis=0) if len(own_xy) >= 2 else None
+            if mid is not None and dnp.hypot(*(mid - at[0, :2])) > MAPPED_PROBE_M:
+                side = 1 if dnp.hypot(*(probe[1, :2] - mid)) < dnp.hypot(*(probe[0, :2] - mid)) else -1
+            else:
+                side = _built_side(line, float(s), frame, urban)
+            if side:
+                signs.append((li, float(s), c, float(side)))
+    if not signs:
+        return changes, []
+    key = {}                    # (a town's name: a city's Stadtteile and the city are one town here)
+    sign_towns = np.array([key.setdefault(c.name, len(key)) for _, _, c, _ in signs], np.int64)
+    at = np.array([furniture._at(mlines[li][1], np.array([s]))[0][0, :2] for li, s, _, _ in signs], np.float64)
+    sign_rows = np.c_[at, [[li, s] for li, s, _, _ in signs]].astype(np.float64)
+    # each change twice, a row per side ([a, -1], [-1, b]): a mapped sign of one town replaces that town's side only,
+    # the other town's sign at a boundary where the two meet stays (Codex on PR #892)
+    if changes:
+        cat = np.repeat(np.array([furniture._at(lines[li][1], np.array([s]))[0][0, :2] for li, s, _, _ in changes],
+                                 np.float64), 2, axis=0)
+        ctowns = np.array([row for _, _, a, b in changes
+                           for row in ([key.get(communes[a].name, -1) if a >= 0 else -1, -1],
+                                       [-1, key.get(communes[b].name, -1) if b >= 0 else -1])], np.int64)
+    else:
+        cat, ctowns = np.zeros((0, 2)), np.zeros((0, 2), np.int64)
+    keep_c, keep_s = fast._ef.town_sign_select(np.ascontiguousarray(cat), np.ascontiguousarray(ctowns),
+                                               np.ascontiguousarray(sign_rows), sign_towns, MAPPED_REACH_M,
+                                               MAPPED_DEDUPE_M)
+    keep_c = keep_c.reshape(-1, 2).tolist()
+    kept = [(li, s, a if ka else -1, b if kb else -1) for (li, s, a, b), (ka, kb) in zip(changes, keep_c)]
+    return ([ch for ch in kept if ch[2] >= 0 or ch[3] >= 0],
+            [sg for sg, k in zip(signs, keep_s.tolist()) if k])
 
 
 def face_group(name, group, local="", country="FR", nxt="", km=0, sub="", main=False):
@@ -1504,7 +1955,7 @@ def _draw_marks(d, x, y, letters, marks, font, size, fill, paper):
                 d.line([(cx - .14 * s, top - .07 * s), (cx, top - .25 * s), (cx + .14 * s, top - .07 * s)], fill=fill,
                        width=lw, joint="curve")
             elif m == "tilde":
-                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * math.sin(t / 8 * 2 * math.pi))
+                pts = [(cx + (t / 8 - 0.5) * .32 * s, top - .16 * s - .05 * s * dmath.sin(t / 8 * 2 * math.pi))
                        for t in range(9)]
                 d.line(pts, fill=fill, width=lw, joint="curve")
             elif m == "diaeresis":
@@ -1775,8 +2226,34 @@ DE_BAND = ((18.71, 548.94), (772.30, 303.07), (884.19, 303.07), (882.68, 342.85)
            (18.71, 567.20))
 
 
+# Germany's lettering: DIN 1451 (VzKat; Mittelschrift, Engschrift where a name is long) as D-DIN and D-DIN Condensed
+# (Datto, SIL OFL 1.1: open DIN-like faces, not DIN 1451's own drawings), the server's own files
+DE_FONTS = tuple(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fonts", f)
+                 for f in ("D-DIN.ttf", "D-DINCondensed.ttf"))
+# the text D-DIN has every letter of (Latin-1: German's ä ö ü ß, French' and Danish' accents): drawn as the font draws
+# it; any other (Sorbian's ś, č, ł) its letters with their accents drawn on them (mark_text)
+DIN_TEXT = re.compile(r"^[\x20-\x7e\xa0-\xff]*$")
+
+
+@functools.lru_cache(maxsize=64)
+def _din(size, narrow=False):
+    """D-DIN (narrow: D-DIN Condensed) at size px; Pillow's own typeface (_font) without the file."""
+    from PIL import ImageFont
+    try:
+        return ImageFont.truetype(DE_FONTS[1 if narrow else 0], size)
+    except OSError:
+        return _font(size)
+
+
+def de_letters(text):
+    """(letters, marks) of a German sign's text: the text as it is where D-DIN has its letters (DIN_TEXT: Großmehring
+    keeps its ß), else mark_text's."""
+    return (text, {}) if DIN_TEXT.match(text) else mark_text(text)
+
+
 def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
-    """Germany's Zeichen 310 (G_ENTRY) / 311 (G_EXIT), above."""
+    """Germany's Zeichen 310 (G_ENTRY) / 311 (G_EXIT), above, in DIN lettering (_din); sub's lines (an Ortsteil's
+    Gemeinde, then its Kreis: village_sub) each a small line under the name."""
     from PIL import Image, ImageDraw
     w, h = round(plate_w("DE") * FACE_PX_PER_M), round(PLATE_H * FACE_PX_PER_M)
     sx, sy = w / 900.0, h / 600.0
@@ -1788,10 +2265,15 @@ def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
     pad_x, pad_y = 45 * sx, 40 * sy
 
     def fit(text, size, room_w):
-        """(font, its size, box) of text at size or smaller, as wide as room_w at most."""
-        letters, marks = mark_text(text)
+        """(font, its size, box) of text at size in D-DIN, else D-DIN Condensed at size or smaller, as wide as room_w
+        at most."""
+        letters, marks = de_letters(text)
+        f = _din(size)
+        bx = _marks_box(d, letters, marks, f, size)
+        if bx[2] - bx[0] <= room_w:
+            return f, size, bx, letters, marks
         while True:
-            f = _font(size)
+            f = _din(size, narrow=True)
             bx = _marks_box(d, letters, marks, f, size)
             if bx[2] - bx[0] <= room_w or size <= 8:
                 return f, size, bx, letters, marks
@@ -1820,12 +2302,15 @@ def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
         item = fit(name, round(150 * sy), room)
         put(item, w / 2, 450 * sy - (item[2][3] - item[2][1]) / 2)
         return img
-    lines = [fit(name, round((150 if not (local or sub) else 135) * sy), room)]
+    subs = [t for t in sub.split("\n") if t] if sub else []
+    lines = [fit(name, round((150 if not (local or subs) else 135 if len(subs) < 2 else 120) * sy), room)]
+    gaps = [0.0]
     if local:
         lines.append(fit(local, round(105 * sy), room))
-    if sub:
-        lines.append(fit(sub, round(62 * sy), room))
-    gaps = [0.0] + [45 * sy] * (len(lines) - 1)
+        gaps.append(45 * sy)
+    for k, t in enumerate(subs):
+        lines.append(fit(t, round(62 * sy), room))
+        gaps.append((45 if k == 0 else 18) * sy)     # (the Kreis close under the Gemeinde)
     total = sum(it[2][3] - it[2][1] for it in lines) + sum(gaps)
     y = (h - total) / 2
     for it, gap in zip(lines, gaps):
@@ -2431,23 +2916,25 @@ FACES.update({cc: FACES.get(p, _face_fr) for cc, p in TERRITORIES.items()})
 
 def write_face(out_dir, vfs_dir, name, group, local="", country="FR", nxt="", km=0, sub="", main=False):
     """A commune's sign face in out_dir (once: a face of the session is not written again): its texture (face_image,
-    <face_group>.png) and its model (<face_group>.dae: the plate's front, a quad at FACE_Y textured with it, its
+    <face_group>.dds) and its model (<face_group>.dae: the plate's front, a quad at FACE_Y textured with it, its
     material named 'bne_' + the face group). Returns the tile's entry for it {"shape", "texture", "material"} (vfs
     paths, the files' own: the revisit cache keeps the files a tile names, revisit.SHAPE_RE)."""
     import dae
     g = face_group(name, group, local, country, nxt, km, sub, main)
-    png, model = os.path.join(out_dir, g + ".png"), os.path.join(out_dir, g + ".dae")
+    # (a DDS, never a PNG the engine cooks at run time: imagery.write_picture_dds)
+    tex, model = os.path.join(out_dir, g + ".dds"), os.path.join(out_dir, g + ".dae")
     material = "bne_" + g
-    if not (os.path.exists(png) and os.path.exists(model)):
-        import staging
-        tmp = staging.tmp_for(png)
-        face_image(name, group, local, country, nxt, km, sub, main).save(tmp, format="PNG")
-        staging.replace(tmp, png)
+    if not (os.path.exists(tex) and os.path.exists(model)):
+        import io
+        import imagery
+        buf = io.BytesIO()
+        face_image(name, group, local, country, nxt, km, sub, main).save(buf, format="PNG")
+        imagery.write_picture_dds(tex, buf.getvalue())
         x, z0, z1 = plate_w(country) / 2, PLATE_Z0, PLATE_Z0 + PLATE_H
         dae.write_grid_dae(model, [-x, FACE_Y, z0, x, FACE_Y, z0, x, FACE_Y, z1, -x, FACE_Y, z1],
-                           [0, 0, 1, 0, 1, 1, 0, 1], [0, 1, 2, 0, 2, 3], material=material, texture=g + ".png",
+                           [0, 0, 1, 0, 1, 1, 0, 1], [0, 1, 2, 0, 2, 3], material=material, texture=g + ".dds",
                            normals=[0, -1, 0] * 4)
-    return {"shape": f"{vfs_dir}/{g}.dae", "texture": f"{vfs_dir}/{g}.png", "material": material}
+    return {"shape": f"{vfs_dir}/{g}.dae", "texture": f"{vfs_dir}/{g}.dds", "material": material}
 
 
 # Street furniture taken away around a sign so drivers see it (in-game 2026-10-28, Boisset-et-Gaujac: a row of street
@@ -2464,7 +2951,7 @@ def clear_around(props, signs):
     at = np.array([(s[1], s[2]) for s in signs], np.float64)
     out = []
     for r in props:
-        if r[0] in CLEAR_GROUPS and np.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
+        if r[0] in CLEAR_GROUPS and dnp.hypot(at[:, 0] - r[1], at[:, 1] - r[2]).min() < CLEAR_M:
             continue
         out.append(r)
     return out
@@ -2550,7 +3037,8 @@ class Towns:
     def communes(self, frame, keys):
         """[Commune] of the map cells keys with their agglomerations, or None when some land cover is not cached yet
         (the tile is then built without town signs and not kept: surface.classes marked it for a rebuild)."""
-        feats = [self.md.cell(k, layers=("town_areas",), kind="demand").layers.get("town_areas") for k in keys]
+        import mapcells
+        feats = [cd.layers.get("town_areas") for cd in mapcells.load_cells(self.md, keys, ("town_areas",))]
         ready = [True]
 
         # (the cells' box: PICTOGRAMS' squares over it, the villages' points near it)
@@ -2598,7 +3086,7 @@ class Towns:
         pts = np.concatenate([r for rings in c.lonlat for r in rings[:1]])
         mid = c.sites[c.site] if c.sites is not None else (pts.min(axis=0) + pts.max(axis=0)) / 2
         rlat = min(LANDCOVER_REACH_M, AGGLO_MARGIN_M + VILLAGE_REACH_M) / M_PER_DEG
-        rlon = rlat / max(math.cos(math.radians(float(mid[1]))), 0.01)
+        rlon = rlat / max(dmath.cos(math.radians(float(mid[1]))), 0.01)
         m = AGGLO_MARGIN_M / M_PER_DEG
         lon0, lat0 = np.maximum(pts.min(axis=0) - m, (mid[0] - rlon, mid[1] - rlat))
         lon1, lat1 = np.minimum(pts.max(axis=0) + m, (mid[0] + rlon, mid[1] + rlat))
@@ -2627,7 +3115,7 @@ class Towns:
         (lon0, lat0), (lon1, lat1) = pts.min(axis=0), pts.max(axis=0)
         if near is not None:
             rlat = POINTS_REACH_M / M_PER_DEG
-            rlon = rlat / max(math.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
+            rlon = rlat / max(dmath.cos(math.radians((near[1] + near[3]) / 2)), 0.01)
             lon0, lat0 = max(lon0, near[0] - rlon), max(lat0, near[1] - rlat)
             lon1, lat1 = min(lon1, near[2] + rlon), min(lat1, near[3] + rlat)
             if lon0 > lon1 or lat0 > lat1:
@@ -2640,8 +3128,10 @@ class Towns:
 
     def maker(self, frame, keys, out_dir, vfs_dir, faces):
         """roads.build_tile's towns: (roads, box, left_hand, rings) -> the tile's sign rows (prop rows of their faces'
-        groups), each new face written and named in faces (the tile's "townsigns": write_tile's towns)."""
-        def rows(roads, box, left_hand, rings=()):
+        groups), each new face written and named in faces (the tile's "townsigns": write_tile's towns). meshed (a
+        list; the regional kit's boards, KIT_BOARDS): those countries' town_signs rows go there whole instead, with no
+        face written for them."""
+        def rows(roads, box, left_hand, rings=(), meshed=None):
             try:
                 communes = self.communes(frame, keys)
             except Exception as e:      # (no signs rather than no tile)
@@ -2650,8 +3140,18 @@ class Towns:
                 return []
             if not communes:
                 return []
+            mapped = None
+            if any(c.country == "DE" for c in communes):
+                try:
+                    mapped = self.mapped_nodes(frame, keys)
+                except Exception as e:      # (the estimate alone rather than no signs)
+                    log.warning("town signs: mapped: %s: %s", type(e).__name__, e, exc_info=True)
             out = []
-            for r in town_signs(roads, communes, frame, box, left_hand, rings):
+            for r in town_signs(roads, communes, frame, box, left_hand, rings, mapped,
+                                self._urban_fn([True]) if mapped else None):
+                if meshed is not None and r[10] in KIT_BOARDS:
+                    meshed.append(r)
+                    continue
                 nxt, km = "", 0
                 if r[0] == G_EXIT and r[10] in NEXT_PLACE:
                     try:
@@ -2672,16 +3172,58 @@ class Towns:
             return out
         return rows
 
+    def town_state(self, frame, keys):
+        """f(xy (n, 2) frame metres) -> (n, 2) bool [in a German town (its agglomeration: state), on a German
+        commune's land] of the communes of the map cells keys, for the speed-limit signs (speedsigns.general: Germany's
+        general limits); None while they are not at hand, or none is German (the signs then all kept)."""
+        try:
+            communes = self.communes(frame, keys)
+        except Exception as e:      # (every speed sign rather than no sign tile)
+            log.warning("town signs: speed signs' towns: %s: %s", type(e).__name__, e, exc_info=True)
+            return None
+        de = [c for c in communes or () if c.country == "DE"]
+        if not de:
+            return None
+
+        def towns(xy):
+            xy = np.asarray(xy, np.float64).reshape(-1, 2)
+            land = np.zeros(len(xy), bool)
+            for c in de:
+                land |= inside(c.parts, xy)
+            return np.c_[state(xy, de, frame) >= 0, land]
+        return towns
+
+    def mapped_nodes(self, frame, keys):
+        """[(x, y, name)] in frame metres of the mapped Ortstafeln (TOWN_SIGN_CODE) the lane shards have in the road
+        cells keys (railtags.sign_nodes: the roads layer joined with them), each once (a node near a cell's edge is in
+        both cells' lists)."""
+        import railtags
+        seen, out = set(), []
+        for k in keys:
+            feats = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+            if feats is None:
+                continue
+            for lo, la, t in railtags.sign_nodes(feats):
+                if not isinstance(t, dict) or not TOWN_SIGN_CODE.search(str(t.get("traffic_sign", ""))):
+                    continue
+                at = (round(float(lo), 7), round(float(la), 7), str(t.get("name", "")))
+                if at in seen:
+                    continue
+                seen.add(at)
+                x, y, _ = frame.geodetic_to_enu(at[1], at[0], 0.0)
+                out.append((float(x), float(y), at[2]))
+        return sorted(out)
+
     def _points_near(self, lat, lon, heading):
         """[(name, lon, lat)] of the village points (mapdata "town_points") of the map cells near the ray of
         NEXT_MAX_M from (lat, lon) along heading (next_place's points; the same cells for the same sign); [] when not
         all are cached yet (_points: the tile is built again)."""
         import mapcells
-        c = math.cos(math.radians(lat))
+        c = dmath.cos(math.radians(lat))
         h = math.radians(heading)
         s = np.arange(500.0, NEXT_MAX_M + 1.0, 1000.0)
-        la = lat + s * math.sin(h) / M_PER_DEG
-        lo = lon + s * math.cos(h) / (M_PER_DEG * c)
+        la = lat + s * dmath.sin(h) / M_PER_DEG
+        lo = lon + s * dmath.cos(h) / (M_PER_DEG * c)
         pad = 1500.0 / M_PER_DEG
         seen, out = set(), []
         for feats in self._points(mapcells.cells_near_points(la, lo, pad, pad / c)) or ():

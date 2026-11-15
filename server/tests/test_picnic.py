@@ -290,6 +290,38 @@ class NoWaitTest(unittest.TestCase):
         src.prefetch([Key()])
         self.assertEqual(calls, [(14, 3, 4)], "read once")
 
+    def test_a_cells_rows_are_kept_for_the_next_process(self):
+        # each process (and run) queried every cell's row groups again: the rows of a version's cell are kept on disk
+        import tempfile
+        import threading
+        import picnicsource
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as d:
+            remote = SimpleNamespace(cache_dir=d)
+            import struct
+            rows = [(7, "picnic_table", None, None, struct.pack("<BIdd", 1, 1, 2.5, 48.1)), (9, None, "bbq", "", b"")]
+
+            def source(answer):
+                src = picnicsource.Source.__new__(picnicsource.Source)
+                src._lock, src._down, src._cells = threading.Lock(), False, {}
+                src._version = lambda kind: ("etag", remote)
+                src._query = answer
+                return src
+
+            class Key:
+                z, x, y = 14, 5, 6
+
+                @staticmethod
+                def bounds():
+                    return (0.0, 0.0, 1.0, 1.0)
+            asked = []
+            a = source(lambda remote_, bounds, kind: asked.append(bounds) or rows)._cell(Key(), "demand")
+            b = source(lambda remote_, bounds, kind: asked.append(bounds) or [])._cell(Key(), "demand")
+            self.assertEqual(len(asked), 1, "the second process read the kept rows")
+            self.assertEqual(list(a.ids), list(b.ids))
+            self.assertEqual(list(a.attrs["tags"]), list(b.attrs["tags"]))
+            self.assertEqual(picnicsource._rows_load(remote, Key()), rows)
+
     def test_mapdata_side_prefetch_starts_every_side_source(self):
         import mapdata
 

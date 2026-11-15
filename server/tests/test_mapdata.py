@@ -36,6 +36,9 @@ import xproc  # noqa: E402
 import railtags  # noqa: E402
 
 railtags.LANES_ON = False       # (the lane shards are fetched per build: test_railtags; these count Overture's requests)
+import osmtagshards  # noqa: E402
+
+osmtagshards.ON = False         # (the OSM tag shards: test_osm_tag_shards; these count the Layercake file's requests)
 
 try:
     import duckdb  # noqa: F401 (only whether it is installed)
@@ -44,6 +47,16 @@ except ImportError:
     HAVE_DUCKDB = False
 needs_duckdb = unittest.skipUnless(HAVE_DUCKDB, "duckdb / fsspec not installed (server/requirements.txt)")
 REPO = Path(__file__).resolve().parents[2]
+# (these tests are the parquet path's: Overture's tiles have their own, tests/test_pmtiles.py)
+_SOURCE = mock.patch.object(mapdata, "MAP_SOURCE", "parquet")
+
+
+def setUpModule():
+    _SOURCE.start()
+
+
+def tearDownModule():
+    _SOURCE.stop()
 
 
 class SmallBlocks:
@@ -531,6 +544,17 @@ class Sources:
         md = mapdata.MapData(cache or os.path.join(self.tmp, "cache"), mf.fetcher(t, policies, **kw), mf.RELEASE)
         self.addCleanup(md.close)
         return md, t
+
+
+@needs_duckdb
+class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_station_tags_beside_rail_tags(self):
+        # the weekly station shards' reader (railtags.StationTags), made with the map data like the rail one
+        import railtags
+        md, _ = self.mapdata()
+        self.assertIsInstance(md.station_tags, railtags.StationTags)
+        # (the road tiles' chargers take its capacity and charge points: their cache keys follow its weekly build)
+        self.assertIn("stations", md.versions())
 
 
 @needs_duckdb
@@ -1112,3 +1136,34 @@ class CliTest(Sources, SmallBlocks, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShedTest(unittest.TestCase):
+    def test_shed_clears_the_station_shards(self):
+        # Codex on #1111 (2026-11-10): MapData.clear_memory (budget.maybe_shed) let go of the rail and lane shards
+        # only; the station shards stayed in memory on small-memory clients
+        import threading
+        from types import SimpleNamespace
+        cleared = []
+        spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
+        md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+        mapdata.MapData.clear_memory(md)
+        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
+
+
+class StoreLevelTest(unittest.TestCase):
+    def test_a_cell_file_holds_the_same_arrays_as_savez_compressed(self):
+        # MapData._store writes at STORE_LEVEL (cheaper than numpy's level 6): the same members and arrays
+        arrays = {"ids": np.array(["a", "bb", ""]), "xy": np.arange(3000, dtype=np.float64).reshape(-1, 2) * 0.37,
+                  "kind": np.array([1, 2, 3], np.uint8), "provenance": np.array(json.dumps({"id": "x"})),
+                  "empty": np.zeros(0, np.int32)}
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "a.npz"), os.path.join(d, "b.npz")
+            mapdata._savez_deflated(a, arrays, mapdata.STORE_LEVEL)
+            np.savez_compressed(b, **arrays)
+            with np.load(a, allow_pickle=False) as za, np.load(b, allow_pickle=False) as zb:
+                self.assertEqual(za.files, zb.files)
+                for k in za.files:
+                    self.assertEqual(za[k].dtype, zb[k].dtype)
+                    np.testing.assert_array_equal(za[k], zb[k])

@@ -1,4 +1,4 @@
-"""revisit: a far tile's texture kept as a file beside its zip (SIDE_KINDS), hard-linked in when kept and out on a
+"""revisit: a far tile's texture kept as a file beside its item (SIDE_KINDS), hard-linked in when kept and out on a
 hit: nothing written either way (a warm drive rewrote every far texture, 2026-11-04). Zips of before (the texture
 inside) still load; a zip whose file was cut back alone is a miss."""
 import os
@@ -11,12 +11,14 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import revisit  # noqa: E402
+import revisitpack  # noqa: E402
 
 
 class SideTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(revisitpack.reset)  # LIFO: release pack handles before deleting the cache
         self.cache = os.path.join(self.tmp.name, "cache")
         self.session = os.path.join(self.tmp.name, "user", "current", "temp", "beamngEarth", "s1")   # (staging: links)
         os.makedirs(self.session)
@@ -37,8 +39,9 @@ class SideTest(unittest.TestCase):
         zp = revisit._path(self.cache, "far", "abcdef")
         side = revisit._side(zp, "tex.dds")
         self.assertEqual(os.stat(side).st_ino, os.stat(tex).st_ino)          # linked in: nothing written
-        with zipfile.ZipFile(zp) as z:
-            self.assertNotIn("tex.dds", z.namelist())
+        self.assertFalse(os.path.exists(zp))                                 # (kept in a pack, not a zip)
+        raw = revisitpack.store_for(self.cache).get("far", "abcdef")
+        self.assertNotIn(b"DDS texture bytes", raw)                          # (the texture beside it, not inside)
         blobs, extra = revisit.load(self.cache, "far", "abcdef")
         self.assertEqual(blobs["built.npz"], b"npz")
         self.assertIsInstance(blobs["tex.dds"], revisit.Side)

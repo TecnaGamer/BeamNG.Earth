@@ -113,6 +113,8 @@ MARKERS={
     'nordic':('white','black','white','two_yellow','slope'),
     'pl':('white','red','red','white','slope'),
     'red_black':('white','black','red','white','slope'),
+    'it_al':('white','black_top','red','white','slope'),
+    'it_motorway':('white','black_top','yellow',None,'slope'),
     'rs':('white','cap','red','white','flat'),
     'si':('white','cap','red','white','flat'),
     'tr':('white','none','red','white','slope'),
@@ -125,6 +127,17 @@ def marker(kind,detail=0):
     if cap=='round':
         m.cylinder(mat(body),0,0,0,h-.08,.075)
         tapered(m,mat(body),h-.08,h,.075,.045)
+    elif band=='black_top':
+        bottom=(0.,0.)
+        band_start=(h-.30,h-.23)
+        top=(h-.07,h)
+        for colour,lo,hi in ((body,bottom,band_start),('black',band_start,top)):
+            pts=[(-w/2,-d,lo[0]),(w/2,-d,lo[1]),(w/2,-d,hi[1]),(-w/2,-d,hi[0])]
+            face(m,mat(colour),pts,(0,-1,0))
+            face(m,mat(colour),[(x,d,z) for x,y,z in pts],(0,1,0))
+            for i in (1,3):
+                a,b=pts[i],pts[(i+1)%4];m.face(mat(colour),[a,(a[0],d,a[2]),(b[0],d,b[2]),b])
+        m.face(mat('black'),[(-w/2,-d,top[0]),(w/2,-d,top[1]),(w/2,d,top[1]),(-w/2,d,top[0])])
     else:
         top=[h-.07 if cap=='slope' else h,h]
         pts=[(-w/2,-d,0),(w/2,-d,0),(w/2,-d,top[1]),(-w/2,-d,top[0])]
@@ -132,11 +145,12 @@ def marker(kind,detail=0):
         for i in range(4):
             a,b=pts[i],pts[(i+1)%4];m.face(mat(body),[a,(a[0],d,a[2]),(b[0],d,b[2]),b])
     for side,ref in ((-1,front),(1,back)):
+        if ref is None:continue
         y=side*(.076 if cap=='round' else d+.001)
         def panel(col,x0,x1,z0,z1,slant=0,depth=0):
             face(m,mat(col),[(x0,y+side*depth,z0),(x1,y+side*depth,z0+slant),
                               (x1,y+side*depth,z1+slant),(x0,y+side*depth,z1)],(0,side,0))
-        if band!='none':
+        if band not in ('none','black_top'):
             col='black' if band in ('black','cap') else 'red' if band=='red_top' else band
             if band=='cap':panel(col,-.060,.060,1.01,1.12)
             elif band=='red_top':panel('red',-.060,.060,1.04,1.075,.05)
@@ -147,6 +161,7 @@ def marker(kind,detail=0):
             for z in (.78,.91):
                 if ref=='two_orange':panel(col,-.043,.043,z-.045,z+.045,depth=.003)
                 else:m.disc_y(mat(col),0,y+side*.003,z,.032,front=side==-1)
+        elif band=='black_top':panel('reflect' if ref=='white' else ref,-.023,.023,.925,1.067,depth=.003)
         else:panel('reflect' if ref=='white' else ref,-.027,.027,.735,.95,depth=.003)
     if kind=='ie':
         # Green/white ringed bollard, not a continental flat delineator.

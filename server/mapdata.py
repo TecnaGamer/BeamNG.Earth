@@ -59,22 +59,33 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
+import dnp
 
 import geodesy
 import gradesep
 import mapcells
 import mapgeom
 import maprasters
+import bnwt
 import netfetch
 import overture
+import pmtiles
 import rangeread
 import revisit
+import levelways
+import roadsmooth
 import staging
 import xproc
 
 log = logging.getLogger("earthd.mapdata")
 
-LAYER_THREADS = 12              # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
+# Where the Overture layers that Overture's own vector tiles hold whole (pmtiles.LAYERS: roads, buildings, places...)
+# come from: "pmtiles" (the default: a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its
+# parquet row groups, 3-25 s) or "parquet" (as before; also every layer's fallback when the tiles fail). (Off for a
+# few hours on 2026-11-11: with the tiles the game froze on cold teleports; the cause was the station boards' PNGs the
+# engine cooked while the place loaded, which the tiles' early stations exposed: DDS now, imagery.write_picture_dds.)
+MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "pmtiles").strip().lower()
+LAYER_THREADS = 12             # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
                                 # user, 2026-10-28: "lets test OSM if it is too laggy we will revert")
@@ -88,6 +99,10 @@ _CPUS = os.cpu_count() or 4
 WARM_THREADS = min(8, _CPUS // 2) if _CPUS > 8 else 0
 BUILDING_MAX_M2 = 2.0e6     # m2: a building footprint larger than this is a mapping error (the largest real ones are
                             # ~1 km2; an OpenStreetMap one of 15.8 km2 roofed a city in Egypt, GitHub #413)
+# The deflate level a cell's layer file is written at: np.savez_compressed's (zlib's default, 6) cost ~1.3 CPU-s of a
+# cold place's ~300 files (Lawrence KS, 2026-11-11), level 3 half of it for files ~12 % larger (13.6 MB for 12.2). The
+# same .npz (np.load reads any level), the same arrays.
+STORE_LEVEL = 3
 VERSION = 2                     # pipeline version: bump when what a cell's layers contain changes
 # per layer, on top of VERSION (a layer's own change without re-fetching the others): roads 2 adds
 # the "oneway" rule (Overture access_restrictions by heading)
@@ -105,7 +120,10 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
 # roads 9: OpenStreetMap's busways appended (osmtags.busway_features). Overture emits none, as with raceways.
+# (osmtags.is_outline, a raceway that is a circuit site's outline left out, GitHub #1010: as #184, only cells fetched
+# after it; the cached ones with the next Overture release bump)
 LAYER_VERSIONS = {"roads": 9}
+LANE_CONTEXT_CELLS = 16       # neighbour cells' raw road layers kept for slip-road mouths (lanesections.split's context)
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -189,11 +207,78 @@ def digest_arrays(arrays):
 BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited for this long (xproc.once)
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
+_ASK = object()         # (MapData._rails / _lanes: the tag data's version not asked for yet)
 MIRROR_SMALL = 65536    # bytes: an array this small is read into memory (no mapping)
-MEM_MB = 192        # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by
+MEM_MB = 256        # (192 before 2026-11-10: with places slimmed, a Manhattan 3x3 build still reads ~97 roads layers,
+                    # ~341 MB: 256 cut cold road tiles' instructions 3.7 / 2.5 / 1.7 % at Manhattan / Munich / Fells Point
+                    # for +45-57 MB peak RSS; budget.py's small machines keep SMALL_MAPDATA_MB)
+                    # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by
                     # its neighbours too: ~8 ms of decompression and a coordinate transform each time, 2026-10-15).
                     # A road tile's layers of Baltimore's 4 cells are ~124 MB by _nbytes (the infrastructure 65):
                     # at 64 every tile decoded them again, 446 loads for 36 tiles (7.5 s of 87 on a Steam Deck)
+
+
+# The road tiles read a cell's places (gas stations, EV chargers, the development context's pedestrian places) through
+# places_slim: only the rows they use, each at its first point, with their readers' findings made on the whole layer
+# (slim_places). The whole layer (Overture's places with every name, category and source as fixed-width strings: ~64
+# MB a Manhattan cell, ~110 MB by _nbytes) is decoded for it and not kept: kept, two of them filled the decoded
+# layers' MEM_MB and pushed out the roads layers every cell's facts read round it, decoded again and again (330
+# decodes of 97 cells for a Manhattan 3 x 3 road tile build, ~12 % of its instructions, 2026-11-10).
+PLACES_SLIM_MB = 32     # the slim places kept per process (a Manhattan cell's ~3 MB)
+
+
+def slim_places(f):
+    """places layer f cut down to its fuel stations' candidates (gasstations._candidates), EV chargers'
+    (evchargers._ev_candidates) and pedestrian places (development._pois), in their order, one point each (its first:
+    where their readers take it), those findings kept on it in its rows (its attrs left out: nothing else reads them).
+    f itself when one of those rows has no point of its own."""
+    if f is None or not len(f):
+        return f
+    import development
+    import evchargers
+    import gasstations
+    fuel, ev, pois = gasstations._candidates(f), evchargers._ev_candidates(f), development._pois(f)
+    rows = np.unique(np.concatenate([np.asarray([r[0] for r in fuel], np.int64),
+                                     np.asarray([r[0] for r in ev], np.int64), np.asarray(pois, np.int64)]))
+    part_off, ring_off = np.asarray(f.part_off, np.int64), np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    p0 = part_off[rows]
+    if len(rows) and ((part_off[rows + 1] <= p0).any() or (coord_off[ring_off[p0] + 1] <= coord_off[ring_off[p0]]).any()):
+        return f            # (a row without a point of its own: its readers' index arithmetic is not a slice's)
+    c = coord_off[ring_off[p0]]
+    m = len(rows)
+    step = np.arange(m + 1, dtype=np.int64)
+    out = mapgeom.Features(
+        f.layer, f.ids[rows], np.asarray(f.kind)[rows], step, step.copy(), step.copy(),
+        np.ascontiguousarray(np.asarray(f.lonlat)[c]), None if f.en is None else np.ascontiguousarray(f.en[c]),
+        None if f.own is None else np.asarray(f.own)[rows], None if f.clipped is None else np.asarray(f.clipped)[rows],
+        {}, {})
+    pos = np.full(len(f), -1, np.int64)
+    pos[rows] = np.arange(m, dtype=np.int64)
+    out.__dict__["_fuel_candidates"] = [(int(pos[r[0]]),) + tuple(r[1:]) for r in fuel]
+    out.__dict__["_ev_candidates"] = [(int(pos[r[0]]),) + tuple(r[1:]) for r in ev]
+    out.__dict__["_development_pois"] = pos[np.asarray(pois, np.int64)]
+    cid = f.__dict__.get("_bnge_cell")
+    if cid is not None:     # (its own facts' key: the whole layer's findings are by its rows)
+        out.__dict__["_bnge_cell"] = (cid[0], "places_slim", cid[2])
+    return out
+
+
+def _slim_nbytes(f):
+    if f is None:
+        return 1024
+    return int(sum(getattr(v, "nbytes", 0) for v in (f.ids, f.kind, f.lonlat, f.en, f.own, f.clipped,
+                                                    f.__dict__.get("_development_pois")))
+               + sum(getattr(v, "nbytes", 0) for v in f.attrs.values())       # (the whole layer when kept as it is)
+               + 200 * (len(f.__dict__.get("_fuel_candidates", ())) + len(f.__dict__.get("_ev_candidates", ())))) + 1024
+
+
+def places_of(md, key, kind="demand"):
+    """Cell key's places as the road tiles read them: md.places_slim, or (a map data without it) its places layer."""
+    slim = getattr(md, "places_slim", None)
+    if slim is not None:
+        return slim(key, kind)
+    return md.cell(key, layers=("places",), kind=kind).layers.get("places")
 
 
 def _nbytes(arrays):
@@ -254,6 +339,16 @@ def _raster_from(arrays):
                              meta["nodata"], list(meta["files"]))
 
 
+
+def _savez_deflated(path, arrays, level):
+    """np.savez_compressed(path, **arrays) at deflate level `level` (numpy's own writer: each array an .npy member of a
+    zip64 archive)."""
+    import zipfile
+    with zipfile.ZipFile(path, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True, compresslevel=level) as zf:
+        for key, val in arrays.items():
+            with zf.open(key + ".npy", "w", force_zip64=True) as fh:
+                np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
+
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
     release: the Overture release (overture.RELEASE)."""
@@ -265,6 +360,11 @@ class MapData:
         self.release = release
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
+        # Overture's own vector tiles for the layers they hold whole (pmtiles.LAYERS), the parquet files the fallback
+        self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
+        # our prebaked input tiles (bnwt.py, BNGE_BNWT_URL) for the layers they hold: the cell its source gives, bit for
+        # bit (same file, same keys), one range read for a block of cells
+        self.bnwt = bnwt.Reader(self.raw_dir, self.fetcher, release) if bnwt.enabled() else None
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
@@ -273,13 +373,23 @@ class MapData:
         # their reads at the tile's build start, so they are mostly there when the props ask at its end
         self.side_sources = [self.picnic_osm]
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
+        import lod2roofs                # (Germany's measured roofs: shape and height of each building)
+        self.lod2_roofs = lod2roofs.Source(cache_dir, self.fetcher) if lod2roofs.ON else None
+        import bdtopo                   # (France's measured buildings: IGN BD TOPO, joined in cell(), BNE_BDTOPO)
+        self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
+        self.station_tags = railtags.StationTags(cache_dir, self.fetcher) if railtags.STATIONS_ON else None
         import regionaldata
         regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
+        import germanroads              # (Germany's surveyed road widths, lanes and surfaces, fetched on demand)
+        germanroads.configure(cache_dir, self.fetcher)
         import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
         roadz.install(cache_dir, self.fetcher, self)
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
+        import decisions                # (the shared decision archives' weekly slices are made from these shards)
+        decisions.register_weekly(self)
         import highwaysigns             # (exit, overhead and mile-marker signs: railtags.SignTags, signstream.py)
         self.highway_signs = highwaysigns.Source(self) if railtags.SIGNS_ON else None
         self.dem = None                 # (gradesep's ground: the server's dem.Dem, set by its owner, else its own)
@@ -291,6 +401,9 @@ class MapData:
         self._mem_lock = threading.Lock()
         self._loading = {}                 # (cell, layer) -> shared Future, including decode; guarded by _mem_lock
         self._cell_stats = dict(memory_hits=0, loads=0, coalesced=0, wait_s=0.0, load_s=0.0, decode_s=0.0)
+        self._slim = OrderedDict()          # cell -> (slim places, bytes): places_slim's LRU (PLACES_SLIM_MB)
+        self._slim_bytes = 0
+        self._slim_locks = [threading.Lock() for _ in range(16)]    # (one thread makes a cell's)
         self._warm_ex = None
         self._warming = set()               # (cell, layer)s queued or building in warm()
 
@@ -299,8 +412,12 @@ class MapData:
         if self._warm_ex is not None:
             self._warm_ex.shutdown(wait=False, cancel_futures=True)
         self.overture.close()
+        if getattr(self, "pmtiles", None) is not None:
+            self.pmtiles.close()
+        if getattr(self, "bnwt", None) is not None:
+            self.bnwt.close()
 
-    def _rails(self, key, layer, feats):
+    def _rails(self, key, layer, feats, built=_ASK):
         """The roads layer's rail segments with OSM's railway tags (railtags.py), once per build of them."""
         rt = getattr(self, "rail_tags", None)
         if rt is None or layer != "roads" or feats is None or not len(feats):
@@ -308,37 +425,260 @@ class MapData:
         sub = feats.attrs.get("subtype")
         if sub is None or not (np.asarray(sub).astype(str) == "rail").any():
             return                          # (no rails: nothing to ask for)
-        built = rt.version()
+        if built is _ASK:
+            built = rt.version()
         if built is None or feats.__dict__.get("_rails_built") == built:
             return
         try:
-            rt.join(feats, key)
-            feats.__dict__["_rails_built"] = built
+            if rt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_rails_built"] = built
         except Exception as e:      # (Overture's classes alone)
             log.debug("railtags join %s: %s: %s", key, type(e).__name__, e)
 
-    def _lanes(self, key, layer, feats):
+    def _lanes(self, key, layer, feats, built=_ASK):
         """The roads layer's road segments with OSM's lane tags (railtags.LaneTags), once per build of them."""
         lt = getattr(self, "lane_tags", None)
         if lt is None or layer != "roads" or feats is None or not len(feats):
             return
-        built = lt.version()
+        if built is _ASK:
+            built = lt.version()
         if built is None or feats.__dict__.get("_lanes_built") == built:
             return
         try:
-            lt.join(feats, key)
-            feats.__dict__["_lanes_built"] = built
+            if lt.join(feats, key) is not False:    # (False: its shard unreachable, joined again next time)
+                feats.__dict__["_lanes_built"] = built
         except Exception as e:      # (no lane data: the markings' guesses)
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
-    def versions(self):
+    # --- the roads layer as decoded, on disk (roadlayercache.py) ---------------------------------
+    def _dec_dir(self, key, layer):
+        return self._mirror_dir(self.path(key, layer)) + ".dec"
+
+    def _dec_key(self, key, layer, arrays):
+        """roadlayercache's key of cell key's roads (its file's arrays) now, or None (off, no mirror, the layer's file
+        not there: its parquet stand-in). The tag data's versions are asked for only where the decode asks (_rails: a
+        layer with rail segments; _lanes: one with features): a layer without rails must not fetch the rail tags'
+        manifest for its key."""
+        import roadlayercache
+        if not roadlayercache.ON or MIRROR_MB <= 0:
+            return None, {}
+        try:
+            stamp = self._stamp(self.path(key, layer))
+        except OSError:
+            return None, {}
+        import lanesections
+        import railtags
+        ids, sub = arrays.get("ids"), arrays.get("attr.subtype")
+        n = len(ids) if ids is not None else 0
+        asks = {"rail_tags": bool(n) and sub is not None and bool((np.asarray(sub).astype(str) == "rail").any()),
+                "lane_tags": bool(n)}
+        vers = {}
+        for name in ("rail_tags", "lane_tags"):
+            t = getattr(self, name, None)
+            if t is not None and asks[name]:
+                vers[name] = t.version()        # (raises as in _rails / _lanes: the decode's own error)
+        switches = [levelways.ON, lanesections.ON, roadsmooth.ON, roadsmooth.G2_ON, roadsmooth.RAIL_ON,
+                    roadsmooth.SWITCH_PIN_ON, railtags.LANES_ON]
+        try:
+            return roadlayercache.key(revisit.code_key(), stamp, vers.get("rail_tags", "-"), vers.get("lane_tags", "-"),
+                                      switches), vers
+        except (TypeError, ValueError):
+            return None, vers
+
+    def _dec_stamp(self, layer, cell):
+        """The stamp now of cell's (its string) layer file, or None."""
+        try:
+            z, x, y = (int(v) for v in cell.split("/"))
+            return self._stamp(self.path(mapcells.CellKey(z, x, y), layer))
+        except (OSError, ValueError):
+            return None
+
+    def _dec_load(self, key, layer, dec):
+        import roadlayercache
+        return roadlayercache.load(self._dec_dir(key, layer), dec, lambda c: self._dec_stamp(layer, c))
+
+    def _tags_read(self, name, key):
+        """Is the tag data's (rail_tags / lane_tags) shard of cell key read (in its memory: a shard that could not be
+        had is passed over without an error for SHARD_RETRY_S, and the layer joined meanwhile lacks its tags)?"""
+        import railtags
+        t = getattr(self, name, None)
+        shards = getattr(t, "shards", None)
+        if shards is None:
+            return False
+        shift = key.z - railtags.SHARD_ZOOM
+        return (key.x >> shift, key.y >> shift) in shards
+
+    def _dec_store(self, key, layer, dec, f, ctx, vers):
+        """Keep the decoded roads f of cell key (ctx: [(neighbour cell, read)] of its lane sections; vers: the tag
+        data's versions its key was made with) when complete: the tags that are there joined, every neighbour read
+        and its file there."""
+        import roadlayercache
+        for name, mark in (("rail_tags", "_rails_built"), ("lane_tags", "_lanes_built")):
+            if vers.get(name) is not None and (f.__dict__.get(mark) != vers[name] or not self._tags_read(name, key)):
+                return              # (its join failed or its shard could not be had: tried again at the next decode)
+        stamps = []
+        for cell, ok in ctx:
+            stamp = self._dec_stamp(layer, cell) if ok else None
+            if stamp is None:
+                return
+            if vers.get("lane_tags") is not None:       # (the neighbour's lanes joined too: its mouths' sections)
+                z, x, y = (int(v) for v in cell.split("/"))
+                if not self._tags_read("lane_tags", mapcells.CellKey(z, x, y)):
+                    return
+            stamps.append((cell, stamp))
+        d = self._dec_dir(key, layer)
+        if roadlayercache.has(d, dec):      # (another process kept it while this one made it: a first visit's
+            return                          # processes read the same cells at once)
+        size = roadlayercache.store(d, dec, f, sorted(set(stamps)))
+        if size:
+            self._mirror_note(size)
+
+    def _lane_sections(self, key, layer, kind, frame, f, ctx=None):
+        """The roads layer with its merged highways' lane sections split out (lanesections.split, from PR #880 by
+        DerEifrige-f; BNE_LANE_SECTIONS=off: as before). A slip road whose mouth lies in another cell reads that
+        cell's own arrays (not cell(): two workers resolving the two ends of one link would wait on each other), so
+        every copy of the link has one geometry."""
+        import lanesections
+        import railtags
+        if not lanesections.ON or railtags.LANE_PARTS not in f.attrs:
+            return f
+        context = {}
+        lt = getattr(self, "lane_tags", None)
+        built = lt.version() if lt is not None else None
+        with self._lock:                # (the neighbour cells' raw layers, kept for the next cells' decodes)
+            kept = self.__dict__.setdefault("_lane_context", OrderedDict())
+
+        def lane_context(lat, lon):
+            owner = mapcells.cell_of(lat, lon)
+            if owner == key:
+                return f
+            if owner not in context:
+                ck = (str(owner), layer, built)
+                with self._lock:
+                    other = kept.get(ck)
+                    if other is not None:
+                        kept.move_to_end(ck)
+                if other is None:
+                    try:
+                        ar, _hit = self.layer_arrays(owner, layer, kind)
+                        other = mapgeom.Features.from_arrays(layer, ar, "")
+                        self._lanes(owner, layer, other)
+                        with self._lock:
+                            kept[ck] = other
+                            while len(kept) > LANE_CONTEXT_CELLS:
+                                kept.popitem(last=False)
+                    except Exception as e:
+                        log.debug("lane mouth context %s: %s", owner, e)
+                context[owner] = other
+                if ctx is not None:         # (what this layer's lane sections read: roadlayercache's validity)
+                    ctx.append((str(owner), other is not None))
+            return context[owner]
+        return lanesections.split(f, frame, lane_context)
+
+    def _bdtopo(self, key, layer, feats):
+        """A French buildings layer with IGN BD TOPO's measured heights, storeys, materials and use (bdtopo.py), joined
+        once its cell's records are here; never waits for them nor asks for them: the building tiles do, for their own
+        cells (bdtopo_wait), not every reader of the outlines (the town coverage's 30-odd cells round a tile, the
+        trees' masks). Returns the layer."""
+        src = getattr(self, "bdtopo", None)
+        if src is None or layer != "buildings" or feats is None or feats.__dict__.get("_bdtopo") is not None:
+            return feats
+        import bdtopo
+        if not bdtopo.covers(_key(key).bounds()):
+            feats.__dict__["_bdtopo"] = False
+            return feats
+        recs = src.cached(key)
+        if recs is None:
+            return feats
+        try:
+            got = bdtopo.join(feats, recs) if len(feats) else None
+        except Exception as e:      # (the map's attributes alone)
+            log.warning("bdtopo join %s: %s: %s", key, type(e).__name__, e)
+            got = None
+        if got is not None:
+            feats.attrs = got       # (one swap: a reader holds either the old attrs or the new ones)
+        feats.__dict__["_bdtopo"] = recs.n
+        return feats
+
+    def bdtopo_wait(self, keys, wait=True):
+        """A building tile's wait for its French cells' measured buildings (bdtopo.Source.wait: together, bounded;
+        wait=False: their downloads started, not waited for). True when they are all here (or none is French); else
+        the tile is a revisit fault (built from the map's attributes alone: not kept, built again with them)."""
+        src = getattr(self, "bdtopo", None)
+        if src is None:
+            return True
+        ks = [_key(k) for k in keys]
+        ok = src.wait(ks) if wait else (not src.prefetch(ks) and src.wait(ks))
+        if not ok:
+            revisit.fault()
+        return ok
+
+    def versions(self, buildings=False):
+        """The map data's identity for cache keys; buildings: for a tile that draws buildings, with the OSM building
+        years' and colours' builds too ("osmyears": osmyears.identity, "osmcolours": osmcolours.identity, each frozen
+        per process; "off" / "none" without one)."""
+        if buildings:
+            import osmcolours
+            import osmyears
+            return dict(self.versions(), osmyears=osmyears.identity(self), osmcolours=osmcolours.identity(self))
+        import europewalks
+
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
-        return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
-                "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
-                "lanes": lanes.known() if lanes is not None else None,
-                "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        v = {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
+             "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
+             "lanes": lanes.known() if lanes is not None else None,
+             "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
+             "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        st = getattr(self, "station_tags", None)
+        if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
+            v["stations"] = st.known()
+        if getattr(self, "pmtiles", None) is not None:
+            # (the cells from Overture's tiles: their own key, so plans, cell facts and tiles built from them never mix
+            # with the parquet cells'; BNGE_MAP_SOURCE=parquet keeps the keys as before)
+            v["mapsrc"] = pmtiles.source_key()
+        if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
+            v["roadsmooth"] = roadsmooth.VERSION
+        import lanesections
+        if lanesections.ON:                     # (likewise the merged highways' lane sections, PR #880)
+            v["lanesections"] = lanesections.VERSION
+        import roads
+        if not roads.WIDTH_MODEL_ON or not roads.WINDING_ON:    # (the measured default widths' switches: off keyed)
+            v["widths"] = (roads.WIDTH_MODEL_ON, roads.WINDING_ON)
+        if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
+            v["street_edges"] = europewalks.VERSION
+        if levelways.ON:
+            v["levelways"] = levelways.VERSION
+        return v
+
+    def warm_manifests(self):
+        """The weekly datasets' manifests (rails, lanes, stations: versions()' keys) fetched now, in the background (the
+        server's start): a first run's tiles, plans and cell facts were keyed without them until a build happened to
+        ask, and none of those was found again by the next run (versions)."""
+        def run():
+            import osmcolours
+            import osmyears
+            got = []
+            for mod in (osmyears, osmcolours):  # (the building years and colours: pinned now for the next start, frozen)
+                try:
+                    got.append(mod.shards(self))
+                except Exception:
+                    got.append(None)
+            try:
+                import bldhz            # (the horizon ring's tall buildings, the same way)
+                tall = bldhz.source(self)
+                got.append(tall if isinstance(tall, bldhz.PagesIndex) else None)
+            except Exception:
+                got.append(None)
+            for src in (getattr(self, "rail_tags", None), getattr(self, "lane_tags", None),
+                        getattr(self, "station_tags", None), *got):
+                if src is None:
+                    continue
+                try:
+                    src.version()
+                except Exception as e:
+                    log.debug("manifest of %s: %s: %s", getattr(src, "name", src), type(e).__name__, e)
+        threading.Thread(target=run, daemon=True, name="manifests").start()
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
@@ -362,8 +702,16 @@ class MapData:
             versions[name] = built
         return versions
 
-    def path(self, key, layer):
+    def _pmt(self, layer):
+        """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
+        return getattr(self, "pmtiles", None) is not None and layer in pmtiles.LAYERS
+
+    def path(self, key, layer, parquet=False):
+        """The cell layer's file. A layer from Overture's tiles has a folder of its own (overture-pmt<FORMAT>): the
+        parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over."""
         source, release = _source(layer, self.release)
+        if not parquet and MapData._pmt(self, layer):
+            source = f"overture-pmt{pmtiles.FORMAT}"
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
@@ -393,20 +741,33 @@ class MapData:
         """True when the layer's file exists (not read: cheap enough for the event loop)."""
         return os.path.exists(self.path(key, layer))
 
-    def layer_provenance(self, key, layer):
-        """The provenance dict of a cached layer file, None when it is not cached (or has none): only that entry of
-        the file is read (np.load is lazy per array), and remembered per file (credits.feature_ids asks every second,
-        from the event loop). Never fetches."""
+    def layer_provenance(self, key, layer, wait=False):
+        """The provenance dict of a cached layer file, None when it is not cached (or has none, or, wait false, not
+        read yet: read on a thread of its own, the next ask has it): only that entry of the file is read (np.load is
+        lazy per array), and remembered per file (credits.feature_ids asks every second, from the event loop). Never
+        fetches."""
         path = self.path(_key(key), layer)
         memo = self.__dict__.setdefault("_prov_memo", {})
         if path in memo:
             return memo[path]
+        if not wait:
+            # (a first read, or a file not built yet, off the event loop: on a busy hard disk opening the cell took
+            # 5.2 s of the loop, GitHub #1054; the caller asks again a second later)
+            self._prov_ask(path)
+            return None
+        return self._prov_read(path)
+
+    PROV_MISS_S = 30.0      # s before a cell file that was not there is looked for again
+
+    def _prov_read(self, path):
+        memo = self.__dict__.setdefault("_prov_memo", {})
         p = None
         try:
             with np.load(path, allow_pickle=False) as z:
                 if "provenance" in z.files:
                     p = json.loads(str(z["provenance"]))
         except FileNotFoundError:
+            self.__dict__.setdefault("_prov_miss", {})[path] = time.monotonic()
             return None                 # (not remembered: it may be built later)
         except Exception:
             p = None
@@ -414,6 +775,34 @@ class MapData:
             memo.clear()
         memo[path] = p
         return p
+
+    def _prov_ask(self, path):
+        """Read path's provenance on the provenance thread (one at a time, newest asks first)."""
+        miss = self.__dict__.setdefault("_prov_miss", {})
+        if time.monotonic() - miss.get(path, -1e9) < self.PROV_MISS_S:
+            return
+        with self.__dict__.setdefault("_prov_lock", threading.Lock()):
+            queue = self.__dict__.setdefault("_prov_queue", [])
+            if path in queue:
+                return
+            queue.append(path)
+            if self.__dict__.get("_prov_thread") is None:
+                t = threading.Thread(target=self._prov_loop, name="mapdata provenance", daemon=True)
+                self.__dict__["_prov_thread"] = t
+                t.start()
+
+    def _prov_loop(self):
+        while True:
+            with self.__dict__["_prov_lock"]:
+                queue = self.__dict__["_prov_queue"]
+                if not queue:
+                    self.__dict__["_prov_thread"] = None
+                    return
+                path = queue.pop()
+            try:
+                self._prov_read(path)
+            except Exception:
+                pass
 
     def _load(self, path):
         """A layer file's arrays, or None when it is missing or unreadable (truncated, a damaged
@@ -436,7 +825,7 @@ class MapData:
     def _store(self, path, arrays):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
-        np.savez_compressed(tmp, **arrays)
+        _savez_deflated(tmp, arrays, STORE_LEVEL)
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
@@ -444,10 +833,37 @@ class MapData:
         if layer in VECTOR_LAYERS:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
-            feats, sources = self.overture.query(layer, key, kind)
+            feats = fell = None
+            if self._pmt(layer) and getattr(self, "bnwt", None) is not None and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, bnwt.PMT)
+            if self._pmt(layer) and feats is None:
+                try:
+                    feats, sources = self.pmtiles.query(layer, key, kind)
+                except Exception as e:      # (any: the parquet files have the same layer, slower)
+                    if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+                        if osm is not None:
+                            osm.cancel()
+                        raise               # (a prefetch the hosts had no room for: as the parquet path's)
+                    fell = e
+                    log.warning("mapdata %s %s: Overture's tiles failed (%s: %s): from its parquet files", key, layer,
+                                type(e).__name__, e)
+            if fell is not None:
+                # what is built from the parquet cell is not kept (revisit) and the cell is stored with the parquet
+                # ones (layer_arrays): the two sources never share a file or a cache key
+                revisit.fault()
+                got = self._load(self.path(key, layer, parquet=True))
+                if got is not None:
+                    if osm is not None:
+                        osm.cancel()
+                    got["_fallback"] = np.array(True)
+                    return got
+            if feats is None and fell is None and not self._pmt(layer) and getattr(self, "bnwt", None) is not None \
+                    and layer in bnwt.LAYERS:
+                feats, sources = self._bnwt_query(layer, key, kind, "parquet")
+            if feats is None:
+                feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result(),
-                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
+                feats = self._osm(feats, osm.result(), lambda need: self._osm_geometry(key, kind, need))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -456,6 +872,10 @@ class MapData:
                 feats.own |= feats.clipped
             arrays = _layer_arrays(feats)
             prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
+            if prov is not None and self._pmt(layer):
+                prov["format"] = "parquet" if fell is not None else "pmtiles"
+            if fell is not None:
+                arrays["_fallback"] = np.array(True)
         elif layer == "landcover":
             r = self.rasters.worldcover(key, kind)
             arrays = _layer_arrays(r)
@@ -470,19 +890,89 @@ class MapData:
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         return arrays
 
+    def _bnwt_query(self, layer, key, kind, source="parquet"):
+        """(Features, sources) of the layer from the prebaked tiles (bnwt.py) as source gives them (Overture's tiles:
+        bnwt.PMT, else "parquet"), (None, None) when they cannot say (the source itself then: the same content)."""
+        try:
+            return self.bnwt.query(layer, key, kind, source)
+        except DEFERRED:
+            if kind not in ("demand", "urgent"):
+                raise                       # (a prefetch the hosts had no room for: as the parquet path's)
+        except bnwt.Unavailable as e:
+            log.debug("mapdata %s %s: no prebaked tile (%s): from the parquet files", key, layer, e)
+        except Exception as e:              # (any: the parquet files have the same layer)
+            log.warning("mapdata %s %s: prebaked tile failed (%s: %s): from the parquet files", key, layer,
+                        type(e).__name__, e)
+        self.bnwt.stats["fallbacks"] += 1
+        return None, None
+
     def _osm_pool(self):
         with self._lock:
             if getattr(self, "_osm_ex", None) is None:
                 self._osm_ex = ThreadPoolExecutor(OSM_THREADS, thread_name_prefix="osmtags")
             return self._osm_ex
 
+    def _osm_shards(self):
+        """The weekly OSM road tag shards (osmtagshards.py), None when off."""
+        import osmtagshards
+        if not osmtagshards.ON or self.fetcher is None:
+            return None
+        with self._lock:
+            if getattr(self, "osm_shards", None) is None:
+                self.osm_shards = osmtagshards.TagShards(self.cache_dir, self.fetcher)
+            return self.osm_shards
+
+    def _osm_tile(self, key, kind):
+        """The decoded tag shard tile of cell key (osmtagshards.TagShards.tile; None: no tagged highway there), or
+        False when the shards cannot answer (off, not published, unreachable, damaged: the Layercake file instead).
+        A prefetch the host had no room for is raised (DEFERRED), as the Layercake path's; on demand the Layercake
+        file is asked instead."""
+        import osmtagshards
+        shards = self._osm_shards()
+        if shards is None or key.z != mapcells.ZOOM:
+            return False
+        try:
+            return shards.tile(key, kind)
+        except osmtagshards.NotInUse:
+            return False                # (none published, or off)
+        except Exception as e:
+            if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+                raise
+            shards.down(e)
+            return False
+
+    def osm_tags_warm(self, kind="prefetch"):
+        """Worker thread: the tag shards' manifest and archive head read once at the start (two small reads, kept on
+        disk for every process), so a fresh place's first cell waits only for its leaf directory and tile."""
+        shards = self._osm_shards()
+        got = shards.manifest() if shards is not None else None
+        if got is not None:
+            for part in got[1].get("_parts", ()):      # (each archive part's head: head() takes a part, not the
+                shards.head(got[0], part, kind)        # manifest, which failed with KeyError: 3 at every start)
+
+    def _osm_geometry(self, key, kind, need):
+        """{way id: lon/lat line} of the cell's tagged motorways and trunks (roadlanes.join's callback): from the tag
+        shards when they answer, else the Layercake file."""
+        import osmtags
+        t = self._osm_tile(key, kind)
+        if t is not False:
+            return osmtags.geometry_from_tile(t, key.bounds(), need)
+        with self._lock:
+            if getattr(self, "osmtags", None) is None:
+                self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
+        return self.osmtags.highway_geometry(key.bounds(), kind, need)
+
     def _osm_cell(self, key, kind):
-        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
-        keep their width guesses). Extra ways are the raceways and busways Overture does not emit."""
+        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py): from the weekly tag shards
+        (osmtagshards.py, one small read), else the Layercake file; none when both fail (the roads keep their width
+        guesses). Extra ways are the raceways and busways Overture does not emit."""
         import osmtags
         if self.fetcher is None:
             return {}, []
         try:
+            t = self._osm_tile(key, kind)
+            if t is not False:
+                return osmtags.from_tile(t, key.bounds())
             with self._lock:
                 if getattr(self, "osmtags", None) is None:
                     self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
@@ -590,6 +1080,13 @@ class MapData:
                 return self._mirrored(key, layer, path, arrays), True
             try:
                 arrays = self._build(key, layer, kind)
+                if arrays.pop("_fallback", None) is not None:
+                    # (the tiles failed: the parquet cell, kept with the parquet ones; asked of the tiles again next
+                    # time it is not in memory)
+                    ppath = self.path(key, layer, parquet=True)
+                    if not os.path.exists(ppath):
+                        self._store(ppath, arrays)
+                    return self._mirrored(key, layer, ppath, arrays), False
                 self._store(path, arrays)
             finally:
                 if mine:
@@ -715,7 +1212,7 @@ class MapData:
         with self._mem_lock:
             return dict(self._cell_stats)
 
-    def _decoded_layer(self, key, layer, kind, frame, token=None):
+    def _decoded_layer(self, key, layer, kind, frame, token=None, remember=True):
         """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
         hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
         k = (str(key), layer)
@@ -727,13 +1224,29 @@ class MapData:
             prov = json.loads(str(arrays.pop("provenance")))
             en = arrays.pop("en.local", None)
             if layer in VECTOR_LAYERS:
-                f = mapgeom.Features.from_arrays(layer, arrays, "")
-                if en is not None and len(en) == len(f.lonlat):
-                    f.en = en
-                else:
-                    f = f.localize(frame)
-                self._rails(key, layer, f)
-                self._lanes(key, layer, f)
+                # (the roads as they were left here before, by this or another process: roadlayercache.py)
+                dec, vers = self._dec_key(key, layer, arrays) if layer == "roads" else (None, {})
+                f = self._dec_load(key, layer, dec) if dec is not None else None
+                made = f is None
+                if made:
+                    f = mapgeom.Features.from_arrays(layer, arrays, "")
+                    if en is not None and len(en) == len(f.lonlat):
+                        f.en = en
+                    else:
+                        f = f.localize(frame)
+                    f0 = revisit.thread_faults()
+                    # (the versions the key was made with, where it asked: each asked once a decode, as before)
+                    self._rails(key, layer, f, **({"built": vers["rail_tags"]} if "rail_tags" in vers else {}))
+                    self._lanes(key, layer, f, **({"built": vers["lane_tags"]} if "lane_tags" in vers else {}))
+                if made and layer == "roads":
+                    f = levelways.promote(f, frame)         # (a street mapped as a footway over a level crossing: a road)
+                    # (a merged highway's own lane sections as their own pieces, before the bends are rounded:
+                    # lanesections.py, from PR #880)
+                    ctx = []
+                    f = self._lane_sections(key, layer, kind, frame, f, ctx)
+                    f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
+                    if dec is not None and revisit.thread_faults() == f0:
+                        self._dec_store(key, layer, dec, f, ctx, vers)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                 if layer == "roads":
@@ -743,7 +1256,8 @@ class MapData:
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)
             entry = (f, prov, _nbytes(arrays))
-            self._remember(k, entry)
+            if remember:
+                self._remember(k, entry)
             with self._mem_lock:
                 self._cell_stats["load_s"] += t1 - t0
                 self._cell_stats["decode_s"] += time.perf_counter() - t1
@@ -758,12 +1272,45 @@ class MapData:
 
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
+        return self._cell_collect(self._cell_submit(key, layers, kind))
+
+    def layer_unkept(self, key, layer, kind="background"):
+        """One cell's decoded layer (as cell(key, (layer,)).layers[layer]) for a caller that reads many cells once:
+        from memory when it is there, else decoded for this call alone and not kept in the MEM_MB cache. The modding
+        API's cachedOnly places read up to places.CACHED_CELLS_MAX cells: through cell() they would push the roads
+        layers every road tile reads out of MEM_MB (its note above) and be decoded again by the next build."""
+        key = _key(key)
+        with self._mem_lock:
+            got = self._mem.get((str(key), layer))
+        if got is not None:
+            return got[0]
+        lat_c, lon_c = key.center()
+        entry, _hit, _dt = self._decoded_layer(key, layer, kind, geodesy.EnuFrame(lat_c, lon_c, 0.0), remember=False)
+        return entry[0]
+
+    def cells(self, keys, layers=LAYERS, kind="demand"):
+        """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
+        list of cells one after another waited for each cell's download and decode before asking for the next (a cold
+        place's railway station group, 3 layers of its cells one at a time: ~5 s of a block's last stage at Lawrence
+        KS, 2026-11-11). The same CellData in the same order; an error is raised once every cell has finished (the
+        first in keys' order)."""
+        pending = [self._cell_submit(k, layers, kind) for k in keys]
+        out, err = [], None
+        for st in pending:
+            try:
+                out.append(self._cell_collect(st))
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            raise err
+        return out
+
+    def _cell_submit(self, key, layers, kind):
+        """cell()'s first half: the layers not in memory submitted (or joined); (key, cd, mem, futs, layers)."""
         key = _key(key)
         lat_c, lon_c = key.center()
         frame = geodesy.EnuFrame(lat_c, lon_c, 0.0)
         cd = CellData(key, key.bounds(), (lat_c, lon_c), frame, self.versions())
-        provs = {}
-
         mem, futs = {}, []
         with self._mem_lock:
             for layer in layers:
@@ -792,6 +1339,12 @@ class MapData:
                         if cur is not None:
                             self._cell_stats["urgent_over"] = self._cell_stats.get("urgent_over", 0) + 1
                     futs.append((layer, fut, shared))
+        return key, cd, mem, futs, layers
+
+    def _cell_collect(self, state):
+        """cell()'s second half: the CellData once its layers are in (an error raised once all have finished)."""
+        key, cd, mem, futs, layers = state
+        provs = {}
         results = {}
         err = None
         for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
@@ -817,6 +1370,12 @@ class MapData:
             else:
                 entry, hit, dt = results[layer]
                 cd.layers[layer], prov, _ = entry
+            if layer == "buildings":
+                self._bdtopo(key, layer, cd.layers[layer])
+            elif layer == "roads" and getattr(cd.layers[layer], "__dict__", {}).get("_lidar_rule"):
+                # (its ranges made on the lidar rule for want of the lidar: what is made on them is kept on the layer,
+                # so whatever takes the layer is not kept either: revisit.fault in the taker's thread)
+                revisit.fault(lidar=True)
             if prov:
                 pid = prov["id"]
                 if pid in provs:            # roads + connectors: one transportation record
@@ -832,12 +1391,55 @@ class MapData:
         cd.provenance = [provs[k] for k in sorted(provs)]
         return cd
 
+    def places_slim(self, key, kind="demand"):
+        """Cell key's places layer as the road tiles read it (slim_places), kept (PLACES_SLIM_MB); the whole layer
+        decoded for it is not (MEM_MB keeps it only when another caller of cell() asked for it). None: no places.
+        Raises as cell() does when the layer cannot be had."""
+        key = _key(key)
+        k = str(key)
+        with self._mem_lock:
+            got = self._slim.get(k)
+            if got is not None:
+                self._slim.move_to_end(k)
+                return got[0]
+        with self._slim_locks[hash(k) % len(self._slim_locks)]:
+            with self._mem_lock:
+                got = self._slim.get(k)
+                if got is not None:
+                    self._slim.move_to_end(k)
+                    return got[0]
+                full = self._mem.get((k, "places"))
+            if full is not None:
+                f = full[0]
+            else:
+                lat_c, lon_c = key.center()
+                try:
+                    entry, _hit, _dt = self._decoded_layer(key, "places", kind, geodesy.EnuFrame(lat_c, lon_c, 0.0),
+                                                           remember=False)
+                except Exception:
+                    revisit.fault()             # (as cell(): a build that goes on without it is not kept)
+                    raise
+                f = entry[0]
+            slim = slim_places(f)
+            n = _slim_nbytes(slim)
+            with self._mem_lock:
+                self._slim[k] = (slim, n)
+                self._slim_bytes += n
+                while self._slim_bytes > PLACES_SLIM_MB * 1e6 and len(self._slim) > 1:
+                    _, (_, m) = self._slim.popitem(last=False)
+                    self._slim_bytes -= m
+            return slim
+
     def clear_memory(self):
         """Drop the decoded layers kept in memory (budget.maybe_shed); the cells load again from disk when asked."""
         with self._mem_lock:
             self._mem.clear()
             self._mem_bytes = 0
-        for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
+            self._slim.clear()
+            self._slim_bytes = 0
+        # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
+        for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
+                     getattr(self, "osm_shards", None)):
             if tags is not None:
                 tags.clear_memory()
 
@@ -891,8 +1493,31 @@ class MapData:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
 
+    def tiles_prefetch(self, needs, kind="prefetch"):
+        """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
+        neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
+        Returns the tiles asked for."""
+        n, done = 0, set()
+        if getattr(self, "bnwt", None) is not None:
+            todo = [(_key(k), ly) for k, ly in needs if ly in bnwt.LAYERS and not self.has(_key(k), ly)
+                    and bnwt.ARCHIVES[bnwt.ARCHIVE_OF[ly]]["source"] == bnwt.source_of(ly, MapData._pmt(self, ly))]
+            try:
+                done = self.bnwt.prefetch(todo, kind) if todo else set()
+                n += len(done)
+            except Exception as e:          # (the cells' own builds read their sources then)
+                log.debug("mapdata: prebaked tiles prefetch: %s: %s", type(e).__name__, e)
+        if getattr(self, "pmtiles", None) is None:
+            return n
+        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)
+                and (_key(k), ly) not in done]      # (Overture's tiles not fetched where the prebaked tiles answer)
+        return n + (self.pmtiles.prefetch(todo, kind) if todo else 0)
+
     def side_prefetch(self, keys):
-        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting."""
+        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's
+        measured buildings with them (bdtopo: a tile's own cells only, not the two rings of outlines warm() asks for
+        roadwidth's walls: 30 downloads for 4 Aix tiles built from 2 cells)."""
+        if getattr(self, "bdtopo", None) is not None:
+            self.bdtopo.prefetch(keys)
         for src in self.side_sources:
             try:
                 src.prefetch(keys)
@@ -904,6 +1529,8 @@ class MapData:
         is on disk; not loaded or mirrored (the session's cells keep the mirror). True when built now. Raises the
         sources' netfetch errors."""
         key = _key(key)
+        if layer == "buildings" and getattr(self, "bdtopo", None) is not None and self.bdtopo.wanted(key):
+            self.bdtopo.load(key, "predownload")    # (a saved area: France's measured buildings with it)
         path = self.path(key, layer)
         if os.path.exists(path):
             return False
@@ -913,7 +1540,13 @@ class MapData:
             if got is not None:
                 return False
             try:
-                self._store(path, self._build(key, layer, "predownload"))
+                arrays = self._build(key, layer, "predownload")
+                dest = path
+                if arrays.pop("_fallback", None) is not None:
+                    dest = self.path(key, layer, parquet=True)      # (as layer_arrays: with the parquet cells)
+                    if os.path.exists(dest):
+                        return False
+                self._store(dest, arrays)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
@@ -1111,7 +1744,7 @@ def preview(cells, path, px_per_cell=1024):
     ty = y0 + (jj + 0.5) / scale
     n = 2.0 ** z
     lon = tx / n * 360.0 - 180.0
-    lat = np.degrees(np.arctan(np.sinh(np.pi * (1 - 2 * ty / n))))
+    lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1 - 2 * ty / n))))
     mx = (tx / n - 0.5) * 2 * maprasters.MERC_HALF
     my = (0.5 - ty / n) * 2 * maprasters.MERC_HALF
     lc_img = np.full((H, W, 3), 255, np.uint8)

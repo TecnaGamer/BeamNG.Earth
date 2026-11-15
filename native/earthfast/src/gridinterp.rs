@@ -42,7 +42,7 @@ pub fn grid_bilinear2<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f64>, b: Py
     }
     let (a_s, b_s) = (av.iter().copied().collect::<Vec<f64>>(), bv.iter().copied().collect::<Vec<f64>>());
     let (xs, ys) = (x.as_array().to_vec(), y.as_array().to_vec());
-    let (oa, ob) = py.allow_threads(|| bilinear2(&a_s, &b_s, nx, ny, x0, y0, step, &xs, &ys));
+    let (oa, ob) = py.detach(|| bilinear2(&a_s, &b_s, nx, ny, x0, y0, step, &xs, &ys));
     Ok((oa.into_pyarray(py), ob.into_pyarray(py)))
 }
 

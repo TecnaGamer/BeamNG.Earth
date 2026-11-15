@@ -24,11 +24,28 @@ STOCK = PoleStyle("pole", 9.2)
 RECESSED = PoleStyle("pole_concrete_recessed", 8.5, ((0.25, 0.0, 7.85),), 0.025)
 WOOD = PoleStyle("fr_wood_pole", 8.5, RECESSED.wire_anchors, RECESSED.wire_radius)
 EU_WOOD = PoleStyle("eu_wood_pole", 8.5, RECESSED.wire_anchors, RECESSED.wire_radius)
+# What a car hits and what must clear a carriageway (furniture.COLLISION_BOXES; furniture.RoadClearance), for every
+# group a style can name. Read 2026-11-11 from each shape's Colmesh (bne_eu_pole_*, bne_fr_wood_neutral,
+# bne_pole_concrete_recessed: all modelled 8.5 m tall, so a row's height over 8.5 is its scale), bounds rounded outwards
+# to 1 cm: the trunk or the A-frame's legs, not the cross-arm. A group without a box is "clear" everywhere, and the
+# Czech A-frame poles and the others stood in the lanes of Police nad Metuji's roundabout (the user, 2026-11-11).
+_TRUNK = (-0.12, -0.14, -0.01, 0.15, 0.14, 8.51)
+_POLE_BOXES = {
+    "pole_concrete_recessed": (-0.21, -0.14, -0.01, 0.21, 0.14, 8.51),
+    "fr_wood_pole": (-0.15, -0.13, -0.01, 0.15, 0.13, 8.51),
+    "eu_wood_pole": (-0.15, -0.13, -0.01, 0.15, 0.13, 8.51),
+    "eu_pole_wood_a": (-0.76, -0.11, -0.02, 0.76, 0.11, 8.52),
+    "eu_pole_wood_h": (-1.01, -0.11, -0.01, 1.01, 0.11, 8.51),
+}
+COLLISION_BOXES = {g: (8.5, (b,)) for g, b in _POLE_BOXES.items()}
 FR_KIT = "fr-varied-furniture-v3"
 EU_KIT = europeinfra.VERSION
 # Explicit country/territory coverage, including the requested RU/TR presets.
 # Overseas territories keep their own codes. Geometry families can be shared.
 EUROPE_COUNTRIES = europeinfra.COUNTRIES
+for _family in europeinfra.POLE_LAYOUTS:
+    COLLISION_BOXES.setdefault("eu_pole_" + _family, (8.5, (_TRUNK,)))
+POLE_GROUPS = ("pole",) + tuple(g for g in COLLISION_BOXES)
 FR_DEMO = "fr-recessed-demo-v1"
 FR_ALL = "fr-recessed-all-v1"
 
@@ -36,6 +53,8 @@ FR_ALL = "fr-recessed-all-v1"
 def profile_for(country, mode="off"):
     """Unknown/unsupported countries fail closed to stock. No geographic override."""
     country = str(country or "").strip().upper()
+    if mode == "poles" and country in EUROPE_COUNTRIES:
+        return EU_KIT+':'+country
     if mode == "europe" and country in EUROPE_COUNTRIES:
         return FR_KIT if country == "FR" else EU_KIT+':'+country
     if country != "FR":
@@ -71,9 +90,14 @@ def choose(profile, road_id):
 
 def geographic_profile(mode):
     """Serializable worker/cache token, including algorithm AND boundary data version."""
-    if mode not in ("fr-demo", "fr-all", "fr-varied", "europe"):
+    if mode not in ("fr-demo", "fr-all", "fr-varied", "europe", "poles"):
         return None
     import countrybounds
+    if mode == "poles":
+        # the country's own poles only (the user, 2026-11-07: "the poles we have are not the local ones"): no town or
+        # direction signs, stops, guard rails or French kit, so no data of theirs in the cache token either
+        import citylamps
+        return (countrybounds.ALGORITHM, mode, countrybounds.signature() + ":" + EU_KIT + ":" + citylamps.VERSION)
     import townlayout
     fingerprint = countrybounds.signature()+":"+townlayout.VERSION
     if mode in ("fr-varied", "europe"):
@@ -93,6 +117,8 @@ def geographic_profile(mode):
             import regionalstops
             import delineatorprofiles
             fingerprint += ':'+regionalstops.VERSION+':'+delineatorprofiles.VERSION    # (the places / Quebec data: countrybounds.signature)
+            import citylamps
+            fingerprint += ':'+citylamps.VERSION
     return (countrybounds.ALGORITHM, mode, fingerprint)
 
 
@@ -120,6 +146,22 @@ def selector(profile, frame):
 
 def kit_enabled(profile):
     return profile == FR_KIT or (isinstance(profile, (tuple, list)) and len(profile) == 3 and profile[1] in ("fr-varied", "europe"))
+
+
+def lamp_country_selector(profile, frame):
+    """x, y, z -> the ISO country code where the country's own street lamp posts stand (the "poles" and "europe" modes:
+    Europe and its neighbours), else None (the stock post): citylamps.localize's gate."""
+    if not (isinstance(profile, (tuple, list)) and len(profile) == 3 and profile[1] in ("poles", "europe")):
+        return lambda x, y, z: None
+    selector(profile, frame)
+    import countrybounds
+    index = countrybounds.bundled()
+
+    def at(x, y, z):
+        lat, lon, _ = frame.enu_to_geodetic(x, y, z)
+        country = index.at(float(lat), float(lon))
+        return country if country in EUROPE_COUNTRIES else None
+    return at
 
 
 def country_selector(profile,frame):

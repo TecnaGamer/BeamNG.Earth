@@ -6,7 +6,8 @@ Every REPORT_S the server sends https://earth.tgforever.net/telemetry (the proje
     {"id": a random install id (TELEMETRY_ID file in the cache; no name, account or hardware in it),
      "v": the app version, "os": windows / linux / deck / macos, "game": a game connected now, "mp": in BeamMP,
      "interval": REPORT_S,
-     "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}}}   (since the last report)
+     "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry", "deferred", "waited",
+                        "waitMs", "limitFail", "budget"}}}   (since the last report)
 
 Nothing else: no place, no position, no IP kept (the collector derives the country from the address and drops it).
 Off with the settings page's Anonymous usage statistics switch (read before every report), BNE_TELEMETRY=off (or
@@ -32,8 +33,10 @@ log = logging.getLogger("earthd.telemetry")
 URL = os.environ.get("BNE_TELEMETRY_URL", "https://earth.tgforever.net/telemetry")
 ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 # the welcome page's choice this version asks for (settings telemetryChoice): nothing is sent before it. 2: the
-# performance data is sent (from development builds first), everyone who chose under 1 is asked again
-CONSENT_VERSION = 2
+# performance data is sent (from development builds first), everyone who chose under 1 is asked again. 3 (2026-11-11):
+# new kinds of performance data (each slow frame's context, time since a teleport, idle time, the game's and the system's
+# memory and VRAM in use, the server's memory and worker count: TELEMETRY.md), everyone asked again
+CONSENT_VERSION = 3
 # The performance section (perfstats.py; the collector reads it: native/serverlist perf.rs) is sent by development
 # builds (the user, 2026-11-08: "start sending performance data on the dev builds. No release tonight") and, from the
 # release after that, releases too (the user, 2026-11-08: "releases should be the same as dev"): True = every build,
@@ -55,7 +58,11 @@ TIMEOUT_S = 10.0
 ID_FILE = "telemetry_id"
 PROC_KEEP_S = 3600.0        # a dead process's totals file is removed this long after its last write
 KEYS = {"req": ("requests",), "mb": ("bytes",), "ok": ("s2xx",), "e4xx": ("s4xx",), "e404": ("s404",),
-        "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",)}
+        "e429": ("s429",), "e5xx": ("s5xx",), "err": ("errors",), "retry": ("retries",),
+        # our own limits: background requests dropped (deferred), demand ones that waited (and ms) or were refused,
+        # daily-budget refusals (netfetch COUNTERS)
+        "deferred": ("deferred",), "waited": ("waited",), "waitMs": ("wait_ms",), "limitFail": ("limit_fail",),
+        "budget": ("budget",)}
 
 
 def install_id(cache_dir):
@@ -231,7 +238,7 @@ class Reporter:
         req = urllib.request.Request(self.url, json.dumps(body, separators=(",", ":")).encode("utf-8"),
                                      {"Content-Type": "application/json", "User-Agent": "BeamNG.Earth"})
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=netfetch.windows_ssl_context()) as r:
                 return 200 <= r.status < 300
         except Exception as e:
             log.debug("telemetry report: %s: %s", type(e).__name__, e)

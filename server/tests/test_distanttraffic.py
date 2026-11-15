@@ -152,7 +152,8 @@ class RoutesTest(unittest.TestCase):
         f = features([[(0, 0), (1000, 0)]], ["primary"],
                      flags=[(0, "is_bridge", .1, .3), (0, "is_bridge", .7, .9)])
         profiles = roads.BridgeProfiles(FRAME, lambda key: f, flat)
-        for part, x in enumerate((100, 700)):
+        keys = roads.part_keys(f, 0, "bridge")      # (each part's key, the same in every cell's copy)
+        for part, x in zip(keys, (100, 700)):
             profiles.done["id000", part] = (roads.bridge_specs(f)[0], np.array([[x, 0.], [x + 200, 0.]]),
                                             np.array([30., 30.]), 0)
         cs = Mock(elev=flat)
@@ -161,7 +162,7 @@ class RoutesTest(unittest.TestCase):
         profiles.region = "test"
         view = roads.ChainView(cs, FRAME)
         self.assertEqual([p[0] for p in view.parts_with_ids([f], (-10, -20, 1010, 20))],
-                         [("id000", 0), ("id000", 1)])
+                         [("id000", keys[0]), ("id000", keys[1])])
         self.assertEqual([p[0] for p in view.parts([f], (-10, -20, 1010, 20))], ["id000", "id000"])
 
     def test_classes_bounds_and_bends(self):

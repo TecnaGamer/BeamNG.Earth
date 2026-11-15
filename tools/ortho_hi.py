@@ -3,7 +3,8 @@ roads and markings with the real ones (the user, 2026-10-28: "compare against hi
 
     python3 tools/ortho_hi.py LAT LON HALF_M OUT.jpg [SOURCE] [PX]
 
-SOURCE: auto (the first that covers the point), md3in (Maryland 0.076 m), penn (Pennsylvania 0.15 m), virginia (0.3 m;
+SOURCE: auto (the first that covers the point and has a picture there; also the server's regional sources,
+imagery_regional.REGIONAL), md3in (Maryland 0.076 m), penn (Pennsylvania 0.15 m), virginia (0.3 m;
 0.076 m in cities), jeffco (Jefferson County CO 0.15 m), naip (USGS NAIP, ~0.6 m, the US). Sources and licences:
 docs/research/2026-10-10-us-state-imagery.md. Fetched through the server's netfetch (its limits, the project's
 User-Agent)."""
@@ -38,8 +39,8 @@ SOURCES = {
 import imagery_regional  # noqa: E402
 XYZ_MAX_ZOOM = {"japan": 18}        # (GSI's seamless photo stops at z18: z19 was all 404s, a black picture of Atami)
 for _n, _v in imagery_regional.REGIONAL.items():
-    if _v[3] == "xyz" and _n not in SOURCES:
-        SOURCES[_n] = ("xyz", _v[0], _v[2], XYZ_MAX_ZOOM.get(_n, 19))
+    if _n not in SOURCES:           # (an "export" one: a WMS / ArcGIS export, its url takes {bbox} / {bbox4326}, {size})
+        SOURCES[_n] = (_v[3], _v[0], _v[2], XYZ_MAX_ZOOM.get(_n, 19) if _v[3] == "xyz" else None)
 ORDER = ("md3in", "penn", "virginia", "jeffco") + tuple(n for n in SOURCES if n not in
                                                         ("md3in", "penn", "virginia", "jeffco", "naip")) + ("naip",)
 
@@ -48,40 +49,68 @@ def merc(lat, lon):
     return R * math.radians(lon), R * math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
 
 
-def main():
-    lat, lon, half, out = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
-    name = sys.argv[5] if len(sys.argv) > 5 else "auto"
-    px = int(sys.argv[6]) if len(sys.argv) > 6 else 1024
-    if name == "auto":
-        name = next(n for n in ORDER if SOURCES[n][2][0] <= lat <= SOURCES[n][2][2]
-                    and SOURCES[n][2][1] <= lon <= SOURCES[n][2][3])
+def unmerc(x, y):
+    return math.degrees(2 * math.atan(math.exp(y / R)) - math.pi / 2), math.degrees(x / R)
+
+
+def fetch(f, name, x0, y0, x1, y1, px):
+    """The picture of the mercator box from source name, or None when it has nothing there (every tile failed, or a
+    blank answer: the source's box takes in a neighbour it does not cover, Austria's basemap and Regensburg)."""
     kind, url, _, zoom = SOURCES[name]
-    k = 1.0 / math.cos(math.radians(lat))           # mercator metres per ground metre
-    cx, cy = merc(lat, lon)
-    x0, y0, x1, y1 = cx - half * k, cy - half * k, cx + half * k, cy + half * k
-    f = netfetch.Fetcher(stats_dir=os.path.join(os.path.expanduser("~/.cache/beamng-earth"), "netstats"))
     if kind == "export":
-        r = f.get(url.format(bbox=f"{x0},{y0},{x1},{y1}", w=px, h=px))
-        img = Image.open(io.BytesIO(r.body)).convert("RGB")
+        (s, w), (n_, e) = unmerc(x0, y0), unmerc(x1, y1)
+        try:
+            r = f.get(url.format(bbox=f"{x0},{y0},{x1},{y1}", bbox4326=f"{s},{w},{n_},{e}", w=px, h=px, size=px))
+            img = Image.open(io.BytesIO(r.body)).convert("RGB")
+        except Exception as ex:
+            print(name, "failed:", ex)
+            return None
     else:
         n = 1 << zoom
         span = 2 * math.pi * R
         tx0, tx1 = int((x0 + span / 2) / span * n), int((x1 + span / 2) / span * n)
         ty0, ty1 = int((span / 2 - y1) / span * n), int((span / 2 - y0) / span * n)
         mos = Image.new("RGB", ((tx1 - tx0 + 1) * 256, (ty1 - ty0 + 1) * 256))
+        got = 0
         for ty in range(ty0, ty1 + 1):
             for tx in range(tx0, tx1 + 1):
                 try:
                     t = f.get(url.format(z=zoom, x=tx, y=ty, ty=n - 1 - ty))
                     mos.paste(Image.open(io.BytesIO(t.body)).convert("RGB"), ((tx - tx0) * 256, (ty - ty0) * 256))
+                    got += 1
                 except Exception as e:
                     print("tile", tx, ty, e)
+        if not got:
+            return None
         res = span / n / 256
         ox, oy = tx0 * 256 * res - span / 2, span / 2 - ty0 * 256 * res
         box = ((x0 - ox) / res, (oy - y1) / res, (x1 - ox) / res, (oy - y0) / res)
         img = mos.crop(tuple(int(round(v)) for v in box)).resize((px, px), Image.LANCZOS)
-    img.save(out, quality=92)
-    print(name, out)
+    lo, hi = img.convert("L").getextrema()
+    return None if hi - lo < 8 else img         # (one flat colour: a nodata answer)
+
+
+def main():
+    lat, lon, half, out = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
+    name = sys.argv[5] if len(sys.argv) > 5 else "auto"
+    px = int(sys.argv[6]) if len(sys.argv) > 6 else 1024
+    if name == "auto":              # every source whose box covers the point, in ORDER: the first with a picture
+        names = [n for n in ORDER if SOURCES[n][2][0] <= lat <= SOURCES[n][2][2]
+                 and SOURCES[n][2][1] <= lon <= SOURCES[n][2][3]]
+    else:
+        names = [name]
+    k = 1.0 / math.cos(math.radians(lat))           # mercator metres per ground metre
+    cx, cy = merc(lat, lon)
+    x0, y0, x1, y1 = cx - half * k, cy - half * k, cx + half * k, cy + half * k
+    f = netfetch.Fetcher(stats_dir=os.path.join(os.path.expanduser("~/.cache/beamng-earth"), "netstats"))
+    for name in names:
+        img = fetch(f, name, x0, y0, x1, y1, px)
+        if img is not None:
+            img.save(out, quality=92)
+            print(name, out)
+            return
+        print(name, "has nothing here")
+    sys.exit("no source has a picture of this place: " + ", ".join(names))
 
 
 if __name__ == "__main__":

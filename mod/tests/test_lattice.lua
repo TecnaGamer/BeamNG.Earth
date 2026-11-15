@@ -47,7 +47,7 @@ T.check(warn and warn:match('ladder') ~= nil, 'q off the ladder is flagged')
 mh, warn = L.heightParams({ maxHeight = 3500, zBase = 1100 })
 T.check(mh == 3500 and warn == nil, 'no q (v2 per-block scale): maxHeight as sent')
 for _, q in ipairs(L.Q_LADDER) do
-  T.check(L.isLadder(q) and q * 65535 >= 255 and q * 65535 <= 4096, 'ladder range 256..4096 m')
+  T.check(L.isLadder(q) and q * 65535 >= 63 and q * 65535 <= 4096, 'ladder range 64..4096 m')
 end
 -- stored height zBase + q16*Q is Q*round(u/Q) whatever the zBase (same q16 grid in every block)
 local Q = 1 / 64

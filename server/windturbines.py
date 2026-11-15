@@ -17,6 +17,8 @@ import re
 import threading
 
 import numpy as np
+import dmath
+import dnp
 
 import geotiles
 
@@ -75,7 +77,7 @@ def _way_ring(element):
         if not np.array_equal(ring[0], ring[-1]) or (np.abs(ring[:, 1]) > 85).any() or (np.abs(ring[:, 0]) > 180).any():
             return None
         ring[:, 0] = np.rad2deg(np.unwrap(np.deg2rad(ring[:, 0])))
-        metres = np.array([111320 * math.cos(math.radians(float(ring[:, 1].mean()))), 110540])
+        metres = np.array([111320 * dmath.cos(math.radians(float(ring[:, 1].mean()))), 110540])
         xy = (ring - ring[0]) * metres
         # Large generator areas can describe a farm; only an individual tower footprint is suitable.
         if np.ptp(xy, axis=0).max() > 100.0:
@@ -84,7 +86,7 @@ def _way_ring(element):
         # rather than constructing a plausible-looking but unmapped position.
         for i in range(len(xy) - 1):
             a, b = xy[i], xy[i + 1]
-            if np.linalg.norm(b - a) < 1e-6:
+            if dnp.norm(b - a) < 1e-6:
                 return None
             for j in range(i + 2, len(xy) - 1):
                 if i == 0 and j == len(xy) - 2:
@@ -175,7 +177,7 @@ def features_from_document(document):
             reference = float(ring[0, 0])
             nl = reference + (node.lon - reference + 180) % 360 - 180
             if Path(ring).contains_points(np.array([[nl, node.lat]]))[0] or math.hypot(
-                    ((node.lon - lon + 180) % 360 - 180) * 111320 * math.cos(math.radians(lat)),
+                    ((node.lon - lon + 180) % 360 - 180) * 111320 * dmath.cos(math.radians(lat)),
                     (node.lat - lat) * 110540) < 2:
                 duplicate = True
                 break
@@ -365,6 +367,55 @@ def small(tags):
     return (rotor is not None and rotor < SMALL_ROTOR_M) or (hub is not None and hub < SMALL_HUB_M)
 
 
+# An unsized turbine in a city is a small one: a power=generator node with no height, hub height or rotor diameter on
+# land WorldCover calls built-up round it (URBAN_PROBE_M, a majority of URBAN_PROBES points) is a rooftop or demo unit,
+# not the utility-scale model (a full-size turbine stood in central Tokyo near Tokyo Tower, OSM node 13722999957,
+# Discord 2026-11-10). The probes: the point and four URBAN_PROBE_M off it.
+SIZE_KEYS = ("height", "height:hub", "rotor:diameter")
+URBAN_PROBE_M = 50.0
+URBAN_BUILT = 50            # WorldCover's built-up class
+
+
+def sized(tags):
+    """Does the turbine carry any mapped size (SIZE_KEYS)?"""
+    return any(length_m(tags.get(k)) is not None for k in SIZE_KEYS)
+
+
+def worldcover_built_fn(md):
+    """built_fn(lat, lon) -> bool for keep(): WorldCover built-up at most of the probes round the point, from md's
+    landcover layer (None: unknown, kept)."""
+    import mapcells
+
+    def built(lat, lon):
+        dlat = URBAN_PROBE_M / 111320.0
+        dlon = dlat / max(0.05, dmath.cos(math.radians(lat)))
+        pts = [(lat, lon), (lat + dlat, lon), (lat - dlat, lon), (lat, lon + dlon), (lat, lon - dlon)]
+        hits = 0
+        for la, lo in pts:
+            lc = md.cell(mapcells.cell_of(la, lo), layers=("landcover",), kind="demand").layers.get("landcover")
+            if lc is None:
+                return None
+            hits += int(np.asarray(lc.sample(np.array([lo]), np.array([la]))).ravel()[0] == URBAN_BUILT)
+        return hits * 2 > len(pts)
+    return built
+
+
+def keep(features, built_fn=None):
+    """The features drawn: not small (by their mapped size), nor an unsized one on built-up land (built_fn)."""
+    out = []
+    for t in features:
+        if small(t.tags):
+            continue
+        if built_fn is not None and not sized(t.tags):
+            try:
+                if built_fn(t.lat, t.lon):
+                    continue
+            except Exception as ex:     # (unknown land cover: kept, as before)
+                log.debug("wind turbine land cover: %s: %s", type(ex).__name__, ex)
+        out.append(t)
+    return out
+
+
 def rows_for_features(frame, features, elev, collide=True):
     """One batched terrain sample and coordinate conversion for a set of mapped turbines."""
     if not features:
@@ -395,7 +446,7 @@ def rows_for_features(frame, features, elev, collide=True):
     return out
 
 
-def tile_turbines(frame, tx, ty, elev):
+def tile_turbines(frame, tx, ty, elev, built_fn=None):
     """Mapped turbine records owned by this existing road tile (legacy square or road geotile).
 
     x/y use the project's height-zero world convention; z uses the existing
@@ -421,5 +472,5 @@ def tile_turbines(frame, tx, ty, elev):
         return []
     lat, lon = np.array([t.lat for t in candidates]), np.array([t.lon for t in candidates])
     x, y, _ = geotiles.geodetic_to_world(frame, lat, lon, 0.0)
-    keep = np.asarray(roads.box_owns(box, x, y))
-    return rows_for_features(frame, [t for t, own in zip(candidates, keep) if own], elev)
+    owned = np.asarray(roads.box_owns(box, x, y))
+    return rows_for_features(frame, keep([t for t, own in zip(candidates, owned) if own], built_fn), elev)

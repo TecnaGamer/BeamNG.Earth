@@ -115,6 +115,18 @@ class SingleFlightTest(unittest.TestCase):
         for layer in ("roads", "buildings"):
             self.assertIs(a.layers[layer], b.layers[layer])
 
+    def test_unkept_layer_is_not_remembered_and_a_kept_one_is_reused(self):
+        # MapData.layer_unkept (the modding API's wide cachedOnly places): decoded for the call, not into MEM_MB; one
+        # already in memory is handed back without decoding again
+        with patch.object(self.md, "layer_arrays", side_effect=lambda key, layer, kind: self.arrays(layer)) as io:
+            f = self.md.layer_unkept(KEY, "places")
+            self.assertIsNotNone(f)
+            self.assertEqual((self.md._mem, self.md._mem_bytes, io.call_count), ({}, 0, 1))
+            kept = self.md.cell(KEY, ("places",)).layers["places"]
+            self.assertIs(self.md.layer_unkept(KEY, "places"), kept)
+            self.assertEqual(io.call_count, 2)
+        self.assertEqual(self.md._loading, {})
+
     def test_eviction_does_not_make_waiters_decode_again(self):
         release = threading.Event()
         def load(key, layer, kind):
@@ -149,6 +161,37 @@ class SingleFlightTest(unittest.TestCase):
              patch.object(mapdata.gradesep, "neighbours_hook", return_value=neighbor):
             got = self.md.cell(KEY, ("roads",)).layers["roads"]
         self.assertIs(got._bnge_neighbours, neighbor)
+
+    def test_cells_load_side_by_side_in_order(self):
+        # MapData.cells: every cell's layers asked for at once (a loop of cell() calls waited for each in turn), the
+        # same CellData in keys' order; an error once all have finished
+        keys = [mapcells.CellKey(14, 16145 + i, 9998) for i in range(4)]
+        started, release = [], threading.Event()
+
+        def load(key, layer, kind):
+            started.append((str(key), layer))
+            if not release.wait(5):
+                raise TimeoutError("test producer was not released")
+            if key == keys[2] and layer == "water":
+                raise ValueError("cell 2's water")
+            return self.arrays(layer)
+        with patch.object(self.md, "layer_arrays", side_effect=load), ThreadPoolExecutor(1) as caller:
+            job = caller.submit(self.md.cells, keys[:2], ("roads", "water"))
+            end = time.monotonic() + 5
+            while len(started) < 4 and time.monotonic() < end:
+                time.sleep(0.001)
+            self.assertEqual(len(started), 4, "both cells' layers loading at once")
+            release.set()
+            got = job.result(5)
+            self.assertEqual([c.key for c in got], keys[:2])
+            serial = [self.md.cell(k, ("roads", "water")) for k in keys[:2]]
+            for a, b in zip(got, serial):
+                self.assertIs(a.layers["roads"], b.layers["roads"])
+                self.assertIs(a.layers["water"], b.layers["water"])
+            with self.assertRaisesRegex(ValueError, "cell 2"):
+                self.md.cells(keys, ("roads", "water"))
+            self.assertEqual(self.md._loading, {}, "every load finished before the error")
+        self.assertEqual(mapcells.load_cells(self.md, keys[:2], ("roads",))[1].key, keys[1])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 //! Each class keeps its tiles in a BTreeMap ordered by (z, x, y): a view's grid walks only the columns under the view
 //! at each zoom, so a query costs the tiles near the view, not the whole cache, and adding or removing a key is one
 //! map update (the cache's hook: new and removed keys only).
+use crate::dm::Dm;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -232,12 +233,12 @@ impl CoverIndex {
 
     /// Cache keys added (new files): how many were tiles of a known class.
     fn add(&mut self, py: Python<'_>, keys: Vec<String>) -> usize {
-        py.allow_threads(|| self.apply(&keys, 1))
+        py.detach(|| self.apply(&keys, 1))
     }
 
     /// Cache keys removed (evicted, cleared, forgotten).
     fn remove(&mut self, py: Python<'_>, keys: Vec<String>) -> usize {
-        py.allow_threads(|| self.apply(&keys, -1))
+        py.detach(|| self.apply(&keys, -1))
     }
 
     /// Rectangles (class, south, west, north, east) in degrees counted (sign 1) or taken out again (-1), each at the
@@ -281,7 +282,7 @@ impl CoverIndex {
             || (x0 as u64 + w as u64) > (1u64 << gz) || (y0 as u64 + h as u64) > (1u64 << gz) {
             return Err(pyo3::exceptions::PyValueError::new_err("cache map: bad grid"));
         }
-        let out = py.allow_threads(|| {
+        let out = py.detach(|| {
             let n = (w * h) as usize;
             let mut out = vec![0u8; n];
             match mode {
@@ -343,7 +344,7 @@ pub fn tile_of(lat: f64, lon: f64, z: u8) -> (u32, u32) {
     let n = (1u64 << z) as f64;
     let lat = lat.clamp(-85.051_128_779_806_6, 85.051_128_779_806_6).to_radians();
     let x = ((lon + 180.0) / 360.0 * n).floor().clamp(0.0, n - 1.0);
-    let y = ((1.0 - lat.tan().asinh() / std::f64::consts::PI) / 2.0 * n).floor().clamp(0.0, n - 1.0);
+    let y = ((1.0 - lat.dtan().dasinh() / std::f64::consts::PI) / 2.0 * n).floor().clamp(0.0, n - 1.0);
     (x as u32, y as u32)
 }
 
@@ -354,7 +355,7 @@ pub fn rect_tiles(s: f64, w: f64, n: f64, e: f64) -> Vec<(u8, u32, u32)> {
         return vec![];
     }
     let span = ((e - w) / 360.0).max(1e-9);
-    let z = ((1.0 / span).log2().floor() as i64).clamp(6, 16) as u8;
+    let z = ((1.0 / span).dlog2().floor() as i64).clamp(6, 16) as u8;
     let (xa, ya) = tile_of(n, w, z);
     let (xb, yb) = tile_of(s, e, z);
     let mut out = Vec::new();

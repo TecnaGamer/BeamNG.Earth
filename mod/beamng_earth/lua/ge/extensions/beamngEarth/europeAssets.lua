@@ -26,6 +26,8 @@ return {
   eu_marker_gb = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_gb', 1.15, 300, true },
   eu_marker_ie = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_ie', 1.15, 300, true },
   eu_marker_is = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_is', 1.15, 300, true },
+  eu_marker_it_al = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_it_al', 1.15, 300, true },
+  eu_marker_it_motorway = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_it_motorway', 1.15, 300, true },
   eu_marker_nl = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_nl', 1.15, 300, true },
   eu_marker_nordic = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_nordic', 1.15, 300, true },
   eu_marker_pl = { '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure/bne_eu_marker_pl', 1.15, 300, true },

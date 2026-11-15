@@ -8,9 +8,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -32,9 +32,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -83,7 +83,7 @@
           0,
           0
         ],
-        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/glass.emissive.png",
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/glass.emissive.dds",
         "metallicFactor": 0.05,
         "roughnessFactor": 0.23,
         "vertColor": true
@@ -128,9 +128,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -152,9 +152,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -176,9 +176,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -200,9 +200,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -224,9 +224,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }
@@ -270,9 +270,9 @@
           1,
           1
         ],
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.dds",
         "metallicFactor": 0,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.dds",
         "roughnessFactor": 0.88,
         "vertColor": true
       }

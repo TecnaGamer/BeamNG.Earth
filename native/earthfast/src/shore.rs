@@ -1,6 +1,7 @@
 //! seacarve's raster loops in Rust (2026-10-23: a Steam Deck's "sea-warm" thread spent ~23 CPU-s of a fresh place's
 //! teleport in shore_steps' whole-raster passes and _carve_line's per-segment numpy, 300 miles from the sea: its rivers,
 //! lakes and streams). The same results as the numpy code to the bit (checked on real cells once).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadwriteArray2};
 use pyo3::prelude::*;
@@ -29,7 +30,7 @@ pub fn shore_steps<'py>(py: Python<'py>, water: PyReadonlyArray2<'py, bool>, kma
             }
         }
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let mut out = vec![0i16; n * m];
         let four = [1isize, -1, wp as isize, -(wp as isize)];
         let diag = [wp as isize + 1, wp as isize - 1, -(wp as isize) + 1, -(wp as isize) - 1];
@@ -114,7 +115,7 @@ pub fn carve_segments(py: Python<'_>, q: PyReadonlyArray2<'_, f64>, hw: PyReadon
     let mut drawn = drawn.as_array_mut();
     let n = depth.shape()[0] as i64;
     let nc = depth.shape()[1] as i64;
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..q.shape()[0].saturating_sub(1) {
             let (a0, a1, b0, b1) = (q[[k, 0]], q[[k, 1]], q[[k + 1, 0]], q[[k + 1, 1]]);
             let reach = hw[k].max(hw[k + 1]) + bank;
@@ -134,7 +135,7 @@ pub fn carve_segments(py: Python<'_>, q: PyReadonlyArray2<'_, f64>, hw: PyReadon
                 for i in i0..i1 {
                     let gi = i as f64 + 0.5;
                     let tt = (((gi - a0) * ab0 + (gj - a1) * ab1) / l2).clamp(0.0, 1.0);
-                    let dist = (gi - (a0 + tt * ab0)).hypot(gj - (a1 + tt * ab1));
+                    let dist = (gi - (a0 + tt * ab0)).dhypot(gj - (a1 + tt * ab1));
                     let h = hw[k] + (hw[k + 1] - hw[k]) * tt;
                     let lvl = lv[k] + (lv[k + 1] - lv[k]) * tt;
                     let d = dd[k] + (dd[k + 1] - dd[k]) * tt;

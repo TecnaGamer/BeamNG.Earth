@@ -5,6 +5,7 @@ Bend geometry is an estimate, not a survey of sign locations. Existing
 priority/AI control logic is unchanged. No-entry placement has been withdrawn.
 """
 import numpy as np
+import dnp
 
 import franceroads as fr
 
@@ -16,7 +17,7 @@ def localize(rows, country_at):
     out = []
     for row in rows:
         if (row[0] == "giveway" and country_at(*row[1:4]) == "FR"
-                and not any(np.linalg.norm(np.asarray(row[1:3]) - p) < 30 for p in signals)):
+                and not any(dnp.norm(np.asarray(row[1:3]) - p) < 30 for p in signals)):
             row = ["fr_giveway_m9c", *row[1:6], 2.45, row[7]]
         out.append(row)
     return out

@@ -42,6 +42,11 @@ M.enabled = true
 local clock = 0             -- s since the mod loaded (update's dt)
 local cur = { id = 'starting', level = 'info', text = '', visible = true }
 M.DROP_HOLD_TEXT = 'Waiting for collision to load here: the car is held in place'
+M.DECK_TEXT = {               -- deckguard.lua's modes
+  slow = 'Slowing down: the bridge ahead is still loading',
+  wait = 'Waiting for the bridge ahead to load',
+  hold = 'Held before the bridge ahead until it has loaded',
+}
 local key = nil             -- the inputs the current text was built from
 local recoveredUntil = nil  -- clock until which 'recovered' shows
 local lastProblem = nil     -- the last non-ok connection state ('lost', 'noserver', ...)
@@ -74,7 +79,8 @@ local EDGE_TEXT = {
 --   info.download    nil | the downloads in flight ('downloading 14 files · 1.1 MB/s', loadprogress.downloadText)
 --   info.edge        nil | 'warn' | 'hold' (edgeguard), info.stuck: the server does not answer
 --                    terrain requests (rather than: no server)
---   t                s since the mod loaded
+--   info.deck        nil | 'slow' | 'wait' | 'hold' (deckguard: a bridge ahead whose road tile has not come)
+--   t               s since the mod loaded
 -- Returns id, level, text ('' for ok).
 function M.compute(info, t)
   local id, level, text
@@ -117,14 +123,20 @@ function M.compute(info, t)
     if M.LEVEL_RANK.info > M.LEVEL_RANK[level] then level = 'info' end
     if id == 'ok' then id = 'drophold' end
   end
-  if info.download and (info.edge or info.dropHold) then   -- (what the held car waits on: loadprogress.downloadText)
+  local dk = info.deck and M.DECK_TEXT[info.deck]
+  if dk then                    -- deckguard.lua: a bridge ahead whose road tile has not come yet
+    text = (text ~= '') and (text .. '\n' .. dk) or dk
+    if M.LEVEL_RANK.info > M.LEVEL_RANK[level] then level = 'info' end
+    if id == 'ok' then id = 'deck' end
+  end
+  if info.download and (info.edge or info.dropHold or info.deck) then   -- (what the held car waits on: loadprogress.downloadText)
     local line = 'The world is ' .. info.download
     text = (text ~= '') and (text .. '\n' .. line) or line
   end
   return id, level, text
 end
 
-local KEYS = { 'net', 'session', 'everConnected', 'attempts', 'note', 'noteDetail', 'edge', 'stuck', 'dropHold' }
+local KEYS = { 'net', 'session', 'everConnected', 'attempts', 'note', 'noteDetail', 'edge', 'stuck', 'dropHold', 'deck' }
 
 -- Did any input change since the text was built? (Compared field by field: nothing allocated.)
 local function changed(info)

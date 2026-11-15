@@ -2,6 +2,7 @@
 //! hump; a flyover's untagged middle stretch; a road over a railway's short tunnel). Two calls: the crossings of the
 //! ground lines with where to read the ground on each side (gradesep_candidates), then, with those heights, the
 //! bridge spans on the upper lines (gradesep_spans). Pure and deterministic for a given input order.
+use crate::dm::Dm;
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -33,7 +34,7 @@ impl<'a> Lines<'a> {
         let mut arc = vec![0.0; xy.nrows()];
         for l in 0..st.len().saturating_sub(1) {
             for k in st[l] + 1..st[l + 1] {
-                arc[k] = arc[k - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).hypot(xy[[k, 1]] - xy[[k - 1, 1]]);
+                arc[k] = arc[k - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).dhypot(xy[[k, 1]] - xy[[k - 1, 1]]);
             }
         }
         Lines { xy, st, arc, ends: std::cell::OnceCell::new() }
@@ -89,7 +90,7 @@ impl<'a> Lines<'a> {
         let (i0, i1) = (self.st[l], self.st[l + 1]);
         let (a, b) = if last { (i1 - 2, i1 - 1) } else { (i0, i0 + 1) };
         let (dx, dy) = (self.xy[[b, 0]] - self.xy[[a, 0]], self.xy[[b, 1]] - self.xy[[a, 1]]);
-        let n = dx.hypot(dy).max(1e-12);
+        let n = dx.dhypot(dy).max(1e-12);
         (dx / n, dy / n)
     }
     /// The straightest line (not UNDER, a railway for a railway, a road for a road) joined to line l's end (last) or
@@ -115,7 +116,7 @@ impl<'a> Lines<'a> {
             }
             {
                 let q = self.end(o, oend);
-                if (q.0 - p.0).hypot(q.1 - p.1) >= tol {
+                if (q.0 - p.0).dhypot(q.1 - p.1) >= tol {
                     continue;
                 }
                 let e = self.dir(o, oend);
@@ -191,7 +192,7 @@ pub fn gradesep_candidates<'py>(
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for &k in ends_grid.get(&(gx + dx, gy + dy)).map(|v| v.as_slice()).unwrap_or(&[]) {
-                    if (de[[k, 0]] - p.0).hypot(de[[k, 1]] - p.1) < touch {
+                    if (de[[k, 0]] - p.0).dhypot(de[[k, 1]] - p.1) < touch {
                         best = best.max(de[[k, 2]]);
                     }
                 }
@@ -349,13 +350,13 @@ pub fn gradesep_candidates<'py>(
                         continue;
                     }
                     let p = (px + t * rx, py_ + t * ry);
-                    if found.iter().any(|q| (q.0 - p.0).hypot(q.1 - p.1) < 1.0) {
+                    if found.iter().any(|q| (q.0 - p.0).dhypot(q.1 - p.1) < 1.0) {
                         continue;
                     }
                     found.push(p);
                     let sa = ln.arc[k] + t * (ln.arc[k + 1] - ln.arc[k]);
                     let sb = ln.arc[m] + u * (ln.arc[m + 1] - ln.arc[m]);
-                    let (ra, rb) = (rx.hypot(ry), sx.hypot(sy));
+                    let (ra, rb) = (rx.dhypot(ry), sx.dhypot(sy));
                     let sin = (den / (ra * rb).max(1e-12)).abs();
                     let (up, lo, su, sl, how) = if under(kind[b]) {
                         (a, b, sa, sb, 1.0)
@@ -364,7 +365,7 @@ pub fn gradesep_candidates<'py>(
                     } else {
                         let junction = [ln.end(a, false), ln.end(a, true), ln.end(b, false), ln.end(b, true)]
                             .iter()
-                            .any(|e| (e.0 - p.0).hypot(e.1 - p.1) < end_m);
+                            .any(|e| (e.0 - p.0).dhypot(e.1 - p.1) < end_m);
                         if junction {
                             continue;
                         }
@@ -426,7 +427,8 @@ fn median(v: &[f64]) -> Option<f64> {
 /// The bridge spans (rows line, from m, to m, the crossing's how) of gradesep_candidates' crossings with the ground heights z (8 per
 /// row, NaN unknown): how 0 a bridge on the line whose ground is higher by prm[0] m (medians) and by prm[1] m on
 /// each side of each line; how 1 on i; then the other's half width + prm[2] m either side of the crossing over the
-/// sine (at least prm[4]), at least prm[3] m; how 2 the whole line. A span past a line's end goes on along the line
+/// sine (at least prm[4]), plus the bridged line's own half width over the tangent (a skew crossing), at least
+/// prm[3] m; how 2 the whole line. A span past a line's end goes on along the line
 /// joined there (an end within prm[5] m, the straightest of the same kind turning less than acos prm[6]).
 #[pyfunction]
 pub fn gradesep_spans<'py>(
@@ -479,7 +481,10 @@ pub fn gradesep_spans<'py>(
         if under(kind[up]) {
             continue;
         }
-        let h = ((half[lo] + clear) / sin.max(min_sin)).max(min_half);
+        // (a skew crossing: the lower line's band also runs along the upper one by the upper's half width over the
+        // tangent across its carriageway, so its edges clear too: a track at 45 deg under a motorway, GitHub #1020)
+        let sn = sin.max(min_sin).min(1.0);
+        let h = ((half[lo] + clear) / sn + half[up] * (1.0 - sn * sn).sqrt() / sn).max(min_half);
         spans.push((up, s - h, s + h, how));
     }
     // past a line's end: on along the straightest line joined there (one step)
@@ -509,7 +514,7 @@ pub fn gradesep_spans<'py>(
 
 /// numpy's interp for one x over increasing xp (binary search for the last xp[j] <= x; x at xp[j] exactly: fp[j]; the
 /// slope form, tried from the other end when it is NaN; below xp[0]: fp[0], above or at the last: fp[last]).
-fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
+pub(crate) fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
     if n == 0 {
         return f64::NAN;
@@ -553,7 +558,7 @@ fn cut(xy: &[[f64; 2]], a: f64, b: f64) -> Vec<[f64; 2]> {
     let mut s = Vec::with_capacity(xy.len());
     s.push(0.0f64);
     for k in 1..xy.len() {
-        let d = (xy[k][0] - xy[k - 1][0]).hypot(xy[k][1] - xy[k - 1][1]);
+        let d = (xy[k][0] - xy[k - 1][0]).dhypot(xy[k][1] - xy[k - 1][1]);
         let last = *s.last().unwrap();
         s.push(last + d);
     }
@@ -619,7 +624,7 @@ fn gather_row(lay: &Layer, i: usize, r: i64, g: &mut Gathered) {
                 }
                 if lay.pk[q] < 0 {
                     let seg: Vec<f64> = (1..piece.len())
-                        .map(|k| (piece[k][0] - piece[k - 1][0]).hypot(piece[k][1] - piece[k - 1][1]))
+                        .map(|k| (piece[k][0] - piece[k - 1][0]).dhypot(piece[k][1] - piece[k - 1][1]))
                         .collect();
                     let l = crate::levels::np_sum(&seg);
                     let (f, e) = (piece[0], piece[piece.len() - 1]);
@@ -685,7 +690,7 @@ fn nan_max(a: f64, b: f64) -> f64 {
 
 /// Each feature's [min e, min n, max e, max n] of all its coordinates (mapgeom.Features.boxes: NaN where one of them
 /// is NaN, +inf / -inf without any), from coord_off[ring_off[part_off[i]]] to the next feature's.
-fn feature_boxes(xy: &numpy::ndarray::ArrayView2<f64>, co: &numpy::ndarray::ArrayView1<i64>,
+pub(crate) fn feature_boxes(xy: &numpy::ndarray::ArrayView2<f64>, co: &numpy::ndarray::ArrayView1<i64>,
                  ro: &numpy::ndarray::ArrayView1<i64>, po: &numpy::ndarray::ArrayView1<i64>) -> Vec<[f64; 4]> {
     let n = po.len().saturating_sub(1);
     let mut out = Vec::with_capacity(n);
@@ -716,6 +721,12 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
     let boxes: Vec<Vec<[f64; 4]>> = layers.iter()
         .map(|(xy, co, ro, po)| feature_boxes(&xy.as_array(), &co.as_array(), &ro.as_array(), &po.as_array()))
         .collect();
+    let (off, rows) = select_core(&boxes, near_m)?;
+    Some((off.into_pyarray(py), rows.into_pyarray(py)))
+}
+
+/// gradesep_select on the layers' feature boxes: (layer offsets, rows), None when no own box is finite.
+pub(crate) fn select_core(boxes: &[Vec<[f64; 4]>], near_m: f64) -> Option<(Vec<i64>, Vec<i64>)> {
     let own = boxes.first()?;
     let mut bx: Option<[f64; 4]> = None;
     for b in own.iter().filter(|b| b.iter().all(|v| v.is_finite())) {
@@ -728,7 +739,7 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
     let bx = [c[0] - near_m, c[1] - near_m, c[2] + near_m, c[3] + near_m];
     let mut off = vec![0i64];
     let mut rows: Vec<i64> = Vec::new();
-    for lb in &boxes {
+    for lb in boxes {
         for (i, b) in lb.iter().enumerate() {
             if !((b[2] < bx[0]) || (b[0] > bx[2]) || (b[3] < bx[1]) || (b[1] > bx[3])) {
                 rows.push(i as i64);
@@ -736,7 +747,7 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
         }
         off.push(rows.len() as i64);
     }
-    Some((off.into_pyarray(py), rows.into_pyarray(py)))
+    Some((off, rows))
 }
 
 /// One layer for gradesep_gather_rows: (xy (N, 2) in the asking cell's frame, coord_off, ring_off, part_off,
@@ -784,4 +795,70 @@ pub fn gradesep_gather_rows<'py>(py: Python<'py>, layers: Vec<GatherLayer<'py>>,
     (Array2::from_shape_vec((m, 2), pts).expect("points").into_pyarray(py), starts.into_pyarray(py),
      line_row.into_pyarray(py), kind.into_pyarray(py), fa.into_pyarray(py), fb.into_pyarray(py),
      half.into_pyarray(py), Array2::from_shape_vec((2 * d, 3), de).expect("decks").into_pyarray(py))
+}
+
+/// Which of the lines xy[starts[i]..starts[i + 1]] (their first two columns) lie along another of the same group
+/// that is longer (or as long and listed first): every vertex within tol m of that one. A deck clipped at one cell's
+/// box beside the whole deck from the next cell (grading._lower_underpasses' spans: joined at their shared end
+/// into a chain doubling back, the carriageway under it dug 8 m into its own ground, the A4 at Glaireuse, #1020).
+#[pyfunction]
+pub fn lines_covered<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, i64>,
+    group: PyReadonlyArray1<'py, i64>,
+    tol: f64,
+) -> Bound<'py, numpy::PyArray1<bool>> {
+    let (xy, starts, group) = (xy.as_array(), starts.as_array(), group.as_array());
+    let n = starts.len().saturating_sub(1);
+    let mut len = vec![0.0f64; n];
+    let mut bb = vec![[f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY]; n];
+    for i in 0..n {
+        let (a, b) = (starts[i] as usize, starts[i + 1] as usize);
+        for k in a..b {
+            let (x, y) = (xy[[k, 0]], xy[[k, 1]]);
+            bb[i] = [bb[i][0].min(x), bb[i][1].min(y), bb[i][2].max(x), bb[i][3].max(y)];
+            if k > a {
+                len[i] += (x - xy[[k - 1, 0]]).dhypot(y - xy[[k - 1, 1]]);
+            }
+        }
+    }
+    let near = |x: f64, y: f64, j: usize| -> bool {
+        let (a, b) = (starts[j] as usize, starts[j + 1] as usize);
+        if b - a == 1 {
+            return (x - xy[[a, 0]]).dhypot(y - xy[[a, 1]]) <= tol;
+        }
+        for k in a..b.saturating_sub(1) {
+            let (x0, y0, x1, y1) = (xy[[k, 0]], xy[[k, 1]], xy[[k + 1, 0]], xy[[k + 1, 1]]);
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 { (((x - x0) * dx + (y - y0) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            if (x - x0 - t * dx).dhypot(y - y0 - t * dy) <= tol {
+                return true;
+            }
+        }
+        false
+    };
+    let mut out = vec![false; n];
+    for i in 0..n {
+        let (a, b) = (starts[i] as usize, starts[i + 1] as usize);
+        if b <= a {
+            continue;
+        }
+        for j in 0..n {
+            if j == i || group[j] != group[i] || len[j] < len[i] || (len[j] == len[i] && j > i) {
+                continue;
+            }
+            if bb[i][0] < bb[j][0] - tol || bb[i][1] < bb[j][1] - tol || bb[i][2] > bb[j][2] + tol
+                || bb[i][3] > bb[j][3] + tol
+            {
+                continue;
+            }
+            if (a..b).all(|k| near(xy[[k, 0]], xy[[k, 1]], j)) {
+                out[i] = true;
+                break;
+            }
+        }
+    }
+    numpy::PyArray1::from_vec(py, out)
 }

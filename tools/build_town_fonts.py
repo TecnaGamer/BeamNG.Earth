@@ -94,15 +94,16 @@ def build():
  alpha=Image.new('L',(width,height))
  for key,ch,im,x,y in positions:
   alpha.paste(im,(x,y));fonts[key]['glyphs'][ch]['uv']=[x/width,1-(y+im.height)/height,(x+im.width)/width,1-y/height]
- for suffix,rgb in [('',(0,0,0)),('_white',(255,255,255))]:
-  image=Image.new('RGBA',alpha.size,(*rgb,0));image.putalpha(alpha);image.save(OUT/('sign_font'+suffix+'.png'))
+ # (the letters' colour is the material's baseColorFactor, black or white: the shader takes only a colour map's rgb, never
+ # its alpha, so the two 4096 px colour layers of uniform black / white were 21 MB of DDS for nothing, 2026-11-13)
  alpha.save(OUT/'sign_font_opacity.data.png')
  meta={**fonts['legacy'],'format':2,'fonts':fonts,'atlas_size':[width,height],'generator':'tools/build_town_fonts.py'}
  (ROOT/'server/data/sign_font.json').write_text(json.dumps(meta,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
  # Keep existing material names/indices so unrelated signs retain their contract.
  materials=json.loads((OUT/'main.materials.json').read_text())
  for key in ('glyph','glyph_white'):
-  m=materials['bne_sign_'+key];m['Stages'][0]['baseColorMap']=VFS+('/sign_font_white.png'if key=='glyph_white'else'/sign_font.png')
+  m=materials['bne_sign_'+key];m['Stages'][0].pop('baseColorMap',None)
+  m['Stages'][0]['baseColorFactor']=[1,1,1,1]if key=='glyph_white'else[0,0,0,1]
   m['Stages'][0]['opacityMap']=VFS+'/sign_font_opacity.data.png'
  (OUT/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n')
  (OUT/'TOWN-FONTS-NOTICE.md').write_text((SOURCES/'NOTICE.md').read_text(),encoding='utf-8')

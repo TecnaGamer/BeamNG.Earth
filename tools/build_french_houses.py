@@ -18,6 +18,15 @@ OUT = ROOT / "mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/fr_hou
 VFS = "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses"
 SIZE = 512
 SURFACES = ("stucco", "stone", "brick", "wood", "roller", "tile", "canal", "slate")
+# The lit glass's emissive map: a strip of cells, each lit window one (server/francehouse_mesh.py LIT_GLASS_CELLS, its
+# UVs all at the cell's centre), each cell's (level, the night's step it goes dark at: 0 lit all night) (the user,
+# 2026-11-08: "the brightness of windows should be randomized at night", "have less lit windows depending on how late it
+# is, peaking at 5 am"; S-moreo's PR #916 gave them three materials, one per level). One map per step of the night
+# (tools/build_night_windows.py STEPS, nightlights.lua M.MAPS): 8 lit in the evening, 5 from 23:15, 3 from 3:00.
+GLASS_LIT = ((1.0, 2), (1.0, 0), (0.18, 1), (0.18, 0), (0.18, 2), (0.05, 1), (0.05, 0), (1.0, 1))
+GLASS_RGB = (255, 235, 200)
+GLASS_CELL = 4              # px
+GLASS_STEPS = ("", "_late", "_dawn")
 
 
 def noise(x, y, seed=0):
@@ -110,11 +119,21 @@ def build(out=OUT):
                  "metallicFactor": .7 if kind == "metal" else .05,
                  "roughnessFactor": .23 if kind.startswith("glass") else .55}
         if kind == "glass_lit":
-            save_png(Image.new("RGB", (4, 4), (255, 235, 200)), out / "glass.emissive.png")
+            for step, suffix in enumerate(GLASS_STEPS):
+                save_png(glass_cells(step), out / f"glass{suffix}.emissive.png")
             stage.update(emissiveMap=VFS + "/glass.emissive.png", emissiveFactor=[0, 0, 0])
         materials[name] = material(name, stage)
     (out / "main.materials.json").write_text(json.dumps(materials, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return materials
+
+
+def glass_cells(step):
+    """The lit glass's emissive strip at the night's step (GLASS_LIT)."""
+    im = np.zeros((GLASS_CELL, GLASS_CELL * len(GLASS_LIT), 3), np.uint8)
+    for k, (level, out) in enumerate(GLASS_LIT):
+        if out == 0 or step < out:
+            im[:, k * GLASS_CELL:(k + 1) * GLASS_CELL] = np.round(np.array(GLASS_RGB) * level).astype(np.uint8)
+    return Image.fromarray(im)
 
 
 def save_png(im, path):

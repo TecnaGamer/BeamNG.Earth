@@ -31,9 +31,12 @@ unchanged).
 """
 import logging
 import math
+import os
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import colormatch as colormatchmod
 import dem as demmod
@@ -55,8 +58,8 @@ MAX_DEM_KEYS = 64               # DEM tiles looked up per far tile (a footprint 
 IMAGERY = {
     "md6in": "State of Maryland, MD iMAP / DoIT",
     "naipusda": "USDA NAIP",
-    "naip": "USDA NAIP via USGS The National Map",
-    "usgs": "USGS The National Map",
+    "naip": "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",
+    "usgs": "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program",       # (USGS's requested credit line)
     "eox2023": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
                "(Contains modified Copernicus Sentinel data 2023)",
     "eox2016": "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH "
@@ -66,12 +69,15 @@ IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.item
 IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
 # (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
 IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
+IMAGERY["bngaer"] = "BeamNG.Earth aerial packs: USDA NAIP (public domain) and open national orthophotos"
 ELEVATION = {
-    demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
+    demmod.MAPTERHORN["name"]: "Mapterhorn (https://mapterhorn.com/attribution)",     # (z0-12 from the project's tile host: still Mapterhorn's)
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
     "lidarbc": "Contains information licensed under the Open Government Licence - British Columbia (LidarBC)",
     "hrdem": "Contains information licensed under the Open Government Licence - Canada "
              "(Natural Resources Canada, HRDEM - CanElevation Series)",
+    "hkdtm": "2020 LiDAR terrain model of the Civil Engineering and Development Department, (c) Government of the Hong "
+             "Kong SAR, from DATA.GOV.HK and the CSDI Portal, data changed",
     polardem.SOURCE: "Produced using Copernicus WorldDEM-30 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and Space GmbH "
                      "2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved",
 }
@@ -91,12 +97,14 @@ SHORT = {
     "img:it_pcn": "Geoportale Nazionale", "img:czechia": "CUZK", "img:estonia": "Maa-amet",
     "img:flanders": "Digitaal Vlaanderen", "img:de_bayern": "LDBV Bayern", "img:de_nrw": "Geobasis NRW",
     "img:de_bw": "LGL BW", "img:de_nds": "LGLN", "img:de_berlin": "Geoportal Berlin", "img:de_hessen": "HVBG Hessen",
-    "img:japan": "GSI Japan", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
+    "img:japan": "GSI Japan", "img:hongkong": "LandsD Hong Kong",
+    "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
     "img:ontario": "Ontario GEO", "img:bcortho": "LidarBC photos (OGL-BC)",
     "img:bngs2": "ESA WorldCover Sentinel-2 2021 (Copernicus)",
     f"dem:{demmod.MAPTERHORN['name']}": "Mapterhorn", f"dem:{demmod.AWS['name']}": "AWS Terrain Tiles / Mapzen",
     f"dem:{polardem.SOURCE}": "Copernicus DEM (DLR, Airbus)",
     "dem:hrdem": "NRCan HRDEM (OGL-Canada)", "dem:lidarbc": "LidarBC (OGL-BC)",
+    "dem:hkdtm": "HK Gov CEDD LiDAR (DATA.GOV.HK, CSDI)",
     WEATHER_ID: "Open-Meteo",
 }
 # Every other source that built what is near the player (the user, 2026-10-18: "show all sources", not only those
@@ -110,12 +118,48 @@ FEATURES = {
     "canopy:lidarbc-chm": "LidarBC (OGL-BC)",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
+    "roof:lod2-de": "German states' LoD2 roofs (GeoBasis-DE)",
+    "roof:lod2-ch": "swisstopo (swissBUILDINGS3D)",
+    "roof:lod2-ee": "Estonian Land and Spatial Development Board",
+    "roof:lod2-wien": "Stadt Wien (data.wien.gv.at)",
+    "roof:3dbag": "3DBAG (tudelft3d, 3DGI)",
+    "bld:bdtopo-fr": "IGN BD TOPO",
+    "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
+    "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+}
+# (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
+LONG = {
+    "roadz:hk": "Road and bridge heights in Hong Kong: Road Network of the Transport Department and 2020 LiDAR of the "
+                "Civil Engineering and Development Department, (c) Government of the Hong Kong SAR, from DATA.GOV.HK "
+                "and the CSDI Portal, data changed",
+    "roof:3dbag": "Roof shapes and heights in the Netherlands: \u00a9 3DBAG by tudelft3d and 3DGI (CC BY 4.0), "
+                  "data changed",
+    "bld:bdtopo-fr": "Building heights, storeys, materials and use: IGN, BD TOPO (Licence Ouverte / Etalab 2.0), "
+                     "data changed",
+    "bld:nyc-3d": "NYC Office of Technology and Innovation, 3-D Building Model (2014); NYC Building Footprints",
+    "roof:lod2-de": "Roof shapes and heights: changed data from the German states' LoD2 building models: "
+                    "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0; Bayerische Vermessungsverwaltung - "
+                    "www.geodaten.bayern.de (CC BY 4.0); Geoportal Berlin (dl-de/zero-2.0); GeoBasis-DE / LGB "
+                    "(dl-de/by-2-0); Landesamt GeoInformation Bremen (CC BY 4.0); Freie und Hansestadt Hamburg, LGV "
+                    "(dl-de/by-2-0); HVBG Hessen (dl-de/zero-2.0); (c) GeoBasis-DE/LGLN (CC BY 4.0); (c) GeoBasis-DE/M-V "
+                    "(CC BY 4.0); Geobasis NRW (dl-de/zero-2.0); (c) GeoBasis-DE / LVermGeoRP, dl-de/by-2-0, "
+                    "www.lvermgeo.rlp.de; Landesamt fur Geobasisinformation Sachsen (GeoSN), dl-de/by-2-0; "
+                    "(c) GeoBasis-DE / LVermGeo ST (dl-de/by-2-0); data changed",
+    "roof:lod2-ch": "Roof shapes and heights in Switzerland and Liechtenstein: © swisstopo, swissBUILDINGS3D 3.0 "
+                    "Beta (open use, source required); roof shapes read from the models' faces, data changed",
+    "roof:lod2-ee": "Building 3D model data: Republic of Estonia Land and Spatial Development Board 2026 (open data "
+                    "licence, https://geoportaal.maaruum.ee/opendata-licence); roof shapes read from the models' "
+                    "faces, data changed",
+    "roof:lod2-wien": "Roof shapes and heights in Vienna: Datenquelle: Stadt Wien - data.wien.gv.at (Generalisiertes "
+                      "Dachmodell LOD2.1, CC BY 4.0), data changed",
 }
 SHORT.update(FEATURES)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
+          ("roof", "Roofs", "Far roofs"), ("bld", "Buildings", "Far buildings"),
+          ("roadz", "Road heights", "Far road heights"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
           ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)
@@ -144,7 +188,7 @@ def full_label(i):
         return ELEVATION.get(name, name)
     if i == WEATHER_ID:
         return weathermod.CREDIT
-    return FEATURES.get(i, name)
+    return LONG.get(i) or FEATURES.get(i, name)
 
 
 def label(i):
@@ -198,7 +242,7 @@ def feature_ids(conn):
         and veg.sent
     if md is not None and hasattr(md, "layer_provenance"):
         dlat = FEATURE_NEAR_M / 110540.0
-        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+        dlon = FEATURE_NEAR_M / (111320.0 * max(0.1, dmath.cos(math.radians(lat))))
         for key in mapcells.cells_for_bbox(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
             layers = (("roads", "buildings", "water") if roads_on else ()) \
                 + (("landcover",) if getattr(s, "surface", None) is not None else ()) \
@@ -232,6 +276,38 @@ def feature_ids(conn):
                 ids.add("bridge:wikidata")
         except Exception:           # (the inventories are optional files)
             pass
+        try:                        # (a measured roof shard on disk near, each country's own credit: lod2roofs)
+            import lod2roofs
+            src = getattr(md, "lod2_roofs", None)
+            if src is not None and (src.cache_dir or src.local):
+                ids |= lod2roofs.credited_near(src.cache_dir, lat, lon, FEATURE_NEAR_M, src.local)
+        except Exception:
+            pass
+        try:                        # (a measured Dutch roof square on disk near: threedbag)
+            import threedbag
+            if threedbag.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("roof:3dbag")
+        except Exception:
+            pass
+        try:                        # (New York's measured massing on disk near: nycmassing)
+            import nycmassing
+            if nycmassing.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("bld:nyc-3d")
+        except Exception:
+            pass
+        try:                        # (France's measured buildings on disk near: bdtopo)
+            import bdtopo
+            if getattr(md, "bdtopo", None) is not None and bdtopo.credited_near(getattr(md, "cache_dir", None),
+                                                                                lat, lon, FEATURE_NEAR_M):
+                ids.add("bld:bdtopo-fr")
+        except Exception:
+            pass
+        try:                        # (a Hong Kong road heights cell on disk near: roadz)
+            import roadz
+            if roadz.hk_credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("roadz:hk")
+        except Exception:
+            pass
         try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
             import threedmr
             if threedmr.credited_near(lat, lon, FEATURE_NEAR_M, getattr(s, "root", None)):
@@ -254,6 +330,36 @@ def feature_ids(conn):
     return ids
 
 
+FEATURE_STEP_M = 100.0          # feature_ids_kept: asked again once the player moved this much ...
+FEATURE_KEEP_S = 30.0           # ... or this long after (files on disk come in meanwhile)
+
+
+def feature_ids_kept(conn):
+    """feature_ids, kept per connection while the player stays within FEATURE_STEP_M of where it was asked and what it
+    goes by (the road tiles, trees, the surface, the sea, the gravity, the airports) is the same, at most
+    FEATURE_KEEP_S: every second it listed and read cache folders on the event loop (3dmr.eu's model infos one by one,
+    the roof and massing shards), a part of the 2-7 s stalls of a BeamMP drive at Baltimore, 2026-11-15)."""
+    s = conn.s
+    fx, fy = conn.focus
+    roads = getattr(conn, "roads", None)
+    veg = getattr(conn, "veg", None)
+    sea = getattr(conn, "sea_sent", None)
+    grav = getattr(getattr(conn, "gravity", None), "msg", None)
+    key = (conn.active, getattr(roads, "aid", None) == conn.active and bool(getattr(roads, "sent", None)),
+           getattr(veg, "aid", None) == conn.active and bool(getattr(veg, "sent", None)),
+           getattr(s, "veg", None) is not None, getattr(s, "surface", None) is not None,
+           bool(sea and sea[0] == conn.active and sea[1] and sea[1][0]),
+           isinstance(grav, dict) and grav.get("source"), getattr(s, "airports", None) is not None)
+    now = time.monotonic()
+    got = getattr(conn, "_feature_kept", None)
+    if got is not None and got[0] == key and now - got[2] < FEATURE_KEEP_S and \
+            math.hypot(fx - got[1][0], fy - got[1][1]) < FEATURE_STEP_M:
+        return set(got[3])
+    ids = feature_ids(conn)
+    conn._feature_kept = (key, (fx, fy), now, frozenset(ids))
+    return ids
+
+
 def dem_keys(frame, bbox, zoom):
     """The (z, x, y) DEM tiles (dem.TILE px Web-Mercator grid) under an ENU footprint of `frame`,
     from a 3 x 3 grid of points on it (the footprint's edges bow on large tiles); at most
@@ -267,7 +373,7 @@ def dem_keys(frame, bbox, zoom):
     n = 2 ** zoom
     fx = (lon / 360.0 + 0.5) * n
     fx = fx - n * np.round((fx - fx[0]) / n)                # unwrap across the antimeridian
-    fy = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * n
+    fy = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * n
     tx0, tx1 = int(math.floor(fx.min())), int(math.floor(fx.max()))
     ty0, ty1 = max(0, int(math.floor(fy.min()))), min(n - 1, int(math.floor(fy.max())))
     if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_DEM_KEYS:
@@ -294,6 +400,8 @@ def tile_sources(frame, bbox, dem, zoom, used):
                 ids.add("dem:hrdem")
             if k in getattr(dem, "lidarbc_served", ()):
                 ids.add("dem:lidarbc")
+            if k in getattr(dem, "hkdtm_served", ()):
+                ids.add("dem:hkdtm")
     if callable(getattr(dem, "polar", None)) and polar_covered(frame, bbox, dem.polar()):
         ids.add(f"dem:{polardem.SOURCE}")
     return frozenset(ids)
@@ -359,7 +467,7 @@ class Credits:
         if conn.weather.msg is not None:
             near.add(WEATHER_ID)
         try:
-            near |= feature_ids(conn)
+            near |= feature_ids_kept(conn)
         except Exception:               # (a bug here must not lose the imagery credits)
             log.exception("credits: feature sources failed")
         far -= near

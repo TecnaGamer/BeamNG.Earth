@@ -40,14 +40,15 @@ for i, w in ipairs(want) do
 end
 
 -- a tile's wells: five parts each, all drawn; the collision asked to rebuild
-local collided = 0
-pj.onCollide = function() collided = collided + 1 end
+local collided, collideAt = 0, nil
+pj.onCollide = function(x, y) collided = collided + 1; collideAt = { x, y } end
 pj.onRows('1:0_0', { { 10, 20, 5, 90 }, { 400, 0, 5, 0 } })
 local statics = S.liveOf('TSStatic')
 T.check(#statics == 10, 'five parts a jack: ' .. #statics)
 local hidden = 0
 for _, o in ipairs(statics) do if o.fields.isRenderEnabled == 'false' then hidden = hidden + 1 end end
 T.check(hidden == 0 and collided == 1, 'every part drawn (the base is the tower); one collision rebuild')
+T.check(collideAt[1] == 10 and collideAt[2] == 20, 'the rebuild asked with a jack\'s spot (roads.lua gates far spots)')
 
 -- sounds: the jack within SOUND_M of the listener gets its engine and squeak, the far one none
 pj.update()
@@ -63,4 +64,5 @@ T.check(moved, 'a rebase moves the parts')
 
 pj.dropKey('1:0_0')
 T.check(#S.liveOf('TSStatic') == 0 and #S.liveOf('SFXEmitter') == 0 and collided == 2, 'the tile goes: parts, sounds')
+T.check(collideAt[1] == 110 and collideAt[2] == 20, 'the drop asked with its (rebased) spot too')
 T.done('test_pumpjacks')

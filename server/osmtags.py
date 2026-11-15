@@ -29,6 +29,8 @@ import threading
 import time
 
 import numpy as np
+import dmath
+import dnp
 
 import netfetch
 import overture
@@ -70,7 +72,7 @@ COLUMNS = {
 }
 TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway", "lane_hw"}
 INT_COLUMNS = {"lanes", "osm_layer"}
-GROUPS_FILE = "groups.json"     # the version's parsed row groups (OsmTags._groups)
+GROUPS_FILE = overture.GROUPS_FILE     # the version's parsed row groups (OsmTags._groups)
 TABLE_DIR = "rg"        # a row group's decoded ways (OsmTags._table), in the version's folder
 TABLE_MEM = 6           # decoded row groups kept in memory (~6 MB each; a place's cells share 3-5)
 EXACT32 = {"bx0", "by0", "bx1", "by1", "lanes", "osm_layer"}   # float32 (the file's bbox; small integers)
@@ -183,7 +185,6 @@ class OsmTags:
         cold downtown Los Angeles visit (4 road tiles, 2026-11-04) when every cell read it. need: [(lon0, lat0, lon1,
         lat1)] of the highways to match: only the ways whose bbox (GEOMETRY_MARGIN_M round it) holds one of them
         (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read."""
-        lon0, lat0, lon1, lat1 = bounds
         etag, remote = self.version(kind)
         rd = self._reader
         files = {PATH: remote}
@@ -193,28 +194,10 @@ class OsmTags:
             uri = f"'{proto}://{PATH}'"
             groups = self._groups(con, uri, remote, kind)
             cand = self._candidates(groups, bounds)
-            names = list(COLUMNS)
-            hw = names.index("lane_hw")
-            lanes = names.index("lanes")
             lane_rows = []
             for rg in cand:
                 t = self._table(con, uri, groups, rg, remote, kind)
-                if not len(t["id"]):
-                    continue
-                b = np.float32
-                m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
-                                   & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
-                for r in _rows(t, m):
-                    if r[_ROW_VAL + lanes] is None or r[_ROW_VAL + hw] is None:
-                        continue
-                    if need is not None:
-                        x0, y0, x1, y1 = (r[_ROW_VAL + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
-                        dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
-                        dy = GEOMETRY_MARGIN_M / 110574.0
-                        if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
-                                   for a0, b0, a1, b1 in need):
-                            continue
-                    lane_rows.append(r[_ROW_FRN])
+                lane_rows.extend(f for f, _ in _lane_rows(cell_rows(t, bounds), need))
             if not lane_rows or not any('geometry' in groups[rg]['cols'] for rg in cand):
                 return out
             hit = sorted({rg for r in lane_rows for rg in cand
@@ -251,46 +234,7 @@ class OsmTags:
         if got is not None and got[0] is remote:
             return got[1]
         # parsed once per version on disk too (0.8 s of every server process's first cell, the footer's ~84k rows)
-        saved = os.path.join(remote.cache_dir, GROUPS_FILE)
-        try:
-            with open(saved, encoding="utf-8") as f:
-                groups = {int(rg): {"first": g["first"], "n": g["n"],
-                                    "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
-                                    "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
-                          for rg, g in json.load(f).items()}
-            with self._lock:
-                self._meta = (remote, groups)
-            return groups
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        tail = remote.read(max(0, remote.size - overture.FOOTER_GUESS), remote.size, kind)
-        n = int.from_bytes(tail[-8:-4], "little")
-        if n + 8 > len(tail):
-            remote.read(remote.size - n - 8, remote.size, kind)
-        meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
-            dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
-            ORDER BY row_group_id, column_id""").fetchall()
-        groups, first = {}, 0
-        for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
-            g = groups.get(rg)
-            if g is None:
-                g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
-                first += nrows
-            offs = [o for o in (dict_off, data_off) if o]
-            if not offs:
-                continue
-            top, leaf = col.split(", ")[0], col.split(", ")[-1]
-            g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
-            if top == "bbox":
-                g["bbox"][leaf] = (smin, smax)
-        try:
-            os.makedirs(remote.cache_dir, exist_ok=True)
-            tmp = f"{saved}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({str(rg): g for rg, g in groups.items()}, f)
-            os.replace(tmp, saved)
-        except (OSError, TypeError, ValueError) as e:
-            log.debug("osmtags: row groups not saved: %s", e)
+        groups = overture.parquet_row_groups(con, uri, remote, kind)
         with self._lock:
             self._meta = (remote, groups)
         return groups
@@ -393,7 +337,6 @@ class OsmTags:
         return t
 
     def _cell(self, remote, bounds, kind):
-        lon0, lat0, lon1, lat1 = bounds
         rd = self._reader
         files = {PATH: remote}
         con, proto, errors = rd._connect(files, kind)
@@ -408,18 +351,16 @@ class OsmTags:
             # of 3 row groups), and the decoding was most of this thread's CPU (23 CPU-s of a teleport, 2026-10-30)
             rows = []
             for rg in cand:
-                t = self._table(con, uri, groups, rg, remote, kind)
-                if not len(t["id"]):
-                    continue
-                # (in float32, as the file's bbox and DuckDB's comparison with it: a way whose box ends on the cell's edge)
-                b = np.float32
-                m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
-                                   & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
-                rows.extend(_rows(t, m))
+                rows.extend(cell_rows(self._table(con, uri, groups, rg, remote, kind), bounds))
             extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
+            # the raceways inside the box of each one that may be a facility's outline (_outline_rows), from every row
+            # group under that box: the decision is the way's own, the same in every cell it reaches
+            inside = {r[_ROW_FRN]: self._inside_rows(con, uri, groups, remote, kind, r) for r in rows
+                      if r[1] and _maybe_outline(r)}
+            want = sorted(set(extra).union(*inside.values())) if extra else []
             got = []
             if extra:           # (rare: the raceways' and busways' own columns and geometry, of their row groups only)
-                hit = sorted({rg for r in extra for rg in cand
+                hit = sorted({rg for r in want for rg in groups
                               if groups[rg]["first"] <= r < groups[rg]["first"] + groups[rg]["n"]})
                 rd._fetch(files, {PATH: [r for rg in hit for c in RACEWAY_COLUMNS + ("geometry",)
                                          for r in groups[rg]["cols"].get(c, [])]}, kind)
@@ -428,9 +369,9 @@ class OsmTags:
                 except Exception:
                     pass
                 rcols = ", ".join(f'"{c}"' for c in RACEWAY_COLUMNS)
-                rows_in = ", ".join(str(int(r)) for r in extra)
-                got = con.execute(f"""SELECT {rcols}, geometry FROM read_parquet({uri}, file_row_number = true)
-                    WHERE file_row_number IN ({rows_in})""").fetchall()
+                rows_in = ", ".join(str(int(r)) for r in want)
+                got = con.execute(f"""SELECT file_row_number, {rcols}, geometry FROM read_parquet({uri},
+                    file_row_number = true) WHERE file_row_number IN ({rows_in})""").fetchall()
         except Exception:
             for e in errors:
                 if isinstance(e, rangeread.Changed):
@@ -438,19 +379,82 @@ class OsmTags:
             raise
         finally:
             con.close()
-        names = list(COLUMNS)
-        tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
-        ways = []
+        lines = {}
         for row in got:
             coords = _linestring(bytes(row[-1]))
             if coords is None or len(coords) < 2:
                 continue
-            d = {c: v for c, v in zip(RACEWAY_COLUMNS, row[:-1]) if v is not None}
+            d = {c: v for c, v in zip(RACEWAY_COLUMNS, row[1:-1]) if v is not None}
             d["coords"] = coords
-            ways.append(d)
-        return tags, ways
+            lines[int(row[0])] = d
+        return tags_and_ways(rows, extra, inside, lines)
+
+    def _inside_rows(self, con, uri, groups, remote, kind, r):
+        """The file rows of the other raceways whose bbox lies inside raceway row r's (r: a _rows tuple)."""
+        x0, y0, x1, y1 = (r[_ROW_VAL + _NAMES.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
+        out = []
+        for rg in self._candidates(groups, (x0, y0, x1, y1)):
+            t = self._table(con, uri, groups, rg, remote, kind)
+            if not len(t["id"]):
+                continue
+            b = np.float32
+            m = (t["race"] & (t["frn"] != r[_ROW_FRN]) & (t["bx0"].astype(b) >= b(x0)) & (t["bx1"].astype(b) <= b(x1))
+                 & (t["by0"].astype(b) >= b(y0)) & (t["by1"].astype(b) <= b(y1)))
+            out.extend(int(f) for f in t["frn"][m])
+        return out
 
 _ROW_FRN = 3    # _rows: (id, raceway, busway, file row, COLUMNS...)
+_NAMES = list(COLUMNS)
+
+# A circuit's facility mapped on the track's tag (GitHub #1010: Tsukuba Circuit's leisure=sports_centre outline, way
+# 438021322, is also highway=raceway) was drawn as a 12 m track round the whole site, over the lanes along its fence.
+# Layercake's file has no leisure or area column, so it is told by its shape: a closed ring without a surface, width,
+# lane count or oneway round another raceway, no raceway in its box coming within OUTLINE_CLEAR_M of it. (An oval keeps its
+# infield course: the course joins the oval; so does a kart course's loop round its own joined inner links: Tsukuba's
+# Course 1000, way 264443876, round an unjoined 40 m link was taken for an outline while any one clear raceway sufficed.)
+OUTLINE_CLOSED_M = 1.0      # m between a ring's ends
+OUTLINE_CLEAR_M = 5.0       # m an enclosed raceway keeps from the outline
+
+
+def _maybe_outline(r):
+    """Whether raceway row r (a _rows tuple) has none of the tags a drawn track carries (surface, width, lanes, oneway:
+    Suzuka's ene-1 kart track, a closed ring round another kart track, has oneway=yes only)."""
+    return all(r[_ROW_VAL + _NAMES.index(c)] is None for c in ("osm_surface", "width", "lanes", "osm_oneway"))
+
+
+def is_outline(ring, others):
+    """Whether lon/lat line ring is closed, wholly encloses one of others (lon/lat lines: the raceways in its box) and
+    comes within OUTLINE_CLEAR_M of none of them. Pure."""
+    from polygon import Path
+    ring = np.asarray(ring, np.float64)
+    if len(ring) < 4:
+        return False
+    kx = 111320.0 * dnp.cos(np.radians(float(ring[:, 1].mean())))
+    scale = np.array([kx, 110540.0])
+    R = (ring - ring[0]) * scale
+    if dnp.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
+        return False
+    poly = Path(R)
+    enclosed = False
+    for o in others:
+        P = (np.asarray(o, np.float64) - ring[0]) * scale
+        if not len(P):
+            continue
+        if min(_seg_dist(P, R), _seg_dist(R, P)) <= OUTLINE_CLEAR_M:
+            return False                # (a raceway joins it or runs along it: a track)
+        enclosed = enclosed or bool(np.all(poly.contains_points(P)))
+    return enclosed
+
+
+def _seg_dist(pts, line):
+    """The least distance from points pts (k, 2) to polyline line (n, 2)."""
+    a, b = line[:-1], line[1:]
+    if not len(a):
+        return float(np.min(dnp.hypot(*(pts - line[0]).T)))
+    ab = b - a
+    t = np.clip(dnp.vecdot(pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
+    d = pts[:, None, :] - (a[None] + t[..., None] * ab[None])
+    return float(np.sqrt((d * d).sum(-1)).min())
 _ROW_VAL = 4
 
 
@@ -469,6 +473,75 @@ def _rows(t, idx):
                 vals.append(None if v != v else (int(v) if c in INT_COLUMNS else v))
         out.append((int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals))
     return out
+
+
+def cell_rows(t, bounds):
+    """The rows (_rows tuples) of decoded table t (a Layercake row group's, or a tag shard tile's) whose bbox touches
+    bounds (lon0, lat0, lon1, lat1): in float32, as the file's bbox and DuckDB's comparison with it (a way whose box
+    ends on the cell's edge)."""
+    if t is None or not len(t["id"]):
+        return []
+    lon0, lat0, lon1, lat1 = bounds
+    b = np.float32
+    m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
+                       & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
+    return _rows(t, m)
+
+
+def tags_and_ways(rows, extra, inside, lines):
+    """OsmTags.cell's answer from the cell's rows (cell_rows), the file rows of its raceways and busways (extra), of the
+    raceways inside each raceway that may be a facility's outline (inside: {file row: [file rows]}) and the raceway /
+    busway lines {file row: {RACEWAY_COLUMNS..., "coords"}}: ({way id: tags}, [the drawn raceways and busways])."""
+    names = list(COLUMNS)
+    tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
+    outlines = {f for f, ins in inside.items() if f in lines
+                and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
+    if outlines:
+        log.info("osmtags: %d raceway(s) taken for a facility's outline, not drawn: %s", len(outlines),
+                 ", ".join(str(lines[f].get("id")) for f in sorted(outlines)))
+    return tags, [lines[f] for f in extra if f in lines and f not in outlines]
+
+
+def _lane_rows(rows, need):
+    """[(file row, way id)] of rows (cell_rows) with a lane count and a motorway / trunk class (lane_hw) whose bbox,
+    GEOMETRY_MARGIN_M round it, holds one of need's boxes (None: all of them): OsmTags.highway_geometry's ways."""
+    lanes, hw = _ROW_VAL + _NAMES.index("lanes"), _ROW_VAL + _NAMES.index("lane_hw")
+    box = [_ROW_VAL + _NAMES.index(c) for c in ("bx0", "by0", "bx1", "by1")]
+    out = []
+    for r in rows:
+        if r[lanes] is None or r[hw] is None:
+            continue
+        if need is not None:
+            x0, y0, x1, y1 = (r[i] for i in box)
+            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(dnp.cos(np.radians((y0 + y1) / 2)))))
+            dy = GEOMETRY_MARGIN_M / 110574.0
+            if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
+                       for a0, b0, a1, b1 in need):
+                continue
+        out.append((r[_ROW_FRN], r[0]))
+    return out
+
+
+def from_tile(t, bounds):
+    """OsmTags.cell's answer for bounds from a decoded tag shard tile (osmtagshards.TagShards.tile; None: a tile
+    without rows): the same rows, raceways, outlines and tags as the Layercake row groups give."""
+    rows = cell_rows(t, bounds)
+    if not rows:
+        return {}, []
+    extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
+    inside = {r[_ROW_FRN]: list(t["inside"].get(r[_ROW_FRN], [])) for r in rows if r[1] and _maybe_outline(r)}
+    want = set(extra).union(*inside.values()) if extra else set()
+    lines = {}
+    for f, wid, cols, coords in t["lines"]:
+        if f in want:
+            lines[f] = {"id": int(wid), **cols, "coords": coords}
+    return tags_and_ways(rows, extra, inside, lines)
+
+
+def geometry_from_tile(t, bounds, need=None):
+    """OsmTags.highway_geometry's answer for bounds from a decoded tag shard tile: {way id: (k, 2) lon/lat}."""
+    geom = t["geom"] if t is not None else {}
+    return {int(w): geom[f] for f, w in _lane_rows(cell_rows(t, bounds), need) if f in geom}
 
 
 RACEWAY_PAVED = {"", "asphalt", "concrete", "paved", "chipseal"}
@@ -536,6 +609,10 @@ def _appended_features(ways, cls, default_width=None, oneway=False):
     if oneway:
         f.rules["oneway"] = mg.rule_table(oneways, "float")
     f.clipped = np.zeros(n, bool)
+    # the mapped lane count, so a busway's dashes can see it. join() writes this same column from the cell's tags.
+    import roadlanes
+    counted = [roadlanes.count(w.get("lanes")) for w in ways]
+    f.attrs["osm_lanes"] = np.array([np.nan if v is None else float(v) for v in counted], np.float64)
     return f
 
 
@@ -567,7 +644,7 @@ def _named_way(feats, i, by_name):
         return None
     lon, lat = (float(v) for v in feats.lonlat[(a + b - 1) // 2][:2])
     my = NAME_MATCH_M / 111320.0
-    mx = my / max(math.cos(math.radians(lat)), 0.1)
+    mx = my / max(dmath.cos(math.radians(lat)), 0.1)
     best = None
     for w, x0, y0, x1, y1 in cands:
         if x0 - mx <= lon <= x1 + mx and y0 - my <= lat <= y1 + my:

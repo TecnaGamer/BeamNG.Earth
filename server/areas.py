@@ -45,6 +45,7 @@ import threading
 import time
 
 import fast
+import dmath
 import netfetch
 import pacer
 import roadz
@@ -54,7 +55,6 @@ log = logging.getLogger("earthd.areas")
 SUBDIR = "areas"
 STORE = "areas.json"
 STORE_VERSION = 1
-MAX_AREAS = 10
 MAX_KM2 = 2500.0            # (965 square miles) an area at most
 MIN_KM2 = 0.05
 PIN_SHARE = 0.9             # saved areas may pin at most this share of the cache's cap
@@ -155,7 +155,7 @@ def route_bounds(route):
     """(s, w, n, e) round a route's corridor."""
     lats, lons, half = route["lat"], route["lon"], route["half"]
     dlat = half / 111_195.0
-    dlon = half / (111_195.0 * max(0.01, math.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
+    dlon = half / (111_195.0 * max(0.01, dmath.cos(math.radians(max(abs(min(lats)), abs(max(lats)))))))
     return (max(-85.0, min(lats) - dlat), max(-180.0, min(lons) - dlon), min(85.0, max(lats) + dlat),
             min(180.0, max(lons) + dlon))
 
@@ -400,8 +400,12 @@ class Areas:
         bounds)."""
         tiles = route_tiles(route) if route is not None else box_tiles(box)
         if phase == "data":
-            return plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
-                              area_layers() if self.s.mapdata is not None else ())
+            import decisions    # (the shared decision archives' blocks first: one request a ~60 km2 block)
+            dec = ([("dec", decisions.BLOCK_Z, x, y) for x, y in tiles(decisions.BLOCK_Z, 0)]
+                   if decisions.enabled() and self.s.mapdata is not None and getattr(self.s, "grading", False)
+                   else [])
+            return dec + plan_steps(tiles, self._hm_zooms(box), self._img_zoom(box),
+                                    area_layers() if self.s.mapdata is not None else ())
         if phase == "world":
             # the road heights' lidar first: a road build waits only seconds for it (roadz.gap_answers) and a cell it
             # had to give up on keeps no geotile for the rest of the server's run
@@ -424,8 +428,12 @@ class Areas:
         return out
 
     def _present(self, step, done_imgs=None):
-        """Is a step's data on disk already (no network)?"""
+        """Is a step's data on disk already (no network; but a world tile near Germany, with its junction signs on,
+        fetches Germany's border data once: geo_prebuilt's key names it, earthd.Server.geo_content_key)?"""
         kind = step[0]
+        if kind == "dec":
+            import decisions
+            return decisions.region_block_present(self.s.cache_dir, self.s.mapdata.versions(), step[2], step[3])
         if kind == "cell":
             import mapcells
             return self.s.mapdata.has(mapcells.CellKey(step[1], step[2], step[3]), step[4])
@@ -445,7 +453,8 @@ class Areas:
 
     def plan(self, s, w, n, e, mode=DEFAULT_MODE):
         """The confirm box's estimate of a new area: {ok, km2, items, missing, downloadBytes, diskBytes, seconds, days,
-        hosts [[host, requests, days]], excluded [source names], worldTiles, worldMissing, error?}. No network."""
+        hosts [[host, requests, days]], excluded [source names], worldTiles, worldMissing, error?}. No network, but a
+        box near Germany, with its junction signs on, fetches Germany's border data once (_present's world tiles)."""
         try:
             box = check_box(s, w, n, e)
             mode = check_mode(mode, self.s)
@@ -584,9 +593,10 @@ class Areas:
     def _add(self, box, route, est, name, mode=DEFAULT_MODE):
         if not est.get("ok"):
             return False, est.get("error") or "no estimate"
+        short = self._disk_room(est.get("diskBytes", 0))
+        if short:
+            return False, short
         with self.lock:
-            if len(self.areas) >= MAX_AREAS:
-                return False, f"at most {MAX_AREAS} saved areas: delete one first"
             cap = self.s.cache.cap if self.s.cache is not None else 0
             pinned = self.pinned_bytes or sum(a["diskBytes"] for a in self.areas)
             if cap and pinned + est.get("diskBytes", 0) > PIN_SHARE * cap:
@@ -605,6 +615,25 @@ class Areas:
         self.wake.set()
         self._changed(force=True)
         return True, aid
+
+    def _disk_room(self, need):
+        """None, or why an area needing `need` bytes is refused for the disk: with no cache cap ("0: no limit") nothing
+        else bounds the saved areas, whose files the cache never evicts, so the area must fit in the disk's free space
+        less the cache's own free reserve (cache.DISK_RESERVE_*: players' disks filled up, ~19k ENOSPC errors in the
+        first week's telemetry). Areas no longer have a count limit (PR #1264)."""
+        c = self.s.cache
+        if c is None or c.cap or not need:
+            return None
+        import cache as cachemod
+        try:
+            du = c.disk_usage(c.root)
+        except (OSError, AttributeError):
+            return None
+        reserve = min(cachemod.DISK_RESERVE_MAX, max(cachemod.DISK_RESERVE_MIN, du.total * cachemod.DISK_RESERVE_SHARE))
+        if need > du.free - reserve:
+            return (f"not enough room: the area needs {need / 1e9:.1f} GB and the disk has "
+                    f"{max(0.0, du.free - reserve) / 1e9:.1f} GB to spare (free some space or pick a smaller area)")
+        return None
 
     def command(self, aid, op):
         """pause / resume / delete an area (delete: it stops, its data stays in the cache, unpinned). True if done."""
@@ -949,6 +978,10 @@ class Areas:
 
     def _fetch(self, a, st):
         kind = st[0]
+        if kind == "dec":
+            import decisions
+            decisions.region_block(self.s.cache_dir, self.s.mapdata.versions(), st[2], st[3])
+            return
         if kind == "geo":
             k = self.s.prebuild_geo(st[2], st[3])
             if k is None:
@@ -961,7 +994,8 @@ class Areas:
                 self._write_world(a["id"], world)
             return
         if kind == "lidar":
-            if roadz.PROVIDER is not None and roadz.PROVIDER.lines("lidar", st[1:4]) is None:
+            if roadz.PROVIDER is not None and any(roadz.PROVIDER.lines(src, st[1:4]) is None
+                                                  for src in roadz.PROVIDER.lidar_sources(st[1:4])):
                 raise RuntimeError("road height lidar not had")         # (the next pass tries again)
             return
         if kind == "fuel":

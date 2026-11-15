@@ -14,6 +14,7 @@ import logging
 import threading
 
 import numpy as np
+import dnp
 
 import dem as demmod
 import geodesy
@@ -117,7 +118,7 @@ class AirportGrader:
                 ex, ny, _ = frame.geodetic_to_enu(pts[:, [0, 2]].ravel(), pts[:, [1, 3]].ravel(), np.zeros(2 * len(pts)))
                 ex, ny = np.asarray(ex).reshape(-1, 2), np.asarray(ny).reshape(-1, 2)
                 for (sx0, sx1), (sy0, sy1), st in zip(ex, ny, strokes):
-                    L = float(np.hypot(sx1 - sx0, sy1 - sy0))
+                    L = float(dnp.hypot(sx1 - sx0, sy1 - sy0))
                     n = max(1, int(np.ceil(L / MARK_PIECE_M)))
                     for i in range(n):
                         a, b = i / n, (i + 1) / n

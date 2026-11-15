@@ -12,6 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 import numpy as np
@@ -21,12 +22,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "server"), str(ROOT / "tools"), str(Path(__file__).parent)]
 import buildings as b
 import cdae
+import francehouse_mesh as fm
 import francehouses as fr
 import geodesy
 import house_regions
 import mapgeom
 import roads
 import build_french_houses as assets
+import mod_textures_dds
 import test_regional_geotiles as regional_geo
 import blockworker as bw
 
@@ -173,6 +176,8 @@ class HouseTest(unittest.TestCase):
                 self.assertLess(high[3].max(), len(high[4]))
                 self.assertGreater(high[0][:, 2].max(), spec.height)
 
+    # (the faces as drawn: shells.close's bottom caps face down by design, the watertight PR)
+    @unittest.mock.patch("shells.close", lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex)))
     def test_square_hipped_roof_and_collision_winding(self):
         for shape in ("gabled", "hipped", "half-hipped", "flat"):
             s = b.plan(rect(w=10, d=10), {"class": "house", "num_floors": 2, "roof_shape": shape}, lat=48.77, lon=7.85)
@@ -195,6 +200,27 @@ class HouseTest(unittest.TestCase):
         np.testing.assert_array_equal(a[2], c[2])
         np.testing.assert_array_equal(a[3], c[3])
         np.testing.assert_array_equal(a[5], c[5])
+
+    def test_lit_windows_each_one_cell_of_one_material(self):
+        """Each lit window one cell of the lit glass's map (its own level and hour to go dark, GLASS_LIT), one lit
+        material (S-moreo's PR #916 had three)."""
+        lit, cells = None, set()
+        for i in range(12):
+            P, UV, T, M, mats, C = b.build([(self.plan(seed_id=str(i)), 0., 0.)])
+            names = {mats[k] for k in set(M.tolist())}
+            self.assertFalse({n for n in names if n.startswith("bne_fr_house_glass_lit_")}, names)
+            if "bne_fr_house_glass_lit" not in names:
+                continue
+            lit = mats.index("bne_fr_house_glass_lit")
+            for tri in T[M == lit]:
+                uv = UV[tri]
+                self.assertTrue(np.allclose(uv, uv[0]), uv)            # (a point: the cell's own level)
+                k = uv[0, 0] * fm.LIT_GLASS_CELLS - .5
+                self.assertAlmostEqual(k, round(k), 6)
+                cells.add(round(k))
+        self.assertIsNotNone(lit)
+        self.assertGreater(len(cells), 2, cells)
+        self.assertEqual(len(assets.GLASS_LIT), fm.LIT_GLASS_CELLS)
 
     def test_pickled_looks_keep_their_colours_without_process_dictionary(self):
         s = pickle.loads(pickle.dumps(self.plan()))
@@ -243,15 +269,17 @@ class HouseTest(unittest.TestCase):
     def test_original_textures_and_material_registration_are_reproducible(self):
         with tempfile.TemporaryDirectory() as td:
             assets.build(td)
-            names = {p.name for p in assets.OUT.iterdir()}
-            self.assertEqual(names, {p.name for p in Path(td).iterdir()})
+            # (the tool draws PNGs and names them; the mod ships them as DDS, tools/mod_textures_dds.py)
+            names = {p.name for p in Path(td).iterdir()}
+            self.assertEqual(mod_textures_dds.shipped_names(assets.OUT), {mod_textures_dds.shipped(n) for n in names})
             for name in names:
                 with self.subTest(asset=name):
                     if name.endswith(".png"):
-                        with Image.open(assets.OUT / name) as a, Image.open(Path(td) / name) as c:
-                            np.testing.assert_array_equal(np.asarray(a), np.asarray(c))
+                        self.assertGreater(mod_textures_dds.texture_psnr(Path(td) / name,
+                                                                         assets.OUT / mod_textures_dds.shipped(name)), 40.0)
                     else:
-                        self.assertEqual(json.loads((assets.OUT / name).read_text()), json.loads((Path(td) / name).read_text()))
+                        self.assertEqual(json.loads((assets.OUT / name).read_text()),
+                                         mod_textures_dds.shipped(json.loads((Path(td) / name).read_text())))
         material = json.loads((assets.OUT / "main.materials.json").read_text())
         self.assertEqual(set(material), set(fr.MATERIALS))
         self.assertTrue(all(not v["translucent"] for v in material.values()))
@@ -282,14 +310,24 @@ class HouseTest(unittest.TestCase):
             s = b.plan(ring, dict(attrs, _fr_residential=True), lat=float(lat), lon=float(lon))
             self.assertEqual(s.fr_house is not None, cls == "yes")
 
-    def test_non_french_tiles_do_not_request_residential_land(self):
-        calls = []
+    def test_non_french_tiles_do_not_infer_french_houses(self):
+        # (land use is read everywhere now, already in the road tile's layers: industrial land, buildings.industrial_rings;
+        # the French house inference stays France's: no residential land handed to tile_buildings elsewhere)
+        seen = []
+        orig = b.tile_buildings
+        def spy(*a, **k):
+            seen.append(list(k.get("house_land_layers", ())))
+            return orig(*a, **k)
         class MD:
             def cell(self, key, layers=(), kind="demand"):
-                calls.append(layers)
                 return SimpleNamespace(layers={})
-        self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(), lambda la, lo: np.zeros(np.shape(la))), ([], []))
-        self.assertFalse(any("land_use" in ls for ls in calls))
+        b.tile_buildings = spy
+        try:
+            self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(),
+                                               lambda la, lo: np.zeros(np.shape(la))), ([], []))
+        finally:
+            b.tile_buildings = orig
+        self.assertTrue(all(not ls for ls in seen))
 
     def test_mesh_builder_accepts_an_iterator_without_losing_buildings(self):
         item = (self.plan(), 0., 0.)

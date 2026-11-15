@@ -24,6 +24,7 @@ import furniture
 import poleprofiles as pp
 import roads
 import build_regional_poles as mesh
+import mod_textures_dds
 
 
 def road(fid="example", urban=False):
@@ -83,6 +84,38 @@ class SelectionTest(unittest.TestCase):
                 for lat, lon in ((48.815, 7.79), (48.58, 7.82), (39., -76.)):
                     self.assertEqual(earthd.Server.pole_profile(server, SimpleNamespace(lat=lat, lon=lon)),
                                      pp.geographic_profile(mode))
+
+
+class CountryPolesTest(unittest.TestCase):
+    """Mode "poles": the country's own poles only, no signs, stops or French kit."""
+
+    def test_europe_and_its_neighbours_get_their_poles_the_rest_stock(self):
+        for country in ("DE", "UA", "PL", "CZ", "FR", "TR"):
+            self.assertEqual(pp.profile_for(country, "poles"), pp.EU_KIT + ":" + country, country)
+        for country in ("US", "CA", "JP", None, "", "ZZ"):
+            self.assertIsNone(pp.profile_for(country, "poles"), country)
+
+    def test_a_countrys_poles_are_from_its_kit_and_stable_per_road(self):
+        import europeinfra
+        ids = [str(i) for i in range(300)]
+        styles = {fid: pp.choose(pp.profile_for("UA", "poles"), fid) for fid in ids}
+        self.assertEqual(styles, {fid: pp.choose(pp.profile_for("UA", "poles"), fid) for fid in reversed(ids)})
+        self.assertEqual({s.group for s in styles.values()},
+                         {"eu_pole_" + f for f in europeinfra.KITS["UA"].poles if not f.startswith("fr_")})
+
+    def test_no_kit_and_no_foreign_data_in_the_token(self):
+        profile = pp.geographic_profile("poles")
+        self.assertEqual(profile[1], "poles")
+        self.assertNotIn(pp.FR_KIT, profile[2])
+        self.assertFalse(pp.kit_enabled(profile))
+        self.assertNotEqual(profile, pp.geographic_profile("europe"))
+
+    def test_the_server_default_is_europe(self):
+        # (on by default since 2026-11-10, the user's call; the parser is built inside main(): the option's text is
+        # what is checked)
+        src = (Path(__file__).resolve().parents[1] / "earthd.py").read_text(encoding="utf-8")
+        i = src.index('"--regional-poles"')
+        self.assertIn('default=os.environ.get("BNE_REGIONAL_POLES", "europe")', src[i:i + 400])
 
 
 class PlacementTest(unittest.TestCase):
@@ -205,7 +238,8 @@ class PipelineTest(unittest.TestCase):
         def revisit(kind, key, aid, tx, ty, out, vfs, name, build, extra, result, where=None):
             keys.append(key)
             return build()
-        def build(*args):
+        def build(*args, **kwargs):         # (kwargs: the German junction signs' de_junctions and the town signs'
+            # towns_on, by name)
             forwarded.append(args[-1])
             return ("/temp/result", 0, [])
         with mock.patch.object(blockworker, "_s", SimpleNamespace(md=None)), \
@@ -292,22 +326,16 @@ class GeometryTest(unittest.TestCase):
     def test_export_materials_lods_and_reproducibility(self):
         with tempfile.TemporaryDirectory() as d:
             mesh.build(d)
-            for name in (mesh.NAME + ".dae", "main.materials.json"):
-                # Git's Windows checkout can use CRLF. Compare all UTF-8 text
-                # after universal-newline decoding; geometry and materials stay exact.
-                self.assertEqual(Path(d, name).read_text(encoding="utf-8"),
-                                 (mesh.OUT / name).read_text(encoding="utf-8"), name)
-            # PNG compression can differ between Pillow/zlib builds. Require
-            # exactly the same decoded image, not the same compressed stream.
-            with Image.open(Path(d, "concrete_grain.png")) as generated, \
-                    Image.open(mesh.OUT / "concrete_grain.png") as shipped:
-                for img in (generated, shipped):
-                    self.assertEqual(img.format, "PNG")
-                    self.assertEqual(img.mode, "RGB")
-                    self.assertEqual(img.size, (128, 128))
-                self.assertEqual(generated.info, shipped.info, "PNG metadata")
-                np.testing.assert_array_equal(np.asarray(generated), np.asarray(shipped),
-                                              err_msg="concrete_grain.png pixels")
+            # Git's Windows checkout can use CRLF. Compare all UTF-8 text
+            # after universal-newline decoding; geometry and materials stay exact.
+            self.assertEqual(Path(d, mesh.NAME + ".dae").read_text(encoding="utf-8"),
+                             (mesh.OUT / (mesh.NAME + ".dae")).read_text(encoding="utf-8"))
+            # (the tool draws a PNG and names it; the mod ships it as DDS: tools/mod_textures_dds.py)
+            self.assertEqual(mod_textures_dds.shipped(json.loads(Path(d, "main.materials.json").read_text("utf-8"))),
+                             json.loads((mesh.OUT / "main.materials.json").read_text(encoding="utf-8")))
+            with Image.open(Path(d, "concrete_grain.png")) as generated:
+                self.assertEqual((generated.format, generated.mode, generated.size), ("PNG", "RGB", (128, 128)))
+                self.assertGreater(mod_textures_dds.texture_psnr(generated, mesh.OUT / "concrete_grain.dds"), 45.0)
             xml = ET.parse(Path(d, mesh.NAME + ".dae"))
             ns = {"c": "http://www.collada.org/2005/11/COLLADASchema"}
             names = {n.attrib.get("name") for n in xml.findall(".//c:node", ns)}

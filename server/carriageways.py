@@ -36,6 +36,7 @@ import os
 import time
 
 import numpy as np
+import dnp
 
 log = logging.getLogger("earthd.grading")
 
@@ -85,7 +86,7 @@ def sample(parts, chain, step=STEP_M):
         ln = np.asarray(parts[i][1], np.float64)[:, :2]
         if rev:
             ln = ln[::-1]
-        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))]
+        s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(ln, axis=0).T))]
         m = max(2, int(math.ceil(s[-1] / step)) + 1)
         a = np.linspace(0.0, s[-1], m)
         pts = np.stack([np.interp(a, s, ln[:, 0]), np.interp(a, s, ln[:, 1])], axis=1)
@@ -95,7 +96,7 @@ def sample(parts, chain, step=STEP_M):
         pi += [i] * len(pts)
         br += [bool(parts[i][2])] * len(pts)
     xy = np.concatenate(xs)
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
     pi, br = np.array(pi), np.array(br)
     ch = np.flatnonzero(br[1:] != br[:-1])
     cut = np.r_[s[ch], s[ch + 1]] if len(ch) else np.zeros(0)
@@ -119,7 +120,7 @@ def chains(parts, tol=TOUCH_M):
         b_i = a_i + 1
         while b_i < len(order_e) and xs[b_i] - xs[a_i] <= tol:
             f = order_e[b_i]
-            if np.hypot(*(ends[e] - ends[f])) <= tol and e // 2 != f // 2:
+            if dnp.hypot(*(ends[e] - ends[f])) <= tol and e // 2 != f // 2:
                 nb[e].append(int(f))
                 nb[f].append(int(e))
             b_i += 1
@@ -174,9 +175,9 @@ def branch_ties(xys, brs, tol=COUPLE_M):
             for nb, q in enumerate(xys):
                 if nb == na or len(q) < 3 or (p < boxes[nb][0]).any() or (p > boxes[nb][1]).any():
                     continue
-                if float(np.min(np.hypot(*(q[[0, -1]] - p).T))) <= tol:
+                if float(np.min(dnp.hypot(*(q[[0, -1]] - p).T))) <= tol:
                     continue                    # (an end meeting an end: a branch point, coupled as such)
-                d = np.hypot(*(q[1:-1] - p).T)
+                d = dnp.hypot(*(q[1:-1] - p).T)
                 j = int(np.argmin(d)) + 1
                 if d[j - 1] > tol or (brs[nb][j - 1] and brs[nb][j] and brs[nb][j + 1]):
                     continue                    # (too far, or on a deck: a road under a bridge is no branch of it)

@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import farpvs  # noqa: E402
+import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import heightmap  # noqa: E402
@@ -139,6 +141,7 @@ class ServerHarness(unittest.TestCase):
             self.server.horizon_pool.shutdown(wait=True)
         if self.server.imagery is not None:
             self.server.imagery.close()
+        revisitpack.reset()
         self.tmp.cleanup()
 
     def conn(self):
@@ -210,9 +213,11 @@ class ServerHarness(unittest.TestCase):
                     keys.add("slotSerial")
                 if self.layout.format >= 4:             # M1: the texture size (the mod's unit kind)
                     keys.add("tex")
-                    # M1h: 256/128 px from L8; flying high (or the 3D map) as fine as on the screen, never finer
+                    # M1h: 256/128 px from L8; flying high (or the 3D map) as fine as on the screen; in sight and resolved
+                    # finer on screen than its level's, larger (farpvs.UP_ON), farpvs.UP_PX_MAX at most
                     self.assertIn(m["tex"], {self.server.tex_size(m["level"]),
-                                             *range(earthd.MAP_TEX_MIN_PX, self.server.tex_size(m["level"]))})
+                                             *range(earthd.MAP_TEX_MIN_PX, self.server.tex_size(m["level"])),
+                                             *(1 << k for k in range(8, farpvs.UP_PX_MAX.bit_length()))})
                 self.assertTrue(self.server.matslots.owns((aid, m["key"]), m["material"]), m)     # its pooled name
                 self.assertEqual(m["texture"], f"/temp/beamngEarth/{self.server.sid}/far_{aid}_{m['key']}.dds")
                 self.assertIs(m["detail"], True)
@@ -279,7 +284,7 @@ class ServerTest(ServerHarness):
         self.assertIsNone(a1["floorZ"], "not in a tunnel")
         aid = a1["anchorId"]
         h = self.check_terrain(a1["terrain"], 0.0, 0.0)
-        self.assertEqual(a1["terrain"]["q"], 1 / 64)                  # 600 m relief
+        self.assertEqual(a1["terrain"]["q"], 1 / 128)     # 600 m relief over the survey, under 512 m in a block (survey_q on block-sized windows, 2026-11-12)
         self.assertEqual(a1["terrain"]["heightmap"], f"/temp/beamngEarth/{self.server.sid}/hm_{aid}_0_0.png")
         self.assertAlmostEqual(a1["groundZ"], h[1024, 1024], delta=0.001)   # sample (1024, 1024) = (0, 0)
 
@@ -834,10 +839,34 @@ class MeshServerTest(ServerHarness):
         quiet = self.c.drain(0.6)
         self.assertFalse([m for m in quiet if m["type"].startswith("far_")], quiet[:3])
 
-    def test_imagery_failure_falls_back_to_palette(self):
+    def test_imagery_failure_allocates_fallback_material_for_retexture(self):
+        """Under temporary network trouble (online mode), tiles receive a pooled material and fallback
+        texture so they can be retextured in-place via far_retex once the host recovers (ROADMAP)."""
+        class Broken(FakeImagery):
+            def render(self, *a, **kw):
+                raise imagery.ImageryError("host timeout")
+        self.server.imagery = Broken(os.path.join(self.tmp.name, "cache", "broken"))
+        far = FarState()
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.c.send({"type": "commit_anchor", "anchorId": aid})
+        self.pose(aid, 0, 0)
+        _, seen = self.stream_until_done(far, aid)
+        tiles = [m for m in seen if m["type"] == "far_tile"]
+        self.assertTrue(tiles)
+        self.assertTrue(all("material" in m and "texture" in m for m in tiles))
+        self.assertEqual(len(self.server.degraded), len(tiles))
+        shape = cdae.read(self.fs(tiles[0]["shape"]))
+        self.assertTrue(shape["materials"][0]["name"].startswith("bngEarthFar_"))
+        self.assertNotEqual(shape["meshes"][0]["tverts2"][0], 0)
+
+    def test_offline_imagery_failure_falls_back_to_palette(self):
+        """In offline mode, tiles keep the shared palette material (bnge_far_palette) with no per-tile
+        material slot."""
         class Broken(FakeImagery):
             def render(self, *a, **kw):
                 raise imagery.ImageryError("offline")
+        self.server.net.offline_flag = True
         self.server.imagery = Broken(os.path.join(self.tmp.name, "cache", "broken"))
         far = FarState()
         self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
@@ -851,6 +880,64 @@ class MeshServerTest(ServerHarness):
         shape = cdae.read(self.fs(tiles[0]["shape"]))
         self.assertEqual(shape["materials"][0]["name"], ff.MATERIAL)
         self.assertEqual(shape["meshes"][0]["tverts2"][0], 0)
+
+    def test_temporary_full_breaker_outage_allocates_material_and_recovers_via_retex(self):
+        """When all breakers are open during a full temporary outage (Fetcher.offline is True,
+        but offline_flag is False), tiles still receive fallback material and recover in-place via
+        far_retex once breakers close and hosts recover."""
+        class Broken(FakeImagery):
+            def render(self, *a, **kw):
+                raise imagery.ImageryError("temporary outage: all breakers open")
+        working_dir = os.path.join(self.tmp.name, "cache", "working")
+        broken_dir = os.path.join(self.tmp.name, "cache", "broken")
+        self.server.imagery = Broken(broken_dir)
+        self.server.net.register_chain("imagery", [s_.url for s_ in self.server.imagery.chain])
+
+        # Trip all breakers across all registered chains: makes Fetcher.offline True!
+        with self.server.net._lock:
+            all_hosts = {h for c in self.server.net._chains.values() for h in c}
+        for h_name in all_hosts:
+            self.server.net.host(h_name).breaker.trip(60.0)
+        self.assertTrue(self.server.net.offline)
+        self.assertFalse(self.server.net.offline_flag)
+
+        far = FarState()
+        self.c.send({"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0"})
+        aid = self.prepare_anchor(1, LAT, LON)["anchorId"]
+        self.c.send({"type": "commit_anchor", "anchorId": aid})
+        self.pose(aid, 0, 0)
+        _, seen = self.stream_until_done(far, aid)
+        tiles = [m for m in seen if m["type"] == "far_tile"]
+        self.assertTrue(tiles)
+        # Even with all breakers open, tiles received pooled material and fallback texture!
+        self.assertTrue(all("material" in m and "texture" in m for m in tiles))
+        self.assertEqual(len(self.server.degraded), len(tiles))
+
+        # Now hosts recover: reset breakers and restore working imagery
+        self.server.imagery = FakeImagery(working_dir)
+        for h_name in all_hosts:
+            b = self.server.net.host(h_name).breaker
+            b.state = "closed"
+            b.open_until = 0.0
+            b.failures.clear()
+            b.probing = False
+        self.assertFalse(self.server.net.offline)
+
+        # Close circuit for imagery hosts to trigger recovery
+        self.server.retex_rate = 500
+        for host in self.server.imagery_hosts():
+            self.server._on_circuit_closed(host)
+
+        # Drain messages until far_retex recovers degraded tiles
+        swaps = []
+        t0 = time.time()
+        while time.time() - t0 < 5.0 and not swaps:
+            msgs = self.c.drain(0.2)
+            swaps.extend(m for m in msgs if m.get("type") == "far_retex")
+        self.assertTrue(len(swaps) > 0)
+        self.assertEqual(swaps[0]["type"], "far_retex")
+        self.assertTrue(swaps[0]["texture"].endswith("_r1.dds"))
+        self.assertLess(len(self.server.degraded), len(tiles))
 
 
 class MeshServer64Test(MeshServerTest):
@@ -1349,6 +1436,10 @@ class WarmPlaceTest(unittest.TestCase):
         self.assertEqual(got[0], (own, "roads"), "the anchor's own cell first")
         self.assertNotIn((own, "water"), got, "the tiles' own buildings and water: when each starts")
         self.assertIn((own, "infrastructure"), got)
+        # the town signs' communes of the cells under the car (the first road tile waited for them), those alone
+        towns = [k for k, ly in got if ly == "town_areas"]
+        self.assertIn(own, towns)
+        self.assertLessEqual(len(towns), 9)
         self.assertEqual(earthd.Server.warm_place(SimpleNamespace(mapdata=None), anchor, 0.0, 0.0), 0)
 
 
@@ -1395,21 +1486,24 @@ class AnchorQTest(unittest.TestCase):
                 return 1000 + self.relief * (np.asarray(lat) - LAT) / 0.27     # +-15 km = +-0.135 deg
         f = geodesy.EnuFrame(LAT, LON)
         d = Dem(10)
-        self.assertEqual(earthd.survey_q(f, d), 1 / 256)
+        self.assertEqual(earthd.survey_q(f, d), 1 / 1024)
         self.assertEqual(d.zoom, earthd.SURVEY_ZOOM)
         # the relief inside block-sized windows decides, not the whole survey's: a steady slope of
-        # 3000 m over 30 km is 150 m per window (4 samples, 1.5 km, for a block of 1024 m and a survey step)
-        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 256)
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 64)      # 450 m per window
-        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (750 m)
-        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1500 m
+        # 3000 m over 30 km is 100 m per window (9 samples, 1 km, for a block of 1024 m)
+        self.assertEqual(earthd.survey_q(f, Dem(3000), 1024.0), 1 / 512)      # (+ zBase's 16 m: 128 m)
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 1024.0), 1 / 128)     # 300 m per window
+        self.assertEqual(earthd.survey_q(f, Dem(9000), 2048.0), 1 / 64)      # bigger blocks, bigger windows (600 m)
+        self.assertEqual(earthd.survey_q(f, Dem(18000), 2048.0), 1 / 32)     # 1200 m
 
         class Peak(Dem):            # flat, with one 1200 m spike: its few windows do not decide (its blocks are coarser)
             def sample(self, lat, lon, zoom, progress=None):
                 la, lo = np.asarray(lat), np.asarray(lon)
                 return 1000 + 1200 * np.exp(-(((la - LAT) * 111320) ** 2 + ((lo - LON) * 86000) ** 2) / 600.0 ** 2)
-        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 128)     # (its foot, not its top: 1/32)
+        self.assertEqual(earthd.survey_q(f, Peak(0), 1024.0), 1 / 1024)     # (the plain round it, not its top: 1/32)
         self.assertEqual(heightmap.block_params(1000.0, 2200.0, 1 / 256)[0], 1 / 32)
+        for relief in (10.0, 180.0, 440.0, 950.0, 1900.0, 5000.0):    # block_q: block_params' rule, its worst zBase
+            self.assertEqual(heightmap.block_q(relief), heightmap.block_params(
+                1015.99, 1015.99 + relief, heightmap.Q_LADDER[0])[0])
 
         class Range(Dem):           # a mountain range over half the survey: it decides
             def sample(self, lat, lon, zoom, progress=None):
@@ -1490,16 +1584,92 @@ class MachineProfileTest(unittest.TestCase):
         old = earthd.FAST_BASE_V
         try:
             a = self._args()
-            with mock.patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("BNGE_FAST_BASE_V", None)
+            with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(budget, "tier", return_value="small"):
+                os.environ.pop("BNGE_FAST_BASE_V", None)     # (the small tier: a 6 GB test runner is a lean one)
                 earthd.machine_profile(a, True)
             self.assertEqual(a.road_processes, budget.SMALL_ROAD_PROCESSES)
-            self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS)
+            # (the compact layout's one far-tile process: earthd.SMALL_COMPACT; else the small profile's)
+            self.assertEqual(a.workers, budget.LEAN_FAR_WORKERS if earthd.SMALL_COMPACT else budget.SMALL_FAR_WORKERS)
+            a = self._args()
+            with mock.patch.object(budget, "tier", return_value="small"), \
+                    mock.patch.object(earthd, "SMALL_COMPACT", False):
+                earthd.machine_profile(a, True)
+            self.assertEqual(a.workers, budget.SMALL_FAR_WORKERS, "BNGE_SMALL_COMPACT=off: the small profile's")
             if budget.SMALL_ANALYSES_OFF:
                 self.assertEqual((a.deshadow, a.colormatch), ("off", "off"))
             self.assertEqual(earthd.FAST_BASE_V, earthd.SMALL_FAST_BASE_V)
         finally:
             earthd.FAST_BASE_V = old
+
+    def test_lean(self):
+        """An 8 GB machine (budget.tier 'lean'): one road-tile and one far-tile process, the tier kept for main_async's
+        pools; a player's own --workers / --road-processes stand."""
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier in ("lean", "emergency"):
+                a = self._args()
+                with mock.patch.object(budget, "tier", return_value=tier):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.road_processes, a.workers, a.far_max, a.tier),
+                                 (budget.LEAN_ROAD_PROCESSES, budget.LEAN_FAR_WORKERS, budget.LEAN_FAR_WORKERS, tier))
+            a = self._args()
+            a.workers, a.road_processes = 4, 3
+            with mock.patch.object(budget, "tier", return_value="lean"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers), (3, 4), "the player's choice")
+            a = self._args()
+            with mock.patch.object(budget, "tier", return_value="small"):
+                earthd.machine_profile(a, True)
+            self.assertEqual((a.road_processes, a.workers),
+                             (budget.SMALL_ROAD_PROCESSES,
+                              budget.LEAN_FAR_WORKERS if earthd.SMALL_COMPACT else budget.SMALL_FAR_WORKERS))
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_emergency_trims_the_extras(self):
+        import budget
+        old = earthd.FAST_BASE_V
+        try:
+            for tier, trim, want in (("emergency", "on", "off"), ("lean", "on", "on"), ("emergency", "off", "on")):
+                a = self._args()
+                a.trees = a.gas_stations = a.airports = a.roads = a.buildings = "on"
+                with mock.patch.object(budget, "tier", return_value=tier), \
+                        mock.patch.object(earthd, "EMERGENCY_TRIM", trim == "on"):
+                    earthd.machine_profile(a, True)
+                self.assertEqual((a.trees, a.gas_stations, a.airports), (want,) * 3, (tier, trim))
+                self.assertEqual((a.roads, a.buildings), ("on", "on"), "the essentials stay")
+        finally:
+            earthd.FAST_BASE_V = old
+
+    def test_lean_processes(self):
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": ""}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"])
+            self.assertEqual(earthd.lean_processes("emergency"), earthd.LEAN_PROCS["emergency"])
+            self.assertEqual(earthd.lean_processes("small"), 4)
+        for v in ("1", "2", "4"):
+            with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": v}):
+                self.assertEqual(earthd.lean_processes("lean"), int(v))
+        with mock.patch.dict(os.environ, {"BNGE_LEAN_PROCS": "7"}):
+            self.assertEqual(earthd.lean_processes("lean"), earthd.LEAN_PROCS["lean"], "not a level: the default")
+
+    def test_block_shared(self):
+        s = earthd.Server.__new__(earthd.Server)
+        p, q = object(), object()
+        s.block_pools = [(p, q), (p, q)]
+        self.assertTrue(s.block_shared())
+        s.block_pools = [(p, q), (object(), object())]
+        self.assertFalse(s.block_shared())
+        s.block_pools = []
+        self.assertFalse(s.block_shared())
+
+    def test_photo_process_not_on_a_small_machine(self):
+        with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": ""}):
+            self.assertTrue(earthd.photo_process(16, False))
+            self.assertFalse(earthd.photo_process(16, True), "a 16-thread 16 GB PC: memory first")
+            self.assertFalse(earthd.photo_process(8, False))
+        with mock.patch.dict(os.environ, {"BNGE_PHOTO_PROCESS": "on"}):
+            self.assertTrue(earthd.photo_process(4, True))
 
     def test_desktop(self):
         import budget

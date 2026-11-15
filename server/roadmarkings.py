@@ -6,6 +6,7 @@ length/gap. Phase is measured on the source line before tile/junction clipping.
 from collections import namedtuple
 
 import numpy as np
+import dnp
 
 Profile = namedtuple('Profile', 'travel ramp solid')
 DEFAULT = Profile((3.0, 8.0, .35), (1.2, 2.8, .35), .35)
@@ -32,7 +33,7 @@ def for_road(spec, country=None, lon=0.):
 
 
 def arc(points):
-    return np.r_[0., np.cumsum(np.linalg.norm(np.diff(points[:, :2], axis=0), axis=1))]
+    return np.r_[0., np.cumsum(dnp.norm(np.diff(points[:, :2], axis=0), axis=1))]
 
 
 def phase(source, point):
@@ -41,7 +42,7 @@ def phase(source, point):
     t = np.clip(((point[:2] - source[:-1, :2]) * d).sum(1) /
                 np.maximum((d * d).sum(1), 1e-12), 0., 1.)
     q = source[:-1, :2] + t[:, None] * d
-    k = int(np.argmin(((q - point[:2]) ** 2).sum(1)))
+    k = int(np.argmin((dnp.sq(q - point[:2])).sum(1)))
     s = arc(source)
     return float(s[k] + t[k] * (s[k + 1] - s[k]))
 

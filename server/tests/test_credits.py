@@ -63,10 +63,12 @@ class WordingTest(unittest.TestCase):
 
     def test_elevation_and_weather(self):
         self.assertEqual(set(credits.ELEVATION), {demmod.MAPTERHORN["name"], demmod.AWS["name"], polardem.SOURCE,
-                                                  "lidarbc", "hrdem"})
+                                                  "lidarbc", "hrdem", "hkdtm"})
         # the open government licences' required wording ("Contains information licensed under ...")
         self.assertIn("Open Government Licence - British Columbia", credits.ELEVATION["lidarbc"])
         self.assertIn("Open Government Licence - Canada", credits.ELEVATION["hrdem"])
+        self.assertIn("(c) Government of the Hong Kong SAR, from DATA.GOV.HK and the CSDI Portal",
+                      credits.ELEVATION["hkdtm"])
         self.assertIn("mapterhorn.com/attribution", credits.ELEVATION["mapterhorn"])
         # the Copernicus DEM's required wording (its licence)
         self.assertIn("provided under COPERNICUS by the European Union and ESA", credits.ELEVATION[polardem.SOURCE])
@@ -266,7 +268,10 @@ class ServerTileCreditsTest(unittest.TestCase):
         s.imagery = Broken(os.path.join(s.out_dir, "broken"))
         self.addCleanup(s.imagery.close)
         info = s.make_tile(a, ff.tile_of("-1_8_0"))
-        self.assertIsNone(info.material)
+        # (a palette texture in a material of its own, stale, so far_retex gives it the photos once imagery is back:
+        # PR #1260; before, a palette tile had no material)
+        self.assertIsNotNone(info.material)
+        self.assertTrue(info.stale)
         self.assertEqual(info.credits, {"dem:mapterhorn"})      # no imagery: elevation only
 
     def test_retexture_updates_the_sources(self):

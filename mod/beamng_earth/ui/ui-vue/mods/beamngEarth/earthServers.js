@@ -25,6 +25,13 @@ const BROWSER_ROUTES = new Set(["menu.beammp.servers", "menu.beammp.direct", "me
 // the category's colour (teal: none of BeamMP's own, orange / green / blue / yellow) and the official server's (violet)
 const EARTH_RGB = "20, 184, 166"
 const OFFICIAL_RGB = "168, 85, 247"
+// UI mod reloads can evaluate this module at another URL. Module-local guards alone then leave two sets of
+// watchers replacing each other's lists. Hand ownership over across all copies in this UI window.
+const OWNER = Symbol.for("beamngEarth.servers")
+let active = false
+let generation = 0
+let pollGeneration = 0
+const current = run => active && run === generation && window[OWNER] === stop
 
 let observer = null
 let style = null
@@ -101,13 +108,16 @@ function place() {
   }
 }
 
-async function poll() {
+async function poll(request) {
+  if (!active || request !== pollGeneration) return
   try {
     // (an expression evaluated with its value passed back, as BeamMP's own page asks Lua: the bridge's lua.extensions
     // proxy did not reach this extension)
     const st = await new Promise(resolve =>
       window.bngApi.engineLua("beamngEarth_serverlist and beamngEarth_serverlist.state()", resolve))
-    if (st && st.state === "loading") pollTimer = setTimeout(poll, POLL_MS)
+    // A reply can arrive after stop(), a new owner, or a newer refresh. It must not touch the list or restart polling.
+    if (!active || request !== pollGeneration) return
+    if (st && st.state === "loading") pollTimer = setTimeout(() => poll(request), POLL_MS)
     const list = Array.isArray(st?.servers) ? st.servers : Object.values(st?.servers || {})
     ours = list.map(toBeamMP)
     officialNames = new Set(ours.filter(s => s.bngeOfficial).map(s => s.strippedName))
@@ -118,19 +128,26 @@ async function poll() {
 }
 
 function refresh() {
+  if (!active) return
+  const request = ++pollGeneration
   clearTimeout(pollTimer)
   window.bngApi.engineLua("if beamngEarth_serverlist then beamngEarth_serverlist.refresh() end")
-  pollTimer = setTimeout(poll, 100)
+  pollTimer = setTimeout(() => poll(request), 100)
 }
 
 // BeamMP's state, once: the view and its list watched
 function hook() {
-  if (!hooking) hooking = hookOnce().catch(e => { hooking = null; throw e })
+  if (!active) return Promise.resolve()
+  if (!hooking) {
+    const run = generation
+    hooking = hookOnce(run).catch(e => { if (current(run)) hooking = null; throw e })
+  }
   return hooking
 }
 
-async function hookOnce() {
+async function hookOnce(run) {
   const mod = await import(BEAMMP_STATE)
+  if (!current(run)) return
   bmp = mod.useBeamMPState(useBridge().events)
   stopWatches.push(watch(bmp.state.view, view => {
     if (view === VIEW) refresh()
@@ -181,12 +198,16 @@ function inject() {
   const sample = sidebar.querySelector(".nav-btn")
   if (sample) for (const a of sample.attributes) if (a.name.startsWith("data-v-")) button.setAttribute(a.name, "")
   button.addEventListener("click", async () => {
+    const run = generation
+    if (!current(run)) return
     // BeamMP's own gates first (its launcher, terms of service and login pages): the category opens from its browser
     const name = String(window.vueRouter?.currentRoute?.value?.name || "")
     if (!BROWSER_ROUTES.has(name)) return
     await hook()
+    if (!current(run)) return
     bmp.setView(VIEW)
     await window.vueRouter.replace({ name: SERVERS_ROUTE, params: { view: VIEW } })
+    if (!current(run)) return
     place()
     mark()
   })
@@ -195,12 +216,16 @@ function inject() {
 }
 
 export function start() {
-  if (observer || typeof MutationObserver === "undefined") return
+  if (active || typeof MutationObserver === "undefined") return
+  if (window[OWNER]) window[OWNER]()
+  window[OWNER] = stop
+  active = true
+  generation++
   style = document.createElement("style")
   style.textContent = css
   document.head.append(style)
   observer = new MutationObserver(() => {
-    if (!document.querySelector(".beammp-route")) return
+    if (!active || !document.querySelector(".beammp-route")) return
     inject()
     if (!bmp && document.querySelector(".beammp-route .sidebar")) hook().catch(e => console.error("BeamNG.Earth: BeamMP's state", e))
     mark()
@@ -208,9 +233,16 @@ export function start() {
   // (class changes too: Vue sets a row's whole class list again when its selection changes)
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] })
   inject()
+  if (document.querySelector(".beammp-route .sidebar")) hook().catch(e => console.error("BeamNG.Earth: BeamMP's state", e))
 }
 
 export function stop() {
+  // An old index.js may finish unloading after its replacement has started. Its cleanup already ran on handover.
+  if (!active) return
+  active = false
+  generation++
+  pollGeneration++
+  if (window[OWNER] === stop) delete window[OWNER]
   if (observer) observer.disconnect()
   observer = null
   clearTimeout(pollTimer)
@@ -219,8 +251,12 @@ export function stop() {
   if (bmp && showing && ourLists.has(toRaw(bmp.state.servers.value))) bmp.state.servers.value = kept || []
   showing = false
   kept = hooking = bmp = null
+  ours = []
+  ourLists = new WeakSet()
+  officialNames = new Set()
   if (style) style.remove()
   style = null
   for (const b of document.querySelectorAll(".bnge-earth-tab")) b.remove()
   for (const w of document.querySelectorAll(".bnge-earth-view")) w.classList.remove("bnge-earth-view")
+  for (const row of document.querySelectorAll(".bnge-official")) row.classList.remove("bnge-official")
 }

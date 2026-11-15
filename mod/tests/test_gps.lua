@@ -57,7 +57,51 @@ T.check(bp and math.abs(bp.x - 20) < 1e-9 and math.abs(bp.y - 100) < 1e-9 and bp
   'the point on the southbound carriageway, facing the way it is driven')
 _, _, bp = G.nearestEdge(dsegs, 10, 100, 0, 1)
 T.check(bp and math.abs(bp.x) < 1e-9 and bp.dy > 0, 'and on the northbound one, facing north')
+-- Recovery must face along the route, independently of a two-way edge's stored order.
+for _, axis in ipairs({ { 1, 0 }, { 0, 1 }, { 0.6, 0.8 } }) do
+  for _, order in ipairs({ -1, 1 }) do
+    local dx, dy = axis[1] * 100 * order, axis[2] * 100 * order
+    for _, heading in ipairs({ -1, 1 }) do
+      local hx, hy = axis[1] * heading, axis[2] * heading
+      local distance, z, point = G.nearestEdge({ { -dx, -dy, dx, dy, 7, 0 } }, 0, 0, hx, hy)
+      T.check(point.dx * hx + point.dy * hy > 0, 'two-way recovery follows the requested heading in either stored order')
+      T.check(distance == 0 and z == 7 and point.x == 0 and point.y == 0,
+        'orienting the edge preserves the recovery point, distance and height')
+      for _, way in ipairs({ -1, 1 }) do
+        local d, _, p = G.nearestEdge({ { -dx, -dy, dx, dy, 7, way } }, 0, 0, hx, hy)
+        local legal = order * way == heading
+        T.check(legal and p and p.dx * hx + p.dy * hy > 0 or not legal and p == nil and d == math.huge,
+          'one-way recovery accepts only the legal direction in either stored order')
+      end
+    end
+    local _, _, point = G.nearestEdge({ { -dx, -dy, dx, dy, 7, 0 } }, 0, 0)
+    T.check(point.dx == 2 * dx and point.dy == 2 * dy, 'without a heading a two-way edge retains its stored direction')
+  end
+end
 local e = { x = { 0, 100, 100 }, y = { 0, 0, 100 }, cum = { 0, 100, 200 } }
+do
+  local a = { 0, 0, 100, 0, 0, 0, a = 'a', b = 'b' }
+  local b = { 100, 0, 200, 0, 0, 1, a = 'b', b = 'c' }
+  local c = { 200, 0, 300, 0, 0, -1, a = 'c', b = 'd' }
+  local links = G.routeLinks({ a, b, c })
+  local p = { segment = a, t = 0.4 }
+  local q = { segment = b, t = 0.6 }
+  T.check(G.routeConnected(links, p, q, 120) and not G.routeConnected(links, p, q, 119),
+    'projection connection includes partial edges and respects its distance limit')
+  T.check(not G.routeConnected(links, q, p, 1000), 'a connection cannot go backwards through a one-way edge')
+  T.check(G.routeConnected(links, { segment = a, t = 0.5 }, { segment = a, t = 0.25 }, 25),
+    'a two-way edge can be driven either way')
+  T.check(not G.routeConnected(links, q, { segment = c, t = 0.5 }, 1000),
+    'a reverse-stored one-way edge cannot be entered in the wrong direction')
+  T.check(G.routeConnected(links, { segment = c, t = 0.5 }, { segment = c, t = 0.1 }, 40),
+    'reverse-stored one-way projections connect in their permitted direction')
+  a[6] = 1
+  local back = { 200, 0, 0, 0, 0, 1, a = 'c', b = 'a' }
+  links = G.routeLinks({ a, b, back })
+  local start, finish = { segment = a, t = 0.8 }, { segment = a, t = 0.2 }
+  T.check(G.routeConnected(links, start, finish, 340) and not G.routeConnected(links, start, finish, 339),
+    'a valid directed loop reaches an earlier projection only by driving the loop')
+end
 local sl = G.routeSlice(e, 50, 160, 25)
 T.check(#sl == 6 and sl[1][1] == 50 and sl[3][1] == 100 and sl[3][2] == 0 and sl[6][1] == 100 and sl[6][2] == 60,
   'the route sliced every 25 m round its corner, both ends included')
@@ -65,11 +109,74 @@ sl = G.routeSlice(e, 150, 5000, 25)
 T.check(sl[#sl][2] == 100 and #sl == 3, 'a slice past the end stops at the destination')
 local ids = G.pathNodes({ { pos = 1 }, { wp = 'a' }, { wp = 'a' }, { wp = 'b' }, { pos = 2, fixed = true }, { pos = 3 } })
 T.check(#ids == 2 and ids[1] == 'a' and ids[2] == 'b', 'the AI path: the graph nodes of the planner path, in order, once')
+do
+  local nodes = {
+    a = { pos = { x = 0, y = 0, z = 0 }, links = {} },
+    b = { pos = { x = 100, y = 0, z = 10 }, links = { a = {} } },
+    upper = { pos = { x = 100, y = 0, z = 30 }, links = { a = {} } },
+  }
+  local function ending(x, y, z)
+    return G.pathNodes({ { wp = 'a', pos = nodes.a.pos }, { pos = { x = x, y = y, z = z }, fixed = true } }, nodes)
+  end
+  local got = ending(99.99, 0, 9.999)
+  T.check(table.concat(got, ',') == 'a,b', 'a destination just before a node retains the final drivable edge')
+  got = ending(50, 0, 5)
+  T.check(table.concat(got, ',') == 'a,b', 'a position-only destination partway along an edge retains its forward endpoint')
+  T.check(table.concat(ending(50, 0, 15), ',') == 'a,upper', 'terminal edge selection includes elevation')
+  T.check(nodes.b.links.a ~= nil and #got == 2, 'terminal edge lookup supports single-sided game links')
+  T.check(#ending(120, 0, 12) == 1, 'a destination beyond the loaded edge does not invent a continuation')
+  T.check(#ending(50, 8, 5) == 1, 'an off-road destination does not select a nearby edge')
+  T.check(#ending(0, 0, 0) == 1, 'a destination at the existing endpoint adds nothing')
+  T.check(#G.pathNodes({ { pos = { x = 50, y = 0, z = 5 } } }, nodes) == 0,
+    'a path without a known graph endpoint does not invent an approach')
+  local projected = { pos = { x = 50, y = 0, z = 5 }, linkCount = 2 }
+  local path = { { wp = 'a', pos = nodes.a.pos }, projected,
+    { pos = { x = 50, y = 0, z = 3.5 }, fixed = true } }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination below a slope retains the edge through the projected road endpoint')
+  path[3].pos = { x = 50, y = 8, z = 5 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination beside the road uses its planned road projection')
+  path[3].pos = { x = 50, y = 0, z = 15 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'the planned road projection takes precedence over another road near the destination')
+  projected.linkCount = nil; path[3].pos.y = 8
+  T.check(#G.pathNodes(path, nodes) == 1, 'an arbitrary coordinate-only tail is not a road projection')
+  projected.linkCount = 2
+  local ended = { { wp = 'a' }, projected, { wp = 'b' }, { pos = { x = 110, y = 8, z = 10 } } }
+  T.check(table.concat(G.pathNodes(ended, nodes), ',') == 'a,b',
+    'a projection before the last named waypoint is not reused')
+  local unnamed = { { pos = { x = 20, y = 0, z = 2 }, linkCount = 2 }, projected, path[3] }
+  T.check(table.concat(G.pathNodes(unnamed, nodes, 'a', 'b'), ',') == 'a,b',
+    'two projected road points identify the final directed edge when both ids were removed')
+  T.check(#G.pathNodes(unnamed, nodes) == 0, 'a position-only path still requires a confirmed starting edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'b', 'a') == 0, 'a position-only path cannot run backward along the confirmed edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'upper') == 0, 'the projected endpoint must lie on the confirmed edge at its elevation')
+  unnamed[1].pos.z = 6
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'the projected start must also lie on the confirmed edge')
+  unnamed[1].pos = projected.pos
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'a zero-length projected path does not invent a continuation')
+  unnamed[1].pos = { x = 20, y = 0, z = 2 }; unnamed[1].linkCount = nil
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an arbitrary coordinate start cannot seed a final-edge route')
+  unnamed[1].linkCount = 2
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(#ending(50, 0, 5) == 1, 'the final edge cannot be driven against its one-way direction')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot override one-way restrictions')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path still obeys one-way restrictions')
+  nodes.b.links.a.inNode = 'a'
+  T.check(table.concat(ending(50, 0, 5), ',') == 'a,b', 'the legal direction of a one-way terminal edge is accepted')
+  nodes.b.links.a = { drivability = 0 }
+  T.check(#ending(50, 0, 5) == 1, 'a non-drivable terminal edge is not appended')
+  nodes.b.links.a = nil
+  T.check(#ending(50, 0, 5) == 1, 'a missing terminal edge does not snap to a disconnected or elevated node')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot bridge a missing graph edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path cannot bridge a missing edge')
+end
 local cmd = G.aiCommand({ 'a', 'b"c' })
-T.check(cmd:find('driveUsingPath', 1, true) and cmd:find('"a","b\\"c"', 1, true) and cmd:find('driveInLane = "on"', 1, true),
-  'the AI command lists the nodes quoted, in lane')
+T.check(cmd:find('beamngEarth_autodrive.drive', 1, true) and cmd:find('"a","b\\"c"', 1, true),
+  'the AI command sends quoted node ids to the vehicle route helper')
 T.check(loadstring(cmd) ~= nil and loadstring(G.aiCommand(nil)) ~= nil, 'both AI commands are valid Lua')
-T.check(G.aiCommand(nil) == 'ai.setMode("disabled")', 'autodrive off: the AI disabled')
+T.check(G.aiCommand(nil):find('stop("disabled")', 1, true), 'autodrive off: route state cleared and AI disabled')
 -- the AI's path starts on the edge under the car (not at the first node past a turn ahead)
 local g2 = { w = { pos = { x = 0, y = 0, z = 0 }, links = { j = {} } }, j = { pos = { x = 100, y = 0, z = 0 }, links = { w = {}, s = {} } },
              s = { pos = { x = 160, y = -60, z = 0 }, links = { j = {} } } }
@@ -77,11 +184,103 @@ local ea, eb = G.edgeUnder(g2, 40, 2, 1, 0)
 T.check(ea == 'w' and eb == 'j', 'the car heading east on w-j')
 T.check(G.edgeUnder(g2, 40, 20, 1, 0) == nil, 'nothing within 8 m: no edge')
 local jn = G.joinStart({ 's' }, 'w', 'j', g2)
-T.check(#jn == 3 and jn[1] == 'w' and jn[2] == 'j' and jn[3] == 's', 'the path goes through the junction, not across the corner')
+T.check(#jn == 2 and jn[1] == 'j' and jn[2] == 's', 'the path goes through the forward junction, not across the corner')
 jn = G.joinStart({ 'j', 's' }, 'w', 'j', g2)
-T.check(#jn == 3 and jn[1] == 'w', 'the edge\'s start put in front')
+T.check(#jn == 2 and jn[1] == 'j', 'a path starting ahead stays ahead')
 jn = G.joinStart({ 'w', 'j', 's' }, 'w', 'j', g2)
-T.check(#jn == 3, 'already starting there: unchanged')
+T.check(#jn == 2 and jn[1] == 'j', 'the rear endpoint is removed when the path follows the current segment')
+jn = G.joinStart({ 'w', 's' }, 'w', 'j', g2)
+T.check(#jn == 2 and jn[1] == 'w', 'a planner path taking another direction is preserved')
+jn = G.joinStart({ 's', 'j' }, 'w', 'j', g2)
+T.check(#jn == 2 and jn[1] == 's', 'a join must not create a loop through a later route node')
+
+-- Wide lanes and tapered edges use their local half-width, even on a single-sided graph.
+do
+  local edge = { inNode = 'a', outNode = 'b', inRadius = 12, outRadius = 4 }
+  local wide = {
+    a = { pos = { x = 0, y = 0 }, radius = 20, links = {} },
+    b = { pos = { x = 100, y = 0 }, radius = 20, links = { a = edge } },
+  }
+  local a, b = G.edgeUnder(wide, 25, 9, 1, 0)
+  T.check(a == 'a' and b == 'b', 'an outer lane beyond 8 m is on the wide end of the road')
+  a, b = G.edgeUnder(wide, 25, 9, -1, 0)
+  T.check(a == 'b' and b == 'a', 'edge radii keep their orientation when driving the other way')
+  T.check(G.edgeUnder(wide, 75, 9, 1, 0) == nil, 'the narrow end uses the tapered edge width, not the wider node radius')
+  T.check(G.edgeUnder(wide, 25, 11, 1, 0) == nil, 'outside the local road width is still rejected')
+  edge.oneWay = true
+  T.check(G.edgeUnder(wide, 25, 9, -1, 0) == nil, 'wide roads still reject a reverse one-way start')
+  wide.a.radius, wide.b.radius = 12, 12
+  wide.b.links.a = {}
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'node radii supply the width when edge radii are absent')
+  wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
+  wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'a road containing the car wins over another road found only through the fallback tolerance')
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0, nil, 25) == 'c', 'approximate route projections retain their explicit search tolerance')
+end
+
+-- Balzac: a narrow service road is slightly closer than the occupied highway lane.
+do
+  local function n(x, y, radius, links) return { pos = { x = x, y = y, z = 0 }, radius = radius, links = links } end
+  local roads = { a = n(0, 0, 6, { b = {} }), b = n(100, 0, 6, {}),
+    c = n(0, 9, 1.5, { d = {} }), d = n(100, 9, 1.5, {}) }
+  T.check(G.edgeUnder(roads, 50, 4.6, 1, 0, 0) == 'a', 'a service road outside its own width cannot steal the highway anchor')
+  T.check(G.edgeUnder(roads, 50, 8, 1, 0, 0) == 'c', 'driving on the service road still selects it')
+  roads.c, roads.d = nil, nil
+  T.check(G.edgeUnder(roads, 50, 7, 1, 0, 0) == 'a', 'the eight-metre fallback still supports a car just beyond the mapped road width')
+end
+
+-- Overlapping fork lanes retain an active path only while it is physically underfoot.
+do
+  local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 4, links = links } end
+  local roads = { a = n(0, 0, { b = {} }), b = n(100, 0, {}),
+    c = n(0, 3, { d = {} }), d = n(100, 3, {}) }
+  local path = { 'a', 'b' }
+  local a, b = G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path)
+  T.check(a == 'a' and b == 'b', 'inside the active highway lane: a nearer ramp centre does not steal the anchor')
+  T.check(G.edgeUnder(roads, 50, 5, 1, 0, 0, nil, path) == 'c',
+    'outside the active road width: choose the actual road, without the eight-metre continuity tolerance')
+  roads.a.pos.z, roads.b.pos.z = 4, 4
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path on another elevation is not preferred')
+  roads.a.pos.z, roads.b.pos.z = 0, 0
+  roads.a.links.b = { oneWay = true, inNode = 'b' }
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, path) == 'c', 'a cached path cannot override a one-way restriction')
+  T.check(G.edgeUnder(roads, 50, 2, 1, 0, 0, nil, { 'a', 'c', 'b' }) == 'c',
+    'path membership alone does not prefer an edge absent from the active path')
+end
+
+-- Continuity applies inside a segment, not around its clamped endpoints.
+do
+  local roads = {
+    a = { pos = { x = 0, y = 0, z = 0 }, radius = 10, links = { b = { inNode = 'a', inRadius = 10, outRadius = 10 } } },
+    b = { pos = { x = 100, y = 0, z = 0 }, radius = 10, links = { c = { inNode = 'b', inRadius = 2, outRadius = 2 } } },
+    c = { pos = { x = 200, y = 0, z = 0 }, radius = 2, links = {} },
+  }
+  local a, b = G.edgeUnder(roads, 105, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'b' and b == 'c', 'a passed wide endpoint cannot override the nearer forward road at a narrowing')
+  roads.a.links.b.inRadius, roads.a.links.b.outRadius = 2, 2
+  roads.b.links.c.inRadius, roads.b.links.c.outRadius = 10, 10
+  a, b = G.edgeUnder(roads, 95, 3, 1, 0, 0, nil, { 'a', 'b', 'c' })
+  T.check(a == 'a' and b == 'b', 'a future wide segment is not preferred before reaching its start')
+end
+
+-- Stacked roads can share a heading and be closer in XY on the wrong level.
+do
+  local stacked = {
+    a = { pos = { x = 0, y = 1, z = 10 }, radius = 6, links = { b = {} } },
+    b = { pos = { x = 100, y = 1, z = 20 }, radius = 6, links = {} },
+    c = { pos = { x = 0, y = 0, z = 0 }, radius = 6, links = { d = {} } },
+    d = { pos = { x = 100, y = 0, z = 0 }, radius = 6, links = {} },
+  }
+  local a, b = G.edgeUnder(stacked, 50, 0, 1, 0, 15)
+  T.check(a == 'a' and b == 'b', 'bridge height beats a horizontally closer road below')
+  a, b = G.edgeUnder(stacked, 50, 1, 1, 0, 0)
+  T.check(a == 'c' and b == 'd', 'the road below beats a horizontally closer bridge above')
+  a, b = G.edgeUnder(stacked, 50, 0, -1, 0, 15)
+  T.check(a == 'b' and b == 'a', 'interpolated bridge height also works in the reverse direction')
+  stacked.c.pos.z, stacked.d.pos.z = 14, 14
+  T.check(G.edgeUnder(stacked, 75, 0, 1, 0, 17.5) == 'a',
+    'sloping edges are compared at the car position, not at an endpoint')
+end
 
 -- the AI's path across a road-graph change: from the edge under the car, as far as every step is an edge in both graphs
 do
@@ -110,7 +309,7 @@ do
   G.afterGraph(keep, same)
   T.check(#sent == 0, 'still valid: no new path for the AI')
   G.afterGraph(keep, { b = n(100, {}), c = n(200, {}) })
-  T.check(#sent == 1, 'a broken step: the AI gets the part that is left')
+  T.check(#sent == 1 and sent[1]:find('stop', 1, true), 'a broken step: hold until the vehicle has the new graph')
   -- a rebase moved the graph (navgraph.transform): the same ids, but the AI's plan held the old frame's points
   local before = G.graphMoves or 0
   G.afterGraph(keep, same, true)
@@ -125,7 +324,7 @@ do -- the game's loaded graph keeps each edge on one node only (map.lua convertT
     c = { pos = P(100, 0), links = { b = { oneWay = false } } },
     d = { pos = P(150, 0), links = { c = { oneWay = true, inNode = 'd' } } },
   }
-  T.check(#G.validFrom({ 'a', 'b', 'c', 'd' }, 1, { one }) == 4, 'a step stored on either node is an edge')
+  T.check(#G.validFrom({ 'a', 'b', 'c', 'd' }, 1, { one }) == 3, 'a reverse one-way step is not a valid continuation')
   local f, t = G.edgeUnder(one, 70, 1, 1, 0)
   T.check(f == 'b' and t == 'c', 'the edge under the car, stored on its far node: ' .. tostring(f) .. tostring(t))
   f, t = G.edgeUnder(one, 70, 1, -1, 0)
@@ -134,7 +333,10 @@ do -- the game's loaded graph keeps each edge on one node only (map.lua convertT
   f, t = G.edgeUnder(one, 120, 1, -1, 0)
   T.check(f == 'd' and t == 'c', 'a one-way edge its way: ' .. tostring(f) .. tostring(t))
   local j = G.joinStart({ 'c', 'd' }, 'a', 'b', one)
-  T.check(#j == 4 and j[1] == 'a' and j[2] == 'b', 'joined across an edge stored on the far node')
+  T.check(#j == 3 and j[1] == 'b' and j[2] == 'c', 'joined through the forward endpoint across an edge stored on the far node')
+  one.c.links.b = { oneWay = true, inNode = 'c' }
+  j = G.joinStart({ 'c', 'd' }, 'a', 'b', one)
+  T.check(#j == 2 and j[1] == 'c', 'a join must not traverse a one-way edge backwards')
 end
 do -- a new path waits for the car's copy of the graph
   local savedMap, gm = map, { buildSerial = 3 }
@@ -193,5 +395,139 @@ do
   T.check(not G.retryRoute(false, 10, 1) and G.retryRoute(false, 15, 1), 'one failure: again after 15 s')
   T.check(not G.retryRoute(false, 50, 3) and G.retryRoute(false, 60, 3), 'three in a row: after 60 s')
   T.check(G.retryRoute(false, 240, 20), 'never longer than 4 min')
+end
+-- GitHub #935 / #886: a route through waypoints, planned in one request, each passed in order
+do
+  local stops, why = G.routeStops({ { lat = 1, lon = 2, name = 'A' }, { 3, 4 }, { lat = 5, lon = 6, name = 'B' } })
+  T.check(stops and #stops == 3 and stops[1].name == 'A' and stops[2].lat == 3 and stops[3].name == 'B',
+    'stops from tables and pairs, in order')
+  T.check(G.routeStops({}) == nil and G.routeStops(nil) == nil, 'none: refused')
+  stops, why = G.routeStops({ { lat = 1, lon = 2 }, { lat = 99, lon = 0 } })
+  T.check(stops == nil and why == 'bad coordinates', 'a bad stop refuses the list')
+  local many = {}
+  for k = 1, G.MAX_VIA + 2 do many[k] = { lat = k, lon = k } end
+  T.check(G.routeStops(many) == nil, 'more than MAX_VIA waypoints: refused')
+
+  local sent = {}
+  local savedCore, savedGet, savedApi = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle'), rawget(_G, 'beamngEarth_api')
+  local events = {}
+  beamngEarth_api = { _event = function(e, info) events[#events + 1] = { e, info } end }
+  beamngEarth_core = { requestRoute = function(id, la0, lo0, la1, lo1, b, via) sent[#sent + 1] = { la1 = la1, via = via }
+    return true end, takeRoute = function() return nil end }
+  getPlayerVehicle = function() return nil end
+  G.clear()
+  T.check(G.setRoute({ { lat = 1, lon = 0, name = 'Charger' }, { lat = 2, lon = 0, name = 'Stop 2' },
+    { lat = 0, lon = 0.0001, name = 'Home' } }), 'route set')
+  T.check(G.status().name == 'Home' and #G.status().waypoints == 2, 'the last is the destination, two waypoints')
+  -- (a flat test anchor: a degree is 1 km)
+  local anchor = { geodeticToEnu = function(_, lat, lon) return lon * 1000, lat * 1000, 0 end }
+  G.update(anchor, { x = 0, y = 0, lat = 0, lon = 0 })
+  T.check(#sent == 1 and sent[1].la1 == 0 and #sent[1].via == 2 and sent[1].via[1][1] == 1 and sent[1].via[2][1] == 2,
+    'one request, the waypoints in order')
+  T.check(G.status() ~= nil, 'at the start, the destination 0 m off: not arrived while waypoints are ahead')
+  G.reset()
+  G.update(anchor, { x = 0, y = 1012, lat = 1.012, lon = 0 })
+  T.check(#G.status().waypoints == 1 and G.status().waypoints[1].name == 'Stop 2', 'the first waypoint passed')
+  T.check(events[1] and events[1][1] == 'waypointReached' and events[1][2].name == 'Charger' and events[1][2].left == 1,
+    'the waypointReached event')
+  G.reset()
+  G.update(anchor, { x = 0, y = 2000, lat = 2, lon = 0 })
+  T.check(G.status().waypoints == nil, 'the second passed: none left')
+  G.reset()
+  G.update(anchor, { x = 0, y = 0, lat = 0, lon = 0 })
+  T.check(G.status() == nil and events[#events][1] == 'routeArrived', 'back home: arrived')
+  T.check(G.setDestination(1, 1, 'plain') and G.status().waypoints == nil, 'a plain destination drops the waypoints')
+  G.clear()
+  beamngEarth_core, getPlayerVehicle, beamngEarth_api = savedCore, savedGet, savedApi
+end
+-- Maneuvers follow the accepted plan, survive a failed replan and disappear with a new destination.
+do
+  local savedCore, savedGet = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle')
+  local check, reroute = G.CHECK_S, G.REROUTE_S
+  G.CHECK_S = 0
+  local answer, requests = nil, 0
+  beamngEarth_core = {
+    requestRoute = function() requests = requests + 1 return true end,
+    takeRoute = function() local r = answer; answer = nil return r end,
+  }
+  getPlayerVehicle = function() return nil end
+  local anchor = { geodeticToEnu = function(_, lat, lon) return lon * 1000, lat * 1000, 0 end }
+  local player = { x = 0, y = 0, lat = 0, lon = 0 }
+  G.setDestination(0, 1, 'East')
+  G.update(anchor, player)
+  answer = { points = { { 0, 0 }, { 0, 1 } }, dist = 1000, dur = 60,
+    steps = { { type = 'turn', modifier = 'right', location = { lat = 0, lon = 0.5 } } } }
+  G.update(anchor, player)
+  local first = G.route()
+  T.check(first and first.steps[1].modifier == 'right', 'accepted route keeps its maneuvers')
+  player.y, player.lat = 300, 0.3
+  G.REROUTE_S = -1
+  G.update(anchor, player)
+  G.REROUTE_S = reroute
+  T.check(requests == 2, 'off-route replan requested')
+  answer = { error = 'HTTP 429', points = {} }
+  G.update(anchor, player)
+  T.check(G.route().version == first.version and G.route().steps[1].modifier == 'right',
+    'failed replan retains the current plan and its maneuvers')
+  G.REROUTE_S = -1
+  G.update(anchor, player)
+  G.REROUTE_S = reroute
+  answer = { points = { { 0.3, 0 }, { 0, 1 } }, dist = 1100, dur = 70,
+    steps = { { type = 'merge', modifier = 'left' } } }
+  G.update(anchor, player)
+  T.check(G.route().version > first.version and G.route().steps[1].type == 'merge',
+    'a successful replan replaces the maneuvers with its own')
+  G.setDestination(0, 2, 'Further east')
+  T.check(G.route() == nil, 'new destination drops the old maneuvers')
+  G.clear()
+  T.check(G.route() == nil, 'clear has no maneuver data')
+  G.CHECK_S, G.REROUTE_S = check, reroute
+  beamngEarth_core, getPlayerVehicle = savedCore, savedGet
+end
+-- Marker simplification must not remove topology: nearby nodes may still be required edges.
+do
+  local function node(x, links, z) return { pos = { x = x, y = 0, z = z or 0 }, links = links or {} } end
+  local nodes = { a = node(0), b = node(0.07, { a = {} }), c = node(40, { b = {} }) }
+  local path = { { wp = 'a', pos = nodes.a.pos }, { wp = 'c', pos = nodes.c.pos } }
+  local function ids() return table.concat(G.pathNodes(path, nodes), ',') end
+  T.check(ids() == 'a,b,c', 'restore a merged 7 cm edge stored on its far endpoint')
+  T.check(#G.validFrom(G.pathNodes(path, nodes), 1, { nodes }) == 3, 'restored path is connected')
+  T.check(#path == 2 and path[2].wp == 'c', 'restoring the AI path leaves the marker path unchanged')
+  nodes.d = node(0.5, { b = {} }); nodes.c.links = { d = {} }
+  T.check(ids() == 'a,b,d,c', 'restore multiple nodes merged into the same marker')
+  nodes.b.links.d = {}; nodes.d.links.a = {} -- a short cycle, not an unbounded search
+  local joined = G.pathNodes(path, nodes)
+  T.check(#joined <= 4 and joined[#joined] == 'c', 'short cycles terminate with a connected path')
+  nodes.b.links.d, nodes.d.links.a = nil, nil
+  nodes.d.pos.x = 1.01
+  T.check(ids() == 'a,c', 'do not repair a chain which leaves the marker merge radius')
+  nodes.d.pos.x = 0.5; nodes.d.pos.z = 12
+  T.check(ids() == 'a,c', 'an overlapping elevated road is not a merged node')
+  nodes.d.pos.z = 0
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(ids() == 'a,c', 'do not restore a connection against a one-way edge')
+  nodes.b.links.a.inNode = 'a'
+  T.check(ids() == 'a,b,d,c', 'restore a short connection in its legal direction')
+  nodes.d.links.b = { drivability = 0 }
+  T.check(ids() == 'a,c', 'an undrivable short connector is not restored')
+  nodes.d.links.b = nil
+  T.check(ids() == 'a,c', 'a genuine disconnected route is left for validation to truncate')
+  nodes.a.links.c = {}
+  T.check(ids() == 'a,c', 'an existing direct edge needs no reconstruction')
+  nodes.a.links.c = { oneWay = true, inNode = 'c' }; nodes.d.links.b = {}
+  T.check(ids() == 'a,c', 'an existing illegal direct edge is not replaced with an invented detour')
+  nodes.a.links.c = nil
+  path = { { wp = 'a' }, { wp = 'c' }, { wp = 'a' } }
+  nodes.b.links.a = {}
+  T.check(ids() == 'a,b,d,c,a', 'restore only a local merge gap and retain the planned return')
+  path = { { wp = 'missing' }, { wp = 'c' } }
+  T.check(ids() == 'missing,c', 'missing graph nodes remain invalid without throwing')
+  nodes = { a = node(0.6), b = node(-0.6, { a = {} }), c = node(-40, { b = {} }) }
+  path = { { wp = 'a', pos = { x = 0, y = 0, z = 0 } }, { wp = 'c', pos = nodes.c.pos } }
+  T.check(ids() == 'a,b,c', 'the merge radius is centred on the retained marker position, not its waypoint')
+  nodes.b.pos.x = -1
+  T.check(ids() == 'a,b,c', 'the stock inclusive one-metre merge boundary is restored')
+  nodes.b.pos.x = -1.001
+  T.check(ids() == 'a,c', 'nodes beyond the stock merge radius remain invalid')
 end
 T.done('test_gps')

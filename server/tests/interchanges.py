@@ -14,6 +14,7 @@ measure() reports, for the decks within RADIUS_M of the place:
   low             the crossings whose gap is under LOW_GAP_M (a deck that blocks, or lies on, the road under it)
 These are measurements, not expectations: test_interchanges.py checks what holds today and that the replay runs.
 """
+import ast
 import json
 import os
 import sys
@@ -24,6 +25,7 @@ from unittest import mock
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import dnp  # noqa: E402
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
 import mapgeom  # noqa: E402
@@ -65,16 +67,73 @@ def _bilinear(axis, z, x, y):
     return out, inside
 
 
-def load(name):
-    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon))."""
-    with np.load(FIXTURES / f"interchange_{name}.npz", allow_pickle=False) as a:
-        data = {k: a[k] for k in a.files}
+STRUCTURED = (".attr.osm_lane_parts", ".attr.lane_section_profile")     # object columns the capture keeps as text (Python literals: no pickles)
+
+
+def _structured(key, values):
+    """A fixture column as Features holds it: a STRUCTURED one's text read back ("" -> None)."""
+    if not key.endswith(STRUCTURED):
+        return values
+    out = np.empty(len(values), object)
+    out[:] = [ast.literal_eval(str(v)) if str(v) else None for v in values]
+    return out
+
+
+def _keep_near(data, prefix, frame, keep_m):
+    """The features of one cell's arrays (prefix) within keep_m of the frame's origin (their bounding box), the rest
+    left out: the planner plans whole cells, and a replay measured near its place need not plan a city 1 km away."""
+    ids = data[prefix + "ids"]
+    part_off, ring_off, coord_off = (np.asarray(data[prefix + k], np.int64) for k in ("part_off", "ring_off", "coord_off"))
+    lonlat = np.asarray(data[prefix + "lonlat"], np.float64)
+    e, n, _ = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.0)
+    xy = np.c_[e, n]
+    keep = []
+    for i in range(len(ids)):
+        c0, c1 = coord_off[ring_off[part_off[i]]], coord_off[ring_off[part_off[i + 1]]]
+        if c1 > c0:
+            lo, hi = xy[c0:c1].min(axis=0), xy[c0:c1].max(axis=0)
+            if dnp.hypot(*np.maximum(np.maximum(lo, -hi), 0.0)) <= keep_m:
+                keep.append(i)
+    new_part, new_ring, new_coord, coords = [0], [0], [0], []
+    for i in keep:
+        for p in range(part_off[i], part_off[i + 1]):
+            for r in range(ring_off[p], ring_off[p + 1]):
+                coords.append(lonlat[coord_off[r]:coord_off[r + 1]])
+                new_coord.append(new_coord[-1] + len(coords[-1]))
+            new_ring.append(len(new_coord) - 1)
+        new_part.append(len(new_ring) - 1)
+    index = np.full(len(ids), -1, np.int64)
+    index[keep] = np.arange(len(keep))
+    out = dict(data)
+    out.update({prefix + "part_off": np.array(new_part, np.int64), prefix + "ring_off": np.array(new_ring, np.int64),
+                prefix + "coord_off": np.array(new_coord, np.int64),
+                prefix + "lonlat": np.concatenate(coords) if coords else np.zeros((0, 2))})
+    for k, v in data.items():
+        rest = k[len(prefix):] if k.startswith(prefix) else None
+        if rest in ("ids", "kind", "own", "clipped") or (rest or "").startswith("attr."):
+            out[k] = v[keep]
+        elif (rest or "").startswith("rule.") and rest.endswith(".feature"):
+            rows = index[np.asarray(v, np.int64)] >= 0
+            base = k[:-len("feature")]
+            for col in ("feature", "value", "start", "end"):
+                out[base + col] = data[base + col][rows]
+            out[k] = index[np.asarray(v, np.int64)[rows]].astype(v.dtype)
+    return out
+
+
+def load(name, prefix="interchange", keep_m=None):
+    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon)) of
+    fixtures/PREFIX_NAME.npz; keep_m: only the roads within this of the place (_keep_near)."""
+    with np.load(FIXTURES / f"{prefix}_{name}.npz", allow_pickle=False) as a:
+        data = {k: _structured(k, a[k]) for k in a.files}
     lat, lon = (float(v) for v in data["origin"])
     frame = geodesy.EnuFrame(lat, lon)
     cells = {}
     for i, key in enumerate(data["cells"]):
         if f"cell{i}.ids" not in data:
             continue
+        if keep_m is not None:
+            data = _keep_near(data, f"cell{i}.", frame, keep_m)
         k = mapcells.CellKey(*(int(v) for v in str(key).split("/")))
         clat, clon = k.center()
         cells[str(k)] = mapgeom.Features.from_arrays("roads", data, f"cell{i}.").localize(geodesy.EnuFrame(clat, clon))
@@ -95,7 +154,7 @@ def load(name):
 def _crossings(a, b):
     """[(t along a's arc m, point (2,))] where polylines a and b (k, 2) cross."""
     out = []
-    sa = np.r_[0.0, np.cumsum(np.hypot(*np.diff(a, axis=0).T))]
+    sa = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(a, axis=0).T))]
     for i in range(len(a) - 1):
         p, r = a[i], a[i + 1] - a[i]
         q, s = b[:-1], b[1:] - b[:-1]
@@ -106,7 +165,7 @@ def _crossings(a, b):
             t = (qp[:, 0] * s[:, 1] - qp[:, 1] * s[:, 0]) / rxs
             u = (qp[:, 0] * r[1] - qp[:, 1] * r[0]) / rxs
         for k in np.flatnonzero(ok & (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1)):
-            out.append((float(sa[i] + t[k] * np.hypot(*r)), p + t[k] * r))
+            out.append((float(sa[i] + t[k] * dnp.hypot(*r)), p + t[k] * r))
     return out
 
 
@@ -144,10 +203,10 @@ def measure(name):
         decks, grades, jumps, gaps, low = 0, [], [], [], []
         for fid, spec, xy, z, _lon in parts:
             xy = np.asarray(xy, np.float64)[:, :2]
-            if np.hypot(xy[:, 0], xy[:, 1]).min() > R:
+            if dnp.hypot(xy[:, 0], xy[:, 1]).min() > R:
                 continue
             decks += 1
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
             if s[-1] > STEP_M:
                 ss = np.arange(0.0, s[-1], STEP_M)
                 zz = np.interp(ss, s, z)
@@ -175,12 +234,12 @@ def measure(name):
         for gid, gcls, gxy in ground:
             if gcls not in MAJOR:
                 continue
-            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(gxy, axis=0).T))]
+            s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(gxy, axis=0).T))]
             if s[-1] < 3 * STEP_M:
                 continue
             ss = np.arange(0.0, s[-1], STEP_M)
             px, py = np.interp(ss, s, gxy[:, 0]), np.interp(ss, s, gxy[:, 1])
-            keep = np.hypot(px, py) <= R
+            keep = dnp.hypot(px, py) <= R
             if keep.sum() < 3:
                 continue
             la, lo, _ = site.frame.enu_to_geodetic(px, py, 0.0)
@@ -206,7 +265,7 @@ def _cell_near(k, site, m):
     lat, lon = site.origin
     dlat = max(la0 - lat, 0.0, lat - la1)
     dlon = max(lo0 - lon, 0.0, lon - lo1)
-    d = np.hypot(dlat * 111320.0, dlon * 111320.0 * np.cos(np.radians(lat)))
+    d = dnp.hypot(dlat * 111320.0, dlon * 111320.0 * dnp.cos(np.radians(lat)))
     return d <= m
 
 

@@ -16,8 +16,8 @@ local G = require('beamngEarth/gasstations')
 G.enabled = true
 local clock = 0
 G.now = function() return clock end
-local collide = 0
-G.onCollide = function() collide = collide + 1 end
+local collide, collideAt = 0, nil
+G.onCollide = function(x, y) collide = collide + 1; collideAt = { x, y } end
 local gov = { try = function() return true end, charge = function() end }
 
 local function rec(id, x)
@@ -53,6 +53,7 @@ T.near(solid.rot.w, math.sqrt(0.5), 1e-9, 'yaw quaternion w')
 local area = scenetree.findObject('bne_fuel_abc_a1')
 T.near(area.scale.x, 1.6, 1e-9, 'area half extents as its scale')
 T.check(collide == 1, 'a collision rebuild asked once per spawned station')
+T.check(collideAt[1] == 0 and collideAt[2] == 0, 'asked with the station\'s spot (roads.lua gates far spots)')
 
 -- the stock POI list: one station, its pumps as (area, icon) names
 local els = {}

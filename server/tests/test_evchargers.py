@@ -3,7 +3,9 @@ have real recharging in the game"): charger sites from Overture's places and Ope
 layout, and their records in the road tiles."""
 import os
 import sys
+import dataclasses
 import unittest
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -300,6 +302,123 @@ class TileTest(unittest.TestCase):
         after = gs.tile_sites(FRAME, 0, 0, md, flat)[0]
         self.assertEqual(before, after)
         self.assertEqual([r["name"] for r in after], ["Speedway"])
+
+
+# --- the weekly station shards: capacity and charge points (Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
+# `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`")
+def ll(x, y):
+    la, lo, _ = FRAME.enu_to_geodetic(x, y, 0.0)
+    return float(la), float(lo)
+
+
+def sh_station(x, y, cap, sid="n1"):
+    la, lo = ll(x, y)
+    return {"id": sid, "kind": "ev", "lat": la, "lon": lo, "name": "", "brand": "", "cap": cap}
+
+
+class ShardTest(unittest.TestCase):
+    def test_count_from_capacity(self):
+        self.assertEqual(ev.count_of(dataclasses.replace(charger(), cap=6)), 6)
+        self.assertEqual(ev.count_of(dataclasses.replace(charger(big=True), cap=30)), ev.CAP_MAX)
+        self.assertEqual(ev.count_of(dataclasses.replace(charger(big=True), cap=1)), 1, "capacity 1 stays 1")
+        self.assertEqual(ev.count_of(charger(big=True, records=2)), 4, "no capacity: as before")
+
+    def test_with_shard_takes_the_nearest_station_within_reach(self):
+        chs = [charger(x=0.0, y=0.0), dataclasses.replace(charger(x=500.0, y=0.0), id="evother")]
+        got = ev.with_shard(chs, [sh_station(20.0, 0.0, 6), sh_station(900.0, 0.0, 3, "n2")], [], FRAME)
+        self.assertEqual([c.cap for c in got], [6, None], "a station farther than MERGE_M is not this site's")
+
+    def test_points_go_to_their_nearest_site(self):
+        chs = [charger(x=0.0, y=0.0), dataclasses.replace(charger(x=80.0, y=0.0), id="evother")]
+        pts = [ll(5.0, 0.0), ll(10.0, 0.0), ll(70.0, 0.0), ll(500.0, 0.0)]
+        got = ev.with_shard(chs, [], pts, FRAME)
+        self.assertEqual([len(c.points) for c in got], [2, 1], "a neighbour's points are not taken; a far one is no one's")
+
+    def test_chargers_at_their_points(self):
+        pts = ((-6.0, 0.0), (-2.0, 0.0), (2.0, 0.0), (6.0, 0.0))
+        ch = dataclasses.replace(charger(big=True), points=pts)
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default")
+        got = sorted((round(p["x"], 1), round(p["y"], 1)) for p in site.props)
+        self.assertEqual(got, sorted(pts), "one charger at each mapped point")
+        self.assertTrue(all(a["y"] > p["y"] for p, a in zip(site.props, site.areas)), "the stalls toward the aisle")
+        self.assertEqual(site.pad, [], "no pad: a mapped site's ground is there already")
+
+    def test_a_point_in_a_building_is_dropped(self):
+        pts = ((-6.0, 0.0), (-2.0, 0.0), (2.0, 0.0), (30.0, -30.0))
+        ch = dataclasses.replace(charger(big=True), points=pts)
+        site = ev.layout(ch, [bld("b1", 30.0, -30.0, 10.0, 10.0)], [ROAD], [AISLE], "default")
+        self.assertEqual(len(site.props), 3)
+
+    def test_one_point_left_is_a_row(self):
+        ch = dataclasses.replace(charger(big=True, records=2), points=((0.0, 0.0),))
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default")
+        self.assertEqual(len(site.props), 4, "fewer than 2 points: today's row")
+
+    def test_tile_takes_the_shard(self):
+        md = ev_md([("pla-ev", (100.0, 100.0), {"basic_category": "ev_charging_station", "name": "ChargePoint"})], [])
+        before, _ = gs.tile_sites(FRAME, 0, 0, md, flat)
+        md.station_tags = SimpleNamespace(stations_in=lambda *a: [sh_station(105.0, 100.0, 6)], points_in=lambda *a: [])
+        recs, _ = gs.tile_sites(FRAME, 0, 0, md, flat)
+        self.assertEqual(len(recs[0]["props"]), 6, "the site's OSM capacity")
+        md.station_tags = SimpleNamespace(stations_in=lambda *a: None, points_in=lambda *a: None)
+        self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], before, "shards unreachable: as before")
+
+    def test_shard_box_reaches_a_stations_points(self):
+        # Codex on #1111 (2026-11-10): a pin matches a shard station up to MERGE_M away, and that station's charge points
+        # up to MERGE_M from it, so the tile asks the shards for 2 MERGE_M round the sites' reach, not one
+        box = roads.tile_bbox(0, 0)
+        x0, y0 = box[0], (box[1] + box[3]) / 2
+        ch = charger(big=True, x=x0, y=y0)
+        r, m = ev.reach_of(ch), gs.MERGE_M
+        sx = x0 - (m - 2.0)
+        px = [x0 - min(r + m + 3.0, (m - 2.0) + (m - 1.0)), x0 - min(r + m + 2.0, (m - 2.0) + (m - 1.5))]
+        self.assertTrue(all(sx - p <= m and x0 - p > r + m for p in px), "the points: the station's, past one MERGE_M")
+        stations, points = [sh_station(sx, y0, 6)], [ll(p, y0) for p in px]
+        inb = lambda b, la, lo: b[0] <= la <= b[2] and b[1] <= lo <= b[3]
+        md = SimpleNamespace(station_tags=SimpleNamespace(
+            stations_in=lambda *b: [s for s in stations if inb(b, s["lat"], s["lon"])],
+            points_in=lambda *b: [p for p in points if inb(b, *p)]))
+        got = gs._with_shard(FRAME, md, box, [ch])
+        self.assertEqual((got[0].cap, len(got[0].points)), (6, 2))
+
+
+class LevelGroundTest(unittest.TestCase):
+    """A row stays on level ground (the user in game, 2026-11-09, Barstow's Supercharger as 12: "some of them are
+    sliding off a hill ... it look s silly"; "Do that or just shift them"): it slides along the aisle to where every
+    charger and stall is within FLAT_M of the row's middle, else is shortened; a mapped point on a bank is dropped."""
+
+    @staticmethod
+    def bank(xs, ys):                  # (flat lot west of x = 10, a bank falling 0.5 m a metre east of it)
+        xs = np.asarray(xs, np.float64)
+        return np.where(xs > 10.0, -(xs - 10.0) * 0.5, 0.0)
+
+    def heights(self, site):
+        pts = np.array([(p["x"], p["y"]) for p in site.props] + [(a["x"], a["y"]) for a in site.areas])
+        return self.bank(pts[:, 0], pts[:, 1])
+
+    def test_a_long_row_stays_on_the_lot(self):
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=self.bank)
+        h = self.heights(site)
+        self.assertLessEqual(float(np.max(np.abs(h - np.median(h)))), ev.FLAT_M, "every charger on level ground")
+        self.assertEqual(len(site.props), 12, "slid along the aisle onto the lot: all 12 kept")
+
+    def test_no_room_on_the_level_shortens(self):
+        cliff = lambda xs, ys: np.where(np.abs(np.asarray(xs, np.float64)) > 7.0, -5.0, 0.0)     # (a 14 m level bit)
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=cliff)
+        self.assertLessEqual(len(site.props), 5)
+        self.assertTrue(all(abs(p["x"]) <= 7.0 for p in site.props))
+
+    def test_a_point_on_the_bank_is_dropped(self):
+        ch = dataclasses.replace(charger(big=True), points=((-6.0, 0.0), (-2.0, 0.0), (2.0, 0.0), (30.0, 0.0)))
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=self.bank)
+        self.assertEqual(sorted(round(p["x"]) for p in site.props), [-6, -2, 2])
+
+    def test_without_heights_as_before(self):
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        a = ev.layout(ch, [], [ROAD], [AISLE], "default")
+        self.assertEqual(round(np.mean([p["x"] for p in a.props]), 6), 0.0, "centred on the site as before")
 
 
 def roads_xy(ll):

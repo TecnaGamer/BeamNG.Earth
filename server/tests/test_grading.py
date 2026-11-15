@@ -190,6 +190,158 @@ class GradePointsTest(unittest.TestCase):
         self.assertTrue(np.allclose(lifted[far], base[far]), "untouched away from roads")
         self.assertTrue(((lifted - flat) <= grading.ROAD_LIFT + 1e-9).all() and ((lifted - flat) >= -1e-9).all())
 
+    def test_a_dirt_road_does_not_pull_a_paved_one_down(self):
+        # The user, 2026-11-09: a paved road dipped where a dirt track ran along its edge. A built surface outranks
+        # an unpaved one in grade_points' blend: the paved road's carriageway keeps its own height and the dirt road
+        # adapts, whatever the dirt's own profile is (grade_rank).
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5,
+                            road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        # (the plans are different roads: their rid keeps a road's own stretches from giving way to each other)
+        paved.rid, dirt.rid = 1, 2
+        xs = np.arange(-60.0, 60.1, 2.0)
+        ys = np.arange(-8.0, 30.01, 0.5)
+        px, py = np.meshgrid(xs, ys)
+        px, py = px.ravel(), py.ravel()
+        out = grading.grade_points(px, py, np.full(len(px), 99.0), [paved, dirt])
+        core = np.abs(py) <= paved.road_half - 0.01
+        self.assertTrue(np.allclose(out[core], 100.0, atol=0.01), "the paved road's carriageway holds its height")
+        # ... and the blend eases onto the side road: at its centre line the ground is still near the asphalt's height,
+        # then falls smoothly to the dirt's own over RANK_SIDE_FADE_M (not a step at the shoulder's edge)
+        on_dirt = out[np.abs(py - 10.5) < 0.01]
+        self.assertGreater(float(np.mean(on_dirt)), 99.5, "the side road eases onto the asphalt")
+        order = np.argsort(py)
+        s_y, s_z = py[order], out[order]
+        sel = (s_y >= paved.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
+        self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the side road eases down, no step")
+        self.assertAlmostEqual(float(s_z[-1]), 99.0, delta=0.02, msg="away from the asphalt the dirt keeps its ground")
+        # ... and the dirt road meets the paved road's height where it runs into its core, not the other way round.
+        # A dirt point inside the paved core takes the paved height.
+        dirtcase = grading.Plan(np.array([[0.0, 30.0], [0.0, -30.0]]), np.array([99.0, 99.0]), 2.5,
+                                road_half=1.5)
+        dirtcase.rank = dirt.rank
+        dirtcase.rid = 3
+        onpath = grading.grade_points(np.array([0.0]), np.array([4.0]), np.array([99.0]), [paved, dirtcase])
+        self.assertAlmostEqual(float(onpath[0]), 100.0, delta=0.01)
+
+    def test_a_subordinate_carriageway_does_not_move_the_main(self):
+        # A service driveway's carriageway overlapping a tertiary's: the higher-ranked road's surface must stay its
+        # own plan, not be pulled by the subordinate road's height (7 cm at a mapped junction was still visible).
+        main = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        main.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        side = grading.Plan(np.array([[-200.0, 3.0], [200.0, 3.0]]), np.array([99.0, 99.0]), 2.0, road_half=2.0)
+        side.rank = grading.grade_rank(roads.Spec(4.0, "paved", False, "service"))
+        main.rid, side.rid = 1, 2
+        out = grading.grade_points(np.array([0.0]), np.array([0.0]), np.array([99.0]), [main, side])
+        self.assertAlmostEqual(float(out[0]), 100.0, delta=1e-9, msg="the tertiary's carriageway is its own plan")
+
+    def test_a_built_side_road_eases_onto_a_higher_built_one(self):
+        # A service road / driveway joining a residential street: built vs built uses the same ease as a dirt road
+        # (the user's follow-up), so the side road climbs onto the main road's ground gently.
+        main = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        main.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "residential"))
+        side = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5, road_half=2.0)
+        side.rank = grading.grade_rank(roads.Spec(4.0, "paved", False, "service"))
+        main.rid, side.rid = 1, 2
+        xs = np.arange(-60.0, 60.1, 2.0)
+        ys = np.arange(-8.0, 30.01, 0.5)
+        px, py = np.meshgrid(xs, ys)
+        px, py = px.ravel(), py.ravel()
+        out = grading.grade_points(px, py, np.full(len(px), 99.0), [main, side])
+        core = np.abs(py) <= main.road_half - 0.01
+        self.assertTrue(np.allclose(out[core], 100.0, atol=0.01), "the main road's carriageway holds its height")
+        on_side = out[np.abs(py - 10.5) < 0.01]
+        self.assertGreater(float(np.mean(on_side)), 99.5, "the built side road eases onto the main road")
+        order = np.argsort(py)
+        s_y, s_z = py[order], out[order]
+        sel = (s_y >= main.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
+        self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the built side road eases down, no step")
+
+    def open_tunnel_case(self, open_tunnel, angle_deg=90.0):
+        """grade_points along a bus lane (rank: no class) crossing a primary's tunnel part open all along (its core,
+        sidewalks too, held as its carriageway, as _make_cell plans it) 1.6 m under it: (s, heights) every metre."""
+        tun = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([188.2, 188.2]), 7.3)
+        tun.rank = grading.grade_rank(roads.Spec(8.6, "paved", True, "primary"))
+        tun.open_tunnel = open_tunnel
+        a = np.radians(angle_deg)
+        d = np.array([np.cos(a), np.sin(a)])
+        bus = grading.Plan(np.array([-60.0 * d, 60.0 * d]), np.array([189.8, 189.8]), 4.5, road_half=3.5)
+        bus.rank = grading.grade_rank(roads.Spec(7.0, "paved", True, "busway"))
+        tun.rid, bus.rid = 1, 2
+        s = np.arange(-30.0, 30.01, 1.0)
+        pts = s[:, None] * d[None, :]
+        return s, grading.grade_points(pts[:, 0], pts[:, 1], np.full(len(s), 189.8), [tun, bus])
+
+    def test_a_road_crossing_an_open_tunnel_eases_onto_it(self):
+        # GitHub #1169, Kennedybruecke in Vienna: the "Unterfahrung" lies under a plaza the elevation leaves out, so its
+        # tunnel is open all along; a bus lane mapped over it (rank: no class, 14 under the primary's, past
+        # RANK_SIDE_MAX_DIFF) kept its own ground up to the section's held carriageway and stepped 1.2 m there. Flagged
+        # open_tunnel, the crossing road eases onto it over the side ease's reach instead.
+        s, old = self.open_tunnel_case(False)
+        self.assertGreater(float(np.abs(old[:-2] - 2 * old[1:-1] + old[2:]).max()), 1.0, "(the step this fixes)")
+        s, z = self.open_tunnel_case(True)
+        held = np.abs(s) <= 7.3 - 0.01
+        self.assertTrue(np.allclose(z[held], 188.2 + 0.0, atol=0.01), "the open section's carriageway holds")
+        # (the drivability ratchet's step, a ledge or a kink on 1 m samples: 1.37 m without; the ease's S-curve bends
+        # 0.11 m over 1 m for the 1.6 m it comes down)
+        self.assertLess(float(np.abs(z[:-2] - 2 * z[1:-1] + z[2:]).max()), 0.15, "the bus lane eases onto it, no step")
+        self.assertAlmostEqual(float(z[-1]), 189.8, delta=0.02, msg="past the ease the bus lane keeps its ground")
+
+    def test_a_road_beside_an_open_tunnel_keeps_its_ground(self):
+        # ... while a road running along it (a street on the cover beside its trench) is not eased onto it: the flag
+        # changes nothing for a road at 20 degrees to it.
+        np.testing.assert_array_equal(self.open_tunnel_case(True, 20.0)[1], self.open_tunnel_case(False, 20.0)[1])
+
+    def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
+        # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
+        # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 4.5], [200.0, 4.5]]), np.array([98.2, 98.2]), 1.75,
+                            road_half=1.75)
+        dirt.rank = grading.grade_rank(roads.Spec(2.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 21, 22
+        ys = np.arange(0.0, 6.01, 0.5)
+        out = grading.grade_points(np.zeros_like(ys), ys, np.full(len(ys), 98.2), [paved, dirt])
+        inside = ys <= paved.road_half - 0.01
+        self.assertTrue(np.allclose(out[inside], 100.0, atol=0.01), "the asphalt's carriageway is whole")
+        self.assertGreater(float(out[-1]), 99.5, "the side road eases onto the asphalt, not a dip")
+
+    def test_ranks_do_not_depend_on_the_batch(self):
+        # A paved road with a dirt track beside it, graded in one batch and in shifted batches: the same heights to the
+        # last bit (PR #1050's 20 m rank reach went past what grade_points' pass 0 took in, and the points a batch's
+        # bucket grid happened to cover got the rank: test_smooth_road_collision's step at a batch edge)
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5, road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 1, 2
+        ys = np.arange(-3.0, 25.0, 0.37)
+        xs = np.full(len(ys), 3.3)
+        base = np.full(len(ys), 99.0)
+        full = grading.grade_points(xs, ys, base, [paved, dirt])
+        for parts in (2, 3, 5):
+            got = np.concatenate([grading.grade_points(xs[k], ys[k], base[k], [paved, dirt])
+                                  for k in np.array_split(np.arange(len(ys)), parts)])
+            np.testing.assert_array_equal(full, got)
+
+    def test_a_dirt_road_gives_way_only_inside_a_paved_core(self):
+        # Outside the paved road's core the dirt road keeps its own profile, and its ground blends back to the
+        # natural one: the rule is no blanket lift of the unpaved road.
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 40.0], [200.0, 40.0]]), np.array([95.0, 95.0]), 2.5,
+                            road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 1, 2
+        out = grading.grade_points(np.array([0.0]), np.array([40.0]), np.array([95.0]), [paved, dirt])
+        self.assertAlmostEqual(float(out[0]), 95.0, delta=0.01)
+
     def test_junction_blends_and_deterministic(self):
         px, py, base = self.grid()
         a, _ = plan_line(-200, 200, 0.0)
@@ -320,6 +472,75 @@ class AbutmentEndTest(unittest.TestCase):
         out = grading.grade_points(np.array([0.0, 5.0]), np.zeros(2), np.full(2, 40.0), [approach])
         self.assertAlmostEqual(out[0], 50.0, delta=0.05)
         self.assertLessEqual(out[1], 50.0 - 5.0 * grading.ABUT_UNDER_GRADE + 0.05)
+
+
+class RailUnderAbutmentTest(unittest.TestCase):
+    """GitHub #909 (the A11 over the Gramzower Museumsbahn by Neu-Kleinow): a short bridge over a railway in a cutting,
+    crossing it at 45 deg off-centre, its abutment 2.7 m from the track's centreline, inside the rail bed's flat band
+    (railways.GRADE_HALF_M). The bed (6 m down) blended into the abutment, the deck end took that ground (2.5-3.4 m
+    under the road going on from it). The band past the ballast gives way to the approach's carriageway there."""
+
+    def setUp(self):
+        xs = np.arange(-80.0, 0.1, 4.0)          # the approach, its end (0, 0) the abutment
+        self.approach = grading.Plan(np.stack([xs, np.zeros(len(xs))], axis=1), np.full(len(xs), 75.4), 8.0,
+                                     abut=(False, True), road_half=7.0)
+        u, n = np.array([1.0, 1.0]) / math.sqrt(2.0), np.array([1.0, -1.0]) / math.sqrt(2.0)
+        t = np.arange(-100.0, 100.1, 2.0)
+        self.c0 = 2.7 * n                         # the track's nearest point to the abutment (under the deck)
+        self.rail_xy = self.c0[None] + t[:, None] * u[None]
+        self.rail_z = np.full(len(t), 69.3)
+
+    def test_the_abutment_keeps_its_road(self):
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        out = grading.grade_points(np.array([0.0]), np.array([0.0]), np.array([69.4]), [self.approach, rail])
+        self.assertAlmostEqual(out[0], 75.4, delta=0.25, msg="the abutment at its approach's height")
+
+    def test_the_track_bed_is_no_higher(self):
+        # (under the deck, past the abutment end, the approach has no carriageway: the band does not give way there,
+        # so the track and the ground beside it stand no higher than with the whole band the rail's carriageway)
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        old = grading.Plan(self.rail_xy, self.rail_z, rail.half)
+        old.rid = rail.rid
+        n = np.array([1.0, -1.0]) / math.sqrt(2.0)
+        pts = np.array([self.c0 + k * n for k in (-1.5, -0.75, 0.0, 0.75, 1.5)] +
+                       [self.c0 + 40.0 * np.array([1.0, 1.0]) / math.sqrt(2.0)])
+        base = np.full(len(pts), 69.4)
+        got = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, rail])
+        was = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, old])
+        self.assertTrue((got <= was + 1e-9).all(), f"{got} over {was}")
+        self.assertAlmostEqual(got[-1], 69.3, delta=0.05, msg="the cutting away from the bridge")
+
+    def test_an_approach_cut_short_of_its_abutment(self):
+        # (each map cell grades its own piece of a road, trim_plan: the piece ending at a cell's edge 2 m short of the
+        # abutment had no abutment end of its own, and its carriageway's round end reached over the deck: 75.3 m on
+        # the track's side under it, 70.6 m with the approach whole; Codex's review of PR #920. Cut twice too: a
+        # cell corner's sliver between)
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        old = grading.Plan(self.rail_xy, self.rail_z, rail.half)
+        old.rid = rail.rid
+        n = np.array([1.0, -1.0]) / math.sqrt(2.0)
+        pts = np.array([self.c0 + k * n for k in (-2.5, -1.5, -0.75, 0.0, 0.75, 1.5, 2.5)])
+        base = np.full(len(pts), 69.4)
+        whole = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, rail])
+        whole_was = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, old])
+        for cuts in ((-2.0,), (-2.0, -1.0)):
+            edges = (-200.0,) + cuts + (200.0,)
+            pieces = [q for x0, x1 in zip(edges[:-1], edges[1:])
+                      for q in grading.trim_plan(self.approach, (x0, -200.0, x1, 200.0))]
+            self.assertEqual(len(pieces), len(cuts) + 1)
+            # every piece's segment its distance on to the abutment at (0, 0), as the whole approach's
+            pk = grading.PlanPack(pieces)
+            to = -pk.b[:, 0]
+            np.testing.assert_allclose(pk.abd[:, 1], np.where(to < grading.ABUT_NEAR_M, to, np.nan), atol=1e-9)
+            np.testing.assert_array_equal(pk.ab, (to < grading.ABUT_NEAR_M).astype(np.uint8))
+            # under the deck the rail bed's narrower carriageway raises the ground no more than with the approach
+            # whole (a cut blends its pieces' ends in a little more, the band whole as well)
+            got = grading.grade_points(pts[:, 0], pts[:, 1], base, pieces + [rail])
+            was = grading.grade_points(pts[:, 0], pts[:, 1], base, pieces + [old])
+            self.assertTrue((got - was <= whole - whole_was + 1e-6).all(),
+                            f"cut at {cuts}: {got} over {was} (whole: {whole} over {whole_was})")
+            top = grading.grade_points(np.array([-1.5]), np.array([0.0]), np.array([69.4]), pieces + [rail])
+            self.assertAlmostEqual(top[0], 75.4, delta=0.05, msg="the approach at its height")
 
 
 class SeparationTest(unittest.TestCase):
@@ -580,6 +801,7 @@ class DirtTest(unittest.TestCase):
         self.assertLess(float(np.abs(residual[np.abs(np.arange(len(xy)) - 100) > 2]).max()), 1e-9,
                         "limiting a hole must not spread its height error over 40 m")
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_damage_is_independent_of_the_natural_grade(self):
         xy = self.xy()
         sp = roads.Spec(3.5, "dirt", False, "track")
@@ -629,6 +851,7 @@ class DirtTest(unittest.TestCase):
             self.assertLess(float(np.abs(z - 100.0).max()), 0.12,
                             "the whole graded carriageway keeps centimetre-scale wear on flat ground")
 
+    @unittest.skipIf(grading.DIRT_BANK_M <= 0.0, "BNE_DIRT_BANK 0")
     def test_random_lean_is_bounded_in_metres_for_wide_roads_too(self):
         xy = self.xy()
         for width in (2.0, 3.5, 7.0, 12.0):
@@ -826,7 +1049,9 @@ class MajorRoadTest(unittest.TestCase):
         """GitHub #835: on the coarse global model (30 m cells, metres of noise) a minor dirt road smoothed over 6 m
         rode every bump of the data. There it is smoothed over DIRT_SIGMA_COARSE_M; on fine elevation it is not."""
         spec = roads.Spec(3.5, "dirt", False, "unclassified")
-        self.assertEqual(grading.profile_sigma(spec), grading.DIRT_SIGMA_MINOR_M)
+        # (on fine elevation a gravel road of a class is smoothed as the paved road of its class; a track less)
+        self.assertEqual(grading.profile_sigma(spec), max(grading.SIGMA_M, grading.CLASS_SIGMA_M["unclassified"]))
+        self.assertEqual(grading.profile_sigma(roads.Spec(3.5, "dirt", False, "track")), grading.DIRT_SIGMA_MINOR_M)
         self.assertEqual(grading.profile_sigma(spec, coarse=True), grading.DIRT_SIGMA_COARSE_M)
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified"), coarse=True),
                          grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified")), "paved: unchanged")
@@ -836,7 +1061,7 @@ class MajorRoadTest(unittest.TestCase):
             return 100.0 + 0.02 * x + 1.5 * np.sin(x / 9.0) + 0.8 * np.sin(x / 4.3 + 1.0)
         xs = np.arange(-200.0, 201.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
-        part = [(np.c_[lo, la], spec)]
+        part = [(np.c_[lo, la], roads.Spec(3.5, "dirt", False, "track"))]     # (a track: 6 m on fine elevation)
         with unittest.mock.patch.object(grading, "DIRT_ROUGH", 0.0):     # (the profile alone, not the potholes)
             fine = grading.plan_roads(FRAME, part, noisy, cuts=False)[0]
             rough = grading.plan_roads(FRAME, part, noisy, cuts=False, coarse=True)[0]
@@ -880,6 +1105,76 @@ class OverTunnels(unittest.TestCase):
         got = grading.Grader._over_tunnels(g, e, n)
         np.testing.assert_array_equal(got, [True, True, False, False, False, True, False])
         self.assertIsNone(grading.Grader._over_tunnels(g, np.array([50.0]), np.array([30.0])))
+
+
+class RoadOverTunnelTest(unittest.TestCase):
+    """A road crossing over a covered tunnel keeps its own cutting over the tube; the tunnel's own road (its approaches)
+    still leaves the ground over the tube uncut. The stage road over the A25's twin tubes at Popoli (2026-11-14): its
+    cutting was undone in a strip over each tube, the hillside standing back up across the road."""
+
+    def setUp(self):
+        from test_roads import M_LON, M_LAT
+
+        def ground(la, lo):
+            e = (np.asarray(lo) - LON) * M_LON                          # along the tunnel, -500 .. 500
+            n = (np.asarray(la) - LAT) * M_LAT
+            hill = 100.0 + 60.0 * np.clip(1.0 - np.abs(e) / 400.0, 0.0, 1.0)
+            return hill + 6.0 * np.exp(-(n / 8.0) ** 2)                 # a bump on the line of the road across
+        self.ground = ground
+
+    def change(self, f, pts):
+        g = grading.Grader(FRAME, FakeMD(f), self.ground)
+        e = np.array([p[0] for p in pts], np.float64)
+        n = np.array([p[1] for p in pts], np.float64)
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+        base = self.ground(la, lo)
+        return g.apply(la, lo, base.copy()) - base
+
+    def tunnel(self, crossing=True):
+        lines = [[(-500, 0), (500, 0)]] + ([[(0, -150), (0, 150)]] if crossing else [])
+        return features(lines, ["primary", "secondary"][:len(lines)], flags=[(0, "is_tunnel", 0.25, 0.75)],
+                        ids=["tube", "across"][:len(lines)])
+
+    def test_the_road_across_keeps_its_cutting_over_the_tube(self):
+        d = self.change(self.tunnel(), [(0.0, 0.0), (0.0, 3.0)])
+        self.assertLess(float(d[0]), -2.0, "the bump under the road's centre cut away, as on any road")
+        self.assertLess(float(d[1]), -2.0, "... and under its lane edge")
+
+    def test_the_tunnels_own_road_does_not_cut_over_the_tube(self):
+        # (every 2 m: the approach's cutting reached ~6 m in over the cover, between samples 20 m apart)
+        pts = [(x, y) for x in range(-246, 247, 2) for y in (-4.0, 0.0, 4.0)]
+        d = self.change(self.tunnel(crossing=False), pts)
+        self.assertGreater(float(d.min()), -grading.OVER_TUNNEL_SMALL_M, "the ground over the tube not cut down")
+
+    def test_own_roads_per_cell(self):
+        # (each cell's verdict from its own plans: a road ending at an end of a tunnel's plans (a portal, or a join
+        # between its sections: the Peripherique's trunk reaches its tube at one) is its approach; one ending 3.5 m off
+        # an end, or crossing over the tube, is not)
+        import threading
+
+        def plan(*xy):
+            return grading.Plan(np.array(xy, np.float64), np.zeros(len(xy)), 3.0)
+        tag = grading.TUNNEL_TAG
+        ps = [("g.0#1" + tag, plan((0, 0), (100, 0))),                 # a section, its ends joins
+              ("g.0#1" + tag + "m0", plan((0, 0), (4, 0))),            # mouth: portal at (0, 0), inner end (4, 0)
+              ("g", plan((-50, 0), (150, 0))),                         # the tunnel's own way
+              ("approach", plan((-80, 0), (0.5, 0))),                  # ends 0.5 m from the portal
+              ("at_join", plan((100, 40), (100, 0.5))),                # ends at the section's far join
+              ("at_inner", plan((4, 40), (4, 0.5))),                   # ends at the mouth plan's inner end
+              ("off_end", plan((40, 40), (40, 3.5))),                  # ends beside the tube, 3.5 m off its line
+              ("across", plan((50, -100), (50, 100)))]                 # crosses over the tube
+        g = types.SimpleNamespace(lock=threading.Lock(), cells={"c": ps}, _cell_plans=lambda k: ps)
+        got, own = grading._Planner._cell_own_roads(g, "c")
+        self.assertIs(got, ps)
+        self.assertEqual({f for f, _x, _y in own},
+                         {"g.0#1" + tag, "g.0#1" + tag + "m0", "g", "approach", "at_join", "at_inner"})
+        self.assertIs(grading._Planner._cell_own_roads(g, "c")[1], own, "made once per cell")
+
+    def test_a_tunnel_plans_feature(self):
+        # (a tunnel's plans are named for its sections, the map part's id (roads: f"{fid}.{n}") then "#k")
+        self.assertEqual(grading._tunnel_feature("35f45a70-54b2.9398624#1:tunm1"), "35f45a70-54b2")
+        self.assertEqual(grading._tunnel_feature("eeb16a87.0#0:tun"), "eeb16a87")
+        self.assertEqual(grading._tunnel_feature("tube"), "tube")
 
 
 class WallHeightTest(unittest.TestCase):
@@ -941,7 +1236,9 @@ class UnderpassTest(unittest.TestCase):
         its ground, more than snap_junctions takes under the junction, a step of several metres (the bug)."""
         f = features([[(-200, 0), (14, 0)], [(14, 0), (14, 150)], [(15.6, 0), (250, 0)], [(0, -20), (0, 20)]],
                      ["residential", "residential", "residential", "motorway"], flags=[(3, "is_bridge")])
-        xs = np.arange(15.6, 60.0, 2.0)
+        # (from the junction: with grade ranks (PR #1050) the bug's step stands in the 1.6 m gap, the road past it held
+        # level at its own height)
+        xs = np.arange(10.0, 60.0, 2.0)
         la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
 
         def grade():
@@ -1301,6 +1598,7 @@ class DirtEndsTest(unittest.TestCase):
     """PR #677 merge: a worn dirt road's damage and lean are zero at its own ends, short parts too (a junction meets
     the joining road at its height, level across)."""
 
+    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_short_part_ends_untouched_and_level(self):
         spec = roads.Spec(4.0, "dirt", False, "unclassified")
         for length in (12.0, 30.0, 300.0):
@@ -1358,3 +1656,52 @@ class CoarseEaseTest(unittest.TestCase):
     def test_equal_ranks_meet_halfway(self):
         main, side = self.run_ease(100.0, 104.0, 7.0, rank_side=7)
         self.assertLess(float(np.median(side) - np.median(main)), 2.5)
+
+
+class ContinuationHoldTest(unittest.TestCase):
+    """PlanPack: one road planned in pieces is one road in grade_points' ranks (the user, 2026-11-10: a dip in a
+    primary where its short piece between two junctions let the side roads pull its painted edge down)."""
+
+    def plan(self, xy, z, rank, rid, half=7.0, road_half=5.0):
+        p = grading.Plan(np.asarray(xy, np.float64), np.asarray(z, np.float64), half, road_half=road_half)
+        p.rank, p.rid = rank, rid
+        return p
+
+    def test_pieces_that_carry_straight_on_share_one_road(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 101)
+        b = self.plan([[50.0, 0.0], [100.0, 0.0]], [100.15, 100.15], 114, 102)   # 15 cm at the joint
+        c = self.plan([[50.0, 20.0], [50.0, 0.0]], [99.0, 99.0], 108, 103, half=8.0, road_half=2.8)  # a side road
+        pack = grading.PlanPack([a, b, c])
+        ra, rb, rc = (np.unique(pack.rid[pack.of == n]) for n in range(3))
+        self.assertEqual(ra.tolist(), rb.tolist(), "the two pieces are one road")
+        self.assertNotEqual(ra.tolist(), rc.tolist(), "a side road is not")
+
+    def test_the_side_road_does_not_move_the_split_main(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 111)
+        b = self.plan([[50.0, 0.0], [100.0, 0.0]], [100.15, 100.15], 114, 112)
+        c = self.plan([[50.0, 20.0], [50.0, 0.0]], [99.0, 99.0], 108, 113, half=8.0, road_half=2.8)
+        x = np.arange(35.0, 49.1, 1.0)
+        for y in (0.0, 3.0, 4.8):
+            pts = np.array([x, np.full_like(x, y)])
+            base = np.full(len(x), 100.0)
+            alone = grading.grade_points(pts[0], pts[1], base, [a, b])
+            with_side = grading.grade_points(pts[0], pts[1], base, [a, b, c])
+            np.testing.assert_allclose(with_side, alone, atol=1e-9, err_msg=f"y={y}: the main's carriageway held")
+
+    def test_a_true_equal_rank_crossing_is_not_one_road(self):
+        a = self.plan([[0.0, 0.0], [100.0, 0.0]], [100.0, 100.0], 114, 201)
+        b = self.plan([[50.0, -50.0], [50.0, 50.0]], [100.0, 100.0], 114, 202)
+        pack = grading.PlanPack([a, b])
+        ra, rb = (np.unique(pack.rid[pack.of == n]) for n in range(2))
+        self.assertNotEqual(ra.tolist(), rb.tolist(), "a crossing with no shared end is two roads")
+
+    def test_a_fork_at_another_level_is_not_one_road(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 301)
+        b = self.plan([[50.0, 0.0], [100.0, 5.0]], [100.8, 100.8], 114, 302)     # 0.8 m step: a real fork
+        pack = grading.PlanPack([a, b])
+        ra, rb = (np.unique(pack.rid[pack.of == n]) for n in range(2))
+        self.assertNotEqual(ra.tolist(), rb.tolist())
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,22 @@
+# BeamNG.Earth on-demand aerial builder: a systemd USER unit (copy to ~/.config/systemd/user/; docs/HOSTING.md).
+# Takes the cells the collector spooled, builds their 1 m packs and uploads them to the bucket. It is the only process
+# that holds the bucket credentials (r2.env, mode 600; see hosting/r2.env.example). Tune --workers, CPUQuota and
+# MemoryMax to the machine; Nice and idle IO keep it out of the way of anything else running there.
+[Unit]
+Description=BeamNG.Earth aerial on-demand builder (1 m AVIF packs to R2; requests spooled by bnge-serverlist)
+Documentation=file://%h/bnge-builder/aerial/run.py
+# Started by bnge-aerial-builder.path once r2.env exists; skipped without it.
+ConditionPathExists=%h/bnge-builder/r2.env
+
+[Service]
+Type=simple
+EnvironmentFile=%h/bnge-builder/r2.env
+Environment=PATH=%h/bnge-builder/aerial/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/bnge-builder/aerial/venv/bin/python %h/bnge-builder/aerial/run.py %h/bnge-builder/aerial-spool %h/bnge-builder/aerial-work --workers 6 --min-free-gb 20
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=400%
+MemoryMax=8G
+Restart=on-failure
+RestartSec=60

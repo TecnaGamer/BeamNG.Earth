@@ -48,5 +48,33 @@ T.check(#m >= 1 and m[1]:find('^perf minute %d+ fps, 1%% low') and m[1]:find('3 
 T.check(P.cause(1600, { mod = {}, engine = { FPSLimiter = 13 } }) == P.UNMEASURED,
   'a 1.6 s frame with 13 ms measured: not blamed on that part')
 T.check(P.cause(300, { mod = { terrainCommit = 280 }, engine = {} }) == 'terrainCommit 280', 'a part that explains it: named')
+T.check(P.cause(200, { mod = { far = 60, roads = 5 }, engine = { Lua = 150, Render = 20 } }) == 'Lua:far 150',
+  'the engine\'s Lua led by one of our parts: Lua:<part>')
+T.check(P.cause(200, { mod = { far = 10, roads = 5 }, engine = { Lua = 150 } }) == 'Lua:other 150',
+  'the engine\'s Lua with little of ours in it: Lua:other')
+T.check(P.cause(200, { mod = { far = 30, roads = 25, trees = 20 }, engine = { Lua = 150 } }) == 'Lua 150',
+  'ours spread over several parts: Lua')
+T.check(P.cause(200, { mod = {}, engine = { Render = 150 } }) == 'Render 150', 'other engine parts unchanged')
 T.check(#P.frame(0 / 0, now, ctx) == 0 and #P.frame(-1, now, ctx) == 0, 'bad frame times ignored')
+-- the minute's 1 % low and worst (lowAndWorst): one top-k pass, the same numbers as the old copy and sort
+do
+  math.randomseed(7)
+  local ok, cases = true, 0
+  for _, n in ipairs({ 1, 2, 5, 99, 100, 101, 250, 3600, 14400 }) do
+    for _ = 1, 3 do
+      local t = {}
+      for i = 1, n do t[i] = math.floor((8 + math.random() * 10 + (math.random() < 0.02 and math.random() * 80 or 0)) * 4) / 4 end
+      local a1, b1 = P.lowAndWorst(t)
+      P.TOPK_LOW = false
+      local a2, b2 = P.lowAndWorst(t)
+      P.TOPK_LOW = true
+      if a1 ~= a2 or b1 ~= b2 then ok = false end
+      cases = cases + 1
+    end
+  end
+  T.check(ok, 'lowAndWorst: the top-k pass equals the sort (' .. cases .. ' minutes, ties included)')
+  local t = { 3, 1, 2 }
+  P.lowAndWorst(t)
+  T.check(t[1] == 3 and t[2] == 1 and t[3] == 2, 'the frames are left as they were')
+end
 T.done('test_perflog')

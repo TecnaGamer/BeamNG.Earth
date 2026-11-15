@@ -65,6 +65,36 @@ with the normal BeamMP launcher.
 To update, unzip the new version's server zip over the old one and restart the server. The server needs no world
 data and little CPU: the world is built on each player's computer.
 
+## Docker
+
+Each release is also a container image: `ghcr.io/tecnagamer/beamng.earth-server:<version>` (`latest`: the newest
+beta; `next`: the newest preview; `dev`: the newest development build), the Linux host bundle (BeamMP's own
+unmodified server program and this zip) with `curl` for the server list. The server and its players run the same
+BeamNG.Earth version, so pin the version's tag and change it with each release. `docker/compose.yaml` in the source is
+a starting point:
+
+```sh
+docker run -d --name beamng-earth -p 30814:30814/tcp -p 30814:30814/udp -v beamng-earth:/data \
+  -e BEAMMP_AUTH_KEY=... -e BEAMMP_NAME="My BeamNG.Earth server" -e BEAMMP_PRIVATE=false \
+  ghcr.io/tecnagamer/beamng.earth-server:<version>
+```
+
+- **`/data`** keeps the server's `ServerConfig.toml` (the host bundle's on first start: `Private = true`, no AuthKey)
+  and what the plugin keeps between sessions: the shared road plans (`store`), baked packs of whole areas (put `.bnge`
+  files in `bake`) and the share helper's `spool`. The server runs as uid 1000: a folder of your own mounted there
+  must be writable by it (`chown -R 1000:1000`).
+- **BeamMP's own `BEAMMP_*` settings** win over the file and are written into it at each start: `BEAMMP_AUTH_KEY`
+  (required), `BEAMMP_NAME`, `BEAMMP_DESCRIPTION`, `BEAMMP_TAGS`, `BEAMMP_PORT`, `BEAMMP_PRIVATE`,
+  `BEAMMP_MAX_PLAYERS`, `BEAMMP_MAX_CARS`, `BEAMMP_MAP`, `BEAMMP_DEBUG` (see BeamMP's documentation). What none sets:
+  edit `/data/ServerConfig.toml` and restart. A port other than 30814: set `BEAMMP_PORT` and publish that same port
+  (`-p 30899:30899/tcp -p 30899:30899/udp`), as the server tells the list its own.
+- **Time, weather and listing** for everyone (the settings at the top of `main.lua`): `BNGE_TIME` (`real` or
+  `HH:MM`), `BNGE_TIME_SPEED` (0, 1, 60, ...), `BNGE_WEATHER` (`real`, `clear`, `cloudy`, `rain`, `storm`, `snow`,
+  `fog`), `BNGE_LISTED` (`false` keeps a public server off the BeamNG.Earth list too). A value it doesn't know stops
+  the start with a message saying which.
+
+Build it yourself from the source's root: `docker build -f docker/Dockerfile -t beamng-earth-server .`
+
 ## Players
 
 - **Every player needs the BeamNG.Earth app** (https://github.com/TecnaGamer/BeamNG.Earth/releases) running, the same

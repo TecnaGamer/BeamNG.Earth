@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 170 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 304 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -31,6 +31,28 @@ def require(version, what):
         raise NativeMissing(f"{what} needs the server's native module (earthfast) version {version} or newer, "
                             f"{'none was loaded' if have is None else f'version {have} was'}: rebuild it with "
                             "python3 tools/build_native.py, or use a release build")
+
+
+class _Missing:
+    """In place of the module when it is missing or too old: every function raises NativeMissing when called (so that
+    importing a module that binds kernels at import time still works, e.g. in the launcher)."""
+
+    def __init__(self, version, what):
+        self.version, self.what = version, what
+
+    def __getattr__(self, name):
+        def missing(*_a, **_k):
+            require(self.version, f"{self.what} ({name})")
+        return missing
+
+
+def native(version, what):
+    """The native module when it is loaded at VERSION >= version, else a stand-in whose functions raise NativeMissing."""
+    try:
+        require(version, what)
+        return _ef
+    except NativeMissing:
+        return _Missing(version, what)
 
 
 def segments(lines_hw):
@@ -128,6 +150,45 @@ def proc_tree(root):
     return _ef.proc_tree(int(root))
 
 
+def ram_limit_mb(setting_gb, total_mb):
+    """The server's RAM limit in MB (2^20 bytes): the settings page's Max RAM in GB (0: Auto) on a machine with
+    total_mb of RAM (0: unknown); native membudget.rs."""
+    require(257, "ram_limit_mb")
+    return _ef.ram_limit_mb(float(setting_gb or 0.0), float(total_mb or 0.0))
+
+
+def ram_auto_mb(total_mb):
+    require(257, "ram_auto_mb")
+    return _ef.ram_auto_mb(float(total_mb or 0.0))
+
+
+def ram_tier(limit_mb):
+    """'emergency', 'lean', 'small' or 'desktop' for a limit (MB)."""
+    require(257, "ram_tier")
+    return _ef.ram_tier(float(limit_mb))
+
+
+def ram_desktop_sizes(limit_mb):
+    """(DEM tiles, map data MB, shed MB, rotate MB, road processes at most, far processes at most) of the desktop tier
+    for a limit (MB)."""
+    require(257, "ram_desktop_sizes")
+    return _ef.ram_desktop_sizes(float(limit_mb))
+
+
+def ram_effective_mb(limit_mb, total_mb, avail_mb, reserve_mb):
+    """The limit in force (MB): lowered while the system has less than reserve_mb available (avail < 0: unknown)."""
+    require(257, "ram_effective_mb")
+    return _ef.ram_effective_mb(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb))
+
+
+def ram_watch(limit_mb, total_mb, avail_mb, reserve_mb, over_s, since_shed_s, since_rotate_s, pools):
+    """The memory watchdog's step: (action 'ok' / 'shed' / 'rotate' / 'wait', pool index, the limit in force MB);
+    pools: [(its largest process's MB, has a backlog)]."""
+    require(257, "ram_watch")
+    return _ef.ram_watch(float(limit_mb), float(total_mb), float(avail_mb), float(reserve_mb), float(over_s),
+                         float(since_shed_s), float(since_rotate_s), [(float(a), bool(b)) for a, b in pools])
+
+
 def md_html(text, base, fold_details=False):
     """(html, [url, ...]): an add-on's Markdown (README, release notes) as the Add-ons page's safe HTML (native
     mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
@@ -200,6 +261,53 @@ def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
     return _ef.lane_parts(codes, np.ascontiguousarray(feature, np.int64), np.ascontiguousarray(start, np.float64),
                           np.ascontiguousarray(end, np.float64), np.ascontiguousarray(ids, np.int64),
                           np.ascontiguousarray(idx, np.int32), tags, ask)
+
+
+def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move, grade):
+    """railroadseam.couple's native work (railseam.rs): the moved bed heights (n,), or None when nothing moved. The
+    roads flattened: their points rxy (m, 2), heights rz (m,), road r = rows off[r]:off[r + 1], half widths rh."""
+    require(283, "rail_seam_couple")     # (283: a vertex keeps to its own band after the run-out)
+    return _ef.rail_seam_couple(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(z, np.float64), float(half),
+                                np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
+                                np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),
+                                float(slope), float(tol), float(max_move), float(grade))
+
+
+def _lines_flat(lines):
+    """(off (n + 1,) int64, xy (m, 2), half (n,)) of [(line (k, 2+), half width)]."""
+    xy = [np.asarray(ln, np.float64)[:, :2] for ln, _h in lines]
+    off = np.r_[0, np.cumsum([len(a) for a in xy])].astype(np.int64)
+    return (off, np.ascontiguousarray(np.concatenate(xy) if xy else np.zeros((0, 2)), np.float64),
+            np.array([float(h) for _ln, h in lines], np.float64))
+
+
+def deck_ground_probe(lines, step, offs, fix, dirs, reach):
+    """grading's bridges-in-the-elevation probe (deckground.rs): the sample points (m, 2) of lines [(line, half)]."""
+    require(190, "deck_ground_probe")
+    off, xy, half = _lines_flat(lines)
+    return _ef.deck_ground_probe(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                                 np.asarray(dirs, np.float64), float(reach))
+
+
+def deck_ground_fit(lines, step, offs, fix, dirs, reach, z, masks, mask_of, slope, t0, t1, mask_m):
+    """deckground.rs: (active (n,) bool, station offsets of the active decks (a + 1,), their rows (m, 6)) from the
+    probe's heights z; masks [(line, half)], deck i's being masks[j] for j in mask_of[i]."""
+    require(190, "deck_ground_fit")
+    off, xy, half = _lines_flat(lines)
+    moff, mxy, mhalf = _lines_flat(masks)
+    mo = np.r_[0, np.cumsum([len(m) for m in mask_of])].astype(np.int64)
+    mi = np.array([j for m in mask_of for j in m], np.int64)
+    return _ef.deck_ground_fit(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                               np.asarray(dirs, np.float64), float(reach), np.ascontiguousarray(z, np.float64),
+                               moff, mxy, mhalf, mo, mi, float(slope), float(t0), float(t1), float(mask_m))
+
+
+def deck_ground_apply(e, n, base, off, xy, half, soff, rows, blend, end):
+    """deckground.rs: base (n,) lowered under the corrected decks, or None when nothing changes."""
+    require(190, "deck_ground_apply")
+    return _ef.deck_ground_apply(np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64),
+                                 np.ascontiguousarray(base, np.float64), off, xy, half, soff, rows, float(blend),
+                                 float(end))
 
 
 def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):

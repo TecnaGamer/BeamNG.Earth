@@ -1,5 +1,6 @@
 //! Bridge decks side by side (roads._deck_beside): which deck parts come within touching distance of each other in
 //! plan, the pair test that was a numpy pass per pair (2.4 s of 14 for 8 of Bratislava's road tiles, 2026-10-28).
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -17,7 +18,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
     let (q, qoff, pts, poff, widths) = (q.as_array(), qoff.as_array(), pts.as_array(), poff.as_array(),
                                         widths.as_array());
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         // each part's box
         let mut bb = vec![[0.0f64; 4]; n];
@@ -82,7 +83,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                     'blocks: for (b, r) in bx[bfirst[j]..bfirst[j + 1]].iter().enumerate() {
                         let gx = (r[0] - qx).max(qx - r[2]).max(0.0);
                         let gy = (r[1] - qy).max(qy - r[3]).max(0.0);
-                        if gx.hypot(gy) > reach + BESIDE_PRUNE_M {
+                        if gx.dhypot(gy) > reach + BESIDE_PRUNE_M {
                             continue;
                         }
                         let v0 = ja + b * BESIDE_BLOCK;
@@ -91,7 +92,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                             let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
                             let l2 = (abx * abx + aby * aby).max(1e-12);
                             let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
-                            d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                            d = d.min((qx - (px + t * abx)).dhypot(qy - (py_ + t * aby)));
                         }
                         if d < reach {
                             break 'blocks;
@@ -126,7 +127,7 @@ fn end_dir(pts: &numpy::ndarray::ArrayView2<f64>, a: usize, b: usize, at_end: bo
     for k in 1..b - a {
         let (px, py) = (pts[[idx(k - 1), 0]], pts[[idx(k - 1), 1]]);
         let (qx, qy) = (pts[[idx(k), 0]], pts[[idx(k), 1]]);
-        let seg = (qx - px).hypot(qy - py);
+        let seg = (qx - px).dhypot(qy - py);
         if run + seg >= look && seg > 0.0 {
             let t = (look - run) / seg;
             tx = px + t * (qx - px);
@@ -136,7 +137,7 @@ fn end_dir(pts: &numpy::ndarray::ArrayView2<f64>, a: usize, b: usize, at_end: bo
         run += seg;
     }
     let (dx, dy) = (tx - x0, ty - y0);
-    let l = dx.hypot(dy);
+    let l = dx.dhypot(dy);
     if l > 1e-9 { [dx / l, dy / l] } else { [0.0, 0.0] }
 }
 
@@ -160,7 +161,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
                                              params.as_array());
     let (join_m, snap_m, min_cos, ground_m, min_len) = (params[0], params[1], params[2], params[3], params[4]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let ne = 2 * n;
         let mut pos = vec![[f64::NAN; 2]; ne];
         let mut dir = vec![[0.0f64; 2]; ne];
@@ -174,7 +175,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
             ok[k] = true;
             let mut l = 0.0;
             for v in a..b - 1 {
-                l += (pts[[v + 1, 0]] - pts[[v, 0]]).hypot(pts[[v + 1, 1]] - pts[[v, 1]]);
+                l += (pts[[v + 1, 0]] - pts[[v, 0]]).dhypot(pts[[v + 1, 1]] - pts[[v, 1]]);
             }
             len[k] = l;
             pos[2 * k] = [pts[[a, 0]], pts[[a, 1]]];
@@ -183,7 +184,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
             dir[2 * k] = end_dir(&pts, a, b, false, look);
             dir[2 * k + 1] = end_dir(&pts, a, b, true, look);
         }
-        let d = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+        let d = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).dhypot(p[1] - q[1]);
         // a grid of the ends and of the ground roads' ends (cells of the widest reach): the near ones only
         // (twice the reach: a free end before this one may have moved up to snap_m from where it is filed)
         let cell = 2.0 * join_m.max(ground_m).max(snap_m).max(1.0);
@@ -270,7 +271,7 @@ pub fn fill_gaps(line: &[[f64; 2]], bridges: &[[f64; 2]], end_deck: [bool; 2], o
     let n = line.len();
     let mut s = vec![0.0f64; n];
     for v in 1..n {
-        s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).hypot(line[v][1] - line[v - 1][1]);
+        s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).dhypot(line[v][1] - line[v - 1][1]);
     }
     let total = if n > 0 { s[n - 1] } else { 0.0 };
     if n < 2 || total <= 0.0 {
@@ -297,7 +298,7 @@ pub fn fill_gaps(line: &[[f64; 2]], bridges: &[[f64; 2]], end_deck: [bool; 2], o
             let (abx, aby) = (w[1][0] - px, w[1][1] - py);
             let l2 = (abx * abx + aby * aby).max(1e-12);
             let t = (((p[0] - px) * abx + (p[1] - py) * aby) / l2).clamp(0.0, 1.0);
-            best = best.min((p[0] - (px + t * abx)).hypot(p[1] - (py + t * aby)));
+            best = best.min((p[0] - (px + t * abx)).dhypot(p[1] - (py + t * aby)));
         }
         best
     };
@@ -375,10 +376,10 @@ pub fn deck_end_on<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, poff: 
                                                     level.as_array(), ground.as_array(), params.as_array());
     let (join_m, ground_m, margin_m) = (params[0], params[1], params[2]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         let p = |v: usize| [pts[[v, 0]], pts[[v, 1]]];
-        let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+        let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).dhypot(a[1] - b[1]);
         let mut ends: Vec<Option<[f64; 2]>> = vec![None; 2 * n];
         for k in 0..n {
             let (a, b) = span(k);
@@ -479,7 +480,7 @@ pub fn pad_hull(parts: &[(Vec<[f64; 2]>, Vec<f64>, f64)], reach: f64, step: f64)
         }
         let mut s = vec![0.0f64; n];
         for v in 1..n {
-            s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).hypot(line[v][1] - line[v - 1][1]);
+            s[v] = s[v - 1] + (line[v][0] - line[v - 1][0]).dhypot(line[v][1] - line[v - 1][1]);
         }
         let end = s[n - 1].min(reach);
         let mut t = 0.0;
@@ -552,7 +553,7 @@ pub fn rim_samples(ring: &[[f64; 3]], lines: &[(Vec<[f64; 2]>, f64)], step: f64,
     for i in 0..k {
         let (a, b) = (ring[i], ring[(i + 1) % k]);
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let len = dx.hypot(dy);
+        let len = dx.dhypot(dy);
         if len < 1e-9 {
             continue;
         }
@@ -566,7 +567,7 @@ pub fn rim_samples(ring: &[[f64; 3]], lines: &[(Vec<[f64; 2]>, f64)], step: f64,
                     let (sx, sy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
                     let l2 = (sx * sx + sy * sy).max(1e-12);
                     let t = (((p[0] - w[0][0]) * sx + (p[1] - w[0][1]) * sy) / l2).clamp(0.0, 1.0);
-                    (p[0] - (w[0][0] + t * sx)).hypot(p[1] - (w[0][1] + t * sy)) <= half + open_m
+                    (p[0] - (w[0][0] + t * sx)).dhypot(p[1] - (w[0][1] + t * sy)) <= half + open_m
                 })
             });
             out.push([p[0], p[1], p[2], nx, ny, if open { 1.0 } else { 0.0 }]);
@@ -667,49 +668,23 @@ pub fn deck_tents<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, z: PyRead
     out.into_pyarray(py)
 }
 
-/// roads._first_ring_ends: (n, 4) per feature its first ring's first and last coordinates (lon0, lat0, lon1, lat1),
-/// NaN without a part or with a first ring of fewer than 2 coordinates.
-#[pyfunction]
-pub fn first_ring_ends<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, coord_off: PyReadonlyArray1<'py, i64>,
-                            ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>)
-                            -> Bound<'py, PyArray2<f64>> {
-    let (ll, co, ro, po) = (lonlat.as_array(), coord_off.as_array(), ring_off.as_array(), part_off.as_array());
-    let n = po.len().saturating_sub(1);
-    let mut out = vec![f64::NAN; 4 * n];
-    for i in 0..n {
-        if po[i + 1] <= po[i] {
-            continue;
-        }
-        let r = ro[po[i] as usize] as usize;
-        let (a, b) = (co[r], co[r + 1]);
-        if b - a >= 2 {
-            let (a, b) = (a as usize, b as usize - 1);
-            out[4 * i..4 * i + 4].copy_from_slice(&[ll[[a, 0]], ll[[a, 1]], ll[[b, 0]], ll[[b, 1]]]);
-        }
-    }
-    numpy::ndarray::Array2::from_shape_vec((n, 4), out).expect("ends").into_pyarray(py)
-}
-
 /// roads._deck_gaps' look round feature i of a layer, in lon / lat (2026-11-08: a numpy pass over the whole layer per
-/// road near a bridge, ~3/4 of _deck_gaps on a Midtown tile). ring (k, 2): i's line; ends (n, 4): each feature's
+/// road near a bridge, ~3/4 of _deck_gaps on a Midtown tile; levelrules.rs calls it since the rules moved there). ring (k, 2): i's line; ends (n, 4): each feature's
 /// first ring's ends (first_ring_ends); boxes (n, 4): their lon / lat boxes (lon0, lat0, lon1, lat1); spec (n,): 1 for
 /// a road with a spec; kx, ky: m per degree. Returns (hits (4,): for ring's first and its last point the (feature,
 /// end 0 / 1) of the one other feature's end within join_m m of it, -1 / -1 for none or for more than one; others
 /// (m, 2): the ends of the other roads with a spec whose boxes come within pad_m m of ring's box (by feature, then
 /// end), in m from ring's first point). numpy's numbers: np.hypot's distance, np.min / np.max's box.
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, ends: PyReadonlyArray2<'py, f64>,
-                            boxes: PyReadonlyArray2<'py, f64>, spec: PyReadonlyArray1<'py, u8>, i: i64, kx: f64,
-                            ky: f64, join_m: f64, pad_m: f64) -> (Vec<i64>, Bound<'py, PyArray2<f64>>) {
-    let (ring, ends, boxes, spec) = (ring.as_array(), ends.as_array(), boxes.as_array(), spec.as_array());
-    let n = ends.nrows();
-    let k = ring.nrows();
-    let mut hits = vec![-1i64; 4];
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deck_gaps_round(ring: &[[f64; 2]], ends: &[[f64; 4]], boxes: &[[f64; 4]], spec: &[u8], i: i64, kx: f64,
+                              ky: f64, join_m: f64, pad_m: f64) -> ([i64; 4], Vec<[f64; 2]>) {
+    let n = ends.len();
+    let k = ring.len();
+    let mut hits = [-1i64; 4];
     if k == 0 {
-        return (hits, numpy::ndarray::Array2::<f64>::zeros((0, 2)).into_pyarray(py));
+        return (hits, Vec::new());
     }
-    for (e, p) in [ring[[0, 0]], ring[[0, 1]], ring[[k - 1, 0]], ring[[k - 1, 1]]].chunks(2).enumerate() {
+    for (e, p) in [ring[0], ring[k - 1]].iter().enumerate() {
         let mut found: Option<(usize, usize)> = None;
         let mut count = 0;
         'all: for j in 0..n {
@@ -717,13 +692,13 @@ pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, e
                 continue;
             }
             for end in 0..2 {
-                let a = (ends[[j, 2 * end]] - p[0]) * kx;
-                let b = (ends[[j, 2 * end + 1]] - p[1]) * ky;
+                let a = (ends[j][2 * end] - p[0]) * kx;
+                let b = (ends[j][2 * end + 1] - p[1]) * ky;
                 // (np.hypot's d < join_m; hypot is never under the larger of |a| and |b|: a cheap test first)
                 if a.abs() >= join_m || b.abs() >= join_m {
                     continue;
                 }
-                if a.hypot(b) < join_m {
+                if a.dhypot(b) < join_m {
                     count += 1;
                     found = Some((j, end));
                     if count > 1 {
@@ -739,33 +714,113 @@ pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, e
         }
     }
     // ring's box (np.min / np.max: NaN if any is) grown by pad_m
-    let (mut lo, mut hi) = ([ring[[0, 0]], ring[[0, 1]]], [ring[[0, 0]], ring[[0, 1]]]);
-    for v in 1..k {
+    let (mut lo, mut hi) = (ring[0], ring[0]);
+    for v in ring.iter().skip(1) {
         for c in 0..2 {
-            let x = ring[[v, c]];
+            let x = v[c];
             lo[c] = if lo[c].is_nan() || x.is_nan() { f64::NAN } else if x < lo[c] { x } else { lo[c] };
             hi[c] = if hi[c].is_nan() || x.is_nan() { f64::NAN } else if x > hi[c] { x } else { hi[c] };
         }
     }
     let pad = [pad_m / kx, pad_m / ky];
     let (lo, hi) = ([lo[0] - pad[0], lo[1] - pad[1]], [hi[0] + pad[0], hi[1] + pad[1]]);
-    let (r0x, r0y) = (ring[[0, 0]], ring[[0, 1]]);
-    let mut others: Vec<f64> = Vec::new();
+    let (r0x, r0y) = (ring[0][0], ring[0][1]);
+    let mut others: Vec<[f64; 2]> = Vec::new();
     for j in 0..n {
-        if !(boxes[[j, 0]] <= hi[0] && boxes[[j, 2]] >= lo[0] && boxes[[j, 1]] <= hi[1] && boxes[[j, 3]] >= lo[1]) {
+        if !(boxes[j][0] <= hi[0] && boxes[j][2] >= lo[0] && boxes[j][1] <= hi[1] && boxes[j][3] >= lo[1]) {
             continue;
         }
         if j as i64 == i || spec[j] == 0 {
             continue;
         }
         for end in 0..2 {
-            let (x, y) = (ends[[j, 2 * end]], ends[[j, 2 * end + 1]]);
+            let (x, y) = (ends[j][2 * end], ends[j][2 * end + 1]);
             if x.is_finite() && y.is_finite() {
-                others.push((x - r0x) * kx);
-                others.push((y - r0y) * ky);
+                others.push([(x - r0x) * kx, (y - r0y) * ky]);
             }
         }
     }
-    let m = others.len() / 2;
-    (hits, numpy::ndarray::Array2::from_shape_vec((m, 2), others).expect("others").into_pyarray(py))
+    (hits, others)
+}
+
+/// One height at each joint of a branched deck chain (roads.deck_profile_once's per-part profile, 238): every node with
+/// two or more part ends (node ids a[k], b[k] of part k) is set to the highest of those ends, each part's profile
+/// raised to it from that end by a smoothstep fading over min(its length, fade_m), the two ends' raises added (a short
+/// part goes from one to the other). z, s (arc m): every part's points, part k rows off[k]..off[k + 1]. Parts whose ends
+/// already agree are left as they are. Pure.
+pub fn deck_weld_core(z: &[f64], s: &[f64], off: &[usize], a: &[usize], b: &[usize], fade_m: f64) -> Vec<f64> {
+    let n = a.len();
+    let nodes = a.iter().chain(b.iter()).copied().max().map_or(0, |m| m + 1);
+    let mut top = vec![f64::NEG_INFINITY; nodes];
+    let mut cnt = vec![0usize; nodes];
+    for k in 0..n {
+        let (i0, i1) = (off[k], off[k + 1]);
+        if i1 <= i0 {
+            continue;
+        }
+        for (nd, v) in [(a[k], z[i0]), (b[k], z[i1 - 1])] {
+            if v.is_finite() {
+                cnt[nd] += 1;
+                top[nd] = top[nd].max(v);
+            }
+        }
+    }
+    let mut out = z.to_vec();
+    for k in 0..n {
+        let (i0, i1) = (off[k], off[k + 1]);
+        if i1 <= i0 + 1 {
+            continue;
+        }
+        let len = s[i1 - 1] - s[i0];
+        let c0 = if cnt[a[k]] > 1 && z[i0].is_finite() { top[a[k]] - z[i0] } else { 0.0 };
+        let c1 = if cnt[b[k]] > 1 && z[i1 - 1].is_finite() { top[b[k]] - z[i1 - 1] } else { 0.0 };
+        if c0 <= 0.0 && c1 <= 0.0 {
+            continue;
+        }
+        let d = len.min(fade_m).max(1e-6);
+        let fall = |t: f64| {
+            let u = (t / d).clamp(0.0, 1.0);
+            1.0 - u * u * (3.0 - 2.0 * u)
+        };
+        for i in i0..i1 {
+            let t = s[i] - s[i0];
+            out[i] = z[i] + c0 * fall(t) + c1 * fall(len - t);
+        }
+    }
+    out
+}
+
+#[pyfunction]
+pub fn deck_weld<'py>(py: Python<'py>, z: PyReadonlyArray1<'py, f64>, s: PyReadonlyArray1<'py, f64>,
+                      off: PyReadonlyArray1<'py, i64>, a: PyReadonlyArray1<'py, i64>, b: PyReadonlyArray1<'py, i64>,
+                      fade_m: f64) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+    let (z, s, off, a, b) = (z.as_array(), s.as_array(), off.as_array(), a.as_array(), b.as_array());
+    let n = a.len();
+    if b.len() != n || off.len() != n + 1 || z.len() != s.len() || off.iter().any(|&v| v < 0 || v as usize > z.len())
+        || (1..off.len()).any(|i| off[i] < off[i - 1]) || a.iter().chain(b.iter()).any(|&v| v < 0) {
+        return Err(pyo3::exceptions::PyValueError::new_err("deck_weld: mismatched arrays"));
+    }
+    let zv: Vec<f64> = z.iter().copied().collect();
+    let sv: Vec<f64> = s.iter().copied().collect();
+    let ov: Vec<usize> = off.iter().map(|&v| v as usize).collect();
+    let av: Vec<usize> = a.iter().map(|&v| v as usize).collect();
+    let bv: Vec<usize> = b.iter().map(|&v| v as usize).collect();
+    let got = py.detach(|| deck_weld_core(&zv, &sv, &ov, &av, &bv, fade_m));
+    Ok(got.into_pyarray(py))
+}
+
+#[cfg(test)]
+mod weld_tests {
+    use super::deck_weld_core;
+
+    #[test]
+    fn joints_meet_at_the_highest_end() {
+        // two parts meeting at node 1: 10.0 and 11.0 there; a free end each (nodes 0, 2) kept
+        let z = [9.0, 9.5, 10.0, 11.0, 11.0, 11.0];
+        let s = [0.0, 5.0, 10.0, 0.0, 5.0, 10.0];
+        let got = deck_weld_core(&z, &s, &[0, 3, 6], &[0, 1], &[1, 2], 40.0);
+        assert!((got[2] - 11.0).abs() < 1e-9 && (got[3] - 11.0).abs() < 1e-9);
+        assert!((got[0] - 9.0).abs() < 1e-9 && (got[5] - 11.0).abs() < 1e-9);
+        assert!(got[1] > 9.5 && got[1] < 10.5);
+    }
 }

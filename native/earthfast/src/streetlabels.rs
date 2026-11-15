@@ -1,6 +1,7 @@
 //! Points to write a road's name at (the 3D map's street labels, server labels.street_labels): along each polyline in
 //! lon / lat, one point every `spacing` metres (the first half a spacing in, a polyline shorter than a spacing gets
 //! one at its middle), with the road's bearing there (degrees clockwise from north) for the text's direction.
+use crate::dm::Dm;
 
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -18,7 +19,7 @@ pub fn label_points(lonlat: &[[f64; 2]], starts: &[i64], ends: &[i64], spacing: 
             continue;
         }
         let pts = &lonlat[s..e];
-        let kx = M_PER_DEG * pts[0][1].to_radians().cos();
+        let kx = M_PER_DEG * pts[0][1].to_radians().dcos();
         // segment lengths in metres
         let seg: Vec<f64> = pts.windows(2)
             .map(|w| (((w[1][0] - w[0][0]) * kx).powi(2) + ((w[1][1] - w[0][1]) * M_PER_DEG).powi(2)).sqrt())
@@ -49,7 +50,7 @@ pub fn label_points(lonlat: &[[f64; 2]], starts: &[i64], ends: &[i64], spacing: 
             lo.push(a[0] + (b[0] - a[0]) * f);
             la.push(a[1] + (b[1] - a[1]) * f);
             let (dx, dy) = ((b[0] - a[0]) * kx, (b[1] - a[1]) * M_PER_DEG);
-            br.push(dx.atan2(dy).to_degrees().rem_euclid(360.0));
+            br.push(dx.datan2(dy).to_degrees().rem_euclid(360.0));
         }
     }
     (fi, lo, la, br)
@@ -63,7 +64,7 @@ pub fn polyline_label_points<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py,
     let a = lonlat.as_array();
     let pts: Vec<[f64; 2]> = a.outer_iter().map(|r| [r[0], r[1]]).collect();
     let (s, e) = (starts.as_array().to_vec(), ends.as_array().to_vec());
-    let (fi, lo, la, br) = py.allow_threads(|| label_points(&pts, &s, &e, spacing));
+    let (fi, lo, la, br) = py.detach(|| label_points(&pts, &s, &e, spacing));
     (fi.into_pyarray(py), lo.into_pyarray(py), la.into_pyarray(py), br.into_pyarray(py))
 }
 

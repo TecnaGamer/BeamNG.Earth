@@ -131,7 +131,7 @@ def _csr(ends, size):
 
 
 class Graph:
-    def __init__(self, arrays, notes):
+    def __init__(self, arrays, notes, *, include_highways=False):
         """Contract shape points, keeping junctions, endpoints, and goal nodes."""
         ways = arrays["wayids"]
         kinds, flags = arrays["kinds"], arrays["flags"]
@@ -156,10 +156,10 @@ class Graph:
         barriers = _indices(ids, notes["barriers"])
         keep[barriers] = True
         keep[_indices(ids, restricted_nodes | relation_nodes)] = True
-        usable = kinds >= 2  # Highway guidance uses the separate motorway system.
+        usable = np.ones(len(kinds), bool) if include_highways else kinds >= 2
         local_points = np.zeros(len(ids), bool)
         # Snap goals to public local roads, not to the motorway passing nearby.
-        local_points[inverse[np.repeat(usable & ((flags & SEPARATED) == 0), np.diff(offsets))]] = (
+        local_points[inverse[np.repeat((kinds >= 2) & ((flags & SEPARATED) == 0), np.diff(offsets))]] = (
             True
         )
         local_points[barriers] = False

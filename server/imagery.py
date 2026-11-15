@@ -16,7 +16,7 @@ while a later source remains, counts as missing, so the chain falls back per sou
 Samples no source covers (404 everywhere) get FALLBACK_RGB; beyond +-85.05 deg (all ice) POLAR_RGB.
 
 Caching: raw tiles on disk under <cache>/<source>/<z>/<x>/<y>.jpg (whatever format the server
-sent), 404s remembered as <y>.404 markers (as dem.py does; they expire after the host's miss_ttl,
+sent), 404s remembered in a column's miss index (missindex.py, as dem.py does; they expire after the host's miss_ttl,
 90 days), decoded tiles in an in-memory LRU. Downloads run on a small pool (FETCH_WORKERS <= 6)
 through a netfetch.Fetcher: the host's rate limit, concurrency cap, retries and circuit breaker
 (keyed by host, so eox2023 and eox2016 share one), one persistent HTTPS connection per thread and
@@ -34,7 +34,7 @@ teleport back renders none of the corrections again. A tile made while a correct
 REQUEST_M) is kept with that region noted and made again once it is ready (_fresh).
 
 Output: DDS DXT1 with a full mip chain (write_dds): linear-light 2 x 2 levels, each sharpened, and their BC1 blocks
-(earthfast.dds_levels: the GPU's encoder when there is one) under our own header (DDSD_MIPMAPCOUNT,
+(earthfast.dds_levels: integer mips and ISPC's BC1 kernels on the CPU) under our own header (DDSD_MIPMAPCOUNT,
 DDSCAPS_MIPMAP|COMPLEX).
 """
 from runtimeprofiler import step as profile_step
@@ -43,12 +43,13 @@ import hashlib
 import io
 import logging
 import math
+import missindex
 import os
 import struct
 import threading
 from collections import OrderedDict
 from runtimeprofiler import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 
 import numpy as np
 
@@ -57,6 +58,8 @@ from PIL import Image, ImageFilter
 import cache as cachemod
 import dem as demmod
 import fast     # Rust kernels (earthfast): the warp, mips and BC1 blocks
+import dmath
+import dnp
 import netfetch
 import season
 import staging
@@ -79,6 +82,14 @@ MEM_TILES = 512                    # decoded 256² RGB tiles kept in memory (~10
 # Netherlands...) was skipped for the near ground there (found adding Poland, 2026-10-22); 81 = 9 x 9 (~64 deg),
 # a 2304 px RGBA mosaic (~21 MB) while one texture renders
 MAX_MOSAIC = 81
+# A far texture's gutter (gutter(): the texels round its footprint that keep the WRAP sampler's mips from blending in
+# the opposite edge) asks no photo tile of its own: the footprint's own tiles are fetched (the taps of its texels,
+# _core_tiles), the gutter takes the neighbouring tiles that are on hand (memory, disk) and the footprint's edge texels
+# (clamped) elsewhere. A global far tile is a Web-Mercator tile, so its texture's footprint ends on photo tile edges: at
+# 256 px the 8-texel gutter and the 1 px margin asked for the 8 photo tiles round the one it shows (31 % of a cold
+# French teleport's EOX requests were tiles only a gutter touched, 15 % with neighbours sharing them). The footprint's
+# texels are the same either way (the zoom still goes by the whole square). BNGE_GUTTER_FETCH=1: as before.
+GUTTER_FETCH = os.environ.get("BNGE_GUTTER_FETCH") == "1"
 MESH_CELLS = 8                     # render(): exact reprojection on an 8 x 8 grid of texture cells
 FALLBACK_RGB = (100, 89, 69)       # no imagery anywhere: the terrain material's dirt colour
 POLAR_RGB = (226, 232, 240)        # ... past Web Mercator's limit, where it is all ice (polar ice sheet, sea ice): snow
@@ -129,11 +140,18 @@ class Source:
     # Never used for a view finer than this zoom (not enlarged: the next source's sharper tiles there), unlike
     # max_zoom, which a finer view uses enlarged
     max_view_zoom: int = 99
+    # A pack source whose packs a coverage file lists (aerialpacks.py: the 1 m aerial packs, "bngaer"): a pack it does
+    # not list is never asked for (missing here: the next source draws it); url takes {g}, the cell's generation
+    coverage: bool = False
+    # ((zoom, |latitude| limit), ...): that zoom's tiles exist only within the limit (the Sentinel-2 z14 packs to 50
+    # degrees: cdn.json "max_lat"); farther out the source's finest zoom is the next coarser one (zoom_caps)
+    zoom_max_lat: tuple = ()
 
 
 SOURCES = {
     "usgs": Source("usgs", "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-                   16, "USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=10),
+                   16, "USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12),
+                   min_zoom=10),
     "eox2023": Source("eox2023", "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/{z}/{y}/{x}.jpg",
                       14, "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified "
                           "Copernicus Sentinel data 2023), CC BY-NC-SA 4.0"),
@@ -149,7 +167,7 @@ SOURCES = {
 SOURCES["naip"] = Source(
     "naip", "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer/exportImage"
             "?bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=jpg&f=image",
-    17, "USDA NAIP via USGS The National Map (public domain)", probe_zooms=(10, 12), min_zoom=17,
+    17, "USDA NAIP via USGS The National Map; Map services and data available from U.S. Geological Survey, National Geospatial Program (public domain)", probe_zooms=(10, 12), min_zoom=17,
     export=2, lazy=True, probe_source="usgs")
 # The same NAIP from USDA's own service: newer flights (2024-25, some states 0.3 m) and 2-5x faster
 # (1.6-4 s per 1024² in-game 2026-10-13 vs ~10 s), but blank in places (Maryland, Denver: black, so
@@ -174,18 +192,76 @@ BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # t
 import bcortho as bcorthomod  # noqa: E402
 import imagery_regional
 import tilepack as tilepackmod  # noqa: E402
+import aerialpacks as aerialpacksmod  # noqa: E402
 # The project's own tile host (cdn.py: its switch puts this in the chain): Sentinel-2 photos of the whole land, ESA
 # WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
 # (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
 CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
+# Its finest zoom: 12 (JPEG packs) until the switch file raises it (cdn.chain: "max_zoom" 13, the WebP packs of 2026-11-11,
+# once the whole land is built); kept in the environment so the block workers (spawned) read the same
+S2_MAX_ZOOM_ENV = "BNGE_S2_MAX_ZOOM"
+S2_MAX_LAT_ENV = "BNGE_S2_MAX_LAT"      # ... and its per-zoom latitude limits ("14:50")
+S2_ZOOMS = (12, 14)                     # (the zooms a switch may set: built ones only)
+
+
+def _s2_max_lat(text):
+    """((zoom, limit), ...) from "14:50,13:80" (S2_MAX_LAT_ENV); () when unset or unreadable."""
+    out = []
+    for part in str(text or "").split(","):
+        try:
+            zs, ls = part.split(":")
+            out.append((int(zs), max(0.0, min(90.0, float(ls)))))
+        except ValueError:
+            continue
+    return tuple(sorted(out))
+
+
+def _s2_zoom(z):
+    try:
+        return max(S2_ZOOMS[0], min(S2_ZOOMS[1], int(z)))
+    except (TypeError, ValueError):
+        return S2_ZOOMS[0]
+
+
 SOURCES["bngs2"] = Source(
-    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", 12,
+    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", _s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)),
     "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
-    pack=3, max_view_zoom=12)
+    pack=3, max_view_zoom=_s2_zoom(os.environ.get(S2_MAX_ZOOM_ENV)), zoom_max_lat=_s2_max_lat(os.environ.get(S2_MAX_LAT_ENV)))
+
+
+def set_s2_max_zoom(z, max_lat=None):
+    """bngs2's finest zoom (its max_zoom and max_view_zoom) from now on, and per zoom the latitude its packs end at
+    (max_lat {zoom: degrees}: the z14 packs were built to 50 degrees), in this process and the ones it spawns later
+    (call before any Imagery is made: an Imagery keeps the Source it was given)."""
+    z = _s2_zoom(z)
+    os.environ[S2_MAX_ZOOM_ENV] = str(z)
+    lim = SOURCES["bngs2"].zoom_max_lat
+    if max_lat is not None:
+        lim = _s2_max_lat(",".join(f"{k}:{v}" for k, v in dict(max_lat).items()))
+        os.environ[S2_MAX_LAT_ENV] = ",".join(f"{k}:{v}" for k, v in lim)
+    if SOURCES["bngs2"].max_zoom != z or SOURCES["bngs2"].zoom_max_lat != lim:
+        SOURCES["bngs2"] = dc_replace(SOURCES["bngs2"], max_zoom=z, max_view_zoom=z, zoom_max_lat=lim)
+    return SOURCES["bngs2"]
+# The 1 m aerial packs (aerialpacks.py, tools/build_aerial_packs.py; the user, 2026-11-13: prebaked for metro areas and
+# main road corridors, built on demand elsewhere): AVIF 4:4:4 tiles of zooms 14-17 from openly licensed photos (NAIP,
+# the open European agencies) in packs of 8 x 8, where the coverage files list them. cdn.chain puts it first in the
+# chain when the switch file turns it on and this build's Pillow decodes AVIF; one request per ~2 km instead of the live
+# services' exports (1.6-10 s each) and USGS / EOX's tiles for the nearer far rings.
+AERIAL_BASE = os.environ.get("BNGE_AERIAL_BASE", CDN_BASE + "/aerial/v1").rstrip("/")
+SOURCES["bngaer"] = Source(
+    "bngaer", AERIAL_BASE + "/g{g}/{z}/{px}/{py}.bngp", 17,
+    "BeamNG.Earth aerial packs: USDA NAIP (public domain) and open national orthophotos (SOURCES.md)",
+    min_zoom=14, pack=3, coverage=True)
+_AERIAL_HOST = netfetch.host_of(AERIAL_BASE)
+if _AERIAL_HOST not in netfetch.POLICIES:          # (BNGE_AERIAL_BASE: a test server, the CDN's own policy)
+    netfetch.POLICIES[_AERIAL_HOST] = netfetch.POLICIES[netfetch.host_of(CDN_BASE)]
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
 REGIONAL_XYZ_MIN_ZOOM = 16
+# s an expired "nothing there" answer reused while its host cannot be asked (offline, breaker open) holds what is built
+# on it (lazy_state's expiry): asked again after that
+UNAVAILABLE_RETRY_S = 3600.0
 for _n, (_url, _attr, _bounds, _kind, _leaf) in imagery_regional.REGIONAL.items():
     if _kind == "xyz":          # a tile cache: also on the nearer far rings (REGIONAL_XYZ_MIN_ZOOM+)
         SOURCES[_n] = Source(_n, _url, 17, _attr, probe_zooms=(12,), min_zoom=REGIONAL_XYZ_MIN_ZOOM, bounds=_bounds,
@@ -240,26 +316,40 @@ def tone_lut(strength=1.0, lift=1.0):
     curve stays monotonic for strength <= 3. lift scales the shadow lift alone (de-shadowed
     texels, deshadow.FULL_TONE_LIFT)."""
     x = np.arange(256) / 255.0
-    y = x + strength * (lift * 0.06 * (1 - x) ** 3 - 0.10 * x ** 3)
+    y = x + strength * (lift * 0.06 * dnp.power(1 - x, 3) - 0.10 * dnp.power(x, 3))
     return np.clip(np.rint(y * 255), 0, 255).astype(np.uint8)
+
+
+# The far field's best photos (the user, 2026-11-11: "sharpen with the best source available in the region"): far tiles
+# in sight sized for the lazy sources too (NAIP's z17 in the US, the regional services' in theirs: sharp_zoom), their
+# photos fetched by warm()'s thread after the near list (far_warm), the tile rendered again when they are in
+FAR_LAZY = os.environ.get("BNGE_FAR_LAZY", "1") != "0"
+FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dropped)
+FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
+SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
+SHARP_PROBE_ALL = os.environ.get("BNGE_SHARP_PROBE_ALL") == "1"
+# (Imagery._needed; BNGE_PREFETCH_PAST_REGIONAL=1: on. Off by default: measured 2026-11-11 it made a cold French
+# teleport's IGN requests 2,600-3,100 (from ~2,000-2,400: tiles prefetched at a queued size the build then did not use)
+# and its settled time no shorter in 12 places, with event-loop stalls from the busier fetch threads)
+PREFETCH_STOP_REGIONAL = os.environ.get("BNGE_PREFETCH_PAST_REGIONAL") != "1"
 
 
 def ground_res(lat, z):
     """Web-Mercator ground resolution (m per 256 px tile pixel) at latitude lat and zoom z."""
-    return EARTH_CIRC * math.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
+    return EARTH_CIRC * dmath.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
 
 
 def zoom_for(lat, texel_m, max_zoom=19):
     """Zoom whose ground resolution is closest (in log2) to the texel size."""
-    c = EARTH_CIRC * max(math.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
-    return int(min(max_zoom, max(0, round(math.log2(c / (TILE * texel_m))))))
+    c = EARTH_CIRC * max(dmath.cos(math.radians(min(abs(lat), MAX_LAT))), 1e-6)
+    return int(min(max_zoom, max(0, round(dmath.log2(c / (TILE * texel_m))))))
 
 
 def mercator_px(lat, lon, z):
     """Global pixel coordinates (x right, y down; pixel centres at +0.5) of lat/lon at zoom z."""
     w = TILE * 2 ** z
     x = (np.asarray(lon, np.float64) / 360.0 + 0.5) * w
-    y = (0.5 - np.arcsinh(np.tan(np.radians(lat))) / (2 * np.pi)) * w
+    y = (0.5 - dnp.arcsinh(dnp.tan(np.radians(lat))) / (2 * np.pi)) * w
     return x, y
 
 
@@ -308,6 +398,23 @@ def match_colours(rgb, ref, sigma_px):
     return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
+def zoom_caps(src, lat):
+    """(max_zoom, max_view_zoom) of src at latitude lat: each zoom whose zoom_max_lat limit lat is beyond is dropped
+    (a coarser one stands in, as at a source's own max_zoom)."""
+    mz, mv = src.max_zoom, src.max_view_zoom
+    if src.zoom_max_lat:
+        a = abs(float(lat))
+        lim = dict(src.zoom_max_lat)
+        while mz in lim and a > lim[mz]:
+            mz -= 1
+        if mz != src.max_zoom and mv >= src.max_zoom:
+            mv = mz             # (its finest view zoom follows its finest zoom down, as bngs2's max_view_zoom = max_zoom)
+    # (no limit hit: both as the source says; a finer view than max_zoom still takes its tiles enlarged when its
+    # max_view_zoom allows: capping mv at max_zoom for every source made finer views skip them, 2026-11-13: the far
+    # rings' imagery and terrain came late, the drive test's commit margin fell from +12 m to -44 m)
+    return mz, mv
+
+
 def in_bounds(src, z, x, y):
     """Tile (z, x, y) overlaps src.bounds (True when the source has none)."""
     if not src.bounds:
@@ -315,8 +422,8 @@ def in_bounds(src, z, x, y):
     s, w, n, e = src.bounds
     k = 2 ** z
     lon0, lon1 = x / k * 360 - 180, (x + 1) / k * 360 - 180
-    lat1 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / k))))
-    lat0 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / k))))
+    lat1 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * y / k))))
+    lat0 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (y + 1) / k))))
     return lon1 > w and lon0 < e and lat1 > s and lat0 < n
 
 
@@ -333,8 +440,8 @@ def range_in_bounds(src, z, tx0, tx1, ty0, ty1):
     s, w, n, e = src.bounds
     k = 2 ** z
     lon0, lon1 = tx0 / k * 360 - 180, (tx1 + 1) / k * 360 - 180
-    lat1 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ty0 / k))))
-    lat0 = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty1 + 1) / k))))
+    lat1 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * ty0 / k))))
+    lat0 = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (ty1 + 1) / k))))
     return lon1 > w and lon0 < e and lat1 > s and lat0 < n
 
 
@@ -353,7 +460,7 @@ def lat_lon_bbox(mb):
     tile's Mercator rows (a fraction of a pixel)."""
     x0, y0, x1, y1 = mb
     lon = lambda x: math.degrees(x / R_MERC)                                            # noqa: E731
-    lat = lambda y: math.degrees(2.0 * math.atan(math.exp(y / R_MERC)) - math.pi / 2)  # noqa: E731
+    lat = lambda y: math.degrees(2.0 * dmath.atan(dmath.exp(y / R_MERC)) - math.pi / 2)  # noqa: E731
     return f"{lat(y0):.7f},{lon(x0):.7f},{lat(y1):.7f},{lon(x1):.7f}"
 
 
@@ -502,7 +609,7 @@ class Imagery:
         self.chain = tuple(SOURCES[s] if isinstance(s, str) else s for s in chain)
         self.fetcher = fetcher if fetcher is not None else netfetch.Fetcher()
         self.fetcher.register_chain("imagery", [s.url for s in self.chain])
-        self.pool = ThreadPoolExecutor(min(fetch_workers, FETCH_WORKERS), thread_name_prefix="img-fetch")
+        self.pool = HostPools(min(fetch_workers, FETCH_WORKERS), "img-fetch")
         # urgent(): the player's block's photo, fetched on threads of its own as netfetch "urgent" (ahead of the far
         # field's demand: a teleport's first block waited 37 s behind it with EOX at its budget, GitHub #116)
         self.urgent_pool = ThreadPoolExecutor(URGENT_WORKERS, thread_name_prefix="img-urgent")
@@ -534,8 +641,11 @@ class Imagery:
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
+        self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
+        self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
         self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
@@ -548,6 +658,28 @@ class Imagery:
         if names == list(DEFAULT_CHAIN) and not extra:
             return ATTRIBUTION
         return "Imagery: " + "; ".join(s.attribution for s in list(self.chain) + extra)
+
+    def aerial(self):
+        """The process's coverage of the 1 m aerial packs (aerialpacks.Coverage; their files kept under this cache): the
+        chain's coverage source's base (its url up to /g{g}/)."""
+        src = next((s for s in self.chain if s.coverage), SOURCES["bngaer"])
+        return aerialpacksmod.coverage(self.fetcher, src.url.split("/g{g}/", 1)[0],
+                                       os.path.join(self.cache_dir, src.name, "_cov"))
+
+    def _pack_covers(self, z, x, y, wait=0.0):
+        """Does a coverage source of the chain hold tile (z, x, y) (its zoom capped at the source's)? Only what is known
+        now unless `wait` (s: a background thread): the lazy sources' exports are not fetched where its packs draw the
+        place."""
+        for src in self.chain:
+            if not src.coverage:
+                continue
+            zz = min(z, src.max_zoom)
+            if zz < src.min_zoom:
+                continue
+            st = self.aerial().tile_state(zz, x >> (z - zz), y >> (z - zz), wait)
+            if st is not None and st[0] == 1:
+                return True
+        return False
 
     def credits_by_area(self):
         """[[attribution, w, s, e, n] or [attribution]] per source in use (a box: the source covers only that
@@ -612,9 +744,7 @@ class Imagery:
         try:
             r = self.fetcher.get(url, kind=kind)
         except netfetch.NotFound:               # outside the source's coverage
-            os.makedirs(os.path.dirname(miss), exist_ok=True)
-            open(miss, "wb").close()            # (re)written: its mtime starts the marker's TTL
-            self.disk.wrote(miss, 0)
+            missindex.record(miss, self.disk)   # (again: its time starts the miss TTL)
             self._count(src.name + ":404")
             return None
         except netfetch.FetchError as e:
@@ -633,9 +763,7 @@ class Imagery:
             f.write(data)
         staging.replace_cached(tmp, path)
         self.disk.wrote(path, len(data))
-        if os.path.exists(miss):                # an expired marker: the source has data there now
-            os.remove(miss)
-            self.disk.forget(miss)
+        missindex.clear(miss, self.disk)        # an expired miss: the source has data there now
         self._count(src.name + ":net")
         return data
 
@@ -652,18 +780,24 @@ class Imagery:
             if data is not None:
                 self._count(src.name + ":disk")
                 return data
-            url = src.url.format(z=pz, px=px, py=py)
+            if src.coverage:                    # (not listed: nothing to ask; its cell asked to be built)
+                st = self.aerial().state(pz, px, py, wait=aerialpacksmod.COV_WAIT_S)
+                if st is None or st[0] != 1:
+                    if st is not None and st[0] == 0:
+                        self.aerial().ask_build(pz, px, py)
+                    self._count(src.name + (":unknown" if st is None else ":uncovered"))
+                    return None
+                url = src.url.format(g=st[1], z=pz, px=px, py=py)
+            else:
+                url = src.url.format(z=pz, px=px, py=py)
             if self.fetcher.miss_alive(miss, url):
                 return None
             kind = getattr(self._local, "kind", "demand")
             try:
                 r = self.fetcher.get(url, kind=kind)
             except netfetch.NotFound:           # no pack there (open sea, outside it): every tile of it a miss
-                for i in range((1 << src.pack) ** 2):
-                    _, mm = self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))
-                    os.makedirs(os.path.dirname(mm), exist_ok=True)
-                    open(mm, "wb").close()
-                    self.disk.wrote(mm, 0)
+                missindex.record([self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))[1]
+                                  for i in range(dnp.sq(1 << src.pack))], self.disk)
                 self._count(src.name + ":404")
                 return None
             except netfetch.FetchError as e:
@@ -680,15 +814,15 @@ class Imagery:
                 self.fetch_ms.append(r.elapsed * 1000)
                 del self.fetch_ms[:-2000]
             out = None
-            for i in range((1 << k) ** 2):
+            misses = []
+            for i in range(dnp.sq(1 << k)):
                 tz, tx, ty = tilepackmod.tile_at(pz, px, py, k, i)
                 tp, mm = self._paths(src, tz, tx, ty)
                 b = tiles.get(i)
-                os.makedirs(os.path.dirname(tp), exist_ok=True)
                 if b is None:
-                    open(mm, "wb").close()
-                    self.disk.wrote(mm, 0)
+                    misses.append(mm)
                     continue
+                os.makedirs(os.path.dirname(tp), exist_ok=True)
                 tmp = f"{tp}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as f:
                     f.write(b)
@@ -696,6 +830,8 @@ class Imagery:
                 self.disk.wrote(tp, len(b))
                 if (tx, ty) == (x, y):
                     out = b
+            if misses:
+                missindex.record(misses, self.disk)
             self._count(src.name + ":net")
             return out
 
@@ -722,9 +858,7 @@ class Imagery:
             try:
                 r = self.fetcher.get(url, kind=kind)
             except netfetch.NotFound:
-                os.makedirs(os.path.dirname(miss), exist_ok=True)
-                open(miss, "wb").close()
-                self.disk.wrote(miss, 0)
+                missindex.record(miss, self.disk)
                 self._count(src.name + ":404")
                 return None
             except netfetch.FetchError as e:
@@ -766,9 +900,7 @@ class Imagery:
             self._count(src.name + (":deferred" if deferred else ":error"))
             raise ImageryError(f"imagery render failed: {src.name} {z}/{x}/{y}: {e}", deferred) from None
         if rgb is None:
-            os.makedirs(os.path.dirname(miss), exist_ok=True)
-            open(miss, "wb").close()
-            self.disk.wrote(miss, 0)
+            missindex.record(miss, self.disk)
             self._count(src.name + ":404")
             return None
         rgb = np.where(ok[..., None], rgb, 0).astype(np.uint8)          # (the export's black: outside the photos)
@@ -778,9 +910,10 @@ class Imagery:
 
     def _split_export(self, src, z, x, y, a):
         """An export parent's image a ((TILE << export)² RGB) written as its children's tiles; tile (x, y)'s bytes, or
-        None when it is outside the data (a miss marker written)."""
+        None when it is outside the data (a miss remembered: missindex)."""
         k = src.export
         out = None
+        misses = []
         for j in range(1 << k):
             for i in range(1 << k):
                 cx, cy = ((x >> k) << k) + i, ((y >> k) << k) + j
@@ -789,10 +922,12 @@ class Imagery:
                 if (child.max(axis=2) <= NODATA_MAX).mean() > NODATA_SHARE or (
                         src.nodata == "white" and (child.min(axis=2) >= NODATA_WHITE_MIN).mean() > NODATA_WHITE_SHARE):
                     # outside the flights (the image is black there): missing, the next source fills it
-                    os.makedirs(os.path.dirname(cmiss), exist_ok=True)
-                    open(cmiss, "wb").close()
-                    self.disk.wrote(cmiss, 0)
+                    misses.append(cmiss)
                     continue
+                if misses and i == j == (1 << k) - 1:
+                    # (the last child goes in last: _warm_done reads it as the whole parent done)
+                    missindex.record(misses, self.disk)
+                    misses = []
                 buf = io.BytesIO()
                 Image.fromarray(child).save(buf, "JPEG", quality=92)
                 b = buf.getvalue()
@@ -804,6 +939,8 @@ class Imagery:
                 self.disk.wrote(cpath, len(b))
                 if (cx, cy) == (x, y):
                     out = b
+        if misses:
+            missindex.record(misses, self.disk)
         return out
 
     def raw(self, src, z, x, y, kind="demand"):
@@ -825,10 +962,12 @@ class Imagery:
         fetches them while driving) are in: a render uses their tiles once they are on disk; one request of an export
         source writes 4 ** export tiles (raw: _download_export). The caller fetches a source's tiles and stops at the
         first that had any."""
+        plat = math.degrees(dmath.atan(dmath.sinh(math.pi * (1 - 2 * (py + 0.5) / 2 ** pz))))
         for src in self.chain:
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, plat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             p = self.fetcher.policy(netfetch.host_of(src.url))
             if z < src.min_zoom:
                 continue
@@ -848,30 +987,79 @@ class Imagery:
                     got = self.tiles([probe], kind="predownload").get(probe)
                     if not self._covered(got):
                         continue
-                elif os.path.exists(self._paths(*probe)[1]):
+                elif missindex.known(self._paths(*probe)[1]):
                     continue
             yield src, keys
+
+    def sharp_zoom(self, lat, lon, reach=None):
+        """The finest zoom the chain's photos hold at (lat, lon): the most of its sources' whose coverage there is known
+        (their probes on hand: NAIP's z17 in the US (lazy: FAR_LAZY, far_warm fetches them), USGS's z16, a regional
+        service's z17; EOX's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
+        per ~5 km square once known (farpvs.UP_ON: a far tile is never made finer than this). reach: the finest zoom
+        the caller's texture can come to (a far tile at farpvs.UP_PX_MAX): a source that only draws finer zooms (a
+        regional tile cache's REGIONAL_XYZ_MIN_ZOOM) can never draw it, its coverage there is not probed (its box
+        stands in: the same answer where it covers; outside its data but in its box a texture there may come out larger,
+        its photos the next source's enlarged; 142-154 of IGN's z12 probes a cold French teleport were for tiles out to
+        300 km, ~6 % of its requests). BNGE_SHARP_PROBE_ALL=1: probed as before."""
+        if reach is not None and SHARP_PROBE_ALL:
+            reach = None
+        k = (round(lat * 20), round(lon * 20)) if reach is None else (round(lat * 20), round(lon * 20), int(reach))
+        got = self._sharp.get(k)
+        if got is not None:
+            return got
+        best, unknown = None, False
+        with self._lock:
+            for src in self.chain:
+                if src.lazy and not FAR_LAZY:
+                    continue
+                z = min(zoom_caps(src, lat))
+                if z < src.min_zoom or (best is not None and z <= best):
+                    continue
+                if reach is not None and src.min_zoom > reach and src.bounds:
+                    bs, bw, bn, be = src.bounds
+                    if bs <= lat <= bn and bw <= lon <= be:
+                        best = z
+                    continue
+                n = 2 ** z
+                x = int((lon / 360.0 + 0.5) * n) % n
+                y = int(min(n - 1, max(0, (0.5 - dmath.asinh(dmath.tan(math.radians(lat))) / (2 * math.pi)) * n)))
+                st = self._probe_status((src, z, x, y))
+                if st == "covered":
+                    best = z
+                elif st == "unknown":
+                    unknown = True
+        z = best if best is not None else SHARP_FALLBACK_ZOOM
+        if not unknown:
+            if len(self._sharp) > 20000:
+                self._sharp.clear()
+            self._sharp[k] = z
+        return z
 
     def on_disk(self, key):
         """A source tile's file is there (no read)."""
         return self._on_disk(key)
 
     def on_disk_or_missing(self, key):
-        """A source tile is on disk or known to be missing there (its .404 marker)."""
+        """A source tile is on disk or known to be missing there (a remembered 404: missindex)."""
         jpg, miss = self._paths(*key)
-        return os.path.exists(jpg) or os.path.exists(miss)
+        return os.path.exists(jpg) or missindex.known(miss)
 
     def _on_disk(self, key):
         src, z, x, y = key
         return os.path.exists(self._paths(src, z, x, y)[0])
 
-    def _load_kind(self, key, kind):
-        """_load(key) in a pool thread, its requests made as `kind` (subclasses override _load(key))."""
+    def _load_kind(self, key, kind, why=None):
+        """_load(key) in a pool thread, its requests made as `kind` (subclasses override _load(key)); why: the
+        submitter's frames (netfetch.NETLOG_STACK, debugging)."""
         self._local.kind = kind
+        if why is not None:
+            netfetch._why.tag = why
         try:
             return self._load(key)
         finally:
             self._local.kind = "demand"
+            if why is not None:
+                netfetch._why.tag = None
 
     def _load(self, key):
         """Decoded tile (Tile), or None if the source has none there."""
@@ -905,16 +1093,63 @@ class Imagery:
     def _covered(probe):
         return probe is not None and not probe.uniform
 
-    def _probe_status(self, key):
-        """'covered' / 'outside' / 'unknown' from the key's coverage probes, coarsest first;
-        starts the fetch of the first unknown one. Caller holds the lock."""
+    def _miss_until(self, key):
+        """(unix s) when the remembered "nothing there" of a tile kept in memory as None ends: its miss marker's time
+        plus its host's miss_ttl; None when it never ends (no TTL) or nothing on disk says when (kept as before)."""
         src, z, x, y = key
-        if not in_bounds(*key):
-            return "outside"                # (never ask a source about a place outside its area)
+        t = missindex.when(self._paths(src, z, x, y)[1])
+        if t is None:
+            return None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        return None if ttl is None else t + ttl
+
+    def _lru_fresh(self, key):
+        """Is key's memory copy usable (caller holds the lock)? A None (a 404) is not once its miss has expired and
+        its host can be asked again: dropped, so the next look fetches it afresh (a probe's "outside" was kept in
+        memory for the process's life, and recovered coverage never seen: review of 6cbcfd2b)."""
+        if key not in self._lru:
+            return False
+        if self._lru[key] is not None:
+            return True
+        src, z, x, y = key
+        until = self._miss_until(key)
+        if until is None or self.fetcher.wall() < until or \
+                self.fetcher.miss_alive(self._paths(src, z, x, y)[1], src.url):
+            return True
+        del self._lru[key]
+        return False
+
+    def _probe_until(self, key):
+        """(unix s, or None: never) when the coverage probe that says key's source holds nothing there may say
+        otherwise: the expiry of its remembered 404 (_miss_until), or its tile's host cache_ttl from now for a blank
+        probe tile (data: None when the host's tiles are kept for good). Caller holds the lock."""
+        src, z, x, y = key
+        if src.coverage or not in_bounds(*key):
+            return None
         psrc = SOURCES[src.probe_source] if src.probe_source else src
         for pz in sorted(p for p in src.probe_zooms if p < z):
             p = (psrc, pz, x >> (z - pz), y >> (z - pz))
-            if p not in self._lru:
+            if p in self._lru and not self._covered(self._lru[p]):
+                if self._lru[p] is None:
+                    return self._miss_until(p)
+                ttl = self.fetcher.policy(netfetch.host_of(psrc.url)).cache_ttl
+                return None if ttl is None else self.fetcher.wall() + ttl
+        return None
+
+    def _probe_status(self, key):
+        """'covered' / 'outside' / 'unknown' from the key's coverage probes, coarsest first;
+        starts the fetch of the first unknown one (or of one whose remembered 404 has expired: _lru_fresh). Caller
+        holds the lock."""
+        src, z, x, y = key
+        if not in_bounds(*key):
+            return "outside"                # (never ask a source about a place outside its area)
+        if src.coverage:                    # (its coverage file: fetched in the background while unknown)
+            st = self.aerial().tile_state(z, x, y) if src.min_zoom <= z <= src.max_zoom else (3, 0)
+            return "unknown" if st is None else "covered" if st[0] == 1 else "outside"
+        psrc = SOURCES[src.probe_source] if src.probe_source else src
+        for pz in sorted(p for p in src.probe_zooms if p < z):
+            p = (psrc, pz, x >> (z - pz), y >> (z - pz))
+            if not self._lru_fresh(p):
                 self._future(p, "prefetch")
                 return "unknown"
             if not self._covered(self._lru[p]):
@@ -928,7 +1163,10 @@ class Imagery:
         fut = self._inflight.get(key)
         if fut is None or fut is stale or (kind == "urgent" and not getattr(fut, "urgent", False)):
             pool = self.urgent_pool if kind == "urgent" else self.pool
-            fut = self._inflight[key] = pool.submit(self._load_kind, key, kind)
+            if isinstance(pool, HostPools):
+                pool = pool.of(netfetch.host_of(key[0].url))
+            why = (f"{kind}:" + netfetch._caller(2)) if netfetch.NETLOG_STACK else None
+            fut = self._inflight[key] = pool.submit(self._load_kind, key, kind, why)
             fut.urgent = kind == "urgent"
             fut.add_done_callback(lambda f: self._finish(key, f))
         return fut
@@ -972,7 +1210,7 @@ class Imagery:
             for k in keys:
                 if probes[k] is not None and not self._covered(known[probes[k]]):
                     out[k] = None           # the source has nothing in this area
-                elif k in self._lru:
+                elif self._lru_fresh(k):
                     self._lru.move_to_end(k)
                     out[k] = self._lru[k]
                 elif not in_bounds(*k):
@@ -1021,38 +1259,51 @@ class Imagery:
                 return pk, d
         return None
 
-    def _needed(self, frame, x0, y0, size, px):
-        """The source tiles render(frame, x0, y0, size, px) may need, source by source in chain order: (k, src,
-        host, [keys]); nothing past the poles, a mosaic over MAX_MOSAIC, or a source's area ending the chain (as
-        render fails over)."""
-        t = size / px
-        c = np.array([0.0, 0.5, 1.0]) * size
-        E, N = np.meshgrid(x0 + c, y0 + c)
-        lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+    def _needed(self, frame, x0, y0, size, px, gutter=False):
+        """The source tiles render(frame, x0, y0, size, px, gutter=gutter) may need, source by source in chain order:
+        (k, src, host, [keys]); nothing past the poles, a mosaic over MAX_MOSAIC, or a source's area ending the chain (as
+        render fails over). With `gutter` (a far texture: x0, y0, size its gutter_square) only the footprint's own tiles
+        (render takes the gutter's from what is on hand)."""
+        where = self.square(frame, x0, y0, size, px, gutter)
+        cells = min(MESH_CELLS, px)
+        cw = px // cells
+        if netfetch.NETLOG_STACK:
+            netfetch._why.ctx = f"{where.size / px:.2f}m{px}px"
+        lat, lon = where.grid(cells)
         if np.abs(lat).max() > MAX_LAT:
             return
-        zw = zoom_for(float(lat[1, 1]), t)
+        g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)
+        zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
+        clat = float(lat[cells // 2, cells // 2])
         for k, src in enumerate(self.chain):
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, clat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
                 continue
             n = 2 ** z
-            fx, fy = mercator_px(lat.ravel(), lon.ravel(), z)
-            fx = fx - n * TILE * np.round((fx - fx[0]) / (n * TILE))
-            tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
-            ty0, ty1 = max(0, int(math.floor(fy.min() - 1)) // TILE), min(n - 1, int(math.floor(fy.max() + 1)) // TILE)
-            if (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_MOSAIC:
+            fx, fy = mercator_px(lat, lon, z)
+            fx = fx - n * TILE * np.round((fx - fx[0, 0]) / (n * TILE))
+            m = self._mosaic_keys(src, z, fx, fy)
+            if m is None:
                 return
-            if not range_in_bounds(src, z, tx0, tx1, ty0, ty1):
-                # outside the source's area: never asked, and the prefetch ends here as it did when this
-                # source's coverage probe was fetched first (2026-10-15: carrying on to the base sources made
-                # the integration drive's far field 1729 coverage holes; tonight's game measurements all ran
-                # with this behaviour; render fetches what is missing on demand)
-                return
-            yield k, src, netfetch.host_of(src.url), [(src, z, tx % n, ty) for ty in range(ty0, ty1 + 1)
-                                                       for tx in range(tx0, tx1 + 1)]
+            tx0, ty0, nx, ny, keys = m
+            if not range_in_bounds(src, z, tx0, tx0 + nx - 1, ty0, ty0 + ny - 1):
+                # outside the source's area: never asked, and the next source is the one render draws from (it skips
+                # this one too). It ended the prefetch here (2026-10-15: carrying on to the base sources made the
+                # integration drive's far field 1729 coverage holes), but with the regional tile caches first in
+                # the chain (Connecticut's from z16) that ended every prefetch of a z16+ texture outside them: not one
+                # of a cold French teleport's ~2,300 IGN tiles was prefetched, every far render fetched its own
+                # while it waited (2026-11-11). It still ends here unless BNGE_PREFETCH_PAST_REGIONAL=1 (see
+                # PREFETCH_STOP_REGIONAL)
+                if PREFETCH_STOP_REGIONAL:
+                    return
+                continue
+            if g:
+                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                keys = {t: kk for t, kk in keys.items() if cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1}
+            yield k, src, netfetch.host_of(src.url), list(keys.values())
 
     def _missing(self, k, key):
         """Is key's tile known to be missing (404, or uniform where a later source can fill it)? None: not known."""
@@ -1061,7 +1312,7 @@ class Imagery:
         a = self._lru[key]
         return a is None or (k < len(self.chain) - 1 and a.uniform)
 
-    def prefetch(self, frame, x0, y0, size, px, soon=False):
+    def prefetch(self, frame, x0, y0, size, px, soon=False, gutter=False):
         """Start fetching the source tiles render(frame, x0, y0, size, px) will need, without
         waiting: the first source of the chain, or the next one where every tile of the
         previous source is already known to be missing (an unknown coverage probe is fetched
@@ -1071,7 +1322,7 @@ class Imagery:
         moments, not a guess: a host that takes no prefetch now still gets them, as demand (with a host past 80 %
         of its daily budget the far field fetched only its 2 tiles in flight at a time: a Deck's took 231 s, GitHub
         #116)."""
-        for k, src, host, keys in self._needed(frame, x0, y0, size, px):
+        for k, src, host, keys in self._needed(frame, x0, y0, size, px, gutter):
             if not self.fetcher.available(host):
                 continue                    # circuit open: render fails over to the next source, warm that
             # --colormatch: their regions' seams, in the background (not under the lock: it may read a
@@ -1132,13 +1383,13 @@ class Imagery:
             self._later[bid] = True
         return (IMG_PENDING, bid)
 
-    def fetch_later(self, frame, x0, y0, size, px):
+    def fetch_later(self, frame, x0, y0, size, px, gutter=False):
         """The tiles a quick render of render(frame, x0, y0, size, px) leaves out (the sources before the chain's
         last, not on disk; not the lazy ones, warm() fetches those) downloaded in the background, together:
         [(IMG_PENDING, batch id)] for the texture's pending set (its live re-render once done: earthd far_retex), or
         [] when nothing is missing."""
         missing = []
-        for k, src, host, keys in self._needed(frame, x0, y0, size, px):
+        for k, src, host, keys in self._needed(frame, x0, y0, size, px, gutter):
             if k >= len(self.chain) - 1 or src.lazy:
                 continue
             missing += [key for key in keys if in_bounds(*key) and not self._on_disk(key)]
@@ -1169,13 +1420,13 @@ class Imagery:
         self._later_pool.submit(run)
         return [token]
 
-    def fetch_needed(self, frame, x0, y0, size, px, last_only=False):
+    def fetch_needed(self, frame, x0, y0, size, px, last_only=False, gutter=False):
         """Fetch (on demand, waiting) the source tiles render(frame, x0, y0, size, px) needs: the first source of the
         chain, the next where every tile of the previous is missing. For a far-tile worker that met a tile not on
         disk (its prefetch was dropped: a host at its budget, GitHub #116, or a fast drive): the tiles come here,
         the render goes back to the worker processes (one main-process render held the far field on a Deck).
         True when the tiles are there (or known to be missing); False on a fetch error."""
-        for k, src, host, keys in self._needed(frame, x0, y0, size, px):
+        for k, src, host, keys in self._needed(frame, x0, y0, size, px, gutter):
             if not self.fetcher.available(host) or (last_only and k < len(self.chain) - 1):
                 continue
             try:
@@ -1209,6 +1460,7 @@ class Imagery:
         `radius` m of the points (lat, lon arrays, in order: nearest first along a path), each once. Pure on the
         chain (warm; the route download, Connection.route_download)."""
         lazy = [s for s in self.chain if s.lazy]
+        cov = any(s.coverage for s in self.chain)
         lat, lon = np.atleast_1d(np.asarray(lat, float)), np.atleast_1d(np.asarray(lon, float))
         if not lazy or not len(lat) or np.abs(lat).max() > MAX_LAT:
             return []
@@ -1232,14 +1484,150 @@ class Imagery:
                 for ty in range(int((fy[0] - r_px) // TILE), int((fy[0] + r_px) // TILE) + 1):
                     for tx in range(int((fx[0] - r_px) // TILE), int((fx[0] + r_px) // TILE) + 1):
                         key = (src, z, (tx >> k) << k, (ty >> k) << k)   # one child per parent
-                        if key not in seen and in_bounds(*key):
+                        if key not in seen and in_bounds(*key) and not (cov and self._pack_covers(*key[1:])):
                             seen.add(key)
                             want.append(key)
         return want
 
+    def _lazy_children(self, frame, x0, y0, size, px):
+        """[(src, z, [(tx, ty), ...])] in chain order: each lazy source's tiles a render(frame, x0, y0, size, px) would
+        read (its own zoom range and bounds; the render's footprint and its one-texel margin)."""
+        lazy = [s for s in self.chain if s.lazy]
+        if not lazy:
+            return []
+        c = np.array([0.0, 0.5, 1.0]) * size
+        E, N = np.meshgrid(x0 + c, y0 + c)
+        lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
+        if np.abs(lat).max() > MAX_LAT:
+            return []
+        zw = zoom_for(float(lat[1, 1]), size / px)
+        out = []
+        for src in lazy:
+            if zw > src.max_view_zoom:
+                continue
+            z = min(zw, src.max_zoom)
+            if z < src.min_zoom:
+                continue
+            if src.bounds:
+                bs, bw, bn, be = src.bounds
+                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                    continue
+            fx, fy = mercator_px(lat.ravel(), lon.ravel(), z)
+            ty0, ty1 = int(math.floor(fy.min() - 1)) // TILE, int(math.floor(fy.max() + 1)) // TILE
+            tx0, tx1 = int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE
+            kids = [(tx, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1) if in_bounds(src, z, tx, ty)]
+            out.append((src, z, kids))
+        return out
+
+    def _child_state(self, src, z, tx, ty):
+        """One lazy source tile, as a render would read it: ("data", None) on disk; ("none", expiry) known to hold
+        nothing: a miss within its host's miss_ttl (expiry: when it ends; None: a host whose misses never do), an
+        expired one while the host cannot be asked (offline, its breaker open: expiry UNAVAILABLE_RETRY_S from now,
+        asked again then), a coverage probe's "outside" (expiry: that probe's own, _probe_until; an expired one is
+        fetched again and the tile undecided meanwhile);
+        ("todo", None) neither (never fetched, evicted by the cache cap, or a miss that expired: asked again). Every
+        "none" but the never-expiring kind carries its expiry, so what is built on it is kept only that long
+        (buildings.roof_photo_final: the photo of a later source too)."""
+        path, miss = self._paths(src, z, tx, ty)
+        if os.path.exists(path):
+            return "data", None
+        ttl = self.fetcher.policy(netfetch.host_of(src.url)).miss_ttl
+        now = self.fetcher.wall()
+        t = missindex.when(miss)
+        if t is not None:
+            if ttl is None:
+                return "none", None
+            if now - t < ttl:
+                return "none", t + ttl
+            if self.fetcher.miss_alive(miss, src.url):      # (expired, but the host cannot be asked now)
+                return "none", now + UNAVAILABLE_RETRY_S
+        with self._lock:
+            if self._probe_status((src, z, tx, ty)) == "outside":
+                return "none", self._probe_until((src, z, tx, ty))
+        return "todo", None
+
+    def lazy_state(self, frame, x0, y0, size, px):
+        """(resolved, expiry, todo) of the lazy tiles a render(frame, x0, y0, size, px) would read: resolved when each
+        is decided (on disk, or every lazy source that could fill it known to hold nothing there), decided per tile, not
+        by an export parent's last child (an export mixes tiles with data and nodata ones, and the cache cap evicts
+        tiles one by one); expiry: the earliest time (unix s) one of the deciding "nothing there" answers expires, None
+        when none does; todo: [(src, z, tx, ty)] the tiles still to fetch (a later source's only where no earlier
+        one has data)."""
+        covered, waiting = set(), set()     # (a later source's tile only once the earlier ones hold nothing there)
+        expiry, todo = None, []
+        for src, z, kids in self._lazy_children(frame, x0, y0, size, px):
+            for tx, ty in kids:
+                if (z, tx, ty) in covered or (z, tx, ty) in waiting:
+                    continue
+                st, until = self._child_state(src, z, tx, ty)
+                if st == "data":
+                    covered.add((z, tx, ty))
+                elif st == "todo":
+                    todo.append((src, z, tx, ty))
+                    waiting.add((z, tx, ty))
+                elif until is not None:
+                    expiry = until if expiry is None else min(expiry, until)
+        return not todo, expiry, todo
+
+    def fetch_lazy(self, frame, x0, y0, size, px):
+        """Fetch now, in the calling thread, the lazy sources' tiles a render(frame, x0, y0, size, px) would read that
+        are not decided yet (lazy_state: per tile, an expired miss asked again), as demand requests (netfetch "urgent"
+        within urgent()), source by source in chain order (a later one only where no earlier one has data): a render
+        that must not skip them (render reads a lazy tile only from disk; warm() fetches the ones round the player).
+        The roofs' photo (buildings.roof_photo_final): a road tile read Maryland's md6in only where the ground photo's
+        warm had fetched it first (2026-11-13). One request per export parent; the hosts' limits are the server's
+        processes' together (netfetch.SharedGate). The number fetched; raises ImageryError (a fetch failed)."""
+        kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        old = getattr(self._local, "kind", None)
+        self._local.kind = kind
+        n, asked = 0, set()
+        try:
+            for _ in range(len(self.chain) + 1):        # (each pass fetches one source's missing parents at most)
+                _ok, _exp, todo = self.lazy_state(frame, x0, y0, size, px)
+                todo = [k for k in todo if (k[0].name, k[1], k[2] >> k[0].export, k[3] >> k[0].export) not in asked]
+                if not todo:
+                    break
+                src = todo[0][0]
+                for s_, z, tx, ty in todo:
+                    if s_ is not src:
+                        continue
+                    parent = (src.name, z, tx >> src.export, ty >> src.export)
+                    if parent in asked:
+                        continue
+                    asked.add(parent)
+                    self._download(src, z, tx, ty)      # (the parent's every tile written: data, or a miss)
+                    self._count(src.name + ":photo")
+                    n += 1
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return n
+
     def key_done(self, key):
         """Nothing (more) to fetch for a route_keys key (_warm_done, under the lock it needs)."""
         return self._warm_done(key)
+
+    def lazy_tile_state(self, key):
+        """A lazy source's tile (src, z, x, y) as a render would read it (_child_state): ("data", None) on disk,
+        ("none", until) known to hold nothing there (until: unix s when that answer ends, None never), ("todo", None)
+        not decided (never fetched, evicted, an expired miss)."""
+        return self._child_state(*key)
+
+    def fetch_lazy_tile(self, key):
+        """A lazy source's undecided tile (lazy_tile_state "todo") fetched now in the calling thread, as a demand
+        request (its export parent in one request: the parent's every tile written, data or a miss): the world map's
+        and the car screens' tiles (maptiles.MapTiles.tile), which tiles() alone passes on to the next source while
+        warm() has not fetched them yet. False: decided already, nothing fetched; raises ImageryError."""
+        src, z, x, y = key
+        if not src.lazy or self.lazy_tile_state(key)[0] != "todo":
+            return False
+        old = getattr(self._local, "kind", None)
+        self._local.kind = "urgent" if getattr(self._caller, "urgent", False) else "demand"
+        try:
+            self._download(src, z, x, y)
+            self._count(src.name + ":map")
+        finally:
+            self._local.kind = old if old is not None else "demand"
+        return True
 
     def fetch_key(self, key):
         """Fetch one route_keys key now in the calling thread at "prefetch" priority (the route download's thread).
@@ -1257,6 +1645,83 @@ class Imagery:
         finally:
             self._local.kind = old if old is not None else "demand"
         return True
+
+    def far_warm(self, tag, priority, frame, x0, y0, size, px, done):
+        """Fetch the lazy sources' photos a far tile's texture (the square x0, y0, size of frame at px: the best
+        source in the region, the user, 2026-11-11: "sharpen with the best source available in the region") would use,
+        after warm()'s near list (its tiles first), the lowest priority first; done() (on the warm thread) once they
+        are on disk or known missing, when any was fetched. A tag already queued: its square and priority updated."""
+        if not FAR_LAZY or not any(src.lazy for src in self.chain):
+            return
+        with self._warm_cv:
+            self._far_warm[tag] = (priority, frame, x0, y0, size, px, done)
+            if len(self._far_warm) > FAR_WARM_MAX:      # (the farthest dropped)
+                for t in sorted(self._far_warm, key=lambda t: self._far_warm[t][0])[FAR_WARM_MAX:]:
+                    del self._far_warm[t]
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
+                self._warm_thread.start()
+            self._warm_cv.notify()
+
+    def lazy_keys(self, frame, x0, y0, size, px):
+        """The lazy sources' keys (src, z, x, y: one per exported parent, route_keys') a render of the square x0, y0,
+        size of frame at px would use (their own zoom range, bounds), in chain order."""
+        lazy = [s_ for s_ in self.chain if s_.lazy]
+        if not lazy:
+            return []
+        cov = any(s_.coverage for s_ in self.chain)
+        xs = np.array([x0, x0 + size, x0, x0 + size], float)
+        ys = np.array([y0, y0, y0 + size, y0 + size], float)
+        lat, lon, _ = frame.enu_to_geodetic(xs, ys, np.zeros(4))
+        if np.abs(lat).max() > MAX_LAT:
+            return []
+        zw = zoom_for(float(np.mean(lat)), size / px)
+        want = []
+        for src in lazy:
+            if zw > src.max_view_zoom:
+                continue
+            z = min(zw, src.max_zoom)
+            if z < src.min_zoom:
+                continue
+            if src.bounds:
+                bs, bw, bn, be = src.bounds
+                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                    continue
+            k = src.export
+            fx, fy = mercator_px(lat, lon, z)
+            for ty in range(int(fy.min() // TILE) >> k << k, int(fy.max() // TILE) + 1, 1 << k):
+                for tx in range(int(fx.min() // TILE) >> k << k, int(fx.max() // TILE) + 1, 1 << k):
+                    key = (src, z, tx, ty)
+                    if in_bounds(*key) and not (cov and self._pack_covers(z, tx, ty)):
+                        want.append(key)
+        return want
+
+    def _far_next(self):
+        """warm()'s thread with its near list done: the next lazy key of the far queue's first tile (nearest), or
+        None; a tile with nothing (more) to fetch leaves the queue (its callback when any was fetched)."""
+        while True:
+            with self._warm_cv:
+                if not self._far_warm:
+                    return None
+                tag = min(self._far_warm, key=lambda t: self._far_warm[t][0])
+                item = self._far_warm[tag]
+            prio, frame, x0, y0, size, px, done = item
+            got = self._far_keys.get(tag)
+            if got is None or got[0] is not item:
+                got = self._far_keys[tag] = (item, self.lazy_keys(frame, x0, y0, size, px),
+                                             got[2] if got is not None else [False])
+            for k in got[1]:
+                if not self._warm_done(k):
+                    return tag, k
+            with self._warm_cv:
+                if self._far_warm.get(tag) is item:
+                    del self._far_warm[tag]
+            self._far_keys.pop(tag, None)
+            if got[2][0]:
+                try:
+                    done()
+                except Exception:
+                    log.exception("far warm %s done", tag)
 
     def _warm_loop(self):
         self._local.kind = "prefetch"
@@ -1278,19 +1743,38 @@ class Imagery:
                     continue
                 key = k
                 break
+            far = None
+            if key is None:
+                far = self._far_next()      # (the near list done: the far tiles' best photos, nearest first)
+                if far is not None:
+                    key = far[1]
             if key is None:
                 with self._warm_cv:
-                    if self._warm_want is want:
+                    if self._warm_want is want and not self._far_warm:
                         self._warm_cv.wait()
                 continue
             src, z, x, y = key
             last = (1 << src.export) - 1
+            if any(s_.coverage for s_ in self.chain) and self._pack_covers(z, x, y, wait=aerialpacksmod.COV_WAIT_S):
+                with self._warm_cv:         # (the aerial packs draw it: its coverage came in after warm() listed it)
+                    done.add(key)
+                continue
+            share = getattr(self.fetcher, "budget_share", None)
+            if far is not None and share is not None and share(src.url) >= FAR_BUDGET_SHARE:
+                got = self._far_keys.get(far[0])      # (the rest of today's budget for the photos round the car)
+                if got is not None and key in got[1]:
+                    got[1].remove(key)
+                continue
             try:
                 # the child _warm_done looks for: with only some children on disk (the cache cap evicted the
                 # others) the first one was a disk hit, the key never done, and this thread read it in a loop
                 # (170 s of the server process's CPU in a 4-minute drive, 2026-10-20)
                 self._download(src, z, x | last, y | last)
-                self._count(src.name + ":warm")
+                self._count(src.name + (":far" if far else ":warm"))
+                if far is not None:
+                    got = self._far_keys.get(far[0])
+                    if got is not None:
+                        got[2][0] = True
             except ImageryError as e:       # the host takes no prefetch now / failed: later
                 with self._warm_cv:
                     self._warm_cv.wait(5.0 if e.deferred else 30.0)
@@ -1299,6 +1783,10 @@ class Imagery:
                 log.exception("imagery warm %s", key[1:])
             with self._warm_cv:             # fetched (or no use asking again): never the same key in a loop
                 done.add(key)
+            if far is not None and not self._warm_done(key):    # (a failed one: not again for this tile)
+                got = self._far_keys.get(far[0])
+                if got is not None:
+                    got[1].remove(key)
 
     def _warm_done(self, key):
         """Nothing (more) to fetch for key's parent: it was fetched (its last child, the one written last, is
@@ -1313,7 +1801,7 @@ class Imagery:
             if s.lazy and s.export == src.export and os.path.exists(self._paths(s, z, x | last, y | last)[0]):
                 return True
         path, miss = self._paths(src, z, x | last, y | last)
-        if os.path.exists(path) or os.path.exists(miss):
+        if os.path.exists(path) or missindex.known(miss):
             return True
         with self._lock:
             return self._probe_status(key) == "outside"
@@ -1324,6 +1812,7 @@ class Imagery:
         lazy = [s for s in self.chain if s.lazy]
         if not lazy:
             return True
+        cov = any(s.coverage for s in self.chain)
         c = np.array([0.0, 0.5, 1.0]) * size
         E, N = np.meshgrid(x0 + c, y0 + c)
         lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
@@ -1338,13 +1827,15 @@ class Imagery:
                                                            or lon.max() < s_.bounds[1] or lon.min() > s_.bounds[3])]
         for ty in range(int(math.floor(fy.min() - 1)) // TILE, int(math.floor(fy.max() + 1)) // TILE + 1):
             for tx in range(int(math.floor(fx.min() - 1)) // TILE, int(math.floor(fx.max() + 1)) // TILE + 1):
+                if cov and self._pack_covers(z, tx, ty):
+                    continue                # (the aerial packs draw it: no lazy tile to wait for)
                 for src in lazy:            # the first with data decides; a missing one passes to the next
                     if not in_bounds(src, z, tx, ty):
                         continue
                     path, miss = self._paths(src, z, tx, ty)
                     if os.path.exists(path):
                         break
-                    if os.path.exists(miss):
+                    if missindex.known(miss):
                         continue
                     with self._lock:
                         if self._probe_status((src, z, tx, ty)) == "outside":
@@ -1594,12 +2085,12 @@ class Imagery:
                                   for tx in range(tx0, tx1 + 1)}
 
     @profile_step('Imagery render')
-    def render(self, frame, x0, y0, size, px, pending=None):
+    def render(self, frame, x0, y0, size, px, pending=None, gutter=False):
         """_render(); texels from a lazy source (NAIP) then take their large-scale colour from the rest of
         the chain (match_colours): NAIP's detail, USGS's colours, so the block's photo meets the far tiles
         around it (USGS, colour-matched and de-shadowed) without a seam (in-game 2026-10-13, Annapolis: the
         NAIP block was a darker, greener square, its water much darker)."""
-        return self.render_where(EnuSquare(frame, x0, y0, size), px, pending)
+        return self.render_where(self.square(frame, x0, y0, size, px, gutter), px, pending)
 
     @profile_step('Imagery render')
     def render_merc(self, z, x, y, px, pending=None):
@@ -1607,6 +2098,39 @@ class Imagery:
         g .. px - g on both axes (gutter_uv of its Mercator position), row 0 north (the far field's global tiles,
         farfield.GTile: the same texture for every anchor)."""
         return self.render_where(MercSquare(z, x, y, px), px, pending)
+
+    @staticmethod
+    def square(frame, x0, y0, size, px, gutter=False):
+        """The area render(frame, x0, y0, size, px) draws: an EnuSquare, or with `gutter` (x0, y0, size: a
+        gutter_square) one that knows its gutter; a global far tile's frame (earthd.tile_where: .merc = (z, x, y)) its
+        exact Web-Mercator square (render_merc's)."""
+        if gutter:
+            merc = getattr(frame, "merc", None)
+            if merc is not None:
+                return MercSquare(*merc, px)
+            sq = EnuSquare(frame, x0, y0, size)
+            sq.g = gutter_px(px)
+            return sq
+        return EnuSquare(frame, x0, y0, size)
+
+    def _on_hand(self, key):
+        """A source tile a gutter may take without a request: its finished tile in memory or on disk, or its raw one
+        (memory, disk) where nothing corrects that source (making it finished needs nothing else)."""
+        with self._lock:
+            if key in self._fin:
+                return True
+            t = self._lru.get(key, False)
+        if t is None:
+            return False                    # (known missing)
+        if os.path.exists(self._fin_path(key)):
+            return True
+        if self.finished_only:
+            return False
+        src = key[0]
+        for obj in (self.deshadow, self.colormatch):
+            if obj is not None and getattr(obj, "source", src.name) == src.name:
+                return False
+        return t is not False or self._on_disk(key)
 
     @profile_step('Imagery source assembly')
     def render_where(self, where, px, pending=None):
@@ -1617,8 +2141,13 @@ class Imagery:
             # coarser texels (64x fewer texels to render, blur and stream through memory than at full size)
             small = max(MATCH_MIN_PX, px // MATCH_DOWN)
             try:
-                ref, _ = self._render(where, small, pending, skip_lazy=True)
+                ref, ref_used = self._render(where, small, pending, skip_lazy=True)
             except ImageryError:            # the reference is unreachable: NAIP as served
+                ref, ref_used = None, {}
+            if ref is not None and ref_used.get("none"):
+                # (texels no source of the reference has, FALLBACK_RGB: none to match to. The roofs' photo, md6in
+                # then Virginia's service, blank in Maryland and finer than the reference's zoom: every roof's colour
+                # was pulled to the fallback's grey-brown, Fells Point's mean blue 115 -> 76, 2026-11-13)
                 ref = None
             if ref is not None:
                 rgb = match_colours(rgb, ref, MATCH_SIGMA_M / (where.size / small))
@@ -1660,18 +2189,23 @@ class Imagery:
         changed (their colours then come partly from its S2 references: the data credits name them)."""
         cells = min(MESH_CELLS, px)
         cw = px // cells
+        if netfetch.NETLOG_STACK:
+            netfetch._why.ctx = f"{where.size / px:.2f}m{px}px{type(where).__name__[:4]}"
         lat_raw, lon = where.grid(cells)                         # [row (north first), col]
         lat = np.clip(lat_raw, -89.9, 89.9)
         zw = zoom_for(float(lat[cells // 2, cells // 2]), where.size / px)
         out = np.zeros((px, px, 3), np.uint8)
         filled = np.zeros((px, px), np.uint8)
         used, error, relit, full = {}, None, 0, False
+        g = 0 if GUTTER_FETCH else int(getattr(where, "g", 0) or 0)     # (the gutter: on hand or clamped)
         fast.require(108, "imagery tile_warp")
+        clat = float(lat[cells // 2, cells // 2])
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
-            if zw > src.max_view_zoom:
+            mz, mv = zoom_caps(src, clat)
+            if zw > mv:
                 continue
-            z = min(zw, src.max_zoom)
+            z = min(zw, mz)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
             if src.bounds:                  # a regional source elsewhere: not even its mosaic's keys
@@ -1690,6 +2224,10 @@ class Imagery:
             if m is None:
                 continue
             tx0, ty0, nx, ny, keys = m
+            if g:
+                cx0, cx1, cy0, cy1 = _core_tiles(fx, fy, cells, cw, g, px)
+                keys = {t: kk for t, kk in keys.items()
+                        if (cx0 <= t[0] <= cx1 and cy0 <= t[1] <= cy1) or self._on_hand(kk)}
             if filled.any():
                 # a later source: only the tiles under the texels still unfilled (an all-sea tile of the first is
                 # one colour, "missing", and the whole footprint was fetched again from the next: at Bergen EOX's
@@ -1740,8 +2278,17 @@ class Imagery:
                 relit += int(rh)
                 if cm_any:
                     used["colormatch"] = used.get("colormatch", 0) + int(hits)
-            if full:
+            if full or (g and filled[g:px - g, g:px - g].all()):
                 break
+        gfill = None
+        if g:                               # (the gutter's texels no tile on hand gave: the footprint's edge, below)
+            gfill = filled == 0
+            gfill[g:px - g, g:px - g] = False
+            if gfill.any():
+                filled[gfill] = 1
+                full = bool(filled.all())
+            else:
+                gfill = None
         if not full:
             if error is not None:           # not known to be uncovered: do not bake a fallback
                 raise error
@@ -1757,6 +2304,9 @@ class Imagery:
             used["none"] = int(hole.sum()) - used.get("polar", 0)
             if not used["none"]:
                 del used["none"]
+        if gfill is not None:
+            i, j = np.nonzero(gfill)
+            out[i, j] = out[np.clip(i, g, px - g - 1), np.clip(j, g, px - g - 1)]
         if relit:
             used["deshadow"] = relit
         return out, used
@@ -1767,6 +2317,38 @@ class Imagery:
         if self.colormatch is not None:
             self.colormatch.close()
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+
+class HostPools:
+    """Imagery's fetch threads, a pool of `workers` per photo host: one host's queue never holds another's tiles back.
+    One pool for all of them queued a cold French teleport's ~2,000 IGN tiles (prefetched at its 50/s) ahead of every
+    EOX tile, and their threads waited on IGN's rate: EOX did all its work after IGN's, not beside it (Lille, Caen,
+    Montpellier 2026-11-11: EOX ~5/s for the first 60 s, then 30-50/s). Only with BNGE_IMG_HOST_POOLS=1 (it goes with
+    BNGE_PREFETCH_PAST_REGIONAL): without IGN's prefetch one pool held nothing back, and the threads of several pools
+    (decoding photos under the interpreter lock) stalled the server's event loop for 2 s at times."""
+
+    def __init__(self, workers, prefix):
+        self.workers, self.prefix = workers, prefix
+        self._pools = {}
+        self._lock = threading.Lock()
+        self._one = os.environ.get("BNGE_IMG_HOST_POOLS") != "1"
+
+    def of(self, host):
+        k = "" if self._one else host
+        with self._lock:
+            p = self._pools.get(k)
+            if p is None:
+                p = self._pools[k] = ThreadPoolExecutor(self.workers, thread_name_prefix=self.prefix)
+            return p
+
+    def submit(self, fn, *args, **kw):
+        return self.of("").submit(fn, *args, **kw)
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        with self._lock:
+            pools = list(self._pools.values())
+        for p in pools:
+            p.shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
 class EnuSquare:
@@ -1786,6 +2368,15 @@ class EnuSquare:
         t = self.size / px
         la, _, _ = self.frame.enu_to_geodetic(self.x0 + (j + 0.5) * t, self.y0 + self.size - (i + 0.5) * t, 0.0)
         return la
+
+
+def _core_tiles(fx, fy, cells, cw, g, px):
+    """(tx0, tx1, ty0, ty1): the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as
+    _mosaic_keys) the bilinear taps of a texture's footprint texels (g .. px - g - 1 on both axes) touch, as the warp
+    (earthfast warp_rgba) places them (Rust: earthfast core_tiles)."""
+    fast.require(222, "core_tiles")
+    return fast._ef.core_tiles(np.ascontiguousarray(fx, np.float64), np.ascontiguousarray(fy, np.float64),
+                               int(cells), int(cw), int(g), int(px))
 
 
 def _unfilled_tiles(filled, cells, cw, fx, fy):
@@ -1812,17 +2403,17 @@ class MercSquare:
     (m, at its centre's latitude) over the texels the tile covers, times px."""
 
     def __init__(self, z, x, y, px):
-        g = gutter(px)
+        g = self.g = gutter(px)
         self.z, self.x, self.y = int(z), int(x), int(y)
         self.f0 = -g / (px - 2 * g)                     # the square in tile fractions: [f0, f1]
         self.f1 = 1.0 - self.f0
-        lat_c = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * (y + 0.5) / 2 ** z))))
-        self.size = EARTH_CIRC * math.cos(math.radians(lat_c)) / 2 ** z * (self.f1 - self.f0)
+        lat_c = math.degrees(dmath.atan(dmath.sinh(math.pi * (1.0 - 2.0 * (y + 0.5) / 2 ** z))))
+        self.size = EARTH_CIRC * dmath.cos(math.radians(lat_c)) / 2 ** z * (self.f1 - self.f0)
 
     def _ll(self, fx, fy):
         w = float(2 ** self.z)
         lon = (self.x + fx) / w * 360.0 - 180.0
-        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
+        lat = np.degrees(dnp.arctan(dnp.sinh(np.pi * (1.0 - 2.0 * (self.y + fy) / w))))
         return lat, lon
 
     def grid(self, n):
@@ -1844,6 +2435,9 @@ def gutter(px):
     levels 0 .. log2(g) are seam-free; deeper mips are only used where a texel is far below a
     pixel. 8 texels (3 % per side at 256 px) keeps levels 0-3 clean."""
     return max(1, min(8, px // 32))
+
+
+gutter_px = gutter      # (where a parameter named gutter hides it)
 
 
 def gutter_square(x0, y0, size, px):
@@ -1877,7 +2471,7 @@ def dxt1_size(w, h):
 # grazing angle is drawn from the small levels): averaged in linear light (dark detail does not swallow light
 # detail) and each smaller level sharpened a little (MIP_SHARPEN, a 3 x 3 unsharp mask).
 MIP_SHARPEN = 0.35
-_TO_LIN = ((np.arange(256) / 255.0) ** 2.2).astype(np.float32)
+_TO_LIN = (dnp.power(np.arange(256) / 255.0, 2.2)).astype(np.float32)
 
 
 def mip_arrays(rgb):
@@ -1893,22 +2487,15 @@ def mip_chain(img):
     return [Image.fromarray(a, "RGB") for a in mip_arrays(np.asarray(img.convert("RGB")))]
 
 
-_BC1_GPU_FAILED = False
-
-
 def encode_dds(rgb):
     """DDS bytes of an RGB image (uint8 [h, w, 3], power-of-two sides): DXT1 (BC1, no alpha)
-    with the full mip chain (mip_arrays' levels), in one Rust call (earthfast.dds_levels: the GPU's BC1 encoder when
-    there is one, ~1 block in 1000 differs from the CPU's; a 512 px texture's CPU time 9.3 -> 2.0 ms; the CPU's
-    encoder: endpoints on each block's principal axis, refined, nearest-colour indices)."""
-    global _BC1_GPU_FAILED
+    with the full mip chain (mip_arrays' chain, in integers: within one sRGB step of it), in one Rust call
+    (earthfast.dds_levels, bc1fast.rs: ISPC's BC1 kernels on the CPU, ~10x our own encoder at its quality and
+    faster than the GPU's round trip, which the game's frames paid for on a Steam Deck: no GPU here since 287)."""
     rgb = np.ascontiguousarray(np.asarray(rgb, np.uint8))
     h, w = rgb.shape[:2]
-    fast.require(108, "imagery dds_levels")
-    data, n, err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), not _BC1_GPU_FAILED and bool(fast.gpu()))
-    if err is not None and not _BC1_GPU_FAILED:
-        _BC1_GPU_FAILED = True          # (logged once; the CPU encoder from then on)
-        log.warning("imagery: GPU BC1 encoding failed (%s); the CPU from now on", err)
+    fast.require(287, "imagery dds_levels")
+    data, n, _err = fast._ef.dds_levels(rgb, _TO_LIN, float(MIP_SHARPEN), False)
     assert len(data) == sum(dxt1_size(max(1, w >> k), max(1, h >> k)) for k in range(n)), (rgb.shape, len(data))
     flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_MIPMAPCOUNT | DDSD_LINEARSIZE
     head = (DDS_MAGIC
@@ -1928,6 +2515,24 @@ def write_dds(path, rgb):
         f.write(data)
     staging.replace(tmp, path)
     return len(data)
+
+
+def write_picture_dds(path, png_bytes):
+    """A drawn picture (PNG bytes of any size: a sign's face) to path as a DDS the game takes as it is (write_dds, its sides
+    stretched up to powers of two: the faces are mapped 0-1 over their boards). A PNG in the session folder goes through
+    the engine's texture cooker at run time, and the cooker deadlocked the game for good ("TextureCooker| Texture[] started
+    importing": direction signs at Heide 2026-11-05, the bus and railway stations' boards on cold teleports 2026-11-11).
+    Returns the file size."""
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(bytes(png_bytes))) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        pw, ph = 1 << max(2, (w - 1).bit_length()), 1 << max(2, (h - 1).bit_length())
+        if (pw, ph) != (w, h):
+            im = im.resize((pw, ph), Image.LANCZOS)
+        rgb = np.asarray(im, np.uint8)
+    return write_dds(path, rgb)
 
 
 def read_dds_info(data):

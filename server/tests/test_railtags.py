@@ -80,6 +80,36 @@ class RailTagsTest(unittest.TestCase):
             railtags.RailTags(d, _Fetcher({})).join(f, mapcells.cell_of(float(la), float(lo)))
         self.assertNotIn("osm_railway", f.attrs)
 
+    def test_an_unreachable_shard_of_a_known_build_is_a_fault_and_joined_again(self):
+        """A known build whose shard cannot be had (a failed download): no tags, a revisit fault (what is built on
+        the untagged layer is not kept) and MapData joins again next time; before, the layer was marked joined for
+        that build and plans made without the lane / rail tags were kept as complete (Codex, 2026-11-14). A dataset
+        not published (no manifest) is no fault."""
+        import revisit
+        from mapdata import MapData
+        for cls, sub, cls_name in ((railtags.RailTags, "rail", "standard_gauge"), (railtags.LaneTags, "road", "primary")):
+            f = features([[(0.0, 100.0), (250.0, 100.0)]], [cls_name], subtypes=[sub])
+            f.attrs["src_record"] = np.array(["w21@3"])
+            lo, la = f.lonlat[0]
+            key = mapcells.cell_of(float(la), float(lo))
+            name = "rail" if cls is railtags.RailTags else "lanes"
+            fetch = _Fetcher({f"{name}/manifest.json": json.dumps({"built": "2026-11-14T03:00:00Z"}).encode()})
+            fetch.get = (lambda real: lambda url, *a, **k: (_ for _ in ()).throw(OSError("offline"))
+                         if url.endswith(".json.gz") else real(url, *a, **k))(fetch.get)
+            with tempfile.TemporaryDirectory() as d:
+                tags = cls(d, fetch)
+                with revisit.scope() as b:
+                    self.assertIs(tags.join(f, key), False, cls.__name__)
+                self.assertTrue(b.n, cls.__name__ + ": a fault")
+                md = SimpleNamespace(rail_tags=tags, lane_tags=tags)
+                flag = "_rails_built" if cls is railtags.RailTags else "_lanes_built"
+                with revisit.scope():
+                    (MapData._rails if cls is railtags.RailTags else MapData._lanes)(md, key, "roads", f)
+                self.assertNotIn(flag, f.__dict__, cls.__name__ + ": not marked joined")
+                with revisit.scope() as b2:     # (not published: no manifest, no fault)
+                    self.assertIsNone(cls(d + "/x", _Fetcher({})).join(f, key))
+                self.assertEqual(b2.n, 0, cls.__name__)
+
 
 
 class OutageTest(unittest.TestCase):
@@ -148,6 +178,68 @@ class OutageTest(unittest.TestCase):
             self.assertEqual(sum(u.endswith("/10/20.json.gz") for u in calls), 1)
 
 
+class DataHostTest(unittest.TestCase):
+    """A manifest's "data" (the build's files on the tile host, R2 behind the CDN; the manifest stays on Pages): the
+    shards are read there, Pages when it fails (not when it answers 404), and a manifest without one reads Pages."""
+
+    DATA = "https://tiles.test/data/rail/b1"
+
+    class Site:
+        def __init__(self, manifest, down=(), files=None):
+            self.manifest, self.down, self.calls = manifest, down, []
+            self.files = files if files is not None else {"/1/2.json.gz": gzip.compress(b'{"nodes": []}')}
+
+        def get(self, url, kind="demand", **_kw):
+            self.calls.append(url)
+            if url.endswith("manifest.json"):
+                return SimpleNamespace(body=json.dumps(self.manifest).encode())
+            if any(url.startswith(d) for d in self.down):
+                raise netfetch.FetchFailed(url + ": HTTP 522", url)
+            for k, v in self.files.items():
+                if url.endswith(k):
+                    return SimpleNamespace(body=v)
+            raise netfetch.NotFound(url)
+
+    def test_data_url(self):
+        self.assertEqual(railtags.data_url({"data": self.DATA + "/"}), self.DATA)
+        for bad in ({}, {"data": None}, {"data": "http://tiles.test/x"}, {"data": 5}, {"data": "https://"}, None, []):
+            self.assertIsNone(railtags.data_url(bad), bad)
+
+    def test_shards_from_the_data_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz"])
+            self.assertEqual(s.shard(5, 5), {}, "a 404 there: none")
+            self.assertEqual(site.calls[2:], [f"{self.DATA}/5/5.json.gz"], "not asked of Pages")
+            # (a fresh process: the pinned manifest names the host too)
+            site2 = self.Site({"built": "b1"})
+            s2 = railtags.Shards(d, site2, "rail")
+            self.assertEqual(s2.version(), "b1")
+            self.assertEqual(s2.data, self.DATA)
+            self.assertEqual(site2.calls, [])
+
+    def test_pages_when_the_data_host_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b1", "data": self.DATA}, down=("https://tiles.test",))
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{self.DATA}/1/2.json.gz", f"{s.base}/1/2.json.gz"])
+
+    def test_both_failing_is_not_none_there(self):
+        site = self.Site({}, down=("https://tiles.test",), files={})
+        with self.assertRaises(netfetch.FetchFailed):
+            railtags.fetch_data(site, self.DATA, "https://pages.test/rail", "1/2.json.gz")
+
+    def test_an_old_manifest_reads_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = self.Site({"built": "b0"})
+            s = railtags.Shards(d, site, "rail")
+            self.assertEqual(s.shard(1, 2), {"nodes": []})
+            self.assertEqual(site.calls[1:], [f"{s.base}/1/2.json.gz"])
+
+
 class KnownPinnedTest(unittest.TestCase):
     """Shards.known(): the pinned manifest's build before this run asked for it (the tiles' cache keys the same from
     a run's start: None until the manifest came before, 2026-11-04)."""
@@ -170,6 +262,117 @@ class KnownPinnedTest(unittest.TestCase):
                 self.assertEqual(s2.known(), "2026-11-08T00:00Z")
             finally:
                 railtags.ON = on
+
+    def test_a_pin_another_process_writes_later_is_seen(self):
+        """A process that looked before the manifest was pinned (another process fetched it a few seconds into a
+        first run) takes it once it is there: it kept None in its keys for the whole run before, and that run's plans,
+        cell facts and tiles were never found again (2026-11-13)."""
+        import json
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            on = railtags.ON
+            railtags.ON = True
+            try:
+                s = railtags.Shards(d, None, "rail")
+                self.assertIsNone(s.known())
+                os.makedirs(s.dir)
+                with open(os.path.join(s.dir, "manifest.json"), "w") as fh:
+                    json.dump({"built": "2026-11-12T18:20:31Z"}, fh)
+                with mock.patch.object(railtags, "PIN_RECHECK_S", 0.0):
+                    self.assertEqual(s.known(), "2026-11-12T18:20:31Z")
+            finally:
+                railtags.ON = on
+
+
+def _shard_xy(lat, lon):
+    key = mapcells.cell_of(lat, lon)
+    return key.x >> (key.z - 7), key.y >> (key.z - 7)
+
+
+class StationTagsTest(unittest.TestCase):
+    """The weekly station shards (tools/build_station_tags.py, dataset "stations"; Bauer33333's find on #716): fuel and
+    charging stations with capacity, and the charge points, in a lat/lon box."""
+
+    def fetcher(self, shards, manifest=True):
+        files = {f"/{x}/{y}.json.gz": gzip.compress(json.dumps(s).encode()) for (x, y), s in shards.items()}
+        if manifest:
+            files["stations/manifest.json"] = json.dumps({"built": "2026-11-13T03:00:00Z", "format": 1}).encode()
+        return _Fetcher(files)
+
+    def test_stations_and_points_in_a_box(self):
+        xy = _shard_xy(34.849, -117.085)
+        sh = {"s": [["n2", "ev", -117.0854, 34.8491, "Tesla Supercharger", "Tesla", 8],
+                    ["n1", "fuel", -117.085, 34.849, "Arco", "", None],
+                    ["n9", "fuel", -117.5, 34.9, "Far", "", None]],
+              "p": [[-117.0853, 34.8492], [-117.6, 34.95]]}
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xy: sh}))
+            got = st.stations_in(34.84, -117.09, 34.86, -117.08)
+            self.assertEqual(sorted(r["id"] for r in got), ["n1", "n2"])
+            ev = [r for r in got if r["id"] == "n2"][0]
+            self.assertEqual((ev["kind"], ev["name"], ev["brand"], ev["cap"]), ("ev", "Tesla Supercharger", "Tesla", 8))
+            self.assertAlmostEqual(ev["lat"], 34.8491)
+            self.assertEqual(st.points_in(34.84, -117.09, 34.86, -117.08), [(34.8492, -117.0853)])
+
+    def test_box_over_two_shards(self):
+        a, b = (34.0, -117.0), (34.0, -114.0)           # (~280 km apart: two z7 shards)
+        xa, xb = _shard_xy(*a), _shard_xy(*b)
+        self.assertNotEqual(xa, xb)
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xa: {"s": [["n1", "fuel", a[1], a[0], "", "", None]], "p": []},
+                                                       xb: {"s": [["n2", "fuel", b[1], b[0], "", "", None]], "p": []}}))
+            self.assertEqual(sorted(r["id"] for r in st.stations_in(33.9, -117.1, 34.1, -113.9)), ["n1", "n2"])
+
+    def test_no_shard_there_is_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({}))
+            self.assertEqual(st.stations_in(0.0, 0.0, 0.1, 0.1), [])
+            self.assertEqual(st.points_in(0.0, 0.0, 0.1, 0.1), [])
+
+    def test_unreachable_is_none(self):
+        class Down:
+            def get(self, url, kind="demand", **_kw):
+                raise OSError("offline")
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, Down())
+            self.assertIsNone(st.stations_in(34.84, -117.09, 34.86, -117.08))
+
+    def test_off_reads_nothing(self):
+        f = self.fetcher({})
+        old = railtags.STATIONS_ON
+        railtags.STATIONS_ON = False
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                self.assertIsNone(railtags.StationTags(d, f).stations_in(34.84, -117.09, 34.86, -117.08))
+        finally:
+            railtags.STATIONS_ON = old
+        self.assertEqual(f.asked, [], "off: nothing fetched")
+
+    def test_local_folder(self):
+        xy = _shard_xy(52.519, 13.414)
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, str(xy[0])))
+            with gzip.open(os.path.join(d, str(xy[0]), f"{xy[1]}.json.gz"), "wt", encoding="utf-8") as fh:
+                json.dump({"s": [["n3", "ev", 13.414, 52.519, "", "", 2]], "p": [[13.4141, 52.5191]]}, fh)
+            with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as fh:
+                json.dump({"built": "local test"}, fh)
+            st = railtags.StationTags(None, None, local=d)
+            self.assertEqual([r["cap"] for r in st.stations_in(52.51, 13.40, 52.53, 13.42)], [2])
+
+    def test_shed_lets_go_of_the_shards(self):
+        # Codex on #1111 (2026-11-10): the budget's shedder must let go of the decoded shards, and the per-shard cell
+        # index (by_cell) holds each shard, so it goes too
+        xy = _shard_xy(34.849, -117.085)
+        sh = {"s": [["n1", "fuel", -117.085, 34.849, "Arco", "", None]], "p": [[-117.0853, 34.8492]]}
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xy: sh}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1)
+            self.assertTrue(st.shards and st.by_cell)
+            st.clear_memory()
+            self.assertEqual((st.shards, st.by_cell), ({}, {}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1, "read again when asked")
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -315,6 +518,188 @@ def lane_attrs_equal(a, b):
                                             or any(type(e) is not type(g) for e, g in zip(p, q)) for p, q in zip(u, v)):
                 return False
     return True
+
+
+class RuleTagsTest(unittest.TestCase):
+    """The German road rules (priority_road, zone:maxspeed: the shard's "rules", apart from its "ways") and sign
+    nodes of a lane shard."""
+
+    def _join(self, shard, src_ways=None, lt_out=None, from_side=False):
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 0.0), (5.0, 5.0)]], ["primary", "residential"],
+                     subtypes=["road", "road"])
+        f.attrs["src_record"] = np.array(["w21@3", "w22@1"])
+        if src_ways:
+            f.rules["src_ways"] = mapgeom.rule_table(src_ways)
+        lo, la = (float(v) for v in f.lonlat[0])
+        key = mapcells.cell_of(la, lo)
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        if callable(shard):
+            shard = shard(lo, la)
+        files = {"lanes/manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode()}
+        if shard is not None:               # (None: no shard there, a 404)
+            files[f"lanes/{sx}/{sy}.json.gz"] = gzip.compress(json.dumps(shard).encode())
+        with tempfile.TemporaryDirectory() as d:
+            lt = railtags.LaneTags(d, _Fetcher(files))
+            lt.join(f, key)
+            if from_side:       # (the next process: the shard's decoded form beside it, the shard itself gone)
+                side = glob.glob(os.path.join(d, "pagesdata", "lanes", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+                self.assertEqual(len(side), 1)
+                os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+                for c in railtags.RULE_COLUMNS:
+                    f.attrs.pop(railtags.lane_attr(c))
+                lt = railtags.LaneTags(d, _Fetcher({"lanes/manifest.json": files["lanes/manifest.json"]}))
+                lt.join(f, key)
+            if lt_out is not None:
+                lt_out.append(lt.shard(sx, sy))
+        return f
+
+    def test_rule_tags_join(self):
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]},
+                                              "zone:maxspeed": {"DE:30": [21], "DE:20": [22]}}})
+        self.assertEqual(list(f.attrs["osm_priority_road"]), ["designated", None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), ["DE:30", "DE:20"])
+
+    def test_rules_compact_on_load(self):
+        got = []
+        self._join({"ways": {}, "rules": {"priority_road": {"designated": [21, 9], "end": [25]},
+                                          "zone:maxspeed": {"DE:30": [21, "x", None]}, "junk": [1]}}, lt_out=got)
+        rules = got[0]["rules"]
+        self.assertIsInstance(rules, railtags.Rules)
+        ids, idx, values = rules.keys["priority_road"]
+        self.assertEqual((ids.dtype, ids.tolist(), [values[i] for i in idx]),
+                         (np.dtype(np.int64), [21, 25, 30], ["designated", "end", "designated"]))
+        self.assertEqual(rules.keys["zone:maxspeed"][0].tolist(), [],
+                         "a list with an entry that is not a number dropped whole")
+        self.assertNotIn("junk", rules.keys)
+        self.assertEqual(rules.get_many("priority_road", ["30", "31", None, "25"]), ["designated", None, None, "end"])
+        self.assertEqual(rules.get_many("zone:maxspeed", []), [])
+
+    def test_rules_from_the_side_file(self):
+        got = []
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]}, "zone:maxspeed": {"DE:20": [22]}}},
+                       lt_out=got, from_side=True)
+        self.assertIsInstance(got[0]["rules"], railtags.Rules, "made Rules as from the shard")
+        self.assertEqual(list(f.attrs["osm_priority_road"]), ["designated", None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), [None, "DE:20"])
+
+    def test_rules_delta_coded(self):
+        r = railtags.Rules({"priority_road": {"designated": [100, 5, 125]}})
+        self.assertEqual(r.get_many("priority_road", ["100", "105", "230", "101"]),
+                         ["designated", "designated", "designated", None])
+        r = railtags.Rules({"priority_road": {"designated": [100, "x", 5], "end": [], "yes_unposted": 7,
+                                              "x": [True, 3]}})
+        self.assertEqual(r.get_many("priority_road", ["100", "105", "5", "3"]), [None] * 4)
+        self.assertEqual(r.keys["priority_road"][0].dtype, np.dtype(np.int64))
+
+    def test_sign_nodes_in_the_cell_only(self):
+        f = self._join(lambda lo, la: {"ways": {}, "nodes": [[1, lo, la, {"traffic_sign": "DE:205"}],
+                                                              [2, lo + 0.1, la + 0.1, {"traffic_sign": "DE:206"}]]})
+        got = railtags.sign_nodes(f)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0][2], {"traffic_sign": "DE:205"})
+
+    def test_join_without_a_cell(self):
+        """join(feats, None) (test_roadlanes' mocked shard): the lane tags, and no sign nodes (none to bound)."""
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["primary"], subtypes=["road"])
+        f.attrs["src_record"] = np.array(["w21@3"])
+        lt = railtags.LaneTags.__new__(railtags.LaneTags)
+        lt.of_cell = lambda _key: {"ways": {"21": {"lanes:forward": "2"}}, "rules": {"priority_road": {"end": [21]}},
+                                   "nodes": [[1, 0.0, 0.0, {"traffic_sign": "DE:205"}]]}
+        lt.join(f, None)
+        self.assertEqual(f.attrs["osm_lanes_forward"][0], "2")
+        self.assertEqual(f.attrs["osm_priority_road"][0], "end")
+        self.assertEqual(railtags.sign_nodes(f), [])
+
+    def test_old_shard_without_nodes_or_rules(self):
+        f = self._join({"ways": {"21": {"lanes:forward": "2"}}})
+        self.assertEqual(list(f.attrs["osm_lanes_forward"]), ["2", None], "the lane tags still joined")
+        self.assertEqual(roads.lane_tags(f, 0), {"lanes:forward": "2"})
+        self.assertEqual(list(f.attrs["osm_priority_road"]), [None, None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), [None, None])
+        self.assertEqual(railtags.sign_nodes(f), [])
+
+    def test_rule_only_way_stays_out_of_lane_tags(self):
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]}}}, [(0, "w21@3", [0.0, 1.0])])
+        self.assertIsNone(roads.lane_tags(f, 0))
+        self.assertEqual([t for _a, _b, _w, t in roads.lane_tag_parts(f, 0)], [None])
+        self.assertEqual(f.attrs["osm_priority_road"][0], "designated")
+
+    def test_lane_parts_without_rule_keys(self):
+        f = self._join({"ways": {"21": {"lanes:forward": "2"}},
+                        "rules": {"priority_road": {"designated": [21]}, "zone:maxspeed": {"DE:30": [21]}}},
+                       [(0, "w21@3", [0.0, 1.0])])
+        self.assertEqual(f.attrs[railtags.LANE_PARTS][0], [(0.0, 1.0, "21", {"lanes:forward": "2"})])
+        self.assertEqual(roads.lane_tags(f, 0), {"lanes:forward": "2"})
+        self.assertEqual(f.attrs["osm_priority_road"][0], "designated")
+        self.assertEqual(f.attrs["osm_zone_maxspeed"][0], "DE:30")
+
+    def test_ways_reader_same_with_and_without_rules(self):
+        """What a reader of the shard's "ways" alone gets (the lane columns, LANE_PARTS: what today's server reads
+        and its markings take) is the same with the new "rules" and "nodes" as without; a shard of rules only is
+        read like no shard at all."""
+        ways = {"21": {"lanes:forward": "1", "lanes:backward": "1", "highway": "primary"}}
+        rules = {"priority_road": {"designated": [21, 78]}, "zone:maxspeed": {"DE:30": [22]}}
+        src = [(0, "w21@3", [0.0, 0.5]), (0, "w99@1", [0.5, 1.0]), (1, "w22@1", [0.0, 1.0])]
+
+        def seen(shard):
+            f = self._join(shard, src)
+            return ({c: list(f.attrs[railtags.lane_attr(c)]) for c in railtags.LANE_COLUMNS},
+                    list(f.attrs[railtags.LANE_PARTS]), [roads.lane_tags(f, i) for i in range(2)],
+                    [roads.lane_tag_parts(f, i) for i in range(2)])
+
+        old = seen({"ways": ways, "nodes": []})
+        self.assertEqual(seen({"ways": ways, "nodes": [[1, 0.0, 0.0, {"traffic_sign": "DE:205"}]], "rules": rules}),
+                         old)
+        self.assertEqual(old[3][0][1], (0.5, 1.0, "99", None), "the rule-only way: no lane tags")
+        self.assertEqual(seen({"ways": {}, "nodes": [], "rules": rules}), seen(None))
+
+
+class SignNodesTest(unittest.TestCase):
+    """The lane shards' German sign nodes (tools/build_lane_tags.py: the Ortstafeln) kept per cell by LaneTags.join
+    for railtags.sign_nodes; the shard builder's records of them."""
+
+    def joined(self, shard):
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["tertiary"], subtypes=["road"])
+        f.attrs["src_record"] = np.array(["w21@1"])
+        lo, la = f.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        fetch = _Fetcher({"lanes/manifest.json": json.dumps({"built": "2026-11-07T03:00:00Z"}).encode(),
+                          f"lanes/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard(key)).encode())})
+        with tempfile.TemporaryDirectory() as d:
+            railtags.LaneTags(d, fetch).join(f, key)
+        return f
+
+    def test_sign_nodes_in_the_cell_only(self):
+        def shard(key):
+            lon0, lat0, lon1, lat1 = key.bounds()
+            mid = ((lon0 + lon1) / 2, (lat0 + lat1) / 2)
+            return {"ways": {}, "nodes": [[1, mid[0], mid[1], {"traffic_sign": "city_limit", "name": "Sarching"}],
+                                          [2, lon1 + 0.05, lat1, {"traffic_sign": "city_limit", "name": "Far"}]]}
+        got = railtags.sign_nodes(self.joined(shard))
+        self.assertEqual([t["name"] for _lo, _la, t in got], ["Sarching"])
+
+    def test_old_shard_without_nodes(self):
+        self.assertEqual(railtags.sign_nodes(self.joined(lambda key: {"ways": {}})), [])
+
+    def test_the_builders_records(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+            __file__)))), "tools"))
+        try:
+            import build_lane_tags as b
+        except ImportError as e:            # (pyosmium: the data repo's Action has it)
+            self.skipTest(f"build_lane_tags: {e}")
+        self.assertEqual(b.sign_records({"traffic_sign": "city_limit", "name": "Sarching"}),
+                         [{"traffic_sign": "city_limit", "name": "Sarching"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:310,DE:311", "direction": "forward", "name": "A / B"}),
+                         [{"traffic_sign": "DE:310,DE:311", "name": "A / B", "direction": "forward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "310"}), [{"traffic_sign": "DE:310"}])
+        self.assertEqual(b.sign_records({"traffic_sign:backward": "city_limit"}),
+                         [{"traffic_sign": "city_limit", "direction": "backward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:274[50]"}), [], "not a town sign")
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:3100"}), [], "not 310")
+        self.assertTrue(b.in_box(12.2, 49.0))
+        self.assertFalse(b.in_box(2.35, 48.85), "Paris: outside Germany's box")
 
 
 class WaysTest(unittest.TestCase):

@@ -35,7 +35,7 @@ def rules(entries, kind="text"):
     return mapgeom.RuleTable(f, v, a, b)
 
 
-def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=None, subtypes=None):
+def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=None, subtypes=None, subclasses=()):
     """Features of LINE roads; lines: list of [(east m, north m), ...] around (LAT, LON)."""
     coords, part_off, ring_off, coord_off = [], [0], [0], [0]
     for ln in lines:
@@ -51,12 +51,34 @@ def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=No
         coord_off=np.array(coord_off, np.int64), lonlat=np.array(coords, np.float64),
         attrs={"class": np.array(classes), "subtype": np.array(subtypes or ["road"] * n)},
         rules={"surface": rules(list(surfaces)), "width": rules(list(widths), "float"),
-               "level": rules(list(levels), "float"), "flags": rules(list(flags))})
+               "level": rules(list(levels), "float"), "flags": rules(list(flags)),
+               "subclass": rules(list(subclasses))})
 
 
 def flat(lat, lon):
     return np.full(np.shape(lat), 10.0)
 
+
+
+def _seg_dist(p, line):
+    """Distance from points p (m, 2) to a polyline (k, 2)."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+    t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0, 1)
+    q = a[None] + t[..., None] * ab[None]
+    return np.hypot(*(p[:, None, :] - q).transpose(2, 0, 1)).min(axis=1)
+
+
+def _crosses(a, b, line):
+    """Whether segment a-b crosses the polyline (k, 2)."""
+    P, Q = line[:-1], line[1:]
+
+    def side(p, q, x):
+        return (q[..., 0] - p[..., 0]) * (x[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (x[..., 0] - p[..., 0])
+    d1, d2 = side(P, Q, a), side(P, Q, b)
+    d3, d4 = side(a, b, P), side(a, b, Q)
+    return bool(((d1 * d2 < 0) & (d3 * d4 < 0)).any())
 
 
 class WalkLevelTest(unittest.TestCase):
@@ -95,8 +117,9 @@ class RulesTest(unittest.TestCase):
         # TerrainMaterials: a heightfield shader, not something a road decal can carry)
         for v in ("rock", "bedrock", "rocky", "grass", "grass_paver"):
             self.assertEqual(roads.surface_kind("residential", v), "dirt", v)
-        for v in ("stone", "stones"):           # (OSM: mostly stone paving)
+        for v in ("stone", "stones", "flagstone", "flagstones", "tiles"):     # (OSM: stone paving; PR #971's)
             self.assertEqual(roads.surface_kind("residential", v), "cobble", v)
+            self.assertEqual(roads.surface_kind("track", v), "cobble", v)     # (paved, not a dirt track)
         # a value not understood at all is the class's own surface, not the dirt road
         self.assertEqual(roads.surface_kind("residential", "whatever"), "paved")
         self.assertEqual(roads.surface_kind("track", "whatever"), "dirt")
@@ -174,7 +197,8 @@ class RulesTest(unittest.TestCase):
         f = features([[(0, 0), (10, 0)]] * 6, ["residential", "footway", "primary", "tertiary", "track", "secondary"],
                      surfaces=[(4, "gravel")], widths=[(2, 14.0)], levels=[(3, 1.0)], flags=[(5, "is_bridge")])
         s = roads.road_specs(f)
-        self.assertEqual(s[0][:2], (roads.STYLE["residential"][0] + 2 * roads.EDGE_STRIP_M, "paved"), "rural: edge strips")
+        # (rural: edge strips; the frame is Baltimore: the US's measured width, roads.WIDTH_TABLE)
+        self.assertEqual(s[0][:2], (roads.WIDTH_TABLE["US"]["residential"][2], "paved"), "rural: measured")
         self.assertIsNone(s[1], "footways left out")
         self.assertEqual(s[2][:2], (14.0, "paved"), "width rule")
         self.assertIsNone(s[3], "off ground level (bridge / tunnel) left out")
@@ -194,7 +218,7 @@ class RulesTest(unittest.TestCase):
     def test_urban_from_land_cover(self):
         f = features([[(0, 0), (10, 0)], [(0, 100), (10, 100)]], ["residential", "residential"], widths=[(1, 9.0)])
         s = roads.road_specs(f, lambda lat, lon: np.ones(np.shape(lat), bool))
-        self.assertEqual(s[0][0], roads.STYLE["residential"][0] + 2 * roads.PARKING_M)
+        self.assertEqual(s[0][0], roads.WIDTH_TABLE["US"]["residential"][0], "a US town street, parking included")
         self.assertEqual(s[1][0], 9.0, "width rule wins over the parking guess")
 
 
@@ -247,7 +271,7 @@ class GeometryTest(unittest.TestCase):
 
     def test_simplify_densify_split(self):
         pts = np.array([[0.0, 0, 0], [10, 0.1, 0], [20, 0, 0], [30, 10, 0]])
-        s = roads.simplify(pts)
+        s = roads.simplify(pts, tol=roads.SIMPLIFY_M)      # (BNE_ROAD_SMOOTH=on keeps 0.03 m: roadsmooth.SIMPLIFY_M)
         self.assertEqual(len(s), 3, "the 0.1 m bump goes, the corner stays")
         d = roads.densify(np.array([[0.0, 0, 0], [100, 0, 0]]))
         self.assertTrue((np.diff(d[:, 0]) <= roads.MAX_SPACING + 1e-9).all() and d[-1, 0] == 100)
@@ -315,14 +339,20 @@ class BuildTileTest(unittest.TestCase):
         f = features([[(-300, 50), (300, 50)], [(100, 10), (100, 200)]], ["primary", "track"])
         surfaces = {l["m"] for l in roads.LOOK.values()} | set(roads.DIRT_MATERIALS)
         chunks = [c for c in roads.build_tile(FRAME, 0, 0, [f], flat) if c["m"] in surfaces]
-        self.assertEqual(len(chunks), 2, "one surface chunk per road (lines and sidewalks aside)")
+        # (one surface chunk per road, lines and sidewalks aside; the track's strip in two, cut at the primary it crosses:
+        # roads.strip_runs, GitHub #771)
+        self.assertEqual(len(chunks), 3, "the primary's chunk and the track's two")
         prim = next(c for c in chunks if c["w"] == roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M)
         xs = [n[0] for n in prim["n"]]
         self.assertAlmostEqual(min(xs), -roads.OVERLAP, delta=0.05)
         self.assertAlmostEqual(max(xs), roads.TILE + roads.OVERLAP, delta=0.05)
         self.assertTrue(all(abs(n[1] - 50) < 0.3 for n in prim["n"]), "on its line (the test helper is spherical: ~0.13 m)")
         self.assertEqual(prim["m"], roads.LOOK["paved"]["m"])
-        track = next(c for c in chunks if c is not prim)
+        tracks = [c for c in chunks if c is not prim]
+        half = (roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M) / 2
+        for t in tracks:
+            self.assertFalse(any(abs(n[1] - 50) < half - 0.5 for n in t["n"]), "no strip over the primary's carriageway")
+        track = max(tracks, key=lambda c: c["s1"])
         self.assertIn(track["m"], roads.DIRT_VARIATIONS)
         self.assertAlmostEqual(track["tl"], roads.DIRT_LOOK["dirt"]["aspect"] * track["w"], places=2)
         self.assertGreater(track["s1"], track["s0"], "the strip's distance runs along the road")
@@ -661,6 +691,63 @@ class BuildTileTest(unittest.TestCase):
             back = (M == 0) & (n[:, 2] > 0.5) & (n[:, 2] < 0.95) & ((n[:, :2] @ out[1]) > 0.3)
             self.assertTrue(back.any(), "a sloped back face")
 
+    def test_junction_stop_lines_follow_the_incoming_driving_side(self):
+        import junctions
+        centre = np.array([120.0, 120.0])
+        arms = [[centre, (300, 120)], [centre, (120, 300)], [centre, (-60, 120)], [centre, (120, -60)]]
+        for left_hand in (False, True):
+            with self.subTest(left_hand=left_hand):
+                f = features(arms, ["residential"] * 4)
+                chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool),
+                                          walks=[], left_hand=left_hand)
+                stops = [c for c in chunks if c["m"] == junctions.STOP_LINE["m"]
+                         and c["w"] == junctions.STOP_LINE["w"]]
+                self.assertEqual(len(stops), 4)
+                for c in stops:
+                    away = np.array(c["n"])[:, :2].mean(0) - centre
+                    u = np.array(max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away))))
+                    right = np.array([-u[1], u[0]])
+                    self.assertGreater(float(away @ right) * (-1 if left_hand else 1), 0,
+                                       "stop line across incoming lanes, never the departing half")
+
+    def test_a_cycleway_with_its_sidewalks_mapped_is_a_street_closed_to_cars(self):
+        # London's Warren Street block between Fitzroy Street and Grafton Mews (highway=cycleway, motor_vehicle=no,
+        # sidewalk=both: bollards at both ends) was bare ground between the houses (the user's report 2026-11-12)
+        import navgraph
+        f = features([[(0, 0), (60, 0)], [(0, 20), (60, 20)], [(0, 40), (60, 40)]], ["cycleway"] * 3)
+        f.attrs["osm_sidewalk"] = np.array(["both", "", "no"], object)
+        sp = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))
+        self.assertIsNotNone(sp[0], "a street closed to cars: drawn")
+        self.assertTrue(roads.has_sidewalks(sp[0]), "with its pavements")
+        self.assertEqual(sp[0].kind, "paved")
+        self.assertIsNone(sp[1], "a cycle track: not a street")
+        self.assertIsNone(sp[2], "nor one without pavements")
+        self.assertNotIn("cycleway", navgraph.DRIVE, "no AI traffic on it")
+
+    def test_one_way_arms_stop_only_where_traffic_comes_in_across_all_of_it(self):
+        # four one-way streets (the user's London report 2026-11-12, Berwick Street / D'Arblay Street): the arm whose
+        # traffic leaves the junction gets no stop line, the one it comes in by one across its whole driving width
+        import junctions
+        centre = np.array([120.0, 120.0])
+        # east and north leave the junction along their points, west and south come in along theirs: 2 in, 2 out
+        arms = [[centre, (300, 120)], [centre, (120, 300)], [(-60, 120), centre], [(120, -60), centre]]
+        for left_hand in (False, True):
+            with self.subTest(left_hand=left_hand):
+                f = features(arms, ["residential"] * 4)
+                f.rules["oneway"] = rules([(i, 1.0) for i in range(4)], "float")
+                spec = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0]
+                chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool),
+                                          walks=[], left_hand=left_hand)
+                stops = [c for c in chunks if c["m"] == junctions.STOP_LINE["m"]
+                         and c["w"] == junctions.STOP_LINE["w"]]
+                self.assertEqual(len(stops), 2, "the two incoming arms only")
+                drive = spec.width - roads.parking_width(spec)
+                for c in stops:
+                    n = np.array(c["n"])[:, :2]
+                    mid = n.mean(0) - centre
+                    self.assertTrue(mid[0] < -1 or mid[1] < -1, "on the west or south arm (incoming)")
+                    self.assertGreater(np.hypot(*(n[-1] - n[0])), drive - 1.0, "across the whole driving width")
+
     def test_junction_corners_crosswalks_ramps(self):
         import tempfile
         import junctions
@@ -679,16 +766,16 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(sum(len(w["ramps"]) for w in runs) + sum(len(c["ramps"]) for c in corners) >= 8,
                         "two curb ramps per crosswalk")
         # residential streets with parking: no curb extensions (GitHub #208), the corners at the parking curb
-        wd = roads.carriageway("residential", "paved", True) / 2
+        wd = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2   # (WIDTH_TABLE)
         cls_ = [np.array(c["n"])[:, :2] for c in chunks if c["m"] == roads.LOOK["paved"]["m"] and c["n"]]
         for c in corners:
-            d = np.min([junctions._seg_dist(c["arc"][:, :2], ln) for ln in cls_], axis=0)
+            d = np.min([_seg_dist(c["arc"][:, :2], ln) for ln in cls_], axis=0)
             self.assertGreater(float(d.min()), wd - 0.1, "the curb never on the parking lane")
             self.assertEqual(len(c["ramps"]), 0, "the crosswalks land on the sidewalk runs, not the corners")
         for c in chunks:
             if c["m"] == junctions.CROSSWALK["m"]:
                 self.assertAlmostEqual(np.hypot(*np.subtract(c["n"][0][:2], c["n"][-1][:2])), 2 * wd, delta=0.3)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = wd
         for c in chunks:                        # no markings through the junction or its crosswalks
             if c["m"].startswith("line_") and c["w"] != junctions.STOP_LINE["w"]:
                 for x, y, _ in c["n"]:
@@ -745,37 +832,37 @@ class BuildTileTest(unittest.TestCase):
         f = features(arms, ["residential"] * 5)
         walks = []
         chunks = roads.build_tile(FRAME, -1, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2
         lines = [np.array([(-200, 100), (200, 100)]), np.array([(-200, 108), (200, 108)]), np.array([(0, 100), (0, 108)])]
         for c in [wk["corner"] for wk in walks if "corner" in wk]:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
             for ln in lines:
-                self.assertGreater(junctions._seg_dist(probe, ln).min(), w - 0.5)
+                self.assertGreater(_seg_dist(probe, ln).min(), w - 0.5)
         for c in chunks:
             if c["m"] == junctions.CROSSWALK["m"]:
                 a, b = np.array(c["n"][0][:2]), np.array(c["n"][-1][:2])
                 for ln in lines:
-                    if junctions._seg_dist(np.array([(a + b) / 2]), ln)[0] > 1.0:
-                        self.assertFalse(junctions._crosses(a, b, ln))
+                    if _seg_dist(np.array([(a + b) / 2]), ln)[0] > 1.0:
+                        self.assertFalse(_crosses(a, b, ln))
 
     def test_offset_junction_corners_across_the_connector(self):
         import junctions
         # two junctions ~10 m apart on a diagonal connector no longer than the streets are wide (the user's
         # Fells Point junction, 2026-10-17): every quadrant gets a curb return, turning onto the connector's edge
         # at one node and off at the other, none on a carriageway, and the connector keeps no sidewalk
-        A, B = (120.0, 120.0), (127.0, 113.0)
+        A, B = (120.0, 120.0), (126.0, 114.0)     # (8.5 m: under the streets' 9.5 m, roads.WIDTH_TABLE)
         arms = [[A, (120, 300)], [A, (-60, 120)], [A, B], [B, (127, -60)], [B, (300, 113)]]
         f = features(arms, ["residential"] * 5)
         walks = []
         roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
         corners = [wk["corner"] for wk in walks if "corner" in wk]
         self.assertEqual(len(corners), 4)
-        w = roads.carriageway("residential", "paved", True) / 2
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width / 2
         lines = [np.array(a, np.float64) for a in arms]
         for c in corners:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
             for ln in lines:
-                self.assertGreater(junctions._seg_dist(probe, ln).min(), w - 0.5 - roads.PARKING_M)
+                self.assertGreater(_seg_dist(probe, ln).min(), w - 0.5 - roads.PARKING_M)
         mid = np.array([(A[0] + B[0]) / 2, (A[1] + B[1]) / 2])
         for r in [wk for wk in walks if "pts" in wk]:
             self.assertGreater(np.hypot(*(r["pts"][:, :2] - mid).T).min(), w, "no sidewalk along the connector")
@@ -785,7 +872,7 @@ class BuildTileTest(unittest.TestCase):
         f = features([[(-300, 50), (300, 50)]], ["tertiary"], surfaces=[(0, "paving_stones")])
         chunks = roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool))
         cob = [c for c in chunks if c["m"] == roads.LOOK["cobble"]["m"]]
-        w = roads.carriageway("tertiary", "cobble", True)
+        w = roads.road_specs(f, lambda la, lo: np.ones(np.shape(la), bool))[0].width     # (the town width: WIDTH_TABLE)
         n = max(1, int(round(w / roads.LOOK["cobble"]["strip"])))
         self.assertEqual(len(cob), n, "parallel strips across the width")
         self.assertTrue(all(abs(c["w"] - w / n) < 0.01 for c in cob))
@@ -936,6 +1023,28 @@ class TrackerTest(unittest.TestCase):
         want = {(1, f"{tx}_{ty}") for tx, ty in roads.tiles_near(0, 0, roads.SEND_M)}
         self.assertEqual(keys, want)
         self.assertEqual(len(built), len(want), "each tile built once")
+
+    def test_a_build_ending_after_close_is_not_sent(self):
+        """A switch that rebuilds the road tiles (town signs, gas stations: earthd replaces the tracker) closes the
+        old tracker: a build of it still running then is not sent when it ends, so it cannot come after the new
+        tracker's tile of the same key and stay (Codex on PR #892)."""
+        import concurrent.futures
+
+        def done(res):
+            f = concurrent.futures.Future()
+            f.set_result(res)
+            return f
+        conn = FakeConn()
+        tr = roads.Tracker()
+        tr.aid = 1
+        tr.close()
+        tr._built(conn, 1, (0, 0), done(("/p/1_0_0", 1)))
+        geo = roads.GeoTracker()
+        geo.aid = 1
+        geo.close()
+        geo._built(conn, 1, (0, 0), done({"content": ("/x/rg.json", 1, {"h": 0.0}, []), "skin": ("/x/rs.json", {}),
+                                          "exact": {}, "time": {}}), True, True, {})
+        self.assertEqual(conn.sent, [])
 
     def test_stuck_build_said_once(self):
         """A road tile whose build never ends (a stuck worker: "roads & buildings 0/36" with an empty log, GitHub #241)
@@ -1191,6 +1300,24 @@ class PaintRoadsTest(unittest.TestCase):
         self.assertEqual(int(out[64, 74]), sf.ASPHALT, "paved wins at the crossing")
         self.assertEqual(int(idx[64, 10]), sf.GRASS, "input untouched")
 
+    def test_painted_after_the_grading_boxes(self):
+        """Discord, 1.6.3 .. 1.9.1: "90% of mountain roads in japan are just 100% gravel/grass". roads._feature_boxes
+        (grading, skew decks, rails: lon0, lat0, lon1, lat1) and surface._lonlat_boxes (lon0, lon1, lat0, lat1) kept
+        their boxes under one key on the layer: when grading's ran first (a cell's facts made, a graded block), the
+        paint read its columns crossed and skipped every road as off the block (a fresh Happogahara block: none
+        painted; where longitude > latitude > 0, as in Japan: the crossed box was a superset of the true one in the
+        Americas and Europe)."""
+        import roads
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "LAT", 36.92), mock.patch.object(mod, "LON", 139.83):
+            lat, lon = self.grid()
+            f = features([[(-200, 0), (200, 0)]], ["residential"])
+        roads._feature_boxes(f)
+        out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
+        self.assertEqual(int(out[64, 10]), sf.ASPHALT, "painted with the grading's boxes made first")
+        b = sf._lonlat_boxes(f)[0]
+        self.assertTrue(b[2] <= b[3] < b[0] < b[1], "lon0 lon1 lat0 lat1")
+
     def test_bare_verge_beside_roads(self):
         """Grass tufts stood on the asphalt along road edges (the user, 2026-10-20): a road without sidewalks gets a
         bare verge (VERGE_M a side) where the ground carries grass; rock stays rock. On the block's 1 m samples, each
@@ -1423,19 +1550,6 @@ class DirtStripTest(unittest.TestCase):
         self.assertEqual(len(roadmesh.build(FRAME, ch, flat, (x0, y0, 0.0), clip=(x0, y0, x1, y1))), 5)
 
 
-class NearNodePairsTest(unittest.TestCase):
-    def test_the_grid_gives_the_all_pairs_scans_pairs_in_its_order(self):
-        import math
-        import junctions
-        rng = np.random.default_rng(3)
-        pos = rng.uniform(0.0, 200.0, (500, 2))
-        r = junctions.MERGE_M
-        scan = [(a, b) for a in range(len(pos)) for b in range(a + 1, len(pos))
-                if math.hypot(*(pos[a] - pos[b])) < r]
-        self.assertTrue(scan)
-        self.assertEqual(list(junctions._near_node_pairs(pos, r)), scan)
-
-
 class RingWidthTest(unittest.TestCase):
     def test_a_mapped_roundabout_is_as_wide_as_the_guides_make_it(self):
         ring = [(30 * np.cos(a), 30 * np.sin(a)) for a in np.linspace(0, 2 * np.pi, 25)]
@@ -1604,6 +1718,14 @@ class TunnelReachTest(unittest.TestCase):
                                [(0, "is_tunnel", 0.45, 0.55)])
             self.assertEqual([(round(a, 4), round(b, 4), k) for a, b, k in got], [(0.45, 0.55, "tunnel")], other)
 
+    def test_its_own_approach_joined_at_the_portal_keeps_the_portal(self):
+        # an underpass under I-280 (37.6002, -122.4240): the service road's tunnel starts at its feature's first point,
+        # its approach a separate road ending there and going on in line. It was taken for a road alongside and the
+        # portal moved 5 m in, onto the embankment: the underpass graded as an open road, a trench across the freeway
+        got = self._ranges([[(0.0, 0.0), (400.0, 0.0)], [(-28.0, -4.0), (0.0, 0.0)]], ["service", "service"],
+                           [(0, "is_tunnel", 0.0, 0.25)])
+        self.assertEqual([(round(a, 4), round(b, 4), k) for a, b, k in got], [(0.0, 0.25, "tunnel")])
+
 
 class TunnelCoverRoadsTest(unittest.TestCase):
     """GitHub #450: a covered tunnel section goes on until the road crossing over it is covered."""
@@ -1682,6 +1804,64 @@ class RetainingWallTest(unittest.TestCase):
         mid = len(w["base"]) // 2
         self.assertGreater(float(w["back_top"][mid]), float(w["top"][mid]) + 0.5)
         self.assertGreaterEqual(float(w["thick"][mid]), grading.WALL_FLAT_M + grading.WALL_T_M)
+
+    def test_a_cutting_under_a_deck_is_walled_up_to_its_underside(self):
+        """A road in a cutting 8 m deep with a deck across it 8 m over the road (Assaku: Tartu mnt over Jarve tee, whose
+        cutting had bare earth slopes under the deck): the walls stand under the deck too, rising to its underside
+        and no further (the Bruce Highway's wall rose through the deck, 2026-10-21), and none under a low deck. With
+        BNE_WALL_UNDER_DECK=off: none under the deck, as before."""
+        import grading
+        rh = roads.carriageway("primary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "primary")) + grading.WALL_FLAT_M
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["primary"]), None)[0]
+        pts = np.c_[np.arange(0.0, 201.0, 5.0), np.zeros(41), np.full(41, 10.0)]
+
+        def elev(la, lo):
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 8.0
+
+        def walls(deck_z, **kw):
+            deck = {"n": np.array([[100.0, -40.0, deck_z], [100.0, 40.0, deck_z]]), "w": 9.0}
+            return [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0),
+                                                     decks=[deck]) if "base" in w]
+
+        def under(ws):          # (the heights over the road of the wall's samples within the deck's width)
+            return [float(h) for w in ws for x, h in zip(w["base"][:, 0], w["top"] - w["road_z"]) if abs(x - 100.0) < 4.0]
+        got = walls(18.0)
+        self.assertTrue(under(got), "walls under the deck")
+        self.assertGreater(min(under(got)), 4.3, "up past an open cutting's 4 m, to the deck")
+        for w in got:
+            for x, t, bt in zip(w["base"][:, 0], w["top"], w["back_top"]):
+                if abs(x - 100.0) < 4.0:
+                    self.assertLessEqual(max(float(t), float(bt)), 18.0 - roads.WALL_DECK_UNDER_M + 1e-6, "under the deck")
+        open_ = [float(h) for w in got for x, h in zip(w["base"][:, 0], w["top"] - w["road_z"]) if abs(x - 60.0) < 4.0]
+        self.assertLess(max(open_), 4.3, "an open cutting: 4 m at most, as before")
+        self.assertFalse(under(walls(12.5)), "a deck 2.5 m over the road: no wall under it")
+        with mock.patch.object(roads, "WALL_UNDER_DECK_ON", False):
+            self.assertFalse(under(walls(18.0)), "off: none under the deck")
+
+    def test_walls_under_a_deck_are_concrete_on_a_minor_road_too(self):
+        """Assaku's Jarve tee is a minor road: its cutting is walled in stone, but under the deck the wall is the
+        abutment's, concrete (the reference photo: sloped concrete walls under the deck)."""
+        import grading
+        rh = roads.carriageway("tertiary", "paved", True, None, False) / 2
+        edge = rh + grading.shoulder(roads.Spec(2 * rh, "paved", False, "tertiary")) + grading.WALL_FLAT_M
+        spec = roads.road_specs(features([[(0.0, 0.0), (200.0, 0.0)]], ["tertiary"]), None)[0]
+        pts = np.c_[np.arange(0.0, 201.0, 5.0), np.zeros(41), np.full(41, 10.0)]
+
+        def elev(la, lo):
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return 10.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 8.0
+        deck = {"n": np.array([[100.0, -40.0, 18.0], [100.0, 40.0, 18.0]]), "w": 9.0}
+        ws = [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0),
+                                               decks=[deck]) if "base" in w]
+        under = [w for w in ws if (abs(w["base"][:, 0] - 100.0) < 4.0).any()]
+        self.assertTrue(under, "walls under the deck")
+        self.assertTrue(all(w["concrete"] for w in under), "concrete under the deck")
+        with mock.patch.object(roads, "WALL_UNDER_DECK_ON", False):
+            ws = [w for w in roads.retaining_walls(FRAME, [("r", spec, pts, LON)], elev, (0.0, -128.0, 256.0, 128.0),
+                                                   decks=[deck]) if "base" in w]
+            self.assertFalse(any(w["concrete"] for w in ws if (abs(w["base"][:, 0] - 100.0) < 4.0).any()))
 
     def test_mountain_road_parapet_from_a_smaller_drop(self):
         """Ground falling 1.5 m within 2 m of the edge: a pass road gets its parapet (PARAPET_DROP_MOUNTAIN_M), a
@@ -1767,12 +1947,13 @@ class MountainRoadTest(unittest.TestCase):
         """A mapped lanes=2 is a two-way road's count, not its width (the Stelvio, 2026-11-05: its way got lanes=2 and
         lost the pass road's 6 m); a third lane is a wider road."""
         f = features([_zigzag(4), _zigzag(4)], ["secondary", "secondary"])
-        base = [sp._replace(mountain=False, width=7.1) for sp in roads.road_specs(f)]
-        got = roads._mountain_roads(f, [base[0]._replace(lanes=2), base[1]._replace(lanes=3)])
+        f.attrs["osm_lanes"] = np.array([2.0, 3.0])
+        got = roads.road_specs(f)
+        self.assertEqual([sp.lanes for sp in got], [2, 3])
         self.assertTrue(got[0].mountain)
         self.assertEqual(got[0].width, roads.MOUNTAIN_ROAD_M)
         self.assertFalse(got[1].mountain)
-        self.assertEqual(got[1].width, 7.1)
+        self.assertEqual(got[1].width, roads.carriageway("secondary", "paved", False, None, False, 3))
 
     def test_no_centre_line(self):
         line = np.array([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0)])
@@ -1862,6 +2043,124 @@ class MountainRoadTest(unittest.TestCase):
         self.assertLess(at(wide, 7.0), at(steep, 7.0) - 1.0)
 
 
+class EntranceFlareTest(unittest.TestCase):
+    """Entrance flares (roads.entrance_flares, BNE_ENTRANCE_FLARES; the gas station on CA-76 at Pala CA): a paved
+    service way's end into a road of a bigger class runs to the throat width over its last metres through its tapers;
+    not between service ways, not over a mapped width, never past the joined road's own carriageway."""
+
+    ON = {"BNE_ENTRANCE_FLARES": "on"}
+
+    @staticmethod
+    def tee(cls="primary", **kw):
+        """A 40 m service driveway east off a road of class cls running north through its start."""
+        return features([[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0), (40.0, 0.0)],
+                         [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)]], ["service", cls], **kw)
+
+    @staticmethod
+    def widths_at(f, i=0):
+        sp = roads.road_specs(f)[i]
+        ll = f.lonlat[f.coord_off[f.ring_off[f.part_off[i]]]:f.coord_off[f.ring_off[f.part_off[i] + 1]]]
+        return roads.taper_widths(sp.width, roads.road_tapers(f)[i], ll[:, 0], ll[:, 1]), sp
+
+    def test_service_into_primary_flares(self):
+        """The joint end runs to FLARE_THROAT_M (the primary is wider), the far end stays the class's 4 m; the joined
+        road is a vertex joint (the through road is not split there), and its own tapers are untouched."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee()
+            ws, sp = self.widths_at(f)
+            self.assertEqual(sp.width, 4.0)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[-1]), 4.0, delta=0.01)
+            self.assertGreater(float(ws[1]), 4.0, "eased, not a step (10 m into the 15 m span)")
+            self.assertLess(float(ws[1]), float(ws[0]))
+            self.assertEqual(roads.road_tapers(f)[1], (), "the primary keeps its own width")
+
+    def test_off_by_default(self):
+        with mock.patch.dict(os.environ):       # (restored whole on exit)
+            os.environ.pop("BNE_ENTRANCE_FLARES", None)
+            self.assertFalse(roads.flares_enabled())
+            ws, _ = self.widths_at(self.tee())
+            self.assertIsNone(ws, "no tapers: BNE_ENTRANCE_FLARES is off")
+
+    def test_two_service_ways_no_flare(self):
+        with mock.patch.dict(os.environ, self.ON):
+            ws, _ = self.widths_at(self.tee(cls="service"))
+            self.assertIsNone(ws)
+
+    def test_mapped_width_stands(self):
+        with mock.patch.dict(os.environ, self.ON):
+            ws, sp = self.widths_at(self.tee(widths=[(0, 5.0)]))
+            self.assertEqual(sp.width, 5.0)
+            self.assertIsNone(ws, "a mapped width stands, over and under the throat")
+            self.assertIsNone(self.widths_at(self.tee(widths=[(0, 9.0)]))[0])
+
+    def test_throat_capped_at_the_joined_road(self):
+        """Into a rural unclassified (5.5 m) the throat is its width, not FLARE_THROAT_M: the mouth stays within the
+        junction's own footprint."""
+        with mock.patch.dict(os.environ, self.ON):
+            ws, _ = self.widths_at(self.tee(cls="unclassified"))
+            self.assertAlmostEqual(float(ws[0]), 5.5, delta=0.01)
+
+    def test_lot_entrance_minimum(self):
+        """A driveway with a parking aisle on its far end serves a mapped lot: FLARE_LOT_THROAT_M (two-way entry);
+        the aisle itself, ending between service ways, is not flared."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)], [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)],
+                          [(40.0, 0.0), (40.0, 30.0), (40.0, 60.0)]],
+                         ["service", "primary", "service"], subclasses=[(2, "parking_aisle")])
+            ws, _ = self.widths_at(f)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_LOT_THROAT_M, delta=0.01)
+            self.assertEqual(roads.road_tapers(f)[2], ())
+
+    def test_curbed_street_keeps_its_corners(self):
+        """A joined road with sidewalks (a curbed town street): no flare, its curb returns own the mouth."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee(cls="residential")
+            specs = [sp if sp is None or sp.cls != "residential" else sp._replace(urban=True)
+                     for sp in roads.road_specs(f)]
+            self.assertTrue(roads.has_sidewalks(specs[1]))
+            self.assertEqual(roads.entrance_flares(f, specs), [(), ()])
+            self.assertTrue(roads.entrance_flares(f, roads.road_specs(f))[0], "rural: flared")
+
+    def test_going_on_runs_to_the_joined_width(self):
+        """A service way going straight on as an unclassified road (the taper kernel joins same-class roads only:
+        a 1.5 m step today) runs to the joined road's width — one taper, not a flare stacked on a kernel one."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)], [(-80.0, 0.0), (-40.0, 0.0), (0.0, 0.0)]],
+                         ["service", "unclassified"])
+            tp = roads.road_tapers(f)[0]
+            self.assertEqual(len(tp), 1)
+            self.assertAlmostEqual(tp[0][2], 5.5, delta=0.01)
+
+    def test_same_class_mapped_width_keeps_the_kernel_taper(self):
+        """Two service ways, one with a mapped width: the kernel's taper to the mean stands alone (no flare:
+        service ways and mapped widths are left out)."""
+        fixture = lambda: features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)],      # noqa: E731
+                                    [(-80.0, 0.0), (-40.0, 0.0), (0.0, 0.0)]],
+                                   ["service", "service"], widths=[(0, 8.0)])
+        before = roads.road_tapers(fixture())
+        self.assertAlmostEqual(before[0][0][2], 6.0, delta=0.01)
+        with mock.patch.dict(os.environ, self.ON):
+            self.assertEqual(roads.road_tapers(fixture()), before)
+
+    def test_deck_end_no_flare(self):
+        """A service way with a bridge part is not flared (its deck's width is its own)."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee(levels=[(0, 1.0, 0.5, 1.0)])
+            self.assertEqual(roads.entrance_flares(f, roads.road_specs(f)), [(), ()])
+
+    def test_both_ends_short_way(self):
+        """A short connector between two bigger roads flares at both ends; the spans never overlap (TAPER_SHARE)."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)],
+                          [(20.0, -100.0), (20.0, 0.0), (20.0, 100.0)]],
+                         ["service", "primary", "secondary"])
+            ws, sp = self.widths_at(f)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[-1]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[1]), 4.0, delta=0.01, msg="the middle its own width: the spans do not meet")
+
+
 class GravelTest(unittest.TestCase):
     """Gravel roads (2026-11-03): OpenStreetMap's own surface first, and untagged minor roads gravel where the
     mapped ones around are (REGIONAL_*)."""
@@ -1899,6 +2198,30 @@ class GravelTest(unittest.TestCase):
         town = lambda lat, lon: np.ones(np.shape(lat), bool)      # noqa: E731
         sp = roads.road_specs(self.roads(4, "gravel"), urban_fn=town)[-1]
         self.assertEqual((sp.kind, sp.urban), ("paved", True))
+
+    def test_one_mapped_road_is_no_sample(self):
+        # GitHub #834: one county road's unpaved segments made every untagged road of the window gravel
+        f = self.roads(4, "gravel")
+        f.attrs["name"] = np.array(["County Road 1089"] * 4 + ["County Road 1103"])
+        self.assertEqual(roads.road_specs(f)[-1].kind, "paved")
+        f = self.roads(4, "gravel")
+        f.attrs["name"] = np.array(["County Road 1089", "County Road 1090", "", "None", "County Road 1103"])
+        self.assertEqual(roads.road_specs(f)[-1].kind, "gravel")      # (three names, two unnamed ways: 4 roads)
+
+    def test_a_street_with_built_up_land_beside_it_stays_paved(self):
+        # a village's / subdivision's street (GitHub #824): built-up land 30 m south of the untagged road at y = -50,
+        # none on it (not a town street by the land-cover test), none beside the mapped gravel roads
+        def beside(lat, lon):
+            n = (np.asarray(lat) - LAT) * M_LAT
+            return np.abs(n + 80.0) < 5.0
+        sp = roads.road_specs(self.roads(4, "gravel"), urban_fn=beside)[-1]
+        self.assertEqual((sp.kind, sp.urban), ("paved", False))
+        nowhere = lambda lat, lon: np.zeros(np.shape(lat), bool)  # noqa: E731
+        self.assertEqual(roads.road_specs(self.roads(4, "gravel"), urban_fn=nowhere)[-1].kind, "gravel")
+        # a service road keeps the rule (a farm driveway in its farmyard's built-up land)
+        f = self.roads(4, "gravel", extra_cls="service")
+        f.attrs["osm_surface"] = np.array(["gravel"] * 4 + [""])
+        self.assertEqual(roads.road_specs(f, urban_fn=beside)[-1].kind, "gravel")
 
     def test_off(self):
         from unittest import mock

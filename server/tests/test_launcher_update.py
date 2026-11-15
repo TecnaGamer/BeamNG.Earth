@@ -56,6 +56,18 @@ class UpdateAtStart(unittest.TestCase):
         self.assertFalse(r)
         self.assertEqual(asked, [])
 
+    def test_a_slow_github_does_not_hold_the_start(self):
+        import threading
+        gate = threading.Event()
+        with mock.patch.object(launcher, "UPDATE_CHECK_S", 0.2):
+            r = launcher.update_at_start(argparse.Namespace(no_update_check=False), ask=lambda q: "y",
+                                         popup=lambda text: True, packaged=True,
+                                         check=lambda current, net: gate.wait(5) and {"current": "1", "latest": "2"},
+                                         download=lambda *a: self.fail("asked"), start=lambda: True)
+        gate.set()
+        self.assertFalse(r)
+        self.assertEqual(launcher.bounded(lambda: 7, 1), 7)
+
     def test_a_source_copy_or_the_switch_asks_nothing(self):
         self.assertEqual(self.go(packaged=False), (False, []))
         self.assertEqual(self.go(args=argparse.Namespace(no_update_check=True)), (False, []))
@@ -101,6 +113,7 @@ class HandOver(unittest.TestCase):
         dropped = []
         with mock.patch.object(launcher, "FROZEN", True), \
                 mock.patch.object(selfupdate, "staged", lambda current: "/x/BeamNG.Earth-new.exe"), \
+                mock.patch.object(selfupdate, "packaged_path", lambda: "/x/BeamNG.Earth-old.exe"), \
                 mock.patch.object(selfupdate, "drop_staged",
                                   lambda path=None, blocked_by=None: dropped.append(blocked_by or 1)), \
                 mock.patch.object(launcher, "smart_app_control_on", lambda: sac), \
@@ -118,6 +131,9 @@ class HandOver(unittest.TestCase):
         self.assertTrue(r)
         self.assertEqual(dropped, [])
         self.assertEqual(popen.call_args[0][0][0], "/x/BeamNG.Earth-new.exe")
+        import selfupdate
+        self.assertEqual(popen.call_args[1]["env"].get(selfupdate.HANDED_OVER_FROM), "/x/BeamNG.Earth-old.exe",
+                         "the new copy is told which file started it (kept: the player's shortcut, GitHub #900)")
 
     def test_a_new_copy_that_dies_at_once_is_dropped_and_this_one_runs(self):
         r, dropped, _ = self.go(wait=1)
@@ -176,6 +192,24 @@ class GameStillRunning(unittest.TestCase):
     def test_a_running_game_and_none(self):
         self.assertTrue(launcher.game_still_running(alive=lambda: True, sleep=lambda s: None))
         self.assertFalse(launcher.game_still_running(alive=lambda: False, sleep=lambda s: None))
+
+
+class WindowlessGame(unittest.TestCase):
+    """GitHub #1038: a game process hanging in the background (no window) kept the app saying "already running"."""
+
+    def test_no_window_now_and_later_is_stuck(self):
+        self.assertTrue(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: False, sleep=lambda s: None))
+
+    def test_a_window_or_no_game_is_not(self):
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: True, sleep=lambda s: None))
+        seq = iter([False, True])           # (its window came while it started)
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: next(seq),
+                                                  sleep=lambda s: None))
+        self.assertIsNone(launcher.windowless_game(pids_fn=lambda: [], window_fn=lambda p: False, sleep=lambda s: None))
+        self.assertFalse(launcher.windowless_game(pids_fn=lambda: [42], window_fn=lambda p: None, sleep=lambda s: None))
+
+    def test_not_windows(self):
+        self.assertIsNone(launcher.windows_visible_window([1]) if not launcher.IS_WIN else None)
 
 
 class Popup(unittest.TestCase):

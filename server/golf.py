@@ -10,6 +10,7 @@ import json
 import logging
 
 import numpy as np
+import dnp
 
 import mapcells
 import mapgeom
@@ -143,7 +144,7 @@ def rows(frame, land_fn, box, elev):
             (pins if mark == "pin" or kind == mapgeom.POINT else holes).append((fid, spot[0], spot[1]))
     pending = list(pins)
     for fid, x, y in holes:
-        if any((x - px) ** 2 + (y - py) ** 2 < NEAR_M ** 2 for _, px, py in pending):
+        if any(dnp.sq(x - px) + dnp.sq(y - py) < NEAR_M * NEAR_M for _, px, py in pending):
             continue
         pending.append((fid, x, y))
     if not pending:

@@ -2,6 +2,8 @@
 import math
 
 import numpy as np
+import dmath
+import dnp
 
 
 def model_box(ring):
@@ -14,6 +16,8 @@ def model_box(ring):
 
 
 _UV4 = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+LIT_SHARE = .3              # of the windows lit at night
+LIT_GLASS_CELLS = 8         # the lit glass map's cells (tools/build_french_houses.py GLASS_LIT)
 
 
 def face(m, pts, material, outward, uv=None):
@@ -33,13 +37,14 @@ def face(m, pts, material, outward, uv=None):
             m.tri(p[0], p[j], p[j + 1], uv[0], uv[j], uv[j + 1], material)
 
 
-def panel(m, a, d, out, s0, s1, z0, z1, material, offset=.025, tile=2.4):
+def panel(m, a, d, out, s0, s1, z0, z1, material, offset=.025, tile=2.4, uv=None):
+    """uv: one point for all its corners (a lit window's cell of the glass map), else tiled along the wall."""
     ax, ay, dx, dy, ox, oy = float(a[0]), float(a[1]), float(d[0]), float(d[1]), float(out[0]), float(out[1])
     px, py = ax + dx * s0 + ox * offset, ay + dy * s0 + oy * offset
     qx, qy = ax + dx * s1 + ox * offset, ay + dy * s1 + oy * offset
     face(m, [(px, py, z0), (qx, qy, z0), (qx, qy, z1), (px, py, z1)],
-         material, (ox, oy, 0.), [(s0 / tile, 0.), (s1 / tile, 0.),
-                                  (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
+         material, (ox, oy, 0.), [uv] * 4 if uv is not None else
+         [(s0 / tile, 0.), (s1 / tile, 0.), (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
 
 
 def box(m, c, u, hx, hy, z0, z1, material):
@@ -53,7 +58,7 @@ def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
     q = (ax + dx * s1, ay + dy * s1, float(z1))
     n = (float(out[0]), float(out[1]), 0.)
     axis = (q[0] - p[0], q[1] - p[1], q[2] - p[2])
-    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
+    length = math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2])
     if length < .05:
         return
     e = (axis[0] / length, axis[1] / length, axis[2] / length)
@@ -79,10 +84,14 @@ def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
 def window(m, a, d, out, s, bottom, width, height, mats, style, seed, lite=False, attic=False):
     import buildings as b
     trim = mats[style["trim"]]
-    dark = mats[b.custom_look("bne_fr_house_glass_lit" if b._hash01(seed, round(s, 4), "lit") < .3 else "bne_fr_house_glass", (.31, .38, .40))]
+    lit = b._hash01(seed, round(s, 4), "lit")
+    dark = mats[b.custom_look("bne_fr_house_glass_lit" if lit < LIT_SHARE else "bne_fr_house_glass", (.31, .38, .40))]
+    # (a lit one: one cell of the lit glass's map, from the same hash: each lit window its own level and hour to go
+    # dark, tools/build_french_houses.py GLASS_LIT; in UVs, one material)
+    cell = ((int(lit / LIT_SHARE * LIT_GLASS_CELLS) + .5) / LIT_GLASS_CELLS, .5) if lit < LIT_SHARE else None
     # Whole frames behind inset panes: no alpha masks or stretched facade sheets.
     panel(m, a, d, out, s - width / 2 - .07, s + width / 2 + .07, bottom - .06, bottom + height + .07, trim, .035)
-    panel(m, a, d, out, s - width / 2, s + width / 2, bottom, bottom + height, dark, .05)
+    panel(m, a, d, out, s - width / 2, s + width / 2, bottom, bottom + height, dark, .05, uv=cell)
     if lite:
         if not style["roller"]:
             for sign in (-1, 1):
@@ -119,7 +128,7 @@ def roof(m, spec, ze, mats):
     style = spec.fr_house
     c, u, hl, hw = model_box(ring)
     v = np.array([-u[1], u[0]])
-    eave, tangent = style["eave"], math.tan(math.radians(spec.pitch))
+    eave, tangent = style["eave"], dmath.tan(math.radians(spec.pitch))
     L, W, z = hl + eave, hw + eave, ze - eave * tangent
     rise, top = W * tangent, ze + hw * tangent
     rm, wall = mats[spec.roof_mat], mats[style["wall"]]
@@ -132,7 +141,7 @@ def roof(m, spec, ze, mats):
         stz = [entry for i, entry in enumerate(stz) if i == 0 or entry != stz[i - 1]]
         if stz[-1] == stz[0]:
             stz.pop()
-        uv = [(s / 2.4, (W - abs(t)) / max(math.cos(math.radians(spec.pitch)), .1) / 2.4) for s, t, _ in stz]
+        uv = [(s / 2.4, (W - abs(t)) / max(dmath.cos(math.radians(spec.pitch)), .1) / 2.4) for s, t, _ in stz]
         face(m, [p(*r) for r in stz], rm, (0, 0, 1), uv)
     if spec.roof == "hipped":
         r = 0. if L - W < .01 else L - W
@@ -190,7 +199,7 @@ def roof_details(m, spec, ze, mats):
     st = spec.fr_house
     c, u, L, W = model_box(b.drawn_ring(spec))
     v = np.array([-u[1], u[0]])
-    tangent, peak = math.tan(math.radians(spec.pitch)), ze + W * math.tan(math.radians(spec.pitch))
+    tangent, peak = dmath.tan(math.radians(spec.pitch)), ze + W * dmath.tan(math.radians(spec.pitch))
     if st["chimney"]:
         brick = mats[b.custom_look("bne_fr_house_brick", (.65, .42, .33))]
         for sign in (-1, 1) if st["region"] == "brittany" else (1,):
@@ -227,10 +236,10 @@ def draw(m, spec, gmin, gmax, mats, lite=False, collision=False):
     base = b.base_z(spec, gmin, gmax)
     bottom = gmin - (b.FOUNDATION_M if collision else b.SKIRT_LITE_M if lite else b.SKIRT_M)
     top = base + spec.height
-    front = spec.door[0] if spec.door else max(range(len(ring)), key=lambda i: np.linalg.norm(ring[(i + 1) % len(ring)] - ring[i]))
+    front = spec.door[0] if spec.door else max(range(len(ring)), key=lambda i: dnp.norm(ring[(i + 1) % len(ring)] - ring[i]))
     for i, a in enumerate(ring):
         bb = ring[(i + 1) % len(ring)]
-        length = float(np.linalg.norm(bb - a))
+        length = float(dnp.norm(bb - a))
         d = (bb - a) / length
         out = np.array([d[1], -d[0]])
         panel(m, a, d, out, 0, length, bottom, top, mats[st["wall"]], 0.)
@@ -279,7 +288,7 @@ def draw(m, spec, gmin, gmax, mats, lite=False, collision=False):
     if spec.roof in {"gabled", "half-hipped"}:
         c, u, L, W = model_box(ring)
         v = np.array([-u[1], u[0]])
-        rise = W * math.tan(math.radians(spec.pitch))
+        rise = W * dmath.tan(math.radians(spec.pitch))
         allowance = rise * (.55 if spec.roof == "half-hipped" else 1.)
         if allowance > 1.4:
             for sign in (-1, 1):

@@ -110,6 +110,110 @@ class CompactTerTest(unittest.TestCase):
             self.assertEqual(sf.write_ter(d, "b.ter", np.zeros((8, 8), np.uint16), None), ("b.ter", None))
 
 
+class LayerFoldTest(unittest.TestCase):
+    """Rarely used land-cover layers folded into the ones around them (surface.fold_layers: fewer materials per .ter,
+    a cheaper swap; the user, 2026-11-11: "combine the ground layers and reduce them without reducing quality")."""
+
+    def block(self, n=200):
+        idx = np.full((n, n), sf.GRASS, np.uint8)
+        idx[:, :40] = sf.DIRT
+        idx[:, 90:96] = sf.ASPHALT                      # a road (painted)
+        return idx
+
+    def land_of(self, idx):
+        land = idx.copy()
+        land[idx == sf.ASPHALT] = sf.GRASS
+        return land
+
+    def test_specks_fold_into_their_neighbours(self):
+        idx = self.block()
+        idx[10:13, 10:13] = sf.ROCK                     # in the dirt
+        idx[50:52, 150:152] = sf.ROCK                   # in the grass
+        idx[100:102, 96] = sf.ROCK                      # by the road
+        idx[150:152, 100:190] = sf.ROCK                 # a line along a bank (no core)
+        st = {}
+        out = sf.fold_layers(idx, self.land_of(idx), 1.0, st)
+        self.assertFalse((out == sf.ROCK).any())
+        self.assertTrue((out[10:13, 10:13] == sf.DIRT).all() and (out[50:52, 150:152] == sf.GRASS).all())
+        self.assertTrue((out[100:102, 96] == sf.GRASS).all(), "the land cover beside it, not the road")
+        self.assertTrue(((out == idx) | (idx == sf.ROCK)).all(), "nothing else changes")
+        self.assertEqual(st["layersFolded"], 1)
+        self.assertEqual(sf.used_materials(out), [sf.ASPHALT, sf.GRASS, sf.DIRT])
+
+    def test_kept(self):
+        n = 200
+
+        def rock_rows(i):
+            for r in range(0, 200, 4):
+                i[r:r + 3, 100:103] = sf.ROCK           # 450 thin samples > 1 % of 200²
+        cases = {
+            "a big patch": lambda i: i.__setitem__((slice(10, 40), slice(100, 130)), sf.ROCK),     # its core 26² m² > 256
+            "a road layer": lambda i: i.__setitem__((slice(10, 12), slice(100, 102)), sf.LOOSE),
+            "the water bed": lambda i: i.__setitem__((slice(10, 12), slice(100, 102)), sf.MUD),
+            "too many samples": rock_rows,
+        }
+        for what, put in cases.items():
+            with self.subTest(what):
+                idx = self.block(n)
+                put(idx)
+                out = sf.fold_layers(idx, self.land_of(idx), 1.0)
+                self.assertTrue((out == idx).all())
+        idx = self.block(n)
+        idx[10:12, 100:102] = sf.LAWN
+        land = self.land_of(idx)
+        land[10:12, 100:102] = sf.GRASS                 # a mapped lawn painted over the land cover
+        self.assertTrue((sf.fold_layers(idx, land, 1.0) == idx).all(), "a painted layer is kept")
+
+    def test_patch_limit_in_square_metres(self):
+        idx = self.block()
+        idx[10:22, 100:112] = sf.ROCK                   # 12 x 12 samples: a core of 8² at 1 m (r 2), 10² x 4 m² at 2 m (r 1)
+        self.assertFalse((sf.fold_layers(idx, self.land_of(idx), 1.0) == sf.ROCK).any())
+        self.assertTrue((sf.fold_layers(idx, self.land_of(idx), 2.0) == sf.ROCK).any())
+
+    def test_switch_off(self):
+        idx = self.block()
+        idx[10:13, 10:13] = sf.ROCK
+        old = sf.FOLD_ON
+        sf.FOLD_ON = False
+        try:
+            self.assertIs(sf.fold_layers(idx, self.land_of(idx), 1.0), idx)
+        finally:
+            sf.FOLD_ON = old
+
+    def test_cap_merges_look_alikes_then_folds_the_least_used(self):
+        n = 400
+        idx = np.full((n, n), sf.GRASS, np.uint8)
+        stripes = [sf.DIRT, sf.ASPHALT, sf.LAWN, sf.MUD, sf.COBBLE, sf.BRICK, sf.PAVERS, sf.GOLF_GREEN,
+                   sf.GOLF_FAIRWAY, sf.LOOSE, sf.DUSTY]
+        for k, m in enumerate(stripes):
+            idx[:, 20 + 30 * k:40 + 30 * k] = m
+        land = idx.copy()
+        for m in (sf.ASPHALT, sf.COBBLE, sf.BRICK, sf.PAVERS, sf.GOLF_GREEN, sf.GOLF_FAIRWAY):
+            land[idx == m] = sf.GRASS
+        self.assertEqual(len(sf.used_materials(idx)), 12)
+        counts = np.bincount(idx.ravel(), minlength=256)
+        painted = np.bincount(idx[idx != land], minlength=256)
+        folded, merged = sf.fold_policy(counts, painted, np.zeros(256), n, 1.0)
+        self.assertEqual(merged, [(sf.GOLF_GREEN, sf.GOLF_FAIRWAY), (sf.BRICK, sf.COBBLE), (sf.GOLF_FAIRWAY, sf.LAWN)])
+        self.assertEqual(folded, [])
+        out = sf.fold_layers(idx, land, 1.0)
+        self.assertEqual(len(sf.used_materials(out)), sf.LAYER_CAP)
+        self.assertTrue((out[idx == sf.GOLF_GREEN] == sf.LAWN).all() and (out[idx == sf.BRICK] == sf.COBBLE).all())
+        # no look-alike pairs left: the least used land-cover layer goes, whatever its size
+        idx2 = idx.copy()
+        idx2[idx2 == sf.BRICK] = sf.ROCK
+        idx2[idx2 == sf.GOLF_GREEN] = sf.SNOW
+        idx2[idx2 == sf.GOLF_FAIRWAY] = sf.GRASS
+        half = idx2[200:]
+        half[half == sf.SNOW] = sf.GRASS                # snow the least used land-cover layer
+        idx2[:, 380:] = sf.ROCK
+        land2 = np.where(np.isin(idx2, [sf.ASPHALT, sf.COBBLE, sf.PAVERS]), sf.GRASS, idx2).astype(np.uint8)
+        out2 = sf.fold_layers(idx2, land2, 1.0)
+        self.assertLessEqual(len(sf.used_materials(out2)), sf.LAYER_CAP)
+        self.assertFalse((out2 == sf.SNOW).any())
+        self.assertTrue((out2 == sf.ROCK).any())
+
+
 class PhotoSnowTest(unittest.TestCase):
     def test_snow_only_where_the_photo_is_white(self):
         # WorldCover "snow and ice" on the Stelvio Pass's summit where the orthophoto has grey-brown scree (#40/#44)
@@ -297,6 +401,9 @@ class ServerSurfaceTest(unittest.TestCase):
             lat = np.asarray(lat)
             return np.where(lat > LAT, 30, 40).astype(np.uint8), True
 
+        def block_classes(self, frame, cx, cy, lat, lon):
+            return self.classes(lat, lon)
+
         def roads(self, lat, lon):
             return [], True
 
@@ -469,12 +576,13 @@ class LotTest(unittest.TestCase):
         self.assertEqual(float(a[2, 2]), 0.0)
         self.assertAlmostEqual(float(a.sum()), 40.5 * 30, places=3)       # the union's area in pixels
         self.assertIsNone(sf._pads_px(frame, -32.0, -32.0, 64.0, 64, 64, [pad(100.0, 120.0, 0.0, 10.0)]))
-        rgb = np.full((64, 64, 3), 200, np.uint8)
+        # (a photo past the paved samples' luma cap: the flat colour; a pale grey one is a concrete lot's own tone now)
+        rgb = np.full((64, 64, 3), 240, np.uint8)
         out = sf.photo_pads(rgb, frame, -32.0, -32.0, 64.0, [pad(-20.5, 20.0, -15.0, 15.0)])
         paved = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
         self.assertTrue(np.array_equal(out[30, 30], paved))
-        self.assertTrue(np.array_equal(out[30, 11], np.round((200 + paved) / 2)))   # half covered
-        self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
+        self.assertTrue(np.array_equal(out[30, 11], np.round((240 + paved) / 2)))   # half covered
+        self.assertTrue(np.array_equal(out[2, 2], [240, 240, 240]) and np.array_equal(rgb[30, 30], [240, 240, 240]))
 
 
     def test_dirt_track_visible_on_pale_ground(self):
@@ -507,8 +615,155 @@ class LotTest(unittest.TestCase):
                 return [[np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])]]
         idx = np.full((50, 50), sf.DIRT, np.uint8)
         out = sf.paint_lots(idx, lat, lon, [Land()])
-        self.assertEqual(out[12, 12], sf.ASPHALT)
+        self.assertEqual(out[12, 12], sf.PAVERS, "no surface mapped: flat stone pavers")
         self.assertEqual(out[12, 37], sf.DIRT)
+
+    def _square(self, lat0, lon0, surface, holes=False):
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+
+        class Land:
+            kind = np.array([3], np.uint8)
+            attrs = {"class": np.array(["plaza"], object), "subtype": np.array(["pedestrian"], object),
+                     "surface": np.array([surface], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                a, b = lon0 + 5 * 2.6e-5, lon0 + 40 * 2.6e-5
+                c, d = lat0 + 5 * 2e-5, lat0 + 40 * 2e-5
+                outer = np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])
+                if not holes:
+                    return [[outer]]
+                e, f = lon0 + 18 * 2.6e-5, lon0 + 26 * 2.6e-5
+                g, h = lat0 + 18 * 2e-5, lat0 + 26 * 2e-5
+                return [[outer, np.array([(e, g), (f, g), (f, h), (e, h), (e, g)])]]
+        return lat, lon, [Land()]
+
+    def test_square_by_its_surface(self):
+        """The user, 2026-11-11: "paint the plaza and apply a texture to it like the roads": each square's layer by its
+        mapped surface, its holes (a fountain, a lawn) left as they were."""
+        for lat0, lon0, surf, want in ((48.86, 2.32, "paving_stones", sf.PAVERS), (48.86, 2.32, "sett", sf.COBBLE),
+                                       (48.86, 2.32, "asphalt", sf.ASPHALT), (40.71, -74.01, "bricks", sf.BRICK)):
+            lat, lon, land = self._square(lat0, lon0, surf, holes=True)
+            idx = np.full((50, 50), sf.GRASS, np.uint8)
+            out = sf.paint_lots(idx, lat, lon, land)
+            self.assertEqual(out[10, 10], want, surf)
+            self.assertEqual(out[22, 22], sf.GRASS, "the hole")
+            self.assertEqual(out[45, 45], sf.GRASS)
+        lat, lon, land = self._square(48.86, 2.32, "sand")
+        self.assertEqual(sf.paint_lots(np.full((50, 50), sf.GRASS, np.uint8), lat, lon, land)[10, 10], sf.GRASS,
+                         "unpaved: the land cover")
+
+    def test_square_by_its_own_tags(self):
+        """surface:colour / paving_stones:material over the photo's vote and the surface rule (plazas.tag_look)."""
+        import json
+        for tags, want in (({"surface:colour": "red"}, sf.BRICK), ({"paving_stones:material": "concrete"}, sf.PAVERS),
+                           ({"colour": "#b04a3a"}, sf.BRICK), ({"colour": "#9a9a9a"}, sf.PAVERS), ({}, sf.PAVERS)):
+            lat, lon, land = self._square(48.86, 2.32, "paving_stones")
+            land[0].attrs["tags"] = np.array([json.dumps(tags)], object)
+            out = sf.paint_lots(np.full((50, 50), sf.DIRT, np.uint8), lat, lon, land,
+                                lambda rings: [(plazas_mod().BRICK, 1.2)] * len(rings))
+            self.assertEqual(out[10, 10], want, tags)
+
+    def test_us_square_by_the_photo(self):
+        """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers, also
+        without a photo."""
+        import plazas
+        lat, lon, land = self._square(40.71, -74.01, "paving_stones")
+        idx = np.full((50, 50), sf.DIRT, np.uint8)
+        self.assertEqual(sf.paint_lots(idx, lat, lon, land)[10, 10], sf.PAVERS, "no photo read: grey")
+        red = sf.paint_lots(idx, lat, lon, land, lambda rings: [(plazas.BRICK, plazas.BRICK_REPEAT_M)] * len(rings))
+        self.assertEqual(red[10, 10], sf.BRICK)
+        grey = sf.paint_lots(idx, lat, lon, land, lambda rings: [plazas.PAVERS] * len(rings))
+        self.assertEqual(grey[10, 10], sf.PAVERS)
+
+
+class IslandFillTest(unittest.TestCase):
+    def test_paved_island_left_to_its_photo(self):
+        """A roundabout footprint the photo shows paved (Baltimore's Washington Monument circle) is not grassed over;
+        a green one is."""
+        poly = [(20, 20), (80, 20), (80, 80), (20, 80)]
+        paved = np.full((100, 100, 3), (170, 165, 155), np.uint8)
+        self.assertTrue(np.array_equal(sf._fill_island_photos(paved, [poly]), paved))
+        grass = paved.copy()
+        grass[30:70, 30:70] = (70, 120, 50)
+        out = sf._fill_island_photos(grass, [poly])
+        self.assertGreater(int(out[25, 25, 1]) - int(out[25, 25, 0]), 20, "the island grassed over")
+
+
+class RoadToneTest(unittest.TestCase):
+    """The roads painted in the photo's own pavement tone (earthfast.paint_lines_toned; the user, 2026-11-11: "start
+    with 1")."""
+
+    def test_tone_from_the_photo_not_the_cars(self):
+        import fast
+        rgb = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # grass
+        rgb[80:120, :] = (150, 148, 140)                                    # a pale concrete road across
+        rgb[95:105, 20:40] = (20, 20, 25)                                   # a black car on it
+        rgb[95:105, 120:126] = (250, 250, 250)                              # a marking
+        segs = np.array([[0.0, 100.0, 200.0, 100.0]])
+        cols = np.array([sf.PHOTO_ROAD_RGBA[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        tone = np.array([sf.PHOTO_ROAD_TONE[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        paved = np.array([list(sf.PHOTO_ROAD_RGBA).index("paved")], np.uint8)
+        out = fast._ef.paint_lines_toned(rgb, segs, np.array([18.0]), paved, cols, tone, 12,
+                                         sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        road = out[85:115, 5:195].reshape(-1, 3).astype(float)
+        flat = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
+        self.assertGreater(road.mean(0)[0], flat[0] + 15, "lighter than the flat grey: the photo's concrete")
+        self.assertLess(road.std(0).max(), 6.0, "even: no car or marking left in it")
+        self.assertTrue((out[20, 20] == rgb[20, 20]).all(), "off the road: the photo")
+        lum = road @ [0.299, 0.587, 0.114]
+        self.assertLessEqual(lum.max(), sf.PHOTO_ROAD_TONE["paved"][1] + 1.0, "within the kind's range")
+        cover = np.zeros((200, 200), np.float32)                            # a lot: paint_cover_toned
+        cover[60:140, 60:140] = 1.0
+        lot = rgb.copy()
+        lot[60:140, 60:140] = (140, 138, 132)
+        lot[90:100, 70:80] = (15, 15, 20)                                   # a parked car
+        painted = fast._ef.paint_cover_toned(lot, cover, np.array(sf.PHOTO_ROAD_RGBA["paved"], np.float32),
+                                             np.array(sf.PHOTO_ROAD_TONE["paved"], np.float32), 12,
+                                             sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        inside = painted[65:135, 65:135].reshape(-1, 3).astype(float)
+        self.assertGreater(inside.mean(0)[0], flat[0] + 15, "the lot's own pale asphalt")
+        self.assertLess(inside.std(0).max(), 6.0, "no car left in it")
+        self.assertTrue((painted[20, 20] == lot[20, 20]).all())
+        bare = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # no pavement in the photo: the flat colour
+        flat_out = fast._ef.paint_lines_toned(bare, segs, np.array([18.0]), paved, cols, tone, 12,
+                                              sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        self.assertTrue(np.allclose(flat_out[100, 100], flat, atol=1))
+
+    def test_concrete_keeps_its_light_tone(self):
+        """The user, 2026-11-12: "Concrete highways look too dark". A pale neutral pavement (a concrete motorway in
+        NAIP: luma 165-200) keeps its shade on a paved road (it was held at the paved cap, 135, or left out of the
+        samples past 185: the flat dark grey); a beige one (dry ground under a road drawn off its line) is held at the
+        cap as before; a road the map says is concrete takes the photo's tone, its light flat colour without one."""
+        import fast
+        cols = np.array([sf.PHOTO_ROAD_RGBA[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        tone = np.array([sf.PHOTO_ROAD_TONE[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        segs = np.array([[0.0, 100.0, 200.0, 100.0]])
+        kinds = list(sf.PHOTO_ROAD_RGBA)
+
+        def painted(road_rgb, kind):
+            rgb = np.full((200, 200, 3), (60, 110, 50), np.uint8)
+            if road_rgb is not None:
+                rgb[80:120, :] = road_rgb
+            out = fast._ef.paint_lines_toned(rgb, segs, np.array([18.0]), np.array([kinds.index(kind)], np.uint8),
+                                             cols, tone, 12, sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT,
+                                             sf.PHOTO_TONE_GREEN)
+            return float(np.median(out[90:110, 20:180].reshape(-1, 3).astype(float) @ [0.299, 0.587, 0.114]))
+        self.assertGreater(painted((190, 188, 180), "paved"), 155.0, "pale concrete keeps its light grey")
+        self.assertLess(painted((180, 165, 135), "paved"), 140.0, "a beige tone stays at the paved cap")
+        self.assertLess(painted((100, 100, 104), "paved"), 105.0, "dark asphalt as before")
+        conc = sf.PHOTO_ROAD_RGBA["concrete"]
+        self.assertAlmostEqual(painted(None, "concrete"), 0.299 * conc[0] + 0.587 * conc[1] + 0.114 * conc[2],
+                               delta=1.5)
+        self.assertLess(painted((96, 96, 100), "concrete"), 125.0, "tagged concrete under a dark overlay: the photo's")
+
+
+def plazas_mod():
+    import plazas
+    return plazas
 
 
 class PhotoRoadsTest(unittest.TestCase):
@@ -546,6 +801,19 @@ class PhotoRoadsTest(unittest.TestCase):
         self.assertLessEqual(abs(painted - width), 2, f"{painted} px painted across a {width:.1f} m road")
         self.assertEqual(int(out[10, 64, 0]), 30, "the photo kept off the road")
         self.assertTrue(np.array_equal(sf.photo_roads(rgb, frame, -64.0, -64.0, 128.0, []), rgb))
+
+    def test_tagged_concrete_painted_light(self):
+        """A road the map says is concrete (concrete:plates too) is painted in concrete's light grey where the photo
+        shows no pavement under it, not asphalt's."""
+        import geodesy
+        import test_roads
+        frame = geodesy.EnuFrame(test_roads.LAT, test_roads.LON)
+        rgb = np.full((128, 128, 3), (60, 110, 50), np.uint8)
+        con = test_roads.features([[(-60, 0), (60, 0)]], ["residential"], surfaces=[(0, "concrete:plates")])
+        asp = test_roads.features([[(-60, 0), (60, 0)]], ["residential"])
+        lum = [float(sf.photo_roads(rgb, frame, -64.0, -64.0, 128.0, [f])[64, 64].astype(float)
+                     @ [0.299, 0.587, 0.114]) for f in (con, asp)]
+        self.assertGreater(lum[0], lum[1] + 50, f"concrete {lum[0]:.0f} vs asphalt {lum[1]:.0f}")
 
 
 class FuelPadTest(unittest.TestCase):

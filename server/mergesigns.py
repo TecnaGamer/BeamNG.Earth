@@ -9,6 +9,7 @@ import time
 from concurrent.futures import CancelledError
 
 import numpy as np
+import dnp
 
 import exitsigns
 import signstates
@@ -59,7 +60,7 @@ def _upstream(rows, ramp):
     last segment before the freeway is often a few metres long; the one-way link segments ending where it starts
     (one each time, no fork) are joined on until CHAIN_M (the PR's OpenStreetMap ramps were one way each)."""
     path, used = ramp[:, :2], []
-    length = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
+    length = float(dnp.norm(np.diff(path, axis=0), axis=1).sum())
     while length < CHAIN_M:
         before = []
         for row in rows:
@@ -67,14 +68,14 @@ def _upstream(rows, ramp):
             if not sp.link or not sp.oneway or sp.cls not in ('motorway','trunk') or any(row is r for r in used):
                 continue
             seg = line[:, :2] if sp.dir >= 0 else line[::-1, :2]
-            if np.linalg.norm(seg[-1]-path[0]) < CHAIN_GAP_M and np.linalg.norm(seg[0]-path[-1]) > CHAIN_GAP_M:
+            if dnp.norm(seg[-1]-path[0]) < CHAIN_GAP_M and dnp.norm(seg[0]-path[-1]) > CHAIN_GAP_M:
                 before.append((row, seg))
         if len(before) != 1:
             break
         row, seg = before[0]
         used.append(row)
         path = np.vstack([seg[:-1], path])
-        length += float(np.linalg.norm(np.diff(seg, axis=0), axis=1).sum())
+        length += float(dnp.norm(np.diff(seg, axis=0), axis=1).sum())
     return path, used
 
 
@@ -95,21 +96,21 @@ def _place_rows(frame, rows, parts_of, owner=None):
         end_ll=np.asarray(ends)
         end_xy=np.column_stack(frame.geodetic_to_enu(end_ll[:,1],end_ll[:,0],0.))[:,:2]
         ramp=line if sp.dir>=0 else line[::-1]
-        if np.linalg.norm(end_xy-ramp[-1,:2],axis=1).min()>.1: continue
+        if dnp.norm(end_xy-ramp[-1,:2],axis=1).min()>.1: continue
         chain,used=_upstream(rows,ramp)
         back=chain[::-1]
         join=back[0]
         length=exitsigns._station(back,1e12)[2]
         if length<35.: continue
         incoming=join-exitsigns._station(back,min(25.,length))[0]
-        incoming/=max(np.linalg.norm(incoming),1e-9)
+        incoming/=max(dnp.norm(incoming),1e-9)
         joins=[]
         for row in mains:
             near=exitsigns._nearest(join,[(*row[:3],0.)])
             travel=near[7]*(row[1].dir or 1)
             # (on the freeway's pavement: Overture's simplified lines leave a ramp's end metres off the freeway's
             # centre line, where OpenStreetMap's share a node)
-            if near[0]<max(1.,row[3]/2.) and travel@incoming>.65:
+            if near[0]<max(1.,row[3]/2.) and dnp.matmul(travel, incoming)>.65:
                 joins.append((row,travel))
         if not joins: continue  # exits, city terminals and flyovers do not qualify
         direction=sorted(joins,key=lambda item:item[0][0])[0][1]
@@ -124,18 +125,18 @@ def _place_rows(frame, rows, parts_of, owner=None):
             for row in mains:
                 near=exitsigns._nearest(q,[(*row[:3],0.)])
                 travel=near[7]*(row[1].dir or 1)
-                if travel@direction<.85 or abs((q-near[6])@travel)>2.:continue
-                if (join-near[6])@direction < 10.:continue
+                if dnp.matmul(travel, direction)<.85 or abs(dnp.matmul(q-near[6], travel))>2.:continue
+                if dnp.matmul(join-near[6], direction) < 10.:continue
                 choices.append((near[0],row[0],row,near,travel))
             if not choices: continue
             _,_,row,near,travel=min(choices,key=lambda v:(v[0],v[1]))
             mainline=row[2];k,t=near[4],near[5]
             at=mainline[k]*(1-t)+mainline[k+1]*t
             right=np.array([travel[1],-travel[0]])
-            side=1 if (q-at[:2])@right>=0 else -1
+            side=1 if dnp.matmul(q-at[:2], right)>=0 else -1
             outward=right*side
             cross=signroads.cross(mainline)
-            edge=abs((cross[k]*(1-t)+cross[k+1]*t)@outward)*row[3]/2
+            edge=abs(dnp.matmul(cross[k]*(1-t)+cross[k+1]*t, outward))*row[3]/2
             spans=[v for poly in ramp_polys for v in exitsigns._spans(poly,at[:2],travel,outward) if v[1]>edge]
             if not spans:continue
             inner=min(v[0] for v in spans)
@@ -204,7 +205,7 @@ def place(frame,cells,box,elev,chunks=(),urban=None,widths=None,left_hand=False,
 
 def _diamond(side,margin=0.):
     ring=exitsigns.Mesh.outline(side-2*margin,-side/2+margin,side-2*margin,max(.01,.045-margin))
-    return ring@np.array([[1.,1.],[-1.,1.]])/math.sqrt(2.)
+    return dnp.matmul(ring, np.array([[1.,1.],[-1.,1.]]))/math.sqrt(2.)
 
 
 def _symbol(side=1):
@@ -262,7 +263,7 @@ class Mesh(exitsigns.Mesh):
         if mesh is None:return None
         p,t,uv,_,mi=mesh
         # Strip collapsed scanline corner triangles, preserving every visible face.
-        area=np.linalg.norm(np.cross(p[t[:,1]]-p[t[:,0]],p[t[:,2]]-p[t[:,0]]),axis=1)
+        area=dnp.norm(np.cross(p[t[:,1]]-p[t[:,0]],p[t[:,2]]-p[t[:,0]]),axis=1)
         keep=area>1e-12
         return p,t[keep],uv,MATERIALS,mi[keep]
 

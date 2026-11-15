@@ -151,10 +151,13 @@ export function searchPlaces(list, query, limit = 8) {
 }
 
 // A WMO weather code (settings.uiMapState's weather.code, from weather.lua's last message) as one emoji, the
-// same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm).
-export function weatherIcon(code) {
+// same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm). night: the sun is
+// down where the player is (settings.lua's weather.night): a clear sky is the moon, not the sun (GitHub #874).
+export function weatherIcon(code, night = false) {
   code = Number(code)
   if (!Number.isFinite(code)) return ""
+  if (code <= 1 && night) return "🌙"     // clear / mainly clear at night
+  if (code === 2 && night) return "☁️"     // partly cloudy at night: no sun peeking out
   if (code === 0) return "☀️"             // clear sky
   if (code <= 2) return "🌤️"         // mainly clear / partly cloudy
   if (code === 3) return "☁️"              // overcast
@@ -198,8 +201,10 @@ export function fallbackTiles(tiles, ready, levels = 6) {
 // ---- tile layers (server/maptiles.py LAYERS: the files the server writes) -------------------------------------
 export const LAYER_EXT = { sat: "jpg", map: "jpg", labels: "png" }
 
-// A layer's tile file under dir: dir/z/x/y.jpg for "sat" (where it always was), dir/<layer>/z/x/y.<ext> otherwise.
+// A layer's tile file under dir: dir/z/x/y.jpg for "sat" (where it always was), dir/<layer>/z/x/y.<ext> otherwise;
+// "satp": a "sat" tile's stand-in (server maptiles.PROV_DIR, settings.mapTiles), dir/prov/z/x/y.jpg.
 export function tilePath(dir, layer, z, x, y) {
+  if (layer === "satp") return `${dir}prov/${z}/${x}/${y}.jpg`
   return layer === "sat" ? `${dir}${z}/${x}/${y}.jpg` : `${dir}${layer}/${z}/${x}/${y}.${LAYER_EXT[layer]}`
 }
 

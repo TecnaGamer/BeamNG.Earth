@@ -5,6 +5,8 @@ import math
 import unicodedata
 
 import numpy as np
+import dmath
+import dnp
 
 import frroadmesh
 import furniture
@@ -12,7 +14,9 @@ import geotiles
 import signplacement
 import townsigns
 
-SIGNATURE = 'fr-local-directions-4'      # 4: the cells from the regional data (regionaldata fr_local / fr_priority)
+SIGNATURE = 'fr-local-directions-5'      # 5: PR #505's later route-estimate rules (checked routes, aligned distances)
+# 4: the cells from the regional data (regionaldata fr_local / fr_priority)
+CHECKED_ROUTING = 6     # the priority catalogue's routing version whose route faces compare competing turns
 SOURCE_ORDER = {'relation': 0, 'road': 1, 'route': 2}
 LOCAL = frozenset(
     ('primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street')
@@ -37,18 +41,27 @@ def nearby(frame, box, margin=0.0):
         return []
     import regionaldata
     result = []
+    priority = regionaldata.dataset('fr_priority')
+    # PR #505's rebuilt priority catalogue (routing 6) checks each route estimate against the junction's competing
+    # turns (checked_route); with it, the older short-range estimates of both catalogues are left out. An older
+    # catalogue keeps every face as before.
+    checked = ((priority or {}).get('meta') or {}).get('routing', 0) >= CHECKED_ROUTING
     for ds in ('fr_priority', 'fr_local'):
-        info = regionaldata.dataset(ds)
+        info = priority if ds == 'fr_priority' else regionaldata.dataset(ds)
         if info is None:
             continue
         cell_size = info['cell']
-        result.extend(
-            row
-            for x in range(lo[0] // cell_size, hi[0] // cell_size + 1)
-            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1)
-            for row in (regionaldata.cell(ds, x, y) or ())
-            if lo[0] <= row['at'][0] <= hi[0] + 1 and lo[1] <= row['at'][1] <= hi[1] + 1
-        )
+        for x in range(lo[0] // cell_size, hi[0] // cell_size + 1):
+            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1):
+                for row in (regionaldata.cell(ds, x, y) or ()):
+                    px, py = row['at']
+                    if lo[0] <= px <= hi[0] + 1 and lo[1] <= py <= hi[1] + 1:
+                        if not checked:
+                            result.append(row)
+                            continue
+                        panels = [p for p in row['panels'] if p['source'] != 'route' or p.get('checked_route')]
+                        if panels:
+                            result.append(dict(row, panels=panels))
     return result
 
 
@@ -112,7 +125,7 @@ class RoadGraph:
         )
         for part in near:
             spec, line, way, ring = self.parts[part]
-            distances = np.hypot(*(line[:, :2] - point).T)
+            distances = dnp.hypot(*(line[:, :2] - point).T)
             for i in np.flatnonzero(distances <= reach):
                 for sense, outward in ((1, line[i:]), (-1, line[i::-1])):
                     if len(outward) > 1 and _length(outward[1, :2] - outward[0, :2]) >= 0.05:
@@ -131,7 +144,7 @@ def _match(arms, at, hint, way, outbound, ring=False):
             continue
         sample, _ = furniture._at(arm.line, np.array([min(length, 18.0)]))
         ray = sample[0, :2] - arm.vertex[:2]
-        alignment = float(ray @ aim) / max(_length(ray), 0.01)
+        alignment = float(dnp.matmul(ray, aim)) / max(_length(ray), 0.01)
         if alignment < 0.81:
             continue
         same = way is not None and arm.way == way
@@ -165,7 +178,7 @@ def _continuation(graph, arm, outbound, stop_at_junction=False):
         if option.ring != arm.ring or not option.end or abs(option.vertex[2] - at[2]) > 1.15:
             continue
         ray = option.line[1, :2] - option.vertex[:2]
-        angle = float(ray @ tail) / _length(ray)
+        angle = float(dnp.matmul(ray, tail)) / _length(ray)
         if stop_at_junction and option.part != arm.part and -0.85 < angle <= 0.82:
             return None
         if option.allows(outbound) and angle > (-0.15 if arm.ring else 0.82):
@@ -211,7 +224,7 @@ def _ring_path(graph, entry):
 
 def _ring_reaches(path, leaving):
     for entry in path:
-        distances = np.hypot(*(entry.line[:, :2] - leaving.vertex[:2]).T)
+        distances = dnp.hypot(*(entry.line[:, :2] - leaving.vertex[:2]).T)
         match = int(np.argmin(distances))
         if (
             distances[match] <= (1.8 if leaving.end or match == len(entry.line) - 1 else 0.20)
@@ -292,11 +305,11 @@ def _straight_labels(sites):
         pts, _ = furniture._at(arm.line, np.array([12.0]))
         incoming = arm.vertex[:2] - pts[0, :2]
         for leave, panel in site.outlets:
-            if panel.get('local') or panel.get('centre') or leave.spec.cls not in THROUGH:
+            if panel['source'] == 'route' or panel.get('local') or panel.get('centre') or leave.spec.cls not in THROUGH:
                 continue
             pts, _ = furniture._at(leave.line, np.array([12.0]))
             ray = pts[0, :2] - leave.vertex[:2]
-            if float(incoming @ ray) >= .88 * _length(incoming) * _length(ray):
+            if float(dnp.matmul(incoming, ray)) >= .88 * _length(incoming) * _length(ray):
                 labels.setdefault((arm.part, -arm.sense), []).append((arm.vertex, panel))
     return labels
 
@@ -312,7 +325,7 @@ def _downstream_label(graph, branch, labels):
         stations = furniture._arclen(branch.line)
         choices = []
         for point, panel in labels.get((branch.part, branch.sense), ()):
-            distance = np.hypot(*(branch.line[:, :2] - point[:2]).T)
+            distance = dnp.hypot(*(branch.line[:, :2] - point[:2]).T)
             at = int(np.argmin(distance))
             if distance[at] <= .20 and 1.8 < stations[at] <= reach:
                 choices.append((stations[at], SOURCE_ORDER[panel['source']], panel))
@@ -385,7 +398,7 @@ def _sites(frame, graph, data, box, french):
             verified = {leave.key for leave, _ in site.outlets} if checked else None
             inherited = []
             for leave, panel in known:
-                if leave.key == arm.key or panel.get('local'):
+                if leave.key == arm.key or panel.get('local') or panel['source'] == 'route':
                     continue
                 if not ring and not _connected(arm, leave):
                     continue
@@ -475,6 +488,9 @@ def _settlement(at, urban, places):
 def _display(panel, urban, locality):
     names = ['Centre-ville'] if panel.get('centre') and urban else panel['names']
     distance = [frroadmesh.distance_label(m) for m in panel.get('distance', ())]
+    if not distance and not urban and panel.get('route_distances'):
+        distance = [frroadmesh.distance_label(m, estimated=True) if m else ''
+                    for m in panel['route_distances']]
     if not distance and not urban and panel.get('route_m'):
         distance = [frroadmesh.distance_label(panel['route_m'], estimated=True)]
     labels, distances = [], []
@@ -492,7 +508,8 @@ def _panels(at, approach, outlets, urban, locality):
     travel = approach.vertex[:2] - incoming[0, :2]
     result = []
     seen = set()
-    signed_names = set()
+    signed_names = {_name(name) for _, panel in outlets if panel['source'] != 'route' for name in panel['names']}
+    inferred_names = set()
     for leave, panel in sorted(outlets, key=lambda row: SOURCE_ORDER[row[1]['source']]):
         if approach.key == leave.key:
             continue
@@ -503,7 +520,7 @@ def _panels(at, approach, outlets, urban, locality):
             sample, _ = furniture._at(leave.line, np.array([12.0]))
             direction = sample[0, :2] - leave.vertex[:2]
         angle = math.degrees(
-            math.atan2(signplacement.cross(travel, direction), float(travel @ direction))
+            dmath.atan2(signplacement.cross(travel, direction), float(dnp.matmul(travel, direction)))
         )
         if abs(angle) > 143.0:
             continue
@@ -513,10 +530,10 @@ def _panels(at, approach, outlets, urban, locality):
         for name, distance in zip(panel['names'], panel['display_distance']):
             normal = _name(name)
             key = leave.key, normal
-            face = normal, turn == 'straight'
-            if key not in seen and (panel['source'] != 'route' or face not in signed_names):
+            if key not in seen and (panel['source'] != 'route' or normal not in signed_names | inferred_names):
                 seen.add(key)
-                signed_names.add(face)
+                if panel['source'] == 'route':
+                    inferred_names.add(normal)
                 labels.append(name)
                 distances.append(distance)
         if labels:
@@ -582,7 +599,7 @@ def _position(
         station = furniture._project(line, site[None])[0]
         if 2.0 <= station <= min(38.0, length - 9.0):
             points, outward = furniture._at(line, np.array([station]))
-            offset = float((site - points[0, :2]) @ _right(-outward[0]))
+            offset = float(dnp.matmul(site - points[0, :2], _right(-outward[0])))
             if half <= offset <= half + 9.0:
                 candidates.append((station, site, None))
     stations = [s for s in (ADVANCE_STATIONS if advance else LOCAL_STATIONS) if s <= length - 9.0]
@@ -617,9 +634,9 @@ def _position(
         if mount is not None:
             index, row = mount
             yaw = math.radians(row[4])
-            axis = np.array([-math.sin(yaw), math.cos(yaw)])
-            offset = float((fixed - c) @ right)
-            if not (half + .20 <= offset <= half + 3.8 and float(axis @ into) >= .91
+            axis = np.array([-dmath.sin(yaw), dmath.cos(yaw)])
+            offset = float(dnp.matmul(fixed - c, right))
+            if not (half + .20 <= offset <= half + 3.8 and float(dnp.matmul(axis, into)) >= .91
                     and abs(row[3] - points[0, 2]) < 1.0):
                 continue
             spots = [fixed + .016 * axis]
@@ -629,7 +646,7 @@ def _position(
             setbacks = (width / 2 + .65, .65, 1.05, width / 2 + 1.35, width / 2 + 2.3, width / 2 + 3.2)
             spots = [c + right * (half + setback) for setback in setbacks]
         for q in spots:
-            if any(float((q - eye) @ into) < 0.62 * _length(q - eye) for eye in eyes):
+            if any(float(dnp.matmul(q - eye, into)) < 0.62 * _length(q - eye) for eye in eyes):
                 continue
             facing = q - (eyes[0] + eyes[1]) / 2
             facing /= _length(facing)
@@ -720,11 +737,11 @@ def _exit_position(graph, leave, width, clearance):
             setbacks = (width / 2 + .55, .63, 1., width / 2 + 1.15, width / 2 + 2., width / 2 + 3.)
             for setback in setbacks:
                 q = p[:2] + side * right * (half + setback)
-                if float((q - eyes[0]) @ into) < 0:
+                if float(dnp.matmul(q - eyes[0], into)) < 0:
                     continue
                 facing = q - (eyes[0] + eyes[1]) / 2
                 facing /= _length(facing)
-                points_to = float(_right(facing) @ outward)
+                points_to = float(dnp.matmul(_right(facing), outward))
                 if abs(points_to) < .23 or not clearance.face(q, p[2], facing, width, eyes):
                     continue
                 z = clearance.obstacles.z(q, p[2])
@@ -758,6 +775,8 @@ def _exit_boards(frame, graph, rings, places, urban_fn, mesh, clearance):
                 panel = dict(panel, names=[panel['names'][i] for i in indices])
                 if 'distance' in panel:
                     panel['distance'] = [panel['distance'][i] for i in indices if i < len(panel['distance'])]
+                if 'route_distances' in panel:
+                    panel['route_distances'] = [panel['route_distances'][i] for i in indices]
                 if 0 not in indices:
                     panel.pop('route_m', None)
             exits.setdefault(leave.key, (leave, []))[1].append(panel)

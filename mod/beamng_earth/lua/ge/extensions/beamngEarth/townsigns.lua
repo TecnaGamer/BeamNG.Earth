@@ -1,4 +1,4 @@
--- Town entry and exit signs (server townsigns.py, BNE_TOWNSIGNS=on; the user, 2026-10-28: the sign of every town and
+-- Town entry and exit signs (server townentry.py, Settings > World > Town signs; the user, 2026-10-28: the sign of every town and
 -- village as you drive in). Each commune's face is a shape and a texture the server writes next to the road tile, which
 -- names them ("townsigns": group -> { shape, texture, material }); the body (two posts and the plate's back) is the
 -- one model every town sign shares (sign_town_body, tools/generate_town_signs.py). register makes a face's Material
@@ -29,7 +29,7 @@ M.FALLBACK_COLOR = '0.97 0.97 0.97 1'   -- texture file missing: a blank white p
 -- townsigns.clear_around): hidden within CLEAR_M of a sign (trees.lua's hiders)
 M.CLEAR_M = 6.0
 M.TREE_GROUPS = { deciduous = true, conifer = true, shrub = true, pine_west = true, oak_west = true, palm = true,
-  juniper = true, tropical = true, desert_shrub = true }
+  juniper = true, tropical = true, desert_shrub = true, mediterranean = true }
 M.ANCHORS_KEPT = 3     -- the signs of this many latest anchors are kept (an older anchor's tiles are gone)
 
 local faces = {}       -- group -> true: the face groups registered

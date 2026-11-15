@@ -57,13 +57,55 @@ M.top = top
 -- least CAUSE_SHARE of the frame; else UNMEASURED (a first-time load, the GPU driver, the OS: outside both timers).
 M.CAUSE_SHARE = 0.25
 M.UNMEASURED = 'mostly outside the mod and engine timers (a load, the GPU driver or the system)'
+-- The engine's Lua total (all of the game's Lua: ours, traffic, UI apps, the garbage collector) is named with whom it
+-- went to: 'Lua:<our part>' when one of the mod's parts is at least CAUSE_SHARE of it, 'Lua:other' when all of the
+-- mod's parts together are under CAUSE_SHARE of it (the game's own Lua), else 'Lua' (2026-11-09 telemetry: 'Lua' was
+-- the top cause of slow frames, which said nothing about whose).
 function M.cause(ms, hitch)
   local best, bk = 0, nil
   for _, part in ipairs({ hitch and hitch.mod or {}, hitch and hitch.engine or {} }) do
     for k, v in pairs(part) do if type(v) == 'number' and v > best then best, bk = v, k end end
   end
-  if bk and best >= M.CAUSE_SHARE * ms then return bk .. ' ' .. r1(best) end
-  return M.UNMEASURED
+  if not bk or best < M.CAUSE_SHARE * ms then return M.UNMEASURED end
+  if bk == 'Lua' then
+    local sum, top, tk = 0, 0, nil
+    for k, v in pairs(hitch.mod or {}) do
+      if type(v) == 'number' then
+        sum = sum + v
+        if v > top then top, tk = v, k end
+      end
+    end
+    if tk and top >= M.CAUSE_SHARE * best then bk = 'Lua:' .. tk
+    elseif sum < M.CAUSE_SHARE * best then bk = 'Lua:other' end
+  end
+  return bk .. ' ' .. r1(best)
+end
+
+-- The minute's 1 % low frame and its worst: the k-th largest of frames (k = 1 % of them) by one pass keeping the k
+-- largest in a short sorted list. The minute line copied and sorted every frame time with a Lua comparator: luajit
+-- 2.0 ms a minute at 60 fps, 10 ms at 240 fps (14,400 frames), in one frame; this pass 0.02 / 0.18 ms.
+-- M.TOPK_LOW = false: the old copy and sort (same numbers; the tests compare both).
+M.TOPK_LOW = true
+function M.lowAndWorst(t)
+  local n = #t
+  local k = math.max(1, math.ceil(n * 0.01))
+  if not M.TOPK_LOW then
+    local s = {}
+    for i, v in ipairs(t) do s[i] = v end
+    table.sort(s, function(a, b) return a > b end)
+    return s[k], s[1]
+  end
+  local top, m = {}, 0          -- the largest so far, descending
+  for i = 1, n do
+    local v = t[i]
+    if m < k or v > top[m] then
+      local j = (m < k) and m + 1 or m
+      while j > 1 and top[j - 1] < v do top[j] = top[j - 1]; j = j - 1 end
+      top[j] = v
+      if m < k then m = m + 1 end
+    end
+  end
+  return top[k], top[1]
 end
 
 local function median(t)
@@ -171,13 +213,10 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
   end
   -- the minute
   if now - summaryAt >= M.SUMMARY_S and #frames > 0 then
-    local s = {}
-    for i, v in ipairs(frames) do s[i] = v end
-    table.sort(s, function(a, b) return a > b end)
-    local low = s[math.max(1, math.ceil(#s * 0.01))]
+    local low, worst = M.lowAndWorst(frames)
     local c = ctx and ctx() or {}
     local line = string.format('perf minute %.0f fps, 1%% low %.0f, worst %d ms, %d hitches', #frames / (sumMin / 1000),
-      1000 / low, r0(s[1]), hitchesMin)
+      1000 / low, r0(worst), hitchesMin)
     if worstMin and worstMin.cause ~= '' then line = line .. ' (worst: ' .. worstMin.cause .. ')' end
     line = line .. ' ' .. where(c)
     if c.extra and c.extra ~= '' then line = line .. ' | ' .. c.extra end
