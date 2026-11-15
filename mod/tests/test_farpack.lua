@@ -232,5 +232,9 @@ do
   T.check(objsWith('bp_' .. P2)[1].hidden == true, 'the pack hidden over the real buildings')
   T.check(roads.farGeoHidden(s2f) == true, 'the skyline stays hidden: near and far tiles cover its square')
   T.check(roads.farGeoHidden(h2f, P2) == true, 'the horizon piece stays hidden too')
+  roads.onFarDrop({ anchorId = 1, key = P2 }, 'P')        -- (the pack gone: the horizon piece's own near/far rule decides)
+  run(1, A)
+  T.check(roads.debugFar()[roads.farGeoKey('P', P2)] == nil, 'the pack dropped')
+  T.check(roads.farGeoHidden(h2f, P2) == true, 'the horizon piece still hidden: near and far tiles cover the square')
 end
 T.done('test_farpack')
