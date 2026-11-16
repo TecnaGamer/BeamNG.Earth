@@ -1011,6 +1011,9 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         p = _plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
                   bank_ext=(len(bank_before), len(bank_after)),
                   banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse)
+        if p is not None and not coarse:
+            import nvdb_terrain_v0514
+            nvdb_terrain_v0514.grade_plan(p, lonlat, spec, shoulder(spec), T_MAX)
         # (road roughness, PR #639 by subformatdnb: off unless BNE_BUMPS > 0; cached plans keep whatever they were
         # planned with, so a change takes effect on places planned after it)
         out.append(bumps.apply(frame, p, spec, ab) if bumps.SCALE > 0 else p)

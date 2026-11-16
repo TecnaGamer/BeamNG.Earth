@@ -2487,8 +2487,9 @@ def taper_widths(width, tapers, lon, lat):
     """Per point (lon, lat arrays) the drawn width of a road width m wide with these tapers (road_tapers), smoothstepped
     from the width at each joint to its own over the taper's length; None where no taper reaches any point (width
     all along). Deterministic from absolute positions: every tile draws a road alike."""
+    # Norwegian NVDB road widths apply on untapered roads, too.
     if not tapers:
-        return None
+        tapers = ()
     lon, lat = np.asarray(lon, np.float64), np.asarray(lat, np.float64)
     out, hit = np.full(lon.shape, float(width)), False
     for tlon, tlat, target, span in tapers:
@@ -2498,6 +2499,13 @@ def taper_widths(width, tapers, lon, lat):
             hit = True
             t = np.clip(d / span, 0.0, 1.0)
             out += np.where(near, (target - width) * (1.0 - t * t * (3.0 - 2.0 * t)), 0.0)
+    # Strictly Norway-only; the width loader queues I/O rather than blocking.
+    if (len(lon) >= 2 and 57.5 <= float(np.mean(lat)) <= 72.0
+            and 3.9 <= float(np.mean(lon)) <= 32.5):
+        from nvdb_width_profile_v03 import at_points
+        measured = at_points(lon, lat, width, out if hit else None)
+        if measured is not None:
+            return measured
     return out if hit else None
 
 
@@ -11872,7 +11880,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         ws = None                               # (tapered where it meets a road of another width: road_tapers)
         if fid in seen:
             tp = joint_desc(road_copies.get(fid, [seen[fid][:2]]), lambda f: road_tapers(f, urban_fn, widths, left_hand))
-            if tp:
+            if tp or (57.5 <= float(frame.lat0) <= 72.0 and 3.9 <= float(frame.lon0) <= 32.5):
                 tla, tlo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 ws = taper_widths(spec.width, tp, tlo, tla)
         half = spec.width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4  # surface paints each segment at its mean
@@ -11895,6 +11903,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             ex = section_lines(ex, *seen[fid][:2], spec, pts, frame, lon, left_hand, line_country, ws)
             if str(country or "").upper() == "SE":
                 ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
+        # Use confidently matched Norwegian NVDB 99 paint where cached.
+        if str(line_country or country or "").upper() == "NO" and spec.kind == "paved":
+            import nvdb_marking_overlay_v046
+            _lat, _lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+            ex = nvdb_marking_overlay_v046.adjust(
+                ex, pts, _lon, _lat, ws if ws is not None else spec.width, spec)
         ex = rampmerges.trim(fid, ex, merge_layouts)
         # (every other road (ne) at its half width + CUT_MARGIN; edge lines not at a road it goes straight on in,
         # centre lines nor at its stems; French paint not at its continuations)
