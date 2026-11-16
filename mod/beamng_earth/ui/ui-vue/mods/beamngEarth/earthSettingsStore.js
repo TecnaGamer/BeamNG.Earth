@@ -129,6 +129,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expCanadaLidar", type: "bool", default: false, name: "Detailed Canadian lidar", desc: "Experimental. In Canada, the national lidar terrain (HRDEM) at full detail near you, and British Columbia's own 1 m lidar where it was flown. Sharper ground, but many more downloads: first visits there take much longer.",
         note: RESTART_NOTE },
+      { id: "expGenGround", type: "bool", default: false, name: "Generated ground", desc: "Experimental. The ground near you is made from 10 m satellite colour (Sentinel-2) and the map (land cover, fields, parks, water, tree heights, roads and buildings) instead of downloading 1 m aerial photos. Places load faster where the photo servers are slow or missing, but the ground shows less real detail (no field stripes, paths or yard details from the photo) and looks like summer.",
+        note: RESTART_NOTE },
       { id: "expStaleRevisit", type: "bool", default: false, name: "Show the older world while rebuilding", desc: "Experimental. After an update, places you visited before show the previous version's roads, trees, signs and ground photos while the new version builds them, instead of loading as a first visit.",
         note: RESTART_NOTE },
     ],
