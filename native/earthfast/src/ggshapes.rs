@@ -67,79 +67,122 @@ pub fn gg_fill_lines(py: Python<'_>, mut out: PyReadwriteArray2<'_, u32>, xy: Py
 }
 
 /// Each polygon's row direction (polygons, 2): the unit vector (east, north) along its dominant edge direction, from
-/// its outer ring (the first ring of poly_off's range) in xy (m, 2) metres: every edge votes for the directions within
-/// 10 degrees of its own with its length; the best-voted edge's direction, refined as the length-weighted mean of the
-/// edges near it (double angles: no trigonometry). Pointing east, or north when it runs north-south.
+/// the edges of all its rings (polygon p's rings are ring_off's [poly_off[p], poly_off[p + 1])) in xy (m, 2), an edge
+/// left out where skip (points) is set at its first point (a clipped piece's edges along a map cell's border: the
+/// clip, not the field). Linear in the edges (the Codex review of 308: a 50,000-vertex forest made the all-pairs vote
+/// quadratic): each edge adds its length to the nearest of BINS double-angle directions; the best window of the bins
+/// within 10 degrees wins, refined as the length-weighted mean of the edges within 10 degrees of its middle (double
+/// angles). Pointing east, or north when it runs north-south; (1, 0) for a polygon without an edge.
 #[pyfunction]
 pub fn gg_poly_axes<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, ring_off: PyReadonlyArray1<'py, i64>,
-                         poly_off: PyReadonlyArray1<'py, i64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let (xy, ring_off, poly_off) = (xy.as_array(), ring_off.as_array(), poly_off.as_array());
+                         poly_off: PyReadonlyArray1<'py, i64>, skip: PyReadonlyArray1<'py, u8>)
+                         -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (xy, ring_off, poly_off, skip) = (xy.as_array(), ring_off.as_array(), poly_off.as_array(), skip.as_array());
     let np = poly_off.len().saturating_sub(1);
     let nr = ring_off.len().saturating_sub(1);
-    let mut out = numpy::ndarray::Array2::<f64>::zeros((np, 2));
-    // cos(2 * 10 deg): the double-angle dot product of directions within 10 degrees
-    const NEAR: f64 = 0.939_692_620_785_908_4;
-    for p in 0..np {
-        out[[p, 0]] = 1.0;
-        let r = poly_off[p];
-        if r < 0 || r as usize >= nr {
-            continue;
-        }
-        let (a, b) = (ring_off[r as usize], ring_off[r as usize + 1]);
-        if a < 0 || b > xy.shape()[0] as i64 || b - a < 2 {
-            continue;
-        }
-        let (a, b) = (a as usize, b as usize);
-        // edges as (length, double-angle unit vector)
-        let mut edges: Vec<(f64, f64, f64)> = Vec::with_capacity(b - a);
-        for q in a..b {
-            let q2 = if q + 1 < b { q + 1 } else { a };
-            let (dx, dy) = (xy[[q2, 0]] - xy[[q, 0]], xy[[q2, 1]] - xy[[q, 1]]);
-            let l2 = dx * dx + dy * dy;
-            if l2 > 1e-12 {
-                edges.push((l2.sqrt(), (dx * dx - dy * dy) / l2, 2.0 * dx * dy / l2));
-            }
-        }
-        if edges.is_empty() {
-            continue;
-        }
-        let mut best = (f64::NEG_INFINITY, 0usize);
-        for (i, e) in edges.iter().enumerate() {
-            let score: f64 = edges.iter().filter(|f| f.1 * e.1 + f.2 * e.2 >= NEAR).map(|f| f.0).sum();
-            if score > best.0 {
-                best = (score, i);
-            }
-        }
-        let e = edges[best.1];
-        let (mut cx, mut cy) = (0.0, 0.0);
-        for f in edges.iter().filter(|f| f.1 * e.1 + f.2 * e.2 >= NEAR) {
-            cx += f.0 * f.1;
-            cy += f.0 * f.2;
-        }
-        let n = (cx * cx + cy * cy).sqrt();
-        if n <= 0.0 {
-            continue;
-        }
-        let (c2, s2) = (cx / n, cy / n);
-        // half angle: (cos t, sin t) with cos 2t = c2, sin 2t = s2, t in [0, pi)
-        let mut ux = ((1.0 + c2) / 2.0).max(0.0).sqrt();
-        let mut uy = ((1.0 - c2) / 2.0).max(0.0).sqrt();
-        if s2 < 0.0 {
-            uy = -uy;
-        }
-        if ux < 1e-9 && uy < 0.0 {
-            uy = -uy;
-        }
-        if ux < 0.0 {
-            ux = -ux;
-            uy = -uy;
-        }
-        out[[p, 0]] = ux;
-        out[[p, 1]] = uy;
+    let npts = xy.shape()[0];
+    if skip.len() != npts || (npts > 0 && xy.shape()[1] < 2) {
+        return Err(pyo3::exceptions::PyValueError::new_err("gg_poly_axes: bad shapes"));
     }
-    let _ = py;
+    let (xy, ring_off, poly_off, skip) = (xy.to_owned(), ring_off.to_owned(), poly_off.to_owned(), skip.to_owned());
+    let out = py.detach(move || {
+        let mut out = numpy::ndarray::Array2::<f64>::zeros((np, 2));
+        let centres: Vec<(f64, f64)> = (0..BINS).map(|k| {
+            let a = 2.0 * std::f64::consts::PI * k as f64 / BINS as f64;
+            (libm::cos(a), libm::sin(a))
+        }).collect();
+        let mut edges: Vec<(f64, f64, f64)> = Vec::new();
+        for p in 0..np {
+            out[[p, 0]] = 1.0;
+            let (r0, r1) = (poly_off[p], poly_off[p + 1]);
+            if r0 < 0 || r1 < r0 || r1 as usize > nr {
+                continue;
+            }
+            edges.clear();
+            for r in r0 as usize..r1 as usize {
+                let (a, b) = (ring_off[r], ring_off[r + 1]);
+                if a < 0 || b > npts as i64 || b - a < 2 {
+                    continue;
+                }
+                let (a, b) = (a as usize, b as usize);
+                for q in a..b {
+                    if skip[q] != 0 {
+                        continue;
+                    }
+                    let q2 = if q + 1 < b { q + 1 } else { a };
+                    let (dx, dy) = (xy[[q2, 0]] - xy[[q, 0]], xy[[q2, 1]] - xy[[q, 1]]);
+                    let l2 = dx * dx + dy * dy;
+                    if l2 > 1e-12 {
+                        edges.push((l2.sqrt(), (dx * dx - dy * dy) / l2, 2.0 * dx * dy / l2));
+                    }
+                }
+            }
+            if edges.is_empty() {
+                continue;
+            }
+            let mut hist = [0.0f64; BINS];
+            for e in &edges {
+                let mut best = (f64::NEG_INFINITY, 0usize);
+                for (k, c) in centres.iter().enumerate() {
+                    let d = e.1 * c.0 + e.2 * c.1;
+                    if d > best.0 {
+                        best = (d, k);
+                    }
+                }
+                hist[best.1] += e.0;
+            }
+            let mut best = (f64::NEG_INFINITY, 0usize);
+            for k in 0..BINS {
+                let mut s = 0.0;
+                for o in 0..=2 * WIN {
+                    s += hist[(k + BINS + o - WIN) % BINS];
+                }
+                if s > best.0 {
+                    best = (s, k);
+                }
+            }
+            // (the window's own middle: its bins' length-weighted direction; windows tied on one strong bin start
+            // left of it, their first bin's centre 10 degrees off)
+            let (mut mx, mut my) = (0.0, 0.0);
+            for o in 0..=2 * WIN {
+                let kk = (best.1 + BINS + o - WIN) % BINS;
+                mx += hist[kk] * centres[kk].0;
+                my += hist[kk] * centres[kk].1;
+            }
+            let mn = (mx * mx + my * my).sqrt();
+            let c = if mn > 0.0 { (mx / mn, my / mn) } else { centres[best.1] };
+            let (mut cx, mut cy) = (0.0, 0.0);
+            for f in edges.iter().filter(|f| f.1 * c.0 + f.2 * c.1 >= NEAR) {
+                cx += f.0 * f.1;
+                cy += f.0 * f.2;
+            }
+            let n = (cx * cx + cy * cy).sqrt();
+            if n <= 0.0 {
+                continue;
+            }
+            let (c2, s2) = (cx / n, cy / n);
+            // half angle: (cos t, sin t) with cos 2t = c2, sin 2t = s2, t in (-90, 90] degrees
+            let ux = ((1.0 + c2) / 2.0).max(0.0).sqrt();
+            let mut uy = ((1.0 - c2) / 2.0).max(0.0).sqrt();
+            if s2 < 0.0 {
+                uy = -uy;
+            }
+            if ux < 1e-9 && uy < 0.0 {
+                uy = -uy;
+            }
+            out[[p, 0]] = ux;
+            out[[p, 1]] = uy;
+        }
+        out
+    });
     Ok(PyArray2::from_owned_array(py, out))
 }
+
+// gg_poly_axes: cos(2 x 10 deg), the double-angle dot product of directions within 10 degrees; 72 bins of 5 degrees of
+// double angle (2.5 of direction), 4 either side within 10 degrees of direction
+const NEAR: f64 = 0.939_692_620_785_908_4;
+const BINS: usize = 72;
+const WIN: usize = 4;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gg_fill_lines, m)?)?;

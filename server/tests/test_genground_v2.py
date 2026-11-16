@@ -59,7 +59,8 @@ class ShapesTest(unittest.TestCase):
         u, v = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
         ring = [p * u for p in (0, 50, 100, 150, 200)] + [200 * u + 40 * v, 40 * v]
         ring = np.array(ring)
-        ax = EF.gg_poly_axes(ring, np.array([0, len(ring)], np.int64), np.array([0, 1], np.int64))
+        ax = EF.gg_poly_axes(ring, np.array([0, len(ring)], np.int64), np.array([0, 1], np.int64),
+                             np.zeros(len(ring), np.uint8))
         self.assertEqual(ax.shape, (1, 2))
         self.assertAlmostEqual(abs(float(ax[0] @ u)), 1.0, places=9)
         self.assertGreaterEqual(ax[0, 0], 0.0, "pointing east")
@@ -148,6 +149,146 @@ class SeasonTest(unittest.TestCase):
         rgb, _ = gg.render(Im(), geodesy.EnuFrame(40.0, -77.0), -32.0, -32.0, 64.0, 64, None, None)
         self.assertEqual(calls, ["render", ("season", (64 + 2 * int(gg.HALO_M),) * 2 + (3,))])
         self.assertTrue((rgb == 7).all(), "the graded generated ground, cut to the block")
+
+
+class _Clip:
+    """Stand-in land_use Features of one cell: polygons in lon / lat (parts(i)) and metres (parts(i, xy)), clipped."""
+
+    def __init__(self, rows, lat_c, lon_c):
+        rows = sorted(rows, key=lambda r: r[0])
+        self.ids = np.array([r[0] for r in rows])
+        self.kind = np.full(len(rows), 3, np.uint8)
+        self.attrs = {"class": np.array([r[1] for r in rows], object), "tags": np.array(["{}"] * len(rows), object)}
+        self.clipped = np.array([r[3] for r in rows], bool)
+        self._ll = [np.asarray(r[2], np.float64) for r in rows]
+        k = 111320.0
+        self._xy = [np.stack([(p[:, 0] - lon_c) * k * np.cos(np.radians(lat_c)), (p[:, 1] - lat_c) * k], 1)
+                    for p in self._ll]
+
+    def __len__(self):
+        return len(self.ids)
+
+    def index(self, fid):
+        j = int(np.searchsorted(self.ids, fid))
+        return j if j < len(self.ids) and self.ids[j] == fid else -1
+
+    def xy_in(self, frame):
+        return "xy"
+
+    def parts(self, i, xy=None):
+        return [[self._xy[i] if xy is not None else self._ll[i]]]
+
+
+class CodexRound2Test(unittest.TestCase):
+    """The Codex review of 41d74b61..f64f29d2."""
+
+    def setUp(self):
+        gg._retries.clear()
+        self.addCleanup(gg._retries.clear)
+
+    def test_axes_linear(self):
+        # [high] the all-pairs vote was quadratic: a 50,000-vertex forest or farm outline took seconds; now linear
+        import time
+        t = np.linspace(0, 2 * np.pi, 50000, endpoint=False)
+        ring = np.stack([400 * np.cos(t) + 3 * np.sin(37 * t), 150 * np.sin(t)], 1)
+        ring = np.concatenate([ring] * 4)
+        off = np.arange(0, len(ring) + 1, 50000, dtype=np.int64)
+        t0 = time.perf_counter()
+        ax = EF.gg_poly_axes(np.ascontiguousarray(ring), off, np.arange(0, 5, dtype=np.int64),
+                             np.zeros(len(ring), np.uint8))
+        self.assertLess(time.perf_counter() - t0, 1.0, "200,000 vertices in well under a second")
+        self.assertEqual(ax.shape, (4, 2))
+
+    def test_clip_edges_left_out(self):
+        # a field's piece whose longest edges are the cell border's clip: the field's own edges decide
+        ring = np.array([(0, 0), (100, 0), (100, 10), (0, 10)], np.float64)      # its long edges: 100 m east-west
+        skip = np.array([1, 0, 1, 0], np.uint8)                                   # ... both the clip
+        ax = EF.gg_poly_axes(ring, np.array([0, 4], np.int64), np.array([0, 1], np.int64), skip)
+        self.assertAlmostEqual(abs(float(ax[0, 1])), 1.0, places=9, msg="north-south: the field's own sides")
+
+    def test_clipped_field_same_direction_in_every_cell(self):
+        # [medium] an orchard 300 m long at 20 degrees, split by a cell border: each cell's piece, asked from either
+        # cell, gets the field's direction (not its own piece's: the small piece's longest edge is the clip)
+        import mapcells
+        key_a = mapcells.cell_of(40.5, -77.5)
+        key_b = mapcells.CellKey(key_a.z, key_a.x + 1, key_a.y)
+        lon_b, lat0, _lon1, lat1 = key_a.bounds()[2], key_a.bounds()[1], key_a.bounds()[2], key_a.bounds()[3]
+        lat_c = (lat0 + lat1) / 2
+        mlon = 111320.0 * np.cos(np.radians(lat_c))
+        a = np.radians(20.0)
+        u, v = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+        # the field in metres from the border point (lon_b, lat_c): 280 m of it east of the border, 20 m west
+        corners = [-20 * u, 280 * u, 280 * u + 60 * v, -20 * u + 60 * v]
+
+        def ll(p):
+            return (lon_b + p[0] / mlon, lat_c + p[1] / 111320.0)
+
+        def clip(poly, east):
+            # the polygon cut at x = 0 (the border), Sutherland-Hodgman on one side
+            out = []
+            for k in range(len(poly)):
+                p, q = poly[k], poly[(k + 1) % len(poly)]
+                pin, qin = (p[0] >= 0) == east, (q[0] >= 0) == east
+                if pin:
+                    out.append(p)
+                if pin != qin:
+                    t = p[0] / (p[0] - q[0])
+                    out.append(p + t * (q - p))
+            out = [np.array((0.0, o[1])) if abs(o[0]) < 1e-9 else o for o in out]
+            return np.array([ll(o) for o in out])
+        west, east = clip(corners, False), clip(corners, True)
+        fa = _Clip([("orch1", "orchard", west, True)], lat_c, lon_b)
+        fb = _Clip([("orch1", "orchard", east, True)], lat_c, lon_b)
+        cells = {key_a: fa, key_b: fb}
+        got = []
+        for f, key in ((fa, key_a), (fb, key_b)):
+            _p, _k, dirs, _ph = gg.polygons(None, -400.0, -400.0, 800.0, 200, [("land_use", f, key)],
+                                            more=lambda k2: cells.get(k2))
+            got.append(dirs[0])
+        for d in got:
+            self.assertAlmostEqual(abs(float(d @ u)), 1.0, places=6, msg=str(d))
+        # (before: each piece alone; the west piece's longest edge is the 60 m clip, north-south)
+        alone = gg.polygons(None, -400.0, -400.0, 800.0, 200, [("land_use", fa, None)])[2][0]
+        self.assertLess(abs(float(alone @ u)), 0.9, "the test sees the old fault")
+
+    def test_missing_layer_retried_with_backoff_then_given_up(self):
+        # [high] a layer whose fetch failed was never asked again (the block stale for good); asked at every photo it
+        # would hammer the host: asked again with a doubling backoff, given up after RETRY_TRIES
+        import geodesy
+        from unittest import mock
+        asks = []
+
+        class Surf:
+            def _queue(self, key, layers):
+                asks.append((now[0], key, layers))
+
+        class MD:
+            def has(self, key, layer):
+                return layer != "canopy"
+
+            def cell(self, key, layers=None, kind=None):
+                import types
+                return types.SimpleNamespace(layers={})
+        now = [0.0]
+        frame = geodesy.EnuFrame(40.877, -77.566)
+        with mock.patch.object(gg, "_now", lambda: now[0]):
+            ready_at = None
+            for step in range(0, 1700, 10):
+                now[0] = float(step)
+                if gg.data_ready(MD(), frame, -64.5, -64.5, 128.0, Surf()) and ready_at is None:
+                    ready_at = step
+            one = sorted({k for _t, k, _l in asks}, key=str)[0]
+            times = [t for t, k, _l in asks if k == one]
+            self.assertEqual(times, [0.0, 30.0, 90.0, 210.0, 450.0, 930.0])
+            self.assertEqual(ready_at, 1530, "given up after its last wait: the photo is made final")
+            pending = set()
+            gg.render(_ImStub(), frame, -64.5, -64.5, 128.0, 128, MD(), None, None, pending)
+            self.assertNotIn(gg.GEN_PENDING, pending, "given up: not pending")
+
+
+class _ImStub:
+    def render(self, frame, x0, y0, size, px, pending=None):
+        return np.full((px, px, 3), 100, np.uint8), {"eox2023": px * px}
 
 
 if __name__ == "__main__":

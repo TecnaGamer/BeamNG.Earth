@@ -6476,6 +6476,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 308: generated ground stage 2: gg_regions(..., line, line_kind, ...) and the surface / pattern kinds,
     // gen_ground(..., poly, pdir, pphase, ...), ggshapes::gg_fill_lines / gg_poly_axes
     ggshapes::register(m)?;
-    m.add("VERSION", 308)?;
+    // 309: gg_poly_axes(..., skip): linear (a histogram of the edge directions), all of a polygon's rings, clip edges left
+    // out (Codex review of 308)
+    m.add("VERSION", 309)?;
     Ok(())
 }

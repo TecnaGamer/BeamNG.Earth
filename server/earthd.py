@@ -5397,7 +5397,8 @@ class Server:
             la, lo = surfacemod._square_pts(anchor.frame, x0, y0, size)
             if not all(self.mapdata.has(k, "roads") for k in mapcells.cells_for_points(la, lo)):
                 return False
-        if genground.GEN_PENDING in pending and not genground.data_ready(self.mapdata, anchor.frame, x0, y0, size):
+        if genground.GEN_PENDING in pending and not genground.data_ready(self.mapdata, anchor.frame, x0, y0, size,
+                                                                            self.surface):
             return False            # (the generated ground's map data: made again once it is on disk)
         return all(rk in (road_data, genground.GEN_PENDING) or self._region_status(rk) is not None for rk in pending)
 

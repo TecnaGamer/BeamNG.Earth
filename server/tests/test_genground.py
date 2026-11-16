@@ -61,7 +61,8 @@ def gen(s2, kind, region=None, canopy=None, ox=1000.0, oy=2000.0, gr=None, gc=No
     phases = np.zeros(len(dirs)) if phases is None else np.asarray(phases, np.float64)
     return EF.gen_ground(np.ascontiguousarray(s2), np.ascontiguousarray(kind, np.uint8),
                          np.ascontiguousarray(region, np.uint32), np.ascontiguousarray(canopy, np.uint8),
-                         np.ascontiguousarray(poly, np.uint32), np.ascontiguousarray(dirs), np.ascontiguousarray(phases),
+                         np.ascontiguousarray(poly, np.uint32), np.ascontiguousarray(dirs),
+                         np.ascontiguousarray(phases),
                          float(ox), float(oy), 1.0, int(-oy if gr is None else gr), int(ox if gc is None else gc))
 
 
@@ -193,7 +194,8 @@ class GenGroundTest(unittest.TestCase):
         x = np.arange(W)
         s2 = np.stack([(x[None, :] + 30 + 0 * x[:, None]) % 256, (x[:, None] * 3 // 4 + 20 + 0 * x[None, :]) % 256,
                        rng.integers(0, 60, (W, W))], -1).astype(np.uint8)
-        kind = rng.choice([gg.GRASS, gg.TREE, gg.CROP, gg.WATER, gg.LAWN, gg.PAVED, gg.BUILT], (W // 12 + 1, W // 9 + 1))
+        kinds = [gg.GRASS, gg.TREE, gg.CROP, gg.WATER, gg.LAWN, gg.PAVED, gg.BUILT]
+        kind = rng.choice(kinds, (W // 12 + 1, W // 9 + 1))
         kind = kind.repeat(12, 0).repeat(9, 1)[:W, :W].astype(np.uint8)
         kind[100:140, 50:300] = gg.WATER
         region = kind.astype(np.uint32) + 16 * ((np.arange(W)[None, :] // 70) % 3).astype(np.uint32)
@@ -340,6 +342,8 @@ class RefreshTest(unittest.TestCase):
     made again once it is: earthd.Server.base_ready waits for genground.data_ready."""
 
     def test_missing_data_marks_the_photo(self):
+        gg._retries.clear()
+        self.addCleanup(gg._retries.clear)
         import geodesy
         frame = geodesy.EnuFrame(40.877, -77.566)
         pending = set()
@@ -354,6 +358,8 @@ class RefreshTest(unittest.TestCase):
         self.assertNotIn(gg.GEN_PENDING, pending, "no map data at all (none to wait for)")
 
     def test_server_redoes_it(self):
+        gg._retries.clear()
+        self.addCleanup(gg._retries.clear)
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import earthd
         from test_server import LAT, LON, ServerHarness

@@ -32,7 +32,8 @@ The rest of the photo's path is unchanged: the roofs filled, the roads, lots, fi
 0.5 m, the cliffs as rock, the terrain material layers' sharp detail textures over it in the game.
 
 With the switch on, the imagery chain holds SOURCES alone (chain(), earthd's main): no 1 m photo is fetched for the
-ground, the far rings, the warm-up or the prefetch, nor for the roofs, squares or street fronts (buildings._photo_sources).
+ground, the far rings, the warm-up or the prefetch, nor for the roofs, squares or street fronts
+(buildings._photo_sources).
 Off (the default): nothing changes. The switch is a BNE_* variable, so it is in revisit.code_key (the base photos' and
 far tiles' revisit keys, the blocks, the road tiles), switches_key and the decision archives' vkey_doc like every build
 switch (experimental.py). Every input is map data whose versions are in the base photo's key (mapdata.versions()); a
@@ -45,6 +46,8 @@ import hashlib
 import json
 import logging
 import os
+import threading
+import time
 
 import numpy as np
 
@@ -56,7 +59,7 @@ import revisit
 log = logging.getLogger("earthd.genground")
 
 ON = os.environ.get("BNE_GEN_GROUND", "off").strip().lower() in ("on", "1", "yes", "true")
-NEED = 308                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns)
+NEED = 309                  # earthfast gg_* / gen_ground (stage 2: lines, surfaces, patterns; linear axes)
 # m round a block its generated ground is made over and cut from: a texel's colour reads the inputs this far round
 # (genground.rs: windows FAR_R_M 48 + the lattice and purity margins), so overlapping blocks agree
 HALO_M = 64.0
@@ -147,40 +150,97 @@ def _cells(lat, lon):
     return mapcells.cells_for_bbox(float(lat.min()), float(lon.min()), float(lat.max()), float(lon.max()))
 
 
+# A missing layer is asked for again with a backoff (RETRY_FIRST_S, doubling, at most RETRY_MAX_S) and given up after
+# RETRY_TRIES asks (the Codex review of 308: a layer whose fetch failed once was never asked again, and the block stayed
+# stale for good; asked at every photo it would hammer the host): given up, the photo is made without it and is final
+# for this process (still a revisit fault: not kept, a later start asks again).
+RETRY_FIRST_S = 30.0
+RETRY_MAX_S = 600.0
+RETRY_TRIES = 6
+_retries = {}               # (cell, layer) -> [asks so far, when the next may be]
+_retry_lock = threading.Lock()
+
+
+def _now():
+    return time.monotonic()
+
+
+def gave_up(key, layer):
+    """Whether the layer of the cell was asked for RETRY_TRIES times without coming (and its last wait is over)."""
+    with _retry_lock:
+        r = _retries.get((key, layer))
+        return r is not None and r[0] >= RETRY_TRIES and _now() >= r[1]
+
+
+def _ask(key, layer, surface):
+    """Queue a background fetch of the layer of the cell if its backoff allows (Surface._queue: the land cover's
+    thread, which drops a repeat while one is queued). True when asked."""
+    queue = getattr(surface, "_queue", None)
+    now = _now()
+    with _retry_lock:
+        r = _retries.setdefault((key, layer), [0, 0.0])
+        if r[0] >= RETRY_TRIES or now < r[1]:
+            return False
+        r[1] = now + min(RETRY_MAX_S, RETRY_FIRST_S * 2.0 ** r[0])
+        r[0] += 1
+    if queue is not None:
+        try:
+            queue(key, (layer,))
+        except Exception as e:      # (asked again after the backoff)
+            log.debug("genground: queue %s of %s: %s", layer, key, e)
+    return True
+
+
+def _absent(md, key, layer, missing, surface):
+    """A layer not on disk: asked for (_ask), a revisit fault, and on missing unless given up (gave_up)."""
+    revisit.fault()
+    _ask(key, layer, surface)
+    if not gave_up(key, layer):
+        missing.append((key, layer))
+
+
 def _layer(md, key, layer, missing, surface=None):
     """A cached layer of a cell, or None. Never fetches here: a missing one goes on `missing` (the photo is redone once
-    it is on disk: GEN_PENDING, earthd.Server.base_ready), is a revisit fault (the photo is not kept) and is queued
-    for a background fetch (Surface._queue: the land cover's thread)."""
+    it is on disk: GEN_PENDING, earthd.Server.base_ready), is a revisit fault (the photo is not kept) and is asked
+    for in the background with a backoff (_absent)."""
     if md is None:
         return None
     if not md.has(key, layer):
-        missing.append((key, layer))
-        revisit.fault()
-        queue = getattr(surface, "_queue", None)
-        if queue is not None:
-            try:
-                queue(key, (layer,))
-            except Exception as e:  # (asked again by the next photo)
-                log.debug("genground: queue %s of %s: %s", layer, key, e)
+        _absent(md, key, layer, missing, surface)
         return None
     try:
         return md.cell(key, layers=(layer,), kind="background").layers.get(layer)
     except Exception as e:          # an unreadable cache file: like a missing one
         log.debug("genground: %s of %s: %s: %s", layer, key, type(e).__name__, e)
-        missing.append((key, layer))
-        revisit.fault()
+        _absent(md, key, layer, missing, surface)
         return None
 
 
-def data_ready(md, frame, x0, y0, size):
-    """Every layer the generated ground reads (LAYERS) on disk for the cells under the square and its halo (never
-    fetches): a photo made without some of them (GEN_PENDING) is made again then."""
-    if md is None:
-        return True
+def _data_cells(frame, x0, y0, size):
+    """(the cells under the square and its halo, those and the ring of cells round them: a clipped field's other
+    pieces, _axis_rings)."""
     hx0, hy0, hsize, _hpx, _h = halo_square(x0, y0, size, 1024)
     la, lo, _ = frame.enu_to_geodetic(np.array([hx0, hx0 + hsize]), np.array([hy0, hy0 + hsize]), 0.0)
     keys = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
-    return all(md.has(k, layer) for k in keys for layer in LAYERS)
+    ring = sorted({mapcells.CellKey(k.z, k.x + dx, k.y + dy) for k in keys for dx in (-1, 0, 1) for dy in (-1, 0, 1)},
+                  key=str)
+    return keys, ring
+
+
+def data_ready(md, frame, x0, y0, size, surface=None):
+    """Every layer the generated ground reads (LAYERS) on disk, or given up (gave_up), for the cells under the square
+    and its halo, and the land use of the cells round them (never fetches; what is missing is asked for again when its
+    backoff allows: base_ready polls this): a photo made without some of them (GEN_PENDING) is made again then."""
+    if md is None:
+        return True
+    keys, ring = _data_cells(frame, x0, y0, size)
+    ready = True
+    for k, layer in [(k, layer) for k in keys for layer in LAYERS] + [(k, "land_use") for k in ring]:
+        if md.has(k, layer) or gave_up(k, layer):
+            continue
+        _ask(k, layer, surface)
+        ready = ready and gave_up(k, layer)
+    return ready
 
 
 def base_kinds(classes, lat, lon):
@@ -250,7 +310,7 @@ def polygon_kind(layer, f, i):
         sport = str(tags.get("sport") or "").split(";")[0].strip()
         return PITCH_SURFACE.get(surf) or PITCH_SPORT.get(sport) or TURF, 1
     if cls in ("pedestrian", "plaza") or tags.get("place") == "square" or tags.get("highway") == "pedestrian":
-        return SURFACE_KIND.get(surf, PAVERS), 1     # (no surface: pavers, as the square's material layer, plazas.paving)
+        return SURFACE_KIND.get(surf, PAVERS), 1     # (no surface: pavers, as its material layer: plazas.paving)
     if cls in ("schoolyard", "playground"):
         if surf in SURFACE_KIND:
             return SURFACE_KIND[surf], 1
@@ -266,17 +326,69 @@ def _phase(fid):
     return int.from_bytes(h, "little") / 2.0 ** 64 * 12.0
 
 
-def polygons(frame, x0, y0, size, px, feats_list):
+# kinds whose rows need a direction (gen_ground's patterns): the rest (forests, farmland, water) never ask for one
+ROW_KINDS = frozenset((TURF, ARTTURF, CLAY, TARTAN, COURT, ORCHARD, VINEYARD, ALLOTMENT, GREENHOUSE, CEMETERY))
+CLIP_EPS_DEG = 1e-9
+
+
+def _clip_flags(lonlat, key):
+    """Per point of a clipped piece's ring (lon, lat), whether its edge to the next point runs along a border of its map
+    cell (the clip, not the polygon's own outline): both ends on the same border."""
+    lon0, lat0, lon1, lat1 = key.bounds()
+    p = np.asarray(lonlat, np.float64)
+    q = np.roll(p, -1, axis=0)
+    out = np.zeros(len(p), np.uint8)
+    for col, b in ((0, lon0), (0, lon1), (1, lat0), (1, lat1)):
+        out |= ((np.abs(p[:, col] - b) <= CLIP_EPS_DEG) & (np.abs(q[:, col] - b) <= CLIP_EPS_DEG)).astype(np.uint8)
+    return out
+
+
+def _axis_rings(frame, fid, f, i, key, more):
+    """[(xy ring (k, 2) m, skip (k,) uint8)] the row direction of polygon fid is found from: its own rings, and where
+    Overture clipped it to its map cell, every piece of it in the 3 x 3 cells round that one (more(cell): their
+    land_use Features or None), the clip's edges left out. The same pieces whichever block asks (the Codex review of
+    308: a field split across cells took another direction in each)."""
+    pieces = [(f, i, key)]
+    clipped = getattr(f, "clipped", None)
+    if more is not None and key is not None and clipped is not None and bool(clipped[i]):
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                k2 = mapcells.CellKey(key.z, key.x + dx, key.y + dy)
+                g = more(k2)
+                if g is None or not len(g):
+                    continue
+                j = g.index(fid)
+                if j >= 0:
+                    pieces.append((g, j, k2))
+    out = []
+    for g, j, k in pieces:
+        xy = g.xy_in(frame)
+        is_clipped = getattr(g, "clipped", None) is not None and bool(g.clipped[j])
+        for part_ll, part_xy in zip(g.parts(j), g.parts(j, xy)):
+            for r_ll, r_xy in zip(part_ll, part_xy):
+                if len(r_xy) < 2:
+                    continue
+                skip = _clip_flags(r_ll, k) if is_clipped and k is not None else np.zeros(len(r_xy), np.uint8)
+                out.append((np.asarray(r_xy, np.float64)[:, :2], skip))
+    return out
+
+
+def polygons(frame, x0, y0, size, px, feats_list, more=None):
     """(poly (px, px) uint32: 0 or 1 + the index of the polygon over each texel, kinds (polygons,) uint8, dirs
     (polygons, 2) each one's rows' direction (east, north), phases (polygons,) m) of the land-use, water and
-    infrastructure Features in feats_list ([(layer name, Features)]), drawn in polygon_kind's order (land use by area,
-    largest first: a park inside a bigger farm area wins)."""
+    infrastructure Features in feats_list ([(layer name, Features, its map cell or None)]), drawn in polygon_kind's
+    order (land use by area, largest first: a park inside a bigger farm area wins). more(cell): the land_use Features
+    of another cell, for a clipped polygon's other pieces (_axis_rings)."""
     fast.require(NEED, "generated ground")
     t = size / px
     top = y0 + size
-    items = []          # (order, -area, id, part, kind, [rings as texel (col, row)])
+    items = []          # (order, -area, id, part, kind, [rings as texel (col, row)], (Features, row, cell))
     seen = set()
-    for layer, f in feats_list:
+    for entry in feats_list:
+        layer, f = entry[0], entry[1]
+        key = entry[2] if len(entry) > 2 else None
         if f is None or not len(f):
             continue
         poly_rows = np.flatnonzero(np.asarray(f.kind) == 3)
@@ -302,26 +414,40 @@ def polygons(frame, x0, y0, size, px, feats_list):
                 area = abs(float(np.sum(x[:-1] * y[1:] - x[1:] * y[:-1]) + x[-1] * y[0] - x[0] * y[-1])) / 2.0
                 rings = [np.stack([(np.asarray(r, np.float64)[:, 0] - x0) / t,
                                    (top - np.asarray(r, np.float64)[:, 1]) / t], 1) for r in part if len(r) >= 3]
-                items.append((order, -area, fid, pi, int(kind), rings))
+                items.append((order, -area, fid, pi, int(kind), rings, (layer, f, i, key)))
     poly = np.zeros((px, px), np.uint32)
     if not items:
         return poly, np.zeros(0, np.uint8), np.zeros((0, 2)), np.zeros(0)
     items.sort(key=lambda it: it[:4])
     pts, ring_off, poly_off, kinds, phases = [], [0], [0], [], []
-    for _o, _a, fid, _pi, k, rings in items:
+    apts, askip, aring, apoly = [], [], [0], [0]
+    axes_memo = {}
+    for _o, _a, fid, _pi, k, rings, (layer, f, i, key) in items:
         for r in rings:
             pts.append(r)
             ring_off.append(ring_off[-1] + len(r))
         poly_off.append(len(ring_off) - 1)
         kinds.append(k)
         phases.append(_phase(fid))
+        if k in ROW_KINDS:      # (only the patterns' polygons: a 50,000-vertex forest never needs a direction)
+            got = axes_memo.get((layer, fid))
+            if got is None:
+                got = axes_memo[(layer, fid)] = _axis_rings(frame, fid, f, i, key,
+                                                            more if layer == "land_use" else None)
+            for r, sk in got:
+                apts.append(r)
+                askip.append(sk)
+                aring.append(aring[-1] + len(r))
+        apoly.append(len(aring) - 1)
     pts = np.ascontiguousarray(np.concatenate(pts), np.float64)
     ring_off = np.asarray(ring_off, np.int64)
     poly_off = np.asarray(poly_off, np.int64)
     fast._ef.gg_fill_polys(poly, pts, ring_off, poly_off, np.arange(1, len(kinds) + 1, dtype=np.uint32))
-    ax = fast._ef.gg_poly_axes(pts, ring_off, poly_off)     # (in texels: rows run south)
-    dirs = np.ascontiguousarray(np.stack([ax[:, 0], -ax[:, 1]], 1))
-    return poly, np.asarray(kinds, np.uint8), dirs, np.asarray(phases, np.float64)
+    dirs = np.asarray(fast._ef.gg_poly_axes(
+        np.ascontiguousarray(np.concatenate(apts) if apts else np.zeros((0, 2)), np.float64),
+        np.asarray(aring, np.int64), np.asarray(apoly, np.int64),
+        np.ascontiguousarray(np.concatenate(askip) if askip else np.zeros(0, np.uint8))), np.float64)
+    return poly, np.asarray(kinds, np.uint8), np.ascontiguousarray(dirs), np.asarray(phases, np.float64)
 
 
 def line_items(roads_list, water_list, infra_list):
@@ -461,7 +587,7 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         for layer in ("land_use", "water", "infrastructure"):
             f = _layer(md, key, layer, missing, surface)
             if f is not None:
-                feats.append((layer, f))
+                feats.append((layer, f, key))
                 if layer in by_layer:
                     by_layer[layer].append(f)
         canopies.append(_layer(md, key, "canopy", missing, surface))
@@ -472,8 +598,14 @@ def inputs(frame, x0, y0, size, px, md, surface, widths=None):
         for key in keys:
             for layer in ("landcover", "buildings"):
                 if not md.has(key, layer):
-                    missing.append((key, layer))
-    poly, pkinds, dirs, phases = polygons(frame, x0, y0, size, px, feats)
+                    _absent(md, key, layer, missing, surface)
+    loaded = {key: f for layer, f, key in feats if layer == "land_use"}
+
+    def more(k2):           # (a clipped field's other cells: read from disk, a missing one is pending like the rest)
+        if k2 not in loaded:
+            loaded[k2] = _layer(md, k2, "land_use", missing, surface)
+        return loaded[k2]
+    poly, pkinds, dirs, phases = polygons(frame, x0, y0, size, px, feats, more)
     line, lkinds = lines(frame, x0, y0, size, px, by_layer["roads"], by_layer["water"], by_layer["infrastructure"])
     canopy = canopy_grid(lat, lon, canopies)
     cover = np.zeros((px, px), np.uint8)
