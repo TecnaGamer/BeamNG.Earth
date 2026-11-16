@@ -468,8 +468,14 @@ PHOTO_EXTRA_SOURCES = ("md6in",)
 
 
 def _photo_sources(frame, x0, y0, x1, y1):
+    """The regional photos a roof, square or street front in the box is read from (none with the generated ground on:
+    the user, 2026-11-15, "The switch should effect roof colors too": no 1 m photo is fetched or read for anything;
+    the roofs take their mapped colour or material, else their style's hashed pick, plan)."""
+    import genground
     import imagery
     import imagery_regional
+    if genground.ON:
+        return ()
     lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
     lat, lon = float(np.asarray(lat).ravel()[0]), float(np.asarray(lon).ravel()[0])
     out = []
@@ -507,7 +513,8 @@ def roof_photo_final(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, ur
     no build of the road tiles there was ever kept (797 not kept in a Fells Point session, the tiles round the car at
     every visit); and online the lazy sources (md6in, New York's, the German states') were read from disk only, so a
     tile built before the ground photo's warm had fetched its photo faulted too."""
-    if not ROOF_PHOTO_ON or cache_dir is None:
+    import genground
+    if not ROOF_PHOTO_ON or genground.ON or cache_dir is None:
         return None, True, None
     try:
         import imagery
