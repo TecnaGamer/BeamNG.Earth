@@ -223,7 +223,8 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
 def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S):
     """(heights per plan, info), or (None, info) when the hard rows are infeasible (the passes' plans stand: the RFC's
     fallback). info: the kernel's diagnostics plus n (unknowns), joins, grade_broken (grade rows broken, over 1 mm),
-    grade_excess_m (the most one is), rounds_grade, fallback (and culprit), elapsed_s."""
+    grade_excess_m (the most one is), grade_worst (where the heights are most over a ceiling: plan, x, y, grade,
+    ceiling; None: nowhere), rounds_grade, fallback (and culprit), elapsed_s."""
     import carriageways
     t0 = time.perf_counter()
     info = {"n": int(sum(len(z) for z in z0)), "fallback": False, "grade_broken": 0, "grade_excess_m": 0.0}
@@ -249,6 +250,7 @@ def solve(plans, specs, z0, ceilings, ranks, pins=(), dips=None, budget=BUDGET_S
         if not GRADE_ROWS_ON or not _over_ceiling(plans, out, z0, ceilings, extra):
             break
     info["fallback"] = out is None
+    info["grade_worst"] = _worst_grade(plans, out, z0, ceilings) if out is not None and GRADE_ROWS_ON else None
     if out is None:             # (which kind of row it is: the one whose absence makes the no-grade solve feasible)
         info["culprit"] = _culprit(plans, specs, z0, ceilings, ranks, pins, dips, budget)
     info["elapsed_s"] = time.perf_counter() - t0
@@ -267,6 +269,26 @@ def _culprit(plans, specs, z0, ceilings, ranks, pins, dips, budget):
         if diag.get("converged") and diag.get("feasible"):
             out.append(kind)
     return out
+
+
+def _worst_grade(plans, zs, z0, ceilings, slack=1e-3):
+    """Where heights zs are most over their plan's ceiling (problem's, per segment): {plan, x, y (the segment's middle),
+    grade, ceiling}, or None where every one holds (within slack m)."""
+    worst, over = None, slack
+    for n, (p, z, b) in enumerate(zip(plans, zs, z0)):
+        if ceilings[n] is None or len(z) < 2:
+            continue
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        ds = np.maximum(np.hypot(*np.diff(xy, axis=0).T), 1e-6)
+        g = _ceiling(ceilings[n], xy, np.asarray(b, np.float64))
+        excess = np.abs(np.diff(z)) - g * ds
+        i = int(np.argmax(excess))
+        if excess[i] > over:
+            over = float(excess[i])
+            mid = (xy[i] + xy[i + 1]) / 2
+            worst = {"plan": n, "x": float(mid[0]), "y": float(mid[1]), "excess_m": round(over, 3),
+                     "grade": round(float(abs(z[i + 1] - z[i]) / ds[i]), 3), "ceiling": round(float(g), 3)}
+    return worst
 
 
 def _over_ceiling(plans, zs, z0, ceilings, extra, slack=1e-3, reach=GRADE_ROW_REACH):

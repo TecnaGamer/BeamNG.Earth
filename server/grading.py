@@ -2956,7 +2956,11 @@ class _Planner:
             "vsolve: %s: %d roads, %d unknowns, %d joins, %d pins, %d dip rows: %s%s in %.2f s", key, n, info["n"],
             info["joins"], info["pins"], info["dips"], info.get("status"),
             " (the passes' heights kept: %s)" % ", ".join(info.get("culprit") or ["?"]) if info["fallback"] else
-            " (%d grade rows broken, the most by %.2f m)" % (info["grade_broken"], info["grade_excess_m"])
+            " (%d grade rows broken, the most by %.2f m%s)" % (
+                info["grade_broken"], info["grade_excess_m"],
+                "" if not info.get("grade_worst") else ": %s at %.0f %% over %.0f %%, x %.1f y %.1f" % (
+                    plans[info["grade_worst"]["plan"]][0], 100 * info["grade_worst"]["grade"],
+                    100 * info["grade_worst"]["ceiling"], info["grade_worst"]["x"], info["grade_worst"]["y"]))
             if info["grade_broken"] else "", info["elapsed_s"])
         with self.lock:
             self.__dict__.setdefault("_vsolve", {})[str(key)] = (kept, info)
