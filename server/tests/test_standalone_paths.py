@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import buildings
 import experimental
+import furniture
 import paintlist
 import roads
 import standalonepaths as paths
@@ -117,7 +118,7 @@ class StandalonePathsTest(unittest.TestCase):
         self.assertFalse(np.array_equal(photo[16, 16], rgb[16, 16]))
         np.testing.assert_array_equal(photo[11, 16], rgb[11, 16])
         items = SimpleNamespace(lat=np.array([LAT + 16 / M_LAT, LAT + 18 / M_LAT]),
-                                lon=np.full(2, LON + 16 / M_LON))
+                                lon=np.full(2, LON + 16 / M_LON), radius=np.full(2, .5))
         blockers = [(xy, w / 2) for _, xy, w, _ in self.parts(f)]
         self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [False, True])
         on = vegetation.Vegetation(None, "cache").dir
@@ -145,6 +146,72 @@ class StandalonePathsTest(unittest.TestCase):
         lon, lat = md.lonlat(100, 100)
         self.assertTrue((np.hypot((before.lon - lon) * M_LON, (before.lat - lat) * M_LAT) < 3.).any())
         self.assertFalse((np.hypot((after.lon - lon) * M_LON, (after.lat - lat) * M_LAT) < 3.).any())
+
+    def test_plant_footprints_clear_edges_bends_and_endpoints(self):
+        blockers = [(np.array([[0., 0.], [20., 0.], [20., 20.]]), 2.)]
+        points = np.array([[10., 3.], [10., 4.1], [-3., 0.], [20., 23.],
+                           [22., -2.], [24., -4.], [10., 0.]])
+        # All but the last centre are off the paving; shrubs/crowns still overlap it.
+        self.assertEqual(paths.keep_outside(points, blockers).tolist(), [True] * 6 + [False])
+        self.assertEqual(paths.keep_outside(points, blockers, np.full(7, 2.)).tolist(),
+                         [False, True, False, False, False, True, False])
+        self.assertEqual(paths.keep_outside(points, [], np.full(7, 2.)).tolist(), [True] * 7)
+        self.assertEqual(paths.keep_outside([], blockers, []).size, 0)
+
+    def test_final_plant_filter_uses_each_footprint(self):
+        # A small shrub fits beside the path; a larger bush, crown or far clump at
+        # the same position does not. Negative near-only scale is not a radius.
+        items = vegetation.Items(np.full(4, LON + 10 / M_LON), np.full(4, LAT + 3 / M_LAT),
+                                 np.array([1., 3., 12., 20.]), np.array([.5, 2., 2.5, 8.]),
+                                 np.array([vegetation.KIND_BUSH] * 2 + [vegetation.KIND_TREE] * 2),
+                                 np.zeros(4, np.uint8), np.zeros(4), np.zeros(4), np.array([1., 1., -1., 1.]))
+        blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
+        self.assertEqual(vegetation._off_paths(items, FRAME, blockers).tolist(), [True, False, False, False])
+
+    def test_furniture_footprints_clear_path_and_keep_nearby_items(self):
+        blockers = [(np.array([[0., 0.], [20., 0.]]), 2.)]
+        def row(group, x, y, yaw=0., height=1.):
+            return [group, x, y, 0., yaw, 1., height, .5]
+        rows = [row(furniture.G_HYDRANT, 10., 0., height=.9),
+                row(furniture.G_HYDRANT, 10., 2.2, height=.9),
+                row(furniture.G_BENCH, 10., 2.8, yaw=90., height=.9),
+                row(furniture.G_BIN, -2.1, 0., height=1.1),
+                row(furniture.G_STREET_TREE, 10., 3., height=10.),
+                row(furniture.G_HYDRANT, 10., 4., height=.9),
+                row(furniture.G_BENCH, 10., 4., height=.9),
+                row(furniture.G_STREET_TREE, 10., 6., height=10.),
+                row(furniture.G_LAMP, 10., 0., height=9.)]
+        self.assertEqual(paths.clear_props(rows, blockers), rows[5:])
+        self.assertEqual(paths.clear_props(rows, []), rows)
+
+    def test_road_builder_removes_hydrant_on_crossing_path_only_when_enabled(self):
+        f = features([[(0, 64), (128, 64)], [(64, 0), (64, 128)]],
+                     ["residential", "pedestrian"], widths=[(1, 4.)])
+        on_path = [furniture.G_HYDRANT, 64., 70., 0., 0., 1., .9, .5]
+        off_path = [furniture.G_HYDRANT, 80., 70., 0., 0., 1., .9, .5]
+        for setting, expected in (("off", [on_path, off_path]), ("on", [off_path])):
+            with patch.dict(os.environ, BNE_STANDALONE_PATHS=setting), \
+                    patch.object(furniture, "place", return_value=[on_path, off_path]):
+                paintlist.clear()
+                props = []
+                roads.build_tile(FRAME, 0, 0, [f], flat, walks=[], props=props)
+                self.assertEqual(props, expected)
+
+    def test_old_centre_only_vegetation_cache_is_not_reused(self):
+        from test_vegetation import FakeMapData, KEY
+        with tempfile.TemporaryDirectory() as directory:
+            md = FakeMapData()
+            v = vegetation.Vegetation(md, directory)
+            old = Path(directory, "vegetation", f"v{vegetation.VERSION}", "standalone-paths-v1",
+                       md.release, str(KEY.x), f"{KEY.y}.npz")
+            old.parent.mkdir(parents=True)
+            empty = vegetation._empty()
+            np.savez(old, **vars(empty))
+            with patch.object(v, "_build", return_value=empty) as build:
+                v.cell(KEY)
+            build.assert_called_once_with(KEY.x, KEY.y)
+            self.assertTrue(old.exists())
+            self.assertTrue(Path(v._path(KEY.x, KEY.y)).exists())
 
     def test_infer_house_access_only_on_a_local_street_without_existing_access(self):
         street = np.array([[-50., 6.], [100., 6.]])

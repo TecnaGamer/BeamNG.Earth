@@ -70,13 +70,49 @@ def _outside_verges(xy, width, starts, delta, lengths, radii, bounds):
     return [xyz[a:b + 1, :2] for a, b in switches.reshape(-1, 2) if size[a:b].sum() >= 1.]
 
 
-def keep_outside(points, blockers):
-    """Positions off all accepted path strips (canopy vegetation and street-tree props)."""
+def keep_outside(points, blockers, radii=None):
+    """Keep footprints off accepted strips, including their rounded ends and bends.
+
+    With no radii this is a point test. Vegetation supplies its crown / footprint radius;
+    checking only its centre lets a bush beside a narrow path cover the paving.
+    """
     import fast
     if not blockers or not len(points):
         return np.ones(len(points), bool)
-    return ~np.asarray(fast._ef.inside_blockers(np.ascontiguousarray(points, np.float64),
-                                                *roads._blocker_segments(blockers)), bool)
+    points = np.ascontiguousarray(points, np.float64)
+    if radii is None:
+        return ~np.asarray(fast._ef.inside_blockers(points, *roads._blocker_segments(blockers)), bool)
+    radii = np.broadcast_to(np.asarray(radii, np.float64), (len(points),))
+    keep = np.ones(len(points), bool)
+    for line, half in blockers:
+        line = np.ascontiguousarray(line, np.float64)
+        if len(line) < 2:
+            continue
+        reach = half + radii
+        near = np.flatnonzero(keep & (points + reach[:, None] >= line.min(0)).all(1)
+                             & (points - reach[:, None] <= line.max(0)).all(1))
+        if len(near):
+            keep[near] = fast._ef.polyline_dist(line, points[near]) > reach[near]
+    return keep
+
+
+def clear_props(rows, blockers):
+    """Guessed street trees and sidewalk furniture must leave the walking strip free."""
+    import furniture
+    if not rows or not blockers:
+        return rows
+    trees = [i for i, row in enumerate(rows) if row[0] == furniture.G_STREET_TREE]
+    keep = np.ones(len(rows), bool)
+    if trees:
+        keep[trees] = keep_outside([rows[i][1:3] for i in trees], blockers,
+                                  [0.12 * rows[i][6] + 1.0 for i in trees])
+    # Reuse the stock models' scaled, rotated collision boxes, including the ends
+    # of benches. Keep mapped lights, signs and poles (and their wire runs) intact.
+    clearance = furniture.RoadClearance([(half, line) for line, half in blockers])
+    for i, row in enumerate(rows):
+        if row[0] in (furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN):
+            keep[i] = clearance.clear(row)
+    return [row for row, ok in zip(rows, keep) if ok]
 
 
 def parts(frame, box, cells, urban=None, widths=None, quick=False):

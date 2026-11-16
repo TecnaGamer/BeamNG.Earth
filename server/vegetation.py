@@ -272,7 +272,7 @@ class Vegetation:
         self.dir = os.path.join(cache_dir, "vegetation", f"v{VERSION}") if cache_dir else None
         import standalonepaths
         if self.dir and standalonepaths.enabled():
-            self.dir = os.path.join(self.dir, "standalone-paths-v1")
+            self.dir = os.path.join(self.dir, "standalone-paths-v2")  # footprint clearance, not just plant centres
         self._mem = OrderedDict()
         self._lock = threading.Lock()
         self._cell_locks = {}
@@ -756,10 +756,10 @@ FARM_MIN_M2 = 800.0
 
 
 def _off_paths(items, frame, blockers):
-    """Test final plant positions in metres, including jitter and the offsets of planted rows."""
+    """Test final plant footprints in metres, including jitter and the offsets of planted rows."""
     import standalonepaths
     e, n, _ = frame.geodetic_to_enu(items.lat, items.lon, 0.)
-    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers)
+    return standalonepaths.keep_outside(np.column_stack((e, n)), blockers, items.radius)
 
 
 def _keep_off_mask(items, mask, chm):
