@@ -147,6 +147,7 @@ M.SCHEMA = {
   expAiTunnels = { kind = 'bool', default = false, label = 'Traffic through tunnels' },
   expRailCollide = { kind = 'bool', default = false, label = 'Solid railway rails' },
   expCatenary = { kind = 'bool', default = false, label = 'Overhead railway wires' },
+  expTrams = { kind = 'bool', default = false, label = 'Tram tracks, poles and signals' },
   expRailCrossings = { kind = 'bool', default = false, label = 'Grouped level crossings' },
   expRailTunnels = { kind = 'bool', default = false, label = 'Railway tunnels' },
   expRailCurves = { kind = 'bool', default = false, label = 'Rounded railway curves' },
@@ -220,7 +221,7 @@ M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 't
   -- (the Experimental page's: server/experimental.py FEATURES, in its order; roadSigns is above)
   'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops', 'expRoadBumps', 'expRoughDirt',
   'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls', 'expTunnelLids', 'expSubseaTunnels',
-  'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
+  'expAiTunnels', 'expRailCollide', 'expCatenary', 'expTrams', 'expRailCrossings', 'expRailTunnels', 'expRailCurves', 'expWatertight',
   'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
 
 -- Stored but not on the settings page

@@ -119,6 +119,8 @@ export const settingsSchema = [
         note: RESTART_NOTE },
       { id: "expCatenary", type: "bool", default: false, name: "Overhead railway wires", desc: "Experimental. Masts and overhead wires along electrified railway lines (at their mapped places where they are mapped).",
         note: RESTART_NOTE },
+      { id: "expTrams", type: "bool", default: false, name: "Tram tracks, poles and signals", desc: "Experimental. Street trams in their paving with the rails flush, open tram track on the ground with sleepers and turnouts, tram poles with span wires and lamps (the wires need Overhead railway wires) and working tram signals at signalled junctions.",
+        note: RESTART_NOTE },
       { id: "expRailCrossings", type: "bool", default: false, name: "Grouped level crossings", desc: "Experimental. A level crossing over several tracks gets one set of signals at each approach, and gates where the crossing is a big one, instead of a set before every track.",
         note: RESTART_NOTE },
       { id: "expRailTunnels", type: "bool", default: false, name: "Railway tunnels", desc: "Experimental. Railway lines mapped in tunnels are built as tunnels through the ground.",

@@ -699,7 +699,7 @@ files[settings.FILE] = nil
 do
   local exp = { 'roadSigns', 'expNlRoadSigns', 'expEuScenery', 'expDropRails', 'expEntranceFlares', 'expPriorityStops',
     'expRoadBumps', 'expRoughDirt', 'expWearStrips', 'expGradeGuard', 'expPhotoSurface', 'expTerrainBumps', 'expCliffWalls',
-    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expRailCrossings', 'expRailTunnels',
+    'expTunnelLids', 'expSubseaTunnels', 'expAiTunnels', 'expRailCollide', 'expCatenary', 'expTrams', 'expRailCrossings', 'expRailTunnels',
     'expRailCurves', 'expWatertight', 'expCanadaLidar', 'expGenGround', 'expStaleRevisit' }
   local inOrder = {}
   for _, k in ipairs(settings.ORDER) do inOrder[k] = true end
