@@ -80,13 +80,15 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
           "birch_clump", "oak_clump", "beech_clump",
           # (30: the bushes' and forest floors' own, shrub_groups; the stock survey 2026-11-16)
           "maquis", "shrub_north", "shrub_tropical", "fern", "deadwood", "tro_thicket",
-          "deciduous_open", "oak_open")
+          "deciduous_open", "oak_open", "birch_open", "beech_open", "pine_west_open", "mediterranean_open",
+          "tropical_open")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
  G_POPLAR, G_CREOSOTE, G_BIRCH, G_OAK, G_BEECH, G_PINE_EU, G_SPRUCE, G_SNAG_BROAD, G_SNAG_CONIFER, G_PALM_DRY,
  G_BIRCH_CLUMP, G_OAK_CLUMP, G_BEECH_CLUMP, G_MAQUIS, G_SHRUB_NORTH, G_SHRUB_TROPICAL, G_FERN, G_DEADWOOD,
- G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN) = range(44)
+ G_TRO_THICKET, G_DECIDUOUS_OPEN, G_OAK_OPEN, G_BIRCH_OPEN, G_BEECH_OPEN, G_PINE_WEST_OPEN, G_MEDITERRANEAN_OPEN,
+ G_TROPICAL_OPEN) = range(49)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -445,8 +447,9 @@ def species_groups(group, height, lat, lon, lcls, koppen, elev, u_broad, u_conif
 
 
 SNAG_FROM = ((G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_OAK_WEST), (G_CONIFER, G_PINE_EU, G_SPRUCE, G_PINE_WEST))
-OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_OAK_OPEN, G_SNAG_BROAD: G_DECIDUOUS_OPEN,
-             G_SNAG_CONIFER: G_CONIFER}
+OPEN_FROM = {G_DECIDUOUS: G_DECIDUOUS_OPEN, G_OAK: G_OAK_OPEN, G_BIRCH: G_BIRCH_OPEN, G_BEECH: G_BEECH_OPEN,
+             G_PINE_WEST: G_PINE_WEST_OPEN, G_MEDITERRANEAN: G_MEDITERRANEAN_OPEN, G_TROPICAL: G_TROPICAL_OPEN,
+             G_SNAG_BROAD: G_DECIDUOUS_OPEN, G_SNAG_CONIFER: G_CONIFER}
 
 
 def open_groups(group, open_):
@@ -494,8 +497,9 @@ DEADWOOD_BUILT_M = 150.0
 DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
 DEADWOOD_MAX_SLOPE = 0.12   # rise over run (7 degrees)
 THICKET_H = (5.5, 7.5)
-# Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (East Coast
-# USA's mossy oaks, tree_oak_forest_a/b and large_b/c: moss on a trunk by an asphalt road, the user's test 2026-11-16)
+# Trees in the open (OPEN_ROAD_M from a road's edge, or on built-up land): no forest-interior shapes there (the
+# forest trees and fillers by their names, *_forest*, *filler*: tall, thin, sparse; East Coast USA's mossy oaks,
+# tree_oak_large_b/c: moss on a trunk by an asphalt road, the user's test 2026-11-16; trees.lua M.FOREST_ONLY)
 # and no dead trees (taken down by the road): the group's _open twin (OPEN_FROM above; the mod's catalog without
 # those shapes).
 OPEN_ROAD_M = 15.0

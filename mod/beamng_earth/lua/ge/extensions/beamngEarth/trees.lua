@@ -463,24 +463,6 @@ M.CATALOG = {
     { WCA .. 'trees/trees_palm/fanpalm_slim', 20.8 },
   },
   birch_clump = { { ECA .. 'trees/trees_aspen/tree_aspen_forest_group', 20.1 } },
-  -- trees in the open (server vegetation.OPEN_FROM, 31: by a road, in town): without East Coast USA's mossy forest oaks
-  -- (tree_oak_forest_a/b, tree_oak_large_b/c wear Moss_01 on the trunk: by an asphalt road, the user's test 2026-11-16)
-  deciduous_open = {
-    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
-    { ECA .. 'trees/trees_aspen/tree_aspen_small_a', 8.3 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_c', 9.7 },
-    { ECA .. 'trees/trees_beech/tree_beech_small_c', 9.9 }, { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
-    { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
-    { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
-    { ECA .. 'trees/trees_aspen/tree_aspen_small_low', 6.05 }, { ECA .. 'trees/trees_beech/tree_beech_bush_e', 6.51 },
-    { ECA .. 'trees/trees_beech/tree_beech_bush_d', 7.23 }, { ECA .. 'trees/trees_aspen/tree_aspen_small_b', 8.18 },
-    { ECA .. 'trees/trees_aspen/tree_aspen_small_d', 10.37 }, { ECA .. 'trees/trees_beech/tree_beech_small_b', 11.6 },
-    { ECA .. 'trees/trees_beech/tree_beech_small_d', 13.32 },
-    { ECA .. 'trees/trees_beech/tree_beech_forest_b', 21.75 },
-  },
-  oak_open = {
-    { ECA .. 'trees/trees_oak/tree_oak_sml_a', 8.6 }, { ECA .. 'trees/trees_oak/tree_oak_sml_b', 9.5 },
-    { ECA .. 'trees/trees_oak/tree_oak_large_a', 13.2 },
-  },
   -- the bushes by the climate (server vegetation.shrub_groups, 30; the stock survey 2026-11-16, heights from the shapes'
   -- bounds, every tree-kind shape with its imposter; the grey bushes are groundcover shapes as desert_shrub's):
   -- the summer-dry climates' maquis and garrigue, California's chaparral (Italy's bushes, Utah's junipers and low grey
@@ -724,6 +706,24 @@ for _, g in ipairs({ 'maquis', 'shrub_north', 'shrub_tropical' }) do     -- (30:
   M.GROUP_MAX_M[g] = 250; M.NO_COLLIDE[g] = true
 end
 M.GROUP_MAX_M.deadwood = 200; M.NO_COLLIDE.deadwood = true     -- (on the forest floor, as the ferns)
+-- Trees in the open (server vegetation.OPEN_FROM, 31: within 15 m of a road, on built-up land): each group's _open
+-- twin is its catalog without the forest-interior shapes: the forest trees and fillers (tall, thin, sparse: meant to be
+-- seen among others; Italy's scots_pine_filler stood alone) and the mossy oaks (Moss_01 on the trunk: by an asphalt
+-- road, the user's test 2026-11-16)
+M.FOREST_ONLY = { '_forest', 'filler', 'tree_oak_large_b', 'tree_oak_large_c' }
+function M.forestOnly(shape)
+  for _, k in ipairs(M.FOREST_ONLY) do
+    if shape:find(k, 1, true) then return true end
+  end
+  return false
+end
+for _, g in ipairs({ 'deciduous', 'oak', 'birch', 'beech', 'pine_west', 'mediterranean', 'tropical' }) do
+  local out = {}
+  for _, v in ipairs(M.CATALOG[g]) do
+    if not M.forestOnly(v[1]) then out[#out + 1] = v end
+  end
+  M.CATALOG[g .. '_open'] = out
+end
 M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
 for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
 -- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months

@@ -470,7 +470,7 @@ class ShrubTest(unittest.TestCase):
         g = veg.open_groups(np.array([veg.G_OAK, veg.G_DECIDUOUS, veg.G_SNAG_BROAD, veg.G_SNAG_CONIFER, veg.G_BEECH,
                                       veg.G_OAK], np.uint8), np.array([1, 1, 1, 1, 1, 0], bool))
         self.assertEqual(g.tolist(), [veg.G_OAK_OPEN, veg.G_DECIDUOUS_OPEN, veg.G_DECIDUOUS_OPEN, veg.G_CONIFER,
-                                      veg.G_BEECH, veg.G_OAK])
+                                      veg.G_BEECH_OPEN, veg.G_OAK])
         md = FakeMapData()
         it = veg.Vegetation(md, None).cell(KEY)
         trees = it.take(it.kind == veg.KIND_TREE)
@@ -482,11 +482,10 @@ class ShrubTest(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         path = os.path.join(root, "mod/beamng_earth/lua/ge/extensions/beamngEarth/trees.lua")
         lua = open(path, encoding="utf-8").read()
-        for name in ("deciduous_open", "oak_open"):
-            i = lua.index(f"\n  {name} = {{")
-            body = lua[i:lua.index("\n  },", i)]
-            self.assertNotIn("tree_oak_forest", body)
-            self.assertNotIn("tree_oak_large_b", body)
+        for g in veg.OPEN_FROM.values():            # every open twin the mod's catalog makes (or a group it has)
+            name = veg.GROUPS[g]
+            if name.endswith("_open"):
+                self.assertIn(f"'{name[:-5]}'", lua[lua.index("M.FOREST_ONLY"):], name)
 
     def test_dead_wood_keeps_off_the_roads(self):
         m = np.zeros((200, 200), bool)
