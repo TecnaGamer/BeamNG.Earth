@@ -3627,6 +3627,13 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
         user_dir, base_vfs, ao_vfs, ao_value = cache
         terraincache.base_entry(user_dir, base_vfs, ao_vfs, rgb, ao_value)
         return rgb, used, pending
+    import genground
+    if genground.ON:            # (earthd.Server.write_base)
+        try:
+            rgb = genground.generate(rgb, frame, x0, y0, size, px, getattr(_s, "md", None), getattr(_s, "surface", None),
+                                     _s.widths)
+        except Exception as e:      # the Sentinel-2 photo stays as it is
+            log.info("base photo: generated ground: %s: %s", type(e).__name__, e)
     if buildings and _s.md is not None:
         try:
             mask = buildingsmod.photo_mask(frame, x0, y0, size, px, _s.md)

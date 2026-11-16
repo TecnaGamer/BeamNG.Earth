@@ -116,6 +116,7 @@ mod par;
 mod bc1fast;
 mod l0roads;
 mod groundphoto;
+mod genground;
 mod layerfold;
 mod roadsurf;
 mod levelways;
@@ -6466,6 +6467,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tile endpoint: server/mtarchive.py)
     m.add_function(wrap_pyfunction!(pmtiles::pmt_find_many, m)?)?;
     m.add_function(wrap_pyfunction!(pmtiles::pmt_ranges, m)?)?;
-    m.add("VERSION", 305)?;
+    // 306: genground::gg_fill_polys / gg_regions / gen_ground (the generated ground, BNE_GEN_GROUND: a block's 1 m base
+    // colour from Sentinel-2 and the map's regions instead of a 1 m aerial photo; server/genground.py)
+    genground::register(m)?;
+    m.add("VERSION", 306)?;
     Ok(())
 }
