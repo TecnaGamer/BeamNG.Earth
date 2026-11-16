@@ -56,7 +56,8 @@ VERSION = 30          # (the cached cells hold their groups: 14 for the regional
                       # conifers by latitude and height above the sea, both in stands (stand_u); dead trees; date and
                       # fan palms in warm towns; the rainforests' trees tropical, fewer palms there);
                       # 30: the bushes by the climate (shrub_groups: maquis, the north's, the tropics',
-                      # the deserts'), ferns and dead wood on the forest floor, the mangroves' trees tropical
+                      # the deserts'), ferns on the forest floor, dead wood added in remote forest (_deadwood), the
+                      # mangroves' trees tropical
 TREE_MIN_M = 3.0
 # The canopy raster, the scatter grids and the crown radii are in Web Mercator units (EPSG:3857: a metre there is
 # cos(lat) metres on the ground) and were tuned by eye at mid latitudes. Past them the same pixel counts covered less
@@ -455,7 +456,11 @@ PALM_FROM = (G_DECIDUOUS, G_BIRCH, G_OAK, G_BEECH, G_MEDITERRANEAN)
 # - the deserts and steppes (B classes): the desert bushes wherever the land cover is (regional_groups made them only
 #   on shrubland or bare ground below 42 degrees and in the dry West);
 # - the forest floor (the understory scatter under the canopy): FERN_SHARE of its bushes ferns in the humid temperate
-#   and boreal climates, DEADWOOD_SHARE logs, fallen trees, branches and stumps outside the tropics and the deserts.
+#   and boreal climates.
+# Dead wood (logs, fallen trees, branches, stumps) is not one of the bushes but added (_deadwood): one on DEADWOOD_P of
+# a DEADWOOD_CELL_M grid's squares inside the forest, only DEADWOOD_ROAD_M or more from any road and with no built-up
+# land within DEADWOOD_BUILT_M (remote woods: a fallen beech lay across a road, the user's test 2026-11-16), outside
+# the tropics and the deserts.
 K_HUMID = (12, 13, 14, 15, 16, 17, 18, 21, 22, 25, 26, 27, 28)     # Cwb Cwc Cfa Cfb Cfc Dsa Dsb Dwa Dwb Dfa Dfb Dfc Dfd
 K_POLAR = (29, 30)                                                  # ET EF
 K_ARID = (4, 5, 6, 7)                                               # BWh BWk BSh BSk
@@ -464,7 +469,10 @@ BOREAL_SHRUB_LAT = 50.0
 CHAPARRAL_SHARE = 0.7
 TROPICAL_SAVANNA_SHARE = 0.5
 FERN_SHARE = {"humid": 0.35, "boreal": 0.15}
-DEADWOOD_SHARE = 0.12
+DEADWOOD_CELL_M = 20.0
+DEADWOOD_P = 0.1            # (2.5 a hectare of remote forest)
+DEADWOOD_ROAD_M = 40.0      # ground m (a fallen beech is 10 m long)
+DEADWOOD_BUILT_M = 150.0
 DEADWOOD_H = (1.0, 3.0)     # m: a dead-wood item's height drawn in this range (the shapes' 1.0-3.0 m, M.pick's)
 FERN_MAX_M = 1.6            # (ferns only for the low bushes)
 SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
@@ -473,9 +481,8 @@ SHRUB_FROM = (G_SHRUB, G_DESERT_SHRUB)
 def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=None):
     """The bushes' groups by the climate (the constants above): group's G_SHRUB / G_DESERT_SHRUB items (the rest as
     they are) become maquis, northern, tropical or desert bushes; understory (per item: a forest floor
-    bush, the scatter under the canopy; None: none) ferns or dead wood. koppen: the class at each item
-    (climate.koppen_many); u, u_floor: hashed [0, 1) per item. (groups, heights): a dead-wood item's height set within
-    DEADWOOD_H (from u_floor). Pure."""
+    bush, the scatter under the canopy; None: none) ferns. koppen: the class at each item (climate.koppen_many);
+    u, u_floor: hashed [0, 1) per item. (groups, heights; the heights as given). Pure."""
     g = np.array(group, np.uint8, copy=True)
     h = np.array(height, np.float32, copy=True)
     lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
@@ -498,12 +505,9 @@ def shrub_groups(group, height, lat, lon, lcls, koppen, u, u_floor, understory=N
     g[bush & arid & (g == G_SHRUB)] = G_DESERT_SHRUB
     if understory is not None:
         floor = bush & np.asarray(understory, bool) & ~tropical & ~arid
-        dead = floor & (uf < DEADWOOD_SHARE)
-        g[dead] = G_DEADWOOD
-        h[dead] = DEADWOOD_H[0] + (DEADWOOD_H[1] - DEADWOOD_H[0]) * (uf[dead] / DEADWOOD_SHARE)
         humid = np.isin(k, K_HUMID) & ~north
         p = np.where(humid, FERN_SHARE["humid"], np.where(north & ~np.isin(k, K_POLAR), FERN_SHARE["boreal"], 0.0))
-        fern = floor & ~dead & (uf < DEADWOOD_SHARE + p) & (h <= FERN_MAX_M)
+        fern = floor & (uf < p) & (h <= FERN_MAX_M)
         g[fern] = G_FERN
     return g, h
 
@@ -519,9 +523,17 @@ def climate_shrubs(it, lcls, understory=None):
     qy = np.rint(np.asarray(it.lat, np.float64) * 1e6).astype(np.int64)
     g, h = shrub_groups(it.group, it.height, it.lat, it.lon, lcls, climate.koppen_many(it.lat, it.lon),
                         _hash01(qx, qy, 71), _hash01(qx, qy, 72), understory)
-    dead = (g == G_DEADWOOD) & (it.group != G_DEADWOOD)
-    radius = np.where(dead, h * 1.5, it.radius).astype(np.float32)     # (a log lies: wider than it is tall)
-    return Items(it.lon, it.lat, h, radius, it.kind, g, it.rank, it.yaw, it.scale)
+    return Items(it.lon, it.lat, h, it.radius, it.kind, g, it.rank, it.yaw, it.scale)
+
+
+def _coarse_near(m, r_px, b=8):
+    """(mask, b): m reduced to b x b pixel blocks (any set) and grown by r_px pixels rounded up to blocks: a pixel
+    (r, c) is within r_px of a set pixel of m (or a little farther) where mask[r // b, c // b]."""
+    H, W = m.shape
+    h, w = -(-H // b), -(-W // b)
+    p = np.zeros((h * b, w * b), bool)
+    p[:H, :W] = m
+    return _dilate(p.reshape(h, b, w, b).any(axis=(1, 3)), int(math.ceil(r_px / b))), b
 
 
 class Vegetation:
@@ -845,13 +857,14 @@ class Vegetation:
         tree = clumps(tree, lcls, (lat0 + lat1) / 2,
                       roads=ClumpRoads(clump_roads, chm, blocked, (ex0, ey0, ex1, ey1)))
         scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
+        dead = self._deadwood(cd, lc, blocked | paved | orchard | vines, road, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
         bounds = (lon0, lat0, lon1, lat1)
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
         bales = bale_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
+        return _concat_all([tree, scatter, dead, edge, planted, hedges, rows, bales])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -894,6 +907,55 @@ class Vegetation:
                                     _hash01(GI, GJ, 26).astype(np.float32),
                                     (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
                                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32)), cls)
+
+    def _deadwood(self, cd, lc, blocked, road, chm, hs):
+        """Dead wood in remote forest (DEADWOOD_*): added items, not bushes changed."""
+        if lc is None:
+            return _empty()
+        lon0, lat0, lon1, lat1 = cd.bounds
+        clat = (lat0 + lat1) / 2
+        if abs(clat) < 23.5:
+            return _empty()
+        ex0, ey0 = _to3857(lon0, lat0)
+        ex1, ey1 = _to3857(lon1, lat1)
+        sec = 1.0 / max(0.05, math.cos(math.radians(clat)))      # (Web Mercator m per ground m)
+        s = DEADWOOD_CELL_M * sec
+        GI, GJ = np.meshgrid(np.arange(math.floor(ex0 / s), math.ceil(ex1 / s)),
+                             np.arange(math.floor(ey0 / s), math.ceil(ey1 / s)))
+        GI, GJ = GI.ravel(), GJ.ravel()
+        px = (GI + _hash01(GI, GJ, 81)) * s
+        py = (GJ + _hash01(GI, GJ, 82)) * s
+        c_ = np.floor((px - chm.x0) / chm.dx).astype(np.int64)
+        r_ = np.floor((chm.y0 - py) / chm.dy).astype(np.int64)
+        ok = (px >= ex0) & (px < ex1) & (py >= ey0) & (py < ey1) & (c_ >= 0) & (c_ < hs.shape[1]) \
+            & (r_ >= 0) & (r_ < hs.shape[0]) & (_hash01(GI, GJ, 83) < DEADWOOD_P)
+        ok[ok] &= ~blocked[r_[ok], c_[ok]] & (hs[r_[ok], c_[ok]] >= TREE_MIN_M)      # under the forest's canopy
+        if ok.any() and road.any():
+            near, b = _coarse_near(road, DEADWOOD_ROAD_M * sec / chm.dx)
+            ok[ok] &= ~near[r_[ok] // b, c_[ok] // b]
+        if not ok.any():
+            return _empty()
+        GI, GJ, px, py = GI[ok], GJ[ok], px[ok], py[ok]
+        lon, lat = _to4326(px, py)
+        keep = lc.sample(lon, lat) == WC["tree"]
+        d = DEADWOOD_BUILT_M * sec          # no built-up land around: 8 points at d, 4 at d / 2
+        for r, step in ((d, 45), (d / 2, 90)):
+            for a in range(0, 360, step):
+                if not keep.any():
+                    return _empty()
+                lo2, la2 = _to4326(px + r * math.cos(math.radians(a)), py + r * math.sin(math.radians(a)))
+                keep &= lc.sample(lo2, la2) != WC["built"]
+        import climate
+        keep &= ~np.isin(climate.koppen_many(lat, lon), K_ARID + K_RAINFOREST + K_SAVANNA)
+        if not keep.any():
+            return _empty()
+        GI, GJ, lon, lat = GI[keep], GJ[keep], lon[keep], lat[keep]
+        n = len(lon)
+        h = (DEADWOOD_H[0] + (DEADWOOD_H[1] - DEADWOOD_H[0]) * _hash01(GI, GJ, 84)).astype(np.float32)
+        return Items(lon, lat, h, (h * 1.5).astype(np.float32), np.full(n, KIND_BUSH, np.uint8),
+                     np.full(n, G_DEADWOOD, np.uint8), _hash01(GI, GJ, 85).astype(np.float32),
+                     (_hash01(GI, GJ, 86) * 360.0).astype(np.float32),
+                     (0.85 + 0.3 * _hash01(GI, GJ, 87)).astype(np.float32))
 
     def _elev(self, lat, lon):
         """Heights above the sea (m) at the points from the DEM at ELEV_ZOOM; None without a DEM or when it cannot say

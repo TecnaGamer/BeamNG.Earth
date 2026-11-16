@@ -415,16 +415,49 @@ class ShrubTest(unittest.TestCase):
             self.assertEqual(int(g[0]), veg.G_TROPICAL)
 
     def test_the_forest_floor(self):
-        g, h = self.g(52.23, 21.0, lcls=10, uf=0.05, floor=True)
-        self.assertEqual(g, veg.G_DEADWOOD)
-        self.assertTrue(veg.DEADWOOD_H[0] <= h <= veg.DEADWOOD_H[1])
-        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.3, floor=True)[0], veg.G_FERN, "ferns")
-        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.3, h=1.9, floor=True)[0], veg.G_SHRUB, "not for the tall")
+        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.2, floor=True)[0], veg.G_FERN, "ferns")
+        self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.2, h=1.9, floor=True)[0], veg.G_SHRUB, "not for the tall")
         self.assertEqual(self.g(52.23, 21.0, lcls=10, uf=0.8, floor=True)[0], veg.G_SHRUB)
-        self.assertEqual(self.g(52.23, 21.0, uf=0.05)[0], veg.G_SHRUB, "open land: no dead wood")
+        self.assertEqual(self.g(52.23, 21.0, uf=0.2)[0], veg.G_SHRUB, "open land: no ferns")
         self.assertEqual(self.g(-3.1, -60.0, lcls=10, uf=0.05, floor=True)[0], veg.G_SHRUB_TROPICAL)
         self.assertEqual(self.g(25.2, 55.3, lcls=10, uf=0.05, floor=True)[0], veg.G_DESERT_SHRUB)
-        self.assertEqual(self.g(43.3, 5.4, lcls=10, uf=0.3, floor=True)[0], veg.G_MAQUIS, "no ferns in the dry south")
+        self.assertEqual(self.g(43.3, 5.4, lcls=10, uf=0.2, floor=True)[0], veg.G_MAQUIS, "no ferns in the dry south")
+        for uf in np.linspace(0, 0.999, 50):        # dead wood is added elsewhere (_deadwood), never a bush changed
+            self.assertNotEqual(self.g(52.23, 21.0, lcls=10, uf=uf, floor=True)[0], veg.G_DEADWOOD)
+
+    def test_dead_wood_only_added_in_remote_forest(self):
+        class Cover(Raster):
+            def __init__(self, cls):
+                super().__init__(None, 0, 0, 1)
+                self.cls = cls
+
+            def sample(self, lon, lat):
+                return np.full(np.shape(lon), self.cls, np.uint8)
+
+        def build(cls):
+            md = FakeMapData()
+            chm = md.cd.layers["canopy"]
+            chm.data = np.full(chm.data.shape, 15, np.uint8)        # one forest over the cell
+            md.cd.layers["landcover"] = Cover(cls)
+            md.cd.layers["buildings"] = Feats(3, [])
+            a, b = md.lonlat(256, -50), md.lonlat(256, 600)           # a road across the middle
+            md.cd.layers["roads"] = Feats(2, [[(float(a[0]), float(a[1])), (float(b[0]), float(b[1]))]], ["track"])
+            return md, veg.Vegetation(md, None).cell(KEY)
+        md, it = build(veg.WC["tree"])
+        dead = it.take(it.group == veg.G_DEADWOOD)
+        self.assertGreater(len(dead), 0, "dead wood in the forest")
+        _, rlat = md.lonlat(256, 0)
+        self.assertGreater(float((np.abs(dead.lat - rlat) * 111000).min()), veg.DEADWOOD_ROAD_M * 0.9, "off the road")
+        self.assertTrue(np.all((dead.height >= veg.DEADWOOD_H[0]) & (dead.height <= veg.DEADWOOD_H[1])))
+        _, it2 = build(veg.WC["built"])
+        self.assertEqual(int((it2.group == veg.G_DEADWOOD).sum()), 0, "none in a town")
+
+    def test_dead_wood_keeps_off_the_roads(self):
+        m = np.zeros((200, 200), bool)
+        m[100, :] = True                    # a road along row 100
+        near, b = veg._coarse_near(m, 30)
+        self.assertTrue(near[70 // b, 50 // b] and near[130 // b, 50 // b], "within 30 px: near")
+        self.assertFalse(near[40 // b, 50 // b] or near[170 // b, 50 // b], "50+ px away: not")
 
     def test_others_and_the_count_unchanged(self):
         for grp in (veg.G_ROCK, veg.G_DECIDUOUS, veg.G_JUNIPER, veg.G_CREOSOTE, veg.G_VINE):
@@ -440,7 +473,7 @@ class ShrubTest(unittest.TestCase):
         self.assertEqual(len(a), n)
         np.testing.assert_array_equal(a.group, b.group)
         np.testing.assert_array_equal(a.lon, it.lon)
-        self.assertGreater(int((a.group == veg.G_DEADWOOD).sum()), 0)
+        self.assertEqual(int((a.group == veg.G_DEADWOOD).sum()), 0)
         self.assertGreater(int((a.group == veg.G_FERN).sum()), 0)
 
     def test_audio_and_the_mod_knows_them(self):
