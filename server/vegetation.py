@@ -1375,6 +1375,19 @@ TILE_ROWS_MAX = 6000        # items a tile sends at most, the lowest ranks: the 
 SEND_M = 1280.0             # tiles this close to the player (Euclidean, to the square's nearest point) are sent
 DROP_M = 1536.0             # ... and dropped beyond this
 BUILD_PER_POSE = 8
+# At speed the trees reach along the car's way (Tracker lead, as the road tiles' corridor: roads.LEAD_S): the disc of
+# SEND_M is 14.7 s of driving at 190 mph and a trees geotile took 12.6 s, so the trees came as the car passed them (the
+# user, 2026-11-16: "it feels like driving on the moon"). At LEAD_FAST_MS or more the tiles within LEAD_CORRIDOR_M of the
+# way ahead (the time-to-reach tree's roads, a straight line without one) are wanted too, LEAD_S of driving ahead
+# (LEAD_MAX_M at most), and kept LEAD_KEEP_S past their last pass on it whatever DROP_M says.
+LEAD_FAST_MS = 25.0         # m/s (56 mph)
+LEAD_S = 30.0
+LEAD_MAX_M = 5000.0
+LEAD_CORRIDOR_M = 320.0     # m either side of the way
+LEAD_KEEP_S = 20.0
+LEAD = (LEAD_FAST_MS, LEAD_S, LEAD_MAX_M, LEAD_CORRIDOR_M)
+NEAR_FIRST_M = 128.0        # (no tree: the tiles this close to the car first, reach.ORDER_NEAR_M)
+SIDE_SLOW = 4.0             # ... and one off the way counts as this many times its distance (roads.SIDE_PENALTY)
 TRACK_MOVE_M = 8.0          # a geotile tracker passes again once the car, camera or a focus moved this much ...
 TRACK_MAX_S = 2.0           # ... or this long after its last pass, or something it sent, built or redoes changed
 
@@ -1646,7 +1659,7 @@ class Tracker:
     (messages veg_tile / veg_drop); the far buildings use one too (buildings.FAR_*)."""
 
     def __init__(self, send_m=SEND_M, drop_m=DROP_M, per_pose=BUILD_PER_POSE, kind="veg", skip_m=None, group=None,
-                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True):
+                 unit=1, inner=None, geo=False, z=None, group_z=None, rebuild_history=True, lead=None):
         # group G (the far buildings under the skyline tiles): every tile of a G x G group whose square comes within
         # send_m is wanted (a skyline tile shows only while none of its tiles do: no overlap, no hole). unit U (the
         # skyline tiles): keys are U x U squares of road tiles; inner (m, G): squares whose G-group comes within m are
@@ -1681,6 +1694,10 @@ class Tracker:
         self.redo, self.sent_h, self.digests = set(), {}, False
         self.epoch = 0              # (drop_all: a build started before it lands unwanted)
         self._gate = None           # (_on_pose_geo: the last pass's inputs, TRACK_MOVE_M)
+        # lead (geotiles): (fast m/s, s, max m, corridor m), the tiles along a fast car's way ahead wanted too (LEAD);
+        # ahead: those of the last passes -> when last on the way (not dropped for LEAD_KEEP_S)
+        self.lead, self.ahead = lead, {}
+        self.rank = {}              # key -> its place in the last pass's order (earthd Server.veg_rank: what goes next)
 
     def redo_all(self):
         """Every geotile sent is asked for again (earthd Connection.stale_run's swap: they may be an older version's);
@@ -1705,7 +1722,7 @@ class Tracker:
         car = getattr(self, "car", ())
         return sum(1 for k in car if k in self.sent), len(car)
 
-    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None):
+    def on_pose(self, conn, aid, x, y, loop, build, view=None, foci=(), frame=None, tree=None, vel=None):
         """As roads.Tracker.on_pose: the tiles within send_m of the car (x, y) and of the camera when it is away
         (view), the car's first; dropped beyond drop_m of both. foci: other vehicles' collision foci (x, y, r, ...)
         whose trees collide: the tiles within r + 128 m of each, after the car's and camera's, kept within r + 256 m.
@@ -1713,7 +1730,7 @@ class Tracker:
         (reach.order_geotiles: right round the car, then along the way it goes) instead of nearest first."""
         import roads as roadsmod
         if self.geo:
-            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree)
+            return self._on_pose_geo(conn, aid, x, y, loop, build, view, foci, frame, tree, vel)
         if aid != self.aid:
             for f in self.futs.values():
                 f.cancel()                  # the old anchor's that have not started
@@ -1759,7 +1776,28 @@ class Tracker:
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": f"{k[0]}_{k[1]}"})
 
-    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None):
+    def _way_ahead(self, frame, x, y, vel, tree, z):
+        """{key: s of driving to it} of the geotiles along a fast car's way ahead (lead): the tree's roads it is likely
+        to take, a straight line along vel without a tree. {} when slow or without lead."""
+        import geotiles
+        if self.lead is None:
+            return {}
+        fast_ms, lead_s, lead_max, corridor = self.lead
+        v = float(tree.speed) if tree is not None else math.hypot(*vel) if vel is not None else 0.0
+        if v < fast_ms:
+            return {}
+        horizon = min(lead_s, lead_max / v)
+        if tree is not None:
+            return {k: got[2] for k, got in tree.geotile_keys(frame, corridor, z=z, horizon=horizon).items() if got[1]}
+        ux, uy = vel[0] / v, vel[1] / v
+        out, d, step = {}, 0.0, corridor / 2
+        while d <= horizon * v:
+            for a, b, _dd in geotiles.tiles_near(frame, x + ux * d, y + uy * d, corridor, z):
+                out.setdefault((a, b), d / v)
+            d += step
+        return out
+
+    def _on_pose_geo(self, conn, aid, x, y, loop, build, view, foci, frame, tree=None, vel=None):
         """on_pose for geotiles: the same rules (send_m, drop_m, the camera's, other cars' foci; group_z's whole groups,
         inner's tiles left out), the tiles' quads in the anchor's world (frame: its EnuFrame); an anchor change keeps
         what was sent and in flight."""
@@ -1803,13 +1841,30 @@ class Tracker:
             for p in spots:
                 skip.update((a, b) for a, b, _d in geotiles.tiles_near(frame, p[0], p[1], self.inner[0], z))
         car = [k for k in near(x, y, self.send_m) if k not in skip]
+        self.car = set(car)             # (progress: the loading line's tiles, the disc's)
+        try:
+            way = self._way_ahead(frame, x, y, vel, tree, z)
+        except Exception as e:          # (the disc alone, as before)
+            way = {}
+            log.debug("%s geotiles along the way ahead: %s: %s", self.kind, type(e).__name__, e)
+        if way:
+            have = set(car)
+            car += [k for k in sorted(way, key=way.get) if k not in have and k not in skip]
+            self.ahead.update((k, now) for k in way)
+        if self.ahead:
+            self.ahead = {k: t for k, t in self.ahead.items() if now - t < LEAD_KEEP_S}
         if tree is not None and car:
             import reach
             try:
-                car = reach.order_geotiles(tree, frame, car, x, y, z)
+                car = reach.order_geotiles(tree, frame, car, x, y, z,
+                                           corridor_m=self.lead[3] if self.lead else None)
             except Exception as e:      # (nearest first, as before)
                 log.debug("%s geotiles in the tree's order: %s: %s", self.kind, type(e).__name__, e)
-        self.car = set(car)
+        elif way:                       # (no tree: right round the car first, then by the time to reach them)
+            d = dict(zip(car, geotiles.dists(frame, car, z, [(x, y)])[:, 0].tolist()))
+            v = max(math.hypot(*vel), 1.0)
+            car.sort(key=lambda k: (0, d[k]) if d[k] <= NEAR_FIRST_M
+                     else (1, min(way.get(k, 1e9), SIDE_SLOW * d[k] / v)))
         seen = [k for k in near(*view, self.send_m) if k not in skip] if view else []
         others = []
         for f in foci:
@@ -1820,6 +1875,7 @@ class Tracker:
                 done.add(k)
                 order.append(k)
         self.redo &= self.sent
+        self.rank = {k: i for i, k in enumerate(order)}
         want = [k for k in order if (k not in self.sent or k in self.redo) and k not in self.building]
         n_go = max(0, self.per_pose - len(self.building))
         more = len(want) > n_go             # (left for a later pass: the gate lets that one through)
@@ -1844,7 +1900,7 @@ class Tracker:
         of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
         were whole seconds of a busy event loop, 2026-11-07)."""
         import geotiles
-        sent = list(self.sent)
+        sent = [k for k in self.sent if k not in self.ahead] if self.ahead else list(self.sent)
         if not sent:
             return []
         z = self.z or geotiles.Z
@@ -1932,6 +1988,9 @@ class Tracker:
                 self.rebuilt += 1
             self.ever.add(key)
         self.sent.add(key)
+        if not again:
+            import arrival
+            arrival.note_geo(conn, self.kind, self.frame, key, self.z or geotiles.Z)
         m = {"type": f"{self.kind}_tile", "anchorId": self.aid, "key": geotiles.key(*key, self.z or geotiles.Z),
              "path": path, "n": n, "frame": [float(frame[0]), float(frame[1])], "pivot": float(pivot)}
         s = getattr(conn, "s", None)

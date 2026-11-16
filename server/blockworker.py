@@ -786,18 +786,28 @@ def _veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+VEG_JOB_SLOW_S = 1.0        # a trees job (veg_geo_many) slower than this is logged
+
+
 def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
     """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
     map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
     (Server.build_veg_geo)."""
     out = []
+    t0, slow = time.perf_counter(), (0.0, None)
     for gx, gy in tiles:
+        t1 = time.perf_counter()
         try:
             out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
         except Exception as e:
             import revisit
             out.append(None if isinstance(e, revisit.StaleMiss) else e)
+        slow = max(slow, (time.perf_counter() - t1, (gx, gy)))
+    dt = time.perf_counter() - t0
+    if dt > VEG_JOB_SLOW_S:         # (where a slow job's time went: one tile's map cell or plans, or all of them)
+        log.info("trees job: %d geotiles in %.1f s, the slowest %s %.1f s", len(tiles), dt, slow[1], slow[0])
     return out
+
 
 def _take_pads(fuel_pads):
     """Use only this job's fuel and frontage pads from earthd.Server.block_fuel_pads."""

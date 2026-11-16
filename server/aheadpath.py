@@ -10,6 +10,8 @@ point with the time the player reaches it (most urgent first) and a lateral spre
 road's own curves, a turn-off). Pure; Track measures the turn rate from the poses.
 """
 import math
+
+import dmath
 from collections import deque
 
 LEAD_S = 90.0           # s of driving ahead
@@ -30,7 +32,7 @@ def points(x, y, vx, vy, turn=0.0, lead_s=LEAD_S, min_m=MIN_M, max_m=MAX_M, step
     if v < MIN_V:
         return []
     dist = min(max_m, max(min_m, v * lead_s))
-    h0 = math.atan2(vy, vx)
+    h0 = dmath.atan2(vy, vx)
     w = max(-TURN_MAX, min(TURN_MAX, turn))
     out = [(0.0, x, y, 0.0)]
     px, py, s = x, y, 0.0
@@ -38,8 +40,8 @@ def points(x, y, vx, vy, turn=0.0, lead_s=LEAD_S, min_m=MIN_M, max_m=MAX_M, step
     while s < dist - 1e-6:
         ds = min(sub, dist - s)
         t_mid = (s + ds / 2) / v
-        h = h0 + w * TURN_FADE_S * (1.0 - math.exp(-t_mid / TURN_FADE_S))
-        px, py, s = px + ds * math.cos(h), py + ds * math.sin(h), s + ds
+        h = h0 + w * TURN_FADE_S * (1.0 - dmath.exp(-t_mid / TURN_FADE_S))
+        px, py, s = px + ds * dmath.cos(h), py + ds * dmath.sin(h), s + ds
         if s >= len(out) * step_m - 1e-6 or s >= dist - 1e-6:
             out.append((s / v, px, py, min(SPREAD_MAX_M, SPREAD * s)))
     return out
@@ -61,7 +63,7 @@ class Track:
         if math.hypot(vx, vy) < MIN_V:
             self.poses.clear()
             return
-        self.poses.append((t, x, y, math.atan2(vy, vx)))
+        self.poses.append((t, x, y, dmath.atan2(vy, vx)))
         while self.poses and t - self.poses[0][0] > self.WINDOW_S:
             self.poses.popleft()
 

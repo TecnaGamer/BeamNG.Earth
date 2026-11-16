@@ -135,6 +135,8 @@ import dirsigns as dirsignsmod  # noqa: E402
 import mapdata as mapdatamod  # noqa: E402
 import dem as demmod  # noqa: E402
 import mapcells  # noqa: E402
+import arrival as arrivalmod  # noqa: E402
+import orderedjobs as orderedjobsmod  # noqa: E402
 import aheadpath  # noqa: E402
 import roadahead  # noqa: E402
 import pacer  # noqa: E402
@@ -541,6 +543,9 @@ def veg_processes(env=None, small=None):
         import budget
         small = budget.small()
     return 1 if small else VEG_PROCESSES_DEFAULT
+# With their own processes the tiles go one by one, each time the one the car reaches soonest now (Server.veg_jobs:
+# orderedjobs.py, Server.veg_rank: the trackers' order of their last pass), the ones no longer wanted dropped: in a
+# job of VEG_GEO_BATCH a tile came back with the job's last (~5 s), in the order they were asked for.
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 SELECT_SLACK_EPS = 1e-3          # m: a pose skips the far selection only when it moved less than its slack by this much
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
@@ -1487,6 +1492,7 @@ class Server:
         self.ahead_busy = False
         self.ahead_last = None          # (anchor id, x, y) of the last round
         self.ahead_stats = {"dem": 0, "cells": 0, "deferred": 0}
+        self.veg_jobs = None            # ... and their queue in the order the car reaches them (orderedjobs.OrderedJobs)
         self.map_ahead_pool = None      # map_ahead's processes (main_async), None: download_ahead fetches the cells
         self.map_ahead_last = None      # (anchor id, x, y) of the last list
         self.map_ahead_want = []        # [cell key] nearest first (the last list's)
@@ -2221,6 +2227,23 @@ class Server:
         if anchor is None:
             return None
         zoom = anchor.zooms[0]
+        if getattr(self, "veg_jobs", None) is not None and self.mapdata is not None:
+            # (in the trees processes, one by one, the one the car reaches soonest first: veg_rank)
+            t0 = time.perf_counter()
+            st = Server.stale_of(self, anchor)      # (an older version's trees with its ground, where there are)
+            vfn = revisitmod.StaleJob(blockworker.veg_geo_many, st) if st else blockworker.veg_geo_many
+            fut = self.veg_jobs.submit((gx, gy), vfn, anchor.id, anchor.lat, anchor.lon, zoom, [(gx, gy)],
+                                       self.out_dir, self.vfs_dir, flat)
+            got = fut.result()
+            if got is None:             # (dropped: no player's tracker wants it any more)
+                return None
+            got = got[0]
+            if time.perf_counter() - t0 > ROAD_GEO_SLOW_S:
+                log.info("trees geotile %d_%d in %.1f s (queue %.1f)", gx, gy, time.perf_counter() - t0,
+                         getattr(fut, "queued_s", 0.0))
+            if isinstance(got, Exception):
+                raise got
+            return got
         if self.road_pool is not None and self.mapdata is not None:
             # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
             t0, waited = time.perf_counter(), []
@@ -2251,6 +2274,16 @@ class Server:
         path, n = vegetationmod.write_tile(self.out_dir, self.vfs_dir, None, gx, gy, rows, flat=flat,
                                            geo={"key": geotiles.key(gx, gy), "frame": frame, "pivot": pivot})
         return path, n, frame, pivot
+
+    def veg_rank(self, key):
+        """Trees geotile key's place in the order the players' trackers want their tiles in now (vegetation.Tracker.rank:
+        the last pass's, the car's way ahead first), the smallest of them; None when none wants it any more."""
+        best = None
+        for c in list(getattr(self, "connections", ())):
+            r = getattr(getattr(c, "veg", None), "rank", {}).get(key)
+            if r is not None and (best is None or r < best):
+                best = r
+        return best
 
     def _veg_geo_job(self, anchor, zoom, gx, gy, flat):
         """(future, index): the road processes' job (blockworker.veg_geo_many) that builds geotile (gx, gy), its result
@@ -4175,7 +4208,7 @@ class Server:
             la, lo, _ = anchor.frame.enu_to_geodetic(px, py, 0.0)
             la, lo = float(la), float(lo)
             dlat = reach / 111320.0
-            dlon = reach / (111320.0 * max(0.05, math.cos(math.radians(la))))
+            dlon = reach / (111320.0 * max(0.05, dmath.cos(math.radians(la))))
             try:
                 keys = mapcells.cells_for_bbox(la - dlat, lo - dlon, la + dlat, lo + dlon)
             except ValueError:
@@ -4236,7 +4269,7 @@ class Server:
             lls.append((float(la), float(lo)))
         pad = LOAD_MAP_PAD_M / 111320.0
         lat0, lat1 = min(a for a, _ in lls) - pad, max(a for a, _ in lls) + pad
-        padlon = pad / max(0.05, math.cos(math.radians(lls[0][0])))
+        padlon = pad / max(0.05, dmath.cos(math.radians(lls[0][0])))
         lon0, lon1 = min(b for _, b in lls) - padlon, max(b for _, b in lls) + padlon
         try:
             keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1, max_cells=LOAD_MAP_MAX_CELLS)
@@ -7832,6 +7865,7 @@ class Connection:
         self.signs_on = True                    # the mod's highwaySigns setting (message highway_signs)
         self.refining = set()                   # graded first blocks on their way (refine_first; send_progress)
         self.ground_wait = {}                   # block key -> when its photo was first seen waiting (ground_progress)
+        self.arrival = arrivalmod.Arrival()     # how far ahead of a fast car its tiles reach the mod (arrival.py)
         self.veg = vegetationmod.Tracker()      # vegetation tiles sent to the mod (--trees on)
         self.veg_flat = False                   # ... as one flat array each (the mod's hello.vegFlat; trees.lua)
         # far buildings (--buildings on); none under the road tiles (they carry the buildings themselves)
@@ -9108,8 +9142,10 @@ class Connection:
                 old = self.veg
                 old.close()
                 # (in the road processes the waiting tiles share a job, so more may wait: _veg_geo_job)
-                per = VEG_GEO_PER_POSE if geo and self.s.road_pool is not None else vegetationmod.BUILD_PER_POSE
-                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, per_pose=per, geo=geo)
+                per = VEG_GEO_PER_POSE if geo and (self.s.road_pool or self.s.veg_jobs) is not None \
+                    else vegetationmod.BUILD_PER_POSE
+                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, per_pose=per, geo=geo,
+                                                 lead=vegetationmod.LEAD if geo else None)
             if geo:
                 m["geoTiles"] = geotiles.Z
             self.traffic_visuals = (geo and msg.get("trafficVisuals") == distanttraffic.PROTO and self.s.traffic
@@ -10506,7 +10542,7 @@ class Connection:
             self.veg.on_pose(self, aid, *self.focus, asyncio.get_running_loop(),
                              self.build_veg_geo if self.veg.geo else self.build_veg_tile,
                              view=self.view_at, foci=[f for f in self.foci if f[3]],
-                             frame=anchor.frame if anchor is not None else None, tree=tree)
+                             frame=anchor.frame if anchor is not None else None, tree=tree, vel=self.vel)
         bld_on = not (self.map_view and self.eye_clearance() > MAP_BUILDINGS_EYE_M)
         if self.s.buildings and aid == self.active and bld_on:
             self.building_reach()
@@ -12756,9 +12792,11 @@ async def main_async(args, restart=None):
                       args.surface == "on", None, logging.getLogger().level,
                       args.airports == "on", args.sea == "on", NICE_ROADS, roadsmod.ROADS_IN_GROUND))
         log.info("trees processes: %d (their own queue, beside the road tiles' %d)", veg_n, args.road_processes)
+    if server.veg_pool is not None:
+        server.veg_jobs = orderedjobsmod.OrderedJobs(server.veg_pool, server.veg_rank, "trees")
     # the whole server held to its RAM limit (memwatch.py: caches dropped, a pool's processes replaced)
     memwatchmod.register(*[p for p, _q in block_pools], photo_pool, far_pool, road_pool, far_bld_pool,
-                         server.veg_pool)
+                         server.veg_pool, server.map_ahead_pool)
     memwatchmod.start()
     server.boost_cpus = (cpupin.boosted(server.server_cpus, server.game_cpus)
                          if getattr(args, "load_boost", "on") == "on" else None)

@@ -12928,6 +12928,9 @@ class GeoTracker:
             self.info[key] = info
             self.shown.pop(key, None)
             self.stats["content"] += 1
+            if not again and aid == self.aid:
+                import arrival
+                arrival.note_geo(conn, "roads", self.frame, key, geotiles.Z)
             m = {"type": "roads_tile", "anchorId": aid, "key": gkey, "path": path, "n": n,
                  "frame": list(geotiles.centre(*key)), "h": info.get("h")}
             data = staging.inline_from(pre, out_dir, path)

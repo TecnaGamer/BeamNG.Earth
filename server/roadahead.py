@@ -12,6 +12,9 @@ only (the map data ahead, earthd.map_ahead, has them there well before the playe
 event loop. Off the known roads, or off any road, follow() gives None and the prefetch predicts as before.
 """
 import math
+
+import dmath
+import dnp
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -71,7 +74,7 @@ class RoadNet:
             a, d = xy[:-1], xy[1:] - xy[:-1]
             ln2 = np.maximum((d * d).sum(1), 1e-9)
             t = np.clip(((x - a[:, 0]) * d[:, 0] + (y - a[:, 1]) * d[:, 1]) / ln2, 0.0, 1.0)
-            dist = np.hypot(a[:, 0] + d[:, 0] * t - x, a[:, 1] + d[:, 1] * t - y)
+            dist = dnp.hypot(a[:, 0] + d[:, 0] * t - x, a[:, 1] + d[:, 1] * t - y)
             j = int(np.argmin(dist))
             cos = (d[j, 0] * vx + d[j, 1] * vy) / (math.sqrt(ln2[j]) * sp)
             if dist[j] <= bd and abs(cos) >= SNAP_ALIGN:
@@ -83,16 +86,16 @@ class RoadNet:
         at a fork, a turn, or the end of the known roads."""
         xy = self.lines[i]
         end, prev = (xy[-1], xy[-2]) if sign > 0 else (xy[0], xy[1])
-        h0 = math.atan2(end[1] - prev[1], end[0] - prev[0])
+        h0 = dmath.atan2(end[1] - prev[1], end[0] - prev[0])
         cands = []
         for d, col in ((1, 0), (-1, 1)):        # lines starting at the end (taken forwards), ending there (backwards)
             p = self.ends[:, col]
-            for k in np.flatnonzero(np.hypot(p[:, 0] - end[0], p[:, 1] - end[1]) <= JOIN_M).tolist():
+            for k in np.flatnonzero(dnp.hypot(p[:, 0] - end[0], p[:, 1] - end[1]) <= JOIN_M).tolist():
                 if k == i:
                     continue
                 line = self.lines[k]
                 a, q = (line[0], line[1]) if d > 0 else (line[-1], line[-2])
-                bend = abs((math.atan2(q[1] - a[1], q[0] - a[0]) - h0 + math.pi) % (2 * math.pi) - math.pi)
+                bend = abs((dmath.atan2(q[1] - a[1], q[0] - a[0]) - h0 + math.pi) % (2 * math.pi) - math.pi)
                 if bend <= TURN_MAX:
                     # the same road first: its name, its class, not a ramp off it; then the straightest
                     rank = ((self.name[k] != self.name[i]) or not self.name[i],
