@@ -655,6 +655,12 @@ do
   frames(2)
   T.check(#rots == nRot + 1 and math.abs(rots[#rots].d.x) < 1e-9 and stH.startHeading == nil and stH.headingFor
     and stH.headingFor.heading == 90, 'a placement before the commit keeps the car\'s heading and the saved one waits')
+  -- the first request fails (anchor_error) and is asked again later: the heading goes with the retry (Codex on aa16d9c9)
+  local nPrep2 = #received('prepare_anchor')
+  serverSend({ type = 'anchor_error', requestId = reqH.requestId, error = 'test: elevation download failed' })
+  T.check(pumpUntil(function() return #received('prepare_anchor') == nPrep2 + 1 end, 400), 'the failed start retried')
+  reqH = last('prepare_anchor')
+  T.check(stH.headingFor and stH.headingFor.requestId == reqH.requestId, 'the heading moved to the retry\'s request')
   serverSend({ type = 'anchor_ready', requestId = reqH.requestId, anchorId = 77, lat = reqH.lat, lon = reqH.lon,
     groundZ = 1180, px = reqH.px, py = reqH.py, terrain = terrainMsg(reqH.cx or 0, reqH.cy or 0,
     '/temp/beamngEarth/s1/hm_77_0_0.png', 1100) })

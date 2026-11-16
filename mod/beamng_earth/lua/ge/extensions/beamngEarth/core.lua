@@ -1465,7 +1465,7 @@ local function onMessage(msg)
       if n >= M._anchorload.PREPARE_TRIES then M.failAnchorLoad('prepare', msg.error); return end
       local wait = math.min(TELEPORT_RETRY_MAX_S, rebase.RETRY_S * 2 ^ (n - 1))
       st.teleportRetry = { lat = p.lat, lon = p.lon, cx = p.cx, cy = p.cy, place = p.place, n = n, at = st.clock + wait,
-        firstAt = p.firstAt or p.sentAt }
+        firstAt = p.firstAt or p.sentAt, requestId = p.requestId }
       setStatus(string.format('Terrain failed (%s), trying again in %d s', tostring(msg.error), wait))
     else
       setStatus('Anchor request failed: ' .. tostring(msg.error))
@@ -1980,6 +1980,9 @@ local function updateWorld(dt)
     st.teleportRetry = nil
     if requestAnchor(retry.lat, retry.lon, 'teleport', retry.cx, retry.cy, retry.place) then
       st.pending.retries, st.pending.firstAt = retry.n, retry.firstAt
+      -- ("Where you left off": the heading goes with the retry, Codex on aa16d9c9)
+      local hf = st.headingFor
+      if hf and retry.requestId ~= nil and hf.requestId == retry.requestId then hf.requestId = st.pending.requestId end
     end
   end
 
