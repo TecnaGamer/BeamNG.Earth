@@ -2763,6 +2763,10 @@ class _Planner:
                 except Exception as e:      # as they were rather than no grading
                     _caught(e)
                     log.debug("grading: carriageways of %s: %s: %s", key, type(e).__name__, e)
+            # (the heights the underpass rule sees: the shadow's dips are its decision on them. Taken on the profile
+            # before the passes, a road raised onto its bridge's approach got a dip at its ground under a deck 10 m
+            # from its own deck's end, 7.8 m over it: a 160 % grade in Lagos)
+            z_under = [np.array(p.z, np.float64) for _f, p in plans] if z_before is not None else None
             if UNDER_ON and plans:
                 try:
                     self._lower_underpasses(key, plans)
@@ -2825,7 +2829,7 @@ class _Planner:
                     log.debug("grading: junctions after welding of %s: %s: %s", key, type(e).__name__, e)
             if z_before is not None and plans:
                 try:            # the one solve beside the passes: measured only, their plans kept (vsolve)
-                    self._vsolve_shadow(key, plans, pspecs, z_before)
+                    self._vsolve_shadow(key, plans, pspecs, z_before, z_under)
                 except Exception as e:
                     log.warning("vsolve: shadow solve of %s: %s: %s", key, type(e).__name__, e)
             if plans:
@@ -2902,10 +2906,11 @@ class _Planner:
             keeps = []
         return feats, plans, keeps
 
-    def _vsolve_shadow(self, key, plans, pspecs, z_before):
+    def _vsolve_shadow(self, key, plans, pspecs, z_before, z_under=None):
         """The cell's ground roads solved in one problem (vsolve.solve) from their profiles before the passes, with the
-        passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks); kept, trimmed
-        to the cell as its plans are, in self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
+        passes' discrete outputs as its inputs (the decks' heights at their abutments, the dips under decks: the
+        underpass rule's on z_under, the heights it sees in the passes, z_before's without); kept, trimmed to the cell
+        as its plans are, in self._vsolve[str(key)] = ([(fid, Plan)], info). The plans themselves untouched."""
         import copy
         n = len(pspecs)
         ground = [p for _f, p in plans[:n]]
@@ -2916,12 +2921,13 @@ class _Planner:
         if UNDER_ON:            # (the dips as the passes' rule makes them, but over the whole solve: its margin too. The
             # passes make them to UNDER_NEAR_M past the box only; taken from them, a cell's own dip spread over the
             # edge into a neighbour that had none there: 6.6 m seam steps in Tokyo)
+            seen = z_before if z_under is None else z_under
             under = [(fid, Plan(p.xy, np.array(z, np.float64), p.half, p.abut, p.cut, p.road_half))
-                     for (fid, p), z in zip(plans[:n], z_before[:n])]
+                     for (fid, p), z in zip(plans[:n], seen[:n])]
             for (_f, p), (_g, q) in zip(plans[:n], under):
                 q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
             self._lower_underpasses(key, under, near=CLIP_MARGIN_M + VERTEX_STEP)
-            for i, ((_f, q), z) in enumerate(zip(under, z_before[:n])):
+            for i, ((_f, q), z) in enumerate(zip(under, seen[:n])):
                 low = np.asarray(q.z, np.float64) <= np.asarray(z, np.float64) - vsolvemod.DIP_M
                 if low.any():
                     dips[i] = np.where(low, np.asarray(q.z, np.float64), np.nan)
