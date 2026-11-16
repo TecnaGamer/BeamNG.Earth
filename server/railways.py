@@ -588,39 +588,56 @@ def _coarse_here(frame, box):
         return False
 
 
+SEG_HITS_PAIRS = 1 << 18    # segment pairs _seg_hits tests at once (its arrays stay a few MB whatever the lines)
+
+
 def _seg_hits(a, b):
-    """Arc positions along polyline a where it crosses polyline b (proper segment intersections). Pure."""
+    """Arc positions along polyline a where it crosses polyline b (proper segment intersections). Every segment of b
+    at once per run of a's segments, the hits in the order the loop over both gave them (a's segment, then b's), the
+    same products per pair. Pure."""
+    n, m = len(a) - 1, len(b) - 1
+    if n < 1 or m < 1:
+        return []
     out = []
     sa = _arc(a)
-    for i in range(len(a) - 1):
-        p, r = a[i], a[i + 1] - a[i]
-        for j in range(len(b) - 1):
-            q, t = b[j], b[j + 1] - b[j]
-            den = r[0] * t[1] - r[1] * t[0]
-            if abs(den) < 1e-12:
-                continue
-            u = ((q[0] - p[0]) * t[1] - (q[1] - p[1]) * t[0]) / den
-            v = ((q[0] - p[0]) * r[1] - (q[1] - p[1]) * r[0]) / den
-            if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
-                out.append(float(sa[i] + u * (sa[i + 1] - sa[i])))
+    q, t = b[:-1], b[1:] - b[:-1]
+    rows = max(1, SEG_HITS_PAIRS // m)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for i0 in range(0, n, rows):
+            i1 = min(i0 + rows, n)
+            p, r = a[i0:i1], a[i0 + 1:i1 + 1] - a[i0:i1]
+            den = r[:, None, 0] * t[None, :, 1] - r[:, None, 1] * t[None, :, 0]
+            d0, d1 = q[None, :, 0] - p[:, None, 0], q[None, :, 1] - p[:, None, 1]
+            u = (d0 * t[None, :, 1] - d1 * t[None, :, 0]) / den
+            v = (d0 * r[:, None, 1] - d1 * r[:, None, 0]) / den
+            i, j = np.nonzero((np.abs(den) >= 1e-12) & (u >= 0.0) & (u <= 1.0) & (v >= 0.0) & (v <= 1.0))
+            out.extend(float(x) for x in sa[i0 + i] + u[i, j] * (sa[i0 + i + 1] - sa[i0 + i]))
     return out
 
 
 def coarse_underpasses(frame, cells, box, rails, reach=REACH_M):
     """[(xy, half width)] (as road_underpasses): on coarse elevation (COARSE_AT), each ground road's piece
     COARSE_PIECE_M either side of where a rail bridge part crosses it."""
-    bridges = [xy for (_fid, _c, kind, xy) in rails if kind == "bridge" and len(xy) >= 2]
+    bridges = [r for r in rails if r[2] == "bridge" and len(r[3]) >= 2]
     if not bridges:
         return []
     coarse = _coarse_here(frame, box)
     if not coarse and not (FLAT_SEP_ON and RAW_ELEV is not None):
         return []
     out = []
+    boxes = _rail_boxes(bridges)
     for line, half in crossings(frame, cells, box, reach):
         if len(line) < 2:
             continue
+        # (only the bridge parts whose box meets the road's can cross it: every road against every part's every
+        # segment was 1.5e9 segment pairs for one plan in Hong Kong (22.414 N 114.213 E), which never finished)
+        lo, hi = line.min(0), line.max(0)
+        near = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0])
+                              & (boxes[:, 1] <= hi[1]) & (boxes[:, 3] >= lo[1]))
+        if not len(near):
+            continue
         sl = _arc(line)
-        for b in bridges:
+        for b in (bridges[k][3] for k in near):
             for sc in _seg_hits(line, b):
                 if not coarse and not flat_rail_crossing(frame, b, line, sc):
                     continue
@@ -1396,10 +1413,11 @@ def seam_crossers(xy, zb, roads_):
     lines, box = _seam_boxes(roads_)
     # (the roads whose box meets the track's, all at once: a numpy max / min per road and track was most of it)
     near = np.flatnonzero(~((box[:, 2] < lo[0]) | (box[:, 3] < lo[1]) | (box[:, 0] > hi[0]) | (box[:, 1] > hi[1])))
-    for k in near.tolist():
+    near = near.tolist()
+    # (every near road's crossings in one kernel call, each road's as a call of its own gives them)
+    for k, hits in zip(near, roads._crossings_by([xy], [lines[k] for k in near]) if near else ()):
         rxy, rz, rh = roads_[k]
         r = lines[k]
-        hits = roads._crossings([xy], [r])
         rzz = np.asarray(rz, np.float64)[:len(r)]
         if hits and any(abs(float(rzz[int(np.argmin(dnp.hypot(*(r - pt).T)))])
                             - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):

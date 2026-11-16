@@ -1073,7 +1073,7 @@ class OfflineTest(unittest.TestCase):
         got = []
         with mock.patch.object(sys, "argv", ["earthd.py", "--offline", "--nice", "0"]), \
                 mock.patch.object(earthd.logging, "basicConfig"), \
-                mock.patch.object(earthd, "main_async", lambda args: got.append(args)), \
+                mock.patch.object(earthd, "main_async", lambda args, *rest: got.append(args)), \
                 mock.patch.object(earthd.asyncio, "run", lambda coro: None):
             earthd.main()
             sys.argv[1:] = ["--nice", "0"]

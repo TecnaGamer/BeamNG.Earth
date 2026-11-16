@@ -3,17 +3,20 @@ centrelines (signed level tier, route number, street name) with heights read fro
 roads from the DTM and decks from the DSM pixels round each deck line (the US source's deck_lidar picks the one surface
 that runs along it). Pure given the fetched inputs (RoadZ._hk fetches them).
 
-The centrelines come twice from the same service, in lon/lat (EPSG:4326, for the map) and in HK1980 Grid metres
-(EPSG:2326, the LiDAR's grid): the server projects them, so no projection is written here."""
+The centrelines come in lon/lat (EPSG:4326, for the map); their HK1980 Grid metres (EPSG:2326, the LiDAR's grid) are
+hkdtm.grid's. (The service's own grid copy of the same lines agreed with it to 0.2 mm on 32,219 vertices, 2026-11-15;
+asked for with fewer vertices, its two copies do not keep the same ones.)"""
 from typing import NamedTuple
 
 import numpy as np
 
 import fast
 import dnp
+import hkdtm
 
 STEP_M = 4.0                # m between a line's stations, deck_lidar's too (roadz.LIDAR_STEP_M)
 PIX_M = 0.5                 # m, the DSM's pixel
+VERTEX_MIN_M = PIX_M        # m along a line between the vertices kept of it (_spaced): no closer than the pixels read
 DECK_HALF_M = 4.0           # m either side of a deck's line its DSM pixels count
 CORRIDOR_NATIVE = 261       # earthfast.VERSION of pixel_corridor (the PIX_M pixel centres within DECK_HALF_M of a
                             # line, each once)
@@ -45,30 +48,42 @@ def _text(v):
     return str(v).strip()
 
 
-def parse_td(feats_ll, feats_xy):
-    """[TdLine] of TD Road Network features fetched in EPSG:4326 (feats_ll) and EPSG:2326 (feats_xy), paired by
-    OBJECTID. A feature whose two copies differ in shape, or with a bad coordinate, is left out."""
-    xy_of = {}
-    for f in feats_xy or ():
-        if isinstance(f, dict):
-            xy_of[(f.get("attributes") or {}).get("OBJECTID")] = (f.get("geometry") or {}).get("paths")
+def _spaced(xy, min_m=VERTEX_MIN_M):
+    """Indices of the vertices kept of the line xy (n, 2), n >= 2: the first, the last, and each one min_m or more
+    along the line past the one kept before it. The service holds some curves in vertices well under a millimetre
+    apart (83,150 on a 57 m line at Hong Kong (22.2778 N 114.1634 E), 985,619 in that map cell where the median cell
+    has 11,212, 2026-11-15), and roadz.observed goes over every vertex of its cells on each call. roadz asks the
+    service to leave them out (HK_LINE_TOL_DEG); this holds whatever it answers."""
+    s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(xy, axis=0).T))]
+    if (np.diff(s) >= min_m).all():
+        return np.arange(len(s))
+    keep = [0]
+    while True:
+        i = int(np.searchsorted(s, s[keep[-1]] + min_m))
+        if i >= len(s) - 1:
+            break
+        keep.append(i)
+    return np.array(keep + [len(s) - 1])
+
+
+def parse_td(feats):
+    """[TdLine] of TD Road Network features fetched in EPSG:4326, their vertices VERTEX_MIN_M apart or more (_spaced,
+    by their grid metres). A feature without usable paths, or a path with a bad coordinate, is left out."""
     out = []
-    for f in feats_ll or ():
+    for f in feats or ():
         if not isinstance(f, dict):
             continue
         a = f.get("attributes") or {}
         try:
             level = int(a.get("ELEVATION") or 0)
-            pl = [np.asarray(p, np.float64)[:, :2] for p in (f.get("geometry") or {}).get("paths")]
-            px = [np.asarray(p, np.float64)[:, :2] for p in xy_of.get(a.get("OBJECTID"))]
+            paths = [np.asarray(p, np.float64)[:, :2] for p in (f.get("geometry") or {}).get("paths")]
         except (TypeError, ValueError, IndexError):
             continue
-        if len(pl) != len(px) or any(p.shape != q.shape for p, q in zip(pl, px)):
-            continue
-        for p, q in zip(pl, px):
-            if (len(p) >= 2 and np.isfinite(p).all() and np.isfinite(q).all()
-                    and (np.abs(p) <= [180.0, 90.0]).all()):
-                out.append(TdLine(level, _text(a.get("ROUTE_NUM")), _text(a.get("STREET_ENAME")), p, q))
+        for p in paths:
+            if len(p) >= 2 and np.isfinite(p).all() and (np.abs(p) <= [180.0, 90.0]).all():
+                q = np.stack(hkdtm.grid(p[:, 1], p[:, 0]), 1)
+                k = _spaced(q)
+                out.append(TdLine(level, _text(a.get("ROUTE_NUM")), _text(a.get("STREET_ENAME")), p[k], q[k]))
     return out
 
 
