@@ -162,9 +162,13 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
     rk = np.asarray(ranks, np.float64)
     r0 = float(rk.min()) if len(rk) else 0.0
     chains, couplings = [], []
+    node_list = nodes(xys, z0) if "nodes" not in drop else []
+    in_node = {k for m in node_list for k in m}
     held = {}
     for (a, i, h) in pins:
-        held[(a, i if i >= 0 else len(xys[a]) + i)] = float(h)
+        k = (a, i if i >= 0 else len(xys[a]) + i)
+        if k not in in_node:    # (a cut end on a junction: the node ties it; held at its profile as well, beside a road
+            held[k] = float(h)  # the underpass rule dipped there, it made two of Tokyo's cells infeasible)
     for n, p in enumerate(plans):
         for e in (0, len(xys[n]) - 1):
             if p.abut[0 if e == 0 else 1] and "abut" not in drop:
@@ -203,7 +207,7 @@ def problem(plans, specs, z0, ceilings, ranks, pins=(), dips=None, grade_rows=Tr
             couplings.append((n, i, n, i + 1, "ge", float(dz0[i] - lim[i])))
             couplings.append((n, i + 1, n, i, "ge", float(-lim[i] - dz0[i])))
     n_joins = 0
-    for members in (nodes(xys, z0) if "nodes" not in drop else ()):
+    for members in node_list:
         # (each node one height: every member tied to one root, a star with no loops. Tied pair by pair, three ends
         # meeting at a side road's mouth formed a loop whose offsets did not add up: 13 of Tokyo's 15 cells infeasible)
         keys = sorted(members)
