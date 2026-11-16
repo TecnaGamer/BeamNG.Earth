@@ -1773,6 +1773,13 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits, country)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
+    import tramsignals                  # (plan 046 H: the tram signals' rows, the mod's tramsignals.lua; BNE_TRAM_SIGNALS)
+    try:
+        tsig = tramsignals.tile_rows(frame, box, rcells, rground,
+                                     lambda: furniture.signals_for(_s.md, frame, near_cells), country, left_hand)
+    except Exception as e:
+        log.warning("tram signals: tile %s_%s: %s: %s", tx, ty, type(e).__name__, e)
+        tsig = []
     import catenary
     if catenary.ENABLED and wires is not None:      # masts and wires along the electrified lines (BNE_CATENARY)
         try:
@@ -1783,8 +1790,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 roadsmod.tile_bbox(tx, ty))
             _bx, _by = roadsmod.tile_bbox(tx, ty)[:2]
             c_rows, c_wires = catenary.build(frame, tx, ty, rcells, c_ground,
-                                             [np.asarray(sp.ring, np.float64) + [_bx, _by] for sp, _g0, _g1 in (items or [])], country)
+                                             [np.asarray(sp.ring, np.float64) + [_bx, _by] for sp, _g0, _g1 in (items or [])], country,
+                                             _road_decks(bridges, rcells, tx, ty))
             if c_rows:
+                import tramcat
+                if tramcat.ENABLED:     # (a tram pole's lamp bracket is its street's lamp: no separate lamp beside it)
+                    props = tramcat.drop_lamps(props, c_rows)
                 props = (props or []) + c_rows
             wires.extend(c_wires)
         except Exception as e:
@@ -1794,6 +1805,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
+                                 road_decks=_road_decks(bridges, rcells, tx, ty), country=country,
                                  return_decks=True, load=cell_fn,
                                  bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
                                  under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
@@ -1909,6 +1921,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.fuel_tried = fuel_tried
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
+    P.tsig = tsig
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.bus_col = _station_collision(frame, box, elev, getattr(_s, "md", None)) if buildings else None
     P.turbines = turbine_rows
@@ -1941,7 +1954,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
-                              signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
+                              signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, tsig=P.tsig, bld_none=bool(buildings),
                                barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces,
                                walk_ground=lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q),
                                speed_traps=P.speed_traps, bus_col=P.bus_col) + (P.fuel_pads, P.fuel_tried)
@@ -2046,6 +2059,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    signs=getattr(P, "signs", None), custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
+                                   tsig=getattr(P, "tsig", ()),
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
                                    turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None),
@@ -3017,6 +3031,24 @@ def _tile_decks(bridges, cells, tx, ty):
                 for _, spec, xy, z, _ in bridges.parts(cells, (x0 - 20, y0 - 20, x1 + 20, y1 + 20))]
     except Exception as e:      # no ways cut rather than no buildings
         log.debug("tile decks: %s: %s", type(e).__name__, e)
+        return []
+
+
+def _road_decks(bridges, cells, tx, ty):
+    """[(xy, z, width)] of the road bridge decks round road tile (tx, ty), for railways.tile_mesh and tramcat (a street tram's bridge lies on
+    one): only with BNE_TRAM (tramtrack), else [] (the railway tiles never read the road bridges)."""
+    import tramtrack
+    if not tramtrack.ENABLED or bridges is None:
+        return []
+    import railways
+    import roads as roadsmod
+    x0, y0, x1, y1 = roadsmod.tile_bbox(tx, ty)
+    m = railways.GRADE_REACH_M * 2
+    try:
+        return [(np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64), float(spec.width))
+                for _, spec, xy, z, _ in bridges.parts(cells, (x0 - m, y0 - m, x1 + m, y1 + m))]
+    except Exception as e:      # no decks: the tram bridge keeps its own slab
+        log.debug("road decks: %s: %s", type(e).__name__, e)
         return []
 
 

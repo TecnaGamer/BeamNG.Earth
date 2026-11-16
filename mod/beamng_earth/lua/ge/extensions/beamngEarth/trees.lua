@@ -42,7 +42,7 @@ M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = tr
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, high_mast_light = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
-  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
+  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, rrbuffer = 400, rrwalk = 250, catmast = 700, tram_tube_span = 700, tram_tube_arm = 700, tram_tube_centre = 700, tram_square_span = 700, tram_square_arm = 700, tram_square_centre = 700, tram_lattice_span = 700, tram_lattice_arm = 700, tram_lattice_centre = 700, tram_concrete_span = 700, tram_concrete_arm = 700, tram_concrete_centre = 700, tram_lamp_g = 700, tram_lamp_k = 700, tram_lamp_t = 700, tram_rosette = 300, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, bench_metal = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, signal_left = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
@@ -80,7 +80,7 @@ M.BEHIND_HYST_M = 30
 -- ahead) ride the next rebuild, as before: a deadline for each of them doubled a Steam Deck drive's rebuilds (52 against
 -- 23-27 in Fells Point at 45 mph).
 M.CLOSE_M = 120
-M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, tram_lamp_g = true, tram_lamp_k = true, tram_lamp_t = true, tram_rosette = true, high_mast_light = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -133,7 +133,7 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true, signal_left = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
-  rrgate_eu_l = true, rrgate_l = true, rrbuffer = true, rrwalk = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  rrgate_eu_l = true, rrgate_l = true, rrbuffer = true, rrwalk = true, catmast = true, tram_tube_span = true, tram_tube_arm = true, tram_tube_centre = true, tram_square_span = true, tram_square_arm = true, tram_square_centre = true, tram_lattice_span = true, tram_lattice_arm = true, tram_lattice_centre = true, tram_concrete_span = true, tram_concrete_arm = true, tram_concrete_centre = true, tram_lamp_g = true, tram_lamp_k = true, tram_lamp_t = true, tram_rosette = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_turboburger = true, rooftank = true }
 
@@ -295,6 +295,25 @@ M.CATALOG = {
   -- a rigid portal's posts (the girder between them is the tile's wire mesh: server catenary.portal_wires)
   catpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_su', 10.4 } },
   catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
+  -- the tram overhead line's poles (server tramcat.py, native/earthfast/src/tram; tools/blender/build_tram_poles.py): family
+  -- tube / square / lattice / concrete, kind span (a street pole) / arm (a cantilever mast) / centre (between two tracks), the
+  -- street lamps on them (g galvanised arm, k black arm, t Helsinki's T head) and the wall rosette
+  tram_tube_span = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_tube_span', 9.0 } },
+  tram_tube_arm = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_tube_arm', 9.0 } },
+  tram_tube_centre = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_tube_centre', 9.0 } },
+  tram_square_span = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_square_span', 9.0 } },
+  tram_square_arm = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_square_arm', 9.0 } },
+  tram_square_centre = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_square_centre', 9.0 } },
+  tram_lattice_span = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lattice_span', 9.0 } },
+  tram_lattice_arm = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lattice_arm', 9.0 } },
+  tram_lattice_centre = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lattice_centre', 9.0 } },
+  tram_concrete_span = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_span', 9.0 } },
+  tram_concrete_arm = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_arm', 9.0 } },
+  tram_concrete_centre = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_concrete_centre', 9.0 } },
+  tram_lamp_g = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lamp_g', 9.0 } },
+  tram_lamp_k = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lamp_k', 9.0 } },
+  tram_lamp_t = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_lamp_t', 9.0 } },
+  tram_rosette = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_tram_rosette', 1.0 } },
   -- the Mediterranean basin's Cs climates (server vegetation.G_MEDITERRANEAN): Italy's own trees, already loaded with
   -- its folder (MATERIALS); heights measured from the shapes' bounds (the asset survey, 2026-11-10)
   mediterranean = {

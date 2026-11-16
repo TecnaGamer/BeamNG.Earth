@@ -424,6 +424,9 @@ end
 local function signalData(nodes)
   local ts = core_trafficSignals
   local inst, ctrls, seqs = {}, {}, {}
+  local okT, trams = pcall(require, 'beamngEarth/tramsignals')       -- (plan 046 H: the tram signals' window at a junction)
+  if not okT then trams = nil end
+  if trams then trams.unbindAll() end
   local stop = nil
   local ns = 0
   for _, j in ipairs(graph.signals or {}) do
@@ -444,9 +447,34 @@ local function signalData(nodes)
             ctrls[#ctrls + 1] = c
             cs[ph] = c
           end
-          local seq = ts.newSequence({ name = 'bne_' .. j.j, phases = { { controllerIds = { cs[0].id } },
-            { controllerIds = { cs[1].id } } } })
+          local phases = { { controllerIds = { cs[0].id } }, { controllerIds = { cs[1].id } } }
+          -- the tram signals within JUNCTION_M follow this sequence (tramsignals.lua): one that runs along a car phase's axis goes
+          -- with that phase's green; the others get a third phase, the trams' window (green + warning seconds), where every car
+          -- signal is red
+          local par, win, winGreen = {}, {}, 0
+          if trams and jn.pos then
+            for _, ts_ in ipairs(trams.nearList(jn.pos.x, jn.pos.y, trams.JUNCTION_M)) do
+              local ph = trams.parallelPhase(ts_, apps)
+              if ph then par[#par + 1] = { ts_, ph } else win[#win + 1] = ts_; winGreen = math.max(winGreen, ts_.green or 0) end
+            end
+          end
+          if #win > 0 then
+            local ct = ts.newController({ name = 'bne_tram_' .. j.j, type = 'lightsBasic',
+              states = { { state = 'redTrafficLight', duration = winGreen + trams.WARN_S } } })
+            ctrls[#ctrls + 1] = ct
+            phases[trams.TRAM_PHASE] = { controllerIds = { ct.id } }
+          end
+          local seq = ts.newSequence({ name = 'bne_' .. j.j, phases = phases })
           seqs[#seqs + 1] = seq
+          for _, w in ipairs(win) do
+            trams.bind(w, { seq = 'bne_' .. j.j, phase = trams.TRAM_PHASE, mode = 'win' },
+              (w.x - jn.pos.x) ^ 2 + (w.y - jn.pos.y) ^ 2)
+          end
+          for _, pp in ipairs(par) do
+            local w, ph = pp[1], pp[2]
+            trams.bind(w, { seq = 'bne_' .. j.j, phase = ph + 1, mode = 'par', ctrl = 'bne_' .. j.j .. '_' .. ph },
+              (w.x - jn.pos.x) ^ 2 + (w.y - jn.pos.y) ^ 2)
+          end
           for i, a in ipairs(apps) do
             local s = ts.newSignal({ name = 'bne_' .. j.j .. '_' .. i, pos = vec3(a[2], a[3], a[4]),
               dir = vec3(a[5], a[6], 0), controllerId = cs[a[7] == 1 and 1 or 0].id, sequenceId = seq.id })

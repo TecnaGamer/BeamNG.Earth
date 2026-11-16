@@ -346,8 +346,16 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     kinds = ("urban", "road", "freeway")
     keep, signs, faces, materials, mats_of = [], [], {}, [METAL], {}
     back = steps_back(boards, rows, frame) if autobahn else np.zeros(len(boards), bool)
-    for b, gone in zip(boards, back):
-        if gone or exitsigns._on_deck(b[0:2], decks, 1.5):
+    import tramtrack
+    if tramtrack.ENABLED and tramtrack.CORRIDOR:        # (no board on a tram's rails: tram/corridor.rs)
+        import railways
+        trams = tramtrack.corridor_parts(frame, [context.cell(k) for k in keys], box, 30.0)
+        on_rails = tramtrack.corridor_hits(np.asarray([b[0:2] for b in boards], np.float64), trams) if trams else \
+            np.zeros(len(boards), bool)
+    else:
+        on_rails = np.zeros(len(boards), bool)
+    for b, gone, rails_hit in zip(boards, back, on_rails):
+        if gone or rails_hit or exitsigns._on_deck(b[0:2], decks, 1.5):
             continue
         first, n = int(b[10]), int(b[11])
         mine = krows[first:first + n]

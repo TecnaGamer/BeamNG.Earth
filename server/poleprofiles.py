@@ -38,6 +38,13 @@ _POLE_BOXES = {
     "eu_pole_wood_h": (-1.01, -0.11, -0.01, 1.01, 0.11, 8.51),
 }
 COLLISION_BOXES = {g: (8.5, (b,)) for g, b in _POLE_BOXES.items()}
+# The tram poles (tools/blender/build_tram_poles.py, plan 046; all 9 m tall at scale 1): the shaft and its foot (flange,
+# foundation, lattice legs), not the arms. Read from the models' Colmesh by test_tram_poles.py.
+TRAM_H = 9.0
+_TRAM_BOXES = {"tube": 0.30, "square": 0.30, "lattice": 0.36, "concrete": 0.32}       # half width of the shaft's foot, m
+for _fam, _hw in _TRAM_BOXES.items():
+    for _kind in ("span", "arm", "centre"):
+        COLLISION_BOXES[f"tram_{_fam}_{_kind}"] = (TRAM_H, ((-_hw, -_hw, -0.01, _hw, _hw, TRAM_H + 0.01),))
 FR_KIT = "fr-varied-furniture-v3"
 EU_KIT = europeinfra.VERSION
 # Explicit country/territory coverage, including the requested RU/TR presets.

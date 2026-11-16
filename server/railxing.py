@@ -230,6 +230,11 @@ def rail_obstacles(frame, cells, box):
     for fid, _cls, kind, xy in railways.parts(frame, cells, box, reach=BED_REACH_M):
         if kind == "ground" and len(xy) >= 2:
             out.append(("rail:" + str(fid), BED_KEEP_M, np.c_[xy, np.zeros(len(xy))]))
+    # the ground trams' corridor (tram/corridor.rs, BNE_TRAM_CORRIDOR): the half width is what furniture adds its own
+    # CLEAR_OTHER_M to (1.5 m), so a pole keeps KEEP_M from the axis, one 2 m off stays
+    import tramtrack
+    for k, line in enumerate(tramtrack.corridor_lines(tramtrack.corridor_parts(frame, cells, box, BED_REACH_M))):
+        out.append(("tram:%d" % k, max(0.05, tramtrack.KEEP_M - 1.5), np.c_[line, np.zeros(len(line))]))
     return out
 
 

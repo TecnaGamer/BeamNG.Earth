@@ -100,6 +100,8 @@ def _files(out, info, cx, cy):
     names = [f"hm_{int(cx)}_{int(cy)}.png", f"hm_{int(cx)}_{int(cy)}.ter"] + list(info.get("layers", []))
     got = {}
     for n in names:
+        if n not in names[:2] and not os.path.exists(os.path.join(out, n)):
+            continue        # (a crop / pasture layer no sample uses has no mask file: surface.write_masks)
         with open(os.path.join(out, n), "rb") as f:
             got[n] = f.read()
     return got

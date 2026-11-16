@@ -11661,11 +11661,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     if walks is not None:
         import railways
         rail_cuts = railways.walk_cut_lines(frame, cells, own_box)
+    import tramtrack
+    if str(country or "").upper() == "SE" or (tramtrack.ENABLED and tramtrack.CORRIDOR):
+        # (a ground tram's strip: no raised sidewalk or median band over it, in every country: Prague's medians had
+        # their curb band right beside the strip, the strip a trench between a curb and the lawn)
+        import rails
+        trams = rails.tram_lines(frame, tx, ty, cells)
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
-        import rails
-        trams = rails.tram_lines(frame, tx, ty, cells)
         stops = []
         if nodes is not None and walks is not None:
             import secrossings as _cx
@@ -12490,6 +12494,7 @@ TILE_RETRY_S = 3.0              # s before a road tile whose build failed is bui
 TILE_STUCK_S = 90.0             # s a road tile's build may take before the log says it may be stuck
 TILE_FAILS_WARN = 5             # a tile's builds failed in a row before an expected kind of failure is logged as a warning
 _FAILS_SEEN = set()             # the kinds of road tile failures logged in full (Tracker._built)
+WIRE_PARTS_MAX = 4              # wire meshes per road tile ("wire", "wire2" .. "wire4": furniture.wire_mesh_parts, the mod's list)
 RAIL_PARTS_MAX = 3              # track meshes per road tile ("rail", "rail2", "rail3", and "railcol".."railcol3": the mod's list)
 BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2".."bld4": the mod's list)
 
@@ -13026,6 +13031,8 @@ def shape_files(aid, tx, ty):
            "barrier": f"barrier_{aid}_{tx}_{ty}.cdae", "buscol": f"buscol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
+    for k in range(2, WIRE_PARTS_MAX + 1):
+        out[f"wire{k}"] = f"wire_{aid}_{tx}_{ty}_{k}.cdae"
     for k in range(2, RAIL_PARTS_MAX + 1):
         out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
         out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
@@ -13099,7 +13106,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=(), bus_col=None):
+               walk_ground=None, speed_traps=(), bus_col=None, tsig=()):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -13127,6 +13134,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["sound"] = sound
     if wells:                                               # oil wells' pump jacks (oilwells.tile_wells)
         data["wells"] = list(wells)
+    if tsig:                                                # tram signals (tramsignals.tile_rows: the mod's tramsignals.lua)
+        data["tsig"] = list(tsig)
     if turbines:                                            # mapped OSM wind turbines (near collision owners)
         data["turbines"] = list(turbines)
     if speed_traps:
@@ -13228,12 +13237,13 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import furniture
         x0, y0, _, _ = tile_bbox(tx, ty)
         import catenary
-        wm = furniture.wire_mesh(wires, (x0, y0, 0.0), catenary.wire_material, catenary.wire_solid)    # (copper / bronze / steel / dark by class)
-        if wm is not None:
-            shape = f"wire_{aid}_{tx}_{ty}.cdae"
+        for k, wm in enumerate(furniture.wire_mesh_parts(wires, (x0, y0, 0.0), catenary.wire_material, catenary.wire_solid,
+                                                         WIRE_PARTS_MAX)):    # (copper / bronze / steel / dark by class)
+            what = "wire" if k == 0 else f"wire{k + 1}"
+            shape = shape_files(aid, tx, ty)[what]
             cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material=wm[3], tri_materials=wm[4],
                        object_name="wires")
-            data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})
         data["props"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in props]}

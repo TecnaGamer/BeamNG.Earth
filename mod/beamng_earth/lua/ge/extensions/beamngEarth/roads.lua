@@ -411,6 +411,9 @@ local function now() return os.clock() * 1000 end
 -- a tile's track mesh is cut into "rail", "rail2", "rail3" (server railways.split_mesh: 16-bit indices); with a lean
 -- "railcol" (and its "railcol2", "railcol3") they only render
 local function isRailDrawn(what) return what == 'rail' or what == 'rail2' or what == 'rail3' end
+-- a tile's wires are cut into "wire" .. "wire4" (server furniture.wire_mesh_parts: 16-bit indices, nothing dropped)
+local function isWire(what) return what == 'wire' or what == 'wire2' or what == 'wire3' or what == 'wire4' end
+M.isWire = isWire     -- (M.update reads it through M: LuaJIT allows 60 upvalues in a function, and it stood at 60 with this one)
 
 -- Main-thread cost of each kind of unit (n, total ms, worst ms) since the level loaded: road chunks, deletes, each
 -- mesh kind of a road tile (road, walk, bld, bldcol, deck ...), far building tiles, collision reloads. status().units
@@ -460,7 +463,7 @@ local function dropTile(key)
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
   for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
-  if t.wire then deleteQ[#deleteQ + 1] = t.wire end
+  for _, w in ipairs({ 'wire', 'wire2', 'wire3', 'wire4' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
@@ -481,6 +484,7 @@ local function dropTile(key)
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
+  if t.tsig then require('beamngEarth/tramsignals').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
   sea.release(t.waterguard)
   tiles[key] = nil
@@ -779,7 +783,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'wire2', 'wire3', 'wire4', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local swapState = nil        -- a generation swap being staged: { gen, parts, tiles } (M.swapBegin)
@@ -931,6 +935,12 @@ local function geoRows(key, t, data, replacing)
     if t.wells and pj.placeRows then pj.placeRows(key, rows) else pj.onRows(key, rows) end
     t.wells = true
   end
+  if type(data.tsig) == 'table' and data.tsig[1] then
+    local ts = require('beamngEarth/tramsignals')
+    local rows = M.mapRows(pl, data.tsig, 1, 4)
+    if t.tsig and ts.placeRows then ts.placeRows(key, rows) else ts.onRows(key, rows) end
+    t.tsig = true
+  end
   local turbines = require('beamngEarth/windturbines')
   local turbineRows = M.mapTurbines(pl, data.turbines)
   if replacing then turbines.placeRows(key, turbineRows) else turbines.onRows(key, turbineRows) end
@@ -950,7 +960,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
+        renderOnly = isWire(what) or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1357,7 +1367,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = isWire(what) or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
@@ -1502,7 +1512,7 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'wire2', 'wire3', 'wire4', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
       'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
     local sl = msgSlot(msg, what)
     if sl then
@@ -1556,6 +1566,10 @@ function M.onTile(msg, currentAnchor, a)
     require('beamngEarth/pumpjacks').onRows(key, data.wells)
     tiles[key].wells = true
   end
+  if type(data.tsig) == 'table' and data.tsig[1] then      -- tram signals (tramsignals.lua)
+    require('beamngEarth/tramsignals').onRows(key, data.tsig)
+    tiles[key].tsig = true
+  end
   require('beamngEarth/windturbines').onRows(key, type(data.turbines) == 'table' and data.turbines or {})
   tiles[key].turbines = type(data.turbines) == 'table' and #data.turbines > 0
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
@@ -1565,8 +1579,11 @@ function M.onTile(msg, currentAnchor, a)
   if type(data.signs) == 'table' and data.signs.shape and type(data.signs.pos) == 'table' then
     walkQ[#walkQ + 1] = { key = key, walk = data.signs, what = 'signs', renderOnly = true, tile = tiles[key] }
   end
-  if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
-    walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
+  for _, what in ipairs({ 'wire', 'wire2', 'wire3', 'wire4' }) do
+    local w = data[what]
+    if type(w) == 'table' and w.shape and type(w.pos) == 'table' then    -- pole wires
+      walkQ[#walkQ + 1] = { key = key, walk = w, what = what, tile = tiles[key] }
+    end
   end
   -- a sign tile (key "s<tx>_<ty>"): its render-only sign shapes, kept in signData for setSignsEnabled
   tiles[key].signOnly = tostring(msg.key):match('^s%-?%d+_') ~= nil
@@ -2171,7 +2188,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'wire2', 'wire3', 'wire4', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 function M.transform(xf, geodesy)
@@ -2437,7 +2454,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       t = nil
     end
     -- (BEHIND: a collider whose tile fell behind the moving car while it waited: parked again, not made only to go)
-    if t and q.what ~= 'road' and q.what ~= 'wire' and not q.renderOnly and not staged and M.behindDir()
+    if t and q.what ~= 'road' and not M.isWire(q.what) and not q.renderOnly and not staged and M.behindDir()
         and not M.collideNear(t) then
       parked[#parked + 1] = q
       t = nil
@@ -2447,7 +2464,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     if t and walk then
       local t0 = now()
       loadMaterials()
-      local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
+      local isRoad = q.what == 'road' or M.isWire(q.what) or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local collide = (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad
       local ok, id = pcall(createWalk, walk, staged and 'None' or collide)
@@ -2703,14 +2720,14 @@ function M.nextWalk(q)
         if along < -M.TILE_M / 2 then k, behind = k * 3 + M.LEAD_MAX_M, true     -- (its centre half a tile behind: left behind)
         else k = math.max(0, along) + M.SIDE_PENALTY * math.max(0, side - M.TILE_M / 2) end
       end
-      if viewAt and (e.renderOnly or e.what == 'wire') then
+      if viewAt and (e.renderOnly or isWire(e.what)) then
         local vx, vy = t.cx - viewAt.x, t.cy - viewAt.y
         local kv = math.sqrt(vx * vx + vy * vy)
         if kv < k then k, behind = kv, false end
       end
     end
     if not behind and (not nearest or k < nearest) then nearest = k end
-    if (e.renderOnly or e.what == 'wire') and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
+    if (e.renderOnly or isWire(e.what)) and not (M.SURFACE_FIRST and (e.what == 'road' or e.what == 'walk')) then
       k = k + (M.RENDER_AFTER_M or 1e6)
     end
     if e.what == 'deck' or e.what == 'tunnel' then k = math.max(0, k - M.DRIVE_FIRST_M) end
@@ -2941,7 +2958,7 @@ function M.readyAround(aid, x, y, r)
   if anchorId ~= aid then return false end
   local busy = {}
   for _, q in ipairs(walkQ) do
-    if not q.renderOnly and q.what ~= 'road' and q.what ~= 'wire' then busy[q.key] = true end
+    if not q.renderOnly and q.what ~= 'road' and not isWire(q.what) then busy[q.key] = true end
   end
   local n = M.TILE_M
   if M.geo then           -- (geotiles: those whose quads come within r, their skins this anchor's)

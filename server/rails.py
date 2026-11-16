@@ -15,6 +15,7 @@ import numpy as np
 import dnp
 
 import railxing
+import tramtrack
 
 KINDS = {"standard_gauge": "rail", "narrow_gauge": "narrow", "light_rail": "tram", "tram": "tram"}   # (no "unknown":
 # OpenStreetMap's proposed and unbuilt lines, railways.DRAWN)
@@ -140,6 +141,10 @@ def _crossing_windows(xy, lines, extra=()):
     return out
 
 
+TRAM_CUT_HALF_M = 1.3          # m: a raised sidewalk or median band stops this far from a ground tram's axis (its strip's half
+                               # width ~1 m and a hand's breadth: BNE_TRAM)
+
+
 def tram_lines(frame, tx, ty, cells):
     """[(centreline (k, 2), half the track's width)] of the trams on the ground near road tile (tx, ty): what a raised
     sidewalk or median stops at (Sweden's: roads.build_tile)."""
@@ -157,20 +162,20 @@ def tram_lines(frame, tx, ty, cells):
             for part in roads.ground_parts(feats, i):
                 xy = _enu(frame, np.asarray(part, np.float64))
                 if len(xy) >= 2 and _near(xy, box, 60.0):
-                    out.append((xy, EMBEDDED["w"] / 2))
+                    out.append((xy, TRAM_CUT_HALF_M if tramtrack.ENABLED else EMBEDDED["w"] / 2))
     return out
 
 
-def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
-    """The track chunks of road tile (tx, ty) (anchor frame): ballast, sleepers, then the rails (material order: the
-    road mesh draws them in that order). cells: the roads Features of the cells touching the tile. Sweden (country),
-    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M)."""
+def _scene(frame, tx, ty, cells, country=None, urban_fn=None):
+    """(box, carriageways, town_ways, tracks, road_classes, road_kinds) of road tile (tx, ty): its box, the roads' carriageways
+    {(fid, part): (centreline, half width)} (and the town's, Sweden's gatuspar), the tracks [(kind, xy, meshed, wear,
+    gauge)] and the roads' classes and kinds. cells: the roads Features of the cells touching the tile."""
     import railways
     import roads
     box = roads.tile_bbox(tx, ty)
     reach = max(t[0] for t in TRACK.values()) + MARGIN_M
     carriageways, town_ways, tracks, seen = {}, {}, [], set()
-    road_classes = {}
+    road_classes, road_kinds = {}, {}
     sweden = str(country or "").upper() == "SE"
     llb = _lonlat_box(frame, box, reach + 20.0)
     for feats in cells:
@@ -210,10 +215,41 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                 if kind is None:
                     carriageways[(fid, k)] = (xy, specs[i].width / 2)
                     road_classes[(fid, k)] = str(cls[i]).removesuffix("_link")
+                    road_kinds[(fid, k)] = specs[i].kind
                     if sweden and specs[i].urban:
                         town_ways[(fid, k)] = carriageways[(fid, k)]
                 else:
-                    tracks.append((kind, xy, meshed, got[1] if meshed else 0))
+                    tracks.append((kind, xy, meshed, got[1] if meshed else 0,
+                                   tramtrack.gauge(railways.osm_gauge(feats, i)) if tramtrack.ENABLED
+                                   and kind == "tram" and not meshed else None))
+    return box, carriageways, town_ways, tracks, road_classes, road_kinds
+
+
+def tram_street_runs(frame, tx, ty, cells, country=None):
+    """[(run (k, 2), gauge)]: the stretches of the tile's ground trams that lie in the street (the paving's rule, tramtrack.py:
+    within STREET_MARGIN_M of a carriageway), chained ways one line, for the rails' physics strips (railways.tile_mesh)."""
+    box, carriageways, _town, tracks, _classes, _kinds = _scene(frame, tx, ty, cells, country)
+    parts = [(xy, g) for kind, xy, meshed, _wear, g in tracks if g is not None]
+    if not parts:
+        return []
+    return tramtrack.street_runs(parts, box, carriageways, carriageways)
+
+
+def tram_open_runs(frame, tx, ty, cells, country, near):
+    """[(run (k, 2), gauge)]: the stretches of the tile's ground trams in the open that are drawn as a 3D track
+    (railways.tile_mesh) within near (x0, y0, x1, y1): the rest of what the decals leave out (tramtrack.open_runs)."""
+    box, carriageways, _town, tracks, _classes, _kinds = _scene(frame, tx, ty, cells, country)
+    parts = [(xy, g) for kind, xy, meshed, _wear, g in tracks if g is not None]
+    return tramtrack.open_runs(parts, near, carriageways, carriageways, country) if parts else []
+
+
+def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
+    """The track chunks of road tile (tx, ty) (anchor frame): ballast, sleepers, then the rails (material order: the
+    road mesh draws them in that order). cells: the roads Features of the cells touching the tile. Sweden (country),
+    in town (urban_fn, as road_specs): a tram beside a carriageway is street track on paving (GATUSPAR_M)."""
+    import railways
+    import roads
+    box, carriageways, town_ways, tracks, road_classes, road_kinds = _scene(frame, tx, ty, cells, country, urban_fn)
     if not tracks:
         return []
 
@@ -228,7 +264,7 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
 
     ballast, sleepers, rails = [], [], []
     todo = []
-    for kind, xy, meshed, wear in tracks:
+    for kind, xy, meshed, wear, gauge in tracks:
         # (a worn line's street track only across the roads its 3D track is not cut at: railways.WORN_CUT_CLASSES,
         # #918; else its old bed came back as street rails across the motorway, wyo-backroads' PR #1117)
         excluded = railways.WORN_CUT_CLASSES.get(wear, ())
@@ -239,13 +275,18 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
             # (and where it runs down a street: railways.street_along cuts its 3D track there, Fells Point's trolley
             # tracks down Thames Street, the user's report 16)
-            todo += [(kind, w, meshed, eligible)
+            todo += [(kind, w, meshed, eligible, None)
                      for w in _crossing_windows(xy, cw_lines, railways.street_spans(xy, list(eligible.values())))]
         else:
-            todo.append((kind, xy, meshed, eligible))
-    for kind, xy, meshed, eligible in todo:
+            todo.append((kind, xy, meshed, eligible, gauge))
+    tram_parts = []
+    for kind, xy, meshed, eligible, gauge in todo:
         bw, sl, sw, step = TRACK[kind]
         off = GAUGE_M[kind] / 2 + HEAD_M / 2
+        if gauge is not None:                   # (BNE_TRAM: a ground tram, the kernel's tram/track.rs: see tramtrack.py)
+            tram_parts.append((xy, gauge))
+            tram_eligible, tram_bw = eligible, bw
+            continue
         full = roads.densify(xy, SAMPLE_M)
         s = np.r_[0.0, np.cumsum(dnp.hypot(*np.diff(full, axis=0).T))]
         gap = (lambda q, e=eligible: no_sleeper(q, e)) if kind == "tram" else (lambda q, e=eligible: on_road(q, e))
@@ -285,4 +326,11 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     ballast.append(_chunk(BALLAST, bw, part))
                     for side in (off, -off):
                         rails.append(_chunk(RAIL, HEAD_M, roads.offset_polyline(part, side)))
+    if tram_parts:      # (the ground trams together: ways that meet end to end are one line, tramtrack.ground_chunks)
+        minor = [k for k, c in road_classes.items() if c in tramtrack.MINOR_CLASSES]
+        cobble = [k for k, kd in road_kinds.items() if kd == "cobble"]      # (the map's surface: sett, paving stones ...)
+        bed, tram_rails = tramtrack.ground_chunks(tram_parts, box, carriageways, tram_eligible, tram_bw, country, minor,
+                                                  cobble)
+        ballast += bed
+        rails += tram_rails
     return ballast + sleepers + rails
