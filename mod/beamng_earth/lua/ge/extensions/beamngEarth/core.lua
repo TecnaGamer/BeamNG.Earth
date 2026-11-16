@@ -270,7 +270,7 @@ local function defaultStart()
   -- place (a teleport's target), else this run's
   local okP, pos = pcall(places.lastPosition)
   if okP and type(pos) == 'table' and tonumber(pos.lat) and tonumber(pos.lon) then
-    return teleportTo(pos.lat, pos.lon, nil, 'start')
+    return teleportTo(pos.lat, pos.lon, nil, 'start', pos.heading)   -- (facing the way it was left, placePlayer)
   end
   if not ui.hasLatLon() then
     local okR, recent = pcall(places.recentList)
@@ -977,6 +977,36 @@ function M.groundRay(z)
   end
 end
 
+-- The player car's heading at (x, y) in the world frame: degrees clockwise from true north (the anchor's northAt there;
+-- the frame's +y without an anchor), or nil (no car, no direction). "Where you left off" saves it (notePlayerPos).
+function M.carHeading(x, y)
+  local veh = getPlayerVehicle and getPlayerVehicle(0)
+  if not veh then return nil end
+  local ok, dir = pcall(function() return veh:getDirectionVector() end)
+  if not ok or not dir or math.abs(dir.x) + math.abs(dir.y) < 1e-6 then return nil end
+  local north = 0
+  local a = st.anchor
+  if a and a.northAt and x and y then
+    local okN, nx, ny = pcall(a.northAt, a, x, y)
+    if okN and tonumber(nx) and tonumber(ny) then north = math.atan2(nx, ny) end
+  end
+  return (math.deg(math.atan2(dir.x, dir.y) - north) + 360) % 360
+end
+-- The world frame's (dx, dy) unit direction at (x, y) for a heading in degrees clockwise from true north (carHeading's
+-- inverse), or nil.
+function M.headingDir(heading, x, y)
+  heading = tonumber(heading)
+  if not heading or heading ~= heading then return nil end
+  local north = 0
+  local a = st.anchor
+  if a and a.northAt then
+    local okN, nx, ny = pcall(a.northAt, a, x or 0, y or 0)
+    if okN and tonumber(nx) and tonumber(ny) then north = math.atan2(nx, ny) end
+  end
+  local ang = north + math.rad(heading)
+  return math.sin(ang), math.cos(ang)
+end
+
 -- Put the player vehicle on the new ground at the origin, upright, keeping its heading.
 -- spawn.safeTeleport with resetVehicle=true resets the vehicle, drops its bounding box onto
 -- the ground (spawn.lua:494 getBBOnGround) and zeroes velocity (spawn.lua:533-534).
@@ -1014,6 +1044,11 @@ local function placePlayer(z, again)
   end
   local dir = veh:getDirectionVector()
   dir = vec3(dir.x, dir.y, 0)
+  -- "Where you left off": the heading the car was left with (teleportTo's heading, once: floorCheck's second placement
+  -- keeps the car's own, which it is by then)
+  local hx, hy = M.headingDir(st.startHeading, x, y)
+  st.startHeading = nil
+  if hx then dir = vec3(hx, hy, 0) end
   if dir:length() < 1e-3 then dir = vec3(0, 1, 0) end
   dir = dir:normalized()
   spawn.safeTeleport(veh, vec3(x, y, z), quatFromDir(dir, vec3(0, 0, 1)), nil, nil, false, nil, true)
@@ -1912,7 +1947,7 @@ end
 local function notePlayerPos(force)
   local pl = st.player
   if pl and pl.lat and pl.lon and st.anchorId and not st.pending and not st.viewFrame then
-    pcall(places.notePosition, pl.lat, pl.lon, st.clock, force)
+    pcall(places.notePosition, pl.lat, pl.lon, st.clock, force, M.carHeading(pl.x, pl.y))
   end
 end
 
@@ -3381,8 +3416,9 @@ end
 
 -- kind: 'teleport' (M.teleport) or 'start' (the level start's), for the recent places list; 'tool'
 -- (M.teleport with opts.record == false: test tools like tools/benchmark.lua) is not recorded
-teleportTo = function(lat, lon, name, kind)
+teleportTo = function(lat, lon, name, kind, heading)
   pcall(M._psum.mod.teleport)
+  st.startHeading = nil      -- (only "Where you left off" sets the car's heading: the start's teleport, below)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then
     setStatus('Teleport: invalid lat/lon')
@@ -3410,6 +3446,7 @@ teleportTo = function(lat, lon, name, kind)
   st.placeSnapped = place ~= nil and not (okA and adLat)
   st.teleportRetry = nil       -- (a new teleport replaces a failed one's retry)
   if requestAnchor(aLat, aLon, 'teleport', cx, cy, place) then
+    st.startHeading = places.validHeading(heading)   -- (degrees clockwise from true north; placePlayer)
     setStatus(string.format('Preparing terrain at %.5f, %.5f ...', lat, lon))
     loadprogress.reset()
     loadprogress.start(st.clock)        -- the bar says "Loading" from now (loadprogress.lua)

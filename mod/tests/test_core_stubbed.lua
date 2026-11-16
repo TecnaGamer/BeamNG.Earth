@@ -1103,4 +1103,25 @@ T.check(#rsL.pending == 1 and rsL.pending[1] == 'expAiTunnels' and rsL.restartab
 T.check(#core.restartState({ groundGrid = '1', expAiTunnels = false, serverCores = '2' },
   { 'groundGrid', 'expAiTunnels', 'serverCores' }).pending == 0, 'restart: ... and the fixed list')
 
+-- "Where you left off" keeps the car's heading (the user, 2026-11-15): carHeading (degrees clockwise from true north,
+-- the anchor's north at the car) and headingDir (its inverse) agree, away from the anchor too (meridian convergence)
+do
+  local geo = require('beamngEarth/geodesy')
+  local stH = core._state()
+  local savedA, savedDir = stH.anchor, veh.getDirectionVector
+  stH.anchor = geo.newAnchor(64.0, -21.9)                  -- (far north: true north turns across the frame)
+  local x, y = 20000, 5000
+  for _, h in ipairs({ 0, 37.5, 90, 181, 270, 359 }) do
+    local dx, dy = core.headingDir(h, x, y)
+    veh.getDirectionVector = function() return vec3(dx, dy, 0) end
+    local back = core.carHeading(x, y)
+    T.check(back and math.abs(((back - h + 540) % 360) - 180) < 1e-6,
+      string.format('heading %.1f: the direction placed and read back agree (%s)', h, tostring(back)))
+  end
+  local nx, ny = stH.anchor:northAt(x, y)
+  local dx, dy = core.headingDir(0, x, y)
+  T.check(math.abs(dx - nx) < 1e-9 and math.abs(dy - ny) < 1e-9, 'heading 0: along true north at the car')
+  T.check(core.headingDir(nil, x, y) == nil and core.headingDir(0 / 0, x, y) == nil, 'no heading: nothing to turn to')
+  stH.anchor, veh.getDirectionVector = savedA, savedDir
+end
 T.done('test_core_stubbed')

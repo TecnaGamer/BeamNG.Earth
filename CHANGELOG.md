@@ -66,6 +66,7 @@ Works with BeamNG.drive 0.40.5.
   starts; it uses the same user folder, so your mods and settings stay put). With several copies installed it asks
   which one to use (`--choose-game` to ask again). Steam players see no change. BeamMP on Linux still needs the game in
   a Steam library. Builds on ideas from PR #1309 (ProxyFirewall202).
+- **Where you left off** now also remembers which way your car was facing, and starts you facing the same way.
 - **Restart world server** button on the settings page: settings that need the world server to restart (Experimental
   features, Ground grid, CPU cores and priority, 3D models from 3dmr.eu, Max RAM's sizing, the cache folder) apply
   without closing the game; the world reloads around your car, which is held still meanwhile.
