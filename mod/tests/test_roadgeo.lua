@@ -8,6 +8,18 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 
+-- Drive frame time explicitly: fast Windows updates can share an os.clock tick,
+-- leaving even a zero rebuild interval unexpired. Keep timestamps and stopwatches
+-- on the same clock so collision checks do not depend on the runner's speed.
+local frameTime = 0
+os.clock = function() return frameTime end
+local stopwatch = require('beamngEarth/stopwatch')
+local function clock()
+  local start = frameTime
+  return function() return (frameTime - start) * 1000 end
+end
+stopwatch.clock, stopwatch.new = clock, clock
+
 -- the modules the rows go to, recorded
 local calls = {}
 local function rec(mod)
@@ -46,12 +58,15 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
--- frames until the import queues are empty, then a few more (the deferred collision rebuild fires after them): the
--- per-frame budget is wall-clock, so a fixed 6 frames left work queued on a slow CI runner (windows-latest, 2026-11-14)
+-- Drain queued imports, then advance a few more frames for deferred collision work.
+local function update(aid, a)
+  frameTime = frameTime + 1 / 60
+  roads.update(gov, aid, car, nil, a)
+end
 local function run(aid, a)
   local n = 0
-  repeat roads.update(gov, aid, car, nil, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
-  for _ = 1, 3 do roads.update(gov, aid, car, nil, a) end
+  repeat update(aid, a); n = n + 1 until (roads.queued() == 0 and n >= 6) or n >= 2000
+  for _ = 1, 3 do update(aid, a) end
 end
 
 local LAT, LON = 39.2834, -76.5934
@@ -359,7 +374,7 @@ do
   car.x, car.y = cx + 300, cy                -- (near enough to make them, beyond needReach)
   T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
     'the geotile again')
-  for _ = 1, 40 do roads.update(gov, 1, car, nil, A) end
+  for _ = 1, 40 do update(1, A) end
   roads.setFoci({ { x = cx, y = cy, r = 320, trees = true, kind = 'player' } })
   local ok, due = pcall(roads.focusDue, roads.needDistance)
   T.check(ok, 'focusDue with a focus without z: ' .. tostring(due))
