@@ -6484,6 +6484,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // forest floor
     // 312: stage 3 steps 4-5: unmapped crop's furrows where the photo shows periodic strips (a structure tensor on the 8 m
     // cells, 32 integer normals, a lag test), the surfaces' palette by the support of their photo colour
-    m.add("VERSION", 312)?;
+    // 320: veg_clumps(..., segs, hws, grid, merc_per_m, rad, max_shift_m) -> (..., stats): the far clumps kept off the
+    // carriageways (split at a road, moved off it, else their trees single). (313-319 left for the parallel ground
+    // work's bumps)
+    m.add("VERSION", 320)?;
     Ok(())
 }
