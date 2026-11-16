@@ -57,7 +57,8 @@ def profile(f, i):
 def _outside_verges(xy, width, starts, delta, lengths, radii, bounds):
     """Discard only the portions that run along an existing street. Perpendicular entrances can meet it."""
     lo, hi = xy.min(axis=0) - width / 2, xy.max(axis=0) + width / 2
-    near = np.flatnonzero((bounds[:, :2] <= hi).all(1) & (bounds[:, 2:] >= lo).all(1))
+    near = np.flatnonzero((bounds[:, 0] <= hi[0]) & (bounds[:, 1] <= hi[1])
+                         & (bounds[:, 2] >= lo[0]) & (bounds[:, 3] >= lo[1]))
     if not len(near):
         return [xy]
     xyz = roads.densify(np.c_[xy, np.zeros(len(xy))], 1.)
@@ -65,16 +66,20 @@ def _outside_verges(xy, width, starts, delta, lengths, radii, bounds):
     mid = xyz[:-1, :2] + step * .5
     size = np.linalg.norm(step, axis=1)
     keep = size > 1e-8
-    for j in near:
-        unit = delta[j] / lengths[j]
-        rel = mid - starts[j]
-        along = rel @ unit
-        across = np.abs(rel[:, 0] * unit[1] - rel[:, 1] * unit[0])
-        # Round the ends of each segment's buffer too. An outside sidewalk at a bend or
-        # junction can be alongside a vertex yet beyond the projections of both segments.
-        past_end = np.maximum(np.maximum(-along, along - lengths[j]), 0.)
-        keep &= ~((np.abs(step @ unit) >= PARALLEL * size)
-                  & (across ** 2 + past_end ** 2 <= (radii[j] + width / 2) ** 2))
+    # Test segments in batches, with bounded temporary arrays even for long paths.
+    # Rounded ends still exclude parallel sidewalks at street bends and junctions.
+    for first in range(0, len(near), 32):
+        j = near[first:first + 32]
+        unit = delta[j] / lengths[j, None]
+        reach2 = (radii[j] + width / 2) ** 2
+        for offset in range(0, len(mid), 1024):
+            idx = np.flatnonzero(keep[offset:offset + 1024]) + offset
+            rel = mid[idx, None, :] - starts[j]
+            along = rel[:, :, 0] * unit[:, 0] + rel[:, :, 1] * unit[:, 1]
+            across = rel[:, :, 0] * unit[:, 1] - rel[:, :, 1] * unit[:, 0]
+            past_end = np.maximum(np.maximum(-along, along - lengths[j]), 0.)
+            parallel = np.abs(step[idx] @ unit.T) >= PARALLEL * size[idx, None]
+            keep[idx] &= ~np.any(parallel & (across ** 2 + past_end ** 2 <= reach2), axis=1)
     if keep.all():
         return [xy]
     switches = np.flatnonzero(np.diff(np.r_[False, keep, False]))

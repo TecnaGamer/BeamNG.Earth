@@ -48,6 +48,18 @@ class StandalonePathsTest(unittest.TestCase):
     def parts(self, *cells):
         return paths.parts(FRAME, (-10, -10, 110, 110), cells)
 
+    def test_verge_batches_preserve_long_path_gaps(self):
+        # Cross both batch limits: 40 street segments and 2,500 one-metre path steps.
+        x = 25. + np.arange(40) * 60.
+        starts = np.c_[x, np.zeros(40)]
+        ends = starts + [10., 0.]
+        radii = np.ones(40)
+        bounds = np.c_[starts - radii[:, None], ends + radii[:, None]]
+        runs = paths._outside_verges(np.array([[0., 0.], [2500., 0.]]), 2.,
+                                     starts, ends - starts, np.full(40, 10.), radii, bounds)
+        expected = np.c_[np.r_[0., x + 12.], np.r_[x - 2., 2500.]]
+        np.testing.assert_allclose([[run[0, 0], run[-1, 0]] for run in runs], expected, rtol=0., atol=1e-9)
+
     def test_charzykowy_width_is_scoped_to_osm_ways(self):
         ways = sorted(paths.CHARZYKOWY_PROMENADE)
         n = len(ways)
